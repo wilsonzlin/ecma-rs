@@ -1,17 +1,30 @@
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
+use crate::lex::KEYWORDS_MAPPING;
 use crate::loc::Loc;
 use ahash::HashSet;
 use ahash::HashSetExt;
 use once_cell::sync::Lazy;
+use serde::Serialize;
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug)]
-pub enum TokenType {
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize)]
+pub enum TT {
   // Used to represent a type that should never be seen in actual code. Similar to 0xFF from UTF-8
   // bytes perspective. Often used to represent an omitted value without having to use `Option`.
   _Dummy,
   // Special token used to represent the end of the source code. Easier than using and handling Option everywhere.
   EOF,
+  // Special token used to represent invalid source code. Easier than having to propagate SyntaxError from the lexer level, which means even peeking during parsing requires error handling (e.g. can't use Option/Result fluent callbacks without excessive wrapping in OK and then transposing).
+  Invalid,
+  // These are only used by lexer.
+  CommentMultilineEnd,
+  LineTerminator,
+  LiteralNumberBin,
+  LiteralNumberHex,
+  LiteralNumberOct,
+  Whitespace,
+
+
 
   Ampersand,
   AmpersandAmpersand,
@@ -44,7 +57,7 @@ pub enum TokenType {
   ChevronRightEquals,
   Colon,
   Comma,
-  CommentMultiple,
+  CommentMultiline,
   CommentSingle,
   Dot,
   DotDotDot,
@@ -108,10 +121,6 @@ pub enum TokenType {
   LiteralFalse,
   LiteralNull,
   LiteralNumber,
-  // LiteralNumber* are only used for lexing
-  LiteralNumberHex,
-  LiteralNumberBin,
-  LiteralNumberOct,
   LiteralRegex,
   LiteralString,
   LiteralTemplatePartString,
@@ -138,18 +147,21 @@ pub enum TokenType {
 }
 
 // These can be used as parameter and variable names.
-pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TokenType>> = Lazy::new(|| {
-  let mut set = HashSet::<TokenType>::new();
-  set.insert(TokenType::KeywordAs);
-  set.insert(TokenType::KeywordAsync);
-  set.insert(TokenType::KeywordConstructor);
-  set.insert(TokenType::KeywordFrom);
-  set.insert(TokenType::KeywordGet);
-  set.insert(TokenType::KeywordLet);
-  set.insert(TokenType::KeywordOf);
-  set.insert(TokenType::KeywordSet);
-  set.insert(TokenType::KeywordStatic);
+pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
+  let mut set = HashSet::<TT>::new();
+  set.insert(TT::KeywordAs);
+  set.insert(TT::KeywordAsync);
+  set.insert(TT::KeywordConstructor);
+  set.insert(TT::KeywordFrom);
+  set.insert(TT::KeywordGet);
+  set.insert(TT::KeywordLet);
+  set.insert(TT::KeywordOf);
+  set.insert(TT::KeywordSet);
+  set.insert(TT::KeywordStatic);
   set
+});
+pub static UNRESERVED_KEYWORD_STRS: Lazy<HashSet<&'static [u8]>> = Lazy::new(|| {
+  UNRESERVED_KEYWORDS.iter().map(|tt| *KEYWORDS_MAPPING.get(tt).unwrap()).collect()
 });
 
 #[derive(Clone, Debug)]
@@ -158,18 +170,10 @@ pub struct Token {
   // Whether one or more whitespace characters appear immediately before this token, and at least
   // one of those whitespace characters is a line terminator.
   pub preceded_by_line_terminator: bool,
-  pub typ: TokenType,
+  pub typ: TT,
 }
 
 impl Token {
-  pub fn new(loc: Loc, typ: TokenType, preceded_by_line_terminator: bool) -> Token {
-    Token {
-      loc,
-      typ,
-      preceded_by_line_terminator,
-    }
-  }
-
   pub fn error(&self, typ: SyntaxErrorType) -> SyntaxError {
     self.loc.error(typ, Some(self.typ))
   }

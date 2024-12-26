@@ -1,26 +1,25 @@
-use self::pattern::ParsePatternRules;
+use expr::pat::ParsePatternRules;
+
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::lex_next;
 use crate::lex::LexMode;
 use crate::lex::Lexer;
-use crate::lex::LexerCheckpoint;
 use crate::loc::Loc;
 use crate::token::Token;
-use crate::token::TokenType;
+use crate::token::TT;
 
 pub mod class_or_object;
-pub mod decl;
 pub mod expr;
-pub mod function;
-pub mod literal;
+pub mod func;
 pub mod operator;
-pub mod pattern;
 pub mod stmt;
 #[cfg(test)]
 mod tests;
 pub mod toplevel;
+pub mod drive;
+pub mod import_export;
 
 // Almost every parse_* function takes these field values as parameters. Instead of having to enumerate them as parameters on every function and ordered unnamed arguments on every call, we simply pass this struct around. Fields are public to allow destructuring, but the value should be immutable; the with_* methods can be used to create an altered copy for passing into other functions, which is useful as most calls simply pass through the values unchanged. This struct should be received as a value, not a reference (i.e. `ctx: ParseCtx` not `ctx: &ParseCtx`) as the latter will require a separate lifetime.
 // All fields except `session` can (although not often) change between calls, so we don't simply put them in Parser, as otherwise we'd have to "unwind" (i.e. reset) those values after each call returns.
@@ -38,7 +37,7 @@ impl ParseCtx {
 #[derive(Debug)]
 #[must_use]
 pub struct MaybeToken {
-  typ: TokenType,
+  typ: TT,
   loc: Loc,
   matched: bool,
 }
@@ -61,24 +60,29 @@ impl MaybeToken {
     self.loc.error(err, Some(self.typ))
   }
 
+  pub fn map<R, F: FnOnce(Self) -> R>(self, f: F) -> Option<R> {
+    if self.matched { Some(f(self)) } else { None }
+  }
+
   pub fn and_then<R, F: FnOnce() -> SyntaxResult<R>>(self, f: F) -> SyntaxResult<Option<R>> {
     Ok(if self.matched { Some(f()?) } else { None })
   }
 }
 
 pub struct ParserCheckpoint {
-  checkpoint: LexerCheckpoint,
+  next_tok_i: usize,
 }
 
+/// To get the lexer's `next` after this token was lexed, use `token.loc.1`.
 struct BufferedToken {
   token: Token,
   lex_mode: LexMode,
-  after_checkpoint: LexerCheckpoint,
 }
 
 pub struct Parser<'a> {
   lexer: Lexer<'a>,
-  buffered: Option<BufferedToken>,
+  buf: Vec<BufferedToken>,
+  next_tok_i: usize,
 }
 
 // We extend this struct with added methods in the various submodules, instead of simply using free functions and passing `&mut Parser` around, for several reasons:
@@ -93,12 +97,9 @@ impl<'a> Parser<'a> {
   pub fn new(lexer: Lexer<'a>) -> Parser<'a> {
     Parser {
       lexer,
-      buffered: None,
+      buf: Vec::new(),
+      next_tok_i: 0,
     }
-  }
-
-  pub fn lexer_mut(&mut self) -> &mut Lexer<'a> {
-    &mut self.lexer
   }
 
   pub fn source_range(&self) -> Loc {
@@ -110,7 +111,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn str(&self, loc: Loc) -> &str {
-    unsafe { std::str::from_utf8_unchecked(self.bytes(loc)) }
+    std::str::from_utf8(self.bytes(loc)).unwrap()
   }
 
   pub fn string(&self, loc: Loc) -> String {
@@ -119,106 +120,129 @@ impl<'a> Parser<'a> {
 
   pub fn checkpoint(&self) -> ParserCheckpoint {
     ParserCheckpoint {
-      checkpoint: self.lexer.checkpoint(),
+      next_tok_i: self.next_tok_i
     }
   }
 
-  pub fn since_checkpoint(&self, checkpoint: ParserCheckpoint) -> Loc {
-    self.lexer.since_checkpoint(checkpoint.checkpoint)
+  pub fn since_checkpoint(&self, checkpoint: &ParserCheckpoint) -> Loc {
+    let start = self.buf[checkpoint.next_tok_i].token.loc.1;
+    Loc(start, self.lexer.next())
   }
 
   pub fn restore_checkpoint(&mut self, checkpoint: ParserCheckpoint) {
-    self.buffered = None;
-    self.lexer.apply_checkpoint(checkpoint.checkpoint);
+    self.next_tok_i = checkpoint.next_tok_i;
   }
 
-  // Useful if lexer was altered outside parser.
-  pub fn clear_buffered(&mut self) {
-    self.buffered = None;
+  fn reset_to(&mut self, n: usize) {
+    self.next_tok_i = n;
+    self.buf.truncate(n);
+    match self.buf.last() {
+      Some(t) => self.lexer.set_next(t.token.loc.1),
+      None => self.lexer.set_next(0),
+    };
   }
 
   fn forward<K: FnOnce(&Token) -> bool>(
     &mut self,
     mode: LexMode,
     keep: K,
-  ) -> SyntaxResult<(bool, Token)> {
-    match self.buffered.as_ref() {
-      Some(b) if b.lex_mode == mode => Ok(if keep(&b.token) {
-        self.lexer.apply_checkpoint(b.after_checkpoint);
-        (true, self.buffered.take().unwrap().token)
-      } else {
-        (false, b.token.clone())
-      }),
-      _ => {
-        // Don't use self.checkpoint as self.backtrack will clear buffer.
-        let cp = self.lexer.checkpoint();
-        let t = lex_next(&mut self.lexer, mode)?;
-        let k = keep(&t);
-        self.buffered = if k {
-          None
-        } else {
-          let after_checkpoint = self.lexer.checkpoint();
-          self.lexer.apply_checkpoint(cp);
-          Some(BufferedToken {
-            token: t.clone(),
-            lex_mode: mode,
-            after_checkpoint,
-          })
-        };
-        Ok((k, t))
-      }
+  ) -> (bool, Token) {
+    if self.buf.get(self.next_tok_i).is_some_and(|t| t.lex_mode != mode) {
+      self.reset_to(self.next_tok_i);
     }
+    assert!(self.buf.len() <= self.next_tok_i);
+    if self.buf.len() == self.next_tok_i {
+      let token = lex_next(&mut self.lexer, mode);
+      self.buf.push(BufferedToken { token, lex_mode: mode });
+    }
+    let t = self.buf[self.next_tok_i].token.clone();
+    let k = keep(&t);
+    if k {
+      self.next_tok_i += 1;
+    };
+    (k, t)
   }
 
-  pub fn next_with_mode(&mut self, mode: LexMode) -> SyntaxResult<Token> {
-    self.forward(mode, |_| true).map(|r| r.1)
+  pub fn consume_with_mode(&mut self, mode: LexMode) -> Token {
+    self.forward(mode, |_| true).1
   }
 
-  pub fn next(&mut self) -> SyntaxResult<Token> {
-    self.next_with_mode(LexMode::Standard)
+  pub fn consume(&mut self) -> Token {
+    self.consume_with_mode(LexMode::Standard)
   }
 
-  pub fn peek_with_mode(&mut self, mode: LexMode) -> SyntaxResult<Token> {
-    self.forward(mode, |_| false).map(|r| r.1)
+  /// Consumes the next token regardless of type, and returns its raw source code as a string.
+  pub fn consume_as_string(&mut self) -> String {
+    let loc = self.consume().loc;
+    self.string(loc)
   }
 
-  pub fn peek(&mut self) -> SyntaxResult<Token> {
+  pub fn peek_with_mode(&mut self, mode: LexMode) -> Token {
+    self.forward(mode, |_| false).1
+  }
+
+  pub fn peek(&mut self) -> Token {
     self.peek_with_mode(LexMode::Standard)
   }
 
-  pub fn consume_peeked(&mut self) -> Token {
-    let b = self.buffered.take().unwrap();
-    self.lexer.apply_checkpoint(b.after_checkpoint);
-    b.token
+  pub fn peek_2_with_mode(&mut self, mode: LexMode) -> (Token, Token) {
+    let cp = self.checkpoint();
+    let a = self.forward(mode, |_| true);
+    let b = self.forward(mode, |_| true);
+    self.restore_checkpoint(cp);
+    (a.1, b.1)
   }
 
-  pub fn maybe_with_mode(&mut self, typ: TokenType, mode: LexMode) -> SyntaxResult<MaybeToken> {
-    let (matched, t) = self.forward(mode, |t| t.typ == typ)?;
-    Ok(MaybeToken {
+  pub fn peek_2(&mut self) -> (Token, Token) {
+    self.peek_2_with_mode(LexMode::Standard)
+  }
+
+  pub fn peek_3(&mut self) -> (Token, Token, Token) {
+    let cp = self.checkpoint();
+    let a = self.forward(LexMode::Standard, |_| true);
+    let b = self.forward(LexMode::Standard, |_| true);
+    let c = self.forward(LexMode::Standard, |_| true);
+    self.restore_checkpoint(cp);
+    (a.1, b.1, c.1)
+  }
+
+  pub fn peek_4(&mut self) -> (Token, Token, Token, Token) {
+    let cp = self.checkpoint();
+    let a = self.forward(LexMode::Standard, |_| true);
+    let b = self.forward(LexMode::Standard, |_| true);
+    let c = self.forward(LexMode::Standard, |_| true);
+    let d = self.forward(LexMode::Standard, |_| true);
+    self.restore_checkpoint(cp);
+    (a.1, b.1, c.1, d.1)
+  }
+
+  pub fn maybe_consume_with_mode(&mut self, typ: TT, mode: LexMode) -> MaybeToken {
+    let (matched, t) = self.forward(mode, |t| t.typ == typ);
+    MaybeToken {
       typ,
       matched,
       loc: t.loc,
-    })
+    }
   }
 
-  pub fn consume_if(&mut self, typ: TokenType) -> SyntaxResult<MaybeToken> {
-    self.maybe_with_mode(typ, LexMode::Standard)
+  pub fn consume_if(&mut self, typ: TT) -> MaybeToken {
+    self.maybe_consume_with_mode(typ, LexMode::Standard)
   }
 
   pub fn consume_if_pred<F: FnOnce(&Token) -> bool>(
     &mut self,
     pred: F,
-  ) -> SyntaxResult<MaybeToken> {
-    let (matched, t) = self.forward(LexMode::Standard, pred)?;
-    Ok(MaybeToken {
+  ) -> MaybeToken {
+    let (matched, t) = self.forward(LexMode::Standard, pred);
+    MaybeToken {
       typ: t.typ,
       matched,
       loc: t.loc,
-    })
+    }
   }
 
-  pub fn require_with_mode(&mut self, typ: TokenType, mode: LexMode) -> SyntaxResult<Token> {
-    let t = self.next_with_mode(mode)?;
+  pub fn require_with_mode(&mut self, typ: TT, mode: LexMode) -> SyntaxResult<Token> {
+    let t = self.consume_with_mode(mode);
     if t.typ != typ {
       Err(t.error(SyntaxErrorType::RequiredTokenNotFound(typ)))
     } else {
@@ -226,12 +250,12 @@ impl<'a> Parser<'a> {
     }
   }
 
-  pub fn require_predicate<P: FnOnce(TokenType) -> bool>(
+  pub fn require_predicate<P: FnOnce(TT) -> bool>(
     &mut self,
     pred: P,
     expected: &'static str,
   ) -> SyntaxResult<Token> {
-    let t = self.next_with_mode(LexMode::Standard)?;
+    let t = self.consume_with_mode(LexMode::Standard);
     if !pred(t.typ) {
       Err(t.error(SyntaxErrorType::ExpectedSyntax(expected)))
     } else {
@@ -239,7 +263,7 @@ impl<'a> Parser<'a> {
     }
   }
 
-  pub fn require(&mut self, typ: TokenType) -> SyntaxResult<Token> {
+  pub fn require(&mut self, typ: TT) -> SyntaxResult<Token> {
     self.require_with_mode(typ, LexMode::Standard)
   }
 }

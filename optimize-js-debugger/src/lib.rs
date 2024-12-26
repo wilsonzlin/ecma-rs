@@ -1,7 +1,7 @@
 use optimize_js::util::debug::OptimizerDebug;
 use optimize_js::Program;
 use optimize_js::ProgramFunction;
-use parse_js::ast::Node;
+use parse_js::ast::node::Node;
 use parse_js::parse;
 use serde::Serialize;
 use symbol_js::compute_symbols;

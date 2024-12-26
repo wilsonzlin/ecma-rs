@@ -1,6 +1,6 @@
 use crate::symbol::Scope;
 use crate::symbol::ScopeType;
-use parse_js::ast::Node;
+use parse_js::ast::node::Node;
 use parse_js::ast::Syntax;
 use parse_js::ast::VarDeclMode;
 use parse_js::visit::JourneyControls;

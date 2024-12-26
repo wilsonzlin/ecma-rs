@@ -1,4 +1,4 @@
-use parse_js::ast::Node;
+use parse_js::ast::node::Node;
 use parse_js::visit::VisitorMut;
 use symbol::Scope;
 use symbol::ScopeType;

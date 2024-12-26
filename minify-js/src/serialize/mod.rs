@@ -8,7 +8,7 @@ use parse_js::ast::ClassOrObjectMemberValue;
 use parse_js::ast::ExportNames;
 use parse_js::ast::ForInit;
 use parse_js::ast::LiteralTemplatePart;
-use parse_js::ast::Node;
+use parse_js::ast::node::Node;
 use parse_js::ast::ObjectMemberType;
 use parse_js::ast::Syntax;
 use parse_js::ast::VarDeclMode;

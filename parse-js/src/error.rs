@@ -1,5 +1,5 @@
 use crate::loc::Loc;
-use crate::token::TokenType;
+use crate::token::TT;
 use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Formatter;
@@ -10,9 +10,6 @@ use std::fmt::Display;
 pub enum SyntaxErrorType {
   ExpectedNotFound,
   ExpectedSyntax(&'static str),
-  ForLoopHeaderHasInvalidLhs,
-  ForLoopHeaderHasMultipleDeclarators,
-  ForLoopHeaderHasNoLhs,
   InvalidAssigmentTarget,
   InvalidCharacterEscape,
   JsxClosingTagMismatch,
@@ -23,7 +20,7 @@ pub enum SyntaxErrorType {
   LineTerminatorInString,
   MalformedLiteralBigInt,
   MalformedLiteralNumber,
-  RequiredTokenNotFound(TokenType),
+  RequiredTokenNotFound(TT),
   TryStatementHasNoCatchOrFinally,
   UnexpectedEnd,
 }
@@ -32,11 +29,11 @@ pub enum SyntaxErrorType {
 pub struct SyntaxError {
   pub typ: SyntaxErrorType,
   pub loc: Loc,
-  pub actual_token: Option<TokenType>,
+  pub actual_token: Option<TT>,
 }
 
 impl SyntaxError {
-  pub fn new(typ: SyntaxErrorType, loc: Loc, actual_token: Option<TokenType>) -> SyntaxError {
+  pub fn new(typ: SyntaxErrorType, loc: Loc, actual_token: Option<TT>) -> SyntaxError {
     SyntaxError {
       typ,
       loc,

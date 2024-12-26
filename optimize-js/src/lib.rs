@@ -12,14 +12,15 @@ pub mod analysis;
 use std::{ops::Deref, sync::{atomic::{AtomicUsize, Ordering}, Arc}};
 
 use ahash::HashSet;
-use analysis::{defs::calculate_defs, interference::calculate_interference_graph, liveness::calculate_live_ins, register_alloc::allocate_registers, single_use_insts::analyse_single_use_defs};
-use cfg::{bblock::convert_insts_to_bblocks, cfg::{Cfg, CfgBBlocks}};
+use analysis::defs::calculate_defs;
+use cfg::{bblock::convert_insts_to_bblocks, cfg::Cfg};
 use crossbeam_utils::sync::WaitGroup;
 use dashmap::DashMap;
 use dom::Dom;
 use opt::{optpass_cfg_prune::optpass_cfg_prune, optpass_dvn::optpass_dvn, optpass_impossible_branches::optpass_impossible_branches, optpass_redundant_assigns::optpass_redundant_assigns, optpass_trivial_dce::optpass_trivial_dce};
-use parse_js::ast::{Node, Syntax};
+use parse_js::ast::Syntax;
 use serde::Serialize;
+use parse_js::ast::node::Node;
 use ssa::{ssa_deconstruct::deconstruct_ssa, ssa_insert_phis::insert_phis_for_ssa_construction, ssa_rename::rename_targets_for_ssa_construction};
 use symbol::var_analysis::VarAnalysis;
 use symbol_js::symbol::Symbol;
@@ -180,10 +181,10 @@ impl Program {
 
 #[cfg(test)]
 mod tests {
-    use parse_js::{ast::Syntax, parse};
+    use parse_js::parse;
     use symbol_js::{compute_symbols, TopLevelMode};
 
-    use crate::{Program};
+    use crate::Program;
 
   #[test]
   fn test_compile_js_statements() {

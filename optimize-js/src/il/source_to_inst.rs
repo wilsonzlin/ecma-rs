@@ -13,7 +13,7 @@ use ahash::HashMap;
 use ahash::HashMapExt;
 use parse_js::ast::ClassOrObjectMemberKey;
 use parse_js::ast::ForInit;
-use parse_js::ast::Node;
+use parse_js::ast::node::Node;
 use parse_js::ast::Syntax;
 use parse_js::ast::VariableDeclarator;
 use parse_js::num::JsNumber;

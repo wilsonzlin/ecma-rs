@@ -1,6 +1,6 @@
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
-use crate::token::TokenType;
+use crate::token::TT;
 use std::cmp::max;
 use std::cmp::min;
 use std::ops::Add;
@@ -10,7 +10,7 @@ use std::ops::AddAssign;
 pub struct Loc(pub usize, pub usize);
 
 impl Loc {
-  pub fn error(self, typ: SyntaxErrorType, actual_token: Option<TokenType>) -> SyntaxError {
+  pub fn error(self, typ: SyntaxErrorType, actual_token: Option<TT>) -> SyntaxError {
     SyntaxError::new(typ, self, actual_token)
   }
 

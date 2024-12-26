@@ -4,16 +4,12 @@ use crate::char::DIGIT_BIN;
 use crate::char::DIGIT_HEX;
 use crate::char::DIGIT_OCT;
 use crate::char::ID_CONTINUE;
+use crate::char::ID_CONTINUE_CHARSTR;
 use crate::char::ID_CONTINUE_JSX;
 use crate::char::ID_START;
-use crate::char::ID_START_CHARSTR;
-use crate::char::WHITESPACE;
-use crate::error::SyntaxError;
-use crate::error::SyntaxErrorType;
-use crate::error::SyntaxResult;
 use crate::loc::Loc;
 use crate::token::Token;
-use crate::token::TokenType;
+use crate::token::TT;
 use ahash::HashMap;
 use ahash::HashMapExt;
 use aho_corasick::AhoCorasick;
@@ -37,6 +33,7 @@ pub enum LexMode {
   JsxTextContent,
   SlashIsRegex,
   Standard,
+  TemplateStrContinue,
 }
 
 #[derive(Copy, Clone)]
@@ -44,31 +41,70 @@ pub struct LexerCheckpoint {
   next: usize,
 }
 
+// Contains the match length.
 #[derive(Copy, Clone)]
-struct Match {
-  len: usize,
-}
+struct Match(usize);
 
 impl Match {
   pub fn len(&self) -> usize {
-    self.len
+    self.0
   }
 
   pub fn prefix(&self, n: usize) -> Match {
-    debug_assert!(n <= self.len);
-    Match { len: n }
+    debug_assert!(n <= self.len());
+    Match(n)
   }
 
   pub fn is_empty(&self) -> bool {
-    self.len == 0
+    self.len() == 0
   }
 }
 
-#[derive(Copy, Clone)]
-struct AhoCorasickMatch {
-  id: usize,
-  mat: Match,
+struct PatternMatcher {
+  patterns: Vec<TT>,
+  matcher: AhoCorasick,
+  anchored: bool,
 }
+
+impl PatternMatcher {
+  pub fn new<D: AsRef<[u8]>>(anchored: bool, patterns: Vec<(TT, D)>) -> Self {
+    let (tts, syns): (Vec<_>, Vec<_>) = patterns.into_iter().unzip();
+    let matcher = AhoCorasickBuilder::new()
+      .start_kind(if anchored {
+        StartKind::Anchored
+      } else {
+        StartKind::Unanchored
+      })
+      .kind(Some(AhoCorasickKind::DFA))
+      .match_kind(MatchKind::LeftmostLongest)
+      .build(syns)
+      .unwrap();
+    PatternMatcher {
+      patterns: tts,
+      matcher,
+      anchored,
+    }
+  }
+
+  pub fn find(&self, lexer: &Lexer) -> LexResult<(TT, Match)> {
+    self
+      .matcher
+      .find(Input::new(&lexer.source[lexer.next..]).anchored(if self.anchored {
+        Anchored::Yes
+      } else {
+        Anchored::No
+      }))
+      .map(|m| (
+        self.patterns[m.pattern().as_usize()],
+        Match(m.end()),
+      ))
+      .ok_or_else(|| LexNotFound)
+  }
+}
+
+struct LexNotFound;
+
+type LexResult<T> = Result<T, LexNotFound>;
 
 pub struct Lexer<'a> {
   source: &'a [u8],
@@ -81,6 +117,10 @@ impl<'a> Lexer<'a> {
       source: code,
       next: 0,
     }
+  }
+
+  pub fn next(&self) -> usize {
+    self.next
   }
 
   fn end(&self) -> usize {
@@ -99,22 +139,23 @@ impl<'a> Lexer<'a> {
     Loc(self.end(), self.end())
   }
 
-  fn error(&self, typ: SyntaxErrorType) -> SyntaxError {
-    Loc(self.next, self.end()).error(typ, None)
-  }
-
   fn at_end(&self) -> bool {
     self.next >= self.end()
   }
 
-  fn peek(&self, n: usize) -> SyntaxResult<u8> {
+  fn peek(&self, n: usize) -> LexResult<u8> {
     self
       .peek_or_eof(n)
-      .ok_or_else(|| self.error(SyntaxErrorType::UnexpectedEnd))
+      .ok_or_else(|| LexNotFound)
   }
 
   fn peek_or_eof(&self, n: usize) -> Option<u8> {
     self.source.get(self.next + n).copied()
+  }
+
+  /// WARNING: Prefer checkpoints instead. Only use this if you know what you're doing.
+  pub fn set_next(&mut self, next: usize) {
+    self.next = next;
   }
 
   pub fn checkpoint(&self) -> LexerCheckpoint {
@@ -129,49 +170,47 @@ impl<'a> Lexer<'a> {
     self.next = checkpoint.next;
   }
 
-  fn n(&self, n: usize) -> SyntaxResult<Match> {
+  fn n(&self, n: usize) -> LexResult<Match> {
     if self.next + n > self.end() {
-      return Err(self.error(SyntaxErrorType::UnexpectedEnd));
+      return Err(LexNotFound);
     };
-    Ok(Match { len: n })
+    Ok(Match(n))
   }
 
   fn if_char(&self, c: u8) -> Match {
-    Match {
-      len: (!self.at_end() && self.source[self.next] == c) as usize,
-    }
+    Match(
+      (!self.at_end() && self.source[self.next] == c) as usize,
+    )
   }
 
   fn through_char_or_end(&self, c: u8) -> Match {
     memchr(c, &self.source[self.next..])
-      .map(|pos| Match { len: pos + 1 })
-      .unwrap_or_else(|| Match {
-        len: self.remaining(),
-      })
+      .map(|pos| Match(pos + 1))
+      .unwrap_or_else(|| Match(self.remaining()))
   }
 
-  fn through_char(&self, c: u8) -> SyntaxResult<Match> {
+  fn through_char(&self, c: u8) -> LexResult<Match> {
     memchr(c, &self.source[self.next..])
-      .map(|pos| Match { len: pos + 1 })
-      .ok_or_else(|| self.error(SyntaxErrorType::UnexpectedEnd))
+      .map(|pos| Match(pos + 1))
+      .ok_or_else(|| LexNotFound)
   }
 
   fn while_not_char(&self, a: u8) -> Match {
-    Match {
-      len: memchr(a, &self.source[self.next..]).unwrap_or(self.remaining()),
-    }
+    Match(
+      memchr(a, &self.source[self.next..]).unwrap_or(self.remaining()),
+    )
   }
 
   fn while_not_2_chars(&self, a: u8, b: u8) -> Match {
-    Match {
-      len: memchr2(a, b, &self.source[self.next..]).unwrap_or(self.remaining()),
-    }
+    Match(
+      memchr2(a, b, &self.source[self.next..]).unwrap_or(self.remaining()),
+    )
   }
 
   fn while_not_3_chars(&self, a: u8, b: u8, c: u8) -> Match {
-    Match {
-      len: memchr3(a, b, c, &self.source[self.next..]).unwrap_or(self.remaining()),
-    }
+    Match(
+      memchr3(a, b, c, &self.source[self.next..]).unwrap_or(self.remaining()),
+    )
   }
 
   fn while_chars(&self, chars: &CharFilter) -> Match {
@@ -179,28 +218,19 @@ impl<'a> Lexer<'a> {
     while len < self.remaining() && chars.has(self.source[self.next + len]) {
       len += 1;
     }
-    Match { len }
-  }
-
-  fn aho_corasick(&self, ac: &AhoCorasick, anchored: Anchored) -> SyntaxResult<AhoCorasickMatch> {
-    ac.find(Input::new(&self.source[self.next..]).anchored(anchored))
-      .map(|m| AhoCorasickMatch {
-        id: m.pattern().as_usize(),
-        mat: Match { len: m.end() },
-      })
-      .ok_or_else(|| self.error(SyntaxErrorType::ExpectedNotFound))
+    Match(len)
   }
 
   fn range(&self, m: Match) -> Loc {
-    Loc(self.next, self.next + m.len)
+    Loc(self.next, self.next + m.len())
   }
 
   fn consume(&mut self, m: Match) -> Match {
-    self.next += m.len;
+    self.next += m.len();
     m
   }
 
-  fn consume_next(&mut self) -> SyntaxResult<u8> {
+  fn consume_next(&mut self) -> LexResult<u8> {
     let c = self.peek(0)?;
     self.next += 1;
     Ok(c)
@@ -209,6 +239,20 @@ impl<'a> Lexer<'a> {
   fn skip_expect(&mut self, n: usize) {
     debug_assert!(self.next + n <= self.end());
     self.next += n;
+  }
+
+  fn drive_fallible(&mut self, preceded_by_line_terminator: bool, f: impl FnOnce(&mut Self) -> LexResult<TT>) -> Token {
+    let cp = self.checkpoint();
+    let typ = f(self).unwrap_or(TT::Invalid);
+    Token {
+      loc: self.since_checkpoint(cp),
+      typ,
+      preceded_by_line_terminator,
+    }
+  }
+
+  fn drive(&mut self, preceded_by_line_terminator: bool, f: impl FnOnce(&mut Self) -> TT) -> Token {
+    self.drive_fallible(preceded_by_line_terminator, |lexer| Ok(f(lexer)))
   }
 }
 
@@ -223,126 +267,126 @@ impl<'a> Index<Loc> for Lexer<'a> {
 impl<'a> Index<Match> for Lexer<'a> {
   type Output = [u8];
 
-  fn index(&self, index: Match) -> &Self::Output {
-    &self.source[self.next - index.len..self.next]
+  fn index(&self, m: Match) -> &Self::Output {
+    &self.source[self.next - m.len()..self.next]
   }
 }
 
 #[rustfmt::skip]
-pub static OPERATORS_MAPPING: Lazy<HashMap<TokenType, &'static [u8]>> = Lazy::new(|| {
-  let mut map = HashMap::<TokenType, &'static [u8]>::new();
-  map.insert(TokenType::Ampersand, b"&");
-  map.insert(TokenType::AmpersandAmpersand, b"&&");
-  map.insert(TokenType::AmpersandAmpersandEquals, b"&&=");
-  map.insert(TokenType::AmpersandEquals, b"&=");
-  map.insert(TokenType::Asterisk, b"*");
-  map.insert(TokenType::AsteriskAsterisk, b"**");
-  map.insert(TokenType::AsteriskAsteriskEquals, b"**=");
-  map.insert(TokenType::AsteriskEquals, b"*=");
-  map.insert(TokenType::Bar, b"|");
-  map.insert(TokenType::BarBar, b"||");
-  map.insert(TokenType::BarBarEquals, b"||=");
-  map.insert(TokenType::BarEquals, b"|=");
-  map.insert(TokenType::BraceClose, b"}");
-  map.insert(TokenType::BraceOpen, b"{");
-  map.insert(TokenType::BracketClose, b"]");
-  map.insert(TokenType::BracketOpen, b"[");
-  map.insert(TokenType::Caret, b"^");
-  map.insert(TokenType::CaretEquals, b"^=");
-  map.insert(TokenType::ChevronLeft, b"<");
-  map.insert(TokenType::ChevronLeftChevronLeft, b"<<");
-  map.insert(TokenType::ChevronLeftChevronLeftEquals, b"<<=");
-  map.insert(TokenType::ChevronLeftEquals, b"<=");
-  map.insert(TokenType::ChevronRight, b">");
-  map.insert(TokenType::ChevronRightChevronRight, b">>");
-  map.insert(TokenType::ChevronRightChevronRightChevronRight, b">>>");
-  map.insert(TokenType::ChevronRightChevronRightChevronRightEquals, b">>>=");
-  map.insert(TokenType::ChevronRightChevronRightEquals, b">>=");
-  map.insert(TokenType::ChevronRightEquals, b">=");
-  map.insert(TokenType::Colon, b":");
-  map.insert(TokenType::Comma, b",");
-  map.insert(TokenType::Dot, b".");
-  map.insert(TokenType::DotDotDot, b"...");
-  map.insert(TokenType::Equals, b"=");
-  map.insert(TokenType::EqualsChevronRight, b"=>");
-  map.insert(TokenType::EqualsEquals, b"==");
-  map.insert(TokenType::EqualsEqualsEquals, b"===");
-  map.insert(TokenType::Exclamation, b"!");
-  map.insert(TokenType::ExclamationEquals, b"!=");
-  map.insert(TokenType::ExclamationEqualsEquals, b"!==");
-  map.insert(TokenType::Hyphen, b"-");
-  map.insert(TokenType::HyphenEquals, b"-=");
-  map.insert(TokenType::HyphenHyphen, b"--");
-  map.insert(TokenType::ParenthesisClose, b")");
-  map.insert(TokenType::ParenthesisOpen, b"(");
-  map.insert(TokenType::Percent, b"%");
-  map.insert(TokenType::PercentEquals, b"%=");
-  map.insert(TokenType::Plus, b"+");
-  map.insert(TokenType::PlusEquals, b"+=");
-  map.insert(TokenType::PlusPlus, b"++");
-  map.insert(TokenType::PrivateMember, b"#");
-  map.insert(TokenType::Question, b"?");
-  map.insert(TokenType::QuestionDot, b"?.");
-  map.insert(TokenType::QuestionDotBracketOpen, b"?.[");
-  map.insert(TokenType::QuestionDotParenthesisOpen, b"?.(");
-  map.insert(TokenType::QuestionQuestion, b"??");
-  map.insert(TokenType::QuestionQuestionEquals, b"??=");
-  map.insert(TokenType::Semicolon, b";");
-  map.insert(TokenType::Slash, b"/");
-  map.insert(TokenType::SlashEquals, b"/=");
-  map.insert(TokenType::Tilde, b"~");
+pub static OPERATORS_MAPPING: Lazy<HashMap<TT, &'static [u8]>> = Lazy::new(|| {
+  let mut map = HashMap::<TT, &'static [u8]>::new();
+  map.insert(TT::Ampersand, b"&");
+  map.insert(TT::AmpersandAmpersand, b"&&");
+  map.insert(TT::AmpersandAmpersandEquals, b"&&=");
+  map.insert(TT::AmpersandEquals, b"&=");
+  map.insert(TT::Asterisk, b"*");
+  map.insert(TT::AsteriskAsterisk, b"**");
+  map.insert(TT::AsteriskAsteriskEquals, b"**=");
+  map.insert(TT::AsteriskEquals, b"*=");
+  map.insert(TT::Bar, b"|");
+  map.insert(TT::BarBar, b"||");
+  map.insert(TT::BarBarEquals, b"||=");
+  map.insert(TT::BarEquals, b"|=");
+  map.insert(TT::BraceClose, b"}");
+  map.insert(TT::BraceOpen, b"{");
+  map.insert(TT::BracketClose, b"]");
+  map.insert(TT::BracketOpen, b"[");
+  map.insert(TT::Caret, b"^");
+  map.insert(TT::CaretEquals, b"^=");
+  map.insert(TT::ChevronLeft, b"<");
+  map.insert(TT::ChevronLeftChevronLeft, b"<<");
+  map.insert(TT::ChevronLeftChevronLeftEquals, b"<<=");
+  map.insert(TT::ChevronLeftEquals, b"<=");
+  map.insert(TT::ChevronRight, b">");
+  map.insert(TT::ChevronRightChevronRight, b">>");
+  map.insert(TT::ChevronRightChevronRightChevronRight, b">>>");
+  map.insert(TT::ChevronRightChevronRightChevronRightEquals, b">>>=");
+  map.insert(TT::ChevronRightChevronRightEquals, b">>=");
+  map.insert(TT::ChevronRightEquals, b">=");
+  map.insert(TT::Colon, b":");
+  map.insert(TT::Comma, b",");
+  map.insert(TT::Dot, b".");
+  map.insert(TT::DotDotDot, b"...");
+  map.insert(TT::Equals, b"=");
+  map.insert(TT::EqualsChevronRight, b"=>");
+  map.insert(TT::EqualsEquals, b"==");
+  map.insert(TT::EqualsEqualsEquals, b"===");
+  map.insert(TT::Exclamation, b"!");
+  map.insert(TT::ExclamationEquals, b"!=");
+  map.insert(TT::ExclamationEqualsEquals, b"!==");
+  map.insert(TT::Hyphen, b"-");
+  map.insert(TT::HyphenEquals, b"-=");
+  map.insert(TT::HyphenHyphen, b"--");
+  map.insert(TT::ParenthesisClose, b")");
+  map.insert(TT::ParenthesisOpen, b"(");
+  map.insert(TT::Percent, b"%");
+  map.insert(TT::PercentEquals, b"%=");
+  map.insert(TT::Plus, b"+");
+  map.insert(TT::PlusEquals, b"+=");
+  map.insert(TT::PlusPlus, b"++");
+  map.insert(TT::PrivateMember, b"#");
+  map.insert(TT::Question, b"?");
+  map.insert(TT::QuestionDot, b"?.");
+  map.insert(TT::QuestionDotBracketOpen, b"?.[");
+  map.insert(TT::QuestionDotParenthesisOpen, b"?.(");
+  map.insert(TT::QuestionQuestion, b"??");
+  map.insert(TT::QuestionQuestionEquals, b"??=");
+  map.insert(TT::Semicolon, b";");
+  map.insert(TT::Slash, b"/");
+  map.insert(TT::SlashEquals, b"/=");
+  map.insert(TT::Tilde, b"~");
   map
 });
 
-pub static KEYWORDS_MAPPING: Lazy<HashMap<TokenType, &'static [u8]>> = Lazy::new(|| {
-  let mut map = HashMap::<TokenType, &'static [u8]>::new();
-  map.insert(TokenType::KeywordAs, b"as");
-  map.insert(TokenType::KeywordAsync, b"async");
-  map.insert(TokenType::KeywordAwait, b"await");
-  map.insert(TokenType::KeywordBreak, b"break");
-  map.insert(TokenType::KeywordCase, b"case");
-  map.insert(TokenType::KeywordCatch, b"catch");
-  map.insert(TokenType::KeywordClass, b"class");
-  map.insert(TokenType::KeywordConst, b"const");
-  map.insert(TokenType::KeywordConstructor, b"constructor");
-  map.insert(TokenType::KeywordContinue, b"continue");
-  map.insert(TokenType::KeywordDebugger, b"debugger");
-  map.insert(TokenType::KeywordDefault, b"default");
-  map.insert(TokenType::KeywordDelete, b"delete");
-  map.insert(TokenType::KeywordDo, b"do");
-  map.insert(TokenType::KeywordElse, b"else");
-  map.insert(TokenType::KeywordEnum, b"enum");
-  map.insert(TokenType::KeywordExport, b"export");
-  map.insert(TokenType::KeywordExtends, b"extends");
-  map.insert(TokenType::KeywordFinally, b"finally");
-  map.insert(TokenType::KeywordFor, b"for");
-  map.insert(TokenType::KeywordFrom, b"from");
-  map.insert(TokenType::KeywordFunction, b"function");
-  map.insert(TokenType::KeywordGet, b"get");
-  map.insert(TokenType::KeywordIf, b"if");
-  map.insert(TokenType::KeywordImport, b"import");
-  map.insert(TokenType::KeywordIn, b"in");
-  map.insert(TokenType::KeywordInstanceof, b"instanceof");
-  map.insert(TokenType::KeywordLet, b"let");
-  map.insert(TokenType::KeywordNew, b"new");
-  map.insert(TokenType::KeywordOf, b"of");
-  map.insert(TokenType::KeywordReturn, b"return");
-  map.insert(TokenType::KeywordSet, b"set");
-  map.insert(TokenType::KeywordStatic, b"static");
-  map.insert(TokenType::KeywordSuper, b"super");
-  map.insert(TokenType::KeywordSwitch, b"switch");
-  map.insert(TokenType::KeywordThis, b"this");
-  map.insert(TokenType::KeywordThrow, b"throw");
-  map.insert(TokenType::KeywordTry, b"try");
-  map.insert(TokenType::KeywordTypeof, b"typeof");
-  map.insert(TokenType::KeywordVar, b"var");
-  map.insert(TokenType::KeywordVoid, b"void");
-  map.insert(TokenType::KeywordWhile, b"while");
-  map.insert(TokenType::KeywordWith, b"with");
-  map.insert(TokenType::KeywordYield, b"yield");
-  map.insert(TokenType::LiteralFalse, b"false");
-  map.insert(TokenType::LiteralNull, b"null");
-  map.insert(TokenType::LiteralTrue, b"true");
+pub static KEYWORDS_MAPPING: Lazy<HashMap<TT, &'static [u8]>> = Lazy::new(|| {
+  let mut map = HashMap::<TT, &'static [u8]>::new();
+  map.insert(TT::KeywordAs, b"as");
+  map.insert(TT::KeywordAsync, b"async");
+  map.insert(TT::KeywordAwait, b"await");
+  map.insert(TT::KeywordBreak, b"break");
+  map.insert(TT::KeywordCase, b"case");
+  map.insert(TT::KeywordCatch, b"catch");
+  map.insert(TT::KeywordClass, b"class");
+  map.insert(TT::KeywordConst, b"const");
+  map.insert(TT::KeywordConstructor, b"constructor");
+  map.insert(TT::KeywordContinue, b"continue");
+  map.insert(TT::KeywordDebugger, b"debugger");
+  map.insert(TT::KeywordDefault, b"default");
+  map.insert(TT::KeywordDelete, b"delete");
+  map.insert(TT::KeywordDo, b"do");
+  map.insert(TT::KeywordElse, b"else");
+  map.insert(TT::KeywordEnum, b"enum");
+  map.insert(TT::KeywordExport, b"export");
+  map.insert(TT::KeywordExtends, b"extends");
+  map.insert(TT::KeywordFinally, b"finally");
+  map.insert(TT::KeywordFor, b"for");
+  map.insert(TT::KeywordFrom, b"from");
+  map.insert(TT::KeywordFunction, b"function");
+  map.insert(TT::KeywordGet, b"get");
+  map.insert(TT::KeywordIf, b"if");
+  map.insert(TT::KeywordImport, b"import");
+  map.insert(TT::KeywordIn, b"in");
+  map.insert(TT::KeywordInstanceof, b"instanceof");
+  map.insert(TT::KeywordLet, b"let");
+  map.insert(TT::KeywordNew, b"new");
+  map.insert(TT::KeywordOf, b"of");
+  map.insert(TT::KeywordReturn, b"return");
+  map.insert(TT::KeywordSet, b"set");
+  map.insert(TT::KeywordStatic, b"static");
+  map.insert(TT::KeywordSuper, b"super");
+  map.insert(TT::KeywordSwitch, b"switch");
+  map.insert(TT::KeywordThis, b"this");
+  map.insert(TT::KeywordThrow, b"throw");
+  map.insert(TT::KeywordTry, b"try");
+  map.insert(TT::KeywordTypeof, b"typeof");
+  map.insert(TT::KeywordVar, b"var");
+  map.insert(TT::KeywordVoid, b"void");
+  map.insert(TT::KeywordWhile, b"while");
+  map.insert(TT::KeywordWith, b"with");
+  map.insert(TT::KeywordYield, b"yield");
+  map.insert(TT::LiteralFalse, b"false");
+  map.insert(TT::LiteralNull, b"null");
+  map.insert(TT::LiteralTrue, b"true");
   map
 });
 
@@ -352,76 +396,115 @@ pub static KEYWORD_STRS: Lazy<HashMap<&'static [u8], usize>> = Lazy::new(|| {
   )
 });
 
-// This has a specific order so that when we use MATCHER, we can find the corresponding TokenType.
-static PATTERNS: Lazy<Vec<(TokenType, &'static [u8])>> = Lazy::new(|| {
-  let mut patterns: Vec<(TokenType, &'static [u8])> = Vec::new();
+#[rustfmt::skip]
+static SIG: Lazy<PatternMatcher> = Lazy::new(|| {
+  let mut patterns: Vec<(TT, Vec<u8>)> = Vec::new();
   for (&k, &v) in OPERATORS_MAPPING.iter() {
-    patterns.push((k, v));
+    patterns.push((k, v.into()));
   }
   for (&k, &v) in KEYWORDS_MAPPING.iter() {
-    patterns.push((k, &v));
+    patterns.push((k, v.into()));
+    // Avoid accidentally matching an identifier starting with a keyword as a keyword.
+    for &c in ID_CONTINUE_CHARSTR {
+      let mut v = v.to_vec();
+      v.push(c);
+      if !KEYWORD_STRS.contains_key(v.as_slice()) {
+        patterns.push((TT::Identifier, v));
+      }
+    }
   }
-  patterns.push((TokenType::ChevronLeftSlash, b"</"));
-  patterns.push((TokenType::CommentMultiple, b"/*"));
-  patterns.push((TokenType::CommentSingle, b"//"));
-  for c in ID_START_CHARSTR.chunks(1) {
-    patterns.push((TokenType::Identifier, c));
+  // TODO We assume that if it's a UTF-8 non-ASCII sequence it's an identifier, but JS only allows a few Unicode property types as identifiers.
+  for c in 0..255 {
+    if ID_START.has(c) || c >> 5 == 0b110 || c >> 4 == 0b1110 || c >> 3 == 0b11110 {
+      patterns.push((TT::Identifier, vec![c]));
+    }
   }
   for c in b"0123456789".chunks(1) {
-    patterns.push((TokenType::LiteralNumber, c));
+    patterns.push((TT::LiteralNumber, c.into()));
   }
-  patterns.push((TokenType::LiteralNumberBin, b"0b"));
-  patterns.push((TokenType::LiteralNumberBin, b"0B"));
-  patterns.push((TokenType::LiteralNumberHex, b"0x"));
-  patterns.push((TokenType::LiteralNumberHex, b"0X"));
-  patterns.push((TokenType::LiteralNumberOct, b"0o"));
-  patterns.push((TokenType::LiteralNumberOct, b"0O"));
+  patterns.push((TT::LiteralNumberBin, b"0b".into()));
+  patterns.push((TT::LiteralNumberBin, b"0B".into()));
+  patterns.push((TT::LiteralNumberHex, b"0x".into()));
+  patterns.push((TT::LiteralNumberHex, b"0X".into()));
+  patterns.push((TT::LiteralNumberOct, b"0o".into()));
+  patterns.push((TT::LiteralNumberOct, b"0O".into()));
   // Prevent `.` immediately followed by a digit from being recognised as the `.` operator.
   for c in b".0.1.2.3.4.5.6.7.8.9".chunks(2) {
-    patterns.push((TokenType::LiteralNumber, c));
+    patterns.push((TT::LiteralNumber, c.into()));
   }
   // Prevent `?` immediately followed by a decimal number from being recognised as the `?.` operator.
   for c in b"?.0?.1?.2?.3?.4?.5?.6?.7?.8?.9".chunks(3) {
-    patterns.push((TokenType::Question, c));
+    patterns.push((TT::Question, c.into()));
   }
-  patterns.push((TokenType::LiteralString, b"\""));
-  patterns.push((TokenType::LiteralString, b"'"));
-  patterns.push((TokenType::LiteralTemplatePartString, b"`"));
-  patterns
+  patterns.push((TT::ChevronLeftSlash, b"</".into()));
+  patterns.push((TT::LiteralString, b"\"".into()));
+  patterns.push((TT::LiteralString, b"'".into()));
+  patterns.push((TT::LiteralTemplatePartString, b"`".into()));
+
+  PatternMatcher::new(true, patterns)
 });
 
-static MATCHER: Lazy<AhoCorasick> = Lazy::new(|| {
-  AhoCorasickBuilder::new()
-    .start_kind(StartKind::Anchored)
-    .kind(Some(AhoCorasickKind::DFA))
-    .match_kind(MatchKind::LeftmostLongest)
-    .build(PATTERNS.iter().map(|(_, pat)| pat))
-    .unwrap()
+static ML_COMMENT: Lazy<PatternMatcher> = Lazy::new(|| {
+  PatternMatcher::new::<&[u8]>(false, vec![
+    (TT::CommentMultilineEnd, b"*/"),
+    // WARNING: Does not consider Unicode whitespace allowed by spec.
+    (TT::LineTerminator, b"\r"),
+    (TT::LineTerminator, b"\n"),
+  ])
 });
 
-static COMMENT_END: Lazy<AhoCorasick> = Lazy::new(|| AhoCorasick::new([b"*/"]).unwrap());
+static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
+  // WARNING: Does not consider Unicode whitespace allowed by spec.
+  PatternMatcher::new::<&[u8]>(
+    true,
+    vec![
+      (TT::LineTerminator, b"\r"),
+      (TT::LineTerminator, b"\n"),
+      (TT::Whitespace, b"\x09"),
+      (TT::Whitespace, b"\x0b"),
+      (TT::Whitespace, b"\x0c"),
+      (TT::Whitespace, b"\x20"),
+      (TT::CommentMultiline, b"/*"),
+      (TT::CommentSingle, b"//"),
+    ],
+  )
+});
 
-fn lex_multiple_comment(lexer: &mut Lexer<'_>) -> SyntaxResult<()> {
+/// Returns whether the comment includes a line terminator.
+fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
   // Consume `/*`.
   lexer.skip_expect(2);
-  lexer.consume(lexer.aho_corasick(&COMMENT_END, Anchored::No)?.mat);
-  Ok(())
+  let mut contains_newline = false;
+  loop {
+    let (tt, mat) = ML_COMMENT
+      .find(lexer)
+      // We can't reject with an error, so we just consume the rest of the source code if no matching `*/` is found.
+      .unwrap_or_else(|_| (TT::EOF, Match(lexer.remaining())));
+    lexer.consume(mat);
+    match tt {
+      TT::CommentMultiline | TT::EOF => {
+        break;
+      }
+      TT::LineTerminator => {
+        contains_newline = true;
+      }
+      _ => unreachable!(),
+    };
+  };
+  contains_newline
 }
 
-fn lex_single_comment(lexer: &mut Lexer<'_>) -> SyntaxResult<()> {
+fn lex_single_comment(lexer: &mut Lexer<'_>) {
   // Consume `//`.
   lexer.skip_expect(2);
   // WARNING: Does not consider other line terminators allowed by spec.
   lexer.consume(lexer.through_char_or_end(b'\n'));
-  Ok(())
 }
 
 fn lex_identifier(
   lexer: &mut Lexer<'_>,
   mode: LexMode,
-  preceded_by_line_terminator: bool,
-) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+) -> TT {
   // Consume starter.
   lexer.skip_expect(1);
   loop {
@@ -436,32 +519,22 @@ fn lex_identifier(
     };
     lexer.skip_expect(1);
   }
-  Ok(Token::new(
-    lexer.since_checkpoint(cp),
-    TokenType::Identifier,
-    preceded_by_line_terminator,
-  ))
+  TT::Identifier
 }
 
 fn lex_bigint_or_number(
   lexer: &mut Lexer<'_>,
-  preceded_by_line_terminator: bool,
-) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+) -> LexResult<TT> {
   // TODO
   lexer.consume(lexer.while_chars(&DIGIT));
   if !lexer.consume(lexer.if_char(b'n')).is_empty() {
-    return Ok(Token::new(
-      lexer.since_checkpoint(cp),
-      TokenType::LiteralBigInt,
-      preceded_by_line_terminator,
-    ));
+    return Ok(TT::LiteralBigInt);
   }
   lexer.consume(lexer.if_char(b'.'));
   lexer.consume(lexer.while_chars(&DIGIT));
   if lexer
     .peek_or_eof(0)
-    .filter(|&c| c == b'e' || c == b'E')
+    .filter(|&c| matches!(c,  b'e' | b'E'))
     .is_some()
   {
     lexer.skip_expect(1);
@@ -471,85 +544,49 @@ fn lex_bigint_or_number(
     };
     lexer.consume(lexer.while_chars(&DIGIT));
   }
-  Ok(Token::new(
-    lexer.since_checkpoint(cp),
-    TokenType::LiteralNumber,
-    preceded_by_line_terminator,
-  ))
+  Ok(TT::LiteralNumber)
 }
 
-fn lex_bigint_or_number_bin(
+fn lex_binary_bigint_or_number(
   lexer: &mut Lexer<'_>,
-  preceded_by_line_terminator: bool,
-) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+) -> TT {
   lexer.skip_expect(2);
   lexer.consume(lexer.while_chars(&DIGIT_BIN));
   if !lexer.consume(lexer.if_char(b'n')).is_empty() {
-    return Ok(Token::new(
-      lexer.since_checkpoint(cp),
-      TokenType::LiteralBigInt,
-      preceded_by_line_terminator,
-    ));
+    return TT::LiteralBigInt;
   }
-  Ok(Token::new(
-    lexer.since_checkpoint(cp),
-    TokenType::LiteralNumber,
-    preceded_by_line_terminator,
-  ))
+  TT::LiteralNumber
 }
 
-fn lex_bigint_or_number_hex(
+fn lex_hex_bigint_or_number(
   lexer: &mut Lexer<'_>,
-  preceded_by_line_terminator: bool,
-) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+) -> TT {
   lexer.skip_expect(2);
   lexer.consume(lexer.while_chars(&DIGIT_HEX));
   if !lexer.consume(lexer.if_char(b'n')).is_empty() {
-    return Ok(Token::new(
-      lexer.since_checkpoint(cp),
-      TokenType::LiteralBigInt,
-      preceded_by_line_terminator,
-    ));
+    return TT::LiteralBigInt;
   }
-  Ok(Token::new(
-    lexer.since_checkpoint(cp),
-    TokenType::LiteralNumber,
-    preceded_by_line_terminator,
-  ))
+  TT::LiteralNumber
 }
 
-fn lex_bigint_or_number_oct(
+fn lex_oct_bigint_or_number(
   lexer: &mut Lexer<'_>,
-  preceded_by_line_terminator: bool,
-) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+) -> TT {
   lexer.skip_expect(2);
   lexer.consume(lexer.while_chars(&DIGIT_OCT));
   if !lexer.consume(lexer.if_char(b'n')).is_empty() {
-    return Ok(Token::new(
-      lexer.since_checkpoint(cp),
-      TokenType::LiteralBigInt,
-      preceded_by_line_terminator,
-    ));
+    return TT::LiteralBigInt;
   }
-  Ok(Token::new(
-    lexer.since_checkpoint(cp),
-    TokenType::LiteralNumber,
-    preceded_by_line_terminator,
-  ))
+  TT::LiteralNumber
 }
 
 fn lex_private_member(
   lexer: &mut Lexer<'_>,
-  preceded_by_line_terminator: bool,
-) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+) -> LexResult<TT> {
   // Include the `#` in the token.
   lexer.skip_expect(1);
   if !ID_START.has(lexer.peek(0)?) {
-    return Err(lexer.error(SyntaxErrorType::ExpectedSyntax("private member")));
+    return Ok(TT::Invalid);
   };
   lexer.skip_expect(1);
   // TODO This is copied from lex_identifier.
@@ -561,16 +598,11 @@ fn lex_private_member(
     };
     lexer.skip_expect(1);
   }
-  Ok(Token::new(
-    lexer.since_checkpoint(cp),
-    TokenType::PrivateMember,
-    preceded_by_line_terminator,
-  ))
+  Ok(TT::PrivateMember)
 }
 
 // TODO Validate regex.
-fn lex_regex(lexer: &mut Lexer<'_>, preceded_by_line_terminator: bool) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   // Consume slash.
   lexer.consume(lexer.n(1)?);
   let mut in_charset = false;
@@ -581,7 +613,7 @@ fn lex_regex(lexer: &mut Lexer<'_>, preceded_by_line_terminator: bool) -> Syntax
         // Cannot escape line terminator.
         // WARNING: Does not consider other line terminators allowed by spec.
         if lexer.peek(1)? == b'\n' {
-          return Err(lexer.error(SyntaxErrorType::LineTerminatorInRegex));
+          return Ok(TT::Invalid);
         };
         lexer.skip_expect(1);
       }
@@ -595,33 +627,28 @@ fn lex_regex(lexer: &mut Lexer<'_>, preceded_by_line_terminator: bool) -> Syntax
         in_charset = false;
       }
       b'\n' => {
-        return Err(lexer.error(SyntaxErrorType::LineTerminatorInRegex));
+        return Ok(TT::Invalid);
       }
       _ => {}
     };
   }
   lexer.consume(lexer.while_chars(&ID_CONTINUE));
-  Ok(Token::new(
-    lexer.since_checkpoint(cp),
-    TokenType::LiteralRegex,
-    preceded_by_line_terminator,
-  ))
+  Ok(TT::LiteralRegex)
 }
 
 // TODO Validate string.
-fn lex_string(lexer: &mut Lexer<'_>, preceded_by_line_terminator: bool) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let quote = lexer.peek(0)?;
   lexer.skip_expect(1);
   loop {
-    // WARNING: Does not consider other line terminators allowed by spec.
+    // TODO Does not consider other line terminators allowed by spec.
     lexer.consume(lexer.while_not_3_chars(b'\\', b'\n', quote));
     match lexer.peek(0)? {
       b'\\' => {
         lexer.consume(lexer.n(2)?);
       }
       b'\n' => {
-        return Err(lexer.error(SyntaxErrorType::LineTerminatorInString));
+        return Ok(TT::Invalid);
       }
       c if c == quote => {
         lexer.skip_expect(1);
@@ -630,20 +657,15 @@ fn lex_string(lexer: &mut Lexer<'_>, preceded_by_line_terminator: bool) -> Synta
       _ => unreachable!(),
     };
   }
-  Ok(Token::new(
-    lexer.since_checkpoint(cp),
-    TokenType::LiteralString,
-    preceded_by_line_terminator,
-  ))
+  Ok(TT::LiteralString)
 }
 
+/// Ends with `${` or backtick.
 pub fn lex_template_string_continue(
   lexer: &mut Lexer<'_>,
-  preceded_by_line_terminator: bool,
-) -> SyntaxResult<Token> {
-  let cp = lexer.checkpoint();
+) -> LexResult<TT> {
   let mut ended = false;
-  let loc = loop {
+  loop {
     lexer.consume(lexer.while_not_3_chars(b'\\', b'`', b'$'));
     match lexer.peek(0)? {
       b'\\' => {
@@ -651,15 +673,13 @@ pub fn lex_template_string_continue(
       }
       b'`' => {
         ended = true;
-        let loc = Some(lexer.since_checkpoint(cp));
         lexer.skip_expect(1);
-        break loc;
+        break;
       }
       b'$' => {
         if lexer.peek(1)? == b'{' {
-          let loc = Some(lexer.since_checkpoint(cp));
           lexer.skip_expect(2);
-          break loc;
+          break;
         } else {
           lexer.skip_expect(1);
         }
@@ -667,110 +687,77 @@ pub fn lex_template_string_continue(
       _ => unreachable!(),
     };
   };
-  Ok(Token::new(
-    loc.unwrap(),
-    if ended {
-      TokenType::LiteralTemplatePartStringEnd
-    } else {
-      TokenType::LiteralTemplatePartString
-    },
-    preceded_by_line_terminator,
-  ))
+  let typ = if ended {
+    TT::LiteralTemplatePartStringEnd
+  } else {
+    TT::LiteralTemplatePartString
+  };
+  Ok(typ)
 }
 
 // TODO Validate template.
-fn lex_template(lexer: &mut Lexer<'_>, preceded_by_line_terminator: bool) -> SyntaxResult<Token> {
+fn lex_template(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   // Consume backtick.
   lexer.skip_expect(1);
-  lex_template_string_continue(lexer, preceded_by_line_terminator)
+  lex_template_string_continue(lexer)
 }
 
-pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> SyntaxResult<Token> {
-  let mut preceded_by_line_terminator = false;
-  loop {
-    if mode == LexMode::JsxTextContent {
-      let cp = lexer.checkpoint();
-      // TODO Technically the spec specificies JSXText cannot contain '>' or '}' either.
+pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
+  if mode == LexMode::JsxTextContent {
+    return lexer.drive(false, |lexer| {
+      // TODO The spec says JSXText cannot contain '>' or '}' either.
       lexer.consume(lexer.while_not_2_chars(b'{', b'<'));
-      return Ok(Token::new(
-        lexer.since_checkpoint(cp),
-        TokenType::JsxTextContent,
-        false,
-      ));
-    };
+      TT::JsxTextContent
+    });
+  };
 
-    let ws = lexer.while_chars(&WHITESPACE);
-    lexer.consume(ws);
-    // If we are not in the first loop, we've skipped some comments, so preserve preceded_by_line_terminator set before any previous comment.
-    // WARNING: Does not consider other line terminators allowed by spec.
-    preceded_by_line_terminator =
-      preceded_by_line_terminator || memchr(b'\n', &lexer[ws]).is_some();
+  if mode == LexMode::TemplateStrContinue {
+    return lexer.drive_fallible(false, |lexer| lex_template_string_continue(lexer));
+  };
 
-    if lexer.at_end() {
-      return Ok(Token::new(
-        lexer.eof_range(),
-        TokenType::EOF,
-        preceded_by_line_terminator,
-      ));
-    };
-
-    // TODO We assume that if it's a UTF-8 non-ASCII sequence it's an identifier, but JS only allows a few Unicode property types as identifiers.
-    let is_utf8_start = if let Some(c) = lexer.peek_or_eof(0) {
-      c >> 5 == 0b110 || c >> 4 == 0b1110 || c >> 3 == 0b11110
-    } else {
-      false
-    };
-
-    if is_utf8_start {
-      return lex_identifier(lexer, mode, preceded_by_line_terminator);
-    };
-
-    let AhoCorasickMatch { id, mut mat } = lexer.aho_corasick(&MATCHER, Anchored::Yes)?;
-    match PATTERNS[id].0 {
-      TokenType::CommentMultiple => lex_multiple_comment(lexer)?,
-      TokenType::CommentSingle => {
-        // The lexer consumes the line terminator at the end of the comment, so any following syntax is technically preceded by at least one line terminator.
+  // Skip whitespace and comments before the next significant token.
+  let mut preceded_by_line_terminator = false;
+  while let Ok((tt, mat)) = INSIG.find(&lexer) {
+    match tt {
+      TT::LineTerminator => {
+        lexer.consume(mat);
         preceded_by_line_terminator = true;
-        lex_single_comment(lexer)?
       }
-      pat => {
-        return match pat {
-          TokenType::Identifier => lex_identifier(lexer, mode, preceded_by_line_terminator),
-          TokenType::LiteralNumber => lex_bigint_or_number(lexer, preceded_by_line_terminator),
-          TokenType::LiteralNumberBin => {
-            lex_bigint_or_number_bin(lexer, preceded_by_line_terminator)
-          }
-          TokenType::LiteralNumberHex => {
-            lex_bigint_or_number_hex(lexer, preceded_by_line_terminator)
-          }
-          TokenType::LiteralNumberOct => {
-            lex_bigint_or_number_oct(lexer, preceded_by_line_terminator)
-          }
-          TokenType::LiteralString => lex_string(lexer, preceded_by_line_terminator),
-          TokenType::LiteralTemplatePartString => lex_template(lexer, preceded_by_line_terminator),
-          TokenType::PrivateMember => lex_private_member(lexer, preceded_by_line_terminator),
-          TokenType::Slash | TokenType::SlashEquals if mode == LexMode::SlashIsRegex => {
-            lex_regex(lexer, preceded_by_line_terminator)
-          }
-          typ => {
-            if typ == TokenType::Question && mat.len() != 1 {
-              // We've matched `?.[0-9]`.
-              mat = mat.prefix(1);
-            } else if KEYWORDS_MAPPING.contains_key(&typ)
-              && lexer
-                .peek_or_eof(mat.len())
-                .filter(|c| ID_CONTINUE.has(*c))
-                .is_some()
-            {
-              // We've accidentally matched a prefix of an identifier as a keyword.
-              return lex_identifier(lexer, mode, preceded_by_line_terminator);
-            };
-            let loc = lexer.range(mat);
-            lexer.consume(mat);
-            Ok(Token::new(loc, typ, preceded_by_line_terminator))
-          }
-        };
+      TT::Whitespace => {
+        lexer.consume(mat);
       }
+      TT::CommentMultiline => {
+        let comment_has_line_terminator = lex_multiline_comment(lexer);
+        preceded_by_line_terminator |= comment_has_line_terminator;
+      }
+      TT::CommentSingle => {
+        // A single-line comment always ends with a line terminator.
+        preceded_by_line_terminator = true;
+        lex_single_comment(lexer);
+      }
+      _ => unreachable!(),
     };
-  }
+  };
+
+  lexer.drive_fallible(preceded_by_line_terminator, |lexer| {
+    SIG.find(lexer).and_then(|(tt, mut mat)| match tt {
+      TT::Identifier => Ok(lex_identifier(lexer, mode)),
+      TT::LiteralNumber => lex_bigint_or_number(lexer),
+      TT::LiteralNumberBin => Ok(lex_binary_bigint_or_number(lexer)),
+      TT::LiteralNumberHex => Ok(lex_hex_bigint_or_number(lexer)),
+      TT::LiteralNumberOct => Ok(lex_oct_bigint_or_number(lexer)),
+      TT::LiteralString => lex_string(lexer),
+      TT::LiteralTemplatePartString => lex_template(lexer),
+      TT::PrivateMember => lex_private_member(lexer),
+      TT::Slash | TT::SlashEquals if mode == LexMode::SlashIsRegex => lex_regex(lexer),
+      typ => {
+        if typ == TT::Question && mat.len() != 1 {
+          // We've matched `?.[0-9]`.
+          mat = mat.prefix(1);
+        };
+        lexer.consume(mat);
+        Ok(typ)
+      }
+    })
+  })
 }

@@ -1,5 +1,6 @@
 use optimize_js::{analysis::{interference::calculate_interference_graph, liveness::calculate_live_ins, register_alloc::allocate_registers, single_use_insts::analyse_single_use_defs}, dom::domtree::calculate_domtree, graph::{backedge::find_backedges_and_junctions, postorder::calculate_postorder}, il::inst::{Arg, BinOp, Const, Inst, UnOp}, Program, ProgramFunction};
-use parse_js::{ast::{Node, Syntax}, loc::Loc, operator::OperatorName};
+use parse_js::{ast::Syntax, loc::Loc, operator::OperatorName};
+use parse_js::ast::node::Node;
 
 fn reconstruct_fn(f: ProgramFunction) -> Node {
   let cfg = f.body;

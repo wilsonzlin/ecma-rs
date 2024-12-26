@@ -1,5 +1,6 @@
 use ahash::{HashMap, HashSet};
-use parse_js::{ast::{Node, Syntax}, loc::Loc, visit::{JourneyControls, Visitor}};
+use parse_js::{ast::Syntax, loc::Loc, visit::{JourneyControls, Visitor}};
+use parse_js::ast::node::Node;
 use symbol_js::symbol::{Scope, ScopeType, Symbol};
 
 // Four tasks (fill out each field as appropriate).
@@ -112,9 +113,9 @@ mod tests {
   use ahash::{HashMap, HashMapExt, HashSet};
   use parse_js::{parse, visit::Visitor};
   use symbol_js::{
-    compute_symbols,
-    symbol::{Scope, ScopeType, Symbol},
-    TopLevelMode,
+      compute_symbols,
+      symbol::{Scope, ScopeType, Symbol},
+      TopLevelMode,
   };
 
   use super::VarVisitor;
