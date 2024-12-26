@@ -23,8 +23,6 @@ use crate::ast::expr::CondExpr;
 use crate::ast::expr::Expr;
 use crate::ast::expr::FuncExpr;
 use crate::ast::expr::IdExpr;
-use crate::ast::expr::ImportExpr;
-use crate::ast::expr::ImportMeta;
 use crate::ast::expr::MemberExpr;
 use crate::ast::expr::SuperExpr;
 use crate::ast::expr::TaggedTemplateExpr;
@@ -199,7 +197,7 @@ impl<'a> Parser<'a> {
   pub fn func_expr(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<FuncExpr>> {
     self.with_loc(|p| {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
-      let start = p.require(TT::KeywordFunction)?.loc;
+      p.require(TT::KeywordFunction)?;
       let generator = p.consume_if(TT::Asterisk).is_match();
       let name = p.maybe_class_or_func_name(ctx);
       let func = p.with_loc(|p| {
@@ -260,9 +258,9 @@ impl<'a> Parser<'a> {
     terminators: [TT; N],
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
-    let (t, t2) = self.peek_2_with_mode(LexMode::SlashIsRegex);
+    let [t0, t1] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard]);
     // Handle unary operators before operand.
-    if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t.typ).filter(|operator| {
+    if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t0.typ).filter(|operator| {
       // TODO Is this correct? Should it be possible to use as operator or keyword depending on whether there is an operand following?
       (operator.name != OperatorName::Await && operator.name != OperatorName::Yield)
         || (operator.name == OperatorName::Await && !ctx.rules.await_allowed)
@@ -293,8 +291,8 @@ impl<'a> Parser<'a> {
     };
 
     // Check this before KeywordAsync.
-    if is_valid_pattern_identifier(t.typ, ctx.rules) {
-      return Ok(if t2.typ == TT::EqualsChevronRight {
+    if is_valid_pattern_identifier(t0.typ, ctx.rules) {
+      return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
         // NOTE: `await` is not allowed as an arrow function parameter, but we'll check this in parse_expr_arrow_function.
         self.arrow_func_expr(ctx, terminators)?.into_stx()
@@ -304,8 +302,8 @@ impl<'a> Parser<'a> {
     };
 
     #[rustfmt::skip]
-    let expr: Node<Expr> = match t.typ {
-      TT::KeywordAsync => match t2.typ {
+    let expr: Node<Expr> = match t0.typ {
+      TT::KeywordAsync => match t1.typ {
         TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_stx(),
         TT::KeywordFunction => self.func_expr(ctx)?.into_stx(),
         // `async` is being used as an identifier.
@@ -317,8 +315,8 @@ impl<'a> Parser<'a> {
       TT::KeywordClass => self.class_expr(ctx)?.into_stx(),
       TT::KeywordFunction => self.func_expr(ctx)?.into_stx(),
       TT::KeywordImport => self.import_expr(ctx)?.into_stx(),
-      TT::KeywordSuper => Node::new(t.loc, SuperExpr {}.into()),
-      TT::KeywordThis => Node::new(t.loc, ThisExpr {}.into()),
+      TT::KeywordSuper => self.super_expr()?.into_stx(),
+      TT::KeywordThis => self.this_expr()?.into_stx(),
       TT::LiteralBigInt => self.lit_bigint()?.into_stx(),
       TT::LiteralTrue | TT::LiteralFalse => self.lit_bool()?.into_stx(),
       TT::LiteralNull => self.lit_null()?.into_stx(),
@@ -327,7 +325,7 @@ impl<'a> Parser<'a> {
       TT::LiteralString => self.lit_str()?.into_stx(),
       TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self.lit_template(ctx)?.into_stx(),
       TT::ParenthesisOpen => self.arrow_function_or_grouping_expr(ctx, terminators, asi)?,
-      _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("expression operand"))),
+      _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand"))),
     };
     Ok(expr)
   }
@@ -488,5 +486,19 @@ impl<'a> Parser<'a> {
     }
 
     Ok(left)
+  }
+
+  pub fn super_expr(&mut self) -> SyntaxResult<Node<SuperExpr>> {
+    self.with_loc(|p| {
+      p.require(TT::KeywordSuper)?;
+      Ok(SuperExpr {}.into())
+    })
+  }
+
+  pub fn this_expr(&mut self) -> SyntaxResult<Node<ThisExpr>> {
+    self.with_loc(|p| {
+      p.require(TT::KeywordThis)?;
+      Ok(ThisExpr {}.into())
+    })
   }
 }

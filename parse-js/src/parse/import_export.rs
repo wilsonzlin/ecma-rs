@@ -135,7 +135,7 @@ impl<'a> Parser<'a> {
   // https://jakearchibald.com/2021/export-default-thing-vs-thing-as-default/
   pub fn export_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
     // TODO Ensure top-level.
-    let (t0, t1, t2) = self.peek_3();
+    let [t0, t1, t2] = self.peek_n();
     // The first token should always be `export`, but it will be parsed in the subroutines and not here.
     assert_eq!(t0.typ, TT::KeywordExport);
     #[rustfmt::skip]

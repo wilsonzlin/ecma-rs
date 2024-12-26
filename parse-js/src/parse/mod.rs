@@ -88,9 +88,8 @@ pub struct Parser<'a> {
 // We extend this struct with added methods in the various submodules, instead of simply using free functions and passing `&mut Parser` around, for several reasons:
 // - Avoid needing to redeclare `<'a>` on every function.
 // - More lifetime elision is available for `self` than if it was just another reference parameter.
-// - `self` is shorter than `parser` but makes more sense than `p`.
 // - Don't need to import each function.
-// - Autocomplete is more specific since `self.*` narrows down the options instead of just listing all visible functions (although almost every function currently starts with `parse_` so this is not as significant).
+// - Autocomplete is more specific since `self.*` narrows down the options instead of just listing all visible functions.
 // - For general consistency; if there's no reason why it should be a free function (e.g. more than one ambiguous base type), it should be a method.
 // - Makes free functions truly separate independent utility functions.
 impl<'a> Parser<'a> {
@@ -185,35 +184,20 @@ impl<'a> Parser<'a> {
     self.peek_with_mode(LexMode::Standard)
   }
 
-  pub fn peek_2_with_mode(&mut self, mode: LexMode) -> (Token, Token) {
+  pub fn peek_n_with_mode<const N: usize>(&mut self, modes: [LexMode; N]) -> [Token; N] {
     let cp = self.checkpoint();
-    let a = self.forward(mode, |_| true);
-    let b = self.forward(mode, |_| true);
+    let tokens = modes.into_iter().map(|m| self.forward(m, |_| true).1).collect::<Vec<_>>();
+    let tokens: [Token; N] = tokens.try_into().unwrap();
     self.restore_checkpoint(cp);
-    (a.1, b.1)
+    tokens
   }
 
-  pub fn peek_2(&mut self) -> (Token, Token) {
-    self.peek_2_with_mode(LexMode::Standard)
-  }
-
-  pub fn peek_3(&mut self) -> (Token, Token, Token) {
+  pub fn peek_n<const N: usize>(&mut self) -> [Token; N] {
     let cp = self.checkpoint();
-    let a = self.forward(LexMode::Standard, |_| true);
-    let b = self.forward(LexMode::Standard, |_| true);
-    let c = self.forward(LexMode::Standard, |_| true);
+    let tokens = (0..N).map(|_| self.forward(LexMode::Standard, |_| true).1).collect::<Vec<_>>();
+    let tokens: [Token; N] = tokens.try_into().unwrap();
     self.restore_checkpoint(cp);
-    (a.1, b.1, c.1)
-  }
-
-  pub fn peek_4(&mut self) -> (Token, Token, Token, Token) {
-    let cp = self.checkpoint();
-    let a = self.forward(LexMode::Standard, |_| true);
-    let b = self.forward(LexMode::Standard, |_| true);
-    let c = self.forward(LexMode::Standard, |_| true);
-    let d = self.forward(LexMode::Standard, |_| true);
-    self.restore_checkpoint(cp);
-    (a.1, b.1, c.1, d.1)
+    tokens
   }
 
   pub fn maybe_consume_with_mode(&mut self, typ: TT, mode: LexMode) -> MaybeToken {

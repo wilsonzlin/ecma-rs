@@ -40,7 +40,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
-    let (t0, t1) = self.peek_2();
+    let [t0, t1] = self.peek_n();
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match t0.typ {
       TT::BraceOpen => self.block_stmt(ctx)?.into_stx(),

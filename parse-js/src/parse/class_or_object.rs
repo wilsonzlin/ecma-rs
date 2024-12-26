@@ -191,7 +191,7 @@ impl<'a> Parser<'a> {
     statement_delimiter: TT,
     property_initialiser_asi: &mut Asi,
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
-    let (a, b, c, d) = self.peek_4();
+    let [a, b, c, d] = self.peek_n();
     Ok(match (a.typ, b.typ, c.typ, d.typ) {
       // Method. Includes using "get" or "set" as the method's name.
       (TT::KeywordAsync, TT::Asterisk, _, TT::ParenthesisOpen)

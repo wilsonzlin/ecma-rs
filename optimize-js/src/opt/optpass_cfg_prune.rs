@@ -29,7 +29,6 @@ fn can_prune_bblock(
   false
 }
 
-/// Remove bblocks that are the only child of their parent.
 pub fn optpass_cfg_prune(
   changed: &mut bool,
   cfg: &mut Cfg,
@@ -78,7 +77,7 @@ pub fn optpass_cfg_prune(
         cfg.graph.disconnect(parent, cur);
       };
 
-      // Detach.
+      // Pop from graph and bblocks.
       let insts = cfg.pop(cur);
       // Move insts to parents, before any CondGoto, and update that CondGoto.
       for &parent in parents.iter() {
@@ -97,7 +96,7 @@ pub fn optpass_cfg_prune(
             };
           }
           // Don't insert CondGoto if it's redundant now.
-          // (Other code, including within this function, assumes CondGoto means 2 children.)
+          // (Other code, including within this function, assume CondGoto means 2 children.)
           if inst.labels[0] == inst.labels[1] {
             continue;
           };
