@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize, Serializer};
 use crate::error::{SyntaxError, SyntaxErrorType};
 use crate::loc::Loc;
 
-#[derive(Default)]
+#[derive(Default, Drive, DriveMut)]
 pub struct NodeAssocData {
   // Make Node movable across threads (e.g. rayon) by bounding value to Send + Sync too.
+  #[drive(skip)]
   map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
@@ -31,7 +32,6 @@ pub struct Node<S: Drive + DriveMut> {
   #[drive(skip)]
   pub loc: Loc,
   pub stx: Box<S>,
-  #[drive(skip)]
   pub assoc: NodeAssocData,
 }
 

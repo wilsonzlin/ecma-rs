@@ -1,5 +1,6 @@
+use derive_visitor::DriveMut;
 use parse_js::ast::node::Node;
-use parse_js::visit::VisitorMut;
+use parse_js::ast::stx::TopLevel;
 use symbol::Scope;
 use symbol::ScopeType;
 use symbol::SymbolGenerator;
@@ -14,12 +15,12 @@ pub enum TopLevelMode {
   Module,
 }
 
-pub fn compute_symbols(top_level_node: &mut Node, top_level_mode: TopLevelMode) -> Scope {
+pub fn compute_symbols(top_level_node: &mut Node<TopLevel>, top_level_mode: TopLevelMode) -> Scope {
   let top_level_scope = Scope::new(SymbolGenerator::new(), None, match top_level_mode {
     TopLevelMode::Global => ScopeType::Global,
     TopLevelMode::Module => ScopeType::Module,
   });
   let mut visitor = DeclVisitor::new(top_level_scope.clone());
-  visitor.visit(top_level_node);
+  top_level_node.drive_mut(&mut visitor);
   top_level_scope
 }
