@@ -18,7 +18,7 @@ use crossbeam_utils::sync::WaitGroup;
 use dashmap::DashMap;
 use dom::Dom;
 use opt::{optpass_cfg_prune::optpass_cfg_prune, optpass_dvn::optpass_dvn, optpass_impossible_branches::optpass_impossible_branches, optpass_redundant_assigns::optpass_redundant_assigns, optpass_trivial_dce::optpass_trivial_dce};
-use parse_js::ast::Syntax;
+use parse_js::ast::{stmt::Stmt, stx::TopLevel};
 use serde::Serialize;
 use parse_js::ast::node::Node;
 use ssa::{ssa_deconstruct::deconstruct_ssa, ssa_insert_phis::insert_phis_for_ssa_construction, ssa_rename::rename_targets_for_ssa_construction};
@@ -35,17 +35,14 @@ pub struct ProgramFunction {
 
 pub fn compile_js_statements(
   program: &ProgramCompiler,
-  statements: &[Node],
+  statements: Vec<Node<Stmt>>,
 ) -> ProgramFunction {
   let mut dbg = program.debug.then(|| OptimizerDebug::new());
   let mut dbg_checkpoint = |name: &str, cfg: &Cfg| {
     dbg.as_mut().map(|dbg| dbg.add_step(name, cfg));
   };
 
-  // Label 0 is for entry.
-  let mut c_label = Counter::new(1);
-  let mut c_temp = Counter::new(0);
-  let insts = program.translate_source_to_inst(statements, &mut c_label, &mut c_temp);
+  let (insts, mut c_label, mut c_temp) = program.translate_source_to_inst(statements);
   let (bblocks, bblock_order) = convert_insts_to_bblocks(insts, &mut c_label);
   let mut cfg = Cfg::from_bblocks(bblocks, bblock_order);
   // Prune unreachable blocks from 0. This is necessary for dominance calculation to be correct (basic example: every block should be dominated by 0, but if there's an unreachable block it'll make all its descendants not dominated by 0).
@@ -80,15 +77,9 @@ pub fn compile_js_statements(
     // TODO Isn't this really const/copy propagation to child Phi insts?
     optpass_redundant_assigns(&mut changed, &mut cfg);
     dbg_checkpoint(&format!("opt{}_redundant_assigns", i), &cfg);
-    optpass_impossible_branches(
-      &mut changed,
-      &mut cfg,
-    );
+    optpass_impossible_branches(&mut changed, &mut cfg);
     dbg_checkpoint(&format!("opt{}_impossible_branches", i), &cfg);
-    optpass_cfg_prune(
-      &mut changed,
-      &mut cfg,
-    );
+    optpass_cfg_prune(&mut changed, &mut cfg);
     dbg_checkpoint(&format!("opt{}_cfg_prune", i), &cfg);
 
     if !changed {
@@ -97,10 +88,7 @@ pub fn compile_js_statements(
   }
 
   // It's safe to calculate liveliness before removing Phi insts; after deconstructing, they always lie exactly between all parent bblocks and the head of the bblock, so their lifetimes are identical.
-  deconstruct_ssa(
-    &mut cfg,
-    &mut c_label,
-  );
+  deconstruct_ssa(&mut cfg, &mut c_label);
   dbg_checkpoint("ssa_deconstruct", &cfg);
 
   ProgramFunction {
@@ -113,11 +101,12 @@ pub type FnId = usize;
 
 #[derive(Debug)]
 pub struct ProgramCompilerInner {
-  // Precomputed via VarVisitor.
+  // Precomputed via VarAnalysis.
   pub foreign_vars: HashSet<Symbol>,
   pub functions: DashMap<FnId, ProgramFunction>,
   pub next_fn_id: AtomicUsize,
   pub debug: bool,
+  /// Functions are compiled in parallel. This waits for all of them to complete.
   pub wg: WaitGroup,
 }
 
@@ -142,7 +131,7 @@ pub struct Program {
 
 impl Program {
   // The AST must already have symbol analysis done by compute_symbols.
-  pub fn compile(top_level_node: &Node, debug: bool) -> Self {
+  pub fn compile(top_level_node: Node<TopLevel>, debug: bool) -> Self {
     let VarAnalysis {
       declared,
       foreign,
@@ -153,9 +142,7 @@ impl Program {
     if let Some((_, loc)) = use_before_decl.iter().next() {
       panic!("Use before declaration at {:?}", loc);
     };
-    let Syntax::TopLevel { body } = top_level_node.stx.as_ref() else {
-      panic!();
-    };
+    let TopLevel { body } = top_level_node.stx;
     let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
       foreign_vars: foreign,
       functions: DashMap::new(),

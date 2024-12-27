@@ -52,7 +52,7 @@ impl Arg {
   pub fn to_var(&self) -> u32 {
     self
       .maybe_var()
-      .expect("cannot convert constant to variable")
+      .expect("not a variable")
   }
 
   pub fn to_const(&self) -> Const {

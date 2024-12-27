@@ -1,2 +1,2 @@
 pub mod inst;
-pub mod source_to_inst;
+pub mod s2i;

@@ -44,12 +44,24 @@ impl<S: Drive + DriveMut> Node<S> {
     }
   }
 
+  /// Converts this Node's stx into a different type, keeping the same location and associated data.
+  /// The current type must be convertable into the resulting type (i.e. `Into<T>`/`From<S>`).
+  /// This is useful for converting S into a variant E::S(S) on an enum (e.g. `CallExpr => Expr::Call(CallExpr)`) where an E is wanted.
   pub fn into_stx<T: From<S> +  Drive + DriveMut>(self) -> Node<T> {
     Node {
       loc: self.loc,
       stx: Box::new(T::from(*self.stx)),
       assoc: self.assoc,
     }
+  }
+
+  /// Same as `into_stx` except for `TryInto<T>`/`TryFrom<S>`.
+  pub fn try_into_stx<T: TryFrom<S> + Drive + DriveMut>(self) -> Result<Node<T>, T::Error> {
+    Ok(Node {
+      loc: self.loc,
+      stx: Box::new(T::try_from(*self.stx)?),
+      assoc: self.assoc,
+    })
   }
 
   /// Maps the syntax, keeping the location and associated data.

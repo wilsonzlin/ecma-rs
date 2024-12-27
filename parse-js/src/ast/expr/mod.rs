@@ -2,7 +2,7 @@ pub mod pat;
 pub mod lit;
 pub mod jsx;
 
-use derive_more::derive::From;
+use derive_more::derive::{From, TryInto};
 use derive_visitor::{Drive, DriveMut};
 use jsx::{JsxElem, JsxExprContainer, JsxMemberExpr, JsxName, JsxSpreadAttr, JsxText};
 use lit::{LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitObjExpr, LitRegexExpr, LitStrExpr, LitTemplateExpr, LitTemplatePart};
@@ -14,7 +14,7 @@ use crate::operator::OperatorName;
 use super::{class_or_object::ClassMember, func::Func, node::Node};
 
 
-#[derive(Debug, Drive, DriveMut, From, Serialize)]
+#[derive(Debug, Drive, DriveMut, From, Serialize, TryInto)]
 #[serde(tag = "$t")]
 pub enum Expr {
   ArrowFunc(ArrowFuncExpr),

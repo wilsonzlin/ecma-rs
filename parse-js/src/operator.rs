@@ -37,8 +37,7 @@ pub enum OperatorName {
   Comma,
   ComputedMemberAccess,
   Conditional,
-  // Only used during parsing.
-  ConditionalAlternate,
+  ConditionalAlternate, // Only used during parsing.
   Delete,
   Division,
   Equality,

@@ -4,7 +4,7 @@ use serde::Serialize;
 
 use std::{collections::VecDeque, ops::{Deref, DerefMut}};
 
-use crate::{graph::Graph, il::{inst::{Inst, InstTyp}, source_to_inst::DUMMY_LABEL}};
+use crate::{graph::Graph, il::{inst::{Inst, InstTyp}, s2i::DUMMY_LABEL}};
 
 /// Wrapper over a Graph<u32> that provides owned types and better method names,
 /// as well as domain-specific methods.
