@@ -6,12 +6,13 @@ use crate::ast::{class_or_object::ClassOrObjKey, node::Node};
 
 use super::Expr;
 
+// We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
 #[derive(Debug, Drive, DriveMut, From, Serialize)]
 #[serde(tag = "$t")]
 pub enum Pat {
-  Arr(ArrPat),
-  Id(IdPat),
-  Obj(ObjPat),
+  Arr(Node<ArrPat>),
+  Id(Node<IdPat>),
+  Obj(Node<ObjPat>),
 }
 
 impl From<Pat> for Expr {

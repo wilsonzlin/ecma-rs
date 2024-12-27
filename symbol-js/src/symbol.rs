@@ -4,6 +4,10 @@ use parking_lot::RwLock;
 use serde::Serialize;
 use core::ptr;
 use std::collections::hash_map::Entry;
+use std::fmt;
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::fmt::Write;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::ops::DerefMut;
@@ -257,6 +261,16 @@ impl Scope {
   pub fn find_symbol(&self, identifier: Identifier) -> Option<Symbol> {
     self.find_symbol_up_to(identifier, |_| false)
   }
+
+  pub fn debug_indented(&self, out: &mut impl fmt::Write, indent: usize) -> fmt::Result {
+    let cur = self.0.read();
+    write!(out, "{}", "  ".repeat(indent))?;
+    write!(out, "{:?}: {}\n", cur.typ, cur.symbol_declaration_order.join(", "))?;
+    for child in cur.children.iter() {
+      child.debug_indented(out, indent + 1)?;
+    };
+    Ok(())
+  }
 }
 
 // Equality means referring to the same unique scope. Useful for HashMap.
@@ -271,5 +285,12 @@ impl Eq for Scope {}
 impl Hash for Scope {
   fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
     ptr::hash(self.0.data_ptr(), state);
+  }
+}
+
+impl Debug for Scope {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.write_str("\nScope:\n")?;
+    self.debug_indented(f, 1)
   }
 }

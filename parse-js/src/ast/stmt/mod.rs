@@ -7,33 +7,34 @@ use serde::{Deserialize, Serialize};
 
 use super::{expr::{pat::Pat, Expr}, import_export::{ExportNames, ImportNames}, node::Node, stx::TopLevel};
 
+// We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
 #[derive(Debug, Drive, DriveMut, From, Serialize, TryInto)]
 #[serde(tag = "$t")]
 pub enum Stmt {
-  Block(BlockStmt),
-  Break(BreakStmt),
-  Continue(ContinueStmt),
-  Debugger(DebuggerStmt),
-  DoWhile(DoWhileStmt),
-  Empty(EmptyStmt),
-  ExportDefaultExpr(ExportDefaultExprStmt),
-  ExportList(ExportListStmt),
-  Expr(ExprStmt),
-  ForIn(ForInStmt),
-  ForOf(ForOfStmt),
-  ForTriple(ForTripleStmt),
-  If(IfStmt),
-  Import(ImportStmt),
-  Label(LabelStmt),
-  Return(ReturnStmt),
-  Switch(SwitchStmt),
-  Throw(ThrowStmt),
-  Try(TryStmt),
-  While(WhileStmt),
+  Block(Node<BlockStmt>),
+  Break(Node<BreakStmt>),
+  Continue(Node<ContinueStmt>),
+  Debugger(Node<DebuggerStmt>),
+  DoWhile(Node<DoWhileStmt>),
+  Empty(Node<EmptyStmt>),
+  ExportDefaultExpr(Node<ExportDefaultExprStmt>),
+  ExportList(Node<ExportListStmt>),
+  Expr(Node<ExprStmt>),
+  ForIn(Node<ForInStmt>),
+  ForOf(Node<ForOfStmt>),
+  ForTriple(Node<ForTripleStmt>),
+  If(Node<IfStmt>),
+  Import(Node<ImportStmt>),
+  Label(Node<LabelStmt>),
+  Return(Node<ReturnStmt>),
+  Switch(Node<SwitchStmt>),
+  Throw(Node<ThrowStmt>),
+  Try(Node<TryStmt>),
+  While(Node<WhileStmt>),
 
-  ClassDecl(ClassDecl),
-  FunctionDecl(FuncDecl),
-  VarDecl(VarDecl),
+  ClassDecl(Node<ClassDecl>),
+  FunctionDecl(Node<FuncDecl>),
+  VarDecl(Node<VarDecl>),
 }
 
 

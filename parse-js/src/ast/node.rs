@@ -55,6 +55,14 @@ impl<S: Drive + DriveMut> Node<S> {
     }
   }
 
+  pub fn into_wrapped_stx<T: From<Node<S>> +  Drive + DriveMut>(self) -> Node<T> {
+    Node {
+      loc: self.loc,
+      stx: Box::new(T::from(self)),
+      assoc: NodeAssocData::default(),
+    }
+  }
+
   /// Same as `into_stx` except for `TryInto<T>`/`TryFrom<S>`.
   pub fn try_into_stx<T: TryFrom<S> + Drive + DriveMut>(self) -> Result<Node<T>, T::Error> {
     Ok(Node {

@@ -43,26 +43,26 @@ impl<'a> Parser<'a> {
     let [t0, t1] = self.peek_n();
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match t0.typ {
-      TT::BraceOpen => self.block_stmt(ctx)?.into_stx(),
-      TT::KeywordBreak => self.break_stmt(ctx)?.into_stx(),
-      TT::KeywordClass => self.class_decl(ctx)?.into_stx(),
-      TT::KeywordConst | TT::KeywordLet | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_stx(),
-      TT::KeywordContinue => self.continue_stmt(ctx)?.into_stx(),
-      TT::KeywordDebugger => self.debugger_stmt()?.into_stx(),
-      TT::KeywordDo => self.do_while_stmt(ctx)?.into_stx(),
-      TT::KeywordExport => self.export_stmt(ctx)?.into_stx(),
-      TT::KeywordFor => self.for_stmt(ctx)?.into_stx(),
-      TT::KeywordAsync | TT::KeywordFunction => self.func_decl(ctx)?.into_stx(),
-      TT::KeywordIf => self.if_stmt(ctx)?.into_stx(),
-      TT::KeywordImport if t1.typ != TT::ParenthesisOpen => self.import_stmt(ctx)?.into_stx(),
-      TT::KeywordReturn => self.return_stmt(ctx)?.into_stx(),
-      TT::KeywordSwitch => self.switch_stmt(ctx)?.into_stx(),
-      TT::KeywordThrow => self.throw_stmt(ctx)?.into_stx(),
-      TT::KeywordTry => self.try_stmt(ctx)?.into_stx(),
-      TT::KeywordWhile => self.while_stmt(ctx)?.into_stx(),
-      TT::Semicolon => self.empty_stmt()?.into_stx(),
-      t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_stx(),
-      _ => self.expr_stmt(ctx)?.into_stx(),
+      TT::BraceOpen => self.block_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordBreak => self.break_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordClass => self.class_decl(ctx)?.into_wrapped_stx(),
+      TT::KeywordConst | TT::KeywordLet | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped_stx(),
+      TT::KeywordContinue => self.continue_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordDebugger => self.debugger_stmt()?.into_wrapped_stx(),
+      TT::KeywordDo => self.do_while_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordExport => self.export_stmt(ctx)?,
+      TT::KeywordFor => self.for_stmt(ctx)?,
+      TT::KeywordAsync | TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped_stx(),
+      TT::KeywordIf => self.if_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordImport if t1.typ != TT::ParenthesisOpen => self.import_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordReturn => self.return_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordSwitch => self.switch_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordThrow => self.throw_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordTry => self.try_stmt(ctx)?.into_wrapped_stx(),
+      TT::KeywordWhile => self.while_stmt(ctx)?.into_wrapped_stx(),
+      TT::Semicolon => self.empty_stmt()?.into_wrapped_stx(),
+      t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_wrapped_stx(),
+      _ => self.expr_stmt(ctx)?.into_wrapped_stx(),
     };
     Ok(stmt)
   }
@@ -278,9 +278,9 @@ impl<'a> Parser<'a> {
     let typ = Type::determine(self, ctx)?;
     self.restore_checkpoint(cp);
     Ok(match typ {
-      Type::Triple => self.for_triple_stmt(ctx)?.into_stx(),
-      Type::In => self.for_in_stmt(ctx)?.into_stx(),
-      Type::Of => self.for_of_stmt(ctx)?.into_stx(),
+      Type::Triple => self.for_triple_stmt(ctx)?.into_wrapped_stx(),
+      Type::In => self.for_in_stmt(ctx)?.into_wrapped_stx(),
+      Type::Of => self.for_of_stmt(ctx)?.into_wrapped_stx(),
     })
   }
 

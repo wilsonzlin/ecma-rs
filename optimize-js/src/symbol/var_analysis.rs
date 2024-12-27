@@ -1,6 +1,6 @@
 use ahash::{HashMap, HashSet};
 use derive_visitor::{Drive, Visitor};
-use parse_js::{ast::{expr::{pat::{ClassOrFuncName, IdPat}, IdExpr}, node::Node, stmt::decl::VarDecl, stx::TopLevel}, loc::Loc};
+use parse_js::{ast::{expr::{pat::{ClassOrFuncName, IdPat}, IdExpr}, node::Node, stmt::{decl::VarDecl, Stmt}, stx::TopLevel}, loc::Loc};
 use symbol_js::symbol::{Scope, ScopeType, Symbol};
 
 type VarDeclNode = Node<VarDecl>;
@@ -9,7 +9,7 @@ type ClassOrFuncNameNode = Node<ClassOrFuncName>;
 type IdPatNode = Node<IdPat>;
 
 // Four tasks (fill out each field as appropriate).
-#[derive(Default, Visitor)]
+#[derive(Debug, Default, Visitor)]
 #[visitor(
   VarDeclNode,
   IdExprNode(enter),
@@ -41,7 +41,7 @@ fn lifted_scope(scope: &Scope) -> Scope {
 }
 
 impl VarVisitor {
-  pub fn enter_var_decl_node(&mut self, node: &Node<VarDecl>) {
+  pub fn enter_var_decl_node(&mut self, _node: &Node<VarDecl>) {
     self.in_var_decl_stack.push(self.in_var_decl);
     self.in_var_decl = true;
   }

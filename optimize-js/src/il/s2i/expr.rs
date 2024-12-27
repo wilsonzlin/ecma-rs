@@ -91,7 +91,8 @@ impl<'p> SourceToInst<'p> {
     // We assume this is enforced at a previous stage (e.g. parsing).
     // The LHS is earlier in execution order, which is why we do this first, before processing the value, which is why we need a dummy (we don't have the value yet). The LHS can be complex (e.g. `(a + b).c[d + e] = f`), so it does matter.
     let mut assign_inst = match *target.stx {
-      Expr::IdPat(IdPat { name }) => {
+      Expr::IdPat(n) => {
+        let IdPat { name } = *n.stx;
         match self.var_type(target.assoc, name) {
           VarType::Local(l) => Inst::var_assign(self.symbol_to_temp(l), dummy_val),
           VarType::Foreign(f) => Inst::foreign_store(f, dummy_val),
@@ -99,13 +100,15 @@ impl<'p> SourceToInst<'p> {
           VarType::Builtin(builtin) => panic!("assignment to builtin {builtin}"),
         }
       }
-      Expr::Member(MemberExpr { optional_chaining, left, right }) => {
+      Expr::Member(n) => {
+        let MemberExpr { optional_chaining, left, right } = *n.stx;
         assert!(!optional_chaining);
         let left_arg = self.compile_expr(left);
         let member_arg = Arg::Const(Const::Str(right.to_string()));
         Inst::prop_assign(left_arg, member_arg, dummy_val)
       }
-      Expr::ComputedMember(ComputedMemberExpr { optional_chaining, object, member }) => {
+      Expr::ComputedMember(n) => {
+        let ComputedMemberExpr { optional_chaining, object, member } = *n.stx;
         assert!(!optional_chaining);
         let left_arg = self.compile_expr(object);
         let member_arg = self.compile_expr(member);
@@ -314,11 +317,11 @@ impl<'p> SourceToInst<'p> {
     // We need to handle methods specially due to `this`.
     let (this_arg, callee_arg) = match *callee.stx {
       Expr::Member(m) => {
-        let c = self.compile_member_expr(m, chain);
+        let c = self.compile_member_expr(*m.stx, chain);
         (c.left, c.res)
       }
       Expr::ComputedMember(m) => {
-        let c = self.compile_computed_member_expr(m, chain);
+        let c = self.compile_computed_member_expr(*m.stx, chain);
         (c.left, c.res)
       }
       _ => {
@@ -361,18 +364,18 @@ impl<'p> SourceToInst<'p> {
   #[rustfmt::skip]
   pub fn compile_expr_with_chain(&mut self, n: Node<Expr>, chain: impl Into<Option<Chain>>) -> Arg {
     match *n.stx {
-      Expr::ArrowFunc(ArrowFuncExpr { func }) => self.compile_func(*func.stx),
-      Expr::Binary(n) => self.compile_binary_expr(n),
-      Expr::Call(n) => self.compile_call_expr(n, chain),
-      Expr::ComputedMember(n) => self.compile_computed_member_expr(n, chain).res,
-      Expr::Cond(n) => self.compile_cond_expr(n),
-      Expr::Id(s) => self.compile_id_expr(n.assoc, s),
-      Expr::LitBool(n) => Arg::Const(Const::Bool(n.value)),
-      Expr::LitNum(n) => Arg::Const(Const::Num(n.value)),
-      Expr::LitStr(n) => Arg::Const(Const::Str(n.value)),
-      Expr::Member(n) => self.compile_member_expr(n, chain).res,
-      Expr::Unary(n) => self.compile_unary_expr(n),
-      Expr::UnaryPostfix(n) => self.compile_unary_postfix_expr(n),
+      Expr::ArrowFunc(n) => self.compile_func(*n.stx.func.stx),
+      Expr::Binary(n) => self.compile_binary_expr(*n.stx),
+      Expr::Call(n) => self.compile_call_expr(*n.stx, chain),
+      Expr::ComputedMember(n) => self.compile_computed_member_expr(*n.stx, chain).res,
+      Expr::Cond(n) => self.compile_cond_expr(*n.stx),
+      Expr::Id(s) => self.compile_id_expr(n.assoc, *s.stx),
+      Expr::LitBool(n) => Arg::Const(Const::Bool(n.stx.value)),
+      Expr::LitNum(n) => Arg::Const(Const::Num(n.stx.value)),
+      Expr::LitStr(n) => Arg::Const(Const::Str(n.stx.value)),
+      Expr::Member(n) => self.compile_member_expr(*n.stx, chain).res,
+      Expr::Unary(n) => self.compile_unary_expr(*n.stx),
+      Expr::UnaryPostfix(n) => self.compile_unary_postfix_expr(*n.stx),
       _ => unimplemented!()
     }
   }

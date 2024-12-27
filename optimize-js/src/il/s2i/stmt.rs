@@ -44,7 +44,8 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_destructuring(&mut self, pat: Node<Pat>, rval: Arg) {
     match *pat.stx {
-      Pat::Arr(ArrPat {elements, rest}) => {
+      Pat::Arr(n) => {
+        let ArrPat {elements, rest} = *n.stx;
         for (i, e) in elements.into_iter().enumerate() {
           let Some(e) = e else {
             continue;
@@ -58,7 +59,8 @@ impl<'p> SourceToInst<'p> {
         }
         // TODO `rest`.
       }
-      Pat::Obj(ObjPat { properties, rest }) => {
+      Pat::Obj(n) => {
+        let ObjPat { properties, rest } = *n.stx;
         for p in properties {
           let ObjPatProp {
             key,
@@ -74,7 +76,8 @@ impl<'p> SourceToInst<'p> {
         }
         // TODO `rest`.
       }
-      Pat::Id(IdPat { name }) => {
+      Pat::Id(n) => {
+        let IdPat { name } = *n.stx;
         // NOTE: It's possible to destructure-assign to ancestor scope vars (including globals), so just because this is a pattern doesn't mean it's for a local var.
         let inst = match self.var_type(pat.assoc, name.clone()) {
           VarType::Local(local) => Inst::var_assign(
@@ -191,13 +194,13 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_stmt(&mut self, n: Node<Stmt>) {
     match *n.stx {
-      Stmt::Block(BlockStmt { body }) => self.compile_stmts(body),
-      Stmt::Break(n) => self.compile_break_stmt(n),
-      Stmt::Expr(n) => self.compile_expr_stmt(n),
-      Stmt::ForTriple(n) => self.compile_for_triple_stmt(n),
-      Stmt::If(n) => self.compile_if_stmt(n),
-      Stmt::VarDecl(n) => self.compile_var_decl(n),
-      Stmt::While(n) => self.compile_while_stmt(n),
+      Stmt::Block(n) => self.compile_stmts(n.stx.body),
+      Stmt::Break(n) => self.compile_break_stmt(*n.stx),
+      Stmt::Expr(n) => self.compile_expr_stmt(*n.stx),
+      Stmt::ForTriple(n) => self.compile_for_triple_stmt(*n.stx),
+      Stmt::If(n) => self.compile_if_stmt(*n.stx),
+      Stmt::VarDecl(n) => self.compile_var_decl(*n.stx),
+      Stmt::While(n) => self.compile_while_stmt(*n.stx),
       _ => unreachable!(),
     };
   }

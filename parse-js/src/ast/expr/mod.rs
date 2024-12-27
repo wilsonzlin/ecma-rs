@@ -14,49 +14,50 @@ use crate::operator::OperatorName;
 use super::{class_or_object::ClassMember, func::Func, node::Node};
 
 
+// We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
 #[derive(Debug, Drive, DriveMut, From, Serialize, TryInto)]
 #[serde(tag = "$t")]
 pub enum Expr {
-  ArrowFunc(ArrowFuncExpr),
-  Binary(BinaryExpr),
-  Call(CallExpr),
-  Class(ClassExpr),
-  ComputedMember(ComputedMemberExpr),
-  Cond(CondExpr),
-  Func(FuncExpr),
-  Id(IdExpr),
-  Import(ImportExpr),
-  ImportMeta(ImportMeta),
-  Member(MemberExpr),
-  Super(SuperExpr),
-  TaggedTemplate(TaggedTemplateExpr),
-  This(ThisExpr),
-  Unary(UnaryExpr),
-  UnaryPostfix(UnaryPostfixExpr),
+  ArrowFunc(Node<ArrowFuncExpr>),
+  Binary(Node<BinaryExpr>),
+  Call(Node<CallExpr>),
+  Class(Node<ClassExpr>),
+  ComputedMember(Node<ComputedMemberExpr>),
+  Cond(Node<CondExpr>),
+  Func(Node<FuncExpr>),
+  Id(Node<IdExpr>),
+  Import(Node<ImportExpr>),
+  ImportMeta(Node<ImportMeta>),
+  Member(Node<MemberExpr>),
+  Super(Node<SuperExpr>),
+  TaggedTemplate(Node<TaggedTemplateExpr>),
+  This(Node<ThisExpr>),
+  Unary(Node<UnaryExpr>),
+  UnaryPostfix(Node<UnaryPostfixExpr>),
 
   // JSX.
-  JsxElem(JsxElem),
-  JsxExprContainer(JsxExprContainer),
-  JsxMember(JsxMemberExpr),
-  JsxName(JsxName),
-  JsxSpreadAttr(JsxSpreadAttr),
-  JsxText(JsxText),
+  JsxElem(Node<JsxElem>),
+  JsxExprContainer(Node<JsxExprContainer>),
+  JsxMember(Node<JsxMemberExpr>),
+  JsxName(Node<JsxName>),
+  JsxSpreadAttr(Node<JsxSpreadAttr>),
+  JsxText(Node<JsxText>),
 
   // Literals.
-  LitArr(LitArrExpr),
-  LitBigInt(LitBigIntExpr),
-  LitBool(LitBoolExpr),
-  LitNull(LitNullExpr),
-  LitNum(LitNumExpr),
-  LitObj(LitObjExpr),
-  LitRegex(LitRegexExpr),
-  LitStr(LitStrExpr),
-  LitTemplate(LitTemplateExpr),
+  LitArr(Node<LitArrExpr>),
+  LitBigInt(Node<LitBigIntExpr>),
+  LitBool(Node<LitBoolExpr>),
+  LitNull(Node<LitNullExpr>),
+  LitNum(Node<LitNumExpr>),
+  LitObj(Node<LitObjExpr>),
+  LitRegex(Node<LitRegexExpr>),
+  LitStr(Node<LitStrExpr>),
+  LitTemplate(Node<LitTemplateExpr>),
 
   // Patterns.
-  ArrPat(ArrPat),
-  IdPat(IdPat),
-  ObjPat(ObjPat),
+  ArrPat(Node<ArrPat>),
+  IdPat(Node<IdPat>),
+  ObjPat(Node<ObjPat>),
 }
 
 

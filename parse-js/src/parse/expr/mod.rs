@@ -124,9 +124,9 @@ impl<'a> Parser<'a> {
         let param_name = p.consume().loc;
         let arrow = p.require(TT::EqualsChevronRight)?;
         let pattern = Node::new(param_name, PatDecl {
-          pat: Node::new(param_name, Pat::Id(IdPat {
+          pat: Node::new(param_name, IdPat {
             name: p.string(param_name),
-          })),
+          }).into_wrapped_stx(),
         });
         let param = Node::new(param_name, ParamDecl {
           rest: false,
@@ -185,7 +185,7 @@ impl<'a> Parser<'a> {
 
     self.rewindable::<Node<Expr>, _>(|p| {
       match p.arrow_func_expr(ctx, terminators) {
-        Ok(expr) => Ok(Some(expr.into_stx())),
+        Ok(expr) => Ok(Some(expr.into_wrapped_stx())),
         Err(err) if err.typ == SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => Err(err),
         Err(_) => Ok(None),
       }
@@ -287,7 +287,7 @@ impl<'a> Parser<'a> {
           operator: operator.name,
           argument: operand,
         })
-      })?.into_stx());
+      })?.into_wrapped_stx());
     };
 
     // Check this before KeywordAsync.
@@ -295,35 +295,39 @@ impl<'a> Parser<'a> {
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
         // NOTE: `await` is not allowed as an arrow function parameter, but we'll check this in parse_expr_arrow_function.
-        self.arrow_func_expr(ctx, terminators)?.into_stx()
+        self.arrow_func_expr(ctx, terminators)?.into_wrapped_stx()
       } else {
-        self.id_expr(ctx)?.into_stx()
+        self.id_expr(ctx)?.into_wrapped_stx()
       });
     };
 
     #[rustfmt::skip]
     let expr: Node<Expr> = match t0.typ {
       TT::KeywordAsync => match t1.typ {
-        TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_stx(),
-        TT::KeywordFunction => self.func_expr(ctx)?.into_stx(),
+        TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped_stx(),
+        TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped_stx(),
         // `async` is being used as an identifier.
-        _ => self.id_expr(ctx)?.into_stx(),
+        _ => self.id_expr(ctx)?.into_wrapped_stx(),
       }
-      TT::BracketOpen => self.lit_arr(ctx)?.into_stx(),
-      TT::BraceOpen => self.lit_obj(ctx)?.into_stx(),
-      TT::ChevronLeft => self.jsx_elem(ctx)?.into_stx(),
-      TT::KeywordClass => self.class_expr(ctx)?.into_stx(),
-      TT::KeywordFunction => self.func_expr(ctx)?.into_stx(),
-      TT::KeywordImport => self.import_expr(ctx)?.into_stx(),
-      TT::KeywordSuper => self.super_expr()?.into_stx(),
-      TT::KeywordThis => self.this_expr()?.into_stx(),
-      TT::LiteralBigInt => self.lit_bigint()?.into_stx(),
-      TT::LiteralTrue | TT::LiteralFalse => self.lit_bool()?.into_stx(),
-      TT::LiteralNull => self.lit_null()?.into_stx(),
-      TT::LiteralNumber => self.lit_num()?.into_stx(),
-      TT::LiteralRegex => self.lit_regex()?.into_stx(),
-      TT::LiteralString => self.lit_str()?.into_stx(),
-      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self.lit_template(ctx)?.into_stx(),
+      TT::BracketOpen => self.lit_arr(ctx)?.into_wrapped_stx(),
+      TT::BraceOpen => self.lit_obj(ctx)?.into_wrapped_stx(),
+      TT::ChevronLeft => self.jsx_elem(ctx)?.into_wrapped_stx(),
+      TT::KeywordClass => self.class_expr(ctx)?.into_wrapped_stx(),
+      TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped_stx(),
+      TT::KeywordImport => match t1.typ {
+        TT::Dot => self.import_meta()?.into_wrapped_stx(),
+        TT::ParenthesisOpen => self.import_call(ctx)?.into_wrapped_stx(),
+        _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("import expression"))),
+      },
+      TT::KeywordSuper => self.super_expr()?.into_wrapped_stx(),
+      TT::KeywordThis => self.this_expr()?.into_wrapped_stx(),
+      TT::LiteralBigInt => self.lit_bigint()?.into_wrapped_stx(),
+      TT::LiteralTrue | TT::LiteralFalse => self.lit_bool()?.into_wrapped_stx(),
+      TT::LiteralNull => self.lit_null()?.into_wrapped_stx(),
+      TT::LiteralNumber => self.lit_num()?.into_wrapped_stx(),
+      TT::LiteralRegex => self.lit_regex()?.into_wrapped_stx(),
+      TT::LiteralString => self.lit_str()?.into_wrapped_stx(),
+      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self.lit_template(ctx)?.into_wrapped_stx(),
       TT::ParenthesisOpen => self.arrow_function_or_grouping_expr(ctx, terminators, asi)?,
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand"))),
     };
@@ -364,7 +368,7 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + t.loc, UnaryPostfixExpr {
             operator: operator_name,
             argument: left,
-          }.into());
+          }).into_wrapped_stx();
           continue;
         }
         // Automatic Semicolon Insertion rules: no newline between operand and template literal.
@@ -377,7 +381,7 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + loc, TaggedTemplateExpr {
             function: left,
             parts,
-          }.into());
+          }).into_wrapped_stx();
           continue;
         }
         _ => {}
@@ -418,7 +422,7 @@ impl<'a> Parser<'a> {
                 },
                 arguments,
                 callee: left,
-              }.into())
+              }).into_wrapped_stx()
             }
             OperatorName::ComputedMemberAccess
             | OperatorName::OptionalChainingComputedMemberAccess => {
@@ -428,7 +432,7 @@ impl<'a> Parser<'a> {
                 optional_chaining: operator.name == OperatorName::OptionalChainingComputedMemberAccess,
                 object: left,
                 member,
-              }.into())
+              }).into_wrapped_stx()
             }
             OperatorName::Conditional => {
               let consequent = self.expr(ctx, [TT::Colon])?;
@@ -443,7 +447,7 @@ impl<'a> Parser<'a> {
                 test: left,
                 consequent,
                 alternate,
-              }.into())
+              }).into_wrapped_stx()
             }
             OperatorName::MemberAccess | OperatorName::OptionalChainingMemberAccess => {
               let right_tok = self.consume();
@@ -462,7 +466,7 @@ impl<'a> Parser<'a> {
                 optional_chaining: operator.name == OperatorName::OptionalChainingMemberAccess,
                 left,
                 right: self.string(right),
-              }.into())
+              }).into_wrapped_stx()
             }
             _ => {
               if operator.name.is_assignment() {
@@ -478,7 +482,7 @@ impl<'a> Parser<'a> {
                 operator: operator.name,
                 left,
                 right,
-              }.into())
+              }).into_wrapped_stx()
             }
           };
         }

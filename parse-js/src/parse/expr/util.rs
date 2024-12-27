@@ -7,7 +7,8 @@ use crate::{ast::{class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey, Cl
 pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
   let loc = node.loc;
   match *node.stx {
-    Expr::LitArr(LitArrExpr { elements }) => {
+    Expr::LitArr(n) => {
+      let LitArrExpr { elements } = *n.stx;
       let mut pat_elements = Vec::<Option<ArrPatElem>>::new();
       let mut rest = None;
       for element in elements {
@@ -17,11 +18,12 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
         match element {
           LitArrElem::Single(elem) => {
             match *elem.stx {
-              Expr::Binary(BinaryExpr {
-                operator,
-                left,
-                right,
-              }) => {
+              Expr::Binary(n) => {
+                let BinaryExpr {
+                  operator,
+                  left,
+                  right,
+                } = *n.stx;
                 if operator != OperatorName::Assignment {
                   return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
                 };
@@ -42,12 +44,13 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
           LitArrElem::Empty => pat_elements.push(None),
         };
       }
-      Ok(Node::new(loc, Pat::Arr(ArrPat {
+      Ok(Node::new(loc, ArrPat {
         elements: pat_elements,
         rest,
-      })))
+      }).into_wrapped_stx())
     }
-    Expr::LitObj(LitObjExpr { members }) => {
+    Expr::LitObj(n) => {
+      let LitObjExpr { members } = *n.stx;
       let mut properties = Vec::new();
       let mut rest: Option<Node<IdPat>> = None;
       for member in members {
@@ -60,11 +63,12 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
             ObjMemberType::Valued { key, val: value } => {
               let (target, default_value) = match value {
                 ClassOrObjVal::Prop(Some(initializer)) => match *initializer.stx {
-                  Expr::Binary(BinaryExpr {
-                    operator,
-                    left,
-                    right,
-                  }) => {
+                  Expr::Binary(n) => {
+                    let BinaryExpr {
+                      operator,
+                      left,
+                      right,
+                    } = *n.stx;
                     if operator != OperatorName::Assignment {
                       return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
                     };
@@ -87,14 +91,14 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
                 shorthand: true,
               }));
             }
-            ObjMemberType::Shorthand { id: identifier } => {
+            ObjMemberType::Shorthand { id } => {
               properties.push(Node::new(loc, ObjPatProp {
                 key: ClassOrObjKey::Direct(
-                  identifier.derive_stx(|id| ClassOrObjMemberDirectKey { key: id.name.clone(), tt: TT::Identifier }),
+                  id.derive_stx(|id| ClassOrObjMemberDirectKey { key: id.name.clone(), tt: TT::Identifier }),
                 ),
-                target: identifier.derive_stx(|id| Pat::Id(IdPat {
+                target: id.derive_stx(|id| IdPat {
                   name: id.name.clone(),
-                })),
+                }).into_wrapped_stx(),
                 default_value: None,
                 shorthand: true,
               }));
@@ -106,19 +110,20 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
               let Pat::Id(rest_pat) = *maybe_rest.stx else {
                 return Err(rest_loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
               };
-              rest = Some(Node::new(rest_loc, rest_pat));
+              rest = Some(rest_pat);
             }
           },
           _ => unreachable!(),
         };
       }
-      Ok(Node::new(loc, Pat::Obj(ObjPat { properties, rest })))
+      Ok(Node::new(loc, ObjPat { properties, rest }).into_wrapped_stx())
+    }
+    Expr::Id(n) => {
+      Ok(Node::new(loc, IdPat { name: n.stx.name.clone() }).into_wrapped_stx())
     }
     // It's possible to encounter an IdPat e.g. `{ a: b = 1 } = x`, where `b = 1` was already parsed as an assignment.
-    Expr::Id(IdExpr { name }) | Expr::IdPat(IdPat { name }) => {
-      Ok(Node::new(loc, Pat::Id(IdPat {
-        name: name.clone(),
-      })))
+    Expr::IdPat(n) => {
+      Ok(n.into_wrapped_stx())
     }
     _ => Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
   }
@@ -145,14 +150,12 @@ pub fn lhs_expr_to_assign_target(
       let root = lit_to_pat(lhs)?;
       Ok(root.into_stx())
     }
-    Expr::ComputedMember(ComputedMemberExpr {
-      optional_chaining, ..
-    })
-    | Expr::Member(MemberExpr {
-      optional_chaining, ..
-    }) if !optional_chaining => {
-      // As long as the expression ends with ComputedMemberExpr or MemberExpr, it's valid e.g. `(a, b?.a ?? 3, c = d || {})[1] = x`. Note that this is after parsing, so `a + b.c = 3` is invalid because that parses to `(a + b.c) = 3`, with a LHS of BinaryExpr with Addition operator.
-      // TODO Technically there cannot be any optional chaining in the entire access/call path, not just in the last part (e.g. `a.b?.c.d = e` is invalid).
+    // As long as the expression ends with ComputedMemberExpr or MemberExpr, it's valid e.g. `(a, b?.a ?? 3, c = d || {})[1] = x`. Note that this is after parsing, so `a + b.c = 3` is invalid because that parses to `(a + b.c) = 3`, with a LHS of BinaryExpr with Addition operator.
+    // TODO Technically there cannot be any optional chaining in the entire access/call path, not just in the last part (e.g. `a.b?.c.d = e` is invalid).
+    Expr::ComputedMember(m) if !m.stx.optional_chaining => {
+      Ok(lhs)
+    }
+    Expr::Member(m) if !m.stx.optional_chaining => {
       Ok(lhs)
     }
     _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),
