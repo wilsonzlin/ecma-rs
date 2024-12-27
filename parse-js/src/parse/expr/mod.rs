@@ -126,7 +126,7 @@ impl<'a> Parser<'a> {
         let pattern = Node::new(param_name, PatDecl {
           pat: Node::new(param_name, IdPat {
             name: p.string(param_name),
-          }).into_wrapped_stx(),
+          }).into_wrapped(),
         });
         let param = Node::new(param_name, ParamDecl {
           rest: false,
@@ -185,7 +185,7 @@ impl<'a> Parser<'a> {
 
     self.rewindable::<Node<Expr>, _>(|p| {
       match p.arrow_func_expr(ctx, terminators) {
-        Ok(expr) => Ok(Some(expr.into_wrapped_stx())),
+        Ok(expr) => Ok(Some(expr.into_wrapped())),
         Err(err) if err.typ == SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => Err(err),
         Err(_) => Ok(None),
       }
@@ -287,7 +287,7 @@ impl<'a> Parser<'a> {
           operator: operator.name,
           argument: operand,
         })
-      })?.into_wrapped_stx());
+      })?.into_wrapped());
     };
 
     // Check this before KeywordAsync.
@@ -295,39 +295,39 @@ impl<'a> Parser<'a> {
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
         // NOTE: `await` is not allowed as an arrow function parameter, but we'll check this in parse_expr_arrow_function.
-        self.arrow_func_expr(ctx, terminators)?.into_wrapped_stx()
+        self.arrow_func_expr(ctx, terminators)?.into_wrapped()
       } else {
-        self.id_expr(ctx)?.into_wrapped_stx()
+        self.id_expr(ctx)?.into_wrapped()
       });
     };
 
     #[rustfmt::skip]
     let expr: Node<Expr> = match t0.typ {
       TT::KeywordAsync => match t1.typ {
-        TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped_stx(),
-        TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped_stx(),
+        TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
+        TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
         // `async` is being used as an identifier.
-        _ => self.id_expr(ctx)?.into_wrapped_stx(),
+        _ => self.id_expr(ctx)?.into_wrapped(),
       }
-      TT::BracketOpen => self.lit_arr(ctx)?.into_wrapped_stx(),
-      TT::BraceOpen => self.lit_obj(ctx)?.into_wrapped_stx(),
-      TT::ChevronLeft => self.jsx_elem(ctx)?.into_wrapped_stx(),
-      TT::KeywordClass => self.class_expr(ctx)?.into_wrapped_stx(),
-      TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped_stx(),
+      TT::BracketOpen => self.lit_arr(ctx)?.into_wrapped(),
+      TT::BraceOpen => self.lit_obj(ctx)?.into_wrapped(),
+      TT::ChevronLeft => self.jsx_elem(ctx)?.into_wrapped(),
+      TT::KeywordClass => self.class_expr(ctx)?.into_wrapped(),
+      TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
       TT::KeywordImport => match t1.typ {
-        TT::Dot => self.import_meta()?.into_wrapped_stx(),
-        TT::ParenthesisOpen => self.import_call(ctx)?.into_wrapped_stx(),
+        TT::Dot => self.import_meta()?.into_wrapped(),
+        TT::ParenthesisOpen => self.import_call(ctx)?.into_wrapped(),
         _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("import expression"))),
       },
-      TT::KeywordSuper => self.super_expr()?.into_wrapped_stx(),
-      TT::KeywordThis => self.this_expr()?.into_wrapped_stx(),
-      TT::LiteralBigInt => self.lit_bigint()?.into_wrapped_stx(),
-      TT::LiteralTrue | TT::LiteralFalse => self.lit_bool()?.into_wrapped_stx(),
-      TT::LiteralNull => self.lit_null()?.into_wrapped_stx(),
-      TT::LiteralNumber => self.lit_num()?.into_wrapped_stx(),
-      TT::LiteralRegex => self.lit_regex()?.into_wrapped_stx(),
-      TT::LiteralString => self.lit_str()?.into_wrapped_stx(),
-      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self.lit_template(ctx)?.into_wrapped_stx(),
+      TT::KeywordSuper => self.super_expr()?.into_wrapped(),
+      TT::KeywordThis => self.this_expr()?.into_wrapped(),
+      TT::LiteralBigInt => self.lit_bigint()?.into_wrapped(),
+      TT::LiteralTrue | TT::LiteralFalse => self.lit_bool()?.into_wrapped(),
+      TT::LiteralNull => self.lit_null()?.into_wrapped(),
+      TT::LiteralNumber => self.lit_num()?.into_wrapped(),
+      TT::LiteralRegex => self.lit_regex()?.into_wrapped(),
+      TT::LiteralString => self.lit_str()?.into_wrapped(),
+      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self.lit_template(ctx)?.into_wrapped(),
       TT::ParenthesisOpen => self.arrow_function_or_grouping_expr(ctx, terminators, asi)?,
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand"))),
     };
@@ -368,7 +368,7 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + t.loc, UnaryPostfixExpr {
             operator: operator_name,
             argument: left,
-          }).into_wrapped_stx();
+          }).into_wrapped();
           continue;
         }
         // Automatic Semicolon Insertion rules: no newline between operand and template literal.
@@ -381,7 +381,7 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + loc, TaggedTemplateExpr {
             function: left,
             parts,
-          }).into_wrapped_stx();
+          }).into_wrapped();
           continue;
         }
         _ => {}
@@ -422,7 +422,7 @@ impl<'a> Parser<'a> {
                 },
                 arguments,
                 callee: left,
-              }).into_wrapped_stx()
+              }).into_wrapped()
             }
             OperatorName::ComputedMemberAccess
             | OperatorName::OptionalChainingComputedMemberAccess => {
@@ -432,7 +432,7 @@ impl<'a> Parser<'a> {
                 optional_chaining: operator.name == OperatorName::OptionalChainingComputedMemberAccess,
                 object: left,
                 member,
-              }).into_wrapped_stx()
+              }).into_wrapped()
             }
             OperatorName::Conditional => {
               let consequent = self.expr(ctx, [TT::Colon])?;
@@ -447,7 +447,7 @@ impl<'a> Parser<'a> {
                 test: left,
                 consequent,
                 alternate,
-              }).into_wrapped_stx()
+              }).into_wrapped()
             }
             OperatorName::MemberAccess | OperatorName::OptionalChainingMemberAccess => {
               let right_tok = self.consume();
@@ -466,7 +466,7 @@ impl<'a> Parser<'a> {
                 optional_chaining: operator.name == OperatorName::OptionalChainingMemberAccess,
                 left,
                 right: self.string(right),
-              }).into_wrapped_stx()
+              }).into_wrapped()
             }
             _ => {
               if operator.name.is_assignment() {
@@ -482,7 +482,7 @@ impl<'a> Parser<'a> {
                 operator: operator.name,
                 left,
                 right,
-              }).into_wrapped_stx()
+              }).into_wrapped()
             }
           };
         }

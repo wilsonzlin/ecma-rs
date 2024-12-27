@@ -74,7 +74,7 @@ impl<'a> Parser<'a> {
         p.require(TT::BraceOpen)?;
         let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
           let (target, alias) = p.import_or_export_name(ctx)?;
-          let alias = alias.into_wrapped_stx();
+          let alias = alias.into_wrapped();
           let alias = alias.wrap(|pat| PatDecl { pat });
           Ok(ImportName { importable: target, alias })
         })?;
@@ -142,10 +142,10 @@ impl<'a> Parser<'a> {
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match (t1.typ, t2.typ) {
       // `class` and `function` are treated as statements that are hoisted, not expressions; however, they can be unnamed, which gives them the name `default`.
-      (TT::KeywordDefault, TT::KeywordAsync | TT::KeywordFunction) | (TT::KeywordAsync | TT::KeywordFunction, _) => self.func_decl(ctx)?.into_wrapped_stx(),
-      (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass, _) => self.class_decl(ctx)?.into_wrapped_stx(),
-      (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped_stx(),
-      (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped_stx(),
+      (TT::KeywordDefault, TT::KeywordAsync | TT::KeywordFunction) | (TT::KeywordAsync | TT::KeywordFunction, _) => self.func_decl(ctx)?.into_wrapped(),
+      (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass, _) => self.class_decl(ctx)?.into_wrapped(),
+      (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
+      (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("exportable"))),
     };
     Ok(stmt)

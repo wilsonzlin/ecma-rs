@@ -47,7 +47,7 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
       Ok(Node::new(loc, ArrPat {
         elements: pat_elements,
         rest,
-      }).into_wrapped_stx())
+      }).into_wrapped())
     }
     Expr::LitObj(n) => {
       let LitObjExpr { members } = *n.stx;
@@ -98,7 +98,7 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
                 ),
                 target: id.derive_stx(|id| IdPat {
                   name: id.name.clone(),
-                }).into_wrapped_stx(),
+                }).into_wrapped(),
                 default_value: None,
                 shorthand: true,
               }));
@@ -116,14 +116,14 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
           _ => unreachable!(),
         };
       }
-      Ok(Node::new(loc, ObjPat { properties, rest }).into_wrapped_stx())
+      Ok(Node::new(loc, ObjPat { properties, rest }).into_wrapped())
     }
     Expr::Id(n) => {
-      Ok(Node::new(loc, IdPat { name: n.stx.name.clone() }).into_wrapped_stx())
+      Ok(Node::new(loc, IdPat { name: n.stx.name.clone() }).into_wrapped())
     }
     // It's possible to encounter an IdPat e.g. `{ a: b = 1 } = x`, where `b = 1` was already parsed as an assignment.
     Expr::IdPat(n) => {
-      Ok(n.into_wrapped_stx())
+      Ok(n.into_wrapped())
     }
     _ => Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
   }

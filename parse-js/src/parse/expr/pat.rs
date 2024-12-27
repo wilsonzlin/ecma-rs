@@ -102,7 +102,7 @@ impl<'a> Parser<'a> {
                   return Err(n.error(SyntaxErrorType::ExpectedNotFound));
                 }
                 // We've already ensured that this is a valid identifier.
-                let id_pat = n.derive_stx(|n| IdPat { name: n.key.clone() }).into_wrapped_stx();
+                let id_pat = n.derive_stx(|n| IdPat { name: n.key.clone() }).into_wrapped();
                 (true, id_pat)
               }
             }
@@ -177,9 +177,9 @@ impl<'a> Parser<'a> {
   pub fn pat(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Pat>> {
     let t = self.peek();
     let pat: Node<Pat> = match t.typ {
-      t if is_valid_pattern_identifier(t, ctx.rules) => self.id_pat(ctx)?.into_wrapped_stx(),
-      TT::BraceOpen => self.obj_pat(ctx)?.into_wrapped_stx(),
-      TT::BracketOpen => self.arr_pat(ctx)?.into_wrapped_stx(),
+      t if is_valid_pattern_identifier(t, ctx.rules) => self.id_pat(ctx)?.into_wrapped(),
+      TT::BraceOpen => self.obj_pat(ctx)?.into_wrapped(),
+      TT::BracketOpen => self.arr_pat(ctx)?.into_wrapped(),
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("pattern"))),
     };
     Ok(pat)

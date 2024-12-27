@@ -32,7 +32,7 @@ impl<'a> Parser<'a> {
 
   pub fn id_pat_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<PatDecl>> {
     self.with_loc(|p| {
-      let pat = p.id_pat(ctx)?.into_wrapped_stx();
+      let pat = p.id_pat(ctx)?.into_wrapped();
       Ok(PatDecl { pat })
     })
   }

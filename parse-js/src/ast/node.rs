@@ -55,14 +55,6 @@ impl<S: Drive + DriveMut> Node<S> {
     }
   }
 
-  pub fn into_wrapped_stx<T: From<Node<S>> +  Drive + DriveMut>(self) -> Node<T> {
-    Node {
-      loc: self.loc,
-      stx: Box::new(T::from(self)),
-      assoc: NodeAssocData::default(),
-    }
-  }
-
   /// Same as `into_stx` except for `TryInto<T>`/`TryFrom<S>`.
   pub fn try_into_stx<T: TryFrom<S> + Drive + DriveMut>(self) -> Result<Node<T>, T::Error> {
     Ok(Node {
@@ -70,6 +62,16 @@ impl<S: Drive + DriveMut> Node<S> {
       stx: Box::new(T::try_from(*self.stx)?),
       assoc: self.assoc,
     })
+  }
+
+  /// Moves Node<S> into Node<T { Node<S> }>. The wrapper will have the same location but no associated data.
+  /// This is useful for converting Node<S> into a variant E::S(Node<S>) on an enum (e.g. `CallExpr => Expr::Call(Node<CallExpr>)`) where an E is wanted.
+  pub fn into_wrapped<T: From<Node<S>> +  Drive + DriveMut>(self) -> Node<T> {
+    Node {
+      loc: self.loc,
+      stx: Box::new(T::from(self)),
+      assoc: NodeAssocData::default(),
+    }
   }
 
   /// Maps the syntax, keeping the location and associated data.
