@@ -3,9 +3,16 @@ use itertools::Itertools;
 
 use crate::cfg::cfg::Cfg;
 
+pub struct DominatesGraph(HashMap<u32, HashSet<u32>>);
+
+impl DominatesGraph {
+  pub fn dominates(&self, a: u32, b: u32) -> bool {
+    self.0.get(&a).is_some_and(|s| s.contains(&b))
+  }
+}
+
 pub struct Dom {
   postorder: Vec<u32>,
-  label_to_postorder: HashMap<u32, usize>,
   // Inverse of `domtree`, child => parent.
   idom_by: HashMap<u32, u32>,
   // Parent => children, where parent is the immediate dominator of each child.
@@ -76,7 +83,6 @@ impl Dom {
     };
     Self {
       postorder,
-      label_to_postorder,
       idom_by,
       domtree,
       entry,
@@ -103,7 +109,7 @@ impl Dom {
 
   /// Node => nodes that it dominates.
   /// The inverse of `dominated_bys`.
-  pub fn dominates_graph(&self) -> HashMap<u32, HashSet<u32>> {
+  pub fn dominates_graph(&self) -> DominatesGraph {
     let dom_bys = self.dominated_by_graph();
     let mut doms = HashMap::<u32, HashSet<u32>>::new();
     for (child, dominated_by) in dom_bys {
@@ -111,7 +117,7 @@ impl Dom {
         doms.entry(parent).or_default().insert(child);
       }
     }
-    doms
+    DominatesGraph(doms)
   }
 
   // A's dominance frontier contains B if A doesn't dominate B, but does dominate a parent of B.

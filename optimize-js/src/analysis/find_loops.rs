@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use ahash::{HashMap, HashMapExt, HashSet};
 
-use crate::cfg::cfg::Cfg;
+use crate::{cfg::cfg::Cfg, dom::Dom};
 
 
 // - Given backedge from B -> A, A is the loop header.
@@ -13,27 +13,34 @@ use crate::cfg::cfg::Cfg;
 // - A loop may be inside another loop; therefore, nodes may be part of multiple loops.
 pub fn find_loops(
   cfg: &Cfg,
-  backedges: &HashMap<u32, u32>, // Map from A -> B where B -> A is a backedge.
+  dom: &Dom,
 ) -> HashMap<u32, HashSet<u32>> {
+  let dominates = dom.dominates_graph();
   // Map from header -> nodes (including the header).
   let mut loops = HashMap::<u32, HashSet<u32>>::new();
-  for (&header, &b) in backedges {
-    let l = loops.entry(header).or_default();
-    l.insert(header);
-    l.insert(b);
-    let mut queue = VecDeque::from([b]);
-    let mut seen = HashSet::from_iter([header, b]);
-    while let Some(n) = queue.pop_front() {
-      // We have reducible CFGs, so all parents must be part of the loop; they can't magically enter from outside the loop.
-      for p in cfg.graph.parents(n) {
-        if seen.contains(&p) {
-          continue;
-        };
-        seen.insert(p);
-        l.insert(p);
-        queue.push_back(p);
+  // Iterate all edges. We're looking for backedges, so we call an a->b edge tail->header (which isn't true until we check it is a backedge).
+  for tail in cfg.graph.labels() {
+    for header in cfg.graph.children(tail) {
+      // If `header` dominates `tail`, then tail->header is a backedge.
+      if !dominates.dominates(header, tail) {
+        continue;
       };
-    };
+      let l = loops.entry(header).or_default();
+      l.insert(header);
+      l.insert(tail);
+      // Traverse backwards from tail to find nodes dominated by header.
+      let mut queue = VecDeque::from([tail]);
+      while let Some(n) = queue.pop_front() {
+        // We have reducible CFGs, so all parents must be part of the loop; they can't magically enter from outside the loop.
+        for p in cfg.graph.parents(n) {
+          if !l.insert(p) {
+            // Already visited.
+            continue;
+          };
+          queue.push_back(p);
+        };
+      };
+    }
   };
   loops
 }

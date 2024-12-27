@@ -17,7 +17,7 @@ pub mod operator;
 pub mod stmt;
 #[cfg(test)]
 mod tests;
-pub mod toplevel;
+pub mod top_level;
 pub mod drive;
 pub mod import_export;
 
