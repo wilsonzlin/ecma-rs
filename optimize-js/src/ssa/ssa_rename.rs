@@ -20,7 +20,7 @@ fn inner(
   let mut to_pop = HashMap::<u32, usize>::new();
 
   // Replace arguments and targets in instructions.
-  for mut inst in cfg.bblocks.get_mut(label).iter_mut() {
+  for inst in cfg.bblocks.get_mut(label).iter_mut() {
     if inst.t != InstTyp::Phi {
       for arg in inst.args.iter_mut() {
         if let Some(tgt) = arg.maybe_var() {

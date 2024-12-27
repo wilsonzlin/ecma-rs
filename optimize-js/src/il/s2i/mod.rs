@@ -57,7 +57,7 @@ enum VarType {
 }
 
 impl<'p> SourceToInst<'p> {
-  fn var_type<N: Drive + DriveMut>(&self, node_assoc: NodeAssocData, name: String) -> VarType {
+  fn var_type(&self, node_assoc: NodeAssocData, name: String) -> VarType {
     let scope = node_assoc.get::<Scope>().unwrap();
     // WARNING: Don't simply find_symbol_up_to_with_scope to nearest closure, as just because it's locally declared doesn't mean it's not a foreign.
     match scope.find_symbol(name.clone()) {

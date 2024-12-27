@@ -1,13 +1,13 @@
 pub mod decl;
 
 use decl::{ClassDecl, FuncDecl, PatDecl, VarDecl, VarDeclMode};
-use derive_more::derive::From;
+use derive_more::derive::{From, TryInto};
 use derive_visitor::{Drive, DriveMut};
 use serde::{Deserialize, Serialize};
 
 use super::{expr::{pat::Pat, Expr}, import_export::{ExportNames, ImportNames}, node::Node, stx::TopLevel};
 
-#[derive(Debug, Drive, DriveMut, From, Serialize)]
+#[derive(Debug, Drive, DriveMut, From, Serialize, TryInto)]
 #[serde(tag = "$t")]
 pub enum Stmt {
   Block(BlockStmt),

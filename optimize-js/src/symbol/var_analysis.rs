@@ -1,10 +1,21 @@
 use ahash::{HashMap, HashSet};
-use parse_js::{ast::Syntax, loc::Loc, visit::{JourneyControls, Visitor}};
-use parse_js::ast::node::Node;
+use derive_visitor::{Drive, Visitor};
+use parse_js::{ast::{expr::{pat::{ClassOrFuncName, IdPat}, IdExpr}, node::Node, stmt::decl::VarDecl, stx::TopLevel}, loc::Loc};
 use symbol_js::symbol::{Scope, ScopeType, Symbol};
 
+type VarDeclNode = Node<VarDecl>;
+type IdExprNode = Node<IdExpr>;
+type ClassOrFuncNameNode = Node<ClassOrFuncName>;
+type IdPatNode = Node<IdPat>;
+
 // Four tasks (fill out each field as appropriate).
-#[derive(Default)]
+#[derive(Default, Visitor)]
+#[visitor(
+  VarDeclNode,
+  IdExprNode(enter),
+  ClassOrFuncNameNode(enter),
+  IdPatNode(enter),
+)]
 struct VarVisitor {
   declared: HashSet<Symbol>,
   foreign: HashSet<Symbol>,
@@ -29,61 +40,57 @@ fn lifted_scope(scope: &Scope) -> Scope {
   lifted_scope(parent)
 }
 
-impl Visitor for VarVisitor {
-  fn on_syntax_down(&mut self, node: &Node, ctl: &mut JourneyControls) {
-    match node.stx.as_ref() {
-      Syntax::VarDecl { .. } => {
-        self.in_var_decl_stack.push(self.in_var_decl);
-        self.in_var_decl = true;
-      }
-      Syntax::IdentifierExpr { name } => {
-        let usage_scope = node.assoc.get::<Scope>().unwrap();
-        let usage_ls = lifted_scope(usage_scope);
-        match usage_scope.find_symbol_up_to_with_scope(name.clone(), |_| false) {
-          None => {
-            // Unknown.
-            self.unknown.insert(name.clone());
-          }
-          Some((decl_scope, symbol)) => {
-            let decl_ls = lifted_scope(&decl_scope);
-            if usage_ls != decl_ls {
-              self.foreign.insert(symbol);
-            } else if !self.declared.contains(&symbol) {
-              // Check for use before declaration to ensure strict SSA.
-              // NOTE: This doesn't check across closures, as that is mostly a runtime determination (see symbol-js/examples/let.js), but we don't care as those are foreign vars and don't affect strict SSA (i.e. correctness).
-              self.use_before_decl.insert(symbol, node.loc);
-            }
-          }
-        };
-      }
-      Syntax::ClassOrFunctionName { name } => {
-        let scope = node.assoc.get::<Scope>().unwrap();
-        // It won't exist if it's a global declaration.
-        // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
-        if let Some(symbol) = scope.find_symbol(name.clone()) {
-          assert!(self.declared.insert(symbol));
-        };
-      }
-      // An identifier pattern doesn't always mean declaration e.g. simple assignment.
-      Syntax::IdentifierPattern { name } if self.in_var_decl => {
-        let scope = node.assoc.get::<Scope>().unwrap();
-        // It won't exist if it's a global declaration.
-        // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
-        if let Some(symbol) = scope.find_symbol(name.clone()) {
-          assert!(self.declared.insert(symbol));
-        };
-      }
-      _ => {}
-    }
+impl VarVisitor {
+  pub fn enter_var_decl_node(&mut self, node: &Node<VarDecl>) {
+    self.in_var_decl_stack.push(self.in_var_decl);
+    self.in_var_decl = true;
   }
 
-  fn on_syntax_up(&mut self, node: &Node) {
-      match node.stx.as_ref() {
-        Syntax::VarDecl { .. } => {
-          self.in_var_decl = self.in_var_decl_stack.pop().unwrap();
-        }
-        _ => {}
+  pub fn exit_var_decl_node(&mut self, _node: &Node<VarDecl>) {
+    self.in_var_decl = self.in_var_decl_stack.pop().unwrap();
+  }
+
+  pub fn enter_id_expr_node(&mut self, node: &Node<IdExpr>) {
+    let name = &node.stx.name;
+    let usage_scope = node.assoc.get::<Scope>().unwrap();
+    let usage_ls = lifted_scope(usage_scope);
+    match usage_scope.find_symbol_up_to_with_scope(name.clone(), |_| false) {
+      None => {
+        // Unknown.
+        self.unknown.insert(name.clone());
       }
+      Some((decl_scope, symbol)) => {
+        let decl_ls = lifted_scope(&decl_scope);
+        if usage_ls != decl_ls {
+          self.foreign.insert(symbol);
+        } else if !self.declared.contains(&symbol) {
+          // Check for use before declaration to ensure strict SSA.
+          // NOTE: This doesn't check across closures, as that is mostly a runtime determination (see symbol-js/examples/let.js), but we don't care as those are foreign vars and don't affect strict SSA (i.e. correctness).
+          self.use_before_decl.insert(symbol, node.loc);
+        }
+      }
+    };
+  }
+
+  pub fn enter_class_or_func_name_node(&mut self, node: &Node<ClassOrFuncName>) {
+    let scope = node.assoc.get::<Scope>().unwrap();
+    // It won't exist if it's a global declaration.
+    // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
+    if let Some(symbol) = scope.find_symbol(node.stx.name.clone()) {
+      assert!(self.declared.insert(symbol));
+    };
+  }
+
+  pub fn enter_id_pat_node(&mut self, node: &Node<IdPat>) {
+    // An identifier pattern doesn't always mean declaration e.g. simple assignment.
+    if self.in_var_decl {
+      let scope = node.assoc.get::<Scope>().unwrap();
+      // It won't exist if it's a global declaration.
+      // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
+      if let Some(symbol) = scope.find_symbol(node.stx.name.clone()) {
+        assert!(self.declared.insert(symbol));
+      };
+    };
   }
 }
 
@@ -96,9 +103,9 @@ pub struct VarAnalysis {
 }
 
 impl VarAnalysis {
-  pub fn analyze(top_level_node: &Node) -> Self {
+  pub fn analyze(top_level_node: &Node<TopLevel>) -> Self {
     let mut var_visitor = VarVisitor::default();
-    var_visitor.visit(top_level_node);
+    top_level_node.drive(&mut var_visitor);
     Self {
       declared: var_visitor.declared,
       foreign: var_visitor.foreign,
@@ -111,7 +118,8 @@ impl VarAnalysis {
 #[cfg(test)]
 mod tests {
   use ahash::{HashMap, HashMapExt, HashSet};
-  use parse_js::{parse, visit::Visitor};
+  use derive_visitor::Drive;
+use parse_js::{parse};
   use symbol_js::{
       compute_symbols,
       symbol::{Scope, ScopeType, Symbol},
@@ -124,7 +132,7 @@ mod tests {
     let mut parsed = parse(source).unwrap();
     let top_level_scope = compute_symbols(&mut parsed, TopLevelMode::Global);
     let mut var_visitor = VarVisitor::default();
-    var_visitor.visit(&parsed);
+    parsed.drive(&mut var_visitor);
     (top_level_scope, var_visitor)
   }
 

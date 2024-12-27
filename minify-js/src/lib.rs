@@ -38,7 +38,7 @@ pub fn minify(
 ) -> Result<(), MinifyError> {
   let mut top_level_node = parse(source).map_err(MinifyError::Syntax)?;
   compute_symbols(&mut top_level_node, top_level_mode);
-  let program = Program::compile(&top_level_node, false);
+  let program = Program::compile(top_level_node, false);
   let minified = reconstruct_ast_from_program(program);
   emit_js(output, &minified);
   Ok(())

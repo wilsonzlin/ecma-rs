@@ -1,4 +1,4 @@
-use parse_js::{ast::{class_or_object::ClassOrObjKey, expr::{pat::{ArrPat, IdPat, ObjPat, ObjPatProp, Pat}, Expr}, node::Node, stmt::{decl::{VarDecl, VarDeclarator}, BlockStmt, BreakStmt, ForTripleStmt, ForTripleStmtInit, IfStmt, Stmt, WhileStmt}}, num::JsNumber};
+use parse_js::{ast::{class_or_object::ClassOrObjKey, expr::{pat::{ArrPat, IdPat, ObjPat, ObjPatProp, Pat}, Expr}, node::Node, stmt::{decl::{VarDecl, VarDeclarator}, BlockStmt, BreakStmt, ExprStmt, ForTripleStmt, ForTripleStmtInit, IfStmt, Stmt, WhileStmt}}, num::JsNumber};
 
 use crate::il::inst::{Arg, BinOp, Const, Inst};
 
@@ -32,7 +32,7 @@ impl<'p> SourceToInst<'p> {
         Arg::Const(Const::Undefined),
       ));
       self.out.push(Inst::cond_goto( Arg::Var(is_undefined_tmp_var), DUMMY_LABEL,  after_label_id));
-      let dv_arg = self.compile_arg(&dv);
+      let dv_arg = self.compile_expr(dv);
       self.out.push(Inst::var_assign(
         tmp_var,
         dv_arg,
@@ -43,7 +43,7 @@ impl<'p> SourceToInst<'p> {
   }
 
   pub fn compile_destructuring(&mut self, pat: Node<Pat>, rval: Arg) {
-    match pat.stx {
+    match *pat.stx {
       Pat::Arr(ArrPat {elements, rest}) => {
         for (i, e) in elements.into_iter().enumerate() {
           let Some(e) = e else {
@@ -52,8 +52,8 @@ impl<'p> SourceToInst<'p> {
           self.compile_destructuring_via_prop(
             rval.clone(),
             Arg::Const(Const::Num(JsNumber(i as f64))),
-            &e.target,
-            e.default_value.as_ref(),
+            e.target,
+            e.default_value,
           );
         }
         // TODO `rest`.
@@ -65,18 +65,18 @@ impl<'p> SourceToInst<'p> {
             target,
             default_value,
             ..
-          } = p.stx;
+          } = *p.stx;
           let prop = match key {
-            ClassOrObjKey::Direct(d) => Arg::Const(Const::Str(d.to_string())),
-            ClassOrObjKey::Computed(c) => self.compile_arg(c),
+            ClassOrObjKey::Direct(d) => Arg::Const(Const::Str(d.stx.key)),
+            ClassOrObjKey::Computed(c) => self.compile_expr(c),
           };
-          self.compile_destructuring_via_prop(rval.clone(), prop, target, default_value.as_ref());
+          self.compile_destructuring_via_prop(rval.clone(), prop, target, default_value);
         }
         // TODO `rest`.
       }
       Pat::Id(IdPat { name }) => {
         // NOTE: It's possible to destructure-assign to ancestor scope vars (including globals), so just because this is a pattern doesn't mean it's for a local var.
-        let inst = match self.var_type(pat, name.clone()) {
+        let inst = match self.var_type(pat.assoc, name.clone()) {
           VarType::Local(local) => Inst::var_assign(
             self.symbol_to_temp(local),
             rval.clone(),
@@ -111,8 +111,12 @@ impl<'p> SourceToInst<'p> {
   pub fn compile_for_triple_stmt(&mut self, ForTripleStmt { init, cond, post, body }: ForTripleStmt) {
     match init {
       ForTripleStmtInit::None => {}
-      ForTripleStmtInit::Expression(e) => self.compile_expr(e),
-      ForTripleStmtInit::Declaration(d) => self.compile_stmt(d),
+      ForTripleStmtInit::Expr(e) => {
+        self.compile_expr(e);
+      }
+      ForTripleStmtInit::Decl(d) => {
+        self.compile_var_decl(*d.stx);
+      }
     };
     let loop_entry_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
@@ -132,22 +136,22 @@ impl<'p> SourceToInst<'p> {
   }
 
   pub fn compile_if_stmt(&mut self, IfStmt { test, consequent, alternate }: IfStmt) {
-    let test_arg = self.compile_arg(&test);
+    let test_arg = self.compile_expr(test);
     match alternate {
       Some(alternate) => {
         let cons_label_id = self.c_label.bump();
         let after_label_id = self.c_label.bump();
         self.out.push(Inst::cond_goto( test_arg,  cons_label_id, DUMMY_LABEL));
-        self.compile_stmt(&alternate);
+        self.compile_stmt(alternate);
         self.out.push(Inst::goto( after_label_id,));
         self.out.push(Inst::label( cons_label_id));
-        self.compile_stmt(&consequent);
+        self.compile_stmt(consequent);
         self.out.push(Inst::label( after_label_id));
       }
       None => {
         let after_label_id = self.c_label.bump();
         self.out.push(Inst::cond_goto( test_arg, DUMMY_LABEL,  after_label_id));
-        self.compile_stmt(&consequent);
+        self.compile_stmt(consequent);
         self.out.push(Inst::label( after_label_id));
       }
     };
@@ -162,9 +166,9 @@ impl<'p> SourceToInst<'p> {
         continue;
       };
       let tmp = self.c_temp.bump();
-      let rval = self.compile_arg(&init);
+      let rval = self.compile_expr(init);
       self.out.push(Inst::var_assign(tmp, rval));
-      self.compile_destructuring(&pattern, Arg::Var(tmp));
+      self.compile_destructuring(pattern.stx.pat, Arg::Var(tmp));
     }
   }
 
@@ -172,7 +176,7 @@ impl<'p> SourceToInst<'p> {
     let before_test_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
     self.out.push(Inst::label( before_test_label));
-    let test_arg = self.compile_arg(&condition);
+    let test_arg = self.compile_expr(condition);
     self.out.push(Inst::cond_goto( test_arg, DUMMY_LABEL,  after_loop_label));
     self.break_stack.push(after_loop_label);
     self.compile_stmt(body);
@@ -181,11 +185,15 @@ impl<'p> SourceToInst<'p> {
     self.out.push(Inst::label( after_loop_label));
   }
 
+  pub fn compile_expr_stmt(&mut self, ExprStmt { expr }: ExprStmt) {
+    self.compile_expr(expr);
+  }
+
   pub fn compile_stmt(&mut self, n: Node<Stmt>) {
-    match n.stx {
+    match *n.stx {
       Stmt::Block(BlockStmt { body }) => self.compile_stmts(body),
       Stmt::Break(n) => self.compile_break_stmt(n),
-      Stmt::Expr(n) => self.compile_expr(n.expr),
+      Stmt::Expr(n) => self.compile_expr_stmt(n),
       Stmt::ForTriple(n) => self.compile_for_triple_stmt(n),
       Stmt::If(n) => self.compile_if_stmt(n),
       Stmt::VarDecl(n) => self.compile_var_decl(n),

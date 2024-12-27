@@ -1,14 +1,14 @@
 use std::sync::atomic::Ordering;
 
-use parse_js::{ast::{expr::{pat::IdPat, ArrowFuncExpr, BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, CondExpr, Expr, IdExpr, MemberExpr, UnaryExpr, UnaryPostfixExpr}, func::{Func, FuncBody}, node::Node}, num::JsNumber, operator::OperatorName};
+use parse_js::{ast::{expr::{pat::IdPat, ArrowFuncExpr, BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, CondExpr, Expr, IdExpr, MemberExpr, UnaryExpr, UnaryPostfixExpr}, func::{Func, FuncBody}, node::{Node, NodeAssocData}}, num::JsNumber, operator::OperatorName};
 
 use crate::{compile_js_statements, il::inst::{Arg, BinOp, Const, Inst, InstTyp, UnOp}};
 
 use super::{Chain, SourceToInst, VarType, DUMMY_LABEL};
 
-struct CompiledMemberExpr {
-  left: Arg,
-  res: Arg,
+pub struct CompiledMemberExpr {
+  pub left: Arg,
+  pub res: Arg,
 }
 
 impl<'p> SourceToInst<'p> {
@@ -31,10 +31,10 @@ impl<'p> SourceToInst<'p> {
   /// Jumps to the on-nullish chain label if the `left_arg` value to the left of the operator with `optional_chaining` is null or undefined.
   /// Does nothing if the operator is not `optional_chaining`.
   /// See `Chain` for more details.
-  fn conditional_chain_jump(&mut self, optional_chaining: bool, left_arg: Arg, chain: Chain) {
+  fn conditional_chain_jump(&mut self, optional_chaining: bool, left_arg: &Arg, chain: Chain) {
     if optional_chaining {
       let is_undefined_tmp_var = self.c_temp.bump();
-      self.out.push(Inst::bin(is_undefined_tmp_var, left_arg, BinOp::LooseEq, Arg::Const(Const::Null)));
+      self.out.push(Inst::bin(is_undefined_tmp_var, left_arg.clone(), BinOp::LooseEq, Arg::Const(Const::Null)));
       self.out.push(Inst::cond_goto(Arg::Var(is_undefined_tmp_var), chain.is_nullish_label, DUMMY_LABEL));
     }
   }
@@ -54,16 +54,15 @@ impl<'p> SourceToInst<'p> {
     }
   }
 
-  pub fn compile_func(&mut self, n: Node<Func>) -> Arg {
-    let Func { arrow, async_, generator, parameters, body } = n.stx;
+  pub fn compile_func(&mut self, Func { arrow, async_, generator, parameters, body }: Func) -> Arg {
     let pg = self.program.clone();
     let id = pg.next_fn_id.fetch_add(1, Ordering::Relaxed);
-    rayon::spawn(|| {
+    rayon::spawn(move || {
       let wg = pg.wg.clone();
       // TODO params, arrow, async, etc.
       match body {
-        FuncBody::Block(vec) => {
-          let func = compile_js_statements(&pg, body);
+        FuncBody::Block(stmts) => {
+          let func = compile_js_statements(&pg, stmts);
           pg.functions.insert(id, func);
         }
         FuncBody::Expression(node) => todo!(),
@@ -73,8 +72,8 @@ impl<'p> SourceToInst<'p> {
     Arg::Fn(id)
   }
 
-  pub fn compile_id_expr(&mut self, n: Node<IdExpr>) -> Arg {
-    match self.var_type(&n, n.stx.name) {
+  pub fn compile_id_expr(&mut self, assoc: NodeAssocData, IdExpr { name }: IdExpr) -> Arg {
+    match self.var_type(assoc, name) {
       VarType::Local(local) => Arg::Var(self.symbol_to_temp(local)),
       VarType::Builtin(builtin) => Arg::Builtin(builtin),
       VarType::Foreign(foreign) => self.temp_var_arg(|tgt| Inst::foreign_load(tgt, foreign)),
@@ -82,14 +81,14 @@ impl<'p> SourceToInst<'p> {
     }
   }
 
-  pub fn compile_assignment(&mut self, operator: OperatorName, left: Node<Expr>, right: Node<Expr>) -> Arg {
+  pub fn compile_assignment(&mut self, operator: OperatorName, target: Node<Expr>, value: Node<Expr>) -> Arg {
     // We'll use this as a placeholder that will be replaced at the end.
     let dummy_val = Arg::Const(Const::Num(JsNumber(0xdeadbeefu32 as f64)));
     // The LHS of an assignment cannot contain a conditional chaining anywhere in the chain, as prohibited by the spec.
     // We assume this is enforced at a previous stage (e.g. parsing).
-    let mut ass_inst = match left.stx {
+    let mut ass_inst = match *target.stx {
       Expr::IdPat(IdPat { name }) => {
-        match self.var_type(left.assoc, name) {
+        match self.var_type(target.assoc, name) {
           VarType::Local(l) => Inst::var_assign(
             self.symbol_to_temp(l),
             dummy_val,
@@ -107,7 +106,7 @@ impl<'p> SourceToInst<'p> {
       }
       Expr::Member(MemberExpr { optional_chaining, left, right }) => {
         assert!(!optional_chaining);
-        let left_arg = self.compile_arg(&left);
+        let left_arg = self.compile_expr(left);
         Inst::prop_assign(
           left_arg,
           Arg::Const(Const::Str(right.to_string())),
@@ -116,8 +115,8 @@ impl<'p> SourceToInst<'p> {
       }
       Expr::ComputedMember(ComputedMemberExpr { optional_chaining, object, member }) => {
         assert!(!optional_chaining);
-        let left_arg = self.compile_expr(&object, None);
-        let member_arg = self.compile_expr(&member, None);
+        let left_arg = self.compile_expr(object);
+        let member_arg = self.compile_expr(member);
         Inst::prop_assign(
           left_arg,
           member_arg,
@@ -126,8 +125,8 @@ impl<'p> SourceToInst<'p> {
       }
       _ => unreachable!(),
     };
-    let mut value = self.compile_expr(right);
-    if *operator != OperatorName::Assignment {
+    let mut value = self.compile_expr(value);
+    if operator != OperatorName::Assignment {
       let op = match operator {
         OperatorName::AssignmentAddition => BinOp::Add,
         OperatorName::AssignmentSubtraction => BinOp::Sub,
@@ -170,12 +169,9 @@ impl<'p> SourceToInst<'p> {
       self.out.push(rhs_inst);
       value = Arg::Var(rhs_tmp_var);
     };
-    for a in ass_inst.args.iter_mut() {
-      if a == dummy_val {
-        a = value;
-        break;
-      };
-    };
+    // The last Inst arg is the dummy arg position for all cases (check above usages).
+    // We can't just find the arg that equals our dummy as it's possible actual source produces it.
+    *ass_inst.args.last_mut().unwrap() = value;
     self.out.push(ass_inst);
     // TODO
     Arg::Var(self.out.last().unwrap().tgts[0])
@@ -246,7 +242,7 @@ impl<'p> SourceToInst<'p> {
   }
 
   pub fn compile_unary_postfix_expr(&mut self, UnaryPostfixExpr { operator, argument }: UnaryPostfixExpr) -> Arg {
-    let arg = self.compile_expr(argument, None);
+    let arg = self.compile_expr(argument);
     let tmp_var = self.c_temp.bump();
     self.out.push(Inst::var_assign(tmp_var, arg.clone()));
     self.out.push(Inst::bin(
@@ -266,10 +262,10 @@ impl<'p> SourceToInst<'p> {
     match operator {
       // Prefix increment/decrement.
       OperatorName::PrefixDecrement | OperatorName::PrefixIncrement => {
-        let arg = self.compile_expr(argument, None);
+        let arg = self.compile_expr(argument);
         self.out.push(Inst::bin(
           arg.to_var(),
-          arg,
+          arg.clone(),
           match operator {
             OperatorName::PrefixDecrement => BinOp::Sub,
             OperatorName::PrefixIncrement => BinOp::Add,
@@ -285,7 +281,7 @@ impl<'p> SourceToInst<'p> {
           OperatorName::UnaryNegation => UnOp::Neg,
           _ => unimplemented!(),
         };
-        let arg = self.compile_expr(argument, None);
+        let arg = self.compile_expr(argument);
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, op, arg));
         Arg::Var(tmp)
@@ -295,9 +291,9 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_member_expr(&mut self, MemberExpr { optional_chaining, left, right }: MemberExpr, chain: impl Into<Option<Chain>>) -> CompiledMemberExpr {
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
-    let left_arg = self.compile_expr(left, chain);
+    let left_arg = self.compile_expr_with_chain(left, chain);
     // Handle `maybe_obj?.a`: skip access if nullish.
-    self.conditional_chain_jump(optional_chaining, left_arg, chain);
+    self.conditional_chain_jump(optional_chaining, &left_arg, chain);
     let res_tmp_var = self.c_temp.bump();
     let right_arg = Arg::Const(Const::Str(right.to_string()));
     self.out.push(Inst::bin(res_tmp_var, left_arg.clone(), BinOp::GetProp, right_arg));
@@ -310,12 +306,12 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_computed_member_expr(&mut self, ComputedMemberExpr { optional_chaining, object, member }: ComputedMemberExpr, chain: impl Into<Option<Chain>>) -> CompiledMemberExpr {
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
-    let left_arg = self.compile_expr(object, chain);
+    let left_arg = self.compile_expr_with_chain(object, chain);
     // Handle `maybe_obj?.["a"]`: skip access if nullish.
-    self.conditional_chain_jump(optional_chaining, left_arg, chain);
+    self.conditional_chain_jump(optional_chaining, &left_arg, chain);
     let res_tmp_var = self.c_temp.bump();
     // WARNING: The computed member expr does *not* use the same chain!
-    let right_arg = self.compile_expr(member, None);
+    let right_arg = self.compile_expr(member);
     self.out.push(Inst::bin(res_tmp_var, left_arg.clone(), BinOp::GetProp, right_arg));
     self.complete_chain_setup(did_chain_setup, res_tmp_var, chain);
     CompiledMemberExpr {
@@ -327,7 +323,7 @@ impl<'p> SourceToInst<'p> {
   pub fn compile_call_expr(&mut self, CallExpr { optional_chaining, callee, arguments }: CallExpr, chain: impl Into<Option<Chain>>) -> Arg {
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
     // We need to handle methods specially due to `this`.
-    let (this_arg, callee_arg) = match callee.stx {
+    let (this_arg, callee_arg) = match *callee.stx {
       Expr::Member(m) => {
         let c = self.compile_member_expr(m, chain);
         (c.left, c.res)
@@ -337,7 +333,7 @@ impl<'p> SourceToInst<'p> {
         (c.left, c.res)
       }
       _ => {
-        let c = self.compile_expr(callee, chain);
+        let c = self.compile_expr_with_chain(callee, chain);
         // If there's no `this`, Const::Undefined is correct, no need for None.
         // Calling a function without an explicit this does use undefined in strict mode (try `function f() { console.log(this); }; f()`).
         // If a function has a bound this (e.g. arrow function, `fn.bind`), that's "decl-site"; it doesn't change our "call-site" (e.g. `fn.call(this)`, `obj.method()`) `this` (but does ignore it at runtime).
@@ -349,15 +345,15 @@ impl<'p> SourceToInst<'p> {
     // This value will hold the result of the call, or undefined if we set up the chain (i.e. we're the tail result node of the chain).
     let res_tmp_var = self.c_temp.bump();
     // Handle `maybe_fn?.()`: skip call if nullish.
-    self.conditional_chain_jump(optional_chaining, callee_arg, chain);
+    self.conditional_chain_jump(optional_chaining, &callee_arg, chain);
 
     // Compile args.
     let mut args = Vec::new();
     let mut spreads = Vec::new();
     for a in arguments.into_iter() {
-      let CallArg { spread: s, value } = a.stx;
-      args.push(self.compile_arg(&value));
-      if *s {
+      let CallArg { spread, value } = *a.stx;
+      args.push(self.compile_expr(value));
+      if spread {
         spreads.push(args.len());
       }
     };
@@ -375,16 +371,20 @@ impl<'p> SourceToInst<'p> {
 
   #[rustfmt::skip]
   pub fn compile_expr_with_chain(&mut self, n: Node<Expr>, chain: impl Into<Option<Chain>>) -> Arg {
-    match n.stx.as_ref() {
-      Expr::ArrowFunc(ArrowFuncExpr { func }) => self.compile_func(func),
+    match *n.stx {
+      Expr::ArrowFunc(ArrowFuncExpr { func }) => self.compile_func(*func.stx),
+      Expr::Binary(n) => self.compile_binary_expr(n),
       Expr::Call(n) => self.compile_call_expr(n, chain),
-      Expr::ComputedMember(n) => self.compile_computed_member_expr(n, chain),
+      Expr::ComputedMember(n) => self.compile_computed_member_expr(n, chain).res,
       Expr::Cond(n) => self.compile_cond_expr(n),
-      Expr::Id(_) => self.compile_id_expr(n.try_into_stx().unwrap()),
+      Expr::Id(s) => self.compile_id_expr(n.assoc, s),
       Expr::LitBool(n) => Arg::Const(Const::Bool(n.value)),
       Expr::LitNum(n) => Arg::Const(Const::Num(n.value)),
       Expr::LitStr(n) => Arg::Const(Const::Str(n.value)),
-      Expr::Member(n) => self.compile_member_expr(n, chain),
+      Expr::Member(n) => self.compile_member_expr(n, chain).res,
+      Expr::Unary(n) => self.compile_unary_expr(n),
+      Expr::UnaryPostfix(n) => self.compile_unary_postfix_expr(n),
+      _ => unimplemented!()
     }
   }
 

@@ -22,7 +22,7 @@ pub enum Expr {
   Call(CallExpr),
   Class(ClassExpr),
   ComputedMember(ComputedMemberExpr),
-  Conditional(CondExpr),
+  Cond(CondExpr),
   Func(FuncExpr),
   Id(IdExpr),
   Import(ImportExpr),

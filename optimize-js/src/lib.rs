@@ -142,7 +142,7 @@ impl Program {
     if let Some((_, loc)) = use_before_decl.iter().next() {
       panic!("Use before declaration at {:?}", loc);
     };
-    let TopLevel { body } = top_level_node.stx;
+    let TopLevel { body } = *top_level_node.stx;
     let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
       foreign_vars: foreign,
       functions: DashMap::new(),
@@ -189,6 +189,6 @@ mod tests {
     "#;
     let mut top_level_node = parse(source.as_bytes()).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
-    let bblocks = Program::compile(&top_level_node, false).top_level;
+    let bblocks = Program::compile(top_level_node, false).top_level;
   }
 }
