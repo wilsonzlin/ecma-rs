@@ -33,9 +33,22 @@ import {
   useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import initWasm, { build_js, set_panic_hook } from "optimize-js-debugger";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import "./App.css";
+import { decode, encode } from "@msgpack/msgpack";
+
+class VObjectMapAsMap<K, V> extends Validator<Map<K, V>> {
+  constructor(private readonly key: Validator<K>, private readonly value: Validator<V>) {
+    super(new Map());
+  }
+
+  parse(theValue: ValuePath, raw: unknown): Map<K, V> {
+    if (typeof raw != "object" || !raw) {
+      throw theValue.isBadAsIt("is not an object");
+    }
+    return new Map(Object.entries(raw).map(([k, v]) => [this.key.parse(theValue.andThen(k), k), this.value.parse(theValue.andThen(k), v)]));
+  }
+}
 
 enum InstTyp {
   Bin = "Bin",
@@ -130,8 +143,8 @@ type Inst = Valid<typeof vInst>;
 const vDebugStep = new VStruct({
   name: new VString(),
   bblockOrder: new VArray(new VInteger()),
-  bblocks: new VMap(new VInteger(), new VArray(vInst)),
-  cfgChildren: new VMap(new VInteger(), new VArray(new VInteger())),
+  bblocks: new VObjectMapAsMap(new VInteger(), new VArray(vInst)),
+  cfgChildren: new VObjectMapAsMap(new VInteger(), new VArray(new VInteger())),
 });
 
 type DebugStep = Valid<typeof vDebugStep>;
@@ -608,42 +621,31 @@ const BBlocksExplorer = ({
 };
 
 export const App = ({}: {}) => {
-  const [loadedWasm, setLoadedWasm] = useState(false);
-  useEffect(() => {
-    (async () => {
-      await initWasm({
-        module_or_path: "/optimize_js_debugger_bg.wasm",
-      });
-      set_panic_hook();
-      // https://github.com/rustwasm/console_error_panic_hook?tab=readme-ov-file#errorstacktracelimit
-      // @ts-expect-error
-      Error.stackTraceLimit = 100;
-      setLoadedWasm(true);
-    })();
-  }, []);
-
   const [source, setSource] = useState(INIT_SOURCE);
   const [data, setData] = useState<BuiltJs>();
   const [curFnId, setCurFnId] = useState<number>();
   const [error, setError] = useState<string>();
   useEffect(() => {
     const src = source.trim();
-    if (!loadedWasm || !src) {
+    if (!src) {
       return;
     }
-    let res;
-    try {
-      // TODO Module mode.
-      res = build_js(source, true);
-    } catch (err) {
-      // Don't clear existing graph.
-      setError(err.stack);
-      return;
-    }
-    setError(undefined);
-    console.log("Built JS:", res);
-    setData(vBuiltJs.parseRoot(res));
-  }, [loadedWasm, source]);
+    const ac = new AbortController();
+    (async () => {
+      const res = await fetch("//localhost:3001/compile", {
+        signal: ac.signal,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/msgpack",
+        },
+        // TODO Module mode.
+        body: encode({ source: src, is_global: true }),
+      });
+      const raw = decode(await res.arrayBuffer());
+      setData(vBuiltJs.parseRoot(raw));
+    })();
+    return () => ac.abort();
+  }, [source]);
   const curFn = data?.functions[curFnId!] ?? data?.top_level;
 
   return (

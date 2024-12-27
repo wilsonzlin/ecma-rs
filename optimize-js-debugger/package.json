@@ -1,15 +1,15 @@
 {
   "private": true,
   "scripts": {
-    "build-worker": "wasm-pack build --${PROFILE:-debug} --target web && mkdir -p dist && cp pkg/*.wasm dist/.",
-    "build": "npm run build-worker && npm run esbuild -- --minify && cp -iv src/index.html dist/.",
+    "build": "npm run esbuild -- --minify && cp -iv src/index.html dist/.",
     "esbuild": "esbuild --bundle --legal-comments=none --outdir=dist --sourcemap src/index.tsx",
-    "format": "cargo +nightly fmt && prettier --write 'src/**/*.{css,html,ts,tsx}'",
+    "format": "prettier --write 'src/**/*.{css,html,ts,tsx}'",
     "start": "npm run esbuild -- --servedir=dist --serve-fallback=src/index.html --watch"
   },
   "dependencies": {
     "@dagrejs/dagre": "^1.1.4",
     "@monaco-editor/react": "^4.6.0",
+    "@msgpack/msgpack": "^2",
     "@wzlin/valid": "^0.4.3",
     "@xtjs/lib": "^0.57.1",
     "@xyflow/react": "^12.3.6",
