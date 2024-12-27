@@ -39,7 +39,7 @@ pub fn build_js(source: &str, is_global: bool) -> JsValue {
   let Program {
     functions,
     top_level,
-  } = Program::compile(&top_level_node, true);
+  } = Program::compile(top_level_node, true);
   let built = BuiltJs {
     functions,
     top_level,

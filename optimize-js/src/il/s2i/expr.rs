@@ -56,9 +56,10 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_func(&mut self, Func { arrow, async_, generator, parameters, body }: Func) -> Arg {
     let pg = self.program.clone();
+    // We must clone the WaitGroup outside the spawn, as the function inside spawn may not be called immediately.
+    let wg = self.wg.clone();
     let id = pg.next_fn_id.fetch_add(1, Ordering::Relaxed);
     rayon::spawn(move || {
-      let wg = pg.wg.clone();
       // TODO params, arrow, async, etc.
       match body {
         FuncBody::Block(stmts) => {
@@ -67,6 +68,8 @@ impl<'p> SourceToInst<'p> {
         }
         FuncBody::Expression(node) => todo!(),
       };
+      // Drop Arc ref first, as our top-level waits on the WaitGroup then immediately tries to unwrap the Arc.
+      drop(pg);
       drop(wg);
     });
     Arg::Fn(id)
@@ -86,47 +89,37 @@ impl<'p> SourceToInst<'p> {
     let dummy_val = Arg::Const(Const::Num(JsNumber(0xdeadbeefu32 as f64)));
     // The LHS of an assignment cannot contain a conditional chaining anywhere in the chain, as prohibited by the spec.
     // We assume this is enforced at a previous stage (e.g. parsing).
-    let mut ass_inst = match *target.stx {
+    // The LHS is earlier in execution order, which is why we do this first, before processing the value, which is why we need a dummy (we don't have the value yet). The LHS can be complex (e.g. `(a + b).c[d + e] = f`), so it does matter.
+    let mut assign_inst = match *target.stx {
       Expr::IdPat(IdPat { name }) => {
         match self.var_type(target.assoc, name) {
-          VarType::Local(l) => Inst::var_assign(
-            self.symbol_to_temp(l),
-            dummy_val,
-          ),
-          VarType::Foreign(f) => Inst::foreign_store(
-            f,
-            dummy_val,
-          ),
-          VarType::Unknown(n) => Inst::unknown_store(
-            n,
-            dummy_val,
-          ),
+          VarType::Local(l) => Inst::var_assign(self.symbol_to_temp(l), dummy_val),
+          VarType::Foreign(f) => Inst::foreign_store(f, dummy_val),
+          VarType::Unknown(n) => Inst::unknown_store(n, dummy_val),
           VarType::Builtin(builtin) => panic!("assignment to builtin {builtin}"),
         }
       }
       Expr::Member(MemberExpr { optional_chaining, left, right }) => {
         assert!(!optional_chaining);
         let left_arg = self.compile_expr(left);
-        Inst::prop_assign(
-          left_arg,
-          Arg::Const(Const::Str(right.to_string())),
-          dummy_val,
-        )
+        let member_arg = Arg::Const(Const::Str(right.to_string()));
+        Inst::prop_assign(left_arg, member_arg, dummy_val)
       }
       Expr::ComputedMember(ComputedMemberExpr { optional_chaining, object, member }) => {
         assert!(!optional_chaining);
         let left_arg = self.compile_expr(object);
         let member_arg = self.compile_expr(member);
-        Inst::prop_assign(
-          left_arg,
-          member_arg,
-          dummy_val,
-        )
+        Inst::prop_assign(left_arg, member_arg, dummy_val)
       }
       _ => unreachable!(),
     };
-    let mut value = self.compile_expr(value);
-    if operator != OperatorName::Assignment {
+    let value_tmp_var = self.c_temp.bump();
+    let mut value_arg = self.compile_expr(value);
+    if operator == OperatorName::Assignment {
+      // Direct assignment. Since we need to return a var holding the result of this assignment expression, assign the value to our tmp var. (This is a precaution, in case the value isn't already a var.)
+      self.out.push(Inst::var_assign(value_tmp_var, value_arg.clone()));
+    } else {
+      // Not direct assignment. We need to perform the operation first. No need for a new tmp var, we can just assign to our expr result tmp var.
       let op = match operator {
         OperatorName::AssignmentAddition => BinOp::Add,
         OperatorName::AssignmentSubtraction => BinOp::Sub,
@@ -134,20 +127,20 @@ impl<'p> SourceToInst<'p> {
         OperatorName::AssignmentDivision => BinOp::Div,
         _ => unimplemented!(),
       };
-      let left_arg = match ass_inst.t {
-        InstTyp::VarAssign => Arg::Var(ass_inst.tgts[0]),
+      let left_arg = match assign_inst.t {
+        InstTyp::VarAssign => Arg::Var(assign_inst.tgts[0]),
         InstTyp::ForeignStore => {
           let left_tmp_var = self.c_temp.bump();
-          self.out.push(Inst::foreign_load(left_tmp_var, ass_inst.foreign));
+          self.out.push(Inst::foreign_load(left_tmp_var, assign_inst.foreign));
           Arg::Var(left_tmp_var)
         }
         InstTyp::UnknownStore => {
           let left_tmp_var = self.c_temp.bump();
-          self.out.push(Inst::unknown_load(left_tmp_var, ass_inst.unknown.clone()));
+          self.out.push(Inst::unknown_load(left_tmp_var, assign_inst.unknown.clone()));
           Arg::Var(left_tmp_var)
         }
         InstTyp::PropAssign => {
-          let (obj, prop, _) = ass_inst.as_prop_assign();
+          let (obj, prop, _) = assign_inst.as_prop_assign();
           let left_tmp_var = self.c_temp.bump();
           self.out.push(Inst::bin(
             left_tmp_var,
@@ -159,22 +152,18 @@ impl<'p> SourceToInst<'p> {
         }
         _ => unreachable!(),
       };
-      let rhs_tmp_var = self.c_temp.bump();
-      let rhs_inst = Inst::bin(
-        rhs_tmp_var,
-        left_arg,
-        op,
-        value,
-      );
+      let rhs_inst = Inst::bin(value_tmp_var, left_arg, op, value_arg);
       self.out.push(rhs_inst);
-      value = Arg::Var(rhs_tmp_var);
+      value_arg = Arg::Var(value_tmp_var);
     };
     // The last Inst arg is the dummy arg position for all cases (check above usages).
     // We can't just find the arg that equals our dummy as it's possible actual source produces it.
-    *ass_inst.args.last_mut().unwrap() = value;
-    self.out.push(ass_inst);
-    // TODO
-    Arg::Var(self.out.last().unwrap().tgts[0])
+    *assign_inst.args.last_mut().unwrap() = value_arg;
+    self.out.push(assign_inst);
+    // The result of an assignment is always the value.
+    // - For member access like `a.b = c`, the getter is not invoked.
+    // - For non-direct assignment operators like `a += b`, the result is `a + b` since it's a shorthand for `a = a + b`.
+    Arg::Var(value_tmp_var)
   }
 
   pub fn compile_logical_expr(&mut self, operator: OperatorName, left: Node<Expr>, right: Node<Expr>) -> Arg {

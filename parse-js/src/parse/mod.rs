@@ -149,7 +149,7 @@ impl<'a> Parser<'a> {
     if self.buf.get(self.next_tok_i).is_some_and(|t| t.lex_mode != mode) {
       self.reset_to(self.next_tok_i);
     }
-    assert!(self.buf.len() <= self.next_tok_i);
+    assert!(self.next_tok_i <= self.buf.len());
     if self.buf.len() == self.next_tok_i {
       let token = lex_next(&mut self.lexer, mode);
       self.buf.push(BufferedToken { token, lex_mode: mode });

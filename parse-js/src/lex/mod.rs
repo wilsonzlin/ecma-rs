@@ -739,6 +739,15 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
     };
   };
 
+  // EOF is different from Invalid, so we should emit this specifically instead of letting drive_fallible return an Invalid.
+  if lexer.at_end() {
+    return Token {
+      loc: lexer.eof_range(),
+      typ: TT::EOF,
+      preceded_by_line_terminator,
+    };
+  };
+
   lexer.drive_fallible(preceded_by_line_terminator, |lexer| {
     SIG.find(lexer).and_then(|(tt, mut mat)| match tt {
       TT::Identifier => Ok(lex_identifier(lexer, mode)),

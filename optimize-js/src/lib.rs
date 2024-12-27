@@ -106,8 +106,6 @@ pub struct ProgramCompilerInner {
   pub functions: DashMap<FnId, ProgramFunction>,
   pub next_fn_id: AtomicUsize,
   pub debug: bool,
-  /// Functions are compiled in parallel. This waits for all of them to complete.
-  pub wg: WaitGroup,
 }
 
 /// Our internal compiler state for a program.
@@ -148,16 +146,13 @@ impl Program {
       functions: DashMap::new(),
       next_fn_id: AtomicUsize::new(0),
       debug,
-      wg: WaitGroup::new(),
     }));
     let top_level = compile_js_statements(&program, body);
     let ProgramCompilerInner {
       functions,
       next_fn_id,
-      wg,
       ..
     } = Arc::try_unwrap(program.0).unwrap();
-    wg.wait();
     let fn_count = next_fn_id.load(Ordering::Relaxed);
     Self {
       functions: (0..fn_count).map(|i| functions.remove(&i).unwrap().1).collect(),
@@ -176,16 +171,21 @@ mod tests {
   #[test]
   fn test_compile_js_statements() {
     let source = r#"
-      a?.b?.c;
-      let x = 1;
-      if (x) {
-        g();
-        x += 1;
-        for (;;) {
-          x += 1;
+      (() => {
+        a?.b?.c;
+        let x = 1;
+        if (x) {
+          g();
+          x += Math.round(1.1);
+          for (;;) {
+            x += 1;
+            setTimeout(() => {
+              h(x);
+            }, 1000);
+          }
         }
-      }
-      f(x);
+        f(x);
+      })();
     "#;
     let mut top_level_node = parse(source.as_bytes()).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
