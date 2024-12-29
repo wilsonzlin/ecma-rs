@@ -2,13 +2,13 @@ use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use itertools::Itertools;
 use serde::Serialize;
 
-use std::{collections::VecDeque, ops::{Deref, DerefMut}};
+use std::{collections::VecDeque, iter, ops::{Deref, DerefMut}};
 
-use crate::{graph::Graph, il::{inst::{Inst, InstTyp}, s2i::DUMMY_LABEL}};
+use crate::{graph::{Graph, GraphRelatedNodesIter}, il::{inst::{Inst, InstTyp}, s2i::DUMMY_LABEL}};
 
 /// Wrapper over a Graph<u32> that provides owned types and better method names,
 /// as well as domain-specific methods.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 pub struct CfgGraph(Graph<u32>);
 
 impl CfgGraph {
@@ -16,11 +16,11 @@ impl CfgGraph {
     self.0.nodes().cloned()
   }
 
-  pub fn parents(&self, bblock: u32) -> impl Iterator<Item=u32> + '_ {
+  pub fn parents(&self, bblock: u32) -> iter::Cloned<GraphRelatedNodesIter<'_, u32>> {
     self.0.parents(&bblock).cloned()
   }
 
-  pub fn children(&self, bblock: u32) -> impl Iterator<Item=u32> + '_ {
+  pub fn children(&self, bblock: u32) -> iter::Cloned<GraphRelatedNodesIter<'_, u32>> {
     self.0.children(&bblock).cloned()
   }
 
@@ -69,6 +69,15 @@ impl CfgGraph {
 
   pub fn calculate_postorder(&self, entry: u32) -> (Vec<u32>, HashMap<u32, usize>) {
     let (postorder, label_to_postorder) = self.0.calculate_postorder(&entry);
+    (
+      postorder.into_iter().map(|&n| n).collect_vec(),
+      label_to_postorder.into_iter().map(|(&k, v)| (k, v)).collect::<HashMap<_, _>>(),
+    )
+  }
+
+  /// WARNING: This is not the same as reverse postorder. This is the postorder of the reversed graph.
+  pub fn calculate_reversed_graph_postorder(&self, entry: u32) -> (Vec<u32>, HashMap<u32, usize>) {
+    let (postorder, label_to_postorder) = self.0.calculate_reversed_graph_postorder(&entry);
     (
       postorder.into_iter().map(|&n| n).collect_vec(),
       label_to_postorder.into_iter().map(|(&k, v)| (k, v)).collect::<HashMap<_, _>>(),

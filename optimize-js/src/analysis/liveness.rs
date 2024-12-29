@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::Arg;
 
+// TODO Use DataFlowAnalysis
 pub fn calculate_live_ins(
   cfg: &Cfg,
   inlines: &HashMap<(u32, usize), (u32, usize)>,
@@ -51,8 +52,8 @@ pub fn calculate_live_ins(
         cur.remove(&var);
       }
       for arg in inst.args.iter() {
-        if let Arg::Var(t) = arg {
-          cur.insert(*t);
+        if let &Arg::Var(t) = arg {
+          cur.insert(t);
         }
       }
       if let Some(add_uses) = additional_uses_at.get(&loc) {

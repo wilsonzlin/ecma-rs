@@ -3,12 +3,15 @@ use ahash::HashMapExt;
 use parking_lot::RwLock;
 use serde::Serialize;
 use core::ptr;
+use std::any::Any;
+use std::any::TypeId;
 use std::collections::hash_map::Entry;
+use std::collections::VecDeque;
 use std::fmt;
 use std::fmt::Debug;
 use std::fmt::Formatter;
-use std::fmt::Write;
 use std::hash::Hash;
+use std::hash::Hasher;
 use std::ops::Deref;
 use std::ops::DerefMut;
 use std::sync::atomic::AtomicU64;
@@ -105,6 +108,7 @@ pub struct ScopeData {
   // Not used by the parser, but useful for some library consumers, as there's currently no other way to iterate all scopes.
   children: Vec<Scope>,
   typ: ScopeType,
+  assoc: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
 }
 
 impl ScopeData {
@@ -114,6 +118,31 @@ impl ScopeData {
 
   pub fn typ(&self) -> ScopeType {
     self.typ
+  }
+
+  pub fn get_assoc<T: Any>(&self) -> Option<&T> {
+    let t = TypeId::of::<T>();
+    self.assoc.get(&t).map(|v| v.downcast_ref().unwrap())
+  }
+
+  pub fn get_or_insert_assoc_with<T: Any + Send + Sync, F: FnOnce() -> T>(
+    &mut self,
+    f: F,
+  ) -> &mut T {
+    let t = TypeId::of::<T>();
+    self.assoc.entry(t).or_insert_with(|| Box::from(f())).downcast_mut().unwrap()
+  }
+
+  pub fn get_or_insert_assoc<T: Any + Send + Sync>(&mut self) -> &mut T
+  where
+    T: Default,
+  {
+    self.get_or_insert_assoc_with(|| Default::default())
+  }
+
+  pub fn set_assoc<T: Any + Send + Sync>(&mut self, v: T) {
+    let t = TypeId::of::<T>();
+    self.assoc.insert(t, Box::from(v));
   }
 
   pub fn add_symbol(&mut self, identifier: Identifier) {
@@ -152,6 +181,36 @@ impl ScopeData {
   }
 }
 
+/// Iterates over a scope and all its ancestors.
+pub struct ScopeSelfAndAncestors {
+  cur: Option<Scope>,
+}
+
+impl Iterator for ScopeSelfAndAncestors {
+  type Item = Scope;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    let cur = self.cur.clone();
+    self.cur = cur.as_ref().and_then(|c| c.data().parent().cloned());
+    cur
+  }
+}
+
+/// Iterates over all descendants of a scope (but not the scope itself) in a breadth-first (left-to-right, then top-to-bottom) order.
+pub struct ScopeDescendants {
+  queue: VecDeque<Scope>,
+}
+
+impl Iterator for ScopeDescendants {
+  type Item = Scope;
+
+  fn next(&mut self) -> Option<Self::Item> {
+    let n = self.queue.pop_front()?;
+    self.queue.extend(n.data().children().iter().cloned());
+    Some(n)
+  }
+}
+
 // We have downstream uses across threads, so use Arc<RwLock<>> instead of Rc<RefCell<>>.
 #[derive(Clone)]
 pub struct Scope(Arc<RwLock<ScopeData>>);
@@ -165,6 +224,7 @@ impl Scope {
       parent: parent.clone(),
       children: Vec::new(),
       typ,
+      assoc: HashMap::new(),
     })));
     if let Some(parent) = parent {
       parent.0.write().children.push(scope.clone());
@@ -180,6 +240,14 @@ impl Scope {
     self.0.write()
   }
 
+  pub fn self_and_ancestors(&self) -> ScopeSelfAndAncestors {
+    ScopeSelfAndAncestors { cur: Some(self.clone()) }
+  }
+
+  pub fn descendants(&self) -> ScopeDescendants {
+    ScopeDescendants { queue: self.data().children().iter().cloned().collect() }
+  }
+
   pub fn create_child_scope(&self, typ: ScopeType) -> Scope {
     // Scope::new will also acquire ref, so we cannot do this inline.
     let symbol_generator = self.0.read().symbol_generator.clone();
@@ -188,31 +256,12 @@ impl Scope {
 
   /// Returns the closest self-or-ancestor scope that matches the provided predicate. If no such match is found, None is returned.
   pub fn find_nearest_scope<F: Fn(ScopeType) -> bool>(&self, pred: F) -> Option<Scope> {
-    let cur = self.0.read();
-    if pred(cur.typ) {
-      Some(self.clone())
-    } else if let Some(parent) = &cur.parent {
-      parent.find_nearest_scope(pred)
-    } else {
-      None
-    }
+    self.self_and_ancestors().find(|s| pred(s.data().typ))
   }
 
   /// Returns the most distant self-or-ancestor scope that matches the provided predicate. If no such match is found, None is returned.
   pub fn find_furthest_scope<F: Fn(ScopeType) -> bool>(&self, pred: F) -> Option<Scope> {
-    let mut latest_match = None;
-    let mut cur = self.clone();
-    loop {
-      if !pred(cur.0.read().typ) {
-        break;
-      };
-      latest_match = Some(cur.clone());
-      let Some(parent) = cur.0.read().parent.clone() else {
-        break;
-      };
-      cur = parent;
-    }
-    latest_match
+    self.self_and_ancestors().take_while(|s| pred(s.data().typ)).last()
   }
 
   /// Returns the matching symbol and associated nearest scope that contains the provided identifier. Once a scope is reached that matches the provided predicate, the search stops *after* looking in that scope. If no such match is found, None is returned.
@@ -221,20 +270,16 @@ impl Scope {
     identifier: Identifier,
     scope_pred: impl Fn(ScopeType) -> bool,
   ) -> Option<(Scope, Symbol)> {
-    let cur = self.0.read();
-    match cur.symbols.get(&identifier) {
-      Some(symbol) => Some((self.clone(), symbol.clone())),
-      None => {
-        if scope_pred(cur.typ) {
-          None
-        } else {
-          match &cur.parent {
-            Some(parent) => parent.find_symbol_up_to_with_scope(identifier, scope_pred),
-            None => None,
-          }
-        }
+    for scope in self.self_and_ancestors() {
+      let cur = scope.data();
+      if let Some(symbol) = cur.symbols.get(&identifier) {
+        return Some((self.clone(), symbol.clone()));
       }
-    }
+      if scope_pred(cur.typ) {
+        break;
+      };
+    };
+    None
   }
 
   /// Returns the matching symbol in the nearest scope for the provided identifier. Once a scope is reached that matches the provided predicate, the search stops *after* looking in that scope. If no such match is found, None is returned.
@@ -283,7 +328,7 @@ impl PartialEq for Scope {
 impl Eq for Scope {}
 
 impl Hash for Scope {
-  fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+  fn hash<H: Hasher>(&self, state: &mut H) {
     ptr::hash(self.0.data_ptr(), state);
   }
 }

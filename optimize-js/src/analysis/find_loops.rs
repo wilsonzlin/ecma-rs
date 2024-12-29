@@ -11,6 +11,19 @@ use crate::{cfg::cfg::Cfg, dom::Dom};
 // - A backedge may point to a loop header outside its own loop.
 //   - Consider: labelled `continue` statements.
 // - A loop may be inside another loop; therefore, nodes may be part of multiple loops.
+// - A header may be part of multiple loops; consider:
+//   ```
+//     while (..) {
+//       for (..) {}
+//       do {
+//         do {
+//           // <-- block of interest
+//           if (exit) break;
+//         } while (..);
+//       } while (..)
+//     }
+//   ```
+//   (Taken from https://releases.llvm.org/10.0.0/docs/LoopTerminology.html, which is worth reading.)
 pub fn find_loops(
   cfg: &Cfg,
   dom: &Dom,

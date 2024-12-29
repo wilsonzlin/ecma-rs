@@ -1,5 +1,3 @@
-use ahash::HashMap;
-use itertools::Itertools;
 use num_bigint::BigInt;
 use parse_js::num::JsNumber;
 use serde::Serialize;

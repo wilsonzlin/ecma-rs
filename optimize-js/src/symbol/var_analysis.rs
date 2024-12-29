@@ -1,9 +1,9 @@
 use ahash::{HashMap, HashSet};
 use derive_visitor::{Drive, Visitor};
-use parse_js::{ast::{expr::{pat::{ClassOrFuncName, IdPat}, IdExpr}, node::Node, stmt::{decl::VarDecl, Stmt}, stx::TopLevel}, loc::Loc};
+use parse_js::{ast::{expr::{pat::{ClassOrFuncName, IdPat}, IdExpr}, node::Node, stmt::{decl::{PatDecl, VarDecl}, Stmt}, stx::TopLevel}, loc::Loc};
 use symbol_js::symbol::{Scope, ScopeType, Symbol};
 
-type VarDeclNode = Node<VarDecl>;
+type PatDeclNode = Node<PatDecl>;
 type IdExprNode = Node<IdExpr>;
 type ClassOrFuncNameNode = Node<ClassOrFuncName>;
 type IdPatNode = Node<IdPat>;
@@ -11,7 +11,7 @@ type IdPatNode = Node<IdPat>;
 // Four tasks (fill out each field as appropriate).
 #[derive(Debug, Default, Visitor)]
 #[visitor(
-  VarDeclNode,
+  PatDeclNode,
   IdExprNode(enter),
   ClassOrFuncNameNode(enter),
   IdPatNode(enter),
@@ -22,8 +22,7 @@ struct VarVisitor {
   unknown: HashSet<String>,
   use_before_decl: HashMap<Symbol, Loc>,
 
-  in_var_decl: bool,
-  in_var_decl_stack: Vec<bool>,
+  in_pat_decl_stack: Vec<bool>,
 }
 
 // The lifted scope is the nearest self-or-ancestor scope that is not a block, or the self-or-ancestor scope just below the global scope.
@@ -41,13 +40,12 @@ fn lifted_scope(scope: &Scope) -> Scope {
 }
 
 impl VarVisitor {
-  pub fn enter_var_decl_node(&mut self, _node: &Node<VarDecl>) {
-    self.in_var_decl_stack.push(self.in_var_decl);
-    self.in_var_decl = true;
+  pub fn enter_pat_decl_node(&mut self, _node: &Node<PatDecl>) {
+    self.in_pat_decl_stack.push(true);
   }
 
-  pub fn exit_var_decl_node(&mut self, _node: &Node<VarDecl>) {
-    self.in_var_decl = self.in_var_decl_stack.pop().unwrap();
+  pub fn exit_pat_decl_node(&mut self, _node: &Node<PatDecl>) {
+    self.in_pat_decl_stack.pop();
   }
 
   pub fn enter_id_expr_node(&mut self, node: &Node<IdExpr>) {
@@ -83,7 +81,7 @@ impl VarVisitor {
 
   pub fn enter_id_pat_node(&mut self, node: &Node<IdPat>) {
     // An identifier pattern doesn't always mean declaration e.g. simple assignment.
-    if self.in_var_decl {
+    if *self.in_pat_decl_stack.last().unwrap_or(&false) {
       let scope = node.assoc.get::<Scope>().unwrap();
       // It won't exist if it's a global declaration.
       // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?

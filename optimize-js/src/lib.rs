@@ -53,7 +53,7 @@ pub fn compile_js_statements(
   dbg_checkpoint("source", &cfg);
 
   // Construct SSA.
-  let dom = Dom::calculate(&cfg, 0);
+  let dom = Dom::calculate(&cfg);
   insert_phis_for_ssa_construction(&mut defs, &mut cfg, &dom);
   dbg_checkpoint("ssa_insert_phis", &cfg);
   rename_targets_for_ssa_construction(&mut cfg, &dom, &mut c_temp);
@@ -68,7 +68,7 @@ pub fn compile_js_statements(
     let mut changed = false;
 
     // TODO Can we avoid recalculating these on every iteration i.e. mutate in-place when changing the CFG?
-    let dom = Dom::calculate(&cfg, 0);
+    let dom = Dom::calculate(&cfg);
 
     optpass_dvn(&mut changed, &mut cfg, &dom);
     dbg_checkpoint(&format!("opt{}_dvn", i), &cfg);

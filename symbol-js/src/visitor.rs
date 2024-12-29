@@ -245,7 +245,7 @@ impl DeclVisitor {
   }
 
   // We want to associate every node with a scope. We do this by visiting every node and associating it with the current (i.e. top-of-stack) scope.
-  // Since Node is a generic type, to avoid walking every node type, we visit NodeAssocData instead which is present on every node.
+  // Since Node is a generic type, to avoid walking every Node<T> type, we visit NodeAssocData instead which is present on every node.
   // Some nodes create new scopes (see previous enter_* methods in this DeclVisitor), and it's ambiguous whether the new scope should be associated with it or not (i.e. start new scope at itself or its children). It doesn't really matter e.g. a new BlockStmt block scope must be assoc. with its `let` decls, but whether it is attached to the BlockStmt node itself doesn't affect anything.
   // Since it doesn't really matter, we arbitrarily choose to start at children, as otherwise we can't use this simple NodeAssocData visit trick since we'd have to set assoc data after processing a node's stx but before recursing into stx.
   fn enter_node_assoc_data(&mut self, assoc: &mut NodeAssocData) {

@@ -1,4 +1,4 @@
-use std::hash::Hash;
+use std::{collections::hash_set, hash::Hash, iter, option};
 
 use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use serde::Serialize;
@@ -7,6 +7,9 @@ struct PostOrderVisitor<'a, K: Clone + Default + Eq + Hash> {
   graph: &'a Graph<K>,
   seen: HashSet<&'a K>,
   order: Vec<&'a K>,
+  // Consider parents as successors and children as predecessors i.e. reverse graph edges.
+  // NOTE: Not the same as reverse postorder.
+  reversed_graph: bool,
 }
 
 impl<'a, K: Clone + Default + Eq + Hash> PostOrderVisitor<'a, K> {
@@ -15,7 +18,11 @@ impl<'a, K: Clone + Default + Eq + Hash> PostOrderVisitor<'a, K> {
       return;
     };
     self.seen.insert(n);
-    for c in self.graph.children(n) {
+    for c in if self.reversed_graph {
+      self.graph.parents(n)
+    } else {
+      self.graph.children(n)
+    } {
       self.visit(c);
     }
     self.order.push(n);
@@ -40,6 +47,9 @@ pub struct Graph<K: Clone + Default + Hash + Eq> {
   nodes: HashMap<K, GraphNode<K>>,
 }
 
+// This is a concrete type instead of `impl Iterator<Item=&K>` so that parents() and children() have the same return type and can be used as such (e.g. both branches of an if-else).
+pub type GraphRelatedNodesIter<'a, K> = iter::Flatten<option::IntoIter<hash_set::Iter<'a, K>>>;
+
 impl<K: Clone + Default + Hash + Eq> Graph<K> {
   pub fn new() -> Self {
     Graph {
@@ -57,12 +67,12 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
     })
   }
 
-  pub fn parents(&self, node: &K) -> impl Iterator<Item=&K> + '_ {
+  pub fn parents(&self, node: &K) -> GraphRelatedNodesIter<'_, K> {
     self.nodes.get(node).map(|node| node.parents.iter()).into_iter().flatten()
   }
 
   /// Will never contain duplicates as we use a set internally.
-  pub fn children(&self, node: &K) -> impl Iterator<Item=&K> + '_ {
+  pub fn children(&self, node: &K) -> GraphRelatedNodesIter<'_, K> {
     self.nodes.get(node).map(|node| node.children.iter()).into_iter().flatten()
   }
 
@@ -113,15 +123,16 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
     }
   }
 
-  // Postorder: visit all children, then self.
-  pub fn calculate_postorder<'a>(
+  fn _calculate_postorder<'a>(
     &'a self,
     entry: &'a K,
+    reversed_graph: bool,
   ) -> (Vec<&'a K>, HashMap<&'a K, usize>) {
     let mut order_po_v = PostOrderVisitor {
       graph: self,
       order: Vec::new(),
       seen: HashSet::new(),
+      reversed_graph,
     };
     order_po_v.visit(entry);
     // Order of nodes to visit in order to visit by postorder. This can also be used to map from postorder number (i.e. number each node would be assigned if sequentially visited and assigned in postorder) to node.
@@ -133,6 +144,23 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
       .map(|(i, l)| (*l, i))
       .collect::<HashMap<_, _>>();
     (po, node_to_po)
+  }
+
+  /// Postorder: visit all children, then self.
+  pub fn calculate_postorder<'a>(
+    &'a self,
+    entry: &'a K,
+  ) -> (Vec<&'a K>, HashMap<&'a K, usize>) {
+    self._calculate_postorder(entry, false)
+  }
+
+  /// Calculate postorder on the reversed graph (graph where children are parents and parents are children i.e. edges reversed).
+  /// WARNING: This is not the same as the reverse postorder.
+  pub fn calculate_reversed_graph_postorder<'a>(
+    &'a self,
+    entry: &'a K,
+  ) -> (Vec<&'a K>, HashMap<&'a K, usize>) {
+    self._calculate_postorder(entry, true)
   }
 }
 

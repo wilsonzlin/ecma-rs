@@ -11,7 +11,18 @@ impl DominatesGraph {
   }
 }
 
-pub struct Dom {
+pub struct DominatedByGraph(HashMap<u32, HashSet<u32>>);
+
+impl DominatedByGraph {
+  pub fn dominated_by(&self, a: u32, b: u32) -> bool {
+    self.0.get(&a).is_some_and(|s| s.contains(&b))
+  }
+}
+
+pub type PostDom = Dom<true>;
+
+/// If `POST`, calculates postdominance instead of dominance.
+pub struct Dom<const POST: bool = false> {
   postorder: Vec<u32>,
   // Inverse of `domtree`, child => parent.
   idom_by: HashMap<u32, u32>,
@@ -21,7 +32,7 @@ pub struct Dom {
   entry: u32,
 }
 
-impl Dom {
+impl<const POST: bool> Dom<POST> {
   // A dominates B if A will **always** execute some time at or before B. (All paths to B go through A.)
   // B is dominated by A if A also dominates **all** of B's parents. (Think about it.)
   // Dominance tree: edges represent only "immediate" dominations. A immediately dominates B iff A dominates B and doesn't strictly dominate any other node that strictly dominates B. (Strictly dominates means A dominates B and A != B.)
@@ -31,8 +42,19 @@ impl Dom {
   // - This paper also contains an explanation on how to calculate what a node dominates given `idom_by`, which is much faster than other dominance calculation algorithms.
   // Other implementations:
   // - https://github.com/sampsyo/bril/blob/34133101a68bb50ae0fc8083857a3e3bd6bae260/bril-llvm/dom.py#L47
-  pub fn calculate(cfg: &Cfg, entry: u32) -> Self {
-    let (postorder, label_to_postorder) = cfg.graph.calculate_postorder(entry);
+  // To calculate the post dominators, reverse the edges and run any dominator algorithm. This is what we do when `POST` is true.
+  pub fn calculate(cfg: &Cfg) -> Self {
+    let entry = if POST {
+      // TODO This does not exist.
+      u32::MAX
+    } else {
+      0
+    };
+    let (postorder, label_to_postorder) = if POST {
+      cfg.graph.calculate_reversed_graph_postorder(entry)
+    } else {
+      cfg.graph.calculate_postorder(entry)
+    };
 
     let mut idom_by = HashMap::<u32, u32>::new();
     let mut domtree = HashMap::<u32, HashSet<u32>>::new();
@@ -57,7 +79,11 @@ impl Dom {
       loop {
         let mut changed = false;
         for &b in postorder.iter().rev().filter(|b| **b != entry) {
-          let parents = cfg.graph.parents(b).collect_vec();
+          let parents = if POST {
+            cfg.graph.children(b)
+          } else {
+            cfg.graph.parents(b)
+          }.collect_vec();
           let Some(mut new_idom) = parents.iter().find(|n| idom_by.contains_key(n)).cloned() else {
             continue;
           };
@@ -91,7 +117,7 @@ impl Dom {
 
   // Node => nodes that dominate it (are its dominator). Also called the dominator graph.
   // https://www.cs.tufts.edu/comp/150FP/archive/keith-cooper/dom14.pdf
-  pub fn dominated_by_graph(&self) -> HashMap<u32, HashSet<u32>> {
+  pub fn dominated_by_graph(&self) -> DominatedByGraph {
     let mut dom = HashMap::<u32, HashSet<u32>>::new();
     for label in self.idom_by.keys().cloned() {
       let e = dom.entry(label).or_default();
@@ -104,7 +130,7 @@ impl Dom {
         n = self.idom_by[&n];
       }
     }
-    dom
+    DominatedByGraph(dom)
   }
 
   /// Node => nodes that it dominates.
@@ -112,7 +138,7 @@ impl Dom {
   pub fn dominates_graph(&self) -> DominatesGraph {
     let dom_bys = self.dominated_by_graph();
     let mut doms = HashMap::<u32, HashSet<u32>>::new();
-    for (child, dominated_by) in dom_bys {
+    for (child, dominated_by) in dom_bys.0 {
       for parent in dominated_by {
         doms.entry(parent).or_default().insert(child);
       }
@@ -147,5 +173,82 @@ impl Dom {
   /// Yields the child nodes that are immediately dominated by the parent node.
   pub fn immediately_dominated_by(&self, parent: u32) -> impl Iterator<Item=u32> + '_ {
     self.domtree.get(&parent).map(|s| s.iter().cloned()).into_iter().flatten()
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::{cfg::cfg::{Cfg, CfgGraph}, dom::Dom};
+
+  /*
+    ```mermaid
+      graph TD
+        0[Block 0: Entry] --> 1[Block 1: First Loop Header]
+        1 --> 2[Block 2: Nested Loop Header]
+        2 --> 3[Block 3: Conditional]
+        3 --> 4[Block 4: Continue Path]
+        4 --> 2
+        3 --> 5[Block 5: Break Handler]
+        5 --> 1
+        1 --> 6[Block 6: Post-Loop Block]
+        6 --> 7[Block 7: Final Block]
+        7 --> MAX[Block MAX: Exit Path]
+        7 --> 2
+
+        style 1 fill:#f9f,stroke:#333
+        style 2 fill:#f9f,stroke:#333
+        style 3 fill:#bbf,stroke:#333
+    ```
+  */
+  fn create_complex_cfg() -> Cfg {
+    let mut graph = CfgGraph::default();
+    // First loop header
+    graph.connect(0, 1);
+
+    // Nested loop header
+    graph.connect(1, 2);
+
+    // Some conditional
+    graph.connect(2, 3);
+
+    // Continue path back to nested loop
+    graph.connect(3, 4);
+    graph.connect(4, 2);
+
+    // Break from nested loop to next step
+    graph.connect(3, 5);
+
+    // Outer loop continue
+    graph.connect(5, 1);
+
+    // Exit first loop
+    graph.connect(1, 6);
+
+    // Another block after loops
+    graph.connect(6, 7);
+
+    // A final conditional branch
+    graph.connect(7, u32::MAX);
+    graph.connect(7, 2); // Jump back to nested loop (labeled break scenario)
+
+    Cfg {
+      bblocks: Default::default(),
+      graph,
+    }
+  }
+
+  #[test]
+  fn test_dom() {
+    let cfg = create_complex_cfg();
+
+    let dom = Dom::<false>::calculate(&cfg);
+    let postdom = Dom::<true>::calculate(&cfg);
+
+    let dominates = dom.dominates_graph();
+    let postdominates = postdom.dominates_graph();
+
+    assert!(dominates.dominates(0, 1));
+    assert!(dominates.dominates(2, 4));
+    assert!(postdominates.dominates(6, 5));
   }
 }

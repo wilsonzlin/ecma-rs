@@ -15,8 +15,8 @@ pub fn analyse_single_use_defs(
   for (label, insts) in cfg.bblocks.all() {
     for (inst_no, inst) in insts.iter().enumerate() {
       for arg in inst.args.iter() {
-        if let Arg::Var(t) = arg {
-          use_locs.entry(*t).or_default().push((label, inst_no));
+        if let &Arg::Var(t) = arg {
+          use_locs.entry(t).or_default().push((label, inst_no));
         }
       }
       for &var in inst.tgts.iter() {

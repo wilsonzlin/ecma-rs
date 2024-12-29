@@ -1,24 +1,19 @@
-use optimize_js::{analysis::{interference::calculate_interference_graph, liveness::calculate_live_ins, register_alloc::allocate_registers, single_use_insts::analyse_single_use_defs}, dom::domtree::calculate_domtree, graph::{backedge::find_backedges_and_junctions, postorder::calculate_postorder}, il::inst::{Arg, BinOp, Const, Inst, UnOp}, Program, ProgramFunction};
-use parse_js::{ast::Syntax, loc::Loc, operator::OperatorName};
+pub mod usage;
+
+use optimize_js::{analysis::{find_conds::find_conds, find_loops::find_loops, interference::calculate_interference_graph, liveness::calculate_live_ins, registers::{self, allocate_registers}, single_use_insts::analyse_single_use_defs}, dom::{Dom, PostDom}, ProgramFunction};
 use parse_js::ast::node::Node;
 
 fn reconstruct_fn(f: ProgramFunction) -> Node {
   let cfg = f.body;
   let (inlines, inlined_tgts) = analyse_single_use_defs(&cfg);
-  let liveness = calculate_live_ins(
-    &cfg,
-    &inlines,
-    &inlined_tgts,
-  );
+  let liveness = calculate_live_ins(&cfg, &inlines, &inlined_tgts);
   let intgraph = calculate_interference_graph(&liveness);
   let var_alloc = allocate_registers(&intgraph);
 
-  // To calculate the post dominators, reverse the edges and run any dominator algorithm.
-  let ipostdom_by = {
-    let (rpo, rpo_label) = calculate_postorder(&cfg, u32::MAX);
-    calculate_domtree(&cfg, &rpo, &rpo_label, u32::MAX).0
-  };
-  let backedges = find_backedges_and_junctions(&cfg);
+  let dom = Dom::calculate(&cfg);
+  let postdom = PostDom::calculate(&cfg);
+  let loops = find_loops(&cfg, &dom);
+  let conds = find_conds(&cfg, &dom, &postdom);
   todo!()
 }
 
