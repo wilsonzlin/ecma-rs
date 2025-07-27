@@ -79,6 +79,11 @@ impl<'a> Parser<'a> {
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {
           rest = Some(p.id_pat(ctx)?);
+          // Check if there's a comma after the rest element
+          if p.peek().typ == TT::Comma {
+            let comma = p.consume();
+            return Err(comma.error(SyntaxErrorType::RestElementTrailingComma));
+          }
           break;
         };
 
@@ -136,17 +141,39 @@ impl<'a> Parser<'a> {
       p.require(TT::BracketOpen)?;
       let mut elements = Vec::<Option<ArrPatElem>>::new();
       let mut rest = None;
-      while !p.consume_if(TT::BracketClose).is_match() {
+      
+      // We need to handle the empty array case specially since consume_if consumes the token
+      if p.peek().typ == TT::BracketClose {
+        p.consume();
+        return Ok(ArrPat { elements, rest });
+      }
+      
+      loop {
         // Check inside loop to ensure that it must come first or after a comma.
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {
           rest = Some(p.pat(ctx)?);
+          // Check if there's a comma after the rest element
+          if p.peek().typ == TT::Comma {
+            let comma = p.consume();
+            // Check if it's a trailing comma (nothing after it)
+            if p.peek().typ == TT::BracketClose {
+              return Err(comma.error(SyntaxErrorType::RestElementTrailingComma));
+            } else {
+              // There's something after the rest element
+              return Err(comma.error(SyntaxErrorType::RestElementNotLast));
+            }
+          }
           break;
         };
 
         // An unnamed element is allowed to ignore that element.
         if p.consume_if(TT::Comma).is_match() {
           elements.push(None);
+          // Check if we're at the end after a trailing comma
+          if p.peek().typ == TT::BracketClose {
+            break;
+          }
         } else {
           let target = p.pat(ctx)?;
           let default_value = if p.consume_if(TT::Equals).is_match() {
@@ -158,10 +185,16 @@ impl<'a> Parser<'a> {
             target,
             default_value,
           }));
-          // This will break if `]`.
-          if !p.consume_if(TT::Comma).is_match() {
+          // Check if we're at the end or need a comma
+          if p.peek().typ == TT::BracketClose {
             break;
-          };
+          }
+          p.require(TT::Comma)?;
+          // Check for trailing comma
+          if p.peek().typ == TT::BracketClose {
+            elements.push(None);
+            break;
+          }
         };
       }
       p.require(TT::BracketClose)?;

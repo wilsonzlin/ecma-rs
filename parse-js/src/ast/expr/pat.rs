@@ -13,6 +13,8 @@ pub enum Pat {
   Arr(Node<ArrPat>),
   Id(Node<IdPat>),
   Obj(Node<ObjPat>),
+  // Assignment target expression (like member expressions) in destructuring contexts
+  AssignTarget(Node<Expr>),
 }
 
 impl From<Pat> for Expr {
@@ -21,6 +23,7 @@ impl From<Pat> for Expr {
       Pat::Arr(arr) => Expr::ArrPat(arr),
       Pat::Id(id) => Expr::IdPat(id),
       Pat::Obj(obj) => Expr::ObjPat(obj),
+      Pat::AssignTarget(expr) => *expr.stx,
     }
   }
 }

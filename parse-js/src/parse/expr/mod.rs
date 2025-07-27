@@ -24,6 +24,7 @@ use crate::ast::expr::Expr;
 use crate::ast::expr::FuncExpr;
 use crate::ast::expr::IdExpr;
 use crate::ast::expr::MemberExpr;
+use crate::ast::expr::NewTarget;
 use crate::ast::expr::SuperExpr;
 use crate::ast::expr::TaggedTemplateExpr;
 use crate::ast::expr::ThisExpr;
@@ -147,7 +148,7 @@ impl<'a> Parser<'a> {
       let fn_body_ctx = ctx.with_rules(ParsePatternRules {
         await_allowed: !is_async && ctx.rules.await_allowed,
         ..ctx.rules
-      });
+      }).with_in_function(true);
       let body = match p.peek().typ {
         TT::BraceOpen => p.parse_func_block_body(fn_body_ctx)?.into(),
         _ => p.expr_with_asi(
@@ -205,7 +206,7 @@ impl<'a> Parser<'a> {
         let fn_body_ctx = ctx.with_rules(ParsePatternRules {
           await_allowed: !is_async && ctx.rules.await_allowed,
           yield_allowed: !generator && ctx.rules.yield_allowed,
-        });
+        }).with_in_function(true);
         let body = p.parse_func_block_body(fn_body_ctx)?.into();
         Ok(Func {
           arrow: false,
@@ -259,6 +260,34 @@ impl<'a> Parser<'a> {
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
     let [t0, t1] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard]);
+    
+    // Special handling for new.target before treating new as unary operator
+    if t0.typ == TT::KeywordNew && t1.typ == TT::Dot {
+      // Peek ahead to check if it's new.target
+      let cp = self.checkpoint();
+      self.consume(); // consume new
+      self.consume(); // consume dot
+      let target_tok = self.peek();
+      self.restore_checkpoint(cp);
+      
+      if target_tok.typ == TT::Identifier {
+        let cp2 = self.checkpoint();
+        self.consume(); // new
+        self.consume(); // dot
+        let id = self.consume();
+        if self.string(id.loc) == "target" {
+          self.restore_checkpoint(cp2);
+          return Ok(self.with_loc(|p| {
+            p.consume(); // new
+            p.consume(); // dot
+            p.consume(); // target
+            Ok(NewTarget {})
+          })?.into_wrapped());
+        }
+        self.restore_checkpoint(cp2);
+      }
+    }
+    
     // Handle unary operators before operand.
     if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t0.typ).filter(|operator| {
       // TODO Is this correct? Should it be possible to use as operator or keyword depending on whether there is an operand following?
@@ -268,6 +297,7 @@ impl<'a> Parser<'a> {
     }) {
       return Ok(self.with_loc(|p| {
         p.consume_with_mode(LexMode::SlashIsRegex);
+        
         let operator = if operator.name == OperatorName::Yield
           && p.consume_if(TT::Asterisk).is_match()
         {
@@ -283,6 +313,12 @@ impl<'a> Parser<'a> {
           terminators,
           asi,
         )?;
+        
+        // Check for standalone await in modules (top-level await not in async function)
+        if operator.name == OperatorName::Await && ctx.is_module && !ctx.in_function {
+          return Err(t0.error(SyntaxErrorType::AwaitNotAllowedInModuleTopLevel));
+        }
+        
         return Ok(UnaryExpr {
           operator: operator.name,
           argument: operand,

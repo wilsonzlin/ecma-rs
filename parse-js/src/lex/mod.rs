@@ -27,7 +27,7 @@ use once_cell::sync::Lazy;
 
 mod tests;
 
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum LexMode {
   JsxTag,
   JsxTextContent,
@@ -121,6 +121,10 @@ impl<'a> Lexer<'a> {
 
   pub fn next(&self) -> usize {
     self.next
+  }
+
+  pub fn source(&self) -> &[u8] {
+    self.source
   }
 
   fn end(&self) -> usize {
@@ -419,6 +423,8 @@ static SIG: Lazy<PatternMatcher> = Lazy::new(|| {
       patterns.push((TT::Identifier, vec![c]));
     }
   }
+  // Add \u as identifier start for Unicode escapes
+  patterns.push((TT::Identifier, b"\\u".into()));
   for c in b"0123456789".chunks(1) {
     patterns.push((TT::LiteralNumber, c.into()));
   }
@@ -482,7 +488,7 @@ fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
       .unwrap_or_else(|_| (TT::EOF, Match(lexer.remaining())));
     lexer.consume(mat);
     match tt {
-      TT::CommentMultiline | TT::EOF => {
+      TT::CommentMultilineEnd | TT::EOF => {
         break;
       }
       TT::LineTerminator => {
@@ -505,9 +511,25 @@ fn lex_identifier(
   lexer: &mut Lexer<'_>,
   mode: LexMode,
 ) -> TT {
-  // Consume starter.
-  lexer.skip_expect(1);
+  // Consume starter which could be a regular character or \u escape
+  if lexer.peek_or_eof(0) == Some(b'\\') && lexer.peek_or_eof(1) == Some(b'u') {
+    // Handle \u escape at start
+    if !consume_unicode_escape(lexer) {
+      return TT::Invalid;
+    }
+  } else {
+    lexer.skip_expect(1);
+  }
+  
   loop {
+    // Check for Unicode escape sequence
+    if lexer.peek_or_eof(0) == Some(b'\\') && lexer.peek_or_eof(1) == Some(b'u') {
+      if !consume_unicode_escape(lexer) {
+        return TT::Invalid;
+      }
+      continue;
+    }
+    
     lexer.consume(lexer.while_chars(if mode == LexMode::JsxTag {
       &ID_CONTINUE_JSX
     } else {
@@ -520,6 +542,45 @@ fn lex_identifier(
     lexer.skip_expect(1);
   }
   TT::Identifier
+}
+
+// Consumes a Unicode escape sequence \uXXXX or \u{XXXX}
+// Returns true if valid, false if invalid
+fn consume_unicode_escape(lexer: &mut Lexer<'_>) -> bool {
+  // Skip \\
+  lexer.skip_expect(1);
+  // Skip u
+  lexer.skip_expect(1);
+  
+  if lexer.peek_or_eof(0) == Some(b'{') {
+    // \u{XXXX} format
+    lexer.skip_expect(1); // Skip {
+    let mut count = 0;
+    while count < 6 && lexer.peek_or_eof(0) != Some(b'}') {
+      match lexer.peek_or_eof(0) {
+        Some(c) if c.is_ascii_hexdigit() => {
+          lexer.skip_expect(1);
+          count += 1;
+        }
+        _ => return false,
+      }
+    }
+    if count == 0 || lexer.peek_or_eof(0) != Some(b'}') {
+      return false;
+    }
+    lexer.skip_expect(1); // Skip }
+  } else {
+    // \uXXXX format
+    for _ in 0..4 {
+      match lexer.peek_or_eof(0) {
+        Some(c) if c.is_ascii_hexdigit() => {
+          lexer.skip_expect(1);
+        }
+        _ => return false,
+      }
+    }
+  }
+  true
 }
 
 fn lex_bigint_or_number(
@@ -602,7 +663,7 @@ fn lex_private_member(
 }
 
 // TODO Validate regex.
-fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
+pub fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   // Consume slash.
   lexer.consume(lexer.n(1)?);
   let mut in_charset = false;
@@ -645,7 +706,21 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
     lexer.consume(lexer.while_not_3_chars(b'\\', b'\n', quote));
     match lexer.peek(0)? {
       b'\\' => {
-        lexer.consume(lexer.n(2)?);
+        // Check if this is a line continuation escape
+        if lexer.peek_or_eof(1) == Some(b'\n') {
+          // Line continuation: skip backslash and newline
+          lexer.skip_expect(2);
+        } else if lexer.peek_or_eof(1) == Some(b'\r') {
+          // Check for \r or \r\n
+          if lexer.peek_or_eof(2) == Some(b'\n') {
+            lexer.skip_expect(3); // Skip \r\n
+          } else {
+            lexer.skip_expect(2); // Skip \r
+          }
+        } else {
+          // Regular escape sequence
+          lexer.consume(lexer.n(2)?);
+        }
       }
       b'\n' => {
         return Ok(TT::Invalid);
@@ -669,7 +744,21 @@ pub fn lex_template_string_continue(
     lexer.consume(lexer.while_not_3_chars(b'\\', b'`', b'$'));
     match lexer.peek(0)? {
       b'\\' => {
-        lexer.consume(lexer.n(2)?);
+        // Check if this is a line continuation escape
+        if lexer.peek_or_eof(1) == Some(b'\n') {
+          // Line continuation: skip backslash and newline
+          lexer.skip_expect(2);
+        } else if lexer.peek_or_eof(1) == Some(b'\r') {
+          // Check for \r or \r\n
+          if lexer.peek_or_eof(2) == Some(b'\n') {
+            lexer.skip_expect(3); // Skip \r\n
+          } else {
+            lexer.skip_expect(2); // Skip \r
+          }
+        } else {
+          // Regular escape sequence
+          lexer.consume(lexer.n(2)?);
+        }
       }
       b'`' => {
         ended = true;
@@ -748,6 +837,39 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
     };
   };
 
+  // Check for HTML-style comments
+  if preceded_by_line_terminator || lexer.next() == 0 {
+    // Check for --> comment
+    if let Ok(b'-') = lexer.peek(0) {
+      if let Ok(b'-') = lexer.peek(1) {
+        if let Ok(b'>') = lexer.peek(2) {
+          // This is an HTML-style comment
+          lex_single_comment(lexer);
+          return lex_next(lexer, mode);
+        }
+      }
+    }
+    // Check for <!-- comment (only at beginning of file)
+    if lexer.next() == 0 {
+      if let Ok(b'<') = lexer.peek(0) {
+        if let Ok(b'!') = lexer.peek(1) {
+          if let Ok(b'-') = lexer.peek(2) {
+            if let Ok(b'-') = lexer.peek(3) {
+              // This is an HTML-style comment
+              lexer.skip_expect(4); // Skip <!--
+              // Consume to end of line
+              lexer.consume(lexer.while_not_char(b'\n'));
+              if !lexer.at_end() {
+                lexer.skip_expect(1); // Skip newline if not at end
+              }
+              return lex_next(lexer, mode);
+            }
+          }
+        }
+      }
+    }
+  }
+
   lexer.drive_fallible(preceded_by_line_terminator, |lexer| {
     SIG.find(lexer).and_then(|(tt, mut mat)| match tt {
       TT::Identifier => Ok(lex_identifier(lexer, mode)),
@@ -758,7 +880,12 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
       TT::LiteralString => lex_string(lexer),
       TT::LiteralTemplatePartString => lex_template(lexer),
       TT::PrivateMember => lex_private_member(lexer),
-      TT::Slash | TT::SlashEquals if mode == LexMode::SlashIsRegex => lex_regex(lexer),
+      TT::Slash if mode == LexMode::SlashIsRegex => lex_regex(lexer),
+      TT::SlashEquals if mode == LexMode::SlashIsRegex => {
+        // For /= in regex mode, don't consume the match, reset position and parse as regex
+        // The pattern matcher found /= as a match, but we want to parse it as regex
+        lex_regex(lexer)
+      }
       typ => {
         if typ == TT::Question && mat.len() != 1 {
           // We've matched `?.[0-9]`.

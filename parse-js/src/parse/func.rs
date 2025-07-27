@@ -3,6 +3,7 @@ use super::Parser;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::ParamDecl;
 use crate::ast::stmt::Stmt;
+use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::token::TT;
 
@@ -27,6 +28,16 @@ impl<'a> Parser<'a> {
         })
       },
     )?;
+    // Validate that rest parameter is last
+    let mut found_rest = false;
+    for param in &parameters {
+      if found_rest {
+        return Err(param.loc.error(SyntaxErrorType::RestElementNotLast, None));
+      }
+      if param.stx.rest {
+        found_rest = true;
+      }
+    }
     Ok(parameters)
   }
 

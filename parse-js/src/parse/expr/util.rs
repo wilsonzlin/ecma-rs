@@ -61,7 +61,7 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
         match *member.stx {
           ObjMember { typ } => match typ {
             ObjMemberType::Valued { key, val: value } => {
-              let (target, default_value) = match value {
+              let (target, default_value, shorthand) = match value {
                 ClassOrObjVal::Prop(Some(initializer)) => match *initializer.stx {
                   Expr::Binary(n) => {
                     let BinaryExpr {
@@ -75,20 +75,35 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
                     (
                       lit_to_pat(left)?,
                       Some(right),
+                      false,
                     )
                   }
                   _ => (
                     lit_to_pat(initializer)?,
                     None,
+                    false,
                   ),
                 },
+                ClassOrObjVal::Prop(None) => {
+                  // No initializer, this must be a pattern like {a: b} where b is the target
+                  match &key {
+                    ClassOrObjKey::Direct(key_node) => {
+                      (
+                        Node::new(loc, IdPat { name: key_node.stx.key.clone() }).into_wrapped(),
+                        None,
+                        false,
+                      )
+                    }
+                    _ => return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
+                  }
+                }
                 _ => return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
               };
               properties.push(Node::new(loc, ObjPatProp {
                 key,
                 target,
                 default_value,
-                shorthand: true,
+                shorthand,
               }));
             }
             ObjMemberType::Shorthand { id } => {
@@ -125,6 +140,27 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
     Expr::IdPat(n) => {
       Ok(n.into_wrapped())
     }
+    // Member expressions (like `obj.prop` or `obj[key]`) are valid assignment targets in destructuring
+    Expr::Member(ref n) if !n.stx.optional_chaining => {
+      Ok(Node::new(loc, Pat::AssignTarget(node)))
+    }
+    Expr::ComputedMember(ref n) if !n.stx.optional_chaining => {
+      Ok(Node::new(loc, Pat::AssignTarget(node)))
+    }
+    // Handle assignment patterns with defaults like `a = 1`
+    Expr::Binary(n) => {
+      let BinaryExpr { operator, left, right } = *n.stx;
+      if operator == OperatorName::Assignment {
+        // For now, just return the left side as the pattern
+        // The default value will be handled at a higher level
+        lit_to_pat(left)
+      } else {
+        Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None))
+      }
+    }
+    // Pattern expressions that were already converted
+    Expr::ArrPat(n) => Ok(Node::new(loc, Pat::Arr(n))),
+    Expr::ObjPat(n) => Ok(Node::new(loc, Pat::Obj(n))),
     _ => Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
   }
 }

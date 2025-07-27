@@ -3,6 +3,7 @@ use super::Asi;
 use super::ParseCtx;
 use super::Parser;
 use crate::ast::class_or_object::ClassOrObjKey;
+use crate::lex;
 use crate::ast::class_or_object::ClassOrObjVal;
 use crate::ast::class_or_object::ObjMember;
 use crate::ast::class_or_object::ObjMemberType;
@@ -40,7 +41,7 @@ pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
   // of the same value get parsed into the same f64 value/bit pattern (e.g. `5.1e10` and `0.51e11`).
   match raw {
     s if s.starts_with("0b") || s.starts_with("0B") => parse_radix(&s[2..], 2),
-    s if s.starts_with("0o") || s.starts_with("0o") => parse_radix(&s[2..], 8),
+    s if s.starts_with("0o") || s.starts_with("0O") => parse_radix(&s[2..], 8),
     s if s.starts_with("0x") || s.starts_with("0X") => parse_radix(&s[2..], 16),
     s => f64::from_str(s).map_err(|_| ()),
   }
@@ -117,9 +118,18 @@ pub fn normalise_literal_string_or_template_inner(mut raw: &[u8]) -> Option<Stri
           let Some(end_pos) = memchr(b'}', raw) else {
             return None;
           };
-          if !(3..=8).contains(&end_pos) {
+          // end_pos is the position of '}', so the hex digit count is end_pos - 2
+          // We allow 1-6 hex digits
+          let hex_digit_count = end_pos - 2;
+          if !(1..=6).contains(&hex_digit_count) {
             return None;
           };
+          // Verify all characters are hex digits
+          for &b in &raw[2..end_pos] {
+            if !b.is_ascii_hexdigit() {
+              return None;
+            }
+          }
           let cp =
             u32::from_str_radix(unsafe { from_utf8_unchecked(&raw[2..end_pos]) }, 16).ok()?;
           let c = char::from_u32(cp)?;
@@ -131,6 +141,12 @@ pub fn normalise_literal_string_or_template_inner(mut raw: &[u8]) -> Option<Stri
           if raw.len() < 5 {
             return None;
           };
+          // Verify all 4 characters are hex digits
+          for &b in &raw[1..5] {
+            if !b.is_ascii_hexdigit() {
+              return None;
+            }
+          }
           let cp = u32::from_str_radix(unsafe { from_utf8_unchecked(&raw[1..5]) }, 16).ok()?;
           let c = char::from_u32(cp)?;
           c.encode_utf8(&mut tmp);
@@ -179,7 +195,11 @@ impl<'a> Parser<'a> {
         if p.peek().typ == TT::BracketClose {
           break;
         };
-        p.require(TT::Comma)?;
+        let comma = p.require(TT::Comma)?;
+        // If we just parsed a rest element and there's a comma, check if it's trailing
+        if rest && p.peek().typ == TT::BracketClose {
+          return Err(comma.error(SyntaxErrorType::RestElementTrailingComma));
+        }
       }
       p.require(TT::BracketClose)?;
       Ok(LitArrExpr {
@@ -255,14 +275,19 @@ impl<'a> Parser<'a> {
             let typ = match value {
               ClassOrObjVal::Prop(None) => {
                 // This property had no value, so it's a shorthand property. Therefore, check that it's a valid identifier name.
-                let ClassOrObjKey::Direct(key) = key else {
-                  unreachable!();
-                };
-                if !is_valid_pattern_identifier(key.stx.tt, ctx.rules) {
-                  return Err(key.error(SyntaxErrorType::ExpectedNotFound));
-                };
-                ObjMemberType::Shorthand {
-                  id: key.map_stx(|n| IdExpr { name: n.key }),
+                match key {
+                  ClassOrObjKey::Direct(key) => {
+                    if !is_valid_pattern_identifier(key.stx.tt, ctx.rules) {
+                      return Err(key.error(SyntaxErrorType::ExpectedNotFound));
+                    };
+                    ObjMemberType::Shorthand {
+                      id: key.map_stx(|n| IdExpr { name: n.key }),
+                    }
+                  }
+                  ClassOrObjKey::Computed(expr) => {
+                    // Computed keys cannot be shorthand properties, this is an error
+                    return Err(expr.error(SyntaxErrorType::ExpectedNotFound));
+                  }
                 }
               }
               _ => ObjMemberType::Valued { key, val: value },
@@ -277,12 +302,127 @@ impl<'a> Parser<'a> {
 
   pub fn lit_regex(&mut self) -> SyntaxResult<Node<LitRegexExpr>> {
     self.with_loc(|p| {
-      let t = p.require(TT::LiteralRegex)?;
-      // TODO Parse, validate, flags.
-      let value = p.string(t.loc);
-      Ok(LitRegexExpr { value })
+      let t = p.peek();
+      if t.typ == TT::LiteralRegex {
+        let t = p.consume();
+        let value = p.string(t.loc);
+        Ok(LitRegexExpr { value })
+      } else if t.typ == TT::Slash {
+        // Fallback: handle slash as regex
+        p.lit_regex_from_slash_inner()
+      } else if t.typ == TT::SlashEquals {
+        // Handle /= as the start of a regex pattern
+        p.lit_regex_from_slash_equals_inner()
+      } else {
+        Err(t.error(crate::error::SyntaxErrorType::ExpectedSyntax("regex literal")))
+      }
     })
   }
+
+  fn lit_regex_from_slash_inner(&mut self) -> SyntaxResult<LitRegexExpr> {
+    // Instead of manually lexing, let's just get the current location and manually parse the regex
+    let slash_token = self.require(TT::Slash)?;
+    
+    // TODO: For now, create a simple regex pattern - we need to implement proper regex parsing
+    // This is a minimal implementation to get basic regex working
+    let start = slash_token.loc.0;
+    let mut end = start + 1; // Start after the initial slash
+    
+    // Very basic regex parsing - find the closing slash
+    let source = self.lexer.source();
+    while end < source.len() {
+      match source[end] {
+        b'/' => {
+          end += 1;
+          break;
+        }
+        b'\\' => {
+          // Skip escaped character
+          if end + 1 < source.len() {
+            end += 2;
+          } else {
+            end += 1;
+          }
+        }
+        b'\n' => {
+          // Invalid regex
+          return Err(slash_token.error(crate::error::SyntaxErrorType::ExpectedSyntax("regex literal")));
+        }
+        _ => {
+          end += 1;
+        }
+      }
+    }
+    
+    // Parse regex flags (optional)
+    while end < source.len() {
+      match source[end] {
+        b'g' | b'i' | b'm' | b's' | b'u' | b'y' => {
+          end += 1;
+        }
+        _ => break,
+      }
+    }
+    
+    // Update lexer position to consume the regex
+    self.lexer.set_next(end);
+    
+    let regex_loc = crate::loc::Loc(start, end);
+    let value = self.string(regex_loc);
+    Ok(LitRegexExpr { value })
+  }
+
+  fn lit_regex_from_slash_equals_inner(&mut self) -> SyntaxResult<LitRegexExpr> {
+    // Handle /= as the start of a regex pattern like /=/
+    let slash_equals_token = self.require(TT::SlashEquals)?;
+    
+    let start = slash_equals_token.loc.0;
+    let mut end = start + 2; // Start after the initial /=
+    
+    // Basic regex parsing - find the closing slash
+    let source = self.lexer.source();
+    while end < source.len() {
+      match source[end] {
+        b'/' => {
+          end += 1;
+          break;
+        }
+        b'\\' => {
+          // Skip escaped character
+          if end + 1 < source.len() {
+            end += 2;
+          } else {
+            end += 1;
+          }
+        }
+        b'\n' => {
+          // Invalid regex
+          return Err(slash_equals_token.error(crate::error::SyntaxErrorType::ExpectedSyntax("regex literal")));
+        }
+        _ => {
+          end += 1;
+        }
+      }
+    }
+    
+    // Parse regex flags (optional)
+    while end < source.len() {
+      match source[end] {
+        b'g' | b'i' | b'm' | b's' | b'u' | b'y' => {
+          end += 1;
+        }
+        _ => break,
+      }
+    }
+    
+    // Update lexer position to consume the regex
+    self.lexer.set_next(end);
+    
+    let regex_loc = crate::loc::Loc(start, end);
+    let value = self.string(regex_loc);
+    Ok(LitRegexExpr { value })
+  }
+
 
   pub fn lit_str(&mut self) -> SyntaxResult<Node<LitStrExpr>> {
     self.with_loc(|p| {

@@ -19,3 +19,9 @@ pub fn parse(source: &[u8]) -> SyntaxResult<Node<TopLevel>> {
   let mut parser = Parser::new(lexer);
   parser.parse_top_level()
 }
+
+pub fn parse_module(source: &[u8]) -> SyntaxResult<Node<TopLevel>> {
+  let lexer = Lexer::new(source);
+  let mut parser = Parser::new(lexer);
+  parser.parse_module()
+}

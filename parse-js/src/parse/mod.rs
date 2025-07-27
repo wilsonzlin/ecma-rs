@@ -26,11 +26,33 @@ pub mod import_export;
 #[derive(Clone, Copy)]
 pub struct ParseCtx {
   pub rules: ParsePatternRules, // For simplicity, this is a copy, not a non-mutable reference, to avoid having a separate lifetime for it. The value is only two booleans, so a reference is probably slower, and it's supposed to be immutable (i.e. changes come from altered copying, not mutating the original single instance), so there shouldn't be any difference between a reference and a copy.
+  pub strict_mode: bool,
+  pub is_module: bool,
+  pub in_function: bool,
+  pub in_iteration: bool,
+  pub in_switch: bool,
+  pub in_single_statement: bool,
 }
 
 impl ParseCtx {
   pub fn with_rules(&self, rules: ParsePatternRules) -> ParseCtx {
     ParseCtx { rules, ..*self }
+  }
+  
+  pub fn with_in_function(&self, in_function: bool) -> ParseCtx {
+    ParseCtx { in_function, ..*self }
+  }
+  
+  pub fn with_in_iteration(&self, in_iteration: bool) -> ParseCtx {
+    ParseCtx { in_iteration, ..*self }
+  }
+  
+  pub fn with_in_switch(&self, in_switch: bool) -> ParseCtx {
+    ParseCtx { in_switch, ..*self }
+  }
+  
+  pub fn with_in_single_statement(&self, in_single_statement: bool) -> ParseCtx {
+    ParseCtx { in_single_statement, ..*self }
   }
 }
 

@@ -29,6 +29,7 @@ pub enum Expr {
   Import(Node<ImportExpr>),
   ImportMeta(Node<ImportMeta>),
   Member(Node<MemberExpr>),
+  NewTarget(Node<NewTarget>),
   Super(Node<SuperExpr>),
   TaggedTemplate(Node<TaggedTemplateExpr>),
   This(Node<ThisExpr>),
@@ -139,6 +140,10 @@ pub struct ImportExpr {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ImportMeta {
+}
+
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct NewTarget {
 }
 
 // Dedicated special type to easily distinguish when analysing and minifying. Also done to avoid using IdentifierExpr as right, which is incorrect (not a variable usage).

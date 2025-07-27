@@ -124,7 +124,7 @@ impl<'a> Parser<'a> {
         let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
           await_allowed: !is_async && ctx.rules.await_allowed,
           yield_allowed: !generator && ctx.rules.yield_allowed,
-        }))?.into();
+        }).with_in_function(true))?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,

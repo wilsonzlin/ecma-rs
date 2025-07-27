@@ -88,7 +88,7 @@ impl<'a> Parser<'a> {
       let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
         await_allowed: !is_async && ctx.rules.await_allowed,
         yield_allowed: !is_generator && ctx.rules.yield_allowed,
-      }))?.into();
+      }).with_in_function(true))?.into();
       Ok(Func {
         arrow: false,
         async_: is_async,
@@ -107,7 +107,7 @@ impl<'a> Parser<'a> {
     let func = self.with_loc(|p| {
       p.require(TT::ParenthesisOpen)?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.parse_func_block_body(ctx)?.into();
+      let body = p.parse_func_block_body(ctx.with_in_function(true))?.into();
       Ok(Func {
         arrow: false,
         async_: false,
@@ -127,7 +127,7 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisOpen)?;
       let param = p.pat_decl(ctx)?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.parse_func_block_body(ctx)?.into();
+      let body = p.parse_func_block_body(ctx.with_in_function(true))?.into();
       Ok(Func {
         arrow: false,
         async_: false,
@@ -156,15 +156,16 @@ impl<'a> Parser<'a> {
     let key = self.class_or_obj_key(ctx)?;
     let has_init = match key {
       ClassOrObjKey::Direct(_) => match self.peek() {
-        // Given `class A {1}`, `"1" in new A`.
-        t if t.typ == TT::BraceClose => true,
-        // Given `class A {1;}`, `"1" in new A`.
-        t if t.typ == statement_delimiter => true,
-        // Given `class A {1\n2}`, `"2" in new A`.
-        t if property_initialiser_asi.can_end_with_asi && t.preceded_by_line_terminator => true,
-        _ => false,
+        // Given `class A {1}`, `"1" in new A` - no initializer for class field
+        t if t.typ == TT::BraceClose => false,
+        // Given `class A {1;}`, `"1" in new A` - no initializer for class field  
+        t if t.typ == statement_delimiter => false,
+        // Given `class A {1\n2}`, `"2" in new A` - no initializer for class field
+        t if property_initialiser_asi.can_end_with_asi && t.preceded_by_line_terminator => false,
+        // Otherwise, we expect an initializer (like `a: value` or `a = value`)
+        _ => true,
       },
-      _ => false,
+      _ => true, // Computed keys always need initializers
     };
     let initializer = has_init
       .then(|| {

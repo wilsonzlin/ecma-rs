@@ -21,6 +21,9 @@ pub enum SyntaxErrorType {
   MalformedLiteralBigInt,
   MalformedLiteralNumber,
   RequiredTokenNotFound(TT),
+  RestElementTrailingComma,
+  RestElementNotLast,
+  AwaitNotAllowedInModuleTopLevel,
   TryStatementHasNoCatchOrFinally,
   UnexpectedEnd,
 }

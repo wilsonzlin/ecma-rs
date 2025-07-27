@@ -31,6 +31,7 @@ pub enum Stmt {
   Throw(Node<ThrowStmt>),
   Try(Node<TryStmt>),
   While(Node<WhileStmt>),
+  With(Node<WithStmt>),
 
   ClassDecl(Node<ClassDecl>),
   FunctionDecl(Node<FuncDecl>),
@@ -214,5 +215,12 @@ pub struct ForInStmt {
 #[derive(Debug, Drive, DriveMut, Serialize)]
   pub struct WhileStmt {
     pub condition: Node<Expr>,
+    pub body: Node<Stmt>,
+  }
+
+
+#[derive(Debug, Drive, DriveMut, Serialize)]
+  pub struct WithStmt {
+    pub object: Node<Expr>,
     pub body: Node<Stmt>,
   }
