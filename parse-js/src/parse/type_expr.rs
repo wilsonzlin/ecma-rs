@@ -34,12 +34,15 @@ impl<'a> Parser<'a> {
     }
 
     let start_loc = types[0].loc;
+    let end_loc = types.last().unwrap().loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     if is_union {
       let union = Node::new(start_loc, TypeUnion { types });
-      self.with_loc(|_| Ok(TypeExpr::UnionType(union)))
+      Ok(Node::new(outer_loc, TypeExpr::UnionType(union)))
     } else {
       let intersection = Node::new(start_loc, TypeIntersection { types });
-      self.with_loc(|_| Ok(TypeExpr::IntersectionType(intersection)))
+      Ok(Node::new(outer_loc, TypeExpr::IntersectionType(intersection)))
     }
   }
 
@@ -58,6 +61,9 @@ impl<'a> Parser<'a> {
     self.require(TT::Colon)?;
     let false_type = self.type_expr(ctx)?;
 
+    let end_loc = false_type.loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let conditional = Node::new(
       start_loc,
       TypeConditional {
@@ -67,7 +73,7 @@ impl<'a> Parser<'a> {
         false_type: Box::new(false_type),
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::ConditionalType(conditional)))
+    Ok(Node::new(outer_loc, TypeExpr::ConditionalType(conditional)))
   }
 
   /// Parse array types and indexed access types
@@ -80,19 +86,26 @@ impl<'a> Parser<'a> {
         TT::BracketOpen => {
           let start_loc = base.loc;
           self.consume();
-          if self.consume_if(TT::BracketClose).is_match() {
+          if self.peek().typ == TT::BracketClose {
             // Array type: T[]
+            let end_loc = self.peek().loc;
+            self.consume();
+            use crate::loc::Loc;
+            let outer_loc = Loc(start_loc.0, end_loc.1);
             let array = Node::new(
               start_loc,
               TypeArray {
                 element_type: Box::new(base),
               },
             );
-            base = self.with_loc(|_| Ok(TypeExpr::ArrayType(array)))?;
+            base = Node::new(outer_loc, TypeExpr::ArrayType(array));
           } else {
             // Indexed access: T[K]
             let index = self.type_expr(ctx)?;
+            let end_loc = self.peek().loc;
             self.require(TT::BracketClose)?;
+            use crate::loc::Loc;
+            let outer_loc = Loc(start_loc.0, end_loc.1);
             let indexed = Node::new(
               start_loc,
               TypeIndexedAccess {
@@ -100,7 +113,7 @@ impl<'a> Parser<'a> {
                 index_type: Box::new(index),
               },
             );
-            base = self.with_loc(|_| Ok(TypeExpr::IndexedAccessType(indexed)))?;
+            base = Node::new(outer_loc, TypeExpr::IndexedAccessType(indexed));
           }
         }
         _ => break,
@@ -119,74 +132,74 @@ impl<'a> Parser<'a> {
       TT::KeywordAny => {
         let loc = self.peek().loc;
         self.consume();
-        let any = Node::new(loc, TypeAny {});
-        self.with_loc(|_| Ok(TypeExpr::Any(any)))
+        let inner = Node::new(loc, TypeAny {});
+        Ok(Node::new(loc, TypeExpr::Any(inner)))
       }
       TT::KeywordUnknown => {
         let loc = self.peek().loc;
         self.consume();
-        let unknown = Node::new(loc, TypeUnknown {});
-        self.with_loc(|_| Ok(TypeExpr::Unknown(unknown)))
+        let inner = Node::new(loc, TypeUnknown {});
+        Ok(Node::new(loc, TypeExpr::Unknown(inner)))
       }
       TT::KeywordNever => {
         let loc = self.peek().loc;
         self.consume();
-        let never = Node::new(loc, TypeNever {});
-        self.with_loc(|_| Ok(TypeExpr::Never(never)))
+        let inner = Node::new(loc, TypeNever {});
+        Ok(Node::new(loc, TypeExpr::Never(inner)))
       }
       TT::KeywordVoid => {
         let loc = self.peek().loc;
         self.consume();
-        let void = Node::new(loc, TypeVoid {});
-        self.with_loc(|_| Ok(TypeExpr::Void(void)))
+        let inner = Node::new(loc, TypeVoid {});
+        Ok(Node::new(loc, TypeExpr::Void(inner)))
       }
       TT::KeywordStringType => {
         let loc = self.peek().loc;
         self.consume();
-        let string = Node::new(loc, TypeString {});
-        self.with_loc(|_| Ok(TypeExpr::String(string)))
+        let inner = Node::new(loc, TypeString {});
+        Ok(Node::new(loc, TypeExpr::String(inner)))
       }
       TT::KeywordNumberType => {
         let loc = self.peek().loc;
         self.consume();
-        let number = Node::new(loc, TypeNumber {});
-        self.with_loc(|_| Ok(TypeExpr::Number(number)))
+        let inner = Node::new(loc, TypeNumber {});
+        Ok(Node::new(loc, TypeExpr::Number(inner)))
       }
       TT::KeywordBooleanType => {
         let loc = self.peek().loc;
         self.consume();
-        let boolean = Node::new(loc, TypeBoolean {});
-        self.with_loc(|_| Ok(TypeExpr::Boolean(boolean)))
+        let inner = Node::new(loc, TypeBoolean {});
+        Ok(Node::new(loc, TypeExpr::Boolean(inner)))
       }
       TT::KeywordBigIntType => {
         let loc = self.peek().loc;
         self.consume();
-        let bigint = Node::new(loc, TypeBigInt {});
-        self.with_loc(|_| Ok(TypeExpr::BigInt(bigint)))
+        let inner = Node::new(loc, TypeBigInt {});
+        Ok(Node::new(loc, TypeExpr::BigInt(inner)))
       }
       TT::KeywordSymbolType => {
         let loc = self.peek().loc;
         self.consume();
-        let symbol = Node::new(loc, TypeSymbol {});
-        self.with_loc(|_| Ok(TypeExpr::Symbol(symbol)))
+        let inner = Node::new(loc, TypeSymbol {});
+        Ok(Node::new(loc, TypeExpr::Symbol(inner)))
       }
       TT::KeywordObjectType => {
         let loc = self.peek().loc;
         self.consume();
-        let object = Node::new(loc, TypeObject {});
-        self.with_loc(|_| Ok(TypeExpr::Object(object)))
+        let inner = Node::new(loc, TypeObject {});
+        Ok(Node::new(loc, TypeExpr::Object(inner)))
       }
       TT::KeywordUndefinedType => {
         let loc = self.peek().loc;
         self.consume();
-        let undefined = Node::new(loc, TypeUndefined {});
-        self.with_loc(|_| Ok(TypeExpr::Undefined(undefined)))
+        let inner = Node::new(loc, TypeUndefined {});
+        Ok(Node::new(loc, TypeExpr::Undefined(inner)))
       }
       TT::LiteralNull => {
         let loc = self.peek().loc;
         self.consume();
-        let null = Node::new(loc, TypeNull {});
-        self.with_loc(|_| Ok(TypeExpr::Null(null)))
+        let inner = Node::new(loc, TypeNull {});
+        Ok(Node::new(loc, TypeExpr::Null(inner)))
       }
 
       // Type reference or qualified name
@@ -196,8 +209,8 @@ impl<'a> Parser<'a> {
       TT::KeywordThis => {
         let loc = self.peek().loc;
         self.consume();
-        let this = Node::new(loc, TypeThis {});
-        self.with_loc(|_| Ok(TypeExpr::ThisType(this)))
+        let inner = Node::new(loc, TypeThis {});
+        Ok(Node::new(loc, TypeExpr::ThisType(inner)))
       }
 
       // typeof type query
@@ -225,32 +238,32 @@ impl<'a> Parser<'a> {
       TT::LiteralString => {
         let loc = self.peek().loc;
         let val = self.lit_str_val()?;
-        let lit = Node::new(loc, TypeLiteral::String(val));
-        self.with_loc(|_| Ok(TypeExpr::LiteralType(lit)))
+        let inner = Node::new(loc, TypeLiteral::String(val));
+        Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
       }
       TT::LiteralNumber => {
         let loc = self.peek().loc;
         let val = self.lit_num_val()?.to_string();
-        let lit = Node::new(loc, TypeLiteral::Number(val));
-        self.with_loc(|_| Ok(TypeExpr::LiteralType(lit)))
+        let inner = Node::new(loc, TypeLiteral::Number(val));
+        Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
       }
       TT::LiteralBigInt => {
         let loc = self.peek().loc;
         let val = self.lit_bigint_val()?.to_string();
-        let lit = Node::new(loc, TypeLiteral::BigInt(val));
-        self.with_loc(|_| Ok(TypeExpr::LiteralType(lit)))
+        let inner = Node::new(loc, TypeLiteral::BigInt(val));
+        Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
       }
       TT::LiteralTrue => {
         let loc = self.peek().loc;
         self.consume();
-        let lit = Node::new(loc, TypeLiteral::Boolean(true));
-        self.with_loc(|_| Ok(TypeExpr::LiteralType(lit)))
+        let inner = Node::new(loc, TypeLiteral::Boolean(true));
+        Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
       }
       TT::LiteralFalse => {
         let loc = self.peek().loc;
         self.consume();
-        let lit = Node::new(loc, TypeLiteral::Boolean(false));
-        self.with_loc(|_| Ok(TypeExpr::LiteralType(lit)))
+        let inner = Node::new(loc, TypeLiteral::Boolean(false));
+        Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
       }
 
       // import("module").Type
@@ -274,6 +287,13 @@ impl<'a> Parser<'a> {
       None
     };
 
+    let end_loc = if let Some(ref args) = type_arguments {
+      args.last().map(|a| a.loc).unwrap_or(start_loc)
+    } else {
+      self.peek().loc
+    };
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let reference = Node::new(
       start_loc,
       TypeReference {
@@ -281,7 +301,7 @@ impl<'a> Parser<'a> {
         type_arguments,
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::TypeReference(reference)))
+    Ok(Node::new(outer_loc, TypeExpr::TypeReference(reference)))
   }
 
   /// Parse entity name (can be qualified: A.B.C)
@@ -378,8 +398,11 @@ impl<'a> Parser<'a> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordTypeof)?;
     let expr_name = self.parse_type_entity_name()?;
+    let end_loc = self.peek().loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let query = Node::new(start_loc, TypeQuery { expr_name });
-    self.with_loc(|_| Ok(TypeExpr::TypeQuery(query)))
+    Ok(Node::new(outer_loc, TypeExpr::TypeQuery(query)))
   }
 
   /// Parse keyof type: keyof T
@@ -387,13 +410,16 @@ impl<'a> Parser<'a> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordKeyof)?;
     let type_expr = self.type_primary(ctx)?;
+    let end_loc = type_expr.loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let keyof = Node::new(
       start_loc,
       TypeKeyOf {
         type_expr: Box::new(type_expr),
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::KeyOfType(keyof)))
+    Ok(Node::new(outer_loc, TypeExpr::KeyOfType(keyof)))
   }
 
   /// Parse infer type: infer R
@@ -401,8 +427,11 @@ impl<'a> Parser<'a> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordInfer)?;
     let type_parameter = self.require_identifier()?;
+    let end_loc = self.peek().loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let infer = Node::new(start_loc, TypeInfer { type_parameter });
-    self.with_loc(|_| Ok(TypeExpr::InferType(infer)))
+    Ok(Node::new(outer_loc, TypeExpr::InferType(infer)))
   }
 
   /// Parse import type: import("module").Type<T>
@@ -425,6 +454,13 @@ impl<'a> Parser<'a> {
       (None, None)
     };
 
+    let end_loc = if let Some(ref args) = type_arguments {
+      args.last().map(|a| a.loc).unwrap_or(self.peek().loc)
+    } else {
+      self.peek().loc
+    };
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let import = Node::new(
       start_loc,
       TypeImport {
@@ -433,7 +469,7 @@ impl<'a> Parser<'a> {
         type_arguments,
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::ImportType(import)))
+    Ok(Node::new(outer_loc, TypeExpr::ImportType(import)))
   }
 
   /// Parse object type literal: { x: T; y?: U; readonly z: V }
@@ -441,9 +477,12 @@ impl<'a> Parser<'a> {
     let start_loc = self.peek().loc;
     self.require(TT::BraceOpen)?;
     let members = self.type_members(ctx)?;
+    let end_loc = self.peek().loc;
     self.require(TT::BraceClose)?;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let object = Node::new(start_loc, TypeObjectLiteral { members });
-    self.with_loc(|_| Ok(TypeExpr::ObjectType(object)))
+    Ok(Node::new(outer_loc, TypeExpr::ObjectType(object)))
   }
 
   /// Parse type members (for object types and interfaces)
@@ -548,6 +587,13 @@ impl<'a> Parser<'a> {
       None
     };
 
+    let end_loc = if let Some(ref ta) = type_annotation {
+      ta.loc
+    } else {
+      self.peek().loc
+    };
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let prop = Node::new(
       start_loc,
       TypePropertySignature {
@@ -557,7 +603,7 @@ impl<'a> Parser<'a> {
         type_annotation,
       },
     );
-    self.with_loc(|_| Ok(TypeMember::Property(prop)))
+    Ok(Node::new(outer_loc, TypeMember::Property(prop)))
   }
 
   /// Parse method signature
@@ -585,6 +631,13 @@ impl<'a> Parser<'a> {
       None
     };
 
+    let end_loc = if let Some(ref rt) = return_type {
+      rt.loc
+    } else {
+      self.peek().loc
+    };
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let method = Node::new(
       start_loc,
       TypeMethodSignature {
@@ -595,7 +648,7 @@ impl<'a> Parser<'a> {
         return_type,
       },
     );
-    self.with_loc(|_| Ok(TypeMember::Method(method)))
+    Ok(Node::new(outer_loc, TypeMember::Method(method)))
   }
 
   /// Parse call signature
@@ -645,6 +698,13 @@ impl<'a> Parser<'a> {
       None
     };
 
+    let end_loc = if let Some(ref rt) = return_type {
+      rt.loc
+    } else {
+      self.peek().loc
+    };
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let constructor = Node::new(
       start_loc,
       TypeConstructSignature {
@@ -653,7 +713,7 @@ impl<'a> Parser<'a> {
         return_type,
       },
     );
-    self.with_loc(|_| Ok(TypeMember::Constructor(constructor)))
+    Ok(Node::new(outer_loc, TypeMember::Constructor(constructor)))
   }
 
   /// Parse index signature
@@ -671,6 +731,9 @@ impl<'a> Parser<'a> {
     self.require(TT::Colon)?;
     let type_annotation = self.type_expr(ctx)?;
 
+    let end_loc = type_annotation.loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let index = Node::new(
       start_loc,
       TypeIndexSignature {
@@ -680,7 +743,7 @@ impl<'a> Parser<'a> {
         type_annotation,
       },
     );
-    self.with_loc(|_| Ok(TypeMember::IndexSignature(index)))
+    Ok(Node::new(outer_loc, TypeMember::IndexSignature(index)))
   }
 
   /// Parse get accessor signature
@@ -699,8 +762,15 @@ impl<'a> Parser<'a> {
       None
     };
 
+    let end_loc = if let Some(ref rt) = return_type {
+      rt.loc
+    } else {
+      self.peek().loc
+    };
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let accessor = Node::new(start_loc, TypeGetAccessor { key, return_type });
-    self.with_loc(|_| Ok(TypeMember::GetAccessor(accessor)))
+    Ok(Node::new(outer_loc, TypeMember::GetAccessor(accessor)))
   }
 
   /// Parse set accessor signature
@@ -712,10 +782,13 @@ impl<'a> Parser<'a> {
     let start_loc = self.peek().loc;
     self.require(TT::ParenthesisOpen)?;
     let parameter = self.function_type_parameter(ctx)?;
+    let end_loc = self.peek().loc;
     self.require(TT::ParenthesisClose)?;
 
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let accessor = Node::new(start_loc, TypeSetAccessor { key, parameter });
-    self.with_loc(|_| Ok(TypeMember::SetAccessor(accessor)))
+    Ok(Node::new(outer_loc, TypeMember::SetAccessor(accessor)))
   }
 
   /// Parse tuple type: [T, U, ...V[]]
@@ -723,15 +796,24 @@ impl<'a> Parser<'a> {
     let start_loc = self.peek().loc;
     self.require(TT::BracketOpen)?;
     let mut elements = Vec::new();
-    while !self.consume_if(TT::BracketClose).is_match() {
+    let end_loc;
+    loop {
+      if self.peek().typ == TT::BracketClose {
+        end_loc = self.peek().loc;
+        self.consume();
+        break;
+      }
       elements.push(self.tuple_element(ctx)?);
       if !self.consume_if(TT::Comma).is_match() {
+        end_loc = self.peek().loc;
         self.require(TT::BracketClose)?;
         break;
       }
     }
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let tuple = Node::new(start_loc, TypeTuple { elements });
-    self.with_loc(|_| Ok(TypeExpr::TupleType(tuple)))
+    Ok(Node::new(outer_loc, TypeExpr::TupleType(tuple)))
   }
 
   /// Parse tuple element
@@ -784,14 +866,17 @@ impl<'a> Parser<'a> {
     let start_loc = self.peek().loc;
     self.require(TT::ParenthesisOpen)?;
     let type_expr = self.type_expr(ctx)?;
+    let end_loc = self.peek().loc;
     self.require(TT::ParenthesisClose)?;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let paren = Node::new(
       start_loc,
       TypeParenthesized {
         type_expr: Box::new(type_expr),
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::ParenthesizedType(paren)))
+    Ok(Node::new(outer_loc, TypeExpr::ParenthesizedType(paren)))
   }
 
   /// Try to parse function type: (x: T) => U
@@ -803,6 +888,9 @@ impl<'a> Parser<'a> {
     self.require(TT::EqualsChevronRight)?;
     let return_type = self.type_expr(ctx)?;
 
+    let end_loc = return_type.loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let func = Node::new(
       start_loc,
       TypeFunction {
@@ -811,7 +899,7 @@ impl<'a> Parser<'a> {
         return_type: Box::new(return_type),
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::FunctionType(func)))
+    Ok(Node::new(outer_loc, TypeExpr::FunctionType(func)))
   }
 
   /// Parse constructor type: new (x: T) => U
@@ -832,6 +920,9 @@ impl<'a> Parser<'a> {
     self.require(TT::EqualsChevronRight)?;
     let return_type = self.type_expr(ctx)?;
 
+    let end_loc = return_type.loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let constructor = Node::new(
       start_loc,
       TypeConstructor {
@@ -840,7 +931,7 @@ impl<'a> Parser<'a> {
         return_type: Box::new(return_type),
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::ConstructorType(constructor)))
+    Ok(Node::new(outer_loc, TypeExpr::ConstructorType(constructor)))
   }
 
   /// Parse function type parameters
@@ -942,6 +1033,7 @@ impl<'a> Parser<'a> {
     let head = self.lit_template_part_str_val()?;
     let mut spans = Vec::new();
 
+    let mut end_loc = start_loc;
     loop {
       let type_expr = self.type_expr(ctx)?;
       let t = self.peek().typ;
@@ -949,6 +1041,7 @@ impl<'a> Parser<'a> {
       let literal = if t == TT::LiteralTemplatePartString {
         self.lit_template_part_str_val()?
       } else if t == TT::LiteralTemplatePartStringEnd {
+        end_loc = self.peek().loc;
         self.consume_as_string()
       } else {
         return Err(
@@ -958,18 +1051,21 @@ impl<'a> Parser<'a> {
         );
       };
 
-      spans.push(self.with_loc(|_| {
-        Ok(TypeTemplateLiteralSpan {
-          type_expr,
-          literal: literal.clone(),
-        })
-      })?);
+      let span_start = type_expr.loc;
+      use crate::loc::Loc;
+      let span_loc = Loc(span_start.0, self.peek().loc.1);
+      spans.push(Node::new(span_loc, TypeTemplateLiteralSpan {
+        type_expr,
+        literal: literal.clone(),
+      }));
 
       if t == TT::LiteralTemplatePartStringEnd {
         break;
       }
     }
 
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let template = Node::new(
       start_loc,
       TypeTemplateLiteral {
@@ -977,7 +1073,7 @@ impl<'a> Parser<'a> {
         spans,
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::TemplateLiteralType(template)))
+    Ok(Node::new(outer_loc, TypeExpr::TemplateLiteralType(template)))
   }
 
   /// Parse mapped type: { [K in keyof T]: T[K] }
@@ -1018,8 +1114,11 @@ impl<'a> Parser<'a> {
 
     self.require(TT::Colon)?;
     let type_expr = self.type_expr(ctx)?;
+    let end_loc = self.peek().loc;
     self.require(TT::BraceClose)?;
 
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
     let mapped = Node::new(
       start_loc,
       TypeMapped {
@@ -1030,6 +1129,6 @@ impl<'a> Parser<'a> {
         type_expr: Box::new(type_expr),
       },
     );
-    self.with_loc(|_| Ok(TypeExpr::MappedType(mapped)))
+    Ok(Node::new(outer_loc, TypeExpr::MappedType(mapped)))
   }
 }

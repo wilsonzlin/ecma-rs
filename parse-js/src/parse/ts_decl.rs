@@ -81,7 +81,7 @@ impl<'a> Parser<'a> {
 
       p.require(TT::BraceOpen)?;
       let members = p.list_with_loc(TT::Comma, TT::BraceClose, |p| p.enum_member(ctx))?;
-      p.require(TT::BraceClose)?;
+      // BraceClose is already consumed by list_with_loc
 
       Ok(EnumDecl {
         export,
