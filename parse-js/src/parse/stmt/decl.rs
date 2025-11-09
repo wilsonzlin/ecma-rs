@@ -76,6 +76,7 @@ impl<'a> Parser<'a> {
           ))?;
         declarators.push(VarDeclarator {
           pattern,
+          type_annotation: None,
           initializer,
         });
         match parse_mode {

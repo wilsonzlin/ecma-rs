@@ -264,7 +264,7 @@ impl<'a> Parser<'a> {
 
   /// Get string value of a template part literal
   pub fn lit_template_part_str_val(&mut self) -> SyntaxResult<String> {
-    let t = self.require(TT::LiteralTemplatePart)?;
+    let t = self.require(TT::LiteralTemplatePartString)?;
     Ok(self.string(t.loc))
   }
 }

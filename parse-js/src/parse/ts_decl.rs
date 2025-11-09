@@ -94,18 +94,16 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse enum member: Red = 1, Green = "green"
-  fn enum_member(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<EnumMember>> {
-    self.with_loc(|p| {
-      let name = p.require_identifier()?;
+  fn enum_member(&mut self, ctx: ParseCtx) -> SyntaxResult<EnumMember> {
+    let name = self.require_identifier()?;
 
-      let initializer = if p.consume_if(TT::Equals).is_match() {
-        Some(p.expr(ctx, [TT::Comma, TT::BraceClose])?)
-      } else {
-        None
-      };
+    let initializer = if self.consume_if(TT::Equals).is_match() {
+      Some(self.expr(ctx, [TT::Comma, TT::BraceClose])?)
+    } else {
+      None
+    };
 
-      Ok(EnumMember { name, initializer })
-    })
+    Ok(EnumMember { name, initializer })
   }
 
   /// Parse namespace declaration: namespace Foo { }
