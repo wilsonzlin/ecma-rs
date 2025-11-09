@@ -30,6 +30,7 @@ use crate::ast::stmt::SwitchStmt;
 use crate::ast::stmt::ThrowStmt;
 use crate::ast::stmt::TryStmt;
 use crate::ast::stmt::WhileStmt;
+use crate::ast::stmt::WithStmt;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::token::TT;
@@ -60,6 +61,7 @@ impl<'a> Parser<'a> {
       TT::KeywordThrow => self.throw_stmt(ctx)?.into_wrapped(),
       TT::KeywordTry => self.try_stmt(ctx)?.into_wrapped(),
       TT::KeywordWhile => self.while_stmt(ctx)?.into_wrapped(),
+      TT::KeywordWith => self.with_stmt(ctx)?.into_wrapped(),
       TT::Semicolon => self.empty_stmt()?.into_wrapped(),
       t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_wrapped(),
       _ => self.expr_stmt(ctx)?.into_wrapped(),
@@ -201,7 +203,7 @@ impl<'a> Parser<'a> {
       p.require(TT::KeywordFor)?;
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(ctx)?;
-      p.require(TT::KeywordOf)?;
+      p.require(TT::KeywordIn)?;
       let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.for_body(ctx)?;
@@ -384,6 +386,20 @@ impl<'a> Parser<'a> {
       let body = p.stmt(ctx)?;
       Ok(WhileStmt {
         condition,
+        body,
+      })
+    })
+  }
+
+  pub fn with_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<WithStmt>> {
+    self.with_loc(|p| {
+      p.require(TT::KeywordWith)?;
+      p.require(TT::ParenthesisOpen)?;
+      let object = p.expr(ctx, [TT::ParenthesisClose])?;
+      p.require(TT::ParenthesisClose)?;
+      let body = p.stmt(ctx)?;
+      Ok(WithStmt {
+        object,
         body,
       })
     })

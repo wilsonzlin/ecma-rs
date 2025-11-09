@@ -105,6 +105,7 @@ impl PatternMatcher {
   }
 }
 
+#[derive(Debug)]
 struct LexNotFound;
 
 type LexResult<T> = Result<T, LexNotFound>;
@@ -545,7 +546,7 @@ fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
       .unwrap_or_else(|_| (TT::EOF, Match(lexer.remaining())));
     lexer.consume(mat);
     match tt {
-      TT::CommentMultiline | TT::EOF => {
+      TT::CommentMultilineEnd | TT::EOF => {
         break;
       }
       TT::LineTerminator => {
@@ -569,7 +570,8 @@ fn lex_identifier(
   mode: LexMode,
 ) -> TT {
   // Consume starter.
-  lexer.skip_expect(1);
+  let starter = lexer.peek(0).unwrap();
+  lexer.skip_expect(starter.len_utf8());
   loop {
     lexer.consume(lexer.while_chars(if mode == LexMode::JsxTag {
       &ID_CONTINUE_JSX
@@ -577,10 +579,11 @@ fn lex_identifier(
       &ID_CONTINUE
     }));
     // TODO We assume if it's not ASCII it's part of a UTF-8 byte sequence, and that sequence represents a valid JS identifier continue code point.
-    if lexer.peek_or_eof(0).filter(|c| !c.is_ascii()).is_none() {
+    if let Some(c) = lexer.peek_or_eof(0).filter(|c| !c.is_ascii()) {
+      lexer.skip_expect(c.len_utf8());
+    } else {
       break;
     };
-    lexer.skip_expect(1);
   }
   TT::Identifier
 }
@@ -648,18 +651,20 @@ fn lex_private_member(
 ) -> LexResult<TT> {
   // Include the `#` in the token.
   lexer.skip_expect(1);
-  if !ID_START.has(lexer.peek(0)?) {
+  let starter = lexer.peek(0)?;
+  if !ID_START.has(starter) {
     return Ok(TT::Invalid);
   };
-  lexer.skip_expect(1);
+  lexer.skip_expect(starter.len_utf8());
   // TODO This is copied from lex_identifier.
   loop {
     lexer.consume(lexer.while_chars(&ID_CONTINUE));
     // TODO We assume if it's not ASCII it's part of a UTF-8 byte sequence, and that sequence represents a valid JS identifier continue code point.
-    if lexer.peek_or_eof(0).filter(|c| !c.is_ascii()).is_none() {
+    if let Some(c) = lexer.peek_or_eof(0).filter(|c| !c.is_ascii()) {
+      lexer.skip_expect(c.len_utf8());
+    } else {
       break;
     };
-    lexer.skip_expect(1);
   }
   Ok(TT::PrivateMember)
 }
@@ -706,16 +711,50 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   lexer.skip_expect(quote.len_utf8());
   let mut invalid = false;
   loop {
-    // TODO Does not consider other line terminators allowed by spec.
-    lexer.consume(lexer.while_not_3_chars('\\', '\n', quote));
+    // Look for backslash, line terminators, or closing quote
+    lexer.consume(lexer.while_not_3_chars('\\', '\r', quote));
+    // Also check for \n and Unicode line separators
+    if let Ok(c) = lexer.peek(0) {
+      if c == '\n' || c == '\u{2028}' || c == '\u{2029}' {
+        // Bare line terminator without backslash - invalid
+        invalid = true;
+        lexer.skip_expect(c.len_utf8());
+        continue;
+      }
+    }
     match lexer.peek(0)? {
       '\\' => {
-        lexer.consume(lexer.n(2)?);
+        // Consume the backslash
+        lexer.skip_expect(1);
+        // Check if next character is a line terminator (line continuation)
+        if let Ok(next_char) = lexer.peek(0) {
+          match next_char {
+            '\r' => {
+              // Consume \r, and if followed by \n, consume that too (CRLF)
+              lexer.skip_expect(1);
+              if lexer.peek(0).ok() == Some('\n') {
+                lexer.skip_expect(1);
+              }
+            }
+            '\n' | '\u{2028}' | '\u{2029}' => {
+              // Line continuation
+              lexer.skip_expect(next_char.len_utf8());
+            }
+            _ => {
+              // Regular escape sequence
+              lexer.skip_expect(next_char.len_utf8());
+            }
+          }
+        }
       }
-      '\n' => {
-        // Mark as invalid but continue consuming to find the closing quote
+      '\r' => {
+        // Bare \r without backslash - invalid
         invalid = true;
-        lexer.skip_expect('\n'.len_utf8());
+        lexer.skip_expect(1);
+        // Also consume \n if it follows (CRLF)
+        if lexer.peek(0).ok() == Some('\n') {
+          lexer.skip_expect(1);
+        }
       }
       c if c == quote => {
         lexer.skip_expect(c.len_utf8());
@@ -740,7 +779,12 @@ pub fn lex_template_string_continue(
     lexer.consume(lexer.while_not_3_chars('\\', '`', '$'));
     match lexer.peek(0)? {
       '\\' => {
-        lexer.consume(lexer.n(2)?);
+        // Consume the backslash
+        lexer.skip_expect(1);
+        // Consume the next character (which may be multi-byte UTF-8)
+        if let Ok(next_char) = lexer.peek(0) {
+          lexer.skip_expect(next_char.len_utf8());
+        }
       }
       '`' => {
         ended = true;

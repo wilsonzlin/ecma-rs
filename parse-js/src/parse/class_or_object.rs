@@ -156,7 +156,13 @@ impl<'a> Parser<'a> {
     let key = self.class_or_obj_key(ctx)?;
     let has_init = match key {
       ClassOrObjKey::Direct(_) => self.peek().typ == value_delimiter,
-      _ => false,
+      ClassOrObjKey::Computed(_) => {
+        // Computed keys always require a value
+        if self.peek().typ != value_delimiter {
+          return Err(self.peek().error(SyntaxErrorType::ExpectedNotFound));
+        }
+        true
+      }
     };
     let initializer = has_init
       .then(|| {

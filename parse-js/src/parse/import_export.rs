@@ -57,6 +57,7 @@ impl<'a> Parser<'a> {
   pub fn import_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ImportStmt>> {
     // TODO Ensure top-level.
     self.with_loc(|p| {
+      p.require(TT::KeywordImport)?;
       let (default, can_have_names) =
         if p.peek().typ == TT::Identifier {
           let alias = p.id_pat_decl(ctx)?;

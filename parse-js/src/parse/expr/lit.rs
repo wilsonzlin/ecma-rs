@@ -38,7 +38,7 @@ pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
   // of the same value get parsed into the same f64 value/bit pattern (e.g. `5.1e10` and `0.51e11`).
   match raw {
     s if s.starts_with("0b") || s.starts_with("0B") => parse_radix(&s[2..], 2),
-    s if s.starts_with("0o") || s.starts_with("0o") => parse_radix(&s[2..], 8),
+    s if s.starts_with("0o") || s.starts_with("0O") => parse_radix(&s[2..], 8),
     s if s.starts_with("0x") || s.starts_with("0X") => parse_radix(&s[2..], 16),
     s => f64::from_str(s).map_err(|_| ()),
   }
