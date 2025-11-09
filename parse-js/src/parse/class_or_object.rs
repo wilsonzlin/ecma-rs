@@ -108,7 +108,19 @@ impl<'a> Parser<'a> {
     let is_generator = self.consume_if(TT::Asterisk).is_match();
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
+      } else {
+        None
+      };
       let parameters = p.func_params(ctx)?;
+      // TypeScript: return type annotation
+      let return_type = if p.consume_if(TT::Colon).is_match() {
+        Some(p.type_expr(ctx)?)
+      } else {
+        None
+      };
       let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
         await_allowed: !is_async && ctx.rules.await_allowed,
         yield_allowed: !is_generator && ctx.rules.yield_allowed,
@@ -117,9 +129,9 @@ impl<'a> Parser<'a> {
         arrow: false,
         async_: is_async,
         generator: is_generator,
-        type_parameters: None,
+        type_parameters,
         parameters,
-        return_type: None,
+        return_type,
         body,
       })
     })?;
@@ -131,8 +143,20 @@ impl<'a> Parser<'a> {
     self.require(TT::KeywordGet)?;
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
+      } else {
+        None
+      };
       p.require(TT::ParenthesisOpen)?;
       p.require(TT::ParenthesisClose)?;
+      // TypeScript: return type annotation
+      let return_type = if p.consume_if(TT::Colon).is_match() {
+        Some(p.type_expr(ctx)?)
+      } else {
+        None
+      };
       // Getters are not generators or async, so yield/await can be used as identifiers
       let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
         await_allowed: true,
@@ -142,9 +166,9 @@ impl<'a> Parser<'a> {
         arrow: false,
         async_: false,
         generator: false,
-        type_parameters: None,
+        type_parameters,
         parameters: Vec::new(),
-        return_type: None,
+        return_type,
         body,
       })
     })?;
@@ -156,6 +180,12 @@ impl<'a> Parser<'a> {
     self.require(TT::KeywordSet)?;
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
+      } else {
+        None
+      };
       p.require(TT::ParenthesisOpen)?;
       // Setters are not generators or async, so yield/await can be used as identifiers
       let setter_ctx = ctx.with_rules(ParsePatternRules {
@@ -169,12 +199,13 @@ impl<'a> Parser<'a> {
         })?;
       let param_loc = pattern.loc;
       p.require(TT::ParenthesisClose)?;
+      // Setters don't have return types
       let body = p.parse_func_block_body(setter_ctx)?.into();
       Ok(Func {
         arrow: false,
         async_: false,
         generator: false,
-        type_parameters: None,
+        type_parameters,
         parameters: vec![Node::new(param_loc, ParamDecl {
           rest: false,
           optional: false,

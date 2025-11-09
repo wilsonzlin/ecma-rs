@@ -127,20 +127,32 @@ impl<'a> Parser<'a> {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("function name"), None));
       };
       let function = p.with_loc(|p| {
+        // TypeScript: generic type parameters
+        let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
         // Parameters and body use the function's own context, not the parent's
         let fn_ctx = ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async,
-          yield_allowed: !generator,
+          await_allowed: !is_async && ctx.rules.await_allowed,
+          yield_allowed: !generator && ctx.rules.yield_allowed,
         });
         let parameters = p.func_params(fn_ctx)?;
+        // TypeScript: return type annotation
+        let return_type = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
         let body = p.parse_func_block_body(fn_ctx)?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,
           generator,
-          type_parameters: None,
+          type_parameters,
           parameters,
-          return_type: None,
+          return_type,
           body,
         })
       })?;

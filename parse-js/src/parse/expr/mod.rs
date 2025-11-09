@@ -115,7 +115,7 @@ impl<'a> Parser<'a> {
     let func = self.with_loc(|p| {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
 
-      let (parameters, arrow) = if !is_async
+      let (type_parameters, parameters, return_type, arrow) = if !is_async
         && is_valid_pattern_identifier(p.peek().typ, ParsePatternRules {
           await_allowed: false,
           yield_allowed: ctx.rules.yield_allowed,
@@ -123,6 +123,12 @@ impl<'a> Parser<'a> {
         // Single-unparenthesised-parameter arrow function.
         // Parse arrow first for fast fail (and in case we are merely trying to parse as arrow function), before we mutate state by creating nodes and adding symbols.
         let param_name = p.consume().loc;
+        // TypeScript: return type annotation (after param, before =>)
+        let return_type = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
         let arrow = p.require(TT::EqualsChevronRight)?;
         let pattern = Node::new(param_name, PatDecl {
           pat: Node::new(param_name, IdPat {
@@ -138,11 +144,23 @@ impl<'a> Parser<'a> {
           type_annotation: None,
           default_value: None,
         });
-        (vec![param], arrow)
+        (None, vec![param], return_type, arrow)
       } else {
+        // TypeScript: generic type parameters
+        let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
         let params = p.func_params(ctx)?;
+        // TypeScript: return type annotation (after params, before =>)
+        let return_type = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
         let arrow = p.require(TT::EqualsChevronRight)?;
-        (params, arrow)
+        (type_parameters, params, return_type, arrow)
       };
 
       if arrow.preceded_by_line_terminator {
@@ -165,9 +183,9 @@ impl<'a> Parser<'a> {
         arrow: true,
         async_: is_async,
         generator: false,
-        type_parameters: None,
+        type_parameters,
         parameters,
-        return_type: None,
+        return_type,
         body,
       })
     })?;
@@ -214,20 +232,32 @@ impl<'a> Parser<'a> {
       });
       let name = p.maybe_class_or_func_name(name_ctx);
       let func = p.with_loc(|p| {
+        // TypeScript: generic type parameters
+        let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
         // Parameters and body use the function's own context, not the parent's
         let fn_ctx = ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async,
-          yield_allowed: !generator,
+          await_allowed: !is_async && ctx.rules.await_allowed,
+          yield_allowed: !generator && ctx.rules.yield_allowed,
         });
         let parameters = p.func_params(fn_ctx)?;
+        // TypeScript: return type annotation
+        let return_type = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
         let body = p.parse_func_block_body(fn_ctx)?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,
           generator,
-          type_parameters: None,
+          type_parameters,
           parameters,
-          return_type: None,
+          return_type,
           body,
         })
       })?;
