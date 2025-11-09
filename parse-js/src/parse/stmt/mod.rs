@@ -41,7 +41,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
-    let [t0, t1] = self.peek_n();
+    let [t0, t1, t2] = self.peek_n();
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match t0.typ {
       TT::BraceOpen => self.block_stmt(ctx)?.into_wrapped(),
@@ -49,7 +49,8 @@ impl<'a> Parser<'a> {
       TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
       TT::KeywordConst | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       // `let` is a contextual keyword - only treat it as a declaration if followed by a pattern start
-      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      // But if it's followed by `identifier :`, it's a labeled statement, not a declaration
+      TT::KeywordLet if (t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules)) && !(is_valid_pattern_identifier(t1.typ, ctx.rules) && t2.typ == TT::Colon) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       TT::KeywordContinue => self.continue_stmt(ctx)?.into_wrapped(),
       TT::KeywordDebugger => self.debugger_stmt()?.into_wrapped(),
       TT::KeywordDo => self.do_while_stmt(ctx)?.into_wrapped(),

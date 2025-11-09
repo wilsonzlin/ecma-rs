@@ -525,6 +525,8 @@ static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
     vec![
       (TT::LineTerminator, "\r"),
       (TT::LineTerminator, "\n"),
+      (TT::LineTerminator, "\u{2028}"),  // Line Separator
+      (TT::LineTerminator, "\u{2029}"),  // Paragraph Separator
       (TT::Whitespace, "\x09"),
       (TT::Whitespace, "\x0b"),
       (TT::Whitespace, "\x0c"),

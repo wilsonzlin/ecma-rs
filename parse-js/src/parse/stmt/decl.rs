@@ -84,7 +84,7 @@ impl<'a> Parser<'a> {
               break;
             }
             let t = p.peek();
-            if t.typ == TT::EOF || (t.preceded_by_line_terminator && t.typ != TT::Comma) {
+            if t.typ == TT::EOF || t.typ == TT::BraceClose || (t.preceded_by_line_terminator && t.typ != TT::Comma) {
               break;
             };
             p.require(TT::Comma)?;
