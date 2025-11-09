@@ -134,6 +134,7 @@ impl<'a> Parser<'a> {
   pub fn export_default_expr_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ExportDefaultExprStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordExport)?;
+      p.require(TT::KeywordDefault)?;
       let expression = p.expr(ctx, [TT::Semicolon])?;
       Ok(ExportDefaultExprStmt { expression })
     })
