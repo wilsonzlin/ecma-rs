@@ -89,7 +89,13 @@ impl<'a> Parser<'a> {
         p.require(TT::KeywordFrom)?;
       }
       let module = p.lit_str_val()?;
-      p.require(TT::Semicolon)?;
+      // Allow ASI - semicolon not required at EOF or before line terminator
+      let t = p.peek();
+      if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+        p.require(TT::Semicolon)?;
+      } else {
+        p.consume_if(TT::Semicolon);
+      }
       Ok(ImportStmt {
         default,
         module,
