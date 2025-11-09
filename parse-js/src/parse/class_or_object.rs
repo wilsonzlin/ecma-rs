@@ -21,14 +21,15 @@ use crate::token::TT;
 impl<'a> Parser<'a> {
   pub fn class_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<ClassMember>>> {
     self.require(TT::BraceOpen)?;
-    let members = self.repeat_until_tt_with_loc(
-      TT::BraceClose,
-      |p| {
-        // Skip empty semicolons
-        while p.consume_if(TT::Semicolon).is_match() {}
-        if p.peek().typ == TT::BraceClose {
-          return Err(p.peek().error(SyntaxErrorType::ExpectedNotFound));
-        }
+    let mut members = Vec::new();
+    loop {
+      // Skip empty semicolons
+      while self.consume_if(TT::Semicolon).is_match() {}
+      // Check if we're at the end
+      if self.peek().typ == TT::BraceClose {
+        break;
+      }
+      let member = self.with_loc(|p| {
         // `static` must always come first if present, unless it's a method name.
         // Check if `static` is followed by `(` which means it's a method name, not a modifier.
         let static_ = if p.peek().typ == TT::KeywordStatic {
@@ -54,8 +55,9 @@ impl<'a> Parser<'a> {
           static_: static_.is_some(),
           val: value,
         })
-      },
-    )?;
+      })?;
+      members.push(member);
+    }
     self.require(TT::BraceClose)?;
     Ok(members)
   }
