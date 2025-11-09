@@ -147,6 +147,7 @@ impl<'a> Parser<'a> {
       (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass, _) => self.class_decl(ctx)?.into_wrapped(),
       (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
       (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("exportable"))),
     };
     Ok(stmt)
