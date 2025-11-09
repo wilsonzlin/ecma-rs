@@ -195,6 +195,40 @@ impl<'a> Parser<'a> {
     property_initialiser_asi: &mut Asi,
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
     let [a, b, c, d] = self.peek_n();
+    // Special case for computed keys: parse key first, then check what follows
+    if a.typ == TT::BracketOpen {
+      let is_async = false;
+      let is_generator = false;
+      let key = self.class_or_obj_key(ctx)?;
+      return Ok(if self.peek().typ == TT::ParenthesisOpen {
+        let method = self.with_loc(|p| {
+          let func = p.with_loc(|p| {
+            let parameters = p.func_params(ctx)?;
+            let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+              await_allowed: !is_async && ctx.rules.await_allowed,
+              yield_allowed: !is_generator && ctx.rules.yield_allowed,
+            }))?.into();
+            Ok(Func {
+              arrow: false,
+              async_: is_async,
+              generator: is_generator,
+              parameters,
+              body,
+            })
+          })?;
+          Ok(ClassOrObjMethod { func })
+        })?;
+        (key, ClassOrObjVal::Method(method))
+      } else {
+        let initializer = if self.peek().typ == value_delimiter {
+          self.require(value_delimiter)?;
+          Some(self.expr_with_asi(ctx, [statement_delimiter, TT::BraceClose], property_initialiser_asi)?)
+        } else {
+          None
+        };
+        (key, ClassOrObjVal::Prop(initializer))
+      });
+    }
     Ok(match (a.typ, b.typ, c.typ, d.typ) {
       // Method. Includes using "get" or "set" as the method's name.
       (TT::KeywordAsync, TT::Asterisk, _, TT::ParenthesisOpen)
