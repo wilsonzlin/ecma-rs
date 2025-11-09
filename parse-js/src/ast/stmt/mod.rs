@@ -5,7 +5,7 @@ use derive_more::derive::{From, TryInto};
 use derive_visitor::{Drive, DriveMut};
 use serde::{Deserialize, Serialize};
 
-use super::{expr::{pat::Pat, Expr}, import_export::{ExportNames, ImportNames}, node::Node, stx::TopLevel};
+use super::{expr::{pat::Pat, Expr}, import_export::{ExportNames, ImportNames}, node::Node, stx::TopLevel, ts_stmt::*, type_expr::TypeExpr};
 
 // We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
 #[derive(Debug, Drive, DriveMut, From, Serialize, TryInto)]
@@ -36,6 +36,19 @@ pub enum Stmt {
   ClassDecl(Node<ClassDecl>),
   FunctionDecl(Node<FuncDecl>),
   VarDecl(Node<VarDecl>),
+
+  // TypeScript statements
+  InterfaceDecl(Node<InterfaceDecl>),
+  TypeAliasDecl(Node<TypeAliasDecl>),
+  EnumDecl(Node<EnumDecl>),
+  NamespaceDecl(Node<NamespaceDecl>),
+  ModuleDecl(Node<ModuleDecl>),
+  GlobalDecl(Node<GlobalDecl>),
+  AmbientVarDecl(Node<AmbientVarDecl>),
+  AmbientFunctionDecl(Node<AmbientFunctionDecl>),
+  AmbientClassDecl(Node<AmbientClassDecl>),
+  ImportTypeDecl(Node<ImportTypeDecl>),
+  ExportTypeDecl(Node<ExportTypeDecl>),
 }
 
 

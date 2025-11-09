@@ -117,6 +117,35 @@ pub enum TT {
   KeywordWhile,
   KeywordWith,
   KeywordYield,
+  // TypeScript keywords
+  KeywordAbstract,
+  KeywordAny,
+  KeywordAsserts,
+  KeywordBigIntType,
+  KeywordBooleanType,
+  KeywordDeclare,
+  KeywordImplements,
+  KeywordInfer,
+  KeywordInterface,
+  KeywordIs,
+  KeywordKeyof,
+  KeywordModule,
+  KeywordNamespace,
+  KeywordNever,
+  KeywordNumberType,
+  KeywordObjectType,
+  KeywordOverride,
+  KeywordPrivate,
+  KeywordProtected,
+  KeywordPublic,
+  KeywordReadonly,
+  KeywordSatisfies,
+  KeywordStringType,
+  KeywordSymbolType,
+  KeywordType,
+  KeywordUndefinedType,
+  KeywordUnique,
+  KeywordUnknown,
   LiteralBigInt,
   LiteralFalse,
   LiteralNull,
@@ -158,6 +187,35 @@ pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   set.insert(TT::KeywordOf);
   set.insert(TT::KeywordSet);
   set.insert(TT::KeywordStatic);
+  // TypeScript contextual keywords
+  set.insert(TT::KeywordAbstract);
+  set.insert(TT::KeywordAny);
+  set.insert(TT::KeywordAsserts);
+  set.insert(TT::KeywordBigIntType);
+  set.insert(TT::KeywordBooleanType);
+  set.insert(TT::KeywordDeclare);
+  set.insert(TT::KeywordImplements);
+  set.insert(TT::KeywordInfer);
+  set.insert(TT::KeywordInterface);
+  set.insert(TT::KeywordIs);
+  set.insert(TT::KeywordKeyof);
+  set.insert(TT::KeywordModule);
+  set.insert(TT::KeywordNamespace);
+  set.insert(TT::KeywordNever);
+  set.insert(TT::KeywordNumberType);
+  set.insert(TT::KeywordObjectType);
+  set.insert(TT::KeywordOverride);
+  set.insert(TT::KeywordPrivate);
+  set.insert(TT::KeywordProtected);
+  set.insert(TT::KeywordPublic);
+  set.insert(TT::KeywordReadonly);
+  set.insert(TT::KeywordSatisfies);
+  set.insert(TT::KeywordStringType);
+  set.insert(TT::KeywordSymbolType);
+  set.insert(TT::KeywordType);
+  set.insert(TT::KeywordUndefinedType);
+  set.insert(TT::KeywordUnique);
+  set.insert(TT::KeywordUnknown);
   set
 });
 pub static UNRESERVED_KEYWORD_STRS: Lazy<HashSet<&'static str>> = Lazy::new(|| {

@@ -137,7 +137,9 @@ impl<'a> Parser<'a> {
           arrow: false,
           async_: is_async,
           generator,
+          type_parameters: None,
           parameters,
+          return_type: None,
           body,
         })
       })?;
@@ -173,8 +175,11 @@ impl<'a> Parser<'a> {
       Ok(ClassDecl {
         export,
         export_default,
+        abstract_: false,
         name,
+        type_parameters: None,
         extends,
+        implements: Vec::new(),
         members,
       })
     })

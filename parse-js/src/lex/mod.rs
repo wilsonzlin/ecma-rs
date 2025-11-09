@@ -441,9 +441,38 @@ pub static KEYWORDS_MAPPING: Lazy<HashMap<TT, &'static str>> = Lazy::new(|| {
   map.insert(TT::KeywordWhile, "while");
   map.insert(TT::KeywordWith, "with");
   map.insert(TT::KeywordYield, "yield");
+  // TypeScript keywords
+  map.insert(TT::KeywordAbstract, "abstract");
+  map.insert(TT::KeywordAny, "any");
+  map.insert(TT::KeywordAsserts, "asserts");
+  map.insert(TT::KeywordBigIntType, "bigint");
+  map.insert(TT::KeywordBooleanType, "boolean");
+  map.insert(TT::KeywordDeclare, "declare");
+  map.insert(TT::KeywordImplements, "implements");
+  map.insert(TT::KeywordInfer, "infer");
+  map.insert(TT::KeywordInterface, "interface");
+  map.insert(TT::KeywordIs, "is");
+  map.insert(TT::KeywordKeyof, "keyof");
+  map.insert(TT::KeywordModule, "module");
+  map.insert(TT::KeywordNamespace, "namespace");
+  map.insert(TT::KeywordNever, "never");
+  map.insert(TT::KeywordNumberType, "number");
+  map.insert(TT::KeywordObjectType, "object");
+  map.insert(TT::KeywordOverride, "override");
+  map.insert(TT::KeywordPrivate, "private");
+  map.insert(TT::KeywordProtected, "protected");
+  map.insert(TT::KeywordPublic, "public");
+  map.insert(TT::KeywordReadonly, "readonly");
+  map.insert(TT::KeywordSatisfies, "satisfies");
+  map.insert(TT::KeywordStringType, "string");
+  map.insert(TT::KeywordSymbolType, "symbol");
+  map.insert(TT::KeywordType, "type");
+  map.insert(TT::KeywordUndefinedType, "undefined");
+  map.insert(TT::KeywordUnique, "unique");
+  map.insert(TT::KeywordUnknown, "unknown");
   map.insert(TT::LiteralFalse, "false");
   map.insert(TT::LiteralNull, "null");
-  map.insert(TT::LiteralTrue, "true");
+  map.insert(TT::LiteralTrue, "true")
   map
 });
 

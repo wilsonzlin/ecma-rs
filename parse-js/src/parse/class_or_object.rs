@@ -53,6 +53,12 @@ impl<'a> Parser<'a> {
         Ok(ClassMember {
           key,
           static_: static_.is_some(),
+          abstract_: false,
+          readonly: false,
+          optional: false,
+          override_: false,
+          accessibility: None,
+          type_annotation: None,
           val: value,
         })
       })?;
@@ -111,7 +117,9 @@ impl<'a> Parser<'a> {
         arrow: false,
         async_: is_async,
         generator: is_generator,
+        type_parameters: None,
         parameters,
+        return_type: None,
         body,
       })
     })?;
@@ -134,7 +142,9 @@ impl<'a> Parser<'a> {
         arrow: false,
         async_: false,
         generator: false,
+        type_parameters: None,
         parameters: Vec::new(),
+        return_type: None,
         body,
       })
     })?;
@@ -164,11 +174,17 @@ impl<'a> Parser<'a> {
         arrow: false,
         async_: false,
         generator: false,
+        type_parameters: None,
         parameters: vec![Node::new(param_loc, ParamDecl {
           rest: false,
+          optional: false,
+          accessibility: None,
+          readonly: false,
           pattern,
+          type_annotation: None,
           default_value,
         })],
+        return_type: None,
         body,
       })
     })?;

@@ -20,6 +20,8 @@ mod tests;
 pub mod top_level;
 pub mod drive;
 pub mod import_export;
+pub mod ts_decl;
+pub mod type_expr;
 
 // Almost every parse_* function takes these field values as parameters. Instead of having to enumerate them as parameters on every function and ordered unnamed arguments on every call, we simply pass this struct around. Fields are public to allow destructuring, but the value should be immutable; the with_* methods can be used to create an altered copy for passing into other functions, which is useful as most calls simply pass through the values unchanged. This struct should be received as a value, not a reference (i.e. `ctx: ParseCtx` not `ctx: &ParseCtx`) as the latter will require a separate lifetime.
 // All fields except `session` can (although not often) change between calls, so we don't simply put them in Parser, as otherwise we'd have to "unwind" (i.e. reset) those values after each call returns.
@@ -249,5 +251,20 @@ impl<'a> Parser<'a> {
 
   pub fn require(&mut self, typ: TT) -> SyntaxResult<Token> {
     self.require_with_mode(typ, LexMode::Standard)
+  }
+
+  /// Require and consume an identifier, returning its string value
+  pub fn require_identifier(&mut self) -> SyntaxResult<String> {
+    let t = self.consume();
+    if t.typ != TT::Identifier {
+      return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+    }
+    Ok(self.string(t.loc))
+  }
+
+  /// Get string value of a template part literal
+  pub fn lit_template_part_str_val(&mut self) -> SyntaxResult<String> {
+    let t = self.require(TT::LiteralTemplatePart)?;
+    Ok(self.string(t.loc))
   }
 }

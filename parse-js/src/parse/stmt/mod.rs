@@ -66,10 +66,66 @@ impl<'a> Parser<'a> {
       TT::KeywordWhile => self.while_stmt(ctx)?.into_wrapped(),
       TT::KeywordWith => self.with_stmt(ctx)?.into_wrapped(),
       TT::Semicolon => self.empty_stmt()?.into_wrapped(),
+
+      // TypeScript declarations
+      TT::KeywordInterface => self.interface_decl(ctx, false, false)?.into_wrapped(),
+      TT::KeywordType => self.type_alias_decl(ctx, false, false)?.into_wrapped(),
+      TT::KeywordEnum => self.enum_decl(ctx, false, false, false)?.into_wrapped(),
+      TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, false)?,
+      TT::KeywordDeclare => self.declare_stmt(ctx)?,
+      TT::KeywordAbstract if t1.typ == TT::KeywordClass => self.abstract_class_decl(ctx)?.into_wrapped(),
+
       t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_wrapped(),
       _ => self.expr_stmt(ctx)?.into_wrapped(),
     };
     Ok(stmt)
+  }
+
+  /// Handle declare keyword
+  fn declare_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
+    self.consume(); // consume 'declare'
+    let t = self.peek().typ;
+    match t {
+      TT::KeywordInterface => Ok(self.interface_decl(ctx, false, true)?.wrap(Stmt::InterfaceDecl)),
+      TT::KeywordType => Ok(self.type_alias_decl(ctx, false, true)?.wrap(Stmt::TypeAliasDecl)),
+      TT::KeywordEnum => Ok(self.enum_decl(ctx, false, true, false)?.wrap(Stmt::EnumDecl)),
+      TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, true),
+      TT::KeywordClass => Ok(self.class_decl_with_modifiers(ctx, false, true, false)?.wrap(Stmt::ClassDecl)),
+      TT::KeywordFunction => Ok(self.func_decl_with_modifiers(ctx, false, true)?.wrap(Stmt::FunctionDecl)),
+      TT::KeywordConst if self.peek_n::<2>()[1].typ == TT::KeywordEnum => {
+        self.consume(); // consume 'const'
+        Ok(self.enum_decl(ctx, false, true, true)?.wrap(Stmt::EnumDecl))
+      }
+      _ => Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare"))),
+    }
+  }
+
+  /// Handle namespace or module declaration
+  fn namespace_or_module_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<Stmt>> {
+    // Check if it's a string module (declare module "foo")
+    if self.peek().typ == TT::KeywordModule && self.peek_n::<2>()[1].typ == TT::LiteralString {
+      Ok(self.module_decl(ctx, export, declare)?.wrap(Stmt::ModuleDecl))
+    } else {
+      Ok(self.namespace_decl(ctx, export, declare)?.wrap(Stmt::NamespaceDecl))
+    }
+  }
+
+  /// Handle abstract class
+  fn abstract_class_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
+    self.consume(); // consume 'abstract'
+    self.class_decl_with_modifiers(ctx, false, false, true)
+  }
+
+  /// Parse class declaration with TypeScript modifiers
+  fn class_decl_with_modifiers(&mut self, ctx: ParseCtx, export: bool, declare: bool, abstract_: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
+    // Implementation will be added when we update class_decl
+    self.class_decl(ctx)
+  }
+
+  /// Parse function declaration with TypeScript modifiers
+  fn func_decl_with_modifiers(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::FuncDecl>> {
+    // Implementation will be added when we update func_decl
+    self.func_decl(ctx)
   }
 
   pub fn label_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LabelStmt>> {

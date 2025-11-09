@@ -131,7 +131,11 @@ impl<'a> Parser<'a> {
         });
         let param = Node::new(param_name, ParamDecl {
           rest: false,
+          optional: false,
+          accessibility: None,
+          readonly: false,
           pattern,
+          type_annotation: None,
           default_value: None,
         });
         (vec![param], arrow)
@@ -161,7 +165,9 @@ impl<'a> Parser<'a> {
         arrow: true,
         async_: is_async,
         generator: false,
+        type_parameters: None,
         parameters,
+        return_type: None,
         body,
       })
     })?;
@@ -219,7 +225,9 @@ impl<'a> Parser<'a> {
           arrow: false,
           async_: is_async,
           generator,
+          type_parameters: None,
           parameters,
+          return_type: None,
           body,
         })
       })?;
@@ -238,7 +246,9 @@ impl<'a> Parser<'a> {
       let members = p.class_body(ctx)?;
       Ok(ClassExpr {
         name,
+        type_parameters: None,
         extends,
+        implements: Vec::new(),
         members,
       })
     })
