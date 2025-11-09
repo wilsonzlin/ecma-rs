@@ -409,6 +409,8 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordDo)?;
       let body = p.stmt(ctx)?;
+      // Consume optional semicolon after body statement (ASI)
+      p.consume_if(TT::Semicolon);
       p.require(TT::KeywordWhile)?;
       p.require(TT::ParenthesisOpen)?;
       let condition = p.expr(ctx, [TT::ParenthesisClose])?;
