@@ -112,7 +112,11 @@ impl<'a> Parser<'a> {
     let func = self.with_loc(|p| {
       p.require(TT::ParenthesisOpen)?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.parse_func_block_body(ctx)?.into();
+      // Getters are not generators or async, so yield/await can be used as identifiers
+      let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+        await_allowed: true,
+        yield_allowed: true,
+      }))?.into();
       Ok(Func {
         arrow: false,
         async_: false,
@@ -132,7 +136,11 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisOpen)?;
       let param = p.pat_decl(ctx)?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.parse_func_block_body(ctx)?.into();
+      // Setters are not generators or async, so yield/await can be used as identifiers
+      let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+        await_allowed: true,
+        yield_allowed: true,
+      }))?.into();
       Ok(Func {
         arrow: false,
         async_: false,

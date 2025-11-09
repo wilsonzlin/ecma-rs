@@ -263,7 +263,7 @@ impl<'a> Parser<'a> {
     // Handle unary operators before operand.
     // Special case: `new.target` should not be treated as `new` operator
     if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t0.typ).filter(|operator| {
-      // TODO Is this correct? Should it be possible to use as operator or keyword depending on whether there is an operand following?
+      // Treat await/yield as operators only when they're keywords (not allowed as identifiers)
       (operator.name != OperatorName::Await && operator.name != OperatorName::Yield)
         || (operator.name == OperatorName::Await && !ctx.rules.await_allowed)
         || (operator.name == OperatorName::Yield && !ctx.rules.yield_allowed)
