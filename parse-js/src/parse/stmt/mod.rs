@@ -208,7 +208,14 @@ impl<'a> Parser<'a> {
         let pat = self.pat_decl(ctx)?;
         (mode, pat)
       }),
-      _ => ForInOfLhs::Assign(self.pat(ctx)?),
+      _ => {
+        // Parse as expression (which handles member expressions, patterns, etc.)
+        // then convert to pattern/assignment target
+        use super::expr::util::lit_to_pat;
+        let expr = self.expr(ctx, [TT::KeywordIn, TT::KeywordOf])?;
+        let pat = lit_to_pat(expr)?;
+        ForInOfLhs::Assign(pat)
+      }
     })
   }
 
@@ -285,8 +292,8 @@ impl<'a> Parser<'a> {
                 _ => Self::Triple,
               }
             } else {
-              // Not a declaration, treat as expression
-              match p.pat(ctx) {
+              // Not a declaration, parse as expression to handle member expressions etc.
+              match p.expr(ctx, [TT::KeywordIn, TT::KeywordOf]) {
                 Ok(_) => match p.peek().typ {
                   TT::KeywordIn => Self::In,
                   TT::KeywordOf => Self::Of,
@@ -301,8 +308,8 @@ impl<'a> Parser<'a> {
             Self::Triple
           }
           _ => {
-            // for-in and for-of loops must have an assignment target or variable declarator at the beginning of its header. We've already handled var decl before, so if it's for-in or for-of there must be a pattern now, followed by the keyword.
-            match p.pat(ctx) {
+            // for-in and for-of loops must have an assignment target or variable declarator at the beginning of its header. We've already handled var decl before, so if it's for-in or for-of there must be an expression/pattern now, followed by the keyword.
+            match p.expr(ctx, [TT::KeywordIn, TT::KeywordOf]) {
               Ok(_) => match p.peek().typ {
                 TT::KeywordIn => Self::In,
                 TT::KeywordOf => Self::Of,
