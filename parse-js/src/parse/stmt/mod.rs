@@ -47,7 +47,9 @@ impl<'a> Parser<'a> {
       TT::BraceOpen => self.block_stmt(ctx)?.into_wrapped(),
       TT::KeywordBreak => self.break_stmt(ctx)?.into_wrapped(),
       TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
-      TT::KeywordConst | TT::KeywordLet | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      TT::KeywordConst | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      // `let` is a contextual keyword - only treat it as a declaration if followed by a pattern start
+      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       TT::KeywordContinue => self.continue_stmt(ctx)?.into_wrapped(),
       TT::KeywordDebugger => self.debugger_stmt()?.into_wrapped(),
       TT::KeywordDo => self.do_while_stmt(ctx)?.into_wrapped(),
@@ -172,10 +174,15 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordFor)?;
       p.require(TT::ParenthesisOpen)?;
-      let init = match p.peek().typ {
-        TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
-        TT::Semicolon => ForTripleStmtInit::None,
-        _ => ForTripleStmtInit::Expr(p.expr(ctx, [TT::Semicolon])?),
+      let init = {
+        let [t0, t1] = p.peek_n();
+        match t0.typ {
+          TT::KeywordVar | TT::KeywordConst => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          // `let` is contextual - only a declaration if followed by a pattern
+          TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          TT::Semicolon => ForTripleStmtInit::None,
+          _ => ForTripleStmtInit::Expr(p.expr(ctx, [TT::Semicolon])?),
+        }
       };
       p.require(TT::Semicolon)?;
       let cond = (p.peek().typ != TT::Semicolon).then(|| p.expr(ctx, [TT::Semicolon])).transpose()?;
@@ -188,8 +195,15 @@ impl<'a> Parser<'a> {
   }
 
   pub fn for_in_of_lhs(&mut self, ctx: ParseCtx) -> SyntaxResult<ForInOfLhs> {
-    Ok(match self.peek().typ {
-      TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => ForInOfLhs::Decl({
+    let [t0, t1] = self.peek_n();
+    Ok(match t0.typ {
+      TT::KeywordVar | TT::KeywordConst => ForInOfLhs::Decl({
+        let mode = self.var_decl_mode()?;
+        let pat = self.pat_decl(ctx)?;
+        (mode, pat)
+      }),
+      // `let` is contextual - only a declaration if followed by a pattern
+      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
         let pat = self.pat_decl(ctx)?;
         (mode, pat)
@@ -248,13 +262,38 @@ impl<'a> Parser<'a> {
         };
         p.require(TT::ParenthesisOpen)?;
         Ok(match p.peek().typ {
-          TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => {
+          TT::KeywordVar | TT::KeywordConst => {
             p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
             match p.peek().typ {
               TT::KeywordIn => Self::In,
               TT::KeywordOf => Self::Of,
               // This should be an error (we expect a semicolon), but we'll let the for(;;) parser handle it for better error messages and simplicity here.
               _ => Self::Triple,
+            }
+          }
+          // `let` is a contextual keyword - it's only a declaration keyword when followed by a pattern.
+          // `let.x`, `let()`, `let[x]` where x is not a valid identifier are all expressions.
+          TT::KeywordLet => {
+            let [_, next_token] = p.peek_n::<2>();
+            let next = next_token.typ;
+            if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+              // Looks like a variable declaration
+              p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
+              match p.peek().typ {
+                TT::KeywordIn => Self::In,
+                TT::KeywordOf => Self::Of,
+                _ => Self::Triple,
+              }
+            } else {
+              // Not a declaration, treat as expression
+              match p.pat(ctx) {
+                Ok(_) => match p.peek().typ {
+                  TT::KeywordIn => Self::In,
+                  TT::KeywordOf => Self::Of,
+                  _ => Self::Triple,
+                }
+                Err(_) => Self::Triple,
+              }
             }
           }
           TT::Semicolon => {
