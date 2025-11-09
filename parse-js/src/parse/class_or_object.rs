@@ -147,13 +147,14 @@ impl<'a> Parser<'a> {
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
       p.require(TT::ParenthesisOpen)?;
-      let param = p.pat_decl(ctx)?;
-      p.require(TT::ParenthesisClose)?;
       // Setters are not generators or async, so yield/await can be used as identifiers
-      let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+      let setter_ctx = ctx.with_rules(ParsePatternRules {
         await_allowed: true,
         yield_allowed: true,
-      }))?.into();
+      });
+      let param = p.pat_decl(setter_ctx)?;
+      p.require(TT::ParenthesisClose)?;
+      let body = p.parse_func_block_body(setter_ctx)?.into();
       Ok(Func {
         arrow: false,
         async_: false,

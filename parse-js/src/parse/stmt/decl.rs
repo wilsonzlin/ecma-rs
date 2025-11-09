@@ -120,11 +120,13 @@ impl<'a> Parser<'a> {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("function name"), None));
       };
       let function = p.with_loc(|p| {
-        let parameters = p.func_params(ctx)?;
-        let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async && ctx.rules.await_allowed,
-          yield_allowed: !generator && ctx.rules.yield_allowed,
-        }))?.into();
+        // Parameters and body use the function's own context, not the parent's
+        let fn_ctx = ctx.with_rules(ParsePatternRules {
+          await_allowed: !is_async,
+          yield_allowed: !generator,
+        });
+        let parameters = p.func_params(fn_ctx)?;
+        let body = p.parse_func_block_body(fn_ctx)?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,

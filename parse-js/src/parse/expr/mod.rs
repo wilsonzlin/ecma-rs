@@ -202,12 +202,13 @@ impl<'a> Parser<'a> {
       let generator = p.consume_if(TT::Asterisk).is_match();
       let name = p.maybe_class_or_func_name(ctx);
       let func = p.with_loc(|p| {
-        let parameters = p.func_params(ctx)?;
-        let fn_body_ctx = ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async && ctx.rules.await_allowed,
-          yield_allowed: !generator && ctx.rules.yield_allowed,
+        // Parameters and body use the function's own context, not the parent's
+        let fn_ctx = ctx.with_rules(ParsePatternRules {
+          await_allowed: !is_async,
+          yield_allowed: !generator,
         });
-        let body = p.parse_func_block_body(fn_body_ctx)?.into();
+        let parameters = p.func_params(fn_ctx)?;
+        let body = p.parse_func_block_body(fn_ctx)?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,
