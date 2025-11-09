@@ -1,6 +1,6 @@
 use crate::{ast::{expr::{pat::{IdPat, Pat}, Expr, ImportExpr, ImportMeta}, import_export::{ExportName, ExportNames, ImportName, ImportNames}, node::Node, stmt::{decl::PatDecl, ExportDefaultExprStmt, ExportListStmt, ImportStmt, Stmt}}, error::{SyntaxErrorType, SyntaxResult}, lex::KEYWORDS_MAPPING, parse::stmt::decl::VarDeclParseMode, token::TT};
 
-use super::{expr::{lit::normalise_literal_string, pat::is_valid_pattern_identifier}, ParseCtx, Parser};
+use super::{expr::{Asi, lit::normalise_literal_string, pat::is_valid_pattern_identifier}, ParseCtx, Parser};
 
 impl<'a> Parser<'a> {
   /// Parses `target`, `target as alias`, `default as alias`, `"target" as alias`.
@@ -152,7 +152,8 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordExport)?;
       p.require(TT::KeywordDefault)?;
-      let expression = p.expr(ctx, [TT::Semicolon])?;
+      let mut asi = Asi::can();
+      let expression = p.expr_with_asi(ctx, [TT::Semicolon], &mut asi)?;
       Ok(ExportDefaultExprStmt { expression })
     })
   }
