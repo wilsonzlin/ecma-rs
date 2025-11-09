@@ -64,6 +64,14 @@ impl<'a> Parser<'a> {
       let mut declarators = Vec::new();
       loop {
         let pattern = p.pat_decl(ctx)?;
+
+        // TypeScript: type annotation
+        let type_annotation = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
+
         let mut asi = match parse_mode {
           VarDeclParseMode::Asi => Asi::can(),
           VarDeclParseMode::Leftmost => Asi::no(),
@@ -76,7 +84,7 @@ impl<'a> Parser<'a> {
           ))?;
         declarators.push(VarDeclarator {
           pattern,
-          type_annotation: None,
+          type_annotation,
           initializer,
         });
         match parse_mode {
@@ -178,21 +186,41 @@ impl<'a> Parser<'a> {
       if name.is_none() && !export_default {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("class name"), None));
       };
-      // Unlike functions, classes are scoped to their block.
-      let extends = if p.consume_if(TT::KeywordExtends).is_match() {
-        Some(p.expr(ctx, [TT::BraceOpen])?)
+
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
       } else {
         None
       };
+
+      // Unlike functions, classes are scoped to their block.
+      let extends = if p.consume_if(TT::KeywordExtends).is_match() {
+        Some(p.expr(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
+      } else {
+        None
+      };
+
+      // TypeScript: implements clause
+      let mut implements = Vec::new();
+      if p.consume_if(TT::KeywordImplements).is_match() {
+        loop {
+          implements.push(p.type_expr(ctx)?);
+          if !p.consume_if(TT::Comma).is_match() {
+            break;
+          }
+        }
+      }
+
       let members = p.class_body(ctx)?;
       Ok(ClassDecl {
         export,
         export_default,
         abstract_: false,
         name,
-        type_parameters: None,
+        type_parameters,
         extends,
-        implements: Vec::new(),
+        implements,
         members,
       })
     })

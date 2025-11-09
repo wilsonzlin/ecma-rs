@@ -272,13 +272,33 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordClass)?.loc;
       let name = p.maybe_class_or_func_name(ctx);
-      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr(ctx, [TT::BraceOpen]))?;
+
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
+      } else {
+        None
+      };
+
+      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+
+      // TypeScript: implements clause
+      let mut implements = Vec::new();
+      if p.consume_if(TT::KeywordImplements).is_match() {
+        loop {
+          implements.push(p.type_expr(ctx)?);
+          if !p.consume_if(TT::Comma).is_match() {
+            break;
+          }
+        }
+      }
+
       let members = p.class_body(ctx)?;
       Ok(ClassExpr {
         name,
-        type_parameters: None,
+        type_parameters,
         extends,
-        implements: Vec::new(),
+        implements,
         members,
       })
     })
