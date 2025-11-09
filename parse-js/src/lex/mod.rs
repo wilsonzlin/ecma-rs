@@ -579,9 +579,9 @@ fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
   contains_newline
 }
 
-fn lex_single_comment(lexer: &mut Lexer<'_>) {
-  // Consume `//`.
-  lexer.skip_expect(2);
+fn lex_single_comment(lexer: &mut Lexer<'_>, prefix: Match) {
+  // Consume the comment prefix (//, <!--, or -->).
+  lexer.skip_expect(prefix.len());
   // WARNING: Does not consider other line terminators allowed by spec.
   lexer.consume(lexer.through_char_or_end('\n'));
 }
@@ -664,12 +664,23 @@ fn lex_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> LexResult<TT> {
   // TODO
+  let start_pos = lexer.next();
+  let first_char = lexer.peek(0)?;
   lexer.consume(lexer.while_chars(&DIGIT));
+  let end_pos = lexer.next();
   if !lexer.consume(lexer.if_char('n')).is_empty() {
     return Ok(TT::LiteralBigInt);
   }
-  lexer.consume(lexer.if_char('.'));
-  lexer.consume(lexer.while_chars(&DIGIT));
+  // Check if this is a legacy octal: starts with 0, has more digits, and all digits are 0-7
+  let integer_part = &lexer[Loc(start_pos, end_pos)];
+  let is_legacy_octal = first_char == '0'
+    && integer_part.len() > 1
+    && integer_part.chars().all(|c| matches!(c, '0'..='7'));
+  // Consume '.' and fractional part if present (but not for legacy octals)
+  if lexer.peek_or_eof(0) == Some('.') && !is_legacy_octal {
+    lexer.consume(lexer.if_char('.'));
+    lexer.consume(lexer.while_chars(&DIGIT));
+  }
   if lexer
     .peek_or_eof(0)
     .filter(|&c| matches!(c, 'e' | 'E'))
@@ -903,24 +914,43 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
   };
 
   // Skip whitespace and comments before the next significant token.
+  // Track whether we're at the start of a line. We're at line start if:
+  // 1. We're at the very beginning of the source (position 0), OR
+  // 2. We encounter a line terminator in the INSIG loop
+  // Initially, we're only at line start if we're at position 0.
+  let mut at_line_start = lexer.next() == 0;
   let mut preceded_by_line_terminator = false;
   while let Ok((tt, mat)) = INSIG.find(&lexer) {
+    // Special case: --> is only a comment at the start of a line
+    // --> has length 3, check if it's at the start of a line
+    if tt == TT::CommentSingle && mat.len() == 3 && !at_line_start {
+      // Not at start of line, so don't treat as comment - break out
+      break;
+    }
     match tt {
       TT::LineTerminator => {
         lexer.consume(mat);
+        at_line_start = true;
         preceded_by_line_terminator = true;
       }
       TT::Whitespace => {
         lexer.consume(mat);
+        // Whitespace doesn't change whether we're at line start
       }
       TT::CommentMultiline => {
         let comment_has_line_terminator = lex_multiline_comment(lexer);
+        // Multiline comments are insignificant for determining line start.
+        // Only update at_line_start if the comment contains a line terminator.
+        if comment_has_line_terminator {
+          at_line_start = true;
+        }
         preceded_by_line_terminator |= comment_has_line_terminator;
       }
       TT::CommentSingle => {
         // A single-line comment always ends with a line terminator.
+        at_line_start = true;
         preceded_by_line_terminator = true;
-        lex_single_comment(lexer);
+        lex_single_comment(lexer, mat);
       }
       _ => unreachable!(),
     };
