@@ -549,6 +549,8 @@ static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
       (TT::Whitespace, "\u{FEFF}"),
       (TT::CommentMultiline, "/*"),
       (TT::CommentSingle, "//"),
+      (TT::CommentSingle, "<!--"),
+      (TT::CommentSingle, "-->"),
     ],
   )
 });
