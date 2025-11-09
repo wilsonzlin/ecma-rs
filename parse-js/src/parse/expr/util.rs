@@ -6,6 +6,16 @@ use crate::{ast::{class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey, Cl
 /// `{ a: [b] }` could be an object literal or object pattern. This function is useful for when a pattern was misinterpreted as a literal expression, without needing to rewind and reparse.
 pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
   let loc = node.loc;
+  // Check for member expressions first (without moving the value).
+  match node.stx.as_ref() {
+    Expr::Member(m) if !m.stx.optional_chaining => {
+      return Ok(Node::new(loc, Pat::AssignTarget(node)));
+    }
+    Expr::ComputedMember(m) if !m.stx.optional_chaining => {
+      return Ok(Node::new(loc, Pat::AssignTarget(node)));
+    }
+    _ => {}
+  }
   match *node.stx {
     Expr::LitArr(n) => {
       let LitArrExpr { elements } = *n.stx;
@@ -121,8 +131,14 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
     Expr::Id(n) => {
       Ok(Node::new(loc, IdPat { name: n.stx.name.clone() }).into_wrapped())
     }
-    // It's possible to encounter an IdPat e.g. `{ a: b = 1 } = x`, where `b = 1` was already parsed as an assignment.
+    // It's possible to encounter patterns already parsed e.g. `{a: [b] = 1}`, where `[b]` was already converted to a pattern.
     Expr::IdPat(n) => {
+      Ok(n.into_wrapped())
+    }
+    Expr::ArrPat(n) => {
+      Ok(n.into_wrapped())
+    }
+    Expr::ObjPat(n) => {
       Ok(n.into_wrapped())
     }
     _ => Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
