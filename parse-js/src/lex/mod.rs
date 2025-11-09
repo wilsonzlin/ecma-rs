@@ -474,6 +474,8 @@ static SIG: Lazy<PatternMatcher> = Lazy::new(|| {
   for c in ID_START_CHARSTR.chars() {
     patterns.push((TT::Identifier, c.to_string()));
   }
+  // Add backslash for Unicode escapes in identifiers
+  patterns.push((TT::Identifier, "\\".into()));
   // Add UTF-8 multi-byte sequences (for Unicode identifiers)
   // We detect the start of UTF-8 sequences by their byte patterns
   for b in 0..256u32 {
@@ -518,7 +520,6 @@ static ML_COMMENT: Lazy<PatternMatcher> = Lazy::new(|| {
 });
 
 static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
-  // WARNING: Does not consider Unicode whitespace allowed by spec.
   PatternMatcher::new::<&str>(
     true,
     vec![
@@ -528,6 +529,24 @@ static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
       (TT::Whitespace, "\x0b"),
       (TT::Whitespace, "\x0c"),
       (TT::Whitespace, "\x20"),
+      // Unicode whitespace
+      (TT::Whitespace, "\u{00A0}"),
+      (TT::Whitespace, "\u{1680}"),
+      (TT::Whitespace, "\u{2000}"),
+      (TT::Whitespace, "\u{2001}"),
+      (TT::Whitespace, "\u{2002}"),
+      (TT::Whitespace, "\u{2003}"),
+      (TT::Whitespace, "\u{2004}"),
+      (TT::Whitespace, "\u{2005}"),
+      (TT::Whitespace, "\u{2006}"),
+      (TT::Whitespace, "\u{2007}"),
+      (TT::Whitespace, "\u{2008}"),
+      (TT::Whitespace, "\u{2009}"),
+      (TT::Whitespace, "\u{200A}"),
+      (TT::Whitespace, "\u{202F}"),
+      (TT::Whitespace, "\u{205F}"),
+      (TT::Whitespace, "\u{3000}"),
+      (TT::Whitespace, "\u{FEFF}"),
       (TT::CommentMultiline, "/*"),
       (TT::CommentSingle, "//"),
     ],
@@ -565,25 +584,76 @@ fn lex_single_comment(lexer: &mut Lexer<'_>) {
   lexer.consume(lexer.through_char_or_end('\n'));
 }
 
+fn lex_unicode_escape(lexer: &mut Lexer<'_>) -> LexResult<()> {
+  // We're at '\', consume it
+  lexer.skip_expect(1);
+  // Expect 'u'
+  if lexer.peek(0)? != 'u' {
+    return Err(LexNotFound);
+  }
+  lexer.skip_expect(1);
+
+  // Check for \u{...} or \uXXXX
+  if lexer.peek_or_eof(0) == Some('{') {
+    // \u{XXXXX} format
+    lexer.skip_expect(1);
+    let checkpoint = lexer.checkpoint();
+    lexer.consume(lexer.while_chars(&DIGIT_HEX));
+    let consumed = lexer.next() - checkpoint.next;
+    if consumed == 0 {
+      return Err(LexNotFound);
+    }
+    if lexer.peek(0)? != '}' {
+      return Err(LexNotFound);
+    }
+    lexer.skip_expect(1);
+  } else {
+    // \uXXXX format - expect exactly 4 hex digits
+    for _ in 0..4 {
+      let c = lexer.peek(0)?;
+      if !DIGIT_HEX.has(c) {
+        return Err(LexNotFound);
+      }
+      lexer.skip_expect(1);
+    }
+  }
+  Ok(())
+}
+
 fn lex_identifier(
   lexer: &mut Lexer<'_>,
   mode: LexMode,
 ) -> TT {
-  // Consume starter.
+  // Consume starter (either a char or a Unicode escape)
   let starter = lexer.peek(0).unwrap();
-  lexer.skip_expect(starter.len_utf8());
+  if starter == '\\' {
+    if lex_unicode_escape(lexer).is_err() {
+      return TT::Invalid;
+    }
+  } else {
+    lexer.skip_expect(starter.len_utf8());
+  }
+
   loop {
+    // Try to consume regular identifier characters
     lexer.consume(lexer.while_chars(if mode == LexMode::JsxTag {
       &ID_CONTINUE_JSX
     } else {
       &ID_CONTINUE
     }));
-    // TODO We assume if it's not ASCII it's part of a UTF-8 byte sequence, and that sequence represents a valid JS identifier continue code point.
-    if let Some(c) = lexer.peek_or_eof(0).filter(|c| !c.is_ascii()) {
-      lexer.skip_expect(c.len_utf8());
-    } else {
-      break;
-    };
+
+    // Check for Unicode escape or UTF-8 multi-byte character
+    match lexer.peek_or_eof(0) {
+      Some('\\') => {
+        if lex_unicode_escape(lexer).is_err() {
+          break;
+        }
+      }
+      Some(c) if !c.is_ascii() => {
+        lexer.skip_expect(c.len_utf8());
+      }
+      _ => break,
+    }
   }
   TT::Identifier
 }
@@ -864,6 +934,14 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
   };
 
   lexer.drive_fallible(preceded_by_line_terminator, |lexer| {
+    // Check for non-ASCII identifier start (Unicode identifiers not in ASCII range)
+    if let Some(c) = lexer.peek_or_eof(0) {
+      if !c.is_ascii() {
+        // Non-ASCII character - assume it's an identifier
+        return Ok(lex_identifier(lexer, mode));
+      }
+    }
+
     SIG.find(lexer).and_then(|(tt, mut mat)| match tt {
       TT::Identifier => Ok(lex_identifier(lexer, mode)),
       TT::LiteralNumber => lex_bigint_or_number(lexer),

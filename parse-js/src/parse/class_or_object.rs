@@ -196,9 +196,13 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
     let [a, b, c, d] = self.peek_n();
     // Special case for computed keys: parse key first, then check what follows
-    if a.typ == TT::BracketOpen {
+    // Handle both [...] and *[...] (generator with computed key)
+    if a.typ == TT::BracketOpen || (a.typ == TT::Asterisk && b.typ == TT::BracketOpen) {
       let is_async = false;
-      let is_generator = false;
+      let is_generator = a.typ == TT::Asterisk;
+      if is_generator {
+        self.require(TT::Asterisk)?;
+      }
       let key = self.class_or_obj_key(ctx)?;
       return Ok(if self.peek().typ == TT::ParenthesisOpen {
         let method = self.with_loc(|p| {
