@@ -5,7 +5,7 @@ use crate::token::TT;
 use crate::token::TT::*;
 
 fn check<const N: usize>(code: &str, expecteds: [TT; N]) {
-  let mut lexer = Lexer::new(code.as_bytes());
+  let mut lexer = Lexer::new(code);
   for expected in expecteds {
     let t = lex_next(&mut lexer, LexMode::Standard);
     assert_eq!(t.typ, expected);

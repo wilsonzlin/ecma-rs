@@ -25,8 +25,6 @@ use crate::lex::LexMode;
 use crate::num::JsNumber;
 use crate::token::TT;
 use core::str::FromStr;
-use memchr::memchr;
-use std::str::from_utf8_unchecked;
 
 fn parse_radix(raw: &str, radix: u32) -> Result<f64, ()> {
   u64::from_str_radix(raw, radix)
@@ -54,106 +52,118 @@ pub fn normalise_literal_bigint(raw: &str) -> Option<String> {
   Some(raw.to_string())
 }
 
-pub fn normalise_literal_string_or_template_inner(mut raw: &[u8]) -> Option<String> {
-  let mut norm = Vec::new();
+pub fn normalise_literal_string_or_template_inner(mut raw: &str) -> Option<String> {
+  let mut norm = String::new();
   while !raw.is_empty() {
-    let Some(escape_pos) = memchr(b'\\', raw) else {
-      norm.extend_from_slice(raw);
+    let Some(escape_pos) = raw.find('\\') else {
+      norm.push_str(raw);
       break;
     };
-    norm.extend_from_slice(&raw[..escape_pos]);
+    norm.push_str(&raw[..escape_pos]);
     raw = &raw[escape_pos + 1..];
     // https://mathiasbynens.be/notes/javascript-escapes
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String#escape_sequences
     // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Template_literals#tagged_templates_and_escape_sequences
-    let mut tmp = [0u8; 4];
-    let (skip, add): (usize, &[u8]) = match raw[0] {
-      b'\n' => (1, b""),
-      b'b' => (1, b"\x08"),
-      b'f' => (1, b"\x0c"),
-      b'n' => (1, b"\n"),
-      b'r' => (1, b"\r"),
-      b't' => (1, b"\t"),
-      b'v' => (1, b"\x0b"),
-      b'0'..=b'7' => {
+    let first_char = raw.chars().next()?;
+    let (skip, add): (usize, &str) = match first_char {
+      '\n' => (1, ""),
+      'b' => (1, "\x08"),
+      'f' => (1, "\x0c"),
+      'n' => (1, "\n"),
+      'r' => (1, "\r"),
+      't' => (1, "\t"),
+      'v' => (1, "\x0b"),
+      '0'..='7' => {
         // Octal escape.
         let mut len = 1;
         if raw
-          .get(len)
-          .filter(|&c| (b'0'..=b'7').contains(c))
+          .chars()
+          .nth(len)
+          .filter(|&c| ('0'..='7').contains(&c))
           .is_some()
         {
           len += 1;
           if raw
-            .get(len)
-            .filter(|&c| (b'0'..=b'7').contains(c))
+            .chars()
+            .nth(len)
+            .filter(|&c| ('0'..='7').contains(&c))
             .is_some()
           {
             len += 1;
           };
         };
-        char::from_u32(
-          u32::from_str_radix(unsafe { from_utf8_unchecked(&raw[..len]) }, 8).unwrap(),
-        )
-        .unwrap()
-        .encode_utf8(&mut tmp);
-        (len, tmp.as_slice())
+        let octal_str = raw.chars().take(len).collect::<String>();
+        let cp = u32::from_str_radix(&octal_str, 8).unwrap();
+        let c = char::from_u32(cp).unwrap();
+        let char_str = c.to_string();
+        norm.push_str(&char_str);
+        raw = &raw[octal_str.len()..];
+        continue;
       }
-      b'x' => {
+      'x' => {
         // Hexadecimal escape.
-        if raw.len() < 3 || !raw[1].is_ascii_hexdigit() || !raw[2].is_ascii_hexdigit() {
+        if raw.chars().count() < 3 {
           return None;
         };
-        char::from_u32(
-          u32::from_str_radix(unsafe { from_utf8_unchecked(&raw[1..3]) }, 16).unwrap(),
-        )
-        .unwrap()
-        .encode_utf8(&mut tmp);
-        (3, tmp.as_slice())
-      }
-      b'u' => match raw.get(1) {
-        Some(b'{') => {
-          // Unicode code point escape.
-          let Some(end_pos) = memchr(b'}', raw) else {
-            return None;
-          };
-          if !(3..=8).contains(&end_pos) {
-            return None;
-          };
-          let cp =
-            u32::from_str_radix(unsafe { from_utf8_unchecked(&raw[2..end_pos]) }, 16).ok()?;
-          let c = char::from_u32(cp)?;
-          c.encode_utf8(&mut tmp);
-          (end_pos + 1, tmp.as_slice())
-        }
-        Some(_) => {
-          // Unicode escape.
-          if raw.len() < 5 {
-            return None;
-          };
-          let cp = u32::from_str_radix(unsafe { from_utf8_unchecked(&raw[1..5]) }, 16).ok()?;
-          let c = char::from_u32(cp)?;
-          c.encode_utf8(&mut tmp);
-          (5, tmp.as_slice())
-        }
-        None => {
+        let hex_chars: String = raw.chars().skip(1).take(2).collect();
+        if !hex_chars.chars().all(|c| c.is_ascii_hexdigit()) {
           return None;
+        };
+        let cp = u32::from_str_radix(&hex_chars, 16).unwrap();
+        let c = char::from_u32(cp).unwrap();
+        norm.push(c);
+        raw = &raw[3..];
+        continue;
+      }
+      'u' => {
+        let second_char = raw.chars().nth(1);
+        match second_char {
+          Some('{') => {
+            // Unicode code point escape.
+            let Some(end_pos) = raw.find('}') else {
+              return None;
+            };
+            if !(3..=8).contains(&end_pos) {
+              return None;
+            };
+            let hex_chars = &raw[2..end_pos];
+            let cp = u32::from_str_radix(hex_chars, 16).ok()?;
+            let c = char::from_u32(cp)?;
+            norm.push(c);
+            raw = &raw[end_pos + 1..];
+            continue;
+          }
+          Some(_) => {
+            // Unicode escape.
+            if raw.chars().count() < 5 {
+              return None;
+            };
+            let hex_chars: String = raw.chars().skip(1).take(4).collect();
+            let cp = u32::from_str_radix(&hex_chars, 16).ok()?;
+            let c = char::from_u32(cp)?;
+            norm.push(c);
+            raw = &raw[5..];
+            continue;
+          }
+          None => {
+            return None;
+          }
         }
-      },
-      c => (1, {
-        tmp[0] = c;
-        &tmp[..1]
-      }),
+      }
+      c => {
+        norm.push(c);
+        raw = &raw[c.len_utf8()..];
+        continue;
+      }
     };
-    norm.extend_from_slice(add);
+    norm.push_str(add);
     raw = &raw[skip..];
   }
-  // We return str instead of [u8] so that serialisation is easy and str methods are available.
-  Some(String::from_utf8(norm).unwrap())
+  Some(norm)
 }
 
 pub fn normalise_literal_string(raw: &str) -> Option<String> {
-  normalise_literal_string_or_template_inner(&raw.as_bytes()[1..raw.len() - 1])
+  normalise_literal_string_or_template_inner(&raw[1..raw.len() - 1])
 }
 
 impl<'a> Parser<'a> {
@@ -277,7 +287,7 @@ impl<'a> Parser<'a> {
 
   pub fn lit_regex(&mut self) -> SyntaxResult<Node<LitRegexExpr>> {
     self.with_loc(|p| {
-      let t = p.require(TT::LiteralRegex)?;
+      let t = p.require_with_mode(TT::LiteralRegex, LexMode::SlashIsRegex)?;
       // TODO Parse, validate, flags.
       let value = p.string(t.loc);
       Ok(LitRegexExpr { value })

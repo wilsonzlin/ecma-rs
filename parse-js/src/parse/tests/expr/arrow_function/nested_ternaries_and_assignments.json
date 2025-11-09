@@ -1,57 +1,55 @@
 {
-  "$t": "BinaryExpr",
+  "$t": "Binary",
   "left": {
-    "$t": "IdentifierPattern",
+    "$t": "IdPat",
     "name": "x"
   },
   "operator": "Assignment",
-  "parenthesised": false,
   "right": {
-    "$t": "ConditionalExpr",
+    "$t": "Cond",
     "alternate": {
-      "$t": "LiteralNumberExpr",
+      "$t": "LitNum",
       "value": 5.0
     },
     "consequent": {
-      "$t": "ArrowFunctionExpr",
-      "function": {
-        "$t": "Function",
+      "$t": "ArrowFunc",
+      "func": {
         "arrow": true,
         "async_": false,
         "body": {
-          "$t": "ConditionalExpr",
-          "alternate": {
-            "$t": "IdentifierExpr",
-            "name": "x"
-          },
-          "consequent": {
-            "$t": "IdentifierExpr",
-            "name": "x"
-          },
-          "parenthesised": false,
-          "test": {
-            "$t": "IdentifierExpr",
-            "name": "x"
+          "Expression": {
+            "$t": "Cond",
+            "alternate": {
+              "$t": "Id",
+              "name": "x"
+            },
+            "consequent": {
+              "$t": "Id",
+              "name": "x"
+            },
+            "test": {
+              "$t": "Id",
+              "name": "x"
+            }
           }
         },
         "generator": false,
         "parameters": [
           {
-            "$t": "ParamDecl",
             "default_value": null,
             "pattern": {
-              "$t": "IdentifierPattern",
-              "name": "x"
+              "pat": {
+                "$t": "Id",
+                "name": "x"
+              }
             },
             "rest": false
           }
         ]
-      },
-      "parenthesised": false
+      }
     },
-    "parenthesised": false,
     "test": {
-      "$t": "LiteralBooleanExpr",
+      "$t": "LitBool",
       "value": true
     }
   }

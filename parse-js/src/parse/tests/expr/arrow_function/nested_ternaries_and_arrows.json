@@ -1,115 +1,117 @@
 {
-  "$t": "ArrowFunctionExpr",
-  "function": {
-    "$t": "Function",
+  "$t": "ArrowFunc",
+  "func": {
     "arrow": true,
     "async_": false,
     "body": {
-      "$t": "ArrowFunctionExpr",
-      "function": {
-        "$t": "Function",
-        "arrow": true,
-        "async_": false,
-        "body": {
-          "$t": "ConditionalExpr",
-          "alternate": {
-            "$t": "LiteralNumberExpr",
-            "value": 5.0
-          },
-          "consequent": {
-            "$t": "ConditionalExpr",
-            "alternate": {
-              "$t": "LiteralNumberExpr",
-              "value": 4.0
-            },
-            "consequent": {
-              "$t": "LiteralNumberExpr",
-              "value": 3.0
-            },
-            "parenthesised": false,
-            "test": {
-              "$t": "CallExpr",
-              "arguments": [],
-              "callee": {
-                "$t": "ArrowFunctionExpr",
-                "function": {
-                  "$t": "Function",
-                  "arrow": true,
-                  "async_": false,
-                  "body": {
-                    "$t": "LiteralNumberExpr",
-                    "value": 2.0
-                  },
-                  "generator": false,
-                  "parameters": [
-                    {
-                      "$t": "ParamDecl",
-                      "default_value": null,
-                      "pattern": {
-                        "$t": "IdentifierPattern",
-                        "name": "y"
-                      },
-                      "rest": false
-                    }
-                  ]
-                },
-                "parenthesised": true
+      "Expression": {
+        "$t": "ArrowFunc",
+        "func": {
+          "arrow": true,
+          "async_": false,
+          "body": {
+            "Expression": {
+              "$t": "Cond",
+              "alternate": {
+                "$t": "LitNum",
+                "value": 5.0
               },
-              "optional_chaining": false,
-              "parenthesised": false
+              "consequent": {
+                "$t": "Cond",
+                "alternate": {
+                  "$t": "LitNum",
+                  "value": 4.0
+                },
+                "consequent": {
+                  "$t": "LitNum",
+                  "value": 3.0
+                },
+                "test": {
+                  "$t": "Call",
+                  "arguments": [],
+                  "callee": {
+                    "$t": "ArrowFunc",
+                    "func": {
+                      "arrow": true,
+                      "async_": false,
+                      "body": {
+                        "Expression": {
+                          "$t": "LitNum",
+                          "value": 2.0
+                        }
+                      },
+                      "generator": false,
+                      "parameters": [
+                        {
+                          "default_value": null,
+                          "pattern": {
+                            "pat": {
+                              "$t": "Id",
+                              "name": "y"
+                            }
+                          },
+                          "rest": false
+                        }
+                      ]
+                    }
+                  },
+                  "optional_chaining": false
+                }
+              },
+              "test": {
+                "$t": "LitNum",
+                "value": 1.0
+              }
             }
           },
-          "parenthesised": false,
-          "test": {
-            "$t": "LiteralNumberExpr",
-            "value": 1.0
-          }
-        },
-        "generator": false,
-        "parameters": [
-          {
-            "$t": "ParamDecl",
-            "default_value": null,
-            "pattern": {
-              "$t": "IdentifierPattern",
-              "name": "x"
-            },
-            "rest": false
-          }
-        ]
-      },
-      "parenthesised": false
+          "generator": false,
+          "parameters": [
+            {
+              "default_value": null,
+              "pattern": {
+                "pat": {
+                  "$t": "Id",
+                  "name": "x"
+                }
+              },
+              "rest": false
+            }
+          ]
+        }
+      }
     },
     "generator": false,
     "parameters": [
       {
-        "$t": "ParamDecl",
         "default_value": null,
         "pattern": {
-          "$t": "IdentifierPattern",
-          "name": "a"
+          "pat": {
+            "$t": "Id",
+            "name": "a"
+          }
         },
         "rest": false
       },
       {
-        "$t": "ParamDecl",
         "default_value": null,
         "pattern": {
-          "$t": "IdentifierPattern",
-          "name": "b"
+          "pat": {
+            "$t": "Id",
+            "name": "b"
+          }
         },
         "rest": false
       },
       {
-        "$t": "ParamDecl",
         "default_value": null,
         "pattern": {
-          "$t": "IdentifierPattern",
-          "name": "c"
+          "pat": {
+            "$t": "Id",
+            "name": "c"
+          }
         },
         "rest": false
       }
     ]
-  },
-  "parenthesised": false
+  }
 }

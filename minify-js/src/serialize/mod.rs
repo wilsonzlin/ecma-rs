@@ -92,19 +92,19 @@ pub static UNARY_OPERATOR_SYNTAX: Lazy<HashMap<OperatorName, &'static str>> = La
 });
 
 static TEMPLATE_LITERAL_ESCAPE_MAT: Lazy<AhoCorasick> = Lazy::new(|| AhoCorasick::new(&[
-  b"\\",
-  b"`",
-  b"$",
+  "\\",
+  "`",
+  "$",
 ]));
 
-const TEMPLATE_LITERAL_ESCAPE_REP: &[&[u8]] = &[b"\\\\", b"\\`", b"\\$"];
+const TEMPLATE_LITERAL_ESCAPE_REP: &[&str] = &["\\\\", "\\`", "\\$"];
 
 // Returns whether or not the value is a property.
 fn emit_class_or_object_member(
   out: &mut Vec<u8>,
   key: &ClassOrObjectMemberKey,
   value: &ClassOrObjectMemberValue,
-  value_delimiter: &'static [u8],
+  value_delimiter: &'static str,
 ) -> bool {
   let is_computed_key = match key {
     ClassOrObjectMemberKey::Computed(_) => true,
@@ -112,15 +112,15 @@ fn emit_class_or_object_member(
   };
   match value {
     ClassOrObjectMemberValue::Getter { .. } => {
-      out.extend_from_slice(b"get");
+      out.extend_from_slice("get".as_bytes());
       if !is_computed_key {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
       };
     }
     ClassOrObjectMemberValue::Setter { .. } => {
-      out.extend_from_slice(b"set");
+      out.extend_from_slice("set".as_bytes());
       if !is_computed_key {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
       };
     }
     ClassOrObjectMemberValue::Method {
@@ -131,12 +131,12 @@ fn emit_class_or_object_member(
         unreachable!();
       };
       if *async_ {
-        out.extend_from_slice(b"async");
+        out.extend_from_slice("async".as_bytes());
       }
       if *generator {
-        out.extend_from_slice(b"*");
+        out.extend_from_slice("*".as_bytes());
       } else if *async_ {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
       }
     }
     _ => {}
@@ -146,9 +146,9 @@ fn emit_class_or_object_member(
       out.extend_from_slice(name.as_bytes());
     }
     ClassOrObjectMemberKey::Computed(expr) => {
-      out.extend_from_slice(b"[");
+      out.extend_from_slice("[".as_bytes());
       emit_js(out, expr);
-      out.extend_from_slice(b"]");
+      out.extend_from_slice("]".as_bytes());
     }
   };
   match value {
@@ -156,7 +156,7 @@ fn emit_class_or_object_member(
       let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
         unreachable!();
       };
-      out.extend_from_slice(b"()");
+      out.extend_from_slice("()".as_bytes());
       emit_js(out, body);
     }
     ClassOrObjectMemberValue::Method {
@@ -165,21 +165,21 @@ fn emit_class_or_object_member(
       let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
         unreachable!();
       };
-      out.extend_from_slice(b"(");
+      out.extend_from_slice("(".as_bytes());
       emit_function_parameters(out, parameters.as_slice());
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
     ClassOrObjectMemberValue::Property { initializer } => {
       if let Some(v) = initializer {
-        out.extend_from_slice(value_delimiter);
+        out.extend_from_slice(value_delimiter.as_bytes());
         let is_comma = is_comma_expression(&v.stx);
         if is_comma {
-          out.extend_from_slice(b"(");
+          out.extend_from_slice("(".as_bytes());
         };
         emit_js(out, v);
         if is_comma {
-          out.extend_from_slice(b")");
+          out.extend_from_slice(")".as_bytes());
         };
       };
     }
@@ -187,9 +187,9 @@ fn emit_class_or_object_member(
       let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
         unreachable!();
       };
-      out.extend_from_slice(b"(");
+      out.extend_from_slice("(".as_bytes());
       emit_js(out, &parameters[0]);
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
   };
@@ -206,30 +206,30 @@ fn emit_class(
   extends: Option<&Node>,
   members: &[Node], // Always ClassMember.
 ) -> () {
-  out.extend_from_slice(b"class");
+  out.extend_from_slice("class".as_bytes());
   if let Some(n) = name {
-    out.extend_from_slice(b" ");
+    out.extend_from_slice(" ".as_bytes());
     emit_js(out, n);
   }
   if let Some(s) = extends {
-    out.extend_from_slice(b" extends ");
+    out.extend_from_slice(" extends ".as_bytes());
     emit_js(out, s);
   }
-  out.extend_from_slice(b"{");
+  out.extend_from_slice("{".as_bytes());
   let mut last_member_was_property = false;
   for (i, m) in members.iter().enumerate() {
     let Syntax::ClassMember { key, static_, value } = m.stx.as_ref() else {
       unreachable!();
     };
     if i > 0 && last_member_was_property {
-      out.extend_from_slice(b";");
+      out.extend_from_slice(";".as_bytes());
     }
     if *static_ {
-      out.extend_from_slice(b"static ");
+      out.extend_from_slice("static ".as_bytes());
     }
-    last_member_was_property = emit_class_or_object_member(out, key, value, b"=");
+    last_member_was_property = emit_class_or_object_member(out, key, value, "=");
   }
-  out.extend_from_slice(b"}");
+  out.extend_from_slice("}".as_bytes());
 }
 
 fn emit_import_or_export_statement_trailer(
@@ -239,42 +239,42 @@ fn emit_import_or_export_statement_trailer(
 ) -> () {
   match names {
     Some(ExportNames::All(alias)) => {
-      out.extend_from_slice(b"*");
+      out.extend_from_slice("*".as_bytes());
       if let Some(alias) = alias {
-        out.extend_from_slice(b"as ");
+        out.extend_from_slice("as ".as_bytes());
         emit_js(out, alias);
         if from.is_some() {
-          out.extend_from_slice(b" ");
+          out.extend_from_slice(" ".as_bytes());
         }
       };
     }
     Some(ExportNames::Specific(names)) => {
-      out.extend_from_slice(b"{");
+      out.extend_from_slice("{".as_bytes());
       for (i, e) in names.iter().enumerate() {
         if i > 0 {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         }
         out.extend_from_slice(e.target.as_bytes());
         // TODO Omit if identical to `target`.
-        out.extend_from_slice(b" as ");
+        out.extend_from_slice(" as ".as_bytes());
         emit_js(out, &e.alias);
       }
-      out.extend_from_slice(b"}");
+      out.extend_from_slice("}".as_bytes());
     }
     None => {}
   };
   if let Some(from) = from {
-    out.extend_from_slice(b"from\"");
+    out.extend_from_slice("from\"".as_bytes());
     // TODO Escape?
     out.extend_from_slice(from.as_bytes());
-    out.extend_from_slice(b"\"");
+    out.extend_from_slice("\"".as_bytes());
   };
 }
 
 fn emit_function_parameters(out: &mut Vec<u8>, params: &[Node]) {
   for (i, p) in params.iter().enumerate() {
     if i > 0 {
-      out.extend_from_slice(b",");
+      out.extend_from_slice(",".as_bytes());
     };
     emit_js(out, p);
   };
@@ -330,7 +330,7 @@ fn emit_statements(out: &mut Vec<u8>, statements: &[Node]) -> () {
         | Syntax::FunctionDecl { .. }
         | Syntax::SwitchStmt { .. }
         | Syntax::TryStmt { .. } => {}
-        _ => out.extend_from_slice(b";"),
+        _ => out.extend_from_slice(";".as_bytes()),
       }
     }
     emit_js(out, n);
@@ -338,7 +338,7 @@ fn emit_statements(out: &mut Vec<u8>, statements: &[Node]) -> () {
   }
   if let Some(n) = last_statement {
     if get_leaf_node_type(n) == LeafNodeType::EmptyStmt {
-      out.extend_from_slice(b";");
+      out.extend_from_slice(";".as_bytes());
     }
   }
 }
@@ -386,13 +386,13 @@ fn emit_js_under_operator(
     Syntax::TaggedTemplateExpr { function, parts } => {
       emit_js(out, &function);
       // TODO Combine with Syntax::LiteralTemplateExpr branch.
-      out.extend_from_slice(b"`");
+      out.extend_from_slice("`".as_bytes());
       for p in parts {
         match p {
           LiteralTemplatePart::Substitution(sub) => {
-            out.extend_from_slice(b"${");
+            out.extend_from_slice("${".as_bytes());
             emit_js(out, sub);
-            out.extend_from_slice(b"}");
+            out.extend_from_slice("}".as_bytes());
           }
           LiteralTemplatePart::String(str) => {
             // TODO Escape.
@@ -400,7 +400,7 @@ fn emit_js_under_operator(
           }
         }
       }
-      out.extend_from_slice(b"`");
+      out.extend_from_slice("`".as_bytes());
     }
     Syntax::LiteralBigIntExpr { value } => {
       out.extend_from_slice(value.as_bytes());
@@ -410,8 +410,8 @@ fn emit_js_under_operator(
     }
     Syntax::LiteralBooleanExpr { value } => {
       match *value {
-        true => out.extend_from_slice(b"!0"),
-        false => out.extend_from_slice(b"!1"),
+        true => out.extend_from_slice("!0".as_bytes()),
+        false => out.extend_from_slice("!1".as_bytes()),
       };
     }
     Syntax::LiteralNumberExpr { value } => {
@@ -420,21 +420,21 @@ fn emit_js_under_operator(
     }
     Syntax::LiteralStringExpr { value } => {
       // TODO Possibly not optimal, could use `'` or `"` instead.
-      out.extend_from_slice(b"`");
+      out.extend_from_slice("`".as_bytes());
       TEMPLATE_LITERAL_ESCAPE_MAT
         .stream_replace_all(value.as_bytes(), &mut *out, TEMPLATE_LITERAL_ESCAPE_REP)
         .unwrap();
-      out.extend_from_slice(b"`");
+      out.extend_from_slice("`".as_bytes());
     }
     Syntax::LiteralTemplateExpr { parts } => {
       // TODO Combine with Syntax::TaggedTemplateExpr branch.
-      out.extend_from_slice(b"`");
+      out.extend_from_slice("`".as_bytes());
       for p in parts {
         match p {
           LiteralTemplatePart::Substitution(sub) => {
-            out.extend_from_slice(b"${");
+            out.extend_from_slice("${".as_bytes());
             emit_js(out, sub);
-            out.extend_from_slice(b"}");
+            out.extend_from_slice("}".as_bytes());
           }
           LiteralTemplatePart::String(str) => {
             // TODO Escape.
@@ -442,25 +442,25 @@ fn emit_js_under_operator(
           }
         }
       }
-      out.extend_from_slice(b"`");
+      out.extend_from_slice("`".as_bytes());
     }
     Syntax::VarDecl {
       mode, declarators, ..
     } => {
       // We split all `export var/let/const` into a declaration and an export at the end, so drop the `export`.
       out.extend_from_slice(match mode {
-        VarDeclMode::Const => b"const",
-        VarDeclMode::Let => b"let",
-        VarDeclMode::Var => b"var",
+        VarDeclMode::Const => "const".as_bytes(),
+        VarDeclMode::Let => "let".as_bytes(),
+        VarDeclMode::Var => "var".as_bytes(),
       });
-      out.extend_from_slice(b" ");
+      out.extend_from_slice(" ".as_bytes());
       for (i, decl) in declarators.iter().enumerate() {
         if i > 0 {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         }
         emit_js(out, &decl.pattern);
         if let Some(expr) = &decl.initializer {
-          out.extend_from_slice(b"=");
+          out.extend_from_slice("=".as_bytes());
           // This is only really done for the Comma operator, which is the only operator below Assignment.
           let operator = &OPERATORS[&OperatorName::Assignment];
           emit_js_under_operator(out, expr, Some(operator.precedence));
@@ -471,44 +471,44 @@ fn emit_js_under_operator(
       out.extend_from_slice(name.as_bytes());
     }
     Syntax::ArrayPattern { elements, rest } => {
-      out.extend_from_slice(b"[");
+      out.extend_from_slice("[".as_bytes());
       for (i, e) in elements.iter().enumerate() {
         if i > 0 {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         }
         if let Some(e) = e {
           emit_js(out, &e.target);
           if let Some(v) = &e.default_value {
-            out.extend_from_slice(b"=");
+            out.extend_from_slice("=".as_bytes());
             emit_js(out, v);
           }
         };
       }
       if let Some(r) = rest {
         if !elements.is_empty() {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         }
-        out.extend_from_slice(b"...");
+        out.extend_from_slice("...".as_bytes());
         emit_js(out, r);
       };
-      out.extend_from_slice(b"]");
+      out.extend_from_slice("]".as_bytes());
     }
     Syntax::ObjectPattern { properties, rest } => {
-      out.extend_from_slice(b"{");
+      out.extend_from_slice("{".as_bytes());
       for (i, e) in properties.iter().enumerate() {
         if i > 0 {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         }
         emit_js(out, e);
       }
       if let Some(r) = rest {
         if !properties.is_empty() {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         }
-        out.extend_from_slice(b"...");
+        out.extend_from_slice("...".as_bytes());
         emit_js(out, r);
       };
-      out.extend_from_slice(b"}");
+      out.extend_from_slice("}".as_bytes());
     }
     Syntax::ClassOrFunctionName { name } => {
       out.extend_from_slice(name.as_bytes());
@@ -524,7 +524,7 @@ fn emit_js_under_operator(
       // The exception is for unnamed functions and classes.
       if *export && name.is_none() {
         debug_assert!(*export_default);
-        out.extend_from_slice(b"export default ");
+        out.extend_from_slice("export default ".as_bytes());
       }
       emit_class(out, name.as_ref(), extends.as_ref(), members.as_slice());
     }
@@ -541,23 +541,23 @@ fn emit_js_under_operator(
       // The exception is for unnamed functions and classes.
       if *export && name.is_none() {
         debug_assert!(*export_default);
-        out.extend_from_slice(b"export default ");
+        out.extend_from_slice("export default ".as_bytes());
       }
       if *async_ {
-        out.extend_from_slice(b"async ");
+        out.extend_from_slice("async ".as_bytes());
       }
-      out.extend_from_slice(b"function");
+      out.extend_from_slice("function".as_bytes());
       if *generator {
-        out.extend_from_slice(b"*");
+        out.extend_from_slice("*".as_bytes());
       } else if name.is_some() {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
       };
       if let Some(name) = name {
         emit_js(out, name);
       }
-      out.extend_from_slice(b"(");
+      out.extend_from_slice("(".as_bytes());
       emit_function_parameters(out, parameters.as_slice());
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
     Syntax::ParamDecl {
@@ -566,11 +566,11 @@ fn emit_js_under_operator(
       default_value,
     } => {
       if *rest {
-        out.extend_from_slice(b"...");
+        out.extend_from_slice("...".as_bytes());
       };
       emit_js(out, pattern);
       if let Some(v) = default_value {
-        out.extend_from_slice(b"=");
+        out.extend_from_slice("=".as_bytes());
         emit_js(out, v);
       }
     }
@@ -584,10 +584,10 @@ fn emit_js_under_operator(
       // See FunctionExpr.
       // TODO Omit parentheses if possible.
       if *parenthesised {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       }
       if *async_ {
-        out.extend_from_slice(b"async");
+        out.extend_from_slice("async".as_bytes());
       }
       let can_omit_parentheses =
         !async_
@@ -608,13 +608,13 @@ fn emit_js_under_operator(
             _ => false,
           };
       if !can_omit_parentheses {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       };
       emit_function_parameters(out, parameters.as_slice());
       if !can_omit_parentheses {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       };
-      out.extend_from_slice(b"=>");
+      out.extend_from_slice("=>".as_bytes());
       let must_parenthesise_body = match &body.stx {
         expr if is_comma_expression(expr) => true,
         // `{a: b}.b`, `{a: b} + 1`, etc. need to be wrapped.
@@ -625,15 +625,15 @@ fn emit_js_under_operator(
         },
       };
       if must_parenthesise_body {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       };
       emit_js(out, body);
       if must_parenthesise_body {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       };
       // TODO Omit parentheses if possible.
       if *parenthesised {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       };
     }
     Syntax::BinaryExpr {
@@ -652,7 +652,7 @@ fn emit_js_under_operator(
         _ => false,
       };
       if must_parenthesise {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       };
       emit_js_under_operator(out, left, Some(operator.precedence));
       out.extend_from_slice(
@@ -665,13 +665,13 @@ fn emit_js_under_operator(
         OperatorName::Addition | OperatorName::Subtraction => {
           // Prevent potential confict with following unary operator e.g. `a+ +b` => `a++b`.
           // TODO Omit when possible.
-          out.extend_from_slice(b" ");
+          out.extend_from_slice(" ".as_bytes());
         }
         _ => {}
       };
       emit_js_under_operator(out, right, Some(operator.precedence));
       if must_parenthesise {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       };
     }
     Syntax::CallExpr {
@@ -690,23 +690,23 @@ fn emit_js_under_operator(
         _ => false,
       };
       if must_parenthesise {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       }
       emit_js_under_operator(out, callee, Some(operator.precedence));
       if *optional_chaining {
-        out.extend_from_slice(b"?.");
+        out.extend_from_slice("?.".as_bytes());
       }
-      out.extend_from_slice(b"(");
+      out.extend_from_slice("(".as_bytes());
       for (i, a) in arguments.iter().enumerate() {
         if i > 0 {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         }
         emit_js(out, a);
       }
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       // TODO Omit parentheses if possible.
       if must_parenthesise {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       }
     }
     Syntax::ConditionalExpr {
@@ -722,15 +722,15 @@ fn emit_js_under_operator(
         _ => false,
       };
       if must_parenthesise {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       };
       emit_js_under_operator(out, test, Some(operator.precedence));
-      out.extend_from_slice(b"?");
+      out.extend_from_slice("?".as_bytes());
       emit_js_under_operator(out, consequent, Some(operator.precedence));
-      out.extend_from_slice(b":");
+      out.extend_from_slice(":".as_bytes());
       emit_js_under_operator(out, alternate, Some(operator.precedence));
       if must_parenthesise {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       };
     }
     Syntax::FunctionExpr {
@@ -744,45 +744,45 @@ fn emit_js_under_operator(
       // We need to keep parentheses to prevent function expressions from being misinterpreted as a function declaration, which cannot be part of an expression e.g. IIFE.
       // TODO Omit parentheses if possible.
       if *parenthesised {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       }
       if *async_ {
-        out.extend_from_slice(b"async ");
+        out.extend_from_slice("async ".as_bytes());
       }
-      out.extend_from_slice(b"function");
+      out.extend_from_slice("function".as_bytes());
       if *generator {
-        out.extend_from_slice(b"*");
+        out.extend_from_slice("*".as_bytes());
       };
       if let Some(name) = name {
         if !generator {
-          out.extend_from_slice(b" ");
+          out.extend_from_slice(" ".as_bytes());
         };
         emit_js(out, name);
       };
-      out.extend_from_slice(b"(");
+      out.extend_from_slice("(".as_bytes());
       emit_function_parameters(out, parameters.as_slice());
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
       // TODO Omit parentheses if possible.
       if *parenthesised {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       }
     }
     Syntax::IdentifierExpr { name } => {
       out.extend_from_slice(name.as_bytes());
     }
     Syntax::ImportExpr { module } => {
-      out.extend_from_slice(b"import(");
+      out.extend_from_slice("import(".as_bytes());
       emit_js(out, module);
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
     }
     Syntax::ImportMeta {} => {
-      out.extend_from_slice(b"import.meta");
+      out.extend_from_slice("import.meta".as_bytes());
     }
     Syntax::JsxAttribute { name, value } => {
       emit_js(out, name);
       if let Some(value) = value {
-        out.extend_from_slice(b"=");
+        out.extend_from_slice("=".as_bytes());
         emit_js(out, value);
       }
     }
@@ -791,86 +791,86 @@ fn emit_js_under_operator(
       attributes,
       children,
     } => {
-      out.extend_from_slice(b"<");
+      out.extend_from_slice("<".as_bytes());
       if let Some(name) = name {
         emit_js(out, name);
       }
       for attr in attributes {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
         emit_js(out, attr);
       }
       if children.is_empty() {
-        out.extend_from_slice(b"/>");
+        out.extend_from_slice("/>".as_bytes());
       } else {
-        out.extend_from_slice(b">");
+        out.extend_from_slice(">".as_bytes());
         for child in children {
           emit_js(out, child);
         }
-        out.extend_from_slice(b"</");
+        out.extend_from_slice("</".as_bytes());
         if let Some(name) = name {
           emit_js(out, name);
         }
-        out.extend_from_slice(b">");
+        out.extend_from_slice(">".as_bytes());
       }
     }
     Syntax::JsxExpressionContainer { value } => {
-      out.extend_from_slice(b"{");
+      out.extend_from_slice("{".as_bytes());
       emit_js(out, value);
-      out.extend_from_slice(b"}");
+      out.extend_from_slice("}".as_bytes());
     }
     Syntax::JsxMemberExpression { base, path } => {
       emit_js(out, base);
       for c in path {
-        out.extend_from_slice(b".");
+        out.extend_from_slice(".".as_bytes());
         out.extend_from_slice(c.as_bytes());
       }
     }
     Syntax::JsxName { namespace, name } => {
       if let Some(namespace) = namespace {
         out.extend_from_slice(namespace.as_bytes());
-        out.extend_from_slice(b":");
+        out.extend_from_slice(":".as_bytes());
       }
       out.extend_from_slice(name.as_bytes());
     }
     Syntax::JsxSpreadAttribute { value } => {
-      out.extend_from_slice(b"{...");
+      out.extend_from_slice("{...".as_bytes());
       emit_js(out, value);
-      out.extend_from_slice(b"}");
+      out.extend_from_slice("}".as_bytes());
     }
     Syntax::JsxText { value } => {
       out.extend_from_slice(value.as_bytes());
     }
     Syntax::LiteralArrayExpr { elements } => {
-      out.extend_from_slice(b"[");
+      out.extend_from_slice("[".as_bytes());
       for (i, e) in elements.iter().enumerate() {
         if i > 0 {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         };
         match e {
           ArrayElement::Single(expr) => {
             emit_js(out, expr);
           }
           ArrayElement::Rest(expr) => {
-            out.extend_from_slice(b"...");
+            out.extend_from_slice("...".as_bytes());
             emit_js(out, expr);
           }
           ArrayElement::Empty => {}
         };
       }
-      out.extend_from_slice(b"]");
+      out.extend_from_slice("]".as_bytes());
     }
     Syntax::LiteralObjectExpr { members } => {
-      out.extend_from_slice(b"{");
+      out.extend_from_slice("{".as_bytes());
       for (i, e) in members.iter().enumerate() {
         if i > 0 {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         }
         emit_js(out, e);
       }
-      out.extend_from_slice(b"}");
+      out.extend_from_slice("}".as_bytes());
     }
     Syntax::LiteralNull {} => {
-      out.extend_from_slice(b"null");
+      out.extend_from_slice("null".as_bytes());
     }
     Syntax::UnaryExpr {
       parenthesised,
@@ -884,12 +884,12 @@ fn emit_js_under_operator(
         _ => false,
       };
       if must_parenthesise {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       };
       out.extend_from_slice(UNARY_OPERATOR_SYNTAX.get(operator_name).unwrap().as_bytes());
       emit_js_under_operator(out, argument, Some(operator.precedence));
       if must_parenthesise {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       };
     }
     Syntax::UnaryPostfixExpr {
@@ -904,39 +904,39 @@ fn emit_js_under_operator(
         _ => false,
       };
       if must_parenthesise {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       };
       emit_js_under_operator(out, argument, Some(operator.precedence));
       out.extend_from_slice(match operator_name {
-        OperatorName::PostfixDecrement => b"--",
-        OperatorName::PostfixIncrement => b"++",
+        OperatorName::PostfixDecrement => "--".as_bytes(),
+        OperatorName::PostfixIncrement => "++".as_bytes(),
         _ => unreachable!(),
       });
       if must_parenthesise {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       };
     }
     Syntax::BlockStmt { body } => {
-      out.extend_from_slice(b"{");
+      out.extend_from_slice("{".as_bytes());
       emit_statements(out, body.as_slice());
-      out.extend_from_slice(b"}");
+      out.extend_from_slice("}".as_bytes());
     }
     Syntax::BreakStmt { label } => {
-      out.extend_from_slice(b"break");
+      out.extend_from_slice("break".as_bytes());
       if let Some(label) = label {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
         out.extend_from_slice(label.as_bytes());
       };
     }
     Syntax::ContinueStmt { label } => {
-      out.extend_from_slice(b"continue");
+      out.extend_from_slice("continue".as_bytes());
       if let Some(label) = label {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
         out.extend_from_slice(label.as_bytes());
       };
     }
     Syntax::DebuggerStmt {} => {
-      out.extend_from_slice(b"debugger");
+      out.extend_from_slice("debugger".as_bytes());
     }
     Syntax::ComputedMemberExpr {
       optional_chaining,
@@ -950,18 +950,18 @@ fn emit_js_under_operator(
         Some(OPERATORS[&OperatorName::ComputedMemberAccess].precedence),
       );
       if *optional_chaining {
-        out.extend_from_slice(b"?.");
+        out.extend_from_slice("?.".as_bytes());
       };
-      out.extend_from_slice(b"[");
+      out.extend_from_slice("[".as_bytes());
       emit_js(out, member);
-      out.extend_from_slice(b"]");
+      out.extend_from_slice("]".as_bytes());
     }
     Syntax::ExportDefaultExprStmt { expression } => {
-      out.extend_from_slice(b"export default ");
+      out.extend_from_slice("export default ".as_bytes());
       emit_js(out, expression);
     }
     Syntax::ExportListStmt { names, from } => {
-      out.extend_from_slice(b"export");
+      out.extend_from_slice("export".as_bytes());
       emit_import_or_export_statement_trailer(out, Some(names), from.as_ref());
     }
     Syntax::ExpressionStmt { expression } => {
@@ -972,76 +972,76 @@ fn emit_js_under_operator(
       consequent,
       alternate,
     } => {
-      out.extend_from_slice(b"if(");
+      out.extend_from_slice("if(".as_bytes());
       emit_js(out, test);
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, consequent);
       if let Some(alternate) = alternate {
         if get_leaf_node_type(consequent) == LeafNodeType::Block {
           // Do nothing.
         } else {
-          out.extend_from_slice(b";");
+          out.extend_from_slice(";".as_bytes());
         };
-        out.extend_from_slice(b"else");
+        out.extend_from_slice("else".as_bytes());
         if let Syntax::BlockStmt { .. } = alternate.stx.as_ref() {
           // Do nothing.
         } else {
-          out.extend_from_slice(b" ");
+          out.extend_from_slice(" ".as_bytes());
         };
         emit_js(out, alternate);
       };
     }
     Syntax::ForStmt { init, condition, post, body } => {
-      out.extend_from_slice(b"for");
-      out.extend_from_slice(b"(");
+      out.extend_from_slice("for".as_bytes());
+      out.extend_from_slice("(".as_bytes());
       match init {
         ForInit::None => {}
         ForInit::Expression(n) | ForInit::Declaration(n) => emit_js(out, n),
       };
-      out.extend_from_slice(b";");
+      out.extend_from_slice(";".as_bytes());
       if let Some(n) = condition {
         emit_js(out, n);
       };
-      out.extend_from_slice(b";");
+      out.extend_from_slice(";".as_bytes());
       if let Some(n) = post {
         emit_js(out, n);
       };
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
     Syntax::ForInStmt { decl_mode, pat, rhs, body } => {
-      out.extend_from_slice(b"for");
-      out.extend_from_slice(b"(");
+      out.extend_from_slice("for".as_bytes());
+      out.extend_from_slice("(".as_bytes());
       if let Some(decl_mode) = decl_mode {
         out.extend_from_slice(match decl_mode {
-          VarDeclMode::Const => b"const",
-          VarDeclMode::Let => b"let",
-          VarDeclMode::Var => b"var",
+          VarDeclMode::Const => "const".as_bytes(),
+          VarDeclMode::Let => "let".as_bytes(),
+          VarDeclMode::Var => "var".as_bytes(),
         });
       };
       emit_js(out, pat);
-      out.extend_from_slice(b" in ");
+      out.extend_from_slice(" in ".as_bytes());
       emit_js(out, rhs);
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
     Syntax::ForOfStmt { await_, decl_mode, pat, rhs, body } => {
-      out.extend_from_slice(b"for");
+      out.extend_from_slice("for".as_bytes());
       if *await_ {
-        out.extend_from_slice(b" await");
+        out.extend_from_slice(" await".as_bytes());
       }
-      out.extend_from_slice(b"(");
+      out.extend_from_slice("(".as_bytes());
       if let Some(decl_mode) = decl_mode {
         out.extend_from_slice(match decl_mode {
-          VarDeclMode::Const => b"const",
-          VarDeclMode::Let => b"let",
-          VarDeclMode::Var => b"var",
+          VarDeclMode::Const => "const".as_bytes(),
+          VarDeclMode::Let => "let".as_bytes(),
+          VarDeclMode::Var => "var".as_bytes(),
         });
       };
       emit_js(out, pat);
-      out.extend_from_slice(b" of ");
+      out.extend_from_slice(" of ".as_bytes());
       emit_js(out, rhs);
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
     Syntax::ImportStmt {
@@ -1049,31 +1049,31 @@ fn emit_js_under_operator(
       names,
       module,
     } => {
-      out.extend_from_slice(b"import");
+      out.extend_from_slice("import".as_bytes());
       if let Some(default) = default {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
         emit_js(out, default);
         if names.is_some() {
-          out.extend_from_slice(b",");
+          out.extend_from_slice(",".as_bytes());
         } else {
-          out.extend_from_slice(b" ");
+          out.extend_from_slice(" ".as_bytes());
         };
       };
       emit_import_or_export_statement_trailer(out, names.as_ref(), Some(module));
     }
     Syntax::ReturnStmt { value } => {
-      out.extend_from_slice(b"return");
+      out.extend_from_slice("return".as_bytes());
       if let Some(value) = value {
         // TODO Omit space if possible.
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
         emit_js(out, value);
       };
     }
     Syntax::ThisExpr {} => {
-      out.extend_from_slice(b"this");
+      out.extend_from_slice("this".as_bytes());
     }
     Syntax::ThrowStmt { value } => {
-      out.extend_from_slice(b"throw ");
+      out.extend_from_slice("throw ".as_bytes());
       emit_js(out, value);
     }
     Syntax::TopLevel { body } => {
@@ -1084,57 +1084,57 @@ fn emit_js_under_operator(
       catch,
       finally,
     } => {
-      out.extend_from_slice(b"try");
+      out.extend_from_slice("try".as_bytes());
       emit_js(out, wrapped);
       if let Some(c) = catch {
         emit_js(out, c);
       }
       if let Some(f) = finally {
-        out.extend_from_slice(b"finally");
+        out.extend_from_slice("finally".as_bytes());
         emit_js(out, f);
       };
     }
     Syntax::WhileStmt { condition, body } => {
-      out.extend_from_slice(b"while(");
+      out.extend_from_slice("while(".as_bytes());
       emit_js(out, condition);
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
     Syntax::DoWhileStmt { condition, body } => {
-      out.extend_from_slice(b"do");
+      out.extend_from_slice("do".as_bytes());
       if let Syntax::BlockStmt { .. } = body.stx.as_ref() {
         // Do nothing.
       } else {
-        out.extend_from_slice(b" ");
+        out.extend_from_slice(" ".as_bytes());
       };
       emit_js(out, body);
       if get_leaf_node_type(body) == LeafNodeType::Block {
         // Do nothing.
       } else {
-        out.extend_from_slice(b";");
+        out.extend_from_slice(";".as_bytes());
       };
-      out.extend_from_slice(b"while(");
+      out.extend_from_slice("while(".as_bytes());
       emit_js(out, condition);
-      out.extend_from_slice(b")");
+      out.extend_from_slice(")".as_bytes());
     }
     Syntax::SwitchStmt { test, branches } => {
-      out.extend_from_slice(b"switch(");
+      out.extend_from_slice("switch(".as_bytes());
       emit_js(out, test);
-      out.extend_from_slice(b"){");
+      out.extend_from_slice("){".as_bytes());
       for (i, b) in branches.iter().enumerate() {
         if i > 0 {
-          out.extend_from_slice(b";");
+          out.extend_from_slice(";".as_bytes());
         };
         emit_js(out, b);
       }
-      out.extend_from_slice(b"}");
+      out.extend_from_slice("}".as_bytes());
     }
     Syntax::CatchBlock { parameter, body } => {
-      out.extend_from_slice(b"catch");
+      out.extend_from_slice("catch".as_bytes());
       if let Some(p) = parameter {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
         emit_js(out, p);
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       }
       for stmt in body {
         emit_js(out, stmt);
@@ -1144,12 +1144,12 @@ fn emit_js_under_operator(
       match case {
         Some(case) => {
           // TODO Omit space if possible.
-          out.extend_from_slice(b"case ");
+          out.extend_from_slice("case ".as_bytes());
           emit_js(out, case);
-          out.extend_from_slice(b":");
+          out.extend_from_slice(":".as_bytes());
         }
         None => {
-          out.extend_from_slice(b"default:");
+          out.extend_from_slice("default:".as_bytes());
         }
       }
       emit_statements(out, body.as_slice());
@@ -1165,30 +1165,30 @@ fn emit_js_under_operator(
           out.extend_from_slice(name.as_bytes());
         }
         ClassOrObjectMemberKey::Computed(expr) => {
-          out.extend_from_slice(b"[");
+          out.extend_from_slice("[".as_bytes());
           emit_js(out, expr);
-          out.extend_from_slice(b"]");
+          out.extend_from_slice("]".as_bytes());
         }
       };
       if !*shorthand {
-        out.extend_from_slice(b":");
+        out.extend_from_slice(":".as_bytes());
         emit_js(out, target);
       };
       if let Some(v) = default_value {
-        out.extend_from_slice(b"=");
+        out.extend_from_slice("=".as_bytes());
         emit_js(out, v);
       };
     }
     Syntax::ObjectMember { typ } => {
       match typ {
         ObjectMemberType::Valued { key, value } => {
-          emit_class_or_object_member(out, key, value, b":");
+          emit_class_or_object_member(out, key, value, ":");
         }
         ObjectMemberType::Shorthand { identifier } => {
           emit_js(out, identifier);
         }
         ObjectMemberType::Rest { value } => {
-          out.extend_from_slice(b"...");
+          out.extend_from_slice("...".as_bytes());
           emit_js(out, value);
         }
       };
@@ -1212,7 +1212,7 @@ fn emit_js_under_operator(
         _ => false,
       };
       if must_parenthesise {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       };
       emit_js_under_operator(out, left, Some(operator.precedence));
       out.extend_from_slice(
@@ -1223,7 +1223,7 @@ fn emit_js_under_operator(
       );
       out.extend_from_slice(right.as_bytes());
       if must_parenthesise {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       };
     }
     Syntax::ClassExpr {
@@ -1235,27 +1235,27 @@ fn emit_js_under_operator(
       // We need to keep parentheses to prevent class expressions from being misinterpreted as a class declaration, which cannot be part of an expression.
       // TODO Omit parentheses if possible.
       if *parenthesised {
-        out.extend_from_slice(b"(");
+        out.extend_from_slice("(".as_bytes());
       }
       emit_class(out, name.as_ref(), extends.as_ref(), members.as_slice());
       // TODO Omit parentheses if possible.
       if *parenthesised {
-        out.extend_from_slice(b")");
+        out.extend_from_slice(")".as_bytes());
       }
     }
     Syntax::LabelStmt { name, statement } => {
       out.extend_from_slice(name.as_bytes());
-      out.extend_from_slice(b":");
+      out.extend_from_slice(":".as_bytes());
       emit_js(out, statement);
     }
     Syntax::CallArg { spread, value } => {
       if *spread {
-        out.extend_from_slice(b"...");
+        out.extend_from_slice("...".as_bytes());
       }
       emit_js(out, value);
     }
     Syntax::SuperExpr {} => {
-      out.extend_from_slice(b"super");
+      out.extend_from_slice("super".as_bytes());
     }
     _ => todo!()
   };

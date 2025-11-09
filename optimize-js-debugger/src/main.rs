@@ -32,7 +32,7 @@ pub async fn handle_post_compile(
   } else {
     TopLevelMode::Module
   };
-  let mut top_level_node = parse(source.as_bytes()).expect("parse input");
+  let mut top_level_node = parse(&source).expect("parse input");
   compute_symbols(&mut top_level_node, top_level_mode);
   let Program {
     functions,

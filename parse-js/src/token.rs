@@ -160,7 +160,7 @@ pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   set.insert(TT::KeywordStatic);
   set
 });
-pub static UNRESERVED_KEYWORD_STRS: Lazy<HashSet<&'static [u8]>> = Lazy::new(|| {
+pub static UNRESERVED_KEYWORD_STRS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
   UNRESERVED_KEYWORDS.iter().map(|tt| *KEYWORDS_MAPPING.get(tt).unwrap()).collect()
 });
 

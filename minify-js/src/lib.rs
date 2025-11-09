@@ -13,12 +13,12 @@ use reconstruct::reconstruct_ast_from_program;
 pub use symbol_js::TopLevelMode;
 use symbol_js::compute_symbols;
 
-/// Minifies UTF-8 JavaScript code, represented as an array of bytes.
+/// Minifies UTF-8 JavaScript code.
 ///
 /// # Arguments
 ///
 /// * `top_level_mode` - How to parse the provided code.
-/// * `source` - A slice of bytes representing the source code to minify.
+/// * `source` - A string slice representing the source code to minify.
 /// * `output` - Destination to write minified output JavaScript code.
 ///
 /// # Examples
@@ -26,14 +26,14 @@ use symbol_js::compute_symbols;
 /// ```
 /// use minify_js::{Session, TopLevelMode, minify};
 ///
-/// let mut code: &[u8] = b"const main = () => { let my_first_variable = 1; };";
+/// let mut code: &str = "const main = () => { let my_first_variable = 1; };";
 /// let mut out = Vec::new();
 /// minify(TopLevelMode::Global, code, &mut out).unwrap();
 /// assert_eq!(out.as_slice(), b"const main=()=>{let a=1}");
 /// ```
 pub fn minify(
   top_level_mode: TopLevelMode,
-  source: &[u8],
+  source: &str,
   output: &mut Vec<u8>,
 ) -> Result<(), MinifyError> {
   let mut top_level_node = parse(source).map_err(MinifyError::Syntax)?;

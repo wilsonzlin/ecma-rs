@@ -6,7 +6,7 @@ use super::Parser;
 
 #[test]
 fn test_parser() {
-  let lexer = Lexer::new(b"let x = /a/ / 1;");
+  let lexer = Lexer::new("let x = /a/ / 1;");
   let mut p = Parser::new(lexer);
   // Initial state.
   let cp = p.checkpoint();

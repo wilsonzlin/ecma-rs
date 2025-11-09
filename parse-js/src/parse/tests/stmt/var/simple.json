@@ -3,19 +3,23 @@
   "declarators": [
     {
       "initializer": {
-        "$t": "LiteralNumberExpr",
+        "$t": "LitNum",
         "value": 1.0
       },
       "pattern": {
-        "$t": "IdentifierPattern",
-        "name": "a"
+        "pat": {
+          "$t": "Id",
+          "name": "a"
+        }
       }
     },
     {
       "initializer": null,
       "pattern": {
-        "$t": "IdentifierPattern",
-        "name": "b"
+        "pat": {
+          "$t": "Id",
+          "name": "b"
+        }
       }
     }
   ],

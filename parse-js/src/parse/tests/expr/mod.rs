@@ -6,7 +6,7 @@ use crate::token::TT;
 use crate::util::test::evaluate_test_input_files;
 use serde_json::Value;
 
-fn parse_expr_and_serialize(input: Vec<u8>) -> Value {
+fn parse_expr_and_serialize(input: String) -> Value {
   let mut parser = Parser::new(Lexer::new(&input));
   let ctx = ParseCtx {
     rules: ParsePatternRules {

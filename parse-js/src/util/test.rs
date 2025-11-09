@@ -9,7 +9,7 @@ use std::fs::read_dir;
 use std::fs::File;
 use std::io::Read;
 
-pub fn evaluate_test_input_files<T: Fn(Vec<u8>) -> Value>(dir_in_src: &str, tester: T) {
+pub fn evaluate_test_input_files<T: Fn(String) -> Value>(dir_in_src: &str, tester: T) {
   let base_dir = format!("{}/src/{}", env!("CARGO_MANIFEST_DIR"), dir_in_src);
   for f_typ in read_dir(&base_dir).unwrap() {
     let f_typ = f_typ.unwrap();
@@ -24,8 +24,9 @@ pub fn evaluate_test_input_files<T: Fn(Vec<u8>) -> Value>(dir_in_src: &str, test
             .unwrap()
             .read_to_end(&mut input)
             .unwrap();
+          let input_str = String::from_utf8(input).unwrap();
           println!("Testing {}/{}...", typ, name);
-          let actual = tester(input);
+          let actual = tester(input_str);
           let json_out_path = format!("{}/{}/{}on", base_dir, typ, name);
           let expected: Value =
             serde_json::from_reader(File::open(&json_out_path).unwrap()).unwrap();

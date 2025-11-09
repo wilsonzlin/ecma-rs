@@ -51,7 +51,7 @@ impl<'a> Parser<'a> {
         }),
         path,
       }))
-    } else if !self.bytes(start)[0].is_ascii_lowercase() {
+    } else if !self.bytes(start).chars().next().unwrap().is_ascii_lowercase() {
       // User-defined component.
       JsxElemName::Id(Node::new(start, IdExpr {
         name: self.string(start),
