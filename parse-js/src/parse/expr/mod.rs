@@ -24,6 +24,7 @@ use crate::ast::expr::Expr;
 use crate::ast::expr::FuncExpr;
 use crate::ast::expr::IdExpr;
 use crate::ast::expr::MemberExpr;
+use crate::ast::expr::NewTarget;
 use crate::ast::expr::SuperExpr;
 use crate::ast::expr::TaggedTemplateExpr;
 use crate::ast::expr::ThisExpr;
@@ -260,11 +261,15 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<Node<Expr>> {
     let [t0, t1] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard]);
     // Handle unary operators before operand.
+    // Special case: `new.target` should not be treated as `new` operator
     if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t0.typ).filter(|operator| {
       // TODO Is this correct? Should it be possible to use as operator or keyword depending on whether there is an operand following?
       (operator.name != OperatorName::Await && operator.name != OperatorName::Yield)
         || (operator.name == OperatorName::Await && !ctx.rules.await_allowed)
         || (operator.name == OperatorName::Yield && !ctx.rules.yield_allowed)
+    }).filter(|operator| {
+      // Don't treat `new` as operator if followed by `.` (for new.target)
+      !(operator.name == OperatorName::New && t1.typ == TT::Dot)
     }) {
       return Ok(self.with_loc(|p| {
         p.consume_with_mode(LexMode::SlashIsRegex);
@@ -327,6 +332,7 @@ impl<'a> Parser<'a> {
         TT::ParenthesisOpen => self.import_call(ctx)?.into_wrapped(),
         _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("import expression"))),
       },
+      TT::KeywordNew if t1.typ == TT::Dot => self.new_target()?.into_wrapped(),
       TT::KeywordSuper => self.super_expr()?.into_wrapped(),
       TT::KeywordThis => self.this_expr()?.into_wrapped(),
       TT::LiteralBigInt => self.lit_bigint()?.into_wrapped(),
@@ -511,6 +517,18 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordThis)?;
       Ok(ThisExpr {}.into())
+    })
+  }
+
+  pub fn new_target(&mut self) -> SyntaxResult<Node<NewTarget>> {
+    self.with_loc(|p| {
+      p.require(TT::KeywordNew)?;
+      p.require(TT::Dot)?;
+      let prop = p.require(TT::Identifier)?;
+      if p.str(prop.loc) != "target" {
+        return Err(prop.error(SyntaxErrorType::ExpectedSyntax("`target` property")));
+      };
+      Ok(NewTarget {}.into())
     })
   }
 }
