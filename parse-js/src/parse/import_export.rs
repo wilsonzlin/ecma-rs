@@ -71,7 +71,7 @@ impl<'a> Parser<'a> {
         p.require(TT::KeywordAs)?;
         let alias = p.id_pat_decl(ctx)?;
         Some(ImportNames::All(alias))
-      } else {
+      } else if p.peek().typ == TT::BraceOpen {
         p.require(TT::BraceOpen)?;
         let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
           let (target, alias) = p.import_or_export_name(ctx)?;
@@ -80,8 +80,14 @@ impl<'a> Parser<'a> {
           Ok(ImportName { importable: target, alias })
         })?;
         Some(ImportNames::Specific(names))
+      } else {
+        // No names - side-effect only import like `import "foo"`
+        None
       };
-      p.require(TT::KeywordFrom)?;
+      // For side-effect imports (import "foo"), there's no `from` keyword
+      if default.is_some() || names.is_some() {
+        p.require(TT::KeywordFrom)?;
+      }
       let module = p.lit_str_val()?;
       p.require(TT::Semicolon)?;
       Ok(ImportStmt {
