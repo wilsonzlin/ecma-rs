@@ -152,17 +152,22 @@ impl<'a> Parser<'a> {
         await_allowed: true,
         yield_allowed: true,
       });
-      let param = p.pat_decl(setter_ctx)?;
+      let pattern = p.pat_decl(setter_ctx)?;
+      let default_value = p.consume_if(TT::Equals)
+        .and_then(|| {
+          p.expr(setter_ctx, [TT::ParenthesisClose])
+        })?;
+      let param_loc = pattern.loc;
       p.require(TT::ParenthesisClose)?;
       let body = p.parse_func_block_body(setter_ctx)?.into();
       Ok(Func {
         arrow: false,
         async_: false,
         generator: false,
-        parameters: vec![Node::new(param.loc, ParamDecl {
+        parameters: vec![Node::new(param_loc, ParamDecl {
           rest: false,
-          pattern: param,
-          default_value: None,
+          pattern,
+          default_value,
         })],
         body,
       })
@@ -218,8 +223,25 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
     let [a, b, c, d] = self.peek_n();
     // Special case for computed keys: parse key first, then check what follows
-    // Handle both [...] and *[...] (generator with computed key)
-    if a.typ == TT::BracketOpen || (a.typ == TT::Asterisk && b.typ == TT::BracketOpen) {
+    // Handle: [...], *[...], get [...], set [...]
+    if a.typ == TT::BracketOpen
+      || (a.typ == TT::Asterisk && b.typ == TT::BracketOpen)
+      || (a.typ == TT::KeywordGet && b.typ == TT::BracketOpen)
+      || (a.typ == TT::KeywordSet && b.typ == TT::BracketOpen) {
+      // Check if this is a getter or setter with computed key
+      let is_getter = a.typ == TT::KeywordGet;
+      let is_setter = a.typ == TT::KeywordSet;
+      if is_getter || is_setter {
+        // Don't consume get/set here - the getter/setter functions will do it
+        if is_getter {
+          let (key, val) = self.class_or_obj_getter(ctx)?;
+          return Ok((key, val.into()));
+        } else {
+          let (key, val) = self.class_or_obj_setter(ctx)?;
+          return Ok((key, val.into()));
+        }
+      }
+      // Otherwise it's a regular method or property
       let is_async = false;
       let is_generator = a.typ == TT::Asterisk;
       if is_generator {

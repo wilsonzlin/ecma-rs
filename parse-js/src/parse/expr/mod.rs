@@ -200,7 +200,13 @@ impl<'a> Parser<'a> {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
       p.require(TT::KeywordFunction)?;
       let generator = p.consume_if(TT::Asterisk).is_match();
-      let name = p.maybe_class_or_func_name(ctx);
+      // Function name is always parsed with yield/await allowed as identifiers,
+      // even for generator/async functions (the function can be named "yield" or "await")
+      let name_ctx = ctx.with_rules(ParsePatternRules {
+        await_allowed: true,
+        yield_allowed: true,
+      });
+      let name = p.maybe_class_or_func_name(name_ctx);
       let func = p.with_loc(|p| {
         // Parameters and body use the function's own context, not the parent's
         let fn_ctx = ctx.with_rules(ParsePatternRules {
