@@ -105,6 +105,7 @@ impl PatternMatcher {
   }
 }
 
+#[derive(Debug)]
 struct LexNotFound;
 
 type LexResult<T> = Result<T, LexNotFound>;
@@ -473,6 +474,8 @@ static SIG: Lazy<PatternMatcher> = Lazy::new(|| {
   for c in ID_START_CHARSTR.chars() {
     patterns.push((TT::Identifier, c.to_string()));
   }
+  // Add backslash for Unicode escapes in identifiers
+  patterns.push((TT::Identifier, "\\".into()));
   // Add UTF-8 multi-byte sequences (for Unicode identifiers)
   // We detect the start of UTF-8 sequences by their byte patterns
   for b in 0..256u32 {
@@ -517,18 +520,39 @@ static ML_COMMENT: Lazy<PatternMatcher> = Lazy::new(|| {
 });
 
 static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
-  // WARNING: Does not consider Unicode whitespace allowed by spec.
   PatternMatcher::new::<&str>(
     true,
     vec![
       (TT::LineTerminator, "\r"),
       (TT::LineTerminator, "\n"),
+      (TT::LineTerminator, "\u{2028}"),  // Line Separator
+      (TT::LineTerminator, "\u{2029}"),  // Paragraph Separator
       (TT::Whitespace, "\x09"),
       (TT::Whitespace, "\x0b"),
       (TT::Whitespace, "\x0c"),
       (TT::Whitespace, "\x20"),
+      // Unicode whitespace
+      (TT::Whitespace, "\u{00A0}"),
+      (TT::Whitespace, "\u{1680}"),
+      (TT::Whitespace, "\u{2000}"),
+      (TT::Whitespace, "\u{2001}"),
+      (TT::Whitespace, "\u{2002}"),
+      (TT::Whitespace, "\u{2003}"),
+      (TT::Whitespace, "\u{2004}"),
+      (TT::Whitespace, "\u{2005}"),
+      (TT::Whitespace, "\u{2006}"),
+      (TT::Whitespace, "\u{2007}"),
+      (TT::Whitespace, "\u{2008}"),
+      (TT::Whitespace, "\u{2009}"),
+      (TT::Whitespace, "\u{200A}"),
+      (TT::Whitespace, "\u{202F}"),
+      (TT::Whitespace, "\u{205F}"),
+      (TT::Whitespace, "\u{3000}"),
+      (TT::Whitespace, "\u{FEFF}"),
       (TT::CommentMultiline, "/*"),
       (TT::CommentSingle, "//"),
+      (TT::CommentSingle, "<!--"),
+      (TT::CommentSingle, "-->"),
     ],
   )
 });
@@ -545,7 +569,7 @@ fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
       .unwrap_or_else(|_| (TT::EOF, Match(lexer.remaining())));
     lexer.consume(mat);
     match tt {
-      TT::CommentMultiline | TT::EOF => {
+      TT::CommentMultilineEnd | TT::EOF => {
         break;
       }
       TT::LineTerminator => {
@@ -557,30 +581,83 @@ fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
   contains_newline
 }
 
-fn lex_single_comment(lexer: &mut Lexer<'_>) {
-  // Consume `//`.
-  lexer.skip_expect(2);
+fn lex_single_comment(lexer: &mut Lexer<'_>, prefix: Match) {
+  // Consume the comment prefix (//, <!--, or -->).
+  lexer.skip_expect(prefix.len());
   // WARNING: Does not consider other line terminators allowed by spec.
   lexer.consume(lexer.through_char_or_end('\n'));
+}
+
+fn lex_unicode_escape(lexer: &mut Lexer<'_>) -> LexResult<()> {
+  // We're at '\', consume it
+  lexer.skip_expect(1);
+  // Expect 'u'
+  if lexer.peek(0)? != 'u' {
+    return Err(LexNotFound);
+  }
+  lexer.skip_expect(1);
+
+  // Check for \u{...} or \uXXXX
+  if lexer.peek_or_eof(0) == Some('{') {
+    // \u{XXXXX} format
+    lexer.skip_expect(1);
+    let checkpoint = lexer.checkpoint();
+    lexer.consume(lexer.while_chars(&DIGIT_HEX));
+    let consumed = lexer.next() - checkpoint.next;
+    if consumed == 0 {
+      return Err(LexNotFound);
+    }
+    if lexer.peek(0)? != '}' {
+      return Err(LexNotFound);
+    }
+    lexer.skip_expect(1);
+  } else {
+    // \uXXXX format - expect exactly 4 hex digits
+    for _ in 0..4 {
+      let c = lexer.peek(0)?;
+      if !DIGIT_HEX.has(c) {
+        return Err(LexNotFound);
+      }
+      lexer.skip_expect(1);
+    }
+  }
+  Ok(())
 }
 
 fn lex_identifier(
   lexer: &mut Lexer<'_>,
   mode: LexMode,
 ) -> TT {
-  // Consume starter.
-  lexer.skip_expect(1);
+  // Consume starter (either a char or a Unicode escape)
+  let starter = lexer.peek(0).unwrap();
+  if starter == '\\' {
+    if lex_unicode_escape(lexer).is_err() {
+      return TT::Invalid;
+    }
+  } else {
+    lexer.skip_expect(starter.len_utf8());
+  }
+
   loop {
+    // Try to consume regular identifier characters
     lexer.consume(lexer.while_chars(if mode == LexMode::JsxTag {
       &ID_CONTINUE_JSX
     } else {
       &ID_CONTINUE
     }));
-    // TODO We assume if it's not ASCII it's part of a UTF-8 byte sequence, and that sequence represents a valid JS identifier continue code point.
-    if lexer.peek_or_eof(0).filter(|c| !c.is_ascii()).is_none() {
-      break;
-    };
-    lexer.skip_expect(1);
+
+    // Check for Unicode escape or UTF-8 multi-byte character
+    match lexer.peek_or_eof(0) {
+      Some('\\') => {
+        if lex_unicode_escape(lexer).is_err() {
+          break;
+        }
+      }
+      Some(c) if !c.is_ascii() => {
+        lexer.skip_expect(c.len_utf8());
+      }
+      _ => break,
+    }
   }
   TT::Identifier
 }
@@ -589,12 +666,23 @@ fn lex_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> LexResult<TT> {
   // TODO
+  let start_pos = lexer.next();
+  let first_char = lexer.peek(0)?;
   lexer.consume(lexer.while_chars(&DIGIT));
+  let end_pos = lexer.next();
   if !lexer.consume(lexer.if_char('n')).is_empty() {
     return Ok(TT::LiteralBigInt);
   }
-  lexer.consume(lexer.if_char('.'));
-  lexer.consume(lexer.while_chars(&DIGIT));
+  // Check if this is a legacy octal: starts with 0, has more digits, and all digits are 0-7
+  let integer_part = &lexer[Loc(start_pos, end_pos)];
+  let is_legacy_octal = first_char == '0'
+    && integer_part.len() > 1
+    && integer_part.chars().all(|c| matches!(c, '0'..='7'));
+  // Consume '.' and fractional part if present (but not for legacy octals)
+  if lexer.peek_or_eof(0) == Some('.') && !is_legacy_octal {
+    lexer.consume(lexer.if_char('.'));
+    lexer.consume(lexer.while_chars(&DIGIT));
+  }
   if lexer
     .peek_or_eof(0)
     .filter(|&c| matches!(c, 'e' | 'E'))
@@ -648,18 +736,20 @@ fn lex_private_member(
 ) -> LexResult<TT> {
   // Include the `#` in the token.
   lexer.skip_expect(1);
-  if !ID_START.has(lexer.peek(0)?) {
+  let starter = lexer.peek(0)?;
+  if !ID_START.has(starter) {
     return Ok(TT::Invalid);
   };
-  lexer.skip_expect(1);
+  lexer.skip_expect(starter.len_utf8());
   // TODO This is copied from lex_identifier.
   loop {
     lexer.consume(lexer.while_chars(&ID_CONTINUE));
     // TODO We assume if it's not ASCII it's part of a UTF-8 byte sequence, and that sequence represents a valid JS identifier continue code point.
-    if lexer.peek_or_eof(0).filter(|c| !c.is_ascii()).is_none() {
+    if let Some(c) = lexer.peek_or_eof(0).filter(|c| !c.is_ascii()) {
+      lexer.skip_expect(c.len_utf8());
+    } else {
       break;
     };
-    lexer.skip_expect(1);
   }
   Ok(TT::PrivateMember)
 }
@@ -706,16 +796,50 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   lexer.skip_expect(quote.len_utf8());
   let mut invalid = false;
   loop {
-    // TODO Does not consider other line terminators allowed by spec.
-    lexer.consume(lexer.while_not_3_chars('\\', '\n', quote));
+    // Look for backslash, line terminators, or closing quote
+    lexer.consume(lexer.while_not_3_chars('\\', '\r', quote));
+    // Also check for \n and Unicode line separators
+    if let Ok(c) = lexer.peek(0) {
+      if c == '\n' || c == '\u{2028}' || c == '\u{2029}' {
+        // Bare line terminator without backslash - invalid
+        invalid = true;
+        lexer.skip_expect(c.len_utf8());
+        continue;
+      }
+    }
     match lexer.peek(0)? {
       '\\' => {
-        lexer.consume(lexer.n(2)?);
+        // Consume the backslash
+        lexer.skip_expect(1);
+        // Check if next character is a line terminator (line continuation)
+        if let Ok(next_char) = lexer.peek(0) {
+          match next_char {
+            '\r' => {
+              // Consume \r, and if followed by \n, consume that too (CRLF)
+              lexer.skip_expect(1);
+              if lexer.peek(0).ok() == Some('\n') {
+                lexer.skip_expect(1);
+              }
+            }
+            '\n' | '\u{2028}' | '\u{2029}' => {
+              // Line continuation
+              lexer.skip_expect(next_char.len_utf8());
+            }
+            _ => {
+              // Regular escape sequence
+              lexer.skip_expect(next_char.len_utf8());
+            }
+          }
+        }
       }
-      '\n' => {
-        // Mark as invalid but continue consuming to find the closing quote
+      '\r' => {
+        // Bare \r without backslash - invalid
         invalid = true;
-        lexer.skip_expect('\n'.len_utf8());
+        lexer.skip_expect(1);
+        // Also consume \n if it follows (CRLF)
+        if lexer.peek(0).ok() == Some('\n') {
+          lexer.skip_expect(1);
+        }
       }
       c if c == quote => {
         lexer.skip_expect(c.len_utf8());
@@ -740,7 +864,12 @@ pub fn lex_template_string_continue(
     lexer.consume(lexer.while_not_3_chars('\\', '`', '$'));
     match lexer.peek(0)? {
       '\\' => {
-        lexer.consume(lexer.n(2)?);
+        // Consume the backslash
+        lexer.skip_expect(1);
+        // Consume the next character (which may be multi-byte UTF-8)
+        if let Ok(next_char) = lexer.peek(0) {
+          lexer.skip_expect(next_char.len_utf8());
+        }
       }
       '`' => {
         ended = true;
@@ -787,24 +916,43 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
   };
 
   // Skip whitespace and comments before the next significant token.
+  // Track whether we're at the start of a line. We're at line start if:
+  // 1. We're at the very beginning of the source (position 0), OR
+  // 2. We encounter a line terminator in the INSIG loop
+  // Initially, we're only at line start if we're at position 0.
+  let mut at_line_start = lexer.next() == 0;
   let mut preceded_by_line_terminator = false;
   while let Ok((tt, mat)) = INSIG.find(&lexer) {
+    // Special case: --> is only a comment at the start of a line
+    // --> has length 3, check if it's at the start of a line
+    if tt == TT::CommentSingle && mat.len() == 3 && !at_line_start {
+      // Not at start of line, so don't treat as comment - break out
+      break;
+    }
     match tt {
       TT::LineTerminator => {
         lexer.consume(mat);
+        at_line_start = true;
         preceded_by_line_terminator = true;
       }
       TT::Whitespace => {
         lexer.consume(mat);
+        // Whitespace doesn't change whether we're at line start
       }
       TT::CommentMultiline => {
         let comment_has_line_terminator = lex_multiline_comment(lexer);
+        // Multiline comments are insignificant for determining line start.
+        // Only update at_line_start if the comment contains a line terminator.
+        if comment_has_line_terminator {
+          at_line_start = true;
+        }
         preceded_by_line_terminator |= comment_has_line_terminator;
       }
       TT::CommentSingle => {
         // A single-line comment always ends with a line terminator.
+        at_line_start = true;
         preceded_by_line_terminator = true;
-        lex_single_comment(lexer);
+        lex_single_comment(lexer, mat);
       }
       _ => unreachable!(),
     };
@@ -820,6 +968,14 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
   };
 
   lexer.drive_fallible(preceded_by_line_terminator, |lexer| {
+    // Check for non-ASCII identifier start (Unicode identifiers not in ASCII range)
+    if let Some(c) = lexer.peek_or_eof(0) {
+      if !c.is_ascii() {
+        // Non-ASCII character - assume it's an identifier
+        return Ok(lex_identifier(lexer, mode));
+      }
+    }
+
     SIG.find(lexer).and_then(|(tt, mut mat)| match tt {
       TT::Identifier => Ok(lex_identifier(lexer, mode)),
       TT::LiteralNumber => lex_bigint_or_number(lexer),

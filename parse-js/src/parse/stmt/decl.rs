@@ -84,7 +84,7 @@ impl<'a> Parser<'a> {
               break;
             }
             let t = p.peek();
-            if t.preceded_by_line_terminator && t.typ != TT::Comma {
+            if t.typ == TT::EOF || t.typ == TT::BraceClose || (t.preceded_by_line_terminator && t.typ != TT::Comma) {
               break;
             };
             p.require(TT::Comma)?;
@@ -114,17 +114,25 @@ impl<'a> Parser<'a> {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
       let start = p.require(TT::KeywordFunction)?.loc;
       let generator = p.consume_if(TT::Asterisk).is_match();
-      let name = p.maybe_class_or_func_name(ctx);
+      // Function name is always parsed with yield/await allowed as identifiers,
+      // even for generator/async functions (the function can be named "yield" or "await")
+      let name_ctx = ctx.with_rules(ParsePatternRules {
+        await_allowed: true,
+        yield_allowed: true,
+      });
+      let name = p.maybe_class_or_func_name(name_ctx);
       // The name can only be omitted in default exports.
       if name.is_none() && !export_default {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("function name"), None));
       };
       let function = p.with_loc(|p| {
-        let parameters = p.func_params(ctx)?;
-        let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async && ctx.rules.await_allowed,
-          yield_allowed: !generator && ctx.rules.yield_allowed,
-        }))?.into();
+        // Parameters and body use the function's own context, not the parent's
+        let fn_ctx = ctx.with_rules(ParsePatternRules {
+          await_allowed: !is_async,
+          yield_allowed: !generator,
+        });
+        let parameters = p.func_params(fn_ctx)?;
+        let body = p.parse_func_block_body(fn_ctx)?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,

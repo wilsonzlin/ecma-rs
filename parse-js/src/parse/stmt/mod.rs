@@ -30,6 +30,7 @@ use crate::ast::stmt::SwitchStmt;
 use crate::ast::stmt::ThrowStmt;
 use crate::ast::stmt::TryStmt;
 use crate::ast::stmt::WhileStmt;
+use crate::ast::stmt::WithStmt;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::token::TT;
@@ -40,13 +41,16 @@ impl<'a> Parser<'a> {
   }
 
   pub fn stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
-    let [t0, t1] = self.peek_n();
+    let [t0, t1, t2] = self.peek_n();
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match t0.typ {
       TT::BraceOpen => self.block_stmt(ctx)?.into_wrapped(),
       TT::KeywordBreak => self.break_stmt(ctx)?.into_wrapped(),
       TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
-      TT::KeywordConst | TT::KeywordLet | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      TT::KeywordConst | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      // `let` is a contextual keyword - only treat it as a declaration if followed by a pattern start
+      // But if it's followed by `identifier :`, it's a labeled statement, not a declaration
+      TT::KeywordLet if (t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules)) && !(is_valid_pattern_identifier(t1.typ, ctx.rules) && t2.typ == TT::Colon) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       TT::KeywordContinue => self.continue_stmt(ctx)?.into_wrapped(),
       TT::KeywordDebugger => self.debugger_stmt()?.into_wrapped(),
       TT::KeywordDo => self.do_while_stmt(ctx)?.into_wrapped(),
@@ -60,6 +64,7 @@ impl<'a> Parser<'a> {
       TT::KeywordThrow => self.throw_stmt(ctx)?.into_wrapped(),
       TT::KeywordTry => self.try_stmt(ctx)?.into_wrapped(),
       TT::KeywordWhile => self.while_stmt(ctx)?.into_wrapped(),
+      TT::KeywordWith => self.with_stmt(ctx)?.into_wrapped(),
       TT::Semicolon => self.empty_stmt()?.into_wrapped(),
       t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_wrapped(),
       _ => self.expr_stmt(ctx)?.into_wrapped(),
@@ -170,10 +175,15 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordFor)?;
       p.require(TT::ParenthesisOpen)?;
-      let init = match p.peek().typ {
-        TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
-        TT::Semicolon => ForTripleStmtInit::None,
-        _ => ForTripleStmtInit::Expr(p.expr(ctx, [TT::Semicolon])?),
+      let init = {
+        let [t0, t1] = p.peek_n();
+        match t0.typ {
+          TT::KeywordVar | TT::KeywordConst => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          // `let` is contextual - only a declaration if followed by a pattern
+          TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          TT::Semicolon => ForTripleStmtInit::None,
+          _ => ForTripleStmtInit::Expr(p.expr(ctx, [TT::Semicolon])?),
+        }
       };
       p.require(TT::Semicolon)?;
       let cond = (p.peek().typ != TT::Semicolon).then(|| p.expr(ctx, [TT::Semicolon])).transpose()?;
@@ -186,13 +196,27 @@ impl<'a> Parser<'a> {
   }
 
   pub fn for_in_of_lhs(&mut self, ctx: ParseCtx) -> SyntaxResult<ForInOfLhs> {
-    Ok(match self.peek().typ {
-      TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => ForInOfLhs::Decl({
+    let [t0, t1] = self.peek_n();
+    Ok(match t0.typ {
+      TT::KeywordVar | TT::KeywordConst => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
         let pat = self.pat_decl(ctx)?;
         (mode, pat)
       }),
-      _ => ForInOfLhs::Assign(self.pat(ctx)?),
+      // `let` is contextual - only a declaration if followed by a pattern
+      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => ForInOfLhs::Decl({
+        let mode = self.var_decl_mode()?;
+        let pat = self.pat_decl(ctx)?;
+        (mode, pat)
+      }),
+      _ => {
+        // Parse as expression (which handles member expressions, patterns, etc.)
+        // then convert to pattern/assignment target
+        use super::expr::util::lit_to_pat;
+        let expr = self.expr(ctx, [TT::KeywordIn, TT::KeywordOf])?;
+        let pat = lit_to_pat(expr)?;
+        ForInOfLhs::Assign(pat)
+      }
     })
   }
 
@@ -201,7 +225,7 @@ impl<'a> Parser<'a> {
       p.require(TT::KeywordFor)?;
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(ctx)?;
-      p.require(TT::KeywordOf)?;
+      p.require(TT::KeywordIn)?;
       let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.for_body(ctx)?;
@@ -246,7 +270,7 @@ impl<'a> Parser<'a> {
         };
         p.require(TT::ParenthesisOpen)?;
         Ok(match p.peek().typ {
-          TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => {
+          TT::KeywordVar | TT::KeywordConst => {
             p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
             match p.peek().typ {
               TT::KeywordIn => Self::In,
@@ -255,13 +279,38 @@ impl<'a> Parser<'a> {
               _ => Self::Triple,
             }
           }
+          // `let` is a contextual keyword - it's only a declaration keyword when followed by a pattern.
+          // `let.x`, `let()`, `let[x]` where x is not a valid identifier are all expressions.
+          TT::KeywordLet => {
+            let [_, next_token] = p.peek_n::<2>();
+            let next = next_token.typ;
+            if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+              // Looks like a variable declaration
+              p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
+              match p.peek().typ {
+                TT::KeywordIn => Self::In,
+                TT::KeywordOf => Self::Of,
+                _ => Self::Triple,
+              }
+            } else {
+              // Not a declaration, parse as expression to handle member expressions etc.
+              match p.expr(ctx, [TT::KeywordIn, TT::KeywordOf]) {
+                Ok(_) => match p.peek().typ {
+                  TT::KeywordIn => Self::In,
+                  TT::KeywordOf => Self::Of,
+                  _ => Self::Triple,
+                }
+                Err(_) => Self::Triple,
+              }
+            }
+          }
           TT::Semicolon => {
             // Only for(;;) loops have semicolons in the header.
             Self::Triple
           }
           _ => {
-            // for-in and for-of loops must have an assignment target or variable declarator at the beginning of its header. We've already handled var decl before, so if it's for-in or for-of there must be a pattern now, followed by the keyword.
-            match p.pat(ctx) {
+            // for-in and for-of loops must have an assignment target or variable declarator at the beginning of its header. We've already handled var decl before, so if it's for-in or for-of there must be an expression/pattern now, followed by the keyword.
+            match p.expr(ctx, [TT::KeywordIn, TT::KeywordOf]) {
               Ok(_) => match p.peek().typ {
                 TT::KeywordIn => Self::In,
                 TT::KeywordOf => Self::Of,
@@ -389,10 +438,26 @@ impl<'a> Parser<'a> {
     })
   }
 
+  pub fn with_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<WithStmt>> {
+    self.with_loc(|p| {
+      p.require(TT::KeywordWith)?;
+      p.require(TT::ParenthesisOpen)?;
+      let object = p.expr(ctx, [TT::ParenthesisClose])?;
+      p.require(TT::ParenthesisClose)?;
+      let body = p.stmt(ctx)?;
+      Ok(WithStmt {
+        object,
+        body,
+      })
+    })
+  }
+
   pub fn do_while_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<DoWhileStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordDo)?;
       let body = p.stmt(ctx)?;
+      // Consume optional semicolon after body statement (ASI)
+      p.consume_if(TT::Semicolon);
       p.require(TT::KeywordWhile)?;
       p.require(TT::ParenthesisOpen)?;
       let condition = p.expr(ctx, [TT::ParenthesisClose])?;

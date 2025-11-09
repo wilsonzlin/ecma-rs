@@ -24,6 +24,7 @@ use crate::ast::expr::Expr;
 use crate::ast::expr::FuncExpr;
 use crate::ast::expr::IdExpr;
 use crate::ast::expr::MemberExpr;
+use crate::ast::expr::NewTarget;
 use crate::ast::expr::SuperExpr;
 use crate::ast::expr::TaggedTemplateExpr;
 use crate::ast::expr::ThisExpr;
@@ -199,14 +200,21 @@ impl<'a> Parser<'a> {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
       p.require(TT::KeywordFunction)?;
       let generator = p.consume_if(TT::Asterisk).is_match();
-      let name = p.maybe_class_or_func_name(ctx);
+      // Function name is always parsed with yield/await allowed as identifiers,
+      // even for generator/async functions (the function can be named "yield" or "await")
+      let name_ctx = ctx.with_rules(ParsePatternRules {
+        await_allowed: true,
+        yield_allowed: true,
+      });
+      let name = p.maybe_class_or_func_name(name_ctx);
       let func = p.with_loc(|p| {
-        let parameters = p.func_params(ctx)?;
-        let fn_body_ctx = ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async && ctx.rules.await_allowed,
-          yield_allowed: !generator && ctx.rules.yield_allowed,
+        // Parameters and body use the function's own context, not the parent's
+        let fn_ctx = ctx.with_rules(ParsePatternRules {
+          await_allowed: !is_async,
+          yield_allowed: !generator,
         });
-        let body = p.parse_func_block_body(fn_body_ctx)?.into();
+        let parameters = p.func_params(fn_ctx)?;
+        let body = p.parse_func_block_body(fn_ctx)?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,
@@ -260,14 +268,18 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<Node<Expr>> {
     let [t0, t1] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard]);
     // Handle unary operators before operand.
+    // Special case: `new.target` should not be treated as `new` operator
     if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t0.typ).filter(|operator| {
-      // TODO Is this correct? Should it be possible to use as operator or keyword depending on whether there is an operand following?
+      // Treat await/yield as operators only when they're keywords (not allowed as identifiers)
       (operator.name != OperatorName::Await && operator.name != OperatorName::Yield)
         || (operator.name == OperatorName::Await && !ctx.rules.await_allowed)
         || (operator.name == OperatorName::Yield && !ctx.rules.yield_allowed)
+    }).filter(|operator| {
+      // Don't treat `new` as operator if followed by `.` (for new.target)
+      !(operator.name == OperatorName::New && t1.typ == TT::Dot)
     }) {
       return Ok(self.with_loc(|p| {
-        p.consume_with_mode(LexMode::SlashIsRegex);
+        let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc;
         let operator = if operator.name == OperatorName::Yield
           && p.consume_if(TT::Asterisk).is_match()
         {
@@ -277,12 +289,40 @@ impl<'a> Parser<'a> {
         };
         let next_min_prec =
           operator.precedence + (operator.associativity == Associativity::Left) as u8;
-        let operand = p.expr_with_min_prec(
-          ctx,
-          next_min_prec,
-          terminators,
-          asi,
-        )?;
+
+        // For yield and await, the operand is optional. Check if there should be an operand.
+        let next_token = p.peek();
+        let has_operand = if operator.name == OperatorName::Yield || operator.name == OperatorName::Await || operator.name == OperatorName::YieldDelegated {
+          // No operand if:
+          // 1. Next token is preceded by line terminator
+          // 2. Next token is a terminator we're looking for
+          // 3. Next token is a closing bracket/paren/brace
+          // 4. Next token is semicolon or comma
+          // 5. Next token is EOF
+          !next_token.preceded_by_line_terminator
+            && next_token.typ != TT::EOF
+            && next_token.typ != TT::Semicolon
+            && next_token.typ != TT::Comma
+            && next_token.typ != TT::ParenthesisClose
+            && next_token.typ != TT::BracketClose
+            && next_token.typ != TT::BraceClose
+            && !terminators.contains(&next_token.typ)
+        } else {
+          true
+        };
+
+        let operand = if has_operand {
+          p.expr_with_min_prec(
+            ctx,
+            next_min_prec,
+            terminators,
+            asi,
+          )?
+        } else {
+          // For yield/await without operand, use `undefined` identifier
+          Node::new(op_loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+        };
+
         return Ok(UnaryExpr {
           operator: operator.name,
           argument: operand,
@@ -327,6 +367,7 @@ impl<'a> Parser<'a> {
         TT::ParenthesisOpen => self.import_call(ctx)?.into_wrapped(),
         _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("import expression"))),
       },
+      TT::KeywordNew if t1.typ == TT::Dot => self.new_target()?.into_wrapped(),
       TT::KeywordSuper => self.super_expr()?.into_wrapped(),
       TT::KeywordThis => self.this_expr()?.into_wrapped(),
       TT::LiteralBigInt => self.lit_bigint()?.into_wrapped(),
@@ -511,6 +552,18 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordThis)?;
       Ok(ThisExpr {}.into())
+    })
+  }
+
+  pub fn new_target(&mut self) -> SyntaxResult<Node<NewTarget>> {
+    self.with_loc(|p| {
+      p.require(TT::KeywordNew)?;
+      p.require(TT::Dot)?;
+      let prop = p.require(TT::Identifier)?;
+      if p.str(prop.loc) != "target" {
+        return Err(prop.error(SyntaxErrorType::ExpectedSyntax("`target` property")));
+      };
+      Ok(NewTarget {}.into())
     })
   }
 }

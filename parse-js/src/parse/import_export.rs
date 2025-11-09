@@ -1,21 +1,32 @@
 use crate::{ast::{expr::{pat::{IdPat, Pat}, Expr, ImportExpr, ImportMeta}, import_export::{ExportName, ExportNames, ImportName, ImportNames}, node::Node, stmt::{decl::PatDecl, ExportDefaultExprStmt, ExportListStmt, ImportStmt, Stmt}}, error::{SyntaxErrorType, SyntaxResult}, lex::KEYWORDS_MAPPING, parse::stmt::decl::VarDeclParseMode, token::TT};
 
-use super::{expr::{lit::normalise_literal_string, pat::is_valid_pattern_identifier}, ParseCtx, Parser};
+use super::{expr::{Asi, lit::normalise_literal_string, pat::is_valid_pattern_identifier}, ParseCtx, Parser};
 
 impl<'a> Parser<'a> {
   /// Parses `target`, `target as alias`, `default as alias`, `"target" as alias`.
-  fn import_or_export_name(&mut self, ctx: ParseCtx) -> SyntaxResult<(String, Node<IdPat>)> {
+  /// For exports, `default` can be used without an alias. For imports, it requires an alias.
+  fn import_or_export_name(&mut self, ctx: ParseCtx, is_export: bool) -> SyntaxResult<(String, Node<IdPat>)> {
     let t0 = self.peek();
     #[rustfmt::skip]
     let (target, alias_is_required) = match t0.typ {
       TT::LiteralString => (self.lit_str_val()?, true),
       t if is_valid_pattern_identifier(t, ctx.rules) => (self.consume_as_string(), false),
-      // Any keyword is allowed, but if reserved, an alias must be used. This includes "default". (To import `default` without `as`, use `import a from "module"` instead of `import {default as a} from "module"`.)
+      // `default` is special: in exports it can be used without alias, but in imports it requires an alias
+      TT::KeywordDefault if is_export => (self.consume_as_string(), false),
+      // Any other keyword is allowed, but if reserved, an alias must be used.
       t if KEYWORDS_MAPPING.contains_key(&t) => (self.consume_as_string(), true),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedNotFound)),
     };
     let alias = if self.consume_if(TT::KeywordAs).is_match() {
-      self.id_pat(ctx)?
+      // In exports, "default" is allowed as an alias name (e.g., export { a as default })
+      // In imports, keywords cannot be used as alias names
+      let t_alias = self.peek();
+      if is_export && t_alias.typ == TT::KeywordDefault {
+        self.consume();
+        Node::new(t_alias.loc, IdPat { name: "default".to_string() })
+      } else {
+        self.id_pat(ctx)?
+      }
     } else if alias_is_required {
       return Err(t0.error(SyntaxErrorType::ExpectedNotFound));
     } else {
@@ -57,6 +68,7 @@ impl<'a> Parser<'a> {
   pub fn import_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ImportStmt>> {
     // TODO Ensure top-level.
     self.with_loc(|p| {
+      p.require(TT::KeywordImport)?;
       let (default, can_have_names) =
         if p.peek().typ == TT::Identifier {
           let alias = p.id_pat_decl(ctx)?;
@@ -70,19 +82,31 @@ impl<'a> Parser<'a> {
         p.require(TT::KeywordAs)?;
         let alias = p.id_pat_decl(ctx)?;
         Some(ImportNames::All(alias))
-      } else {
+      } else if p.peek().typ == TT::BraceOpen {
         p.require(TT::BraceOpen)?;
         let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
-          let (target, alias) = p.import_or_export_name(ctx)?;
+          let (target, alias) = p.import_or_export_name(ctx, false)?;
           let alias = alias.into_wrapped();
           let alias = alias.wrap(|pat| PatDecl { pat });
           Ok(ImportName { importable: target, alias })
         })?;
         Some(ImportNames::Specific(names))
+      } else {
+        // No names - side-effect only import like `import "foo"`
+        None
       };
-      p.require(TT::KeywordFrom)?;
+      // For side-effect imports (import "foo"), there's no `from` keyword
+      if default.is_some() || names.is_some() {
+        p.require(TT::KeywordFrom)?;
+      }
       let module = p.lit_str_val()?;
-      p.require(TT::Semicolon)?;
+      // Allow ASI - semicolon not required at EOF or before line terminator
+      let t = p.peek();
+      if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+        p.require(TT::Semicolon)?;
+      } else {
+        p.consume_if(TT::Semicolon);
+      }
       Ok(ImportStmt {
         default,
         module,
@@ -100,7 +124,7 @@ impl<'a> Parser<'a> {
           let names = p.list_with_loc(
             TT::Comma,
             TT::BraceClose,
-            |p| p.import_or_export_name(ctx)
+            |p| p.import_or_export_name(ctx, true)
               .map(|(target, alias)| ExportName { exportable: target, alias }),
           )?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
@@ -127,7 +151,9 @@ impl<'a> Parser<'a> {
   pub fn export_default_expr_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ExportDefaultExprStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordExport)?;
-      let expression = p.expr(ctx, [TT::Semicolon])?;
+      p.require(TT::KeywordDefault)?;
+      let mut asi = Asi::can();
+      let expression = p.expr_with_asi(ctx, [TT::Semicolon], &mut asi)?;
       Ok(ExportDefaultExprStmt { expression })
     })
   }
@@ -146,6 +172,7 @@ impl<'a> Parser<'a> {
       (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass, _) => self.class_decl(ctx)?.into_wrapped(),
       (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
       (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("exportable"))),
     };
     Ok(stmt)

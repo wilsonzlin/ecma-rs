@@ -21,11 +21,28 @@ use crate::token::TT;
 impl<'a> Parser<'a> {
   pub fn class_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<ClassMember>>> {
     self.require(TT::BraceOpen)?;
-    let members = self.repeat_until_tt_with_loc(
-      TT::BraceClose,
-      |p| {
-        // `static` must always come first if present.
-        let static_ = p.consume_if(TT::KeywordStatic).match_loc();
+    let mut members = Vec::new();
+    loop {
+      // Skip empty semicolons
+      while self.consume_if(TT::Semicolon).is_match() {}
+      // Check if we're at the end
+      if self.peek().typ == TT::BraceClose {
+        break;
+      }
+      let member = self.with_loc(|p| {
+        // `static` must always come first if present, unless it's a method name.
+        // Check if `static` is followed by `(` which means it's a method name, not a modifier.
+        let static_ = if p.peek().typ == TT::KeywordStatic {
+          let [_, next] = p.peek_n::<2>();
+          if next.typ == TT::ParenthesisOpen {
+            // `static()` - it's a method name
+            None
+          } else {
+            p.consume_if(TT::KeywordStatic).match_loc()
+          }
+        } else {
+          None
+        };
         let (key, value) = p.class_or_obj_member(
           ctx,
           TT::Equals,
@@ -38,8 +55,9 @@ impl<'a> Parser<'a> {
           static_: static_.is_some(),
           val: value,
         })
-      },
-    )?;
+      })?;
+      members.push(member);
+    }
     self.require(TT::BraceClose)?;
     Ok(members)
   }
@@ -107,7 +125,11 @@ impl<'a> Parser<'a> {
     let func = self.with_loc(|p| {
       p.require(TT::ParenthesisOpen)?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.parse_func_block_body(ctx)?.into();
+      // Getters are not generators or async, so yield/await can be used as identifiers
+      let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+        await_allowed: true,
+        yield_allowed: true,
+      }))?.into();
       Ok(Func {
         arrow: false,
         async_: false,
@@ -125,17 +147,27 @@ impl<'a> Parser<'a> {
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
       p.require(TT::ParenthesisOpen)?;
-      let param = p.pat_decl(ctx)?;
+      // Setters are not generators or async, so yield/await can be used as identifiers
+      let setter_ctx = ctx.with_rules(ParsePatternRules {
+        await_allowed: true,
+        yield_allowed: true,
+      });
+      let pattern = p.pat_decl(setter_ctx)?;
+      let default_value = p.consume_if(TT::Equals)
+        .and_then(|| {
+          p.expr(setter_ctx, [TT::ParenthesisClose])
+        })?;
+      let param_loc = pattern.loc;
       p.require(TT::ParenthesisClose)?;
-      let body = p.parse_func_block_body(ctx)?.into();
+      let body = p.parse_func_block_body(setter_ctx)?.into();
       Ok(Func {
         arrow: false,
         async_: false,
         generator: false,
-        parameters: vec![Node::new(param.loc, ParamDecl {
+        parameters: vec![Node::new(param_loc, ParamDecl {
           rest: false,
-          pattern: param,
-          default_value: None,
+          pattern,
+          default_value,
         })],
         body,
       })
@@ -156,7 +188,13 @@ impl<'a> Parser<'a> {
     let key = self.class_or_obj_key(ctx)?;
     let has_init = match key {
       ClassOrObjKey::Direct(_) => self.peek().typ == value_delimiter,
-      _ => false,
+      ClassOrObjKey::Computed(_) => {
+        // Computed keys always require a value
+        if self.peek().typ != value_delimiter {
+          return Err(self.peek().error(SyntaxErrorType::ExpectedNotFound));
+        }
+        true
+      }
     };
     let initializer = has_init
       .then(|| {
@@ -184,6 +222,61 @@ impl<'a> Parser<'a> {
     property_initialiser_asi: &mut Asi,
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
     let [a, b, c, d] = self.peek_n();
+    // Special case for computed keys: parse key first, then check what follows
+    // Handle: [...], *[...], get [...], set [...]
+    if a.typ == TT::BracketOpen
+      || (a.typ == TT::Asterisk && b.typ == TT::BracketOpen)
+      || (a.typ == TT::KeywordGet && b.typ == TT::BracketOpen)
+      || (a.typ == TT::KeywordSet && b.typ == TT::BracketOpen) {
+      // Check if this is a getter or setter with computed key
+      let is_getter = a.typ == TT::KeywordGet;
+      let is_setter = a.typ == TT::KeywordSet;
+      if is_getter || is_setter {
+        // Don't consume get/set here - the getter/setter functions will do it
+        if is_getter {
+          let (key, val) = self.class_or_obj_getter(ctx)?;
+          return Ok((key, val.into()));
+        } else {
+          let (key, val) = self.class_or_obj_setter(ctx)?;
+          return Ok((key, val.into()));
+        }
+      }
+      // Otherwise it's a regular method or property
+      let is_async = false;
+      let is_generator = a.typ == TT::Asterisk;
+      if is_generator {
+        self.require(TT::Asterisk)?;
+      }
+      let key = self.class_or_obj_key(ctx)?;
+      return Ok(if self.peek().typ == TT::ParenthesisOpen {
+        let method = self.with_loc(|p| {
+          let func = p.with_loc(|p| {
+            let parameters = p.func_params(ctx)?;
+            let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+              await_allowed: !is_async && ctx.rules.await_allowed,
+              yield_allowed: !is_generator && ctx.rules.yield_allowed,
+            }))?.into();
+            Ok(Func {
+              arrow: false,
+              async_: is_async,
+              generator: is_generator,
+              parameters,
+              body,
+            })
+          })?;
+          Ok(ClassOrObjMethod { func })
+        })?;
+        (key, ClassOrObjVal::Method(method))
+      } else {
+        let initializer = if self.peek().typ == value_delimiter {
+          self.require(value_delimiter)?;
+          Some(self.expr_with_asi(ctx, [statement_delimiter, TT::BraceClose], property_initialiser_asi)?)
+        } else {
+          None
+        };
+        (key, ClassOrObjVal::Prop(initializer))
+      });
+    }
     Ok(match (a.typ, b.typ, c.typ, d.typ) {
       // Method. Includes using "get" or "set" as the method's name.
       (TT::KeywordAsync, TT::Asterisk, _, TT::ParenthesisOpen)

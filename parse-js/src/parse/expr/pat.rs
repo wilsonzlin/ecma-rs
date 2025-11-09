@@ -136,7 +136,7 @@ impl<'a> Parser<'a> {
       p.require(TT::BracketOpen)?;
       let mut elements = Vec::<Option<ArrPatElem>>::new();
       let mut rest = None;
-      while !p.consume_if(TT::BracketClose).is_match() {
+      while p.peek().typ != TT::BracketClose {
         // Check inside loop to ensure that it must come first or after a comma.
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {

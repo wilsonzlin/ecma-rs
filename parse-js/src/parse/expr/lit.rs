@@ -3,9 +3,12 @@ use super::Asi;
 use super::ParseCtx;
 use super::Parser;
 use crate::ast::class_or_object::ClassOrObjKey;
+use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
 use crate::ast::class_or_object::ClassOrObjVal;
 use crate::ast::class_or_object::ObjMember;
 use crate::ast::class_or_object::ObjMemberType;
+use crate::ast::expr::BinaryExpr;
+use crate::ast::expr::Expr;
 use crate::ast::expr::IdExpr;
 use crate::ast::expr::lit::LitArrElem;
 use crate::ast::expr::lit::LitArrExpr;
@@ -23,6 +26,7 @@ use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
 use crate::num::JsNumber;
+use crate::operator::OperatorName;
 use crate::token::TT;
 use core::str::FromStr;
 
@@ -38,7 +42,7 @@ pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
   // of the same value get parsed into the same f64 value/bit pattern (e.g. `5.1e10` and `0.51e11`).
   match raw {
     s if s.starts_with("0b") || s.starts_with("0B") => parse_radix(&s[2..], 2),
-    s if s.starts_with("0o") || s.starts_with("0o") => parse_radix(&s[2..], 8),
+    s if s.starts_with("0o") || s.starts_with("0O") => parse_radix(&s[2..], 8),
     s if s.starts_with("0x") || s.starts_with("0X") => parse_radix(&s[2..], 16),
     s => f64::from_str(s).map_err(|_| ()),
   }
@@ -123,11 +127,13 @@ pub fn normalise_literal_string_or_template_inner(mut raw: &str) -> Option<Strin
             let Some(end_pos) = raw.find('}') else {
               return None;
             };
-            if !(3..=8).contains(&end_pos) {
+            let hex_chars = &raw[2..end_pos];
+            // Must have at least 1 hex digit
+            if hex_chars.is_empty() || !hex_chars.chars().all(|c| c.is_ascii_hexdigit()) {
               return None;
             };
-            let hex_chars = &raw[2..end_pos];
             let cp = u32::from_str_radix(hex_chars, 16).ok()?;
+            // char::from_u32 validates that cp is a valid Unicode code point (<= 0x10FFFF)
             let c = char::from_u32(cp)?;
             norm.push(c);
             raw = &raw[end_pos + 1..];
@@ -271,8 +277,30 @@ impl<'a> Parser<'a> {
                 if !is_valid_pattern_identifier(key.stx.tt, ctx.rules) {
                   return Err(key.error(SyntaxErrorType::ExpectedNotFound));
                 };
-                ObjMemberType::Shorthand {
-                  id: key.map_stx(|n| IdExpr { name: n.key }),
+                // Check for default value (e.g., {c = 1})
+                if p.consume_if(TT::Equals).is_match() {
+                  // Parse the default value and create an assignment expression
+                  let key_name = key.stx.key.clone();
+                  let key_loc = key.loc;
+                  let default_val = p.expr(ctx, [TT::Comma, TT::BraceClose])?;
+                  let id_expr = Node::new(key_loc, IdExpr { name: key_name.clone() }).into_wrapped();
+                  let bin_expr = Node::new(key_loc + default_val.loc, BinaryExpr {
+                    operator: OperatorName::Assignment,
+                    left: id_expr,
+                    right: default_val,
+                  }).into_wrapped();
+                  ObjMemberType::Valued {
+                    key: ClassOrObjKey::Direct(Node::new(key_loc, ClassOrObjMemberDirectKey {
+                      key: key_name,
+                      tt: TT::Identifier,
+                    })),
+                    val: ClassOrObjVal::Prop(Some(bin_expr))
+                  }
+                } else {
+                  // No default value - this is a normal shorthand property
+                  ObjMemberType::Shorthand {
+                    id: key.map_stx(|n| IdExpr { name: n.key }),
+                  }
                 }
               }
               _ => ObjMemberType::Valued { key, val: value },
