@@ -127,11 +127,13 @@ pub fn normalise_literal_string_or_template_inner(mut raw: &str) -> Option<Strin
             let Some(end_pos) = raw.find('}') else {
               return None;
             };
-            if !(3..=8).contains(&end_pos) {
+            let hex_chars = &raw[2..end_pos];
+            // Must have at least 1 hex digit
+            if hex_chars.is_empty() || !hex_chars.chars().all(|c| c.is_ascii_hexdigit()) {
               return None;
             };
-            let hex_chars = &raw[2..end_pos];
             let cp = u32::from_str_radix(hex_chars, 16).ok()?;
+            // char::from_u32 validates that cp is a valid Unicode code point (<= 0x10FFFF)
             let c = char::from_u32(cp)?;
             norm.push(c);
             raw = &raw[end_pos + 1..];
