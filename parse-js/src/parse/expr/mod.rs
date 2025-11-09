@@ -290,7 +290,21 @@ impl<'a> Parser<'a> {
       })?.into_wrapped());
     };
 
-    // Check this before KeywordAsync.
+    // Check for async keyword first, before checking if it's a valid identifier.
+    if t0.typ == TT::KeywordAsync {
+      return Ok(match t1.typ {
+        TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
+        TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
+        // Check if this could be a single-parameter arrow function: `async x => {}`
+        TT::EqualsChevronRight if is_valid_pattern_identifier(t0.typ, ctx.rules) => {
+          self.arrow_func_expr(ctx, terminators)?.into_wrapped()
+        }
+        // `async` is being used as an identifier.
+        _ => self.id_expr(ctx)?.into_wrapped(),
+      });
+    };
+
+    // Check for other valid pattern identifiers (excluding async, which we already handled).
     if is_valid_pattern_identifier(t0.typ, ctx.rules) {
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
@@ -303,12 +317,6 @@ impl<'a> Parser<'a> {
 
     #[rustfmt::skip]
     let expr: Node<Expr> = match t0.typ {
-      TT::KeywordAsync => match t1.typ {
-        TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
-        TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
-        // `async` is being used as an identifier.
-        _ => self.id_expr(ctx)?.into_wrapped(),
-      }
       TT::BracketOpen => self.lit_arr(ctx)?.into_wrapped(),
       TT::BraceOpen => self.lit_obj(ctx)?.into_wrapped(),
       TT::ChevronLeft => self.jsx_elem(ctx)?.into_wrapped(),

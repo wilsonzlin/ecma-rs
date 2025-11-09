@@ -287,7 +287,7 @@ impl<'a> Parser<'a> {
 
   pub fn lit_regex(&mut self) -> SyntaxResult<Node<LitRegexExpr>> {
     self.with_loc(|p| {
-      let t = p.require(TT::LiteralRegex)?;
+      let t = p.require_with_mode(TT::LiteralRegex, LexMode::SlashIsRegex)?;
       // TODO Parse, validate, flags.
       let value = p.string(t.loc);
       Ok(LitRegexExpr { value })

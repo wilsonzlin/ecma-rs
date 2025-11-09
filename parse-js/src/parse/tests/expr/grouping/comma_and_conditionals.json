@@ -1,43 +1,39 @@
 {
-  "$t": "BinaryExpr",
+  "$t": "Binary",
   "left": {
-    "$t": "BinaryExpr",
+    "$t": "Binary",
     "left": {
-      "$t": "IdentifierExpr",
+      "$t": "Id",
       "name": "a"
     },
     "operator": "Comma",
-    "parenthesised": false,
     "right": {
-      "$t": "ConditionalExpr",
+      "$t": "Cond",
       "alternate": {
-        "$t": "BinaryExpr",
+        "$t": "Binary",
         "left": {
-          "$t": "IdentifierExpr",
+          "$t": "Id",
           "name": "c"
         },
         "operator": "LogicalAnd",
-        "parenthesised": false,
         "right": {
-          "$t": "IdentifierExpr",
+          "$t": "Id",
           "name": "d"
         }
       },
       "consequent": {
-        "$t": "IdentifierExpr",
+        "$t": "Id",
         "name": "b"
       },
-      "parenthesised": false,
       "test": {
-        "$t": "IdentifierExpr",
+        "$t": "Id",
         "name": "a"
       }
     }
   },
   "operator": "Comma",
-  "parenthesised": true,
   "right": {
-    "$t": "IdentifierExpr",
+    "$t": "Id",
     "name": "d"
   }
 }

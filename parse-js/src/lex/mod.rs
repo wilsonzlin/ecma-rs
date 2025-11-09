@@ -675,10 +675,11 @@ fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
       '\\' => {
         // Cannot escape line terminator.
         // WARNING: Does not consider other line terminators allowed by spec.
-        if lexer.peek(1)? == '\n' {
+        let escaped_char = lexer.peek(0)?;
+        if escaped_char == '\n' {
           return Ok(TT::Invalid);
         };
-        lexer.skip_expect(1);
+        lexer.skip_expect(escaped_char.len_utf8());
       }
       '/' if !in_charset => {
         break;
@@ -703,6 +704,7 @@ fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
 fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let quote = lexer.peek(0)?;
   lexer.skip_expect(quote.len_utf8());
+  let mut invalid = false;
   loop {
     // TODO Does not consider other line terminators allowed by spec.
     lexer.consume(lexer.while_not_3_chars('\\', '\n', quote));
@@ -711,7 +713,9 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
         lexer.consume(lexer.n(2)?);
       }
       '\n' => {
-        return Ok(TT::Invalid);
+        // Mark as invalid but continue consuming to find the closing quote
+        invalid = true;
+        lexer.skip_expect('\n'.len_utf8());
       }
       c if c == quote => {
         lexer.skip_expect(c.len_utf8());
@@ -720,7 +724,11 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
       _ => unreachable!(),
     };
   }
-  Ok(TT::LiteralString)
+  if invalid {
+    Ok(TT::Invalid)
+  } else {
+    Ok(TT::LiteralString)
+  }
 }
 
 /// Ends with `${` or backtick.

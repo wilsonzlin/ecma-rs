@@ -1,17 +1,22 @@
 {
-  "$t": "ForOfStmt",
+  "$t": "ForOf",
   "await_": true,
   "body": {
-    "$t": "ForBody",
     "body": []
   },
-  "decl_mode": "Const",
-  "pat": {
-    "$t": "IdentifierPattern",
-    "name": "s"
+  "lhs": {
+    "Decl": [
+      "Const",
+      {
+        "pat": {
+          "$t": "Id",
+          "name": "s"
+        }
+      }
+    ]
   },
   "rhs": {
-    "$t": "IdentifierExpr",
+    "$t": "Id",
     "name": "expr"
   }
 }

@@ -3,34 +3,34 @@
   "declarators": [
     {
       "initializer": {
-        "$t": "ArrowFunctionExpr",
-        "function": {
-          "$t": "Function",
+        "$t": "ArrowFunc",
+        "func": {
           "arrow": true,
           "async_": false,
           "body": {
-            "$t": "FunctionBody",
-            "body": []
+            "Block": []
           },
           "generator": false,
           "parameters": [
             {
-              "$t": "ParamDecl",
               "default_value": null,
               "pattern": {
-                "$t": "ObjectPattern",
-                "properties": [],
-                "rest": null
+                "pat": {
+                  "$t": "Obj",
+                  "properties": [],
+                  "rest": null
+                }
               },
               "rest": false
             }
           ]
-        },
-        "parenthesised": false
+        }
       },
       "pattern": {
-        "$t": "IdentifierPattern",
-        "name": "x"
+        "pat": {
+          "$t": "Id",
+          "name": "x"
+        }
       }
     }
   ],

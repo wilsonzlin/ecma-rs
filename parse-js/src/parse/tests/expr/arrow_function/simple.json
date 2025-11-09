@@ -1,43 +1,43 @@
 {
-  "$t": "ArrowFunctionExpr",
-  "function": {
-    "$t": "Function",
+  "$t": "ArrowFunc",
+  "func": {
     "arrow": true,
     "async_": false,
     "body": {
-      "$t": "FunctionBody",
-      "body": []
+      "Block": []
     },
     "generator": false,
     "parameters": [
       {
-        "$t": "ParamDecl",
         "default_value": null,
         "pattern": {
-          "$t": "IdentifierPattern",
-          "name": "a"
+          "pat": {
+            "$t": "Id",
+            "name": "a"
+          }
         },
         "rest": false
       },
       {
-        "$t": "ParamDecl",
         "default_value": null,
         "pattern": {
-          "$t": "IdentifierPattern",
-          "name": "b"
+          "pat": {
+            "$t": "Id",
+            "name": "b"
+          }
         },
         "rest": false
       },
       {
-        "$t": "ParamDecl",
         "default_value": null,
         "pattern": {
-          "$t": "IdentifierPattern",
-          "name": "c"
+          "pat": {
+            "$t": "Id",
+            "name": "c"
+          }
         },
         "rest": false
       }
     ]
-  },
-  "parenthesised": false
+  }
 }
