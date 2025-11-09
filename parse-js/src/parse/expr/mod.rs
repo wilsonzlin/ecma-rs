@@ -272,7 +272,7 @@ impl<'a> Parser<'a> {
       !(operator.name == OperatorName::New && t1.typ == TT::Dot)
     }) {
       return Ok(self.with_loc(|p| {
-        p.consume_with_mode(LexMode::SlashIsRegex);
+        let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc;
         let operator = if operator.name == OperatorName::Yield
           && p.consume_if(TT::Asterisk).is_match()
         {
@@ -282,12 +282,40 @@ impl<'a> Parser<'a> {
         };
         let next_min_prec =
           operator.precedence + (operator.associativity == Associativity::Left) as u8;
-        let operand = p.expr_with_min_prec(
-          ctx,
-          next_min_prec,
-          terminators,
-          asi,
-        )?;
+
+        // For yield and await, the operand is optional. Check if there should be an operand.
+        let next_token = p.peek();
+        let has_operand = if operator.name == OperatorName::Yield || operator.name == OperatorName::Await || operator.name == OperatorName::YieldDelegated {
+          // No operand if:
+          // 1. Next token is preceded by line terminator
+          // 2. Next token is a terminator we're looking for
+          // 3. Next token is a closing bracket/paren/brace
+          // 4. Next token is semicolon or comma
+          // 5. Next token is EOF
+          !next_token.preceded_by_line_terminator
+            && next_token.typ != TT::EOF
+            && next_token.typ != TT::Semicolon
+            && next_token.typ != TT::Comma
+            && next_token.typ != TT::ParenthesisClose
+            && next_token.typ != TT::BracketClose
+            && next_token.typ != TT::BraceClose
+            && !terminators.contains(&next_token.typ)
+        } else {
+          true
+        };
+
+        let operand = if has_operand {
+          p.expr_with_min_prec(
+            ctx,
+            next_min_prec,
+            terminators,
+            asi,
+          )?
+        } else {
+          // For yield/await without operand, use `undefined` identifier
+          Node::new(op_loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+        };
+
         return Ok(UnaryExpr {
           operator: operator.name,
           argument: operand,
