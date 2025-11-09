@@ -29,8 +29,19 @@ impl<'a> Parser<'a> {
         if p.peek().typ == TT::BraceClose {
           return Err(p.peek().error(SyntaxErrorType::ExpectedNotFound));
         }
-        // `static` must always come first if present.
-        let static_ = p.consume_if(TT::KeywordStatic).match_loc();
+        // `static` must always come first if present, unless it's a method name.
+        // Check if `static` is followed by `(` which means it's a method name, not a modifier.
+        let static_ = if p.peek().typ == TT::KeywordStatic {
+          let [_, next] = p.peek_n::<2>();
+          if next.typ == TT::ParenthesisOpen {
+            // `static()` - it's a method name
+            None
+          } else {
+            p.consume_if(TT::KeywordStatic).match_loc()
+          }
+        } else {
+          None
+        };
         let (key, value) = p.class_or_obj_member(
           ctx,
           TT::Equals,
