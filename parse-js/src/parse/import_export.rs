@@ -4,18 +4,29 @@ use super::{expr::{lit::normalise_literal_string, pat::is_valid_pattern_identifi
 
 impl<'a> Parser<'a> {
   /// Parses `target`, `target as alias`, `default as alias`, `"target" as alias`.
-  fn import_or_export_name(&mut self, ctx: ParseCtx) -> SyntaxResult<(String, Node<IdPat>)> {
+  /// For exports, `default` can be used without an alias. For imports, it requires an alias.
+  fn import_or_export_name(&mut self, ctx: ParseCtx, is_export: bool) -> SyntaxResult<(String, Node<IdPat>)> {
     let t0 = self.peek();
     #[rustfmt::skip]
     let (target, alias_is_required) = match t0.typ {
       TT::LiteralString => (self.lit_str_val()?, true),
       t if is_valid_pattern_identifier(t, ctx.rules) => (self.consume_as_string(), false),
-      // Any keyword is allowed, but if reserved, an alias must be used. This includes "default". (To import `default` without `as`, use `import a from "module"` instead of `import {default as a} from "module"`.)
+      // `default` is special: in exports it can be used without alias, but in imports it requires an alias
+      TT::KeywordDefault if is_export => (self.consume_as_string(), false),
+      // Any other keyword is allowed, but if reserved, an alias must be used.
       t if KEYWORDS_MAPPING.contains_key(&t) => (self.consume_as_string(), true),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedNotFound)),
     };
     let alias = if self.consume_if(TT::KeywordAs).is_match() {
-      self.id_pat(ctx)?
+      // In exports, "default" is allowed as an alias name (e.g., export { a as default })
+      // In imports, keywords cannot be used as alias names
+      let t_alias = self.peek();
+      if is_export && t_alias.typ == TT::KeywordDefault {
+        self.consume();
+        Node::new(t_alias.loc, IdPat { name: "default".to_string() })
+      } else {
+        self.id_pat(ctx)?
+      }
     } else if alias_is_required {
       return Err(t0.error(SyntaxErrorType::ExpectedNotFound));
     } else {
@@ -74,7 +85,7 @@ impl<'a> Parser<'a> {
       } else if p.peek().typ == TT::BraceOpen {
         p.require(TT::BraceOpen)?;
         let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
-          let (target, alias) = p.import_or_export_name(ctx)?;
+          let (target, alias) = p.import_or_export_name(ctx, false)?;
           let alias = alias.into_wrapped();
           let alias = alias.wrap(|pat| PatDecl { pat });
           Ok(ImportName { importable: target, alias })
@@ -113,7 +124,7 @@ impl<'a> Parser<'a> {
           let names = p.list_with_loc(
             TT::Comma,
             TT::BraceClose,
-            |p| p.import_or_export_name(ctx)
+            |p| p.import_or_export_name(ctx, true)
               .map(|(target, alias)| ExportName { exportable: target, alias }),
           )?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
