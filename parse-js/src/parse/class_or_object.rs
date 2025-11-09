@@ -24,6 +24,11 @@ impl<'a> Parser<'a> {
     let members = self.repeat_until_tt_with_loc(
       TT::BraceClose,
       |p| {
+        // Skip empty semicolons
+        while p.consume_if(TT::Semicolon).is_match() {}
+        if p.peek().typ == TT::BraceClose {
+          return Err(p.peek().error(SyntaxErrorType::ExpectedNotFound));
+        }
         // `static` must always come first if present.
         let static_ = p.consume_if(TT::KeywordStatic).match_loc();
         let (key, value) = p.class_or_obj_member(
