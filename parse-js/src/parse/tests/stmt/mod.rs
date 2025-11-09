@@ -5,7 +5,7 @@ use crate::parse::Parser;
 use crate::util::test::evaluate_test_input_files;
 use serde_json::Value;
 
-fn parse_stmt_and_serialize(input: Vec<u8>) -> Value {
+fn parse_stmt_and_serialize(input: String) -> Value {
   let mut parser = Parser::new(Lexer::new(&input));
   let ctx = ParseCtx {
     rules: ParsePatternRules {

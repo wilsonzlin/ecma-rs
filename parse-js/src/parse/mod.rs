@@ -105,12 +105,12 @@ impl<'a> Parser<'a> {
     self.lexer.source_range()
   }
 
-  pub fn bytes(&self, loc: Loc) -> &[u8] {
+  pub fn bytes(&self, loc: Loc) -> &str {
     &self.lexer[loc]
   }
 
   pub fn str(&self, loc: Loc) -> &str {
-    std::str::from_utf8(self.bytes(loc)).unwrap()
+    self.bytes(loc)
   }
 
   pub fn string(&self, loc: Loc) -> String {

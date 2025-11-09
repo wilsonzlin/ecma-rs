@@ -23,7 +23,8 @@ fn main() {
       let file_path = t.unwrap();
       let file_name = file_path.file_name().to_str().unwrap().to_string();
       let src = fs::read(file_path.path()).unwrap();
-      let error = parse_js::parse(&src).err().map(|err| format!("{:?}", err));
+      let src_str = std::str::from_utf8(&src).unwrap();
+      let error = parse_js::parse(src_str).err().map(|err| format!("{:?}", err));
       (file_name, error)
     })
     .collect::<Vec<_>>();
