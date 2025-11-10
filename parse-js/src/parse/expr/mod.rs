@@ -403,7 +403,8 @@ impl<'a> Parser<'a> {
     };
 
     // Check for async keyword first, before checking if it's a valid identifier.
-    if t0.typ == TT::KeywordAsync {
+    // Exception: `async => ...` should be treated as a parameter name, not async keyword
+    if t0.typ == TT::KeywordAsync && t1.typ != TT::EqualsChevronRight {
       return Ok(match t1.typ {
         TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
         TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
@@ -412,24 +413,15 @@ impl<'a> Parser<'a> {
         _ if is_valid_pattern_identifier(t1.typ, ctx.rules) && t2.typ == TT::EqualsChevronRight => {
           self.arrow_func_expr(ctx, terminators)?.into_wrapped()
         }
-        // Special case: `async => ...` means async is used as a parameter name, not async keyword
-        // We need to parse it as a non-async arrow function without calling arrow_func_expr
-        // because that would consume async as a keyword
-        TT::EqualsChevronRight => {
-          // Parse as identifier expression for now, operator parsing will handle the arrow function
-          self.id_expr(ctx)?.into_wrapped()
-        }
         // `async` is being used as an identifier.
         _ => self.id_expr(ctx)?.into_wrapped(),
       });
     };
 
-    // Check for other valid pattern identifiers (excluding async, which we already handled).
-    // Note: async is NOT excluded here because it fell through from above when followed by =>
-    if is_valid_pattern_identifier(t0.typ, ctx.rules) && t0.typ != TT::KeywordAsync {
+    // Check for other valid pattern identifiers.
+    if is_valid_pattern_identifier(t0.typ, ctx.rules) {
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
-        // NOTE: `await` is not allowed as an arrow function parameter, but we'll check this in parse_expr_arrow_function.
         self.arrow_func_expr(ctx, terminators)?.into_wrapped()
       } else {
         self.id_expr(ctx)?.into_wrapped()

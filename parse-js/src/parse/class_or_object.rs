@@ -277,6 +277,10 @@ impl<'a> Parser<'a> {
   }
 
   pub fn class_or_obj_getter(&mut self, ctx: ParseCtx) -> SyntaxResult<(ClassOrObjKey, Node<ClassOrObjGetter>)> {
+    self.class_or_obj_getter_impl(ctx, false)
+  }
+
+  pub fn class_or_obj_getter_impl(&mut self, ctx: ParseCtx, abstract_: bool) -> SyntaxResult<(ClassOrObjKey, Node<ClassOrObjGetter>)> {
     self.require(TT::KeywordGet)?;
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
@@ -295,10 +299,16 @@ impl<'a> Parser<'a> {
         None
       };
       // Getters are not generators or async, so yield/await can be used as identifiers
-      let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
-        await_allowed: true,
-        yield_allowed: true,
-      }))?.into();
+      // TypeScript: abstract getters have no body
+      let body = if abstract_ && p.peek().typ != TT::BraceOpen {
+        p.consume_if(TT::Semicolon);
+        None
+      } else {
+        Some(p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+          await_allowed: true,
+          yield_allowed: true,
+        }))?.into())
+      };
       Ok(Func {
         arrow: false,
         async_: false,
@@ -306,7 +316,7 @@ impl<'a> Parser<'a> {
         type_parameters,
         parameters: Vec::new(),
         return_type,
-        body: Some(body),
+        body,
       })
     })?;
     let val = func.wrap(|func| ClassOrObjGetter { func });
@@ -314,6 +324,10 @@ impl<'a> Parser<'a> {
   }
 
   pub fn class_or_obj_setter(&mut self, ctx: ParseCtx) -> SyntaxResult<(ClassOrObjKey, Node<ClassOrObjSetter>)> {
+    self.class_or_obj_setter_impl(ctx, false)
+  }
+
+  pub fn class_or_obj_setter_impl(&mut self, ctx: ParseCtx, abstract_: bool) -> SyntaxResult<(ClassOrObjKey, Node<ClassOrObjSetter>)> {
     self.require(TT::KeywordSet)?;
     let key = self.class_or_obj_key(ctx)?;
     let func = self.with_loc(|p| {
@@ -337,7 +351,13 @@ impl<'a> Parser<'a> {
       let param_loc = pattern.loc;
       p.require(TT::ParenthesisClose)?;
       // Setters don't have return types
-      let body = p.parse_func_block_body(setter_ctx)?.into();
+      // TypeScript: abstract setters have no body
+      let body = if abstract_ && p.peek().typ != TT::BraceOpen {
+        p.consume_if(TT::Semicolon);
+        None
+      } else {
+        Some(p.parse_func_block_body(setter_ctx)?.into())
+      };
       Ok(Func {
         arrow: false,
         async_: false,
@@ -354,7 +374,7 @@ impl<'a> Parser<'a> {
           default_value,
         })],
         return_type: None,
-        body: Some(body),
+        body,
       })
     })?;
     let val = func.wrap(|func| ClassOrObjSetter { func });
@@ -426,10 +446,10 @@ impl<'a> Parser<'a> {
       if is_getter || is_setter {
         // Don't consume get/set here - the getter/setter functions will do it
         if is_getter {
-          let (key, val) = self.class_or_obj_getter(ctx)?;
+          let (key, val) = self.class_or_obj_getter_impl(ctx, abstract_)?;
           return Ok((key, val.into()));
         } else {
-          let (key, val) = self.class_or_obj_setter(ctx)?;
+          let (key, val) = self.class_or_obj_setter_impl(ctx, abstract_)?;
           return Ok((key, val.into()));
         }
       }
@@ -501,12 +521,12 @@ impl<'a> Parser<'a> {
       }
       // Getter.
       (TT::KeywordGet, _, TT::ParenthesisOpen, _) => {
-        let (k, v) = self.class_or_obj_getter(ctx)?;
+        let (k, v) = self.class_or_obj_getter_impl(ctx, abstract_)?;
         (k, v.into())
       }
       // Setter.
       (TT::KeywordSet, _, TT::ParenthesisOpen, _) => {
-        let (k, v) = self.class_or_obj_setter(ctx)?;
+        let (k, v) = self.class_or_obj_setter_impl(ctx, abstract_)?;
         (k, v.into())
       }
       // Assume it's a property.
