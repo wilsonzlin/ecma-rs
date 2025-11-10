@@ -234,14 +234,20 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<(ClassOrObjKey, Option<Node<Expr>>)> {
     let key = self.class_or_obj_key(ctx)?;
     let has_init = match key {
-      ClassOrObjKey::Direct(_) => self.peek().typ == value_delimiter,
-      ClassOrObjKey::Computed(_) => {
-        // Computed keys always require a value
-        if self.peek().typ != value_delimiter {
-          return Err(self.peek().error(SyntaxErrorType::ExpectedNotFound));
-        }
-        true
-      }
+      ClassOrObjKey::Direct(_) => match self.peek() {
+        // Given `class A {1}`, `"1" in new A` - bare property with no initializer.
+        t if t.typ == TT::BraceClose => false,
+        // Given `class A {1;}`, `"1" in new A` - bare property with no initializer.
+        t if t.typ == statement_delimiter => false,
+        // Given `class A {1\n2}`, `"2" in new A` - bare property with no initializer.
+        t if property_initialiser_asi.can_end_with_asi && t.preceded_by_line_terminator => false,
+        // If we see the value delimiter, we have an initializer
+        t if t.typ == value_delimiter => true,
+        // Otherwise, bare property
+        _ => false,
+      },
+      // Computed properties always check for delimiter
+      ClassOrObjKey::Computed(_) => self.peek().typ == value_delimiter,
     };
     let initializer = has_init
       .then(|| {

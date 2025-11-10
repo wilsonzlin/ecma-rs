@@ -46,16 +46,26 @@ fn run_test(path: &Path) -> TestResult {
         }
     };
 
-    match parse_js::parse(&source) {
-        Ok(_) => TestResult {
+    // Catch panics to prevent test runner from crashing
+    let result = std::panic::catch_unwind(|| {
+        parse_js::parse(&source)
+    });
+
+    match result {
+        Ok(Ok(_)) => TestResult {
             path: path.to_path_buf(),
             passed: true,
             error: None,
         },
-        Err(e) => TestResult {
+        Ok(Err(e)) => TestResult {
             path: path.to_path_buf(),
             passed: false,
             error: Some(format!("{:?}", e)),
+        },
+        Err(panic_err) => TestResult {
+            path: path.to_path_buf(),
+            passed: false,
+            error: Some(format!("PANIC: {:?}", panic_err)),
         },
     }
 }
@@ -77,6 +87,9 @@ fn main() {
     for (idx, test_path) in tests.iter().enumerate() {
         if idx % 100 == 0 {
             println!("Progress: {}/{}", idx, tests.len());
+        }
+        if idx % 10 == 0 {
+            eprintln!("[TEST {}] {}", idx, test_path.display());
         }
 
         let result = run_test(test_path);

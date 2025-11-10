@@ -272,7 +272,12 @@ impl<'a> Parser<'a> {
               ClassOrObjVal::Prop(None) => {
                 // This property had no value, so it's a shorthand property. Therefore, check that it's a valid identifier name.
                 let ClassOrObjKey::Direct(key) = key else {
-                  unreachable!();
+                  // Computed properties cannot be shorthand
+                  let loc = match key {
+                    ClassOrObjKey::Computed(ref expr) => expr.loc,
+                    _ => unreachable!(),
+                  };
+                  return Err(loc.error(SyntaxErrorType::ExpectedSyntax("property value"), None));
                 };
                 if !is_valid_pattern_identifier(key.stx.tt, ctx.rules) {
                   return Err(key.error(SyntaxErrorType::ExpectedNotFound));
