@@ -30,35 +30,73 @@ impl<'a> Parser<'a> {
         break;
       }
       let member = self.with_loc(|p| {
-        // `static` must always come first if present, unless it's a method name.
-        // Check if `static` is followed by `(` which means it's a method name, not a modifier.
-        let static_ = if p.peek().typ == TT::KeywordStatic {
-          let [_, next] = p.peek_n::<2>();
-          if next.typ == TT::ParenthesisOpen {
-            // `static()` - it's a method name
-            None
-          } else {
-            p.consume_if(TT::KeywordStatic).match_loc()
-          }
+        // Parse TypeScript modifiers in order:
+        // [accessibility] [abstract] [override] [static] [readonly]
+
+        // TypeScript: accessibility modifiers (public, private, protected)
+        let accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
+          Some(crate::ast::stmt::decl::Accessibility::Public)
+        } else if p.consume_if(TT::KeywordPrivate).is_match() {
+          Some(crate::ast::stmt::decl::Accessibility::Private)
+        } else if p.consume_if(TT::KeywordProtected).is_match() {
+          Some(crate::ast::stmt::decl::Accessibility::Protected)
         } else {
           None
         };
+
+        // TypeScript: abstract modifier
+        let abstract_ = p.consume_if(TT::KeywordAbstract).is_match();
+
+        // TypeScript: override modifier
+        let override_ = p.consume_if(TT::KeywordOverride).is_match();
+
+        // `static` must always come after other modifiers
+        let static_ = if p.peek().typ == TT::KeywordStatic {
+          let [_, next] = p.peek_n::<2>();
+          if next.typ == TT::ParenthesisOpen {
+            // `static()` - it's a method name, not a modifier
+            false
+          } else {
+            p.consume_if(TT::KeywordStatic).is_match()
+          }
+        } else {
+          false
+        };
+
+        // TypeScript: readonly modifier
+        let readonly = p.consume_if(TT::KeywordReadonly).is_match();
+
         let (key, value) = p.class_or_obj_member(
           ctx,
           TT::Equals,
           TT::Semicolon,
           &mut Asi::can(),
         )?;
+
+        // TypeScript: definite assignment assertion (! after key)
+        let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+
+        // TypeScript: optional property (? after key)
+        let optional = p.consume_if(TT::Question).is_match();
+
+        // TypeScript: type annotation
+        let type_annotation = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
+
         p.consume_if(TT::Semicolon);
         Ok(ClassMember {
           key,
-          static_: static_.is_some(),
-          abstract_: false,
-          readonly: false,
-          optional: false,
-          override_: false,
-          accessibility: None,
-          type_annotation: None,
+          static_,
+          abstract_,
+          readonly,
+          optional,
+          override_,
+          definite_assignment,
+          accessibility,
+          type_annotation,
           val: value,
         })
       })?;
@@ -115,9 +153,9 @@ impl<'a> Parser<'a> {
         None
       };
       let parameters = p.func_params(ctx)?;
-      // TypeScript: return type annotation
+      // TypeScript: return type annotation - may be type predicate
       let return_type = if p.consume_if(TT::Colon).is_match() {
-        Some(p.type_expr(ctx)?)
+        Some(p.type_expr_or_predicate(ctx)?)
       } else {
         None
       };
@@ -151,9 +189,9 @@ impl<'a> Parser<'a> {
       };
       p.require(TT::ParenthesisOpen)?;
       p.require(TT::ParenthesisClose)?;
-      // TypeScript: return type annotation
+      // TypeScript: return type annotation - may be type predicate
       let return_type = if p.consume_if(TT::Colon).is_match() {
-        Some(p.type_expr(ctx)?)
+        Some(p.type_expr_or_predicate(ctx)?)
       } else {
         None
       };
@@ -304,7 +342,19 @@ impl<'a> Parser<'a> {
       return Ok(if self.peek().typ == TT::ParenthesisOpen {
         let method = self.with_loc(|p| {
           let func = p.with_loc(|p| {
+            // TypeScript: generic type parameters
+            let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+              Some(p.type_parameters(ctx)?)
+            } else {
+              None
+            };
             let parameters = p.func_params(ctx)?;
+            // TypeScript: return type annotation
+            let return_type = if p.consume_if(TT::Colon).is_match() {
+              Some(p.type_expr_or_predicate(ctx)?)
+            } else {
+              None
+            };
             let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
               await_allowed: !is_async && ctx.rules.await_allowed,
               yield_allowed: !is_generator && ctx.rules.yield_allowed,
@@ -313,7 +363,9 @@ impl<'a> Parser<'a> {
               arrow: false,
               async_: is_async,
               generator: is_generator,
+              type_parameters,
               parameters,
+              return_type,
               body,
             })
           })?;

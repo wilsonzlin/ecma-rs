@@ -17,6 +17,7 @@ pub enum TypeExpr {
   Boolean(Node<TypeBoolean>),
   BigInt(Node<TypeBigInt>),
   Symbol(Node<TypeSymbol>),
+  UniqueSymbol(Node<TypeUniqueSymbol>),
   Object(Node<TypeObject>),
   Null(Node<TypeNull>),
   Undefined(Node<TypeUndefined>),
@@ -85,6 +86,10 @@ pub struct TypeBigInt {}
 /// Primitive type: symbol
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeSymbol {}
+
+/// Primitive type: unique symbol
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct TypeUniqueSymbol {}
 
 /// Primitive type: object
 #[derive(Debug, Drive, DriveMut, Serialize)]

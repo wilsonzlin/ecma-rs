@@ -472,7 +472,7 @@ pub static KEYWORDS_MAPPING: Lazy<HashMap<TT, &'static str>> = Lazy::new(|| {
   map.insert(TT::KeywordUnknown, "unknown");
   map.insert(TT::LiteralFalse, "false");
   map.insert(TT::LiteralNull, "null");
-  map.insert(TT::LiteralTrue, "true")
+  map.insert(TT::LiteralTrue, "true");
   map
 });
 

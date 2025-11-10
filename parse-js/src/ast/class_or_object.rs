@@ -77,6 +77,8 @@ pub struct ClassMember {
   pub optional: bool,
   #[drive(skip)]
   pub override_: bool,
+  #[drive(skip)]
+  pub definite_assignment: bool, // TypeScript: prop!: Type
   pub accessibility: Option<Accessibility>,
   pub type_annotation: Option<Node<TypeExpr>>, // For properties only
   pub val: ClassOrObjVal,

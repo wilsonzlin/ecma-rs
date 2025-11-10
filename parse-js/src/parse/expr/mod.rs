@@ -123,9 +123,9 @@ impl<'a> Parser<'a> {
         // Single-unparenthesised-parameter arrow function.
         // Parse arrow first for fast fail (and in case we are merely trying to parse as arrow function), before we mutate state by creating nodes and adding symbols.
         let param_name = p.consume().loc;
-        // TypeScript: return type annotation (after param, before =>)
+        // TypeScript: return type annotation (after param, before =>) - may be type predicate
         let return_type = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
+          Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
         };
@@ -153,9 +153,9 @@ impl<'a> Parser<'a> {
           None
         };
         let params = p.func_params(ctx)?;
-        // TypeScript: return type annotation (after params, before =>)
+        // TypeScript: return type annotation (after params, before =>) - may be type predicate
         let return_type = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
+          Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
         };
@@ -244,9 +244,9 @@ impl<'a> Parser<'a> {
           yield_allowed: !generator && ctx.rules.yield_allowed,
         });
         let parameters = p.func_params(fn_ctx)?;
-        // TypeScript: return type annotation
+        // TypeScript: return type annotation - may be type predicate
         let return_type = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
+          Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
         };
@@ -480,6 +480,23 @@ impl<'a> Parser<'a> {
           }).into_wrapped();
           continue;
         }
+        // TypeScript: Non-null assertion: expr!
+        // We need to distinguish between non-null assertion (expr!) and inequality operators (!= and !==)
+        TT::Exclamation if !t.preceded_by_line_terminator => {
+          let next = self.peek();
+          if next.typ != TT::Equals && next.typ != TT::EqualsEquals {
+            // This is a non-null assertion: expr!
+            use crate::ast::expr::NonNullAssertionExpr;
+            left = Node::new(left.loc + t.loc, NonNullAssertionExpr {
+              expression: Box::new(left),
+            }).into_wrapped();
+            continue;
+          }
+          // Otherwise it's != or !==, so restore checkpoint and continue loop to re-process
+          // We restore so the binary operator handling code below can process != or !==
+          self.restore_checkpoint(cp);
+          continue; // Restart loop to re-process the ! token as part of != or !==
+        }
         // Automatic Semicolon Insertion rules: no newline between operand and template literal.
         TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
           if !t.preceded_by_line_terminator =>
@@ -490,6 +507,26 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + loc, TaggedTemplateExpr {
             function: left,
             parts,
+          }).into_wrapped();
+          continue;
+        }
+        // TypeScript: Type assertion: expr as Type
+        TT::KeywordAs => {
+          let type_annotation = self.type_expr(ctx)?;
+          use crate::ast::expr::TypeAssertionExpr;
+          left = Node::new(left.loc + type_annotation.loc, TypeAssertionExpr {
+            expression: Box::new(left),
+            type_annotation,
+          }).into_wrapped();
+          continue;
+        }
+        // TypeScript: Satisfies expression: expr satisfies Type
+        TT::KeywordSatisfies => {
+          let type_annotation = self.type_expr(ctx)?;
+          use crate::ast::expr::SatisfiesExpr;
+          left = Node::new(left.loc + type_annotation.loc, SatisfiesExpr {
+            expression: Box::new(left),
+            type_annotation,
           }).into_wrapped();
           continue;
         }
