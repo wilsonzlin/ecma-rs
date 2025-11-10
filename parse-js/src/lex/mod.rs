@@ -891,6 +891,11 @@ pub fn lex_template_string_continue(
   let mut ended = false;
   loop {
     lexer.consume(lexer.while_not_3_chars('\\', '`', '$'));
+    // Check for EOF (unterminated template string)
+    if lexer.remaining() == 0 {
+      // Return error for unterminated template - will become TT::Invalid
+      return Err(LexNotFound);
+    }
     match lexer.peek(0)? {
       '\\' => {
         // Consume the backslash
