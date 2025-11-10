@@ -480,7 +480,7 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse type arguments: <T, U, V>
-  fn type_arguments(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<TypeExpr>>> {
+  pub fn type_arguments(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<TypeExpr>>> {
     self.require(TT::ChevronLeft)?;
     let mut args = Vec::new();
     while !self.consume_if(TT::ChevronRight).is_match() {

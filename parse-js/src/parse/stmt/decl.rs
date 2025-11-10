@@ -226,7 +226,9 @@ impl<'a> Parser<'a> {
 
       // Unlike functions, classes are scoped to their block.
       let extends = if p.consume_if(TT::KeywordExtends).is_match() {
-        Some(p.expr(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
+        // TypeScript: extends clause can have type arguments: class C<T> extends Base<T>
+        // Parse expression, which will handle type arguments via expr_with_ts_type_args
+        Some(p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
       } else {
         None
       };

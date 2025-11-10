@@ -94,6 +94,12 @@ impl<'a> Parser<'a> {
     self.expr_with_min_prec(ctx, 1, terminators, asi)
   }
 
+  /// Parse expression with TypeScript type arguments support
+  /// Type arguments are now handled automatically in the main expression loop
+  pub fn expr_with_ts_type_args<const N: usize>(&mut self, ctx: ParseCtx, terminators: [TT; N]) -> SyntaxResult<Node<Expr>> {
+    self.expr(ctx, terminators)
+  }
+
   /// Parses a parenthesised expression like `(a + b)`.
   pub fn grouping(&mut self, ctx: ParseCtx, asi: &mut Asi) -> SyntaxResult<Node<Expr>> {
     self.require(TT::ParenthesisOpen)?;
@@ -300,7 +306,7 @@ impl<'a> Parser<'a> {
         None
       };
 
-      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
 
       // TypeScript: implements clause
       let mut implements = Vec::new();
@@ -562,6 +568,36 @@ impl<'a> Parser<'a> {
             type_annotation,
           }).into_wrapped();
           continue;
+        }
+        // TypeScript: Skip type arguments after identifiers/member expressions
+        // e.g., Base<T> in extends clause
+        TT::ChevronLeft => {
+          // We've already consumed <, need to check if this is type arguments
+          // Peek ahead to disambiguate
+          let next = self.peek();
+          let looks_like_type_args = match next.typ {
+            TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
+            TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
+            TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
+            TT::BracketOpen | TT::BraceOpen | TT::ParenthesisOpen |
+            TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer |
+            TT::ChevronRight | TT::Identifier => true,
+            _ => false,
+          };
+
+          if looks_like_type_args {
+            // Parse the rest of the type arguments (we already consumed <)
+            let mut args = Vec::new();
+            while !self.consume_if(TT::ChevronRight).is_match() {
+              args.push(self.type_expr(ctx)?);
+              if !self.consume_if(TT::Comma).is_match() {
+                self.require(TT::ChevronRight)?;
+                break;
+              }
+            }
+            continue;
+          }
+          // Not type arguments, continue to binary operator handling
         }
         _ => {}
       };
