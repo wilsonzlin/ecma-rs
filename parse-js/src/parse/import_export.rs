@@ -241,10 +241,12 @@ impl<'a> Parser<'a> {
       return self.with_loc(|p| {
         p.require(TT::KeywordExport)?;
         p.require(TT::Equals)?;
-        let expression = p.expr(ctx, [])?;
+        let expression = p.expr(ctx, [TT::Semicolon])?;
         // Allow ASI
         let t = p.peek();
         if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+          p.require(TT::Semicolon)?;
+        } else {
           p.consume_if(TT::Semicolon);
         }
         Ok(crate::ast::ts_stmt::ExportAssignmentDecl { expression })
