@@ -71,7 +71,7 @@ fn run_test(path: &Path) -> TestResult {
 }
 
 fn main() {
-    let test_dir = Path::new("tests/typescript-conformance");
+    let test_dir = Path::new("tests/TypeScript/tests/cases/conformance");
 
     println!("🔍 Discovering TypeScript conformance tests...");
     let tests = discover_tests(test_dir);
