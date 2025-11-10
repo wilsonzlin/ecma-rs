@@ -259,12 +259,14 @@ impl<'a> Parser<'a> {
       (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
       (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
+      // TypeScript: export type { ... } or export type * from "module" (type-only re-exports)
+      (TT::KeywordType, TT::BraceOpen | TT::Asterisk) => self.export_list_stmt(ctx)?.into_wrapped(),
       // TypeScript: export interface, export type, export enum, export namespace, export declare
       (TT::KeywordInterface, _) => {
         self.consume(); // export
         self.interface_decl(ctx, true, false)?.into_wrapped()
       },
-      (TT::KeywordType, _) if t2.typ != TT::BraceOpen && t2.typ != TT::Asterisk => {
+      (TT::KeywordType, _) => {
         self.consume(); // export
         self.type_alias_decl(ctx, true, false)?.into_wrapped()
       },
