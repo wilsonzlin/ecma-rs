@@ -60,7 +60,38 @@ impl<'a> Parser<'a> {
         // `static` must always come after other modifiers
         let static_ = if p.peek().typ == TT::KeywordStatic {
           let [_, next] = p.peek_n::<2>();
-          if next.typ == TT::ParenthesisOpen {
+          if next.typ == TT::BraceOpen {
+            // `static {}` - static initialization block
+            p.consume(); // consume 'static'
+            let block = p.with_loc(|p| {
+              p.require(TT::BraceOpen)?;
+              let body = p.stmts(ctx, TT::BraceClose)?;
+              p.require(TT::BraceClose)?;
+              Ok(crate::ast::class_or_object::ClassStaticBlock { body })
+            })?;
+            use crate::ast::class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal};
+            use crate::loc::Loc;
+            let dummy_key = ClassOrObjKey::Direct(Node::new(
+              Loc(0, 0),
+              ClassOrObjMemberDirectKey {
+                key: String::new(),
+                tt: TT::Identifier,
+              }
+            ));
+            return Ok(ClassMember {
+              decorators,
+              key: dummy_key,
+              static_: true,
+              abstract_: false,
+              readonly: false,
+              optional: false,
+              override_: false,
+              definite_assignment: false,
+              accessibility: None,
+              type_annotation: None,
+              val: ClassOrObjVal::StaticBlock(block),
+            });
+          } else if next.typ == TT::ParenthesisOpen {
             // `static()` - it's a method name, not a modifier
             false
           } else {
