@@ -1,7 +1,7 @@
 TypeScript Conformance Test Failures Report
 
-Total: 5897, Passed: 1690, Failed: 4207
-Pass Rate: 28.66%
+Total: 5897, Passed: 1770, Failed: 4127
+Pass Rate: 30.02%
 
 ================================================================================
 
@@ -15,10 +15,6 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [17:2
 ================================================================================
 File: tests/typescript-conformance/enums/enumMergingErrors.ts
 Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [124:130]
-
-================================================================================
-File: tests/typescript-conformance/enums/enumErrorOnConstantBindingWithInitializer.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [72:77]
 
 ================================================================================
 File: tests/typescript-conformance/enums/enumConstantMembers.ts
@@ -110,7 +106,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [132:133
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/asyncAwait_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [87:90]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordFunction)] around loc [314:322]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/asyncAwaitIsolatedModules_es5.ts
@@ -133,32 +129,28 @@ File: tests/typescript-conformance/async/es5/asyncModule_es5.ts
 Error: RequiredTokenNotFound(KeywordFunction) [token=Some(KeywordNamespace)] around loc [74:83]
 
 ================================================================================
-File: tests/typescript-conformance/async/es5/awaitUnion_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [79:82]
-
-================================================================================
 File: tests/typescript-conformance/async/es5/asyncDeclare_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordAsync)] around loc [76:81]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [111:112]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitBinaryExpression/awaitBinaryExpression3_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [154:155]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitBinaryExpression/awaitBinaryExpression1_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [156:157]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitBinaryExpression/awaitBinaryExpression4_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [156:157]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitBinaryExpression/awaitBinaryExpression5_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [156:157]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitBinaryExpression/awaitBinaryExpression2_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [156:157]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/asyncClass_es5.ts
@@ -166,35 +158,35 @@ Error: RequiredTokenNotFound(KeywordFunction) [token=Some(KeywordClass)] around 
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitCallExpression/awaitCallExpression8_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [195:196]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitCallExpression/awaitCallExpression1_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [195:196]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitCallExpression/awaitCallExpression6_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [195:196]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitCallExpression/awaitCallExpression3_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [195:196]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitCallExpression/awaitCallExpression5_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [195:196]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitCallExpression/awaitCallExpression7_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [195:196]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitCallExpression/awaitCallExpression4_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [195:196]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/awaitCallExpression/awaitCallExpression2_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [76:79]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [195:196]
 
 ================================================================================
 File: tests/typescript-conformance/async/es5/asyncArrowFunction/asyncArrowFunction1_es5.ts
@@ -245,10 +237,6 @@ File: tests/typescript-conformance/async/es5/asyncArrowFunction/asyncArrowFuncti
 Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [87:88]
 
 ================================================================================
-File: tests/typescript-conformance/async/es5/awaitClassExpression_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [100:103]
-
-================================================================================
 File: tests/typescript-conformance/async/es5/asyncInterface_es5.ts
 Error: RequiredTokenNotFound(KeywordFunction) [token=Some(KeywordInterface)] around loc [74:83]
 
@@ -289,10 +277,6 @@ File: tests/typescript-conformance/async/es5/functionDeclarations/asyncFunctionD
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [193:194]
 
 ================================================================================
-File: tests/typescript-conformance/async/es5/asyncUseStrict_es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [79:82]
-
-================================================================================
 File: tests/typescript-conformance/async/es6/asyncClass_es6.ts
 Error: RequiredTokenNotFound(KeywordFunction) [token=Some(KeywordClass)] around loc [46:51]
 
@@ -302,43 +286,31 @@ Error: RequiredTokenNotFound(KeywordFunction) [token=Some(KeywordEnum)] around l
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/asyncDeclare_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordAsync)] around loc [48:53]
-
-================================================================================
-File: tests/typescript-conformance/async/es6/awaitUnion_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [50:53]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [83:84]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/asyncAwait_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [58:61]
-
-================================================================================
-File: tests/typescript-conformance/async/es6/awaitClassExpression_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [71:74]
-
-================================================================================
-File: tests/typescript-conformance/async/es6/asyncUseStrict_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [50:53]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordFunction)] around loc [285:293]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitBinaryExpression/awaitBinaryExpression5_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [128:129]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitBinaryExpression/awaitBinaryExpression3_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [126:127]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitBinaryExpression/awaitBinaryExpression4_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [128:129]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitBinaryExpression/awaitBinaryExpression1_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [128:129]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitBinaryExpression/awaitBinaryExpression2_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [128:129]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/asyncInterface_es6.ts
@@ -350,35 +322,35 @@ Error: RequiredTokenNotFound(KeywordFunction) [token=Some(KeywordNamespace)] aro
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitCallExpression/awaitCallExpression8_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitCallExpression/awaitCallExpression6_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitCallExpression/awaitCallExpression1_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitCallExpression/awaitCallExpression5_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitCallExpression/awaitCallExpression7_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitCallExpression/awaitCallExpression2_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitCallExpression/awaitCallExpression4_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/awaitCallExpression/awaitCallExpression3_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [48:51]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/asyncArrowFunction/asyncArrowFunction9_es6.ts
@@ -434,7 +406,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/asyncWithVarShadowing_es6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [110:115]
+Error: RequiredTokenNotFound(KeywordOf) [token=Some(KeywordIn)] around loc [2159:2161]
 
 ================================================================================
 File: tests/typescript-conformance/async/es6/asyncImportedPromise_es6.ts
@@ -478,7 +450,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(EqualsChevronRight)] ar
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/asyncAwait_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [61:64]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordFunction)] around loc [288:296]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/asyncAwaitIsolatedModules_es2017.ts
@@ -490,63 +462,59 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [1219:12
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitBinaryExpression/awaitBinaryExpression2_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [131:132]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitBinaryExpression/awaitBinaryExpression5_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [131:132]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitBinaryExpression/awaitBinaryExpression3_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [129:130]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitBinaryExpression/awaitBinaryExpression4_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [131:132]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitBinaryExpression/awaitBinaryExpression1_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [131:132]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/await_incorrectThisType.ts
 Error: RequiredTokenNotFound(Identifier) [token=Some(Comma)] around loc [283:284]
 
 ================================================================================
-File: tests/typescript-conformance/async/es2017/awaitInheritedPromise_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [96:99]
-
-================================================================================
 File: tests/typescript-conformance/async/es2017/awaitCallExpression/awaitCallExpression8_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [170:171]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitCallExpression/awaitCallExpression3_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [170:171]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitCallExpression/awaitCallExpression2_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [170:171]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitCallExpression/awaitCallExpression5_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [170:171]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitCallExpression/awaitCallExpression6_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [170:171]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitCallExpression/awaitCallExpression1_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [170:171]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitCallExpression/awaitCallExpression4_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [170:171]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/awaitCallExpression/awaitCallExpression7_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [170:171]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/asyncArrowFunction/asyncArrowFunction5_es2017.ts
@@ -595,14 +563,6 @@ Error: ExpectedSyntax("expression operator") [token=Some(EqualsChevronRight)] ar
 ================================================================================
 File: tests/typescript-conformance/async/es2017/asyncArrowFunction/asyncArrowFunctionCapturesThis_es2017.ts
 Error: ExpectedSyntax("expression operator") [token=Some(EqualsChevronRight)] around loc [91:93]
-
-================================================================================
-File: tests/typescript-conformance/async/es2017/awaitClassExpression_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [74:77]
-
-================================================================================
-File: tests/typescript-conformance/async/es2017/asyncUseStrict_es2017.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [53:56]
 
 ================================================================================
 File: tests/typescript-conformance/async/es2017/functionDeclarations/asyncFunctionDeclaration10_es2017.ts
@@ -718,7 +678,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [153:154
 
 ================================================================================
 File: tests/typescript-conformance/jsdoc/jsdocImportTypeReferenceToCommonjsModule.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [83:86]
+Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [116:122]
 
 ================================================================================
 File: tests/typescript-conformance/jsdoc/typedefTagExtraneousProperty.ts
@@ -786,7 +746,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/jsdoc/typedefCrossModule.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [89:92]
+Error: ExpectedSyntax("identifier") [token=Some(Dot)] around loc [295:296]
 
 ================================================================================
 File: tests/typescript-conformance/jsdoc/tsNoCheckForTypescriptComments1.ts
@@ -985,10 +945,6 @@ File: tests/typescript-conformance/jsdoc/checkJsdocSatisfiesTag14.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [171:172]
 
 ================================================================================
-File: tests/typescript-conformance/jsdoc/typedefMultipleTypeParameters.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [627:630]
-
-================================================================================
 File: tests/typescript-conformance/jsdoc/moduleExportsElementAccessAssignment2.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [154:155]
 
@@ -1034,7 +990,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [78:8
 
 ================================================================================
 File: tests/typescript-conformance/jsdoc/declarations/jsDeclarationsTypeReassignmentFromDeclaration.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [168:173]
+Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [190:196]
 
 ================================================================================
 File: tests/typescript-conformance/jsdoc/declarations/jsDeclarationsReferenceToClassInstanceCrossFile.ts
@@ -1406,7 +1362,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [187
 
 ================================================================================
 File: tests/typescript-conformance/moduleResolution/bundler/bundlerSyntaxRestrictions.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [171:174]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [333:334]
 
 ================================================================================
 File: tests/typescript-conformance/moduleResolution/bundler/bundlerDirectoryModule.ts
@@ -1514,7 +1470,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [161:
 
 ================================================================================
 File: tests/typescript-conformance/moduleResolution/nodeModulesAtTypesPriority.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [140:145]
+Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [158:164]
 
 ================================================================================
 File: tests/typescript-conformance/moduleResolution/untypedModuleImport.ts
@@ -1594,11 +1550,11 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [861:862
 
 ================================================================================
 File: tests/typescript-conformance/generators/generatorReturnTypeInferenceNonStrict.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [113:118]
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [427:428]
 
 ================================================================================
 File: tests/typescript-conformance/generators/yieldStatementNoAsiAfterTransform.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [78:81]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc [154:156]
 
 ================================================================================
 File: tests/typescript-conformance/generators/generatorReturnTypeIndirectReferenceToGlobalType.ts
@@ -1613,10 +1569,6 @@ File: tests/typescript-conformance/generators/generatorYieldContextualType.ts
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [121:122]
 
 ================================================================================
-File: tests/typescript-conformance/generators/generatorAssignability.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [66:69]
-
-================================================================================
 File: tests/typescript-conformance/generators/generatorImplicitAny.ts
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [210:211]
 
@@ -1626,7 +1578,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [110:111
 
 ================================================================================
 File: tests/typescript-conformance/generators/generatorReturnTypeInference.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [112:117]
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [421:422]
 
 ================================================================================
 File: tests/typescript-conformance/es2019/globalThisAmbientModules.ts
@@ -1641,28 +1593,12 @@ File: tests/typescript-conformance/es2019/globalThisGlobalExportAsGlobal.ts
 Error: ExpectedSyntax("declaration after declare") [token=Some(Identifier)] around loc [65:71]
 
 ================================================================================
-File: tests/typescript-conformance/es2019/globalThisTypeIndexAccess.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [9:14]
-
-================================================================================
 File: tests/typescript-conformance/es2019/importMeta/importMetaNarrowing.ts
 Error: ExpectedSyntax("declaration after declare") [token=Some(Identifier)] around loc [59:65]
 
 ================================================================================
 File: tests/typescript-conformance/es2019/importMeta/importMeta.ts
 Error: ExpectedSyntax("expression operator") [token=Some(EqualsChevronRight)] around loc [241:243]
-
-================================================================================
-File: tests/typescript-conformance/es2019/globalThisUnknown.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [8:11]
-
-================================================================================
-File: tests/typescript-conformance/es2019/globalThisBlockscopedProperties.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [352:355]
-
-================================================================================
-File: tests/typescript-conformance/es2019/globalThisUnknownNoImplicitAny.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [32:35]
 
 ================================================================================
 File: tests/typescript-conformance/override/override10.ts
@@ -1762,7 +1698,7 @@ Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [43
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/metadata/esDecoratorsMetadata5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [78:81]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [111:111]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/metadata/esDecoratorsMetadata2.ts
@@ -1778,7 +1714,7 @@ Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [20
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/esDecorators-decoratorExpression.3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [115:118]
+Error: ExpectedSyntax("type expression") [token=Some(ChevronLeft)] around loc [122:123]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classSuper/esDecorators-classDeclaration-classSuper.7.ts
@@ -1786,27 +1722,27 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc 
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classSuper/esDecorators-classDeclaration-classSuper.4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [164:165]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classSuper/esDecorators-classDeclaration-classSuper.6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [164:165]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classSuper/esDecorators-classDeclaration-classSuper.3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [135:136]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classSuper/esDecorators-classDeclaration-classSuper.5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [135:136]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classSuper/esDecorators-classDeclaration-classSuper.1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [162:163]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classSuper/esDecorators-classDeclaration-classSuper.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [165:165]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-nonStaticPrivateGetter.ts
@@ -1814,19 +1750,19 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-commonjs-classNamespaceMerge.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [52:55]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [70:70]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-setFunctionName.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [125:128]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [142:142]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-multipleDecorators.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [134:134]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-sourceMap.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [136:139]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [153:153]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-exportModifier.2.ts
@@ -1858,23 +1794,23 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/methods/esDecorators-classDeclaration-methods-nonStaticPrivate.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/methods/esDecorators-classDeclaration-methods-nonStaticAbstract.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [176:176]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/methods/esDecorators-classDeclaration-methods-static.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [167:167]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/methods/esDecorators-classDeclaration-methods-staticPrivate.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/methods/esDecorators-classDeclaration-methods-nonStatic.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [167:167]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-exportModifier.ts
@@ -1886,7 +1822,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-simpleTransformation.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [122:122]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-staticComputedGetter.ts
@@ -1894,11 +1830,11 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classThisReference/esDecorators-classDeclaration-classThisReference.es5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [81:84]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [98:98]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/classThisReference/esDecorators-classDeclaration-classThisReference.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [117:117]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-nonStaticPrivateField.ts
@@ -1906,55 +1842,55 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-parameterProperties.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [137:140]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [218:218]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStaticPrivateAccessor.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-staticPrivate.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStaticAbstract.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [174:174]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-staticAmbient.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [165:165]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStaticAbstractAccessor.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [169:169]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStatic.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [137:140]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [197:197]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStaticAmbient.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [165:165]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-staticPrivateAccessor.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-static.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [137:140]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [197:197]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStaticPrivate.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-staticAccessor.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [160:160]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStaticAccessor.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [160:160]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-nonStaticPrivateMethod.ts
@@ -1962,7 +1898,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-commentPreservation.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [156:159]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [180:180]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-staticPrivateSetter.ts
@@ -1974,7 +1910,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-commonjs.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [52:55]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [70:70]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-staticComputedMethod.ts
@@ -1986,23 +1922,23 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/accessors/esDecorators-classDeclaration-accessors-static.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [167:167]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/accessors/esDecorators-classDeclaration-accessors-nonStaticPrivate.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/accessors/esDecorators-classDeclaration-accessors-nonStatic.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [167:167]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/accessors/esDecorators-classDeclaration-accessors-nonStaticAbstract.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [176:176]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/accessors/esDecorators-classDeclaration-accessors-staticPrivate.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [100:103]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-staticComputedField.ts
@@ -2010,7 +1946,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-outerThisReference.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [79:82]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [178:178]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-classDecorator.3.ts
@@ -2018,7 +1954,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-parameterDecorators.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [105:108]
+Error: ExpectedSyntax("pattern") [token=Some(Invalid)] around loc [149:149]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-missingEmitHelpers-nonStaticPrivateAutoAccessor.ts
@@ -2030,19 +1966,19 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc 
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/esDecorators-privateFieldAccess.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [52:55]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [67:67]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/esDecorators-emitDecoratorMetadata.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [138:141]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [155:155]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/esDecorators-decoratorExpression.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [115:118]
+Error: ExpectedSyntax("type expression") [token=Some(ChevronLeft)] around loc [143:144]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/esDecorators-decoratorExpression.1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [115:118]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [132:132]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.5.ts
@@ -2050,27 +1986,27 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/classSuper/esDecorators-classExpression-classSuper.5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [135:136]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/classSuper/esDecorators-classExpression-classSuper.3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [135:136]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/classSuper/esDecorators-classExpression-classSuper.1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [162:163]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/classSuper/esDecorators-classExpression-classSuper.6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [164:165]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/classSuper/esDecorators-classExpression-classSuper.4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [164:165]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/classSuper/esDecorators-classExpression-classSuper.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [84:87]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [166:166]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.4.ts
@@ -2078,7 +2014,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-commentPreservation.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [120:123]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [154:154]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.16.ts
@@ -2098,51 +2034,51 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [160:163]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [236:236]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [82:85]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [192:192]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [82:85]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Equals)] around loc [244:245]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [82:85]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [238:239]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [82:85]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [223:223]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [82:85]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [224:224]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.8.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [104:107]
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordDefault)] around loc [229:236]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.10.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [84:87]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [207:208]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [82:85]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [249:250]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.7.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [82:85]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [250:250]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.9.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [126:129]
+Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [143:149]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.11.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [84:87]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [142:142]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.12.ts
@@ -2150,7 +2086,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [160:163]
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordDefault)] around loc [244:251]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.9.ts
@@ -2162,7 +2098,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.13.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [160:163]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [256:256]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.8.ts
@@ -2174,7 +2110,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [150:
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [160:163]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [255:255]
 
 ================================================================================
 File: tests/typescript-conformance/esDecorators/classExpression/esDecorators-classExpression-missingEmitHelpers-classDecorator.17.ts
@@ -2426,7 +2362,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [182:
 
 ================================================================================
 File: tests/typescript-conformance/externalModules/topLevelAwaitErrors.11.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [108:111]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [127:133]
 
 ================================================================================
 File: tests/typescript-conformance/externalModules/multipleExportDefault6.ts
@@ -3098,11 +3034,11 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [188:189
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/spreadOverwritesPropertyStrict.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [25:28]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [120:121]
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/spreadOverwritesProperty.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [72:75]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [167:168]
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/spreadNonObject1.ts
@@ -3110,7 +3046,7 @@ Error: ExpectedSyntax("template literal continuation") [token=Some(BraceClose)] 
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/spreadDuplicateExact.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [113:116]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [296:297]
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/objectSpreadRepeatedComplexity.ts
@@ -3118,7 +3054,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [275:276
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/spreadNonPrimitive.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [8:11]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [63:64]
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/objectSpreadStrictNull.ts
@@ -3133,14 +3069,6 @@ File: tests/typescript-conformance/types/spread/spreadExcessProperty.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [53:54]
 
 ================================================================================
-File: tests/typescript-conformance/types/spread/spreadUnion2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [38:43]
-
-================================================================================
-File: tests/typescript-conformance/types/spread/spreadUnion4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [8:13]
-
-================================================================================
 File: tests/typescript-conformance/types/spread/spreadMethods.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [75:76]
 
@@ -3153,16 +3081,12 @@ File: tests/typescript-conformance/types/spread/objectSpreadNegative.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [54:55]
 
 ================================================================================
-File: tests/typescript-conformance/types/spread/spreadContextualTypedBindingPattern.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [70:75]
-
-================================================================================
 File: tests/typescript-conformance/types/spread/objectSpreadRepeatedNullCheckPerf.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [813:814]
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/objectSpreadIndexSignature.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [25:28]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [208:209]
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/objectSpread.ts
@@ -3170,7 +3094,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [54:55]
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/spreadDuplicate.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [75:78]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [258:259]
 
 ================================================================================
 File: tests/typescript-conformance/types/spread/objectSpreadNegativeParse.ts
@@ -3186,7 +3110,7 @@ Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/types/uniqueSymbol/uniqueSymbolsErrors.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [83:88]
+Error: ExpectedSyntax("type expression") [token=Some(KeywordUnique)] around loc [108:114]
 
 ================================================================================
 File: tests/typescript-conformance/types/uniqueSymbol/uniqueSymbolsPropertyNames.ts
@@ -3194,7 +3118,7 @@ Error: ExpectedSyntax("type expression") [token=Some(KeywordUnique)] around loc 
 
 ================================================================================
 File: tests/typescript-conformance/types/uniqueSymbol/uniqueSymbols.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [261:266]
+Error: ExpectedSyntax("type expression") [token=Some(KeywordUnique)] around loc [278:284]
 
 ================================================================================
 File: tests/typescript-conformance/types/uniqueSymbol/uniqueSymbolsDeclarationsInJsErrors.ts
@@ -3202,7 +3126,7 @@ Error: RequiredTokenNotFound(Equals) [token=Some(Semicolon)] around loc [336:337
 
 ================================================================================
 File: tests/typescript-conformance/types/uniqueSymbol/uniqueSymbolsDeclarations.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [260:265]
+Error: ExpectedSyntax("type expression") [token=Some(KeywordUnique)] around loc [277:283]
 
 ================================================================================
 File: tests/typescript-conformance/types/uniqueSymbol/uniqueSymbolsDeclarationsInJs.ts
@@ -3210,7 +3134,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/types/uniqueSymbol/uniqueSymbolsDeclarationsErrors.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [128:133]
+Error: ExpectedSyntax("type expression") [token=Some(KeywordUnique)] around loc [137:143]
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/enumLiteralTypes2.ts
@@ -3226,7 +3150,7 @@ Error: ExpectedSyntax("type expression") [token=Some(Hyphen)] around loc [232:23
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/templateLiteralTypes7.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [175:180]
+Error: ExpectedSyntax("type expression") [token=Some(ChevronLeft)] around loc [184:185]
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/stringLiteralsWithEqualityChecks01.ts
@@ -3234,7 +3158,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/literalTypesAndDestructuring.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [28:31]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc [148:150]
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/stringMappingOverPatternLiterals.ts
@@ -3278,7 +3202,7 @@ Error: ExpectedSyntax("type expression") [token=Some(Hyphen)] around loc [262:26
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/templateLiteralTypes5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [160:165]
+Error: ExpectedSyntax("type expression") [token=Some(ChevronLeft)] around loc [169:170]
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/stringLiteralsWithSwitchStatements04.ts
@@ -3322,7 +3246,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/stringLiteralsAssignedToStringMappings.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [8:11]
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [24:25]
 
 ================================================================================
 File: tests/typescript-conformance/types/literal/templateLiteralTypes1.ts
@@ -3742,7 +3666,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [63:
 
 ================================================================================
 File: tests/typescript-conformance/types/typeRelationships/assignmentCompatibility/optionalPropertyAssignableToStringIndexSignature.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [26:29]
+Error: ExpectedSyntax("expression operator") [token=Some(Exclamation)] around loc [602:603]
 
 ================================================================================
 File: tests/typescript-conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithObjectMembersNumericNames.ts
@@ -3910,7 +3834,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [8
 
 ================================================================================
 File: tests/typescript-conformance/types/typeRelationships/assignmentCompatibility/intersectionIncludingPropFromGlobalAugmentation.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [203:208]
+Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [390:396]
 
 ================================================================================
 File: tests/typescript-conformance/types/typeRelationships/assignmentCompatibility/nullAssignableToEveryType.ts
@@ -3959,10 +3883,6 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [1
 ================================================================================
 File: tests/typescript-conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithObjectMembers3.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [201:202]
-
-================================================================================
-File: tests/typescript-conformance/types/typeRelationships/comparable/independentPropertyVariance.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [107:112]
 
 ================================================================================
 File: tests/typescript-conformance/types/typeRelationships/comparable/optionalProperties02.ts
@@ -4094,7 +4014,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [172:
 
 ================================================================================
 File: tests/typescript-conformance/types/typeRelationships/typeInference/unionTypeInference.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [48:53]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [177:178]
 
 ================================================================================
 File: tests/typescript-conformance/types/typeRelationships/typeInference/unionAndIntersectionInference1.ts
@@ -4353,10 +4273,6 @@ File: tests/typescript-conformance/types/never/neverInference.ts
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [90:91]
 
 ================================================================================
-File: tests/typescript-conformance/types/never/neverIntersectionNotCallable.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [8:13]
-
-================================================================================
 File: tests/typescript-conformance/types/never/neverTypeErrors2.ts
 Error: RequiredTokenNotFound(KeywordOf) [token=Some(KeywordIn)] around loc [327:329]
 
@@ -4365,12 +4281,8 @@ File: tests/typescript-conformance/types/never/neverTypeErrors1.ts
 Error: RequiredTokenNotFound(KeywordOf) [token=Some(KeywordIn)] around loc [297:299]
 
 ================================================================================
-File: tests/typescript-conformance/types/forAwait/types.forAwait.es2018.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [63:68]
-
-================================================================================
 File: tests/typescript-conformance/types/forAwait/types.forAwait.es2018.1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [63:68]
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [192:193]
 
 ================================================================================
 File: tests/typescript-conformance/types/intersection/operatorsAndIntersectionTypes.ts
@@ -4378,7 +4290,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc 
 
 ================================================================================
 File: tests/typescript-conformance/types/intersection/intersectionReduction.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [29:34]
+Error: ExpectedSyntax("type expression") [token=Some(KeywordUnique)] around loc [41:47]
 
 ================================================================================
 File: tests/typescript-conformance/types/intersection/intersectionTypeEquivalence.ts
@@ -4386,19 +4298,15 @@ Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc
 
 ================================================================================
 File: tests/typescript-conformance/types/intersection/intersectionWithIndexSignatures.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [80:83]
+Error: RequiredTokenNotFound(Colon) [token=Some(KeywordIn)] around loc [463:465]
 
 ================================================================================
 File: tests/typescript-conformance/types/intersection/intersectionTypeInference.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [217:218]
 
 ================================================================================
-File: tests/typescript-conformance/types/intersection/intersectionOfUnionNarrowing.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [164:169]
-
-================================================================================
 File: tests/typescript-conformance/types/intersection/intersectionReductionStrict.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [28:33]
+Error: ExpectedSyntax("type expression") [token=Some(KeywordUnique)] around loc [40:46]
 
 ================================================================================
 File: tests/typescript-conformance/types/intersection/intersectionNarrowing.ts
@@ -4451,10 +4359,6 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [81:82]
 ================================================================================
 File: tests/typescript-conformance/types/intersection/intersectionOfUnionOfUnitTypes.ts
 Error: ExpectedSyntax("pattern") [token=Some(KeywordEnum)] around loc [20:24]
-
-================================================================================
-File: tests/typescript-conformance/types/intersection/commonTypeIntersection.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [8:11]
 
 ================================================================================
 File: tests/typescript-conformance/types/stringLiteral/stringLiteralTypesAsTags02.ts
@@ -4738,7 +4642,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [121:
 
 ================================================================================
 File: tests/typescript-conformance/types/keyof/circularIndexedAccessErrors.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [162:165]
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [172:173]
 
 ================================================================================
 File: tests/typescript-conformance/types/keyof/keyofAndIndexedAccess.ts
@@ -4902,7 +4806,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [405:406
 
 ================================================================================
 File: tests/typescript-conformance/types/typeParameters/typeArgumentLists/instantiationExpressionErrors.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [51:54]
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [149:150]
 
 ================================================================================
 File: tests/typescript-conformance/types/typeParameters/typeArgumentLists/instantiateGenericClassWithZeroTypeArguments.ts
@@ -5133,10 +5037,6 @@ File: tests/typescript-conformance/types/tuple/wideningTuples1.ts
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [70:71]
 
 ================================================================================
-File: tests/typescript-conformance/types/tuple/tupleLengthCheck.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [8:13]
-
-================================================================================
 File: tests/typescript-conformance/types/tuple/contextualTypeTupleEnd.ts
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [146:147]
 
@@ -5147,10 +5047,6 @@ Error: ExpectedSyntax("type expression") [token=Some(KeywordReadonly)] around lo
 ================================================================================
 File: tests/typescript-conformance/types/tuple/named/partiallyNamedTuples.ts
 Error: RequiredTokenNotFound(Colon) [token=Some(KeywordIn)] around loc [479:481]
-
-================================================================================
-File: tests/typescript-conformance/types/tuple/named/partiallyNamedTuples3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [42:47]
 
 ================================================================================
 File: tests/typescript-conformance/types/tuple/named/namedTupleMembers.ts
@@ -5230,7 +5126,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [101:102
 
 ================================================================================
 File: tests/typescript-conformance/types/nonPrimitive/nonPrimitiveStrictNull.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [50:53]
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [999:1000]
 
 ================================================================================
 File: tests/typescript-conformance/types/nonPrimitive/assignObjectToNonPrimitive.ts
@@ -5445,10 +5341,6 @@ File: tests/typescript-conformance/types/typeAliases/typeAliases.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [437:438]
 
 ================================================================================
-File: tests/typescript-conformance/types/typeAliases/builtinIteratorReturn.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [84:89]
-
-================================================================================
 File: tests/typescript-conformance/types/typeAliases/intrinsicTypes.ts
 Error: RequiredTokenNotFound(ChevronRight) [token=Some(LiteralString)] around loc [64:71]
 
@@ -5478,11 +5370,11 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [269:270
 
 ================================================================================
 File: tests/typescript-conformance/types/rest/restTuplesFromContextualTypes.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [51:56]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [318:319]
 
 ================================================================================
 File: tests/typescript-conformance/types/rest/genericRestParameters2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [51:56]
+Error: ExpectedSyntax("type expression") [token=Some(ChevronLeft)] around loc [1880:1881]
 
 ================================================================================
 File: tests/typescript-conformance/types/rest/objectRestParameterES5.ts
@@ -5490,7 +5382,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [160:
 
 ================================================================================
 File: tests/typescript-conformance/types/rest/genericRestParameters1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [51:54]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [952:953]
 
 ================================================================================
 File: tests/typescript-conformance/types/rest/objectRest2.ts
@@ -5506,7 +5398,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Comma)] around loc [9:10]
 
 ================================================================================
 File: tests/typescript-conformance/types/rest/genericRestParameters3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [51:54]
+Error: ExpectedSyntax("type expression") [token=Some(KeywordReadonly)] around loc [381:389]
 
 ================================================================================
 File: tests/typescript-conformance/types/rest/objectRestAssignment.ts
@@ -5533,16 +5425,12 @@ File: tests/typescript-conformance/types/any/narrowExceptionVariableInCatchClaus
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordIs)] around loc [39:41]
 
 ================================================================================
-File: tests/typescript-conformance/types/any/narrowFromAnyWithInstanceof.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [8:11]
-
-================================================================================
 File: tests/typescript-conformance/types/any/assignAnyToEveryType.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [257:258]
 
 ================================================================================
 File: tests/typescript-conformance/types/any/narrowFromAnyWithTypePredicate.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [8:11]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordIs)] around loc [55:57]
 
 ================================================================================
 File: tests/typescript-conformance/types/any/assignEveryTypeToAny.ts
@@ -6457,44 +6345,12 @@ File: tests/typescript-conformance/functions/functionOverloadCompatibilityWithVo
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [29:30]
 
 ================================================================================
-File: tests/typescript-conformance/references/library-reference-8.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [261:264]
-
-================================================================================
 File: tests/typescript-conformance/references/library-reference-10.ts
 Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [218:219]
 
 ================================================================================
-File: tests/typescript-conformance/references/library-reference-14.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [181:184]
-
-================================================================================
-File: tests/typescript-conformance/references/library-reference-15.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [155:158]
-
-================================================================================
-File: tests/typescript-conformance/references/library-reference-4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [265:268]
-
-================================================================================
-File: tests/typescript-conformance/references/library-reference-7.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [185:188]
-
-================================================================================
 File: tests/typescript-conformance/references/library-reference-11.ts
 Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [242:243]
-
-================================================================================
-File: tests/typescript-conformance/references/library-reference-6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [220:223]
-
-================================================================================
-File: tests/typescript-conformance/references/library-reference-5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [270:273]
-
-================================================================================
-File: tests/typescript-conformance/references/library-reference-3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [188:191]
 
 ================================================================================
 File: tests/typescript-conformance/references/library-reference-2.ts
@@ -6503,10 +6359,6 @@ Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [237
 ================================================================================
 File: tests/typescript-conformance/references/library-reference-13.ts
 Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [202:203]
-
-================================================================================
-File: tests/typescript-conformance/references/library-reference-1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [188:191]
 
 ================================================================================
 File: tests/typescript-conformance/references/library-reference-12.ts
@@ -6718,7 +6570,7 @@ Error: ExpectedSyntax("expression operand") [token=Some(KeywordDefault)] around 
 
 ================================================================================
 File: tests/typescript-conformance/salsa/moduleExportWithExportPropertyAssignment2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [89:92]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [162:163]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/plainJSGrammarErrors2.ts
@@ -6734,7 +6586,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [144:
 
 ================================================================================
 File: tests/typescript-conformance/salsa/moduleExportWithExportPropertyAssignment4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [89:92]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [162:163]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/propertyAssignmentOnImportedSymbol.ts
@@ -6770,7 +6622,7 @@ Error: ExpectedSyntax("identifier") [token=Some(Dot)] around loc [234:235]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/moduleExportWithExportPropertyAssignment.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [89:92]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [162:163]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/prototypePropertyAssignmentMergeWithInterfaceMethod.ts
@@ -6794,15 +6646,11 @@ Error: ExpectedSyntax("identifier") [token=Some(Dot)] around loc [120:121]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/moduleExportWithExportPropertyAssignment3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [89:92]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [162:163]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/plainJSGrammarErrors3.ts
 Error: ExpectedSyntax("expression operator") [token=Some(KeywordNew)] around loc [160:163]
-
-================================================================================
-File: tests/typescript-conformance/salsa/typeFromPropertyAssignment19.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [86:89]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/reExportJsFromTs.ts
@@ -6810,7 +6658,7 @@ Error: ExpectedSyntax("identifier") [token=Some(Dot)] around loc [73:74]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/typeFromPropertyAssignment17.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [86:89]
+Error: ExpectedSyntax("identifier") [token=Some(Dot)] around loc [199:200]
 
 ================================================================================
 File: tests/typescript-conformance/salsa/moduleExportAliasExports.ts
@@ -6906,7 +6754,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [106:
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/constructor/decoratorOnClassConstructor4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [113:116]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [128:128]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/constructor/decoratorOnClassConstructor3.ts
@@ -6922,7 +6770,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [173:
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/constructor/parameter/decoratorOnClassConstructorParameter5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [195:200]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [273:274]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/constructor/parameter/decoratorOnClassConstructorParameter4.ts
@@ -6938,11 +6786,11 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [162:
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod15.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [92:95]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [142:143]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod14.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [92:95]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [142:143]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod10.ts
@@ -6950,7 +6798,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [113:
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod17.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [92:95]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [142:142]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod4.ts
@@ -6970,7 +6818,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [86:8
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod16.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [92:95]
+Error: RequiredTokenNotFound(Equals) [token=Some(Invalid)] around loc [146:146]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethodOverload1.ts
@@ -6990,7 +6838,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [174:
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod18.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [92:95]
+Error: RequiredTokenNotFound(Equals) [token=Some(Invalid)] around loc [137:137]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod13.ts
@@ -7026,7 +6874,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [174:
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod19.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [165:168]
+Error: RequiredTokenNotFound(Equals) [token=Some(Invalid)] around loc [209:209]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/method/decoratorOnClassMethod12.ts
@@ -7054,7 +6902,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc 
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/decoratorOnClass9.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [56:59]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [139:139]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/class/decoratedClassExportsCommonJS2.ts
@@ -7130,7 +6978,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [93:9
 
 ================================================================================
 File: tests/typescript-conformance/decorators/decoratorMetadata-jsdoc.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [114:117]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [152:152]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/legacyDecorators-contextualTypes.ts
@@ -7174,7 +7022,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [37:3
 
 ================================================================================
 File: tests/typescript-conformance/decorators/invalid/decoratorOnFunctionParameter.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [8:13]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [37:38]
 
 ================================================================================
 File: tests/typescript-conformance/decorators/invalid/decoratorOnAwait.ts
@@ -7359,10 +7207,6 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(ParenthesisOpen)] aro
 ================================================================================
 File: tests/typescript-conformance/es6/for-ofStatements/for-of35.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [117:118]
-
-================================================================================
-File: tests/typescript-conformance/es6/for-ofStatements/for-of58.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [67:72]
 
 ================================================================================
 File: tests/typescript-conformance/es6/for-ofStatements/for-of47.ts
@@ -7818,7 +7662,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [146:
 
 ================================================================================
 File: tests/typescript-conformance/es6/moduleExportsSystem/topLevelVarHoistingCommonJS.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [81:84]
+Error: RequiredTokenNotFound(KeywordOf) [token=Some(KeywordIn)] around loc [433:435]
 
 ================================================================================
 File: tests/typescript-conformance/es6/moduleExportsSystem/decoratedDefaultExportsGetExportedSystem.ts
@@ -8698,7 +8542,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [47:5
 
 ================================================================================
 File: tests/typescript-conformance/es6/modules/exportsAndImportsWithUnderscores4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [68:71]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [506:512]
 
 ================================================================================
 File: tests/typescript-conformance/es6/modules/exportsAndImports4.ts
@@ -8905,10 +8749,6 @@ File: tests/typescript-conformance/es6/destructuring/destructuringObjectBindingP
 Error: RequiredTokenNotFound(Colon) [token=Some(Comma)] around loc [58:59]
 
 ================================================================================
-File: tests/typescript-conformance/es6/destructuring/destructuringArrayBindingPatternAndAssignment5SiblingInitializer.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [514:519]
-
-================================================================================
 File: tests/typescript-conformance/es6/destructuring/emptyAssignmentPatterns04_ES6.ts
 Error: RequiredTokenNotFound(Colon) [token=Some(Comma)] around loc [87:88]
 
@@ -9033,10 +8873,6 @@ File: tests/typescript-conformance/es6/destructuring/destructuringVariableDeclar
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [216:217]
 
 ================================================================================
-File: tests/typescript-conformance/es6/destructuring/destructuringArrayBindingPatternAndAssignment4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [95:100]
-
-================================================================================
 File: tests/typescript-conformance/es6/destructuring/iterableArrayPattern16.ts
 Error: RequiredTokenNotFound(Equals) [token=Some(BraceClose)] around loc [107:108]
 
@@ -9063,10 +8899,6 @@ Error: RequiredTokenNotFound(Equals) [token=Some(BraceClose)] around loc [30:31]
 ================================================================================
 File: tests/typescript-conformance/es6/destructuring/iterableArrayPattern23.ts
 Error: ExpectedNotFound [token=None] around loc [56:61]
-
-================================================================================
-File: tests/typescript-conformance/es6/destructuring/destructuringVoidStrictNullChecks.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [36:41]
 
 ================================================================================
 File: tests/typescript-conformance/es6/destructuring/emptyVariableDeclarationBindingPatterns01_ES5.ts
@@ -9141,10 +8973,6 @@ File: tests/typescript-conformance/es6/destructuring/emptyVariableDeclarationBin
 Error: RequiredTokenNotFound(BracketClose) [token=Some(Equals)] around loc [150:151]
 
 ================================================================================
-File: tests/typescript-conformance/es6/destructuring/declarationInAmbientContext.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [8:11]
-
-================================================================================
 File: tests/typescript-conformance/es6/destructuring/emptyAssignmentPatterns02_ES5.ts
 Error: RequiredTokenNotFound(Colon) [token=Some(Comma)] around loc [92:93]
 
@@ -9155,10 +8983,6 @@ Error: ExpectedSyntax("property name") [token=Some(ChevronLeft)] around loc [158
 ================================================================================
 File: tests/typescript-conformance/es6/destructuring/iterableArrayPattern5.ts
 Error: RequiredTokenNotFound(Equals) [token=Some(BraceClose)] around loc [30:31]
-
-================================================================================
-File: tests/typescript-conformance/es6/destructuring/destructuringVoid.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [37:42]
 
 ================================================================================
 File: tests/typescript-conformance/es6/destructuring/iterableArrayPattern19.ts
@@ -9211,10 +9035,6 @@ Error: RequiredTokenNotFound(Equals) [token=Some(BraceClose)] around loc [30:31]
 ================================================================================
 File: tests/typescript-conformance/es6/destructuring/destructuringVariableDeclaration1ES6.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [233:234]
-
-================================================================================
-File: tests/typescript-conformance/es6/destructuring/destructuringWithLiteralInitializers2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [470:475]
 
 ================================================================================
 File: tests/typescript-conformance/es6/destructuring/iterableArrayPattern9.ts
@@ -9798,7 +9618,7 @@ Error: ExpectedNotFound [token=None] around loc [166:187]
 
 ================================================================================
 File: tests/typescript-conformance/ambient/ambientDeclarations.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [53:56]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [199:200]
 
 ================================================================================
 File: tests/typescript-conformance/ambient/ambientShorthand_merging.ts
@@ -9842,7 +9662,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/ambient/ambientErrors.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [50:53]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [147:148]
 
 ================================================================================
 File: tests/typescript-conformance/ambient/ambientModuleDeclarationWithReservedIdentifierInDottedPath.ts
@@ -10061,10 +9881,6 @@ File: tests/typescript-conformance/expressions/typeGuards/typeGuardNarrowsPrimit
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordIs)] around loc [77:79]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/typeGuards/typeGuardsWithInstanceOfByConstructorSignature.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [83:86]
-
-================================================================================
 File: tests/typescript-conformance/expressions/typeGuards/TypeGuardWithArrayUnion.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [26:27]
 
@@ -10077,44 +9893,28 @@ File: tests/typescript-conformance/expressions/arrayLiterals/arrayLiteralInferen
 Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [64:70]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/optionalChaining/elementAccessChain/elementAccessChain.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [29:34]
-
-================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/elementAccessChain/elementAccessChain.3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [28:33]
+Error: InvalidAssigmentTarget [token=None] around loc [178:185]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/elementAccessChain/elementAccessChain.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [28:33]
+Error: ExpectedSyntax("type expression") [token=Some(ChevronLeft)] around loc [535:536]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/optionalChainingInTypeAssertions.ts
 Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc [85:87]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/optionalChaining/propertyAccessChain/propertyAccessChain.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [29:34]
-
-================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/propertyAccessChain/propertyAccessChain.3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [28:33]
+Error: InvalidAssigmentTarget [token=None] around loc [150:153]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/propertyAccessChain/propertyAccessChain.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [28:33]
+Error: ExpectedSyntax("type expression") [token=Some(ChevronLeft)] around loc [390:391]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/privateIdentifierChain/privateIdentifierChain.1.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Question)] around loc [87:88]
-
-================================================================================
-File: tests/typescript-conformance/expressions/optionalChaining/delete/deleteChain.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [26:31]
-
-================================================================================
-File: tests/typescript-conformance/expressions/optionalChaining/callChain/callChain.2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [29:34]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/callChain/callChainInference.ts
@@ -10126,7 +9926,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Question)] around loc
 
 ================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/callChain/callChain.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [28:33]
+Error: ExpectedSyntax("type expression") [token=Some(ChevronLeft)] around loc [721:722]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/callChain/callChain.3.ts
@@ -10141,12 +9941,8 @@ File: tests/typescript-conformance/expressions/optionalChaining/callChain/superM
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Question)] around loc [56:57]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/optionalChaining/callChain/parentheses.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [37:42]
-
-================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/taggedTemplateChain/taggedTemplateChain.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [8:11]
+Error: ExpectedSyntax("member access property") [token=Some(LiteralTemplatePartStringEnd)] around loc [24:27]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/optionalChaining/optionalChainingInference.ts
@@ -10186,7 +9982,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [130:
 
 ================================================================================
 File: tests/typescript-conformance/expressions/functionCalls/callWithSpread3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [8:13]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [286:287]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/functionCalls/typeArgumentInference.ts
@@ -10214,7 +10010,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [50:5
 
 ================================================================================
 File: tests/typescript-conformance/expressions/functionCalls/callWithSpread5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [8:13]
+Error: RequiredTokenNotFound(BracketClose) [token=Some(Question)] around loc [67:68]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/functionCalls/callWithSpreadES6.ts
@@ -10222,7 +10018,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [587
 
 ================================================================================
 File: tests/typescript-conformance/expressions/functionCalls/callWithSpread4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [125:130]
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [634:635]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/functionCalls/typeArgumentInferenceWithConstraints.ts
@@ -10534,7 +10330,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc 
 
 ================================================================================
 File: tests/typescript-conformance/expressions/asOperator/asOpEmitParens.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [8:11]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc [52:54]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/asOperator/asOperator4.ts
@@ -10721,20 +10517,12 @@ File: tests/typescript-conformance/expressions/binaryOperators/comparisonOperato
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [23:24]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNumberOperand.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [59:64]
-
-================================================================================
 File: tests/typescript-conformance/expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNoRelationshipObjectsOnConstructorSignature.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [25:26]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNumericLiteral.ts
 Error: RequiredTokenNotFound(ChevronRight) [token=Some(KeywordNumberType)] around loc [98:104]
-
-================================================================================
-File: tests/typescript-conformance/expressions/binaryOperators/comparisonOperator/comparisonOperatorWithIntersectionType.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [8:11]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/binaryOperators/comparisonOperator/comparisonOperatorWithNoRelationshipObjectsOnIndexSignature.ts
@@ -10770,7 +10558,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [2
 
 ================================================================================
 File: tests/typescript-conformance/expressions/binaryOperators/instanceofOperator/instanceofOperatorWithRHSHasSymbolHasInstance.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [239:242]
+Error: RequiredTokenNotFound(Colon) [token=Some(Dot)] around loc [258:259]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/binaryOperators/instanceofOperator/instanceofOperatorWithInvalidStaticToString.ts
@@ -10801,68 +10589,28 @@ File: tests/typescript-conformance/expressions/typeAssertions/duplicatePropertie
 Error: RequiredTokenNotFound(ChevronRight) [token=Some(BraceOpen)] around loc [34:35]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/elementAccess/stringEnumInElementAccess01.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [149:154]
-
-================================================================================
 File: tests/typescript-conformance/expressions/elementAccess/letIdentifierInElementAccess01.ts
 Error: ExpectedSyntax("expression operator") [token=Some(KeywordLet)] around loc [7:10]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [26:31]
-
-================================================================================
 File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator_es2020.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [45:50]
-
-================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator_not_strict.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [27:32]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc [699:701]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [58:63]
-
-================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator11.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [26:31]
-
-================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator7.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [26:31]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [1091:1092]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator12.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [70:71]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [26:31]
-
-================================================================================
 File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingAssignmentVsPrivateFieldsJsEmit1.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [120:121]
 
 ================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator8.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [26:31]
-
-================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [26:31]
-
-================================================================================
 File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator10.ts
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [58:59]
-
-================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [26:31]
-
-================================================================================
-File: tests/typescript-conformance/expressions/nullishCoalescingOperator/nullishCoalescingOperator9.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordLet)] around loc [26:29]
 
 ================================================================================
 File: tests/typescript-conformance/expressions/commaOperator/commaOperatorWithSecondOperandObjectType.ts
@@ -11214,11 +10962,11 @@ Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [107
 
 ================================================================================
 File: tests/typescript-conformance/nonjsExtensions/declarationFileForHtmlFileWithinDeclarationFile.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [319:322]
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordDefault)] around loc [346:353]
 
 ================================================================================
 File: tests/typescript-conformance/nonjsExtensions/declarationFileForHtmlImport.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [361:364]
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordDefault)] around loc [388:395]
 
 ================================================================================
 File: tests/typescript-conformance/nonjsExtensions/declarationFileForJsonImport.ts
@@ -11302,7 +11050,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [4
 
 ================================================================================
 File: tests/typescript-conformance/statements/returnStatements/returnStatementNoAsiAfterTransform.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [61:64]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc [137:139]
 
 ================================================================================
 File: tests/typescript-conformance/statements/returnStatements/invalidReturnStatements.ts
@@ -11414,7 +11162,7 @@ Error: RequiredTokenNotFound(ChevronRight) [token=Some(KeywordNumberType)] aroun
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsWithAsyncIteratorObject.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [85:90]
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [308:311]
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/usingDeclarations.7.ts
@@ -11530,7 +11278,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/usingDeclarations.10.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [96:99]
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [122:123]
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsWithLegacyClassDecorators.11.ts
@@ -11606,7 +11354,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsInForOf.5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [174:179]
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [201:206]
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/usingDeclarations.6.ts
@@ -11662,7 +11410,7 @@ Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [172:
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsWithIteratorObject.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [85:90]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [303:304]
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/usingDeclarations.15.ts
@@ -11682,7 +11430,7 @@ Error: ExpectedSyntax("expression operator") [token=Some(BraceOpen)] around loc 
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsWithIteratorObject.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [85:90]
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [303:304]
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsInForAwaitOf.2.ts
@@ -11738,7 +11486,7 @@ Error: ExpectedSyntax("expression operand") [token=Some(BracketClose)] around lo
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsInForAwaitOf.3.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [174:179]
+Error: RequiredTokenNotFound(KeywordOf) [token=Some(Identifier)] around loc [207:212]
 
 ================================================================================
 File: tests/typescript-conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsWithObjectLiterals2.ts
@@ -12530,7 +12278,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [5
 
 ================================================================================
 File: tests/typescript-conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers11.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [117:122]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [136:136]
 
 ================================================================================
 File: tests/typescript-conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers2.ts
@@ -12574,7 +12322,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [1
 
 ================================================================================
 File: tests/typescript-conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers10.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [118:123]
+Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [137:137]
 
 ================================================================================
 File: tests/typescript-conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers8.ts
@@ -12842,7 +12590,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [9
 
 ================================================================================
 File: tests/typescript-conformance/classes/members/privateNames/privateNamesUnique-4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [69:74]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [103:104]
 
 ================================================================================
 File: tests/typescript-conformance/classes/members/privateNames/privateNameStaticsAndStaticMethods.ts
@@ -13242,7 +12990,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/classes/constructorDeclarations/superCalls/derivedClassSuperProperties.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [61:66]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [205:206]
 
 ================================================================================
 File: tests/typescript-conformance/classes/constructorDeclarations/superCalls/derivedClassConstructorWithoutSuperCall.ts
@@ -13322,7 +13070,7 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [163:164
 
 ================================================================================
 File: tests/typescript-conformance/classes/propertyMemberDeclarations/autoAccessorExperimentalDecorators.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [80:83]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [175:175]
 
 ================================================================================
 File: tests/typescript-conformance/classes/propertyMemberDeclarations/propertyAndFunctionWithSameName.ts
@@ -13645,10 +13393,6 @@ File: tests/typescript-conformance/jsx/tsxSpreadAttributesResolution15.tsx
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [115:121]
 
 ================================================================================
-File: tests/typescript-conformance/jsx/tsxFragmentPreserveEmit.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [160:163]
-
-================================================================================
 File: tests/typescript-conformance/jsx/tsxSpreadInvalidType.tsx
 Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [75:81]
 
@@ -13662,15 +13406,11 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxReactEmitNesting.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [73:76]
+Error: ExpectedSyntax("expression operator") [token=Some(EqualsChevronRight)] around loc [232:234]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxExternalModuleEmit1.tsx
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [147:153]
-
-================================================================================
-File: tests/typescript-conformance/jsx/tsxNamespacedAttributeName2.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [45:48]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxSpreadAttributesResolution4.tsx
@@ -13691,10 +13431,6 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxParseTests2.tsx
 Error: ExpectedSyntax("expression operand") [token=Some(ChevronLeftSlash)] around loc [148:150]
-
-================================================================================
-File: tests/typescript-conformance/jsx/tsxReactEmit4.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [155:158]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/checkJsxChildrenProperty13.tsx
@@ -13734,7 +13470,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxEmitSpreadAttribute.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [80:85]
+Error: RequiredTokenNotFound(Colon) [token=Some(Comma)] around loc [601:602]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxStatelessFunctionComponentsWithTypeArguments4.tsx
@@ -13762,7 +13498,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxSpreadChildren.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [129:132]
+Error: ExpectedSyntax("expression operand") [token=Some(DotDotDot)] around loc [438:441]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/checkJsxChildrenProperty3.tsx
@@ -13782,15 +13518,11 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [971:972
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxFragmentErrors.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [157:160]
+Error: JsxClosingTagMismatch [token=Some(ChevronLeftSlash)] around loc [180:182]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxSpreadAttributesResolution9.tsx
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [115:121]
-
-================================================================================
-File: tests/typescript-conformance/jsx/tsxReactEmitWhitespace2.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [155:158]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxAttributeResolution16.tsx
@@ -13850,7 +13582,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxReactEmit1.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [155:158]
+Error: RequiredTokenNotFound(Colon) [token=Some(BraceClose)] around loc [795:796]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxSpreadOverwritesAttributeStrict.tsx
@@ -13906,15 +13638,11 @@ Error: RequiredTokenNotFound(ChevronRight) [token=Some(ChevronLeftSlash)] around
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxReactTestSuite.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [27:30]
+Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [833:834]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxLibraryManagedAttributes.tsx
 Error: ExpectedSyntax("type expression") [token=Some(Ampersand)] around loc [81:82]
-
-================================================================================
-File: tests/typescript-conformance/jsx/tsxReactEmitWhitespace.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [155:158]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/inline/inlineJsxAndJsxFragPragmaOverridesCompilerOptions.tsx
@@ -13958,7 +13686,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxEsprimaFbTestSuite.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [26:29]
+Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [476:477]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxSfcReturnNull.tsx
@@ -13986,7 +13714,7 @@ Error: JsxClosingTagMismatch [token=Some(ChevronLeftSlash)] around loc [276:278]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxSpreadChildrenInvalidType.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [159:162]
+Error: ExpectedSyntax("expression operand") [token=Some(DotDotDot)] around loc [468:471]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxGenericAttributesType4.tsx
@@ -14042,7 +13770,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxParsingError4.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [72:77]
+Error: RequiredTokenNotFound(ChevronRight) [token=Some(KeywordPublic)] around loc [204:210]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxErrorRecovery3.tsx
@@ -14079,10 +13807,6 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [387:388
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxSpreadAttributesResolution5.tsx
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [115:121]
-
-================================================================================
-File: tests/typescript-conformance/jsx/tsxReactEmit3.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [97:100]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/checkJsxChildrenProperty15.tsx
@@ -14125,16 +13849,12 @@ File: tests/typescript-conformance/jsx/unicodeEscapesInJsxtags.tsx
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [167:173]
 
 ================================================================================
-File: tests/typescript-conformance/jsx/tsxFragmentReactEmit.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [157:160]
-
-================================================================================
 File: tests/typescript-conformance/jsx/jsxAndTypeAssertion.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [27:30]
+Error: RequiredTokenNotFound(ChevronRight) [token=Some(KeywordAny)] around loc [83:86]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxReactEmitEntities.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [155:158]
+Error: RequiredTokenNotFound(LiteralString) [token=Some(Invalid)] around loc [412:445]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxParsingError3.tsx
@@ -14198,7 +13918,7 @@ Error: RequiredTokenNotFound(KeywordModule) [token=Some(Identifier)] around loc 
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxInvalidEsprimaTestSuite.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [46:49]
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronLeftSlash)] around loc [63:65]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/tsxSpreadAttributesResolution16.tsx
@@ -14214,7 +13934,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [2
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxAttributeInitializer.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [53:56]
+Error: RequiredTokenNotFound(LiteralString) [token=Some(ChevronLeft)] around loc [90:91]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxs/jsxJsxsCjsTransformKeyPropCustomImportPragma.tsx
@@ -14266,15 +13986,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/jsx/jsxParsingErrorImmediateSpreadInAttributeValue.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [44:49]
-
-================================================================================
-File: tests/typescript-conformance/jsx/tsxNamespacedTagName2.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [45:48]
-
-================================================================================
-File: tests/typescript-conformance/jsx/tsxReactEmit2.tsx
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [155:158]
+Error: ExpectedSyntax("expression operand") [token=Some(DotDotDot)] around loc [186:189]
 
 ================================================================================
 File: tests/typescript-conformance/jsx/commentEmittingInPreserveJsx1.tsx
@@ -14313,10 +14025,6 @@ File: tests/typescript-conformance/jsx/checkJsxChildrenProperty2.tsx
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [149:155]
 
 ================================================================================
-File: tests/typescript-conformance/controlFlow/controlFlowWithTemplateLiterals.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [35:40]
-
-================================================================================
 File: tests/typescript-conformance/controlFlow/controlFlowIterationErrorsAsync.ts
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [463:464]
 
@@ -14326,7 +14034,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Question)] around loc
 
 ================================================================================
 File: tests/typescript-conformance/controlFlow/exhaustiveSwitchStatements1.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [4205:4210]
+Error: ExpectedSyntax("expression operator") [token=Some(Exclamation)] around loc [5076:5077]
 
 ================================================================================
 File: tests/typescript-conformance/controlFlow/typeGuardsNestedAssignments.ts
@@ -14381,10 +14089,6 @@ File: tests/typescript-conformance/controlFlow/controlFlowDestructuringDeclarati
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [570:571]
 
 ================================================================================
-File: tests/typescript-conformance/controlFlow/controlFlowNullishCoalesce.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [132:137]
-
-================================================================================
 File: tests/typescript-conformance/controlFlow/typeGuardsTypeParameters.ts
 Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [115:116]
 
@@ -14406,7 +14110,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordConst)] around loc [2
 
 ================================================================================
 File: tests/typescript-conformance/controlFlow/controlFlowOptionalChain.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [99:104]
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(KeywordIs)] around loc [456:458]
 
 ================================================================================
 File: tests/typescript-conformance/controlFlow/controlFlowParameter.ts
@@ -14423,10 +14127,6 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [144:
 ================================================================================
 File: tests/typescript-conformance/controlFlow/controlFlowAssignmentExpression.ts
 Error: RequiredTokenNotFound(BraceOpen) [token=Some(Semicolon)] around loc [288:289]
-
-================================================================================
-File: tests/typescript-conformance/controlFlow/controlFlowElementAccess2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [25:30]
 
 ================================================================================
 File: tests/typescript-conformance/controlFlow/constLocalsInFunctionExpressions.ts
@@ -14483,10 +14183,6 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [106:107
 ================================================================================
 File: tests/typescript-conformance/controlFlow/controlFlowAliasing.ts
 Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [1424:1425]
-
-================================================================================
-File: tests/typescript-conformance/controlFlow/controlFlowStringIndex.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [100:105]
 
 ================================================================================
 File: tests/typescript-conformance/emitter/es2018/asyncGenerators/emitter.asyncGenerators.objectLiteralMethods.es2018.ts
@@ -14598,7 +14294,7 @@ Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [0:
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpression4ES2020.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [274:277]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [325:326]
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpressionAsyncES5CJS.ts
@@ -14610,11 +14306,11 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [273:274
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpressionInCJS5.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [297:300]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [348:349]
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpressionNoModuleKindSpecified.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [231:234]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [282:283]
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpressionNestedES20152.ts
@@ -14630,7 +14326,7 @@ Error: ExpectedSyntax("expression operand") [token=Some(KeywordDefault)] around 
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpressionInSystem4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [295:298]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [346:347]
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpressionNestedSystem.ts
@@ -14710,7 +14406,7 @@ Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImport)] around loc [
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpressionInAMD4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [292:295]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [343:344]
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpression6ES2020.ts
@@ -14758,15 +14454,15 @@ Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [276:277
 
 ================================================================================
 File: tests/typescript-conformance/dynamicImport/importCallExpressionInUMD4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [290:293]
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Equals)] around loc [341:342]
 
 ================================================================================
 File: tests/typescript-conformance/pedantic/noUncheckedIndexedAccess.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [343:348]
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordAs)] around loc [550:552]
 
 ================================================================================
 File: tests/typescript-conformance/pedantic/noUncheckedIndexedAccessDestructuring.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [64:69]
+Error: RequiredTokenNotFound(Colon) [token=Some(Comma)] around loc [1868:1869]
 
 ================================================================================
 File: tests/typescript-conformance/typings/typingsLookup1.ts
@@ -15469,10 +15165,6 @@ File: tests/typescript-conformance/parser/ecmascript5/ErrorRecovery/Expressions/
 Error: ExpectedSyntax("expression operand") [token=Some(ParenthesisClose)] around loc [9:10]
 
 ================================================================================
-File: tests/typescript-conformance/parser/ecmascript5/ErrorRecovery/parserModifierOnStatementInBlock2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [14:17]
-
-================================================================================
 File: tests/typescript-conformance/parser/ecmascript5/ErrorRecovery/SourceUnits/parserErrorRecovery_SourceUnit1.ts
 Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [14:15]
 
@@ -15997,14 +15689,6 @@ File: tests/typescript-conformance/parser/ecmascript5/VariableDeclarations/parse
 Error: ExpectedSyntax("pattern") [token=Some(Semicolon)] around loc [4:5]
 
 ================================================================================
-File: tests/typescript-conformance/parser/ecmascript5/VariableDeclarations/parserVariableDeclaration4.d.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [8:11]
-
-================================================================================
-File: tests/typescript-conformance/parser/ecmascript5/VariableDeclarations/parserVariableDeclaration4.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [34:37]
-
-================================================================================
 File: tests/typescript-conformance/parser/ecmascript5/VariableDeclarations/parserVariableDeclaration10.ts
 Error: ExpectedSyntax("pattern") [token=Some(Semicolon)] around loc [6:7]
 
@@ -16019,10 +15703,6 @@ Error: UnexpectedEnd [token=Some(EOF)] around loc [249:249]
 ================================================================================
 File: tests/typescript-conformance/parser/ecmascript5/VariableDeclarations/parserVariableDeclaration7.ts
 Error: RequiredTokenNotFound(Comma) [token=Some(EOF)] around loc [7:7]
-
-================================================================================
-File: tests/typescript-conformance/parser/ecmascript5/parserNotRegex2.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordConst)] around loc [8:13]
 
 ================================================================================
 File: tests/typescript-conformance/parser/ecmascript5/parservoidInQualifiedName1.ts
@@ -16122,7 +15802,7 @@ Error: RequiredTokenNotFound(LiteralRegex) [token=Some(Slash)] around loc [7:8]
 
 ================================================================================
 File: tests/typescript-conformance/parser/ecmascript5/RegularExpressions/parserRegularExpression6.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [8:11]
+Error: RequiredTokenNotFound(LiteralRegex) [token=Some(SlashEquals)] around loc [47:49]
 
 ================================================================================
 File: tests/typescript-conformance/parser/ecmascript5/RegularExpressions/parserRegularExpression4.ts
@@ -16398,7 +16078,7 @@ Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [8
 
 ================================================================================
 File: tests/typescript-conformance/parser/ecmascript5/RealWorld/parserharness.ts
-Error: ExpectedSyntax("declaration after declare") [token=Some(KeywordVar)] around loc [851:854]
+Error: RequiredTokenNotFound(LiteralRegex) [token=Some(Slash)] around loc [1076:1077]
 
 ================================================================================
 File: tests/typescript-conformance/parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration14.ts
