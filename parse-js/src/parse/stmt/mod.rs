@@ -47,6 +47,11 @@ impl<'a> Parser<'a> {
       TT::BraceOpen => self.block_stmt(ctx)?.into_wrapped(),
       TT::KeywordBreak => self.break_stmt(ctx)?.into_wrapped(),
       TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
+      // TypeScript: const enum
+      TT::KeywordConst if t1.typ == TT::KeywordEnum => {
+        self.consume(); // consume 'const'
+        self.enum_decl(ctx, false, false, true)?.into_wrapped()
+      },
       TT::KeywordConst | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       // `let` is a contextual keyword - only treat it as a declaration if followed by a pattern start
       // TypeScript: `let identifier :` is a variable declaration with type annotation, not a labeled statement
@@ -604,3 +609,4 @@ impl<'a> Parser<'a> {
     })
   }
 }
+
