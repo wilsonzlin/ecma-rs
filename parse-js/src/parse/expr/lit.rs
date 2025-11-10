@@ -267,6 +267,7 @@ impl<'a> Parser<'a> {
               TT::Colon,
               TT::Comma,
               &mut Asi::no(),
+              false, // Object literals don't have abstract methods
             )?;
             let typ = match value {
               ClassOrObjVal::Prop(None) => {

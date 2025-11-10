@@ -6,6 +6,15 @@ use crate::token::TT;
 
 use super::{expr::{Decorator, Expr, IdExpr}, func::Func, node::Node, stmt::decl::Accessibility, type_expr::TypeExpr};
 
+/// Index signature in class: [key: string]: Type
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ClassIndexSignature {
+  #[drive(skip)]
+  pub parameter_name: String,
+  pub parameter_type: Node<TypeExpr>,
+  pub type_annotation: Node<TypeExpr>,
+}
+
 /// This is a node as the key may not the same as source[node.loc], due to decoding/normalization.
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ClassOrObjMemberDirectKey {
@@ -48,6 +57,8 @@ pub enum ClassOrObjVal {
   // Must be Some if object, as shorthands are covered by ObjectMemberType::Shorthand (and are initialised).
   // Unlike the others, this is not its own struct as if None, there is no source range.
   Prop(Option<Node<Expr>>),
+  // TypeScript: index signature in classes
+  IndexSignature(Node<ClassIndexSignature>),
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]

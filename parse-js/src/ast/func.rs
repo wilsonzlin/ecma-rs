@@ -16,7 +16,7 @@ use super::{expr::Expr, node::Node, stmt::{decl::ParamDecl, Stmt}, type_expr::{T
     pub type_parameters: Option<Vec<Node<TypeParameter>>>,
     pub parameters: Vec<Node<ParamDecl>>,
     pub return_type: Option<Node<TypeExpr>>,
-    pub body: FuncBody,
+    pub body: Option<FuncBody>, // TypeScript: overload signatures have no body
   }
 
   // A function body is different from a block statement, as the scopes are different. This doesn't mean much at the parser level, but helps with downstream usages.

@@ -69,12 +69,65 @@ impl<'a> Parser<'a> {
         // TypeScript: readonly modifier
         let readonly = p.consume_if(TT::KeywordReadonly).is_match();
 
-        let (key, value) = p.class_or_obj_member(
-          ctx,
-          TT::Equals,
-          TT::Semicolon,
-          &mut Asi::can(),
-        )?;
+        // TypeScript: check for index signature [key: type]: type
+        let (key, value) = if p.peek().typ == TT::BracketOpen {
+          let checkpoint = p.checkpoint();
+          let _bracket = p.consume();
+          // Check if this looks like an index signature (identifier : type])
+          let looks_like_index_sig = if p.peek().typ == TT::Identifier {
+            let [_, t2] = p.peek_n::<2>();
+            t2.typ == TT::Colon
+          } else {
+            false
+          };
+          p.restore_checkpoint(checkpoint);
+
+          if looks_like_index_sig {
+            // Parse index signature
+            let index_sig = p.with_loc(|p| {
+              p.require(TT::BracketOpen)?;
+              let parameter_name = p.require_identifier()?;
+              p.require(TT::Colon)?;
+              let parameter_type = p.type_expr(ctx)?;
+              p.require(TT::BracketClose)?;
+              p.require(TT::Colon)?;
+              let type_annotation = p.type_expr(ctx)?;
+              use crate::ast::class_or_object::ClassIndexSignature;
+              Ok(ClassIndexSignature {
+                parameter_name,
+                parameter_type,
+                type_annotation,
+              })
+            })?;
+            // Fabricate a key (unused for index signatures) and wrap in IndexSignature variant
+            use crate::ast::class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal};
+            use crate::loc::Loc;
+            let dummy_key = ClassOrObjKey::Direct(Node::new(
+              Loc(0, 0),
+              ClassOrObjMemberDirectKey {
+                key: String::new(),
+                tt: TT::Identifier,
+              }
+            ));
+            (dummy_key, ClassOrObjVal::IndexSignature(index_sig))
+          } else {
+            p.class_or_obj_member(
+              ctx,
+              TT::Equals,
+              TT::Semicolon,
+              &mut Asi::can(),
+              abstract_,
+            )?
+          }
+        } else {
+          p.class_or_obj_member(
+            ctx,
+            TT::Equals,
+            TT::Semicolon,
+            &mut Asi::can(),
+            abstract_,
+          )?
+        };
 
         // TypeScript: definite assignment assertion (! after key)
         let definite_assignment = p.consume_if(TT::Exclamation).is_match();
@@ -145,6 +198,7 @@ impl<'a> Parser<'a> {
   pub fn class_or_obj_method(
     &mut self,
     ctx: ParseCtx,
+    abstract_: bool,
   ) -> SyntaxResult<(ClassOrObjKey, Node<ClassOrObjMethod>)> {
     let is_async = self.consume_if(TT::KeywordAsync).is_match();
     let is_generator = self.consume_if(TT::Asterisk).is_match();
@@ -163,10 +217,16 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
-      let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
-        await_allowed: !is_async && ctx.rules.await_allowed,
-        yield_allowed: !is_generator && ctx.rules.yield_allowed,
-      }))?.into();
+      // TypeScript: abstract methods have no body
+      let body = if abstract_ && p.peek().typ != TT::BraceOpen {
+        p.consume_if(TT::Semicolon);
+        None
+      } else {
+        Some(p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+          await_allowed: !is_async && ctx.rules.await_allowed,
+          yield_allowed: !is_generator && ctx.rules.yield_allowed,
+        }))?.into())
+      };
       Ok(Func {
         arrow: false,
         async_: is_async,
@@ -211,7 +271,7 @@ impl<'a> Parser<'a> {
         type_parameters,
         parameters: Vec::new(),
         return_type,
-        body,
+        body: Some(body),
       })
     })?;
     let val = func.wrap(|func| ClassOrObjGetter { func });
@@ -249,6 +309,7 @@ impl<'a> Parser<'a> {
         generator: false,
         type_parameters,
         parameters: vec![Node::new(param_loc, ParamDecl {
+          decorators: Vec::new(),
           rest: false,
           optional: false,
           accessibility: None,
@@ -258,7 +319,7 @@ impl<'a> Parser<'a> {
           default_value,
         })],
         return_type: None,
-        body,
+        body: Some(body),
       })
     })?;
     let val = func.wrap(|func| ClassOrObjSetter { func });
@@ -315,6 +376,7 @@ impl<'a> Parser<'a> {
     value_delimiter: TT,
     statement_delimiter: TT,
     property_initialiser_asi: &mut Asi,
+    abstract_: bool,
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
     let [a, b, c, d] = self.peek_n();
     // Special case for computed keys: parse key first, then check what follows
@@ -359,10 +421,16 @@ impl<'a> Parser<'a> {
             } else {
               None
             };
-            let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
-              await_allowed: !is_async && ctx.rules.await_allowed,
-              yield_allowed: !is_generator && ctx.rules.yield_allowed,
-            }))?.into();
+            // TypeScript: abstract methods have no body
+            let body = if abstract_ && p.peek().typ != TT::BraceOpen {
+              p.consume_if(TT::Semicolon);
+              None
+            } else {
+              Some(p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+                await_allowed: !is_async && ctx.rules.await_allowed,
+                yield_allowed: !is_generator && ctx.rules.yield_allowed,
+              }))?.into())
+            };
             Ok(Func {
               arrow: false,
               async_: is_async,
@@ -393,7 +461,7 @@ impl<'a> Parser<'a> {
       | (TT::Asterisk, _, TT::ParenthesisOpen, _)
       | (_, TT::ParenthesisOpen, _, _)
       => {
-        let (k, v) = self.class_or_obj_method(ctx)?;
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
         (k, v.into())
       }
       // Getter.

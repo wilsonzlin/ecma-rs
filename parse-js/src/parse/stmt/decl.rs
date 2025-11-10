@@ -153,7 +153,14 @@ impl<'a> Parser<'a> {
         } else {
           None
         };
-        let body = p.parse_func_block_body(fn_ctx)?.into();
+        // TypeScript: function overload signatures have no body
+        let body = if p.peek().typ == TT::BraceOpen {
+          Some(p.parse_func_block_body(fn_ctx)?.into())
+        } else {
+          // Overload signature - consume semicolon or allow ASI
+          p.consume_if(TT::Semicolon);
+          None
+        };
         Ok(Func {
           arrow: false,
           async_: is_async,

@@ -186,7 +186,7 @@ impl<'a> Parser<'a> {
         type_parameters,
         parameters,
         return_type,
-        body,
+        body: Some(body),
       })
     })?;
     Ok(Node::new(func.loc, ArrowFuncExpr { func }))
@@ -258,7 +258,7 @@ impl<'a> Parser<'a> {
           type_parameters,
           parameters,
           return_type,
-          body,
+          body: Some(body),
         })
       })?;
       Ok(FuncExpr {

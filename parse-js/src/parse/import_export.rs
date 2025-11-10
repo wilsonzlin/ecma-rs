@@ -87,10 +87,12 @@ impl<'a> Parser<'a> {
       } else if p.peek().typ == TT::BraceOpen {
         p.require(TT::BraceOpen)?;
         let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
+          // TypeScript: per-specifier type-only import
+          let type_only = p.consume_if(TT::KeywordType).is_match();
           let (target, alias) = p.import_or_export_name(ctx, false)?;
           let alias = alias.into_wrapped();
           let alias = alias.wrap(|pat| PatDecl { pat });
-          Ok(ImportName { importable: target, alias })
+          Ok(ImportName { type_only, importable: target, alias })
         })?;
         Some(ImportNames::Specific(names))
       } else {
@@ -129,8 +131,12 @@ impl<'a> Parser<'a> {
           let names = p.list_with_loc(
             TT::Comma,
             TT::BraceClose,
-            |p| p.import_or_export_name(ctx, true)
-              .map(|(target, alias)| ExportName { exportable: target, alias }),
+            |p| {
+              // TypeScript: per-specifier type-only export
+              let type_only = p.consume_if(TT::KeywordType).is_match();
+              p.import_or_export_name(ctx, true)
+                .map(|(target, alias)| ExportName { type_only, exportable: target, alias })
+            },
           )?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
           ExportListStmt {
