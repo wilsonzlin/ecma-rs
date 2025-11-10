@@ -97,6 +97,13 @@ impl<'a> Parser<'a> {
   /// Handle declare keyword
   fn declare_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
     self.consume(); // consume 'declare'
+
+    // Check for "declare global { }" - global is an identifier, not a keyword
+    let peek_tok = self.peek();
+    if peek_tok.typ == TT::Identifier && self.string(peek_tok.loc) == "global" {
+      return Ok(self.global_decl(ctx)?.wrap(Stmt::GlobalDecl));
+    }
+
     let t = self.peek().typ;
     match t {
       TT::KeywordInterface => Ok(self.interface_decl(ctx, false, true)?.wrap(Stmt::InterfaceDecl)),
@@ -609,4 +616,5 @@ impl<'a> Parser<'a> {
     })
   }
 }
+
 

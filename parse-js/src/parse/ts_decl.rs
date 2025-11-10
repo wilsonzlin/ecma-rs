@@ -170,8 +170,8 @@ impl<'a> Parser<'a> {
   pub fn global_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<GlobalDecl>> {
     self.with_loc(|p| {
       // 'declare' already consumed
-      p.require(TT::KeywordModule)?; // Actually uses 'global' but we need a keyword for it
-      // For now, parse as a special module
+      // Consume 'global' identifier
+      p.require(TT::Identifier)?;
 
       p.require(TT::BraceOpen)?;
       let body = p.stmts(ctx, TT::BraceClose)?;
