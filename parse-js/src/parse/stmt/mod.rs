@@ -56,7 +56,9 @@ impl<'a> Parser<'a> {
       TT::KeywordDo => self.do_while_stmt(ctx)?.into_wrapped(),
       TT::KeywordExport => self.export_stmt(ctx)?,
       TT::KeywordFor => self.for_stmt(ctx)?,
-      TT::KeywordAsync | TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
+      // Only treat async as function decl if followed by function keyword
+      TT::KeywordAsync if t1.typ == TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
+      TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
       TT::KeywordIf => self.if_stmt(ctx)?.into_wrapped(),
       TT::KeywordImport if t1.typ != TT::ParenthesisOpen => self.import_stmt(ctx)?.into_wrapped(),
       TT::KeywordReturn => self.return_stmt(ctx)?.into_wrapped(),
