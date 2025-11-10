@@ -142,6 +142,7 @@ pub struct IdExpr {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ImportExpr {
   pub module: Node<Expr>,
+  pub attributes: Option<Node<Expr>>,
 }
 
 

@@ -125,6 +125,7 @@ pub struct SwitchBranch {
     pub names: ExportNames,
     #[drive(skip)]
     pub from: Option<String>,
+    pub attributes: Option<Node<Expr>>,
   }
 
 
@@ -151,6 +152,7 @@ pub struct SwitchBranch {
     pub names: Option<ImportNames>,
     #[drive(skip)]
     pub module: String,
+    pub attributes: Option<Node<Expr>>,
   }
 
 

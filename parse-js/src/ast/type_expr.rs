@@ -1,4 +1,4 @@
-use super::expr::Expr;
+use super::expr::{Expr, ImportExpr};
 use super::node::Node;
 use derive_visitor::{Drive, DriveMut};
 use serde::Serialize;
@@ -116,6 +116,7 @@ pub struct TypeReference {
 pub enum TypeEntityName {
   Identifier(#[drive(skip)] String),
   Qualified(Box<TypeQualifiedName>),
+  Import(Node<ImportExpr>),
 }
 
 /// Qualified name: A.B.C

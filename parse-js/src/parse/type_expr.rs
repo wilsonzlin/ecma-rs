@@ -493,11 +493,20 @@ impl<'a> Parser<'a> {
     Ok(args)
   }
 
-  /// Parse typeof type query: typeof foo, typeof foo.bar.baz
+  /// Parse typeof type query: typeof foo, typeof foo.bar.baz, typeof import("module")
   fn type_query(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordTypeof)?;
-    let expr_name = self.parse_type_entity_name()?;
+
+    // Check if it's typeof import(...)
+    let expr_name = if self.peek().typ == TT::KeywordImport {
+      let import_expr = self.import_call(ctx)?;
+      let end_loc = import_expr.loc;
+      TypeEntityName::Import(import_expr)
+    } else {
+      self.parse_type_entity_name()?
+    };
+
     let end_loc = self.peek().loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
@@ -614,9 +623,23 @@ impl<'a> Parser<'a> {
     let checkpoint = self.checkpoint();
     let readonly = self.consume_if(TT::KeywordReadonly).is_match();
 
-    // Check for index signature: [key: string]: T
+    // Check for index signature vs computed property: [key: string]: T vs [Symbol.iterator]?: T
     if self.peek().typ == TT::BracketOpen {
-      return self.index_signature(ctx, readonly);
+      let bracket_checkpoint = self.checkpoint();
+      self.consume(); // consume '['
+      // Check if this looks like an index signature (identifier : type])
+      let looks_like_index_sig = if self.peek().typ == TT::Identifier {
+        let [_, t2] = self.peek_n::<2>();
+        t2.typ == TT::Colon
+      } else {
+        false
+      };
+      self.restore_checkpoint(bracket_checkpoint);
+
+      if looks_like_index_sig {
+        return self.index_signature(ctx, readonly);
+      }
+      // Otherwise, it's a computed property key - fall through to parse it normally
     }
 
     // Check for call signature or constructor signature

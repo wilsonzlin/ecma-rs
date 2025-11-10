@@ -40,9 +40,22 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordImport)?;
       p.require(TT::ParenthesisOpen)?;
-      let module = p.expr(ctx, [TT::ParenthesisClose])?;
+      let module = p.expr(ctx, [TT::Comma, TT::ParenthesisClose])?;
+
+      // Import attributes: import("module", { with: { type: "json" } })
+      let attributes = if p.consume_if(TT::Comma).is_match() {
+        // Allow trailing comma: import("module",)
+        if p.peek().typ == TT::ParenthesisClose {
+          None
+        } else {
+          Some(p.expr(ctx, [TT::ParenthesisClose])?)
+        }
+      } else {
+        None
+      };
+
       p.require(TT::ParenthesisClose)?;
-      Ok(ImportExpr { module })
+      Ok(ImportExpr { module, attributes })
     })
   }
 
@@ -100,6 +113,7 @@ impl<'a> Parser<'a> {
               default: Some(alias),
               module,
               names: None,
+              attributes: None,
             });
           }
 
@@ -133,6 +147,14 @@ impl<'a> Parser<'a> {
         p.require(TT::KeywordFrom)?;
       }
       let module = p.lit_str_val()?;
+
+      // Import attributes: import ... from "module" with { type: "json" }
+      let attributes = if p.consume_if(TT::KeywordWith).is_match() {
+        Some(p.expr(ctx, [])?)
+      } else {
+        None
+      };
+
       // Allow ASI - semicolon not required at EOF or before line terminator
       let t = p.peek();
       if t.typ != TT::EOF && !t.preceded_by_line_terminator {
@@ -145,6 +167,7 @@ impl<'a> Parser<'a> {
         default,
         module,
         names,
+        attributes,
       })
     })
   }
@@ -155,7 +178,7 @@ impl<'a> Parser<'a> {
       // TypeScript: export type
       let type_only = p.consume_if(TT::KeywordType).is_match();
       let t = p.consume();
-      let stmt = match t.typ {
+      let (names, from) = match t.typ {
         TT::BraceOpen => {
           let names = p.list_with_loc(
             TT::Comma,
@@ -168,25 +191,30 @@ impl<'a> Parser<'a> {
             },
           )?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
-          ExportListStmt {
-            type_only,
-            names: ExportNames::Specific(names),
-            from,
-          }
+          (ExportNames::Specific(names), from)
         }
         TT::Asterisk => {
           let alias = p.consume_if(TT::KeywordAs).and_then(|| p.id_pat(ctx))?;
           p.require(TT::KeywordFrom)?;
           let from = p.lit_str_val()?;
-          ExportListStmt {
-            type_only,
-            names: ExportNames::All(alias),
-            from: Some(from),
-          }
+          (ExportNames::All(alias), Some(from))
         }
         _ => return Err(t.error(SyntaxErrorType::ExpectedNotFound)),
       };
-      Ok(stmt)
+
+      // Export attributes: export ... from "module" with { type: "json" }
+      let attributes = if p.consume_if(TT::KeywordWith).is_match() {
+        Some(p.expr(ctx, [])?)
+      } else {
+        None
+      };
+
+      Ok(ExportListStmt {
+        type_only,
+        names,
+        from,
+        attributes,
+      })
     })
   }
 
