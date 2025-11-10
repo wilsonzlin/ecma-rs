@@ -103,6 +103,11 @@ impl<'a> Parser<'a> {
         self.consume(); // consume 'const'
         Ok(self.enum_decl(ctx, false, true, true)?.wrap(Stmt::EnumDecl))
       }
+      // Support declare abstract class
+      TT::KeywordAbstract if self.peek_n::<2>()[1].typ == TT::KeywordClass => {
+        self.consume(); // consume 'abstract'
+        Ok(self.class_decl_with_modifiers(ctx, false, true, true)?.wrap(Stmt::ClassDecl))
+      }
       // Support declare var, declare let, declare const
       TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
       _ => Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare"))),

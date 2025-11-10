@@ -263,6 +263,10 @@ impl<'a> Parser<'a> {
             self.consume(); // consume 'const'
             self.enum_decl(ctx, true, true, true)?.into_wrapped()
           }
+          TT::KeywordAbstract if self.peek_n::<2>()[1].typ == TT::KeywordClass => {
+            self.consume(); // consume 'abstract'
+            self.class_decl(ctx)?.into_wrapped()
+          }
           TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
           _ => return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after export declare"))),
         }
