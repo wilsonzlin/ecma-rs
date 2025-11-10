@@ -252,8 +252,9 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
-      // TypeScript: abstract methods have no body
-      let body = if abstract_ && p.peek().typ != TT::BraceOpen {
+      // TypeScript: method overload signatures and abstract methods have no body
+      // Method overloads are indicated by a semicolon instead of a body
+      let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
         p.consume_if(TT::Semicolon);
         None
       } else {
@@ -299,8 +300,8 @@ impl<'a> Parser<'a> {
         None
       };
       // Getters are not generators or async, so yield/await can be used as identifiers
-      // TypeScript: abstract getters have no body
-      let body = if abstract_ && p.peek().typ != TT::BraceOpen {
+      // TypeScript: getter overload signatures and abstract getters have no body
+      let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
         p.consume_if(TT::Semicolon);
         None
       } else {
@@ -357,8 +358,8 @@ impl<'a> Parser<'a> {
       let param_loc = pattern.loc;
       p.require(TT::ParenthesisClose)?;
       // Setters don't have return types
-      // TypeScript: abstract setters have no body
-      let body = if abstract_ && p.peek().typ != TT::BraceOpen {
+      // TypeScript: setter overload signatures and abstract setters have no body
+      let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
         p.consume_if(TT::Semicolon);
         None
       } else {
@@ -482,8 +483,9 @@ impl<'a> Parser<'a> {
             } else {
               None
             };
-            // TypeScript: abstract methods have no body
-            let body = if abstract_ && p.peek().typ != TT::BraceOpen {
+            // TypeScript: method overload signatures and abstract methods have no body
+            // Method overloads are indicated by a semicolon instead of a body
+            let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
               p.consume_if(TT::Semicolon);
               None
             } else {
