@@ -12,6 +12,8 @@ pub struct ClassDecl {
   #[drive(skip)]
   pub export_default: bool,
   #[drive(skip)]
+  pub declare: bool,
+  #[drive(skip)]
   pub abstract_: bool,
   pub name: Option<Node<ClassOrFuncName>>, // Name can only be omitted in a default export, although a default export class can still have a name.
   pub type_parameters: Option<Vec<Node<TypeParameter>>>,

@@ -135,9 +135,9 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse class declaration with TypeScript modifiers
-  fn class_decl_with_modifiers(&mut self, ctx: ParseCtx, export: bool, declare: bool, abstract_: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
-    // Implementation will be added when we update class_decl
-    self.class_decl(ctx)
+  fn class_decl_with_modifiers(&mut self, ctx: ParseCtx, _export: bool, declare: bool, _abstract_: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
+    // export and abstract are parsed inside class_decl_impl, so we only need to pass declare
+    self.class_decl_impl(ctx, declare)
   }
 
   /// Parse function declaration with TypeScript modifiers

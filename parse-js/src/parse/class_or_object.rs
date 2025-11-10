@@ -20,6 +20,10 @@ use crate::token::TT;
 
 impl<'a> Parser<'a> {
   pub fn class_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<ClassMember>>> {
+    self.class_body_with_context(ctx, false)
+  }
+
+  pub fn class_body_with_context(&mut self, ctx: ParseCtx, ambient: bool) -> SyntaxResult<Vec<Node<ClassMember>>> {
     self.require(TT::BraceOpen)?;
     let mut members = Vec::new();
     loop {
@@ -48,7 +52,7 @@ impl<'a> Parser<'a> {
         };
 
         // TypeScript: abstract modifier
-        let abstract_ = p.consume_if(TT::KeywordAbstract).is_match();
+        let abstract_ = ambient || p.consume_if(TT::KeywordAbstract).is_match();
 
         // TypeScript: override modifier
         let override_ = p.consume_if(TT::KeywordOverride).is_match();

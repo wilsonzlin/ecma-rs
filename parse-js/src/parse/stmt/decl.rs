@@ -194,6 +194,14 @@ impl<'a> Parser<'a> {
     &mut self,
     ctx: ParseCtx,
   ) -> SyntaxResult<Node<ClassDecl>> {
+    self.class_decl_impl(ctx, false)
+  }
+
+  pub fn class_decl_impl(
+    &mut self,
+    ctx: ParseCtx,
+    declare: bool,
+  ) -> SyntaxResult<Node<ClassDecl>> {
     self.with_loc(|p| {
       // TypeScript: parse decorators before export/class
       let decorators = p.decorators(ctx)?;
@@ -234,11 +242,12 @@ impl<'a> Parser<'a> {
         }
       }
 
-      let members = p.class_body(ctx)?;
+      let members = p.class_body_with_context(ctx, declare || abstract_)?;
       Ok(ClassDecl {
         decorators,
         export,
         export_default,
+        declare,
         abstract_,
         name,
         type_parameters,

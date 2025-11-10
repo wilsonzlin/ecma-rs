@@ -278,6 +278,16 @@ impl<'a> Parser<'a> {
       // Type reference or qualified name
       TT::Identifier => self.type_reference(ctx),
 
+      // Contextual keywords allowed as type identifiers
+      TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
+      TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
+      TT::KeywordAbstract | TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
+      TT::KeywordInfer | TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
+      TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
+      TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
+      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet
+      => self.type_reference(ctx),
+
       // this type
       TT::KeywordThis => {
         let loc = self.peek().loc;
@@ -379,11 +389,11 @@ impl<'a> Parser<'a> {
 
   /// Parse entity name (can be qualified: A.B.C)
   fn parse_type_entity_name(&mut self) -> SyntaxResult<TypeEntityName> {
-    let first = self.require_identifier()?;
+    let first = self.require_type_identifier()?;
     let mut name = TypeEntityName::Identifier(first);
 
     while self.consume_if(TT::Dot).is_match() {
-      let right = self.require_identifier()?;
+      let right = self.require_type_identifier()?;
       name = TypeEntityName::Qualified(Box::new(TypeQualifiedName {
         left: name,
         right,
@@ -391,6 +401,23 @@ impl<'a> Parser<'a> {
     }
 
     Ok(name)
+  }
+
+  /// Require an identifier or contextual keyword valid in type position
+  fn require_type_identifier(&mut self) -> SyntaxResult<String> {
+    let t = self.consume();
+    match t.typ {
+      TT::Identifier |
+      TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
+      TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
+      TT::KeywordAbstract | TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
+      TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
+      TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
+      TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
+      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet
+      => Ok(self.string(t.loc)),
+      _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type identifier")))
+    }
   }
 
   /// Check if we're at the start of type arguments <...>
