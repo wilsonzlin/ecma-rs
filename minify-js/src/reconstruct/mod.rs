@@ -1,7 +1,13 @@
 pub mod usage;
 
-use optimize_js::{analysis::{find_conds::find_conds, find_loops::find_loops, interference::calculate_interference_graph, liveness::calculate_live_ins, registers::{self, allocate_registers}, single_use_insts::analyse_single_use_defs}, dom::{Dom, PostDom}, ProgramFunction};
-use parse_js::ast::node::Node;
+use optimize_js::{
+  analysis::{find_conds::find_conds, find_loops::find_loops, interference::calculate_interference_graph, liveness::calculate_live_ins, registers::{self, allocate_registers}, single_use_insts::analyse_single_use_defs},
+  dom::{Dom, PostDom},
+  il::inst::{Arg, Const},
+  Program,
+  ProgramFunction
+};
+use parse_js::ast::{node::Node, expr::Expr};
 
 fn reconstruct_fn(f: ProgramFunction) -> Node {
   let cfg = f.body;

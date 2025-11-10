@@ -237,6 +237,8 @@ impl DeclVisitor {
       VarDeclMode::Const => AddToScope::IfNotGlobal,
       VarDeclMode::Let => AddToScope::IfNotGlobal,
       VarDeclMode::Var => AddToScope::NearestClosure,
+      VarDeclMode::Using => AddToScope::IfNotGlobal,
+      VarDeclMode::AwaitUsing => AddToScope::IfNotGlobal,
     });
   }
 

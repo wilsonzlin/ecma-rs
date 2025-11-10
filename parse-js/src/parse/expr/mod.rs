@@ -113,7 +113,15 @@ impl<'a> Parser<'a> {
     terminators: [TT; N],
   ) -> SyntaxResult<Node<ArrowFuncExpr>> {
     let func = self.with_loc(|p| {
-      let is_async = p.consume_if(TT::KeywordAsync).is_match();
+      // Check if current token is 'async' followed by '=>'
+      // In that case, 'async' is the parameter name, not the async keyword
+      let is_async_param_name = p.peek().typ == TT::KeywordAsync && p.peek_n::<2>()[1].typ == TT::EqualsChevronRight;
+
+      let is_async = if !is_async_param_name {
+        p.consume_if(TT::KeywordAsync).is_match()
+      } else {
+        false
+      };
 
       // Check if this is a single-unparenthesised-parameter arrow function
       // Works for both sync (x => ...) and async (async x => ...)

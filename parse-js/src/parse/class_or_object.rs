@@ -344,6 +344,12 @@ impl<'a> Parser<'a> {
         yield_allowed: true,
       });
       let pattern = p.pat_decl(setter_ctx)?;
+      // TypeScript: type annotation for setter parameter
+      let type_annotation = if p.consume_if(TT::Colon).is_match() {
+        Some(p.type_expr(ctx)?)
+      } else {
+        None
+      };
       let default_value = p.consume_if(TT::Equals)
         .and_then(|| {
           p.expr(setter_ctx, [TT::ParenthesisClose])

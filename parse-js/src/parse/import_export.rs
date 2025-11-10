@@ -232,10 +232,22 @@ impl<'a> Parser<'a> {
       (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
       // TypeScript: export interface, export type, export enum, export namespace, export declare
-      (TT::KeywordInterface, _) => self.interface_decl(ctx, true, false)?.into_wrapped(),
-      (TT::KeywordType, _) if t2.typ != TT::BraceOpen && t2.typ != TT::Asterisk => self.type_alias_decl(ctx, true, false)?.into_wrapped(),
-      (TT::KeywordEnum, _) => self.enum_decl(ctx, true, false, false)?.into_wrapped(),
-      (TT::KeywordNamespace, _) => self.namespace_decl(ctx, true, false)?.into_wrapped(),
+      (TT::KeywordInterface, _) => {
+        self.consume(); // export
+        self.interface_decl(ctx, true, false)?.into_wrapped()
+      },
+      (TT::KeywordType, _) if t2.typ != TT::BraceOpen && t2.typ != TT::Asterisk => {
+        self.consume(); // export
+        self.type_alias_decl(ctx, true, false)?.into_wrapped()
+      },
+      (TT::KeywordEnum, _) => {
+        self.consume(); // export
+        self.enum_decl(ctx, true, false, false)?.into_wrapped()
+      },
+      (TT::KeywordNamespace, _) => {
+        self.consume(); // export
+        self.namespace_decl(ctx, true, false)?.into_wrapped()
+      },
       (TT::KeywordDeclare, _) => {
         // For "export declare", we need to handle it specially to pass export=true
         self.consume(); // export

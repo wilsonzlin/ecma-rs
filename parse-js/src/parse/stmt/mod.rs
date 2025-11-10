@@ -80,6 +80,8 @@ impl<'a> Parser<'a> {
       TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, false)?,
       TT::KeywordDeclare => self.declare_stmt(ctx)?,
       TT::KeywordAbstract if t1.typ == TT::KeywordClass => self.abstract_class_decl(ctx)?.into_wrapped(),
+      // Decorators can appear before class declarations
+      TT::At => self.class_decl_impl(ctx, false)?.into_wrapped(),
 
       t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_wrapped(),
       _ => self.expr_stmt(ctx)?.into_wrapped(),
@@ -130,7 +132,7 @@ impl<'a> Parser<'a> {
 
   /// Handle abstract class
   fn abstract_class_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
-    self.consume(); // consume 'abstract'
+    // Don't consume 'abstract' here - let class_decl_impl do it
     self.class_decl_with_modifiers(ctx, false, false, true)
   }
 
