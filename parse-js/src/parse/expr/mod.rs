@@ -136,6 +136,7 @@ impl<'a> Parser<'a> {
           }).into_wrapped(),
         });
         let param = Node::new(param_name, ParamDecl {
+          decorators: vec![],
           rest: false,
           optional: false,
           accessibility: None,

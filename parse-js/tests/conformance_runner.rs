@@ -35,7 +35,7 @@ fn discover_tests(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn run_test(path: &Path) -> TestResult {
-    let source = match fs::read(path) {
+    let source = match fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
             return TestResult {

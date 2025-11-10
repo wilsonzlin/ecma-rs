@@ -4,3 +4,4 @@
 [submodule "parse-js/tests/TypeScript"]
 	path = parse-js/tests/TypeScript
 	url = https://github.com/microsoft/TypeScript.git
+	shallow = true
