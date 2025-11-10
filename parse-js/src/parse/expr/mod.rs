@@ -571,31 +571,47 @@ impl<'a> Parser<'a> {
         }
         // TypeScript: Skip type arguments after identifiers/member expressions
         // e.g., Base<T> in extends clause
+        // Only treat < as type arguments if left is an identifier or member expression
         TT::ChevronLeft => {
-          // We've already consumed <, need to check if this is type arguments
-          // Peek ahead to disambiguate
-          let next = self.peek();
-          let looks_like_type_args = match next.typ {
-            TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
-            TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
-            TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
-            TT::BracketOpen | TT::BraceOpen | TT::ParenthesisOpen |
-            TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer |
-            TT::ChevronRight | TT::Identifier => true,
-            _ => false,
-          };
+          // Check if left expression is an identifier or member expression
+          let left_is_identifier_or_member = matches!(*left.stx,
+            Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_)
+          );
 
-          if looks_like_type_args {
-            // Parse the rest of the type arguments (we already consumed <)
-            let mut args = Vec::new();
-            while !self.consume_if(TT::ChevronRight).is_match() {
-              args.push(self.type_expr(ctx)?);
-              if !self.consume_if(TT::Comma).is_match() {
-                self.require(TT::ChevronRight)?;
-                break;
+          if left_is_identifier_or_member {
+            // We've already consumed <, need to check if this is type arguments
+            // Peek ahead to disambiguate
+            let next = self.peek();
+            let looks_like_type_args = match next.typ {
+              TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
+              TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
+              TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
+              TT::BracketOpen | TT::BraceOpen | TT::ParenthesisOpen |
+              TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer |
+              TT::ChevronRight => true,
+              // For identifiers, need to check what comes after
+              TT::Identifier => {
+                let [_, t2] = self.peek_n::<2>();
+                matches!(t2.typ,
+                  TT::ChevronRight | TT::Comma | TT::KeywordExtends | TT::Equals |
+                  TT::Bar | TT::Ampersand | TT::Dot | TT::BracketOpen
+                )
+              },
+              _ => false,
+            };
+
+            if looks_like_type_args {
+              // Parse the rest of the type arguments (we already consumed <)
+              let mut args = Vec::new();
+              while !self.consume_if(TT::ChevronRight).is_match() {
+                args.push(self.type_expr(ctx)?);
+                if !self.consume_if(TT::Comma).is_match() {
+                  self.require(TT::ChevronRight)?;
+                  break;
+                }
               }
+              continue;
             }
-            continue;
           }
           // Not type arguments, continue to binary operator handling
         }
