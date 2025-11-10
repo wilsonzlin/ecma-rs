@@ -446,6 +446,7 @@ pub static KEYWORDS_MAPPING: Lazy<HashMap<TT, &'static str>> = Lazy::new(|| {
   map.insert(TT::KeywordYield, "yield");
   // TypeScript keywords
   map.insert(TT::KeywordAbstract, "abstract");
+  map.insert(TT::KeywordAccessor, "accessor");
   map.insert(TT::KeywordAny, "any");
   map.insert(TT::KeywordAsserts, "asserts");
   map.insert(TT::KeywordBigIntType, "bigint");

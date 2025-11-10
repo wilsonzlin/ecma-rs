@@ -198,7 +198,9 @@ impl<'a> Parser<'a> {
   pub fn decorator(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<crate::ast::expr::Decorator>> {
     self.with_loc(|p| {
       p.require(TT::At)?;
-      let expression = p.expr(ctx, [])?;
+      // Allow ASI so decorator expression can end at line terminator
+      let mut asi = crate::parse::expr::Asi::can();
+      let expression = p.expr_with_min_prec(ctx, 1, [], &mut asi)?;
       Ok(crate::ast::expr::Decorator { expression })
     })
   }

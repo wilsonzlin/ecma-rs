@@ -84,6 +84,7 @@ impl<'a> Parser<'a> {
               static_: true,
               abstract_: false,
               readonly: false,
+              accessor: false,
               optional: false,
               override_: false,
               definite_assignment: false,
@@ -103,6 +104,9 @@ impl<'a> Parser<'a> {
 
         // TypeScript: readonly modifier
         let readonly = p.consume_if(TT::KeywordReadonly).is_match();
+
+        // TypeScript/JavaScript: accessor modifier for auto-accessors
+        let accessor = p.consume_if(TT::KeywordAccessor).is_match();
 
         // TypeScript: check for index signature [key: type]: type
         let (key, value) = if p.peek().typ == TT::BracketOpen {
@@ -184,6 +188,7 @@ impl<'a> Parser<'a> {
           static_,
           abstract_,
           readonly,
+          accessor,
           optional,
           override_,
           definite_assignment,

@@ -122,6 +122,7 @@ pub enum TT {
   KeywordYield,
   // TypeScript keywords
   KeywordAbstract,
+  KeywordAccessor,
   KeywordAny,
   KeywordAsserts,
   KeywordBigIntType,

@@ -93,6 +93,8 @@ pub struct ClassMember {
   #[drive(skip)]
   pub readonly: bool,
   #[drive(skip)]
+  pub accessor: bool,
+  #[drive(skip)]
   pub optional: bool,
   #[drive(skip)]
   pub override_: bool,
