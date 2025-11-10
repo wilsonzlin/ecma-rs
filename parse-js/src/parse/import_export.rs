@@ -74,6 +74,35 @@ impl<'a> Parser<'a> {
       let (default, can_have_names) =
         if p.peek().typ == TT::Identifier {
           let alias = p.id_pat_decl(ctx)?;
+
+          // TypeScript: check for import equals: import id = require("module")
+          if p.peek().typ == TT::Equals {
+            p.consume(); // =
+            // Expect "require"
+            let require_name = p.require_identifier()?;
+            if require_name != "require" {
+              return Err(p.peek().error(SyntaxErrorType::ExpectedNotFound));
+            }
+            p.require(TT::ParenthesisOpen)?;
+            let module = p.lit_str_val()?;
+            p.require(TT::ParenthesisClose)?;
+
+            // Allow ASI
+            let t = p.peek();
+            if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+              p.consume_if(TT::Semicolon);
+            }
+
+            // Return as ImportStmt with special marker
+            // We'll use type_only=false, and the presence of default without names as marker
+            return Ok(ImportStmt {
+              type_only: false,
+              default: Some(alias),
+              module,
+              names: None,
+            });
+          }
+
           (Some(alias), p.consume_if(TT::Comma).is_match())
         } else {
           (None, true)
