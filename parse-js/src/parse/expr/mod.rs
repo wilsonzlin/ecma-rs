@@ -115,11 +115,22 @@ impl<'a> Parser<'a> {
     let func = self.with_loc(|p| {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
 
-      let (type_parameters, parameters, return_type, arrow) = if !is_async
-        && is_valid_pattern_identifier(p.peek().typ, ParsePatternRules {
-          await_allowed: false,
-          yield_allowed: ctx.rules.yield_allowed,
-        }) {
+      // Check if this is a single-unparenthesised-parameter arrow function
+      // Works for both sync (x => ...) and async (async x => ...)
+      let next_token = p.peek().typ;
+      let is_unparenthesised_single_param = is_valid_pattern_identifier(next_token, ParsePatternRules {
+        await_allowed: false,
+        yield_allowed: ctx.rules.yield_allowed,
+      }) && {
+        // Need to peek further to see if there's => coming up
+        let peek2 = p.peek_n::<2>()[1].typ;
+        // Could be either:
+        // - identifier =>
+        // - identifier : type =>
+        peek2 == TT::EqualsChevronRight || peek2 == TT::Colon
+      };
+
+      let (type_parameters, parameters, return_type, arrow) = if is_unparenthesised_single_param {
         // Single-unparenthesised-parameter arrow function.
         // Parse arrow first for fast fail (and in case we are merely trying to parse as arrow function), before we mutate state by creating nodes and adding symbols.
         let param_name = p.consume().loc;
@@ -327,7 +338,7 @@ impl<'a> Parser<'a> {
     terminators: [TT; N],
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
-    let [t0, t1] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard]);
+    let [t0, t1, t2] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard, LexMode::Standard]);
     // Handle unary operators before operand.
     // Special case: `new.target` should not be treated as `new` operator
     if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t0.typ).filter(|operator| {
@@ -397,7 +408,8 @@ impl<'a> Parser<'a> {
         TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
         TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
         // Check if this could be a single-parameter arrow function: `async x => {}`
-        TT::EqualsChevronRight if is_valid_pattern_identifier(t0.typ, ctx.rules) => {
+        // t1 is the identifier, t2 should be =>
+        _ if is_valid_pattern_identifier(t1.typ, ctx.rules) && t2.typ == TT::EqualsChevronRight => {
           self.arrow_func_expr(ctx, terminators)?.into_wrapped()
         }
         // `async` is being used as an identifier.

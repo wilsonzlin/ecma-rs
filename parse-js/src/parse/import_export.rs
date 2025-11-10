@@ -207,6 +207,22 @@ impl<'a> Parser<'a> {
     let [t0, t1, t2] = self.peek_n();
     // The first token should always be `export`, but it will be parsed in the subroutines and not here.
     assert_eq!(t0.typ, TT::KeywordExport);
+
+    // TypeScript: export = expression (export assignment)
+    if t1.typ == TT::Equals {
+      return self.with_loc(|p| {
+        p.require(TT::KeywordExport)?;
+        p.require(TT::Equals)?;
+        let expression = p.expr(ctx, [])?;
+        // Allow ASI
+        let t = p.peek();
+        if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+          p.consume_if(TT::Semicolon);
+        }
+        Ok(crate::ast::ts_stmt::ExportAssignmentDecl { expression })
+      }).map(|node| node.into_wrapped());
+    }
+
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match (t1.typ, t2.typ) {
       // `class` and `function` are treated as statements that are hoisted, not expressions; however, they can be unnamed, which gives them the name `default`.
@@ -215,6 +231,42 @@ impl<'a> Parser<'a> {
       (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
       (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
+      // TypeScript: export interface, export type, export enum, export namespace, export declare
+      (TT::KeywordInterface, _) => self.interface_decl(ctx, true, false)?.into_wrapped(),
+      (TT::KeywordType, _) if t2.typ != TT::BraceOpen && t2.typ != TT::Asterisk => self.type_alias_decl(ctx, true, false)?.into_wrapped(),
+      (TT::KeywordEnum, _) => self.enum_decl(ctx, true, false, false)?.into_wrapped(),
+      (TT::KeywordNamespace, _) => self.namespace_decl(ctx, true, false)?.into_wrapped(),
+      (TT::KeywordDeclare, _) => {
+        // For "export declare", we need to handle it specially to pass export=true
+        self.consume(); // export
+        self.consume(); // declare
+        let t = self.peek().typ;
+        match t {
+          TT::KeywordInterface => self.interface_decl(ctx, true, true)?.into_wrapped(),
+          TT::KeywordType => self.type_alias_decl(ctx, true, true)?.into_wrapped(),
+          TT::KeywordEnum => self.enum_decl(ctx, true, true, false)?.into_wrapped(),
+          TT::KeywordNamespace | TT::KeywordModule => {
+            // Check if it's a string module (declare module "foo")
+            if t == TT::KeywordModule && self.peek_n::<2>()[1].typ == TT::LiteralString {
+              self.module_decl(ctx, true, true)?.into_wrapped()
+            } else {
+              self.namespace_decl(ctx, true, true)?.into_wrapped()
+            }
+          },
+          TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
+          TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
+          TT::KeywordAsync if self.peek_n::<2>()[1].typ == TT::KeywordFunction => {
+            self.consume(); // consume 'async'
+            self.func_decl(ctx)?.into_wrapped()
+          }
+          TT::KeywordConst if self.peek_n::<2>()[1].typ == TT::KeywordEnum => {
+            self.consume(); // consume 'const'
+            self.enum_decl(ctx, true, true, true)?.into_wrapped()
+          }
+          TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+          _ => return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after export declare"))),
+        }
+      },
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("exportable"))),
     };
     Ok(stmt)

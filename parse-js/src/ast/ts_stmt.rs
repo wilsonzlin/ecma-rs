@@ -192,3 +192,9 @@ pub struct ImportEqualsDecl {
   #[drive(skip)]
   pub module: String,
 }
+
+/// Export assignment: export = expression
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ExportAssignmentDecl {
+  pub expression: Node<Expr>,
+}

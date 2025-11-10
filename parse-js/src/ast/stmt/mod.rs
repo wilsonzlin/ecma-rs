@@ -50,6 +50,7 @@ pub enum Stmt {
   ImportTypeDecl(Node<ImportTypeDecl>),
   ExportTypeDecl(Node<ExportTypeDecl>),
   ImportEqualsDecl(Node<ImportEqualsDecl>),
+  ExportAssignmentDecl(Node<ExportAssignmentDecl>),
 }
 
 
