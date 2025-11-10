@@ -241,8 +241,8 @@ impl<'a> Parser<'a> {
         };
         // Parameters and body use the function's own context, not the parent's
         let fn_ctx = ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async,
-          yield_allowed: !generator,
+          await_allowed: !is_async && ctx.rules.await_allowed,
+          yield_allowed: !generator && ctx.rules.yield_allowed,
         });
         let parameters = p.func_params(fn_ctx)?;
         // TypeScript: return type annotation - may be type predicate
