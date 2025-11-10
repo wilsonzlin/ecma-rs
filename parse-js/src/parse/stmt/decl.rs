@@ -147,13 +147,20 @@ impl<'a> Parser<'a> {
           yield_allowed: !generator && ctx.rules.yield_allowed,
         });
         let parameters = p.func_params(fn_ctx)?;
-        // TypeScript: return type annotation
+        // TypeScript: return type annotation (may be type predicate)
         let return_type = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
+          Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
         };
-        let body = p.parse_func_block_body(fn_ctx)?.into();
+        // TypeScript: function overload signatures have no body
+        let body = if p.peek().typ == TT::BraceOpen {
+          Some(p.parse_func_block_body(fn_ctx)?.into())
+        } else {
+          // Overload signature - consume semicolon or allow ASI
+          p.consume_if(TT::Semicolon);
+          None
+        };
         Ok(Func {
           arrow: false,
           async_: is_async,
@@ -178,8 +185,13 @@ impl<'a> Parser<'a> {
     ctx: ParseCtx,
   ) -> SyntaxResult<Node<ClassDecl>> {
     self.with_loc(|p| {
+      // TypeScript: parse decorators before export/class
+      let decorators = p.decorators(ctx)?;
+
       let export = p.consume_if(TT::KeywordExport).is_match();
       let export_default = export && p.consume_if(TT::KeywordDefault).is_match();
+      // TypeScript: abstract keyword
+      let abstract_ = p.consume_if(TT::KeywordAbstract).is_match();
       let start = p.require(TT::KeywordClass)?.loc;
       // Names can be omitted only in default exports.
       let name = p.maybe_class_or_func_name(ctx);
@@ -214,9 +226,10 @@ impl<'a> Parser<'a> {
 
       let members = p.class_body(ctx)?;
       Ok(ClassDecl {
+        decorators,
         export,
         export_default,
-        abstract_: false,
+        abstract_,
         name,
         type_parameters,
         extends,

@@ -9,6 +9,8 @@ use super::{expr::pat::IdPat, node::Node, stmt::decl::PatDecl};
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ExportName {
   #[drive(skip)]
+  pub type_only: bool, // TypeScript: export { type Foo }
+  #[drive(skip)]
   pub exportable: String,
   // This is always set, even when no explicit alias is provided. This is for simplicity for downstream tasks, as an implicit alias hides the implicit IdPat usage.
   pub alias: Node<IdPat>,
@@ -27,6 +29,8 @@ pub enum ExportNames {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ImportName {
+  #[drive(skip)]
+  pub type_only: bool, // TypeScript: import { type Foo }
   #[drive(skip)]
   pub importable: String,
   // This is always set, even when no explicit alias is provided. This is for simplicity for downstream tasks, as an implicit alias hides the implicit IdPat decl.

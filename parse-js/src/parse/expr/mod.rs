@@ -115,17 +115,28 @@ impl<'a> Parser<'a> {
     let func = self.with_loc(|p| {
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
 
-      let (type_parameters, parameters, return_type, arrow) = if !is_async
-        && is_valid_pattern_identifier(p.peek().typ, ParsePatternRules {
-          await_allowed: false,
-          yield_allowed: ctx.rules.yield_allowed,
-        }) {
+      // Check if this is a single-unparenthesised-parameter arrow function
+      // Works for both sync (x => ...) and async (async x => ...)
+      let next_token = p.peek().typ;
+      let is_unparenthesised_single_param = is_valid_pattern_identifier(next_token, ParsePatternRules {
+        await_allowed: false,
+        yield_allowed: ctx.rules.yield_allowed,
+      }) && {
+        // Need to peek further to see if there's => coming up
+        let peek2 = p.peek_n::<2>()[1].typ;
+        // Could be either:
+        // - identifier =>
+        // - identifier : type =>
+        peek2 == TT::EqualsChevronRight || peek2 == TT::Colon
+      };
+
+      let (type_parameters, parameters, return_type, arrow) = if is_unparenthesised_single_param {
         // Single-unparenthesised-parameter arrow function.
         // Parse arrow first for fast fail (and in case we are merely trying to parse as arrow function), before we mutate state by creating nodes and adding symbols.
         let param_name = p.consume().loc;
-        // TypeScript: return type annotation (after param, before =>)
+        // TypeScript: return type annotation (after param, before =>) - may be type predicate
         let return_type = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
+          Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
         };
@@ -136,6 +147,7 @@ impl<'a> Parser<'a> {
           }).into_wrapped(),
         });
         let param = Node::new(param_name, ParamDecl {
+          decorators: vec![],
           rest: false,
           optional: false,
           accessibility: None,
@@ -153,9 +165,9 @@ impl<'a> Parser<'a> {
           None
         };
         let params = p.func_params(ctx)?;
-        // TypeScript: return type annotation (after params, before =>)
+        // TypeScript: return type annotation (after params, before =>) - may be type predicate
         let return_type = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
+          Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
         };
@@ -186,7 +198,7 @@ impl<'a> Parser<'a> {
         type_parameters,
         parameters,
         return_type,
-        body,
+        body: Some(body),
       })
     })?;
     Ok(Node::new(func.loc, ArrowFuncExpr { func }))
@@ -244,9 +256,9 @@ impl<'a> Parser<'a> {
           yield_allowed: !generator && ctx.rules.yield_allowed,
         });
         let parameters = p.func_params(fn_ctx)?;
-        // TypeScript: return type annotation
+        // TypeScript: return type annotation - may be type predicate
         let return_type = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
+          Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
         };
@@ -258,7 +270,7 @@ impl<'a> Parser<'a> {
           type_parameters,
           parameters,
           return_type,
-          body,
+          body: Some(body),
         })
       })?;
       Ok(FuncExpr {
@@ -326,7 +338,7 @@ impl<'a> Parser<'a> {
     terminators: [TT; N],
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
-    let [t0, t1] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard]);
+    let [t0, t1, t2] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard, LexMode::Standard]);
     // Handle unary operators before operand.
     // Special case: `new.target` should not be treated as `new` operator
     if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t0.typ).filter(|operator| {
@@ -396,7 +408,8 @@ impl<'a> Parser<'a> {
         TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
         TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
         // Check if this could be a single-parameter arrow function: `async x => {}`
-        TT::EqualsChevronRight if is_valid_pattern_identifier(t0.typ, ctx.rules) => {
+        // t1 is the identifier, t2 should be =>
+        _ if is_valid_pattern_identifier(t1.typ, ctx.rules) && t2.typ == TT::EqualsChevronRight => {
           self.arrow_func_expr(ctx, terminators)?.into_wrapped()
         }
         // `async` is being used as an identifier.
@@ -480,6 +493,23 @@ impl<'a> Parser<'a> {
           }).into_wrapped();
           continue;
         }
+        // TypeScript: Non-null assertion: expr!
+        // We need to distinguish between non-null assertion (expr!) and inequality operators (!= and !==)
+        TT::Exclamation if !t.preceded_by_line_terminator => {
+          let next = self.peek();
+          if next.typ != TT::Equals && next.typ != TT::EqualsEquals {
+            // This is a non-null assertion: expr!
+            use crate::ast::expr::NonNullAssertionExpr;
+            left = Node::new(left.loc + t.loc, NonNullAssertionExpr {
+              expression: Box::new(left),
+            }).into_wrapped();
+            continue;
+          }
+          // Otherwise it's != or !==, so restore checkpoint and continue loop to re-process
+          // We restore so the binary operator handling code below can process != or !==
+          self.restore_checkpoint(cp);
+          continue; // Restart loop to re-process the ! token as part of != or !==
+        }
         // Automatic Semicolon Insertion rules: no newline between operand and template literal.
         TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
           if !t.preceded_by_line_terminator =>
@@ -490,6 +520,38 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + loc, TaggedTemplateExpr {
             function: left,
             parts,
+          }).into_wrapped();
+          continue;
+        }
+        // TypeScript: Type assertion: expr as Type or expr as const
+        TT::KeywordAs => {
+          // Check if this is "as const"
+          if self.peek().typ == TT::KeywordConst {
+            let const_loc = self.consume().loc;
+            use crate::ast::expr::TypeAssertionExpr;
+            left = Node::new(left.loc + const_loc, TypeAssertionExpr {
+              expression: Box::new(left),
+              type_annotation: None,
+              const_assertion: true,
+            }).into_wrapped();
+          } else {
+            let type_annotation = self.type_expr(ctx)?;
+            use crate::ast::expr::TypeAssertionExpr;
+            left = Node::new(left.loc + type_annotation.loc, TypeAssertionExpr {
+              expression: Box::new(left),
+              type_annotation: Some(type_annotation),
+              const_assertion: false,
+            }).into_wrapped();
+          }
+          continue;
+        }
+        // TypeScript: Satisfies expression: expr satisfies Type
+        TT::KeywordSatisfies => {
+          let type_annotation = self.type_expr(ctx)?;
+          use crate::ast::expr::SatisfiesExpr;
+          left = Node::new(left.loc + type_annotation.loc, SatisfiesExpr {
+            expression: Box::new(left),
+            type_annotation,
           }).into_wrapped();
           continue;
         }

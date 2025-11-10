@@ -1,11 +1,12 @@
 use derive_visitor::{Drive, DriveMut};
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{class_or_object::ClassMember, expr::{pat::{ClassOrFuncName, Pat}, Expr}, func::Func, node::Node, type_expr::{TypeExpr, TypeParameter}};
+use crate::ast::{class_or_object::ClassMember, expr::{pat::{ClassOrFuncName, Pat}, Decorator, Expr}, func::Func, node::Node, type_expr::{TypeExpr, TypeParameter}};
 
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ClassDecl {
+  pub decorators: Vec<Node<Decorator>>,
   #[drive(skip)]
   pub export: bool,
   #[drive(skip)]
@@ -31,6 +32,7 @@ pub struct FuncDecl {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ParamDecl {
+  pub decorators: Vec<Node<Decorator>>,
   #[drive(skip)]
   pub rest: bool,
   #[drive(skip)]

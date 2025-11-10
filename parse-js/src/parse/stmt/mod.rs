@@ -49,14 +49,16 @@ impl<'a> Parser<'a> {
       TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
       TT::KeywordConst | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       // `let` is a contextual keyword - only treat it as a declaration if followed by a pattern start
-      // But if it's followed by `identifier :`, it's a labeled statement, not a declaration
-      TT::KeywordLet if (t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules)) && !(is_valid_pattern_identifier(t1.typ, ctx.rules) && t2.typ == TT::Colon) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      // TypeScript: `let identifier :` is a variable declaration with type annotation, not a labeled statement
+      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       TT::KeywordContinue => self.continue_stmt(ctx)?.into_wrapped(),
       TT::KeywordDebugger => self.debugger_stmt()?.into_wrapped(),
       TT::KeywordDo => self.do_while_stmt(ctx)?.into_wrapped(),
       TT::KeywordExport => self.export_stmt(ctx)?,
       TT::KeywordFor => self.for_stmt(ctx)?,
-      TT::KeywordAsync | TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
+      // Only treat async as function decl if followed by function keyword
+      TT::KeywordAsync if t1.typ == TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
+      TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
       TT::KeywordIf => self.if_stmt(ctx)?.into_wrapped(),
       TT::KeywordImport if t1.typ != TT::ParenthesisOpen => self.import_stmt(ctx)?.into_wrapped(),
       TT::KeywordReturn => self.return_stmt(ctx)?.into_wrapped(),
@@ -100,6 +102,11 @@ impl<'a> Parser<'a> {
       TT::KeywordConst if self.peek_n::<2>()[1].typ == TT::KeywordEnum => {
         self.consume(); // consume 'const'
         Ok(self.enum_decl(ctx, false, true, true)?.wrap(Stmt::EnumDecl))
+      }
+      // Support declare abstract class
+      TT::KeywordAbstract if self.peek_n::<2>()[1].typ == TT::KeywordClass => {
+        self.consume(); // consume 'abstract'
+        Ok(self.class_decl_with_modifiers(ctx, false, true, true)?.wrap(Stmt::ClassDecl))
       }
       // Support declare var, declare let, declare const
       TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),

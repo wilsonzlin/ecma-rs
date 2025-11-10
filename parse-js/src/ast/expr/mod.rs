@@ -200,11 +200,13 @@ pub struct UnaryPostfixExpr {
 
 // TypeScript expressions
 
-/// Type assertion: value as Type
+/// Type assertion: value as Type or value as const
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeAssertionExpr {
   pub expression: Box<Node<Expr>>,
-  pub type_annotation: Node<TypeExpr>,
+  pub type_annotation: Option<Node<TypeExpr>>, // None for "as const"
+  #[drive(skip)]
+  pub const_assertion: bool, // true for "as const"
 }
 
 /// Non-null assertion: value!

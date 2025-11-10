@@ -11,6 +11,64 @@ impl<'a> Parser<'a> {
     self.type_union_or_intersection(ctx)
   }
 
+  /// Parse type expression or type predicate for function return type
+  /// Type predicates: `x is Type`, `asserts x`, `asserts x is Type`
+  pub fn type_expr_or_predicate(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
+    // Check for type predicate patterns
+    let checkpoint = self.checkpoint();
+    let start_loc = self.peek().loc;
+
+    // Check for 'asserts' keyword
+    let asserts = self.consume_if(TT::KeywordAsserts).is_match();
+
+    // Try to parse parameter name
+    if self.peek().typ == TT::Identifier || self.peek().typ == TT::KeywordThis {
+      let is_this = self.peek().typ == TT::KeywordThis;
+      let param_checkpoint = self.checkpoint();
+      let parameter_name = if is_this {
+        self.consume();
+        "this".to_string()
+      } else {
+        self.require_identifier()?
+      };
+
+      // Check for 'is Type' after parameter name
+      if self.consume_if(TT::KeywordIs).is_match() {
+        // This is a type predicate: `x is Type` or `asserts x is Type`
+        let type_annotation = Some(Box::new(self.type_expr(ctx)?));
+        let end_loc = type_annotation.as_ref().unwrap().loc;
+        use crate::loc::Loc;
+        let outer_loc = Loc(start_loc.0, end_loc.1);
+        let predicate = Node::new(start_loc, TypePredicate {
+          asserts,
+          parameter_name,
+          type_annotation,
+        });
+        return Ok(Node::new(outer_loc, TypeExpr::TypePredicate(predicate)));
+      } else if asserts {
+        // This is `asserts x` without 'is Type'
+        let end_loc = self.peek().loc;
+        use crate::loc::Loc;
+        let outer_loc = Loc(start_loc.0, end_loc.1);
+        let predicate = Node::new(start_loc, TypePredicate {
+          asserts: true,
+          parameter_name,
+          type_annotation: None,
+        });
+        return Ok(Node::new(outer_loc, TypeExpr::TypePredicate(predicate)));
+      } else {
+        // Not a type predicate, restore and parse as normal type
+        self.restore_checkpoint(param_checkpoint);
+      }
+    }
+
+    // Not a type predicate, restore and parse as normal type expression
+    if asserts {
+      self.restore_checkpoint(checkpoint);
+    }
+    self.type_union_or_intersection(ctx)
+  }
+
   /// Parse union or intersection types (lowest precedence)
   /// T | U | V  or  T & U & V
   /// Note: Cannot mix | and & at same level without parentheses
@@ -182,6 +240,21 @@ impl<'a> Parser<'a> {
         self.consume();
         let inner = Node::new(loc, TypeSymbol {});
         Ok(Node::new(loc, TypeExpr::Symbol(inner)))
+      }
+      TT::KeywordUnique => {
+        // Check for "unique symbol"
+        let start_loc = self.peek().loc;
+        self.consume();
+        if self.peek().typ == TT::KeywordSymbolType {
+          let end_loc = self.peek().loc;
+          self.consume();
+          use crate::loc::Loc;
+          let outer_loc = Loc(start_loc.0, end_loc.1);
+          let inner = Node::new(start_loc, TypeUniqueSymbol {});
+          Ok(Node::new(outer_loc, TypeExpr::UniqueSymbol(inner)))
+        } else {
+          return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("symbol after unique")));
+        }
       }
       TT::KeywordObjectType => {
         let loc = self.peek().loc;
@@ -422,15 +495,23 @@ impl<'a> Parser<'a> {
     Ok(Node::new(outer_loc, TypeExpr::KeyOfType(keyof)))
   }
 
-  /// Parse infer type: infer R
+  /// Parse infer type: infer R, infer R extends U
   fn infer_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordInfer)?;
     let type_parameter = self.require_identifier()?;
+
+    // TypeScript: infer with extends clause
+    let constraint = if self.consume_if(TT::KeywordExtends).is_match() {
+      Some(Box::new(self.type_expr(ctx)?))
+    } else {
+      None
+    };
+
     let end_loc = self.peek().loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let infer = Node::new(start_loc, TypeInfer { type_parameter });
+    let infer = Node::new(start_loc, TypeInfer { type_parameter, constraint });
     Ok(Node::new(outer_loc, TypeExpr::InferType(infer)))
   }
 
@@ -1005,6 +1086,23 @@ impl<'a> Parser<'a> {
   /// Parse single type parameter
   fn type_parameter(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeParameter>> {
     self.with_loc(|p| {
+      // TypeScript: const type parameter
+      let const_ = p.consume_if(TT::KeywordConst).is_match();
+
+      // TypeScript: variance annotations (in, out, in out)
+      use crate::ast::type_expr::Variance;
+      let variance = if p.consume_if(TT::KeywordIn).is_match() {
+        if p.consume_if(TT::KeywordOut).is_match() {
+          Some(Variance::InOut)
+        } else {
+          Some(Variance::In)
+        }
+      } else if p.consume_if(TT::KeywordOut).is_match() {
+        Some(Variance::Out)
+      } else {
+        None
+      };
+
       let name = p.require_identifier()?;
 
       let constraint = if p.consume_if(TT::KeywordExtends).is_match() {
@@ -1020,6 +1118,8 @@ impl<'a> Parser<'a> {
       };
 
       Ok(TypeParameter {
+        const_,
+        variance,
         name,
         constraint,
         default,
@@ -1099,6 +1199,14 @@ impl<'a> Parser<'a> {
     let type_parameter = self.require_identifier()?;
     self.require(TT::KeywordIn)?;
     let constraint = self.type_expr(ctx)?;
+
+    // TypeScript: as clause for key remapping: [K in T as NewK]
+    let name_type = if self.consume_if(TT::KeywordAs).is_match() {
+      Some(Box::new(self.type_expr(ctx)?))
+    } else {
+      None
+    };
+
     self.require(TT::BracketClose)?;
 
     // Parse optional modifier: ?, +?, -?
@@ -1125,6 +1233,7 @@ impl<'a> Parser<'a> {
         readonly_modifier,
         type_parameter,
         constraint: Box::new(constraint),
+        name_type,
         optional_modifier,
         type_expr: Box::new(type_expr),
       },

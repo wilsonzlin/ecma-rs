@@ -17,6 +17,7 @@ pub enum TypeExpr {
   Boolean(Node<TypeBoolean>),
   BigInt(Node<TypeBigInt>),
   Symbol(Node<TypeSymbol>),
+  UniqueSymbol(Node<TypeUniqueSymbol>),
   Object(Node<TypeObject>),
   Null(Node<TypeNull>),
   Undefined(Node<TypeUndefined>),
@@ -85,6 +86,10 @@ pub struct TypeBigInt {}
 /// Primitive type: symbol
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeSymbol {}
+
+/// Primitive type: unique symbol
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct TypeUniqueSymbol {}
 
 /// Primitive type: object
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -196,9 +201,21 @@ pub struct TypeFunctionParameter {
   pub type_expr: Node<TypeExpr>,
 }
 
-/// Type parameter: T, T extends U, T = DefaultType
+/// Variance annotation for type parameters
+#[derive(Debug, Copy, Clone, Serialize)]
+pub enum Variance {
+  In,       // contravariant
+  Out,      // covariant
+  InOut,    // invariant (both in and out)
+}
+
+/// Type parameter: T, T extends U, T = DefaultType, in T, out T, in out T, const T
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeParameter {
+  #[drive(skip)]
+  pub const_: bool, // TypeScript: const type parameter
+  #[drive(skip)]
+  pub variance: Option<Variance>,
   #[drive(skip)]
   pub name: String,
   pub constraint: Option<Box<Node<TypeExpr>>>,
@@ -331,14 +348,15 @@ pub struct TypeConditional {
   pub false_type: Box<Node<TypeExpr>>,
 }
 
-/// Infer type: infer R
+/// Infer type: infer R, infer R extends U
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeInfer {
   #[drive(skip)]
   pub type_parameter: String,
+  pub constraint: Option<Box<Node<TypeExpr>>>, // TypeScript: infer T extends U
 }
 
-/// Mapped type: { [K in keyof T]: T[K] }, { readonly [K in T]?: U }
+/// Mapped type: { [K in keyof T]: T[K] }, { readonly [K in T]?: U }, { [K in T as NewK]: U }
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeMapped {
   #[drive(skip)]
@@ -346,6 +364,7 @@ pub struct TypeMapped {
   #[drive(skip)]
   pub type_parameter: String,
   pub constraint: Box<Node<TypeExpr>>,
+  pub name_type: Option<Box<Node<TypeExpr>>>, // as clause for key remapping
   #[drive(skip)]
   pub optional_modifier: Option<MappedTypeModifier>,
   pub type_expr: Box<Node<TypeExpr>>,

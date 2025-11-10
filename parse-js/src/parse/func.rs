@@ -14,6 +14,9 @@ impl<'a> Parser<'a> {
       TT::Comma,
       TT::ParenthesisClose,
       |p| {
+        // TypeScript: parse decorators for parameters
+        let decorators = p.decorators(ctx)?;
+
         // TypeScript: accessibility modifiers
         let accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
           Some(Accessibility::Public)
@@ -47,6 +50,7 @@ impl<'a> Parser<'a> {
           })?;
 
         Ok(ParamDecl {
+          decorators,
           rest,
           optional,
           accessibility,
