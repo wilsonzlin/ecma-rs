@@ -527,13 +527,13 @@ impl<'a> Parser<'a> {
         let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
         (k, v.into())
       }
-      // Getter.
-      (TT::KeywordGet, _, TT::ParenthesisOpen, _) => {
+      // Getter (may have invalid type parameters like get foo<T>())
+      (TT::KeywordGet, _, TT::ParenthesisOpen, _) | (TT::KeywordGet, _, TT::ChevronLeft, _) => {
         let (k, v) = self.class_or_obj_getter_impl(ctx, abstract_)?;
         (k, v.into())
       }
-      // Setter.
-      (TT::KeywordSet, _, TT::ParenthesisOpen, _) => {
+      // Setter (may have invalid type parameters like set foo<T>(x))
+      (TT::KeywordSet, _, TT::ParenthesisOpen, _) | (TT::KeywordSet, _, TT::ChevronLeft, _) => {
         let (k, v) = self.class_or_obj_setter_impl(ctx, abstract_)?;
         (k, v.into())
       }
