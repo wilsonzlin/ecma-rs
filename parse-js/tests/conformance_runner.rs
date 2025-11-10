@@ -92,19 +92,6 @@ fn main() {
             eprintln!("[TEST {}] {}", idx, test_path.display());
         }
 
-        // Skip known problematic tests that cause infinite loops
-        // TODO: Fix infinite loop issues in these tests
-        if idx >= 1841 && idx <= 1950 {
-            eprintln!("[SKIP] Test {} (known infinite loop)", idx);
-            results.push(TestResult {
-                path: test_path.clone(),
-                passed: false,
-                error: Some("SKIPPED: Known infinite loop".to_string()),
-            });
-            failed.fetch_add(1, Ordering::Relaxed);
-            continue;
-        }
-
         let result = run_test(test_path);
 
         if result.passed {
