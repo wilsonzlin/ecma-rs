@@ -49,6 +49,7 @@ pub enum Stmt {
   AmbientClassDecl(Node<AmbientClassDecl>),
   ImportTypeDecl(Node<ImportTypeDecl>),
   ExportTypeDecl(Node<ExportTypeDecl>),
+  ImportEqualsDecl(Node<ImportEqualsDecl>),
 }
 
 

@@ -181,3 +181,14 @@ pub struct ExportTypeName {
   #[drive(skip)]
   pub exported: Option<String>,
 }
+
+/// Import equals declaration: import id = require("module")
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ImportEqualsDecl {
+  #[drive(skip)]
+  pub export: bool,
+  #[drive(skip)]
+  pub name: String,
+  #[drive(skip)]
+  pub module: String,
+}
