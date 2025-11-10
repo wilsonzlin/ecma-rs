@@ -79,4 +79,6 @@ pub enum VarDeclMode {
   Const,
   Let,
   Var,
+  Using,
+  AwaitUsing,
 }

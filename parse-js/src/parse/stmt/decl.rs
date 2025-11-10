@@ -43,6 +43,16 @@ impl<'a> Parser<'a> {
       TT::KeywordLet => VarDeclMode::Let,
       TT::KeywordConst => VarDeclMode::Const,
       TT::KeywordVar => VarDeclMode::Var,
+      TT::KeywordUsing => VarDeclMode::Using,
+      TT::KeywordAwait => {
+        // Check if followed by 'using'
+        if self.peek().typ == TT::KeywordUsing {
+          self.consume(); // consume 'using'
+          VarDeclMode::AwaitUsing
+        } else {
+          return Err(t.error(SyntaxErrorType::ExpectedSyntax("variable declaration")));
+        }
+      }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("variable declaration"))),
     })
   }

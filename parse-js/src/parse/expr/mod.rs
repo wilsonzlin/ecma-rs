@@ -404,20 +404,24 @@ impl<'a> Parser<'a> {
 
     // Check for async keyword first, before checking if it's a valid identifier.
     if t0.typ == TT::KeywordAsync {
-      return Ok(match t1.typ {
-        TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
-        TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
-        // Check if this could be a single-parameter arrow function: `async x => {}`
-        // t1 is the identifier, t2 should be =>
-        _ if is_valid_pattern_identifier(t1.typ, ctx.rules) && t2.typ == TT::EqualsChevronRight => {
-          self.arrow_func_expr(ctx, terminators)?.into_wrapped()
-        }
-        // `async` is being used as an identifier.
-        _ => self.id_expr(ctx)?.into_wrapped(),
-      });
+      // Special case: `async => ...` means async is used as a parameter name, not as async keyword
+      // Don't handle it here, let it fall through to regular identifier handling below
+      if t1.typ != TT::EqualsChevronRight {
+        return Ok(match t1.typ {
+          TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
+          TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
+          // Check if this could be a single-parameter arrow function: `async x => {}`
+          // t1 is the identifier, t2 should be =>
+          _ if is_valid_pattern_identifier(t1.typ, ctx.rules) && t2.typ == TT::EqualsChevronRight => {
+            self.arrow_func_expr(ctx, terminators)?.into_wrapped()
+          }
+          // `async` is being used as an identifier.
+          _ => self.id_expr(ctx)?.into_wrapped(),
+        });
+      }
     };
 
-    // Check for other valid pattern identifiers (excluding async, which we already handled).
+    // Check for other valid pattern identifiers (including async when followed by =>).
     if is_valid_pattern_identifier(t0.typ, ctx.rules) {
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.

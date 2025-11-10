@@ -438,6 +438,7 @@ pub static KEYWORDS_MAPPING: Lazy<HashMap<TT, &'static str>> = Lazy::new(|| {
   map.insert(TT::KeywordThrow, "throw");
   map.insert(TT::KeywordTry, "try");
   map.insert(TT::KeywordTypeof, "typeof");
+  map.insert(TT::KeywordUsing, "using");
   map.insert(TT::KeywordVar, "var");
   map.insert(TT::KeywordVoid, "void");
   map.insert(TT::KeywordWhile, "while");
