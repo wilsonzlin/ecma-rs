@@ -332,6 +332,7 @@ impl<'a> Index<Match> for Lexer<'a> {
 #[rustfmt::skip]
 pub static OPERATORS_MAPPING: Lazy<HashMap<TT, &'static str>> = Lazy::new(|| {
   let mut map = HashMap::<TT, &'static str>::new();
+  map.insert(TT::At, "@");
   map.insert(TT::Ampersand, "&");
   map.insert(TT::AmpersandAmpersand, "&&");
   map.insert(TT::AmpersandAmpersandEquals, "&&=");
@@ -427,6 +428,7 @@ pub static KEYWORDS_MAPPING: Lazy<HashMap<TT, &'static str>> = Lazy::new(|| {
   map.insert(TT::KeywordLet, "let");
   map.insert(TT::KeywordNew, "new");
   map.insert(TT::KeywordOf, "of");
+  map.insert(TT::KeywordOut, "out");
   map.insert(TT::KeywordReturn, "return");
   map.insert(TT::KeywordSet, "set");
   map.insert(TT::KeywordStatic, "static");

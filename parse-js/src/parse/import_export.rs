@@ -69,6 +69,8 @@ impl<'a> Parser<'a> {
     // TODO Ensure top-level.
     self.with_loc(|p| {
       p.require(TT::KeywordImport)?;
+      // TypeScript: import type
+      let type_only = p.consume_if(TT::KeywordType).is_match();
       let (default, can_have_names) =
         if p.peek().typ == TT::Identifier {
           let alias = p.id_pat_decl(ctx)?;
@@ -108,6 +110,7 @@ impl<'a> Parser<'a> {
         p.consume_if(TT::Semicolon);
       }
       Ok(ImportStmt {
+        type_only,
         default,
         module,
         names,
@@ -118,6 +121,8 @@ impl<'a> Parser<'a> {
   pub fn export_list_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ExportListStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordExport)?;
+      // TypeScript: export type
+      let type_only = p.consume_if(TT::KeywordType).is_match();
       let t = p.consume();
       let stmt = match t.typ {
         TT::BraceOpen => {
@@ -129,6 +134,7 @@ impl<'a> Parser<'a> {
           )?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
           ExportListStmt {
+            type_only,
             names: ExportNames::Specific(names),
             from,
           }
@@ -138,6 +144,7 @@ impl<'a> Parser<'a> {
           p.require(TT::KeywordFrom)?;
           let from = p.lit_str_val()?;
           ExportListStmt {
+            type_only,
             names: ExportNames::All(alias),
             from: Some(from),
           }

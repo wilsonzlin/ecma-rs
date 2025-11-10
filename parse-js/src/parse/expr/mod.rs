@@ -510,14 +510,26 @@ impl<'a> Parser<'a> {
           }).into_wrapped();
           continue;
         }
-        // TypeScript: Type assertion: expr as Type
+        // TypeScript: Type assertion: expr as Type or expr as const
         TT::KeywordAs => {
-          let type_annotation = self.type_expr(ctx)?;
-          use crate::ast::expr::TypeAssertionExpr;
-          left = Node::new(left.loc + type_annotation.loc, TypeAssertionExpr {
-            expression: Box::new(left),
-            type_annotation,
-          }).into_wrapped();
+          // Check if this is "as const"
+          if self.peek().typ == TT::KeywordConst {
+            let const_loc = self.consume().loc;
+            use crate::ast::expr::TypeAssertionExpr;
+            left = Node::new(left.loc + const_loc, TypeAssertionExpr {
+              expression: Box::new(left),
+              type_annotation: None,
+              const_assertion: true,
+            }).into_wrapped();
+          } else {
+            let type_annotation = self.type_expr(ctx)?;
+            use crate::ast::expr::TypeAssertionExpr;
+            left = Node::new(left.loc + type_annotation.loc, TypeAssertionExpr {
+              expression: Box::new(left),
+              type_annotation: Some(type_annotation),
+              const_assertion: false,
+            }).into_wrapped();
+          }
           continue;
         }
         // TypeScript: Satisfies expression: expr satisfies Type

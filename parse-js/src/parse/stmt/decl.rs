@@ -178,6 +178,9 @@ impl<'a> Parser<'a> {
     ctx: ParseCtx,
   ) -> SyntaxResult<Node<ClassDecl>> {
     self.with_loc(|p| {
+      // TypeScript: parse decorators before export/class
+      let decorators = p.decorators(ctx)?;
+
       let export = p.consume_if(TT::KeywordExport).is_match();
       let export_default = export && p.consume_if(TT::KeywordDefault).is_match();
       // TypeScript: abstract keyword
@@ -216,6 +219,7 @@ impl<'a> Parser<'a> {
 
       let members = p.class_body(ctx)?;
       Ok(ClassDecl {
+        decorators,
         export,
         export_default,
         abstract_,

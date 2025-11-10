@@ -26,6 +26,7 @@ pub enum TT {
 
 
 
+  At,
   Ampersand,
   AmpersandAmpersand,
   AmpersandAmpersandEquals,
@@ -103,6 +104,7 @@ pub enum TT {
   KeywordLet,
   KeywordNew,
   KeywordOf,
+  KeywordOut,
   KeywordReturn,
   KeywordSet,
   KeywordStatic,
@@ -185,6 +187,7 @@ pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   set.insert(TT::KeywordGet);
   set.insert(TT::KeywordLet);
   set.insert(TT::KeywordOf);
+  set.insert(TT::KeywordOut);
   set.insert(TT::KeywordSet);
   set.insert(TT::KeywordStatic);
   // TypeScript contextual keywords

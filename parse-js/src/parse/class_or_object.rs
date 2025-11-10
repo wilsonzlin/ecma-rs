@@ -30,6 +30,9 @@ impl<'a> Parser<'a> {
         break;
       }
       let member = self.with_loc(|p| {
+        // TypeScript: parse decorators for members
+        let decorators = p.decorators(ctx)?;
+
         // Parse TypeScript modifiers in order:
         // [accessibility] [abstract] [override] [static] [readonly]
 
@@ -88,6 +91,7 @@ impl<'a> Parser<'a> {
 
         p.consume_if(TT::Semicolon);
         Ok(ClassMember {
+          decorators,
           key,
           static_,
           abstract_,

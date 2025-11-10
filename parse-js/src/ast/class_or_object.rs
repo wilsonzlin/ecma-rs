@@ -4,7 +4,7 @@ use serde::{Serialize};
 
 use crate::token::TT;
 
-use super::{expr::{Expr, IdExpr}, func::Func, node::Node, stmt::decl::Accessibility, type_expr::TypeExpr};
+use super::{expr::{Decorator, Expr, IdExpr}, func::Func, node::Node, stmt::decl::Accessibility, type_expr::TypeExpr};
 
 /// This is a node as the key may not the same as source[node.loc], due to decoding/normalization.
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -66,6 +66,7 @@ pub enum ObjMemberType {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ClassMember {
+  pub decorators: Vec<Node<Decorator>>,
   pub key: ClassOrObjKey,
   #[drive(skip)]
   pub static_: bool,

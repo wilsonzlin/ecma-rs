@@ -197,8 +197,7 @@ impl<'a> Parser<'a> {
   /// Parse decorator: @decorator or @decorator(args)
   pub fn decorator(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<crate::ast::expr::Decorator>> {
     self.with_loc(|p| {
-      // @ token should be added to lexer as AtToken if not already present
-      // For now we'll work around it
+      p.require(TT::At)?;
       let expression = p.expr(ctx, [])?;
       Ok(crate::ast::expr::Decorator { expression })
     })
@@ -207,8 +206,9 @@ impl<'a> Parser<'a> {
   /// Parse decorators list
   pub fn decorators(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<crate::ast::expr::Decorator>>> {
     let mut decorators = Vec::new();
-    // Decorators start with @ - we need to handle this in the lexer
-    // For now, skip decorator parsing as we need @ token support
+    while self.peek().typ == TT::At {
+      decorators.push(self.decorator(ctx)?);
+    }
     Ok(decorators)
   }
 }

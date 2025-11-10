@@ -118,6 +118,8 @@ pub struct SwitchBranch {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
   pub struct ExportListStmt {
+    #[drive(skip)]
+    pub type_only: bool, // TypeScript: export type
     pub names: ExportNames,
     #[drive(skip)]
     pub from: Option<String>,
@@ -140,6 +142,8 @@ pub struct SwitchBranch {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
   pub struct ImportStmt {
+    #[drive(skip)]
+    pub type_only: bool, // TypeScript: import type
     // PatDecl always contains IdPat.
     pub default: Option<Node<PatDecl>>,
     pub names: Option<ImportNames>,

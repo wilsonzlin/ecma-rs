@@ -495,15 +495,23 @@ impl<'a> Parser<'a> {
     Ok(Node::new(outer_loc, TypeExpr::KeyOfType(keyof)))
   }
 
-  /// Parse infer type: infer R
+  /// Parse infer type: infer R, infer R extends U
   fn infer_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordInfer)?;
     let type_parameter = self.require_identifier()?;
+
+    // TypeScript: infer with extends clause
+    let constraint = if self.consume_if(TT::KeywordExtends).is_match() {
+      Some(Box::new(self.type_expr(ctx)?))
+    } else {
+      None
+    };
+
     let end_loc = self.peek().loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let infer = Node::new(start_loc, TypeInfer { type_parameter });
+    let infer = Node::new(start_loc, TypeInfer { type_parameter, constraint });
     Ok(Node::new(outer_loc, TypeExpr::InferType(infer)))
   }
 
@@ -1078,6 +1086,23 @@ impl<'a> Parser<'a> {
   /// Parse single type parameter
   fn type_parameter(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeParameter>> {
     self.with_loc(|p| {
+      // TypeScript: const type parameter
+      let const_ = p.consume_if(TT::KeywordConst).is_match();
+
+      // TypeScript: variance annotations (in, out, in out)
+      use crate::ast::type_expr::Variance;
+      let variance = if p.consume_if(TT::KeywordIn).is_match() {
+        if p.consume_if(TT::KeywordOut).is_match() {
+          Some(Variance::InOut)
+        } else {
+          Some(Variance::In)
+        }
+      } else if p.consume_if(TT::KeywordOut).is_match() {
+        Some(Variance::Out)
+      } else {
+        None
+      };
+
       let name = p.require_identifier()?;
 
       let constraint = if p.consume_if(TT::KeywordExtends).is_match() {
@@ -1093,6 +1118,8 @@ impl<'a> Parser<'a> {
       };
 
       Ok(TypeParameter {
+        const_,
+        variance,
         name,
         constraint,
         default,
@@ -1172,6 +1199,14 @@ impl<'a> Parser<'a> {
     let type_parameter = self.require_identifier()?;
     self.require(TT::KeywordIn)?;
     let constraint = self.type_expr(ctx)?;
+
+    // TypeScript: as clause for key remapping: [K in T as NewK]
+    let name_type = if self.consume_if(TT::KeywordAs).is_match() {
+      Some(Box::new(self.type_expr(ctx)?))
+    } else {
+      None
+    };
+
     self.require(TT::BracketClose)?;
 
     // Parse optional modifier: ?, +?, -?
@@ -1198,6 +1233,7 @@ impl<'a> Parser<'a> {
         readonly_modifier,
         type_parameter,
         constraint: Box::new(constraint),
+        name_type,
         optional_modifier,
         type_expr: Box::new(type_expr),
       },
