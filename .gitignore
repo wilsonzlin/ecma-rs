@@ -3,3 +3,6 @@ dist/
 node_modules/
 package-lock.json
 target/
+
+# Auto-generated test reports
+typescript_conformance_failures.txt

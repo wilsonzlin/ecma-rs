@@ -54,7 +54,7 @@ impl<'p> SourceToInst<'p> {
     }
   }
 
-  pub fn compile_func(&mut self, Func { arrow, async_, generator, parameters, body }: Func) -> Arg {
+  pub fn compile_func(&mut self, Func { arrow, async_, generator, type_parameters, parameters, return_type, body }: Func) -> Arg {
     let pg = self.program.clone();
     // We must clone the WaitGroup outside the spawn, as the function inside spawn may not be called immediately.
     let wg = self.wg.clone();

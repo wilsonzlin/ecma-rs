@@ -1,7 +1,7 @@
 use derive_visitor::{Drive, DriveMut};
 use serde::{Deserialize, Serialize};
 
-use crate::ast::{class_or_object::ClassMember, expr::{pat::{ClassOrFuncName, Pat}, Expr}, func::Func, node::Node};
+use crate::ast::{class_or_object::ClassMember, expr::{pat::{ClassOrFuncName, Pat}, Expr}, func::Func, node::Node, type_expr::{TypeExpr, TypeParameter}};
 
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -10,8 +10,12 @@ pub struct ClassDecl {
   pub export: bool,
   #[drive(skip)]
   pub export_default: bool,
+  #[drive(skip)]
+  pub abstract_: bool,
   pub name: Option<Node<ClassOrFuncName>>, // Name can only be omitted in a default export, although a default export class can still have a name.
+  pub type_parameters: Option<Vec<Node<TypeParameter>>>,
   pub extends: Option<Node<Expr>>,
+  pub implements: Vec<Node<TypeExpr>>,
   pub members: Vec<Node<ClassMember>>
 }
 
@@ -29,8 +33,21 @@ pub struct FuncDecl {
 pub struct ParamDecl {
   #[drive(skip)]
   pub rest: bool,
+  #[drive(skip)]
+  pub optional: bool,
+  pub accessibility: Option<Accessibility>,
+  #[drive(skip)]
+  pub readonly: bool,
   pub pattern: Node<PatDecl>,
+  pub type_annotation: Option<Node<TypeExpr>>,
   pub default_value: Option<Node<Expr>>,
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Drive, DriveMut)]
+pub enum Accessibility {
+  Public,
+  Private,
+  Protected,
 }
 
 // Since a pattern can also be in an expression (e.g. assignment), have a specific unified type for declarations (e.g. imports, function params, var/let/const, catch binding) only, useful for downstream tasks. This contains only the pattern; it shouldn't contain any expressions (e.g. initializer) as that itself could contain patterns (e.g. assignment), defeating the purpose.
@@ -50,6 +67,7 @@ pub struct VarDecl {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct VarDeclarator {
   pub pattern: Node<PatDecl>,
+  pub type_annotation: Option<Node<TypeExpr>>,
   pub initializer: Option<Node<Expr>>,
 }
 

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::operator::OperatorName;
 
-use super::{class_or_object::ClassMember, func::Func, node::Node};
+use super::{class_or_object::ClassMember, func::Func, node::Node, type_expr::TypeExpr};
 
 
 // We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
@@ -59,6 +59,11 @@ pub enum Expr {
   ArrPat(Node<ArrPat>),
   IdPat(Node<IdPat>),
   ObjPat(Node<ObjPat>),
+
+  // TypeScript expressions
+  TypeAssertion(Node<TypeAssertionExpr>),
+  NonNullAssertion(Node<NonNullAssertionExpr>),
+  SatisfiesExpr(Node<SatisfiesExpr>),
 }
 
 
@@ -96,7 +101,9 @@ pub struct CallExpr {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ClassExpr {
   pub name: Option<Node<ClassOrFuncName>>,
+  pub type_parameters: Option<Vec<Node<super::type_expr::TypeParameter>>>,
   pub extends: Option<Node<Expr>>,
+  pub implements: Vec<Node<TypeExpr>>,
   pub members: Vec<Node<ClassMember>>,
 }
 
@@ -189,4 +196,32 @@ pub struct UnaryPostfixExpr {
   #[drive(skip)]
   pub operator: OperatorName,
   pub argument: Node<Expr>,
+}
+
+// TypeScript expressions
+
+/// Type assertion: value as Type
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct TypeAssertionExpr {
+  pub expression: Box<Node<Expr>>,
+  pub type_annotation: Node<TypeExpr>,
+}
+
+/// Non-null assertion: value!
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct NonNullAssertionExpr {
+  pub expression: Box<Node<Expr>>,
+}
+
+/// Satisfies expression: value satisfies Type
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct SatisfiesExpr {
+  pub expression: Box<Node<Expr>>,
+  pub type_annotation: Node<TypeExpr>,
+}
+
+/// Decorator: @decorator or @decorator(args)
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct Decorator {
+  pub expression: Node<Expr>,
 }

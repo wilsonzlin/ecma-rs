@@ -4,7 +4,7 @@ use serde::{Serialize};
 
 use crate::token::TT;
 
-use super::{expr::{Expr, IdExpr}, func::Func, node::Node};
+use super::{expr::{Expr, IdExpr}, func::Func, node::Node, stmt::decl::Accessibility, type_expr::TypeExpr};
 
 /// This is a node as the key may not the same as source[node.loc], due to decoding/normalization.
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -69,6 +69,16 @@ pub struct ClassMember {
   pub key: ClassOrObjKey,
   #[drive(skip)]
   pub static_: bool,
+  #[drive(skip)]
+  pub abstract_: bool,
+  #[drive(skip)]
+  pub readonly: bool,
+  #[drive(skip)]
+  pub optional: bool,
+  #[drive(skip)]
+  pub override_: bool,
+  pub accessibility: Option<Accessibility>,
+  pub type_annotation: Option<Node<TypeExpr>>, // For properties only
   pub val: ClassOrObjVal,
 }
 

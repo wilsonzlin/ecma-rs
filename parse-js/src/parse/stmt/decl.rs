@@ -64,6 +64,14 @@ impl<'a> Parser<'a> {
       let mut declarators = Vec::new();
       loop {
         let pattern = p.pat_decl(ctx)?;
+
+        // TypeScript: type annotation
+        let type_annotation = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
+
         let mut asi = match parse_mode {
           VarDeclParseMode::Asi => Asi::can(),
           VarDeclParseMode::Leftmost => Asi::no(),
@@ -76,6 +84,7 @@ impl<'a> Parser<'a> {
           ))?;
         declarators.push(VarDeclarator {
           pattern,
+          type_annotation,
           initializer,
         });
         match parse_mode {
@@ -126,18 +135,32 @@ impl<'a> Parser<'a> {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("function name"), None));
       };
       let function = p.with_loc(|p| {
+        // TypeScript: generic type parameters
+        let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
         // Parameters and body use the function's own context, not the parent's
         let fn_ctx = ctx.with_rules(ParsePatternRules {
-          await_allowed: !is_async,
-          yield_allowed: !generator,
+          await_allowed: !is_async && ctx.rules.await_allowed,
+          yield_allowed: !generator && ctx.rules.yield_allowed,
         });
         let parameters = p.func_params(fn_ctx)?;
+        // TypeScript: return type annotation
+        let return_type = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
         let body = p.parse_func_block_body(fn_ctx)?.into();
         Ok(Func {
           arrow: false,
           async_: is_async,
           generator,
+          type_parameters,
           parameters,
+          return_type,
           body,
         })
       })?;
@@ -163,18 +186,41 @@ impl<'a> Parser<'a> {
       if name.is_none() && !export_default {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("class name"), None));
       };
-      // Unlike functions, classes are scoped to their block.
-      let extends = if p.consume_if(TT::KeywordExtends).is_match() {
-        Some(p.expr(ctx, [TT::BraceOpen])?)
+
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
       } else {
         None
       };
+
+      // Unlike functions, classes are scoped to their block.
+      let extends = if p.consume_if(TT::KeywordExtends).is_match() {
+        Some(p.expr(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
+      } else {
+        None
+      };
+
+      // TypeScript: implements clause
+      let mut implements = Vec::new();
+      if p.consume_if(TT::KeywordImplements).is_match() {
+        loop {
+          implements.push(p.type_expr(ctx)?);
+          if !p.consume_if(TT::Comma).is_match() {
+            break;
+          }
+        }
+      }
+
       let members = p.class_body(ctx)?;
       Ok(ClassDecl {
         export,
         export_default,
+        abstract_: false,
         name,
+        type_parameters,
         extends,
+        implements,
         members,
       })
     })
