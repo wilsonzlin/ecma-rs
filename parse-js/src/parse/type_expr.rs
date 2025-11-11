@@ -73,17 +73,40 @@ impl<'a> Parser<'a> {
   /// T | U | V  or  T & U & V
   /// Note: Cannot mix | and & at same level without parentheses
   fn type_union_or_intersection(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
+    // TypeScript allows leading | or & in union/intersection types:
+    // type A = | B | C
+    // type D = & E & F
+    let leading_op = self.peek().typ;
+    let has_leading = matches!(leading_op, TT::Bar | TT::Ampersand);
+    if has_leading {
+      self.consume();
+    }
+
     let first = self.type_conditional(ctx)?;
 
     let t = self.peek().typ;
-    if t != TT::Bar && t != TT::Ampersand {
-      return Ok(first);
+    let is_union_or_intersection = t == TT::Bar || t == TT::Ampersand;
+
+    // If we had a leading operator, we must continue with the same operator
+    // If we didn't have a leading operator, we need at least one operator to follow
+    if has_leading {
+      if t != leading_op && !is_union_or_intersection {
+        // Leading | or & but no continuation - return the single type
+        return Ok(first);
+      }
+      if t != TT::Bar && t != TT::Ampersand {
+        return Ok(first);
+      }
+    } else {
+      if !is_union_or_intersection {
+        return Ok(first);
+      }
     }
 
-    let is_union = t == TT::Bar;
+    let is_union = if has_leading { leading_op == TT::Bar } else { t == TT::Bar };
     let mut types = vec![first];
 
-    while self.consume_if(t).is_match() {
+    while self.consume_if(if has_leading { leading_op } else { t }).is_match() {
       types.push(self.type_conditional(ctx)?);
     }
 
