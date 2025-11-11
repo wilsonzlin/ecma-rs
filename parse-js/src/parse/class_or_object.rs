@@ -109,7 +109,7 @@ impl<'a> Parser<'a> {
         let accessor = p.consume_if(TT::KeywordAccessor).is_match();
 
         // TypeScript: check for index signature [key: type]: type
-        let (key, value) = if p.peek().typ == TT::BracketOpen {
+        let (key, value, definite_assignment, optional, type_annotation) = if p.peek().typ == TT::BracketOpen {
           let checkpoint = p.checkpoint();
           let _bracket = p.consume();
           // Check if this looks like an index signature (identifier : type])
@@ -148,37 +148,38 @@ impl<'a> Parser<'a> {
                 tt: TT::Identifier,
               }
             ));
-            (dummy_key, ClassOrObjVal::IndexSignature(index_sig))
+            (dummy_key, ClassOrObjVal::IndexSignature(index_sig), false, false, None)
           } else {
-            p.class_or_obj_member(
+            let (key, value) = p.class_or_obj_member(
               ctx,
               TT::Equals,
               TT::Semicolon,
               &mut Asi::can(),
               abstract_,
-            )?
+            )?;
+            (key, value, false, false, None)
           }
         } else {
-          p.class_or_obj_member(
-            ctx,
-            TT::Equals,
-            TT::Semicolon,
-            &mut Asi::can(),
-            abstract_,
-          )?
-        };
+          // Parse class member with TypeScript syntax: key [!] [?] [: type] [= init]
+          let key = p.class_or_obj_key(ctx)?;
 
-        // TypeScript: definite assignment assertion (! after key)
-        let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+          // TypeScript: definite assignment assertion (! after key)
+          let definite_assignment = p.consume_if(TT::Exclamation).is_match();
 
-        // TypeScript: optional property (? after key)
-        let optional = p.consume_if(TT::Question).is_match();
+          // TypeScript: optional property (? after key)
+          let optional = p.consume_if(TT::Question).is_match();
 
-        // TypeScript: type annotation
-        let type_annotation = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
-        } else {
-          None
+          // TypeScript: type annotation (: type)
+          let type_annotation = if p.consume_if(TT::Colon).is_match() {
+            Some(p.type_expr(ctx)?)
+          } else {
+            None
+          };
+
+          // Now check for method/getter/setter or property initializer
+          let value = p.class_member_value(ctx, &key, abstract_)?;
+
+          (key, value, definite_assignment, optional, type_annotation)
         };
 
         p.consume_if(TT::Semicolon);
@@ -232,6 +233,68 @@ impl<'a> Parser<'a> {
         Ok(ClassOrObjMemberDirectKey { key, tt: t.typ })
       })?)
     })
+  }
+
+  /// Parse class member value after key and optional type annotation have been parsed
+  /// Determines if this is a method, getter, setter, or property initializer
+  fn class_member_value(
+    &mut self,
+    ctx: ParseCtx,
+    key: &ClassOrObjKey,
+    abstract_: bool,
+  ) -> SyntaxResult<ClassOrObjVal> {
+    // Check what follows the key/type annotation
+    let t = self.peek();
+
+    match t.typ {
+      // Method with type parameters or parenthesis
+      TT::ChevronLeft | TT::ParenthesisOpen => {
+        // Parse as method
+        let method = self.with_loc(|p| {
+          let func = p.with_loc(|p| {
+            // TypeScript: generic type parameters
+            let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+              Some(p.type_parameters(ctx)?)
+            } else {
+              None
+            };
+            let parameters = p.func_params(ctx)?;
+            // TypeScript: return type annotation
+            let return_type = if p.consume_if(TT::Colon).is_match() {
+              Some(p.type_expr_or_predicate(ctx)?)
+            } else {
+              None
+            };
+            // TypeScript: method overload signatures and abstract methods have no body
+            let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
+              p.consume_if(TT::Semicolon);
+              None
+            } else {
+              Some(p.parse_func_block_body(ctx)?.into())
+            };
+            Ok(Func {
+              arrow: false,
+              async_: false,
+              generator: false,
+              type_parameters,
+              parameters,
+              return_type,
+              body,
+            })
+          })?;
+          Ok(ClassOrObjMethod { func })
+        })?;
+        Ok(ClassOrObjVal::Method(method))
+      }
+      // Property with initializer
+      TT::Equals => {
+        self.require(TT::Equals)?;
+        let initializer = self.expr_with_asi(ctx, [TT::Semicolon, TT::BraceClose], &mut Asi::can())?;
+        Ok(ClassOrObjVal::Prop(Some(initializer)))
+      }
+      // Property without initializer
+      _ => Ok(ClassOrObjVal::Prop(None))
+    }
   }
 
   /// Parses a class or object method like `a() {}`, `async a() {}`, `*a() {}`, `async *a() {}`.
