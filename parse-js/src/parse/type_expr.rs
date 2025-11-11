@@ -553,7 +553,7 @@ impl<'a> Parser<'a> {
   fn infer_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordInfer)?;
-    let type_parameter = self.require_identifier()?;
+    let type_parameter = self.require_type_identifier()?;
 
     // TypeScript: infer with extends clause
     let constraint = if self.consume_if(TT::KeywordExtends).is_match() {
