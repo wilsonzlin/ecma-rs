@@ -414,7 +414,9 @@ impl<'a> Parser<'a> {
       TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
-      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet
+      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
+      // Allow type keywords as identifiers in typeof queries like: typeof undefined
+      TT::KeywordUndefinedType
       => Ok(self.string(t.loc)),
       _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type identifier")))
     }
