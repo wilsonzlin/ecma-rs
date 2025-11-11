@@ -116,17 +116,26 @@ impl<'a> Parser<'a> {
 
   /// Parse namespace declaration: namespace Foo { }
   pub fn namespace_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<NamespaceDecl>> {
+    self.namespace_decl_impl(ctx, export, declare, false)
+  }
+
+  /// Parse namespace declaration with optional keyword check
+  /// For dotted paths like `namespace A.B.C`, we don't require the keyword before B and C
+  fn namespace_decl_impl(&mut self, ctx: ParseCtx, export: bool, declare: bool, skip_keyword: bool) -> SyntaxResult<Node<NamespaceDecl>> {
     self.with_loc(|p| {
-      // Accept both 'namespace' and 'module' keywords
-      if !p.consume_if(TT::KeywordNamespace).is_match() {
-        p.require(TT::KeywordModule)?;
+      // Accept both 'namespace' and 'module' keywords (unless this is part of a dotted path)
+      if !skip_keyword {
+        if !p.consume_if(TT::KeywordNamespace).is_match() {
+          p.require(TT::KeywordModule)?;
+        }
       }
 
       let name = p.require_identifier()?;
 
       // Check for nested namespace: namespace A.B { }
       let body = if p.consume_if(TT::Dot).is_match() {
-        let nested = p.namespace_decl(ctx, false, false)?;
+        // For dotted paths, skip keyword check in recursive calls
+        let nested = p.namespace_decl_impl(ctx, false, false, true)?;
         NamespaceBody::Namespace(Box::new(nested))
       } else {
         p.require(TT::BraceOpen)?;
