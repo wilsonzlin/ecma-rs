@@ -160,26 +160,56 @@ impl<'a> Parser<'a> {
             (key, value, false, false, None)
           }
         } else {
-          // Parse class member with TypeScript syntax: key [!] [?] [: type] [= init]
-          let key = p.class_or_obj_key(ctx)?;
+          // Check for special member types that need early detection:
+          // async methods, generator methods, getters, setters
+          let [t0, t1, t2] = p.peek_n();
 
-          // TypeScript: definite assignment assertion (! after key)
-          let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+          // Detect async generator: async *
+          // Detect async method: async identifier/keyword (
+          // Detect generator: * identifier/keyword (
+          // Detect getter: get identifier/keyword [(
+          // Detect setter: set identifier/keyword (
+          let needs_special_handling = matches!(
+            (t0.typ, t1.typ, t2.typ),
+            (TT::KeywordAsync, TT::Asterisk, _) |
+            (TT::KeywordAsync, _, TT::ParenthesisOpen) |
+            (TT::Asterisk, _, TT::ParenthesisOpen) |
+            (TT::KeywordGet, _, TT::ParenthesisOpen) |
+            (TT::KeywordSet, _, TT::ParenthesisOpen)
+          );
 
-          // TypeScript: optional property (? after key)
-          let optional = p.consume_if(TT::Question).is_match();
-
-          // TypeScript: type annotation (: type)
-          let type_annotation = if p.consume_if(TT::Colon).is_match() {
-            Some(p.type_expr(ctx)?)
+          if needs_special_handling {
+            // Use the original class_or_obj_member for these special cases
+            let (key, value) = p.class_or_obj_member(
+              ctx,
+              TT::Equals,
+              TT::Semicolon,
+              &mut Asi::can(),
+              abstract_,
+            )?;
+            (key, value, false, false, None)
           } else {
-            None
-          };
+            // Parse class member with TypeScript syntax: key [!] [?] [: type] [= init]
+            let key = p.class_or_obj_key(ctx)?;
 
-          // Now check for method/getter/setter or property initializer
-          let value = p.class_member_value(ctx, &key, abstract_)?;
+            // TypeScript: definite assignment assertion (! after key)
+            let definite_assignment = p.consume_if(TT::Exclamation).is_match();
 
-          (key, value, definite_assignment, optional, type_annotation)
+            // TypeScript: optional property (? after key)
+            let optional = p.consume_if(TT::Question).is_match();
+
+            // TypeScript: type annotation (: type)
+            let type_annotation = if p.consume_if(TT::Colon).is_match() {
+              Some(p.type_expr(ctx)?)
+            } else {
+              None
+            };
+
+            // Now check for method/getter/setter or property initializer
+            let value = p.class_member_value(ctx, &key, abstract_)?;
+
+            (key, value, definite_assignment, optional, type_annotation)
+          }
         };
 
         p.consume_if(TT::Semicolon);
