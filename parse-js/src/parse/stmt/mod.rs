@@ -516,6 +516,12 @@ impl<'a> Parser<'a> {
           let parameter = p.consume_if(TT::ParenthesisOpen)
             .and_then(|| {
               let pattern = p.pat_decl(ctx)?;
+              // TypeScript: optional type annotation in catch clause
+              // e.g. `catch (e: any)` or `catch (e: unknown)`
+              if p.consume_if(TT::Colon).is_match() {
+                // Parse and discard the type annotation
+                p.type_expr(ctx)?;
+              }
               p.require(TT::ParenthesisClose)?;
               Ok(pattern)
             })?;
