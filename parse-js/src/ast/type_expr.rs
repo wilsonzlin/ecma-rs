@@ -240,6 +240,7 @@ pub enum TypeMember {
   IndexSignature(Node<TypeIndexSignature>),
   GetAccessor(Node<TypeGetAccessor>),
   SetAccessor(Node<TypeSetAccessor>),
+  MappedProperty(Node<TypeMapped>),
 }
 
 /// Property signature: x: T, readonly x?: T

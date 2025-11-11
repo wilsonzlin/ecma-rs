@@ -681,22 +681,25 @@ impl<'a> Parser<'a> {
     let checkpoint = self.checkpoint();
     let readonly = self.consume_if(TT::KeywordReadonly).is_match();
 
-    // Check for index signature vs computed property: [key: string]: T vs [Symbol.iterator]?: T
+    // Check for index signature vs mapped property vs computed property
+    // [key: string]: T vs [K in T]: V vs [Symbol.iterator]?: T
     if self.peek().typ == TT::BracketOpen {
       let bracket_checkpoint = self.checkpoint();
       self.consume(); // consume '['
-      // Check if this looks like an index signature (identifier : type])
-      let looks_like_index_sig = if self.peek().typ == TT::Identifier {
+      if self.peek().typ == TT::Identifier {
         let [_, t2] = self.peek_n::<2>();
-        t2.typ == TT::Colon
-      } else {
-        false
-      };
-      self.restore_checkpoint(bracket_checkpoint);
-
-      if looks_like_index_sig {
-        return self.index_signature(ctx, readonly);
+        if t2.typ == TT::Colon {
+          // Index signature: [key: string]: T
+          self.restore_checkpoint(bracket_checkpoint);
+          return self.index_signature(ctx, readonly);
+        } else if t2.typ == TT::KeywordIn {
+          // Mapped type member: [K in keyof T]: V
+          // Restore to before readonly was consumed, so mapped_type_member can parse it
+          self.restore_checkpoint(checkpoint);
+          return self.mapped_type_member(ctx);
+        }
       }
+      self.restore_checkpoint(bracket_checkpoint);
       // Otherwise, it's a computed property key - fall through to parse it normally
     }
 
@@ -1445,5 +1448,79 @@ impl<'a> Parser<'a> {
       },
     );
     Ok(Node::new(outer_loc, TypeExpr::MappedType(mapped)))
+  }
+
+  /// Parse mapped type member in object type: [K in keyof T]: V
+  fn mapped_type_member(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeMember>> {
+    let start_loc = self.peek().loc;
+
+    // Parse readonly modifier: readonly, +readonly, -readonly
+    let readonly_modifier = if self.consume_if(TT::KeywordReadonly).is_match() {
+      Some(MappedTypeModifier::None)
+    } else if self.consume_if(TT::Plus).is_match() && self.consume_if(TT::KeywordReadonly).is_match()
+    {
+      Some(MappedTypeModifier::Plus)
+    } else if self.consume_if(TT::Hyphen).is_match()
+      && self.consume_if(TT::KeywordReadonly).is_match()
+    {
+      Some(MappedTypeModifier::Minus)
+    } else {
+      None
+    };
+
+    self.require(TT::BracketOpen)?;
+    let type_parameter = self.require_identifier()?;
+    self.require(TT::KeywordIn)?;
+    let constraint = self.type_expr(ctx)?;
+
+    // TypeScript: as clause for key remapping: [K in T as NewK]
+    let name_type = if self.consume_if(TT::KeywordAs).is_match() {
+      Some(Box::new(self.type_expr(ctx)?))
+    } else {
+      None
+    };
+
+    self.require(TT::BracketClose)?;
+
+    // Parse optional modifier: ?, +?, -?
+    let optional_modifier = if self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::None)
+    } else if self.consume_if(TT::Plus).is_match() && self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::Plus)
+    } else if self.consume_if(TT::Hyphen).is_match() && self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::Minus)
+    } else {
+      None
+    };
+
+    // Type annotation is optional in mapped type members
+    let (type_expr, end_loc) = if self.consume_if(TT::Colon).is_match() {
+      let te = self.type_expr(ctx)?;
+      let loc = te.loc;
+      (Box::new(te), loc)
+    } else {
+      // No type annotation - create implicit 'any' type
+      use crate::ast::type_expr::TypeAny;
+      use crate::loc::Loc;
+      let any_loc = Loc(self.peek().loc.0, self.peek().loc.0);
+      let any_inner = Node::new(any_loc, TypeAny {});
+      let any_type = Node::new(any_loc, TypeExpr::Any(any_inner));
+      (Box::new(any_type), any_loc)
+    };
+
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
+    let mapped = Node::new(
+      start_loc,
+      TypeMapped {
+        readonly_modifier,
+        type_parameter,
+        constraint: Box::new(constraint),
+        name_type,
+        optional_modifier,
+        type_expr,
+      },
+    );
+    Ok(Node::new(outer_loc, TypeMember::MappedProperty(mapped)))
   }
 }
