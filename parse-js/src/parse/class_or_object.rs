@@ -631,6 +631,9 @@ impl<'a> Parser<'a> {
         (key, ClassOrObjVal::Prop(initializer))
       });
     }
+    // Check if this looks like a method with type parameters: foo<T>(...)
+    let has_type_params = b.typ == TT::ChevronLeft && self.is_start_of_type_arguments();
+
     Ok(match (a.typ, b.typ, c.typ, d.typ) {
       // Method. Includes using "get" or "set" as the method's name.
       (TT::KeywordAsync, TT::Asterisk, _, TT::ParenthesisOpen)
@@ -638,6 +641,11 @@ impl<'a> Parser<'a> {
       | (TT::Asterisk, _, TT::ParenthesisOpen, _)
       | (_, TT::ParenthesisOpen, _, _)
       => {
+        let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
+        (k, v.into())
+      }
+      // Method with type parameters: foo<T>(...)
+      _ if has_type_params => {
         let (k, v) = self.class_or_obj_method(ctx, abstract_)?;
         (k, v.into())
       }
