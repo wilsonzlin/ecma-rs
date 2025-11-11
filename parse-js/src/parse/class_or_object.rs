@@ -247,7 +247,7 @@ impl<'a> Parser<'a> {
     Ok(members)
   }
 
-  /// Parses a class or object key like `a`, `'a'`, `#a`, `"a"`, `1`, `[1]`.
+  /// Parses a class or object key like `a`, `'a'`, `#a`, `"a"`, `1`, `[1]`, `` `template` ``.
   pub fn class_or_obj_key(
     &mut self,
     ctx: ParseCtx,
@@ -259,6 +259,9 @@ impl<'a> Parser<'a> {
         self.require(TT::BracketClose)?;
         key
       })
+    } else if self.peek().typ == TT::LiteralTemplatePartString || self.peek().typ == TT::LiteralTemplatePartStringEnd {
+      // Template literal as property key: `foo` or `foo${expr}bar`
+      ClassOrObjKey::Computed(self.lit_template(ctx)?.into_wrapped())
     } else {
       ClassOrObjKey::Direct(self.with_loc(|p| {
         let t = p.peek();
