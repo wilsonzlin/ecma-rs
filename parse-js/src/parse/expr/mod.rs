@@ -482,14 +482,39 @@ impl<'a> Parser<'a> {
       TT::BracketOpen => self.lit_arr(ctx)?.into_wrapped(),
       TT::BraceOpen => self.lit_obj(ctx)?.into_wrapped(),
       TT::ChevronLeft => {
-        // TypeScript: angle-bracket type assertion: <Type>expr
-        // Try to parse as type assertion first, fall back to JSX
+        // TypeScript: Could be:
+        // 1. Arrow function with type parameters: <T>(x: T) => ...
+        // 2. Angle-bracket type assertion: <Type>expr
+        // 3. JSX element: <Component>
+
+        // Try parsing as arrow function first if it looks like one
         let checkpoint = self.checkpoint();
-        match self.try_parse_angle_bracket_type_assertion(ctx) {
-          Ok(assertion) => assertion,
-          Err(_) => {
-            self.restore_checkpoint(checkpoint);
-            self.jsx_elem(ctx)?.into_wrapped()
+        if self.is_start_of_type_arguments() {
+          // Could be arrow function with type parameters
+          // Try to parse it as such
+          match self.arrow_func_expr(ctx, terminators) {
+            Ok(arrow) => arrow.into_wrapped(),
+            Err(_) => {
+              // Failed to parse as arrow function, restore and try other options
+              self.restore_checkpoint(checkpoint);
+              let assertion_checkpoint = self.checkpoint();
+              match self.try_parse_angle_bracket_type_assertion(ctx) {
+                Ok(assertion) => assertion,
+                Err(_) => {
+                  self.restore_checkpoint(assertion_checkpoint);
+                  self.jsx_elem(ctx)?.into_wrapped()
+                }
+              }
+            }
+          }
+        } else {
+          // Not type arguments, try type assertion or JSX
+          match self.try_parse_angle_bracket_type_assertion(ctx) {
+            Ok(assertion) => assertion,
+            Err(_) => {
+              self.restore_checkpoint(checkpoint);
+              self.jsx_elem(ctx)?.into_wrapped()
+            }
           }
         }
       },
