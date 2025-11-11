@@ -396,7 +396,8 @@ impl<'a> Parser<'a> {
       TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
       TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
       TT::KeywordUndefinedType | TT::Identifier | TT::BraceOpen | TT::BracketOpen |
-      TT::KeywordTypeof | TT::KeywordKeyof | TT::ParenthesisOpen
+      TT::KeywordTypeof | TT::KeywordKeyof | TT::ParenthesisOpen |
+      TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull
     );
 
     if !looks_like_type_assertion {
