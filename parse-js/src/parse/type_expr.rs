@@ -590,9 +590,46 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse object type literal: { x: T; y?: U; readonly z: V }
+  /// or mapped type: { [K in keyof T]: T[K] }
   fn object_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
     self.require(TT::BraceOpen)?;
+
+    // Check if this is a mapped type by looking ahead
+    // Mapped types start with optional readonly/+readonly/-readonly, then [, then identifier in
+    let checkpoint = self.checkpoint();
+
+    // Skip optional readonly modifier
+    if self.peek().typ == TT::KeywordReadonly {
+      self.consume();
+    } else if self.peek().typ == TT::Plus || self.peek().typ == TT::Hyphen {
+      self.consume();
+      if self.peek().typ == TT::KeywordReadonly {
+        self.consume();
+      }
+    }
+
+    // Check for [identifier in pattern
+    let is_mapped_type = if self.peek().typ == TT::BracketOpen {
+      self.consume(); // consume '['
+      if self.peek().typ == TT::Identifier {
+        let [_, t2] = self.peek_n::<2>();
+        t2.typ == TT::KeywordIn
+      } else {
+        false
+      }
+    } else {
+      false
+    };
+
+    self.restore_checkpoint(checkpoint);
+
+    if is_mapped_type {
+      // Parse as mapped type body (opening brace already consumed)
+      return self.mapped_type_body(ctx, start_loc);
+    }
+
+    // Parse as regular object type
     let members = self.type_members(ctx)?;
     let end_loc = self.peek().loc;
     self.require(TT::BraceClose)?;
@@ -1231,6 +1268,68 @@ impl<'a> Parser<'a> {
     let start_loc = self.peek().loc;
     self.require(TT::BraceOpen)?;
 
+    // Parse readonly modifier: readonly, +readonly, -readonly
+    let readonly_modifier = if self.consume_if(TT::KeywordReadonly).is_match() {
+      Some(MappedTypeModifier::None)
+    } else if self.consume_if(TT::Plus).is_match() && self.consume_if(TT::KeywordReadonly).is_match()
+    {
+      Some(MappedTypeModifier::Plus)
+    } else if self.consume_if(TT::Hyphen).is_match()
+      && self.consume_if(TT::KeywordReadonly).is_match()
+    {
+      Some(MappedTypeModifier::Minus)
+    } else {
+      None
+    };
+
+    self.require(TT::BracketOpen)?;
+    let type_parameter = self.require_identifier()?;
+    self.require(TT::KeywordIn)?;
+    let constraint = self.type_expr(ctx)?;
+
+    // TypeScript: as clause for key remapping: [K in T as NewK]
+    let name_type = if self.consume_if(TT::KeywordAs).is_match() {
+      Some(Box::new(self.type_expr(ctx)?))
+    } else {
+      None
+    };
+
+    self.require(TT::BracketClose)?;
+
+    // Parse optional modifier: ?, +?, -?
+    let optional_modifier = if self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::None)
+    } else if self.consume_if(TT::Plus).is_match() && self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::Plus)
+    } else if self.consume_if(TT::Hyphen).is_match() && self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::Minus)
+    } else {
+      None
+    };
+
+    self.require(TT::Colon)?;
+    let type_expr = self.type_expr(ctx)?;
+    let end_loc = self.peek().loc;
+    self.require(TT::BraceClose)?;
+
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
+    let mapped = Node::new(
+      start_loc,
+      TypeMapped {
+        readonly_modifier,
+        type_parameter,
+        constraint: Box::new(constraint),
+        name_type,
+        optional_modifier,
+        type_expr: Box::new(type_expr),
+      },
+    );
+    Ok(Node::new(outer_loc, TypeExpr::MappedType(mapped)))
+  }
+
+  /// Parse mapped type body (after opening brace has been consumed)
+  fn mapped_type_body(&mut self, ctx: ParseCtx, start_loc: crate::loc::Loc) -> SyntaxResult<Node<TypeExpr>> {
     // Parse readonly modifier: readonly, +readonly, -readonly
     let readonly_modifier = if self.consume_if(TT::KeywordReadonly).is_match() {
       Some(MappedTypeModifier::None)
