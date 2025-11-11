@@ -207,7 +207,7 @@ impl<'a> Parser<'a> {
         TT::KeywordStatic, TT::KeywordGet, TT::KeywordSet, TT::KeywordAsync,
         TT::KeywordPublic, TT::KeywordPrivate, TT::KeywordProtected,
         TT::KeywordAbstract, TT::KeywordReadonly, TT::KeywordOverride,
-        TT::Asterisk, TT::At, TT::BracketOpen, TT::BraceClose
+        TT::Asterisk, TT::At, TT::BracketOpen, TT::BraceClose, TT::Identifier
       ], &mut asi)?;
       Ok(crate::ast::expr::Decorator { expression })
     })
