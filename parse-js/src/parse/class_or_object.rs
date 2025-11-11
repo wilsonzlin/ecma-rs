@@ -632,7 +632,16 @@ impl<'a> Parser<'a> {
       });
     }
     // Check if this looks like a method with type parameters: foo<T>(...)
-    let has_type_params = b.typ == TT::ChevronLeft && self.is_start_of_type_arguments();
+    // We need to consume the identifier and check if next is <type-args>(
+    let checkpoint = self.checkpoint();
+    let has_type_params = if a.typ == TT::Identifier && b.typ == TT::ChevronLeft {
+      self.consume(); // consume identifier
+      let result = self.is_start_of_type_arguments();
+      self.restore_checkpoint(checkpoint);
+      result
+    } else {
+      false
+    };
 
     Ok(match (a.typ, b.typ, c.typ, d.typ) {
       // Method. Includes using "get" or "set" as the method's name.
