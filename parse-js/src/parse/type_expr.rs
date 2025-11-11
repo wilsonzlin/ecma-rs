@@ -1372,6 +1372,8 @@ impl<'a> Parser<'a> {
 
     self.require(TT::Colon)?;
     let type_expr = self.type_expr(ctx)?;
+    // Optional semicolon or comma before closing brace
+    let _ = self.consume_if(TT::Semicolon).is_match() || self.consume_if(TT::Comma).is_match();
     let end_loc = self.peek().loc;
     self.require(TT::BraceClose)?;
 
@@ -1434,6 +1436,8 @@ impl<'a> Parser<'a> {
 
     self.require(TT::Colon)?;
     let type_expr = self.type_expr(ctx)?;
+    // Optional semicolon or comma before closing brace
+    let _ = self.consume_if(TT::Semicolon).is_match() || self.consume_if(TT::Comma).is_match();
     let end_loc = self.peek().loc;
     self.require(TT::BraceClose)?;
 
