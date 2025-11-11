@@ -480,6 +480,7 @@ impl<'a> Parser<'a> {
         matches!(
           self.peek().typ,
           TT::ChevronRight
+            | TT::ChevronLeft  // For nested type args like List<T>
             | TT::Comma
             | TT::KeywordExtends
             | TT::Equals
