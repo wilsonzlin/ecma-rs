@@ -1,0 +1,650 @@
+warning: /home/user/ecma-rs/parse-js/Cargo.toml: file `/home/user/ecma-rs/parse-js/tests/conformance_runner.rs` found to be present in multiple build targets:
+  * `bin` target `conformance_runner`
+  * `integration-test` target `conformance_runner`
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/expr/pat.rs:3:13
+  |
+3 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Deserialize`
+  --> parse-js/src/ast/expr/mod.rs:10:13
+   |
+10 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^
+
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/func.rs:3:13
+  |
+3 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/node.rs:6:13
+  |
+6 | use serde::{Deserialize, Serialize, Serializer};
+  |             ^^^^^^^^^^^
+
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/stmt/decl.rs:2:13
+  |
+2 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/stmt/mod.rs:6:13
+  |
+6 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+
+warning: unused imports: `stx::TopLevel` and `type_expr::TypeExpr`
+ --> parse-js/src/ast/stmt/mod.rs:8:92
+  |
+8 | use super::{expr::{pat::Pat, Expr}, import_export::{ExportNames, ImportNames}, node::Node, stx::TopLevel, ts_stmt::*, type_expr::TypeExpr};
+  |                                                                                            ^^^^^^^^^^^^^              ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `any::Any`
+ --> parse-js/src/ast/stx.rs:1:11
+  |
+1 | use std::{any::Any, fmt::Debug};
+  |           ^^^^^^^^
+
+warning: unused import: `derive_more::derive::From`
+ --> parse-js/src/ast/stx.rs:3:5
+  |
+3 | use derive_more::derive::From;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `expr::Expr`
+ --> parse-js/src/ast/stx.rs:7:13
+  |
+7 | use super::{expr::Expr, node::Node, stmt::Stmt};
+  |             ^^^^^^^^^^
+
+warning: unused import: `crate::ast::expr::Expr`
+  --> parse-js/src/parse/expr/lit.rs:11:5
+   |
+11 | use crate::ast::expr::Expr;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputedMemberExpr`, `IdExpr`, and `MemberExpr`
+ --> parse-js/src/parse/expr/util.rs:1:140
+  |
+1 | ...bjMember, ObjMemberType}, expr::{BinaryExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr}, expr::lit::{LitArrElem, LitArrExpr, LitObj...
+  |                                                 ^^^^^^^^^^^^^^^^^^        ^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `crate::ast::expr::pat::Pat`
+  --> parse-js/src/parse/expr/mod.rs:13:5
+   |
+13 | use crate::ast::expr::pat::Pat;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Expr` and `Pat`
+ --> parse-js/src/parse/import_export.rs:1:39
+  |
+1 | use crate::{ast::{expr::{pat::{IdPat, Pat}, Expr, ImportExpr, ImportMeta}, import_export::{ExportName, ExportNames, ImportName, ImportNam...
+  |                                       ^^^   ^^^^
+
+warning: unused import: `lit::normalise_literal_string`
+ --> parse-js/src/parse/import_export.rs:3:25
+  |
+3 | use super::{expr::{Asi, lit::normalise_literal_string, pat::is_valid_pattern_identifier}, ParseCtx, Parser};
+  |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::expr::Expr`
+ --> parse-js/src/parse/ts_decl.rs:2:5
+  |
+2 | use crate::ast::expr::Expr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::stmt::Stmt`
+ --> parse-js/src/parse/ts_decl.rs:4:5
+  |
+4 | use crate::ast::stmt::Stmt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::type_expr::TypeExpr`
+ --> parse-js/src/parse/ts_decl.rs:6:5
+  |
+6 | use crate::ast::type_expr::TypeExpr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `SyntaxErrorType`
+ --> parse-js/src/parse/ts_decl.rs:7:20
+  |
+7 | use crate::error::{SyntaxErrorType, SyntaxResult};
+  |                    ^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::expr::Expr`
+ --> parse-js/src/parse/type_expr.rs:2:5
+  |
+2 | use crate::ast::expr::Expr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused variable: `key`
+   --> parse-js/src/parse/class_or_object.rs:291:5
+    |
+291 |     key: &ClassOrObjKey,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_key`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `type_annotation`
+   --> parse-js/src/parse/class_or_object.rs:465:11
+    |
+465 |       let type_annotation = if p.consume_if(TT::Colon).is_match() {
+    |           ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_type_annotation`
+
+warning: unreachable pattern
+   --> parse-js/src/parse/expr/util.rs:126:11
+    |
+ 72 |           ObjMember { typ } => match typ {
+    |           ----------------- matches any value
+...
+126 |           _ => unreachable!(),
+    |           ^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `accessibility` is never read
+  --> parse-js/src/parse/func.rs:62:17
+   |
+62 |         let mut accessibility = None;
+   |                 ^^^^^^^^^^^^^
+   |
+   = help: maybe it is overwritten before being read?
+   = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `t2`
+  --> parse-js/src/parse/stmt/mod.rs:44:18
+   |
+44 |     let [t0, t1, t2] = self.peek_n();
+   |                  ^^ help: if this is intentional, prefix it with an underscore: `_t2`
+
+warning: unused variable: `export`
+   --> parse-js/src/parse/stmt/mod.rs:158:57
+    |
+158 |   fn func_decl_with_modifiers(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::FuncDec...
+    |                                                         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_export`
+
+warning: unused variable: `declare`
+   --> parse-js/src/parse/stmt/mod.rs:158:71
+    |
+158 | ...tx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::FuncDecl>> {
+    |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_declare`
+
+warning: unreachable pattern
+   --> parse-js/src/parse/type_expr.rs:287:72
+    |
+244 |       TT::KeywordUnique => {
+    |       ----------------- matches all the relevant values
+...
+287 |       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
+    |                                                                        ^^^^^^^^^^^^^^^^^ no value can reach this
+
+warning: unused variable: `end_loc`
+   --> parse-js/src/parse/type_expr.rs:528:11
+    |
+528 |       let end_loc = import_expr.loc;
+    |           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_end_loc`
+
+warning: type `LexNotFound` is more private than the item `lex_template_string_continue`
+   --> parse-js/src/lex/mod.rs:907:1
+    |
+907 | / pub fn lex_template_string_continue(
+908 | |   lexer: &mut Lexer<'_>,
+909 | | ) -> LexResult<TT> {
+    | |__________________^ function `lex_template_string_continue` is reachable at visibility `pub`
+    |
+note: but type `LexNotFound` is only usable at visibility `pub(self)`
+   --> parse-js/src/lex/mod.rs:109:1
+    |
+109 | struct LexNotFound;
+    | ^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: methods `through_char`, `while_not_char`, and `range` are never used
+   --> parse-js/src/lex/mod.rs:207:6
+    |
+118 | impl<'a> Lexer<'a> {
+    | ------------------ methods in this implementation
+...
+207 |   fn through_char(&self, c: char) -> LexResult<Match> {
+    |      ^^^^^^^^^^^^
+...
+220 |   fn while_not_char(&self, a: char) -> Match {
+    |      ^^^^^^^^^^^^^^
+...
+281 |   fn range(&self, m: Match) -> Loc {
+    |      ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `check` is never used
+ --> parse-js/src/lex/tests/mod.rs:7:4
+  |
+7 | fn check<const N: usize>(code: &str, expecteds: [TT; N]) {
+  |    ^^^^^
+
+warning: unnecessary transmute
+  --> parse-js/src/num.rs:42:16
+   |
+42 |       unsafe { mem::transmute::<f64, u64>(self.0) }.hash(state);
+   |                --------------------------^^^^^^^^
+   |                |
+   |                help: replace this with: `f64::to_bits`
+   |
+   = note: `#[warn(unnecessary_transmutes)]` on by default
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:230:9
+    |
+230 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: use `let _ = ...` to ignore the resulting value
+    |
+230 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:318:15
+    |
+318 |               p.consume_if(TT::Semicolon);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+318 |               let _ = p.consume_if(TT::Semicolon);
+    |               +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:374:9
+    |
+374 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+374 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:421:9
+    |
+421 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+421 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:479:9
+    |
+479 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+479 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:605:15
+    |
+605 |               p.consume_if(TT::Semicolon);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+605 |               let _ = p.consume_if(TT::Semicolon);
+    |               +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/stmt/mod.rs:584:7
+    |
+584 |       p.consume_if(TT::Semicolon);
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+584 |       let _ = p.consume_if(TT::Semicolon);
+    |       +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/stmt/decl.rs:171:11
+    |
+171 |           p.consume_if(TT::Semicolon);
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+171 |           let _ = p.consume_if(TT::Semicolon);
+    |           +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/import_export.rs:110:15
+    |
+110 |               p.consume_if(TT::Semicolon);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+110 |               let _ = p.consume_if(TT::Semicolon);
+    |               +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/import_export.rs:167:9
+    |
+167 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+167 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/import_export.rs:263:11
+    |
+263 |           p.consume_if(TT::Semicolon);
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+263 |           let _ = p.consume_if(TT::Semicolon);
+    |           +++++++
+
+warning: unused `MaybeToken` that must be used
+  --> parse-js/src/parse/ts_decl.rs:64:7
+   |
+64 |       p.consume_if(TT::Semicolon);
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: use `let _ = ...` to ignore the resulting value
+   |
+64 |       let _ = p.consume_if(TT::Semicolon);
+   |       +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/type_expr.rs:675:9
+    |
+675 |         self.consume_if(TT::Comma);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+675 |         let _ = self.consume_if(TT::Comma);
+    |         +++++++
+
+warning: `parse-js` (lib) generated 46 warnings (run `cargo fix --lib -p parse-js` to apply 21 suggestions)
+warning: unused import: `std::sync::Mutex`
+  --> parse-js/tests/conformance_runner.rs:12:5
+   |
+12 | use std::sync::Mutex;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `parse-js` (bin "conformance_runner") generated 1 warning (run `cargo fix --bin "conformance_runner"` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.22s
+     Running `/home/user/ecma-rs/target/release/conformance_runner`
+🔍 Discovering TypeScript conformance tests...
+📊 Found 5897 test files
+
+🚀 Running tests in parallel...
+[100/5897] tests/TypeScript/tests/cases/conformance/es6/Symbols/symbolProperty8.ts
+[200/5897] tests/TypeScript/tests/cases/conformance/emitter/es2018/asyncGenerators/emitter.asyncGenerators.functionExpressions.es2018.ts
+[300/5897] tests/TypeScript/tests/cases/conformance/es6/Symbols/symbolType2.ts
+[400/5897] tests/TypeScript/tests/cases/conformance/esDecorators/esDecorators-privateFieldAccess.ts
+[500/5897] tests/TypeScript/tests/cases/conformance/async/es5/awaitBinaryExpression/awaitBinaryExpression5_es5.ts
+[600/5897] tests/TypeScript/tests/cases/conformance/es6/computedProperties/computedPropertyNames8_ES6.ts
+[700/5897] tests/TypeScript/tests/cases/conformance/es6/computedProperties/computedPropertyNames17_ES5.ts
+[800/5897] tests/TypeScript/tests/cases/conformance/decorators/class/property/decoratorOnClassProperty7.ts
+[900/5897] tests/TypeScript/tests/cases/conformance/decorators/invalid/decoratorOnEnum.ts
+[1000/5897] tests/TypeScript/tests/cases/conformance/es2020/localesObjectArgument.ts
+[1100/5897] tests/TypeScript/tests/cases/conformance/classes/propertyMemberDeclarations/autoAccessor4.ts
+[1200/5897] tests/TypeScript/tests/cases/conformance/es6/for-ofStatements/for-of29.ts
+[1300/5897] tests/TypeScript/tests/cases/conformance/controlFlow/controlFlowBinaryOrExpression.ts
+[1400/5897] tests/TypeScript/tests/cases/conformance/es5/es5DateAPIs.ts
+[1500/5897] tests/TypeScript/tests/cases/conformance/node/nodeModulesExportsSpecifierGenerationDirectory.ts
+[1600/5897] tests/TypeScript/tests/cases/conformance/jsdoc/callbackTag3.ts
+[1700/5897] tests/TypeScript/tests/cases/conformance/es6/for-ofStatements/for-of57.ts
+[1800/5897] tests/TypeScript/tests/cases/conformance/es6/for-ofStatements/for-of9.ts
+[1900/5897] tests/TypeScript/tests/cases/conformance/es6/Symbols/symbolProperty58.ts
+[2000/5897] tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameFieldInitializer.ts
+[2100/5897] tests/TypeScript/tests/cases/conformance/classes/classStaticBlock/classStaticBlock1.ts
+[2200/5897] tests/TypeScript/tests/cases/conformance/salsa/typeFromPropertyAssignment10_1.ts
+[2300/5897] tests/TypeScript/tests/cases/conformance/jsdoc/declarations/jsDeclarationsReferenceToClassInstanceCrossFile.ts
+[2400/5897] tests/TypeScript/tests/cases/conformance/types/typeParameters/typeParameterLists/propertyAccessOnTypeParameterWithConstraints4.ts
+[2500/5897] tests/TypeScript/tests/cases/conformance/types/members/classWithProtectedProperty.ts
+[2600/5897] tests/TypeScript/tests/cases/conformance/es6/modules/exportsAndImports3-amd.ts
+[2700/5897] tests/TypeScript/tests/cases/conformance/expressions/optionalChaining/callChain/superMethodCall.ts
+[2800/5897] tests/TypeScript/tests/cases/conformance/es6/newTarget/newTarget.es6.ts
+[2900/5897] tests/TypeScript/tests/cases/conformance/classes/constructorDeclarations/classConstructorOverloadsAccessibility.ts
+[3000/5897] tests/TypeScript/tests/cases/conformance/jsdoc/jsdocTemplateTagDefault.ts
+[3100/5897] tests/TypeScript/tests/cases/conformance/es6/destructuring/emptyObjectBindingPatternParameter02.ts
+[3200/5897] tests/TypeScript/tests/cases/conformance/expressions/superPropertyAccess/errorSuperPropertyAccess.ts
+[3300/5897] tests/TypeScript/tests/cases/conformance/parser/ecmascript6/Iterators/parserForOfStatement19.ts
+[3400/5897] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ClassDeclarations/parserClassDeclaration12.ts
+[3500/5897] tests/TypeScript/tests/cases/conformance/es6/spread/iteratorSpreadInArray8.ts
+[3600/5897] tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ShorthandPropertyAssignment/parserShorthandPropertyAssignment1.ts
+[3700/5897] tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/assignmentCompatWithStringIndexer3.ts
+[3800/5897] tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/callSignatureAssignabilityInInheritance3.ts
+[3900/5897] tests/TypeScript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsWithLegacyClassDecorators.3.ts
+[4000/5897] tests/TypeScript/tests/cases/conformance/moduleResolution/typesVersions.multiFile.ts
+[4100/5897] tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/callSignatures/restParametersOfNonArrayTypes2.ts
+[4200/5897] tests/TypeScript/tests/cases/conformance/jsx/tsxAttributeResolution2.tsx
+[4300/5897] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ParameterLists/parserParameterList17.ts
+[4400/5897] tests/TypeScript/tests/cases/conformance/generators/generatorAssignability.ts
+[4500/5897] tests/TypeScript/tests/cases/conformance/generators/generatorReturnTypeFallback.2.ts
+[4600/5897] tests/TypeScript/tests/cases/conformance/types/intersection/intersectionOfUnionNarrowing.ts
+[4700/5897] tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/propertySignatures/propertyNamesOfReservedWords.ts
+[4800/5897] tests/TypeScript/tests/cases/conformance/types/typeRelationships/recursiveTypes/objectTypeWithRecursiveWrappedProperty.ts
+[4900/5897] tests/TypeScript/tests/cases/conformance/types/primitives/number/validNumberAssignments.ts
+[5000/5897] tests/TypeScript/tests/cases/conformance/types/literal/numericLiteralTypes1.ts
+[5100/5897] tests/TypeScript/tests/cases/conformance/es6/templates/templateStringInModuleName.ts
+[5200/5897] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserForStatement4.ts
+[5300/5897] tests/TypeScript/tests/cases/conformance/es6/templates/templateStringInParenthesesES6.ts
+[5400/5897] tests/TypeScript/tests/cases/conformance/types/spread/spreadObjectOrFalsy.ts
+[5500/5897] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/ContinueStatements/parser_continueTarget5.ts
+[5600/5897] tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeInference/genericCallWithGenericSignatureArguments2.ts
+[5700/5897] tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeInference/genericCallWithObjectTypeArgsAndConstraints.ts
+[5800/5897] tests/TypeScript/tests/cases/conformance/es6/unicodeExtendedEscapes/unicodeExtendedEscapesInRegularExpressions03.ts
+Progress: 5896/5897 (100.0%)
+Progress: 5896/5897 (100.0%)
+⏱️  TIMEOUT: tests/TypeScript/tests/cases/conformance/types/specifyingTypes/typeLiterals/parenthesizedTypes.ts
+
+================================================================================
+📈 TEST RESULTS SUMMARY
+================================================================================
+Total tests:  5897
+✅ Passed:     5076 (86.08%)
+❌ Failed:     821 (13.92%)
+================================================================================
+⏱️  Timeouts:   1
+
+📋 FAILURES BY CATEGORY:
+================================================================================
+statements/VariableStatements/usingDeclarations: 29 failures
+parser/ecmascript5/Generics: 24 failures
+es6/templates: 22 failures
+parser/ecmascript5/SkippedTokens: 20 failures
+es6/unicodeExtendedEscapes: 19 failures
+parser/ecmascript5/RegressionTests: 19 failures
+parser/ecmascript5/Statements: 18 failures
+es6/destructuring: 17 failures
+parser/ecmascript5: 16 failures
+jsx: 15 failures
+classes/members/privateNames: 15 failures
+types/typeRelationships/typeAndMemberIdentity: 14 failures
+expressions/typeGuards: 13 failures
+types/literal: 13 failures
+types/mapped: 13 failures
+types/thisType: 13 failures
+decorators/invalid: 13 failures
+parser/ecmascript5/ErrorRecovery: 13 failures
+types/typeRelationships/recursiveTypes: 12 failures
+controlFlow: 10 failures
+
+🔍 SAMPLE FAILURES (first 50):
+================================================================================
+
+1. tests/TypeScript/tests/cases/conformance/additionalChecks/noPropertyAccessFromIndexSignature1.ts (3.238509ms)
+   Error: RequiredTokenNotFound(BracketClose) [token=Some(Colon)] around loc [168:169]
+
+2. tests/TypeScript/tests/cases/conformance/ambient/ambientModuleDeclarationWithReservedIdentifierInDottedPath.ts (3.220101ms)
+   Error: RequiredTokenNotFound(KeywordModule) [token=Some(KeywordDebugger)] around loc [104:112]
+
+3. tests/TypeScript/tests/cases/conformance/ambient/ambientModuleDeclarationWithReservedIdentifierInDottedPath2.ts (3.371705ms)
+   Error: RequiredTokenNotFound(KeywordModule) [token=Some(KeywordDebugger)] around loc [48:56]
+
+4. tests/TypeScript/tests/cases/conformance/async/es2017/asyncArrowFunction/asyncArrowFunction9_es2017.ts (2.271753ms)
+   Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(KeywordAwait)] around loc [64:69]
+
+5. tests/TypeScript/tests/cases/conformance/async/es2017/await_incorrectThisType.ts (4.752139ms)
+   Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(ChevronLeft)] around loc [714:715]
+
+6. tests/TypeScript/tests/cases/conformance/async/es2017/functionDeclarations/asyncFunctionDeclaration10_es2017.ts (4.92184ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(EqualsChevronRight)] around loc [72:74]
+
+7. tests/TypeScript/tests/cases/conformance/async/es2017/functionDeclarations/asyncFunctionDeclaration5_es2017.ts (4.444867ms)
+   Error: ExpectedSyntax("pattern") [token=Some(KeywordAwait)] around loc [62:67]
+
+8. tests/TypeScript/tests/cases/conformance/async/es5/asyncArrowFunction/asyncArrowFunction9_es5.ts (2.6883ms)
+   Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(KeywordAwait)] around loc [89:94]
+
+9. tests/TypeScript/tests/cases/conformance/async/es5/asyncClass_es5.ts (1.59568ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [74:79]
+
+10. tests/TypeScript/tests/cases/conformance/async/es5/asyncEnum_es5.ts (3.143475ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordEnum)] around loc [74:78]
+
+11. tests/TypeScript/tests/cases/conformance/async/es5/asyncInterface_es5.ts (1.58279ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordInterface)] around loc [74:83]
+
+12. tests/TypeScript/tests/cases/conformance/async/es5/asyncModule_es5.ts (2.708144ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordNamespace)] around loc [74:83]
+
+13. tests/TypeScript/tests/cases/conformance/async/es5/functionDeclarations/asyncFunctionDeclaration10_es5.ts (1.955266ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(EqualsChevronRight)] around loc [97:99]
+
+14. tests/TypeScript/tests/cases/conformance/async/es5/functionDeclarations/asyncFunctionDeclaration5_es5.ts (2.534425ms)
+   Error: ExpectedSyntax("pattern") [token=Some(KeywordAwait)] around loc [87:92]
+
+15. tests/TypeScript/tests/cases/conformance/async/es6/asyncArrowFunction/asyncArrowFunction9_es6.ts (2.452478ms)
+   Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(KeywordAwait)] around loc [61:66]
+
+16. tests/TypeScript/tests/cases/conformance/async/es6/asyncClass_es6.ts (2.728386ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [46:51]
+
+17. tests/TypeScript/tests/cases/conformance/async/es6/asyncEnum_es6.ts (2.822538ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordEnum)] around loc [46:50]
+
+18. tests/TypeScript/tests/cases/conformance/async/es6/asyncInterface_es6.ts (2.816068ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordInterface)] around loc [46:55]
+
+19. tests/TypeScript/tests/cases/conformance/async/es6/asyncModule_es6.ts (1.256584ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordNamespace)] around loc [46:55]
+
+20. tests/TypeScript/tests/cases/conformance/async/es6/functionDeclarations/asyncFunctionDeclaration10_es6.ts (2.260072ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(EqualsChevronRight)] around loc [69:71]
+
+21. tests/TypeScript/tests/cases/conformance/async/es6/functionDeclarations/asyncFunctionDeclaration5_es6.ts (2.137536ms)
+   Error: ExpectedSyntax("pattern") [token=Some(KeywordAwait)] around loc [59:64]
+
+22. tests/TypeScript/tests/cases/conformance/async/es6/functionDeclarations/asyncOrYieldAsBindingIdentifier1.ts (1.615157ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordAwait)] around loc [199:204]
+
+23. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classAbstractKeyword/classAbstractCrashedOnce.ts (2.148492ms)
+   Error: ExpectedSyntax("member access property") [token=Some(BraceClose)] around loc [117:118]
+
+24. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classAbstractKeyword/classAbstractImportInstantiation.ts (3.073937ms)
+   Error: ExpectedNotFound [token=Some(Dot)] around loc [84:85]
+
+25. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classAbstractKeyword/classAbstractManyKeywords.ts (2.95318ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [24:29]
+
+26. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classAbstractKeyword/classAbstractWithInterface.ts (4.075024ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordInterface)] around loc [9:18]
+
+27. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classExtendingClassLikeType.ts (1.9157ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [682:687]
+
+28. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendingOptionalChain.ts (2.725834ms)
+   Error: RequiredTokenNotFound(BraceOpen) [token=Some(QuestionDot)] around loc [109:111]
+
+29. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendingPrimitive.ts (3.876499ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [181:186]
+
+30. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendingPrimitive2.ts (6.851536ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [66:71]
+
+31. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendsEveryObjectType.ts (2.501759ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(Semicolon)] around loc [100:101]
+
+32. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendsEveryObjectType2.ts (3.281347ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(Semicolon)] around loc [30:31]
+
+33. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classWithPredefinedTypesAsNames2.ts (1.797569ms)
+   Error: ExpectedSyntax("class name") [token=None] around loc [51:56]
+
+34. tests/TypeScript/tests/cases/conformance/classes/classStaticBlock/classStaticBlock26.ts (2.620109ms)
+   Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(KeywordAwait)] around loc [687:692]
+
+35. tests/TypeScript/tests/cases/conformance/classes/classStaticBlock/classStaticBlock6.ts (1.890656ms)
+   Error: ExpectedSyntax("type identifier") [token=Some(KeywordThis)] around loc [1086:1090]
+
+36. tests/TypeScript/tests/cases/conformance/classes/classStaticBlock/classStaticBlock7.ts (2.487198ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(LiteralNumber)] around loc [39:40]
+
+37. tests/TypeScript/tests/cases/conformance/classes/constructorDeclarations/classConstructorOverloadsAccessibility.ts (2.921165ms)
+   Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordProtected)] around loc [79:88]
+
+38. tests/TypeScript/tests/cases/conformance/classes/constructorDeclarations/constructorParameters/readonlyInConstructorParameters.ts (1.850198ms)
+   Error: InvalidAssigmentTarget [token=None] around loc [57:66]
+
+39. tests/TypeScript/tests/cases/conformance/classes/constructorDeclarations/constructorParameters/readonlyReadonly.ts (2.185044ms)
+   Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Identifier)] around loc [79:80]
+
+40. tests/TypeScript/tests/cases/conformance/classes/constructorDeclarations/superCalls/derivedClassSuperCallsInNonConstructorMembers.ts (4.081717ms)
+   Error: ExpectedSyntax("type expression") [token=Some(KeywordSuper)] around loc [125:130]
+
+41. tests/TypeScript/tests/cases/conformance/classes/indexMemberDeclarations/privateIndexer2.ts (4.207085ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(BracketOpen)] around loc [58:59]
+
+42. tests/TypeScript/tests/cases/conformance/classes/members/accessibility/privateInstanceMemberAccessibility.ts (2.02365ms)
+   Error: ExpectedSyntax("type identifier") [token=Some(KeywordSuper)] around loc [172:177]
+
+43. tests/TypeScript/tests/cases/conformance/classes/members/classTypes/genericSetterInClassType.ts (4.374225ms)
+   Error: InvalidAssigmentTarget [token=None] around loc [422:444]
+
+44. tests/TypeScript/tests/cases/conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers1.ts (2.735477ms)
+   Error: InvalidAssigmentTarget [token=None] around loc [856:858]
+
+45. tests/TypeScript/tests/cases/conformance/classes/members/instanceAndStaticMembers/thisAndSuperInStaticMembers2.ts (2.914355ms)
+   Error: InvalidAssigmentTarget [token=None] around loc [857:859]
+
+46. tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameAndPropertySignature.ts (2.004523ms)
+   Error: ExpectedSyntax("property name") [token=Some(PrivateMember)] around loc [15:19]
+
+47. tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameConstructorSignature.ts (2.425477ms)
+   Error: InvalidAssigmentTarget [token=None] around loc [100:109]
+
+48. tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameEnum.ts (2.399744ms)
+   Error: ExpectedSyntax("identifier") [token=Some(PrivateMember)] around loc [14:16]
+
+49. tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameFieldParenthesisLeftAssignment.ts (2.191091ms)
+   Error: InvalidAssigmentTarget [token=None] around loc [157:170]
+
+50. tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameHashCharName.ts (2.325013ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(Invalid)] around loc [19:20]
+
+📝 Detailed failure report written to: typescript_conformance_failures.txt
+
+

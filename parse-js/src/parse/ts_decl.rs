@@ -95,11 +95,14 @@ impl<'a> Parser<'a> {
 
   /// Parse enum member: Red = 1, Green = "green"
   fn enum_member(&mut self, ctx: ParseCtx) -> SyntaxResult<EnumMember> {
-    // TypeScript allows string literals as enum member names
-    let name = if self.peek().typ == TT::LiteralString {
-      self.lit_str_val()?
-    } else {
-      self.require_identifier()?
+    // TypeScript allows string literals and numeric literals as enum member names
+    let name = match self.peek().typ {
+      TT::LiteralString => self.lit_str_val()?,
+      TT::LiteralNumber => {
+        let t = self.consume();
+        self.str(t.loc).to_string()
+      }
+      _ => self.require_identifier()?,
     };
 
     let initializer = if self.consume_if(TT::Equals).is_match() {
