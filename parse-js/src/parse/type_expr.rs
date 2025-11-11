@@ -1252,30 +1252,34 @@ impl<'a> Parser<'a> {
     let mut end_loc = start_loc;
     loop {
       let type_expr = self.type_expr(ctx)?;
-      let t = self.peek().typ;
 
-      let literal = if t == TT::LiteralTemplatePartString {
-        self.lit_template_part_str_val()?
-      } else if t == TT::LiteralTemplatePartStringEnd {
-        end_loc = self.peek().loc;
-        self.consume_as_string()
+      // Require the closing brace of the substitution
+      self.require(TT::BraceClose)?;
+
+      // Get the next template part in template continuation mode
+      use crate::lex::LexMode;
+      let t = self.consume_with_mode(LexMode::TemplateStrContinue);
+
+      let literal = if t.typ == TT::LiteralTemplatePartString {
+        self.string(t.loc).to_string()
+      } else if t.typ == TT::LiteralTemplatePartStringEnd {
+        end_loc = t.loc;
+        self.string(t.loc).to_string()
       } else {
         return Err(
-          self
-            .peek()
-            .error(SyntaxErrorType::ExpectedSyntax("template literal continuation")),
+          t.error(SyntaxErrorType::ExpectedSyntax("template literal continuation")),
         );
       };
 
       let span_start = type_expr.loc;
       use crate::loc::Loc;
-      let span_loc = Loc(span_start.0, self.peek().loc.1);
+      let span_loc = Loc(span_start.0, t.loc.1);
       spans.push(Node::new(span_loc, TypeTemplateLiteralSpan {
         type_expr,
         literal: literal.clone(),
       }));
 
-      if t == TT::LiteralTemplatePartStringEnd {
+      if t.typ == TT::LiteralTemplatePartStringEnd {
         break;
       }
     }
