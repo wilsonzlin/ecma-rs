@@ -24,6 +24,10 @@ impl<'a> Parser<'a> {
       if is_export && t_alias.typ == TT::KeywordDefault {
         self.consume();
         Node::new(t_alias.loc, IdPat { name: "default".to_string() })
+      } else if t_alias.typ == TT::LiteralString {
+        // ES2022: arbitrary module namespace identifiers - allow string literals as aliases
+        let name = self.lit_str_val()?;
+        Node::new(t_alias.loc, IdPat { name })
       } else {
         self.id_pat(ctx)?
       }
@@ -194,7 +198,16 @@ impl<'a> Parser<'a> {
           (ExportNames::Specific(names), from)
         }
         TT::Asterisk => {
-          let alias = p.consume_if(TT::KeywordAs).and_then(|| p.id_pat(ctx))?;
+          let alias = p.consume_if(TT::KeywordAs).and_then(|| {
+            // ES2022: arbitrary module namespace identifiers - allow string literals
+            let t = p.peek();
+            if t.typ == TT::LiteralString {
+              let name = p.lit_str_val()?;
+              Ok(Node::new(t.loc, IdPat { name }))
+            } else {
+              p.id_pat(ctx)
+            }
+          })?;
           p.require(TT::KeywordFrom)?;
           let from = p.lit_str_val()?;
           (ExportNames::All(alias), Some(from))
