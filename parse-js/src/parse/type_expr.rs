@@ -507,7 +507,7 @@ impl<'a> Parser<'a> {
     while !self.consume_if(TT::ChevronRight).is_match() {
       args.push(self.type_expr(ctx)?);
       if !self.consume_if(TT::Comma).is_match() {
-        self.require(TT::ChevronRight)?;
+        self.require_chevron_right()?;
         break;
       }
     }
@@ -1219,7 +1219,7 @@ impl<'a> Parser<'a> {
     while !self.consume_if(TT::ChevronRight).is_match() {
       params.push(self.type_parameter(ctx)?);
       if !self.consume_if(TT::Comma).is_match() {
-        self.require(TT::ChevronRight)?;
+        self.require_chevron_right()?;
         break;
       }
     }
