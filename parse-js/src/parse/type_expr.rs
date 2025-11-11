@@ -282,7 +282,7 @@ impl<'a> Parser<'a> {
       TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
       TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
       TT::KeywordAbstract | TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
-      TT::KeywordInfer | TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
+      TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
       TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet
