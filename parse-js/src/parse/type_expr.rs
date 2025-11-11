@@ -314,6 +314,9 @@ impl<'a> Parser<'a> {
       // Parenthesized type or function type: (x: T) => U
       TT::ParenthesisOpen => self.paren_or_function_type(ctx),
 
+      // Generic function type: <T>(x: T) => U
+      TT::ChevronLeft => self.try_function_type(ctx),
+
       // new () => T  (constructor type)
       TT::KeywordNew => self.constructor_type(ctx),
 
@@ -1065,9 +1068,17 @@ impl<'a> Parser<'a> {
     Ok(Node::new(outer_loc, TypeExpr::ParenthesizedType(paren)))
   }
 
-  /// Try to parse function type: (x: T) => U
+  /// Try to parse function type: (x: T) => U or <T>(x: T) => U
   fn try_function_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
+
+    // Optional type parameters: <T, U>
+    let type_parameters = if self.peek().typ == TT::ChevronLeft && self.is_start_of_type_arguments() {
+      Some(self.type_parameters(ctx)?)
+    } else {
+      None
+    };
+
     self.require(TT::ParenthesisOpen)?;
     let parameters = self.function_type_parameters(ctx)?;
     self.require(TT::ParenthesisClose)?;
@@ -1080,7 +1091,7 @@ impl<'a> Parser<'a> {
     let func = Node::new(
       start_loc,
       TypeFunction {
-        type_parameters: None,
+        type_parameters,
         parameters,
         return_type: Box::new(return_type),
       },
