@@ -17,19 +17,40 @@ impl<'a> Parser<'a> {
         // TypeScript: parse decorators for parameters
         let decorators = p.decorators(ctx)?;
 
-        // TypeScript: accessibility modifiers
-        let accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
-          Some(Accessibility::Public)
-        } else if p.consume_if(TT::KeywordPrivate).is_match() {
-          Some(Accessibility::Private)
-        } else if p.consume_if(TT::KeywordProtected).is_match() {
-          Some(Accessibility::Protected)
-        } else {
-          None
-        };
+        // TypeScript: accessibility modifiers and readonly can appear in either order
+        // e.g. `readonly public x` or `public readonly x` are both valid
+        let mut accessibility = None;
+        let mut readonly = false;
 
-        // TypeScript: readonly modifier
-        let readonly = p.consume_if(TT::KeywordReadonly).is_match();
+        // Try to parse first modifier (either readonly or accessibility)
+        if p.consume_if(TT::KeywordReadonly).is_match() {
+          readonly = true;
+          // After readonly, check for accessibility
+          accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
+            Some(Accessibility::Public)
+          } else if p.consume_if(TT::KeywordPrivate).is_match() {
+            Some(Accessibility::Private)
+          } else if p.consume_if(TT::KeywordProtected).is_match() {
+            Some(Accessibility::Protected)
+          } else {
+            None
+          };
+        } else {
+          // Try accessibility first
+          accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
+            Some(Accessibility::Public)
+          } else if p.consume_if(TT::KeywordPrivate).is_match() {
+            Some(Accessibility::Private)
+          } else if p.consume_if(TT::KeywordProtected).is_match() {
+            Some(Accessibility::Protected)
+          } else {
+            None
+          };
+          // After accessibility, check for readonly
+          if accessibility.is_some() {
+            readonly = p.consume_if(TT::KeywordReadonly).is_match();
+          }
+        }
 
         let rest = p.consume_if(TT::DotDotDot).is_match();
         let pattern = p.pat_decl(ctx)?;
