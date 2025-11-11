@@ -731,6 +731,12 @@ fn lex_bigint_or_number(
     lexer.consume(lexer.if_char('.'));
     consume_digits_with_separators(lexer, &DIGIT);
   }
+  // Allow underscore before exponent marker (88_e4 -> 88e4)
+  if lexer.peek_or_eof(0) == Some('_')
+    && lexer.peek_or_eof(1).map_or(false, |c| matches!(c, 'e' | 'E'))
+  {
+    lexer.skip_expect(1); // consume _
+  }
   if lexer
     .peek_or_eof(0)
     .filter(|&c| matches!(c, 'e' | 'E'))
