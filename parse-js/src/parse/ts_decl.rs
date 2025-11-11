@@ -198,9 +198,17 @@ impl<'a> Parser<'a> {
   pub fn decorator(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<crate::ast::expr::Decorator>> {
     self.with_loc(|p| {
       p.require(TT::At)?;
-      // Allow ASI so decorator expression can end at line terminator
-      let mut asi = crate::parse::expr::Asi::can();
-      let expression = p.expr_with_min_prec(ctx, 1, [], &mut asi)?;
+      // Parse decorator expression with terminators for class member keywords
+      // This prevents the decorator from consuming modifiers and member syntax
+      use crate::parse::expr::Asi;
+      use crate::token::TT;
+      let mut asi = Asi::can();
+      let expression = p.expr_with_min_prec(ctx, 1, [
+        TT::KeywordStatic, TT::KeywordGet, TT::KeywordSet, TT::KeywordAsync,
+        TT::KeywordPublic, TT::KeywordPrivate, TT::KeywordProtected,
+        TT::KeywordAbstract, TT::KeywordReadonly, TT::KeywordOverride,
+        TT::Asterisk, TT::At, TT::BracketOpen, TT::BraceClose
+      ], &mut asi)?;
       Ok(crate::ast::expr::Decorator { expression })
     })
   }
