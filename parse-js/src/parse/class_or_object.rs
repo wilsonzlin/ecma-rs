@@ -179,6 +179,7 @@ impl<'a> Parser<'a> {
 
           // Detect async generator: async *
           // Detect async method: async identifier/keyword (
+          // Detect async method with computed property: async [
           // Detect generator: * identifier/keyword (
           // Detect generator with computed property: * [
           // Detect getter: get identifier/keyword [(
@@ -186,6 +187,7 @@ impl<'a> Parser<'a> {
           let needs_special_handling = matches!(
             (t0.typ, t1.typ, t2.typ),
             (TT::KeywordAsync, TT::Asterisk, _) |
+            (TT::KeywordAsync, TT::BracketOpen, _) |
             (TT::KeywordAsync, _, TT::ParenthesisOpen) |
             (TT::Asterisk, _, TT::ParenthesisOpen) |
             (TT::Asterisk, TT::BracketOpen, _) |
@@ -648,6 +650,7 @@ impl<'a> Parser<'a> {
     Ok(match (a.typ, b.typ, c.typ, d.typ) {
       // Method. Includes using "get" or "set" as the method's name.
       (TT::KeywordAsync, TT::Asterisk, _, TT::ParenthesisOpen)
+      | (TT::KeywordAsync, TT::BracketOpen, _, _)  // Async method with computed property: async [key]()
       | (TT::KeywordAsync, _, TT::ParenthesisOpen, _)
       | (TT::Asterisk, _, TT::ParenthesisOpen, _)
       | (TT::Asterisk, TT::BracketOpen, _, _)  // Generator with computed property: *[key]()
