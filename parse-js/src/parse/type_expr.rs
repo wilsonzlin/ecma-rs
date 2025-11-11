@@ -1138,6 +1138,30 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<Vec<Node<TypeFunctionParameter>>> {
     let mut params = Vec::new();
 
+    // Check for `this` parameter as first parameter
+    if self.peek().typ == TT::KeywordThis {
+      let [_, next] = self.peek_n::<2>();
+      if next.typ == TT::Colon {
+        // Parse this parameter: this: Type
+        params.push(self.with_loc(|p| {
+          p.consume(); // consume 'this'
+          p.require(TT::Colon)?;
+          let type_expr = p.type_expr(ctx)?;
+          Ok(TypeFunctionParameter {
+            name: Some(String::from("this")),
+            optional: false,
+            rest: false,
+            type_expr,
+          })
+        })?);
+
+        // Check for comma before other parameters
+        if self.peek().typ == TT::Comma {
+          self.consume();
+        }
+      }
+    }
+
     while self.peek().typ != TT::ParenthesisClose && self.peek().typ != TT::EOF {
       params.push(self.function_type_parameter(ctx)?);
 
