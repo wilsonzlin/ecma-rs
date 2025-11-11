@@ -14,6 +14,46 @@ impl<'a> Parser<'a> {
       TT::Comma,
       TT::ParenthesisClose,
       |p| {
+        // TypeScript: check for `this` parameter (can only be first parameter)
+        // Syntax: `this: Type`
+        if p.peek().typ == TT::KeywordThis {
+          let [_, next] = p.peek_n::<2>();
+          if next.typ == TT::Colon {
+            // This is a `this` parameter
+            p.consume(); // consume 'this'
+            p.require(TT::Colon)?;
+            let type_annotation = Some(p.type_expr(ctx)?);
+            // Create a pseudo-pattern for the `this` parameter
+            use crate::ast::expr::pat::{IdPat, Pat};
+            use crate::ast::stmt::decl::PatDecl;
+            use crate::loc::Loc;
+            let this_pattern = Node::new(
+              Loc(0, 0),
+              PatDecl {
+                pat: Node::new(
+                  Loc(0, 0),
+                  Pat::Id(Node::new(
+                    Loc(0, 0),
+                    IdPat {
+                      name: String::from("this"),
+                    },
+                  )),
+                ),
+              },
+            );
+            return Ok(ParamDecl {
+              decorators: Vec::new(),
+              rest: false,
+              optional: false,
+              accessibility: None,
+              readonly: false,
+              pattern: this_pattern,
+              type_annotation,
+              default_value: None,
+            });
+          }
+        }
+
         // TypeScript: parse decorators for parameters
         let decorators = p.decorators(ctx)?;
 
