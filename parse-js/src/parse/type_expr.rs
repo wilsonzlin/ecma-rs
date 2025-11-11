@@ -480,6 +480,8 @@ impl<'a> Parser<'a> {
         matches!(
           self.peek().typ,
           TT::ChevronRight
+            | TT::ChevronRightChevronRight
+            | TT::ChevronRightChevronRightChevronRight
             | TT::Comma
             | TT::KeywordExtends
             | TT::Equals
@@ -491,7 +493,8 @@ impl<'a> Parser<'a> {
       }
 
       // Closing > immediately (empty type args or single T)
-      TT::ChevronRight => true,
+      // Also handle >> and >>> which will be split during parsing
+      TT::ChevronRight | TT::ChevronRightChevronRight | TT::ChevronRightChevronRightChevronRight => true,
 
       _ => false,
     };
