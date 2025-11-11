@@ -31,7 +31,9 @@ use crate::token::TT;
 use core::str::FromStr;
 
 fn parse_radix(raw: &str, radix: u32) -> Result<f64, ()> {
-  u64::from_str_radix(raw, radix)
+  // Strip numeric separators (_) before parsing
+  let stripped = raw.replace('_', "");
+  u64::from_str_radix(&stripped, radix)
     .map_err(|_| ())
     // TODO This is lossy, but there is no TryFrom for converting from u64 to f64, and u32 cannot represent all possible JS values.
     .map(|v| v as f64)
@@ -40,7 +42,22 @@ fn parse_radix(raw: &str, radix: u32) -> Result<f64, ()> {
 pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
   // TODO We assume that the Rust parser follows ECMAScript spec and that different representations
   // of the same value get parsed into the same f64 value/bit pattern (e.g. `5.1e10` and `0.51e11`).
-  match raw {
+  // Strip numeric separators (_) before parsing for decimal numbers
+  let stripped;
+  let to_parse = if raw.contains('_')
+    && !raw.starts_with("0b")
+    && !raw.starts_with("0B")
+    && !raw.starts_with("0o")
+    && !raw.starts_with("0O")
+    && !raw.starts_with("0x")
+    && !raw.starts_with("0X") {
+    stripped = raw.replace('_', "");
+    &stripped
+  } else {
+    raw
+  };
+
+  match to_parse {
     s if s.starts_with("0b") || s.starts_with("0B") => parse_radix(&s[2..], 2),
     s if s.starts_with("0o") || s.starts_with("0O") => parse_radix(&s[2..], 8),
     s if s.starts_with("0x") || s.starts_with("0X") => parse_radix(&s[2..], 16),
