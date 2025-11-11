@@ -330,6 +330,22 @@ impl<'a> Parser<'a> {
         let inner = Node::new(loc, TypeLiteral::Number(val));
         Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
       }
+      // Negative numeric literals: -123
+      TT::Hyphen => {
+        let start_loc = self.peek().loc;
+        let [_, next] = self.peek_n::<2>();
+        if next.typ == TT::LiteralNumber {
+          self.consume(); // consume hyphen
+          let num_val = self.lit_num_val()?.to_string();
+          let val = format!("-{}", num_val);
+          use crate::loc::Loc;
+          let loc = Loc(start_loc.0, self.peek().loc.1);
+          let inner = Node::new(loc, TypeLiteral::Number(val));
+          Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
+        } else {
+          Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("type expression")))
+        }
+      }
       TT::LiteralBigInt => {
         let loc = self.peek().loc;
         let val = self.lit_bigint_val()?.to_string();
