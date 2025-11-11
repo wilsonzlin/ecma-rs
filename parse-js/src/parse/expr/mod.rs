@@ -346,6 +346,41 @@ impl<'a> Parser<'a> {
     Ok(self.string(t.loc))
   }
 
+  /// Try to parse angle-bracket type assertion: <Type>expr
+  /// Returns parsed assertion or error if it doesn't look like a type assertion
+  fn try_parse_angle_bracket_type_assertion(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Expr>> {
+    // Quick lookahead: check if this looks like a type assertion
+    // Type assertions start with type expression keywords or identifiers that are type names
+    let [_, t1] = self.peek_n::<2>();
+    let looks_like_type_assertion = matches!(t1.typ,
+      TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
+      TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
+      TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
+      TT::KeywordUndefinedType | TT::Identifier | TT::BraceOpen | TT::BracketOpen |
+      TT::KeywordTypeof | TT::KeywordKeyof | TT::ParenthesisOpen
+    );
+
+    if !looks_like_type_assertion {
+      return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("type assertion")));
+    }
+
+    self.with_loc(|p| {
+      p.require(TT::ChevronLeft)?;
+      let type_annotation = p.type_expr(ctx)?;
+      p.require(TT::ChevronRight)?;
+
+      // Parse just the operand - the outer expression parser will handle operators
+      let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
+
+      use crate::ast::expr::TypeAssertionExpr;
+      Ok(TypeAssertionExpr {
+        expression: Box::new(expression),
+        type_annotation: Some(type_annotation),
+        const_assertion: false,
+      })
+    }).map(|node| node.into_wrapped())
+  }
+
   fn expr_operand<const N: usize>(
     &mut self,
     ctx: ParseCtx,
@@ -446,7 +481,18 @@ impl<'a> Parser<'a> {
     let expr: Node<Expr> = match t0.typ {
       TT::BracketOpen => self.lit_arr(ctx)?.into_wrapped(),
       TT::BraceOpen => self.lit_obj(ctx)?.into_wrapped(),
-      TT::ChevronLeft => self.jsx_elem(ctx)?.into_wrapped(),
+      TT::ChevronLeft => {
+        // TypeScript: angle-bracket type assertion: <Type>expr
+        // Try to parse as type assertion first, fall back to JSX
+        let checkpoint = self.checkpoint();
+        match self.try_parse_angle_bracket_type_assertion(ctx) {
+          Ok(assertion) => assertion,
+          Err(_) => {
+            self.restore_checkpoint(checkpoint);
+            self.jsx_elem(ctx)?.into_wrapped()
+          }
+        }
+      },
       TT::KeywordClass => self.class_expr(ctx)?.into_wrapped(),
       TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
       TT::KeywordImport => match t1.typ {
