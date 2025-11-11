@@ -321,6 +321,45 @@ impl<'a> Parser<'a> {
 
       let members = p.class_body(ctx)?;
       Ok(ClassExpr {
+        decorators: Vec::new(),
+        name,
+        type_parameters,
+        extends,
+        implements,
+        members,
+      })
+    })
+  }
+
+  pub fn class_expr_with_decorators(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ClassExpr>> {
+    self.with_loc(|p| {
+      let decorators = p.decorators(ctx)?;
+      p.require(TT::KeywordClass)?.loc;
+      let name = p.maybe_class_or_func_name(ctx);
+
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
+      } else {
+        None
+      };
+
+      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+
+      // TypeScript: implements clause
+      let mut implements = Vec::new();
+      if p.consume_if(TT::KeywordImplements).is_match() {
+        loop {
+          implements.push(p.type_expr(ctx)?);
+          if !p.consume_if(TT::Comma).is_match() {
+            break;
+          }
+        }
+      }
+
+      let members = p.class_body(ctx)?;
+      Ok(ClassExpr {
+        decorators,
         name,
         type_parameters,
         extends,
@@ -476,6 +515,33 @@ impl<'a> Parser<'a> {
         self.id_expr(ctx)?.into_wrapped()
       });
     };
+
+    // Check for decorators before class expression: @dec class C {}
+    if t0.typ == TT::At {
+      // Look ahead to see if there's a class keyword after decorators
+      let checkpoint = self.checkpoint();
+      let mut has_decorators = false;
+      while self.peek().typ == TT::At {
+        has_decorators = true;
+        self.consume(); // consume @
+        // Skip the decorator expression
+        match self.expr_with_min_prec(ctx, 1, terminators, asi) {
+          Ok(_) => {},
+          Err(_) => {
+            self.restore_checkpoint(checkpoint);
+            return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand")));
+          }
+        }
+      }
+      if has_decorators && self.peek().typ == TT::KeywordClass {
+        // Parse class expression with decorators
+        self.restore_checkpoint(checkpoint);
+        return Ok(self.class_expr_with_decorators(ctx)?.into_wrapped());
+      } else {
+        // Not a decorated class, restore and fall through to error
+        self.restore_checkpoint(checkpoint);
+      }
+    }
 
     #[rustfmt::skip]
     let expr: Node<Expr> = match t0.typ {

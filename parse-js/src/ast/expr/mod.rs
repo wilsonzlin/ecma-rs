@@ -100,6 +100,7 @@ pub struct CallExpr {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ClassExpr {
+  pub decorators: Vec<Node<Decorator>>,
   pub name: Option<Node<ClassOrFuncName>>,
   pub type_parameters: Option<Vec<Node<super::type_expr::TypeParameter>>>,
   pub extends: Option<Node<Expr>>,
