@@ -150,14 +150,27 @@ impl<'a> Parser<'a> {
             ));
             (dummy_key, ClassOrObjVal::IndexSignature(index_sig), false, false, None)
           } else {
-            let (key, value) = p.class_or_obj_member(
-              ctx,
-              TT::Equals,
-              TT::Semicolon,
-              &mut Asi::can(),
-              abstract_,
-            )?;
-            (key, value, false, false, None)
+            // Computed property name: [expr]
+            // Parse the computed key
+            let key = p.class_or_obj_key(ctx)?;
+
+            // TypeScript: definite assignment assertion (! after key)
+            let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+
+            // TypeScript: optional property (? after key)
+            let optional = p.consume_if(TT::Question).is_match();
+
+            // TypeScript: type annotation (: type)
+            let type_annotation = if p.consume_if(TT::Colon).is_match() {
+              Some(p.type_expr(ctx)?)
+            } else {
+              None
+            };
+
+            // Now check for method/getter/setter or property initializer
+            let value = p.class_member_value(ctx, &key, abstract_)?;
+
+            (key, value, definite_assignment, optional, type_annotation)
           }
         } else {
           // Check for special member types that need early detection:
