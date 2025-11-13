@@ -114,6 +114,7 @@ pub enum TT {
   KeywordThrow,
   KeywordTry,
   KeywordTypeof,
+  KeywordUsing,
   KeywordVar,
   KeywordVoid,
   KeywordWhile,
@@ -121,6 +122,7 @@ pub enum TT {
   KeywordYield,
   // TypeScript keywords
   KeywordAbstract,
+  KeywordAccessor,
   KeywordAny,
   KeywordAsserts,
   KeywordBigIntType,
@@ -190,6 +192,7 @@ pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   set.insert(TT::KeywordOut);
   set.insert(TT::KeywordSet);
   set.insert(TT::KeywordStatic);
+  set.insert(TT::KeywordUsing);
   // TypeScript contextual keywords
   set.insert(TT::KeywordAbstract);
   set.insert(TT::KeywordAny);

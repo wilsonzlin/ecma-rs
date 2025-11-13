@@ -24,6 +24,10 @@ impl<'a> Parser<'a> {
       if is_export && t_alias.typ == TT::KeywordDefault {
         self.consume();
         Node::new(t_alias.loc, IdPat { name: "default".to_string() })
+      } else if t_alias.typ == TT::LiteralString {
+        // ES2022: arbitrary module namespace identifiers - allow string literals as aliases
+        let name = self.lit_str_val()?;
+        Node::new(t_alias.loc, IdPat { name })
       } else {
         self.id_pat(ctx)?
       }
@@ -40,9 +44,22 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordImport)?;
       p.require(TT::ParenthesisOpen)?;
-      let module = p.expr(ctx, [TT::ParenthesisClose])?;
+      let module = p.expr(ctx, [TT::Comma, TT::ParenthesisClose])?;
+
+      // Import attributes: import("module", { with: { type: "json" } })
+      let attributes = if p.consume_if(TT::Comma).is_match() {
+        // Allow trailing comma: import("module",)
+        if p.peek().typ == TT::ParenthesisClose {
+          None
+        } else {
+          Some(p.expr(ctx, [TT::ParenthesisClose])?)
+        }
+      } else {
+        None
+      };
+
       p.require(TT::ParenthesisClose)?;
-      Ok(ImportExpr { module })
+      Ok(ImportExpr { module, attributes })
     })
   }
 
@@ -100,6 +117,7 @@ impl<'a> Parser<'a> {
               default: Some(alias),
               module,
               names: None,
+              attributes: None,
             });
           }
 
@@ -133,6 +151,14 @@ impl<'a> Parser<'a> {
         p.require(TT::KeywordFrom)?;
       }
       let module = p.lit_str_val()?;
+
+      // Import attributes: import ... from "module" with { type: "json" }
+      let attributes = if p.consume_if(TT::KeywordWith).is_match() {
+        Some(p.expr(ctx, [])?)
+      } else {
+        None
+      };
+
       // Allow ASI - semicolon not required at EOF or before line terminator
       let t = p.peek();
       if t.typ != TT::EOF && !t.preceded_by_line_terminator {
@@ -145,6 +171,7 @@ impl<'a> Parser<'a> {
         default,
         module,
         names,
+        attributes,
       })
     })
   }
@@ -155,7 +182,7 @@ impl<'a> Parser<'a> {
       // TypeScript: export type
       let type_only = p.consume_if(TT::KeywordType).is_match();
       let t = p.consume();
-      let stmt = match t.typ {
+      let (names, from) = match t.typ {
         TT::BraceOpen => {
           let names = p.list_with_loc(
             TT::Comma,
@@ -168,25 +195,39 @@ impl<'a> Parser<'a> {
             },
           )?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
-          ExportListStmt {
-            type_only,
-            names: ExportNames::Specific(names),
-            from,
-          }
+          (ExportNames::Specific(names), from)
         }
         TT::Asterisk => {
-          let alias = p.consume_if(TT::KeywordAs).and_then(|| p.id_pat(ctx))?;
+          let alias = p.consume_if(TT::KeywordAs).and_then(|| {
+            // ES2022: arbitrary module namespace identifiers - allow string literals
+            let t = p.peek();
+            if t.typ == TT::LiteralString {
+              let name = p.lit_str_val()?;
+              Ok(Node::new(t.loc, IdPat { name }))
+            } else {
+              p.id_pat(ctx)
+            }
+          })?;
           p.require(TT::KeywordFrom)?;
           let from = p.lit_str_val()?;
-          ExportListStmt {
-            type_only,
-            names: ExportNames::All(alias),
-            from: Some(from),
-          }
+          (ExportNames::All(alias), Some(from))
         }
         _ => return Err(t.error(SyntaxErrorType::ExpectedNotFound)),
       };
-      Ok(stmt)
+
+      // Export attributes: export ... from "module" with { type: "json" }
+      let attributes = if p.consume_if(TT::KeywordWith).is_match() {
+        Some(p.expr(ctx, [])?)
+      } else {
+        None
+      };
+
+      Ok(ExportListStmt {
+        type_only,
+        names,
+        from,
+        attributes,
+      })
     })
   }
 
@@ -213,10 +254,12 @@ impl<'a> Parser<'a> {
       return self.with_loc(|p| {
         p.require(TT::KeywordExport)?;
         p.require(TT::Equals)?;
-        let expression = p.expr(ctx, [])?;
+        let expression = p.expr(ctx, [TT::Semicolon])?;
         // Allow ASI
         let t = p.peek();
         if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+          p.require(TT::Semicolon)?;
+        } else {
           p.consume_if(TT::Semicolon);
         }
         Ok(crate::ast::ts_stmt::ExportAssignmentDecl { expression })
@@ -227,15 +270,29 @@ impl<'a> Parser<'a> {
     let stmt: Node<Stmt> = match (t1.typ, t2.typ) {
       // `class` and `function` are treated as statements that are hoisted, not expressions; however, they can be unnamed, which gives them the name `default`.
       (TT::KeywordDefault, TT::KeywordAsync | TT::KeywordFunction) | (TT::KeywordAsync | TT::KeywordFunction, _) => self.func_decl(ctx)?.into_wrapped(),
-      (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass, _) => self.class_decl(ctx)?.into_wrapped(),
+      (TT::KeywordDefault, TT::KeywordClass) | (TT::KeywordClass | TT::KeywordAbstract, _) => self.class_decl(ctx)?.into_wrapped(),
       (TT::KeywordDefault, _) => self.export_default_expr_stmt(ctx)?.into_wrapped(),
-      (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      (TT::KeywordVar | TT::KeywordLet | TT::KeywordConst | TT::KeywordUsing | TT::KeywordAwait, _) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
+      // TypeScript: export type { ... } or export type * from "module" (type-only re-exports)
+      (TT::KeywordType, TT::BraceOpen | TT::Asterisk) => self.export_list_stmt(ctx)?.into_wrapped(),
       // TypeScript: export interface, export type, export enum, export namespace, export declare
-      (TT::KeywordInterface, _) => self.interface_decl(ctx, true, false)?.into_wrapped(),
-      (TT::KeywordType, _) if t2.typ != TT::BraceOpen && t2.typ != TT::Asterisk => self.type_alias_decl(ctx, true, false)?.into_wrapped(),
-      (TT::KeywordEnum, _) => self.enum_decl(ctx, true, false, false)?.into_wrapped(),
-      (TT::KeywordNamespace, _) => self.namespace_decl(ctx, true, false)?.into_wrapped(),
+      (TT::KeywordInterface, _) => {
+        self.consume(); // export
+        self.interface_decl(ctx, true, false)?.into_wrapped()
+      },
+      (TT::KeywordType, _) => {
+        self.consume(); // export
+        self.type_alias_decl(ctx, true, false)?.into_wrapped()
+      },
+      (TT::KeywordEnum, _) => {
+        self.consume(); // export
+        self.enum_decl(ctx, true, false, false)?.into_wrapped()
+      },
+      (TT::KeywordNamespace, _) => {
+        self.consume(); // export
+        self.namespace_decl(ctx, true, false)?.into_wrapped()
+      },
       (TT::KeywordDeclare, _) => {
         // For "export declare", we need to handle it specially to pass export=true
         self.consume(); // export
@@ -267,7 +324,7 @@ impl<'a> Parser<'a> {
             self.consume(); // consume 'abstract'
             self.class_decl(ctx)?.into_wrapped()
           }
-          TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+          TT::KeywordVar | TT::KeywordLet | TT::KeywordConst | TT::KeywordUsing | TT::KeywordAwait => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
           _ => return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after export declare"))),
         }
       },

@@ -43,6 +43,16 @@ impl<'a> Parser<'a> {
       TT::KeywordLet => VarDeclMode::Let,
       TT::KeywordConst => VarDeclMode::Const,
       TT::KeywordVar => VarDeclMode::Var,
+      TT::KeywordUsing => VarDeclMode::Using,
+      TT::KeywordAwait => {
+        // Check if followed by 'using'
+        if self.peek().typ == TT::KeywordUsing {
+          self.consume(); // consume 'using'
+          VarDeclMode::AwaitUsing
+        } else {
+          return Err(t.error(SyntaxErrorType::ExpectedSyntax("variable declaration")));
+        }
+      }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("variable declaration"))),
     })
   }
@@ -184,6 +194,14 @@ impl<'a> Parser<'a> {
     &mut self,
     ctx: ParseCtx,
   ) -> SyntaxResult<Node<ClassDecl>> {
+    self.class_decl_impl(ctx, false)
+  }
+
+  pub fn class_decl_impl(
+    &mut self,
+    ctx: ParseCtx,
+    declare: bool,
+  ) -> SyntaxResult<Node<ClassDecl>> {
     self.with_loc(|p| {
       // TypeScript: parse decorators before export/class
       let decorators = p.decorators(ctx)?;
@@ -208,7 +226,9 @@ impl<'a> Parser<'a> {
 
       // Unlike functions, classes are scoped to their block.
       let extends = if p.consume_if(TT::KeywordExtends).is_match() {
-        Some(p.expr(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
+        // TypeScript: extends clause can have type arguments: class C<T> extends Base<T>
+        // Parse expression, which will handle type arguments via expr_with_ts_type_args
+        Some(p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
       } else {
         None
       };
@@ -224,11 +244,12 @@ impl<'a> Parser<'a> {
         }
       }
 
-      let members = p.class_body(ctx)?;
+      let members = p.class_body_with_context(ctx, declare || abstract_)?;
       Ok(ClassDecl {
         decorators,
         export,
         export_default,
+        declare,
         abstract_,
         name,
         type_parameters,

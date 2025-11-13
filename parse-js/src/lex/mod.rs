@@ -438,6 +438,7 @@ pub static KEYWORDS_MAPPING: Lazy<HashMap<TT, &'static str>> = Lazy::new(|| {
   map.insert(TT::KeywordThrow, "throw");
   map.insert(TT::KeywordTry, "try");
   map.insert(TT::KeywordTypeof, "typeof");
+  map.insert(TT::KeywordUsing, "using");
   map.insert(TT::KeywordVar, "var");
   map.insert(TT::KeywordVoid, "void");
   map.insert(TT::KeywordWhile, "while");
@@ -445,6 +446,7 @@ pub static KEYWORDS_MAPPING: Lazy<HashMap<TT, &'static str>> = Lazy::new(|| {
   map.insert(TT::KeywordYield, "yield");
   // TypeScript keywords
   map.insert(TT::KeywordAbstract, "abstract");
+  map.insert(TT::KeywordAccessor, "accessor");
   map.insert(TT::KeywordAny, "any");
   map.insert(TT::KeywordAsserts, "asserts");
   map.insert(TT::KeywordBigIntType, "bigint");
@@ -693,13 +695,28 @@ fn lex_identifier(
   TT::Identifier
 }
 
+/// Consume digits with numeric separators (_)
+/// ES2021 allows underscores as separators: 1_000_000
+fn consume_digits_with_separators(lexer: &mut Lexer<'_>, digit_filter: &CharFilter) {
+  loop {
+    lexer.consume(lexer.while_chars(digit_filter));
+    // Check if next is underscore followed by a digit (numeric separator)
+    if lexer.peek_or_eof(0) == Some('_')
+      && lexer.peek_or_eof(1).map_or(false, |c| digit_filter.has(c)) {
+      lexer.skip_expect(1); // consume _
+    } else {
+      break;
+    }
+  }
+}
+
 fn lex_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> LexResult<TT> {
   // TODO
   let start_pos = lexer.next();
   let first_char = lexer.peek(0)?;
-  lexer.consume(lexer.while_chars(&DIGIT));
+  consume_digits_with_separators(lexer, &DIGIT);
   let end_pos = lexer.next();
   if !lexer.consume(lexer.if_char('n')).is_empty() {
     return Ok(TT::LiteralBigInt);
@@ -708,11 +725,17 @@ fn lex_bigint_or_number(
   let integer_part = &lexer[Loc(start_pos, end_pos)];
   let is_legacy_octal = first_char == '0'
     && integer_part.len() > 1
-    && integer_part.chars().all(|c| matches!(c, '0'..='7'));
+    && integer_part.chars().all(|c| matches!(c, '0'..='7' | '_'));
   // Consume '.' and fractional part if present (but not for legacy octals)
   if lexer.peek_or_eof(0) == Some('.') && !is_legacy_octal {
     lexer.consume(lexer.if_char('.'));
-    lexer.consume(lexer.while_chars(&DIGIT));
+    consume_digits_with_separators(lexer, &DIGIT);
+  }
+  // Allow underscore before exponent marker (88_e4 -> 88e4)
+  if lexer.peek_or_eof(0) == Some('_')
+    && lexer.peek_or_eof(1).map_or(false, |c| matches!(c, 'e' | 'E'))
+  {
+    lexer.skip_expect(1); // consume _
   }
   if lexer
     .peek_or_eof(0)
@@ -724,7 +747,7 @@ fn lex_bigint_or_number(
       '+' | '-' => lexer.skip_expect(1),
       _ => {}
     };
-    lexer.consume(lexer.while_chars(&DIGIT));
+    consume_digits_with_separators(lexer, &DIGIT);
   }
   Ok(TT::LiteralNumber)
 }
@@ -733,7 +756,7 @@ fn lex_binary_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> TT {
   lexer.skip_expect(2);
-  lexer.consume(lexer.while_chars(&DIGIT_BIN));
+  consume_digits_with_separators(lexer, &DIGIT_BIN);
   if !lexer.consume(lexer.if_char('n')).is_empty() {
     return TT::LiteralBigInt;
   }
@@ -744,7 +767,7 @@ fn lex_hex_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> TT {
   lexer.skip_expect(2);
-  lexer.consume(lexer.while_chars(&DIGIT_HEX));
+  consume_digits_with_separators(lexer, &DIGIT_HEX);
   if !lexer.consume(lexer.if_char('n')).is_empty() {
     return TT::LiteralBigInt;
   }
@@ -755,7 +778,7 @@ fn lex_oct_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> TT {
   lexer.skip_expect(2);
-  lexer.consume(lexer.while_chars(&DIGIT_OCT));
+  consume_digits_with_separators(lexer, &DIGIT_OCT);
   if !lexer.consume(lexer.if_char('n')).is_empty() {
     return TT::LiteralBigInt;
   }

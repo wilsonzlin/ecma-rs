@@ -253,6 +253,63 @@ impl<'a> Parser<'a> {
     self.require_with_mode(typ, LexMode::Standard)
   }
 
+  /// Require ChevronRight with support for splitting >> and >>> tokens
+  /// This is needed for parsing nested generic types like List<List<T>>
+  pub fn require_chevron_right(&mut self) -> SyntaxResult<Token> {
+    let t = self.peek();
+    match t.typ {
+      TT::ChevronRight => {
+        // Normal case - consume and return
+        Ok(self.consume())
+      }
+      TT::ChevronRightChevronRight => {
+        // Split >> into > and >
+        self.consume(); // Consume the >>
+        // Create a replacement > token to push back
+        let split_token = Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0 + 1, t.loc.1), // Second > starts one char later
+          preceded_by_line_terminator: false,
+        };
+        // Insert the second > into the buffer at current position
+        self.buf.insert(self.next_tok_i, BufferedToken {
+          token: split_token,
+          lex_mode: LexMode::Standard,
+        });
+        // Return a token representing the first >
+        Ok(Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0, t.loc.0 + 1),
+          preceded_by_line_terminator: t.preceded_by_line_terminator,
+        })
+      }
+      TT::ChevronRightChevronRightChevronRight => {
+        // Split >>> into > and >>
+        self.consume(); // Consume the >>>
+        // Create a >> token to push back
+        let split_token = Token {
+          typ: TT::ChevronRightChevronRight,
+          loc: Loc(t.loc.0 + 1, t.loc.1), // >> starts one char later
+          preceded_by_line_terminator: false,
+        };
+        // Insert the >> into the buffer at current position
+        self.buf.insert(self.next_tok_i, BufferedToken {
+          token: split_token,
+          lex_mode: LexMode::Standard,
+        });
+        // Return a token representing the first >
+        Ok(Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0, t.loc.0 + 1),
+          preceded_by_line_terminator: t.preceded_by_line_terminator,
+        })
+      }
+      _ => {
+        Err(t.error(SyntaxErrorType::RequiredTokenNotFound(TT::ChevronRight)))
+      }
+    }
+  }
+
   /// Require and consume an identifier, returning its string value
   pub fn require_identifier(&mut self) -> SyntaxResult<String> {
     let t = self.consume();

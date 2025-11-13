@@ -94,6 +94,12 @@ impl<'a> Parser<'a> {
     self.expr_with_min_prec(ctx, 1, terminators, asi)
   }
 
+  /// Parse expression with TypeScript type arguments support
+  /// Type arguments are now handled automatically in the main expression loop
+  pub fn expr_with_ts_type_args<const N: usize>(&mut self, ctx: ParseCtx, terminators: [TT; N]) -> SyntaxResult<Node<Expr>> {
+    self.expr(ctx, terminators)
+  }
+
   /// Parses a parenthesised expression like `(a + b)`.
   pub fn grouping(&mut self, ctx: ParseCtx, asi: &mut Asi) -> SyntaxResult<Node<Expr>> {
     self.require(TT::ParenthesisOpen)?;
@@ -113,7 +119,15 @@ impl<'a> Parser<'a> {
     terminators: [TT; N],
   ) -> SyntaxResult<Node<ArrowFuncExpr>> {
     let func = self.with_loc(|p| {
-      let is_async = p.consume_if(TT::KeywordAsync).is_match();
+      // Check if current token is 'async' followed by '=>'
+      // In that case, 'async' is the parameter name, not the async keyword
+      let is_async_param_name = p.peek().typ == TT::KeywordAsync && p.peek_n::<2>()[1].typ == TT::EqualsChevronRight;
+
+      let is_async = if !is_async_param_name {
+        p.consume_if(TT::KeywordAsync).is_match()
+      } else {
+        false
+      };
 
       // Check if this is a single-unparenthesised-parameter arrow function
       // Works for both sync (x => ...) and async (async x => ...)
@@ -292,7 +306,7 @@ impl<'a> Parser<'a> {
         None
       };
 
-      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
 
       // TypeScript: implements clause
       let mut implements = Vec::new();
@@ -307,6 +321,45 @@ impl<'a> Parser<'a> {
 
       let members = p.class_body(ctx)?;
       Ok(ClassExpr {
+        decorators: Vec::new(),
+        name,
+        type_parameters,
+        extends,
+        implements,
+        members,
+      })
+    })
+  }
+
+  pub fn class_expr_with_decorators(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ClassExpr>> {
+    self.with_loc(|p| {
+      let decorators = p.decorators(ctx)?;
+      p.require(TT::KeywordClass)?.loc;
+      let name = p.maybe_class_or_func_name(ctx);
+
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
+      } else {
+        None
+      };
+
+      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+
+      // TypeScript: implements clause
+      let mut implements = Vec::new();
+      if p.consume_if(TT::KeywordImplements).is_match() {
+        loop {
+          implements.push(p.type_expr(ctx)?);
+          if !p.consume_if(TT::Comma).is_match() {
+            break;
+          }
+        }
+      }
+
+      let members = p.class_body(ctx)?;
+      Ok(ClassExpr {
+        decorators,
         name,
         type_parameters,
         extends,
@@ -330,6 +383,42 @@ impl<'a> Parser<'a> {
       return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
     };
     Ok(self.string(t.loc))
+  }
+
+  /// Try to parse angle-bracket type assertion: <Type>expr
+  /// Returns parsed assertion or error if it doesn't look like a type assertion
+  fn try_parse_angle_bracket_type_assertion(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Expr>> {
+    // Quick lookahead: check if this looks like a type assertion
+    // Type assertions start with type expression keywords or identifiers that are type names
+    let [_, t1] = self.peek_n::<2>();
+    let looks_like_type_assertion = matches!(t1.typ,
+      TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
+      TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
+      TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
+      TT::KeywordUndefinedType | TT::Identifier | TT::BraceOpen | TT::BracketOpen |
+      TT::KeywordTypeof | TT::KeywordKeyof | TT::ParenthesisOpen |
+      TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull
+    );
+
+    if !looks_like_type_assertion {
+      return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("type assertion")));
+    }
+
+    self.with_loc(|p| {
+      p.require(TT::ChevronLeft)?;
+      let type_annotation = p.type_expr(ctx)?;
+      p.require(TT::ChevronRight)?;
+
+      // Parse just the operand - the outer expression parser will handle operators
+      let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
+
+      use crate::ast::expr::TypeAssertionExpr;
+      Ok(TypeAssertionExpr {
+        expression: Box::new(expression),
+        type_annotation: Some(type_annotation),
+        const_assertion: false,
+      })
+    }).map(|node| node.into_wrapped())
   }
 
   fn expr_operand<const N: usize>(
@@ -403,7 +492,8 @@ impl<'a> Parser<'a> {
     };
 
     // Check for async keyword first, before checking if it's a valid identifier.
-    if t0.typ == TT::KeywordAsync {
+    // Exception: `async => ...` should be treated as a parameter name, not async keyword
+    if t0.typ == TT::KeywordAsync && t1.typ != TT::EqualsChevronRight {
       return Ok(match t1.typ {
         TT::ParenthesisOpen => self.arrow_func_expr(ctx, terminators)?.into_wrapped(),
         TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
@@ -417,22 +507,84 @@ impl<'a> Parser<'a> {
       });
     };
 
-    // Check for other valid pattern identifiers (excluding async, which we already handled).
+    // Check for other valid pattern identifiers.
     if is_valid_pattern_identifier(t0.typ, ctx.rules) {
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
-        // NOTE: `await` is not allowed as an arrow function parameter, but we'll check this in parse_expr_arrow_function.
         self.arrow_func_expr(ctx, terminators)?.into_wrapped()
       } else {
         self.id_expr(ctx)?.into_wrapped()
       });
     };
 
+    // Check for decorators before class expression: @dec class C {}
+    if t0.typ == TT::At {
+      // Look ahead to see if there's a class keyword after decorators
+      let checkpoint = self.checkpoint();
+      let mut has_decorators = false;
+      while self.peek().typ == TT::At {
+        has_decorators = true;
+        self.consume(); // consume @
+        // Skip the decorator expression
+        match self.expr_with_min_prec(ctx, 1, terminators, asi) {
+          Ok(_) => {},
+          Err(_) => {
+            self.restore_checkpoint(checkpoint);
+            return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand")));
+          }
+        }
+      }
+      if has_decorators && self.peek().typ == TT::KeywordClass {
+        // Parse class expression with decorators
+        self.restore_checkpoint(checkpoint);
+        return Ok(self.class_expr_with_decorators(ctx)?.into_wrapped());
+      } else {
+        // Not a decorated class, restore and fall through to error
+        self.restore_checkpoint(checkpoint);
+      }
+    }
+
     #[rustfmt::skip]
     let expr: Node<Expr> = match t0.typ {
       TT::BracketOpen => self.lit_arr(ctx)?.into_wrapped(),
       TT::BraceOpen => self.lit_obj(ctx)?.into_wrapped(),
-      TT::ChevronLeft => self.jsx_elem(ctx)?.into_wrapped(),
+      TT::ChevronLeft => {
+        // TypeScript: Could be:
+        // 1. Arrow function with type parameters: <T>(x: T) => ...
+        // 2. Angle-bracket type assertion: <Type>expr
+        // 3. JSX element: <Component>
+
+        // Try parsing as arrow function first if it looks like one
+        let checkpoint = self.checkpoint();
+        if self.is_start_of_type_arguments() {
+          // Could be arrow function with type parameters
+          // Try to parse it as such
+          match self.arrow_func_expr(ctx, terminators) {
+            Ok(arrow) => arrow.into_wrapped(),
+            Err(_) => {
+              // Failed to parse as arrow function, restore and try other options
+              self.restore_checkpoint(checkpoint);
+              let assertion_checkpoint = self.checkpoint();
+              match self.try_parse_angle_bracket_type_assertion(ctx) {
+                Ok(assertion) => assertion,
+                Err(_) => {
+                  self.restore_checkpoint(assertion_checkpoint);
+                  self.jsx_elem(ctx)?.into_wrapped()
+                }
+              }
+            }
+          }
+        } else {
+          // Not type arguments, try type assertion or JSX
+          match self.try_parse_angle_bracket_type_assertion(ctx) {
+            Ok(assertion) => assertion,
+            Err(_) => {
+              self.restore_checkpoint(checkpoint);
+              self.jsx_elem(ctx)?.into_wrapped()
+            }
+          }
+        }
+      },
       TT::KeywordClass => self.class_expr(ctx)?.into_wrapped(),
       TT::KeywordFunction => self.func_expr(ctx)?.into_wrapped(),
       TT::KeywordImport => match t1.typ {
@@ -554,6 +706,52 @@ impl<'a> Parser<'a> {
             type_annotation,
           }).into_wrapped();
           continue;
+        }
+        // TypeScript: Skip type arguments after identifiers/member expressions
+        // e.g., Base<T> in extends clause
+        // Only treat < as type arguments if left is an identifier or member expression
+        TT::ChevronLeft => {
+          // Check if left expression is an identifier or member expression
+          let left_is_identifier_or_member = matches!(*left.stx,
+            Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_)
+          );
+
+          if left_is_identifier_or_member {
+            // We've already consumed <, need to check if this is type arguments
+            // Peek ahead to disambiguate
+            let next = self.peek();
+            let looks_like_type_args = match next.typ {
+              TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
+              TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
+              TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
+              TT::BracketOpen | TT::BraceOpen | TT::ParenthesisOpen |
+              TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer |
+              TT::ChevronRight => true,
+              // For identifiers, need to check what comes after
+              TT::Identifier => {
+                let [_, t2] = self.peek_n::<2>();
+                matches!(t2.typ,
+                  TT::ChevronRight | TT::Comma | TT::KeywordExtends | TT::Equals |
+                  TT::Bar | TT::Ampersand | TT::Dot | TT::BracketOpen
+                )
+              },
+              _ => false,
+            };
+
+            if looks_like_type_args {
+              // Parse the rest of the type arguments (we already consumed <)
+              let mut args = Vec::new();
+              while !self.consume_if(TT::ChevronRight).is_match() {
+                args.push(self.type_expr(ctx)?);
+                if !self.consume_if(TT::Comma).is_match() {
+                  self.require(TT::ChevronRight)?;
+                  break;
+                }
+              }
+              continue;
+            }
+          }
+          // Not type arguments, continue to binary operator handling
         }
         _ => {}
       };

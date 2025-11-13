@@ -49,6 +49,11 @@ pub struct ClassOrObjSetter {
   pub func: Node<Func>, // `params` contains exactly one ParamDecl with no `default_value` or `rest`.
 }
 
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ClassStaticBlock {
+  pub body: Vec<Node<super::stmt::Stmt>>,
+}
+
 #[derive(Debug, Drive, DriveMut, From, Serialize)]
 pub enum ClassOrObjVal {
   Getter(Node<ClassOrObjGetter>),
@@ -59,6 +64,8 @@ pub enum ClassOrObjVal {
   Prop(Option<Node<Expr>>),
   // TypeScript: index signature in classes
   IndexSignature(Node<ClassIndexSignature>),
+  // Static initialization block
+  StaticBlock(Node<ClassStaticBlock>),
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -85,6 +92,8 @@ pub struct ClassMember {
   pub abstract_: bool,
   #[drive(skip)]
   pub readonly: bool,
+  #[drive(skip)]
+  pub accessor: bool,
   #[drive(skip)]
   pub optional: bool,
   #[drive(skip)]

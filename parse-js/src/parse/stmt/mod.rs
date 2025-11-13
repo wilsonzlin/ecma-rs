@@ -47,10 +47,19 @@ impl<'a> Parser<'a> {
       TT::BraceOpen => self.block_stmt(ctx)?.into_wrapped(),
       TT::KeywordBreak => self.break_stmt(ctx)?.into_wrapped(),
       TT::KeywordClass => self.class_decl(ctx)?.into_wrapped(),
+      // TypeScript: const enum
+      TT::KeywordConst if t1.typ == TT::KeywordEnum => {
+        self.consume(); // consume 'const'
+        self.enum_decl(ctx, false, false, true)?.into_wrapped()
+      },
       TT::KeywordConst | TT::KeywordVar => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       // `let` is a contextual keyword - only treat it as a declaration if followed by a pattern start
       // TypeScript: `let identifier :` is a variable declaration with type annotation, not a labeled statement
       TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      // `using` is a contextual keyword for resource management
+      TT::KeywordUsing if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
+      // `await using` for async resource management
+      TT::KeywordAwait if t1.typ == TT::KeywordUsing => self.var_decl(ctx, VarDeclParseMode::Asi)?.into_wrapped(),
       TT::KeywordContinue => self.continue_stmt(ctx)?.into_wrapped(),
       TT::KeywordDebugger => self.debugger_stmt()?.into_wrapped(),
       TT::KeywordDo => self.do_while_stmt(ctx)?.into_wrapped(),
@@ -76,6 +85,8 @@ impl<'a> Parser<'a> {
       TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, false)?,
       TT::KeywordDeclare => self.declare_stmt(ctx)?,
       TT::KeywordAbstract if t1.typ == TT::KeywordClass => self.abstract_class_decl(ctx)?.into_wrapped(),
+      // Decorators can appear before class declarations
+      TT::At => self.class_decl_impl(ctx, false)?.into_wrapped(),
 
       t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_wrapped(),
       _ => self.expr_stmt(ctx)?.into_wrapped(),
@@ -86,6 +97,13 @@ impl<'a> Parser<'a> {
   /// Handle declare keyword
   fn declare_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
     self.consume(); // consume 'declare'
+
+    // Check for "declare global { }" - global is an identifier, not a keyword
+    let peek_tok = self.peek();
+    if peek_tok.typ == TT::Identifier && self.string(peek_tok.loc) == "global" {
+      return Ok(self.global_decl(ctx)?.wrap(Stmt::GlobalDecl));
+    }
+
     let t = self.peek().typ;
     match t {
       TT::KeywordInterface => Ok(self.interface_decl(ctx, false, true)?.wrap(Stmt::InterfaceDecl)),
@@ -108,8 +126,8 @@ impl<'a> Parser<'a> {
         self.consume(); // consume 'abstract'
         Ok(self.class_decl_with_modifiers(ctx, false, true, true)?.wrap(Stmt::ClassDecl))
       }
-      // Support declare var, declare let, declare const
-      TT::KeywordVar | TT::KeywordLet | TT::KeywordConst => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
+      // Support declare var, declare let, declare const, declare using
+      TT::KeywordVar | TT::KeywordLet | TT::KeywordConst | TT::KeywordUsing => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
       _ => Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare"))),
     }
   }
@@ -126,14 +144,14 @@ impl<'a> Parser<'a> {
 
   /// Handle abstract class
   fn abstract_class_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
-    self.consume(); // consume 'abstract'
+    // Don't consume 'abstract' here - let class_decl_impl do it
     self.class_decl_with_modifiers(ctx, false, false, true)
   }
 
   /// Parse class declaration with TypeScript modifiers
-  fn class_decl_with_modifiers(&mut self, ctx: ParseCtx, export: bool, declare: bool, abstract_: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
-    // Implementation will be added when we update class_decl
-    self.class_decl(ctx)
+  fn class_decl_with_modifiers(&mut self, ctx: ParseCtx, _export: bool, declare: bool, _abstract_: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
+    // export and abstract are parsed inside class_decl_impl, so we only need to pass declare
+    self.class_decl_impl(ctx, declare)
   }
 
   /// Parse function declaration with TypeScript modifiers
@@ -349,6 +367,36 @@ impl<'a> Parser<'a> {
               _ => Self::Triple,
             }
           }
+          // `await using` for async resource management in for-of
+          TT::KeywordAwait if p.peek_n::<2>()[1].typ == TT::KeywordUsing => {
+            p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
+            match p.peek().typ {
+              TT::KeywordOf => Self::Of,
+              _ => Self::Triple,
+            }
+          }
+          // `using` is a contextual keyword for resource management
+          TT::KeywordUsing => {
+            let [_, next_token] = p.peek_n::<2>();
+            let next = next_token.typ;
+            if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+              p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
+              match p.peek().typ {
+                TT::KeywordOf => Self::Of,
+                _ => Self::Triple,
+              }
+            } else {
+              // Not a declaration, parse as expression
+              match p.expr(ctx, [TT::KeywordIn, TT::KeywordOf]) {
+                Ok(_) => match p.peek().typ {
+                  TT::KeywordIn => Self::In,
+                  TT::KeywordOf => Self::Of,
+                  _ => Self::Triple,
+                }
+                Err(_) => Self::Triple,
+              }
+            }
+          }
           // `let` is a contextual keyword - it's only a declaration keyword when followed by a pattern.
           // `let.x`, `let()`, `let[x]` where x is not a valid identifier are all expressions.
           TT::KeywordLet => {
@@ -468,6 +516,12 @@ impl<'a> Parser<'a> {
           let parameter = p.consume_if(TT::ParenthesisOpen)
             .and_then(|| {
               let pattern = p.pat_decl(ctx)?;
+              // TypeScript: optional type annotation in catch clause
+              // e.g. `catch (e: any)` or `catch (e: unknown)`
+              if p.consume_if(TT::Colon).is_match() {
+                // Parse and discard the type annotation
+                p.type_expr(ctx)?;
+              }
               p.require(TT::ParenthesisClose)?;
               Ok(pattern)
             })?;
@@ -568,3 +622,5 @@ impl<'a> Parser<'a> {
     })
   }
 }
+
+

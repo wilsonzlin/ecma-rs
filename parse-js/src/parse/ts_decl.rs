@@ -95,7 +95,15 @@ impl<'a> Parser<'a> {
 
   /// Parse enum member: Red = 1, Green = "green"
   fn enum_member(&mut self, ctx: ParseCtx) -> SyntaxResult<EnumMember> {
-    let name = self.require_identifier()?;
+    // TypeScript allows string literals and numeric literals as enum member names
+    let name = match self.peek().typ {
+      TT::LiteralString => self.lit_str_val()?,
+      TT::LiteralNumber => {
+        let t = self.consume();
+        self.str(t.loc).to_string()
+      }
+      _ => self.require_identifier()?,
+    };
 
     let initializer = if self.consume_if(TT::Equals).is_match() {
       Some(self.expr(ctx, [TT::Comma, TT::BraceClose])?)
@@ -108,17 +116,26 @@ impl<'a> Parser<'a> {
 
   /// Parse namespace declaration: namespace Foo { }
   pub fn namespace_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<NamespaceDecl>> {
+    self.namespace_decl_impl(ctx, export, declare, false)
+  }
+
+  /// Parse namespace declaration with optional keyword check
+  /// For dotted paths like `namespace A.B.C`, we don't require the keyword before B and C
+  fn namespace_decl_impl(&mut self, ctx: ParseCtx, export: bool, declare: bool, skip_keyword: bool) -> SyntaxResult<Node<NamespaceDecl>> {
     self.with_loc(|p| {
-      // Accept both 'namespace' and 'module' keywords
-      if !p.consume_if(TT::KeywordNamespace).is_match() {
-        p.require(TT::KeywordModule)?;
+      // Accept both 'namespace' and 'module' keywords (unless this is part of a dotted path)
+      if !skip_keyword {
+        if !p.consume_if(TT::KeywordNamespace).is_match() {
+          p.require(TT::KeywordModule)?;
+        }
       }
 
       let name = p.require_identifier()?;
 
       // Check for nested namespace: namespace A.B { }
       let body = if p.consume_if(TT::Dot).is_match() {
-        let nested = p.namespace_decl(ctx, false, false)?;
+        // For dotted paths, skip keyword check in recursive calls
+        let nested = p.namespace_decl_impl(ctx, false, false, true)?;
         NamespaceBody::Namespace(Box::new(nested))
       } else {
         p.require(TT::BraceOpen)?;
@@ -170,8 +187,8 @@ impl<'a> Parser<'a> {
   pub fn global_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<GlobalDecl>> {
     self.with_loc(|p| {
       // 'declare' already consumed
-      p.require(TT::KeywordModule)?; // Actually uses 'global' but we need a keyword for it
-      // For now, parse as a special module
+      // Consume 'global' identifier
+      p.require(TT::Identifier)?;
 
       p.require(TT::BraceOpen)?;
       let body = p.stmts(ctx, TT::BraceClose)?;
@@ -198,7 +215,17 @@ impl<'a> Parser<'a> {
   pub fn decorator(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<crate::ast::expr::Decorator>> {
     self.with_loc(|p| {
       p.require(TT::At)?;
-      let expression = p.expr(ctx, [])?;
+      // Parse decorator expression with terminators for class member keywords
+      // This prevents the decorator from consuming modifiers and member syntax
+      use crate::parse::expr::Asi;
+      use crate::token::TT;
+      let mut asi = Asi::can();
+      let expression = p.expr_with_min_prec(ctx, 1, [
+        TT::KeywordStatic, TT::KeywordGet, TT::KeywordSet, TT::KeywordAsync,
+        TT::KeywordPublic, TT::KeywordPrivate, TT::KeywordProtected,
+        TT::KeywordAbstract, TT::KeywordReadonly, TT::KeywordOverride,
+        TT::Asterisk, TT::At, TT::BracketOpen, TT::BraceClose, TT::Identifier
+      ], &mut asi)?;
       Ok(crate::ast::expr::Decorator { expression })
     })
   }

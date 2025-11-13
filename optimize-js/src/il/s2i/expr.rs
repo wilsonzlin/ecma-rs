@@ -62,11 +62,16 @@ impl<'p> SourceToInst<'p> {
     rayon::spawn(move || {
       // TODO params, arrow, async, etc.
       match body {
-        FuncBody::Block(stmts) => {
+        Some(FuncBody::Block(stmts)) => {
           let func = compile_js_statements(&pg, stmts);
           pg.functions.insert(id, func);
         }
-        FuncBody::Expression(node) => todo!(),
+        Some(FuncBody::Expression(node)) => todo!(),
+        None => {
+          // Empty function body (e.g. ambient declaration)
+          let func = compile_js_statements(&pg, Vec::new());
+          pg.functions.insert(id, func);
+        }
       };
       // Drop Arc ref first, as our top-level waits on the WaitGroup then immediately tries to unwrap the Arc.
       drop(pg);

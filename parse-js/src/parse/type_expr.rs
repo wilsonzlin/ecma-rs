@@ -73,17 +73,40 @@ impl<'a> Parser<'a> {
   /// T | U | V  or  T & U & V
   /// Note: Cannot mix | and & at same level without parentheses
   fn type_union_or_intersection(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
+    // TypeScript allows leading | or & in union/intersection types:
+    // type A = | B | C
+    // type D = & E & F
+    let leading_op = self.peek().typ;
+    let has_leading = matches!(leading_op, TT::Bar | TT::Ampersand);
+    if has_leading {
+      self.consume();
+    }
+
     let first = self.type_conditional(ctx)?;
 
     let t = self.peek().typ;
-    if t != TT::Bar && t != TT::Ampersand {
-      return Ok(first);
+    let is_union_or_intersection = t == TT::Bar || t == TT::Ampersand;
+
+    // If we had a leading operator, we must continue with the same operator
+    // If we didn't have a leading operator, we need at least one operator to follow
+    if has_leading {
+      if t != leading_op && !is_union_or_intersection {
+        // Leading | or & but no continuation - return the single type
+        return Ok(first);
+      }
+      if t != TT::Bar && t != TT::Ampersand {
+        return Ok(first);
+      }
+    } else {
+      if !is_union_or_intersection {
+        return Ok(first);
+      }
     }
 
-    let is_union = t == TT::Bar;
+    let is_union = if has_leading { leading_op == TT::Bar } else { t == TT::Bar };
     let mut types = vec![first];
 
-    while self.consume_if(t).is_match() {
+    while self.consume_if(if has_leading { leading_op } else { t }).is_match() {
       types.push(self.type_conditional(ctx)?);
     }
 
@@ -278,6 +301,16 @@ impl<'a> Parser<'a> {
       // Type reference or qualified name
       TT::Identifier => self.type_reference(ctx),
 
+      // Contextual keywords allowed as type identifiers
+      TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
+      TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
+      TT::KeywordAbstract | TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
+      TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
+      TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
+      TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
+      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet
+      => self.type_reference(ctx),
+
       // this type
       TT::KeywordThis => {
         let loc = self.peek().loc;
@@ -304,6 +337,9 @@ impl<'a> Parser<'a> {
       // Parenthesized type or function type: (x: T) => U
       TT::ParenthesisOpen => self.paren_or_function_type(ctx),
 
+      // Generic function type: <T>(x: T) => U
+      TT::ChevronLeft => self.try_function_type(ctx),
+
       // new () => T  (constructor type)
       TT::KeywordNew => self.constructor_type(ctx),
 
@@ -319,6 +355,22 @@ impl<'a> Parser<'a> {
         let val = self.lit_num_val()?.to_string();
         let inner = Node::new(loc, TypeLiteral::Number(val));
         Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
+      }
+      // Negative numeric literals: -123
+      TT::Hyphen => {
+        let start_loc = self.peek().loc;
+        let [_, next] = self.peek_n::<2>();
+        if next.typ == TT::LiteralNumber {
+          self.consume(); // consume hyphen
+          let num_val = self.lit_num_val()?.to_string();
+          let val = format!("-{}", num_val);
+          use crate::loc::Loc;
+          let loc = Loc(start_loc.0, self.peek().loc.1);
+          let inner = Node::new(loc, TypeLiteral::Number(val));
+          Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
+        } else {
+          Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("type expression")))
+        }
       }
       TT::LiteralBigInt => {
         let loc = self.peek().loc;
@@ -379,11 +431,11 @@ impl<'a> Parser<'a> {
 
   /// Parse entity name (can be qualified: A.B.C)
   fn parse_type_entity_name(&mut self) -> SyntaxResult<TypeEntityName> {
-    let first = self.require_identifier()?;
+    let first = self.require_type_identifier()?;
     let mut name = TypeEntityName::Identifier(first);
 
     while self.consume_if(TT::Dot).is_match() {
-      let right = self.require_identifier()?;
+      let right = self.require_type_identifier()?;
       name = TypeEntityName::Qualified(Box::new(TypeQualifiedName {
         left: name,
         right,
@@ -391,6 +443,25 @@ impl<'a> Parser<'a> {
     }
 
     Ok(name)
+  }
+
+  /// Require an identifier or contextual keyword valid in type position
+  fn require_type_identifier(&mut self) -> SyntaxResult<String> {
+    let t = self.consume();
+    match t.typ {
+      TT::Identifier |
+      TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
+      TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
+      TT::KeywordAbstract | TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
+      TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
+      TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
+      TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
+      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
+      // Allow type keywords as identifiers in typeof queries like: typeof undefined
+      TT::KeywordUndefinedType
+      => Ok(self.string(t.loc)),
+      _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type identifier")))
+    }
   }
 
   /// Check if we're at the start of type arguments <...>
@@ -432,6 +503,8 @@ impl<'a> Parser<'a> {
         matches!(
           self.peek().typ,
           TT::ChevronRight
+            | TT::ChevronRightChevronRight
+            | TT::ChevronRightChevronRightChevronRight
             | TT::Comma
             | TT::KeywordExtends
             | TT::Equals
@@ -443,7 +516,8 @@ impl<'a> Parser<'a> {
       }
 
       // Closing > immediately (empty type args or single T)
-      TT::ChevronRight => true,
+      // Also handle >> and >>> which will be split during parsing
+      TT::ChevronRight | TT::ChevronRightChevronRight | TT::ChevronRightChevronRightChevronRight => true,
 
       _ => false,
     };
@@ -453,24 +527,33 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse type arguments: <T, U, V>
-  fn type_arguments(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<TypeExpr>>> {
+  pub fn type_arguments(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<TypeExpr>>> {
     self.require(TT::ChevronLeft)?;
     let mut args = Vec::new();
     while !self.consume_if(TT::ChevronRight).is_match() {
       args.push(self.type_expr(ctx)?);
       if !self.consume_if(TT::Comma).is_match() {
-        self.require(TT::ChevronRight)?;
+        self.require_chevron_right()?;
         break;
       }
     }
     Ok(args)
   }
 
-  /// Parse typeof type query: typeof foo, typeof foo.bar.baz
+  /// Parse typeof type query: typeof foo, typeof foo.bar.baz, typeof import("module")
   fn type_query(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordTypeof)?;
-    let expr_name = self.parse_type_entity_name()?;
+
+    // Check if it's typeof import(...)
+    let expr_name = if self.peek().typ == TT::KeywordImport {
+      let import_expr = self.import_call(ctx)?;
+      let end_loc = import_expr.loc;
+      TypeEntityName::Import(import_expr)
+    } else {
+      self.parse_type_entity_name()?
+    };
+
     let end_loc = self.peek().loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
@@ -499,7 +582,7 @@ impl<'a> Parser<'a> {
   fn infer_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
     self.require(TT::KeywordInfer)?;
-    let type_parameter = self.require_identifier()?;
+    let type_parameter = self.require_type_identifier()?;
 
     // TypeScript: infer with extends clause
     let constraint = if self.consume_if(TT::KeywordExtends).is_match() {
@@ -554,9 +637,46 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse object type literal: { x: T; y?: U; readonly z: V }
+  /// or mapped type: { [K in keyof T]: T[K] }
   fn object_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
     self.require(TT::BraceOpen)?;
+
+    // Check if this is a mapped type by looking ahead
+    // Mapped types start with optional readonly/+readonly/-readonly, then [, then identifier in
+    let checkpoint = self.checkpoint();
+
+    // Skip optional readonly modifier
+    if self.peek().typ == TT::KeywordReadonly {
+      self.consume();
+    } else if self.peek().typ == TT::Plus || self.peek().typ == TT::Hyphen {
+      self.consume();
+      if self.peek().typ == TT::KeywordReadonly {
+        self.consume();
+      }
+    }
+
+    // Check for [identifier in pattern
+    let is_mapped_type = if self.peek().typ == TT::BracketOpen {
+      self.consume(); // consume '['
+      if self.peek().typ == TT::Identifier {
+        let [_, t2] = self.peek_n::<2>();
+        t2.typ == TT::KeywordIn
+      } else {
+        false
+      }
+    } else {
+      false
+    };
+
+    self.restore_checkpoint(checkpoint);
+
+    if is_mapped_type {
+      // Parse as mapped type body (opening brace already consumed)
+      return self.mapped_type_body(ctx, start_loc);
+    }
+
+    // Parse as regular object type
     let members = self.type_members(ctx)?;
     let end_loc = self.peek().loc;
     self.require(TT::BraceClose)?;
@@ -587,9 +707,26 @@ impl<'a> Parser<'a> {
     let checkpoint = self.checkpoint();
     let readonly = self.consume_if(TT::KeywordReadonly).is_match();
 
-    // Check for index signature: [key: string]: T
+    // Check for index signature vs mapped property vs computed property
+    // [key: string]: T vs [K in T]: V vs [Symbol.iterator]?: T
     if self.peek().typ == TT::BracketOpen {
-      return self.index_signature(ctx, readonly);
+      let bracket_checkpoint = self.checkpoint();
+      self.consume(); // consume '['
+      if self.peek().typ == TT::Identifier {
+        let [_, t2] = self.peek_n::<2>();
+        if t2.typ == TT::Colon {
+          // Index signature: [key: string]: T
+          self.restore_checkpoint(bracket_checkpoint);
+          return self.index_signature(ctx, readonly);
+        } else if t2.typ == TT::KeywordIn {
+          // Mapped type member: [K in keyof T]: V
+          // Restore to before readonly was consumed, so mapped_type_member can parse it
+          self.restore_checkpoint(checkpoint);
+          return self.mapped_type_member(ctx);
+        }
+      }
+      self.restore_checkpoint(bracket_checkpoint);
+      // Otherwise, it's a computed property key - fall through to parse it normally
     }
 
     // Check for call signature or constructor signature
@@ -960,9 +1097,17 @@ impl<'a> Parser<'a> {
     Ok(Node::new(outer_loc, TypeExpr::ParenthesizedType(paren)))
   }
 
-  /// Try to parse function type: (x: T) => U
+  /// Try to parse function type: (x: T) => U or <T>(x: T) => U
   fn try_function_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     let start_loc = self.peek().loc;
+
+    // Optional type parameters: <T, U>
+    let type_parameters = if self.peek().typ == TT::ChevronLeft && self.is_start_of_type_arguments() {
+      Some(self.type_parameters(ctx)?)
+    } else {
+      None
+    };
+
     self.require(TT::ParenthesisOpen)?;
     let parameters = self.function_type_parameters(ctx)?;
     self.require(TT::ParenthesisClose)?;
@@ -975,7 +1120,7 @@ impl<'a> Parser<'a> {
     let func = Node::new(
       start_loc,
       TypeFunction {
-        type_parameters: None,
+        type_parameters,
         parameters,
         return_type: Box::new(return_type),
       },
@@ -1021,6 +1166,30 @@ impl<'a> Parser<'a> {
     ctx: ParseCtx,
   ) -> SyntaxResult<Vec<Node<TypeFunctionParameter>>> {
     let mut params = Vec::new();
+
+    // Check for `this` parameter as first parameter
+    if self.peek().typ == TT::KeywordThis {
+      let [_, next] = self.peek_n::<2>();
+      if next.typ == TT::Colon {
+        // Parse this parameter: this: Type
+        params.push(self.with_loc(|p| {
+          p.consume(); // consume 'this'
+          p.require(TT::Colon)?;
+          let type_expr = p.type_expr(ctx)?;
+          Ok(TypeFunctionParameter {
+            name: Some(String::from("this")),
+            optional: false,
+            rest: false,
+            type_expr,
+          })
+        })?);
+
+        // Check for comma before other parameters
+        if self.peek().typ == TT::Comma {
+          self.consume();
+        }
+      }
+    }
 
     while self.peek().typ != TT::ParenthesisClose && self.peek().typ != TT::EOF {
       params.push(self.function_type_parameter(ctx)?);
@@ -1076,7 +1245,7 @@ impl<'a> Parser<'a> {
     while !self.consume_if(TT::ChevronRight).is_match() {
       params.push(self.type_parameter(ctx)?);
       if !self.consume_if(TT::Comma).is_match() {
-        self.require(TT::ChevronRight)?;
+        self.require_chevron_right()?;
         break;
       }
     }
@@ -1136,30 +1305,34 @@ impl<'a> Parser<'a> {
     let mut end_loc = start_loc;
     loop {
       let type_expr = self.type_expr(ctx)?;
-      let t = self.peek().typ;
 
-      let literal = if t == TT::LiteralTemplatePartString {
-        self.lit_template_part_str_val()?
-      } else if t == TT::LiteralTemplatePartStringEnd {
-        end_loc = self.peek().loc;
-        self.consume_as_string()
+      // Require the closing brace of the substitution
+      self.require(TT::BraceClose)?;
+
+      // Get the next template part in template continuation mode
+      use crate::lex::LexMode;
+      let t = self.consume_with_mode(LexMode::TemplateStrContinue);
+
+      let literal = if t.typ == TT::LiteralTemplatePartString {
+        self.string(t.loc).to_string()
+      } else if t.typ == TT::LiteralTemplatePartStringEnd {
+        end_loc = t.loc;
+        self.string(t.loc).to_string()
       } else {
         return Err(
-          self
-            .peek()
-            .error(SyntaxErrorType::ExpectedSyntax("template literal continuation")),
+          t.error(SyntaxErrorType::ExpectedSyntax("template literal continuation")),
         );
       };
 
       let span_start = type_expr.loc;
       use crate::loc::Loc;
-      let span_loc = Loc(span_start.0, self.peek().loc.1);
+      let span_loc = Loc(span_start.0, t.loc.1);
       spans.push(Node::new(span_loc, TypeTemplateLiteralSpan {
         type_expr,
         literal: literal.clone(),
       }));
 
-      if t == TT::LiteralTemplatePartStringEnd {
+      if t.typ == TT::LiteralTemplatePartStringEnd {
         break;
       }
     }
@@ -1222,6 +1395,8 @@ impl<'a> Parser<'a> {
 
     self.require(TT::Colon)?;
     let type_expr = self.type_expr(ctx)?;
+    // Optional semicolon or comma before closing brace
+    let _ = self.consume_if(TT::Semicolon).is_match() || self.consume_if(TT::Comma).is_match();
     let end_loc = self.peek().loc;
     self.require(TT::BraceClose)?;
 
@@ -1239,5 +1414,143 @@ impl<'a> Parser<'a> {
       },
     );
     Ok(Node::new(outer_loc, TypeExpr::MappedType(mapped)))
+  }
+
+  /// Parse mapped type body (after opening brace has been consumed)
+  fn mapped_type_body(&mut self, ctx: ParseCtx, start_loc: crate::loc::Loc) -> SyntaxResult<Node<TypeExpr>> {
+    // Parse readonly modifier: readonly, +readonly, -readonly
+    let readonly_modifier = if self.consume_if(TT::KeywordReadonly).is_match() {
+      Some(MappedTypeModifier::None)
+    } else if self.consume_if(TT::Plus).is_match() && self.consume_if(TT::KeywordReadonly).is_match()
+    {
+      Some(MappedTypeModifier::Plus)
+    } else if self.consume_if(TT::Hyphen).is_match()
+      && self.consume_if(TT::KeywordReadonly).is_match()
+    {
+      Some(MappedTypeModifier::Minus)
+    } else {
+      None
+    };
+
+    self.require(TT::BracketOpen)?;
+    let type_parameter = self.require_identifier()?;
+    self.require(TT::KeywordIn)?;
+    let constraint = self.type_expr(ctx)?;
+
+    // TypeScript: as clause for key remapping: [K in T as NewK]
+    let name_type = if self.consume_if(TT::KeywordAs).is_match() {
+      Some(Box::new(self.type_expr(ctx)?))
+    } else {
+      None
+    };
+
+    self.require(TT::BracketClose)?;
+
+    // Parse optional modifier: ?, +?, -?
+    let optional_modifier = if self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::None)
+    } else if self.consume_if(TT::Plus).is_match() && self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::Plus)
+    } else if self.consume_if(TT::Hyphen).is_match() && self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::Minus)
+    } else {
+      None
+    };
+
+    self.require(TT::Colon)?;
+    let type_expr = self.type_expr(ctx)?;
+    // Optional semicolon or comma before closing brace
+    let _ = self.consume_if(TT::Semicolon).is_match() || self.consume_if(TT::Comma).is_match();
+    let end_loc = self.peek().loc;
+    self.require(TT::BraceClose)?;
+
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
+    let mapped = Node::new(
+      start_loc,
+      TypeMapped {
+        readonly_modifier,
+        type_parameter,
+        constraint: Box::new(constraint),
+        name_type,
+        optional_modifier,
+        type_expr: Box::new(type_expr),
+      },
+    );
+    Ok(Node::new(outer_loc, TypeExpr::MappedType(mapped)))
+  }
+
+  /// Parse mapped type member in object type: [K in keyof T]: V
+  fn mapped_type_member(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeMember>> {
+    let start_loc = self.peek().loc;
+
+    // Parse readonly modifier: readonly, +readonly, -readonly
+    let readonly_modifier = if self.consume_if(TT::KeywordReadonly).is_match() {
+      Some(MappedTypeModifier::None)
+    } else if self.consume_if(TT::Plus).is_match() && self.consume_if(TT::KeywordReadonly).is_match()
+    {
+      Some(MappedTypeModifier::Plus)
+    } else if self.consume_if(TT::Hyphen).is_match()
+      && self.consume_if(TT::KeywordReadonly).is_match()
+    {
+      Some(MappedTypeModifier::Minus)
+    } else {
+      None
+    };
+
+    self.require(TT::BracketOpen)?;
+    let type_parameter = self.require_identifier()?;
+    self.require(TT::KeywordIn)?;
+    let constraint = self.type_expr(ctx)?;
+
+    // TypeScript: as clause for key remapping: [K in T as NewK]
+    let name_type = if self.consume_if(TT::KeywordAs).is_match() {
+      Some(Box::new(self.type_expr(ctx)?))
+    } else {
+      None
+    };
+
+    self.require(TT::BracketClose)?;
+
+    // Parse optional modifier: ?, +?, -?
+    let optional_modifier = if self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::None)
+    } else if self.consume_if(TT::Plus).is_match() && self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::Plus)
+    } else if self.consume_if(TT::Hyphen).is_match() && self.consume_if(TT::Question).is_match() {
+      Some(MappedTypeModifier::Minus)
+    } else {
+      None
+    };
+
+    // Type annotation is optional in mapped type members
+    let (type_expr, end_loc) = if self.consume_if(TT::Colon).is_match() {
+      let te = self.type_expr(ctx)?;
+      let loc = te.loc;
+      (Box::new(te), loc)
+    } else {
+      // No type annotation - create implicit 'any' type
+      use crate::ast::type_expr::TypeAny;
+      use crate::loc::Loc;
+      let any_loc = Loc(self.peek().loc.0, self.peek().loc.0);
+      let any_inner = Node::new(any_loc, TypeAny {});
+      let any_type = Node::new(any_loc, TypeExpr::Any(any_inner));
+      (Box::new(any_type), any_loc)
+    };
+
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
+    let mapped = Node::new(
+      start_loc,
+      TypeMapped {
+        readonly_modifier,
+        type_parameter,
+        constraint: Box::new(constraint),
+        name_type,
+        optional_modifier,
+        type_expr,
+      },
+    );
+    Ok(Node::new(outer_loc, TypeMember::MappedProperty(mapped)))
   }
 }
