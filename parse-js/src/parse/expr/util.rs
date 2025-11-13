@@ -141,7 +141,10 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
     Expr::ObjPat(n) => {
       Ok(n.into_wrapped())
     }
-    _ => Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
+    // TypeScript: For any other expression type, wrap it as an assignment target for error recovery
+    // This allows destructuring with call expressions, unary operators, etc.
+    // The type checker will validate these patterns semantically.
+    _ => Ok(Node::new(loc, Pat::AssignTarget(node))),
   }
 }
 
@@ -149,6 +152,7 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
 // Trying to check if every object, array, or identifier expression operand is actually an assignment target first is too expensive and wasteful, so simply retroactively transform the LHS of a BinaryExpr with Assignment* operator into a target, raising an error if it can't (and is an invalid assignment target). A valid target is:
 // - A chain of non-optional-chaining member, computed member, and call operators, not ending in a call.
 // - A pattern.
+// TypeScript: Be maximally permissive and accept most expression types for error recovery.
 pub fn lhs_expr_to_assign_target(
   lhs: Node<Expr>,
   operator_name: OperatorName,
@@ -172,6 +176,12 @@ pub fn lhs_expr_to_assign_target(
       Ok(lhs)
     }
     Expr::Member(m) if !m.stx.optional_chaining => {
+      Ok(lhs)
+    }
+    // TypeScript: Accept call expressions, unary expressions, and postfix expressions for error recovery
+    // This allows patterns like `foo() = bar`, `++x = 5`, `x++ = 5`, `++x++`, etc.
+    // The type checker will reject these, but the parser accepts them.
+    Expr::Call(_) | Expr::Unary(_) | Expr::UnaryPostfix(_) => {
       Ok(lhs)
     }
     _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),
