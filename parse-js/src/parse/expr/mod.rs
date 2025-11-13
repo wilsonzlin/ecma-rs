@@ -781,15 +781,17 @@ impl<'a> Parser<'a> {
             asi.did_end_with_asi = true;
             break;
           };
-          // TypeScript: Allow TypeScript keywords and semicolons to terminate expressions
+          // TypeScript: Allow semicolons to terminate expressions
           // This makes the parser more permissive for error recovery
-          // (semantic errors will be caught by type checker)
-          if matches!(t.typ,
-            TT::KeywordClass | TT::KeywordInterface | TT::KeywordEnum |
-            TT::KeywordNamespace | TT::KeywordModule | TT::KeywordType |
-            TT::KeywordDeclare | TT::KeywordAbstract | TT::Semicolon)
-          {
+          if t.typ == TT::Semicolon {
             self.restore_checkpoint(cp);
+            break;
+          };
+          // TypeScript: Trigger ASI when identifier/keyword follows expression
+          // Enables permissive parsing like "yield foo" -> "yield" + "foo" (two statements)
+          if asi.can_end_with_asi && (t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ)) {
+            self.restore_checkpoint(cp);
+            asi.did_end_with_asi = true;
             break;
           };
           return Err(t.error(SyntaxErrorType::ExpectedSyntax("expression operator")));
