@@ -236,7 +236,18 @@ impl<'a> Parser<'a> {
       let mut asi = Asi::can();
       let expr = p.expr_with_asi(ctx, [TT::Semicolon], &mut asi)?;
       if !asi.did_end_with_asi {
-        p.require(TT::Semicolon)?;
+        // TypeScript: Allow TypeScript keywords to trigger ASI
+        // This makes expressions like "abstract interface" parse as two statements
+        let next = p.peek().typ;
+        if matches!(next,
+          TT::KeywordClass | TT::KeywordInterface | TT::KeywordEnum |
+          TT::KeywordNamespace | TT::KeywordModule | TT::KeywordType |
+          TT::KeywordDeclare | TT::KeywordAbstract)
+        {
+          // ASI triggered by TypeScript keyword
+        } else {
+          p.require(TT::Semicolon)?;
+        }
       };
       Ok(ExprStmt {
         expr,

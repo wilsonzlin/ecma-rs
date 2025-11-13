@@ -130,7 +130,18 @@ impl<'a> Parser<'a> {
         }
       }
 
-      let name = p.require_identifier()?;
+      // TypeScript: Allow reserved keywords in dotted namespace paths
+      // e.g., `declare namespace chrome.debugger {}` or `declare namespace test.class {}`
+      // This is permissive parsing - semantic errors will be caught by type checker
+      let t = p.consume();
+      let name = if t.typ == TT::Identifier {
+        p.string(t.loc)
+      } else if skip_keyword {
+        // In dotted paths, allow any keyword to be used as identifier
+        p.string(t.loc)
+      } else {
+        return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+      };
 
       // Check for nested namespace: namespace A.B { }
       let body = if p.consume_if(TT::Dot).is_match() {

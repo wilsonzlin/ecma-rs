@@ -668,7 +668,8 @@ impl<'a> Parser<'a> {
         {
           let loc = t.loc;
           self.restore_checkpoint(cp);
-          let parts = self.lit_template_parts(ctx)?;
+          // ES2018: Tagged templates allow invalid escape sequences
+          let parts = self.lit_template_parts(ctx, true)?;
           left = Node::new(left.loc + loc, TaggedTemplateExpr {
             function: left,
             parts,
@@ -767,6 +768,17 @@ impl<'a> Parser<'a> {
             // TODO Exceptions (e.g. for loop header).
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
+            break;
+          };
+          // TypeScript: Allow TypeScript keywords and semicolons to terminate expressions
+          // This makes the parser more permissive for error recovery
+          // (semantic errors will be caught by type checker)
+          if matches!(t.typ,
+            TT::KeywordClass | TT::KeywordInterface | TT::KeywordEnum |
+            TT::KeywordNamespace | TT::KeywordModule | TT::KeywordType |
+            TT::KeywordDeclare | TT::KeywordAbstract | TT::Semicolon)
+          {
+            self.restore_checkpoint(cp);
             break;
           };
           return Err(t.error(SyntaxErrorType::ExpectedSyntax("expression operator")));
