@@ -497,6 +497,11 @@ impl<'a> Parser<'a> {
       // Type operators
       TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer => true,
 
+      // TypeScript: Literal types (string, number, boolean, null, etc.)
+      // Enables: Exclude<"a" | "b", "c">, MyType<123>, etc.
+      TT::LiteralString | TT::LiteralNumber | TT::LiteralBigInt
+      | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull => true,
+
       // Identifier followed by type-like punctuation
       TT::Identifier => {
         self.consume();
