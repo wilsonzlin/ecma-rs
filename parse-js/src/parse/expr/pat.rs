@@ -13,6 +13,7 @@ use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::token::TT;
 use crate::token::UNRESERVED_KEYWORDS;
+use crate::lex::KEYWORDS_MAPPING;
 
 #[derive(Clone, Copy)]
 pub struct ParsePatternRules {
@@ -99,11 +100,12 @@ impl<'a> Parser<'a> {
               }
               ClassOrObjKey::Direct(n) => {
                 // We can't have a non-identifier (e.g. str) key, even if it normalizes to a valid identifier name.
-                // It also must be a valid pattern identifier (e.g. can't be a reserved keyword).
-                if !is_valid_pattern_identifier(n.stx.tt, ctx.rules) {
+                // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
+                // The type checker will validate this semantically.
+                if n.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&n.stx.tt) {
                   return Err(n.error(SyntaxErrorType::ExpectedNotFound));
                 }
-                // We've already ensured that this is a valid identifier.
+                // We've already ensured that this is a valid identifier or keyword.
                 let id_pat = n.derive_stx(|n| IdPat { name: n.key.clone() }).into_wrapped();
                 (true, id_pat)
               }

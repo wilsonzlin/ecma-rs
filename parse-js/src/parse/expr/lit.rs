@@ -25,6 +25,7 @@ use crate::ast::node::Node;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
+use crate::lex::KEYWORDS_MAPPING;
 use crate::num::JsNumber;
 use crate::operator::OperatorName;
 use crate::token::TT;
@@ -307,7 +308,9 @@ impl<'a> Parser<'a> {
                   };
                   return Err(loc.error(SyntaxErrorType::ExpectedSyntax("property value"), None));
                 };
-                if !is_valid_pattern_identifier(key.stx.tt, ctx.rules) {
+                // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
+                // The type checker will validate this semantically.
+                if key.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&key.stx.tt) {
                   return Err(key.error(SyntaxErrorType::ExpectedNotFound));
                 };
                 // Check for default value (e.g., {c = 1})
