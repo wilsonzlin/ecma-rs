@@ -103,12 +103,24 @@ impl<'a> Parser<'a> {
   /// Parses a parenthesised expression like `(a + b)`.
   pub fn grouping(&mut self, ctx: ParseCtx, asi: &mut Asi) -> SyntaxResult<Node<Expr>> {
     self.require(TT::ParenthesisOpen)?;
-    let expr = self.expr_with_min_prec(
-      ctx,
-      1,
-      [TT::ParenthesisClose],
-      asi,
-    )?;
+    // TypeScript: Allow empty parenthesized expressions for error recovery: ()
+    // Also handles comma operator with missing operands: (, x) or (x, )
+    let expr = if self.peek().typ == TT::ParenthesisClose {
+      // Empty expression: () - create synthetic undefined
+      let loc = self.peek().loc;
+      Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+    } else {
+      self.expr_with_min_prec(
+        ctx,
+        1,
+        [TT::ParenthesisClose],
+        asi,
+      ).unwrap_or_else(|_| {
+        // If expression parsing fails, create synthetic undefined for error recovery
+        let loc = self.peek().loc;
+        Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+      })
+    };
     self.require(TT::ParenthesisClose)?;
     Ok(expr)
   }
