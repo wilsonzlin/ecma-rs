@@ -308,6 +308,11 @@ impl<'a> Parser<'a> {
       (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
       // TypeScript: export type { ... } or export type * from "module" (type-only re-exports)
       (TT::KeywordType, TT::BraceOpen | TT::Asterisk) => self.export_list_stmt(ctx)?.into_wrapped(),
+      // TypeScript: export import a = A (exported import alias)
+      (TT::KeywordImport, _) => {
+        self.consume(); // export
+        self.import_stmt(ctx)?.into_wrapped()
+      },
       // TypeScript: export interface, export type, export enum, export namespace, export declare
       (TT::KeywordInterface, _) => {
         self.consume(); // export
