@@ -848,8 +848,9 @@ impl<'a> Parser<'a> {
     let parameters = self.function_type_parameters(ctx)?;
     self.require(TT::ParenthesisClose)?;
 
+    // TypeScript: Support type predicates in method signatures
     let return_type = if self.consume_if(TT::Colon).is_match() {
-      Some(self.type_expr(ctx)?)
+      Some(self.type_expr_or_predicate(ctx)?)
     } else {
       None
     };
@@ -887,8 +888,9 @@ impl<'a> Parser<'a> {
       let parameters = p.function_type_parameters(ctx)?;
       p.require(TT::ParenthesisClose)?;
 
+      // TypeScript: Support type predicates in call signatures
       let return_type = if p.consume_if(TT::Colon).is_match() {
-        Some(p.type_expr(ctx)?)
+        Some(p.type_expr_or_predicate(ctx)?)
       } else {
         None
       };
@@ -915,8 +917,9 @@ impl<'a> Parser<'a> {
     let parameters = self.function_type_parameters(ctx)?;
     self.require(TT::ParenthesisClose)?;
 
+    // TypeScript: Support type predicates in constructor signatures
     let return_type = if self.consume_if(TT::Colon).is_match() {
-      Some(self.type_expr(ctx)?)
+      Some(self.type_expr_or_predicate(ctx)?)
     } else {
       None
     };
@@ -979,8 +982,9 @@ impl<'a> Parser<'a> {
     self.require(TT::ParenthesisOpen)?;
     self.require(TT::ParenthesisClose)?;
 
+    // TypeScript: Support type predicates in get accessor signatures
     let return_type = if self.consume_if(TT::Colon).is_match() {
-      Some(self.type_expr(ctx)?)
+      Some(self.type_expr_or_predicate(ctx)?)
     } else {
       None
     };
