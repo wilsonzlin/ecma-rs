@@ -184,6 +184,11 @@ impl<'a> Parser<'a> {
       t if is_valid_pattern_identifier(t, ctx.rules) => self.id_pat(ctx)?.into_wrapped(),
       TT::BraceOpen => self.obj_pat(ctx)?.into_wrapped(),
       TT::BracketOpen => self.arr_pat(ctx)?.into_wrapped(),
+      // TypeScript: For error recovery, create synthetic identifier when pattern is missing
+      // Handles cases like `var;`, `let;`, `const;`, `export var;`
+      TT::Semicolon | TT::Comma | TT::EOF => {
+        Node::new(t.loc, IdPat { name: String::from("") }).into_wrapped()
+      }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("pattern"))),
     };
     Ok(pat)
