@@ -192,6 +192,11 @@ pub fn lhs_expr_to_assign_target(
     Expr::LitNum(_) | Expr::LitStr(_) | Expr::LitBool(_) | Expr::LitNull(_) | Expr::LitBigInt(_) | Expr::LitRegex(_) => {
       Ok(lhs)
     }
+    // TypeScript: Accept this, super, type assertions, and other TypeScript expressions for error recovery
+    // This allows patterns like `this *= value`, `super = value`, `(expr as T) = value`, `expr! = value`
+    Expr::This(_) | Expr::Super(_) | Expr::TypeAssertion(_) | Expr::NonNullAssertion(_) | Expr::SatisfiesExpr(_) => {
+      Ok(lhs)
+    }
     _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),
   }
 }
