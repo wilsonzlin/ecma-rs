@@ -481,7 +481,13 @@ impl<'a> Parser<'a> {
             && next_token.typ != TT::BraceClose
             && !terminators.contains(&next_token.typ)
         } else {
-          true
+          // TypeScript: For other unary operators, allow missing operand for error recovery
+          // Accept semicolon, closing braces/brackets/parens as missing operand
+          next_token.typ != TT::Semicolon
+            && next_token.typ != TT::ParenthesisClose
+            && next_token.typ != TT::BracketClose
+            && next_token.typ != TT::BraceClose
+            && next_token.typ != TT::EOF
         };
 
         let operand = if has_operand {
@@ -492,7 +498,7 @@ impl<'a> Parser<'a> {
             asi,
           )?
         } else {
-          // For yield/await without operand, use `undefined` identifier
+          // For unary operators without operand, use `undefined` identifier for error recovery
           Node::new(op_loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
         };
 
