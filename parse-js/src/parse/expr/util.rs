@@ -186,6 +186,12 @@ pub fn lhs_expr_to_assign_target(
     Expr::Call(_) | Expr::Unary(_) | Expr::UnaryPostfix(_) => {
       Ok(lhs)
     }
+    // TypeScript: Accept literal expressions for error recovery
+    // This allows patterns like `1 >>= 2`, `"str" = value`, etc.
+    // The type checker will reject these, but the parser accepts them.
+    Expr::LitNum(_) | Expr::LitStr(_) | Expr::LitBool(_) | Expr::LitNull(_) | Expr::LitBigInt(_) | Expr::LitRegex(_) => {
+      Ok(lhs)
+    }
     _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),
   }
 }
