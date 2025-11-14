@@ -1008,7 +1008,19 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<Node<TypeMember>> {
     let start_loc = self.peek().loc;
     self.require(TT::ParenthesisOpen)?;
-    let parameter = self.function_type_parameter(ctx)?;
+    // TypeScript: Error recovery - allow setters with no parameter
+    let parameter = if self.peek().typ == TT::ParenthesisClose {
+      // Empty parameter list - create synthetic parameter for error recovery
+      let loc = self.peek().loc;
+      Node::new(loc, TypeFunctionParameter {
+        rest: false,
+        name: Some("_".to_string()),
+        optional: false,
+        type_expr: Node::new(loc, TypeExpr::Any(Node::new(loc, crate::ast::type_expr::TypeAny {}))),
+      })
+    } else {
+      self.function_type_parameter(ctx)?
+    };
     let end_loc = self.peek().loc;
     self.require(TT::ParenthesisClose)?;
 

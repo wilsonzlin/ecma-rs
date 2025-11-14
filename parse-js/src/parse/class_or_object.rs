@@ -3,6 +3,8 @@ use super::expr::Asi;
 use super::ParseCtx;
 use super::Parser;
 use crate::ast::class_or_object::ClassMember;
+use crate::ast::expr::pat::{IdPat, Pat};
+use crate::ast::stmt::decl::PatDecl;
 use crate::ast::class_or_object::ClassOrObjGetter;
 use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
 use crate::ast::class_or_object::ClassOrObjKey;
@@ -462,17 +464,28 @@ impl<'a> Parser<'a> {
         await_allowed: true,
         yield_allowed: true,
       });
-      let pattern = p.pat_decl(setter_ctx)?;
-      // TypeScript: type annotation for setter parameter
-      let type_annotation = if p.consume_if(TT::Colon).is_match() {
-        Some(p.type_expr(ctx)?)
+      // TypeScript: Error recovery - allow setters with no parameter
+      let (pattern, type_annotation, default_value) = if p.peek().typ == TT::ParenthesisClose {
+        // Empty parameter list - create synthetic parameter for error recovery
+        let loc = p.peek().loc;
+        let synthetic_pattern = Node::new(loc, PatDecl {
+          pat: Node::new(loc, IdPat { name: String::from("_") }).into_wrapped(),
+        });
+        (synthetic_pattern, None, None)
       } else {
-        None
+        let pattern = p.pat_decl(setter_ctx)?;
+        // TypeScript: type annotation for setter parameter
+        let type_annotation = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
+        let default_value = p.consume_if(TT::Equals)
+          .and_then(|| {
+            p.expr(setter_ctx, [TT::ParenthesisClose])
+          })?;
+        (pattern, type_annotation, default_value)
       };
-      let default_value = p.consume_if(TT::Equals)
-        .and_then(|| {
-          p.expr(setter_ctx, [TT::ParenthesisClose])
-        })?;
       let param_loc = pattern.loc;
       p.require(TT::ParenthesisClose)?;
       // Setters don't have return types
@@ -495,7 +508,7 @@ impl<'a> Parser<'a> {
           accessibility: None,
           readonly: false,
           pattern,
-          type_annotation: None,
+          type_annotation,
           default_value,
         })],
         return_type: None,
