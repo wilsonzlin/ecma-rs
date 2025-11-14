@@ -854,7 +854,16 @@ impl<'a> Parser<'a> {
             }
             OperatorName::ComputedMemberAccess
             | OperatorName::OptionalChainingComputedMemberAccess => {
-              let member = self.expr(ctx, [TT::BracketClose])?;
+              // TypeScript: Allow empty bracket expressions for error recovery: obj[]
+              let member = if self.peek().typ == TT::BracketClose {
+                let loc = self.peek().loc;
+                Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+              } else {
+                self.expr(ctx, [TT::BracketClose]).unwrap_or_else(|_| {
+                  let loc = self.peek().loc;
+                  Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+                })
+              };
               let end = self.require(TT::BracketClose)?;
               Node::new(left.loc + end.loc, ComputedMemberExpr {
                 optional_chaining: operator.name == OperatorName::OptionalChainingComputedMemberAccess,
