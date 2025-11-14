@@ -6,12 +6,13 @@ use crate::{ast::{class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey, Cl
 /// `{ a: [b] }` could be an object literal or object pattern. This function is useful for when a pattern was misinterpreted as a literal expression, without needing to rewind and reparse.
 pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
   let loc = node.loc;
+  // TypeScript: Accept member expressions for error recovery, even with optional chaining
   // Check for member expressions first (without moving the value).
   match node.stx.as_ref() {
-    Expr::Member(m) if !m.stx.optional_chaining => {
+    Expr::Member(_) => {
       return Ok(Node::new(loc, Pat::AssignTarget(node)));
     }
-    Expr::ComputedMember(m) if !m.stx.optional_chaining => {
+    Expr::ComputedMember(_) => {
       return Ok(Node::new(loc, Pat::AssignTarget(node)));
     }
     _ => {}
@@ -170,12 +171,13 @@ pub fn lhs_expr_to_assign_target(
       let root = lit_to_pat(lhs)?;
       Ok(root.into_stx())
     }
-    // As long as the expression ends with ComputedMemberExpr or MemberExpr, it's valid e.g. `(a, b?.a ?? 3, c = d || {})[1] = x`. Note that this is after parsing, so `a + b.c = 3` is invalid because that parses to `(a + b.c) = 3`, with a LHS of BinaryExpr with Addition operator.
-    // TODO Technically there cannot be any optional chaining in the entire access/call path, not just in the last part (e.g. `a.b?.c.d = e` is invalid).
-    Expr::ComputedMember(m) if !m.stx.optional_chaining => {
+    // TypeScript: Accept member/computed member expressions for error recovery, even with optional chaining
+    // Patterns like `obj?.a = 1` are syntactically parseable but semantically invalid
+    // The type checker will validate these
+    Expr::ComputedMember(_) => {
       Ok(lhs)
     }
-    Expr::Member(m) if !m.stx.optional_chaining => {
+    Expr::Member(_) => {
       Ok(lhs)
     }
     // TypeScript: Accept call expressions, unary expressions, and postfix expressions for error recovery
