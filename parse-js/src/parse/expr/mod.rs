@@ -770,14 +770,44 @@ impl<'a> Parser<'a> {
 
             if looks_like_type_args {
               // Parse the rest of the type arguments (we already consumed <)
-              let mut args = Vec::new();
+              let mut _args = Vec::new();
               while !self.consume_if(TT::ChevronRight).is_match() {
-                args.push(self.type_expr(ctx)?);
-                if !self.consume_if(TT::Comma).is_match() {
-                  self.require(TT::ChevronRight)?;
-                  break;
+                match self.type_expr(ctx) {
+                  Ok(arg) => {
+                    _args.push(arg);
+                    if !self.consume_if(TT::Comma).is_match() {
+                      if let Ok(_) = self.require_chevron_right() {
+                        break;
+                      } else {
+                        // Error recovery: couldn't find closing >
+                        break;
+                      }
+                    }
+                  }
+                  Err(_) => {
+                    // Error recovery: skip to closing > or give up
+                    break;
+                  }
                 }
               }
+
+              // TypeScript: Check if this is a call expression with type arguments
+              // e.g., foo<T>() or obj.method<T>()
+              if self.peek().typ == TT::ParenthesisOpen {
+                self.consume(); // (
+                let arguments = match self.call_args(ctx) {
+                  Ok(args) => args,
+                  Err(_) => Vec::new(),  // Error recovery
+                };
+                if let Ok(end) = self.require(TT::ParenthesisClose) {
+                  left = Node::new(left.loc + end.loc, CallExpr {
+                    optional_chaining: false,
+                    arguments,
+                    callee: left,
+                  }).into_wrapped();
+                }
+              }
+
               continue;
             }
           }
