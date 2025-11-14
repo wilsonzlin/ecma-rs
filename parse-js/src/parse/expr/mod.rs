@@ -794,6 +794,22 @@ impl<'a> Parser<'a> {
             asi.did_end_with_asi = true;
             break;
           };
+          // TypeScript: For error recovery, trigger ASI when we see tokens that typically start new constructs
+          // This handles cases like `await 1` (in contexts where await is an identifier),
+          // arrow functions with malformed types `(a): =>`, object literals after expressions, etc.
+          if asi.can_end_with_asi && matches!(t.typ,
+            TT::Colon |           // Arrow function malformed type annotation: (a):
+            TT::BraceOpen |       // New object/block after expression
+            TT::LiteralNumber |   // Number after identifier: `await 1` where await is identifier
+            TT::LiteralString |   // String after expression
+            TT::LiteralTrue |     // Boolean after expression
+            TT::LiteralFalse |    // Boolean after expression
+            TT::LiteralNull       // Null after expression
+          ) {
+            self.restore_checkpoint(cp);
+            asi.did_end_with_asi = true;
+            break;
+          };
           return Err(t.error(SyntaxErrorType::ExpectedSyntax("expression operator")));
         }
         Some(operator) => {
