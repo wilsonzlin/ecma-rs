@@ -409,7 +409,8 @@ impl<'a> Parser<'a> {
       TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
       TT::KeywordUndefinedType | TT::Identifier | TT::BraceOpen | TT::BracketOpen |
       TT::KeywordTypeof | TT::KeywordKeyof | TT::ParenthesisOpen |
-      TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull
+      TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull |
+      TT::KeywordConst
     );
 
     if !looks_like_type_assertion {
@@ -418,6 +419,24 @@ impl<'a> Parser<'a> {
 
     self.with_loc(|p| {
       p.require(TT::ChevronLeft)?;
+
+      // Check for <const> type assertion
+      let is_const_assertion = p.peek().typ == TT::KeywordConst;
+      if is_const_assertion {
+        p.consume(); // consume 'const'
+        p.require(TT::ChevronRight)?;
+
+        // Parse just the operand - the outer expression parser will handle operators
+        let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
+
+        use crate::ast::expr::TypeAssertionExpr;
+        return Ok(TypeAssertionExpr {
+          expression: Box::new(expression),
+          type_annotation: None,
+          const_assertion: true,
+        }.into());
+      }
+
       let type_annotation = p.type_expr(ctx)?;
       p.require(TT::ChevronRight)?;
 
