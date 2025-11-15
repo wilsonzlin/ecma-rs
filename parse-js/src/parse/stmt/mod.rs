@@ -396,10 +396,11 @@ impl<'a> Parser<'a> {
               _ => Self::Triple,
             }
           }
-          // `await using` for async resource management in for-of
+          // `await using` for async resource management
           TT::KeywordAwait if p.peek_n::<2>()[1].typ == TT::KeywordUsing => {
             p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
             match p.peek().typ {
+              TT::KeywordIn => Self::In,
               TT::KeywordOf => Self::Of,
               _ => Self::Triple,
             }
@@ -411,6 +412,7 @@ impl<'a> Parser<'a> {
             if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
               p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
               match p.peek().typ {
+                TT::KeywordIn => Self::In,
                 TT::KeywordOf => Self::Of,
                 _ => Self::Triple,
               }
