@@ -111,23 +111,13 @@ impl<'a> Parser<'a> {
       TT::KeywordEnum => Ok(self.enum_decl(ctx, false, true, false)?.wrap(Stmt::EnumDecl)),
       TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, true),
       TT::KeywordClass => Ok(self.class_decl_with_modifiers(ctx, false, true, false)?.wrap(Stmt::ClassDecl)),
-      // TypeScript: declare var, declare const, declare using, declare await using
-      TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
-      TT::KeywordAwait => {
-        // Check if followed by 'using' for declare await using
-        let [_, next] = self.peek_n::<2>();
-        if next.typ == TT::KeywordUsing {
-          Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl))
-        } else {
-          Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare")))
-        }
-      }
       TT::KeywordFunction => Ok(self.func_decl_with_modifiers(ctx, false, true)?.wrap(Stmt::FunctionDecl)),
       // Support declare async function
       TT::KeywordAsync if self.peek_n::<2>()[1].typ == TT::KeywordFunction => {
         self.consume(); // consume 'async'
         Ok(self.func_decl_with_modifiers(ctx, false, true)?.wrap(Stmt::FunctionDecl))
       }
+      // Support declare const enum (must come before declare const)
       TT::KeywordConst if self.peek_n::<2>()[1].typ == TT::KeywordEnum => {
         self.consume(); // consume 'const'
         Ok(self.enum_decl(ctx, false, true, true)?.wrap(Stmt::EnumDecl))
@@ -137,8 +127,17 @@ impl<'a> Parser<'a> {
         self.consume(); // consume 'abstract'
         Ok(self.class_decl_with_modifiers(ctx, false, true, true)?.wrap(Stmt::ClassDecl))
       }
-      // Support declare var, declare let, declare const, declare using
-      TT::KeywordVar | TT::KeywordLet | TT::KeywordConst | TT::KeywordUsing => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
+      // TypeScript: declare var, declare const, declare let, declare using
+      TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordUsing => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
+      // TypeScript: declare await using
+      TT::KeywordAwait => {
+        let [_, next] = self.peek_n::<2>();
+        if next.typ == TT::KeywordUsing {
+          Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl))
+        } else {
+          Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare")))
+        }
+      }
       _ => Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare"))),
     }
   }
