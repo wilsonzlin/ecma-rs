@@ -381,7 +381,22 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<(ClassOrObjKey, Node<ClassOrObjMethod>)> {
     let is_async = self.consume_if(TT::KeywordAsync).is_match();
     let is_generator = self.consume_if(TT::Asterisk).is_match();
-    let key = self.class_or_obj_key(ctx)?;
+
+    // For anonymous methods like *(), async(), check if paren comes immediately
+    let key = if self.peek().typ == TT::ParenthesisOpen {
+      // Anonymous method - use empty string as key
+      use crate::ast::class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey};
+      use crate::loc::Loc;
+      ClassOrObjKey::Direct(Node::new(
+        Loc(0, 0),
+        ClassOrObjMemberDirectKey {
+          key: String::new(),
+          tt: TT::Identifier,
+        }
+      ))
+    } else {
+      self.class_or_obj_key(ctx)?
+    };
     let func = self.with_loc(|p| {
       // TypeScript: generic type parameters
       let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
@@ -689,6 +704,7 @@ impl<'a> Parser<'a> {
       (TT::KeywordAsync, TT::Asterisk, _, TT::ParenthesisOpen)
       | (TT::KeywordAsync, TT::BracketOpen, _, _)  // Async method with computed property: async [key]()
       | (TT::KeywordAsync, _, TT::ParenthesisOpen, _)
+      | (TT::Asterisk, TT::ParenthesisOpen, _, _)  // Anonymous generator method: *()
       | (TT::Asterisk, _, TT::ParenthesisOpen, _)
       | (TT::Asterisk, TT::BracketOpen, _, _)  // Generator with computed property: *[key]()
       | (_, TT::ParenthesisOpen, _, _)
