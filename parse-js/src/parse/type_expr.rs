@@ -304,7 +304,7 @@ impl<'a> Parser<'a> {
       // Contextual keywords allowed as type identifiers
       TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
       TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
-      TT::KeywordAbstract | TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
+      TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
       TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
@@ -341,7 +341,20 @@ impl<'a> Parser<'a> {
       TT::ChevronLeft => self.try_function_type(ctx),
 
       // new () => T  (constructor type)
+      // TypeScript: abstract new () => T (abstract constructor type)
       TT::KeywordNew => self.constructor_type(ctx),
+      TT::KeywordAbstract => {
+        // Check if this is 'abstract new' for abstract constructor type
+        let [_, next] = self.peek_n::<2>();
+        if next.typ == TT::KeywordNew {
+          // Skip 'abstract' and parse constructor type
+          self.consume(); // abstract
+          self.constructor_type(ctx)
+        } else {
+          // Treat 'abstract' as a type identifier
+          self.type_reference(ctx)
+        }
+      }
 
       // Literal types
       TT::LiteralString => {
