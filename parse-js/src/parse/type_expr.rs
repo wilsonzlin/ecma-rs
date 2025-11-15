@@ -1244,8 +1244,8 @@ impl<'a> Parser<'a> {
       let name = if p.peek().typ == TT::Identifier {
         let checkpoint = p.checkpoint();
         let n = p.consume_as_string();
-        // Check if followed by colon or question
-        if p.peek().typ == TT::Colon || p.peek().typ == TT::Question {
+        // Check if followed by colon, question, or equals (for error recovery)
+        if p.peek().typ == TT::Colon || p.peek().typ == TT::Question || p.peek().typ == TT::Equals {
           Some(n)
         } else {
           p.restore_checkpoint(checkpoint);
@@ -1256,6 +1256,28 @@ impl<'a> Parser<'a> {
       };
 
       let optional = p.consume_if(TT::Question).is_match();
+
+      // TypeScript: Allow default values in type signatures for error recovery
+      // e.g., `(x = 1)` or `foo(x = 1)` in interface/type literal
+      if p.peek().typ == TT::Equals {
+        p.consume(); // consume '='
+        // Parse and discard the default value expression
+        let _ = p.expr(ctx, [TT::Comma, TT::ParenthesisClose]);
+        // Type annotation is optional when there's a default value
+        let type_expr = if p.consume_if(TT::Colon).is_match() {
+          p.type_expr(ctx)?
+        } else {
+          // Create synthetic 'any' type
+          use crate::loc::Loc;
+          Node::new(p.peek().loc, TypeExpr::Any(Node::new(p.peek().loc, crate::ast::type_expr::TypeAny {})))
+        };
+        return Ok(TypeFunctionParameter {
+          name,
+          optional,
+          rest,
+          type_expr,
+        });
+      }
 
       if name.is_some() || optional {
         p.require(TT::Colon)?;
