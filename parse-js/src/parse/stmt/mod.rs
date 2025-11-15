@@ -86,7 +86,19 @@ impl<'a> Parser<'a> {
       TT::KeywordDeclare => self.declare_stmt(ctx)?,
       TT::KeywordAbstract if t1.typ == TT::KeywordClass => self.abstract_class_decl(ctx)?.into_wrapped(),
       // Decorators can appear before class declarations
-      TT::At => self.class_decl_impl(ctx, false)?.into_wrapped(),
+      // For error recovery, if decorators are followed by non-class, skip decorators and parse the statement
+      TT::At => {
+        let checkpoint = self.checkpoint();
+        match self.class_decl_impl(ctx, false) {
+          Ok(class_decl) => class_decl.into_wrapped(),
+          Err(_) => {
+            // Not a class - restore and skip decorators, then parse the statement
+            self.restore_checkpoint(checkpoint);
+            let _ = self.decorators(ctx); // Skip decorators
+            self.stmt(ctx)?
+          }
+        }
+      }
 
       t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_wrapped(),
       _ => self.expr_stmt(ctx)?.into_wrapped(),
@@ -117,6 +129,7 @@ impl<'a> Parser<'a> {
         self.consume(); // consume 'async'
         Ok(self.func_decl_with_modifiers(ctx, false, true)?.wrap(Stmt::FunctionDecl))
       }
+      // Support declare const enum (must come before declare const)
       TT::KeywordConst if self.peek_n::<2>()[1].typ == TT::KeywordEnum => {
         self.consume(); // consume 'const'
         Ok(self.enum_decl(ctx, false, true, true)?.wrap(Stmt::EnumDecl))
@@ -126,8 +139,17 @@ impl<'a> Parser<'a> {
         self.consume(); // consume 'abstract'
         Ok(self.class_decl_with_modifiers(ctx, false, true, true)?.wrap(Stmt::ClassDecl))
       }
-      // Support declare var, declare let, declare const, declare using
-      TT::KeywordVar | TT::KeywordLet | TT::KeywordConst | TT::KeywordUsing => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
+      // TypeScript: declare var, declare const, declare let, declare using
+      TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordUsing => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
+      // TypeScript: declare await using
+      TT::KeywordAwait => {
+        let [_, next] = self.peek_n::<2>();
+        if next.typ == TT::KeywordUsing {
+          Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl))
+        } else {
+          Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare")))
+        }
+      }
       _ => Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare"))),
     }
   }
@@ -236,7 +258,18 @@ impl<'a> Parser<'a> {
       let mut asi = Asi::can();
       let expr = p.expr_with_asi(ctx, [TT::Semicolon], &mut asi)?;
       if !asi.did_end_with_asi {
-        p.require(TT::Semicolon)?;
+        // TypeScript: Allow TypeScript keywords to trigger ASI
+        // This makes expressions like "abstract interface" parse as two statements
+        let next = p.peek().typ;
+        if matches!(next,
+          TT::KeywordClass | TT::KeywordInterface | TT::KeywordEnum |
+          TT::KeywordNamespace | TT::KeywordModule | TT::KeywordType |
+          TT::KeywordDeclare | TT::KeywordAbstract)
+        {
+          // ASI triggered by TypeScript keyword
+        } else {
+          p.require(TT::Semicolon)?;
+        }
       };
       Ok(ExprStmt {
         expr,
@@ -266,9 +299,11 @@ impl<'a> Parser<'a> {
       let init = {
         let [t0, t1] = p.peek_n();
         match t0.typ {
-          TT::KeywordVar | TT::KeywordConst => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
           // `let` is contextual - only a declaration if followed by a pattern
           TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          // TypeScript: await using in for loop
+          TT::KeywordAwait if t1.typ == TT::KeywordUsing => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
           TT::Semicolon => ForTripleStmtInit::None,
           _ => ForTripleStmtInit::Expr(p.expr(ctx, [TT::Semicolon])?),
         }
@@ -286,13 +321,19 @@ impl<'a> Parser<'a> {
   pub fn for_in_of_lhs(&mut self, ctx: ParseCtx) -> SyntaxResult<ForInOfLhs> {
     let [t0, t1] = self.peek_n();
     Ok(match t0.typ {
-      TT::KeywordVar | TT::KeywordConst => ForInOfLhs::Decl({
+      TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
         let pat = self.pat_decl(ctx)?;
         (mode, pat)
       }),
       // `let` is contextual - only a declaration if followed by a pattern
       TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => ForInOfLhs::Decl({
+        let mode = self.var_decl_mode()?;
+        let pat = self.pat_decl(ctx)?;
+        (mode, pat)
+      }),
+      // TypeScript: await using in for-of loop
+      TT::KeywordAwait if t1.typ == TT::KeywordUsing => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
         let pat = self.pat_decl(ctx)?;
         (mode, pat)
@@ -367,10 +408,11 @@ impl<'a> Parser<'a> {
               _ => Self::Triple,
             }
           }
-          // `await using` for async resource management in for-of
+          // `await using` for async resource management
           TT::KeywordAwait if p.peek_n::<2>()[1].typ == TT::KeywordUsing => {
             p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
             match p.peek().typ {
+              TT::KeywordIn => Self::In,
               TT::KeywordOf => Self::Of,
               _ => Self::Triple,
             }
@@ -382,6 +424,7 @@ impl<'a> Parser<'a> {
             if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
               p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
               match p.peek().typ {
+                TT::KeywordIn => Self::In,
                 TT::KeywordOf => Self::Of,
                 _ => Self::Triple,
               }

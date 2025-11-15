@@ -92,33 +92,65 @@ impl<'a> Parser<'a> {
         if p.peek().typ == TT::Identifier {
           let alias = p.id_pat_decl(ctx)?;
 
-          // TypeScript: check for import equals: import id = require("module")
+          // TypeScript: check for import equals: import id = require("module") or import id = EntityName
           if p.peek().typ == TT::Equals {
             p.consume(); // =
-            // Expect "require"
-            let require_name = p.require_identifier()?;
-            if require_name != "require" {
+
+            // Check if this is require() or entity name
+            if p.peek().typ == TT::Identifier {
+              let checkpoint = p.checkpoint();
+              let first_name = p.consume_as_string();
+
+              if first_name == "require" && p.peek().typ == TT::ParenthesisOpen {
+                // import id = require("module")
+                p.require(TT::ParenthesisOpen)?;
+                let module = p.lit_str_val()?;
+                p.require(TT::ParenthesisClose)?;
+
+                // Allow ASI
+                let t = p.peek();
+                if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+                  p.consume_if(TT::Semicolon);
+                }
+
+                return Ok(ImportStmt {
+                  type_only: false,
+                  default: Some(alias),
+                  module,
+                  names: None,
+                  attributes: None,
+                });
+              } else {
+                // import id = EntityName (e.g., import A = B.C.D)
+                // Consume dotted name: identifier(.identifier)*
+                while p.peek().typ == TT::Dot {
+                  p.consume(); // .
+                  if p.peek().typ == TT::Identifier || crate::lex::KEYWORDS_MAPPING.contains_key(&p.peek().typ) {
+                    p.consume();
+                  } else {
+                    // Error recovery: allow incomplete dotted names
+                    break;
+                  }
+                }
+
+                // Allow ASI
+                let t = p.peek();
+                if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+                  p.consume_if(TT::Semicolon);
+                }
+
+                // Return as ImportStmt with marker (empty module string)
+                return Ok(ImportStmt {
+                  type_only: false,
+                  default: Some(alias),
+                  module: String::new(),
+                  names: None,
+                  attributes: None,
+                });
+              }
+            } else {
               return Err(p.peek().error(SyntaxErrorType::ExpectedNotFound));
             }
-            p.require(TT::ParenthesisOpen)?;
-            let module = p.lit_str_val()?;
-            p.require(TT::ParenthesisClose)?;
-
-            // Allow ASI
-            let t = p.peek();
-            if t.typ != TT::EOF && !t.preceded_by_line_terminator {
-              p.consume_if(TT::Semicolon);
-            }
-
-            // Return as ImportStmt with special marker
-            // We'll use type_only=false, and the presence of default without names as marker
-            return Ok(ImportStmt {
-              type_only: false,
-              default: Some(alias),
-              module,
-              names: None,
-              attributes: None,
-            });
           }
 
           (Some(alias), p.consume_if(TT::Comma).is_match())
@@ -276,6 +308,11 @@ impl<'a> Parser<'a> {
       (TT::BraceOpen | TT::Asterisk, _) => self.export_list_stmt(ctx)?.into_wrapped(),
       // TypeScript: export type { ... } or export type * from "module" (type-only re-exports)
       (TT::KeywordType, TT::BraceOpen | TT::Asterisk) => self.export_list_stmt(ctx)?.into_wrapped(),
+      // TypeScript: export import a = A (exported import alias)
+      (TT::KeywordImport, _) => {
+        self.consume(); // export
+        self.import_stmt(ctx)?.into_wrapped()
+      },
       // TypeScript: export interface, export type, export enum, export namespace, export declare
       (TT::KeywordInterface, _) => {
         self.consume(); // export

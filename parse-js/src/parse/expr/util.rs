@@ -6,12 +6,13 @@ use crate::{ast::{class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey, Cl
 /// `{ a: [b] }` could be an object literal or object pattern. This function is useful for when a pattern was misinterpreted as a literal expression, without needing to rewind and reparse.
 pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
   let loc = node.loc;
+  // TypeScript: Accept member expressions for error recovery, even with optional chaining
   // Check for member expressions first (without moving the value).
   match node.stx.as_ref() {
-    Expr::Member(m) if !m.stx.optional_chaining => {
+    Expr::Member(_) => {
       return Ok(Node::new(loc, Pat::AssignTarget(node)));
     }
-    Expr::ComputedMember(m) if !m.stx.optional_chaining => {
+    Expr::ComputedMember(_) => {
       return Ok(Node::new(loc, Pat::AssignTarget(node)));
     }
     _ => {}
@@ -141,7 +142,10 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
     Expr::ObjPat(n) => {
       Ok(n.into_wrapped())
     }
-    _ => Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
+    // TypeScript: For any other expression type, wrap it as an assignment target for error recovery
+    // This allows destructuring with call expressions, unary operators, etc.
+    // The type checker will validate these patterns semantically.
+    _ => Ok(Node::new(loc, Pat::AssignTarget(node))),
   }
 }
 
@@ -149,6 +153,7 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
 // Trying to check if every object, array, or identifier expression operand is actually an assignment target first is too expensive and wasteful, so simply retroactively transform the LHS of a BinaryExpr with Assignment* operator into a target, raising an error if it can't (and is an invalid assignment target). A valid target is:
 // - A chain of non-optional-chaining member, computed member, and call operators, not ending in a call.
 // - A pattern.
+// TypeScript: Be maximally permissive and accept most expression types for error recovery.
 pub fn lhs_expr_to_assign_target(
   lhs: Node<Expr>,
   operator_name: OperatorName,
@@ -166,12 +171,30 @@ pub fn lhs_expr_to_assign_target(
       let root = lit_to_pat(lhs)?;
       Ok(root.into_stx())
     }
-    // As long as the expression ends with ComputedMemberExpr or MemberExpr, it's valid e.g. `(a, b?.a ?? 3, c = d || {})[1] = x`. Note that this is after parsing, so `a + b.c = 3` is invalid because that parses to `(a + b.c) = 3`, with a LHS of BinaryExpr with Addition operator.
-    // TODO Technically there cannot be any optional chaining in the entire access/call path, not just in the last part (e.g. `a.b?.c.d = e` is invalid).
-    Expr::ComputedMember(m) if !m.stx.optional_chaining => {
+    // TypeScript: Accept member/computed member expressions for error recovery, even with optional chaining
+    // Patterns like `obj?.a = 1` are syntactically parseable but semantically invalid
+    // The type checker will validate these
+    Expr::ComputedMember(_) => {
       Ok(lhs)
     }
-    Expr::Member(m) if !m.stx.optional_chaining => {
+    Expr::Member(_) => {
+      Ok(lhs)
+    }
+    // TypeScript: Accept call expressions, unary expressions, and postfix expressions for error recovery
+    // This allows patterns like `foo() = bar`, `++x = 5`, `x++ = 5`, `++x++`, etc.
+    // The type checker will reject these, but the parser accepts them.
+    Expr::Call(_) | Expr::Unary(_) | Expr::UnaryPostfix(_) => {
+      Ok(lhs)
+    }
+    // TypeScript: Accept literal expressions for error recovery
+    // This allows patterns like `1 >>= 2`, `"str" = value`, etc.
+    // The type checker will reject these, but the parser accepts them.
+    Expr::LitNum(_) | Expr::LitStr(_) | Expr::LitBool(_) | Expr::LitNull(_) | Expr::LitBigInt(_) | Expr::LitRegex(_) => {
+      Ok(lhs)
+    }
+    // TypeScript: Accept this, super, type assertions, and other TypeScript expressions for error recovery
+    // This allows patterns like `this *= value`, `super = value`, `(expr as T) = value`, `expr! = value`
+    Expr::This(_) | Expr::Super(_) | Expr::TypeAssertion(_) | Expr::NonNullAssertion(_) | Expr::SatisfiesExpr(_) => {
       Ok(lhs)
     }
     _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),

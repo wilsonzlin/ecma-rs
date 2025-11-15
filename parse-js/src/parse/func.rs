@@ -59,36 +59,34 @@ impl<'a> Parser<'a> {
 
         // TypeScript: accessibility modifiers and readonly can appear in either order
         // e.g. `readonly public x` or `public readonly x` are both valid
+        // Error recovery: allow duplicate modifiers
         let mut accessibility = None;
         let mut readonly = false;
 
-        // Try to parse first modifier (either readonly or accessibility)
-        if p.consume_if(TT::KeywordReadonly).is_match() {
-          readonly = true;
-          // After readonly, check for accessibility
-          accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
-            Some(Accessibility::Public)
+        // Parse modifiers in a loop to allow duplicates
+        loop {
+          let mut found_modifier = false;
+
+          // Try readonly
+          if p.consume_if(TT::KeywordReadonly).is_match() {
+            readonly = true;
+            found_modifier = true;
+          }
+
+          // Try accessibility
+          if p.consume_if(TT::KeywordPublic).is_match() {
+            accessibility = Some(Accessibility::Public);
+            found_modifier = true;
           } else if p.consume_if(TT::KeywordPrivate).is_match() {
-            Some(Accessibility::Private)
+            accessibility = Some(Accessibility::Private);
+            found_modifier = true;
           } else if p.consume_if(TT::KeywordProtected).is_match() {
-            Some(Accessibility::Protected)
-          } else {
-            None
-          };
-        } else {
-          // Try accessibility first
-          accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
-            Some(Accessibility::Public)
-          } else if p.consume_if(TT::KeywordPrivate).is_match() {
-            Some(Accessibility::Private)
-          } else if p.consume_if(TT::KeywordProtected).is_match() {
-            Some(Accessibility::Protected)
-          } else {
-            None
-          };
-          // After accessibility, check for readonly
-          if accessibility.is_some() {
-            readonly = p.consume_if(TT::KeywordReadonly).is_match();
+            accessibility = Some(Accessibility::Protected);
+            found_modifier = true;
+          }
+
+          if !found_modifier {
+            break;
           }
         }
 

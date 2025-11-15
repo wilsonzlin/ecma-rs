@@ -75,6 +75,9 @@ impl<'a> Parser<'a> {
       loop {
         let pattern = p.pat_decl(ctx)?;
 
+        // TypeScript: definite assignment assertion
+        let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+
         // TypeScript: type annotation
         let type_annotation = if p.consume_if(TT::Colon).is_match() {
           Some(p.type_expr(ctx)?)
@@ -94,6 +97,7 @@ impl<'a> Parser<'a> {
           ))?;
         declarators.push(VarDeclarator {
           pattern,
+          definite_assignment,
           type_annotation,
           initializer,
         });

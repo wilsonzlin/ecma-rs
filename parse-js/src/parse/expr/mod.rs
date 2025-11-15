@@ -103,12 +103,24 @@ impl<'a> Parser<'a> {
   /// Parses a parenthesised expression like `(a + b)`.
   pub fn grouping(&mut self, ctx: ParseCtx, asi: &mut Asi) -> SyntaxResult<Node<Expr>> {
     self.require(TT::ParenthesisOpen)?;
-    let expr = self.expr_with_min_prec(
-      ctx,
-      1,
-      [TT::ParenthesisClose],
-      asi,
-    )?;
+    // TypeScript: Allow empty parenthesized expressions for error recovery: ()
+    // Also handles comma operator with missing operands: (, x) or (x, )
+    let expr = if self.peek().typ == TT::ParenthesisClose {
+      // Empty expression: () - create synthetic undefined
+      let loc = self.peek().loc;
+      Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+    } else {
+      self.expr_with_min_prec(
+        ctx,
+        1,
+        [TT::ParenthesisClose],
+        asi,
+      ).unwrap_or_else(|_| {
+        // If expression parsing fails, create synthetic undefined for error recovery
+        let loc = self.peek().loc;
+        Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+      })
+    };
     self.require(TT::ParenthesisClose)?;
     Ok(expr)
   }
@@ -397,7 +409,8 @@ impl<'a> Parser<'a> {
       TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
       TT::KeywordUndefinedType | TT::Identifier | TT::BraceOpen | TT::BracketOpen |
       TT::KeywordTypeof | TT::KeywordKeyof | TT::ParenthesisOpen |
-      TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull
+      TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull |
+      TT::KeywordConst
     );
 
     if !looks_like_type_assertion {
@@ -406,6 +419,24 @@ impl<'a> Parser<'a> {
 
     self.with_loc(|p| {
       p.require(TT::ChevronLeft)?;
+
+      // Check for <const> type assertion
+      let is_const_assertion = p.peek().typ == TT::KeywordConst;
+      if is_const_assertion {
+        p.consume(); // consume 'const'
+        p.require(TT::ChevronRight)?;
+
+        // Parse just the operand - the outer expression parser will handle operators
+        let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
+
+        use crate::ast::expr::TypeAssertionExpr;
+        return Ok(TypeAssertionExpr {
+          expression: Box::new(expression),
+          type_annotation: None,
+          const_assertion: true,
+        }.into());
+      }
+
       let type_annotation = p.type_expr(ctx)?;
       p.require(TT::ChevronRight)?;
 
@@ -469,7 +500,13 @@ impl<'a> Parser<'a> {
             && next_token.typ != TT::BraceClose
             && !terminators.contains(&next_token.typ)
         } else {
-          true
+          // TypeScript: For other unary operators, allow missing operand for error recovery
+          // Accept semicolon, closing braces/brackets/parens as missing operand
+          next_token.typ != TT::Semicolon
+            && next_token.typ != TT::ParenthesisClose
+            && next_token.typ != TT::BracketClose
+            && next_token.typ != TT::BraceClose
+            && next_token.typ != TT::EOF
         };
 
         let operand = if has_operand {
@@ -480,7 +517,7 @@ impl<'a> Parser<'a> {
             asi,
           )?
         } else {
-          // For yield/await without operand, use `undefined` identifier
+          // For unary operators without operand, use `undefined` identifier for error recovery
           Node::new(op_loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
         };
 
@@ -603,6 +640,17 @@ impl<'a> Parser<'a> {
       TT::LiteralString => self.lit_str()?.into_wrapped(),
       TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self.lit_template(ctx)?.into_wrapped(),
       TT::ParenthesisOpen => self.arrow_function_or_grouping_expr(ctx, terminators, asi)?,
+      // ES2022: Private identifier in expression position (e.g., `#field in obj`)
+      TT::PrivateMember => self.with_loc(|p| {
+        let name = p.consume_as_string();
+        Ok(IdExpr { name })
+      })?.into_wrapped(),
+      // TypeScript: Allow Invalid tokens for error recovery (malformed input, unterminated strings, etc.)
+      // Parser continues with synthetic identifier to enable further parsing
+      TT::Invalid => self.with_loc(|p| {
+        p.consume();
+        Ok(IdExpr { name: String::from("") })
+      })?.into_wrapped(),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand"))),
     };
     Ok(expr)
@@ -668,7 +716,8 @@ impl<'a> Parser<'a> {
         {
           let loc = t.loc;
           self.restore_checkpoint(cp);
-          let parts = self.lit_template_parts(ctx)?;
+          // ES2018: Tagged templates allow invalid escape sequences
+          let parts = self.lit_template_parts(ctx, true)?;
           left = Node::new(left.loc + loc, TaggedTemplateExpr {
             function: left,
             parts,
@@ -740,14 +789,44 @@ impl<'a> Parser<'a> {
 
             if looks_like_type_args {
               // Parse the rest of the type arguments (we already consumed <)
-              let mut args = Vec::new();
+              let mut _args = Vec::new();
               while !self.consume_if(TT::ChevronRight).is_match() {
-                args.push(self.type_expr(ctx)?);
-                if !self.consume_if(TT::Comma).is_match() {
-                  self.require(TT::ChevronRight)?;
-                  break;
+                match self.type_expr(ctx) {
+                  Ok(arg) => {
+                    _args.push(arg);
+                    if !self.consume_if(TT::Comma).is_match() {
+                      if let Ok(_) = self.require_chevron_right() {
+                        break;
+                      } else {
+                        // Error recovery: couldn't find closing >
+                        break;
+                      }
+                    }
+                  }
+                  Err(_) => {
+                    // Error recovery: skip to closing > or give up
+                    break;
+                  }
                 }
               }
+
+              // TypeScript: Check if this is a call expression with type arguments
+              // e.g., foo<T>() or obj.method<T>()
+              if self.peek().typ == TT::ParenthesisOpen {
+                self.consume(); // (
+                let arguments = match self.call_args(ctx) {
+                  Ok(args) => args,
+                  Err(_) => Vec::new(),  // Error recovery
+                };
+                if let Ok(end) = self.require(TT::ParenthesisClose) {
+                  left = Node::new(left.loc + end.loc, CallExpr {
+                    optional_chaining: false,
+                    arguments,
+                    callee: left,
+                  }).into_wrapped();
+                }
+              }
+
               continue;
             }
           }
@@ -765,6 +844,35 @@ impl<'a> Parser<'a> {
           {
             // Automatic Semicolon Insertion.
             // TODO Exceptions (e.g. for loop header).
+            self.restore_checkpoint(cp);
+            asi.did_end_with_asi = true;
+            break;
+          };
+          // TypeScript: Allow semicolons to terminate expressions
+          // This makes the parser more permissive for error recovery
+          if t.typ == TT::Semicolon {
+            self.restore_checkpoint(cp);
+            break;
+          };
+          // TypeScript: Trigger ASI when identifier/keyword follows expression
+          // Enables permissive parsing like "yield foo" -> "yield" + "foo" (two statements)
+          if asi.can_end_with_asi && (t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ)) {
+            self.restore_checkpoint(cp);
+            asi.did_end_with_asi = true;
+            break;
+          };
+          // TypeScript: For error recovery, trigger ASI when we see tokens that typically start new constructs
+          // This handles cases like `await 1` (in contexts where await is an identifier),
+          // arrow functions with malformed types `(a): =>`, object literals after expressions, etc.
+          if asi.can_end_with_asi && matches!(t.typ,
+            TT::Colon |           // Arrow function malformed type annotation: (a):
+            TT::BraceOpen |       // New object/block after expression
+            TT::LiteralNumber |   // Number after identifier: `await 1` where await is identifier
+            TT::LiteralString |   // String after expression
+            TT::LiteralTrue |     // Boolean after expression
+            TT::LiteralFalse |    // Boolean after expression
+            TT::LiteralNull       // Null after expression
+          ) {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
             break;
@@ -795,7 +903,16 @@ impl<'a> Parser<'a> {
             }
             OperatorName::ComputedMemberAccess
             | OperatorName::OptionalChainingComputedMemberAccess => {
-              let member = self.expr(ctx, [TT::BracketClose])?;
+              // TypeScript: Allow empty bracket expressions for error recovery: obj[]
+              let member = if self.peek().typ == TT::BracketClose {
+                let loc = self.peek().loc;
+                Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+              } else {
+                self.expr(ctx, [TT::BracketClose]).unwrap_or_else(|_| {
+                  let loc = self.peek().loc;
+                  Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+                })
+              };
               let end = self.require(TT::BracketClose)?;
               Node::new(left.loc + end.loc, ComputedMemberExpr {
                 optional_chaining: operator.name == OperatorName::OptionalChainingComputedMemberAccess,

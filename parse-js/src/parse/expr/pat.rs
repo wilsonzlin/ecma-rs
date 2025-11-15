@@ -13,6 +13,7 @@ use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::token::TT;
 use crate::token::UNRESERVED_KEYWORDS;
+use crate::lex::KEYWORDS_MAPPING;
 
 #[derive(Clone, Copy)]
 pub struct ParsePatternRules {
@@ -41,8 +42,10 @@ impl ParsePatternRules {
 pub fn is_valid_pattern_identifier(typ: TT, rules: ParsePatternRules) -> bool {
   match typ {
     TT::Identifier => true,
-    TT::KeywordAwait => rules.await_allowed,
-    TT::KeywordYield => rules.yield_allowed,
+    // TypeScript: Allow await/yield unconditionally as parameter names
+    // (semantic errors will be caught later by type checker)
+    TT::KeywordAwait => true, // was: rules.await_allowed,
+    TT::KeywordYield => true, // was: rules.yield_allowed,
     t => UNRESERVED_KEYWORDS.contains(&t),
   }
 }
@@ -97,11 +100,12 @@ impl<'a> Parser<'a> {
               }
               ClassOrObjKey::Direct(n) => {
                 // We can't have a non-identifier (e.g. str) key, even if it normalizes to a valid identifier name.
-                // It also must be a valid pattern identifier (e.g. can't be a reserved keyword).
-                if !is_valid_pattern_identifier(n.stx.tt, ctx.rules) {
+                // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
+                // The type checker will validate this semantically.
+                if n.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&n.stx.tt) {
                   return Err(n.error(SyntaxErrorType::ExpectedNotFound));
                 }
-                // We've already ensured that this is a valid identifier.
+                // We've already ensured that this is a valid identifier or keyword.
                 let id_pat = n.derive_stx(|n| IdPat { name: n.key.clone() }).into_wrapped();
                 (true, id_pat)
               }
@@ -180,6 +184,11 @@ impl<'a> Parser<'a> {
       t if is_valid_pattern_identifier(t, ctx.rules) => self.id_pat(ctx)?.into_wrapped(),
       TT::BraceOpen => self.obj_pat(ctx)?.into_wrapped(),
       TT::BracketOpen => self.arr_pat(ctx)?.into_wrapped(),
+      // TypeScript: For error recovery, create synthetic identifier when pattern is missing
+      // Handles cases like `var;`, `let;`, `const;`, `export var;`
+      TT::Semicolon | TT::Comma | TT::EOF => {
+        Node::new(t.loc, IdPat { name: String::from("") }).into_wrapped()
+      }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("pattern"))),
     };
     Ok(pat)

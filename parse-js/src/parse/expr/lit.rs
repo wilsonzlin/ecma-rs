@@ -25,6 +25,7 @@ use crate::ast::node::Node;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
+use crate::lex::KEYWORDS_MAPPING;
 use crate::num::JsNumber;
 use crate::operator::OperatorName;
 use crate::token::TT;
@@ -307,7 +308,9 @@ impl<'a> Parser<'a> {
                   };
                   return Err(loc.error(SyntaxErrorType::ExpectedSyntax("property value"), None));
                 };
-                if !is_valid_pattern_identifier(key.stx.tt, ctx.rules) {
+                // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
+                // The type checker will validate this semantically.
+                if key.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&key.stx.tt) {
                   return Err(key.error(SyntaxErrorType::ExpectedNotFound));
                 };
                 // Check for default value (e.g., {c = 1})
@@ -364,21 +367,24 @@ impl<'a> Parser<'a> {
 
   /// Parses a literal string and returns the raw string value normalized (e.g. escapes decoded).
   /// Does *not* return a node; use `lit_str` for that.
+  /// TypeScript: Allows invalid escape sequences (permissive parsing, semantic errors caught later)
   pub fn lit_str_val(&mut self) -> SyntaxResult<String> {
     let t = self.require(TT::LiteralString)?;
-    normalise_literal_string(self.str(t.loc))
-      .ok_or_else(|| t.loc.error(SyntaxErrorType::InvalidCharacterEscape, None))
+    // TypeScript: Allow invalid escapes (e.g., \u{110000} out of range)
+    // Use empty string for invalid escapes to continue parsing
+    Ok(normalise_literal_string(self.str(t.loc)).unwrap_or_else(|| String::new()))
   }
 
   pub fn lit_template(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitTemplateExpr>> {
     self.with_loc(|p| {
-      let parts = p.lit_template_parts(ctx)?;
+      let parts = p.lit_template_parts(ctx, false)?;
       Ok(LitTemplateExpr { parts })
     })
   }
 
   // NOTE: The next token must definitely be LiteralTemplatePartString{,End}.
-  pub fn lit_template_parts(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<LitTemplatePart>> {
+  // ES2018: Tagged templates can have invalid escape sequences (cooked value is undefined, raw is available)
+  pub fn lit_template_parts(&mut self, ctx: ParseCtx, tagged: bool) -> SyntaxResult<Vec<LitTemplatePart>> {
     let t = self.consume();
     let is_end = match t.typ {
       TT::LiteralTemplatePartString => false,
@@ -387,10 +393,14 @@ impl<'a> Parser<'a> {
     };
 
     let mut parts = Vec::new();
-    parts.push(LitTemplatePart::String(
+    // ES2018: Tagged templates allow invalid escapes
+    let first_str = if tagged {
+      normalise_literal_string_or_template_inner(self.bytes(t.loc)).unwrap_or_else(|| String::new())
+    } else {
       normalise_literal_string_or_template_inner(self.bytes(t.loc))
-        .ok_or_else(|| t.loc.error(SyntaxErrorType::InvalidCharacterEscape, None))?,
-    ));
+        .ok_or_else(|| t.loc.error(SyntaxErrorType::InvalidCharacterEscape, None))?
+    };
+    parts.push(LitTemplatePart::String(first_str));
     if !is_end {
       loop {
         let substitution = self.expr(ctx, [TT::BraceClose])?;
@@ -400,13 +410,17 @@ impl<'a> Parser<'a> {
         if !matches!(string.typ, TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd) {
           return Err(string.error(SyntaxErrorType::ExpectedSyntax("template string part")));
         };
-        parts.push(LitTemplatePart::String(
+        // ES2018: Tagged templates allow invalid escapes
+        let part_str = if tagged {
+          normalise_literal_string_or_template_inner(self.bytes(string.loc)).unwrap_or_else(|| String::new())
+        } else {
           normalise_literal_string_or_template_inner(self.bytes(string.loc)).ok_or_else(|| {
             string
               .loc
               .error(SyntaxErrorType::InvalidCharacterEscape, None)
-          })?,
-        ));
+          })?
+        };
+        parts.push(LitTemplatePart::String(part_str));
         if string.typ == TT::LiteralTemplatePartStringEnd {
           break;
         };

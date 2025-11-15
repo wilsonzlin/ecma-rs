@@ -3,6 +3,8 @@ use super::expr::Asi;
 use super::ParseCtx;
 use super::Parser;
 use crate::ast::class_or_object::ClassMember;
+use crate::ast::expr::pat::{IdPat, Pat};
+use crate::ast::stmt::decl::PatDecl;
 use crate::ast::class_or_object::ClassOrObjGetter;
 use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
 use crate::ast::class_or_object::ClassOrObjKey;
@@ -41,21 +43,31 @@ impl<'a> Parser<'a> {
         // [accessibility] [abstract] [override] [static] [readonly]
 
         // TypeScript: accessibility modifiers (public, private, protected)
-        let accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
-          Some(crate::ast::stmt::decl::Accessibility::Public)
-        } else if p.consume_if(TT::KeywordPrivate).is_match() {
-          Some(crate::ast::stmt::decl::Accessibility::Private)
-        } else if p.consume_if(TT::KeywordProtected).is_match() {
-          Some(crate::ast::stmt::decl::Accessibility::Protected)
-        } else {
-          None
-        };
+        // Error recovery: allow duplicate modifiers
+        let mut accessibility = None;
+        while p.peek().typ == TT::KeywordPublic || p.peek().typ == TT::KeywordPrivate || p.peek().typ == TT::KeywordProtected {
+          if p.consume_if(TT::KeywordPublic).is_match() {
+            accessibility = Some(crate::ast::stmt::decl::Accessibility::Public);
+          } else if p.consume_if(TT::KeywordPrivate).is_match() {
+            accessibility = Some(crate::ast::stmt::decl::Accessibility::Private);
+          } else if p.consume_if(TT::KeywordProtected).is_match() {
+            accessibility = Some(crate::ast::stmt::decl::Accessibility::Protected);
+          }
+        }
 
         // TypeScript: abstract modifier
-        let abstract_ = ambient || p.consume_if(TT::KeywordAbstract).is_match();
+        // Error recovery: allow duplicate abstract modifiers
+        let mut abstract_ = ambient;
+        while p.consume_if(TT::KeywordAbstract).is_match() {
+          abstract_ = true;
+        }
 
         // TypeScript: override modifier
-        let override_ = p.consume_if(TT::KeywordOverride).is_match();
+        // Error recovery: allow duplicate override modifiers
+        let mut override_ = false;
+        while p.consume_if(TT::KeywordOverride).is_match() {
+          override_ = true;
+        }
 
         // `static` must always come after other modifiers
         let static_ = if p.peek().typ == TT::KeywordStatic {
@@ -103,10 +115,24 @@ impl<'a> Parser<'a> {
         };
 
         // TypeScript: readonly modifier
-        let readonly = p.consume_if(TT::KeywordReadonly).is_match();
+        // Error recovery: allow duplicate readonly modifiers
+        let mut readonly = false;
+        while p.consume_if(TT::KeywordReadonly).is_match() {
+          readonly = true;
+        }
 
         // TypeScript/JavaScript: accessor modifier for auto-accessors
-        let accessor = p.consume_if(TT::KeywordAccessor).is_match();
+        // Error recovery: allow duplicate accessor modifiers
+        let mut accessor = false;
+        while p.consume_if(TT::KeywordAccessor).is_match() {
+          accessor = true;
+        }
+
+        // TypeScript: Error recovery - skip decorators in invalid positions
+        // e.g., `public @dec get foo()` - decorator after modifier is invalid
+        while p.peek().typ == TT::At {
+          let _ = p.decorators(ctx);
+        }
 
         // TypeScript: check for index signature [key: type]: type
         let (key, value, definite_assignment, optional, type_annotation) = if p.peek().typ == TT::BracketOpen {
@@ -355,7 +381,22 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<(ClassOrObjKey, Node<ClassOrObjMethod>)> {
     let is_async = self.consume_if(TT::KeywordAsync).is_match();
     let is_generator = self.consume_if(TT::Asterisk).is_match();
-    let key = self.class_or_obj_key(ctx)?;
+
+    // For anonymous methods like *(), async(), check if paren comes immediately
+    let key = if self.peek().typ == TT::ParenthesisOpen {
+      // Anonymous method - use empty string as key
+      use crate::ast::class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey};
+      use crate::loc::Loc;
+      ClassOrObjKey::Direct(Node::new(
+        Loc(0, 0),
+        ClassOrObjMemberDirectKey {
+          key: String::new(),
+          tt: TT::Identifier,
+        }
+      ))
+    } else {
+      self.class_or_obj_key(ctx)?
+    };
     let func = self.with_loc(|p| {
       // TypeScript: generic type parameters
       let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
@@ -462,17 +503,28 @@ impl<'a> Parser<'a> {
         await_allowed: true,
         yield_allowed: true,
       });
-      let pattern = p.pat_decl(setter_ctx)?;
-      // TypeScript: type annotation for setter parameter
-      let type_annotation = if p.consume_if(TT::Colon).is_match() {
-        Some(p.type_expr(ctx)?)
+      // TypeScript: Error recovery - allow setters with no parameter
+      let (pattern, type_annotation, default_value) = if p.peek().typ == TT::ParenthesisClose {
+        // Empty parameter list - create synthetic parameter for error recovery
+        let loc = p.peek().loc;
+        let synthetic_pattern = Node::new(loc, PatDecl {
+          pat: Node::new(loc, IdPat { name: String::from("_") }).into_wrapped(),
+        });
+        (synthetic_pattern, None, None)
       } else {
-        None
+        let pattern = p.pat_decl(setter_ctx)?;
+        // TypeScript: type annotation for setter parameter
+        let type_annotation = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr(ctx)?)
+        } else {
+          None
+        };
+        let default_value = p.consume_if(TT::Equals)
+          .and_then(|| {
+            p.expr(setter_ctx, [TT::ParenthesisClose])
+          })?;
+        (pattern, type_annotation, default_value)
       };
-      let default_value = p.consume_if(TT::Equals)
-        .and_then(|| {
-          p.expr(setter_ctx, [TT::ParenthesisClose])
-        })?;
       let param_loc = pattern.loc;
       p.require(TT::ParenthesisClose)?;
       // Setters don't have return types
@@ -495,7 +547,7 @@ impl<'a> Parser<'a> {
           accessibility: None,
           readonly: false,
           pattern,
-          type_annotation: None,
+          type_annotation,
           default_value,
         })],
         return_type: None,
@@ -652,6 +704,7 @@ impl<'a> Parser<'a> {
       (TT::KeywordAsync, TT::Asterisk, _, TT::ParenthesisOpen)
       | (TT::KeywordAsync, TT::BracketOpen, _, _)  // Async method with computed property: async [key]()
       | (TT::KeywordAsync, _, TT::ParenthesisOpen, _)
+      | (TT::Asterisk, TT::ParenthesisOpen, _, _)  // Anonymous generator method: *()
       | (TT::Asterisk, _, TT::ParenthesisOpen, _)
       | (TT::Asterisk, TT::BracketOpen, _, _)  // Generator with computed property: *[key]()
       | (_, TT::ParenthesisOpen, _, _)

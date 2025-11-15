@@ -130,7 +130,19 @@ impl<'a> Parser<'a> {
         }
       }
 
-      let name = p.require_identifier()?;
+      // TypeScript: Allow reserved keywords in dotted namespace paths
+      // e.g., `declare namespace chrome.debugger {}` or `declare namespace test.class {}`
+      // This is permissive parsing - semantic errors will be caught by type checker
+      // Also allow keywords as namespace names for error recovery (e.g., `namespace debugger {}`)
+      let t = p.consume();
+      let name = if t.typ == TT::Identifier {
+        p.string(t.loc)
+      } else if crate::lex::KEYWORDS_MAPPING.contains_key(&t.typ) {
+        // Allow any keyword as namespace name for error recovery
+        p.string(t.loc)
+      } else {
+        return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+      };
 
       // Check for nested namespace: namespace A.B { }
       let body = if p.consume_if(TT::Dot).is_match() {

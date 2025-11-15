@@ -304,7 +304,7 @@ impl<'a> Parser<'a> {
       // Contextual keywords allowed as type identifiers
       TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
       TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
-      TT::KeywordAbstract | TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
+      TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
       TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
@@ -341,7 +341,20 @@ impl<'a> Parser<'a> {
       TT::ChevronLeft => self.try_function_type(ctx),
 
       // new () => T  (constructor type)
+      // TypeScript: abstract new () => T (abstract constructor type)
       TT::KeywordNew => self.constructor_type(ctx),
+      TT::KeywordAbstract => {
+        // Check if this is 'abstract new' for abstract constructor type
+        let [_, next] = self.peek_n::<2>();
+        if next.typ == TT::KeywordNew {
+          // Skip 'abstract' and parse constructor type
+          self.consume(); // abstract
+          self.constructor_type(ctx)
+        } else {
+          // Treat 'abstract' as a type identifier
+          self.type_reference(ctx)
+        }
+      }
 
       // Literal types
       TT::LiteralString => {
@@ -457,8 +470,8 @@ impl<'a> Parser<'a> {
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
       TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
-      // Allow type keywords as identifiers in typeof queries like: typeof undefined
-      TT::KeywordUndefinedType
+      // Allow type keywords as identifiers in typeof queries like: typeof undefined, typeof this
+      TT::KeywordUndefinedType | TT::KeywordThis
       => Ok(self.string(t.loc)),
       _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type identifier")))
     }
@@ -496,6 +509,11 @@ impl<'a> Parser<'a> {
 
       // Type operators
       TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer => true,
+
+      // TypeScript: Literal types (string, number, boolean, null, etc.)
+      // Enables: Exclude<"a" | "b", "c">, MyType<123>, etc.
+      TT::LiteralString | TT::LiteralNumber | TT::LiteralBigInt
+      | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull => true,
 
       // Identifier followed by type-like punctuation
       TT::Identifier => {
@@ -744,8 +762,11 @@ impl<'a> Parser<'a> {
     }
 
     // Check for get/set accessors
-    let is_get = self.consume_if(TT::KeywordGet).is_match();
-    let is_set = !is_get && self.consume_if(TT::KeywordSet).is_match();
+    // But don't treat get/set as accessor keywords if followed by ? (optional method)
+    let is_get = self.peek().typ == TT::KeywordGet && self.peek_n::<2>()[1].typ != TT::Question
+      && self.consume_if(TT::KeywordGet).is_match();
+    let is_set = !is_get && self.peek().typ == TT::KeywordSet && self.peek_n::<2>()[1].typ != TT::Question
+      && self.consume_if(TT::KeywordSet).is_match();
 
     // Parse property key
     let key = self.type_property_key(ctx)?;
@@ -843,8 +864,9 @@ impl<'a> Parser<'a> {
     let parameters = self.function_type_parameters(ctx)?;
     self.require(TT::ParenthesisClose)?;
 
+    // TypeScript: Support type predicates in method signatures
     let return_type = if self.consume_if(TT::Colon).is_match() {
-      Some(self.type_expr(ctx)?)
+      Some(self.type_expr_or_predicate(ctx)?)
     } else {
       None
     };
@@ -882,8 +904,9 @@ impl<'a> Parser<'a> {
       let parameters = p.function_type_parameters(ctx)?;
       p.require(TT::ParenthesisClose)?;
 
+      // TypeScript: Support type predicates in call signatures
       let return_type = if p.consume_if(TT::Colon).is_match() {
-        Some(p.type_expr(ctx)?)
+        Some(p.type_expr_or_predicate(ctx)?)
       } else {
         None
       };
@@ -910,8 +933,9 @@ impl<'a> Parser<'a> {
     let parameters = self.function_type_parameters(ctx)?;
     self.require(TT::ParenthesisClose)?;
 
+    // TypeScript: Support type predicates in constructor signatures
     let return_type = if self.consume_if(TT::Colon).is_match() {
-      Some(self.type_expr(ctx)?)
+      Some(self.type_expr_or_predicate(ctx)?)
     } else {
       None
     };
@@ -974,8 +998,9 @@ impl<'a> Parser<'a> {
     self.require(TT::ParenthesisOpen)?;
     self.require(TT::ParenthesisClose)?;
 
+    // TypeScript: Support type predicates in get accessor signatures
     let return_type = if self.consume_if(TT::Colon).is_match() {
-      Some(self.type_expr(ctx)?)
+      Some(self.type_expr_or_predicate(ctx)?)
     } else {
       None
     };
@@ -999,7 +1024,19 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<Node<TypeMember>> {
     let start_loc = self.peek().loc;
     self.require(TT::ParenthesisOpen)?;
-    let parameter = self.function_type_parameter(ctx)?;
+    // TypeScript: Error recovery - allow setters with no parameter
+    let parameter = if self.peek().typ == TT::ParenthesisClose {
+      // Empty parameter list - create synthetic parameter for error recovery
+      let loc = self.peek().loc;
+      Node::new(loc, TypeFunctionParameter {
+        rest: false,
+        name: Some("_".to_string()),
+        optional: false,
+        type_expr: Node::new(loc, TypeExpr::Any(Node::new(loc, crate::ast::type_expr::TypeAny {}))),
+      })
+    } else {
+      self.function_type_parameter(ctx)?
+    };
     let end_loc = self.peek().loc;
     self.require(TT::ParenthesisClose)?;
 
@@ -1205,13 +1242,24 @@ impl<'a> Parser<'a> {
   /// Parse single function type parameter
   fn function_type_parameter(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeFunctionParameter>> {
     self.with_loc(|p| {
+      // TypeScript: Allow accessibility modifiers in type signatures for error recovery
+      // e.g., `(public x, private y)` in interface (semantically invalid but syntactically parseable)
+      if !p.consume_if(TT::KeywordPublic).is_match() {
+        if !p.consume_if(TT::KeywordPrivate).is_match() {
+          p.consume_if(TT::KeywordProtected);
+        }
+      }
+
+      // TypeScript: Allow readonly modifier
+      p.consume_if(TT::KeywordReadonly);
+
       let rest = p.consume_if(TT::DotDotDot).is_match();
 
       let name = if p.peek().typ == TT::Identifier {
         let checkpoint = p.checkpoint();
         let n = p.consume_as_string();
-        // Check if followed by colon or question
-        if p.peek().typ == TT::Colon || p.peek().typ == TT::Question {
+        // Check if followed by colon, question, or equals (for error recovery)
+        if p.peek().typ == TT::Colon || p.peek().typ == TT::Question || p.peek().typ == TT::Equals {
           Some(n)
         } else {
           p.restore_checkpoint(checkpoint);
@@ -1222,6 +1270,28 @@ impl<'a> Parser<'a> {
       };
 
       let optional = p.consume_if(TT::Question).is_match();
+
+      // TypeScript: Allow default values in type signatures for error recovery
+      // e.g., `(x = 1)` or `foo(x = 1)` in interface/type literal
+      if p.peek().typ == TT::Equals {
+        p.consume(); // consume '='
+        // Parse and discard the default value expression
+        let _ = p.expr(ctx, [TT::Comma, TT::ParenthesisClose]);
+        // Type annotation is optional when there's a default value
+        let type_expr = if p.consume_if(TT::Colon).is_match() {
+          p.type_expr(ctx)?
+        } else {
+          // Create synthetic 'any' type
+          use crate::loc::Loc;
+          Node::new(p.peek().loc, TypeExpr::Any(Node::new(p.peek().loc, crate::ast::type_expr::TypeAny {})))
+        };
+        return Ok(TypeFunctionParameter {
+          name,
+          optional,
+          rest,
+          type_expr,
+        });
+      }
 
       if name.is_some() || optional {
         p.require(TT::Colon)?;

@@ -71,6 +71,8 @@ pub struct VarDecl {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct VarDeclarator {
   pub pattern: Node<PatDecl>,
+  #[drive(skip)]
+  pub definite_assignment: bool,
   pub type_annotation: Option<Node<TypeExpr>>,
   pub initializer: Option<Node<Expr>>,
 }
