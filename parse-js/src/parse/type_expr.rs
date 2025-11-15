@@ -762,8 +762,11 @@ impl<'a> Parser<'a> {
     }
 
     // Check for get/set accessors
-    let is_get = self.consume_if(TT::KeywordGet).is_match();
-    let is_set = !is_get && self.consume_if(TT::KeywordSet).is_match();
+    // But don't treat get/set as accessor keywords if followed by ? (optional method)
+    let is_get = self.peek().typ == TT::KeywordGet && self.peek_n::<2>()[1].typ != TT::Question
+      && self.consume_if(TT::KeywordGet).is_match();
+    let is_set = !is_get && self.peek().typ == TT::KeywordSet && self.peek_n::<2>()[1].typ != TT::Question
+      && self.consume_if(TT::KeywordSet).is_match();
 
     // Parse property key
     let key = self.type_property_key(ctx)?;
