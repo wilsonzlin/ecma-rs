@@ -1239,6 +1239,17 @@ impl<'a> Parser<'a> {
   /// Parse single function type parameter
   fn function_type_parameter(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeFunctionParameter>> {
     self.with_loc(|p| {
+      // TypeScript: Allow accessibility modifiers in type signatures for error recovery
+      // e.g., `(public x, private y)` in interface (semantically invalid but syntactically parseable)
+      if !p.consume_if(TT::KeywordPublic).is_match() {
+        if !p.consume_if(TT::KeywordPrivate).is_match() {
+          p.consume_if(TT::KeywordProtected);
+        }
+      }
+
+      // TypeScript: Allow readonly modifier
+      p.consume_if(TT::KeywordReadonly);
+
       let rest = p.consume_if(TT::DotDotDot).is_match();
 
       let name = if p.peek().typ == TT::Identifier {
