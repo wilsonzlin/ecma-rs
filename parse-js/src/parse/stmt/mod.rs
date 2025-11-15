@@ -86,7 +86,19 @@ impl<'a> Parser<'a> {
       TT::KeywordDeclare => self.declare_stmt(ctx)?,
       TT::KeywordAbstract if t1.typ == TT::KeywordClass => self.abstract_class_decl(ctx)?.into_wrapped(),
       // Decorators can appear before class declarations
-      TT::At => self.class_decl_impl(ctx, false)?.into_wrapped(),
+      // For error recovery, if decorators are followed by non-class, skip decorators and parse the statement
+      TT::At => {
+        let checkpoint = self.checkpoint();
+        match self.class_decl_impl(ctx, false) {
+          Ok(class_decl) => class_decl.into_wrapped(),
+          Err(_) => {
+            // Not a class - restore and skip decorators, then parse the statement
+            self.restore_checkpoint(checkpoint);
+            let _ = self.decorators(ctx); // Skip decorators
+            self.stmt(ctx)?
+          }
+        }
+      }
 
       t if is_valid_pattern_identifier(t, ctx.rules) && t1.typ == TT::Colon => self.label_stmt(ctx)?.into_wrapped(),
       _ => self.expr_stmt(ctx)?.into_wrapped(),
