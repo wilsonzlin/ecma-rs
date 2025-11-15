@@ -43,21 +43,31 @@ impl<'a> Parser<'a> {
         // [accessibility] [abstract] [override] [static] [readonly]
 
         // TypeScript: accessibility modifiers (public, private, protected)
-        let accessibility = if p.consume_if(TT::KeywordPublic).is_match() {
-          Some(crate::ast::stmt::decl::Accessibility::Public)
-        } else if p.consume_if(TT::KeywordPrivate).is_match() {
-          Some(crate::ast::stmt::decl::Accessibility::Private)
-        } else if p.consume_if(TT::KeywordProtected).is_match() {
-          Some(crate::ast::stmt::decl::Accessibility::Protected)
-        } else {
-          None
-        };
+        // Error recovery: allow duplicate modifiers
+        let mut accessibility = None;
+        while p.peek().typ == TT::KeywordPublic || p.peek().typ == TT::KeywordPrivate || p.peek().typ == TT::KeywordProtected {
+          if p.consume_if(TT::KeywordPublic).is_match() {
+            accessibility = Some(crate::ast::stmt::decl::Accessibility::Public);
+          } else if p.consume_if(TT::KeywordPrivate).is_match() {
+            accessibility = Some(crate::ast::stmt::decl::Accessibility::Private);
+          } else if p.consume_if(TT::KeywordProtected).is_match() {
+            accessibility = Some(crate::ast::stmt::decl::Accessibility::Protected);
+          }
+        }
 
         // TypeScript: abstract modifier
-        let abstract_ = ambient || p.consume_if(TT::KeywordAbstract).is_match();
+        // Error recovery: allow duplicate abstract modifiers
+        let mut abstract_ = ambient;
+        while p.consume_if(TT::KeywordAbstract).is_match() {
+          abstract_ = true;
+        }
 
         // TypeScript: override modifier
-        let override_ = p.consume_if(TT::KeywordOverride).is_match();
+        // Error recovery: allow duplicate override modifiers
+        let mut override_ = false;
+        while p.consume_if(TT::KeywordOverride).is_match() {
+          override_ = true;
+        }
 
         // `static` must always come after other modifiers
         let static_ = if p.peek().typ == TT::KeywordStatic {
@@ -105,10 +115,18 @@ impl<'a> Parser<'a> {
         };
 
         // TypeScript: readonly modifier
-        let readonly = p.consume_if(TT::KeywordReadonly).is_match();
+        // Error recovery: allow duplicate readonly modifiers
+        let mut readonly = false;
+        while p.consume_if(TT::KeywordReadonly).is_match() {
+          readonly = true;
+        }
 
         // TypeScript/JavaScript: accessor modifier for auto-accessors
-        let accessor = p.consume_if(TT::KeywordAccessor).is_match();
+        // Error recovery: allow duplicate accessor modifiers
+        let mut accessor = false;
+        while p.consume_if(TT::KeywordAccessor).is_match() {
+          accessor = true;
+        }
 
         // TypeScript: check for index signature [key: type]: type
         let (key, value, definite_assignment, optional, type_annotation) = if p.peek().typ == TT::BracketOpen {
