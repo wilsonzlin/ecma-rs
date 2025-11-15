@@ -128,6 +128,12 @@ impl<'a> Parser<'a> {
           accessor = true;
         }
 
+        // TypeScript: Error recovery - skip decorators in invalid positions
+        // e.g., `public @dec get foo()` - decorator after modifier is invalid
+        while p.peek().typ == TT::At {
+          let _ = p.decorators(ctx);
+        }
+
         // TypeScript: check for index signature [key: type]: type
         let (key, value, definite_assignment, optional, type_annotation) = if p.peek().typ == TT::BracketOpen {
           let checkpoint = p.checkpoint();
