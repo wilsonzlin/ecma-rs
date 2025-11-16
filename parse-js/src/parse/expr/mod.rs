@@ -403,6 +403,7 @@ impl<'a> Parser<'a> {
     // Quick lookahead: check if this looks like a type assertion
     // Type assertions start with type expression keywords or identifiers that are type names
     let [_, t1] = self.peek_n::<2>();
+    eprintln!("DEBUG try_parse_angle_bracket_type_assertion: t1 = {:?} '{}'", t1.typ, self.str(t1.loc));
 
     // Check if it's an identifier that looks like a JSX tag (starts with lowercase)
     // JSX built-in tags like <div>, <span> start with lowercase, while type names typically start with uppercase
@@ -423,6 +424,8 @@ impl<'a> Parser<'a> {
       TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull |
       TT::KeywordConst
     );
+
+    eprintln!("DEBUG: is_likely_jsx_tag = {}, looks_like_type_assertion = {}", is_likely_jsx_tag, looks_like_type_assertion);
 
     if !looks_like_type_assertion {
       return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("type assertion")));
@@ -450,6 +453,18 @@ impl<'a> Parser<'a> {
 
       let type_annotation = p.type_expr(ctx)?;
       p.require(TT::ChevronRight)?;
+
+      // TypeScript: If we're followed by `<`, this could be JSX, not a nested type assertion
+      // E.g., <Panel><Div /></Panel> should be JSX, not <Panel>(<Div>(...))</Panel> as nested type assertions
+      // Check if it looks like a JSX element: `<identifier` followed by whitespace, `/`, or `>`
+      if p.peek().typ == TT::ChevronLeft {
+        let [_, t1, t2] = p.peek_n::<3>();
+        if t1.typ == TT::Identifier {
+          // This looks like JSX: <identifier ...
+          // Reject the type assertion and let JSX parser handle it
+          return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("not a type assertion (followed by JSX element)")));
+        }
+      }
 
       // Parse just the operand - the outer expression parser will handle operators
       let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
@@ -634,8 +649,10 @@ impl<'a> Parser<'a> {
           }
         } else {
           // Not type arguments, try type assertion or JSX
+          
           match self.try_parse_angle_bracket_type_assertion(ctx) {
             Ok(assertion) => {
+              
               assertion
             }
             Err(e) => {

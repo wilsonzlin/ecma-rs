@@ -104,8 +104,10 @@ impl<'a> Parser<'a> {
     let mut children = Vec::<JsxElemChild>::new();
     loop {
       let t = self.peek();
+      eprintln!("DEBUG jsx_elem_children: peeked token {:?} at {:?}", t.typ, t.loc);
       match t.typ {
         TT::ChevronLeftSlash => {
+          
           break;
         }
         TT::EOF => {
@@ -114,13 +116,17 @@ impl<'a> Parser<'a> {
         _ => {}
       };
       let text = self.require_with_mode(TT::JsxTextContent, LexMode::JsxTextContent)?;
+      eprintln!("DEBUG: Read text content, loc: {:?}", text.loc);
       if !text.loc.is_empty() {
         children.push(JsxElemChild::Text(Node::new(text.loc, JsxText {
           value: self.string(text.loc),
         })));
       };
+      eprintln!("DEBUG: After text, peek = {:?}", self.peek().typ);
       if self.peek().typ == TT::ChevronLeft {
+        
         let child = self.jsx_elem(ctx)?;
+        
         children.push(JsxElemChild::Element(child));
       };
       if self.consume_if(TT::BraceOpen).is_match() {
@@ -149,9 +155,11 @@ impl<'a> Parser<'a> {
 
   // https://facebook.github.io/jsx/
   pub fn jsx_elem(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<JsxElem>> {
+    
     self.with_loc(|p| {
       p.require(TT::ChevronLeft)?;
       let tag_name = p.jsx_elem_name()?;
+      eprintln!("DEBUG jsx_elem: tag_name = {:?}", tag_name);
       let attributes = tag_name
         .is_some()
         .then(|| p.jsx_elem_attrs(ctx))
@@ -159,6 +167,7 @@ impl<'a> Parser<'a> {
         .unwrap_or_default();
       if p.consume_if(TT::Slash).is_match() {
         // Self closing.
+        
         p.require(TT::ChevronRight)?;
         return Ok(JsxElem {
           name: tag_name,
@@ -166,6 +175,7 @@ impl<'a> Parser<'a> {
           children: Vec::new(),
         });
       }
+      
       p.require(TT::ChevronRight)?;
       let children = p.jsx_elem_children(ctx)?;
       let closing = p.require(TT::ChevronLeftSlash)?;
