@@ -11,6 +11,7 @@ use super::{Expr, IdExpr};
 pub enum JsxAttrVal {
   Expression(Node<JsxExprContainer>),
   Text(Node<JsxText>),
+  Element(Node<JsxElem>),
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]

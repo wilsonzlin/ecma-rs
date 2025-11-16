@@ -68,12 +68,31 @@ impl<'a> Parser<'a> {
 
   /// Parses a JSX attribute value (comes after the equals sign).
   pub fn jsx_attr_val(&mut self, ctx: ParseCtx) -> SyntaxResult<JsxAttrVal> {
-    // TODO Attr values can be an element or fragment directly e.g. `a=<div/>`.
-    let val = if self.consume_if(TT::BraceOpen).is_match() {
-      let value = self.expr(ctx, [TT::BraceClose])?;
-      let expr = Node::new(value.loc, JsxExprContainer { value });
-      self.require(TT::BraceClose)?;
-      JsxAttrVal::Expression(expr)
+    // Attr values can be an element/fragment directly e.g. `a=<div/>`, or an expression in braces, or a string
+    let val = if self.peek().typ == TT::ChevronLeft {
+      // JSX element or fragment as attribute value
+      let elem = self.jsx_elem(ctx)?;
+      JsxAttrVal::Element(elem)
+    } else if self.consume_if(TT::BraceOpen).is_match() {
+      // Check for empty expression: <div prop={} />
+      if self.peek().typ == TT::BraceClose {
+        // Empty expression - create empty container
+        let loc = self.peek().loc;
+        self.consume(); // consume }
+        // For empty expressions, we still need a valid expression node
+        // Use an empty identifier or similar placeholder
+        use crate::ast::expr::{Expr, IdExpr};
+        use crate::ast::node::Node;
+        use crate::loc::Loc;
+        let empty_expr = Node::new(Loc(loc.0, loc.0), Expr::Id(Node::new(Loc(loc.0, loc.0), IdExpr { name: String::new() })));
+        let expr = Node::new(loc, JsxExprContainer { value: empty_expr });
+        JsxAttrVal::Expression(expr)
+      } else {
+        let value = self.expr(ctx, [TT::BraceClose])?;
+        let expr = Node::new(value.loc, JsxExprContainer { value });
+        self.require(TT::BraceClose)?;
+        JsxAttrVal::Expression(expr)
+      }
     } else {
       JsxAttrVal::Text(self.with_loc(|p| p.lit_str_val().map(|value| JsxText { value }))?)
     };
@@ -130,12 +149,17 @@ impl<'a> Parser<'a> {
         children.push(JsxElemChild::Element(child));
       };
       if self.consume_if(TT::BraceOpen).is_match() {
-        // TODO Allow empty expr.
-        let value = self.expr(ctx, [TT::BraceClose])?;
-        children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
-          value,
-        })));
-        self.require(TT::BraceClose)?;
+        // Allow empty expr: <div>{}</div>
+        if self.peek().typ == TT::BraceClose {
+          // Empty expression - skip it, don't add to children
+          self.consume(); // consume }
+        } else {
+          let value = self.expr(ctx, [TT::BraceClose])?;
+          children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
+            value,
+          })));
+          self.require(TT::BraceClose)?;
+        }
       };
     };
     Ok(children)
