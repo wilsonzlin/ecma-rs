@@ -1203,29 +1203,96 @@ impl<'a> Parser<'a> {
 
   /// Parse parenthesized type or function type
   fn paren_or_function_type(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
-    let checkpoint = self.checkpoint();
-
-    // Try to parse as function type
-    if let Ok(func_type) = self.try_function_type(ctx) {
-      return Ok(func_type);
+    // Quick lookahead to avoid expensive parsing attempt for parenthesized types
+    // This prevents exponential backtracking on deeply nested parentheses like ((((string))))
+    if !self.looks_like_function_type() {
+      // Parse as parenthesized type
+      let start_loc = self.peek().loc;
+      self.require(TT::ParenthesisOpen)?;
+      let type_expr = self.type_expr(ctx)?;
+      let end_loc = self.peek().loc;
+      self.require(TT::ParenthesisClose)?;
+      use crate::loc::Loc;
+      let outer_loc = Loc(start_loc.0, end_loc.1);
+      let paren = Node::new(
+        start_loc,
+        TypeParenthesized {
+          type_expr: Box::new(type_expr),
+        },
+      );
+      return Ok(Node::new(outer_loc, TypeExpr::ParenthesizedType(paren)));
     }
 
-    // Restore and parse as parenthesized type
+    // Parse as function type
+    self.try_function_type(ctx)
+  }
+
+  /// Quick lookahead to check if this looks like a function type (has => after params)
+  /// This avoids exponential backtracking on deeply nested parenthesized types
+  fn looks_like_function_type(&mut self) -> bool {
+    let checkpoint = self.checkpoint();
+
+    // Skip optional type parameters <T, U>
+    if self.peek().typ == TT::ChevronLeft {
+      self.consume(); // <
+      let mut depth = 1;
+      while depth > 0 && self.peek().typ != TT::EOF {
+        match self.peek().typ {
+          TT::ChevronLeft => depth += 1,
+          TT::ChevronRight => depth -= 1,
+          TT::ChevronRightChevronRight => depth -= 2,
+          TT::ChevronRightChevronRightChevronRight => depth -= 3,
+          _ => {}
+        }
+        if depth > 0 {
+          self.consume();
+        }
+      }
+      if depth > 0 {
+        self.restore_checkpoint(checkpoint);
+        return false;
+      }
+      self.consume(); // consume the final >
+    }
+
+    // Must have opening paren
+    if self.peek().typ != TT::ParenthesisOpen {
+      self.restore_checkpoint(checkpoint);
+      return false;
+    }
+    self.consume(); // (
+
+    // Scan to find matching )
+    let mut depth = 1;
+    while depth > 0 && self.peek().typ != TT::EOF {
+      match self.peek().typ {
+        TT::ParenthesisOpen => depth += 1,
+        TT::ParenthesisClose => {
+          depth -= 1;
+          if depth > 0 {
+            self.consume();
+          }
+        }
+        _ => {}
+      }
+      if depth > 0 {
+        self.consume();
+      }
+    }
+
+    if depth > 0 {
+      // Didn't find matching paren
+      self.restore_checkpoint(checkpoint);
+      return false;
+    }
+
+    self.consume(); // consume the final )
+
+    // Check if followed by =>
+    let has_arrow = self.peek().typ == TT::EqualsChevronRight;
+
     self.restore_checkpoint(checkpoint);
-    let start_loc = self.peek().loc;
-    self.require(TT::ParenthesisOpen)?;
-    let type_expr = self.type_expr(ctx)?;
-    let end_loc = self.peek().loc;
-    self.require(TT::ParenthesisClose)?;
-    use crate::loc::Loc;
-    let outer_loc = Loc(start_loc.0, end_loc.1);
-    let paren = Node::new(
-      start_loc,
-      TypeParenthesized {
-        type_expr: Box::new(type_expr),
-      },
-    );
-    Ok(Node::new(outer_loc, TypeExpr::ParenthesizedType(paren)))
+    has_arrow
   }
 
   /// Try to parse function type: (x: T) => U or <T>(x: T) => U
