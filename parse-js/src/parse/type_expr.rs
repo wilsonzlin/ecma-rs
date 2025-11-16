@@ -528,7 +528,8 @@ impl<'a> Parser<'a> {
         self.consume();
         matches!(
           self.peek().typ,
-          TT::ChevronRight
+          TT::ChevronLeft
+            | TT::ChevronRight
             | TT::ChevronRightChevronRight
             | TT::ChevronRightChevronRightChevronRight
             | TT::Comma
