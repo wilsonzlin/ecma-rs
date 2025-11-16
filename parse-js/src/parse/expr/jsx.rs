@@ -2,11 +2,24 @@ use crate::{ast::{expr::{IdExpr, jsx::{JsxAttr, JsxAttrVal, JsxElem, JsxElemChil
 
 
 impl<'a> Parser<'a> {
+  /// Gets a token that can be used as a JSX name (attribute name, tag name part, etc.).
+  /// JSX allows any identifier including JavaScript keywords.
+  fn jsx_name_token(&mut self) -> SyntaxResult<crate::token::Token> {
+    let tok = self.peek_with_mode(LexMode::JsxTag);
+    // Accept identifiers and any keywords as JSX names
+    if tok.typ == TT::Identifier || tok.typ.is_keyword() {
+      self.consume_with_mode(LexMode::JsxTag);
+      Ok(tok)
+    } else {
+      Err(tok.error(crate::error::SyntaxErrorType::RequiredTokenNotFound(TT::Identifier)))
+    }
+  }
+
   pub fn jsx_name(&mut self) -> SyntaxResult<Node<JsxName>> {
     self.with_loc(|p| {
-      let start = p.require_with_mode(TT::Identifier, LexMode::JsxTag)?;
+      let start = p.jsx_name_token()?;
       Ok(if p.consume_if(TT::Colon).is_match() {
-        let name = p.require_with_mode(TT::Identifier, LexMode::JsxTag)?;
+        let name = p.jsx_name_token()?;
         JsxName {
           namespace: Some(p.string(start.loc)),
           name: p.string(name.loc),
@@ -22,16 +35,18 @@ impl<'a> Parser<'a> {
 
   /// Parses a JSX element name like `div`, `ab-cd`, `MyComponent`, `a.b.c`, or `ns:div`.
   pub fn jsx_elem_name(&mut self) -> SyntaxResult<Option<JsxElemName>> {
-    let Some(start) = self
-      .maybe_consume_with_mode(TT::Identifier, LexMode::JsxTag)
-      .match_loc()
-    else {
+    // Try to get a JSX name token (identifier or keyword)
+    let tok = self.peek_with_mode(LexMode::JsxTag);
+    let is_name_token = tok.typ == TT::Identifier || tok.typ.is_keyword();
+    if !is_name_token {
       // Fragment.
       return Ok(None);
     };
+    let start = self.jsx_name_token()?.loc;
+
     let name = if self.consume_if(TT::Colon).is_match() {
       // Namespaced name.
-      let name = self.require_with_mode(TT::Identifier, LexMode::JsxTag)?;
+      let name = self.jsx_name_token()?;
       JsxElemName::Name(Node::new(start + name.loc, JsxName {
         namespace: Some(self.string(start)),
         name: self.string(name.loc),
