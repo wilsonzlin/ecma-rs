@@ -1084,6 +1084,8 @@ impl<'a> Parser<'a> {
   ) -> SyntaxResult<Node<TypeMember>> {
     let start_loc = self.peek().loc;
     self.require(TT::ParenthesisOpen)?;
+    // ES2017+: Allow trailing comma in empty parameter list
+    let _ = self.consume_if(TT::Comma);
     self.require(TT::ParenthesisClose)?;
 
     // TypeScript: Support type predicates in get accessor signatures
@@ -1125,6 +1127,8 @@ impl<'a> Parser<'a> {
     } else {
       self.function_type_parameter(ctx)?
     };
+    // ES2017+: Allow trailing comma in setter parameter list
+    let _ = self.consume_if(TT::Comma);
     let end_loc = self.peek().loc;
     self.require(TT::ParenthesisClose)?;
 

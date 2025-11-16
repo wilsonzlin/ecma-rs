@@ -451,6 +451,8 @@ impl<'a> Parser<'a> {
         None
       };
       p.require(TT::ParenthesisOpen)?;
+      // ES2017+: Allow trailing comma in empty parameter list
+      let _ = p.consume_if(TT::Comma);
       p.require(TT::ParenthesisClose)?;
       // TypeScript: return type annotation - may be type predicate
       let return_type = if p.consume_if(TT::Colon).is_match() {
@@ -526,6 +528,8 @@ impl<'a> Parser<'a> {
         (pattern, type_annotation, default_value)
       };
       let param_loc = pattern.loc;
+      // ES2017+: Allow trailing comma in setter parameter list
+      let _ = p.consume_if(TT::Comma);
       p.require(TT::ParenthesisClose)?;
       // Setters don't have return types
       // TypeScript: setter overload signatures and abstract setters have no body

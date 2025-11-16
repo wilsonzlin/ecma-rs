@@ -85,6 +85,10 @@ impl<'a> Parser<'a> {
           // e.g., ({...{}} = {}), ({...[]} = {})
           // The type checker will validate these semantically
           rest = Some(p.pat(ctx)?);
+          // TypeScript: For error recovery, allow trailing comma after rest element
+          // even though it's semantically invalid (e.g., {...x,})
+          // The type checker will catch this error
+          let _ = p.consume_if(TT::Comma);
           break;
         };
 
@@ -157,6 +161,10 @@ impl<'a> Parser<'a> {
             // Parse and discard the initializer
             p.expr(ctx, [TT::BracketClose])?;
           }
+          // TypeScript: For error recovery, allow trailing comma after rest element
+          // even though it's semantically invalid (e.g., [...x,])
+          // The type checker will catch this error
+          let _ = p.consume_if(TT::Comma);
           break;
         };
 
