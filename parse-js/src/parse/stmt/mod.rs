@@ -31,6 +31,7 @@ use crate::ast::stmt::ThrowStmt;
 use crate::ast::stmt::TryStmt;
 use crate::ast::stmt::WhileStmt;
 use crate::ast::stmt::WithStmt;
+use crate::ast::stmt::decl::PatDecl;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::token::TT;
@@ -318,24 +319,54 @@ impl<'a> Parser<'a> {
     })
   }
 
+  // Helper function to parse 'in' or 'of' as an identifier in for-in/for-of loops
+  // This handles the special case where 'in' and 'of' are used as variable names
+  fn for_in_of_contextual_keyword_pattern(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<PatDecl>> {
+    use crate::ast::expr::pat::IdPat;
+    use crate::ast::expr::pat::Pat;
+    self.with_loc(|p| {
+      let t = p.consume();
+      let name = p.string(t.loc);
+      let id_pat = Node::new(t.loc, IdPat { name });
+      let pat = Node::new(t.loc, Pat::Id(id_pat));
+      Ok(PatDecl { pat })
+    })
+  }
+
   pub fn for_in_of_lhs(&mut self, ctx: ParseCtx) -> SyntaxResult<ForInOfLhs> {
     let [t0, t1] = self.peek_n();
     Ok(match t0.typ {
       TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
-        let pat = self.pat_decl(ctx)?;
+        // Special case: allow 'in' and 'of' as identifiers in for-in/for-of loops
+        // e.g., `for (var in of x)` or `for (var of of x)`
+        let pat = if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+          self.for_in_of_contextual_keyword_pattern(ctx)?
+        } else {
+          self.pat_decl(ctx)?
+        };
         (mode, pat)
       }),
       // `let` is contextual - only a declaration if followed by a pattern
-      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => ForInOfLhs::Decl({
+      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) || t1.typ == TT::KeywordIn || t1.typ == TT::KeywordOf => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
-        let pat = self.pat_decl(ctx)?;
+        // Special case: allow 'in' and 'of' as identifiers in for-in/for-of loops
+        let pat = if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+          self.for_in_of_contextual_keyword_pattern(ctx)?
+        } else {
+          self.pat_decl(ctx)?
+        };
         (mode, pat)
       }),
       // TypeScript: await using in for-of loop
       TT::KeywordAwait if t1.typ == TT::KeywordUsing => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
-        let pat = self.pat_decl(ctx)?;
+        // Special case: allow 'in' and 'of' as identifiers in for-in/for-of loops
+        let pat = if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+          self.for_in_of_contextual_keyword_pattern(ctx)?
+        } else {
+          self.pat_decl(ctx)?
+        };
         (mode, pat)
       }),
       _ => {
