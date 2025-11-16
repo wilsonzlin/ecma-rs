@@ -138,15 +138,19 @@ pub enum TypeLiteral {
   Null,
 }
 
-/// Array type: T[]
+/// Array type: T[] or readonly T[]
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeArray {
+  #[drive(skip)]
+  pub readonly: bool,
   pub element_type: Box<Node<TypeExpr>>,
 }
 
-/// Tuple type: [T, U], [string, ...number[]]
+/// Tuple type: [T, U], [string, ...number[]] or readonly [T, U]
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TypeTuple {
+  #[drive(skip)]
+  pub readonly: bool,
   pub elements: Vec<Node<TypeTupleElement>>,
 }
 

@@ -184,6 +184,7 @@ impl<'a> Parser<'a> {
             let array = Node::new(
               start_loc,
               TypeArray {
+                readonly: false,
                 element_type: Box::new(base),
               },
             );
@@ -309,13 +310,74 @@ impl<'a> Parser<'a> {
       // Type reference or qualified name
       TT::Identifier => self.type_reference(ctx),
 
+      // readonly modifier for array and tuple types
+      TT::KeywordReadonly => {
+        let [_, next] = self.peek_n::<2>();
+        // Check if followed by a type that can be readonly (primitives, identifiers, brackets, parens, etc.)
+        // If followed by [, it's a readonly tuple type
+        // Otherwise, parse the type and if it ends up being an array, mark it readonly
+        if next.typ == TT::BracketOpen {
+          // readonly [T, U] or readonly []
+          self.consume(); // consume readonly
+          let start_loc = self.peek().loc;
+          self.require(TT::BracketOpen)?;
+          let mut elements = Vec::new();
+          let end_loc;
+          loop {
+            if self.peek().typ == TT::BracketClose {
+              end_loc = self.peek().loc;
+              self.consume();
+              break;
+            }
+            elements.push(self.tuple_element(ctx)?);
+            if !self.consume_if(TT::Comma).is_match() {
+              end_loc = self.peek().loc;
+              self.require(TT::BracketClose)?;
+              break;
+            }
+          }
+          use crate::loc::Loc;
+          let outer_loc = Loc(start_loc.0, end_loc.1);
+          let tuple = Node::new(start_loc, TypeTuple { readonly: true, elements });
+          Ok(Node::new(outer_loc, TypeExpr::TupleType(tuple)))
+        } else {
+          // readonly T[] - consume readonly and parse the base type
+          self.consume(); // consume readonly
+          let start_loc = self.peek().loc;
+          let mut base_type = self.type_primary(ctx)?;
+
+          // Now check if it's followed by [] to make it an array type
+          if self.peek().typ == TT::BracketOpen {
+            let [_, bracket_next] = self.peek_n::<2>();
+            if bracket_next.typ == TT::BracketClose {
+              // It's T[] pattern
+              self.consume(); // consume [
+              let end_loc = self.peek().loc;
+              self.consume(); // consume ]
+              use crate::loc::Loc;
+              let outer_loc = Loc(start_loc.0, end_loc.1);
+              let array = Node::new(
+                start_loc,
+                TypeArray {
+                  readonly: true,
+                  element_type: Box::new(base_type),
+                },
+              );
+              base_type = Node::new(outer_loc, TypeExpr::ArrayType(array));
+            }
+          }
+
+          Ok(base_type)
+        }
+      }
+
       // Contextual keywords allowed as type identifiers
       TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
       TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
       TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
       TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
-      TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
+      TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
       TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet
       => self.type_reference(ctx),
 
@@ -1077,7 +1139,7 @@ impl<'a> Parser<'a> {
     }
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let tuple = Node::new(start_loc, TypeTuple { elements });
+    let tuple = Node::new(start_loc, TypeTuple { readonly: false, elements });
     Ok(Node::new(outer_loc, TypeExpr::TupleType(tuple)))
   }
 
