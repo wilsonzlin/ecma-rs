@@ -1100,13 +1100,19 @@ impl<'a> Parser<'a> {
         None
       };
 
-      let optional = p.consume_if(TT::Question).is_match();
+      // For named elements, check for optional before colon: name?: Type
+      let mut optional = p.consume_if(TT::Question).is_match();
 
       if label.is_some() || optional {
         p.require(TT::Colon)?;
       }
 
       let type_expr = p.type_expr(ctx)?;
+
+      // For unnamed elements, check for optional after type: Type?
+      if label.is_none() && !optional {
+        optional = p.consume_if(TT::Question).is_match();
+      }
 
       Ok(TypeTupleElement {
         label,
