@@ -1159,7 +1159,7 @@ impl<'a> Parser<'a> {
     let parameters = self.function_type_parameters(ctx)?;
     self.require(TT::ParenthesisClose)?;
     self.require(TT::EqualsChevronRight)?;
-    let return_type = self.type_expr(ctx)?;
+    let return_type = self.type_expr_or_predicate(ctx)?;
 
     let end_loc = return_type.loc;
     use crate::loc::Loc;
@@ -1191,7 +1191,7 @@ impl<'a> Parser<'a> {
     let parameters = self.function_type_parameters(ctx)?;
     self.require(TT::ParenthesisClose)?;
     self.require(TT::EqualsChevronRight)?;
-    let return_type = self.type_expr(ctx)?;
+    let return_type = self.type_expr_or_predicate(ctx)?;
 
     let end_loc = return_type.loc;
     use crate::loc::Loc;
