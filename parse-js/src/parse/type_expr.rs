@@ -69,44 +69,50 @@ impl<'a> Parser<'a> {
     self.type_union_or_intersection(ctx)
   }
 
-  /// Parse union or intersection types (lowest precedence)
-  /// T | U | V  or  T & U & V
-  /// Note: Cannot mix | and & at same level without parentheses
+  /// Parse union types (lowest precedence): T | U | V
+  /// Each element of a union can be an intersection type
   fn type_union_or_intersection(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
-    // TypeScript allows leading | or & in union/intersection types:
-    // type A = | B | C
-    // type D = & E & F
-    let leading_op = self.peek().typ;
-    let has_leading = matches!(leading_op, TT::Bar | TT::Ampersand);
-    if has_leading {
-      self.consume();
+    // TypeScript allows leading | in union types: type A = | B | C
+    let has_leading_bar = self.consume_if(TT::Bar).is_match();
+
+    let first = self.type_intersection(ctx)?;
+
+    // Check if there are more union members
+    if !has_leading_bar && self.peek().typ != TT::Bar {
+      return Ok(first);
     }
+
+    let mut types = vec![first];
+    while self.consume_if(TT::Bar).is_match() {
+      types.push(self.type_intersection(ctx)?);
+    }
+
+    if types.len() == 1 {
+      return Ok(types.into_iter().next().unwrap());
+    }
+
+    let start_loc = types[0].loc;
+    let end_loc = types.last().unwrap().loc;
+    use crate::loc::Loc;
+    let outer_loc = Loc(start_loc.0, end_loc.1);
+    let union = Node::new(start_loc, TypeUnion { types });
+    Ok(Node::new(outer_loc, TypeExpr::UnionType(union)))
+  }
+
+  /// Parse intersection types (higher precedence than union): T & U & V
+  fn type_intersection(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
+    // TypeScript allows leading & in intersection types: type A = & B & C
+    let has_leading_amp = self.consume_if(TT::Ampersand).is_match();
 
     let first = self.type_conditional(ctx)?;
 
-    let t = self.peek().typ;
-    let is_union_or_intersection = t == TT::Bar || t == TT::Ampersand;
-
-    // If we had a leading operator, we must continue with the same operator
-    // If we didn't have a leading operator, we need at least one operator to follow
-    if has_leading {
-      if t != leading_op && !is_union_or_intersection {
-        // Leading | or & but no continuation - return the single type
-        return Ok(first);
-      }
-      if t != TT::Bar && t != TT::Ampersand {
-        return Ok(first);
-      }
-    } else {
-      if !is_union_or_intersection {
-        return Ok(first);
-      }
+    // Check if there are more intersection members
+    if !has_leading_amp && self.peek().typ != TT::Ampersand {
+      return Ok(first);
     }
 
-    let is_union = if has_leading { leading_op == TT::Bar } else { t == TT::Bar };
     let mut types = vec![first];
-
-    while self.consume_if(if has_leading { leading_op } else { t }).is_match() {
+    while self.consume_if(TT::Ampersand).is_match() {
       types.push(self.type_conditional(ctx)?);
     }
 
@@ -118,13 +124,8 @@ impl<'a> Parser<'a> {
     let end_loc = types.last().unwrap().loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    if is_union {
-      let union = Node::new(start_loc, TypeUnion { types });
-      Ok(Node::new(outer_loc, TypeExpr::UnionType(union)))
-    } else {
-      let intersection = Node::new(start_loc, TypeIntersection { types });
-      Ok(Node::new(outer_loc, TypeExpr::IntersectionType(intersection)))
-    }
+    let intersection = Node::new(start_loc, TypeIntersection { types });
+    Ok(Node::new(outer_loc, TypeExpr::IntersectionType(intersection)))
   }
 
   /// Parse conditional types: T extends U ? X : Y
