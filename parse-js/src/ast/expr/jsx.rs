@@ -66,6 +66,8 @@ pub struct JsxElem {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxExprContainer {
+  #[drive(skip)]
+  pub spread: bool,
   pub value: Node<Expr>,
 }
 

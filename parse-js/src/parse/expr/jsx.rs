@@ -85,11 +85,11 @@ impl<'a> Parser<'a> {
         use crate::ast::node::Node;
         use crate::loc::Loc;
         let empty_expr = Node::new(Loc(loc.0, loc.0), Expr::Id(Node::new(Loc(loc.0, loc.0), IdExpr { name: String::new() })));
-        let expr = Node::new(loc, JsxExprContainer { value: empty_expr });
+        let expr = Node::new(loc, JsxExprContainer { spread: false, value: empty_expr });
         JsxAttrVal::Expression(expr)
       } else {
         let value = self.expr(ctx, [TT::BraceClose])?;
-        let expr = Node::new(value.loc, JsxExprContainer { value });
+        let expr = Node::new(value.loc, JsxExprContainer { spread: false, value });
         self.require(TT::BraceClose)?;
         JsxAttrVal::Expression(expr)
       }
@@ -123,10 +123,8 @@ impl<'a> Parser<'a> {
     let mut children = Vec::<JsxElemChild>::new();
     loop {
       let t = self.peek();
-      eprintln!("DEBUG jsx_elem_children: peeked token {:?} at {:?}", t.typ, t.loc);
       match t.typ {
         TT::ChevronLeftSlash => {
-          
           break;
         }
         TT::EOF => {
@@ -135,17 +133,13 @@ impl<'a> Parser<'a> {
         _ => {}
       };
       let text = self.require_with_mode(TT::JsxTextContent, LexMode::JsxTextContent)?;
-      eprintln!("DEBUG: Read text content, loc: {:?}", text.loc);
       if !text.loc.is_empty() {
         children.push(JsxElemChild::Text(Node::new(text.loc, JsxText {
           value: self.string(text.loc),
         })));
       };
-      eprintln!("DEBUG: After text, peek = {:?}", self.peek().typ);
       if self.peek().typ == TT::ChevronLeft {
-        
         let child = self.jsx_elem(ctx)?;
-        
         children.push(JsxElemChild::Element(child));
       };
       if self.consume_if(TT::BraceOpen).is_match() {
@@ -153,9 +147,20 @@ impl<'a> Parser<'a> {
         if self.peek().typ == TT::BraceClose {
           // Empty expression - skip it, don't add to children
           self.consume(); // consume }
+        } else if self.peek().typ == TT::DotDotDot {
+          // Spread children: <div>{...items}</div>
+          // This is valid JSX - the spread creates multiple children from an array
+          self.consume(); // consume ...
+          let value = self.expr(ctx, [TT::BraceClose])?;
+          children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
+            spread: true,
+            value,
+          })));
+          self.require(TT::BraceClose)?;
         } else {
           let value = self.expr(ctx, [TT::BraceClose])?;
           children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
+            spread: false,
             value,
           })));
           self.require(TT::BraceClose)?;
@@ -179,11 +184,9 @@ impl<'a> Parser<'a> {
 
   // https://facebook.github.io/jsx/
   pub fn jsx_elem(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<JsxElem>> {
-    
     self.with_loc(|p| {
       p.require(TT::ChevronLeft)?;
       let tag_name = p.jsx_elem_name()?;
-      eprintln!("DEBUG jsx_elem: tag_name = {:?}", tag_name);
       let attributes = tag_name
         .is_some()
         .then(|| p.jsx_elem_attrs(ctx))
