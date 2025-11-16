@@ -99,13 +99,15 @@ impl<'a> Parser<'a> {
                 )));
               }
               ClassOrObjKey::Direct(n) => {
-                // We can't have a non-identifier (e.g. str) key, even if it normalizes to a valid identifier name.
                 // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
-                // The type checker will validate this semantically.
-                if n.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&n.stx.tt) {
+                // TypeScript: Also accept string literals that normalize to identifiers (e.g., { "while" })
+                // The type checker will validate these semantically.
+                if n.stx.tt != TT::Identifier
+                  && n.stx.tt != TT::LiteralString
+                  && !KEYWORDS_MAPPING.contains_key(&n.stx.tt) {
                   return Err(n.error(SyntaxErrorType::ExpectedNotFound));
                 }
-                // We've already ensured that this is a valid identifier or keyword.
+                // We've already ensured that this is a valid identifier, keyword, or string literal.
                 let id_pat = n.derive_stx(|n| IdPat { name: n.key.clone() }).into_wrapped();
                 (true, id_pat)
               }
@@ -179,6 +181,7 @@ impl<'a> Parser<'a> {
   /// * Object patterns (e.g., `{ x, y }`)
   /// * Array patterns (e.g., `[a, b, ...rest]`)
   pub fn pat(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Pat>> {
+    use crate::lex::KEYWORDS_MAPPING;
     let t = self.peek();
     let pat: Node<Pat> = match t.typ {
       t if is_valid_pattern_identifier(t, ctx.rules) => self.id_pat(ctx)?.into_wrapped(),
@@ -188,6 +191,15 @@ impl<'a> Parser<'a> {
       // Handles cases like `var;`, `let;`, `const;`, `export var;`
       TT::Semicolon | TT::Comma | TT::EOF => {
         Node::new(t.loc, IdPat { name: String::from("") }).into_wrapped()
+      }
+      // TypeScript: Allow any keyword as pattern identifier for error recovery
+      // Examples: `var { while: while } = x` or `let [if] = arr`
+      // The type checker will validate these semantically
+      t if KEYWORDS_MAPPING.contains_key(&t) => {
+        self.with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdPat { name })
+        })?.into_wrapped()
       }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("pattern"))),
     };
