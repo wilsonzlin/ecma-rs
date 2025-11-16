@@ -440,7 +440,7 @@ impl<'a> Parser<'a> {
         let inner = Node::new(loc, TypeLiteral::Number(val));
         Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
       }
-      // Negative numeric literals: -123
+      // Negative numeric literals: -123 or -123n
       TT::Hyphen => {
         let start_loc = self.peek().loc;
         let [_, next] = self.peek_n::<2>();
@@ -451,6 +451,14 @@ impl<'a> Parser<'a> {
           use crate::loc::Loc;
           let loc = Loc(start_loc.0, self.peek().loc.1);
           let inner = Node::new(loc, TypeLiteral::Number(val));
+          Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
+        } else if next.typ == TT::LiteralBigInt {
+          self.consume(); // consume hyphen
+          let bigint_val = self.lit_bigint_val()?.to_string();
+          let val = format!("-{}", bigint_val);
+          use crate::loc::Loc;
+          let loc = Loc(start_loc.0, self.peek().loc.1);
+          let inner = Node::new(loc, TypeLiteral::BigInt(val));
           Ok(Node::new(loc, TypeExpr::LiteralType(inner)))
         } else {
           Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("type expression")))
