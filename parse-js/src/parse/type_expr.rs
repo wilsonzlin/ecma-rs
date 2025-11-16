@@ -595,10 +595,11 @@ impl<'a> Parser<'a> {
       // Readonly modifier: readonly T[]
       TT::KeywordReadonly => true,
 
-      // TypeScript: Literal types (string, number, boolean, null, etc.)
-      // Enables: Exclude<"a" | "b", "c">, MyType<123>, etc.
+      // TypeScript: Literal types (string, number, boolean, null, template literals, etc.)
+      // Enables: Exclude<"a" | "b", "c">, MyType<123>, MyType<`foo${T}`>, etc.
       TT::LiteralString | TT::LiteralNumber | TT::LiteralBigInt
-      | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull => true,
+      | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull
+      | TT::LiteralTemplatePartString => true,
 
       // Identifier followed by type-like punctuation
       TT::Identifier => {
