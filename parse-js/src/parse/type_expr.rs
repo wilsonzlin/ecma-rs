@@ -580,6 +580,12 @@ impl<'a> Parser<'a> {
       // Type operators
       TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer => true,
 
+      // Constructor types: new () => T, abstract new () => T
+      TT::KeywordNew | TT::KeywordAbstract => true,
+
+      // Readonly modifier: readonly T[]
+      TT::KeywordReadonly => true,
+
       // TypeScript: Literal types (string, number, boolean, null, etc.)
       // Enables: Exclude<"a" | "b", "c">, MyType<123>, etc.
       TT::LiteralString | TT::LiteralNumber | TT::LiteralBigInt
