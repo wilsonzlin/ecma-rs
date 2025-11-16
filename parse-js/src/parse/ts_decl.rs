@@ -12,7 +12,8 @@ impl<'a> Parser<'a> {
   pub fn interface_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<InterfaceDecl>> {
     self.with_loc(|p| {
       p.require(TT::KeywordInterface)?;
-      let name = p.require_identifier()?;
+      // TypeScript allows type keywords as interface names in error cases
+      let name = p.require_identifier_or_ts_keyword()?;
 
       let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
         Some(p.type_parameters(ctx)?)
@@ -49,7 +50,8 @@ impl<'a> Parser<'a> {
   pub fn type_alias_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<TypeAliasDecl>> {
     self.with_loc(|p| {
       p.require(TT::KeywordType)?;
-      let name = p.require_identifier()?;
+      // TypeScript allows type keywords as type alias names in error cases
+      let name = p.require_identifier_or_ts_keyword()?;
 
       let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
         Some(p.type_parameters(ctx)?)
@@ -77,7 +79,8 @@ impl<'a> Parser<'a> {
   pub fn enum_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool, const_: bool) -> SyntaxResult<Node<EnumDecl>> {
     self.with_loc(|p| {
       p.require(TT::KeywordEnum)?;
-      let name = p.require_identifier()?;
+      // TypeScript allows type keywords as enum names in error cases
+      let name = p.require_identifier_or_ts_keyword()?;
 
       p.require(TT::BraceOpen)?;
       let members = p.list_with_loc(TT::Comma, TT::BraceClose, |p| p.enum_member(ctx))?;
