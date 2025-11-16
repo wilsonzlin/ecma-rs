@@ -241,7 +241,9 @@ impl<'a> Parser<'a> {
       let mut implements = Vec::new();
       if p.consume_if(TT::KeywordImplements).is_match() {
         loop {
-          implements.push(p.type_expr(ctx)?);
+          // Parse as expression to allow optional chaining (A?.B) even though it's semantically invalid
+          // TypeScript parser accepts this syntax and lets the type checker reject it
+          implements.push(p.expr_with_ts_type_args(ctx, [TT::Comma, TT::BraceOpen])?);
           if !p.consume_if(TT::Comma).is_match() {
             break;
           }
