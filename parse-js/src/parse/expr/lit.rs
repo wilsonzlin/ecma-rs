@@ -313,6 +313,8 @@ impl<'a> Parser<'a> {
                 if key.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&key.stx.tt) {
                   return Err(key.error(SyntaxErrorType::ExpectedNotFound));
                 };
+                // TypeScript: Check for definite assignment assertion (e.g., { a! })
+                let _definite_assignment = p.consume_if(TT::Exclamation).is_match();
                 // Check for default value (e.g., {c = 1})
                 if p.consume_if(TT::Equals).is_match() {
                   // Parse the default value and create an assignment expression
