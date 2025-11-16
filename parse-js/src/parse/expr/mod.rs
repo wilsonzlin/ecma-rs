@@ -871,7 +871,8 @@ impl<'a> Parser<'a> {
             TT::LiteralString |   // String after expression
             TT::LiteralTrue |     // Boolean after expression
             TT::LiteralFalse |    // Boolean after expression
-            TT::LiteralNull       // Null after expression
+            TT::LiteralNull |     // Null after expression
+            TT::ChevronLeftSlash  // JSX closing tag: </div> after JSX element with text children
           ) {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;

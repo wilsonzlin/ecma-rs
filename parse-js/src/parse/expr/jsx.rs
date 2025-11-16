@@ -103,9 +103,12 @@ impl<'a> Parser<'a> {
   pub fn jsx_elem_children(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<JsxElemChild>> {
     let mut children = Vec::<JsxElemChild>::new();
     loop {
+      eprintln!("[JSX DEBUG] Loop start");
       let t = self.peek();
+      eprintln!("[JSX DEBUG] Peeked: {:?} at [{}:{}]", t.typ, t.loc.0, t.loc.1);
       match t.typ {
         TT::ChevronLeftSlash => {
+          eprintln!("[JSX DEBUG] Found closing tag, breaking");
           break;
         }
         TT::EOF => {
@@ -113,17 +116,23 @@ impl<'a> Parser<'a> {
         }
         _ => {}
       };
+      eprintln!("[JSX DEBUG] Lexing JsxTextContent");
       let text = self.require_with_mode(TT::JsxTextContent, LexMode::JsxTextContent)?;
+      eprintln!("[JSX DEBUG] Got JsxTextContent: [{}:{}] empty={}", text.loc.0, text.loc.1, text.loc.is_empty());
       if !text.loc.is_empty() {
         children.push(JsxElemChild::Text(Node::new(text.loc, JsxText {
           value: self.string(text.loc),
         })));
       };
+      eprintln!("[JSX DEBUG] Checking for child element");
       if self.peek().typ == TT::ChevronLeft {
+        eprintln!("[JSX DEBUG] Found child element");
         let child = self.jsx_elem(ctx)?;
         children.push(JsxElemChild::Element(child));
       };
+      eprintln!("[JSX DEBUG] Checking for expression");
       if self.consume_if(TT::BraceOpen).is_match() {
+        eprintln!("[JSX DEBUG] Found expression");
         // TODO Allow empty expr.
         let value = self.expr(ctx, [TT::BraceClose])?;
         children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
@@ -131,6 +140,7 @@ impl<'a> Parser<'a> {
         })));
         self.require(TT::BraceClose)?;
       };
+      eprintln!("[JSX DEBUG] End of loop iteration");
     };
     Ok(children)
   }
@@ -149,16 +159,22 @@ impl<'a> Parser<'a> {
 
   // https://facebook.github.io/jsx/
   pub fn jsx_elem(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<JsxElem>> {
+    eprintln!("[JSX ELEM] Starting jsx_elem");
     self.with_loc(|p| {
+      eprintln!("[JSX ELEM] Requiring ChevronLeft");
       p.require(TT::ChevronLeft)?;
+      eprintln!("[JSX ELEM] Parsing tag name");
       let tag_name = p.jsx_elem_name()?;
+      eprintln!("[JSX ELEM] Tag name parsed: {:?}", tag_name.as_ref().map(|_| "Some"));
       let attributes = tag_name
         .is_some()
         .then(|| p.jsx_elem_attrs(ctx))
         .transpose()?
         .unwrap_or_default();
+      eprintln!("[JSX ELEM] Attributes parsed");
       if p.consume_if(TT::Slash).is_match() {
         // Self closing.
+        eprintln!("[JSX ELEM] Self-closing element");
         p.require(TT::ChevronRight)?;
         return Ok(JsxElem {
           name: tag_name,
@@ -166,14 +182,18 @@ impl<'a> Parser<'a> {
           children: Vec::new(),
         });
       }
+      eprintln!("[JSX ELEM] Not self-closing, requiring ChevronRight");
       p.require(TT::ChevronRight)?;
+      eprintln!("[JSX ELEM] Calling jsx_elem_children");
       let children = p.jsx_elem_children(ctx)?;
+      eprintln!("[JSX ELEM] jsx_elem_children returned {} children", children.len());
       let closing = p.require(TT::ChevronLeftSlash)?;
       let end_name = p.jsx_elem_name()?;
       if tag_name != end_name {
         return Err(closing.error(SyntaxErrorType::JsxClosingTagMismatch));
       };
       p.require(TT::ChevronRight)?;
+      eprintln!("[JSX ELEM] Successfully parsed jsx element");
       Ok(JsxElem {
         name: tag_name,
         attributes,
