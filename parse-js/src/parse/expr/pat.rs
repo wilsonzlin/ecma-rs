@@ -81,7 +81,10 @@ impl<'a> Parser<'a> {
         // Check inside loop to ensure that it must come first or after a comma.
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {
-          rest = Some(p.id_pat(ctx)?);
+          // TypeScript: For error recovery, allow binding patterns in rest properties
+          // e.g., ({...{}} = {}), ({...[]} = {})
+          // The type checker will validate these semantically
+          rest = Some(p.pat(ctx)?);
           break;
         };
 
@@ -147,6 +150,13 @@ impl<'a> Parser<'a> {
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {
           rest = Some(p.pat(ctx)?);
+          // TypeScript: For error recovery, allow initializer on rest element
+          // even though it's semantically invalid (e.g., [...x = a])
+          // The type checker will catch this error
+          if p.consume_if(TT::Equals).is_match() {
+            // Parse and discard the initializer
+            p.expr(ctx, [TT::BracketClose])?;
+          }
           break;
         };
 

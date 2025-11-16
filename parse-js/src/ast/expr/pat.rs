@@ -61,7 +61,8 @@ pub struct IdPat {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ObjPat {
   pub properties: Vec<Node<ObjPatProp>>,
-  pub rest: Option<Node<IdPat>>,
+  // TypeScript: Can be any pattern for error recovery (e.g., {...{}} or {...[]})
+  pub rest: Option<Node<Pat>>,
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
