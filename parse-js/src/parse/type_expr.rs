@@ -163,8 +163,16 @@ impl<'a> Parser<'a> {
     let mut base = self.type_primary(ctx)?;
 
     loop {
-      match self.peek().typ {
+      let next_tok = self.peek();
+      match next_tok.typ {
         TT::BracketOpen => {
+          // Don't parse [..] as array/indexed access if it's on a new line
+          // This prevents treating index signatures as indexed access types
+          // in interface/object type contexts
+          if next_tok.preceded_by_line_terminator {
+            break;
+          }
+
           let start_loc = base.loc;
           self.consume();
           if self.peek().typ == TT::BracketClose {
@@ -728,13 +736,15 @@ impl<'a> Parser<'a> {
     // Check for index signature vs mapped property vs computed property
     // [key: string]: T vs [K in T]: V vs [Symbol.iterator]?: T
     if self.peek().typ == TT::BracketOpen {
-      let bracket_checkpoint = self.checkpoint();
-      self.consume(); // consume '['
-      if self.peek().typ == TT::Identifier {
-        let [_, t2] = self.peek_n::<2>();
+      // Peek ahead: [, then identifier/keyword, then : or in
+      let [_t0, t1, t2] = self.peek_n::<3>();
+      // Check if t1 is identifier or keyword (keywords can be used as parameter names)
+      let is_identifier_or_keyword = t1.typ == TT::Identifier ||
+        crate::lex::KEYWORDS_MAPPING.contains_key(&t1.typ);
+
+      if is_identifier_or_keyword {
         if t2.typ == TT::Colon {
           // Index signature: [key: string]: T
-          self.restore_checkpoint(bracket_checkpoint);
           return self.index_signature(ctx, readonly);
         } else if t2.typ == TT::KeywordIn {
           // Mapped type member: [K in keyof T]: V
@@ -743,7 +753,6 @@ impl<'a> Parser<'a> {
           return self.mapped_type_member(ctx);
         }
       }
-      self.restore_checkpoint(bracket_checkpoint);
       // Otherwise, it's a computed property key - fall through to parse it normally
     }
 

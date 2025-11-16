@@ -111,7 +111,7 @@ fn run_test_with_timeout(path: &Path, timeout_secs: u64) -> TestResult {
 }
 
 fn main() {
-    let test_dir = Path::new("tests/TypeScript/tests/cases/conformance");
+    let test_dir = Path::new("parse-js/tests/TypeScript/tests/cases/conformance");
 
     println!("🔍 Discovering TypeScript conformance tests...");
     let mut tests = discover_tests(test_dir);

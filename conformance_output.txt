@@ -1,0 +1,452 @@
+warning: /home/user/ecma-rs/parse-js/Cargo.toml: file `/home/user/ecma-rs/parse-js/tests/conformance_runner.rs` found to be present in multiple build targets:
+  * `bin` target `conformance_runner`
+  * `integration-test` target `conformance_runner`
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/expr/pat.rs:3:13
+  |
+3 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused import: `Deserialize`
+  --> parse-js/src/ast/expr/mod.rs:10:13
+   |
+10 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^
+
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/func.rs:3:13
+  |
+3 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/node.rs:6:13
+  |
+6 | use serde::{Deserialize, Serialize, Serializer};
+  |             ^^^^^^^^^^^
+
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/stmt/decl.rs:2:13
+  |
+2 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+
+warning: unused import: `Deserialize`
+ --> parse-js/src/ast/stmt/mod.rs:6:13
+  |
+6 | use serde::{Deserialize, Serialize};
+  |             ^^^^^^^^^^^
+
+warning: unused imports: `stx::TopLevel` and `type_expr::TypeExpr`
+ --> parse-js/src/ast/stmt/mod.rs:8:92
+  |
+8 | use super::{expr::{pat::Pat, Expr}, import_export::{ExportNames, ImportNames}, node::Node, stx::TopLevel, ts_stmt::*, type_expr::TypeExpr};
+  |                                                                                            ^^^^^^^^^^^^^              ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `any::Any`
+ --> parse-js/src/ast/stx.rs:1:11
+  |
+1 | use std::{any::Any, fmt::Debug};
+  |           ^^^^^^^^
+
+warning: unused import: `derive_more::derive::From`
+ --> parse-js/src/ast/stx.rs:3:5
+  |
+3 | use derive_more::derive::From;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `expr::Expr`
+ --> parse-js/src/ast/stx.rs:7:13
+  |
+7 | use super::{expr::Expr, node::Node, stmt::Stmt};
+  |             ^^^^^^^^^^
+
+warning: unused import: `Pat`
+ --> parse-js/src/parse/class_or_object.rs:6:36
+  |
+6 | use crate::ast::expr::pat::{IdPat, Pat};
+  |                                    ^^^
+
+warning: unused import: `super::pat::is_valid_pattern_identifier`
+ --> parse-js/src/parse/expr/lit.rs:1:5
+  |
+1 | use super::pat::is_valid_pattern_identifier;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::expr::Expr`
+  --> parse-js/src/parse/expr/lit.rs:11:5
+   |
+11 | use crate::ast::expr::Expr;
+   |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `ComputedMemberExpr`, `IdExpr`, and `MemberExpr`
+ --> parse-js/src/parse/expr/util.rs:1:140
+  |
+1 | ...bjMember, ObjMemberType}, expr::{BinaryExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr}, expr::lit::{LitArrElem, LitArrExpr, LitObj...
+  |                                                 ^^^^^^^^^^^^^^^^^^        ^^^^^^  ^^^^^^^^^^
+
+warning: unused import: `crate::ast::expr::pat::Pat`
+  --> parse-js/src/parse/expr/mod.rs:13:5
+   |
+13 | use crate::ast::expr::pat::Pat;
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Expr` and `Pat`
+ --> parse-js/src/parse/import_export.rs:1:39
+  |
+1 | use crate::{ast::{expr::{pat::{IdPat, Pat}, Expr, ImportExpr, ImportMeta}, import_export::{ExportName, ExportNames, ImportName, ImportNam...
+  |                                       ^^^   ^^^^
+
+warning: unused import: `lit::normalise_literal_string`
+ --> parse-js/src/parse/import_export.rs:3:25
+  |
+3 | use super::{expr::{Asi, lit::normalise_literal_string, pat::is_valid_pattern_identifier}, ParseCtx, Parser};
+  |                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::expr::Expr`
+ --> parse-js/src/parse/ts_decl.rs:2:5
+  |
+2 | use crate::ast::expr::Expr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::stmt::Stmt`
+ --> parse-js/src/parse/ts_decl.rs:4:5
+  |
+4 | use crate::ast::stmt::Stmt;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::type_expr::TypeExpr`
+ --> parse-js/src/parse/ts_decl.rs:6:5
+  |
+6 | use crate::ast::type_expr::TypeExpr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::ast::expr::Expr`
+ --> parse-js/src/parse/type_expr.rs:2:5
+  |
+2 | use crate::ast::expr::Expr;
+  |     ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `crate::loc::Loc`
+    --> parse-js/src/parse/type_expr.rs:1285:15
+     |
+1285 |           use crate::loc::Loc;
+     |               ^^^^^^^^^^^^^^^
+
+warning: unused variable: `key`
+   --> parse-js/src/parse/class_or_object.rs:319:5
+    |
+319 |     key: &ClassOrObjKey,
+    |     ^^^ help: if this is intentional, prefix it with an underscore: `_key`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `rules`
+  --> parse-js/src/parse/expr/pat.rs:42:45
+   |
+42 | pub fn is_valid_pattern_identifier(typ: TT, rules: ParsePatternRules) -> bool {
+   |                                             ^^^^^ help: if this is intentional, prefix it with an underscore: `_rules`
+
+warning: unreachable pattern
+   --> parse-js/src/parse/expr/util.rs:127:11
+    |
+ 73 |           ObjMember { typ } => match typ {
+    |           ----------------- matches any value
+...
+127 |           _ => unreachable!(),
+    |           ^ no value can reach this
+    |
+    = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `t2`
+  --> parse-js/src/parse/stmt/mod.rs:44:18
+   |
+44 |     let [t0, t1, t2] = self.peek_n();
+   |                  ^^ help: if this is intentional, prefix it with an underscore: `_t2`
+
+warning: unused variable: `export`
+   --> parse-js/src/parse/stmt/mod.rs:180:57
+    |
+180 |   fn func_decl_with_modifiers(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::FuncDec...
+    |                                                         ^^^^^^ help: if this is intentional, prefix it with an underscore: `_export`
+
+warning: unused variable: `declare`
+   --> parse-js/src/parse/stmt/mod.rs:180:71
+    |
+180 | ...tx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::FuncDecl>> {
+    |                                ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_declare`
+
+warning: unused variable: `checkpoint`
+   --> parse-js/src/parse/import_export.rs:101:19
+    |
+101 |               let checkpoint = p.checkpoint();
+    |                   ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_checkpoint`
+
+warning: unreachable pattern
+   --> parse-js/src/parse/type_expr.rs:310:72
+    |
+267 |       TT::KeywordUnique => {
+    |       ----------------- matches all the relevant values
+...
+310 |       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
+    |                                                                        ^^^^^^^^^^^^^^^^^ no value can reach this
+
+warning: unused variable: `end_loc`
+   --> parse-js/src/parse/type_expr.rs:569:11
+    |
+569 |       let end_loc = import_expr.loc;
+    |           ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_end_loc`
+
+warning: type `LexNotFound` is more private than the item `lex_template_string_continue`
+   --> parse-js/src/lex/mod.rs:913:1
+    |
+913 | / pub fn lex_template_string_continue(
+914 | |   lexer: &mut Lexer<'_>,
+915 | | ) -> LexResult<TT> {
+    | |__________________^ function `lex_template_string_continue` is reachable at visibility `pub`
+    |
+note: but type `LexNotFound` is only usable at visibility `pub(self)`
+   --> parse-js/src/lex/mod.rs:109:1
+    |
+109 | struct LexNotFound;
+    | ^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: methods `through_char`, `while_not_char`, and `range` are never used
+   --> parse-js/src/lex/mod.rs:207:6
+    |
+118 | impl<'a> Lexer<'a> {
+    | ------------------ methods in this implementation
+...
+207 |   fn through_char(&self, c: char) -> LexResult<Match> {
+    |      ^^^^^^^^^^^^
+...
+220 |   fn while_not_char(&self, a: char) -> Match {
+    |      ^^^^^^^^^^^^^^
+...
+281 |   fn range(&self, m: Match) -> Loc {
+    |      ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `check` is never used
+ --> parse-js/src/lex/tests/mod.rs:7:4
+  |
+7 | fn check<const N: usize>(code: &str, expecteds: [TT; N]) {
+  |    ^^^^^
+
+warning: unnecessary transmute
+  --> parse-js/src/num.rs:42:16
+   |
+42 |       unsafe { mem::transmute::<f64, u64>(self.0) }.hash(state);
+   |                --------------------------^^^^^^^^
+   |                |
+   |                help: replace this with: `f64::to_bits`
+   |
+   = note: `#[warn(unnecessary_transmutes)]` on by default
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:258:9
+    |
+258 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: use `let _ = ...` to ignore the resulting value
+    |
+258 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:346:15
+    |
+346 |               p.consume_if(TT::Semicolon);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+346 |               let _ = p.consume_if(TT::Semicolon);
+    |               +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:417:9
+    |
+417 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+417 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:464:9
+    |
+464 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+464 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:533:9
+    |
+533 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+533 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/class_or_object.rs:659:15
+    |
+659 |               p.consume_if(TT::Semicolon);
+    |               ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+659 |               let _ = p.consume_if(TT::Semicolon);
+    |               +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/stmt/mod.rs:627:7
+    |
+627 |       p.consume_if(TT::Semicolon);
+    |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+627 |       let _ = p.consume_if(TT::Semicolon);
+    |       +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/stmt/decl.rs:175:11
+    |
+175 |           p.consume_if(TT::Semicolon);
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+175 |           let _ = p.consume_if(TT::Semicolon);
+    |           +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/import_export.rs:113:19
+    |
+113 |                   p.consume_if(TT::Semicolon);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+113 |                   let _ = p.consume_if(TT::Semicolon);
+    |                   +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/import_export.rs:139:19
+    |
+139 |                   p.consume_if(TT::Semicolon);
+    |                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+139 |                   let _ = p.consume_if(TT::Semicolon);
+    |                   +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/import_export.rs:199:9
+    |
+199 |         p.consume_if(TT::Semicolon);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+199 |         let _ = p.consume_if(TT::Semicolon);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/import_export.rs:295:11
+    |
+295 |           p.consume_if(TT::Semicolon);
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+295 |           let _ = p.consume_if(TT::Semicolon);
+    |           +++++++
+
+warning: unused `MaybeToken` that must be used
+  --> parse-js/src/parse/ts_decl.rs:64:7
+   |
+64 |       p.consume_if(TT::Semicolon);
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: use `let _ = ...` to ignore the resulting value
+   |
+64 |       let _ = p.consume_if(TT::Semicolon);
+   |       +++++++
+
+warning: unused `MaybeToken` that must be used
+   --> parse-js/src/parse/type_expr.rs:716:9
+    |
+716 |         self.consume_if(TT::Comma);
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+help: use `let _ = ...` to ignore the resulting value
+    |
+716 |         let _ = self.consume_if(TT::Comma);
+    |         +++++++
+
+warning: unused `MaybeToken` that must be used
+    --> parse-js/src/parse/type_expr.rs:1249:11
+     |
+1249 |           p.consume_if(TT::KeywordProtected);
+     |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: use `let _ = ...` to ignore the resulting value
+     |
+1249 |           let _ = p.consume_if(TT::KeywordProtected);
+     |           +++++++
+
+warning: unused `MaybeToken` that must be used
+    --> parse-js/src/parse/type_expr.rs:1254:7
+     |
+1254 |       p.consume_if(TT::KeywordReadonly);
+     |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+help: use `let _ = ...` to ignore the resulting value
+     |
+1254 |       let _ = p.consume_if(TT::KeywordReadonly);
+     |       +++++++
+
+warning: `parse-js` (lib) generated 51 warnings (run `cargo fix --lib -p parse-js` to apply 23 suggestions)
+warning: unused import: `std::sync::Mutex`
+  --> parse-js/tests/conformance_runner.rs:12:5
+   |
+12 | use std::sync::Mutex;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `parse-js` (bin "conformance_runner") generated 1 warning (run `cargo fix --bin "conformance_runner"` to apply 1 suggestion)
+    Finished `release` profile [optimized] target(s) in 0.27s
+     Running `target/release/conformance_runner`
+🔍 Discovering TypeScript conformance tests...
+📊 Found 0 test files
+
+🚀 Running tests in parallel...
+
+================================================================================
+📈 TEST RESULTS SUMMARY
+================================================================================
+Total tests:  0
+✅ Passed:     0 (NaN%)
+❌ Failed:     0 (NaN%)
+================================================================================
+
+
