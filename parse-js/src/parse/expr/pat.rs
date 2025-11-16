@@ -50,10 +50,25 @@ pub fn is_valid_pattern_identifier(typ: TT, rules: ParsePatternRules) -> bool {
   }
 }
 
+/// Check if a token can be used as a class or function name
+/// TypeScript allows type keywords as class/function names in error cases
+pub fn is_valid_class_or_func_name(typ: TT, rules: ParsePatternRules) -> bool {
+  if is_valid_pattern_identifier(typ, rules) {
+    return true;
+  }
+  // Additionally allow TypeScript type keywords
+  matches!(
+    typ,
+    TT::KeywordAny | TT::KeywordBooleanType | TT::KeywordNumberType |
+    TT::KeywordStringType | TT::KeywordSymbolType | TT::KeywordVoid |
+    TT::KeywordNever | TT::KeywordUndefinedType | TT::KeywordUnknown |
+    TT::KeywordObjectType | TT::KeywordBigIntType
+  )
+}
 
 impl<'a> Parser<'a> {
   pub fn maybe_class_or_func_name(&mut self, ctx: ParseCtx) -> Option<Node<ClassOrFuncName>> {
-    self.consume_if_pred(|t| is_valid_pattern_identifier(t.typ, ctx.rules))
+    self.consume_if_pred(|t| is_valid_class_or_func_name(t.typ, ctx.rules))
       .map(|t| Node::new(t.loc, ClassOrFuncName { name: self.string(t.loc) }))
   }
 
