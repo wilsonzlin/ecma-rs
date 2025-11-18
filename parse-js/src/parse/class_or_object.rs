@@ -367,6 +367,9 @@ impl<'a> Parser<'a> {
           TT::Identifier => p.consume_as_string(),
           // Any keyword is allowed as a key.
           t if KEYWORDS_MAPPING.contains_key(&t) => p.consume_as_string(),
+          // TypeScript: Error recovery - allow asterisk as property key (malformed generator)
+          // Example: `class C { *() {} }` or `class C { * }`
+          TT::Asterisk => p.consume_as_string(),
           _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("keyword or identifier"))),
         };
         Ok(ClassOrObjMemberDirectKey { key, tt: t.typ })
