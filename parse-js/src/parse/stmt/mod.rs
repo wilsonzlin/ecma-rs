@@ -84,7 +84,9 @@ impl<'a> Parser<'a> {
       TT::KeywordType => self.type_alias_decl(ctx, false, false)?.into_wrapped(),
       TT::KeywordEnum => self.enum_decl(ctx, false, false, false)?.into_wrapped(),
       TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, false)?,
-      TT::KeywordDeclare => self.declare_stmt(ctx)?,
+      // TypeScript: `declare` keyword - but check if it's being used as an identifier
+      // Error recovery: `declare \`template\`` is a tagged template, not a declare statement
+      TT::KeywordDeclare if t1.typ != TT::LiteralTemplatePartString && t1.typ != TT::LiteralTemplatePartStringEnd => self.declare_stmt(ctx)?,
       TT::KeywordAbstract if t1.typ == TT::KeywordClass => self.abstract_class_decl(ctx)?.into_wrapped(),
       // Decorators can appear before class declarations
       // For error recovery, if decorators are followed by non-class, skip decorators and parse the statement
