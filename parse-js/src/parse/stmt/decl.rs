@@ -79,8 +79,10 @@ impl<'a> Parser<'a> {
         let definite_assignment = p.consume_if(TT::Exclamation).is_match();
 
         // TypeScript: type annotation
+        // Note: We use type_expr_or_predicate for error recovery - type predicates
+        // are semantically invalid in variable declarations but should parse
         let type_annotation = if p.consume_if(TT::Colon).is_match() {
-          Some(p.type_expr(ctx)?)
+          Some(p.type_expr_or_predicate(ctx)?)
         } else {
           None
         };

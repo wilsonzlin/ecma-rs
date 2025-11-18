@@ -756,33 +756,79 @@ fn lex_binary_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> TT {
   lexer.skip_expect(2);
+  let start_pos = lexer.next();
   consume_digits_with_separators(lexer, &DIGIT_BIN);
-  if !lexer.consume(lexer.if_char('n')).is_empty() {
-    return TT::LiteralBigInt;
+  let end_pos = lexer.next();
+  let has_valid_digits = end_pos > start_pos;
+
+  // Consume any remaining decimal digits (which are invalid for binary)
+  let invalid_start = lexer.next();
+  consume_digits_with_separators(lexer, &DIGIT);
+  let has_invalid_digits = lexer.next() > invalid_start;
+
+  let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
+
+  // Invalid if no valid digits, or if there are invalid digits
+  if !has_valid_digits || has_invalid_digits {
+    return TT::Invalid;
   }
-  TT::LiteralNumber
+
+  if is_bigint {
+    TT::LiteralBigInt
+  } else {
+    TT::LiteralNumber
+  }
 }
 
 fn lex_hex_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> TT {
   lexer.skip_expect(2);
+  let start_pos = lexer.next();
   consume_digits_with_separators(lexer, &DIGIT_HEX);
-  if !lexer.consume(lexer.if_char('n')).is_empty() {
-    return TT::LiteralBigInt;
+  let end_pos = lexer.next();
+  let has_valid_digits = end_pos > start_pos;
+
+  let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
+
+  // Invalid if no valid digits
+  if !has_valid_digits {
+    return TT::Invalid;
   }
-  TT::LiteralNumber
+
+  if is_bigint {
+    TT::LiteralBigInt
+  } else {
+    TT::LiteralNumber
+  }
 }
 
 fn lex_oct_bigint_or_number(
   lexer: &mut Lexer<'_>,
 ) -> TT {
   lexer.skip_expect(2);
+  let start_pos = lexer.next();
   consume_digits_with_separators(lexer, &DIGIT_OCT);
-  if !lexer.consume(lexer.if_char('n')).is_empty() {
-    return TT::LiteralBigInt;
+  let end_pos = lexer.next();
+  let has_valid_digits = end_pos > start_pos;
+
+  // Consume any remaining decimal digits (which are invalid for octal)
+  let invalid_start = lexer.next();
+  consume_digits_with_separators(lexer, &DIGIT);
+  let has_invalid_digits = lexer.next() > invalid_start;
+
+  let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
+
+  // Invalid if no valid digits, or if there are invalid digits
+  if !has_valid_digits || has_invalid_digits {
+    return TT::Invalid;
   }
-  TT::LiteralNumber
+
+  if is_bigint {
+    TT::LiteralBigInt
+  } else {
+    TT::LiteralNumber
+  }
 }
 
 fn lex_private_member(

@@ -345,6 +345,31 @@ impl<'a> Parser<'a> {
         } else {
           self.pat_decl(ctx)?
         };
+
+        // TypeScript: type annotation (parse and discard for error recovery)
+        if self.consume_if(TT::Colon).is_match() {
+          let _ = self.type_expr(ctx);
+        }
+
+        // Error recovery: consume excess declarations (e.g., `for (const a, b of arr)`)
+        // This handles malformed syntax like: `for (var x, y of arr)` or `for (const a, { [b]: c} of arr)`
+        while self.peek().typ == TT::Comma {
+          self.consume(); // consume comma
+
+          // Check if we've reached 'in' or 'of' (edge case)
+          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+            break;
+          }
+
+          // Parse and discard additional pattern (for error recovery)
+          let _ = self.pat_decl(ctx);
+
+          // Parse and discard type annotation if present
+          if self.consume_if(TT::Colon).is_match() {
+            let _ = self.type_expr(ctx);
+          }
+        }
+
         (mode, pat)
       }),
       // `let` is contextual - only a declaration if followed by a pattern
@@ -356,6 +381,27 @@ impl<'a> Parser<'a> {
         } else {
           self.pat_decl(ctx)?
         };
+
+        // TypeScript: type annotation (parse and discard for error recovery)
+        if self.consume_if(TT::Colon).is_match() {
+          let _ = self.type_expr(ctx);
+        }
+
+        // Error recovery: consume excess declarations
+        while self.peek().typ == TT::Comma {
+          self.consume(); // consume comma
+
+          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+            break;
+          }
+
+          let _ = self.pat_decl(ctx);
+
+          if self.consume_if(TT::Colon).is_match() {
+            let _ = self.type_expr(ctx);
+          }
+        }
+
         (mode, pat)
       }),
       // TypeScript: await using in for-of loop
@@ -367,6 +413,27 @@ impl<'a> Parser<'a> {
         } else {
           self.pat_decl(ctx)?
         };
+
+        // TypeScript: type annotation (parse and discard for error recovery)
+        if self.consume_if(TT::Colon).is_match() {
+          let _ = self.type_expr(ctx);
+        }
+
+        // Error recovery: consume excess declarations
+        while self.peek().typ == TT::Comma {
+          self.consume(); // consume comma
+
+          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+            break;
+          }
+
+          let _ = self.pat_decl(ctx);
+
+          if self.consume_if(TT::Colon).is_match() {
+            let _ = self.type_expr(ctx);
+          }
+        }
+
         (mode, pat)
       }),
       _ => {

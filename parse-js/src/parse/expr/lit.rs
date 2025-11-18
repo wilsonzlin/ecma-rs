@@ -283,6 +283,76 @@ impl<'a> Parser<'a> {
         TT::Comma,
         TT::BraceClose,
         |p| {
+          // Error recovery: class declarations in object literals are not allowed
+          if p.peek().typ == TT::KeywordClass {
+            // Skip the entire class declaration
+            p.consume(); // consume 'class'
+            // Skip optional class name
+            if p.peek().typ == TT::Identifier {
+              p.consume();
+            }
+            // Skip optional type parameters
+            if p.peek().typ == TT::ChevronLeft {
+              let mut depth = 0;
+              while p.peek().typ != TT::EOF {
+                if p.peek().typ == TT::ChevronLeft {
+                  depth += 1;
+                  p.consume();
+                } else if p.peek().typ == TT::ChevronRight {
+                  p.consume();
+                  depth -= 1;
+                  if depth == 0 {
+                    break;
+                  }
+                } else if p.peek().typ == TT::BraceOpen {
+                  break;
+                } else {
+                  p.consume();
+                }
+              }
+            }
+            // Skip optional extends clause
+            if p.consume_if(TT::KeywordExtends).is_match() {
+              // Skip until we reach the class body
+              while p.peek().typ != TT::BraceOpen && p.peek().typ != TT::EOF {
+                p.consume();
+              }
+            }
+            // Skip optional implements clause
+            if p.consume_if(TT::KeywordImplements).is_match() {
+              // Skip until we reach the class body
+              while p.peek().typ != TT::BraceOpen && p.peek().typ != TT::EOF {
+                p.consume();
+              }
+            }
+            // Skip the class body
+            if p.peek().typ == TT::BraceOpen {
+              let mut depth = 0;
+              while p.peek().typ != TT::EOF {
+                if p.peek().typ == TT::BraceOpen {
+                  depth += 1;
+                  p.consume();
+                } else if p.peek().typ == TT::BraceClose {
+                  p.consume();
+                  depth -= 1;
+                  if depth == 0 {
+                    break;
+                  }
+                } else {
+                  p.consume();
+                }
+              }
+            }
+            // Return a dummy member (will be ignored by error recovery)
+            // Use an empty shorthand property as a placeholder
+            use crate::ast::expr::IdExpr;
+            use crate::loc::Loc;
+            return Ok(ObjMember {
+              typ: ObjMemberType::Shorthand {
+                id: Node::new(Loc(0, 0), IdExpr { name: String::new() }),
+              },
+            });
+          }
           let rest = p.consume_if(TT::DotDotDot).is_match();
           if rest {
             let value = p.expr(ctx, [TT::Comma, TT::BraceClose])?;
@@ -309,8 +379,13 @@ impl<'a> Parser<'a> {
                   return Err(loc.error(SyntaxErrorType::ExpectedSyntax("property value"), None));
                 };
                 // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
+                // Error recovery: Also accept string literals, numbers, etc. for malformed shorthand properties
                 // The type checker will validate this semantically.
-                if key.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&key.stx.tt) {
+                if key.stx.tt != TT::Identifier
+                  && !KEYWORDS_MAPPING.contains_key(&key.stx.tt)
+                  && key.stx.tt != TT::LiteralString
+                  && key.stx.tt != TT::LiteralNumber
+                  && key.stx.tt != TT::LiteralBigInt {
                   return Err(key.error(SyntaxErrorType::ExpectedNotFound));
                 };
                 // TypeScript: Check for definite assignment assertion (e.g., { a! })

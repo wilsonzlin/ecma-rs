@@ -35,6 +35,69 @@ impl<'a> Parser<'a> {
       if self.peek().typ == TT::BraceClose {
         break;
       }
+      // Error recovery: nested class declarations are not allowed
+      if self.peek().typ == TT::KeywordClass {
+        // Skip the entire nested class declaration
+        self.consume(); // consume 'class'
+        // Skip optional class name
+        if self.peek().typ == TT::Identifier {
+          self.consume();
+        }
+        // Skip optional type parameters
+        if self.peek().typ == TT::ChevronLeft {
+          let mut depth = 0;
+          while self.peek().typ != TT::EOF {
+            if self.peek().typ == TT::ChevronLeft {
+              depth += 1;
+              self.consume();
+            } else if self.peek().typ == TT::ChevronRight {
+              self.consume();
+              depth -= 1;
+              if depth == 0 {
+                break;
+              }
+            } else if self.peek().typ == TT::BraceOpen {
+              break;
+            } else {
+              self.consume();
+            }
+          }
+        }
+        // Skip optional extends clause
+        if self.consume_if(TT::KeywordExtends).is_match() {
+          // Skip until we reach the class body
+          while self.peek().typ != TT::BraceOpen && self.peek().typ != TT::EOF {
+            self.consume();
+          }
+        }
+        // Skip optional implements clause
+        if self.consume_if(TT::KeywordImplements).is_match() {
+          // Skip until we reach the class body
+          while self.peek().typ != TT::BraceOpen && self.peek().typ != TT::EOF {
+            self.consume();
+          }
+        }
+        // Skip the class body
+        if self.peek().typ == TT::BraceOpen {
+          let mut depth = 0;
+          while self.peek().typ != TT::EOF {
+            if self.peek().typ == TT::BraceOpen {
+              depth += 1;
+              self.consume();
+            } else if self.peek().typ == TT::BraceClose {
+              self.consume();
+              depth -= 1;
+              if depth == 0 {
+                break;
+              }
+            } else {
+              self.consume();
+            }
+          }
+        }
+        // Continue to next member
+        continue;
+      }
       let member = self.with_loc(|p| {
         // TypeScript: parse decorators for members
         let decorators = p.decorators(ctx)?;
@@ -466,6 +529,19 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
+      // Error recovery: allow getters without parentheses
+      if p.peek().typ != TT::ParenthesisOpen {
+        // Missing parentheses - create empty body for error recovery
+        return Ok(Func {
+          arrow: false,
+          async_: false,
+          generator: false,
+          type_parameters,
+          parameters: Vec::new(),
+          return_type: None,
+          body: None,
+        });
+      }
       p.require(TT::ParenthesisOpen)?;
       // ES2017+: Allow trailing comma in empty parameter list
       let _ = p.consume_if(TT::Comma);
@@ -515,6 +591,33 @@ impl<'a> Parser<'a> {
       } else {
         None
       };
+      // Error recovery: allow setters without parentheses
+      if p.peek().typ != TT::ParenthesisOpen {
+        // Missing parentheses - create synthetic parameter for error recovery
+        let loc = p.peek().loc;
+        let synthetic_pattern = Node::new(loc, PatDecl {
+          pat: Node::new(loc, IdPat { name: String::from("_") }).into_wrapped(),
+        });
+        let param_loc = synthetic_pattern.loc;
+        return Ok(Func {
+          arrow: false,
+          async_: false,
+          generator: false,
+          type_parameters,
+          parameters: vec![Node::new(param_loc, ParamDecl {
+            decorators: Vec::new(),
+            rest: false,
+            optional: false,
+            accessibility: None,
+            readonly: false,
+            pattern: synthetic_pattern,
+            type_annotation: None,
+            default_value: None,
+          })],
+          return_type: None,
+          body: None,
+        });
+      }
       p.require(TT::ParenthesisOpen)?;
       // Setters are not generators or async, so yield/await can be used as identifiers
       let setter_ctx = ctx.with_rules(ParsePatternRules {
@@ -631,6 +734,39 @@ impl<'a> Parser<'a> {
     abstract_: bool,
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
     let [a, b, c, d] = self.peek_n();
+
+    // Error recovery: Handle generator method without a name: *{ }
+    if a.typ == TT::Asterisk && b.typ == TT::BraceOpen {
+      self.consume(); // consume *
+      // Create synthetic empty key
+      use crate::loc::Loc;
+      let key = ClassOrObjKey::Direct(Node::new(
+        Loc(0, 0),
+        ClassOrObjMemberDirectKey {
+          key: String::new(),
+          tt: TT::Identifier,
+        }
+      ));
+      // Consume the method body
+      let method = self.with_loc(|p| {
+        let func = p.with_loc(|p| {
+          let parameters = Vec::new();
+          let body = Some(p.parse_func_block_body(ctx)?.into());
+          Ok(Func {
+            arrow: false,
+            async_: false,
+            generator: true,
+            type_parameters: None,
+            parameters,
+            return_type: None,
+            body,
+          })
+        })?;
+        Ok(ClassOrObjMethod { func })
+      })?;
+      return Ok((key, ClassOrObjVal::Method(method)));
+    }
+
     // Special case for computed keys: parse key first, then check what follows
     // Handle: [...], *[...], get [...], set [...]
     if a.typ == TT::BracketOpen
@@ -738,12 +874,46 @@ impl<'a> Parser<'a> {
         (k, v.into())
       }
       // Getter (may have invalid type parameters like get foo<T>())
+      // Error recovery: also handle getters without parentheses like "get e"
       (TT::KeywordGet, _, TT::ParenthesisOpen, _) | (TT::KeywordGet, _, TT::ChevronLeft, _) => {
         let (k, v) = self.class_or_obj_getter_impl(ctx, abstract_)?;
         (k, v.into())
       }
+      // Error recovery: getter without parentheses - detect "get <identifier/keyword/string/number>"
+      (TT::KeywordGet, TT::Identifier, _, _)
+      | (TT::KeywordGet, TT::LiteralString, _, _)
+      | (TT::KeywordGet, TT::LiteralNumber, _, _)
+      | (TT::KeywordGet, TT::LiteralBigInt, _, _)
+      | (TT::KeywordGet, TT::PrivateMember, _, _)
+        if c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft
+      => {
+        let (k, v) = self.class_or_obj_getter_impl(ctx, abstract_)?;
+        (k, v.into())
+      }
+      // Error recovery: getter with keyword as name but no parentheses
+      (TT::KeywordGet, _, _, _) if KEYWORDS_MAPPING.contains_key(&b.typ) && c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft => {
+        let (k, v) = self.class_or_obj_getter_impl(ctx, abstract_)?;
+        (k, v.into())
+      }
       // Setter (may have invalid type parameters like set foo<T>(x))
+      // Error recovery: also handle setters without parentheses like "set f"
       (TT::KeywordSet, _, TT::ParenthesisOpen, _) | (TT::KeywordSet, _, TT::ChevronLeft, _) => {
+        let (k, v) = self.class_or_obj_setter_impl(ctx, abstract_)?;
+        (k, v.into())
+      }
+      // Error recovery: setter without parentheses - detect "set <identifier/keyword/string/number>"
+      (TT::KeywordSet, TT::Identifier, _, _)
+      | (TT::KeywordSet, TT::LiteralString, _, _)
+      | (TT::KeywordSet, TT::LiteralNumber, _, _)
+      | (TT::KeywordSet, TT::LiteralBigInt, _, _)
+      | (TT::KeywordSet, TT::PrivateMember, _, _)
+        if c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft
+      => {
+        let (k, v) = self.class_or_obj_setter_impl(ctx, abstract_)?;
+        (k, v.into())
+      }
+      // Error recovery: setter with keyword as name but no parentheses
+      (TT::KeywordSet, _, _, _) if KEYWORDS_MAPPING.contains_key(&b.typ) && c.typ != TT::ParenthesisOpen && c.typ != TT::ChevronLeft => {
         let (k, v) = self.class_or_obj_setter_impl(ctx, abstract_)?;
         (k, v.into())
       }

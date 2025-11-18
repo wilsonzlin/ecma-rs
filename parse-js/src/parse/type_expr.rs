@@ -12,7 +12,7 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse type expression or type predicate for function return type
-  /// Type predicates: `x is Type`, `asserts x`, `asserts x is Type`
+  /// Type predicates: `x is Type`, `asserts x`, `asserts x is Type`, `this is Type`
   pub fn type_expr_or_predicate(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     // Check for type predicate patterns
     let checkpoint = self.checkpoint();
@@ -25,6 +25,7 @@ impl<'a> Parser<'a> {
     if self.peek().typ == TT::Identifier || self.peek().typ == TT::KeywordThis {
       let is_this = self.peek().typ == TT::KeywordThis;
       let param_checkpoint = self.checkpoint();
+      let param_loc = self.peek().loc; // Save location before consuming
       let parameter_name = if is_this {
         self.consume();
         "this".to_string()
@@ -47,9 +48,8 @@ impl<'a> Parser<'a> {
         return Ok(Node::new(outer_loc, TypeExpr::TypePredicate(predicate)));
       } else if asserts {
         // This is `asserts x` without 'is Type'
-        let end_loc = self.peek().loc;
         use crate::loc::Loc;
-        let outer_loc = Loc(start_loc.0, end_loc.1);
+        let outer_loc = Loc(start_loc.0, param_loc.1);
         let predicate = Node::new(start_loc, TypePredicate {
           asserts: true,
           parameter_name,
