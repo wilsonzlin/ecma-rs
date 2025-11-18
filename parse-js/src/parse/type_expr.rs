@@ -888,6 +888,9 @@ impl<'a> Parser<'a> {
         self.require(TT::BracketClose)?;
         Ok(TypePropertyKey::Computed(Box::new(expr)))
       }
+      // TypeScript: Error recovery - private names in type/interface property signatures
+      // Semantically invalid but accept for error recovery (e.g., `type A = { #foo: string }`)
+      TT::PrivateMember => Ok(TypePropertyKey::Identifier(self.consume_as_string())),
       _ => {
         // Allow keywords as property names
         if crate::lex::KEYWORDS_MAPPING.contains_key(&t.typ) {

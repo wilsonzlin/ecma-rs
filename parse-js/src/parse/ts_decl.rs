@@ -105,6 +105,9 @@ impl<'a> Parser<'a> {
         let t = self.consume();
         self.str(t.loc).to_string()
       }
+      // TypeScript: Error recovery - private names in enum members
+      // Semantically invalid but accept for error recovery (e.g., `enum E { #x }`)
+      TT::PrivateMember => self.consume_as_string(),
       _ => self.require_identifier()?,
     };
 
