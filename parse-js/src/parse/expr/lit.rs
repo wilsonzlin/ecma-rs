@@ -370,49 +370,55 @@ impl<'a> Parser<'a> {
             let typ = match value {
               ClassOrObjVal::Prop(None) => {
                 // This property had no value, so it's a shorthand property. Therefore, check that it's a valid identifier name.
-                let ClassOrObjKey::Direct(key) = key else {
-                  // Computed properties cannot be shorthand
-                  let loc = match key {
-                    ClassOrObjKey::Computed(ref expr) => expr.loc,
-                    _ => unreachable!(),
-                  };
-                  return Err(loc.error(SyntaxErrorType::ExpectedSyntax("property value"), None));
-                };
-                // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
-                // Error recovery: Also accept string literals, numbers, etc. for malformed shorthand properties
-                // The type checker will validate this semantically.
-                if key.stx.tt != TT::Identifier
-                  && !KEYWORDS_MAPPING.contains_key(&key.stx.tt)
-                  && key.stx.tt != TT::LiteralString
-                  && key.stx.tt != TT::LiteralNumber
-                  && key.stx.tt != TT::LiteralBigInt {
-                  return Err(key.error(SyntaxErrorType::ExpectedNotFound));
-                };
-                // TypeScript: Check for definite assignment assertion (e.g., { a! })
-                let _definite_assignment = p.consume_if(TT::Exclamation).is_match();
-                // Check for default value (e.g., {c = 1})
-                if p.consume_if(TT::Equals).is_match() {
-                  // Parse the default value and create an assignment expression
-                  let key_name = key.stx.key.clone();
-                  let key_loc = key.loc;
-                  let default_val = p.expr(ctx, [TT::Comma, TT::BraceClose])?;
-                  let id_expr = Node::new(key_loc, IdExpr { name: key_name.clone() }).into_wrapped();
-                  let bin_expr = Node::new(key_loc + default_val.loc, BinaryExpr {
-                    operator: OperatorName::Assignment,
-                    left: id_expr,
-                    right: default_val,
-                  }).into_wrapped();
-                  ObjMemberType::Valued {
-                    key: ClassOrObjKey::Direct(Node::new(key_loc, ClassOrObjMemberDirectKey {
-                      key: key_name,
-                      tt: TT::Identifier,
-                    })),
-                    val: ClassOrObjVal::Prop(Some(bin_expr))
+                match key {
+                  ClassOrObjKey::Computed(expr) => {
+                    // TypeScript: Error recovery - computed properties without value like { [e] }
+                    // Create synthetic undefined value for error recovery
+                    let loc = expr.loc;
+                    let synthetic_value = Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped();
+                    ObjMemberType::Valued {
+                      key: ClassOrObjKey::Computed(expr),
+                      val: ClassOrObjVal::Prop(Some(synthetic_value)),
+                    }
                   }
-                } else {
-                  // No default value - this is a normal shorthand property
-                  ObjMemberType::Shorthand {
-                    id: key.map_stx(|n| IdExpr { name: n.key }),
+                  ClassOrObjKey::Direct(direct_key) => {
+                    // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
+                    // Error recovery: Also accept string literals, numbers, etc. for malformed shorthand properties
+                    // The type checker will validate this semantically.
+                    if direct_key.stx.tt != TT::Identifier
+                      && !KEYWORDS_MAPPING.contains_key(&direct_key.stx.tt)
+                      && direct_key.stx.tt != TT::LiteralString
+                      && direct_key.stx.tt != TT::LiteralNumber
+                      && direct_key.stx.tt != TT::LiteralBigInt {
+                      return Err(direct_key.error(SyntaxErrorType::ExpectedNotFound));
+                    };
+                    // TypeScript: Check for definite assignment assertion (e.g., { a! })
+                    let _definite_assignment = p.consume_if(TT::Exclamation).is_match();
+                    // Check for default value (e.g., {c = 1})
+                    if p.consume_if(TT::Equals).is_match() {
+                      // Parse the default value and create an assignment expression
+                      let key_name = direct_key.stx.key.clone();
+                      let key_loc = direct_key.loc;
+                      let default_val = p.expr(ctx, [TT::Comma, TT::BraceClose])?;
+                      let id_expr = Node::new(key_loc, IdExpr { name: key_name.clone() }).into_wrapped();
+                      let bin_expr = Node::new(key_loc + default_val.loc, BinaryExpr {
+                        operator: OperatorName::Assignment,
+                        left: id_expr,
+                        right: default_val,
+                      }).into_wrapped();
+                      ObjMemberType::Valued {
+                        key: ClassOrObjKey::Direct(Node::new(key_loc, ClassOrObjMemberDirectKey {
+                          key: key_name,
+                          tt: TT::Identifier,
+                        })),
+                        val: ClassOrObjVal::Prop(Some(bin_expr))
+                      }
+                    } else {
+                      // No default value - this is a normal shorthand property
+                      ObjMemberType::Shorthand {
+                        id: direct_key.map_stx(|n| IdExpr { name: n.key }),
+                      }
+                    }
                   }
                 }
               }
