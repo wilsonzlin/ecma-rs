@@ -11,6 +11,7 @@ use super::{Expr, IdExpr};
 pub enum JsxAttrVal {
   Expression(Node<JsxExprContainer>),
   Text(Node<JsxText>),
+  Element(Node<JsxElem>),
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -65,6 +66,8 @@ pub struct JsxElem {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxExprContainer {
+  #[drive(skip)]
+  pub spread: bool,
   pub value: Node<Expr>,
 }
 

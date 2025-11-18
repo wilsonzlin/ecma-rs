@@ -2,11 +2,24 @@ use crate::{ast::{expr::{IdExpr, jsx::{JsxAttr, JsxAttrVal, JsxElem, JsxElemChil
 
 
 impl<'a> Parser<'a> {
+  /// Gets a token that can be used as a JSX name (attribute name, tag name part, etc.).
+  /// JSX allows any identifier including JavaScript keywords.
+  fn jsx_name_token(&mut self) -> SyntaxResult<crate::token::Token> {
+    let tok = self.peek_with_mode(LexMode::JsxTag);
+    // Accept identifiers and any keywords as JSX names
+    if tok.typ == TT::Identifier || tok.typ.is_keyword() {
+      self.consume_with_mode(LexMode::JsxTag);
+      Ok(tok)
+    } else {
+      Err(tok.error(crate::error::SyntaxErrorType::RequiredTokenNotFound(TT::Identifier)))
+    }
+  }
+
   pub fn jsx_name(&mut self) -> SyntaxResult<Node<JsxName>> {
     self.with_loc(|p| {
-      let start = p.require_with_mode(TT::Identifier, LexMode::JsxTag)?;
+      let start = p.jsx_name_token()?;
       Ok(if p.consume_if(TT::Colon).is_match() {
-        let name = p.require_with_mode(TT::Identifier, LexMode::JsxTag)?;
+        let name = p.jsx_name_token()?;
         JsxName {
           namespace: Some(p.string(start.loc)),
           name: p.string(name.loc),
@@ -22,16 +35,18 @@ impl<'a> Parser<'a> {
 
   /// Parses a JSX element name like `div`, `ab-cd`, `MyComponent`, `a.b.c`, or `ns:div`.
   pub fn jsx_elem_name(&mut self) -> SyntaxResult<Option<JsxElemName>> {
-    let Some(start) = self
-      .maybe_consume_with_mode(TT::Identifier, LexMode::JsxTag)
-      .match_loc()
-    else {
+    // Try to get a JSX name token (identifier or keyword)
+    let tok = self.peek_with_mode(LexMode::JsxTag);
+    let is_name_token = tok.typ == TT::Identifier || tok.typ.is_keyword();
+    if !is_name_token {
       // Fragment.
       return Ok(None);
     };
+    let start = self.jsx_name_token()?.loc;
+
     let name = if self.consume_if(TT::Colon).is_match() {
       // Namespaced name.
-      let name = self.require_with_mode(TT::Identifier, LexMode::JsxTag)?;
+      let name = self.jsx_name_token()?;
       JsxElemName::Name(Node::new(start + name.loc, JsxName {
         namespace: Some(self.string(start)),
         name: self.string(name.loc),
@@ -68,12 +83,31 @@ impl<'a> Parser<'a> {
 
   /// Parses a JSX attribute value (comes after the equals sign).
   pub fn jsx_attr_val(&mut self, ctx: ParseCtx) -> SyntaxResult<JsxAttrVal> {
-    // TODO Attr values can be an element or fragment directly e.g. `a=<div/>`.
-    let val = if self.consume_if(TT::BraceOpen).is_match() {
-      let value = self.expr(ctx, [TT::BraceClose])?;
-      let expr = Node::new(value.loc, JsxExprContainer { value });
-      self.require(TT::BraceClose)?;
-      JsxAttrVal::Expression(expr)
+    // Attr values can be an element/fragment directly e.g. `a=<div/>`, or an expression in braces, or a string
+    let val = if self.peek().typ == TT::ChevronLeft {
+      // JSX element or fragment as attribute value
+      let elem = self.jsx_elem(ctx)?;
+      JsxAttrVal::Element(elem)
+    } else if self.consume_if(TT::BraceOpen).is_match() {
+      // Check for empty expression: <div prop={} />
+      if self.peek().typ == TT::BraceClose {
+        // Empty expression - create empty container
+        let loc = self.peek().loc;
+        self.consume(); // consume }
+        // For empty expressions, we still need a valid expression node
+        // Use an empty identifier or similar placeholder
+        use crate::ast::expr::{Expr, IdExpr};
+        use crate::ast::node::Node;
+        use crate::loc::Loc;
+        let empty_expr = Node::new(Loc(loc.0, loc.0), Expr::Id(Node::new(Loc(loc.0, loc.0), IdExpr { name: String::new() })));
+        let expr = Node::new(loc, JsxExprContainer { spread: false, value: empty_expr });
+        JsxAttrVal::Expression(expr)
+      } else {
+        let value = self.expr(ctx, [TT::BraceClose])?;
+        let expr = Node::new(value.loc, JsxExprContainer { spread: false, value });
+        self.require(TT::BraceClose)?;
+        JsxAttrVal::Expression(expr)
+      }
     } else {
       JsxAttrVal::Text(self.with_loc(|p| p.lit_str_val().map(|value| JsxText { value }))?)
     };
@@ -124,12 +158,28 @@ impl<'a> Parser<'a> {
         children.push(JsxElemChild::Element(child));
       };
       if self.consume_if(TT::BraceOpen).is_match() {
-        // TODO Allow empty expr.
-        let value = self.expr(ctx, [TT::BraceClose])?;
-        children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
-          value,
-        })));
-        self.require(TT::BraceClose)?;
+        // Allow empty expr: <div>{}</div>
+        if self.peek().typ == TT::BraceClose {
+          // Empty expression - skip it, don't add to children
+          self.consume(); // consume }
+        } else if self.peek().typ == TT::DotDotDot {
+          // Spread children: <div>{...items}</div>
+          // This is valid JSX - the spread creates multiple children from an array
+          self.consume(); // consume ...
+          let value = self.expr(ctx, [TT::BraceClose])?;
+          children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
+            spread: true,
+            value,
+          })));
+          self.require(TT::BraceClose)?;
+        } else {
+          let value = self.expr(ctx, [TT::BraceClose])?;
+          children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
+            spread: false,
+            value,
+          })));
+          self.require(TT::BraceClose)?;
+        }
       };
     };
     Ok(children)
@@ -159,6 +209,7 @@ impl<'a> Parser<'a> {
         .unwrap_or_default();
       if p.consume_if(TT::Slash).is_match() {
         // Self closing.
+        
         p.require(TT::ChevronRight)?;
         return Ok(JsxElem {
           name: tag_name,
@@ -166,6 +217,7 @@ impl<'a> Parser<'a> {
           children: Vec::new(),
         });
       }
+      
       p.require(TT::ChevronRight)?;
       let children = p.jsx_elem_children(ctx)?;
       let closing = p.require(TT::ChevronLeftSlash)?;

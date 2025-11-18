@@ -322,6 +322,12 @@ impl<'a> Parser<'a> {
     // Check what follows the key/type annotation
     let t = self.peek();
 
+    // Check if this is a constructor method
+    let is_constructor = match key {
+      ClassOrObjKey::Direct(k) => k.stx.key == "constructor",
+      _ => false,
+    };
+
     match t.typ {
       // Method with type parameters or parenthesis
       TT::ChevronLeft | TT::ParenthesisOpen => {
@@ -342,7 +348,17 @@ impl<'a> Parser<'a> {
               None
             };
             // TypeScript: method overload signatures and abstract methods have no body
-            let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
+            // Also check if next token could start a new member (for overloads without semicolons)
+            let next_could_be_new_member = matches!(
+              p.peek().typ,
+              TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected |
+              TT::KeywordAbstract | TT::KeywordStatic | TT::KeywordReadonly |
+              TT::BraceClose
+            );
+            // For constructors, if next token is not an opening brace, it's an overload signature
+            let constructor_without_body = is_constructor && p.peek().typ != TT::BraceOpen;
+
+            let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) || next_could_be_new_member || constructor_without_body {
               p.consume_if(TT::Semicolon);
               None
             } else {
@@ -451,6 +467,8 @@ impl<'a> Parser<'a> {
         None
       };
       p.require(TT::ParenthesisOpen)?;
+      // ES2017+: Allow trailing comma in empty parameter list
+      let _ = p.consume_if(TT::Comma);
       p.require(TT::ParenthesisClose)?;
       // TypeScript: return type annotation - may be type predicate
       let return_type = if p.consume_if(TT::Colon).is_match() {
@@ -526,6 +544,8 @@ impl<'a> Parser<'a> {
         (pattern, type_annotation, default_value)
       };
       let param_loc = pattern.loc;
+      // ES2017+: Allow trailing comma in setter parameter list
+      let _ = p.consume_if(TT::Comma);
       p.require(TT::ParenthesisClose)?;
       // Setters don't have return types
       // TypeScript: setter overload signatures and abstract setters have no body

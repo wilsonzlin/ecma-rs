@@ -18,7 +18,7 @@ pub struct ClassDecl {
   pub name: Option<Node<ClassOrFuncName>>, // Name can only be omitted in a default export, although a default export class can still have a name.
   pub type_parameters: Option<Vec<Node<TypeParameter>>>,
   pub extends: Option<Node<Expr>>,
-  pub implements: Vec<Node<TypeExpr>>,
+  pub implements: Vec<Node<Expr>>,  // Changed from TypeExpr to Expr to support optional chaining (A?.B)
   pub members: Vec<Node<ClassMember>>
 }
 

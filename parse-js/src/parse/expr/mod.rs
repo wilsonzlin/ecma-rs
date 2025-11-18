@@ -403,7 +403,19 @@ impl<'a> Parser<'a> {
     // Quick lookahead: check if this looks like a type assertion
     // Type assertions start with type expression keywords or identifiers that are type names
     let [_, t1] = self.peek_n::<2>();
-    let looks_like_type_assertion = matches!(t1.typ,
+    eprintln!("DEBUG try_parse_angle_bracket_type_assertion: t1 = {:?} '{}'", t1.typ, self.str(t1.loc));
+
+    // Check if it's an identifier that looks like a JSX tag (starts with lowercase)
+    // JSX built-in tags like <div>, <span> start with lowercase, while type names typically start with uppercase
+    let is_likely_jsx_tag = if t1.typ == TT::Identifier {
+      let id_str = self.str(t1.loc);
+      // If identifier starts with lowercase letter, it's likely JSX
+      id_str.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+    } else {
+      false
+    };
+
+    let looks_like_type_assertion = !is_likely_jsx_tag && matches!(t1.typ,
       TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
       TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
       TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
@@ -412,6 +424,8 @@ impl<'a> Parser<'a> {
       TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull |
       TT::KeywordConst
     );
+
+    eprintln!("DEBUG: is_likely_jsx_tag = {}, looks_like_type_assertion = {}", is_likely_jsx_tag, looks_like_type_assertion);
 
     if !looks_like_type_assertion {
       return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("type assertion")));
@@ -440,8 +454,26 @@ impl<'a> Parser<'a> {
       let type_annotation = p.type_expr(ctx)?;
       p.require(TT::ChevronRight)?;
 
+      // TypeScript: If we're followed by `<`, this could be JSX, not a nested type assertion
+      // E.g., <Panel><Div /></Panel> should be JSX, not <Panel>(<Div>(...))</Panel> as nested type assertions
+      // Check if it looks like a JSX element: `<identifier` followed by whitespace, `/`, or `>`
+      if p.peek().typ == TT::ChevronLeft {
+        let [_, t1, t2] = p.peek_n::<3>();
+        if t1.typ == TT::Identifier {
+          // This looks like JSX: <identifier ...
+          // Reject the type assertion and let JSX parser handle it
+          return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("not a type assertion (followed by JSX element)")));
+        }
+      }
+
       // Parse just the operand - the outer expression parser will handle operators
       let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
+
+      // If we're followed by a JSX closing tag, this is actually JSX, not a type assertion
+      // E.g., <Comp>text</Comp> should be JSX, not <Comp>(text) as type assertion
+      if p.peek().typ == TT::ChevronLeftSlash {
+        return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("not a type assertion (followed by JSX closing tag)")));
+      }
 
       use crate::ast::expr::TypeAssertionExpr;
       Ok(TypeAssertionExpr {
@@ -597,14 +629,18 @@ impl<'a> Parser<'a> {
           // Could be arrow function with type parameters
           // Try to parse it as such
           match self.arrow_func_expr(ctx, terminators) {
-            Ok(arrow) => arrow.into_wrapped(),
-            Err(_) => {
+            Ok(arrow) => {
+              arrow.into_wrapped()
+            }
+            Err(e) => {
               // Failed to parse as arrow function, restore and try other options
               self.restore_checkpoint(checkpoint);
               let assertion_checkpoint = self.checkpoint();
               match self.try_parse_angle_bracket_type_assertion(ctx) {
-                Ok(assertion) => assertion,
-                Err(_) => {
+                Ok(assertion) => {
+                  assertion
+                }
+                Err(e2) => {
                   self.restore_checkpoint(assertion_checkpoint);
                   self.jsx_elem(ctx)?.into_wrapped()
                 }
@@ -613,9 +649,13 @@ impl<'a> Parser<'a> {
           }
         } else {
           // Not type arguments, try type assertion or JSX
+          
           match self.try_parse_angle_bracket_type_assertion(ctx) {
-            Ok(assertion) => assertion,
-            Err(_) => {
+            Ok(assertion) => {
+              
+              assertion
+            }
+            Err(e) => {
               self.restore_checkpoint(checkpoint);
               self.jsx_elem(ctx)?.into_wrapped()
             }
@@ -871,7 +911,8 @@ impl<'a> Parser<'a> {
             TT::LiteralString |   // String after expression
             TT::LiteralTrue |     // Boolean after expression
             TT::LiteralFalse |    // Boolean after expression
-            TT::LiteralNull       // Null after expression
+            TT::LiteralNull |     // Null after expression
+            TT::ChevronLeftSlash  // JSX closing tag: </div> after JSX element with text children
           ) {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;

@@ -50,10 +50,25 @@ pub fn is_valid_pattern_identifier(typ: TT, rules: ParsePatternRules) -> bool {
   }
 }
 
+/// Check if a token can be used as a class or function name
+/// TypeScript allows type keywords as class/function names in error cases
+pub fn is_valid_class_or_func_name(typ: TT, rules: ParsePatternRules) -> bool {
+  if is_valid_pattern_identifier(typ, rules) {
+    return true;
+  }
+  // Additionally allow TypeScript type keywords
+  matches!(
+    typ,
+    TT::KeywordAny | TT::KeywordBooleanType | TT::KeywordNumberType |
+    TT::KeywordStringType | TT::KeywordSymbolType | TT::KeywordVoid |
+    TT::KeywordNever | TT::KeywordUndefinedType | TT::KeywordUnknown |
+    TT::KeywordObjectType | TT::KeywordBigIntType
+  )
+}
 
 impl<'a> Parser<'a> {
   pub fn maybe_class_or_func_name(&mut self, ctx: ParseCtx) -> Option<Node<ClassOrFuncName>> {
-    self.consume_if_pred(|t| is_valid_pattern_identifier(t.typ, ctx.rules))
+    self.consume_if_pred(|t| is_valid_class_or_func_name(t.typ, ctx.rules))
       .map(|t| Node::new(t.loc, ClassOrFuncName { name: self.string(t.loc) }))
   }
 
@@ -81,7 +96,14 @@ impl<'a> Parser<'a> {
         // Check inside loop to ensure that it must come first or after a comma.
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {
-          rest = Some(p.id_pat(ctx)?);
+          // TypeScript: For error recovery, allow binding patterns in rest properties
+          // e.g., ({...{}} = {}), ({...[]} = {})
+          // The type checker will validate these semantically
+          rest = Some(p.pat(ctx)?);
+          // TypeScript: For error recovery, allow trailing comma after rest element
+          // even though it's semantically invalid (e.g., {...x,})
+          // The type checker will catch this error
+          let _ = p.consume_if(TT::Comma);
           break;
         };
 
@@ -99,13 +121,15 @@ impl<'a> Parser<'a> {
                 )));
               }
               ClassOrObjKey::Direct(n) => {
-                // We can't have a non-identifier (e.g. str) key, even if it normalizes to a valid identifier name.
                 // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
-                // The type checker will validate this semantically.
-                if n.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&n.stx.tt) {
+                // TypeScript: Also accept string literals that normalize to identifiers (e.g., { "while" })
+                // The type checker will validate these semantically.
+                if n.stx.tt != TT::Identifier
+                  && n.stx.tt != TT::LiteralString
+                  && !KEYWORDS_MAPPING.contains_key(&n.stx.tt) {
                   return Err(n.error(SyntaxErrorType::ExpectedNotFound));
                 }
-                // We've already ensured that this is a valid identifier or keyword.
+                // We've already ensured that this is a valid identifier, keyword, or string literal.
                 let id_pat = n.derive_stx(|n| IdPat { name: n.key.clone() }).into_wrapped();
                 (true, id_pat)
               }
@@ -145,6 +169,17 @@ impl<'a> Parser<'a> {
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {
           rest = Some(p.pat(ctx)?);
+          // TypeScript: For error recovery, allow initializer on rest element
+          // even though it's semantically invalid (e.g., [...x = a])
+          // The type checker will catch this error
+          if p.consume_if(TT::Equals).is_match() {
+            // Parse and discard the initializer
+            p.expr(ctx, [TT::BracketClose])?;
+          }
+          // TypeScript: For error recovery, allow trailing comma after rest element
+          // even though it's semantically invalid (e.g., [...x,])
+          // The type checker will catch this error
+          let _ = p.consume_if(TT::Comma);
           break;
         };
 
@@ -179,6 +214,7 @@ impl<'a> Parser<'a> {
   /// * Object patterns (e.g., `{ x, y }`)
   /// * Array patterns (e.g., `[a, b, ...rest]`)
   pub fn pat(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Pat>> {
+    use crate::lex::KEYWORDS_MAPPING;
     let t = self.peek();
     let pat: Node<Pat> = match t.typ {
       t if is_valid_pattern_identifier(t, ctx.rules) => self.id_pat(ctx)?.into_wrapped(),
@@ -188,6 +224,15 @@ impl<'a> Parser<'a> {
       // Handles cases like `var;`, `let;`, `const;`, `export var;`
       TT::Semicolon | TT::Comma | TT::EOF => {
         Node::new(t.loc, IdPat { name: String::from("") }).into_wrapped()
+      }
+      // TypeScript: Allow any keyword as pattern identifier for error recovery
+      // Examples: `var { while: while } = x` or `let [if] = arr`
+      // The type checker will validate these semantically
+      t if KEYWORDS_MAPPING.contains_key(&t) => {
+        self.with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdPat { name })
+        })?.into_wrapped()
       }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("pattern"))),
     };

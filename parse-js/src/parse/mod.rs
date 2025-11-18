@@ -319,6 +319,26 @@ impl<'a> Parser<'a> {
     Ok(self.string(t.loc))
   }
 
+  /// Require an identifier, but allow TypeScript type keywords as identifiers
+  /// TypeScript allows type keywords like "any", "string", "number", etc. as identifiers in some contexts
+  pub fn require_identifier_or_ts_keyword(&mut self) -> SyntaxResult<String> {
+    let t = self.consume();
+    // Allow regular identifiers
+    if t.typ == TT::Identifier {
+      return Ok(self.string(t.loc));
+    }
+    // Allow TypeScript type keywords as identifiers
+    match t.typ {
+      TT::KeywordAny | TT::KeywordBooleanType | TT::KeywordNumberType |
+      TT::KeywordStringType | TT::KeywordSymbolType | TT::KeywordVoid |
+      TT::KeywordNever | TT::KeywordUndefinedType | TT::KeywordUnknown |
+      TT::KeywordObjectType | TT::KeywordBigIntType => {
+        Ok(self.string(t.loc))
+      }
+      _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")))
+    }
+  }
+
   /// Get string value of a template part literal
   pub fn lit_template_part_str_val(&mut self) -> SyntaxResult<String> {
     let t = self.require(TT::LiteralTemplatePartString)?;

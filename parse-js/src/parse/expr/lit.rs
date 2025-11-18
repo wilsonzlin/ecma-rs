@@ -313,6 +313,8 @@ impl<'a> Parser<'a> {
                 if key.stx.tt != TT::Identifier && !KEYWORDS_MAPPING.contains_key(&key.stx.tt) {
                   return Err(key.error(SyntaxErrorType::ExpectedNotFound));
                 };
+                // TypeScript: Check for definite assignment assertion (e.g., { a! })
+                let _definite_assignment = p.consume_if(TT::Exclamation).is_match();
                 // Check for default value (e.g., {c = 1})
                 if p.consume_if(TT::Equals).is_match() {
                   // Parse the default value and create an assignment expression
@@ -384,6 +386,7 @@ impl<'a> Parser<'a> {
 
   // NOTE: The next token must definitely be LiteralTemplatePartString{,End}.
   // ES2018: Tagged templates can have invalid escape sequences (cooked value is undefined, raw is available)
+  // TypeScript: All templates allow invalid escapes (permissive parsing, semantic errors caught later)
   pub fn lit_template_parts(&mut self, ctx: ParseCtx, tagged: bool) -> SyntaxResult<Vec<LitTemplatePart>> {
     let t = self.consume();
     let is_end = match t.typ {
@@ -394,12 +397,8 @@ impl<'a> Parser<'a> {
 
     let mut parts = Vec::new();
     // ES2018: Tagged templates allow invalid escapes
-    let first_str = if tagged {
-      normalise_literal_string_or_template_inner(self.bytes(t.loc)).unwrap_or_else(|| String::new())
-    } else {
-      normalise_literal_string_or_template_inner(self.bytes(t.loc))
-        .ok_or_else(|| t.loc.error(SyntaxErrorType::InvalidCharacterEscape, None))?
-    };
+    // TypeScript: All templates allow invalid escapes (permissive parsing)
+    let first_str = normalise_literal_string_or_template_inner(self.bytes(t.loc)).unwrap_or_else(|| String::new());
     parts.push(LitTemplatePart::String(first_str));
     if !is_end {
       loop {
@@ -411,15 +410,8 @@ impl<'a> Parser<'a> {
           return Err(string.error(SyntaxErrorType::ExpectedSyntax("template string part")));
         };
         // ES2018: Tagged templates allow invalid escapes
-        let part_str = if tagged {
-          normalise_literal_string_or_template_inner(self.bytes(string.loc)).unwrap_or_else(|| String::new())
-        } else {
-          normalise_literal_string_or_template_inner(self.bytes(string.loc)).ok_or_else(|| {
-            string
-              .loc
-              .error(SyntaxErrorType::InvalidCharacterEscape, None)
-          })?
-        };
+        // TypeScript: All templates allow invalid escapes (permissive parsing)
+        let part_str = normalise_literal_string_or_template_inner(self.bytes(string.loc)).unwrap_or_else(|| String::new());
         parts.push(LitTemplatePart::String(part_str));
         if string.typ == TT::LiteralTemplatePartStringEnd {
           break;

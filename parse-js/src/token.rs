@@ -237,6 +237,39 @@ pub struct Token {
   pub typ: TT,
 }
 
+impl TT {
+  /// Returns true if this token is any keyword (JavaScript or TypeScript).
+  pub fn is_keyword(self) -> bool {
+    matches!(self,
+      TT::KeywordAs | TT::KeywordAsync | TT::KeywordAwait |
+      TT::KeywordBreak | TT::KeywordCase | TT::KeywordCatch |
+      TT::KeywordClass | TT::KeywordConst | TT::KeywordConstructor |
+      TT::KeywordContinue | TT::KeywordDebugger | TT::KeywordDefault |
+      TT::KeywordDelete | TT::KeywordDo | TT::KeywordElse |
+      TT::KeywordEnum | TT::KeywordExport | TT::KeywordExtends |
+      TT::KeywordFinally | TT::KeywordFor | TT::KeywordFrom |
+      TT::KeywordFunction | TT::KeywordGet | TT::KeywordIf |
+      TT::KeywordImport | TT::KeywordIn | TT::KeywordInstanceof |
+      TT::KeywordLet | TT::KeywordNew | TT::KeywordOf |
+      TT::KeywordOut | TT::KeywordReturn | TT::KeywordSet |
+      TT::KeywordStatic | TT::KeywordSuper | TT::KeywordSwitch |
+      TT::KeywordThis | TT::KeywordThrow | TT::KeywordTry |
+      TT::KeywordTypeof | TT::KeywordUsing | TT::KeywordVar |
+      TT::KeywordVoid | TT::KeywordWhile | TT::KeywordWith |
+      TT::KeywordYield | TT::KeywordAbstract | TT::KeywordAccessor |
+      TT::KeywordAny | TT::KeywordAsserts | TT::KeywordBigIntType |
+      TT::KeywordBooleanType | TT::KeywordDeclare | TT::KeywordImplements |
+      TT::KeywordInfer | TT::KeywordInterface | TT::KeywordIs |
+      TT::KeywordKeyof | TT::KeywordModule | TT::KeywordNamespace |
+      TT::KeywordNever | TT::KeywordNumberType | TT::KeywordObjectType |
+      TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected |
+      TT::KeywordPublic | TT::KeywordReadonly | TT::KeywordSatisfies |
+      TT::KeywordStringType | TT::KeywordSymbolType | TT::KeywordType |
+      TT::KeywordUndefinedType | TT::KeywordUnique | TT::KeywordUnknown
+    )
+  }
+}
+
 impl Token {
   pub fn error(&self, typ: SyntaxErrorType) -> SyntaxError {
     self.loc.error(typ, Some(self.typ))

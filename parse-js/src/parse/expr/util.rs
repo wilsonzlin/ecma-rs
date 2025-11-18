@@ -63,7 +63,7 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
     Expr::LitObj(n) => {
       let LitObjExpr { members } = *n.stx;
       let mut properties = Vec::new();
-      let mut rest: Option<Node<IdPat>> = None;
+      let mut rest: Option<Node<Pat>> = None;
       for member in members {
         let loc = member.loc;
         if rest.is_some() {
@@ -115,13 +115,10 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
               }));
             }
             ObjMemberType::Rest { val: value } => {
-              let maybe_rest = lit_to_pat(value)?;
-              // The rest element must be an identifier.
-              let rest_loc = maybe_rest.loc;
-              let Pat::Id(rest_pat) = *maybe_rest.stx else {
-                return Err(rest_loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
-              };
-              rest = Some(rest_pat);
+              // TypeScript: For error recovery, allow any pattern in rest position
+              // e.g., {...{}} or {...[]}
+              // The type checker will validate these semantically
+              rest = Some(lit_to_pat(value)?);
             }
           },
           _ => unreachable!(),
