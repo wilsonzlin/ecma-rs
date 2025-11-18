@@ -565,7 +565,10 @@ impl<'a> Parser<'a> {
       TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
       // Allow type keywords as identifiers in typeof queries like: typeof undefined, typeof this
       TT::KeywordUndefinedType | TT::KeywordThis |
-      TT::KeywordSuper  // TypeScript: Error recovery - allow 'super' as type identifier
+      TT::KeywordSuper |  // TypeScript: Error recovery - allow 'super' as type identifier
+      // TypeScript: Error recovery - allow reserved keywords in qualified type names
+      // Examples: `x.void`, `typeof Controller.prototype.delete`, `typeof foo.var`
+      TT::KeywordVoid | TT::KeywordDelete | TT::KeywordVar
       => Ok(self.string(t.loc)),
       _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type identifier")))
     }
