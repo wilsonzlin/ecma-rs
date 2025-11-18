@@ -234,6 +234,15 @@ impl<'a> Parser<'a> {
           Ok(IdPat { name })
         })?.into_wrapped()
       }
+      // TypeScript: Error recovery - private names in patterns/parameters
+      // Examples: `const #foo = 3;` or `function f(#x: string) {}`
+      // The type checker will catch these as semantic errors
+      TT::PrivateMember => {
+        self.with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdPat { name })
+        })?.into_wrapped()
+      }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("pattern"))),
     };
     Ok(pat)

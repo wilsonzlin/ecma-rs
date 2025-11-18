@@ -796,13 +796,13 @@ impl<'a> Parser<'a> {
           }).into_wrapped();
           continue;
         }
-        // TypeScript: Skip type arguments after identifiers/member expressions
-        // e.g., Base<T> in extends clause
-        // Only treat < as type arguments if left is an identifier or member expression
+        // TypeScript: Skip type arguments after identifiers/member expressions/call expressions
+        // e.g., Base<T> in extends clause or getBase()<T> in class extends
+        // Only treat < as type arguments if left is an identifier, member expression, or call expression
         TT::ChevronLeft => {
-          // Check if left expression is an identifier or member expression
+          // Check if left expression is an identifier, member expression, or call expression
           let left_is_identifier_or_member = matches!(*left.stx,
-            Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_)
+            Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
           );
 
           if left_is_identifier_or_member {

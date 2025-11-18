@@ -489,6 +489,19 @@ impl<'a> Parser<'a> {
       // Template literal type
       TT::LiteralTemplatePartString => self.template_literal_type(ctx),
 
+      // TypeScript: Error recovery - private names in type expressions
+      // Example: `const x: C[#bar] = 3;` (indexed access with private name)
+      // The type checker will catch this as a semantic error
+      TT::PrivateMember => {
+        let loc = self.peek().loc;
+        let name = self.consume_as_string();
+        let reference = Node::new(loc, TypeReference {
+          name: TypeEntityName::Identifier(name),
+          type_arguments: None,
+        });
+        Ok(Node::new(loc, TypeExpr::TypeReference(reference)))
+      }
+
       _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type expression"))),
     }
   }
