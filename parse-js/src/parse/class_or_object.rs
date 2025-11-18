@@ -543,6 +543,47 @@ impl<'a> Parser<'a> {
         });
       }
       p.require(TT::ParenthesisOpen)?;
+
+      // TypeScript: Check for optional `this` parameter in getter
+      // Syntax: get x(this: Type): ReturnType
+      let mut parameters = Vec::new();
+      if p.peek().typ == TT::KeywordThis {
+        let [_, next] = p.peek_n::<2>();
+        if next.typ == TT::Colon {
+          // Parse this parameter: this: Type
+          use crate::ast::expr::pat::{IdPat, Pat};
+          use crate::ast::stmt::decl::{ParamDecl, PatDecl};
+          use crate::loc::Loc;
+          p.consume(); // consume 'this'
+          p.require(TT::Colon)?;
+          let type_annotation = Some(p.type_expr(ctx)?);
+          let this_pattern = Node::new(
+            Loc(0, 0),
+            PatDecl {
+              pat: Node::new(
+                Loc(0, 0),
+                Pat::Id(Node::new(
+                  Loc(0, 0),
+                  IdPat {
+                    name: String::from("this"),
+                  },
+                )),
+              ),
+            },
+          );
+          parameters.push(Node::new(Loc(0, 0), ParamDecl {
+            decorators: Vec::new(),
+            rest: false,
+            optional: false,
+            accessibility: None,
+            readonly: false,
+            pattern: this_pattern,
+            type_annotation,
+            default_value: None,
+          }));
+        }
+      }
+
       // ES2017+: Allow trailing comma in empty parameter list
       let _ = p.consume_if(TT::Comma);
       p.require(TT::ParenthesisClose)?;
@@ -568,7 +609,7 @@ impl<'a> Parser<'a> {
         async_: false,
         generator: false,
         type_parameters,
-        parameters: Vec::new(),
+        parameters,
         return_type,
         body,
       })
@@ -624,7 +665,52 @@ impl<'a> Parser<'a> {
         await_allowed: true,
         yield_allowed: true,
       });
-      // TypeScript: Error recovery - allow setters with no parameter
+
+      // TypeScript: Check for optional `this` parameter in setter
+      // Syntax: set x(this: Type, value: ValueType)
+      let mut parameters = Vec::new();
+      if p.peek().typ == TT::KeywordThis {
+        let [_, next] = p.peek_n::<2>();
+        if next.typ == TT::Colon {
+          // Parse this parameter: this: Type
+          use crate::ast::expr::pat::{IdPat, Pat};
+          use crate::ast::stmt::decl::{ParamDecl, PatDecl};
+          use crate::loc::Loc;
+          p.consume(); // consume 'this'
+          p.require(TT::Colon)?;
+          let type_annotation = Some(p.type_expr(ctx)?);
+          let this_pattern = Node::new(
+            Loc(0, 0),
+            PatDecl {
+              pat: Node::new(
+                Loc(0, 0),
+                Pat::Id(Node::new(
+                  Loc(0, 0),
+                  IdPat {
+                    name: String::from("this"),
+                  },
+                )),
+              ),
+            },
+          );
+          parameters.push(Node::new(Loc(0, 0), ParamDecl {
+            decorators: Vec::new(),
+            rest: false,
+            optional: false,
+            accessibility: None,
+            readonly: false,
+            pattern: this_pattern,
+            type_annotation,
+            default_value: None,
+          }));
+          // Consume comma after this parameter
+          if p.consume_if(TT::Comma).is_match() {
+            // Continue to parse value parameter
+          }
+        }
+      }
+
+      // TypeScript: Parse value parameter (or error recovery - allow setters with no parameter)
       let (pattern, type_annotation, default_value) = if p.peek().typ == TT::ParenthesisClose {
         // Empty parameter list - create synthetic parameter for error recovery
         let loc = p.peek().loc;
@@ -647,6 +733,19 @@ impl<'a> Parser<'a> {
         (pattern, type_annotation, default_value)
       };
       let param_loc = pattern.loc;
+
+      // Add the value parameter to the parameters list
+      parameters.push(Node::new(param_loc, ParamDecl {
+        decorators: Vec::new(),
+        rest: false,
+        optional: false,
+        accessibility: None,
+        readonly: false,
+        pattern,
+        type_annotation,
+        default_value,
+      }));
+
       // ES2017+: Allow trailing comma in setter parameter list
       let _ = p.consume_if(TT::Comma);
       p.require(TT::ParenthesisClose)?;
@@ -663,16 +762,7 @@ impl<'a> Parser<'a> {
         async_: false,
         generator: false,
         type_parameters,
-        parameters: vec![Node::new(param_loc, ParamDecl {
-          decorators: Vec::new(),
-          rest: false,
-          optional: false,
-          accessibility: None,
-          readonly: false,
-          pattern,
-          type_annotation,
-          default_value,
-        })],
+        parameters,
         return_type: None,
         body,
       })
