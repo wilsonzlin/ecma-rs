@@ -379,7 +379,8 @@ impl<'a> Parser<'a> {
       TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
       TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
-      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet
+      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
+      TT::KeywordSuper  // TypeScript: Error recovery - allow 'super' in type positions
       => self.type_reference(ctx),
 
       // this type
@@ -563,7 +564,8 @@ impl<'a> Parser<'a> {
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
       TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
       // Allow type keywords as identifiers in typeof queries like: typeof undefined, typeof this
-      TT::KeywordUndefinedType | TT::KeywordThis
+      TT::KeywordUndefinedType | TT::KeywordThis |
+      TT::KeywordSuper  // TypeScript: Error recovery - allow 'super' as type identifier
       => Ok(self.string(t.loc)),
       _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type identifier")))
     }
