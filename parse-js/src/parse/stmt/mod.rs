@@ -454,7 +454,12 @@ impl<'a> Parser<'a> {
       p.require(TT::KeywordFor)?;
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(ctx)?;
-      p.require(TT::KeywordIn)?;
+      // Special case: if variable name is 'in', the keyword was already consumed
+      // e.g., `for (let in x)` - the 'in' serves as both variable name and keyword
+      if !p.consume_if(TT::KeywordIn).is_match() {
+        // 'in' keyword was already consumed as the variable name
+        // This is fine - just continue parsing
+      }
       let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.for_body(ctx)?;
@@ -468,7 +473,12 @@ impl<'a> Parser<'a> {
       let await_ = p.consume_if(TT::KeywordAwait).is_match();
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(ctx)?;
-      p.require(TT::KeywordOf)?;
+      // Special case: if variable name is 'of', the keyword was already consumed
+      // e.g., `for (let of x)` - the 'of' serves as both variable name and keyword
+      if !p.consume_if(TT::KeywordOf).is_match() {
+        // 'of' keyword was already consumed as the variable name
+        // This is fine - just continue parsing
+      }
       let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.for_body(ctx)?;
@@ -521,7 +531,13 @@ impl<'a> Parser<'a> {
           TT::KeywordUsing => {
             let [_, next_token] = p.peek_n::<2>();
             let next = next_token.typ;
-            if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+            // Special case: `for (using in ...)` or `for (using of ...)`
+            // The variable name is `in` or `of` itself
+            if next == TT::KeywordIn {
+              Self::In
+            } else if next == TT::KeywordOf {
+              Self::Of
+            } else if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
               p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
               match p.peek().typ {
                 TT::KeywordIn => Self::In,
@@ -545,7 +561,13 @@ impl<'a> Parser<'a> {
           TT::KeywordLet => {
             let [_, next_token] = p.peek_n::<2>();
             let next = next_token.typ;
-            if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+            // Special case: `for (let in ...)` or `for (let of ...)`
+            // The variable name is `in` or `of` itself
+            if next == TT::KeywordIn {
+              Self::In
+            } else if next == TT::KeywordOf {
+              Self::Of
+            } else if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
               // Looks like a variable declaration
               p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
               match p.peek().typ {
