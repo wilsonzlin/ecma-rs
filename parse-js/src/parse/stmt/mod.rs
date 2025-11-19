@@ -83,7 +83,9 @@ impl<'a> Parser<'a> {
       TT::KeywordInterface => self.interface_decl(ctx, false, false)?.into_wrapped(),
       TT::KeywordType => self.type_alias_decl(ctx, false, false)?.into_wrapped(),
       TT::KeywordEnum => self.enum_decl(ctx, false, false, false)?.into_wrapped(),
-      TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, false)?,
+      // `module` and `namespace` are contextual keywords - only treat as declarations if followed by identifier/string
+      // Allow `module.exports` and `namespace.something` to be parsed as expressions
+      TT::KeywordNamespace | TT::KeywordModule if matches!(t1.typ, TT::Identifier | TT::LiteralString) => self.namespace_or_module_decl(ctx, false, false)?,
       // TypeScript: `declare` keyword - but check if it's being used as an identifier
       // Error recovery: `declare \`template\`` is a tagged template, not a declare statement
       TT::KeywordDeclare if t1.typ != TT::LiteralTemplatePartString && t1.typ != TT::LiteralTemplatePartStringEnd => self.declare_stmt(ctx)?,
