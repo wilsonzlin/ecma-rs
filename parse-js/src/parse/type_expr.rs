@@ -12,7 +12,7 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse type expression or type predicate for function return type
-  /// Type predicates: `x is Type`, `asserts x`, `asserts x is Type`
+  /// Type predicates: `x is Type`, `asserts x`, `asserts x is Type`, `this is Type`
   pub fn type_expr_or_predicate(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<TypeExpr>> {
     // Check for type predicate patterns
     let checkpoint = self.checkpoint();
@@ -25,6 +25,7 @@ impl<'a> Parser<'a> {
     if self.peek().typ == TT::Identifier || self.peek().typ == TT::KeywordThis {
       let is_this = self.peek().typ == TT::KeywordThis;
       let param_checkpoint = self.checkpoint();
+      let param_loc = self.peek().loc; // Save location before consuming
       let parameter_name = if is_this {
         self.consume();
         "this".to_string()
@@ -47,9 +48,8 @@ impl<'a> Parser<'a> {
         return Ok(Node::new(outer_loc, TypeExpr::TypePredicate(predicate)));
       } else if asserts {
         // This is `asserts x` without 'is Type'
-        let end_loc = self.peek().loc;
         use crate::loc::Loc;
-        let outer_loc = Loc(start_loc.0, end_loc.1);
+        let outer_loc = Loc(start_loc.0, param_loc.1);
         let predicate = Node::new(start_loc, TypePredicate {
           asserts: true,
           parameter_name,
@@ -379,7 +379,8 @@ impl<'a> Parser<'a> {
       TT::KeywordIs | TT::KeywordModule | TT::KeywordNamespace |
       TT::KeywordOverride | TT::KeywordPrivate | TT::KeywordProtected | TT::KeywordPublic |
       TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
-      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet
+      TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
+      TT::KeywordSuper  // TypeScript: Error recovery - allow 'super' in type positions
       => self.type_reference(ctx),
 
       // this type
@@ -489,6 +490,19 @@ impl<'a> Parser<'a> {
       // Template literal type
       TT::LiteralTemplatePartString => self.template_literal_type(ctx),
 
+      // TypeScript: Error recovery - private names in type expressions
+      // Example: `const x: C[#bar] = 3;` (indexed access with private name)
+      // The type checker will catch this as a semantic error
+      TT::PrivateMember => {
+        let loc = self.peek().loc;
+        let name = self.consume_as_string();
+        let reference = Node::new(loc, TypeReference {
+          name: TypeEntityName::Identifier(name),
+          type_arguments: None,
+        });
+        Ok(Node::new(loc, TypeExpr::TypeReference(reference)))
+      }
+
       _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type expression"))),
     }
   }
@@ -550,7 +564,11 @@ impl<'a> Parser<'a> {
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic | TT::KeywordUnique |
       TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
       // Allow type keywords as identifiers in typeof queries like: typeof undefined, typeof this
-      TT::KeywordUndefinedType | TT::KeywordThis
+      TT::KeywordUndefinedType | TT::KeywordThis |
+      TT::KeywordSuper |  // TypeScript: Error recovery - allow 'super' as type identifier
+      // TypeScript: Error recovery - allow reserved keywords in qualified type names
+      // Examples: `x.void`, `typeof Controller.prototype.delete`, `typeof foo.var`
+      TT::KeywordVoid | TT::KeywordDelete | TT::KeywordVar
       => Ok(self.string(t.loc)),
       _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("type identifier")))
     }
@@ -888,6 +906,9 @@ impl<'a> Parser<'a> {
         self.require(TT::BracketClose)?;
         Ok(TypePropertyKey::Computed(Box::new(expr)))
       }
+      // TypeScript: Error recovery - private names in type/interface property signatures
+      // Semantically invalid but accept for error recovery (e.g., `type A = { #foo: string }`)
+      TT::PrivateMember => Ok(TypePropertyKey::Identifier(self.consume_as_string())),
       _ => {
         // Allow keywords as property names
         if crate::lex::KEYWORDS_MAPPING.contains_key(&t.typ) {

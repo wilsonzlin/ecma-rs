@@ -501,6 +501,9 @@ impl<'a> Parser<'a> {
     }).filter(|operator| {
       // Don't treat `new` as operator if followed by `.` (for new.target)
       !(operator.name == OperatorName::New && t1.typ == TT::Dot)
+    }).filter(|operator| {
+      // Don't treat `await` or `yield` as operators if followed by `=>` (arrow function parameter)
+      !((operator.name == OperatorName::Await || operator.name == OperatorName::Yield) && t1.typ == TT::EqualsChevronRight)
     }) {
       return Ok(self.with_loc(|p| {
         let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc;
@@ -578,6 +581,38 @@ impl<'a> Parser<'a> {
 
     // Check for other valid pattern identifiers.
     if is_valid_pattern_identifier(t0.typ, ctx.rules) {
+      // Error recovery: `yield *` should be treated as yield expression even at top level
+      // This handles cases like bare `yield *;` for error recovery
+      if t0.typ == TT::KeywordYield && t1.typ == TT::Asterisk {
+        return Ok(self.with_loc(|p| {
+          let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc; // consume 'yield'
+          p.consume(); // consume '*'
+          let operator = &OPERATORS[&OperatorName::YieldDelegated];
+
+          // Check if there's an operand
+          let next_token = p.peek();
+          let has_operand = !next_token.preceded_by_line_terminator
+            && next_token.typ != TT::EOF
+            && next_token.typ != TT::Semicolon
+            && next_token.typ != TT::Comma
+            && next_token.typ != TT::ParenthesisClose
+            && next_token.typ != TT::BracketClose
+            && next_token.typ != TT::BraceClose
+            && !terminators.contains(&next_token.typ);
+
+          let operand = if has_operand {
+            p.expr_with_min_prec(ctx, operator.precedence + 1, terminators, asi)?
+          } else {
+            Node::new(op_loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+          };
+
+          Ok(UnaryExpr {
+            operator: operator.name,
+            argument: operand,
+          })
+        })?.into_wrapped());
+      }
+
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
         self.arrow_func_expr(ctx, terminators)?.into_wrapped()
@@ -796,13 +831,13 @@ impl<'a> Parser<'a> {
           }).into_wrapped();
           continue;
         }
-        // TypeScript: Skip type arguments after identifiers/member expressions
-        // e.g., Base<T> in extends clause
-        // Only treat < as type arguments if left is an identifier or member expression
+        // TypeScript: Skip type arguments after identifiers/member expressions/call expressions
+        // e.g., Base<T> in extends clause or getBase()<T> in class extends
+        // Only treat < as type arguments if left is an identifier, member expression, or call expression
         TT::ChevronLeft => {
-          // Check if left expression is an identifier or member expression
+          // Check if left expression is an identifier, member expression, or call expression
           let left_is_identifier_or_member = matches!(*left.stx,
-            Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_)
+            Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
           );
 
           if left_is_identifier_or_member {
@@ -813,9 +848,34 @@ impl<'a> Parser<'a> {
               TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
               TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
               TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
-              TT::BracketOpen | TT::BraceOpen | TT::ParenthesisOpen |
+              TT::BracketOpen | TT::BraceOpen |
               TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer |
               TT::ChevronRight => true,
+              // For parentheses, check if it looks like a function type
+              // e.g., <() => T> or <(x: T) => U>
+              // vs expression like < (c * d)
+              TT::ParenthesisOpen => {
+                let [_, t2] = self.peek_n::<2>();
+                matches!(t2.typ,
+                  // <()> is likely function type: () => T
+                  TT::ParenthesisClose |
+                  // <(readonly [...> or <(public [...> etc
+                  TT::KeywordReadonly | TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected |
+                  // <(new (...> constructor type
+                  TT::KeywordNew |
+                  // <(...rest> rest parameter
+                  TT::DotDotDot
+                ) || {
+                  // Check for parameter with type annotation: <(x: T)>
+                  // Look for pattern: ( identifier :
+                  if t2.typ == TT::Identifier {
+                    let [_, _, t3] = self.peek_n::<3>();
+                    matches!(t3.typ, TT::Colon | TT::Question)
+                  } else {
+                    false
+                  }
+                }
+              },
               // For identifiers, need to check what comes after
               TT::Identifier => {
                 let [_, t2] = self.peek_n::<2>();

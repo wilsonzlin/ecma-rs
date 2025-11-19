@@ -83,9 +83,19 @@ impl<'a> Parser<'a> {
       TT::KeywordInterface => self.interface_decl(ctx, false, false)?.into_wrapped(),
       TT::KeywordType => self.type_alias_decl(ctx, false, false)?.into_wrapped(),
       TT::KeywordEnum => self.enum_decl(ctx, false, false, false)?.into_wrapped(),
-      TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, false)?,
-      TT::KeywordDeclare => self.declare_stmt(ctx)?,
+      // `module` and `namespace` are contextual keywords - only treat as declarations if followed by identifier/string
+      // Allow `module.exports` and `namespace.something` to be parsed as expressions
+      TT::KeywordNamespace | TT::KeywordModule if matches!(t1.typ, TT::Identifier | TT::LiteralString) => self.namespace_or_module_decl(ctx, false, false)?,
+      // TypeScript: `declare` keyword - but check if it's being used as an identifier
+      // Error recovery: `declare \`template\`` is a tagged template, not a declare statement
+      TT::KeywordDeclare if t1.typ != TT::LiteralTemplatePartString && t1.typ != TT::LiteralTemplatePartStringEnd => self.declare_stmt(ctx)?,
       TT::KeywordAbstract if t1.typ == TT::KeywordClass => self.abstract_class_decl(ctx)?.into_wrapped(),
+      // Error recovery: `accessor` keyword in invalid positions (accessor class, accessor function, etc.)
+      // Skip the accessor keyword and continue parsing the statement
+      TT::KeywordAccessor if matches!(t1.typ, TT::KeywordClass | TT::KeywordFunction | TT::KeywordInterface | TT::KeywordType | TT::KeywordEnum | TT::KeywordNamespace | TT::KeywordModule | TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordImport | TT::KeywordExport) => {
+        self.consume(); // skip 'accessor'
+        self.stmt(ctx)?
+      },
       // Decorators can appear before class declarations
       // For error recovery, if decorators are followed by non-class, skip decorators and parse the statement
       TT::At => {
@@ -345,6 +355,31 @@ impl<'a> Parser<'a> {
         } else {
           self.pat_decl(ctx)?
         };
+
+        // TypeScript: type annotation (parse and discard for error recovery)
+        if self.consume_if(TT::Colon).is_match() {
+          let _ = self.type_expr(ctx);
+        }
+
+        // Error recovery: consume excess declarations (e.g., `for (const a, b of arr)`)
+        // This handles malformed syntax like: `for (var x, y of arr)` or `for (const a, { [b]: c} of arr)`
+        while self.peek().typ == TT::Comma {
+          self.consume(); // consume comma
+
+          // Check if we've reached 'in' or 'of' (edge case)
+          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+            break;
+          }
+
+          // Parse and discard additional pattern (for error recovery)
+          let _ = self.pat_decl(ctx);
+
+          // Parse and discard type annotation if present
+          if self.consume_if(TT::Colon).is_match() {
+            let _ = self.type_expr(ctx);
+          }
+        }
+
         (mode, pat)
       }),
       // `let` is contextual - only a declaration if followed by a pattern
@@ -356,6 +391,27 @@ impl<'a> Parser<'a> {
         } else {
           self.pat_decl(ctx)?
         };
+
+        // TypeScript: type annotation (parse and discard for error recovery)
+        if self.consume_if(TT::Colon).is_match() {
+          let _ = self.type_expr(ctx);
+        }
+
+        // Error recovery: consume excess declarations
+        while self.peek().typ == TT::Comma {
+          self.consume(); // consume comma
+
+          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+            break;
+          }
+
+          let _ = self.pat_decl(ctx);
+
+          if self.consume_if(TT::Colon).is_match() {
+            let _ = self.type_expr(ctx);
+          }
+        }
+
         (mode, pat)
       }),
       // TypeScript: await using in for-of loop
@@ -367,6 +423,27 @@ impl<'a> Parser<'a> {
         } else {
           self.pat_decl(ctx)?
         };
+
+        // TypeScript: type annotation (parse and discard for error recovery)
+        if self.consume_if(TT::Colon).is_match() {
+          let _ = self.type_expr(ctx);
+        }
+
+        // Error recovery: consume excess declarations
+        while self.peek().typ == TT::Comma {
+          self.consume(); // consume comma
+
+          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+            break;
+          }
+
+          let _ = self.pat_decl(ctx);
+
+          if self.consume_if(TT::Colon).is_match() {
+            let _ = self.type_expr(ctx);
+          }
+        }
+
         (mode, pat)
       }),
       _ => {
@@ -385,7 +462,12 @@ impl<'a> Parser<'a> {
       p.require(TT::KeywordFor)?;
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(ctx)?;
-      p.require(TT::KeywordIn)?;
+      // Special case: if variable name is 'in', the keyword was already consumed
+      // e.g., `for (let in x)` - the 'in' serves as both variable name and keyword
+      if !p.consume_if(TT::KeywordIn).is_match() {
+        // 'in' keyword was already consumed as the variable name
+        // This is fine - just continue parsing
+      }
       let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.for_body(ctx)?;
@@ -399,7 +481,12 @@ impl<'a> Parser<'a> {
       let await_ = p.consume_if(TT::KeywordAwait).is_match();
       p.require(TT::ParenthesisOpen)?;
       let lhs = p.for_in_of_lhs(ctx)?;
-      p.require(TT::KeywordOf)?;
+      // Special case: if variable name is 'of', the keyword was already consumed
+      // e.g., `for (let of x)` - the 'of' serves as both variable name and keyword
+      if !p.consume_if(TT::KeywordOf).is_match() {
+        // 'of' keyword was already consumed as the variable name
+        // This is fine - just continue parsing
+      }
       let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.for_body(ctx)?;
@@ -452,7 +539,13 @@ impl<'a> Parser<'a> {
           TT::KeywordUsing => {
             let [_, next_token] = p.peek_n::<2>();
             let next = next_token.typ;
-            if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+            // Special case: `for (using in ...)` or `for (using of ...)`
+            // The variable name is `in` or `of` itself
+            if next == TT::KeywordIn {
+              Self::In
+            } else if next == TT::KeywordOf {
+              Self::Of
+            } else if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
               p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
               match p.peek().typ {
                 TT::KeywordIn => Self::In,
@@ -476,7 +569,13 @@ impl<'a> Parser<'a> {
           TT::KeywordLet => {
             let [_, next_token] = p.peek_n::<2>();
             let next = next_token.typ;
-            if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+            // Special case: `for (let in ...)` or `for (let of ...)`
+            // The variable name is `in` or `of` itself
+            if next == TT::KeywordIn {
+              Self::In
+            } else if next == TT::KeywordOf {
+              Self::Of
+            } else if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
               // Looks like a variable declaration
               p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
               match p.peek().typ {

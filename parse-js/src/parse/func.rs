@@ -54,8 +54,8 @@ impl<'a> Parser<'a> {
           }
         }
 
-        // TypeScript: parse decorators for parameters
-        let decorators = p.decorators(ctx)?;
+        // TypeScript: parse decorators for parameters (before modifiers)
+        let mut decorators = p.decorators(ctx)?;
 
         // TypeScript: accessibility modifiers and readonly can appear in either order
         // e.g. `readonly public x` or `public readonly x` are both valid
@@ -88,6 +88,13 @@ impl<'a> Parser<'a> {
           if !found_modifier {
             break;
           }
+        }
+
+        // TypeScript: Also allow decorators after modifiers for error recovery
+        // e.g. `public @dec p` in addition to `@dec public p`
+        if p.peek().typ == TT::At {
+          let post_modifiers_decorators = p.decorators(ctx)?;
+          decorators.extend(post_modifiers_decorators);
         }
 
         let rest = p.consume_if(TT::DotDotDot).is_match();

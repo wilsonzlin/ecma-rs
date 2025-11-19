@@ -162,7 +162,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_var_decl(&mut self, VarDecl { export, mode, declarators }: VarDecl) {
     // TODO export.
-    for VarDeclarator { initializer, pattern, type_annotation } in declarators
+    for VarDeclarator { initializer, pattern, type_annotation, definite_assignment: _ } in declarators
     {
       // TODO `initializer` must exist if `pattern` isn't IdentifierPattern (e.g. `var [a]; var {b};`).
       let Some(init) = initializer else {

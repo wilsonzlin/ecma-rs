@@ -135,6 +135,11 @@ impl<'a> Parser<'a> {
               }
             }
           };
+          // TypeScript: Error recovery - skip optional marker (?) in destructuring patterns
+          // This is invalid syntax but helps with error recovery
+          // e.g., `var {h?} = obj;` - the ? is not allowed but we skip it to continue parsing
+          let _ = p.consume_if(TT::Question);
+
           let default_value = p.consume_if(TT::Equals)
             .and_then(|| p.expr(ctx, [TT::Comma, TT::BraceClose]))?;
           Ok(ObjPatProp {
@@ -229,6 +234,24 @@ impl<'a> Parser<'a> {
       // Examples: `var { while: while } = x` or `let [if] = arr`
       // The type checker will validate these semantically
       t if KEYWORDS_MAPPING.contains_key(&t) => {
+        self.with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdPat { name })
+        })?.into_wrapped()
+      }
+      // TypeScript: Error recovery - private names in patterns/parameters
+      // Examples: `const #foo = 3;` or `function f(#x: string) {}`
+      // The type checker will catch these as semantic errors
+      TT::PrivateMember => {
+        self.with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdPat { name })
+        })?.into_wrapped()
+      }
+      // TypeScript: Error recovery - template literals as patterns
+      // Example: `function f(`hello`) {}` - template literal used as parameter name
+      // The type checker will catch this as a semantic error
+      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => {
         self.with_loc(|p| {
           let name = p.consume_as_string();
           Ok(IdPat { name })

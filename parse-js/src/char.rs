@@ -85,7 +85,7 @@ pub static DIGIT_HEX: Lazy<CharFilter> = Lazy::new(|| {
 
 pub static DIGIT_OCT: Lazy<CharFilter> = Lazy::new(|| {
   let mut filter = CharFilter::new();
-  filter.add_chars('0'..='8');
+  filter.add_chars('0'..='7');
   filter
 });
 
