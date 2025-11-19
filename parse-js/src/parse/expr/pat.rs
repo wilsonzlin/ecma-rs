@@ -135,6 +135,11 @@ impl<'a> Parser<'a> {
               }
             }
           };
+          // TypeScript: Error recovery - skip optional marker (?) in destructuring patterns
+          // This is invalid syntax but helps with error recovery
+          // e.g., `var {h?} = obj;` - the ? is not allowed but we skip it to continue parsing
+          let _ = p.consume_if(TT::Question);
+
           let default_value = p.consume_if(TT::Equals)
             .and_then(|| p.expr(ctx, [TT::Comma, TT::BraceClose]))?;
           Ok(ObjPatProp {
