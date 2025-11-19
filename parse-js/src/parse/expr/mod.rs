@@ -581,6 +581,38 @@ impl<'a> Parser<'a> {
 
     // Check for other valid pattern identifiers.
     if is_valid_pattern_identifier(t0.typ, ctx.rules) {
+      // Error recovery: `yield *` should be treated as yield expression even at top level
+      // This handles cases like bare `yield *;` for error recovery
+      if t0.typ == TT::KeywordYield && t1.typ == TT::Asterisk {
+        return Ok(self.with_loc(|p| {
+          let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc; // consume 'yield'
+          p.consume(); // consume '*'
+          let operator = &OPERATORS[&OperatorName::YieldDelegated];
+
+          // Check if there's an operand
+          let next_token = p.peek();
+          let has_operand = !next_token.preceded_by_line_terminator
+            && next_token.typ != TT::EOF
+            && next_token.typ != TT::Semicolon
+            && next_token.typ != TT::Comma
+            && next_token.typ != TT::ParenthesisClose
+            && next_token.typ != TT::BracketClose
+            && next_token.typ != TT::BraceClose
+            && !terminators.contains(&next_token.typ);
+
+          let operand = if has_operand {
+            p.expr_with_min_prec(ctx, operator.precedence + 1, terminators, asi)?
+          } else {
+            Node::new(op_loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+          };
+
+          Ok(UnaryExpr {
+            operator: operator.name,
+            argument: operand,
+          })
+        })?.into_wrapped());
+      }
+
       return Ok(if t1.typ == TT::EqualsChevronRight {
         // Single-unparenthesised-parameter arrow function.
         self.arrow_func_expr(ctx, terminators)?.into_wrapped()
