@@ -90,6 +90,12 @@ impl<'a> Parser<'a> {
       // Error recovery: `declare \`template\`` is a tagged template, not a declare statement
       TT::KeywordDeclare if t1.typ != TT::LiteralTemplatePartString && t1.typ != TT::LiteralTemplatePartStringEnd => self.declare_stmt(ctx)?,
       TT::KeywordAbstract if t1.typ == TT::KeywordClass => self.abstract_class_decl(ctx)?.into_wrapped(),
+      // Error recovery: `accessor` keyword in invalid positions (accessor class, accessor function, etc.)
+      // Skip the accessor keyword and continue parsing the statement
+      TT::KeywordAccessor if matches!(t1.typ, TT::KeywordClass | TT::KeywordFunction | TT::KeywordInterface | TT::KeywordType | TT::KeywordEnum | TT::KeywordNamespace | TT::KeywordModule | TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordImport | TT::KeywordExport) => {
+        self.consume(); // skip 'accessor'
+        self.stmt(ctx)?
+      },
       // Decorators can appear before class declarations
       // For error recovery, if decorators are followed by non-class, skip decorators and parse the statement
       TT::At => {

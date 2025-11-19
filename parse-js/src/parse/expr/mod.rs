@@ -501,6 +501,9 @@ impl<'a> Parser<'a> {
     }).filter(|operator| {
       // Don't treat `new` as operator if followed by `.` (for new.target)
       !(operator.name == OperatorName::New && t1.typ == TT::Dot)
+    }).filter(|operator| {
+      // Don't treat `await` or `yield` as operators if followed by `=>` (arrow function parameter)
+      !((operator.name == OperatorName::Await || operator.name == OperatorName::Yield) && t1.typ == TT::EqualsChevronRight)
     }) {
       return Ok(self.with_loc(|p| {
         let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc;

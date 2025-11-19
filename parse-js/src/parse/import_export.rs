@@ -330,6 +330,13 @@ impl<'a> Parser<'a> {
         self.consume(); // export
         self.namespace_decl(ctx, true, false)?.into_wrapped()
       },
+      // TypeScript: export @decorator class (decorator on exported class)
+      // Error recovery: allow decorators after export
+      (TT::At, _) => {
+        self.consume(); // export
+        // The class_decl function will handle the decorators
+        self.class_decl(ctx)?.into_wrapped()
+      },
       (TT::KeywordDeclare, _) => {
         // For "export declare", we need to handle it specially to pass export=true
         self.consume(); // export
