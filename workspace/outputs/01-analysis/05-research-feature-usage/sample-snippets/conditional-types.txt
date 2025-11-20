@@ -1,0 +1,100 @@
+vue/packages/shared/src/typeUtils.ts:  U extends any ? (k: U) => void : never
+vue/packages/shared/src/typeUtils.ts-) extends (k: infer I) => void
+vue/packages/shared/src/typeUtils.ts-  ? I
+--
+vue/packages/shared/src/typeUtils.ts:export type IfAny<T, Y, N> = 0 extends 1 & T ? Y : N
+vue/packages/shared/src/typeUtils.ts-
+vue/packages/shared/src/typeUtils.ts-export type IsKeyValues<T, K = string> = IfAny<
+--
+vue/packages/shared/src/typeUtils.ts:  T extends object ? (keyof T extends K ? true : false) : false
+vue/packages/shared/src/typeUtils.ts->
+vue/packages/shared/src/typeUtils.ts-
+--
+vue/packages/shared/src/typeUtils.ts:  TOverload extends () => never ? never : () => never
+vue/packages/shared/src/typeUtils.ts->
+--
+vue/packages-private/dts-test/utils.d.ts:  T extends any ? (U extends T ? false : true) : never
+vue/packages-private/dts-test/utils.d.ts-) extends false
+vue/packages-private/dts-test/utils.d.ts-  ? false
+--
+vue/packages-private/dts-test/utils.d.ts:export type IsAny<T> = 0 extends 1 & T ? true : false
+vue/packages-private/dts-test/utils.d.ts-
+vue/packages-private/dts-test/utils.d.ts-export type Prettify<T> = { [K in keyof T]: T[K] } & {}
+--
+TypeScript/tests/lib/react16.d.ts:    export type IsOptional<T> = undefined | null extends T ? true : undefined extends T ? true : null extends T ? true : false;
+TypeScript/tests/lib/react16.d.ts-
+TypeScript/tests/lib/react16.d.ts:    export type RequiredKeys<V> = { [K in keyof V]: V[K] extends Validator<infer T> ? IsOptional<T> extends true ? never : K : never }[keyof V];
+TypeScript/tests/lib/react16.d.ts-    export type OptionalKeys<V> = Exclude<keyof V, RequiredKeys<V>>;
+TypeScript/tests/lib/react16.d.ts-    export type InferPropsInner<V> = { [K in keyof V]: InferType<V[K]>; };
+--
+TypeScript/tests/lib/react16.d.ts:    export type InferType<V> = V extends Validator<infer T> ? T : any;
+TypeScript/tests/lib/react16.d.ts-    export type InferProps<V> =
+TypeScript/tests/lib/react16.d.ts-        & InferPropsInner<Pick<V, RequiredKeys<V>>>
+--
+TypeScript/tests/lib/react16.d.ts:            // Just "P extends { ref?: infer R }" looks sufficient, but R will infer as {} if P is {}.
+TypeScript/tests/lib/react16.d.ts-            'ref' extends keyof P
+TypeScript/tests/lib/react16.d.ts:                ? P extends { ref?: infer R }
+TypeScript/tests/lib/react16.d.ts-                    ? string extends R
+TypeScript/tests/lib/react16.d.ts-                        ? PropsWithoutRef<P> & { ref?: Exclude<R, string> }
+--
+TypeScript/tests/lib/react16.d.ts:            [K in keyof JSX.IntrinsicElements]: P extends JSX.IntrinsicElements[K] ? K : never
+TypeScript/tests/lib/react16.d.ts-        }[keyof JSX.IntrinsicElements] |
+TypeScript/tests/lib/react16.d.ts-        ComponentType<P>;
+--
+TypeScript/tests/lib/react16.d.ts:        ? string extends keyof P ? P :
+TypeScript/tests/lib/react16.d.ts-        & Pick<P, Exclude<keyof P, keyof D>>
+TypeScript/tests/lib/react16.d.ts-        & Partial<Pick<P, Extract<keyof P, keyof D>>>
+--
+vue/packages/shared/src/general.ts:) => T extends '' ? '' : `on${Capitalize<T>}` = cacheStringFunction(
+vue/packages/shared/src/general.ts-  <T extends string>(str: T) => {
+vue/packages/shared/src/general.ts-    const s = str ? `on${capitalize(str)}` : ``
+vue/packages/shared/src/general.ts:    return s as T extends '' ? '' : `on${Capitalize<T>}`
+vue/packages/shared/src/general.ts-  },
+vue/packages/shared/src/general.ts-)
+--
+TypeScript/tests/lib/react18/react18.d.ts:            [K in keyof JSX.IntrinsicElements]: P extends JSX.IntrinsicElements[K] ? K : never
+TypeScript/tests/lib/react18/react18.d.ts-        }[keyof JSX.IntrinsicElements] |
+TypeScript/tests/lib/react18/react18.d.ts-        ComponentType<P>;
+--
+TypeScript/tests/lib/react18/react18.d.ts:        ref?: ('ref' extends keyof P ? P extends { ref?: infer R | undefined } ? R : never : never) | undefined;
+TypeScript/tests/lib/react18/react18.d.ts-    }
+TypeScript/tests/lib/react18/react18.d.ts-
+--
+TypeScript/tests/lib/react18/react18.d.ts:    type ContextType<C extends Context<any>> = C extends Context<infer T> ? T : never;
+TypeScript/tests/lib/react18/react18.d.ts-
+TypeScript/tests/lib/react18/react18.d.ts-    // NOTE: only the Context object itself can get a displayName
+--
+TypeScript/tests/lib/react18/react18.d.ts:            C extends null | undefined ? C : Array<Exclude<T, boolean | null | undefined>>;
+TypeScript/tests/lib/react18/react18.d.ts-        forEach<C>(children: C | ReadonlyArray<C>, fn: (child: C, index: number) => void): void;
+TypeScript/tests/lib/react18/react18.d.ts-        count(children: any): number;
+TypeScript/tests/lib/react18/react18.d.ts:        only<C>(children: C): C extends any[] ? never : C;
+TypeScript/tests/lib/react18/react18.d.ts-        toArray(children: ReactNode | ReactNode[]): Array<Exclude<ReactNode, boolean | null | undefined>>;
+TypeScript/tests/lib/react18/react18.d.ts-    };
+--
+TypeScript/tests/lib/react18/react18.d.ts:        P extends any ? ('ref' extends keyof P ? Pick<P, Exclude<keyof P, 'ref'>> : P) : P;
+TypeScript/tests/lib/react18/react18.d.ts-    /** Ensures that the props do not include string ref, which cannot be forwarded */
+TypeScript/tests/lib/react18/react18.d.ts-    type PropsWithRef<P> =
+TypeScript/tests/lib/react18/react18.d.ts:        // Just "P extends { ref?: infer R }" looks sufficient, but R will infer as {} if P is {}.
+TypeScript/tests/lib/react18/react18.d.ts-        'ref' extends keyof P
+TypeScript/tests/lib/react18/react18.d.ts:            ? P extends { ref?: infer R | undefined }
+TypeScript/tests/lib/react18/react18.d.ts-                ? string extends R
+TypeScript/tests/lib/react18/react18.d.ts-                    ? PropsWithoutRef<P> & { ref?: Exclude<R, string> | undefined }
+--
+TypeScript/tests/lib/react18/react18.d.ts:    type ReducerState<R extends Reducer<any, any>> = R extends Reducer<infer S, any> ? S : never;
+TypeScript/tests/lib/react18/react18.d.ts:    type ReducerAction<R extends Reducer<any, any>> = R extends Reducer<any, infer A> ? A : never;
+TypeScript/tests/lib/react18/react18.d.ts-    // The identity check is done with the SameValue algorithm (Object.is), which is stricter than ===
+TypeScript/tests/lib/react18/react18.d.ts-    type ReducerStateWithoutAction<R extends ReducerWithoutAction<any>> =
+TypeScript/tests/lib/react18/react18.d.ts:        R extends ReducerWithoutAction<infer S> ? S : never;
+TypeScript/tests/lib/react18/react18.d.ts-    type DependencyList = ReadonlyArray<unknown>;
+TypeScript/tests/lib/react18/react18.d.ts-
+--
+TypeScript/tests/lib/react18/react18.d.ts:    function useImperativeHandle<T, R extends T>(ref: Ref<T>|undefined, init: () => R, deps?: DependencyList): void;
+TypeScript/tests/lib/react18/react18.d.ts-    // I made 'inputs' required here and in useMemo as there's no point to memoizing without the memoization key
+TypeScript/tests/lib/react18/react18.d.ts-    // useCallback(X) is identical to just using X, useMemo(() => Y) is identical to just using Y.
+--
+TypeScript/tests/lib/react18/react18.d.ts:            C extends null | undefined ? C : Array<Exclude<T, boolean | null | undefined>>;
+TypeScript/tests/lib/react18/react18.d.ts-        forEach<C>(children: C | ReadonlyArray<C>, fn: (child: C, index: number) => void): void;
+TypeScript/tests/lib/react18/react18.d.ts-        count(children: any): number;
+TypeScript/tests/lib/react18/react18.d.ts:        only<C>(children: C): C extends any[] ? never : C;
+TypeScript/tests/lib/react18/react18.d.ts-        toArray(children: ReactNode | ReactNode[]): Array<Exclude<ReactNode, boolean | null | undefined>>;
+TypeScript/tests/lib/react18/react18.d.ts-    }
