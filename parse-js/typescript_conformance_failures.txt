@@ -1,0 +1,1709 @@
+TypeScript Conformance Test Failures Report
+
+Total: 5898, Passed: 5558, Failed: 340
+Pass Rate: 94.24%
+
+================================================================================
+
+FAILURES:
+
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classAbstractKeyword/classAbstractCrashedOnce.ts
+Duration: 2.840305ms
+Error: ExpectedSyntax("member access property") [token=Some(BraceClose)] around loc [117:118]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classAbstractKeyword/classAbstractManyKeywords.ts
+Duration: 2.672078ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordDefault)] around loc [64:71]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendingPrimitive.ts
+Duration: 2.392812ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [181:186]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendingPrimitive2.ts
+Duration: 2.182413ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [66:71]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendsEveryObjectType.ts
+Duration: 2.581793ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [100:101]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendsEveryObjectType2.ts
+Duration: 2.474151ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [30:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/indexMemberDeclarations/privateIndexer2.ts
+Duration: 3.004194ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(BracketOpen)] around loc [58:59]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/members/accessibility/privateInstanceMemberAccessibility.ts
+Duration: 2.443998ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Dot)] around loc [206:207]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameHashCharName.ts
+Duration: 2.154593ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [39:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameInInExpressionTransform.ts
+Duration: 1.679742ms
+Error: InvalidAssigmentTarget [token=None] around loc [1076:1081]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNamesIncompatibleModifiers.ts
+Duration: 1.945637ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordAsync)] around loc [531:536]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/classes/propertyMemberDeclarations/canFollowGetSetKeyword.ts
+Duration: 1.564844ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Asterisk)] around loc [127:128]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/controlFlow/assertionTypePredicates1.ts
+Duration: 2.637542ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(KeywordIs)] around loc [3851:3853]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/controlFlow/definiteAssignmentAssertionsWithObjectShortHand.ts
+Duration: 1.920338ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Question)] around loc [123:124]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/controlFlow/dependentDestructuredVariables.ts
+Duration: 29.568199ms
+Error: ExpectedSyntax("type expression") [token=Some(KeywordType)] around loc [5582:5586]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/decorators/class/method/decoratorOnClassMethodOverload1.ts
+Duration: 2.686572ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Identifier)] around loc [213:219]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/decorators/class/method/decoratorOnClassMethodOverload2.ts
+Duration: 2.264814ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(At)] around loc [204:205]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/decorators/class/method/parameter/decoratorOnClassMethodParameter3.ts
+Duration: 2.825445ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [231:236]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/decorators/decoratorMetadata-jsdoc.ts
+Duration: 2.275023ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Question)] around loc [180:181]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/decorators/invalid/decoratorOnArrowFunction.ts
+Duration: 2.831394ms
+Error: ExpectedSyntax("expression operand") [token=Some(At)] around loc [48:49]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/decorators/invalid/decoratorOnEnum2.ts
+Duration: 3.411416ms
+Error: ExpectedSyntax("identifier") [token=Some(At)] around loc [53:54]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/decorators/invalid/decoratorOnFunctionExpression.ts
+Duration: 3.280118ms
+Error: ExpectedSyntax("expression operand") [token=Some(At)] around loc [48:49]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/dynamicImport/importCallExpressionGrammarError.ts
+Duration: 2.011136ms
+Error: ExpectedSyntax("expression operand") [token=Some(DotDotDot)] around loc [170:173]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/enums/enumErrors.ts
+Duration: 2.983722ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [843:844]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es2019/importMeta/importMetaNarrowing.ts
+Duration: 1.651198ms
+Error: RequiredTokenNotFound(LiteralString) [token=Some(Dot)] around loc [143:144]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/arrowFunction/disallowLineTerminatorBeforeArrow.ts
+Duration: 2.425211ms
+Error: LineTerminatorAfterArrowFunctionParameters [token=Some(EqualsChevronRight)] around loc [17:19]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/classDeclaration/emitClassDeclarationWithTypeArgumentAndOverloadInES6.ts
+Duration: 2.268271ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Identifier)] around loc [172:175]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringObjectBindingPatternAndAssignment3.ts
+Duration: 4.557476ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Question)] around loc [27:28]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringParameterDeclaration1ES5.ts
+Duration: 2.633067ms
+Error: ExpectedSyntax("type expression") [token=Some(Comma)] around loc [1116:1117]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringParameterDeclaration1ES5iterable.ts
+Duration: 2.948315ms
+Error: ExpectedSyntax("type expression") [token=Some(Comma)] around loc [1146:1147]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringParameterDeclaration1ES6.ts
+Duration: 3.45086ms
+Error: ExpectedSyntax("type expression") [token=Some(Comma)] around loc [1170:1171]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringParameterDeclaration2.ts
+Duration: 3.006923ms
+Error: ExpectedSyntax("expression operator") [token=Some(ParenthesisClose)] around loc [403:404]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/functionPropertyAssignments/FunctionPropertyAssignments4_es6.ts
+Duration: 3.727148ms
+Error: ExpectedNotFound [token=None] around loc [28:30]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/functionPropertyAssignments/FunctionPropertyAssignments6_es6.ts
+Duration: 1.710034ms
+Error: ExpectedNotFound [token=None] around loc [28:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/shorthandPropertyAssignment/objectLiteralShorthandPropertiesErrorFromNotUsingIdentifier.ts
+Duration: 2.169296ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Dot)] around loc [156:157]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/shorthandPropertyAssignment/objectLiteralShorthandPropertiesErrorWithModule.ts
+Duration: 2.530626ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Dot)] around loc [139:140]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/spread/arraySpreadInCall.ts
+Duration: 2.445529ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(ChevronLeft)] around loc [746:747]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/templates/TemplateExpression1.ts
+Duration: 3.367537ms
+Error: ExpectedSyntax("expression operator") [token=Some(EOF)] around loc [18:18]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/templates/templateStringInModuleName.ts
+Duration: 2.636742ms
+Error: ExpectedSyntax("identifier") [token=Some(LiteralTemplatePartStringEnd)] around loc [18:22]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/templates/templateStringInModuleNameES6.ts
+Duration: 2.000022ms
+Error: ExpectedSyntax("identifier") [token=Some(LiteralTemplatePartStringEnd)] around loc [35:39]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/templates/templateStringWithEmbeddedYieldKeyword.ts
+Duration: 2.794395ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(BraceOpen)] around loc [17:18]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es6/variableDeclarations/VariableDeclaration13_es6.ts
+Duration: 2.315298ms
+Error: ExpectedSyntax("pattern") [token=Some(LiteralNumber)] around loc [241:242]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es7/exponentiationOperator/compoundExponentiationAssignmentLHSIsValue.ts
+Duration: 2.090937ms
+Error: ExpectedSyntax("expression operand") [token=Some(AsteriskAsteriskEquals)] around loc [631:634]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/es7/exponentiationOperator/emitExponentiationOperator4.ts
+Duration: 4.153657ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(EOF)] around loc [702:702]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-parameterDecorators.ts
+Duration: 3.134419ms
+Error: ExpectedSyntax("pattern") [token=Some(At)] around loc [204:205]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStaticPrivate.ts
+Duration: 1.895713ms
+Error: ExpectedSyntax("expression operator") [token=Some(PrivateMember)] around loc [137:144]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/esDecorators/classDeclaration/methods/esDecorators-classDeclaration-methods-nonStaticPrivate.ts
+Duration: 2.746671ms
+Error: ExpectedSyntax("expression operator") [token=Some(PrivateMember)] around loc [137:145]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.2.ts
+Duration: 3.124161ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(At)] around loc [240:241]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.4.ts
+Duration: 2.343648ms
+Error: ExpectedSyntax("expression operand") [token=Some(At)] around loc [224:225]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.5.ts
+Duration: 2.057543ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(At)] around loc [246:247]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.6.ts
+Duration: 2.745109ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(At)] around loc [255:256]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.7.ts
+Duration: 1.864283ms
+Error: ExpectedSyntax("expression operand") [token=Some(At)] around loc [250:251]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/asOperator/asOperatorASI.ts
+Duration: 3.001546ms
+Error: ExpectedSyntax("type expression") [token=Some(LiteralTemplatePartStringEnd)] around loc [84:97]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/assignmentOperator/assignmentLHSIsValue.ts
+Duration: 2.762924ms
+Error: ExpectedSyntax("expression operand") [token=Some(Equals)] around loc [493:494]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/assignmentOperator/compoundAssignmentLHSIsValue.ts
+Duration: 3.010346ms
+Error: ExpectedSyntax("expression operand") [token=Some(AsteriskEquals)] around loc [851:853]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/commaOperator/commaOperatorWithoutOperand.ts
+Duration: 1.707335ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Comma)] around loc [282:283]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/functionCalls/grammarAmbiguities.ts
+Duration: 1.648011ms
+Error: ExpectedSyntax("expression operator") [token=Some(LiteralNumber)] around loc [156:157]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/optionalChaining/taggedTemplateChain/taggedTemplateChain.ts
+Duration: 1.98899ms
+Error: ExpectedSyntax("member access property") [token=Some(LiteralTemplatePartStringEnd)] around loc [24:27]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/typeAssertions/typeAssertions.ts
+Duration: 14.365683ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [1158:1159]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/typeGuards/typeGuardFunctionErrors.ts
+Duration: 2.579422ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(KeywordIs)] around loc [1864:1866]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/typeGuards/typeGuardOfFormThisMember.ts
+Duration: 2.104195ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Ampersand)] around loc [440:441]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/typeGuards/typeGuardOfFormThisMemberErrors.ts
+Duration: 2.651296ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Ampersand)] around loc [440:441]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/typeGuards/typePredicateASI.ts
+Duration: 2.256171ms
+Error: ExpectedSyntax("type expression") [token=Some(ParenthesisClose)] around loc [70:71]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/unaryOperators/bitwiseNotOperator/bitwiseNotOperatorInvalidOperations.ts
+Duration: 3.224164ms
+Error: ExpectedSyntax("expression operator") [token=Some(Tilde)] around loc [57:58]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/unaryOperators/negateOperator/negateOperatorInvalidOperations.ts
+Duration: 2.898748ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordVar)] around loc [55:58]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/unaryOperators/plusOperator/plusOperatorInvalidOperations.ts
+Duration: 2.639197ms
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [64:65]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/expressions/unaryOperators/typeofOperator/typeofOperatorInvalidOperations.ts
+Duration: 2.089504ms
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [72:73]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/externalModules/es6/es6modulekindWithES5Target5.ts
+Duration: 2.003608ms
+Error: RequiredTokenNotFound(Comma) [token=Some(Identifier)] around loc [122:124]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/externalModules/esnext/esnextmodulekindWithES5Target5.ts
+Duration: 1.810216ms
+Error: RequiredTokenNotFound(Comma) [token=Some(Identifier)] around loc [122:124]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/externalModules/topLevelAwait.2.ts
+Duration: 2.725903ms
+Error: RequiredTokenNotFound(LiteralString) [token=Some(KeywordAwait)] around loc [159:164]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/externalModules/topLevelAwaitErrors.12.ts
+Duration: 2.166873ms
+Error: RequiredTokenNotFound(LiteralString) [token=Some(KeywordAwait)] around loc [173:178]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/externalModules/typeOnly/exportDeclaration_missingBraces.ts
+Duration: 3.211342ms
+Error: RequiredTokenNotFound(Equals) [token=Some(Semicolon)] around loc [145:146]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/externalModules/verbatimModuleSyntaxConstEnum.ts
+Duration: 1.907846ms
+Error: RequiredTokenNotFound(Comma) [token=Some(Identifier)] around loc [69:70]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/importAssertion/importAssertion4.ts
+Duration: 1.760609ms
+Error: RequiredTokenNotFound(Semicolon) [token=Some(Identifier)] around loc [29:35]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/importAssertion/importAssertion5.ts
+Duration: 2.586562ms
+Error: RequiredTokenNotFound(Semicolon) [token=Some(Identifier)] around loc [29:35]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/importAttributes/importAttributes4.ts
+Duration: 1.927076ms
+Error: ExpectedSyntax("expression operand") [token=Some(EOF)] around loc [33:33]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/importAttributes/importAttributes5.ts
+Duration: 1.325111ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(EOF)] around loc [35:35]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/interfaces/interfaceDeclarations/interfaceExtendingOptionalChain.ts
+Duration: 1.91714ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(QuestionDot)] around loc [71:73]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/interfaces/interfaceDeclarations/interfaceThatInheritsFromItself.ts
+Duration: 2.670747ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImplements)] around loc [164:174]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/interfaces/interfacesExtendingClasses/interfaceExtendingClass2.ts
+Duration: 3.464405ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(EOF)] around loc [262:262]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/internalModules/importDeclarations/shadowedInternalModule.ts
+Duration: 2.680782ms
+Error: RequiredTokenNotFound(LiteralString) [token=Some(KeywordAny)] around loc [679:682]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/jsdoc/jsdocDisallowedInTypescript.ts
+Duration: 2.207804ms
+Error: ExpectedSyntax("type identifier") [token=Some(ChevronLeft)] around loc [63:64]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/jsdoc/jsdocParseErrorsInTypescript.ts
+Duration: 2.469136ms
+Error: ExpectedSyntax("expression operand") [token=Some(ParenthesisClose)] around loc [78:79]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/jsx/checkJsxNamespaceNamesQuestionableForms.tsx
+Duration: 4.503898ms
+Error: RequiredTokenNotFound(Identifier) [token=Some(Dot)] around loc [204:205]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/jsx/checkJsxSubtleSkipContextSensitiveBug.tsx
+Duration: 1.955975ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordAsync)] around loc [470:475]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/jsx/jsxAndTypeAssertion.tsx
+Duration: 13.165917ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [167:168]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/jsx/tsxDynamicTagName1.tsx
+Duration: 2.708461ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronLeftSlash)] around loc [68:70]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/jsx/tsxDynamicTagName3.tsx
+Duration: 3.847272ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronLeftSlash)] around loc [176:178]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/jsx/tsxDynamicTagName4.tsx
+Duration: 2.022081ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronLeftSlash)] around loc [187:189]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/override/override11.ts
+Duration: 2.703685ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(KeywordPublic)] around loc [85:91]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/override/overrideParameterProperty.ts
+Duration: 2.161988ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Identifier)] around loc [115:117]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Accessors/parserAccessors10.ts
+Duration: 2.725529ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(KeywordGet)] around loc [37:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Accessors/parserAccessors7.ts
+Duration: 2.215515ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Identifier)] around loc [35:36]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Accessors/parserAccessors9.ts
+Duration: 3.242919ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Identifier)] around loc [38:39]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Accessors/parserSetAccessorWithTypeAnnotation1.ts
+Duration: 2.074856ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Colon)] around loc [41:42]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ClassDeclarations/parserClassDeclaration1.ts
+Duration: 2.218772ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordExtends)] around loc [18:25]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ClassDeclarations/parserClassDeclaration2.ts
+Duration: 2.123727ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordImplements)] around loc [21:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ClassDeclarations/parserClassDeclaration26.ts
+Duration: 2.522569ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(BraceClose)] around loc [30:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ClassDeclarations/parserClassDeclaration3.ts
+Duration: 2.35423ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordExtends)] around loc [21:28]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ClassDeclarations/parserClassDeclaration4.ts
+Duration: 3.148463ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordExtends)] around loc [31:38]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ClassDeclarations/parserClassDeclaration5.ts
+Duration: 2.947785ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordImplements)] around loc [31:41]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ComputedPropertyNames/parserES5ComputedPropertyName6.ts
+Duration: 3.928205ms
+Error: ExpectedSyntax("identifier") [token=Some(BracketOpen)] around loc [28:29]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/EnumDeclarations/parserEnum4.ts
+Duration: 2.363864ms
+Error: ExpectedSyntax("identifier") [token=Some(Comma)] around loc [46:47]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/EnumDeclarations/parserEnum5.ts
+Duration: 1.852874ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Colon)] around loc [27:28]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/EnumDeclarations/parserInterfaceKeywordInEnum.ts
+Duration: 2.523604ms
+Error: ExpectedSyntax("identifier") [token=Some(KeywordInterface)] around loc [16:25]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/EnumDeclarations/parserInterfaceKeywordInEnum1.ts
+Duration: 3.194863ms
+Error: ExpectedSyntax("identifier") [token=Some(KeywordInterface)] around loc [33:42]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/AccessibilityAfterStatic/parserAccessibilityAfterStatic6.ts
+Duration: 2.823619ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(EOF)] around loc [29:29]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArgumentLists/parserErrorRecovery_ArgumentList1.ts
+Duration: 2.473633ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordReturn)] around loc [30:36]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArgumentLists/parserErrorRecovery_ArgumentList2.ts
+Duration: 2.282146ms
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [25:26]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArgumentLists/parserErrorRecovery_ArgumentList3.ts
+Duration: 2.231482ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordReturn)] around loc [32:38]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArgumentLists/parserErrorRecovery_ArgumentList4.ts
+Duration: 1.694842ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordReturn)] around loc [33:39]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArgumentLists/parserErrorRecovery_ArgumentList6.ts
+Duration: 3.026683ms
+Error: ExpectedSyntax("expression operand") [token=Some(Comma)] around loc [4:5]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArgumentLists/parserErrorRecovery_ArgumentList7.ts
+Duration: 3.741921ms
+Error: ExpectedSyntax("expression operand") [token=Some(Comma)] around loc [6:7]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArrayLiteralExpressions/parserErrorRecoveryArrayLiteralExpression1.ts
+Duration: 2.049134ms
+Error: ExpectedSyntax("expression operator") [token=Some(LiteralNumber)] around loc [18:19]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArrayLiteralExpressions/parserErrorRecoveryArrayLiteralExpression2.ts
+Duration: 2.628139ms
+Error: ExpectedSyntax("expression operator") [token=Some(LiteralNumber)] around loc [82:99]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArrayLiteralExpressions/parserErrorRecoveryArrayLiteralExpression3.ts
+Duration: 2.079026ms
+Error: RequiredTokenNotFound(Comma) [token=Some(Semicolon)] around loc [53:54]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArrowFunctions/ArrowFunction1.ts
+Duration: 2.101803ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Colon)] around loc [10:11]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArrowFunctions/ArrowFunction3.ts
+Duration: 2.19759ms
+Error: ExpectedSyntax("expression operand") [token=Some(Colon)] around loc [11:12]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArrowFunctions/parserX_ArrowFunction1.ts
+Duration: 2.81215ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Colon)] around loc [10:11]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ArrowFunctions/parserX_ArrowFunction3.ts
+Duration: 2.004393ms
+Error: ExpectedSyntax("expression operand") [token=Some(Colon)] around loc [11:12]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/Blocks/parserErrorRecovery_Block1.ts
+Duration: 3.423661ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordReturn)] around loc [30:36]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/Blocks/parserErrorRecovery_Block3.ts
+Duration: 2.988855ms
+Error: ExpectedSyntax("expression operand") [token=Some(Colon)] around loc [57:58]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ClassElements/parserErrorRecovery_ClassElement1.ts
+Duration: 2.610785ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(EOF)] around loc [140:140]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ClassElements/parserErrorRecovery_ClassElement2.ts
+Duration: 2.107886ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(BraceOpen)] around loc [39:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ClassElements/parserErrorRecovery_ClassElement3.ts
+Duration: 2.690228ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(EOF)] around loc [66:66]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ExtendsOrImplementsClauses/parserErrorRecovery_ExtendsOrImplementsClause1.ts
+Duration: 1.985691ms
+Error: ExpectedSyntax("expression operator") [token=Some(EOF)] around loc [20:20]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ExtendsOrImplementsClauses/parserErrorRecovery_ExtendsOrImplementsClause2.ts
+Duration: 1.988239ms
+Error: ExpectedSyntax("expression operator") [token=Some(EOF)] around loc [23:23]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ExtendsOrImplementsClauses/parserErrorRecovery_ExtendsOrImplementsClause3.ts
+Duration: 2.212632ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [27:28]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ExtendsOrImplementsClauses/parserErrorRecovery_ExtendsOrImplementsClause4.ts
+Duration: 1.482958ms
+Error: ExpectedSyntax("expression operator") [token=Some(EOF)] around loc [33:33]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ExtendsOrImplementsClauses/parserErrorRecovery_ExtendsOrImplementsClause5.ts
+Duration: 2.215276ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [30:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ExtendsOrImplementsClauses/parserErrorRecovery_ExtendsOrImplementsClause6.ts
+Duration: 2.107804ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(EOF)] around loc [23:23]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/IfStatements/parserErrorRecoveryIfStatement1.ts
+Duration: 2.291602ms
+Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [35:36]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/IfStatements/parserErrorRecoveryIfStatement2.ts
+Duration: 1.864535ms
+Error: ExpectedSyntax("expression operator") [token=Some(BraceClose)] around loc [36:37]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/IfStatements/parserErrorRecoveryIfStatement3.ts
+Duration: 2.059727ms
+Error: ExpectedSyntax("expression operator") [token=Some(BraceClose)] around loc [38:39]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/IfStatements/parserErrorRecoveryIfStatement4.ts
+Duration: 2.153184ms
+Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [39:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/IfStatements/parserErrorRecoveryIfStatement5.ts
+Duration: 2.281281ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(EOF)] around loc [75:75]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/IfStatements/parserErrorRecoveryIfStatement6.ts
+Duration: 2.47257ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(EOF)] around loc [84:84]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/LeftShifts/parserErrorRecovery_LeftShift1.ts
+Duration: 1.826882ms
+Error: ExpectedSyntax("expression operand") [token=Some(ParenthesisClose)] around loc [28:29]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ModuleElements/parserErrorRecovery_ModuleElement1.ts
+Duration: 1.664299ms
+Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [13:14]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ModuleElements/parserErrorRecovery_ModuleElement2.ts
+Duration: 2.460242ms
+Error: ExpectedSyntax("expression operand") [token=Some(ParenthesisClose)] around loc [46:47]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ObjectLiterals/parserErrorRecovery_ObjectLiteral1.ts
+Duration: 1.521788ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [15:16]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ObjectLiterals/parserErrorRecovery_ObjectLiteral2.ts
+Duration: 1.771683ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(KeywordReturn)] around loc [13:19]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ObjectLiterals/parserErrorRecovery_ObjectLiteral3.ts
+Duration: 2.479906ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordReturn)] around loc [15:21]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ObjectLiterals/parserErrorRecovery_ObjectLiteral4.ts
+Duration: 1.6439ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordReturn)] around loc [16:22]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ObjectLiterals/parserErrorRecovery_ObjectLiteral5.ts
+Duration: 1.851842ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [23:24]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ParameterLists/parserErrorRecovery_ParameterList1.ts
+Duration: 1.641844ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(BraceOpen)] around loc [13:14]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ParameterLists/parserErrorRecovery_ParameterList2.ts
+Duration: 1.514426ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(EOF)] around loc [18:18]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ParameterLists/parserErrorRecovery_ParameterList5.ts
+Duration: 2.288514ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Colon)] around loc [2:3]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/ParameterLists/parserErrorRecovery_ParameterList6.ts
+Duration: 1.396894ms
+Error: ExpectedSyntax("type expression") [token=Some(KeywordBreak)] around loc [35:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/SourceUnits/parserErrorRecovery_SourceUnit1.ts
+Duration: 1.821722ms
+Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [14:15]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/SwitchStatements/parserErrorRecovery_SwitchStatement1.ts
+Duration: 1.208056ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordCase)] around loc [44:48]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/SwitchStatements/parserErrorRecovery_SwitchStatement2.ts
+Duration: 2.010226ms
+Error: RequiredTokenNotFound(KeywordDefault) [token=Some(KeywordClass)] around loc [50:55]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/TypeArgumentLists/TypeArgumentList1.ts
+Duration: 2.209304ms
+Error: ExpectedSyntax("expression operator") [token=Some(Invalid)] around loc [8:9]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/TypeArgumentLists/parserX_TypeArgumentList1.ts
+Duration: 2.239216ms
+Error: ExpectedSyntax("expression operator") [token=Some(Invalid)] around loc [8:9]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserEqualsGreaterThanAfterFunction1.ts
+Duration: 2.422122ms
+Error: ExpectedSyntax("function name") [token=None] around loc [0:8]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserEqualsGreaterThanAfterFunction2.ts
+Duration: 2.308717ms
+Error: ExpectedSyntax("function name") [token=None] around loc [0:8]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserErrantEqualsGreaterThanAfterFunction1.ts
+Duration: 3.509632ms
+Error: ExpectedSyntax("expression operand") [token=Some(EqualsChevronRight)] around loc [13:15]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserErrantEqualsGreaterThanAfterFunction2.ts
+Duration: 1.17332ms
+Error: ExpectedSyntax("expression operand") [token=Some(EqualsChevronRight)] around loc [17:19]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserFuzz1.ts
+Duration: 3.656795ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(EOF)] around loc [25:25]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserMissingLambdaOpenBrace1.ts
+Duration: 4.228685ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordVar)] around loc [112:115]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserUnfinishedTypeNameBeforeKeyword1.ts
+Duration: 2.830827ms
+Error: RequiredTokenNotFound(Comma) [token=Some(Identifier)] around loc [31:42]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserUnterminatedGeneric1.ts
+Duration: 2.756979ms
+Error: ExpectedSyntax("property name") [token=Some(ChevronLeft)] around loc [76:77]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ErrorRecovery/parserUnterminatedGeneric2.ts
+Duration: 2.579649ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Colon)] around loc [76:77]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ExportAssignments/parserExportAssignment1.ts
+Duration: 2.449587ms
+Error: ExpectedSyntax("expression operator") [token=Some(EOF)] around loc [12:12]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ExportAssignments/parserExportAssignment3.ts
+Duration: 2.652843ms
+Error: ExpectedSyntax("expression operand") [token=Some(EOF)] around loc [8:8]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ExportAssignments/parserExportAssignment4.ts
+Duration: 2.161026ms
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [9:10]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Expressions/parseIncompleteBinaryExpression1.ts
+Duration: 2.55869ms
+Error: ExpectedSyntax("expression operand") [token=Some(BarBar)] around loc [11:13]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Fuzz/parser0_004152.ts
+Duration: 4.646435ms
+Error: ExpectedSyntax("expression operand") [token=Some(ParenthesisClose)] around loc [65:66]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserAmbiguity2.ts
+Duration: 2.695603ms
+Error: ExpectedSyntax("expression operator") [token=Some(LiteralNumber)] around loc [9:10]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGenericsInTypeContexts2.ts
+Duration: 2.412728ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [44:45]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGenericsInVariableDeclaration1.ts
+Duration: 2.954029ms
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [32:33]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity12.ts
+Duration: 2.828802ms
+Error: ExpectedSyntax("expression operand") [token=Some(Equals)] around loc [5:6]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity13.ts
+Duration: 3.350325ms
+Error: ExpectedSyntax("expression operand") [token=Some(Equals)] around loc [8:9]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity14.ts
+Duration: 2.853624ms
+Error: ExpectedSyntax("expression operand") [token=Some(Equals)] around loc [6:7]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity17.ts
+Duration: 2.665378ms
+Error: ExpectedSyntax("expression operand") [token=Some(Equals)] around loc [6:7]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity18.ts
+Duration: 2.715213ms
+Error: ExpectedSyntax("expression operand") [token=Some(Equals)] around loc [9:10]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity19.ts
+Duration: 3.24602ms
+Error: ExpectedSyntax("expression operand") [token=Some(Equals)] around loc [7:8]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity2.ts
+Duration: 1.847698ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronRight)] around loc [4:5]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity3.ts
+Duration: 2.18938ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronRight)] around loc [7:8]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity4.ts
+Duration: 2.521927ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronRight)] around loc [5:6]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity7.ts
+Duration: 1.837718ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronRight)] around loc [5:6]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity8.ts
+Duration: 2.327487ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronRight)] around loc [8:9]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Generics/parserGreaterThanTokenAmbiguity9.ts
+Duration: 1.980083ms
+Error: ExpectedSyntax("expression operand") [token=Some(ChevronRight)] around loc [6:7]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature1.ts
+Duration: 2.20688ms
+Error: ExpectedSyntax("expression operand") [token=Some(DotDotDot)] around loc [18:21]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature11.ts
+Duration: 1.915576ms
+Error: RequiredTokenNotFound(Colon) [token=Some(Semicolon)] around loc [102:103]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature2.ts
+Duration: 2.285723ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [25:26]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature3.ts
+Duration: 3.251701ms
+Error: ExpectedSyntax("expression operand") [token=Some(BracketClose)] around loc [20:21]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature6.ts
+Duration: 2.394851ms
+Error: RequiredTokenNotFound(Colon) [token=Some(BraceClose)] around loc [30:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature7.ts
+Duration: 2.243972ms
+Error: RequiredTokenNotFound(Colon) [token=Some(BraceClose)] around loc [29:30]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature8.ts
+Duration: 2.517637ms
+Error: RequiredTokenNotFound(Colon) [token=Some(Semicolon)] around loc [23:24]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/IndexSignatures/parserIndexSignature9.ts
+Duration: 1.468514ms
+Error: ExpectedSyntax("expression operand") [token=Some(BracketClose)] around loc [19:20]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration1.ts
+Duration: 4.192717ms
+Error: RequiredTokenNotFound(Question) [token=Some(BraceOpen)] around loc [32:33]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration2.ts
+Duration: 2.414109ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordImplements)] around loc [12:22]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/InterfaceDeclarations/parserInterfaceDeclaration6.ts
+Duration: 2.622493ms
+Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [0:6]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration12.ts
+Duration: 1.673224ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Identifier)] around loc [39:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration14.ts
+Duration: 2.294733ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Identifier)] around loc [50:51]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration15.ts
+Duration: 2.026749ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Identifier)] around loc [46:47]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration17.ts
+Duration: 2.17683ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Question)] around loc [40:41]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/MemberAccessorDeclarations/parserMemberAccessorDeclaration18.ts
+Duration: 2.295695ms
+Error: ExpectedSyntax("pattern") [token=Some(DotDotDot)] around loc [39:42]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/MemberFunctionDeclarations/parserMemberFunctionDeclarationAmbiguities1.ts
+Duration: 1.954784ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(ParenthesisOpen)] around loc [19:20]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/MissingTokens/parserMissingToken1.ts
+Duration: 2.495345ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordFinally)] around loc [4:11]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration11.ts
+Duration: 1.99598ms
+Error: RequiredTokenNotFound(Comma) [token=Some(Dot)] around loc [122:123]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ObjectTypes/parserObjectType6.ts
+Duration: 2.016853ms
+Error: ExpectedSyntax("expression operand") [token=Some(BracketClose)] around loc [23:24]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/PropertyAssignments/parserFunctionPropertyAssignment4.ts
+Duration: 2.975594ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [11:12]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser509546.ts
+Duration: 1.975576ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(BraceClose)] around loc [37:38]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser509546_1.ts
+Duration: 2.796712ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(BraceClose)] around loc [37:38]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser509546_2.ts
+Duration: 2.708116ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(BraceClose)] around loc [54:55]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser509630.ts
+Duration: 4.783951ms
+Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [54:55]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser509667.ts
+Duration: 3.658051ms
+Error: ExpectedSyntax("member access property") [token=Some(BraceClose)] around loc [44:45]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser509669.ts
+Duration: 4.30261ms
+Error: ExpectedSyntax("expression operand") [token=Some(Colon)] around loc [32:33]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser512084.ts
+Duration: 3.161776ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(EOF)] around loc [13:13]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser512097.ts
+Duration: 3.014421ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [13:14]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser512325.ts
+Duration: 2.696357ms
+Error: ExpectedSyntax("expression operator") [token=Some(EqualsChevronRight)] around loc [21:23]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser519458.ts
+Duration: 3.188247ms
+Error: ExpectedNotFound [token=Some(KeywordModule)] around loc [14:20]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser618973.ts
+Duration: 1.825569ms
+Error: ExpectedSyntax("exportable") [token=Some(KeywordExport)] around loc [0:6]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser643728.ts
+Duration: 2.622253ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(Semicolon)] around loc [32:33]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser645086_1.ts
+Duration: 2.451499ms
+Error: ExpectedSyntax("expression operator") [token=Some(BracketClose)] around loc [12:13]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser645086_2.ts
+Duration: 2.450538ms
+Error: ExpectedSyntax("expression operator") [token=Some(BracketClose)] around loc [13:14]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser645484.ts
+Duration: 2.314689ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(Question)] around loc [18:19]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegularExpressions/parserRegularExpressionDivideAmbiguity4.ts
+Duration: 2.44338ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [5:14]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens11.ts
+Duration: 2.001386ms
+Error: ExpectedSyntax("expression operator") [token=Some(Invalid)] around loc [4:5]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens12.ts
+Duration: 2.131591ms
+Error: ExpectedSyntax("expression operator") [token=Some(Invalid)] around loc [2:3]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens13.ts
+Duration: 2.349036ms
+Error: ExpectedSyntax("expression operator") [token=Some(Invalid)] around loc [9:10]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens16.ts
+Duration: 1.847299ms
+Error: ExpectedSyntax("expression operand") [token=Some(Colon)] around loc [5:6]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens17.ts
+Duration: 3.509933ms
+Error: ExpectedSyntax("expression operator") [token=Some(EOF)] around loc [8:8]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens18.ts
+Duration: 2.608818ms
+Error: ExpectedSyntax("expression operator") [token=Some(Invalid)] around loc [6:7]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens2.ts
+Duration: 3.338849ms
+Error: ExpectedSyntax("expression operator") [token=Some(Invalid)] around loc [1:2]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens20.ts
+Duration: 2.368748ms
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [8:9]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/SkippedTokens/parserSkippedTokens4.ts
+Duration: 2.718198ms
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [11:12]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserES5ForOfStatement2.ts
+Duration: 2.119097ms
+Error: RequiredTokenNotFound(Semicolon) [token=Some(Identifier)] around loc [28:29]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserES5ForOfStatement20.ts
+Duration: 2.265187ms
+Error: ExpectedSyntax("expression operator") [token=Some(ParenthesisClose)] around loc [37:38]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserES5ForOfStatement21.ts
+Duration: 1.905502ms
+Error: ExpectedSyntax("expression operand") [token=Some(ParenthesisClose)] around loc [30:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserES5ForOfStatement4.ts
+Duration: 1.811253ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordOf)] around loc [31:33]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserES5ForOfStatement6.ts
+Duration: 3.27731ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordOf)] around loc [38:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserES5ForOfStatement7.ts
+Duration: 2.565912ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordOf)] around loc [55:57]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserForInStatement2.ts
+Duration: 3.002834ms
+Error: RequiredTokenNotFound(Semicolon) [token=Some(Identifier)] around loc [12:13]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserForInStatement4.ts
+Duration: 2.051911ms
+Error: ExpectedSyntax("expression operator") [token=Some(ParenthesisClose)] around loc [19:20]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserForInStatement6.ts
+Duration: 2.59471ms
+Error: ExpectedSyntax("expression operator") [token=Some(ParenthesisClose)] around loc [26:27]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserForInStatement7.ts
+Duration: 2.263728ms
+Error: ExpectedSyntax("expression operator") [token=Some(ParenthesisClose)] around loc [43:44]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/TupleTypes/TupleType4.ts
+Duration: 1.716055ms
+Error: ExpectedSyntax("type expression") [token=Some(EOF)] around loc [8:8]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/TupleTypes/TupleType6.ts
+Duration: 3.224732ms
+Error: ExpectedSyntax("type expression") [token=Some(Comma)] around loc [15:16]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Types/parserTypeQuery3.ts
+Duration: 2.601402ms
+Error: ExpectedSyntax("type identifier") [token=Some(EOF)] around loc [16:16]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Types/parserTypeQuery4.ts
+Duration: 2.150343ms
+Error: ExpectedSyntax("type identifier") [token=Some(Semicolon)] around loc [16:17]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Types/parserTypeQuery8.ts
+Duration: 1.763146ms
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [15:16]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/parserRealSource4.ts
+Duration: 3.829649ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordVar)] around loc [1347:1350]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/parserRealSource7.ts
+Duration: 2.972785ms
+Error: ExpectedSyntax("identifier") [token=Some(Dot)] around loc [1048:1049]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/parserRealSource9.ts
+Duration: 2.023386ms
+Error: ExpectedSyntax("identifier") [token=Some(Dot)] around loc [1246:1247]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/parserS12.11_A3_T4.ts
+Duration: 2.79229ms
+Error: ExpectedSyntax("expression operand") [token=Some(Colon)] around loc [422:423]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript5/parservoidInQualifiedName1.ts
+Duration: 2.239546ms
+Error: RequiredTokenNotFound(Comma) [token=Some(Dot)] around loc [12:13]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName16.ts
+Duration: 3.156238ms
+Error: ExpectedSyntax("identifier") [token=Some(BracketOpen)] around loc [28:29]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName26.ts
+Duration: 1.963471ms
+Error: ExpectedSyntax("identifier") [token=Some(BracketOpen)] around loc [45:46]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName27.ts
+Duration: 2.928321ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [71:72]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName29.ts
+Duration: 2.324335ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Colon)] around loc [67:68]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName30.ts
+Duration: 2.075283ms
+Error: ExpectedSyntax("identifier") [token=Some(BracketOpen)] around loc [61:62]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName33.ts
+Duration: 3.034459ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(BraceOpen)] around loc [66:67]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName34.ts
+Duration: 2.666733ms
+Error: ExpectedSyntax("identifier") [token=Some(BracketOpen)] around loc [61:62]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ComputedPropertyNames/parserComputedPropertyName5.ts
+Duration: 1.621396ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(KeywordGet)] around loc [33:36]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/Iterators/parserForOfStatement2.ts
+Duration: 1.147593ms
+Error: RequiredTokenNotFound(Semicolon) [token=Some(Identifier)] around loc [28:29]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/Iterators/parserForOfStatement20.ts
+Duration: 1.774947ms
+Error: ExpectedSyntax("expression operator") [token=Some(ParenthesisClose)] around loc [37:38]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/Iterators/parserForOfStatement21.ts
+Duration: 2.921766ms
+Error: ExpectedSyntax("expression operand") [token=Some(ParenthesisClose)] around loc [30:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/Iterators/parserForOfStatement4.ts
+Duration: 1.885726ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordOf)] around loc [31:33]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/Iterators/parserForOfStatement6.ts
+Duration: 4.065796ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordOf)] around loc [38:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/Iterators/parserForOfStatement7.ts
+Duration: 2.635718ms
+Error: ExpectedSyntax("expression operator") [token=Some(KeywordOf)] around loc [55:57]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ShorthandPropertyAssignment/parserShorthandPropertyAssignment1.ts
+Duration: 1.817629ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Question)] around loc [102:103]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/ShorthandPropertyAssignment/parserShorthandPropertyAssignment5.ts
+Duration: 2.506241ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Question)] around loc [39:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/parser/ecmascript6/Symbols/parserSymbolIndexer5.ts
+Duration: 1.802393ms
+Error: ExpectedSyntax("expression operator") [token=Some(Colon)] around loc [33:34]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/scanner/ecmascript3/scannerES3NumericLiteral6.ts
+Duration: 2.323018ms
+Error: MalformedLiteralNumber [token=None] around loc [0:3]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/scanner/ecmascript5/scannerNumericLiteral6.ts
+Duration: 1.842103ms
+Error: MalformedLiteralNumber [token=None] around loc [17:20]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/scanner/ecmascript5/scannerStringLiterals.ts
+Duration: 3.349436ms
+Error: ExpectedSyntax("member access property") [token=Some(EOF)] around loc [147:147]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/scanner/ecmascript5/scannerUnexpectedNullCharacter1.ts
+Duration: 1.88654ms
+Error: ExpectedSyntax("expression operator") [token=Some(Invalid)] around loc [3:3]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/awaitUsingDeclarationsInForOf.5.ts
+Duration: 2.773992ms
+Error: RequiredTokenNotFound(Semicolon) [token=Some(Identifier)] around loc [210:211]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarationsInForOf.4.ts
+Duration: 2.016659ms
+Error: ExpectedSyntax("expression operand") [token=Some(Equals)] around loc [102:103]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/statements/labeledStatements/labeledStatementDeclarationListInLoopNoCrash3.ts
+Duration: 2.198934ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [528:532]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/statements/labeledStatements/labeledStatementDeclarationListInLoopNoCrash4.ts
+Duration: 2.995418ms
+Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [471:475]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/statements/throwStatements/invalidThrowStatement.ts
+Duration: 4.494281ms
+Error: ExpectedSyntax("expression operand") [token=Some(Semicolon)] around loc [39:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/statements/tryStatements/invalidTryStatements.ts
+Duration: 2.160539ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordCatch)] around loc [21:26]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/conditional/inferTypes1.ts
+Duration: 2.528115ms
+Error: RequiredTokenNotFound(Question) [token=Some(Bar)] around loc [4549:4550]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/conditional/inferTypesWithExtends1.ts
+Duration: 2.484327ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Question)] around loc [3742:3743]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/import/importTypeNonString.ts
+Duration: 2.160052ms
+Error: RequiredTokenNotFound(LiteralString) [token=Some(BraceOpen)] around loc [63:64]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/import/importWithTypeArguments.ts
+Duration: 3.392316ms
+Error: RequiredTokenNotFound(LiteralString) [token=Some(ChevronLeft)] around loc [6:7]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/literal/templateLiteralTypes1.ts
+Duration: 59.536572ms
+Error: RequiredTokenNotFound(ChevronRight) [token=Some(Hyphen)] around loc [8441:8442]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/literal/templateLiteralTypes2.ts
+Duration: 2.97956ms
+Error: RequiredTokenNotFound(ChevronRight) [token=Some(LiteralTemplatePartString)] around loc [1682:1688]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/literal/templateLiteralTypes3.ts
+Duration: 4.49256ms
+Error: RequiredTokenNotFound(ChevronRight) [token=Some(LiteralTemplatePartStringEnd)] around loc [1281:1286]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/literal/templateLiteralTypes4.ts
+Duration: 52.916753ms
+Error: RequiredTokenNotFound(Question) [token=Some(Bar)] around loc [13422:13423]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/literal/templateLiteralTypesPatterns.ts
+Duration: 12.100391ms
+Error: ExpectedSyntax("type expression") [token=Some(LiteralTemplatePartStringEnd)] around loc [3999:4005]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/mapped/mappedTypeConstraints2.ts
+Duration: 3.1976ms
+Error: RequiredTokenNotFound(Question) [token=Some(Bar)] around loc [1642:1643]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/mapped/mappedTypeProperties.ts
+Duration: 2.694185ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Identifier)] around loc [215:220]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/mapped/mappedTypes2.ts
+Duration: 2.873433ms
+Error: ExpectedSyntax("property name") [token=Some(ParenthesisOpen)] around loc [392:393]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/mapped/mappedTypesGenericTuples.ts
+Duration: 3.282121ms
+Error: RequiredTokenNotFound(Colon) [token=Some(Comma)] around loc [554:555]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/nonPrimitive/nonPrimitiveAndTypeVariables.ts
+Duration: 2.622314ms
+Error: RequiredTokenNotFound(Question) [token=Some(Bar)] around loc [154:155]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/nonPrimitive/nonPrimitiveInGeneric.ts
+Duration: 3.173061ms
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [701:702]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/nonPrimitive/nonPrimitiveStrictNull.ts
+Duration: 1.958099ms
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [1028:1029]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/callSignatures/callSignatureWithOptionalParameterAndInitializer.ts
+Duration: 2.415105ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Equals)] around loc [394:395]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/callSignatures/callSignaturesWithParameterInitializers2.ts
+Duration: 2.092382ms
+Error: RequiredTokenNotFound(BraceOpen) [token=Some(Comma)] around loc [301:302]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/methodSignatures/objectTypesWithOptionalProperties.ts
+Duration: 2.068751ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Question)] around loc [256:257]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/methodSignatures/objectTypesWithOptionalProperties2.ts
+Duration: 2.794814ms
+Error: ExpectedSyntax("property name") [token=Some(Question)] around loc [67:68]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/propertySignatures/numericNamedPropertyDuplicates.ts
+Duration: 2.204585ms
+Error: ExpectedSyntax("expression operator") [token=Some(LiteralNumber)] around loc [221:222]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/propertySignatures/propertyNamesOfReservedWords.ts
+Duration: 2.14237ms
+Error: ExpectedSyntax("keyword or identifier") [token=Some(Semicolon)] around loc [23:24]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/objectTypeLiteral/propertySignatures/stringNamedPropertyDuplicates.ts
+Duration: 3.14118ms
+Error: ExpectedSyntax("expression operator") [token=Some(LiteralString)] around loc [254:259]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/primitives/string/assignFromStringInterface2.ts
+Duration: 1.959484ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Colon)] around loc [1312:1313]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/rest/objectRestNegative.ts
+Duration: 4.998505ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Identifier)] around loc [72:73]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/rest/objectRestPropertyMustBeLast.ts
+Duration: 3.097493ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(Identifier)] around loc [11:12]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/rest/restElementMustBeLast.ts
+Duration: 2.128357ms
+Error: RequiredTokenNotFound(BracketClose) [token=Some(Identifier)] around loc [11:12]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/specifyingTypes/typeLiterals/arrayTypeOfTypeOf.ts
+Duration: 2.528542ms
+Error: RequiredTokenNotFound(Comma) [token=Some(ChevronLeft)] around loc [171:172]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/specifyingTypes/typeLiterals/parenthesizedTypes.ts
+Duration: 2.731135ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Colon)] around loc [217:218]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/specifyingTypes/typeQueries/invalidTypeOfTarget.ts
+Duration: 2.761293ms
+Error: ExpectedSyntax("type identifier") [token=Some(BraceOpen)] around loc [15:16]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/spread/objectSpreadNegativeParse.ts
+Duration: 2.842236ms
+Error: ExpectedSyntax("expression operand") [token=Some(BraceClose)] around loc [30:31]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/stringLiteral/typeArgumentsWithStringLiteralTypes01.ts
+Duration: 3.57352ms
+Error: ExpectedSyntax("pattern") [token=Some(LiteralString)] around loc [1811:1818]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/thisType/declarationFiles.ts
+Duration: 4.239693ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(ChevronLeft)] around loc [401:402]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/thisType/thisTypeErrors.ts
+Duration: 2.090888ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordReturn)] around loc [532:538]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/thisType/thisTypeErrors2.ts
+Duration: 1.775688ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(ChevronLeft)] around loc [144:145]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/thisType/thisTypeInAccessors.ts
+Duration: 3.231787ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(Identifier)] around loc [585:586]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/thisType/thisTypeInBasePropertyAndDerivedContainerOfBase01.ts
+Duration: 2.364254ms
+Error: ExpectedSyntax("property name") [token=Some(ChevronLeft)] around loc [167:168]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/thisType/thisTypeInClasses.ts
+Duration: 2.12337ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(ChevronLeft)] around loc [346:347]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/thisType/thisTypeInFunctionsNegative.ts
+Duration: 3.213446ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(KeywordThis)] around loc [5407:5411]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/thisType/thisTypeInInterfaces.ts
+Duration: 1.918864ms
+Error: ExpectedSyntax("property name") [token=Some(ChevronLeft)] around loc [385:386]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/tuple/named/namedTupleMembersErrors.ts
+Duration: 1.706941ms
+Error: RequiredTokenNotFound(BracketClose) [token=Some(Question)] around loc [334:335]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/tuple/named/partiallyNamedTuples2.ts
+Duration: 2.140033ms
+Error: ExpectedSyntax("property name") [token=Some(ChevronLeft)] around loc [159:160]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeParameters/typeArgumentLists/instantiationExpressionErrors.ts
+Duration: 4.26716ms
+Error: ExpectedSyntax("member access property") [token=Some(ChevronLeft)] around loc [761:762]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeParameters/typeArgumentLists/instantiationExpressions.ts
+Duration: 4.801637ms
+Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(KeywordStringType)] around loc [518:524]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeParameters/typeParameterLists/typeParameterConstModifiers.ts
+Duration: 2.471634ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(ChevronLeft)] around loc [39:40]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeParameters/typeParameterLists/typeParameterConstModifiersReturnsAndYields.ts
+Duration: 2.110619ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(ChevronLeft)] around loc [98:99]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeParameters/typeParameterLists/typeParameterConstModifiersReverseMappedTypes.ts
+Duration: 2.224642ms
+Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(ChevronLeft)] around loc [57:58]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeParameters/typeParameterLists/varianceAnnotations.ts
+Duration: 3.130978ms
+Error: RequiredTokenNotFound(Equals) [token=Some(ChevronLeft)] around loc [57:58]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeParameters/typeParameterLists/varianceAnnotationsWithCircularlyReferencesError.ts
+Duration: 1.654034ms
+Error: RequiredTokenNotFound(Equals) [token=Some(ChevronLeft)] around loc [50:51]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/covariantCallbacks.ts
+Duration: 2.526134ms
+Error: ExpectedSyntax("property name") [token=Some(ParenthesisOpen)] around loc [1295:1296]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesDifferingByConstraints.ts
+Duration: 3.026412ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [688:689]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesDifferingByConstraints2.ts
+Duration: 3.645409ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [876:877]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesDifferingByConstraints3.ts
+Duration: 2.494655ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [1076:1077]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesDifferingByReturnType.ts
+Duration: 3.110888ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [591:592]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesDifferingByReturnType2.ts
+Duration: 4.392349ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [656:657]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesDifferingTypeParameterCounts.ts
+Duration: 2.962647ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [356:357]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesDifferingTypeParameterNames.ts
+Duration: 2.516399ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [299:300]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesOptionalParams.ts
+Duration: 3.788809ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [627:628]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesOptionalParams2.ts
+Duration: 3.653343ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [652:653]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeAndMemberIdentity/objectTypesIdentityWithGenericConstructSignaturesOptionalParams3.ts
+Duration: 4.677892ms
+Error: RequiredTokenNotFound(BraceClose) [token=Some(ChevronLeft)] around loc [651:652]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeInference/noInfer.ts
+Duration: 3.936008ms
+Error: RequiredTokenNotFound(ChevronRight) [token=Some(LiteralString)] around loc [213:218]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeInference/unionAndIntersectionInference1.ts
+Duration: 4.658741ms
+Error: ExpectedSyntax("expression operand") [token=Some(KeywordReturn)] around loc [545:551]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeInference/unionAndIntersectionInference3.ts
+Duration: 2.033403ms
+Error: ExpectedSyntax("expression operator") [token=Some(ParenthesisClose)] around loc [338:339]
+
+================================================================================
+File: tests/TypeScript/tests/cases/conformance/types/uniqueSymbol/uniqueSymbolsErrors.ts
+Duration: 2.365566ms
+Error: ExpectedSyntax("symbol after unique") [token=Some(KeywordNumberType)] around loc [115:121]

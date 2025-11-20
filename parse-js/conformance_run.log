@@ -1,0 +1,1439 @@
+warning: /home/user/ecma-rs/parse-js/Cargo.toml: file `/home/user/ecma-rs/parse-js/tests/conformance_runner.rs` found to be present in multiple build targets:
+  * `bin` target `conformance_runner`
+  * `integration-test` target `conformance_runner`
+   Compiling parse-js v0.24.1 (/home/user/ecma-rs/parse-js)
+warning: type `LexNotFound` is more private than the item `lex_template_string_continue`
+   --> parse-js/src/lex/mod.rs:949:1
+    |
+949 | pub fn lex_template_string_continue(lexer: &mut Lexer<'_>) -> LexResult<TT> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `lex_template_string_continue` is reachable at visibility `pub`
+    |
+note: but type `LexNotFound` is only usable at visibility `pub(self)`
+   --> parse-js/src/lex/mod.rs:111:1
+    |
+111 | struct LexNotFound;
+    | ^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: methods `through_char`, `while_not_char`, and `range` are never used
+   --> parse-js/src/lex/mod.rs:207:6
+    |
+120 | impl<'a> Lexer<'a> {
+    | ------------------ methods in this implementation
+...
+207 |   fn through_char(&self, c: char) -> LexResult<Match> {
+    |      ^^^^^^^^^^^^
+...
+220 |   fn while_not_char(&self, a: char) -> Match {
+    |      ^^^^^^^^^^^^^^
+...
+280 |   fn range(&self, m: Match) -> Loc {
+    |      ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `check` is never used
+ --> parse-js/src/lex/tests/mod.rs:7:4
+  |
+7 | fn check<const N: usize>(code: &str, expecteds: [TT; N]) {
+  |    ^^^^^
+
+warning: `parse-js` (lib) generated 3 warnings
+    Finished `release` profile [optimized] target(s) in 21.21s
+     Running `/home/user/ecma-rs/target/release/conformance_runner`
+🔍 Discovering TypeScript conformance tests...
+📊 Found 5898 test files
+
+🚀 Running tests in parallel...
+[100/5898] tests/TypeScript/tests/cases/conformance/types/primitives/string/stringPropertyAccessWithError.ts
+[200/5898] tests/TypeScript/tests/cases/conformance/additionalChecks/noPropertyAccessFromIndexSignature1.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Foo'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[300/5898] tests/TypeScript/tests/cases/conformance/classes/constructorDeclarations/superCalls/superCallInConstructorWithNoBaseType.ts
+[400/5898] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/VariableDeclarations/parserVariableDeclaration1.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Hyphen '-'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = LiteralTemplatePartString '`foo${'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordUndefinedType 'undefined'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ChevronRight '>'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = LiteralTemplatePartStringEnd '`abc`'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[500/5898] tests/TypeScript/tests/cases/conformance/types/typeParameters/typeArgumentLists/typeParameterAsTypeParameterConstraint2.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[600/5898] tests/TypeScript/tests/cases/conformance/declarationEmit/nullPropertyName.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[700/5898] tests/TypeScript/tests/cases/conformance/types/typeRelationships/assignmentCompatibility/numberAssignableToEnum.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Foo'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[800/5898] tests/TypeScript/tests/cases/conformance/decorators/class/accessor/decoratorOnClassAccessor6.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'I1'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'I3'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'I2'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'I1'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'I2'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'I1'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[900/5898] tests/TypeScript/tests/cases/conformance/classes/members/inheritanceAndOverriding/derivedClassIncludesInheritedMembers.ts
+[1000/5898] tests/TypeScript/tests/cases/conformance/decorators/class/decoratorOnClass2.ts
+[1100/5898] tests/TypeScript/tests/cases/conformance/es6/for-ofStatements/for-of23.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived2'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[1200/5898] tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classExtendingNull.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'C'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'M'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'C'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'M'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordObjectType 'object'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[1300/5898] tests/TypeScript/tests/cases/conformance/classes/members/instanceAndStaticMembers/typeOfThisInStaticMembers10.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[1400/5898] tests/TypeScript/tests/cases/conformance/statements/VariableStatements/usingDeclarations/usingDeclarations.8.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordThis 'this'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'span'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FooComponent'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FooComponent'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FooComponent'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FooComponent'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Base'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[1500/5898] tests/TypeScript/tests/cases/conformance/types/contextualTypes/logicalAnd/contextuallyTypeLogicalAnd01.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'U'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'U'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'U'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Base'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ParenthesisOpen '('
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ParenthesisOpen '('
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Array'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Array'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[1600/5898] tests/TypeScript/tests/cases/conformance/jsdoc/declarations/jsDeclarationsCommonjsRelativePath.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Array'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'IdentifierToken'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Object'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'S'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'S'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[1700/5898] tests/TypeScript/tests/cases/conformance/jsdoc/declarations/jsDeclarationsExportSpecifierNonlocal.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'U'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'U'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'U'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'V'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived2'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'U'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Base'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Base'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Array'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[1800/5898] tests/TypeScript/tests/cases/conformance/es6/functionDeclarations/FunctionDeclaration2_es6.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Base'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Base'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ParenthesisOpen '('
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'U'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[1900/5898] tests/TypeScript/tests/cases/conformance/es6/functionDeclarations/FunctionDeclaration9_es6.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[2000/5898] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/EnumDeclarations/parserEnum5.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'C2'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FuncDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FuncDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'C4'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[2100/5898] tests/TypeScript/tests/cases/conformance/dynamicImport/importCallExpressionInAMD2.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Derived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ModuleType'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeSymbol'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ZeroOf'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BinaryExpression'
+[2200/5898] tests/TypeScript/tests/cases/conformance/es6/memberFunctionDeclarations/MemberFunctionDeclaration6_es6.ts
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BinaryExpression'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordVoid 'void'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[2300/5898] tests/TypeScript/tests/cases/conformance/es6/moduleExportsSystem/outFilerootDirModuleNamesSystem.ts
+[2400/5898] tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeInference/genericCallWithConstructorTypedArguments5.ts
+[2500/5898] tests/TypeScript/tests/cases/conformance/types/tuple/tupleElementTypes4.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ResizablePanel'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ResizablePanel'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = LiteralNumber '1'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ChevronRight '>'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ModuleDeclaration'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[2600/5898] tests/TypeScript/tests/cases/conformance/jsx/tsxEmitSpreadAttribute.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'InterfaceDeclaration'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = LiteralString '"foo"'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = LiteralString '"foo"'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'VarDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FuncDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'C'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[2700/5898] tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeInference/genericCallWithObjectTypeArgsAndConstraints.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'b'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'h1'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ComponentWithUnion'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'E'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[2800/5898] tests/TypeScript/tests/cases/conformance/types/nonPrimitive/nonPrimitiveIndexingWithForInNoImplicitAny.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustPropTypes'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustPropTypes'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'foo'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustPropTypes'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'foo'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustPropTypes'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'img'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustDefaultProps'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustDefaultProps'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustDefaultProps'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'n'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'imag'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BothWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'MyClass'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier '日本語'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'MyClass'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'AbC_def'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BothWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'c'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'd'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BothWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BothWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BothWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BothWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'LeftRight'
+[2900/5898] tests/TypeScript/tests/cases/conformance/jsx/tsxUnionElementType2.tsx
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustPropTypesWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustPropTypesWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustPropTypesWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustPropTypesWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustDefaultPropsWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustDefaultPropsWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustDefaultPropsWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'JustDefaultPropsWithSpecifiedGeneric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[3000/5898] tests/TypeScript/tests/cases/conformance/types/typeRelationships/typeInference/indexSignatureTypeInference.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BoundDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'nope'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'CustomTag'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ChevronRight '>'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'customTag'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Block'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[3100/5898] tests/TypeScript/tests/cases/conformance/jsx/tsxSpreadAttributesResolution9.tsx
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'IfStatement'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'CustomTag'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Foo'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'foundFirst'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'string_named'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'CustomTag'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Other'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Composite'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Todo'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TodoList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Dotted'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Composite'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 't'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'CallExpression'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Todo'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Foo'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Foo'
+[3200/5898] tests/TypeScript/tests/cases/conformance/es6/arrowFunction/emitArrowFunctionWhenUsingArguments02_ES6.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'hasOwnProperty'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BinaryExpression'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Namespace'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Namespace'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Todo'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'font'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TodoList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'x'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordUndefinedType 'undefined'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'CallExpression'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+[3300/5898] tests/TypeScript/tests/cases/conformance/es2020/modules/exportAsNamespace1.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Y'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'a'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Component'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+[3400/5898] tests/TypeScript/tests/cases/conformance/es2022/arbitraryModuleNamespaceIdentifiers/arbitraryModuleNamespaceIdentifiers_syntax.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ChevronRight '>'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+[3500/5898] tests/TypeScript/tests/cases/conformance/types/union/unionTypeEquivalence.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Myn'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ChevronRight '>'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'span'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'MyString'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[3600/5898] tests/TypeScript/tests/cases/conformance/salsa/inferingFromAny.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordVoid 'void'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'I'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[3700/5898] tests/TypeScript/tests/cases/conformance/types/uniqueSymbol/uniqueSymbolsDeclarations.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'CaseStatement'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[3800/5898] tests/TypeScript/tests/cases/conformance/expressions/binaryOperators/arithmeticOperator/arithmeticOperatorWithUndefinedValueAndInvalidOperands.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Finally'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[3900/5898] tests/TypeScript/tests/cases/conformance/es6/Symbols/symbolProperty54.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4000/5898] tests/TypeScript/tests/cases/conformance/references/library-reference-1.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Try'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Catch'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4100/5898] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Expressions/parserUnaryExpression2.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BracketOpen '['
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'VarDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'VarDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BrandedNum'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BrandedNum'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BrandedNum'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BrandedNum'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4200/5898] tests/TypeScript/tests/cases/conformance/expressions/unaryOperators/incrementOperator/incrementOperatorWithUnsupportedBooleanType.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BrandedNum'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BrandedNum'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BrandedNum'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'BrandedNum'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4300/5898] tests/TypeScript/tests/cases/conformance/es6/templates/templateStringInPropertyAssignmentES6.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'div'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4400/5898] tests/TypeScript/tests/cases/conformance/es6/computedProperties/computedPropertyNames17_ES5.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'T'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4500/5898] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/RegressionTests/parser509618.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'String'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'String'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4600/5898] tests/TypeScript/tests/cases/conformance/es6/templates/templateStringsWithTypeErrorInFunctionExpressionsInSubstitutionExpressionES6.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4700/5898] tests/TypeScript/tests/cases/conformance/es6/templates/templateStringInNewExpression.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'PrintContext'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'PrintContext'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Script'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeDeclaration'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'UnaryExpression'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ModuleDeclaration'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FuncDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Try'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ModuleDeclaration'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'InterfaceDeclaration'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SymbolTableScope'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4800/5898] tests/TypeScript/tests/cases/conformance/expressions/binaryOperators/logicalAndOperator/logicalAndOperatorStrictMode.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SymbolTableScope'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Catch'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'InterfaceDeclaration'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Finally'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SymbolTableScope'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'WithStatement'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FuncDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FuncDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'VarDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SymbolScopeBuilder'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeSymbol'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FuncDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[4900/5898] tests/TypeScript/tests/cases/conformance/externalModules/typeOnly/exportSpecifiers.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Identifier'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeSymbol'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Catch'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ASTList'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5000/5898] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/PropertySignatures/parserPropertySignature7.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ModuleDeclaration'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'FuncDecl'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Catch'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5100/5898] tests/TypeScript/tests/cases/conformance/externalModules/esnext/esnextmodulekindWithES5Target2.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5200/5898] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/ModuleDeclarations/parserModuleDeclaration3.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5300/5898] tests/TypeScript/tests/cases/conformance/es7/exponentiationOperator/emitExponentiationOperatorInTemplateString3ES6.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Function'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5400/5898] tests/TypeScript/tests/cases/conformance/parser/ecmascript5/Statements/parserES5ForOfStatement3.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordNumberType 'number'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'DeclFlags'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5500/5898] tests/TypeScript/tests/cases/conformance/expressions/elementAccess/stringEnumInElementAccess01.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Function'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5600/5898] tests/TypeScript/tests/cases/conformance/expressions/contextualTyping/parenthesizedContexualTyping3.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'ITextWriter'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5700/5898] tests/TypeScript/tests/cases/conformance/expressions/typeSatisfaction/typeSatisfaction_contextualTyping2.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Harness'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ParenthesisOpen '('
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ParenthesisOpen '('
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+[5800/5898] tests/TypeScript/tests/cases/conformance/expressions/unaryOperators/decrementOperator/decrementOperatorWithNumberTypeInvalidOperations.ts
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordConst 'const'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordConst 'const'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordConst 'const'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordConst 'const'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Base'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordConst 'const'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Array'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeBase'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeBase'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeBase'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeDerived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Genric'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeDerived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeDerived'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeOther'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeOther'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ParenthesisOpen '('
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'SomeOther'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'numOrStr'
+DEBUG: is_likely_jsx_tag = true, looks_like_type_assertion = false
+DEBUG try_parse_angle_bracket_type_assertion: t1 = ParenthesisOpen '('
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Base'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Array'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = BraceOpen '{'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'Harness'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordAny 'any'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = Identifier 'TypeScript'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+DEBUG try_parse_angle_bracket_type_assertion: t1 = KeywordStringType 'string'
+DEBUG: is_likely_jsx_tag = false, looks_like_type_assertion = true
+
+================================================================================
+📈 TEST RESULTS SUMMARY
+================================================================================
+Total tests:  5898
+✅ Passed:     5558 (94.24%)
+❌ Failed:     340 (5.76%)
+================================================================================
+
+📋 FAILURES BY CATEGORY:
+================================================================================
+parser/ecmascript5/Generics: 15 failures
+parser/ecmascript5/RegressionTests: 15 failures
+parser/ecmascript5/Statements: 10 failures
+types/typeRelationships/typeAndMemberIdentity: 10 failures
+parser/ecmascript5/ErrorRecovery: 9 failures
+parser/ecmascript5/SkippedTokens: 9 failures
+types/thisType: 8 failures
+parser/ecmascript6/ComputedPropertyNames: 8 failures
+parser/ecmascript5/IndexSignatures: 8 failures
+parser/ecmascript5/ErrorRecovery/ArgumentLists: 6 failures
+parser/ecmascript5/ErrorRecovery/IfStatements: 6 failures
+parser/ecmascript6/Iterators: 6 failures
+jsx: 6 failures
+parser/ecmascript5/ClassDeclarations: 6 failures
+parser/ecmascript5/ErrorRecovery/ExtendsOrImplementsClauses: 6 failures
+parser/ecmascript5/MemberAccessorDeclarations: 5 failures
+parser/ecmascript5: 5 failures
+types/literal: 5 failures
+types/typeParameters/typeParameterLists: 5 failures
+esDecorators/classExpression/namedEvaluation: 5 failures
+
+🔍 SAMPLE FAILURES (first 50):
+================================================================================
+
+1. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classAbstractKeyword/classAbstractCrashedOnce.ts (2.840305ms)
+   Error: ExpectedSyntax("member access property") [token=Some(BraceClose)] around loc [117:118]
+
+2. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classAbstractKeyword/classAbstractManyKeywords.ts (2.672078ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(KeywordDefault)] around loc [64:71]
+
+3. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendingPrimitive.ts (2.392812ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [181:186]
+
+4. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendingPrimitive2.ts (2.182413ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(KeywordClass)] around loc [66:71]
+
+5. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendsEveryObjectType.ts (2.581793ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [100:101]
+
+6. tests/TypeScript/tests/cases/conformance/classes/classDeclarations/classHeritageSpecification/classExtendsEveryObjectType2.ts (2.474151ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [30:31]
+
+7. tests/TypeScript/tests/cases/conformance/classes/indexMemberDeclarations/privateIndexer2.ts (3.004194ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(BracketOpen)] around loc [58:59]
+
+8. tests/TypeScript/tests/cases/conformance/classes/members/accessibility/privateInstanceMemberAccessibility.ts (2.443998ms)
+   Error: ExpectedSyntax("keyword or identifier") [token=Some(Dot)] around loc [206:207]
+
+9. tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameHashCharName.ts (2.154593ms)
+   Error: ExpectedSyntax("keyword or identifier") [token=Some(Invalid)] around loc [39:40]
+
+10. tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNameInInExpressionTransform.ts (1.679742ms)
+   Error: InvalidAssigmentTarget [token=None] around loc [1076:1081]
+
+11. tests/TypeScript/tests/cases/conformance/classes/members/privateNames/privateNamesIncompatibleModifiers.ts (1.945637ms)
+   Error: RequiredTokenNotFound(BraceOpen) [token=Some(KeywordAsync)] around loc [531:536]
+
+12. tests/TypeScript/tests/cases/conformance/classes/propertyMemberDeclarations/canFollowGetSetKeyword.ts (1.564844ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(Asterisk)] around loc [127:128]
+
+13. tests/TypeScript/tests/cases/conformance/controlFlow/assertionTypePredicates1.ts (2.637542ms)
+   Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(KeywordIs)] around loc [3851:3853]
+
+14. tests/TypeScript/tests/cases/conformance/controlFlow/definiteAssignmentAssertionsWithObjectShortHand.ts (1.920338ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(Question)] around loc [123:124]
+
+15. tests/TypeScript/tests/cases/conformance/controlFlow/dependentDestructuredVariables.ts (29.568199ms)
+   Error: ExpectedSyntax("type expression") [token=Some(KeywordType)] around loc [5582:5586]
+
+16. tests/TypeScript/tests/cases/conformance/decorators/class/method/decoratorOnClassMethodOverload1.ts (2.686572ms)
+   Error: RequiredTokenNotFound(BraceOpen) [token=Some(Identifier)] around loc [213:219]
+
+17. tests/TypeScript/tests/cases/conformance/decorators/class/method/decoratorOnClassMethodOverload2.ts (2.264814ms)
+   Error: RequiredTokenNotFound(BraceOpen) [token=Some(At)] around loc [204:205]
+
+18. tests/TypeScript/tests/cases/conformance/decorators/class/method/parameter/decoratorOnClassMethodParameter3.ts (2.825445ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(Identifier)] around loc [231:236]
+
+19. tests/TypeScript/tests/cases/conformance/decorators/decoratorMetadata-jsdoc.ts (2.275023ms)
+   Error: ExpectedSyntax("keyword or identifier") [token=Some(Question)] around loc [180:181]
+
+20. tests/TypeScript/tests/cases/conformance/decorators/invalid/decoratorOnArrowFunction.ts (2.831394ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(At)] around loc [48:49]
+
+21. tests/TypeScript/tests/cases/conformance/decorators/invalid/decoratorOnEnum2.ts (3.411416ms)
+   Error: ExpectedSyntax("identifier") [token=Some(At)] around loc [53:54]
+
+22. tests/TypeScript/tests/cases/conformance/decorators/invalid/decoratorOnFunctionExpression.ts (3.280118ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(At)] around loc [48:49]
+
+23. tests/TypeScript/tests/cases/conformance/dynamicImport/importCallExpressionGrammarError.ts (2.011136ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(DotDotDot)] around loc [170:173]
+
+24. tests/TypeScript/tests/cases/conformance/enums/enumErrors.ts (2.983722ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(Semicolon)] around loc [843:844]
+
+25. tests/TypeScript/tests/cases/conformance/es2019/importMeta/importMetaNarrowing.ts (1.651198ms)
+   Error: RequiredTokenNotFound(LiteralString) [token=Some(Dot)] around loc [143:144]
+
+26. tests/TypeScript/tests/cases/conformance/es6/arrowFunction/disallowLineTerminatorBeforeArrow.ts (2.425211ms)
+   Error: LineTerminatorAfterArrowFunctionParameters [token=Some(EqualsChevronRight)] around loc [17:19]
+
+27. tests/TypeScript/tests/cases/conformance/es6/classDeclaration/emitClassDeclarationWithTypeArgumentAndOverloadInES6.ts (2.268271ms)
+   Error: RequiredTokenNotFound(BraceOpen) [token=Some(Identifier)] around loc [172:175]
+
+28. tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringObjectBindingPatternAndAssignment3.ts (4.557476ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(Question)] around loc [27:28]
+
+29. tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringParameterDeclaration1ES5.ts (2.633067ms)
+   Error: ExpectedSyntax("type expression") [token=Some(Comma)] around loc [1116:1117]
+
+30. tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringParameterDeclaration1ES5iterable.ts (2.948315ms)
+   Error: ExpectedSyntax("type expression") [token=Some(Comma)] around loc [1146:1147]
+
+31. tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringParameterDeclaration1ES6.ts (3.45086ms)
+   Error: ExpectedSyntax("type expression") [token=Some(Comma)] around loc [1170:1171]
+
+32. tests/TypeScript/tests/cases/conformance/es6/destructuring/destructuringParameterDeclaration2.ts (3.006923ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(ParenthesisClose)] around loc [403:404]
+
+33. tests/TypeScript/tests/cases/conformance/es6/functionPropertyAssignments/FunctionPropertyAssignments4_es6.ts (3.727148ms)
+   Error: ExpectedNotFound [token=None] around loc [28:30]
+
+34. tests/TypeScript/tests/cases/conformance/es6/functionPropertyAssignments/FunctionPropertyAssignments6_es6.ts (1.710034ms)
+   Error: ExpectedNotFound [token=None] around loc [28:31]
+
+35. tests/TypeScript/tests/cases/conformance/es6/shorthandPropertyAssignment/objectLiteralShorthandPropertiesErrorFromNotUsingIdentifier.ts (2.169296ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(Dot)] around loc [156:157]
+
+36. tests/TypeScript/tests/cases/conformance/es6/shorthandPropertyAssignment/objectLiteralShorthandPropertiesErrorWithModule.ts (2.530626ms)
+   Error: RequiredTokenNotFound(BraceClose) [token=Some(Dot)] around loc [139:140]
+
+37. tests/TypeScript/tests/cases/conformance/es6/spread/arraySpreadInCall.ts (2.445529ms)
+   Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(ChevronLeft)] around loc [746:747]
+
+38. tests/TypeScript/tests/cases/conformance/es6/templates/TemplateExpression1.ts (3.367537ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(EOF)] around loc [18:18]
+
+39. tests/TypeScript/tests/cases/conformance/es6/templates/templateStringInModuleName.ts (2.636742ms)
+   Error: ExpectedSyntax("identifier") [token=Some(LiteralTemplatePartStringEnd)] around loc [18:22]
+
+40. tests/TypeScript/tests/cases/conformance/es6/templates/templateStringInModuleNameES6.ts (2.000022ms)
+   Error: ExpectedSyntax("identifier") [token=Some(LiteralTemplatePartStringEnd)] around loc [35:39]
+
+41. tests/TypeScript/tests/cases/conformance/es6/templates/templateStringWithEmbeddedYieldKeyword.ts (2.794395ms)
+   Error: RequiredTokenNotFound(ParenthesisOpen) [token=Some(BraceOpen)] around loc [17:18]
+
+42. tests/TypeScript/tests/cases/conformance/es6/variableDeclarations/VariableDeclaration13_es6.ts (2.315298ms)
+   Error: ExpectedSyntax("pattern") [token=Some(LiteralNumber)] around loc [241:242]
+
+43. tests/TypeScript/tests/cases/conformance/es7/exponentiationOperator/compoundExponentiationAssignmentLHSIsValue.ts (2.090937ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(AsteriskAsteriskEquals)] around loc [631:634]
+
+44. tests/TypeScript/tests/cases/conformance/es7/exponentiationOperator/emitExponentiationOperator4.ts (4.153657ms)
+   Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(EOF)] around loc [702:702]
+
+45. tests/TypeScript/tests/cases/conformance/esDecorators/classDeclaration/esDecorators-classDeclaration-parameterDecorators.ts (3.134419ms)
+   Error: ExpectedSyntax("pattern") [token=Some(At)] around loc [204:205]
+
+46. tests/TypeScript/tests/cases/conformance/esDecorators/classDeclaration/fields/esDecorators-classDeclaration-fields-nonStaticPrivate.ts (1.895713ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(PrivateMember)] around loc [137:144]
+
+47. tests/TypeScript/tests/cases/conformance/esDecorators/classDeclaration/methods/esDecorators-classDeclaration-methods-nonStaticPrivate.ts (2.746671ms)
+   Error: ExpectedSyntax("expression operator") [token=Some(PrivateMember)] around loc [137:145]
+
+48. tests/TypeScript/tests/cases/conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.2.ts (3.124161ms)
+   Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(At)] around loc [240:241]
+
+49. tests/TypeScript/tests/cases/conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.4.ts (2.343648ms)
+   Error: ExpectedSyntax("expression operand") [token=Some(At)] around loc [224:225]
+
+50. tests/TypeScript/tests/cases/conformance/esDecorators/classExpression/namedEvaluation/esDecorators-classExpression-namedEvaluation.5.ts (2.057543ms)
+   Error: RequiredTokenNotFound(ParenthesisClose) [token=Some(At)] around loc [246:247]
+
+📝 Detailed failure report written to: typescript_conformance_failures.txt
+
+
