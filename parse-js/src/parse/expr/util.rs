@@ -1,6 +1,24 @@
-use crate::{ast::{class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey, ClassOrObjVal, ObjMember, ObjMemberType}, expr::{BinaryExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr}, expr::lit::{LitArrElem, LitArrExpr, LitObjExpr}, node::Node, expr::pat::{ArrPat, ArrPatElem, IdPat, ObjPat, ObjPatProp, Pat}}, error::{SyntaxErrorType, SyntaxResult}, operator::OperatorName, token::TT};
-
-
+use crate::ast::class_or_object::ClassOrObjKey;
+use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
+use crate::ast::class_or_object::ClassOrObjVal;
+use crate::ast::class_or_object::ObjMember;
+use crate::ast::class_or_object::ObjMemberType;
+use crate::ast::expr::lit::LitArrElem;
+use crate::ast::expr::lit::LitArrExpr;
+use crate::ast::expr::lit::LitObjExpr;
+use crate::ast::expr::pat::ArrPat;
+use crate::ast::expr::pat::ArrPatElem;
+use crate::ast::expr::pat::IdPat;
+use crate::ast::expr::pat::ObjPat;
+use crate::ast::expr::pat::ObjPatProp;
+use crate::ast::expr::pat::Pat;
+use crate::ast::expr::BinaryExpr;
+use crate::ast::expr::Expr;
+use crate::ast::node::Node;
+use crate::error::SyntaxErrorType;
+use crate::error::SyntaxResult;
+use crate::operator::OperatorName;
+use crate::token::TT;
 
 /// Converts a literal expression subtree into a pattern (assignment target).
 /// `{ a: [b] }` could be an object literal or object pattern. This function is useful for when a pattern was misinterpreted as a literal expression, without needing to rewind and reparse.
@@ -55,10 +73,13 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
           LitArrElem::Empty => pat_elements.push(None),
         };
       }
-      Ok(Node::new(loc, ArrPat {
-        elements: pat_elements,
-        rest,
-      }).into_wrapped())
+      Ok(
+        Node::new(loc, ArrPat {
+          elements: pat_elements,
+          rest,
+        })
+        .into_wrapped(),
+      )
     }
     Expr::LitObj(n) => {
       let LitObjExpr { members } = *n.stx;
@@ -83,15 +104,9 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
                     if operator != OperatorName::Assignment {
                       return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None));
                     };
-                    (
-                      lit_to_pat(left)?,
-                      Some(right),
-                    )
+                    (lit_to_pat(left)?, Some(right))
                   }
-                  _ => (
-                    lit_to_pat(initializer)?,
-                    None,
-                  ),
+                  _ => (lit_to_pat(initializer)?, None),
                 },
                 _ => return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
               };
@@ -104,12 +119,15 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
             }
             ObjMemberType::Shorthand { id } => {
               properties.push(Node::new(loc, ObjPatProp {
-                key: ClassOrObjKey::Direct(
-                  id.derive_stx(|id| ClassOrObjMemberDirectKey { key: id.name.clone(), tt: TT::Identifier }),
-                ),
-                target: id.derive_stx(|id| IdPat {
-                  name: id.name.clone(),
-                }).into_wrapped(),
+                key: ClassOrObjKey::Direct(id.derive_stx(|id| ClassOrObjMemberDirectKey {
+                  key: id.name.clone(),
+                  tt: TT::Identifier,
+                })),
+                target: id
+                  .derive_stx(|id| IdPat {
+                    name: id.name.clone(),
+                  })
+                  .into_wrapped(),
                 default_value: None,
                 shorthand: true,
               }));
@@ -121,31 +139,26 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
               rest = Some(lit_to_pat(value)?);
             }
           },
-          _ => unreachable!(),
         };
       }
       Ok(Node::new(loc, ObjPat { properties, rest }).into_wrapped())
     }
-    Expr::Id(n) => {
-      Ok(Node::new(loc, IdPat { name: n.stx.name.clone() }).into_wrapped())
-    }
+    Expr::Id(n) => Ok(
+      Node::new(loc, IdPat {
+        name: n.stx.name.clone(),
+      })
+      .into_wrapped(),
+    ),
     // It's possible to encounter patterns already parsed e.g. `{a: [b] = 1}`, where `[b]` was already converted to a pattern.
-    Expr::IdPat(n) => {
-      Ok(n.into_wrapped())
-    }
-    Expr::ArrPat(n) => {
-      Ok(n.into_wrapped())
-    }
-    Expr::ObjPat(n) => {
-      Ok(n.into_wrapped())
-    }
+    Expr::IdPat(n) => Ok(n.into_wrapped()),
+    Expr::ArrPat(n) => Ok(n.into_wrapped()),
+    Expr::ObjPat(n) => Ok(n.into_wrapped()),
     // TypeScript: For any other expression type, wrap it as an assignment target for error recovery
     // This allows destructuring with call expressions, unary operators, etc.
     // The type checker will validate these patterns semantically.
     _ => Ok(Node::new(loc, Pat::AssignTarget(node))),
   }
 }
-
 
 // Trying to check if every object, array, or identifier expression operand is actually an assignment target first is too expensive and wasteful, so simply retroactively transform the LHS of a BinaryExpr with Assignment* operator into a target, raising an error if it can't (and is an invalid assignment target). A valid target is:
 // - A chain of non-optional-chaining member, computed member, and call operators, not ending in a call.
@@ -156,12 +169,8 @@ pub fn lhs_expr_to_assign_target(
   operator_name: OperatorName,
 ) -> SyntaxResult<Node<Expr>> {
   match lhs.stx.as_ref() {
-    e @ (Expr::LitArr(_)
-    | Expr::LitObj(_)
-    | Expr::Id(_)) => {
-      if operator_name != OperatorName::Assignment
-        && !matches!(e, Expr::Id(_))
-      {
+    e @ (Expr::LitArr(_) | Expr::LitObj(_) | Expr::Id(_)) => {
+      if operator_name != OperatorName::Assignment && !matches!(e, Expr::Id(_)) {
         return Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget));
       }
       // We must transform into a pattern.
@@ -171,29 +180,28 @@ pub fn lhs_expr_to_assign_target(
     // TypeScript: Accept member/computed member expressions for error recovery, even with optional chaining
     // Patterns like `obj?.a = 1` are syntactically parseable but semantically invalid
     // The type checker will validate these
-    Expr::ComputedMember(_) => {
-      Ok(lhs)
-    }
-    Expr::Member(_) => {
-      Ok(lhs)
-    }
+    Expr::ComputedMember(_) => Ok(lhs),
+    Expr::Member(_) => Ok(lhs),
     // TypeScript: Accept call expressions, unary expressions, and postfix expressions for error recovery
     // This allows patterns like `foo() = bar`, `++x = 5`, `x++ = 5`, `++x++`, etc.
     // The type checker will reject these, but the parser accepts them.
-    Expr::Call(_) | Expr::Unary(_) | Expr::UnaryPostfix(_) => {
-      Ok(lhs)
-    }
+    Expr::Call(_) | Expr::Unary(_) | Expr::UnaryPostfix(_) => Ok(lhs),
     // TypeScript: Accept literal expressions for error recovery
     // This allows patterns like `1 >>= 2`, `"str" = value`, etc.
     // The type checker will reject these, but the parser accepts them.
-    Expr::LitNum(_) | Expr::LitStr(_) | Expr::LitBool(_) | Expr::LitNull(_) | Expr::LitBigInt(_) | Expr::LitRegex(_) => {
-      Ok(lhs)
-    }
+    Expr::LitNum(_)
+    | Expr::LitStr(_)
+    | Expr::LitBool(_)
+    | Expr::LitNull(_)
+    | Expr::LitBigInt(_)
+    | Expr::LitRegex(_) => Ok(lhs),
     // TypeScript: Accept this, super, type assertions, and other TypeScript expressions for error recovery
     // This allows patterns like `this *= value`, `super = value`, `(expr as T) = value`, `expr! = value`
-    Expr::This(_) | Expr::Super(_) | Expr::TypeAssertion(_) | Expr::NonNullAssertion(_) | Expr::SatisfiesExpr(_) => {
-      Ok(lhs)
-    }
+    Expr::This(_)
+    | Expr::Super(_)
+    | Expr::TypeAssertion(_)
+    | Expr::NonNullAssertion(_)
+    | Expr::SatisfiesExpr(_) => Ok(lhs),
     _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),
   }
 }

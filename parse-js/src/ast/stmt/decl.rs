@@ -1,8 +1,15 @@
-use derive_visitor::{Drive, DriveMut};
-use serde::{Deserialize, Serialize};
-
-use crate::ast::{class_or_object::ClassMember, expr::{pat::{ClassOrFuncName, Pat}, Decorator, Expr}, func::Func, node::Node, type_expr::{TypeExpr, TypeParameter}};
-
+use crate::ast::class_or_object::ClassMember;
+use crate::ast::expr::pat::ClassOrFuncName;
+use crate::ast::expr::pat::Pat;
+use crate::ast::expr::Decorator;
+use crate::ast::expr::Expr;
+use crate::ast::func::Func;
+use crate::ast::node::Node;
+use crate::ast::type_expr::TypeExpr;
+use crate::ast::type_expr::TypeParameter;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use serde::Serialize;
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ClassDecl {
@@ -18,8 +25,8 @@ pub struct ClassDecl {
   pub name: Option<Node<ClassOrFuncName>>, // Name can only be omitted in a default export, although a default export class can still have a name.
   pub type_parameters: Option<Vec<Node<TypeParameter>>>,
   pub extends: Option<Node<Expr>>,
-  pub implements: Vec<Node<Expr>>,  // Changed from TypeExpr to Expr to support optional chaining (A?.B)
-  pub members: Vec<Node<ClassMember>>
+  pub implements: Vec<Node<Expr>>, // Changed from TypeExpr to Expr to support optional chaining (A?.B)
+  pub members: Vec<Node<ClassMember>>,
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -76,7 +83,6 @@ pub struct VarDeclarator {
   pub type_annotation: Option<Node<TypeExpr>>,
   pub initializer: Option<Node<Expr>>,
 }
-
 
 #[derive(Eq, PartialEq, Clone, Copy, Debug, Serialize, Drive, DriveMut)]
 pub enum VarDeclMode {

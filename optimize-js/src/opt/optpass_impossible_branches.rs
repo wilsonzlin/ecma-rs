@@ -1,22 +1,18 @@
-use ahash::HashMap;
-use ahash::HashSet;
-use ahash::HashSetExt;
-use itertools::Itertools;
-
 use crate::cfg::cfg::Cfg;
 use crate::eval::consteval::coerce_to_bool;
 use crate::il::inst::Arg;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
+use ahash::HashMap;
+use ahash::HashSet;
+use ahash::HashSetExt;
+use itertools::Itertools;
 
 // Correctness:
 // - When we detach bblocks A and B (because A can never branch to B in reality e.g. const eval is always true/false), we move all bblocks in subgraph G, which contains all bblocks only reachable from B.
 // - We must then detach all bblocks within G i.e. remove all edges to bblocks outside of G. This isn't recursive, as the bblocks only reachable from B doesn't change as we remove these bblocks or their edges.
 // - We must clean up any usages of defs within G outside of G. Outside of G, these uses can only appear in Phi nodes.
-pub fn optpass_impossible_branches(
-  changed: &mut bool,
-  cfg: &mut Cfg,
-) {
+pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
   loop {
     for label in cfg.graph.labels().collect_vec() {
       let Some(inst) = cfg.bblocks.get_mut(label).last_mut() else {

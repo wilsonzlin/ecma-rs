@@ -1,10 +1,18 @@
-use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
+use crate::graph::Graph;
+use crate::graph::GraphRelatedNodesIter;
+use crate::il::inst::Inst;
+use crate::il::inst::InstTyp;
+use crate::il::s2i::DUMMY_LABEL;
+use ahash::HashMap;
+use ahash::HashMapExt;
+use ahash::HashSet;
+use ahash::HashSetExt;
 use itertools::Itertools;
 use serde::Serialize;
-
-use std::{collections::VecDeque, iter, ops::{Deref, DerefMut}};
-
-use crate::{graph::{Graph, GraphRelatedNodesIter}, il::{inst::{Inst, InstTyp}, s2i::DUMMY_LABEL}};
+use std::collections::VecDeque;
+use std::iter;
+use std::ops::Deref;
+use std::ops::DerefMut;
 
 /// Wrapper over a Graph<u32> that provides owned types and better method names,
 /// as well as domain-specific methods.
@@ -12,7 +20,7 @@ use crate::{graph::{Graph, GraphRelatedNodesIter}, il::{inst::{Inst, InstTyp}, s
 pub struct CfgGraph(Graph<u32>);
 
 impl CfgGraph {
-  pub fn labels(&self) -> impl Iterator<Item=u32> + '_ {
+  pub fn labels(&self) -> impl Iterator<Item = u32> + '_ {
     self.0.nodes().cloned()
   }
 
@@ -32,7 +40,7 @@ impl CfgGraph {
     self.0.disconnect(&parent, &child);
   }
 
-  pub fn delete_many(&mut self, bblocks: impl IntoIterator<Item=u32>) {
+  pub fn delete_many(&mut self, bblocks: impl IntoIterator<Item = u32>) {
     for bblock in bblocks {
       self.0.contract(&bblock);
     }
@@ -52,7 +60,7 @@ impl CfgGraph {
    * - When an empty bblock has no children.
    * - When an empty bblock has no children with Phi insts.
    */
-  pub fn find_unreachable(&self) -> impl Iterator<Item=u32> + '_ {
+  pub fn find_unreachable(&self) -> impl Iterator<Item = u32> + '_ {
     let mut seen = HashSet::from_iter([0]);
     let mut to_visit = VecDeque::from([0]);
     while let Some(n) = to_visit.pop_front() {
@@ -71,7 +79,10 @@ impl CfgGraph {
     let (postorder, label_to_postorder) = self.0.calculate_postorder(&entry);
     (
       postorder.into_iter().map(|&n| n).collect_vec(),
-      label_to_postorder.into_iter().map(|(&k, v)| (k, v)).collect::<HashMap<_, _>>(),
+      label_to_postorder
+        .into_iter()
+        .map(|(&k, v)| (k, v))
+        .collect::<HashMap<_, _>>(),
     )
   }
 
@@ -80,7 +91,10 @@ impl CfgGraph {
     let (postorder, label_to_postorder) = self.0.calculate_reversed_graph_postorder(&entry);
     (
       postorder.into_iter().map(|&n| n).collect_vec(),
-      label_to_postorder.into_iter().map(|(&k, v)| (k, v)).collect::<HashMap<_, _>>(),
+      label_to_postorder
+        .into_iter()
+        .map(|(&k, v)| (k, v))
+        .collect::<HashMap<_, _>>(),
     )
   }
 }
@@ -107,15 +121,15 @@ impl CfgBBlocks {
     self.0.remove(&label).unwrap()
   }
 
-  pub fn remove_many(&mut self, labels: impl IntoIterator<Item=u32>) -> Vec<Vec<Inst>> {
+  pub fn remove_many(&mut self, labels: impl IntoIterator<Item = u32>) -> Vec<Vec<Inst>> {
     labels.into_iter().map(|label| self.remove(label)).collect()
   }
 
-  pub fn all(&self) -> impl Iterator<Item=(u32, &Vec<Inst>)> {
+  pub fn all(&self) -> impl Iterator<Item = (u32, &Vec<Inst>)> {
     self.0.iter().map(|(k, v)| (*k, v))
   }
 
-  pub fn all_mut(&mut self) -> impl Iterator<Item=(u32, &mut Vec<Inst>)> {
+  pub fn all_mut(&mut self) -> impl Iterator<Item = (u32, &mut Vec<Inst>)> {
     self.0.iter_mut().map(|(k, v)| (*k, v))
   }
 }
@@ -156,12 +170,22 @@ impl Cfg {
     let mut graph = Graph::new();
     for i in 0..bblocks.len() {
       let parent = bblock_order[i];
-      if let Some(Inst { t: InstTyp::_Goto, labels, .. }) = bblocks[&parent].last() {
+      if let Some(Inst {
+        t: InstTyp::_Goto,
+        labels,
+        ..
+      }) = bblocks[&parent].last()
+      {
         let label = labels[0];
         graph.connect(&parent, &label);
         // We don't want Goto insts after this point.
         bblocks.get_mut(&parent).unwrap().pop().unwrap();
-      } else if let Some(Inst { t: InstTyp::CondGoto, labels, .. }) = bblocks.get_mut(&parent).unwrap().last_mut() {
+      } else if let Some(Inst {
+        t: InstTyp::CondGoto,
+        labels,
+        ..
+      }) = bblocks.get_mut(&parent).unwrap().last_mut()
+      {
         for label in labels.iter_mut() {
           // We use DUMMY_LABEL during source_to_inst for one branch of a CondGoto to indicate fallthrough.
           // We must update the Inst label too.

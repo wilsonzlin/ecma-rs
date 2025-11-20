@@ -51,7 +51,7 @@ type VarDeclNode = Node<VarDecl>;
   ImportStmtNode,
   PatDeclNode,
   VarDeclNode,
-  NodeAssocData(enter),
+  NodeAssocData(enter)
 )]
 pub(crate) struct DeclVisitor {
   scope_stack: Vec<Scope>,
@@ -86,7 +86,9 @@ impl DeclVisitor {
   }
 
   fn new_scope(&mut self, new_scope_type: ScopeType) {
-    self.scope_stack.push(self.scope().create_child_scope(new_scope_type));
+    self
+      .scope_stack
+      .push(self.scope().create_child_scope(new_scope_type));
   }
 
   fn restore_scope(&mut self) {

@@ -71,7 +71,10 @@ impl PatternMatcher {
   pub fn new<D: AsRef<str>>(anchored: bool, patterns: Vec<(TT, D)>) -> Self {
     let (tts, syns): (Vec<_>, Vec<_>) = patterns.into_iter().unzip();
     // Convert string patterns to byte patterns for AhoCorasick
-    let byte_syns: Vec<Vec<u8>> = syns.iter().map(|s| s.as_ref().as_bytes().to_vec()).collect();
+    let byte_syns: Vec<Vec<u8>> = syns
+      .iter()
+      .map(|s| s.as_ref().as_bytes().to_vec())
+      .collect();
     let matcher = AhoCorasickBuilder::new()
       .start_kind(if anchored {
         StartKind::Anchored
@@ -92,15 +95,14 @@ impl PatternMatcher {
   pub fn find(&self, lexer: &Lexer) -> LexResult<(TT, Match)> {
     self
       .matcher
-      .find(Input::new(&lexer.source[lexer.next..]).anchored(if self.anchored {
-        Anchored::Yes
-      } else {
-        Anchored::No
-      }))
-      .map(|m| (
-        self.patterns[m.pattern().as_usize()],
-        Match(m.end()),
-      ))
+      .find(
+        Input::new(&lexer.source[lexer.next..]).anchored(if self.anchored {
+          Anchored::Yes
+        } else {
+          Anchored::No
+        }),
+      )
+      .map(|m| (self.patterns[m.pattern().as_usize()], Match(m.end())))
       .ok_or_else(|| LexNotFound)
   }
 }
@@ -148,9 +150,7 @@ impl<'a> Lexer<'a> {
   }
 
   fn peek(&self, n: usize) -> LexResult<char> {
-    self
-      .peek_or_eof(n)
-      .ok_or_else(|| LexNotFound)
+    self.peek_or_eof(n).ok_or_else(|| LexNotFound)
   }
 
   fn peek_or_eof(&self, n: usize) -> Option<char> {
@@ -219,13 +219,9 @@ impl<'a> Lexer<'a> {
 
   fn while_not_char(&self, a: char) -> Match {
     if a.is_ascii() {
-      Match(
-        memchr(a as u8, self.source[self.next..].as_bytes()).unwrap_or(self.remaining()),
-      )
+      Match(memchr(a as u8, self.source[self.next..].as_bytes()).unwrap_or(self.remaining()))
     } else {
-      Match(
-        self.source[self.next..].find(a).unwrap_or(self.remaining()),
-      )
+      Match(self.source[self.next..].find(a).unwrap_or(self.remaining()))
     }
   }
 
@@ -251,17 +247,20 @@ impl<'a> Lexer<'a> {
   fn while_not_3_chars(&self, a: char, b: char, c: char) -> Match {
     if a.is_ascii() && b.is_ascii() && c.is_ascii() {
       Match(
-        memchr3(a as u8, b as u8, c as u8, self.source[self.next..].as_bytes()).unwrap_or(self.remaining()),
+        memchr3(
+          a as u8,
+          b as u8,
+          c as u8,
+          self.source[self.next..].as_bytes(),
+        )
+        .unwrap_or(self.remaining()),
       )
     } else {
       let remaining = &self.source[self.next..];
       let pos_a = remaining.find(a);
       let pos_b = remaining.find(b);
       let pos_c = remaining.find(c);
-      let pos = [pos_a, pos_b, pos_c]
-        .iter()
-        .filter_map(|&p| p)
-        .min();
+      let pos = [pos_a, pos_b, pos_c].iter().filter_map(|&p| p).min();
       Match(pos.unwrap_or(self.remaining()))
     }
   }
@@ -298,7 +297,11 @@ impl<'a> Lexer<'a> {
     self.next += n;
   }
 
-  fn drive_fallible(&mut self, preceded_by_line_terminator: bool, f: impl FnOnce(&mut Self) -> LexResult<TT>) -> Token {
+  fn drive_fallible(
+    &mut self,
+    preceded_by_line_terminator: bool,
+    f: impl FnOnce(&mut Self) -> LexResult<TT>,
+  ) -> Token {
     let cp = self.checkpoint();
     let typ = f(self).unwrap_or(TT::Invalid);
     Token {
@@ -553,41 +556,38 @@ static ML_COMMENT: Lazy<PatternMatcher> = Lazy::new(|| {
 });
 
 static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
-  PatternMatcher::new::<&str>(
-    true,
-    vec![
-      (TT::LineTerminator, "\r"),
-      (TT::LineTerminator, "\n"),
-      (TT::LineTerminator, "\u{2028}"),  // Line Separator
-      (TT::LineTerminator, "\u{2029}"),  // Paragraph Separator
-      (TT::Whitespace, "\x09"),
-      (TT::Whitespace, "\x0b"),
-      (TT::Whitespace, "\x0c"),
-      (TT::Whitespace, "\x20"),
-      // Unicode whitespace
-      (TT::Whitespace, "\u{00A0}"),
-      (TT::Whitespace, "\u{1680}"),
-      (TT::Whitespace, "\u{2000}"),
-      (TT::Whitespace, "\u{2001}"),
-      (TT::Whitespace, "\u{2002}"),
-      (TT::Whitespace, "\u{2003}"),
-      (TT::Whitespace, "\u{2004}"),
-      (TT::Whitespace, "\u{2005}"),
-      (TT::Whitespace, "\u{2006}"),
-      (TT::Whitespace, "\u{2007}"),
-      (TT::Whitespace, "\u{2008}"),
-      (TT::Whitespace, "\u{2009}"),
-      (TT::Whitespace, "\u{200A}"),
-      (TT::Whitespace, "\u{202F}"),
-      (TT::Whitespace, "\u{205F}"),
-      (TT::Whitespace, "\u{3000}"),
-      (TT::Whitespace, "\u{FEFF}"),
-      (TT::CommentMultiline, "/*"),
-      (TT::CommentSingle, "//"),
-      (TT::CommentSingle, "<!--"),
-      (TT::CommentSingle, "-->"),
-    ],
-  )
+  PatternMatcher::new::<&str>(true, vec![
+    (TT::LineTerminator, "\r"),
+    (TT::LineTerminator, "\n"),
+    (TT::LineTerminator, "\u{2028}"), // Line Separator
+    (TT::LineTerminator, "\u{2029}"), // Paragraph Separator
+    (TT::Whitespace, "\x09"),
+    (TT::Whitespace, "\x0b"),
+    (TT::Whitespace, "\x0c"),
+    (TT::Whitespace, "\x20"),
+    // Unicode whitespace
+    (TT::Whitespace, "\u{00A0}"),
+    (TT::Whitespace, "\u{1680}"),
+    (TT::Whitespace, "\u{2000}"),
+    (TT::Whitespace, "\u{2001}"),
+    (TT::Whitespace, "\u{2002}"),
+    (TT::Whitespace, "\u{2003}"),
+    (TT::Whitespace, "\u{2004}"),
+    (TT::Whitespace, "\u{2005}"),
+    (TT::Whitespace, "\u{2006}"),
+    (TT::Whitespace, "\u{2007}"),
+    (TT::Whitespace, "\u{2008}"),
+    (TT::Whitespace, "\u{2009}"),
+    (TT::Whitespace, "\u{200A}"),
+    (TT::Whitespace, "\u{202F}"),
+    (TT::Whitespace, "\u{205F}"),
+    (TT::Whitespace, "\u{3000}"),
+    (TT::Whitespace, "\u{FEFF}"),
+    (TT::CommentMultiline, "/*"),
+    (TT::CommentSingle, "//"),
+    (TT::CommentSingle, "<!--"),
+    (TT::CommentSingle, "-->"),
+  ])
 });
 
 /// Returns whether the comment includes a line terminator.
@@ -610,7 +610,7 @@ fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
       }
       _ => unreachable!(),
     };
-  };
+  }
   contains_newline
 }
 
@@ -657,10 +657,7 @@ fn lex_unicode_escape(lexer: &mut Lexer<'_>) -> LexResult<()> {
   Ok(())
 }
 
-fn lex_identifier(
-  lexer: &mut Lexer<'_>,
-  mode: LexMode,
-) -> TT {
+fn lex_identifier(lexer: &mut Lexer<'_>, mode: LexMode) -> TT {
   // Consume starter (either a char or a Unicode escape)
   let starter = lexer.peek(0).unwrap();
   if starter == '\\' {
@@ -702,7 +699,8 @@ fn consume_digits_with_separators(lexer: &mut Lexer<'_>, digit_filter: &CharFilt
     lexer.consume(lexer.while_chars(digit_filter));
     // Check if next is underscore followed by a digit (numeric separator)
     if lexer.peek_or_eof(0) == Some('_')
-      && lexer.peek_or_eof(1).map_or(false, |c| digit_filter.has(c)) {
+      && lexer.peek_or_eof(1).map_or(false, |c| digit_filter.has(c))
+    {
       lexer.skip_expect(1); // consume _
     } else {
       break;
@@ -710,9 +708,7 @@ fn consume_digits_with_separators(lexer: &mut Lexer<'_>, digit_filter: &CharFilt
   }
 }
 
-fn lex_bigint_or_number(
-  lexer: &mut Lexer<'_>,
-) -> LexResult<TT> {
+fn lex_bigint_or_number(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   // TODO
   let start_pos = lexer.next();
   let first_char = lexer.peek(0)?;
@@ -733,7 +729,9 @@ fn lex_bigint_or_number(
   }
   // Allow underscore before exponent marker (88_e4 -> 88e4)
   if lexer.peek_or_eof(0) == Some('_')
-    && lexer.peek_or_eof(1).map_or(false, |c| matches!(c, 'e' | 'E'))
+    && lexer
+      .peek_or_eof(1)
+      .map_or(false, |c| matches!(c, 'e' | 'E'))
   {
     lexer.skip_expect(1); // consume _
   }
@@ -752,9 +750,7 @@ fn lex_bigint_or_number(
   Ok(TT::LiteralNumber)
 }
 
-fn lex_binary_bigint_or_number(
-  lexer: &mut Lexer<'_>,
-) -> TT {
+fn lex_binary_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   lexer.skip_expect(2);
   let start_pos = lexer.next();
   consume_digits_with_separators(lexer, &DIGIT_BIN);
@@ -780,9 +776,7 @@ fn lex_binary_bigint_or_number(
   }
 }
 
-fn lex_hex_bigint_or_number(
-  lexer: &mut Lexer<'_>,
-) -> TT {
+fn lex_hex_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   lexer.skip_expect(2);
   let start_pos = lexer.next();
   consume_digits_with_separators(lexer, &DIGIT_HEX);
@@ -803,9 +797,7 @@ fn lex_hex_bigint_or_number(
   }
 }
 
-fn lex_oct_bigint_or_number(
-  lexer: &mut Lexer<'_>,
-) -> TT {
+fn lex_oct_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   lexer.skip_expect(2);
   let start_pos = lexer.next();
   consume_digits_with_separators(lexer, &DIGIT_OCT);
@@ -831,9 +823,7 @@ fn lex_oct_bigint_or_number(
   }
 }
 
-fn lex_private_member(
-  lexer: &mut Lexer<'_>,
-) -> LexResult<TT> {
+fn lex_private_member(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   // Include the `#` in the token.
   lexer.skip_expect(1);
   let starter = lexer.peek(0)?;
@@ -956,9 +946,7 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
 }
 
 /// Ends with `${` or backtick.
-pub fn lex_template_string_continue(
-  lexer: &mut Lexer<'_>,
-) -> LexResult<TT> {
+pub fn lex_template_string_continue(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let mut ended = false;
   loop {
     lexer.consume(lexer.while_not_3_chars('\\', '`', '$'));
@@ -991,7 +979,7 @@ pub fn lex_template_string_continue(
       }
       _ => unreachable!(),
     };
-  };
+  }
   let typ = if ended {
     TT::LiteralTemplatePartStringEnd
   } else {
@@ -1061,7 +1049,7 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
       }
       _ => unreachable!(),
     };
-  };
+  }
 
   // EOF is different from Invalid, so we should emit this specifically instead of letting drive_fallible return an Invalid.
   if lexer.at_end() {

@@ -1,13 +1,13 @@
 use super::ParseCtx;
 use super::Parser;
+use crate::ast::func::Func;
+use crate::ast::node::Node;
 use crate::ast::stmt::decl::ClassDecl;
 use crate::ast::stmt::decl::FuncDecl;
 use crate::ast::stmt::decl::PatDecl;
 use crate::ast::stmt::decl::VarDecl;
 use crate::ast::stmt::decl::VarDeclMode;
 use crate::ast::stmt::decl::VarDeclarator;
-use crate::ast::func::Func;
-use crate::ast::node::Node;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::parse::expr::pat::ParsePatternRules;
@@ -91,12 +91,9 @@ impl<'a> Parser<'a> {
           VarDeclParseMode::Asi => Asi::can(),
           VarDeclParseMode::Leftmost => Asi::no(),
         };
-        let initializer = p.consume_if(TT::Equals)
-          .and_then(|| p.expr_with_asi(
-            ctx,
-            [TT::Semicolon, TT::Comma],
-            &mut asi,
-          ))?;
+        let initializer = p
+          .consume_if(TT::Equals)
+          .and_then(|| p.expr_with_asi(ctx, [TT::Semicolon, TT::Comma], &mut asi))?;
         declarators.push(VarDeclarator {
           pattern,
           definite_assignment,
@@ -109,7 +106,10 @@ impl<'a> Parser<'a> {
               break;
             }
             let t = p.peek();
-            if t.typ == TT::EOF || t.typ == TT::BraceClose || (t.preceded_by_line_terminator && t.typ != TT::Comma) {
+            if t.typ == TT::EOF
+              || t.typ == TT::BraceClose
+              || (t.preceded_by_line_terminator && t.typ != TT::Comma)
+            {
               break;
             };
             p.require(TT::Comma)?;
@@ -129,10 +129,7 @@ impl<'a> Parser<'a> {
     })
   }
 
-  pub fn func_decl(
-    &mut self,
-    ctx: ParseCtx,
-  ) -> SyntaxResult<Node<FuncDecl>> {
+  pub fn func_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<FuncDecl>> {
     self.with_loc(|p| {
       let export = p.consume_if(TT::KeywordExport).is_match();
       let export_default = export && p.consume_if(TT::KeywordDefault).is_match();
@@ -174,7 +171,7 @@ impl<'a> Parser<'a> {
           Some(p.parse_func_block_body(fn_ctx)?.into())
         } else {
           // Overload signature - consume semicolon or allow ASI
-          p.consume_if(TT::Semicolon);
+          let _ = p.consume_if(TT::Semicolon);
           None
         };
         Ok(Func {
@@ -196,18 +193,11 @@ impl<'a> Parser<'a> {
     })
   }
 
-  pub fn class_decl(
-    &mut self,
-    ctx: ParseCtx,
-  ) -> SyntaxResult<Node<ClassDecl>> {
+  pub fn class_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ClassDecl>> {
     self.class_decl_impl(ctx, false)
   }
 
-  pub fn class_decl_impl(
-    &mut self,
-    ctx: ParseCtx,
-    declare: bool,
-  ) -> SyntaxResult<Node<ClassDecl>> {
+  pub fn class_decl_impl(&mut self, ctx: ParseCtx, declare: bool) -> SyntaxResult<Node<ClassDecl>> {
     self.with_loc(|p| {
       // TypeScript: parse decorators before export/class
       let decorators = p.decorators(ctx)?;

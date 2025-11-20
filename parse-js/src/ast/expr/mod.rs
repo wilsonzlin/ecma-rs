@@ -1,18 +1,37 @@
-pub mod pat;
-pub mod lit;
 pub mod jsx;
+pub mod lit;
+pub mod pat;
 
-use derive_more::derive::{From, TryInto};
-use derive_visitor::{Drive, DriveMut};
-use jsx::{JsxElem, JsxExprContainer, JsxMemberExpr, JsxName, JsxSpreadAttr, JsxText};
-use lit::{LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitObjExpr, LitRegexExpr, LitStrExpr, LitTemplateExpr, LitTemplatePart};
-use pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat};
-use serde::{Deserialize, Serialize};
-
+use super::class_or_object::ClassMember;
+use super::func::Func;
+use super::node::Node;
+use super::type_expr::TypeExpr;
 use crate::operator::OperatorName;
-
-use super::{class_or_object::ClassMember, func::Func, node::Node, type_expr::TypeExpr};
-
+use derive_more::derive::From;
+use derive_more::derive::TryInto;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use jsx::JsxElem;
+use jsx::JsxExprContainer;
+use jsx::JsxMemberExpr;
+use jsx::JsxName;
+use jsx::JsxSpreadAttr;
+use jsx::JsxText;
+use lit::LitArrExpr;
+use lit::LitBigIntExpr;
+use lit::LitBoolExpr;
+use lit::LitNullExpr;
+use lit::LitNumExpr;
+use lit::LitObjExpr;
+use lit::LitRegexExpr;
+use lit::LitStrExpr;
+use lit::LitTemplateExpr;
+use lit::LitTemplatePart;
+use pat::ArrPat;
+use pat::ClassOrFuncName;
+use pat::IdPat;
+use pat::ObjPat;
+use serde::Serialize;
 
 // We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
 #[derive(Debug, Drive, DriveMut, From, Serialize, TryInto)]
@@ -66,7 +85,6 @@ pub enum Expr {
   SatisfiesExpr(Node<SatisfiesExpr>),
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct CallArg {
   #[drive(skip)]
@@ -79,7 +97,6 @@ pub struct ArrowFuncExpr {
   pub func: Node<Func>, // Always Function.
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct BinaryExpr {
   #[drive(skip)]
@@ -88,7 +105,6 @@ pub struct BinaryExpr {
   pub right: Node<Expr>,
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct CallExpr {
   #[drive(skip)]
@@ -96,7 +112,6 @@ pub struct CallExpr {
   pub callee: Node<Expr>,
   pub arguments: Vec<Node<CallArg>>,
 }
-
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ClassExpr {
@@ -108,14 +123,12 @@ pub struct ClassExpr {
   pub members: Vec<Node<ClassMember>>,
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct CondExpr {
   pub test: Node<Expr>,
   pub consequent: Node<Expr>,
   pub alternate: Node<Expr>,
 }
-
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ComputedMemberExpr {
@@ -125,13 +138,11 @@ pub struct ComputedMemberExpr {
   pub member: Node<Expr>,
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct FuncExpr {
   pub name: Option<Node<ClassOrFuncName>>,
   pub func: Node<Func>,
 }
-
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct IdExpr {
@@ -139,21 +150,17 @@ pub struct IdExpr {
   pub name: String,
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ImportExpr {
   pub module: Node<Expr>,
   pub attributes: Option<Node<Expr>>,
 }
 
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ImportMeta {}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-pub struct ImportMeta {
-}
-
-#[derive(Debug, Drive, DriveMut, Serialize)]
-pub struct NewTarget {
-}
+pub struct NewTarget {}
 
 // Dedicated special type to easily distinguish when analysing and minifying. Also done to avoid using IdentifierExpr as right, which is incorrect (not a variable usage).
 
@@ -166,17 +173,11 @@ pub struct MemberExpr {
   pub right: String,
 }
 
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct SuperExpr {}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-pub struct SuperExpr {
-
-}
-
-#[derive(Debug, Drive, DriveMut, Serialize)]
-pub struct ThisExpr {
-
-}
-
+pub struct ThisExpr {}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct TaggedTemplateExpr {
@@ -184,14 +185,12 @@ pub struct TaggedTemplateExpr {
   pub parts: Vec<LitTemplatePart>,
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct UnaryExpr {
   #[drive(skip)]
   pub operator: OperatorName,
   pub argument: Node<Expr>,
 }
-
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct UnaryPostfixExpr {
@@ -208,7 +207,7 @@ pub struct TypeAssertionExpr {
   pub expression: Box<Node<Expr>>,
   pub type_annotation: Option<Node<TypeExpr>>, // None for "as const"
   #[drive(skip)]
-  pub const_assertion: bool, // true for "as const"
+  pub const_assertion: bool,   // true for "as const"
 }
 
 /// Non-null assertion: value!

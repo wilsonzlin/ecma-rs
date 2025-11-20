@@ -1,23 +1,28 @@
-use ahash::{HashMap, HashSet};
+use ahash::HashMap;
+use ahash::HashSet;
 use croaring::Bitmap;
 use derive_visitor::Visitor;
-use parse_js::ast::{expr::{pat::IdPat, IdExpr}, func::Func, node::Node, stmt::{decl::PatDecl, BlockStmt, CatchBlock, ForBody}};
-use symbol_js::symbol::{Scope, Symbol};
-
+use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::IdExpr;
+use parse_js::ast::func::Func;
+use parse_js::ast::node::Node;
+use parse_js::ast::stmt::decl::PatDecl;
+use parse_js::ast::stmt::BlockStmt;
+use parse_js::ast::stmt::CatchBlock;
+use parse_js::ast::stmt::ForBody;
+use symbol_js::symbol::Scope;
+use symbol_js::symbol::Symbol;
 
 // Given some scope (likely function), we have the task of assigning a name to each variable declared in it.
 // We must not name a variable in such a way that we inadvertently shadow a variable in some ancestor scope that the current or any descendant scope uses.
 // Only foreign and unknown variables can be used across scopes, so we only need to consider these.
-
 
 type IdExprNode = Node<IdExpr>;
 type PatDeclNode = Node<PatDecl>;
 type IdPatNode = Node<IdPat>;
 
 #[derive(Visitor)]
-#[visitor(
-  IdExprNode(enter),
-)]
+#[visitor(IdExprNode(enter))]
 pub(crate) struct UsageVisitor {
   is_foreign: HashSet<Symbol>,
 }
@@ -35,27 +40,32 @@ impl UsageVisitor {
     let Some(sym) = scope.find_symbol(name.clone()) else {
       // Unknown.
       for ancestor in scope.self_and_ancestors() {
-        ancestor.data_mut().get_or_insert_assoc::<ScopeUsages>().unknown.insert(name.clone());
-      };
+        ancestor
+          .data_mut()
+          .get_or_insert_assoc::<ScopeUsages>()
+          .unknown
+          .insert(name.clone());
+      }
       return;
     };
     if !self.is_foreign.contains(&sym) {
       return;
     };
     for ancestor in scope.self_and_ancestors() {
-    if ancestor.data().get_symbol(name).is_some() {
+      if ancestor.data().get_symbol(name).is_some() {
         break;
       };
-      ancestor.data_mut().get_or_insert_assoc::<ScopeUsages>().foreign.insert(sym);
-    };
+      ancestor
+        .data_mut()
+        .get_or_insert_assoc::<ScopeUsages>()
+        .foreign
+        .insert(sym);
+    }
   }
 }
 
 #[derive(Visitor)]
-#[visitor(
-  PatDeclNode,
-  IdPatNode(enter),
-)]
+#[visitor(PatDeclNode, IdPatNode(enter))]
 pub(crate) struct NamingVisitor {
   is_foreign: HashSet<Symbol>,
   in_pat_decl_stack: Vec<bool>,
@@ -100,14 +110,24 @@ impl NamingVisitor {
     if !self.is_foreign.contains(&sym) {
       return;
     };
-    let name_id = scope.data_mut().get_or_insert_assoc::<ScopeFreeNames>().take_next_free_name_id();
+    let name_id = scope
+      .data_mut()
+      .get_or_insert_assoc::<ScopeFreeNames>()
+      .take_next_free_name_id();
     // TODO Optimization: skip subtree of a scope if it doesn't use the variable.
     for d in scope.descendants() {
-      if d.data().get_assoc::<ScopeUsages>().is_some_and(|u| u.foreign.contains(&sym)) {
+      if d
+        .data()
+        .get_assoc::<ScopeUsages>()
+        .is_some_and(|u| u.foreign.contains(&sym))
+      {
         // This descendant scope uses the variable, so it cannot name one of its declared variables the same.
-        d.data_mut().get_or_insert_assoc::<ScopeFreeNames>().free_name_ids.remove(name_id);
+        d.data_mut()
+          .get_or_insert_assoc::<ScopeFreeNames>()
+          .free_name_ids
+          .remove(name_id);
       };
-    };
+    }
     // TODO Generate name given name_id and unknown usages (disallowed names) in current scope.
   }
 }

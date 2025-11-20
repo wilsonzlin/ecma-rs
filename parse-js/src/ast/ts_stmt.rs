@@ -1,8 +1,11 @@
 use super::expr::Expr;
 use super::node::Node;
 use super::stmt::Stmt;
-use super::type_expr::{TypeExpr, TypeMember, TypeParameter};
-use derive_visitor::{Drive, DriveMut};
+use super::type_expr::TypeExpr;
+use super::type_expr::TypeMember;
+use super::type_expr::TypeParameter;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
 use serde::Serialize;
 
 /// Interface declaration: interface Foo<T> extends Bar { }

@@ -1,12 +1,11 @@
 pub mod decl;
 
-use decl::VarDeclParseMode;
-
 use super::expr::pat::is_valid_pattern_identifier;
 use super::expr::Asi;
 use super::ParseCtx;
 use super::Parser;
 use crate::ast::node::Node;
+use crate::ast::stmt::decl::PatDecl;
 use crate::ast::stmt::BlockStmt;
 use crate::ast::stmt::BreakStmt;
 use crate::ast::stmt::CatchBlock;
@@ -31,10 +30,10 @@ use crate::ast::stmt::ThrowStmt;
 use crate::ast::stmt::TryStmt;
 use crate::ast::stmt::WhileStmt;
 use crate::ast::stmt::WithStmt;
-use crate::ast::stmt::decl::PatDecl;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::token::TT;
+use decl::VarDeclParseMode;
 
 impl<'a> Parser<'a> {
   pub fn stmts(&mut self, ctx: ParseCtx, end: TT) -> SyntaxResult<Vec<Node<Stmt>>> {
@@ -42,7 +41,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
-    let [t0, t1, t2] = self.peek_n();
+    let [t0, t1, _t2] = self.peek_n();
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match t0.typ {
       TT::BraceOpen => self.block_stmt(ctx)?.into_wrapped(),
@@ -129,16 +128,40 @@ impl<'a> Parser<'a> {
 
     let t = self.peek().typ;
     match t {
-      TT::KeywordInterface => Ok(self.interface_decl(ctx, false, true)?.wrap(Stmt::InterfaceDecl)),
-      TT::KeywordType => Ok(self.type_alias_decl(ctx, false, true)?.wrap(Stmt::TypeAliasDecl)),
-      TT::KeywordEnum => Ok(self.enum_decl(ctx, false, true, false)?.wrap(Stmt::EnumDecl)),
+      TT::KeywordInterface => Ok(
+        self
+          .interface_decl(ctx, false, true)?
+          .wrap(Stmt::InterfaceDecl),
+      ),
+      TT::KeywordType => Ok(
+        self
+          .type_alias_decl(ctx, false, true)?
+          .wrap(Stmt::TypeAliasDecl),
+      ),
+      TT::KeywordEnum => Ok(
+        self
+          .enum_decl(ctx, false, true, false)?
+          .wrap(Stmt::EnumDecl),
+      ),
       TT::KeywordNamespace | TT::KeywordModule => self.namespace_or_module_decl(ctx, false, true),
-      TT::KeywordClass => Ok(self.class_decl_with_modifiers(ctx, false, true, false)?.wrap(Stmt::ClassDecl)),
-      TT::KeywordFunction => Ok(self.func_decl_with_modifiers(ctx, false, true)?.wrap(Stmt::FunctionDecl)),
+      TT::KeywordClass => Ok(
+        self
+          .class_decl_with_modifiers(ctx, false, true, false)?
+          .wrap(Stmt::ClassDecl),
+      ),
+      TT::KeywordFunction => Ok(
+        self
+          .func_decl_with_modifiers(ctx, false, true)?
+          .wrap(Stmt::FunctionDecl),
+      ),
       // Support declare async function
       TT::KeywordAsync if self.peek_n::<2>()[1].typ == TT::KeywordFunction => {
         self.consume(); // consume 'async'
-        Ok(self.func_decl_with_modifiers(ctx, false, true)?.wrap(Stmt::FunctionDecl))
+        Ok(
+          self
+            .func_decl_with_modifiers(ctx, false, true)?
+            .wrap(Stmt::FunctionDecl),
+        )
       }
       // Support declare const enum (must come before declare const)
       TT::KeywordConst if self.peek_n::<2>()[1].typ == TT::KeywordEnum => {
@@ -148,47 +171,94 @@ impl<'a> Parser<'a> {
       // Support declare abstract class
       TT::KeywordAbstract if self.peek_n::<2>()[1].typ == TT::KeywordClass => {
         self.consume(); // consume 'abstract'
-        Ok(self.class_decl_with_modifiers(ctx, false, true, true)?.wrap(Stmt::ClassDecl))
+        Ok(
+          self
+            .class_decl_with_modifiers(ctx, false, true, true)?
+            .wrap(Stmt::ClassDecl),
+        )
       }
       // TypeScript: declare var, declare const, declare let, declare using
-      TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordUsing => Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl)),
+      TT::KeywordVar | TT::KeywordConst | TT::KeywordLet | TT::KeywordUsing => Ok(
+        self
+          .var_decl(ctx, VarDeclParseMode::Asi)?
+          .wrap(Stmt::VarDecl),
+      ),
       // TypeScript: declare await using
       TT::KeywordAwait => {
         let [_, next] = self.peek_n::<2>();
         if next.typ == TT::KeywordUsing {
-          Ok(self.var_decl(ctx, VarDeclParseMode::Asi)?.wrap(Stmt::VarDecl))
+          Ok(
+            self
+              .var_decl(ctx, VarDeclParseMode::Asi)?
+              .wrap(Stmt::VarDecl),
+          )
         } else {
-          Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare")))
+          Err(
+            self
+              .peek()
+              .error(SyntaxErrorType::ExpectedSyntax("declaration after declare")),
+          )
         }
       }
-      _ => Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("declaration after declare"))),
+      _ => Err(
+        self
+          .peek()
+          .error(SyntaxErrorType::ExpectedSyntax("declaration after declare")),
+      ),
     }
   }
 
   /// Handle namespace or module declaration
-  fn namespace_or_module_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<Stmt>> {
+  fn namespace_or_module_decl(
+    &mut self,
+    ctx: ParseCtx,
+    export: bool,
+    declare: bool,
+  ) -> SyntaxResult<Node<Stmt>> {
     // Check if it's a string module (declare module "foo")
     if self.peek().typ == TT::KeywordModule && self.peek_n::<2>()[1].typ == TT::LiteralString {
-      Ok(self.module_decl(ctx, export, declare)?.wrap(Stmt::ModuleDecl))
+      Ok(
+        self
+          .module_decl(ctx, export, declare)?
+          .wrap(Stmt::ModuleDecl),
+      )
     } else {
-      Ok(self.namespace_decl(ctx, export, declare)?.wrap(Stmt::NamespaceDecl))
+      Ok(
+        self
+          .namespace_decl(ctx, export, declare)?
+          .wrap(Stmt::NamespaceDecl),
+      )
     }
   }
 
   /// Handle abstract class
-  fn abstract_class_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
+  fn abstract_class_decl(
+    &mut self,
+    ctx: ParseCtx,
+  ) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
     // Don't consume 'abstract' here - let class_decl_impl do it
     self.class_decl_with_modifiers(ctx, false, false, true)
   }
 
   /// Parse class declaration with TypeScript modifiers
-  fn class_decl_with_modifiers(&mut self, ctx: ParseCtx, _export: bool, declare: bool, _abstract_: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
+  fn class_decl_with_modifiers(
+    &mut self,
+    ctx: ParseCtx,
+    _export: bool,
+    declare: bool,
+    _abstract_: bool,
+  ) -> SyntaxResult<Node<crate::ast::stmt::decl::ClassDecl>> {
     // export and abstract are parsed inside class_decl_impl, so we only need to pass declare
     self.class_decl_impl(ctx, declare)
   }
 
   /// Parse function declaration with TypeScript modifiers
-  fn func_decl_with_modifiers(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<crate::ast::stmt::decl::FuncDecl>> {
+  fn func_decl_with_modifiers(
+    &mut self,
+    ctx: ParseCtx,
+    _export: bool,
+    _declare: bool,
+  ) -> SyntaxResult<Node<crate::ast::stmt::decl::FuncDecl>> {
     // Implementation will be added when we update func_decl
     self.func_decl(ctx)
   }
@@ -206,9 +276,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn empty_stmt(&mut self) -> SyntaxResult<Node<EmptyStmt>> {
-    self.with_loc(|p| {
-      p.require(TT::Semicolon).map(|_| EmptyStmt {})
-    })
+    self.with_loc(|p| p.require(TT::Semicolon).map(|_| EmptyStmt {}))
   }
 
   pub fn block_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<BlockStmt>> {
@@ -220,24 +288,20 @@ impl<'a> Parser<'a> {
     })
   }
 
-  fn break_or_continue_label(
-    &mut self,
-    ctx: ParseCtx,
-  ) -> SyntaxResult<Option<String>> {
+  fn break_or_continue_label(&mut self, ctx: ParseCtx) -> SyntaxResult<Option<String>> {
     let t = self.peek();
-    let label =
-      if is_valid_pattern_identifier(t.typ, ctx.rules) && !t.preceded_by_line_terminator {
-        // Label.
-        Some(self.consume_as_string())
-      } else if t.typ == TT::Semicolon {
-        self.consume();
-        None
-      } else if t.preceded_by_line_terminator || t.typ == TT::BraceClose {
-        // ASI.
-        None
-      } else {
-        return Err(t.error(SyntaxErrorType::ExpectedSyntax("label")));
-      };
+    let label = if is_valid_pattern_identifier(t.typ, ctx.rules) && !t.preceded_by_line_terminator {
+      // Label.
+      Some(self.consume_as_string())
+    } else if t.typ == TT::Semicolon {
+      self.consume();
+      None
+    } else if t.preceded_by_line_terminator || t.typ == TT::BraceClose {
+      // ASI.
+      None
+    } else {
+      return Err(t.error(SyntaxErrorType::ExpectedSyntax("label")));
+    };
     Ok(label)
   }
 
@@ -258,9 +322,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn debugger_stmt(&mut self) -> SyntaxResult<Node<DebuggerStmt>> {
-    self.with_loc(|p| {
-      p.require(TT::KeywordDebugger).map(|_| DebuggerStmt {})
-    })
+    self.with_loc(|p| p.require(TT::KeywordDebugger).map(|_| DebuggerStmt {}))
   }
 
   // WARNING: Do not reuse this functions for other statements, as this will output a statement node, not an expression, which can lead to double semicolons that cause invalid code when outputting.
@@ -272,24 +334,28 @@ impl<'a> Parser<'a> {
         // TypeScript: Allow TypeScript keywords to trigger ASI
         // This makes expressions like "abstract interface" parse as two statements
         let next = p.peek().typ;
-        if matches!(next,
-          TT::KeywordClass | TT::KeywordInterface | TT::KeywordEnum |
-          TT::KeywordNamespace | TT::KeywordModule | TT::KeywordType |
-          TT::KeywordDeclare | TT::KeywordAbstract)
-        {
+        if matches!(
+          next,
+          TT::KeywordClass
+            | TT::KeywordInterface
+            | TT::KeywordEnum
+            | TT::KeywordNamespace
+            | TT::KeywordModule
+            | TT::KeywordType
+            | TT::KeywordDeclare
+            | TT::KeywordAbstract
+        ) {
           // ASI triggered by TypeScript keyword
         } else {
           p.require(TT::Semicolon)?;
         }
       };
-      Ok(ExprStmt {
-        expr,
-      })
+      Ok(ExprStmt { expr })
     })
   }
 
   fn for_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ForBody>> {
-     self.with_loc(|p| {
+    self.with_loc(|p| {
       if p.peek().typ == TT::BraceOpen {
         // Block.
         p.require(TT::BraceOpen)?;
@@ -298,7 +364,9 @@ impl<'a> Parser<'a> {
         Ok(ForBody { body })
       } else {
         // Single statement.
-        Ok(ForBody { body: vec![p.stmt(ctx)?] })
+        Ok(ForBody {
+          body: vec![p.stmt(ctx)?],
+        })
       }
     })
   }
@@ -310,28 +378,50 @@ impl<'a> Parser<'a> {
       let init = {
         let [t0, t1] = p.peek_n();
         match t0.typ {
-          TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => {
+            ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
+          }
           // `let` is contextual - only a declaration if followed by a pattern
-          TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          TT::KeywordLet
+            if t1.typ == TT::BraceOpen
+              || t1.typ == TT::BracketOpen
+              || is_valid_pattern_identifier(t1.typ, ctx.rules) =>
+          {
+            ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
+          }
           // TypeScript: await using in for loop
-          TT::KeywordAwait if t1.typ == TT::KeywordUsing => ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?),
+          TT::KeywordAwait if t1.typ == TT::KeywordUsing => {
+            ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
+          }
           TT::Semicolon => ForTripleStmtInit::None,
           _ => ForTripleStmtInit::Expr(p.expr(ctx, [TT::Semicolon])?),
         }
       };
       p.require(TT::Semicolon)?;
-      let cond = (p.peek().typ != TT::Semicolon).then(|| p.expr(ctx, [TT::Semicolon])).transpose()?;
+      let cond = (p.peek().typ != TT::Semicolon)
+        .then(|| p.expr(ctx, [TT::Semicolon]))
+        .transpose()?;
       p.require(TT::Semicolon)?;
-      let post = (p.peek().typ != TT::ParenthesisClose).then(|| p.expr(ctx, [TT::ParenthesisClose])).transpose()?;
+      let post = (p.peek().typ != TT::ParenthesisClose)
+        .then(|| p.expr(ctx, [TT::ParenthesisClose]))
+        .transpose()?;
       p.require(TT::ParenthesisClose)?;
       let body = p.for_body(ctx)?;
-      Ok(ForTripleStmt { init, cond, post, body })
+      Ok(ForTripleStmt {
+        init,
+        cond,
+        post,
+        body,
+      })
     })
   }
 
   // Helper function to parse 'in' or 'of' as an identifier in for-in/for-of loops
   // This handles the special case where 'in' and 'of' are used as variable names
-  fn for_in_of_contextual_keyword_pattern(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<PatDecl>> {
+  fn for_in_of_contextual_keyword_pattern(
+    &mut self,
+    _ctx: ParseCtx,
+  ) -> SyntaxResult<Node<PatDecl>> {
     use crate::ast::expr::pat::IdPat;
     use crate::ast::expr::pat::Pat;
     self.with_loc(|p| {
@@ -383,37 +473,45 @@ impl<'a> Parser<'a> {
         (mode, pat)
       }),
       // `let` is contextual - only a declaration if followed by a pattern
-      TT::KeywordLet if t1.typ == TT::BraceOpen || t1.typ == TT::BracketOpen || is_valid_pattern_identifier(t1.typ, ctx.rules) || t1.typ == TT::KeywordIn || t1.typ == TT::KeywordOf => ForInOfLhs::Decl({
-        let mode = self.var_decl_mode()?;
-        // Special case: allow 'in' and 'of' as identifiers in for-in/for-of loops
-        let pat = if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
-          self.for_in_of_contextual_keyword_pattern(ctx)?
-        } else {
-          self.pat_decl(ctx)?
-        };
+      TT::KeywordLet
+        if t1.typ == TT::BraceOpen
+          || t1.typ == TT::BracketOpen
+          || is_valid_pattern_identifier(t1.typ, ctx.rules)
+          || t1.typ == TT::KeywordIn
+          || t1.typ == TT::KeywordOf =>
+      {
+        ForInOfLhs::Decl({
+          let mode = self.var_decl_mode()?;
+          // Special case: allow 'in' and 'of' as identifiers in for-in/for-of loops
+          let pat = if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+            self.for_in_of_contextual_keyword_pattern(ctx)?
+          } else {
+            self.pat_decl(ctx)?
+          };
 
-        // TypeScript: type annotation (parse and discard for error recovery)
-        if self.consume_if(TT::Colon).is_match() {
-          let _ = self.type_expr(ctx);
-        }
-
-        // Error recovery: consume excess declarations
-        while self.peek().typ == TT::Comma {
-          self.consume(); // consume comma
-
-          if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
-            break;
-          }
-
-          let _ = self.pat_decl(ctx);
-
+          // TypeScript: type annotation (parse and discard for error recovery)
           if self.consume_if(TT::Colon).is_match() {
             let _ = self.type_expr(ctx);
           }
-        }
 
-        (mode, pat)
-      }),
+          // Error recovery: consume excess declarations
+          while self.peek().typ == TT::Comma {
+            self.consume(); // consume comma
+
+            if self.peek().typ == TT::KeywordIn || self.peek().typ == TT::KeywordOf {
+              break;
+            }
+
+            let _ = self.pat_decl(ctx);
+
+            if self.consume_if(TT::Colon).is_match() {
+              let _ = self.type_expr(ctx);
+            }
+          }
+
+          (mode, pat)
+        })
+      }
       // TypeScript: await using in for-of loop
       TT::KeywordAwait if t1.typ == TT::KeywordUsing => ForInOfLhs::Decl({
         let mode = self.var_decl_mode()?;
@@ -490,7 +588,12 @@ impl<'a> Parser<'a> {
       let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.for_body(ctx)?;
-      Ok(ForOfStmt { await_, lhs, rhs, body })
+      Ok(ForOfStmt {
+        await_,
+        lhs,
+        rhs,
+        body,
+      })
     })
   }
 
@@ -545,7 +648,10 @@ impl<'a> Parser<'a> {
               Self::In
             } else if next == TT::KeywordOf {
               Self::Of
-            } else if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+            } else if next == TT::BraceOpen
+              || next == TT::BracketOpen
+              || is_valid_pattern_identifier(next, ctx.rules)
+            {
               p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
               match p.peek().typ {
                 TT::KeywordIn => Self::In,
@@ -559,7 +665,7 @@ impl<'a> Parser<'a> {
                   TT::KeywordIn => Self::In,
                   TT::KeywordOf => Self::Of,
                   _ => Self::Triple,
-                }
+                },
                 Err(_) => Self::Triple,
               }
             }
@@ -575,7 +681,10 @@ impl<'a> Parser<'a> {
               Self::In
             } else if next == TT::KeywordOf {
               Self::Of
-            } else if next == TT::BraceOpen || next == TT::BracketOpen || is_valid_pattern_identifier(next, ctx.rules) {
+            } else if next == TT::BraceOpen
+              || next == TT::BracketOpen
+              || is_valid_pattern_identifier(next, ctx.rules)
+            {
               // Looks like a variable declaration
               p.var_decl(ctx, VarDeclParseMode::Leftmost)?;
               match p.peek().typ {
@@ -590,7 +699,7 @@ impl<'a> Parser<'a> {
                   TT::KeywordIn => Self::In,
                   TT::KeywordOf => Self::Of,
                   _ => Self::Triple,
-                }
+                },
                 Err(_) => Self::Triple,
               }
             }
@@ -606,7 +715,7 @@ impl<'a> Parser<'a> {
                 TT::KeywordIn => Self::In,
                 TT::KeywordOf => Self::Of,
                 _ => Self::Triple,
-              }
+              },
               Err(_) => Self::Triple,
             }
           }
@@ -631,8 +740,7 @@ impl<'a> Parser<'a> {
       let test = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let consequent = p.stmt(ctx)?;
-      let alternate = p.consume_if(TT::KeywordElse)
-        .and_then(|| p.stmt(ctx))?;
+      let alternate = p.consume_if(TT::KeywordElse).and_then(|| p.stmt(ctx))?;
       Ok(IfStmt {
         test,
         consequent,
@@ -644,20 +752,19 @@ impl<'a> Parser<'a> {
   pub fn return_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ReturnStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordReturn)?;
-      let value =
-        if p.peek().preceded_by_line_terminator || p.peek().typ == TT::BraceClose {
-          // Automatic Semicolon Insertion.
-          None
-        } else if p.consume_if(TT::Semicolon).is_match() {
-          None
-        } else {
-          let mut asi = Asi::can();
-          let value = p.expr_with_asi(ctx, [TT::Semicolon], &mut asi)?;
-          if !asi.did_end_with_asi {
-            p.require(TT::Semicolon)?;
-          };
-          Some(value)
+      let value = if p.peek().preceded_by_line_terminator || p.peek().typ == TT::BraceClose {
+        // Automatic Semicolon Insertion.
+        None
+      } else if p.consume_if(TT::Semicolon).is_match() {
+        None
+      } else {
+        let mut asi = Asi::can();
+        let value = p.expr_with_asi(ctx, [TT::Semicolon], &mut asi)?;
+        if !asi.did_end_with_asi {
+          p.require(TT::Semicolon)?;
         };
+        Some(value)
+      };
       Ok(ReturnStmt { value })
     })
   }
@@ -674,9 +781,7 @@ impl<'a> Parser<'a> {
       if !asi.did_end_with_asi {
         p.require(TT::Semicolon)?;
       };
-      Ok(ThrowStmt {
-        value,
-      })
+      Ok(ThrowStmt { value })
     })
   }
 
@@ -684,31 +789,27 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       let start = p.require(TT::KeywordTry)?;
       let wrapped = p.block_stmt(ctx)?;
-      let catch = p.consume_if(TT::KeywordCatch)
-        .and_then(|| {
-          let parameter = p.consume_if(TT::ParenthesisOpen)
-            .and_then(|| {
-              let pattern = p.pat_decl(ctx)?;
-              // TypeScript: optional type annotation in catch clause
-              // e.g. `catch (e: any)` or `catch (e: unknown)`
-              if p.consume_if(TT::Colon).is_match() {
-                // Parse and discard the type annotation
-                p.type_expr(ctx)?;
-              }
-              p.require(TT::ParenthesisClose)?;
-              Ok(pattern)
-            })?;
-          p.with_loc(|p| {
-            p.require(TT::BraceOpen)?;
-            let body = p.stmts(ctx, TT::BraceClose)?;
-            p.require(TT::BraceClose)?;
-            Ok(CatchBlock {
-              parameter,
-              body,
-            })
-          })
+      let catch = p.consume_if(TT::KeywordCatch).and_then(|| {
+        let parameter = p.consume_if(TT::ParenthesisOpen).and_then(|| {
+          let pattern = p.pat_decl(ctx)?;
+          // TypeScript: optional type annotation in catch clause
+          // e.g. `catch (e: any)` or `catch (e: unknown)`
+          if p.consume_if(TT::Colon).is_match() {
+            // Parse and discard the type annotation
+            p.type_expr(ctx)?;
+          }
+          p.require(TT::ParenthesisClose)?;
+          Ok(pattern)
         })?;
-      let finally = p.consume_if(TT::KeywordFinally)
+        p.with_loc(|p| {
+          p.require(TT::BraceOpen)?;
+          let body = p.stmts(ctx, TT::BraceClose)?;
+          p.require(TT::BraceClose)?;
+          Ok(CatchBlock { parameter, body })
+        })
+      })?;
+      let finally = p
+        .consume_if(TT::KeywordFinally)
         .and_then(|| p.block_stmt(ctx))?;
       if catch.is_none() && finally.is_none() {
         return Err(start.error(SyntaxErrorType::TryStatementHasNoCatchOrFinally));
@@ -728,10 +829,7 @@ impl<'a> Parser<'a> {
       let condition = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.stmt(ctx)?;
-      Ok(WhileStmt {
-        condition,
-        body,
-      })
+      Ok(WhileStmt { condition, body })
     })
   }
 
@@ -742,10 +840,7 @@ impl<'a> Parser<'a> {
       let object = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
       let body = p.stmt(ctx)?;
-      Ok(WithStmt {
-        object,
-        body,
-      })
+      Ok(WithStmt { object, body })
     })
   }
 
@@ -754,15 +849,12 @@ impl<'a> Parser<'a> {
       p.require(TT::KeywordDo)?;
       let body = p.stmt(ctx)?;
       // Consume optional semicolon after body statement (ASI)
-      p.consume_if(TT::Semicolon);
+      let _ = p.consume_if(TT::Semicolon);
       p.require(TT::KeywordWhile)?;
       p.require(TT::ParenthesisOpen)?;
       let condition = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
-      Ok(DoWhileStmt {
-        condition,
-        body,
-      })
+      Ok(DoWhileStmt { condition, body })
     })
   }
 
@@ -782,18 +874,18 @@ impl<'a> Parser<'a> {
         };
         p.require(TT::Colon)?;
         let body = p.repeat_while(
-          |p| !matches!(p.peek().typ, TT::KeywordCase | TT::KeywordDefault | TT::BraceClose),
+          |p| {
+            !matches!(
+              p.peek().typ,
+              TT::KeywordCase | TT::KeywordDefault | TT::BraceClose
+            )
+          },
           |p| p.stmt(ctx),
         )?;
         Ok(SwitchBranch { case, body })
       })?;
       p.require(TT::BraceClose)?;
-      Ok(SwitchStmt {
-        test,
-        branches,
-      })
+      Ok(SwitchStmt { test, branches })
     })
   }
 }
-
-

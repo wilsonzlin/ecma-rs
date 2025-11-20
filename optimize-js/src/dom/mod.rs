@@ -1,7 +1,8 @@
-use ahash::{HashMap, HashMapExt, HashSet};
-use itertools::Itertools;
-
 use crate::cfg::cfg::Cfg;
+use ahash::HashMap;
+use ahash::HashMapExt;
+use ahash::HashSet;
+use itertools::Itertools;
 
 pub struct DominatesGraph(HashMap<u32, HashSet<u32>>);
 
@@ -83,7 +84,8 @@ impl<const POST: bool> Dom<POST> {
             cfg.graph.children(b)
           } else {
             cfg.graph.parents(b)
-          }.collect_vec();
+          }
+          .collect_vec();
           let Some(mut new_idom) = parents.iter().find(|n| idom_by.contains_key(n)).cloned() else {
             continue;
           };
@@ -171,14 +173,21 @@ impl<const POST: bool> Dom<POST> {
   }
 
   /// Yields the child nodes that are immediately dominated by the parent node.
-  pub fn immediately_dominated_by(&self, parent: u32) -> impl Iterator<Item=u32> + '_ {
-    self.domtree.get(&parent).map(|s| s.iter().cloned()).into_iter().flatten()
+  pub fn immediately_dominated_by(&self, parent: u32) -> impl Iterator<Item = u32> + '_ {
+    self
+      .domtree
+      .get(&parent)
+      .map(|s| s.iter().cloned())
+      .into_iter()
+      .flatten()
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use crate::{cfg::cfg::{Cfg, CfgGraph}, dom::Dom};
+  use crate::cfg::cfg::Cfg;
+  use crate::cfg::cfg::CfgGraph;
+  use crate::dom::Dom;
 
   /*
     ```mermaid

@@ -1,10 +1,10 @@
-use derive_more::derive::From;
-use derive_visitor::{Drive, DriveMut};
-use serde::{Deserialize, Serialize};
-
-use crate::ast::{class_or_object::ClassOrObjKey, node::Node};
-
 use super::Expr;
+use crate::ast::class_or_object::ClassOrObjKey;
+use crate::ast::node::Node;
+use derive_more::derive::From;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use serde::Serialize;
 
 // We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
 #[derive(Debug, Drive, DriveMut, From, Serialize)]

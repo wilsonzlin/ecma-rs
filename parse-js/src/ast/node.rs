@@ -1,11 +1,16 @@
-use std::any::{Any, TypeId};
-use ahash::HashMap;
-use derive_visitor::{Drive, DriveMut};
-use std::fmt::{Debug, Formatter};
-use std::fmt;
-use serde::{Deserialize, Serialize, Serializer};
-use crate::error::{SyntaxError, SyntaxErrorType};
+use crate::error::SyntaxError;
+use crate::error::SyntaxErrorType;
 use crate::loc::Loc;
+use ahash::HashMap;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use serde::Serialize;
+use serde::Serializer;
+use std::any::Any;
+use std::any::TypeId;
+use std::fmt::Debug;
+use std::fmt::Formatter;
+use std::fmt::{self};
 
 #[derive(Default, Drive, DriveMut)]
 pub struct NodeAssocData {
@@ -47,7 +52,7 @@ impl<S: Drive + DriveMut> Node<S> {
   /// Converts this Node's stx into a different type, keeping the same location and associated data.
   /// The current type must be convertable into the resulting type (i.e. `Into<T>`/`From<S>`).
   /// This is useful for converting S into a variant E::S(S) on an enum (e.g. `CallExpr => Expr::Call(CallExpr)`) where an E is wanted.
-  pub fn into_stx<T: From<S> +  Drive + DriveMut>(self) -> Node<T> {
+  pub fn into_stx<T: From<S> + Drive + DriveMut>(self) -> Node<T> {
     Node {
       loc: self.loc,
       stx: Box::new(T::from(*self.stx)),
@@ -66,7 +71,7 @@ impl<S: Drive + DriveMut> Node<S> {
 
   /// Moves Node<S> into Node<T { Node<S> }>. The wrapper will have the same location but no associated data.
   /// This is useful for converting Node<S> into a variant E::S(Node<S>) on an enum (e.g. `CallExpr => Expr::Call(Node<CallExpr>)`) where an E is wanted.
-  pub fn into_wrapped<T: From<Node<S>> +  Drive + DriveMut>(self) -> Node<T> {
+  pub fn into_wrapped<T: From<Node<S>> + Drive + DriveMut>(self) -> Node<T> {
     Node {
       loc: self.loc,
       stx: Box::new(T::from(self)),
@@ -116,7 +121,6 @@ impl<S: Serialize + Drive + DriveMut> Serialize for Node<S> {
     self.stx.serialize(serializer)
   }
 }
-
 
 #[cfg(test)]
 mod tests {

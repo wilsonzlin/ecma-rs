@@ -1,9 +1,12 @@
-use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
+use crate::cfg::cfg::Cfg;
+use crate::dom::Dom;
+use crate::il::inst::Inst;
+use ahash::HashMap;
+use ahash::HashMapExt;
+use ahash::HashSet;
+use ahash::HashSetExt;
 use itertools::Itertools;
-
 use std::collections::VecDeque;
-
-use crate::{cfg::cfg::Cfg, dom::Dom, il::inst::Inst};
 
 pub fn insert_phis_for_ssa_construction(
   defs: &mut HashMap<u32, HashSet<u32>>,

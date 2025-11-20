@@ -1,6 +1,5 @@
 use core::hash::Hash;
 use core::hash::Hasher;
-use core::mem;
 use serde::Serialize;
 use serde::Serializer;
 use std::cmp::Ordering;
@@ -39,7 +38,7 @@ impl Ord for JsNumber {
 impl Hash for JsNumber {
   fn hash<H: Hasher>(&self, state: &mut H) {
     if !self.0.is_nan() {
-      unsafe { mem::transmute::<f64, u64>(self.0) }.hash(state);
+      self.0.to_bits().hash(state);
     };
   }
 }

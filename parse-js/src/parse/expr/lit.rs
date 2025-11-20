@@ -1,4 +1,3 @@
-use super::pat::is_valid_pattern_identifier;
 use super::Asi;
 use super::ParseCtx;
 use super::Parser;
@@ -7,9 +6,6 @@ use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
 use crate::ast::class_or_object::ClassOrObjVal;
 use crate::ast::class_or_object::ObjMember;
 use crate::ast::class_or_object::ObjMemberType;
-use crate::ast::expr::BinaryExpr;
-use crate::ast::expr::Expr;
-use crate::ast::expr::IdExpr;
 use crate::ast::expr::lit::LitArrElem;
 use crate::ast::expr::lit::LitArrExpr;
 use crate::ast::expr::lit::LitBigIntExpr;
@@ -21,6 +17,8 @@ use crate::ast::expr::lit::LitRegexExpr;
 use crate::ast::expr::lit::LitStrExpr;
 use crate::ast::expr::lit::LitTemplateExpr;
 use crate::ast::expr::lit::LitTemplatePart;
+use crate::ast::expr::BinaryExpr;
+use crate::ast::expr::IdExpr;
 use crate::ast::node::Node;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
@@ -61,7 +59,8 @@ pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
     && !raw.starts_with("0o")
     && !raw.starts_with("0O")
     && !raw.starts_with("0x")
-    && !raw.starts_with("0X") {
+    && !raw.starts_with("0X")
+  {
     stripped = raw.replace('_', "");
     &stripped
   } else {
@@ -226,9 +225,7 @@ impl<'a> Parser<'a> {
         p.require(TT::Comma)?;
       }
       p.require(TT::BracketClose)?;
-      Ok(LitArrExpr {
-        elements,
-      })
+      Ok(LitArrExpr { elements })
     })
   }
 
@@ -259,7 +256,7 @@ impl<'a> Parser<'a> {
   pub fn lit_null(&mut self) -> SyntaxResult<Node<LitNullExpr>> {
     self.with_loc(|p| {
       p.require(TT::LiteralNull)?;
-      Ok(LitNullExpr {  })
+      Ok(LitNullExpr {})
     })
   }
 
@@ -279,155 +276,161 @@ impl<'a> Parser<'a> {
   pub fn lit_obj(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitObjExpr>> {
     self.with_loc(|p| {
       p.require(TT::BraceOpen)?.loc;
-      let members = p.list_with_loc(
-        TT::Comma,
-        TT::BraceClose,
-        |p| {
-          // Error recovery: class declarations in object literals are not allowed
-          if p.peek().typ == TT::KeywordClass {
-            // Skip the entire class declaration
-            p.consume(); // consume 'class'
-            // Skip optional class name
-            if p.peek().typ == TT::Identifier {
+      let members = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
+        // Error recovery: class declarations in object literals are not allowed
+        if p.peek().typ == TT::KeywordClass {
+          // Skip the entire class declaration
+          p.consume(); // consume 'class'
+                       // Skip optional class name
+          if p.peek().typ == TT::Identifier {
+            p.consume();
+          }
+          // Skip optional type parameters
+          if p.peek().typ == TT::ChevronLeft {
+            let mut depth = 0;
+            while p.peek().typ != TT::EOF {
+              if p.peek().typ == TT::ChevronLeft {
+                depth += 1;
+                p.consume();
+              } else if p.peek().typ == TT::ChevronRight {
+                p.consume();
+                depth -= 1;
+                if depth == 0 {
+                  break;
+                }
+              } else if p.peek().typ == TT::BraceOpen {
+                break;
+              } else {
+                p.consume();
+              }
+            }
+          }
+          // Skip optional extends clause
+          if p.consume_if(TT::KeywordExtends).is_match() {
+            // Skip until we reach the class body
+            while p.peek().typ != TT::BraceOpen && p.peek().typ != TT::EOF {
               p.consume();
             }
-            // Skip optional type parameters
-            if p.peek().typ == TT::ChevronLeft {
-              let mut depth = 0;
-              while p.peek().typ != TT::EOF {
-                if p.peek().typ == TT::ChevronLeft {
-                  depth += 1;
-                  p.consume();
-                } else if p.peek().typ == TT::ChevronRight {
-                  p.consume();
-                  depth -= 1;
-                  if depth == 0 {
-                    break;
-                  }
-                } else if p.peek().typ == TT::BraceOpen {
+          }
+          // Skip optional implements clause
+          if p.consume_if(TT::KeywordImplements).is_match() {
+            // Skip until we reach the class body
+            while p.peek().typ != TT::BraceOpen && p.peek().typ != TT::EOF {
+              p.consume();
+            }
+          }
+          // Skip the class body
+          if p.peek().typ == TT::BraceOpen {
+            let mut depth = 0;
+            while p.peek().typ != TT::EOF {
+              if p.peek().typ == TT::BraceOpen {
+                depth += 1;
+                p.consume();
+              } else if p.peek().typ == TT::BraceClose {
+                p.consume();
+                depth -= 1;
+                if depth == 0 {
                   break;
-                } else {
-                  p.consume();
                 }
-              }
-            }
-            // Skip optional extends clause
-            if p.consume_if(TT::KeywordExtends).is_match() {
-              // Skip until we reach the class body
-              while p.peek().typ != TT::BraceOpen && p.peek().typ != TT::EOF {
+              } else {
                 p.consume();
               }
             }
-            // Skip optional implements clause
-            if p.consume_if(TT::KeywordImplements).is_match() {
-              // Skip until we reach the class body
-              while p.peek().typ != TT::BraceOpen && p.peek().typ != TT::EOF {
-                p.consume();
-              }
-            }
-            // Skip the class body
-            if p.peek().typ == TT::BraceOpen {
-              let mut depth = 0;
-              while p.peek().typ != TT::EOF {
-                if p.peek().typ == TT::BraceOpen {
-                  depth += 1;
-                  p.consume();
-                } else if p.peek().typ == TT::BraceClose {
-                  p.consume();
-                  depth -= 1;
-                  if depth == 0 {
-                    break;
-                  }
-                } else {
-                  p.consume();
-                }
-              }
-            }
-            // Return a dummy member (will be ignored by error recovery)
-            // Use an empty shorthand property as a placeholder
-            use crate::ast::expr::IdExpr;
-            use crate::loc::Loc;
-            return Ok(ObjMember {
-              typ: ObjMemberType::Shorthand {
-                id: Node::new(Loc(0, 0), IdExpr { name: String::new() }),
-              },
-            });
           }
-          let rest = p.consume_if(TT::DotDotDot).is_match();
-          if rest {
-            let value = p.expr(ctx, [TT::Comma, TT::BraceClose])?;
-            Ok(ObjMember {
-              typ: ObjMemberType::Rest { val: value },
-            })
-          } else {
-            let (key, value) = p.class_or_obj_member(
-              ctx,
-              TT::Colon,
-              TT::Comma,
-              &mut Asi::no(),
-              false, // Object literals don't have abstract methods
-            )?;
-            let typ = match value {
-              ClassOrObjVal::Prop(None) => {
-                // This property had no value, so it's a shorthand property. Therefore, check that it's a valid identifier name.
-                match key {
-                  ClassOrObjKey::Computed(expr) => {
-                    // TypeScript: Error recovery - computed properties without value like { [e] }
-                    // Create synthetic undefined value for error recovery
-                    let loc = expr.loc;
-                    let synthetic_value = Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped();
-                    ObjMemberType::Valued {
-                      key: ClassOrObjKey::Computed(expr),
-                      val: ClassOrObjVal::Prop(Some(synthetic_value)),
-                    }
-                  }
-                  ClassOrObjKey::Direct(direct_key) => {
-                    // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
-                    // Error recovery: Also accept string literals, numbers, etc. for malformed shorthand properties
-                    // The type checker will validate this semantically.
-                    if direct_key.stx.tt != TT::Identifier
-                      && !KEYWORDS_MAPPING.contains_key(&direct_key.stx.tt)
-                      && direct_key.stx.tt != TT::LiteralString
-                      && direct_key.stx.tt != TT::LiteralNumber
-                      && direct_key.stx.tt != TT::LiteralBigInt {
-                      return Err(direct_key.error(SyntaxErrorType::ExpectedNotFound));
-                    };
-                    // TypeScript: Check for definite assignment assertion (e.g., { a! })
-                    let _definite_assignment = p.consume_if(TT::Exclamation).is_match();
-                    // Check for default value (e.g., {c = 1})
-                    if p.consume_if(TT::Equals).is_match() {
-                      // Parse the default value and create an assignment expression
-                      let key_name = direct_key.stx.key.clone();
-                      let key_loc = direct_key.loc;
-                      let default_val = p.expr(ctx, [TT::Comma, TT::BraceClose])?;
-                      let id_expr = Node::new(key_loc, IdExpr { name: key_name.clone() }).into_wrapped();
-                      let bin_expr = Node::new(key_loc + default_val.loc, BinaryExpr {
-                        operator: OperatorName::Assignment,
-                        left: id_expr,
-                        right: default_val,
-                      }).into_wrapped();
-                      ObjMemberType::Valued {
-                        key: ClassOrObjKey::Direct(Node::new(key_loc, ClassOrObjMemberDirectKey {
-                          key: key_name,
-                          tt: TT::Identifier,
-                        })),
-                        val: ClassOrObjVal::Prop(Some(bin_expr))
-                      }
-                    } else {
-                      // No default value - this is a normal shorthand property
-                      ObjMemberType::Shorthand {
-                        id: direct_key.map_stx(|n| IdExpr { name: n.key }),
-                      }
-                    }
-                  }
-                }
-              }
-              _ => ObjMemberType::Valued { key, val: value },
-            };
-            Ok(ObjMember { typ })
-          }
+          // Return a dummy member (will be ignored by error recovery)
+          // Use an empty shorthand property as a placeholder
+          use crate::ast::expr::IdExpr;
+          use crate::loc::Loc;
+          return Ok(ObjMember {
+            typ: ObjMemberType::Shorthand {
+              id: Node::new(Loc(0, 0), IdExpr {
+                name: String::new(),
+              }),
+            },
+          });
         }
-      )?;
+        let rest = p.consume_if(TT::DotDotDot).is_match();
+        if rest {
+          let value = p.expr(ctx, [TT::Comma, TT::BraceClose])?;
+          Ok(ObjMember {
+            typ: ObjMemberType::Rest { val: value },
+          })
+        } else {
+          let (key, value) = p.class_or_obj_member(
+            ctx,
+            TT::Colon,
+            TT::Comma,
+            &mut Asi::no(),
+            false, // Object literals don't have abstract methods
+          )?;
+          let typ = match value {
+            ClassOrObjVal::Prop(None) => {
+              // This property had no value, so it's a shorthand property. Therefore, check that it's a valid identifier name.
+              match key {
+                ClassOrObjKey::Computed(expr) => {
+                  // TypeScript: Error recovery - computed properties without value like { [e] }
+                  // Create synthetic undefined value for error recovery
+                  let loc = expr.loc;
+                  let synthetic_value = Node::new(loc, IdExpr {
+                    name: "undefined".to_string(),
+                  })
+                  .into_wrapped();
+                  ObjMemberType::Valued {
+                    key: ClassOrObjKey::Computed(expr),
+                    val: ClassOrObjVal::Prop(Some(synthetic_value)),
+                  }
+                }
+                ClassOrObjKey::Direct(direct_key) => {
+                  // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
+                  // Error recovery: Also accept string literals, numbers, etc. for malformed shorthand properties
+                  // The type checker will validate this semantically.
+                  if direct_key.stx.tt != TT::Identifier
+                    && !KEYWORDS_MAPPING.contains_key(&direct_key.stx.tt)
+                    && direct_key.stx.tt != TT::LiteralString
+                    && direct_key.stx.tt != TT::LiteralNumber
+                    && direct_key.stx.tt != TT::LiteralBigInt
+                  {
+                    return Err(direct_key.error(SyntaxErrorType::ExpectedNotFound));
+                  };
+                  // TypeScript: Check for definite assignment assertion (e.g., { a! })
+                  let _definite_assignment = p.consume_if(TT::Exclamation).is_match();
+                  // Check for default value (e.g., {c = 1})
+                  if p.consume_if(TT::Equals).is_match() {
+                    // Parse the default value and create an assignment expression
+                    let key_name = direct_key.stx.key.clone();
+                    let key_loc = direct_key.loc;
+                    let default_val = p.expr(ctx, [TT::Comma, TT::BraceClose])?;
+                    let id_expr = Node::new(key_loc, IdExpr {
+                      name: key_name.clone(),
+                    })
+                    .into_wrapped();
+                    let bin_expr = Node::new(key_loc + default_val.loc, BinaryExpr {
+                      operator: OperatorName::Assignment,
+                      left: id_expr,
+                      right: default_val,
+                    })
+                    .into_wrapped();
+                    ObjMemberType::Valued {
+                      key: ClassOrObjKey::Direct(Node::new(key_loc, ClassOrObjMemberDirectKey {
+                        key: key_name,
+                        tt: TT::Identifier,
+                      })),
+                      val: ClassOrObjVal::Prop(Some(bin_expr)),
+                    }
+                  } else {
+                    // No default value - this is a normal shorthand property
+                    ObjMemberType::Shorthand {
+                      id: direct_key.map_stx(|n| IdExpr { name: n.key }),
+                    }
+                  }
+                }
+              }
+            }
+            _ => ObjMemberType::Valued { key, val: value },
+          };
+          Ok(ObjMember { typ })
+        }
+      })?;
       Ok(LitObjExpr { members })
     })
   }
@@ -468,7 +471,11 @@ impl<'a> Parser<'a> {
   // NOTE: The next token must definitely be LiteralTemplatePartString{,End}.
   // ES2018: Tagged templates can have invalid escape sequences (cooked value is undefined, raw is available)
   // TypeScript: All templates allow invalid escapes (permissive parsing, semantic errors caught later)
-  pub fn lit_template_parts(&mut self, ctx: ParseCtx, tagged: bool) -> SyntaxResult<Vec<LitTemplatePart>> {
+  pub fn lit_template_parts(
+    &mut self,
+    ctx: ParseCtx,
+    _tagged: bool,
+  ) -> SyntaxResult<Vec<LitTemplatePart>> {
     let t = self.consume();
     let is_end = match t.typ {
       TT::LiteralTemplatePartString => false,
@@ -479,7 +486,8 @@ impl<'a> Parser<'a> {
     let mut parts = Vec::new();
     // ES2018: Tagged templates allow invalid escapes
     // TypeScript: All templates allow invalid escapes (permissive parsing)
-    let first_str = normalise_literal_string_or_template_inner(self.bytes(t.loc)).unwrap_or_else(|| String::new());
+    let first_str = normalise_literal_string_or_template_inner(self.bytes(t.loc))
+      .unwrap_or_else(|| String::new());
     parts.push(LitTemplatePart::String(first_str));
     if !is_end {
       loop {
@@ -487,12 +495,16 @@ impl<'a> Parser<'a> {
         self.require(TT::BraceClose)?;
         parts.push(LitTemplatePart::Substitution(substitution));
         let string = self.consume_with_mode(LexMode::TemplateStrContinue);
-        if !matches!(string.typ, TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd) {
+        if !matches!(
+          string.typ,
+          TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
+        ) {
           return Err(string.error(SyntaxErrorType::ExpectedSyntax("template string part")));
         };
         // ES2018: Tagged templates allow invalid escapes
         // TypeScript: All templates allow invalid escapes (permissive parsing)
-        let part_str = normalise_literal_string_or_template_inner(self.bytes(string.loc)).unwrap_or_else(|| String::new());
+        let part_str = normalise_literal_string_or_template_inner(self.bytes(string.loc))
+          .unwrap_or_else(|| String::new());
         parts.push(LitTemplatePart::String(part_str));
         if string.typ == TT::LiteralTemplatePartStringEnd {
           break;

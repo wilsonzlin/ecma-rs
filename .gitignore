@@ -5,4 +5,3 @@ package-lock.json
 target/
 
 # Auto-generated test reports
-typescript_conformance_failures.txt

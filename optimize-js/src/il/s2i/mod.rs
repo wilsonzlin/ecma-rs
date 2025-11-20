@@ -1,17 +1,16 @@
 pub mod expr;
 pub mod stmt;
 
-use crate::compile_js_statements;
-use crate::eval::builtin::BUILTINS;
-use crate::util::counter::Counter;
-use crate::ProgramCompiler;
-
 use super::inst::Arg;
 use super::inst::BinOp;
 use super::inst::Const;
 use super::inst::Inst;
 use super::inst::InstTyp;
 use super::inst::UnOp;
+use crate::compile_js_statements;
+use crate::eval::builtin::BUILTINS;
+use crate::util::counter::Counter;
+use crate::ProgramCompiler;
 use ahash::HashMap;
 use ahash::HashMapExt;
 use crossbeam_utils::sync::WaitGroup;
@@ -19,15 +18,15 @@ use derive_visitor::Drive;
 use derive_visitor::DriveMut;
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::Expr;
+use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::Stmt;
-use parse_js::ast::node::Node;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
-use symbol_js::symbol::Scope;
-use symbol_js::symbol::Symbol;
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
+use symbol_js::symbol::Scope;
+use symbol_js::symbol::Symbol;
 
 // CondGoto fallthrough placeholder label.
 pub const DUMMY_LABEL: u32 = u32::MAX;
@@ -64,11 +63,13 @@ impl<'p> SourceToInst<'p> {
     let scope = node_assoc.get::<Scope>().unwrap();
     // WARNING: Don't simply find_symbol_up_to_with_scope to nearest closure, as just because it's locally declared doesn't mean it's not a foreign.
     match scope.find_symbol(name.clone()) {
-      Some(local_or_foreign) => if self.program.foreign_vars.contains(&local_or_foreign) {
-        VarType::Foreign(local_or_foreign)
-      } else {
-        VarType::Local(local_or_foreign)
-      },
+      Some(local_or_foreign) => {
+        if self.program.foreign_vars.contains(&local_or_foreign) {
+          VarType::Foreign(local_or_foreign)
+        } else {
+          VarType::Local(local_or_foreign)
+        }
+      }
       None => match BUILTINS.get(name.as_str()) {
         Some(_) => VarType::Builtin(name),
         None => VarType::Unknown(name),

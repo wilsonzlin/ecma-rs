@@ -1,18 +1,11 @@
-pub mod pat;
-pub mod lit;
 pub mod jsx;
+pub mod lit;
+pub mod pat;
 pub mod util;
-
-use pat::is_valid_pattern_identifier;
-use pat::ParsePatternRules;
-use util::lhs_expr_to_assign_target;
 
 use super::ParseCtx;
 use super::Parser;
 use crate::ast::expr::pat::IdPat;
-use crate::ast::expr::pat::Pat;
-use crate::ast::stmt::decl::ParamDecl;
-use crate::ast::stmt::decl::PatDecl;
 use crate::ast::expr::ArrowFuncExpr;
 use crate::ast::expr::BinaryExpr;
 use crate::ast::expr::CallArg;
@@ -32,6 +25,8 @@ use crate::ast::expr::UnaryExpr;
 use crate::ast::expr::UnaryPostfixExpr;
 use crate::ast::func::Func;
 use crate::ast::node::Node;
+use crate::ast::stmt::decl::ParamDecl;
+use crate::ast::stmt::decl::PatDecl;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
@@ -42,6 +37,9 @@ use crate::operator::OPERATORS;
 use crate::parse::operator::MULTARY_OPERATOR_MAPPING;
 use crate::parse::operator::UNARY_OPERATOR_MAPPING;
 use crate::token::TT;
+use pat::is_valid_pattern_identifier;
+use pat::ParsePatternRules;
+use util::lhs_expr_to_assign_target;
 
 pub struct Asi {
   pub can_end_with_asi: bool,
@@ -65,6 +63,15 @@ impl Asi {
 }
 
 impl<'a> Parser<'a> {
+  /// Creates a synthetic `undefined` identifier expression for error recovery.
+  /// Used when parsing fails or encounters empty expressions like `()`.
+  fn create_synthetic_undefined(&self, loc: crate::loc::Loc) -> Node<Expr> {
+    Node::new(loc, IdExpr {
+      name: "undefined".to_string(),
+    })
+    .into_wrapped()
+  }
+
   pub fn call_args(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<CallArg>>> {
     let mut args = Vec::new();
     while self.peek().typ != TT::ParenthesisClose {
@@ -81,7 +88,11 @@ impl<'a> Parser<'a> {
     Ok(args)
   }
 
-  pub fn expr<const N: usize>(&mut self, ctx: ParseCtx, terminators: [TT; N]) -> SyntaxResult<Node<Expr>> {
+  pub fn expr<const N: usize>(
+    &mut self,
+    ctx: ParseCtx,
+    terminators: [TT; N],
+  ) -> SyntaxResult<Node<Expr>> {
     self.expr_with_min_prec(ctx, 1, terminators, &mut Asi::no())
   }
 
@@ -96,7 +107,11 @@ impl<'a> Parser<'a> {
 
   /// Parse expression with TypeScript type arguments support
   /// Type arguments are now handled automatically in the main expression loop
-  pub fn expr_with_ts_type_args<const N: usize>(&mut self, ctx: ParseCtx, terminators: [TT; N]) -> SyntaxResult<Node<Expr>> {
+  pub fn expr_with_ts_type_args<const N: usize>(
+    &mut self,
+    ctx: ParseCtx,
+    terminators: [TT; N],
+  ) -> SyntaxResult<Node<Expr>> {
     self.expr(ctx, terminators)
   }
 
@@ -108,18 +123,15 @@ impl<'a> Parser<'a> {
     let expr = if self.peek().typ == TT::ParenthesisClose {
       // Empty expression: () - create synthetic undefined
       let loc = self.peek().loc;
-      Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+      self.create_synthetic_undefined(loc)
     } else {
-      self.expr_with_min_prec(
-        ctx,
-        1,
-        [TT::ParenthesisClose],
-        asi,
-      ).unwrap_or_else(|_| {
-        // If expression parsing fails, create synthetic undefined for error recovery
-        let loc = self.peek().loc;
-        Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
-      })
+      self
+        .expr_with_min_prec(ctx, 1, [TT::ParenthesisClose], asi)
+        .unwrap_or_else(|_| {
+          // If expression parsing fails, create synthetic undefined for error recovery
+          let loc = self.peek().loc;
+          self.create_synthetic_undefined(loc)
+        })
     };
     self.require(TT::ParenthesisClose)?;
     Ok(expr)
@@ -133,7 +145,8 @@ impl<'a> Parser<'a> {
     let func = self.with_loc(|p| {
       // Check if current token is 'async' followed by '=>'
       // In that case, 'async' is the parameter name, not the async keyword
-      let is_async_param_name = p.peek().typ == TT::KeywordAsync && p.peek_n::<2>()[1].typ == TT::EqualsChevronRight;
+      let is_async_param_name =
+        p.peek().typ == TT::KeywordAsync && p.peek_n::<2>()[1].typ == TT::EqualsChevronRight;
 
       let is_async = if !is_async_param_name {
         p.consume_if(TT::KeywordAsync).is_match()
@@ -144,17 +157,18 @@ impl<'a> Parser<'a> {
       // Check if this is a single-unparenthesised-parameter arrow function
       // Works for both sync (x => ...) and async (async x => ...)
       let next_token = p.peek().typ;
-      let is_unparenthesised_single_param = is_valid_pattern_identifier(next_token, ParsePatternRules {
-        await_allowed: false,
-        yield_allowed: ctx.rules.yield_allowed,
-      }) && {
-        // Need to peek further to see if there's => coming up
-        let peek2 = p.peek_n::<2>()[1].typ;
-        // Could be either:
-        // - identifier =>
-        // - identifier : type =>
-        peek2 == TT::EqualsChevronRight || peek2 == TT::Colon
-      };
+      let is_unparenthesised_single_param =
+        is_valid_pattern_identifier(next_token, ParsePatternRules {
+          await_allowed: false,
+          yield_allowed: ctx.rules.yield_allowed,
+        }) && {
+          // Need to peek further to see if there's => coming up
+          let peek2 = p.peek_n::<2>()[1].typ;
+          // Could be either:
+          // - identifier =>
+          // - identifier : type =>
+          peek2 == TT::EqualsChevronRight || peek2 == TT::Colon
+        };
 
       let (type_parameters, parameters, return_type, arrow) = if is_unparenthesised_single_param {
         // Single-unparenthesised-parameter arrow function.
@@ -170,7 +184,8 @@ impl<'a> Parser<'a> {
         let pattern = Node::new(param_name, PatDecl {
           pat: Node::new(param_name, IdPat {
             name: p.string(param_name),
-          }).into_wrapped(),
+          })
+          .into_wrapped(),
         });
         let param = Node::new(param_name, ParamDecl {
           decorators: vec![],
@@ -211,11 +226,9 @@ impl<'a> Parser<'a> {
       });
       let body = match p.peek().typ {
         TT::BraceOpen => p.parse_func_block_body(fn_body_ctx)?.into(),
-        _ => p.expr_with_asi(
-          fn_body_ctx,
-          terminators,
-          &mut Asi::can(),
-        )?.into(),
+        _ => p
+          .expr_with_asi(fn_body_ctx, terminators, &mut Asi::can())?
+          .into(),
       };
       Ok(Func {
         arrow: true,
@@ -246,13 +259,14 @@ impl<'a> Parser<'a> {
     // as arrow function fails quickly. Complex patterns like `{a, b: { c: [d, e] } = f }` are
     // unlikely to be used as operands in a grouping.
 
-    self.rewindable::<Node<Expr>, _>(|p| {
-      match p.arrow_func_expr(ctx, terminators) {
+    self
+      .rewindable::<Node<Expr>, _>(|p| match p.arrow_func_expr(ctx, terminators) {
         Ok(expr) => Ok(Some(expr.into_wrapped())),
-        Err(err) if err.typ == SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => Err(err),
+        Err(err) if err.typ == SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => {
+          Err(err)
+        }
         Err(_) => Ok(None),
-      }
-    })
+      })
       .transpose()
       .unwrap_or_else(|| self.grouping(ctx, asi))
   }
@@ -299,10 +313,7 @@ impl<'a> Parser<'a> {
           body: Some(body),
         })
       })?;
-      Ok(FuncExpr {
-        name,
-        func,
-      })
+      Ok(FuncExpr { name, func })
     })
   }
 
@@ -318,7 +329,9 @@ impl<'a> Parser<'a> {
         None
       };
 
-      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+      let extends = p
+        .consume_if(TT::KeywordExtends)
+        .and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
 
       // TypeScript: implements clause
       let mut implements = Vec::new();
@@ -356,7 +369,9 @@ impl<'a> Parser<'a> {
         None
       };
 
-      let extends = p.consume_if(TT::KeywordExtends).and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
+      let extends = p
+        .consume_if(TT::KeywordExtends)
+        .and_then(|| p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements]))?;
 
       // TypeScript: implements clause
       let mut implements = Vec::new();
@@ -403,85 +418,126 @@ impl<'a> Parser<'a> {
     // Quick lookahead: check if this looks like a type assertion
     // Type assertions start with type expression keywords or identifiers that are type names
     let [_, t1] = self.peek_n::<2>();
-    eprintln!("DEBUG try_parse_angle_bracket_type_assertion: t1 = {:?} '{}'", t1.typ, self.str(t1.loc));
+    eprintln!(
+      "DEBUG try_parse_angle_bracket_type_assertion: t1 = {:?} '{}'",
+      t1.typ,
+      self.str(t1.loc)
+    );
 
     // Check if it's an identifier that looks like a JSX tag (starts with lowercase)
     // JSX built-in tags like <div>, <span> start with lowercase, while type names typically start with uppercase
     let is_likely_jsx_tag = if t1.typ == TT::Identifier {
       let id_str = self.str(t1.loc);
       // If identifier starts with lowercase letter, it's likely JSX
-      id_str.chars().next().map_or(false, |c| c.is_ascii_lowercase())
+      id_str
+        .chars()
+        .next()
+        .map_or(false, |c| c.is_ascii_lowercase())
     } else {
       false
     };
 
-    let looks_like_type_assertion = !is_likely_jsx_tag && matches!(t1.typ,
-      TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
-      TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
-      TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
-      TT::KeywordUndefinedType | TT::Identifier | TT::BraceOpen | TT::BracketOpen |
-      TT::KeywordTypeof | TT::KeywordKeyof | TT::ParenthesisOpen |
-      TT::LiteralString | TT::LiteralNumber | TT::LiteralTrue | TT::LiteralFalse | TT::LiteralNull |
-      TT::KeywordConst
+    let looks_like_type_assertion = !is_likely_jsx_tag
+      && matches!(
+        t1.typ,
+        TT::KeywordAny
+          | TT::KeywordUnknown
+          | TT::KeywordNever
+          | TT::KeywordVoid
+          | TT::KeywordStringType
+          | TT::KeywordNumberType
+          | TT::KeywordBooleanType
+          | TT::KeywordBigIntType
+          | TT::KeywordSymbolType
+          | TT::KeywordObjectType
+          | TT::KeywordUndefinedType
+          | TT::Identifier
+          | TT::BraceOpen
+          | TT::BracketOpen
+          | TT::KeywordTypeof
+          | TT::KeywordKeyof
+          | TT::ParenthesisOpen
+          | TT::LiteralString
+          | TT::LiteralNumber
+          | TT::LiteralTrue
+          | TT::LiteralFalse
+          | TT::LiteralNull
+          | TT::KeywordConst
+      );
+
+    eprintln!(
+      "DEBUG: is_likely_jsx_tag = {}, looks_like_type_assertion = {}",
+      is_likely_jsx_tag, looks_like_type_assertion
     );
 
-    eprintln!("DEBUG: is_likely_jsx_tag = {}, looks_like_type_assertion = {}", is_likely_jsx_tag, looks_like_type_assertion);
-
     if !looks_like_type_assertion {
-      return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax("type assertion")));
+      return Err(
+        self
+          .peek()
+          .error(SyntaxErrorType::ExpectedSyntax("type assertion")),
+      );
     }
 
-    self.with_loc(|p| {
-      p.require(TT::ChevronLeft)?;
+    self
+      .with_loc(|p| {
+        p.require(TT::ChevronLeft)?;
 
-      // Check for <const> type assertion
-      let is_const_assertion = p.peek().typ == TT::KeywordConst;
-      if is_const_assertion {
-        p.consume(); // consume 'const'
+        // Check for <const> type assertion
+        let is_const_assertion = p.peek().typ == TT::KeywordConst;
+        if is_const_assertion {
+          p.consume(); // consume 'const'
+          p.require(TT::ChevronRight)?;
+
+          // Parse just the operand - the outer expression parser will handle operators
+          let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
+
+          use crate::ast::expr::TypeAssertionExpr;
+          return Ok(
+            TypeAssertionExpr {
+              expression: Box::new(expression),
+              type_annotation: None,
+              const_assertion: true,
+            }
+            .into(),
+          );
+        }
+
+        let type_annotation = p.type_expr(ctx)?;
         p.require(TT::ChevronRight)?;
+
+        // TypeScript: If we're followed by `<`, this could be JSX, not a nested type assertion
+        // E.g., <Panel><Div /></Panel> should be JSX, not <Panel>(<Div>(...))</Panel> as nested type assertions
+        // Check if it looks like a JSX element: `<identifier` followed by whitespace, `/`, or `>`
+        if p.peek().typ == TT::ChevronLeft {
+          let [_, t1, _t2] = p.peek_n::<3>();
+          if t1.typ == TT::Identifier {
+            // This looks like JSX: <identifier ...
+            // Reject the type assertion and let JSX parser handle it
+            return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+              "not a type assertion (followed by JSX element)",
+            )));
+          }
+        }
 
         // Parse just the operand - the outer expression parser will handle operators
         let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
 
-        use crate::ast::expr::TypeAssertionExpr;
-        return Ok(TypeAssertionExpr {
-          expression: Box::new(expression),
-          type_annotation: None,
-          const_assertion: true,
-        }.into());
-      }
-
-      let type_annotation = p.type_expr(ctx)?;
-      p.require(TT::ChevronRight)?;
-
-      // TypeScript: If we're followed by `<`, this could be JSX, not a nested type assertion
-      // E.g., <Panel><Div /></Panel> should be JSX, not <Panel>(<Div>(...))</Panel> as nested type assertions
-      // Check if it looks like a JSX element: `<identifier` followed by whitespace, `/`, or `>`
-      if p.peek().typ == TT::ChevronLeft {
-        let [_, t1, t2] = p.peek_n::<3>();
-        if t1.typ == TT::Identifier {
-          // This looks like JSX: <identifier ...
-          // Reject the type assertion and let JSX parser handle it
-          return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("not a type assertion (followed by JSX element)")));
+        // If we're followed by a JSX closing tag, this is actually JSX, not a type assertion
+        // E.g., <Comp>text</Comp> should be JSX, not <Comp>(text) as type assertion
+        if p.peek().typ == TT::ChevronLeftSlash {
+          return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax(
+            "not a type assertion (followed by JSX closing tag)",
+          )));
         }
-      }
 
-      // Parse just the operand - the outer expression parser will handle operators
-      let expression = p.expr_operand(ctx, [], &mut Asi::no())?;
-
-      // If we're followed by a JSX closing tag, this is actually JSX, not a type assertion
-      // E.g., <Comp>text</Comp> should be JSX, not <Comp>(text) as type assertion
-      if p.peek().typ == TT::ChevronLeftSlash {
-        return Err(p.peek().error(SyntaxErrorType::ExpectedSyntax("not a type assertion (followed by JSX closing tag)")));
-      }
-
-      use crate::ast::expr::TypeAssertionExpr;
-      Ok(TypeAssertionExpr {
-        expression: Box::new(expression),
-        type_annotation: Some(type_annotation),
-        const_assertion: false,
+        use crate::ast::expr::TypeAssertionExpr;
+        Ok(TypeAssertionExpr {
+          expression: Box::new(expression),
+          type_annotation: Some(type_annotation),
+          const_assertion: false,
+        })
       })
-    }).map(|node| node.into_wrapped())
+      .map(|node| node.into_wrapped())
   }
 
   fn expr_operand<const N: usize>(
@@ -490,77 +546,85 @@ impl<'a> Parser<'a> {
     terminators: [TT; N],
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
-    let [t0, t1, t2] = self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard, LexMode::Standard]);
+    let [t0, t1, t2] =
+      self.peek_n_with_mode([LexMode::SlashIsRegex, LexMode::Standard, LexMode::Standard]);
     // Handle unary operators before operand.
     // Special case: `new.target` should not be treated as `new` operator
-    if let Some(operator) = UNARY_OPERATOR_MAPPING.get(&t0.typ).filter(|operator| {
-      // Treat await/yield as operators only when they're keywords (not allowed as identifiers)
-      (operator.name != OperatorName::Await && operator.name != OperatorName::Yield)
-        || (operator.name == OperatorName::Await && !ctx.rules.await_allowed)
-        || (operator.name == OperatorName::Yield && !ctx.rules.yield_allowed)
-    }).filter(|operator| {
-      // Don't treat `new` as operator if followed by `.` (for new.target)
-      !(operator.name == OperatorName::New && t1.typ == TT::Dot)
-    }).filter(|operator| {
-      // Don't treat `await` or `yield` as operators if followed by `=>` (arrow function parameter)
-      !((operator.name == OperatorName::Await || operator.name == OperatorName::Yield) && t1.typ == TT::EqualsChevronRight)
-    }) {
-      return Ok(self.with_loc(|p| {
-        let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc;
-        let operator = if operator.name == OperatorName::Yield
-          && p.consume_if(TT::Asterisk).is_match()
-        {
-          &OPERATORS[&OperatorName::YieldDelegated]
-        } else {
-          *operator
-        };
-        let next_min_prec =
-          operator.precedence + (operator.associativity == Associativity::Left) as u8;
+    if let Some(operator) = UNARY_OPERATOR_MAPPING
+      .get(&t0.typ)
+      .filter(|operator| {
+        // Treat await/yield as operators only when they're keywords (not allowed as identifiers)
+        (operator.name != OperatorName::Await && operator.name != OperatorName::Yield)
+          || (operator.name == OperatorName::Await && !ctx.rules.await_allowed)
+          || (operator.name == OperatorName::Yield && !ctx.rules.yield_allowed)
+      })
+      .filter(|operator| {
+        // Don't treat `new` as operator if followed by `.` (for new.target)
+        !(operator.name == OperatorName::New && t1.typ == TT::Dot)
+      })
+      .filter(|operator| {
+        // Don't treat `await` or `yield` as operators if followed by `=>` (arrow function parameter)
+        !((operator.name == OperatorName::Await || operator.name == OperatorName::Yield)
+          && t1.typ == TT::EqualsChevronRight)
+      })
+    {
+      return Ok(
+        self
+          .with_loc(|p| {
+            let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc;
+            let operator =
+              if operator.name == OperatorName::Yield && p.consume_if(TT::Asterisk).is_match() {
+                &OPERATORS[&OperatorName::YieldDelegated]
+              } else {
+                *operator
+              };
+            let next_min_prec =
+              operator.precedence + (operator.associativity == Associativity::Left) as u8;
 
-        // For yield and await, the operand is optional. Check if there should be an operand.
-        let next_token = p.peek();
-        let has_operand = if operator.name == OperatorName::Yield || operator.name == OperatorName::Await || operator.name == OperatorName::YieldDelegated {
-          // No operand if:
-          // 1. Next token is preceded by line terminator
-          // 2. Next token is a terminator we're looking for
-          // 3. Next token is a closing bracket/paren/brace
-          // 4. Next token is semicolon or comma
-          // 5. Next token is EOF
-          !next_token.preceded_by_line_terminator
-            && next_token.typ != TT::EOF
-            && next_token.typ != TT::Semicolon
-            && next_token.typ != TT::Comma
-            && next_token.typ != TT::ParenthesisClose
-            && next_token.typ != TT::BracketClose
-            && next_token.typ != TT::BraceClose
-            && !terminators.contains(&next_token.typ)
-        } else {
-          // TypeScript: For other unary operators, allow missing operand for error recovery
-          // Accept semicolon, closing braces/brackets/parens as missing operand
-          next_token.typ != TT::Semicolon
-            && next_token.typ != TT::ParenthesisClose
-            && next_token.typ != TT::BracketClose
-            && next_token.typ != TT::BraceClose
-            && next_token.typ != TT::EOF
-        };
+            // For yield and await, the operand is optional. Check if there should be an operand.
+            let next_token = p.peek();
+            let has_operand = if operator.name == OperatorName::Yield
+              || operator.name == OperatorName::Await
+              || operator.name == OperatorName::YieldDelegated
+            {
+              // No operand if:
+              // 1. Next token is preceded by line terminator
+              // 2. Next token is a terminator we're looking for
+              // 3. Next token is a closing bracket/paren/brace
+              // 4. Next token is semicolon or comma
+              // 5. Next token is EOF
+              !next_token.preceded_by_line_terminator
+                && next_token.typ != TT::EOF
+                && next_token.typ != TT::Semicolon
+                && next_token.typ != TT::Comma
+                && next_token.typ != TT::ParenthesisClose
+                && next_token.typ != TT::BracketClose
+                && next_token.typ != TT::BraceClose
+                && !terminators.contains(&next_token.typ)
+            } else {
+              // TypeScript: For other unary operators, allow missing operand for error recovery
+              // Accept semicolon, closing braces/brackets/parens as missing operand
+              next_token.typ != TT::Semicolon
+                && next_token.typ != TT::ParenthesisClose
+                && next_token.typ != TT::BracketClose
+                && next_token.typ != TT::BraceClose
+                && next_token.typ != TT::EOF
+            };
 
-        let operand = if has_operand {
-          p.expr_with_min_prec(
-            ctx,
-            next_min_prec,
-            terminators,
-            asi,
-          )?
-        } else {
-          // For unary operators without operand, use `undefined` identifier for error recovery
-          Node::new(op_loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
-        };
+            let operand = if has_operand {
+              p.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?
+            } else {
+              // For unary operators without operand, use `undefined` identifier for error recovery
+              p.create_synthetic_undefined(op_loc)
+            };
 
-        return Ok(UnaryExpr {
-          operator: operator.name,
-          argument: operand,
-        })
-      })?.into_wrapped());
+            return Ok(UnaryExpr {
+              operator: operator.name,
+              argument: operand,
+            });
+          })?
+          .into_wrapped(),
+      );
     };
 
     // Check for async keyword first, before checking if it's a valid identifier.
@@ -584,33 +648,37 @@ impl<'a> Parser<'a> {
       // Error recovery: `yield *` should be treated as yield expression even at top level
       // This handles cases like bare `yield *;` for error recovery
       if t0.typ == TT::KeywordYield && t1.typ == TT::Asterisk {
-        return Ok(self.with_loc(|p| {
-          let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc; // consume 'yield'
-          p.consume(); // consume '*'
-          let operator = &OPERATORS[&OperatorName::YieldDelegated];
+        return Ok(
+          self
+            .with_loc(|p| {
+              let op_loc = p.consume_with_mode(LexMode::SlashIsRegex).loc; // consume 'yield'
+              p.consume(); // consume '*'
+              let operator = &OPERATORS[&OperatorName::YieldDelegated];
 
-          // Check if there's an operand
-          let next_token = p.peek();
-          let has_operand = !next_token.preceded_by_line_terminator
-            && next_token.typ != TT::EOF
-            && next_token.typ != TT::Semicolon
-            && next_token.typ != TT::Comma
-            && next_token.typ != TT::ParenthesisClose
-            && next_token.typ != TT::BracketClose
-            && next_token.typ != TT::BraceClose
-            && !terminators.contains(&next_token.typ);
+              // Check if there's an operand
+              let next_token = p.peek();
+              let has_operand = !next_token.preceded_by_line_terminator
+                && next_token.typ != TT::EOF
+                && next_token.typ != TT::Semicolon
+                && next_token.typ != TT::Comma
+                && next_token.typ != TT::ParenthesisClose
+                && next_token.typ != TT::BracketClose
+                && next_token.typ != TT::BraceClose
+                && !terminators.contains(&next_token.typ);
 
-          let operand = if has_operand {
-            p.expr_with_min_prec(ctx, operator.precedence + 1, terminators, asi)?
-          } else {
-            Node::new(op_loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
-          };
+              let operand = if has_operand {
+                p.expr_with_min_prec(ctx, operator.precedence + 1, terminators, asi)?
+              } else {
+                p.create_synthetic_undefined(op_loc)
+              };
 
-          Ok(UnaryExpr {
-            operator: operator.name,
-            argument: operand,
-          })
-        })?.into_wrapped());
+              Ok(UnaryExpr {
+                operator: operator.name,
+                argument: operand,
+              })
+            })?
+            .into_wrapped(),
+        );
       }
 
       return Ok(if t1.typ == TT::EqualsChevronRight {
@@ -629,9 +697,9 @@ impl<'a> Parser<'a> {
       while self.peek().typ == TT::At {
         has_decorators = true;
         self.consume(); // consume @
-        // Skip the decorator expression
+                        // Skip the decorator expression
         match self.expr_with_min_prec(ctx, 1, terminators, asi) {
-          Ok(_) => {},
+          Ok(_) => {}
           Err(_) => {
             self.restore_checkpoint(checkpoint);
             return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand")));
@@ -667,7 +735,7 @@ impl<'a> Parser<'a> {
             Ok(arrow) => {
               arrow.into_wrapped()
             }
-            Err(e) => {
+            Err(_e) => {
               // Failed to parse as arrow function, restore and try other options
               self.restore_checkpoint(checkpoint);
               let assertion_checkpoint = self.checkpoint();
@@ -675,7 +743,7 @@ impl<'a> Parser<'a> {
                 Ok(assertion) => {
                   assertion
                 }
-                Err(e2) => {
+                Err(_e2) => {
                   self.restore_checkpoint(assertion_checkpoint);
                   self.jsx_elem(ctx)?.into_wrapped()
                 }
@@ -684,13 +752,13 @@ impl<'a> Parser<'a> {
           }
         } else {
           // Not type arguments, try type assertion or JSX
-          
+
           match self.try_parse_angle_bracket_type_assertion(ctx) {
             Ok(assertion) => {
-              
+
               assertion
             }
-            Err(e) => {
+            Err(_e) => {
               self.restore_checkpoint(checkpoint);
               self.jsx_elem(ctx)?.into_wrapped()
             }
@@ -765,7 +833,8 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + t.loc, UnaryPostfixExpr {
             operator: operator_name,
             argument: left,
-          }).into_wrapped();
+          })
+          .into_wrapped();
           continue;
         }
         // TypeScript: Non-null assertion: expr!
@@ -777,7 +846,8 @@ impl<'a> Parser<'a> {
             use crate::ast::expr::NonNullAssertionExpr;
             left = Node::new(left.loc + t.loc, NonNullAssertionExpr {
               expression: Box::new(left),
-            }).into_wrapped();
+            })
+            .into_wrapped();
             continue;
           }
           // Otherwise it's != or !==, so restore checkpoint and continue loop to re-process
@@ -796,7 +866,8 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + loc, TaggedTemplateExpr {
             function: left,
             parts,
-          }).into_wrapped();
+          })
+          .into_wrapped();
           continue;
         }
         // TypeScript: Type assertion: expr as Type or expr as const
@@ -809,7 +880,8 @@ impl<'a> Parser<'a> {
               expression: Box::new(left),
               type_annotation: None,
               const_assertion: true,
-            }).into_wrapped();
+            })
+            .into_wrapped();
           } else {
             let type_annotation = self.type_expr(ctx)?;
             use crate::ast::expr::TypeAssertionExpr;
@@ -817,7 +889,8 @@ impl<'a> Parser<'a> {
               expression: Box::new(left),
               type_annotation: Some(type_annotation),
               const_assertion: false,
-            }).into_wrapped();
+            })
+            .into_wrapped();
           }
           continue;
         }
@@ -828,7 +901,8 @@ impl<'a> Parser<'a> {
           left = Node::new(left.loc + type_annotation.loc, SatisfiesExpr {
             expression: Box::new(left),
             type_annotation,
-          }).into_wrapped();
+          })
+          .into_wrapped();
           continue;
         }
         // TypeScript: Skip type arguments after identifiers/member expressions/call expressions
@@ -836,7 +910,8 @@ impl<'a> Parser<'a> {
         // Only treat < as type arguments if left is an identifier, member expression, or call expression
         TT::ChevronLeft => {
           // Check if left expression is an identifier, member expression, or call expression
-          let left_is_identifier_or_member = matches!(*left.stx,
+          let left_is_identifier_or_member = matches!(
+            *left.stx,
             Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
           );
 
@@ -845,18 +920,29 @@ impl<'a> Parser<'a> {
             // Peek ahead to disambiguate
             let next = self.peek();
             let looks_like_type_args = match next.typ {
-              TT::KeywordAny | TT::KeywordUnknown | TT::KeywordNever | TT::KeywordVoid |
-              TT::KeywordStringType | TT::KeywordNumberType | TT::KeywordBooleanType |
-              TT::KeywordBigIntType | TT::KeywordSymbolType | TT::KeywordObjectType |
-              TT::BracketOpen | TT::BraceOpen |
-              TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer |
-              TT::ChevronRight => true,
+              TT::KeywordAny
+              | TT::KeywordUnknown
+              | TT::KeywordNever
+              | TT::KeywordVoid
+              | TT::KeywordStringType
+              | TT::KeywordNumberType
+              | TT::KeywordBooleanType
+              | TT::KeywordBigIntType
+              | TT::KeywordSymbolType
+              | TT::KeywordObjectType
+              | TT::BracketOpen
+              | TT::BraceOpen
+              | TT::KeywordTypeof
+              | TT::KeywordKeyof
+              | TT::KeywordInfer
+              | TT::ChevronRight => true,
               // For parentheses, check if it looks like a function type
               // e.g., <() => T> or <(x: T) => U>
               // vs expression like < (c * d)
               TT::ParenthesisOpen => {
                 let [_, t2] = self.peek_n::<2>();
-                matches!(t2.typ,
+                matches!(
+                  t2.typ,
                   // <()> is likely function type: () => T
                   TT::ParenthesisClose |
                   // <(readonly [...> or <(public [...> etc
@@ -875,15 +961,22 @@ impl<'a> Parser<'a> {
                     false
                   }
                 }
-              },
+              }
               // For identifiers, need to check what comes after
               TT::Identifier => {
                 let [_, t2] = self.peek_n::<2>();
-                matches!(t2.typ,
-                  TT::ChevronRight | TT::Comma | TT::KeywordExtends | TT::Equals |
-                  TT::Bar | TT::Ampersand | TT::Dot | TT::BracketOpen
+                matches!(
+                  t2.typ,
+                  TT::ChevronRight
+                    | TT::Comma
+                    | TT::KeywordExtends
+                    | TT::Equals
+                    | TT::Bar
+                    | TT::Ampersand
+                    | TT::Dot
+                    | TT::BracketOpen
                 )
-              },
+              }
               _ => false,
             };
 
@@ -916,14 +1009,15 @@ impl<'a> Parser<'a> {
                 self.consume(); // (
                 let arguments = match self.call_args(ctx) {
                   Ok(args) => args,
-                  Err(_) => Vec::new(),  // Error recovery
+                  Err(_) => Vec::new(), // Error recovery
                 };
                 if let Ok(end) = self.require(TT::ParenthesisClose) {
                   left = Node::new(left.loc + end.loc, CallExpr {
                     optional_chaining: false,
                     arguments,
                     callee: left,
-                  }).into_wrapped();
+                  })
+                  .into_wrapped();
                 }
               }
 
@@ -938,9 +1032,7 @@ impl<'a> Parser<'a> {
       match MULTARY_OPERATOR_MAPPING.get(&t.typ) {
         None => {
           if asi.can_end_with_asi
-            && (t.preceded_by_line_terminator
-              || t.typ == TT::BraceClose
-              || t.typ == TT::EOF)
+            && (t.preceded_by_line_terminator || t.typ == TT::BraceClose || t.typ == TT::EOF)
           {
             // Automatic Semicolon Insertion.
             // TODO Exceptions (e.g. for loop header).
@@ -956,7 +1048,9 @@ impl<'a> Parser<'a> {
           };
           // TypeScript: Trigger ASI when identifier/keyword follows expression
           // Enables permissive parsing like "yield foo" -> "yield" + "foo" (two statements)
-          if asi.can_end_with_asi && (t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ)) {
+          if asi.can_end_with_asi
+            && (t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ))
+          {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
             break;
@@ -964,16 +1058,19 @@ impl<'a> Parser<'a> {
           // TypeScript: For error recovery, trigger ASI when we see tokens that typically start new constructs
           // This handles cases like `await 1` (in contexts where await is an identifier),
           // arrow functions with malformed types `(a): =>`, object literals after expressions, etc.
-          if asi.can_end_with_asi && matches!(t.typ,
-            TT::Colon |           // Arrow function malformed type annotation: (a):
+          if asi.can_end_with_asi
+            && matches!(
+              t.typ,
+              TT::Colon |           // Arrow function malformed type annotation: (a):
             TT::BraceOpen |       // New object/block after expression
             TT::LiteralNumber |   // Number after identifier: `await 1` where await is identifier
             TT::LiteralString |   // String after expression
             TT::LiteralTrue |     // Boolean after expression
             TT::LiteralFalse |    // Boolean after expression
             TT::LiteralNull |     // Null after expression
-            TT::ChevronLeftSlash  // JSX closing tag: </div> after JSX element with text children
-          ) {
+            TT::ChevronLeftSlash // JSX closing tag: </div> after JSX element with text children
+            )
+          {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
             break;
@@ -1000,26 +1097,29 @@ impl<'a> Parser<'a> {
                 },
                 arguments,
                 callee: left,
-              }).into_wrapped()
+              })
+              .into_wrapped()
             }
             OperatorName::ComputedMemberAccess
             | OperatorName::OptionalChainingComputedMemberAccess => {
               // TypeScript: Allow empty bracket expressions for error recovery: obj[]
               let member = if self.peek().typ == TT::BracketClose {
                 let loc = self.peek().loc;
-                Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+                self.create_synthetic_undefined(loc)
               } else {
                 self.expr(ctx, [TT::BracketClose]).unwrap_or_else(|_| {
                   let loc = self.peek().loc;
-                  Node::new(loc, IdExpr { name: "undefined".to_string() }).into_wrapped()
+                  self.create_synthetic_undefined(loc)
                 })
               };
               let end = self.require(TT::BracketClose)?;
               Node::new(left.loc + end.loc, ComputedMemberExpr {
-                optional_chaining: operator.name == OperatorName::OptionalChainingComputedMemberAccess,
+                optional_chaining: operator.name
+                  == OperatorName::OptionalChainingComputedMemberAccess,
                 object: left,
                 member,
-              }).into_wrapped()
+              })
+              .into_wrapped()
             }
             OperatorName::Conditional => {
               let consequent = self.expr(ctx, [TT::Colon])?;
@@ -1034,7 +1134,8 @@ impl<'a> Parser<'a> {
                 test: left,
                 consequent,
                 alternate,
-              }).into_wrapped()
+              })
+              .into_wrapped()
             }
             OperatorName::MemberAccess | OperatorName::OptionalChainingMemberAccess => {
               let right_tok = self.consume();
@@ -1053,23 +1154,20 @@ impl<'a> Parser<'a> {
                 optional_chaining: operator.name == OperatorName::OptionalChainingMemberAccess,
                 left,
                 right: self.string(right),
-              }).into_wrapped()
+              })
+              .into_wrapped()
             }
             _ => {
               if operator.name.is_assignment() {
                 left = lhs_expr_to_assign_target(left, operator.name)?;
               };
-              let right = self.expr_with_min_prec(
-                ctx,
-                next_min_prec,
-                terminators,
-                asi,
-              )?;
+              let right = self.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?;
               Node::new(left.loc + right.loc, BinaryExpr {
                 operator: operator.name,
                 left,
                 right,
-              }).into_wrapped()
+              })
+              .into_wrapped()
             }
           };
         }
