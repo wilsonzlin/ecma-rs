@@ -163,8 +163,6 @@ impl<'a> Parser<'a> {
               p.require(TT::BraceClose)?;
               Ok(crate::ast::class_or_object::ClassStaticBlock { body })
             })?;
-            use crate::ast::class_or_object::ClassOrObjKey;
-            use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
             use crate::ast::class_or_object::ClassOrObjVal;
             let dummy_key = p.create_synthetic_class_key();
             return Ok(ClassMember {
@@ -243,8 +241,6 @@ impl<'a> Parser<'a> {
                 })
               })?;
               // Fabricate a key (unused for index signatures) and wrap in IndexSignature variant
-              use crate::ast::class_or_object::ClassOrObjKey;
-              use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
               use crate::ast::class_or_object::ClassOrObjVal;
               let dummy_key = p.create_synthetic_class_key();
               (
