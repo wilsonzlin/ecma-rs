@@ -1,7 +1,7 @@
-use core::ops::RangeInclusive;
-use once_cell::sync::Lazy;
 use ahash::HashSet;
 use ahash::HashSetExt;
+use core::ops::RangeInclusive;
+use once_cell::sync::Lazy;
 
 #[derive(Clone)]
 pub struct CharFilter {

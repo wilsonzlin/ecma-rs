@@ -2,13 +2,13 @@ use ahash::HashMap;
 use ahash::HashMapExt;
 use aho_corasick::AhoCorasick;
 use once_cell::sync::Lazy;
+use parse_js::ast::node::Node;
 use parse_js::ast::ArrayElement;
 use parse_js::ast::ClassOrObjectMemberKey;
 use parse_js::ast::ClassOrObjectMemberValue;
 use parse_js::ast::ExportNames;
 use parse_js::ast::ForInit;
 use parse_js::ast::LiteralTemplatePart;
-use parse_js::ast::node::Node;
 use parse_js::ast::ObjectMemberType;
 use parse_js::ast::Syntax;
 use parse_js::ast::VarDeclMode;
@@ -20,82 +20,79 @@ use std::io::Write;
 mod tests;
 
 pub static BINARY_OPERATOR_SYNTAX: Lazy<HashMap<OperatorName, &'static str>> = Lazy::new(|| {
-    let mut map = HashMap::<OperatorName, &'static str>::new();
-    // Excluded: Call, Conditional.
-    map.insert(OperatorName::Addition, "+");
-    map.insert(OperatorName::Assignment, "=");
-    map.insert(OperatorName::AssignmentAddition, "+=");
-    map.insert(OperatorName::AssignmentBitwiseAnd, "&=");
-    map.insert(OperatorName::AssignmentBitwiseLeftShift, "<<=");
-    map.insert(OperatorName::AssignmentBitwiseOr, "|=");
-    map.insert(OperatorName::AssignmentBitwiseRightShift, ">>=");
-    map.insert(OperatorName::AssignmentBitwiseUnsignedRightShift, ">>>=");
-    map.insert(OperatorName::AssignmentBitwiseXor, "^=");
-    map.insert(OperatorName::AssignmentDivision, "/=");
-    map.insert(OperatorName::AssignmentExponentiation, "**=");
-    map.insert(OperatorName::AssignmentLogicalAnd, "&&=");
-    map.insert(OperatorName::AssignmentLogicalOr, "||=");
-    map.insert(OperatorName::AssignmentMultiplication, "*=");
-    map.insert(OperatorName::AssignmentNullishCoalescing, "??=");
-    map.insert(OperatorName::AssignmentRemainder, "%=");
-    map.insert(OperatorName::AssignmentSubtraction, "-=");
-    map.insert(OperatorName::BitwiseAnd, "&");
-    map.insert(OperatorName::BitwiseLeftShift, "<<");
-    map.insert(OperatorName::BitwiseOr, "|");
-    map.insert(OperatorName::BitwiseRightShift, ">>");
-    map.insert(OperatorName::BitwiseUnsignedRightShift, ">>>");
-    map.insert(OperatorName::BitwiseXor, "^");
-    map.insert(OperatorName::Comma, ",");
-    map.insert(OperatorName::Division, "/");
-    map.insert(OperatorName::Equality, "==");
-    map.insert(OperatorName::Exponentiation, "**");
-    map.insert(OperatorName::GreaterThan, ">");
-    map.insert(OperatorName::GreaterThanOrEqual, ">=");
-    map.insert(OperatorName::In, " in ");
-    map.insert(OperatorName::Inequality, "!=");
-    map.insert(OperatorName::Instanceof, " instanceof ");
-    map.insert(OperatorName::LessThan, "<");
-    map.insert(OperatorName::LessThanOrEqual, "<=");
-    map.insert(OperatorName::LogicalAnd, "&&");
-    map.insert(OperatorName::LogicalOr, "||");
-    map.insert(OperatorName::MemberAccess, ".");
-    map.insert(OperatorName::Multiplication, "*");
-    map.insert(OperatorName::NullishCoalescing, "??");
-    map.insert(OperatorName::OptionalChainingMemberAccess, "?.");
-    map.insert(OperatorName::OptionalChainingComputedMemberAccess, "?.[");
-    map.insert(OperatorName::OptionalChainingCall, "?.(");
-    map.insert(OperatorName::Remainder, "%");
-    map.insert(OperatorName::StrictEquality, "===");
-    map.insert(OperatorName::StrictInequality, "!==");
-    map.insert(OperatorName::Subtraction, "-");
-    map.insert(OperatorName::Typeof, " typeof ");
-    map
+  let mut map = HashMap::<OperatorName, &'static str>::new();
+  // Excluded: Call, Conditional.
+  map.insert(OperatorName::Addition, "+");
+  map.insert(OperatorName::Assignment, "=");
+  map.insert(OperatorName::AssignmentAddition, "+=");
+  map.insert(OperatorName::AssignmentBitwiseAnd, "&=");
+  map.insert(OperatorName::AssignmentBitwiseLeftShift, "<<=");
+  map.insert(OperatorName::AssignmentBitwiseOr, "|=");
+  map.insert(OperatorName::AssignmentBitwiseRightShift, ">>=");
+  map.insert(OperatorName::AssignmentBitwiseUnsignedRightShift, ">>>=");
+  map.insert(OperatorName::AssignmentBitwiseXor, "^=");
+  map.insert(OperatorName::AssignmentDivision, "/=");
+  map.insert(OperatorName::AssignmentExponentiation, "**=");
+  map.insert(OperatorName::AssignmentLogicalAnd, "&&=");
+  map.insert(OperatorName::AssignmentLogicalOr, "||=");
+  map.insert(OperatorName::AssignmentMultiplication, "*=");
+  map.insert(OperatorName::AssignmentNullishCoalescing, "??=");
+  map.insert(OperatorName::AssignmentRemainder, "%=");
+  map.insert(OperatorName::AssignmentSubtraction, "-=");
+  map.insert(OperatorName::BitwiseAnd, "&");
+  map.insert(OperatorName::BitwiseLeftShift, "<<");
+  map.insert(OperatorName::BitwiseOr, "|");
+  map.insert(OperatorName::BitwiseRightShift, ">>");
+  map.insert(OperatorName::BitwiseUnsignedRightShift, ">>>");
+  map.insert(OperatorName::BitwiseXor, "^");
+  map.insert(OperatorName::Comma, ",");
+  map.insert(OperatorName::Division, "/");
+  map.insert(OperatorName::Equality, "==");
+  map.insert(OperatorName::Exponentiation, "**");
+  map.insert(OperatorName::GreaterThan, ">");
+  map.insert(OperatorName::GreaterThanOrEqual, ">=");
+  map.insert(OperatorName::In, " in ");
+  map.insert(OperatorName::Inequality, "!=");
+  map.insert(OperatorName::Instanceof, " instanceof ");
+  map.insert(OperatorName::LessThan, "<");
+  map.insert(OperatorName::LessThanOrEqual, "<=");
+  map.insert(OperatorName::LogicalAnd, "&&");
+  map.insert(OperatorName::LogicalOr, "||");
+  map.insert(OperatorName::MemberAccess, ".");
+  map.insert(OperatorName::Multiplication, "*");
+  map.insert(OperatorName::NullishCoalescing, "??");
+  map.insert(OperatorName::OptionalChainingMemberAccess, "?.");
+  map.insert(OperatorName::OptionalChainingComputedMemberAccess, "?.[");
+  map.insert(OperatorName::OptionalChainingCall, "?.(");
+  map.insert(OperatorName::Remainder, "%");
+  map.insert(OperatorName::StrictEquality, "===");
+  map.insert(OperatorName::StrictInequality, "!==");
+  map.insert(OperatorName::Subtraction, "-");
+  map.insert(OperatorName::Typeof, " typeof ");
+  map
 });
 
 pub static UNARY_OPERATOR_SYNTAX: Lazy<HashMap<OperatorName, &'static str>> = Lazy::new(|| {
-    let mut map = HashMap::<OperatorName, &'static str>::new();
-    // Excluded: Postfix{Increment,Decrement}.
-    map.insert(OperatorName::Await, "await ");
-    map.insert(OperatorName::BitwiseNot, "~");
-    map.insert(OperatorName::Delete, "delete ");
-    map.insert(OperatorName::LogicalNot, "!");
-    map.insert(OperatorName::New, "new ");
-    map.insert(OperatorName::PrefixDecrement, "--");
-    map.insert(OperatorName::PrefixIncrement, "++");
-    map.insert(OperatorName::Typeof, "typeof ");
-    map.insert(OperatorName::UnaryNegation, "-");
-    map.insert(OperatorName::UnaryPlus, "+");
-    map.insert(OperatorName::Void, "void ");
-    map.insert(OperatorName::Yield, "yield ");
-    map.insert(OperatorName::YieldDelegated, "yield*");
-    map
+  let mut map = HashMap::<OperatorName, &'static str>::new();
+  // Excluded: Postfix{Increment,Decrement}.
+  map.insert(OperatorName::Await, "await ");
+  map.insert(OperatorName::BitwiseNot, "~");
+  map.insert(OperatorName::Delete, "delete ");
+  map.insert(OperatorName::LogicalNot, "!");
+  map.insert(OperatorName::New, "new ");
+  map.insert(OperatorName::PrefixDecrement, "--");
+  map.insert(OperatorName::PrefixIncrement, "++");
+  map.insert(OperatorName::Typeof, "typeof ");
+  map.insert(OperatorName::UnaryNegation, "-");
+  map.insert(OperatorName::UnaryPlus, "+");
+  map.insert(OperatorName::Void, "void ");
+  map.insert(OperatorName::Yield, "yield ");
+  map.insert(OperatorName::YieldDelegated, "yield*");
+  map
 });
 
-static TEMPLATE_LITERAL_ESCAPE_MAT: Lazy<AhoCorasick> = Lazy::new(|| AhoCorasick::new(&[
-  "\\",
-  "`",
-  "$",
-]));
+static TEMPLATE_LITERAL_ESCAPE_MAT: Lazy<AhoCorasick> =
+  Lazy::new(|| AhoCorasick::new(&["\\", "`", "$"]));
 
 const TEMPLATE_LITERAL_ESCAPE_REP: &[&str] = &["\\\\", "\\`", "\\$"];
 
@@ -123,11 +120,15 @@ fn emit_class_or_object_member(
         out.extend_from_slice(" ".as_bytes());
       };
     }
-    ClassOrObjectMemberValue::Method {
-      function,
-      ..
-    } => {
-      let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
+    ClassOrObjectMemberValue::Method { function, .. } => {
+      let Syntax::Function {
+        arrow,
+        async_,
+        generator,
+        parameters,
+        body,
+      } = function.stx.as_ref()
+      else {
         unreachable!();
       };
       if *async_ {
@@ -153,16 +154,28 @@ fn emit_class_or_object_member(
   };
   match value {
     ClassOrObjectMemberValue::Getter { function } => {
-      let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
+      let Syntax::Function {
+        arrow,
+        async_,
+        generator,
+        parameters,
+        body,
+      } = function.stx.as_ref()
+      else {
         unreachable!();
       };
       out.extend_from_slice("()".as_bytes());
       emit_js(out, body);
     }
-    ClassOrObjectMemberValue::Method {
-      function, ..
-    } => {
-      let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
+    ClassOrObjectMemberValue::Method { function, .. } => {
+      let Syntax::Function {
+        arrow,
+        async_,
+        generator,
+        parameters,
+        body,
+      } = function.stx.as_ref()
+      else {
         unreachable!();
       };
       out.extend_from_slice("(".as_bytes());
@@ -183,8 +196,15 @@ fn emit_class_or_object_member(
         };
       };
     }
-    ClassOrObjectMemberValue::Setter {  function } => {
-      let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
+    ClassOrObjectMemberValue::Setter { function } => {
+      let Syntax::Function {
+        arrow,
+        async_,
+        generator,
+        parameters,
+        body,
+      } = function.stx.as_ref()
+      else {
         unreachable!();
       };
       out.extend_from_slice("(".as_bytes());
@@ -218,7 +238,12 @@ fn emit_class(
   out.extend_from_slice("{".as_bytes());
   let mut last_member_was_property = false;
   for (i, m) in members.iter().enumerate() {
-    let Syntax::ClassMember { key, static_, value } = m.stx.as_ref() else {
+    let Syntax::ClassMember {
+      key,
+      static_,
+      value,
+    } = m.stx.as_ref()
+    else {
       unreachable!();
     };
     if i > 0 && last_member_was_property {
@@ -277,7 +302,7 @@ fn emit_function_parameters(out: &mut Vec<u8>, params: &[Node]) {
       out.extend_from_slice(",".as_bytes());
     };
     emit_js(out, p);
-  };
+  }
 }
 
 // NOTE: We no longer support outputting to a generic Write, as that incurs significant performance overhead (even with a BufWriter<Vec<u8>>) and our parser is not streaming anyway.
@@ -534,7 +559,14 @@ fn emit_js_under_operator(
       function,
       name,
     } => {
-      let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
+      let Syntax::Function {
+        arrow,
+        async_,
+        generator,
+        parameters,
+        body,
+      } = function.stx.as_ref()
+      else {
         unreachable!();
       };
       // We split all `export class/function` into a declaration and an export at the end, so drop the `export`.
@@ -578,7 +610,14 @@ fn emit_js_under_operator(
       parenthesised,
       function,
     } => {
-      let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
+      let Syntax::Function {
+        arrow,
+        async_,
+        generator,
+        parameters,
+        body,
+      } = function.stx.as_ref()
+      else {
         unreachable!();
       };
       // See FunctionExpr.
@@ -589,24 +628,23 @@ fn emit_js_under_operator(
       if *async_ {
         out.extend_from_slice("async".as_bytes());
       }
-      let can_omit_parentheses =
-        !async_
-          && parameters.len() == 1
-          && match parameters[0].stx.as_ref() {
-            Syntax::ParamDecl {
-              default_value,
-              pattern,
-              rest,
-            } => {
-              !rest
-                && default_value.is_none()
-                && match pattern.stx.as_ref() {
-                  Syntax::IdentifierPattern { .. } => true,
-                  _ => false,
-                }
-            }
-            _ => false,
-          };
+      let can_omit_parentheses = !async_
+        && parameters.len() == 1
+        && match parameters[0].stx.as_ref() {
+          Syntax::ParamDecl {
+            default_value,
+            pattern,
+            rest,
+          } => {
+            !rest
+              && default_value.is_none()
+              && match pattern.stx.as_ref() {
+                Syntax::IdentifierPattern { .. } => true,
+                _ => false,
+              }
+          }
+          _ => false,
+        };
       if !can_omit_parentheses {
         out.extend_from_slice("(".as_bytes());
       };
@@ -738,7 +776,14 @@ fn emit_js_under_operator(
       name,
       function,
     } => {
-      let Syntax::Function { arrow, async_, generator, parameters, body } = function.stx.as_ref() else {
+      let Syntax::Function {
+        arrow,
+        async_,
+        generator,
+        parameters,
+        body,
+      } = function.stx.as_ref()
+      else {
         unreachable!();
       };
       // We need to keep parentheses to prevent function expressions from being misinterpreted as a function declaration, which cannot be part of an expression e.g. IIFE.
@@ -991,7 +1036,12 @@ fn emit_js_under_operator(
         emit_js(out, alternate);
       };
     }
-    Syntax::ForStmt { init, condition, post, body } => {
+    Syntax::ForStmt {
+      init,
+      condition,
+      post,
+      body,
+    } => {
       out.extend_from_slice("for".as_bytes());
       out.extend_from_slice("(".as_bytes());
       match init {
@@ -1009,7 +1059,12 @@ fn emit_js_under_operator(
       out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
-    Syntax::ForInStmt { decl_mode, pat, rhs, body } => {
+    Syntax::ForInStmt {
+      decl_mode,
+      pat,
+      rhs,
+      body,
+    } => {
       out.extend_from_slice("for".as_bytes());
       out.extend_from_slice("(".as_bytes());
       if let Some(decl_mode) = decl_mode {
@@ -1025,7 +1080,13 @@ fn emit_js_under_operator(
       out.extend_from_slice(")".as_bytes());
       emit_js(out, body);
     }
-    Syntax::ForOfStmt { await_, decl_mode, pat, rhs, body } => {
+    Syntax::ForOfStmt {
+      await_,
+      decl_mode,
+      pat,
+      rhs,
+      body,
+    } => {
       out.extend_from_slice("for".as_bytes());
       if *await_ {
         out.extend_from_slice(" await".as_bytes());
@@ -1257,6 +1318,6 @@ fn emit_js_under_operator(
     Syntax::SuperExpr {} => {
       out.extend_from_slice("super".as_bytes());
     }
-    _ => todo!()
+    _ => todo!(),
   };
 }

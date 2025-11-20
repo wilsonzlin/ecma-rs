@@ -1,13 +1,20 @@
 pub mod usage;
 
-use optimize_js::{
-  analysis::{find_conds::find_conds, find_loops::find_loops, interference::calculate_interference_graph, liveness::calculate_live_ins, registers::{self, allocate_registers}, single_use_insts::analyse_single_use_defs},
-  dom::{Dom, PostDom},
-  il::inst::{Arg, Const},
-  Program,
-  ProgramFunction
-};
-use parse_js::ast::{node::Node, expr::Expr};
+use optimize_js::analysis::find_conds::find_conds;
+use optimize_js::analysis::find_loops::find_loops;
+use optimize_js::analysis::interference::calculate_interference_graph;
+use optimize_js::analysis::liveness::calculate_live_ins;
+use optimize_js::analysis::registers::allocate_registers;
+use optimize_js::analysis::registers::{self};
+use optimize_js::analysis::single_use_insts::analyse_single_use_defs;
+use optimize_js::dom::Dom;
+use optimize_js::dom::PostDom;
+use optimize_js::il::inst::Arg;
+use optimize_js::il::inst::Const;
+use optimize_js::Program;
+use optimize_js::ProgramFunction;
+use parse_js::ast::expr::Expr;
+use parse_js::ast::node::Node;
 
 fn reconstruct_fn(f: ProgramFunction) -> Node {
   let cfg = f.body;
@@ -30,14 +37,16 @@ pub(crate) fn reconstruct_ast_from_program(pg: Program) -> Node {
       Arg::Const(v) => match v {
         Const::BigInt(v) => todo!(),
         Const::Bool(v) => todo!(),
-        Const::Null => Syntax::LiteralNull {  },
+        Const::Null => Syntax::LiteralNull {},
         Const::Num(v) => Syntax::LiteralNumberExpr { value: *v },
         Const::Str(v) => todo!(),
         Const::Undefined => todo!(),
-      }
+      },
       Arg::Fn(id) => todo!(),
       // TODO
-      Arg::Var(v) => Syntax::IdentifierExpr { name: format!("tmp{v}") },
+      Arg::Var(v) => Syntax::IdentifierExpr {
+        name: format!("tmp{v}"),
+      },
     };
     Node::new(Loc(0, 0), stx)
   }
@@ -45,7 +54,12 @@ pub(crate) fn reconstruct_ast_from_program(pg: Program) -> Node {
   let mut stmts = Vec::new();
   for inst in bblock {
     let stx = match inst {
-      Inst::Bin { tgt, left, op, right } => {
+      Inst::Bin {
+        tgt,
+        left,
+        op,
+        right,
+      } => {
         let operator = match op {
           BinOp::Add => OperatorName::Addition,
           BinOp::Div => OperatorName::Division,
@@ -105,7 +119,9 @@ pub(crate) fn reconstruct_ast_from_program(pg: Program) -> Node {
         Syntax::BinaryExpr {
           parenthesised: false, // TODO
           operator: OperatorName::Assignment,
-          left: Node::new(Loc(0, 0), Syntax::IdentifierPattern { name: format!("tmp{to}") }), // TODO
+          left: Node::new(Loc(0, 0), Syntax::IdentifierPattern {
+            name: format!("tmp{to}"),
+          }), // TODO
           right: Node::new(Loc(0, 0), Syntax::IdentifierPattern { name: from.clone() }),
         }
       }
@@ -122,6 +138,6 @@ pub(crate) fn reconstruct_ast_from_program(pg: Program) -> Node {
     let n_expr = Node::new(Loc(0, 0), stx);
     let n_stmt = Node::new(Loc(0, 0), Syntax::ExpressionStmt { expression: n_expr });
     stmts.push(n_stmt);
-  };
+  }
   Node::new(Loc(0, 0), Syntax::TopLevel { body: stmts })
 }

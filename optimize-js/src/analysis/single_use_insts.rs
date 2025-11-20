@@ -1,15 +1,12 @@
+use crate::cfg::cfg::Cfg;
+use crate::il::inst::Arg;
+use crate::il::inst::InstTyp;
 use ahash::HashMap;
 use ahash::HashMapExt;
 use ahash::HashSet;
 use ahash::HashSetExt;
 
-use crate::cfg::cfg::Cfg;
-use crate::il::inst::Arg;
-use crate::il::inst::InstTyp;
-
-pub fn analyse_single_use_defs(
-  cfg: &Cfg,
-) -> (HashMap<(u32, usize), (u32, usize)>, HashSet<u32>) {
+pub fn analyse_single_use_defs(cfg: &Cfg) -> (HashMap<(u32, usize), (u32, usize)>, HashSet<u32>) {
   let mut use_locs = HashMap::<u32, Vec<(u32, usize)>>::new();
   let mut def_locs = HashMap::<u32, (u32, usize)>::new();
   for (label, insts) in cfg.bblocks.all() {

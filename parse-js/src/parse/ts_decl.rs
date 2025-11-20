@@ -1,15 +1,19 @@
-use super::{ParseCtx, Parser};
-use crate::ast::expr::Expr;
+use super::ParseCtx;
+use super::Parser;
 use crate::ast::node::Node;
-use crate::ast::stmt::Stmt;
 use crate::ast::ts_stmt::*;
-use crate::ast::type_expr::TypeExpr;
-use crate::error::{SyntaxErrorType, SyntaxResult};
+use crate::error::SyntaxErrorType;
+use crate::error::SyntaxResult;
 use crate::token::TT;
 
 impl<'a> Parser<'a> {
   /// Parse interface declaration: interface Foo<T> extends Bar { }
-  pub fn interface_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<InterfaceDecl>> {
+  pub fn interface_decl(
+    &mut self,
+    ctx: ParseCtx,
+    export: bool,
+    declare: bool,
+  ) -> SyntaxResult<Node<InterfaceDecl>> {
     self.with_loc(|p| {
       p.require(TT::KeywordInterface)?;
       // TypeScript allows type keywords as interface names in error cases
@@ -47,7 +51,12 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse type alias: type Foo<T> = Bar<T>
-  pub fn type_alias_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<TypeAliasDecl>> {
+  pub fn type_alias_decl(
+    &mut self,
+    ctx: ParseCtx,
+    export: bool,
+    declare: bool,
+  ) -> SyntaxResult<Node<TypeAliasDecl>> {
     self.with_loc(|p| {
       p.require(TT::KeywordType)?;
       // TypeScript allows type keywords as type alias names in error cases
@@ -63,7 +72,7 @@ impl<'a> Parser<'a> {
       let type_expr = p.type_expr(ctx)?;
 
       // Optional semicolon
-      p.consume_if(TT::Semicolon);
+      let _ = p.consume_if(TT::Semicolon);
 
       Ok(TypeAliasDecl {
         export,
@@ -76,7 +85,13 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse enum declaration: enum Color { Red, Green, Blue }
-  pub fn enum_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool, const_: bool) -> SyntaxResult<Node<EnumDecl>> {
+  pub fn enum_decl(
+    &mut self,
+    ctx: ParseCtx,
+    export: bool,
+    declare: bool,
+    const_: bool,
+  ) -> SyntaxResult<Node<EnumDecl>> {
     self.with_loc(|p| {
       p.require(TT::KeywordEnum)?;
       // TypeScript allows type keywords as enum names in error cases
@@ -121,13 +136,24 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse namespace declaration: namespace Foo { }
-  pub fn namespace_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<NamespaceDecl>> {
+  pub fn namespace_decl(
+    &mut self,
+    ctx: ParseCtx,
+    export: bool,
+    declare: bool,
+  ) -> SyntaxResult<Node<NamespaceDecl>> {
     self.namespace_decl_impl(ctx, export, declare, false)
   }
 
   /// Parse namespace declaration with optional keyword check
   /// For dotted paths like `namespace A.B.C`, we don't require the keyword before B and C
-  fn namespace_decl_impl(&mut self, ctx: ParseCtx, export: bool, declare: bool, skip_keyword: bool) -> SyntaxResult<Node<NamespaceDecl>> {
+  fn namespace_decl_impl(
+    &mut self,
+    ctx: ParseCtx,
+    export: bool,
+    declare: bool,
+    skip_keyword: bool,
+  ) -> SyntaxResult<Node<NamespaceDecl>> {
     self.with_loc(|p| {
       // Accept both 'namespace' and 'module' keywords (unless this is part of a dotted path)
       if !skip_keyword {
@@ -172,7 +198,12 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse module declaration: module "foo" { } or declare module "foo" { }
-  pub fn module_decl(&mut self, ctx: ParseCtx, export: bool, declare: bool) -> SyntaxResult<Node<ModuleDecl>> {
+  pub fn module_decl(
+    &mut self,
+    ctx: ParseCtx,
+    export: bool,
+    declare: bool,
+  ) -> SyntaxResult<Node<ModuleDecl>> {
     self.with_loc(|p| {
       p.require(TT::KeywordModule)?;
 
@@ -238,18 +269,37 @@ impl<'a> Parser<'a> {
       use crate::parse::expr::Asi;
       use crate::token::TT;
       let mut asi = Asi::can();
-      let expression = p.expr_with_min_prec(ctx, 1, [
-        TT::KeywordStatic, TT::KeywordGet, TT::KeywordSet, TT::KeywordAsync,
-        TT::KeywordPublic, TT::KeywordPrivate, TT::KeywordProtected,
-        TT::KeywordAbstract, TT::KeywordReadonly, TT::KeywordOverride,
-        TT::Asterisk, TT::At, TT::BracketOpen, TT::BraceClose, TT::Identifier
-      ], &mut asi)?;
+      let expression = p.expr_with_min_prec(
+        ctx,
+        1,
+        [
+          TT::KeywordStatic,
+          TT::KeywordGet,
+          TT::KeywordSet,
+          TT::KeywordAsync,
+          TT::KeywordPublic,
+          TT::KeywordPrivate,
+          TT::KeywordProtected,
+          TT::KeywordAbstract,
+          TT::KeywordReadonly,
+          TT::KeywordOverride,
+          TT::Asterisk,
+          TT::At,
+          TT::BracketOpen,
+          TT::BraceClose,
+          TT::Identifier,
+        ],
+        &mut asi,
+      )?;
       Ok(crate::ast::expr::Decorator { expression })
     })
   }
 
   /// Parse decorators list
-  pub fn decorators(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<crate::ast::expr::Decorator>>> {
+  pub fn decorators(
+    &mut self,
+    ctx: ParseCtx,
+  ) -> SyntaxResult<Vec<Node<crate::ast::expr::Decorator>>> {
     let mut decorators = Vec::new();
     while self.peek().typ == TT::At {
       decorators.push(self.decorator(ctx)?);

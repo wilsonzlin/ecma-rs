@@ -1,10 +1,15 @@
-
-use std::{collections::{hash_map::Entry, VecDeque}, hash::Hash};
-
-use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
-use itertools::{chain, Itertools};
-
-use crate::{cfg::cfg::{Cfg, CfgBBlocks}, il::inst::Inst};
+use crate::cfg::cfg::Cfg;
+use crate::cfg::cfg::CfgBBlocks;
+use crate::il::inst::Inst;
+use ahash::HashMap;
+use ahash::HashMapExt;
+use ahash::HashSet;
+use ahash::HashSetExt;
+use itertools::chain;
+use itertools::Itertools;
+use std::collections::hash_map::Entry;
+use std::collections::VecDeque;
+use std::hash::Hash;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum Set<T: Clone + Eq + Hash> {
@@ -64,18 +69,22 @@ pub trait DataFlowAnalysis<T: Eq, const FORWARDS: bool> {
   // Must be monotonic.
   fn transfer(&mut self, block: &[Inst], in_: &T) -> T;
   fn join(&mut self, pred_outs: &[&T]) -> T;
-  fn analyze (&mut self, cfg: &Cfg) {
-    let related = |successors: bool, label: u32| if successors || !FORWARDS {
-      cfg.graph.children(label)
-    } else {
-      cfg.graph.parents(label)
+  fn analyze(&mut self, cfg: &Cfg) {
+    let related = |successors: bool, label: u32| {
+      if successors || !FORWARDS {
+        cfg.graph.children(label)
+      } else {
+        cfg.graph.parents(label)
+      }
     };
     let mut outs = HashMap::<u32, T>::new();
     // TODO u32::MAX does not exist.
     let mut worklist = VecDeque::from([if FORWARDS { 0 } else { u32::MAX }]);
     while let Some(label) = worklist.pop_front() {
       let in_ = self.join(
-        &related(false, label).filter_map(|p| outs.get(&p)).collect_vec()
+        &related(false, label)
+          .filter_map(|p| outs.get(&p))
+          .collect_vec(),
       );
       let out = self.transfer(cfg.bblocks.get(label), &in_);
       let did_change = outs.get(&label).is_none_or(|ex| ex != &out);
@@ -83,6 +92,6 @@ pub trait DataFlowAnalysis<T: Eq, const FORWARDS: bool> {
       if did_change {
         worklist.extend(related(true, label));
       };
-    };
+    }
   }
 }

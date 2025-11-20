@@ -1,8 +1,8 @@
 use ahash::HashMap;
 use ahash::HashMapExt;
+use core::ptr;
 use parking_lot::RwLock;
 use serde::Serialize;
-use core::ptr;
 use std::any::Any;
 use std::any::TypeId;
 use std::collections::hash_map::Entry;
@@ -130,7 +130,12 @@ impl ScopeData {
     f: F,
   ) -> &mut T {
     let t = TypeId::of::<T>();
-    self.assoc.entry(t).or_insert_with(|| Box::from(f())).downcast_mut().unwrap()
+    self
+      .assoc
+      .entry(t)
+      .or_insert_with(|| Box::from(f()))
+      .downcast_mut()
+      .unwrap()
   }
 
   pub fn get_or_insert_assoc<T: Any + Send + Sync>(&mut self) -> &mut T
@@ -241,11 +246,15 @@ impl Scope {
   }
 
   pub fn self_and_ancestors(&self) -> ScopeSelfAndAncestors {
-    ScopeSelfAndAncestors { cur: Some(self.clone()) }
+    ScopeSelfAndAncestors {
+      cur: Some(self.clone()),
+    }
   }
 
   pub fn descendants(&self) -> ScopeDescendants {
-    ScopeDescendants { queue: self.data().children().iter().cloned().collect() }
+    ScopeDescendants {
+      queue: self.data().children().iter().cloned().collect(),
+    }
   }
 
   pub fn create_child_scope(&self, typ: ScopeType) -> Scope {
@@ -261,7 +270,10 @@ impl Scope {
 
   /// Returns the most distant self-or-ancestor scope that matches the provided predicate. If no such match is found, None is returned.
   pub fn find_furthest_scope<F: Fn(ScopeType) -> bool>(&self, pred: F) -> Option<Scope> {
-    self.self_and_ancestors().take_while(|s| pred(s.data().typ)).last()
+    self
+      .self_and_ancestors()
+      .take_while(|s| pred(s.data().typ))
+      .last()
   }
 
   /// Returns the matching symbol and associated nearest scope that contains the provided identifier. Once a scope is reached that matches the provided predicate, the search stops *after* looking in that scope. If no such match is found, None is returned.
@@ -278,7 +290,7 @@ impl Scope {
       if scope_pred(cur.typ) {
         break;
       };
-    };
+    }
     None
   }
 
@@ -310,10 +322,15 @@ impl Scope {
   pub fn debug_indented(&self, out: &mut impl fmt::Write, indent: usize) -> fmt::Result {
     let cur = self.0.read();
     write!(out, "{}", "  ".repeat(indent))?;
-    write!(out, "{:?}: {}\n", cur.typ, cur.symbol_declaration_order.join(", "))?;
+    write!(
+      out,
+      "{:?}: {}\n",
+      cur.typ,
+      cur.symbol_declaration_order.join(", ")
+    )?;
     for child in cur.children.iter() {
       child.debug_indented(out, indent + 1)?;
-    };
+    }
     Ok(())
   }
 }

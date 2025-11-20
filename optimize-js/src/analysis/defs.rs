@@ -1,6 +1,7 @@
-use ahash::{HashMap, HashMapExt, HashSet};
-
 use crate::cfg::cfg::Cfg;
+use ahash::HashMap;
+use ahash::HashMapExt;
+use ahash::HashSet;
 
 // Find which bblocks assign to what vars.
 pub fn calculate_defs(cfg: &Cfg) -> HashMap<u32, HashSet<u32>> {

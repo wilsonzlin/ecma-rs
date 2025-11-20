@@ -1,10 +1,9 @@
-use ahash::HashMap;
-use ahash::HashMapExt;
-
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::Arg;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
+use ahash::HashMap;
+use ahash::HashMapExt;
 
 // VarAssigns are always useless in strict SSA. However, dominator-based value numbering doesn't manage to detect and remove all such insts, with one reason being that DVNT only traverses domtree children.
 // My theory for correctness:
@@ -37,7 +36,7 @@ pub fn optpass_redundant_assigns(changed: &mut bool, cfg: &mut Cfg) {
           continue;
         };
         *arg = new_arg.clone();
-      };
+      }
     }
   }
 }

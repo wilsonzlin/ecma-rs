@@ -1,5 +1,21 @@
-use crate::{ast::{expr::{IdExpr, jsx::{JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxExprContainer, JsxMemberExpr, JsxName, JsxSpreadAttr, JsxText}}, node::Node}, error::{SyntaxErrorType, SyntaxResult}, lex::LexMode, parse::{ParseCtx, Parser}, token::TT};
-
+use crate::ast::expr::jsx::JsxAttr;
+use crate::ast::expr::jsx::JsxAttrVal;
+use crate::ast::expr::jsx::JsxElem;
+use crate::ast::expr::jsx::JsxElemChild;
+use crate::ast::expr::jsx::JsxElemName;
+use crate::ast::expr::jsx::JsxExprContainer;
+use crate::ast::expr::jsx::JsxMemberExpr;
+use crate::ast::expr::jsx::JsxName;
+use crate::ast::expr::jsx::JsxSpreadAttr;
+use crate::ast::expr::jsx::JsxText;
+use crate::ast::expr::IdExpr;
+use crate::ast::node::Node;
+use crate::error::SyntaxErrorType;
+use crate::error::SyntaxResult;
+use crate::lex::LexMode;
+use crate::parse::ParseCtx;
+use crate::parse::Parser;
+use crate::token::TT;
 
 impl<'a> Parser<'a> {
   /// Gets a token that can be used as a JSX name (attribute name, tag name part, etc.).
@@ -11,7 +27,11 @@ impl<'a> Parser<'a> {
       self.consume_with_mode(LexMode::JsxTag);
       Ok(tok)
     } else {
-      Err(tok.error(crate::error::SyntaxErrorType::RequiredTokenNotFound(TT::Identifier)))
+      Err(
+        tok.error(crate::error::SyntaxErrorType::RequiredTokenNotFound(
+          TT::Identifier,
+        )),
+      )
     }
   }
 
@@ -66,7 +86,13 @@ impl<'a> Parser<'a> {
         }),
         path,
       }))
-    } else if !self.bytes(start).chars().next().unwrap().is_ascii_lowercase() {
+    } else if !self
+      .bytes(start)
+      .chars()
+      .next()
+      .unwrap()
+      .is_ascii_lowercase()
+    {
       // User-defined component.
       JsxElemName::Id(Node::new(start, IdExpr {
         name: self.string(start),
@@ -94,17 +120,29 @@ impl<'a> Parser<'a> {
         // Empty expression - create empty container
         let loc = self.peek().loc;
         self.consume(); // consume }
-        // For empty expressions, we still need a valid expression node
-        // Use an empty identifier or similar placeholder
-        use crate::ast::expr::{Expr, IdExpr};
+                        // For empty expressions, we still need a valid expression node
+                        // Use an empty identifier or similar placeholder
+        use crate::ast::expr::Expr;
+        use crate::ast::expr::IdExpr;
         use crate::ast::node::Node;
         use crate::loc::Loc;
-        let empty_expr = Node::new(Loc(loc.0, loc.0), Expr::Id(Node::new(Loc(loc.0, loc.0), IdExpr { name: String::new() })));
-        let expr = Node::new(loc, JsxExprContainer { spread: false, value: empty_expr });
+        let empty_expr = Node::new(
+          Loc(loc.0, loc.0),
+          Expr::Id(Node::new(Loc(loc.0, loc.0), IdExpr {
+            name: String::new(),
+          })),
+        );
+        let expr = Node::new(loc, JsxExprContainer {
+          spread: false,
+          value: empty_expr,
+        });
         JsxAttrVal::Expression(expr)
       } else {
         let value = self.expr(ctx, [TT::BraceClose])?;
-        let expr = Node::new(value.loc, JsxExprContainer { spread: false, value });
+        let expr = Node::new(value.loc, JsxExprContainer {
+          spread: false,
+          value,
+        });
         self.require(TT::BraceClose)?;
         JsxAttrVal::Expression(expr)
       }
@@ -117,7 +155,9 @@ impl<'a> Parser<'a> {
   /// Parses a JSX named attribute like `key="value"`. See `JsxAttr` for other attribute types.
   pub fn jsx_named_attr(&mut self, ctx: ParseCtx) -> SyntaxResult<JsxAttr> {
     let name = self.jsx_name()?;
-    let value = self.consume_if(TT::Equals).and_then(|| self.jsx_attr_val(ctx))?;
+    let value = self
+      .consume_if(TT::Equals)
+      .and_then(|| self.jsx_attr_val(ctx))?;
     Ok(JsxAttr::Named { name, value })
   }
 
@@ -181,7 +221,7 @@ impl<'a> Parser<'a> {
           self.require(TT::BraceClose)?;
         }
       };
-    };
+    }
     Ok(children)
   }
 
@@ -209,7 +249,7 @@ impl<'a> Parser<'a> {
         .unwrap_or_default();
       if p.consume_if(TT::Slash).is_match() {
         // Self closing.
-        
+
         p.require(TT::ChevronRight)?;
         return Ok(JsxElem {
           name: tag_name,
@@ -217,7 +257,7 @@ impl<'a> Parser<'a> {
           children: Vec::new(),
         });
       }
-      
+
       p.require(TT::ChevronRight)?;
       let children = p.jsx_elem_children(ctx)?;
       let closing = p.require(TT::ChevronLeftSlash)?;

@@ -1,4 +1,5 @@
-use ast::{node::Node, stx::TopLevel};
+use ast::node::Node;
+use ast::stx::TopLevel;
 use error::SyntaxResult;
 use lex::Lexer;
 use parse::Parser;

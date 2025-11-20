@@ -1,11 +1,34 @@
-use crate::{ast::{expr::{pat::{IdPat, Pat}, Expr, ImportExpr, ImportMeta}, import_export::{ExportName, ExportNames, ImportName, ImportNames}, node::Node, stmt::{decl::PatDecl, ExportDefaultExprStmt, ExportListStmt, ImportStmt, Stmt}}, error::{SyntaxErrorType, SyntaxResult}, lex::KEYWORDS_MAPPING, parse::stmt::decl::VarDeclParseMode, token::TT};
-
-use super::{expr::{Asi, lit::normalise_literal_string, pat::is_valid_pattern_identifier}, ParseCtx, Parser};
+use super::expr::pat::is_valid_pattern_identifier;
+use super::expr::Asi;
+use super::ParseCtx;
+use super::Parser;
+use crate::ast::expr::pat::IdPat;
+use crate::ast::expr::ImportExpr;
+use crate::ast::expr::ImportMeta;
+use crate::ast::import_export::ExportName;
+use crate::ast::import_export::ExportNames;
+use crate::ast::import_export::ImportName;
+use crate::ast::import_export::ImportNames;
+use crate::ast::node::Node;
+use crate::ast::stmt::decl::PatDecl;
+use crate::ast::stmt::ExportDefaultExprStmt;
+use crate::ast::stmt::ExportListStmt;
+use crate::ast::stmt::ImportStmt;
+use crate::ast::stmt::Stmt;
+use crate::error::SyntaxErrorType;
+use crate::error::SyntaxResult;
+use crate::lex::KEYWORDS_MAPPING;
+use crate::parse::stmt::decl::VarDeclParseMode;
+use crate::token::TT;
 
 impl<'a> Parser<'a> {
   /// Parses `target`, `target as alias`, `default as alias`, `"target" as alias`.
   /// For exports, `default` can be used without an alias. For imports, it requires an alias.
-  fn import_or_export_name(&mut self, ctx: ParseCtx, is_export: bool) -> SyntaxResult<(String, Node<IdPat>)> {
+  fn import_or_export_name(
+    &mut self,
+    ctx: ParseCtx,
+    is_export: bool,
+  ) -> SyntaxResult<(String, Node<IdPat>)> {
     let t0 = self.peek();
     #[rustfmt::skip]
     let (target, alias_is_required) = match t0.typ {
@@ -23,7 +46,9 @@ impl<'a> Parser<'a> {
       let t_alias = self.peek();
       if is_export && t_alias.typ == TT::KeywordDefault {
         self.consume();
-        Node::new(t_alias.loc, IdPat { name: "default".to_string() })
+        Node::new(t_alias.loc, IdPat {
+          name: "default".to_string(),
+        })
       } else if t_alias.typ == TT::LiteralString {
         // ES2022: arbitrary module namespace identifiers - allow string literals as aliases
         let name = self.lit_str_val()?;
@@ -35,7 +60,9 @@ impl<'a> Parser<'a> {
       return Err(t0.error(SyntaxErrorType::ExpectedNotFound));
     } else {
       // Create a "virtual" node representing the alias as if `a as a` was declared instead. (See AST for rationale.)
-      Node::new(t0.loc, IdPat { name: target.clone() })
+      Node::new(t0.loc, IdPat {
+        name: target.clone(),
+      })
     };
     Ok((target, alias))
   }
@@ -88,75 +115,76 @@ impl<'a> Parser<'a> {
       p.require(TT::KeywordImport)?;
       // TypeScript: import type
       let type_only = p.consume_if(TT::KeywordType).is_match();
-      let (default, can_have_names) =
-        if p.peek().typ == TT::Identifier {
-          let alias = p.id_pat_decl(ctx)?;
+      let (default, can_have_names) = if p.peek().typ == TT::Identifier {
+        let alias = p.id_pat_decl(ctx)?;
 
-          // TypeScript: check for import equals: import id = require("module") or import id = EntityName
-          if p.peek().typ == TT::Equals {
-            p.consume(); // =
+        // TypeScript: check for import equals: import id = require("module") or import id = EntityName
+        if p.peek().typ == TT::Equals {
+          p.consume(); // =
 
-            // Check if this is require() or entity name
-            if p.peek().typ == TT::Identifier {
-              let checkpoint = p.checkpoint();
-              let first_name = p.consume_as_string();
+          // Check if this is require() or entity name
+          if p.peek().typ == TT::Identifier {
+            let _checkpoint = p.checkpoint();
+            let first_name = p.consume_as_string();
 
-              if first_name == "require" && p.peek().typ == TT::ParenthesisOpen {
-                // import id = require("module")
-                p.require(TT::ParenthesisOpen)?;
-                let module = p.lit_str_val()?;
-                p.require(TT::ParenthesisClose)?;
+            if first_name == "require" && p.peek().typ == TT::ParenthesisOpen {
+              // import id = require("module")
+              p.require(TT::ParenthesisOpen)?;
+              let module = p.lit_str_val()?;
+              p.require(TT::ParenthesisClose)?;
 
-                // Allow ASI
-                let t = p.peek();
-                if t.typ != TT::EOF && !t.preceded_by_line_terminator {
-                  p.consume_if(TT::Semicolon);
-                }
-
-                return Ok(ImportStmt {
-                  type_only: false,
-                  default: Some(alias),
-                  module,
-                  names: None,
-                  attributes: None,
-                });
-              } else {
-                // import id = EntityName (e.g., import A = B.C.D)
-                // Consume dotted name: identifier(.identifier)*
-                while p.peek().typ == TT::Dot {
-                  p.consume(); // .
-                  if p.peek().typ == TT::Identifier || crate::lex::KEYWORDS_MAPPING.contains_key(&p.peek().typ) {
-                    p.consume();
-                  } else {
-                    // Error recovery: allow incomplete dotted names
-                    break;
-                  }
-                }
-
-                // Allow ASI
-                let t = p.peek();
-                if t.typ != TT::EOF && !t.preceded_by_line_terminator {
-                  p.consume_if(TT::Semicolon);
-                }
-
-                // Return as ImportStmt with marker (empty module string)
-                return Ok(ImportStmt {
-                  type_only: false,
-                  default: Some(alias),
-                  module: String::new(),
-                  names: None,
-                  attributes: None,
-                });
+              // Allow ASI
+              let t = p.peek();
+              if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+                let _ = p.consume_if(TT::Semicolon);
               }
-            } else {
-              return Err(p.peek().error(SyntaxErrorType::ExpectedNotFound));
-            }
-          }
 
-          (Some(alias), p.consume_if(TT::Comma).is_match())
-        } else {
-          (None, true)
-        };
+              return Ok(ImportStmt {
+                type_only: false,
+                default: Some(alias),
+                module,
+                names: None,
+                attributes: None,
+              });
+            } else {
+              // import id = EntityName (e.g., import A = B.C.D)
+              // Consume dotted name: identifier(.identifier)*
+              while p.peek().typ == TT::Dot {
+                p.consume(); // .
+                if p.peek().typ == TT::Identifier
+                  || crate::lex::KEYWORDS_MAPPING.contains_key(&p.peek().typ)
+                {
+                  p.consume();
+                } else {
+                  // Error recovery: allow incomplete dotted names
+                  break;
+                }
+              }
+
+              // Allow ASI
+              let t = p.peek();
+              if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+                let _ = p.consume_if(TT::Semicolon);
+              }
+
+              // Return as ImportStmt with marker (empty module string)
+              return Ok(ImportStmt {
+                type_only: false,
+                default: Some(alias),
+                module: String::new(),
+                names: None,
+                attributes: None,
+              });
+            }
+          } else {
+            return Err(p.peek().error(SyntaxErrorType::ExpectedNotFound));
+          }
+        }
+
+        (Some(alias), p.consume_if(TT::Comma).is_match())
+      } else {
+        (None, true)
+      };
       let names = if !can_have_names {
         None
       } else if p.consume_if(TT::Asterisk).is_match() {
@@ -171,7 +199,11 @@ impl<'a> Parser<'a> {
           let (target, alias) = p.import_or_export_name(ctx, false)?;
           let alias = alias.into_wrapped();
           let alias = alias.wrap(|pat| PatDecl { pat });
-          Ok(ImportName { type_only, importable: target, alias })
+          Ok(ImportName {
+            type_only,
+            importable: target,
+            alias,
+          })
         })?;
         Some(ImportNames::Specific(names))
       } else {
@@ -196,7 +228,7 @@ impl<'a> Parser<'a> {
       if t.typ != TT::EOF && !t.preceded_by_line_terminator {
         p.require(TT::Semicolon)?;
       } else {
-        p.consume_if(TT::Semicolon);
+        let _ = p.consume_if(TT::Semicolon);
       }
       Ok(ImportStmt {
         type_only,
@@ -216,16 +248,16 @@ impl<'a> Parser<'a> {
       let t = p.consume();
       let (names, from) = match t.typ {
         TT::BraceOpen => {
-          let names = p.list_with_loc(
-            TT::Comma,
-            TT::BraceClose,
-            |p| {
-              // TypeScript: per-specifier type-only export
-              let type_only = p.consume_if(TT::KeywordType).is_match();
-              p.import_or_export_name(ctx, true)
-                .map(|(target, alias)| ExportName { type_only, exportable: target, alias })
-            },
-          )?;
+          let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
+            // TypeScript: per-specifier type-only export
+            let type_only = p.consume_if(TT::KeywordType).is_match();
+            p.import_or_export_name(ctx, true)
+              .map(|(target, alias)| ExportName {
+                type_only,
+                exportable: target,
+                alias,
+              })
+          })?;
           let from = p.consume_if(TT::KeywordFrom).and_then(|| p.lit_str_val())?;
           (ExportNames::Specific(names), from)
         }
@@ -263,7 +295,10 @@ impl<'a> Parser<'a> {
     })
   }
 
-  pub fn export_default_expr_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ExportDefaultExprStmt>> {
+  pub fn export_default_expr_stmt(
+    &mut self,
+    ctx: ParseCtx,
+  ) -> SyntaxResult<Node<ExportDefaultExprStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordExport)?;
       p.require(TT::KeywordDefault)?;
@@ -283,19 +318,21 @@ impl<'a> Parser<'a> {
 
     // TypeScript: export = expression (export assignment)
     if t1.typ == TT::Equals {
-      return self.with_loc(|p| {
-        p.require(TT::KeywordExport)?;
-        p.require(TT::Equals)?;
-        let expression = p.expr(ctx, [TT::Semicolon])?;
-        // Allow ASI
-        let t = p.peek();
-        if t.typ != TT::EOF && !t.preceded_by_line_terminator {
-          p.require(TT::Semicolon)?;
-        } else {
-          p.consume_if(TT::Semicolon);
-        }
-        Ok(crate::ast::ts_stmt::ExportAssignmentDecl { expression })
-      }).map(|node| node.into_wrapped());
+      return self
+        .with_loc(|p| {
+          p.require(TT::KeywordExport)?;
+          p.require(TT::Equals)?;
+          let expression = p.expr(ctx, [TT::Semicolon])?;
+          // Allow ASI
+          let t = p.peek();
+          if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+            p.require(TT::Semicolon)?;
+          } else {
+            let _ = p.consume_if(TT::Semicolon);
+          }
+          Ok(crate::ast::ts_stmt::ExportAssignmentDecl { expression })
+        })
+        .map(|node| node.into_wrapped());
     }
 
     #[rustfmt::skip]

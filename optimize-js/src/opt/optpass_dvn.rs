@@ -1,9 +1,3 @@
-use ahash::HashMap;
-use ahash::HashSet;
-use itertools::Itertools;
-use std::collections::hash_map::Entry;
-use std::mem::swap;
-
 use crate::cfg::cfg::Cfg;
 use crate::dom::Dom;
 use crate::eval::consteval::maybe_eval_const_bin_expr;
@@ -15,6 +9,11 @@ use crate::il::inst::Const;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::il::inst::UnOp;
+use ahash::HashMap;
+use ahash::HashSet;
+use itertools::Itertools;
+use std::collections::hash_map::Entry;
+use std::mem::swap;
 
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Val {
@@ -52,18 +51,12 @@ impl State {
         Entry::Occupied(o) => o.get().clone(),
         // We haven't seen this variable before, so it must be from a back edge. Therefore, we must leave it as is.
         Entry::Vacant(_) => Arg::Var(*tgt),
-      }
+      },
     }
   }
 }
 
-fn inner(
-  changed: &mut bool,
-  state: &mut State,
-  cfg: &mut Cfg,
-  dom: &Dom,
-  label: u32,
-) {
+fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label: u32) {
   let orig_state = state.clone();
   for inst_mut in cfg.bblocks.get_mut(label).iter_mut() {
     // We still need to normalise args in instructions in case we don't rewrite entire instruction to a VarAssign.
@@ -104,15 +97,11 @@ fn inner(
         let (tgt, func, this, args, spreads) = inst.as_call();
         // TODO If constevalable and `tgt` is None.
         match (tgt, func, this, args, spreads) {
-          (Some(_), Arg::Builtin(func), _, args, spread) if spreads.is_empty() &&
-            args
-              .iter()
-              .all(|a| matches!(a, Arg::Const(_))) =>
+          (Some(_), Arg::Builtin(func), _, args, spread)
+            if spreads.is_empty() && args.iter().all(|a| matches!(a, Arg::Const(_))) =>
           {
-            maybe_eval_const_builtin_call(
-              &func,
-              &args.iter().map(|a| a.to_const()).collect_vec(),
-            ).map(|v| Arg::Const(v))
+            maybe_eval_const_builtin_call(&func, &args.iter().map(|a| a.to_const()).collect_vec())
+              .map(|v| Arg::Const(v))
           }
           _ => None,
         }
@@ -205,11 +194,7 @@ fn inner(
 /// - Copy propagation
 /// - Const propagation
 /// - Const evaluation
-pub fn optpass_dvn(
-  changed: &mut bool,
-  cfg: &mut Cfg,
-  dom: &Dom,
-) {
+pub fn optpass_dvn(changed: &mut bool, cfg: &mut Cfg, dom: &Dom) {
   let mut state = State::default();
   inner(changed, &mut state, cfg, dom, 0);
 }

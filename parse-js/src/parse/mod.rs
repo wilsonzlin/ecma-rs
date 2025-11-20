@@ -1,5 +1,3 @@
-use expr::pat::ParsePatternRules;
-
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
@@ -9,17 +7,18 @@ use crate::lex::Lexer;
 use crate::loc::Loc;
 use crate::token::Token;
 use crate::token::TT;
+use expr::pat::ParsePatternRules;
 
 pub mod class_or_object;
+pub mod drive;
 pub mod expr;
 pub mod func;
+pub mod import_export;
 pub mod operator;
 pub mod stmt;
 #[cfg(test)]
 mod tests;
 pub mod top_level;
-pub mod drive;
-pub mod import_export;
 pub mod ts_decl;
 pub mod type_expr;
 
@@ -63,7 +62,11 @@ impl MaybeToken {
   }
 
   pub fn map<R, F: FnOnce(Self) -> R>(self, f: F) -> Option<R> {
-    if self.matched { Some(f(self)) } else { None }
+    if self.matched {
+      Some(f(self))
+    } else {
+      None
+    }
   }
 
   pub fn and_then<R, F: FnOnce() -> SyntaxResult<R>>(self, f: F) -> SyntaxResult<Option<R>> {
@@ -121,7 +124,7 @@ impl<'a> Parser<'a> {
 
   pub fn checkpoint(&self) -> ParserCheckpoint {
     ParserCheckpoint {
-      next_tok_i: self.next_tok_i
+      next_tok_i: self.next_tok_i,
     }
   }
 
@@ -143,18 +146,21 @@ impl<'a> Parser<'a> {
     };
   }
 
-  fn forward<K: FnOnce(&Token) -> bool>(
-    &mut self,
-    mode: LexMode,
-    keep: K,
-  ) -> (bool, Token) {
-    if self.buf.get(self.next_tok_i).is_some_and(|t| t.lex_mode != mode) {
+  fn forward<K: FnOnce(&Token) -> bool>(&mut self, mode: LexMode, keep: K) -> (bool, Token) {
+    if self
+      .buf
+      .get(self.next_tok_i)
+      .is_some_and(|t| t.lex_mode != mode)
+    {
       self.reset_to(self.next_tok_i);
     }
     assert!(self.next_tok_i <= self.buf.len());
     if self.buf.len() == self.next_tok_i {
       let token = lex_next(&mut self.lexer, mode);
-      self.buf.push(BufferedToken { token, lex_mode: mode });
+      self.buf.push(BufferedToken {
+        token,
+        lex_mode: mode,
+      });
     }
     let t = self.buf[self.next_tok_i].token.clone();
     let k = keep(&t);
@@ -188,7 +194,10 @@ impl<'a> Parser<'a> {
 
   pub fn peek_n_with_mode<const N: usize>(&mut self, modes: [LexMode; N]) -> [Token; N] {
     let cp = self.checkpoint();
-    let tokens = modes.into_iter().map(|m| self.forward(m, |_| true).1).collect::<Vec<_>>();
+    let tokens = modes
+      .into_iter()
+      .map(|m| self.forward(m, |_| true).1)
+      .collect::<Vec<_>>();
     let tokens: [Token; N] = tokens.try_into().unwrap();
     self.restore_checkpoint(cp);
     tokens
@@ -196,7 +205,9 @@ impl<'a> Parser<'a> {
 
   pub fn peek_n<const N: usize>(&mut self) -> [Token; N] {
     let cp = self.checkpoint();
-    let tokens = (0..N).map(|_| self.forward(LexMode::Standard, |_| true).1).collect::<Vec<_>>();
+    let tokens = (0..N)
+      .map(|_| self.forward(LexMode::Standard, |_| true).1)
+      .collect::<Vec<_>>();
     let tokens: [Token; N] = tokens.try_into().unwrap();
     self.restore_checkpoint(cp);
     tokens
@@ -215,10 +226,7 @@ impl<'a> Parser<'a> {
     self.maybe_consume_with_mode(typ, LexMode::Standard)
   }
 
-  pub fn consume_if_pred<F: FnOnce(&Token) -> bool>(
-    &mut self,
-    pred: F,
-  ) -> MaybeToken {
+  pub fn consume_if_pred<F: FnOnce(&Token) -> bool>(&mut self, pred: F) -> MaybeToken {
     let (matched, t) = self.forward(LexMode::Standard, pred);
     MaybeToken {
       typ: t.typ,
@@ -265,7 +273,7 @@ impl<'a> Parser<'a> {
       TT::ChevronRightChevronRight => {
         // Split >> into > and >
         self.consume(); // Consume the >>
-        // Create a replacement > token to push back
+                        // Create a replacement > token to push back
         let split_token = Token {
           typ: TT::ChevronRight,
           loc: Loc(t.loc.0 + 1, t.loc.1), // Second > starts one char later
@@ -286,7 +294,7 @@ impl<'a> Parser<'a> {
       TT::ChevronRightChevronRightChevronRight => {
         // Split >>> into > and >>
         self.consume(); // Consume the >>>
-        // Create a >> token to push back
+                        // Create a >> token to push back
         let split_token = Token {
           typ: TT::ChevronRightChevronRight,
           loc: Loc(t.loc.0 + 1, t.loc.1), // >> starts one char later
@@ -304,9 +312,7 @@ impl<'a> Parser<'a> {
           preceded_by_line_terminator: t.preceded_by_line_terminator,
         })
       }
-      _ => {
-        Err(t.error(SyntaxErrorType::RequiredTokenNotFound(TT::ChevronRight)))
-      }
+      _ => Err(t.error(SyntaxErrorType::RequiredTokenNotFound(TT::ChevronRight))),
     }
   }
 
@@ -329,13 +335,18 @@ impl<'a> Parser<'a> {
     }
     // Allow TypeScript type keywords as identifiers
     match t.typ {
-      TT::KeywordAny | TT::KeywordBooleanType | TT::KeywordNumberType |
-      TT::KeywordStringType | TT::KeywordSymbolType | TT::KeywordVoid |
-      TT::KeywordNever | TT::KeywordUndefinedType | TT::KeywordUnknown |
-      TT::KeywordObjectType | TT::KeywordBigIntType => {
-        Ok(self.string(t.loc))
-      }
-      _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")))
+      TT::KeywordAny
+      | TT::KeywordBooleanType
+      | TT::KeywordNumberType
+      | TT::KeywordStringType
+      | TT::KeywordSymbolType
+      | TT::KeywordVoid
+      | TT::KeywordNever
+      | TT::KeywordUndefinedType
+      | TT::KeywordUnknown
+      | TT::KeywordObjectType
+      | TT::KeywordBigIntType => Ok(self.string(t.loc)),
+      _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier"))),
     }
   }
 

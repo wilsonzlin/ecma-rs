@@ -1,6 +1,8 @@
-use super::expr::{Expr, ImportExpr};
+use super::expr::Expr;
+use super::expr::ImportExpr;
 use super::node::Node;
-use derive_visitor::{Drive, DriveMut};
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
 use serde::Serialize;
 
 /// Main type expression enum covering all TypeScript type constructs
@@ -209,9 +211,9 @@ pub struct TypeFunctionParameter {
 /// Variance annotation for type parameters
 #[derive(Debug, Copy, Clone, Serialize)]
 pub enum Variance {
-  In,       // contravariant
-  Out,      // covariant
-  InOut,    // invariant (both in and out)
+  In,    // contravariant
+  Out,   // covariant
+  InOut, // invariant (both in and out)
 }
 
 /// Type parameter: T, T extends U, T = DefaultType, in T, out T, in out T, const T

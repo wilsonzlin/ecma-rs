@@ -1,17 +1,17 @@
-use optimize_js::Program;
-use serialize::emit_js;
 use err::MinifyError;
+use optimize_js::Program;
 use parse_js::parse;
+use serialize::emit_js;
 
-mod serialize;
 mod err;
 mod reconstruct;
+mod serialize;
 #[cfg(test)]
 mod tests;
 
 use reconstruct::reconstruct_ast_from_program;
-pub use symbol_js::TopLevelMode;
 use symbol_js::compute_symbols;
+pub use symbol_js::TopLevelMode;
 
 /// Minifies UTF-8 JavaScript code.
 ///

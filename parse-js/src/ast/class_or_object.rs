@@ -1,10 +1,15 @@
-use derive_more::derive::From;
-use derive_visitor::{Drive, DriveMut};
-use serde::{Serialize};
-
+use super::expr::Decorator;
+use super::expr::Expr;
+use super::expr::IdExpr;
+use super::func::Func;
+use super::node::Node;
+use super::stmt::decl::Accessibility;
+use super::type_expr::TypeExpr;
 use crate::token::TT;
-
-use super::{expr::{Decorator, Expr, IdExpr}, func::Func, node::Node, stmt::decl::Accessibility, type_expr::TypeExpr};
+use derive_more::derive::From;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use serde::Serialize;
 
 /// Index signature in class: [key: string]: Type
 #[derive(Debug, Drive, DriveMut, Serialize)]
