@@ -3,40 +3,40 @@
   "declarators": [
     {
       "initializer": {
-        "$t": "LiteralObjectExpr",
+        "$t": "LitObj",
         "members": [
           {
-            "$t": "ObjectMember",
             "typ": {
               "Valued": {
                 "key": {
-                  "Direct": "get"
+                  "Direct": {
+                    "key": "get",
+                    "tt": "KeywordGet"
+                  }
                 },
-                "value": {
-                  "Property": {
-                    "initializer": {
-                      "$t": "LiteralArrayExpr",
-                      "elements": [
-                        {
-                          "Single": {
-                            "$t": "IdentifierExpr",
-                            "name": "set"
-                          }
-                        },
-                        {
-                          "Single": {
-                            "$t": "IdentifierExpr",
-                            "name": "get"
-                          }
-                        },
-                        {
-                          "Single": {
-                            "$t": "IdentifierExpr",
-                            "name": "await"
-                          }
+                "val": {
+                  "Prop": {
+                    "$t": "LitArr",
+                    "elements": [
+                      {
+                        "Single": {
+                          "$t": "Id",
+                          "name": "set"
                         }
-                      ]
-                    }
+                      },
+                      {
+                        "Single": {
+                          "$t": "Id",
+                          "name": "get"
+                        }
+                      },
+                      {
+                        "Single": {
+                          "$t": "Id",
+                          "name": "await"
+                        }
+                      }
+                    ]
                   }
                 }
               }
@@ -45,49 +45,47 @@
         ]
       },
       "pattern": {
-        "$t": "IdentifierPattern",
-        "name": "set"
+        "pat": {
+          "$t": "Id",
+          "name": "set"
+        }
       }
     },
     {
       "initializer": null,
       "pattern": {
-        "$t": "IdentifierPattern",
-        "name": "of"
+        "pat": {
+          "$t": "Id",
+          "name": "of"
+        }
       }
     },
     {
       "initializer": {
-        "$t": "LiteralObjectExpr",
+        "$t": "LitObj",
         "members": [
           {
-            "$t": "ObjectMember",
             "typ": {
               "Shorthand": {
-                "identifier": {
-                  "$t": "IdentifierExpr",
+                "id": {
                   "name": "await"
                 }
               }
             }
           },
           {
-            "$t": "ObjectMember",
             "typ": {
               "Shorthand": {
-                "identifier": {
-                  "$t": "IdentifierExpr",
+                "id": {
                   "name": "of"
                 }
               }
             }
           },
           {
-            "$t": "ObjectMember",
             "typ": {
               "Shorthand": {
-                "identifier": {
-                  "$t": "IdentifierExpr",
+                "id": {
                   "name": "let"
                 }
               }
@@ -96,79 +94,91 @@
         ]
       },
       "pattern": {
-        "$t": "ObjectPattern",
-        "properties": [
-          {
-            "$t": "ObjectPatternProperty",
-            "default_value": null,
-            "key": {
-              "Direct": "get"
-            },
-            "shorthand": true,
-            "target": {
-              "$t": "IdentifierPattern",
-              "name": "get"
-            }
-          },
-          {
-            "$t": "ObjectPatternProperty",
-            "default_value": null,
-            "key": {
-              "Direct": "set"
-            },
-            "shorthand": true,
-            "target": {
-              "$t": "IdentifierPattern",
-              "name": "set"
-            }
-          },
-          {
-            "$t": "ObjectPatternProperty",
-            "default_value": null,
-            "key": {
-              "Direct": "yield"
-            },
-            "shorthand": false,
-            "target": {
-              "$t": "ArrayPattern",
-              "elements": [
-                {
-                  "default_value": null,
-                  "target": {
-                    "$t": "IdentifierPattern",
-                    "name": "await"
-                  }
-                },
-                {
-                  "default_value": null,
-                  "target": {
-                    "$t": "IdentifierPattern",
-                    "name": "of"
-                  }
+        "pat": {
+          "$t": "Obj",
+          "properties": [
+            {
+              "default_value": null,
+              "key": {
+                "Direct": {
+                  "key": "get",
+                  "tt": "KeywordGet"
                 }
-              ],
-              "rest": null
+              },
+              "shorthand": true,
+              "target": {
+                "$t": "Id",
+                "name": "get"
+              }
+            },
+            {
+              "default_value": null,
+              "key": {
+                "Direct": {
+                  "key": "set",
+                  "tt": "KeywordSet"
+                }
+              },
+              "shorthand": true,
+              "target": {
+                "$t": "Id",
+                "name": "set"
+              }
+            },
+            {
+              "default_value": null,
+              "key": {
+                "Direct": {
+                  "key": "yield",
+                  "tt": "KeywordYield"
+                }
+              },
+              "shorthand": false,
+              "target": {
+                "$t": "Arr",
+                "elements": [
+                  {
+                    "default_value": null,
+                    "target": {
+                      "$t": "Id",
+                      "name": "await"
+                    }
+                  },
+                  {
+                    "default_value": null,
+                    "target": {
+                      "$t": "Id",
+                      "name": "of"
+                    }
+                  }
+                ],
+                "rest": null
+              }
             }
-          }
-        ],
-        "rest": null
+          ],
+          "rest": null
+        }
       }
     },
     {
       "initializer": {
-        "$t": "IdentifierExpr",
+        "$t": "Id",
         "name": "let"
       },
       "pattern": {
-        "$t": "IdentifierPattern",
-        "name": "await"
+        "pat": {
+          "$t": "Id",
+          "name": "await"
+        }
       }
     },
     {
       "initializer": null,
       "pattern": {
-        "$t": "IdentifierPattern",
-        "name": "yield"
+        "pat": {
+          "$t": "Id",
+          "name": "yield"
+        }
       }
     }
   ],

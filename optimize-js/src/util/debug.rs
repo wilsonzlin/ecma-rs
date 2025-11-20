@@ -1,7 +1,8 @@
-use ahash::{HashMap, HashSet};
+use crate::cfg::cfg::Cfg;
+use crate::il::inst::Inst;
+use ahash::HashMap;
+use ahash::HashSet;
 use serde::Serialize;
-
-use crate::{cfg::cfg::Cfg, il::inst::Inst};
 
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -19,9 +20,7 @@ pub struct OptimizerDebug {
 
 impl OptimizerDebug {
   pub fn new() -> Self {
-    Self {
-      steps: Vec::new(),
-    }
+    Self { steps: Vec::new() }
   }
 
   pub fn add_step(&mut self, name: impl AsRef<str>, cfg: &Cfg) {
@@ -30,7 +29,11 @@ impl OptimizerDebug {
       // We always recalculate as some steps may prune or add bblocks.
       bblock_order: cfg.graph.calculate_postorder(0).0,
       bblocks: cfg.bblocks.all().map(|(k, v)| (k, v.clone())).collect(),
-      cfg_children: cfg.graph.labels().map(|k| (k, cfg.graph.children(k).collect())).collect(),
+      cfg_children: cfg
+        .graph
+        .labels()
+        .map(|k| (k, cfg.graph.children(k).collect()))
+        .collect(),
     });
   }
 }

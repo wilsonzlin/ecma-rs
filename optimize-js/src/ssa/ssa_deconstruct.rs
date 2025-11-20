@@ -1,13 +1,13 @@
+use crate::cfg::cfg::Cfg;
+use crate::il::inst::Inst;
+use crate::il::inst::InstTyp;
+use crate::util::counter::Counter;
+use ahash::HashMap;
+use ahash::HashMapExt;
+use ahash::HashSet;
 use std::iter::zip;
 
-use ahash::{HashMap, HashMapExt, HashSet};
-
-use crate::{cfg::cfg::Cfg, il::inst::{Inst, InstTyp}, util::counter::Counter};
-
-pub fn deconstruct_ssa(
-  cfg: &mut Cfg,
-  c_label: &mut Counter,
-) {
+pub fn deconstruct_ssa(cfg: &mut Cfg, c_label: &mut Counter) {
   struct NewBblock {
     label: u32,
     parent: u32,
@@ -45,7 +45,7 @@ pub fn deconstruct_ssa(
           if *l == b.child {
             *l = b.label;
           };
-        };
+        }
       };
     };
     // Attach new bblock.

@@ -1,7 +1,6 @@
 use super::ParseCtx;
 use super::Parser;
 use crate::ast::class_or_object::ClassOrObjKey;
-use crate::ast::node::Node;
 use crate::ast::expr::pat::ArrPat;
 use crate::ast::expr::pat::ArrPatElem;
 use crate::ast::expr::pat::ClassOrFuncName;
@@ -9,8 +8,10 @@ use crate::ast::expr::pat::IdPat;
 use crate::ast::expr::pat::ObjPat;
 use crate::ast::expr::pat::ObjPatProp;
 use crate::ast::expr::pat::Pat;
+use crate::ast::node::Node;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
+use crate::lex::KEYWORDS_MAPPING;
 use crate::token::TT;
 use crate::token::UNRESERVED_KEYWORDS;
 
@@ -38,20 +39,49 @@ impl ParsePatternRules {
   }
 }
 
-pub fn is_valid_pattern_identifier(typ: TT, rules: ParsePatternRules) -> bool {
+pub fn is_valid_pattern_identifier(typ: TT, _rules: ParsePatternRules) -> bool {
   match typ {
     TT::Identifier => true,
-    TT::KeywordAwait => rules.await_allowed,
-    TT::KeywordYield => rules.yield_allowed,
+    // TypeScript: Allow await/yield unconditionally as parameter names
+    // (semantic errors will be caught later by type checker)
+    TT::KeywordAwait => true, // was: rules.await_allowed,
+    TT::KeywordYield => true, // was: rules.yield_allowed,
     t => UNRESERVED_KEYWORDS.contains(&t),
   }
 }
 
+/// Check if a token can be used as a class or function name
+/// TypeScript allows type keywords as class/function names in error cases
+pub fn is_valid_class_or_func_name(typ: TT, rules: ParsePatternRules) -> bool {
+  if is_valid_pattern_identifier(typ, rules) {
+    return true;
+  }
+  // Additionally allow TypeScript type keywords
+  matches!(
+    typ,
+    TT::KeywordAny
+      | TT::KeywordBooleanType
+      | TT::KeywordNumberType
+      | TT::KeywordStringType
+      | TT::KeywordSymbolType
+      | TT::KeywordVoid
+      | TT::KeywordNever
+      | TT::KeywordUndefinedType
+      | TT::KeywordUnknown
+      | TT::KeywordObjectType
+      | TT::KeywordBigIntType
+  )
+}
 
 impl<'a> Parser<'a> {
   pub fn maybe_class_or_func_name(&mut self, ctx: ParseCtx) -> Option<Node<ClassOrFuncName>> {
-    self.consume_if_pred(|t| is_valid_pattern_identifier(t.typ, ctx.rules))
-      .map(|t| Node::new(t.loc, ClassOrFuncName { name: self.string(t.loc) }))
+    self
+      .consume_if_pred(|t| is_valid_class_or_func_name(t.typ, ctx.rules))
+      .map(|t| {
+        Node::new(t.loc, ClassOrFuncName {
+          name: self.string(t.loc),
+        })
+      })
   }
 
   /// Parses an identifier pattern.
@@ -78,7 +108,14 @@ impl<'a> Parser<'a> {
         // Check inside loop to ensure that it must come first or after a comma.
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {
-          rest = Some(p.id_pat(ctx)?);
+          // TypeScript: For error recovery, allow binding patterns in rest properties
+          // e.g., ({...{}} = {}), ({...[]} = {})
+          // The type checker will validate these semantically
+          rest = Some(p.pat(ctx)?);
+          // TypeScript: For error recovery, allow trailing comma after rest element
+          // even though it's semantically invalid (e.g., {...x,})
+          // The type checker will catch this error
+          let _ = p.consume_if(TT::Comma);
           break;
         };
 
@@ -96,18 +133,32 @@ impl<'a> Parser<'a> {
                 )));
               }
               ClassOrObjKey::Direct(n) => {
-                // We can't have a non-identifier (e.g. str) key, even if it normalizes to a valid identifier name.
-                // It also must be a valid pattern identifier (e.g. can't be a reserved keyword).
-                if !is_valid_pattern_identifier(n.stx.tt, ctx.rules) {
+                // TypeScript: Accept any keyword in shorthand property for error recovery (e.g., { while })
+                // TypeScript: Also accept string literals that normalize to identifiers (e.g., { "while" })
+                // The type checker will validate these semantically.
+                if n.stx.tt != TT::Identifier
+                  && n.stx.tt != TT::LiteralString
+                  && !KEYWORDS_MAPPING.contains_key(&n.stx.tt)
+                {
                   return Err(n.error(SyntaxErrorType::ExpectedNotFound));
                 }
-                // We've already ensured that this is a valid identifier.
-                let id_pat = n.derive_stx(|n| IdPat { name: n.key.clone() }).into_wrapped();
+                // We've already ensured that this is a valid identifier, keyword, or string literal.
+                let id_pat = n
+                  .derive_stx(|n| IdPat {
+                    name: n.key.clone(),
+                  })
+                  .into_wrapped();
                 (true, id_pat)
               }
             }
           };
-          let default_value = p.consume_if(TT::Equals)
+          // TypeScript: Error recovery - skip optional marker (?) in destructuring patterns
+          // This is invalid syntax but helps with error recovery
+          // e.g., `var {h?} = obj;` - the ? is not allowed but we skip it to continue parsing
+          let _ = p.consume_if(TT::Question);
+
+          let default_value = p
+            .consume_if(TT::Equals)
             .and_then(|| p.expr(ctx, [TT::Comma, TT::BraceClose]))?;
           Ok(ObjPatProp {
             key,
@@ -123,10 +174,7 @@ impl<'a> Parser<'a> {
         };
       }
       p.require(TT::BraceClose)?;
-      Ok(ObjPat {
-        properties,
-        rest,
-      })
+      Ok(ObjPat { properties, rest })
     })
   }
 
@@ -136,11 +184,22 @@ impl<'a> Parser<'a> {
       p.require(TT::BracketOpen)?;
       let mut elements = Vec::<Option<ArrPatElem>>::new();
       let mut rest = None;
-      while !p.consume_if(TT::BracketClose).is_match() {
+      while p.peek().typ != TT::BracketClose {
         // Check inside loop to ensure that it must come first or after a comma.
         // NOTE: No trailing comma allowed.
         if p.consume_if(TT::DotDotDot).is_match() {
           rest = Some(p.pat(ctx)?);
+          // TypeScript: For error recovery, allow initializer on rest element
+          // even though it's semantically invalid (e.g., [...x = a])
+          // The type checker will catch this error
+          if p.consume_if(TT::Equals).is_match() {
+            // Parse and discard the initializer
+            p.expr(ctx, [TT::BracketClose])?;
+          }
+          // TypeScript: For error recovery, allow trailing comma after rest element
+          // even though it's semantically invalid (e.g., [...x,])
+          // The type checker will catch this error
+          let _ = p.consume_if(TT::Comma);
           break;
         };
 
@@ -175,11 +234,45 @@ impl<'a> Parser<'a> {
   /// * Object patterns (e.g., `{ x, y }`)
   /// * Array patterns (e.g., `[a, b, ...rest]`)
   pub fn pat(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Pat>> {
+    use crate::lex::KEYWORDS_MAPPING;
     let t = self.peek();
     let pat: Node<Pat> = match t.typ {
       t if is_valid_pattern_identifier(t, ctx.rules) => self.id_pat(ctx)?.into_wrapped(),
       TT::BraceOpen => self.obj_pat(ctx)?.into_wrapped(),
       TT::BracketOpen => self.arr_pat(ctx)?.into_wrapped(),
+      // TypeScript: For error recovery, create synthetic identifier when pattern is missing
+      // Handles cases like `var;`, `let;`, `const;`, `export var;`
+      TT::Semicolon | TT::Comma | TT::EOF => Node::new(t.loc, IdPat {
+        name: String::from(""),
+      })
+      .into_wrapped(),
+      // TypeScript: Allow any keyword as pattern identifier for error recovery
+      // Examples: `var { while: while } = x` or `let [if] = arr`
+      // The type checker will validate these semantically
+      t if KEYWORDS_MAPPING.contains_key(&t) => self
+        .with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdPat { name })
+        })?
+        .into_wrapped(),
+      // TypeScript: Error recovery - private names in patterns/parameters
+      // Examples: `const #foo = 3;` or `function f(#x: string) {}`
+      // The type checker will catch these as semantic errors
+      TT::PrivateMember => self
+        .with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdPat { name })
+        })?
+        .into_wrapped(),
+      // TypeScript: Error recovery - template literals as patterns
+      // Example: `function f(`hello`) {}` - template literal used as parameter name
+      // The type checker will catch this as a semantic error
+      TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => self
+        .with_loc(|p| {
+          let name = p.consume_as_string();
+          Ok(IdPat { name })
+        })?
+        .into_wrapped(),
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("pattern"))),
     };
     Ok(pat)

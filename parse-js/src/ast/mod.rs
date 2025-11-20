@@ -5,3 +5,5 @@ pub mod import_export;
 pub mod node;
 pub mod stmt;
 pub mod stx;
+pub mod ts_stmt;
+pub mod type_expr;

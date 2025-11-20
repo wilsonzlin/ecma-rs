@@ -1,20 +1,17 @@
 {
-  "$t": "UnaryExpr",
+  "$t": "Unary",
   "argument": {
-    "$t": "UnaryExpr",
+    "$t": "Unary",
     "argument": {
-      "$t": "MemberExpr",
+      "$t": "Member",
       "left": {
-        "$t": "IdentifierExpr",
+        "$t": "Id",
         "name": "abc"
       },
       "optional_chaining": true,
-      "parenthesised": false,
       "right": "def"
     },
-    "operator": "New",
-    "parenthesised": false
+    "operator": "New"
   },
-  "operator": "UnaryPlus",
-  "parenthesised": false
+  "operator": "UnaryPlus"
 }

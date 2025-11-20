@@ -24,8 +24,7 @@ pub enum TT {
   LiteralNumberOct,
   Whitespace,
 
-
-
+  At,
   Ampersand,
   AmpersandAmpersand,
   AmpersandAmpersandEquals,
@@ -103,6 +102,7 @@ pub enum TT {
   KeywordLet,
   KeywordNew,
   KeywordOf,
+  KeywordOut,
   KeywordReturn,
   KeywordSet,
   KeywordStatic,
@@ -112,11 +112,42 @@ pub enum TT {
   KeywordThrow,
   KeywordTry,
   KeywordTypeof,
+  KeywordUsing,
   KeywordVar,
   KeywordVoid,
   KeywordWhile,
   KeywordWith,
   KeywordYield,
+  // TypeScript keywords
+  KeywordAbstract,
+  KeywordAccessor,
+  KeywordAny,
+  KeywordAsserts,
+  KeywordBigIntType,
+  KeywordBooleanType,
+  KeywordDeclare,
+  KeywordImplements,
+  KeywordInfer,
+  KeywordInterface,
+  KeywordIs,
+  KeywordKeyof,
+  KeywordModule,
+  KeywordNamespace,
+  KeywordNever,
+  KeywordNumberType,
+  KeywordObjectType,
+  KeywordOverride,
+  KeywordPrivate,
+  KeywordProtected,
+  KeywordPublic,
+  KeywordReadonly,
+  KeywordSatisfies,
+  KeywordStringType,
+  KeywordSymbolType,
+  KeywordType,
+  KeywordUndefinedType,
+  KeywordUnique,
+  KeywordUnknown,
   LiteralBigInt,
   LiteralFalse,
   LiteralNull,
@@ -156,12 +187,46 @@ pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   set.insert(TT::KeywordGet);
   set.insert(TT::KeywordLet);
   set.insert(TT::KeywordOf);
+  set.insert(TT::KeywordOut);
   set.insert(TT::KeywordSet);
   set.insert(TT::KeywordStatic);
+  set.insert(TT::KeywordUsing);
+  // TypeScript contextual keywords
+  set.insert(TT::KeywordAbstract);
+  set.insert(TT::KeywordAny);
+  set.insert(TT::KeywordAsserts);
+  set.insert(TT::KeywordBigIntType);
+  set.insert(TT::KeywordBooleanType);
+  set.insert(TT::KeywordDeclare);
+  set.insert(TT::KeywordImplements);
+  set.insert(TT::KeywordInfer);
+  set.insert(TT::KeywordInterface);
+  set.insert(TT::KeywordIs);
+  set.insert(TT::KeywordKeyof);
+  set.insert(TT::KeywordModule);
+  set.insert(TT::KeywordNamespace);
+  set.insert(TT::KeywordNever);
+  set.insert(TT::KeywordNumberType);
+  set.insert(TT::KeywordObjectType);
+  set.insert(TT::KeywordOverride);
+  set.insert(TT::KeywordPrivate);
+  set.insert(TT::KeywordProtected);
+  set.insert(TT::KeywordPublic);
+  set.insert(TT::KeywordReadonly);
+  set.insert(TT::KeywordSatisfies);
+  set.insert(TT::KeywordStringType);
+  set.insert(TT::KeywordSymbolType);
+  set.insert(TT::KeywordType);
+  set.insert(TT::KeywordUndefinedType);
+  set.insert(TT::KeywordUnique);
+  set.insert(TT::KeywordUnknown);
   set
 });
-pub static UNRESERVED_KEYWORD_STRS: Lazy<HashSet<&'static [u8]>> = Lazy::new(|| {
-  UNRESERVED_KEYWORDS.iter().map(|tt| *KEYWORDS_MAPPING.get(tt).unwrap()).collect()
+pub static UNRESERVED_KEYWORD_STRS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+  UNRESERVED_KEYWORDS
+    .iter()
+    .map(|tt| *KEYWORDS_MAPPING.get(tt).unwrap())
+    .collect()
 });
 
 #[derive(Clone, Debug)]
@@ -171,6 +236,90 @@ pub struct Token {
   // one of those whitespace characters is a line terminator.
   pub preceded_by_line_terminator: bool,
   pub typ: TT,
+}
+
+impl TT {
+  /// Returns true if this token is any keyword (JavaScript or TypeScript).
+  pub fn is_keyword(self) -> bool {
+    matches!(
+      self,
+      TT::KeywordAs
+        | TT::KeywordAsync
+        | TT::KeywordAwait
+        | TT::KeywordBreak
+        | TT::KeywordCase
+        | TT::KeywordCatch
+        | TT::KeywordClass
+        | TT::KeywordConst
+        | TT::KeywordConstructor
+        | TT::KeywordContinue
+        | TT::KeywordDebugger
+        | TT::KeywordDefault
+        | TT::KeywordDelete
+        | TT::KeywordDo
+        | TT::KeywordElse
+        | TT::KeywordEnum
+        | TT::KeywordExport
+        | TT::KeywordExtends
+        | TT::KeywordFinally
+        | TT::KeywordFor
+        | TT::KeywordFrom
+        | TT::KeywordFunction
+        | TT::KeywordGet
+        | TT::KeywordIf
+        | TT::KeywordImport
+        | TT::KeywordIn
+        | TT::KeywordInstanceof
+        | TT::KeywordLet
+        | TT::KeywordNew
+        | TT::KeywordOf
+        | TT::KeywordOut
+        | TT::KeywordReturn
+        | TT::KeywordSet
+        | TT::KeywordStatic
+        | TT::KeywordSuper
+        | TT::KeywordSwitch
+        | TT::KeywordThis
+        | TT::KeywordThrow
+        | TT::KeywordTry
+        | TT::KeywordTypeof
+        | TT::KeywordUsing
+        | TT::KeywordVar
+        | TT::KeywordVoid
+        | TT::KeywordWhile
+        | TT::KeywordWith
+        | TT::KeywordYield
+        | TT::KeywordAbstract
+        | TT::KeywordAccessor
+        | TT::KeywordAny
+        | TT::KeywordAsserts
+        | TT::KeywordBigIntType
+        | TT::KeywordBooleanType
+        | TT::KeywordDeclare
+        | TT::KeywordImplements
+        | TT::KeywordInfer
+        | TT::KeywordInterface
+        | TT::KeywordIs
+        | TT::KeywordKeyof
+        | TT::KeywordModule
+        | TT::KeywordNamespace
+        | TT::KeywordNever
+        | TT::KeywordNumberType
+        | TT::KeywordObjectType
+        | TT::KeywordOverride
+        | TT::KeywordPrivate
+        | TT::KeywordProtected
+        | TT::KeywordPublic
+        | TT::KeywordReadonly
+        | TT::KeywordSatisfies
+        | TT::KeywordStringType
+        | TT::KeywordSymbolType
+        | TT::KeywordType
+        | TT::KeywordUndefinedType
+        | TT::KeywordUnique
+        | TT::KeywordUnknown
+    )
+  }
 }
 
 impl Token {

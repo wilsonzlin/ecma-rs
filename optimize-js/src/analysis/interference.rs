@@ -1,4 +1,6 @@
-use ahash::{HashMap, HashMapExt, HashSet};
+use ahash::HashMap;
+use ahash::HashMapExt;
+use ahash::HashSet;
 use itertools::Itertools;
 
 pub fn calculate_interference_graph(

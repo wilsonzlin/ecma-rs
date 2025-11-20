@@ -1,7 +1,19 @@
-use ahash::{HashMap, HashSet};
-use derive_visitor::{Drive, Visitor};
-use parse_js::{ast::{expr::{pat::{ClassOrFuncName, IdPat}, IdExpr}, node::Node, stmt::{decl::{PatDecl, VarDecl}, Stmt}, stx::TopLevel}, loc::Loc};
-use symbol_js::symbol::{Scope, ScopeType, Symbol};
+use ahash::HashMap;
+use ahash::HashSet;
+use derive_visitor::Drive;
+use derive_visitor::Visitor;
+use parse_js::ast::expr::pat::ClassOrFuncName;
+use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::IdExpr;
+use parse_js::ast::node::Node;
+use parse_js::ast::stmt::decl::PatDecl;
+use parse_js::ast::stmt::decl::VarDecl;
+use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stx::TopLevel;
+use parse_js::loc::Loc;
+use symbol_js::symbol::Scope;
+use symbol_js::symbol::ScopeType;
+use symbol_js::symbol::Symbol;
 
 type PatDeclNode = Node<PatDecl>;
 type IdExprNode = Node<IdExpr>;
@@ -14,7 +26,7 @@ type IdPatNode = Node<IdPat>;
   PatDeclNode,
   IdExprNode(enter),
   ClassOrFuncNameNode(enter),
-  IdPatNode(enter),
+  IdPatNode(enter)
 )]
 struct VarVisitor {
   declared: HashSet<Symbol>,
@@ -115,16 +127,17 @@ impl VarAnalysis {
 
 #[cfg(test)]
 mod tests {
-  use ahash::{HashMap, HashMapExt, HashSet};
-  use derive_visitor::Drive;
-use parse_js::{parse};
-  use symbol_js::{
-      compute_symbols,
-      symbol::{Scope, ScopeType, Symbol},
-      TopLevelMode,
-  };
-
   use super::VarVisitor;
+  use ahash::HashMap;
+  use ahash::HashMapExt;
+  use ahash::HashSet;
+  use derive_visitor::Drive;
+  use parse_js::parse;
+  use symbol_js::compute_symbols;
+  use symbol_js::symbol::Scope;
+  use symbol_js::symbol::ScopeType;
+  use symbol_js::symbol::Symbol;
+  use symbol_js::TopLevelMode;
 
   fn parse_and_visit(source: &[u8]) -> (Scope, VarVisitor) {
     let mut parsed = parse(source).unwrap();
@@ -226,29 +239,17 @@ use parse_js::{parse};
     // Verify the visit.
     assert_eq!(
       v.declared,
-      HashSet::from_iter([
-        syms["a"],
-        syms["b1"],
-        syms["b2"],
-        syms["c"],
-        syms["d"],
-        syms["e"],
-      ]),
+      HashSet::from_iter([syms["a"], syms["b1"], syms["b2"], syms["c"], syms["d"], syms["e"],]),
     );
 
     assert_eq!(
       v.foreign,
-      HashSet::from_iter([
-        syms["a"],
-        syms["b1"],
-        syms["c"],
-      ]),
+      HashSet::from_iter([syms["a"], syms["b1"], syms["c"],]),
     );
 
     assert_eq!(
       v.use_before_decl.keys().cloned().collect::<HashSet<_>>(),
-      HashSet::from_iter([
-      ]),
+      HashSet::from_iter([]),
     );
 
     assert_eq!(
@@ -313,29 +314,14 @@ use parse_js::{parse};
     // Verify the visit.
     assert_eq!(
       v.declared,
-      HashSet::from_iter([
-        syms["a"],
-        syms["b1"],
-        syms["b2"],
-        syms["c"],
-        syms["d"],
-      ]),
+      HashSet::from_iter([syms["a"], syms["b1"], syms["b2"], syms["c"], syms["d"],]),
     );
 
-    assert_eq!(
-      v.foreign,
-      HashSet::from_iter([
-      ]),
-    );
+    assert_eq!(v.foreign, HashSet::from_iter([]),);
 
     assert_eq!(
       v.use_before_decl.keys().cloned().collect::<HashSet<_>>(),
-      HashSet::from_iter([
-        syms["a"],
-        syms["b1"],
-        syms["b2"],
-        syms["c"],
-      ]),
+      HashSet::from_iter([syms["a"], syms["b1"], syms["b2"], syms["c"],]),
     );
 
     assert_eq!(

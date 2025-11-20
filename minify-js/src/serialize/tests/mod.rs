@@ -5,9 +5,7 @@ use parse_js::parse::Parser;
 
 fn check(top_level_mode: TopLevelMode, src: &str, expected: &str) -> () {
   let mut parser = Parser::new(Lexer::new(src.as_bytes()));
-  let node = parser
-    .parse_top_level()
-    .unwrap();
+  let node = parser.parse_top_level().unwrap();
   let mut out = Vec::new();
   minify_js(&node);
   emit_js(&mut out, &node);

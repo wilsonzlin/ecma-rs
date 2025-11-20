@@ -1,13 +1,13 @@
 use super::ParseCtx;
 use super::Parser;
+use crate::ast::func::Func;
+use crate::ast::node::Node;
 use crate::ast::stmt::decl::ClassDecl;
 use crate::ast::stmt::decl::FuncDecl;
 use crate::ast::stmt::decl::PatDecl;
 use crate::ast::stmt::decl::VarDecl;
 use crate::ast::stmt::decl::VarDeclMode;
 use crate::ast::stmt::decl::VarDeclarator;
-use crate::ast::func::Func;
-use crate::ast::node::Node;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::parse::expr::pat::ParsePatternRules;
@@ -43,6 +43,16 @@ impl<'a> Parser<'a> {
       TT::KeywordLet => VarDeclMode::Let,
       TT::KeywordConst => VarDeclMode::Const,
       TT::KeywordVar => VarDeclMode::Var,
+      TT::KeywordUsing => VarDeclMode::Using,
+      TT::KeywordAwait => {
+        // Check if followed by 'using'
+        if self.peek().typ == TT::KeywordUsing {
+          self.consume(); // consume 'using'
+          VarDeclMode::AwaitUsing
+        } else {
+          return Err(t.error(SyntaxErrorType::ExpectedSyntax("variable declaration")));
+        }
+      }
       _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("variable declaration"))),
     })
   }
@@ -64,18 +74,30 @@ impl<'a> Parser<'a> {
       let mut declarators = Vec::new();
       loop {
         let pattern = p.pat_decl(ctx)?;
+
+        // TypeScript: definite assignment assertion
+        let definite_assignment = p.consume_if(TT::Exclamation).is_match();
+
+        // TypeScript: type annotation
+        // Note: We use type_expr_or_predicate for error recovery - type predicates
+        // are semantically invalid in variable declarations but should parse
+        let type_annotation = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr_or_predicate(ctx)?)
+        } else {
+          None
+        };
+
         let mut asi = match parse_mode {
           VarDeclParseMode::Asi => Asi::can(),
           VarDeclParseMode::Leftmost => Asi::no(),
         };
-        let initializer = p.consume_if(TT::Equals)
-          .and_then(|| p.expr_with_asi(
-            ctx,
-            [TT::Semicolon, TT::Comma],
-            &mut asi,
-          ))?;
+        let initializer = p
+          .consume_if(TT::Equals)
+          .and_then(|| p.expr_with_asi(ctx, [TT::Semicolon, TT::Comma], &mut asi))?;
         declarators.push(VarDeclarator {
           pattern,
+          definite_assignment,
+          type_annotation,
           initializer,
         });
         match parse_mode {
@@ -84,7 +106,10 @@ impl<'a> Parser<'a> {
               break;
             }
             let t = p.peek();
-            if t.preceded_by_line_terminator && t.typ != TT::Comma {
+            if t.typ == TT::EOF
+              || t.typ == TT::BraceClose
+              || (t.preceded_by_line_terminator && t.typ != TT::Comma)
+            {
               break;
             };
             p.require(TT::Comma)?;
@@ -104,32 +129,58 @@ impl<'a> Parser<'a> {
     })
   }
 
-  pub fn func_decl(
-    &mut self,
-    ctx: ParseCtx,
-  ) -> SyntaxResult<Node<FuncDecl>> {
+  pub fn func_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<FuncDecl>> {
     self.with_loc(|p| {
       let export = p.consume_if(TT::KeywordExport).is_match();
       let export_default = export && p.consume_if(TT::KeywordDefault).is_match();
       let is_async = p.consume_if(TT::KeywordAsync).is_match();
       let start = p.require(TT::KeywordFunction)?.loc;
       let generator = p.consume_if(TT::Asterisk).is_match();
-      let name = p.maybe_class_or_func_name(ctx);
+      // Function name is always parsed with yield/await allowed as identifiers,
+      // even for generator/async functions (the function can be named "yield" or "await")
+      let name_ctx = ctx.with_rules(ParsePatternRules {
+        await_allowed: true,
+        yield_allowed: true,
+      });
+      let name = p.maybe_class_or_func_name(name_ctx);
       // The name can only be omitted in default exports.
       if name.is_none() && !export_default {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("function name"), None));
       };
       let function = p.with_loc(|p| {
-        let parameters = p.func_params(ctx)?;
-        let body = p.parse_func_block_body(ctx.with_rules(ParsePatternRules {
+        // TypeScript: generic type parameters
+        let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+          Some(p.type_parameters(ctx)?)
+        } else {
+          None
+        };
+        // Parameters and body use the function's own context, not the parent's
+        let fn_ctx = ctx.with_rules(ParsePatternRules {
           await_allowed: !is_async && ctx.rules.await_allowed,
           yield_allowed: !generator && ctx.rules.yield_allowed,
-        }))?.into();
+        });
+        let parameters = p.func_params(fn_ctx)?;
+        // TypeScript: return type annotation (may be type predicate)
+        let return_type = if p.consume_if(TT::Colon).is_match() {
+          Some(p.type_expr_or_predicate(ctx)?)
+        } else {
+          None
+        };
+        // TypeScript: function overload signatures have no body
+        let body = if p.peek().typ == TT::BraceOpen {
+          Some(p.parse_func_block_body(fn_ctx)?.into())
+        } else {
+          // Overload signature - consume semicolon or allow ASI
+          let _ = p.consume_if(TT::Semicolon);
+          None
+        };
         Ok(Func {
           arrow: false,
           async_: is_async,
           generator,
+          type_parameters,
           parameters,
+          return_type,
           body,
         })
       })?;
@@ -142,31 +193,66 @@ impl<'a> Parser<'a> {
     })
   }
 
-  pub fn class_decl(
-    &mut self,
-    ctx: ParseCtx,
-  ) -> SyntaxResult<Node<ClassDecl>> {
+  pub fn class_decl(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ClassDecl>> {
+    self.class_decl_impl(ctx, false)
+  }
+
+  pub fn class_decl_impl(&mut self, ctx: ParseCtx, declare: bool) -> SyntaxResult<Node<ClassDecl>> {
     self.with_loc(|p| {
+      // TypeScript: parse decorators before export/class
+      let decorators = p.decorators(ctx)?;
+
       let export = p.consume_if(TT::KeywordExport).is_match();
       let export_default = export && p.consume_if(TT::KeywordDefault).is_match();
+      // TypeScript: abstract keyword
+      let abstract_ = p.consume_if(TT::KeywordAbstract).is_match();
       let start = p.require(TT::KeywordClass)?.loc;
       // Names can be omitted only in default exports.
       let name = p.maybe_class_or_func_name(ctx);
       if name.is_none() && !export_default {
         return Err(start.error(SyntaxErrorType::ExpectedSyntax("class name"), None));
       };
-      // Unlike functions, classes are scoped to their block.
-      let extends = if p.consume_if(TT::KeywordExtends).is_match() {
-        Some(p.expr(ctx, [TT::BraceOpen])?)
+
+      // TypeScript: generic type parameters
+      let type_parameters = if p.peek().typ == TT::ChevronLeft && p.is_start_of_type_arguments() {
+        Some(p.type_parameters(ctx)?)
       } else {
         None
       };
-      let members = p.class_body(ctx)?;
+
+      // Unlike functions, classes are scoped to their block.
+      let extends = if p.consume_if(TT::KeywordExtends).is_match() {
+        // TypeScript: extends clause can have type arguments: class C<T> extends Base<T>
+        // Parse expression, which will handle type arguments via expr_with_ts_type_args
+        Some(p.expr_with_ts_type_args(ctx, [TT::BraceOpen, TT::KeywordImplements])?)
+      } else {
+        None
+      };
+
+      // TypeScript: implements clause
+      let mut implements = Vec::new();
+      if p.consume_if(TT::KeywordImplements).is_match() {
+        loop {
+          // Parse as expression to allow optional chaining (A?.B) even though it's semantically invalid
+          // TypeScript parser accepts this syntax and lets the type checker reject it
+          implements.push(p.expr_with_ts_type_args(ctx, [TT::Comma, TT::BraceOpen])?);
+          if !p.consume_if(TT::Comma).is_match() {
+            break;
+          }
+        }
+      }
+
+      let members = p.class_body_with_context(ctx, declare || abstract_)?;
       Ok(ClassDecl {
+        decorators,
         export,
         export_default,
+        declare,
+        abstract_,
         name,
+        type_parameters,
         extends,
+        implements,
         members,
       })
     })

@@ -1,11 +1,10 @@
-use derive_visitor::{Drive, DriveMut};
-use serde::Serialize;
-
-use crate::{ast::{class_or_object::ObjMember, node::Node}, num::JsNumber};
-
 use super::Expr;
-
-
+use crate::ast::class_or_object::ObjMember;
+use crate::ast::node::Node;
+use crate::num::JsNumber;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use serde::Serialize;
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub enum LitArrElem {

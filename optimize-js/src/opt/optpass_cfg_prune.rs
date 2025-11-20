@@ -1,7 +1,9 @@
-use ahash::{HashMap, HashSet};
+use crate::cfg::cfg::Cfg;
+use crate::il::inst::Inst;
+use crate::il::inst::InstTyp;
+use ahash::HashMap;
+use ahash::HashSet;
 use itertools::Itertools;
-
-use crate::{cfg::cfg::Cfg, il::inst::{Inst, InstTyp}};
 
 /**
  * WARNING: Read comment in cfg.rs.
@@ -29,10 +31,7 @@ fn can_prune_bblock(
   false
 }
 
-pub fn optpass_cfg_prune(
-  changed: &mut bool,
-  cfg: &mut Cfg,
-) {
+pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
   // Iterate until convergence, instead of waiting for another optimisation pass.
   loop {
     // Merge all empty leaf bblocks into one, so that we can detect CondGoto that actually go to both empty leaves.
@@ -47,7 +46,9 @@ pub fn optpass_cfg_prune(
 
       let parents = cfg.graph.parents(cur).collect_vec();
       let children = cfg.graph.children(cur).collect_vec();
-      let is_only_child_of_all_parents = parents.iter().all(|&parent| cfg.graph.children(parent).count() == 1);
+      let is_only_child_of_all_parents = parents
+        .iter()
+        .all(|&parent| cfg.graph.children(parent).count() == 1);
       let is_empty = cfg.bblocks.get(cur).is_empty();
       let is_leaf = children.is_empty();
 
@@ -75,7 +76,7 @@ pub fn optpass_cfg_prune(
       // Detach from parents.
       for &parent in parents.iter() {
         cfg.graph.disconnect(parent, cur);
-      };
+      }
 
       // Pop from graph and bblocks.
       let insts = cfg.pop(cur);
@@ -113,7 +114,7 @@ pub fn optpass_cfg_prune(
           if let Some(ex) = c_inst.remove_phi(cur) {
             for &parent in parents.iter() {
               c_inst.insert_phi(parent, ex.clone());
-            };
+            }
           };
         }
       }
@@ -140,12 +141,12 @@ pub fn optpass_cfg_prune(
           } else {
             all_children_empty = false;
           };
-        };
+        }
         if all_children_empty {
           // Drop the CondGoto.
           bblocks.pop().unwrap();
         };
-      };
+      }
       // For all other empty leaves, remove them. They should be unreachable.
       for label in empty_leaves.into_iter().skip(1) {
         cfg.pop(label);

@@ -1,6 +1,8 @@
-use ahash::{HashMap, HashMapExt};
-
-use crate::{il::inst::{Inst, InstTyp}, util::counter::Counter};
+use crate::il::inst::Inst;
+use crate::il::inst::InstTyp;
+use crate::util::counter::Counter;
+use ahash::HashMap;
+use ahash::HashMapExt;
 
 pub type BBlock = Vec<Inst>;
 

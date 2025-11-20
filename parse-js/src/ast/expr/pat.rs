@@ -1,10 +1,10 @@
-use derive_more::derive::From;
-use derive_visitor::{Drive, DriveMut};
-use serde::{Deserialize, Serialize};
-
-use crate::ast::{class_or_object::ClassOrObjKey, node::Node};
-
 use super::Expr;
+use crate::ast::class_or_object::ClassOrObjKey;
+use crate::ast::node::Node;
+use derive_more::derive::From;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use serde::Serialize;
 
 // We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
 #[derive(Debug, Drive, DriveMut, From, Serialize)]
@@ -13,6 +13,8 @@ pub enum Pat {
   Arr(Node<ArrPat>),
   Id(Node<IdPat>),
   Obj(Node<ObjPat>),
+  // For assignment (not binding) patterns, any LeftHandSideExpression is allowed
+  AssignTarget(Node<Expr>),
 }
 
 impl From<Pat> for Expr {
@@ -21,6 +23,7 @@ impl From<Pat> for Expr {
       Pat::Arr(arr) => Expr::ArrPat(arr),
       Pat::Id(id) => Expr::IdPat(id),
       Pat::Obj(obj) => Expr::ObjPat(obj),
+      Pat::AssignTarget(expr) => *expr.stx,
     }
   }
 }
@@ -58,7 +61,8 @@ pub struct IdPat {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ObjPat {
   pub properties: Vec<Node<ObjPatProp>>,
-  pub rest: Option<Node<IdPat>>,
+  // TypeScript: Can be any pattern for error recovery (e.g., {...{}} or {...[]})
+  pub rest: Option<Node<Pat>>,
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]

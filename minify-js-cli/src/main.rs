@@ -1,3 +1,5 @@
+use clap::builder::PossibleValuesParser;
+use clap::builder::TypedValueParser;
 use clap::Parser;
 use minify_js::minify;
 use minify_js::TopLevelMode;
@@ -7,8 +9,6 @@ use std::io::stdout;
 use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
-use clap::builder::TypedValueParser;
-use clap::builder::PossibleValuesParser;
 
 #[derive(Parser)]
 #[command(name = "minify-js", about = "Extremely fast JS minifier")]

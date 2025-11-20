@@ -1,10 +1,9 @@
+use crate::cfg::cfg::Cfg;
+use crate::il::inst::Arg;
 use ahash::HashMap;
 use ahash::HashMapExt;
 use ahash::HashSet;
 use std::collections::VecDeque;
-
-use crate::cfg::cfg::Cfg;
-use crate::il::inst::Arg;
 
 // TODO Use DataFlowAnalysis
 pub fn calculate_live_ins(
@@ -22,7 +21,10 @@ pub fn calculate_live_ins(
     for arg in cfg.bblocks.get(src.0)[src.1].args.iter() {
       if let Arg::Var(t) = arg {
         if !inlined_vars.contains(t) {
-          additional_uses_at.entry(dest.clone()).or_default().insert(*t);
+          additional_uses_at
+            .entry(dest.clone())
+            .or_default()
+            .insert(*t);
         }
       }
     }
@@ -34,7 +36,9 @@ pub fn calculate_live_ins(
   let mut live_in_at_top_of_bblock = HashMap::<u32, HashSet<u32>>::new();
   let mut worklist = cfg.graph.labels().collect::<VecDeque<_>>();
   while let Some(label) = worklist.pop_front() {
-    let mut cur = cfg.graph.children(label)
+    let mut cur = cfg
+      .graph
+      .children(label)
       .filter_map(|c| live_in_at_top_of_bblock.get(&c))
       .cloned()
       .reduce(|r, p| r.union(&p).cloned().collect::<HashSet<_>>())

@@ -1,30 +1,41 @@
+pub mod analysis;
 pub mod cfg;
-pub mod graph;
 pub mod dom;
+pub mod eval;
+pub mod graph;
+pub mod il;
 pub mod opt;
 pub mod ssa;
 pub mod symbol;
-pub mod il;
 pub mod util;
-pub mod eval;
-pub mod analysis;
-
-use std::{ops::Deref, sync::{atomic::{AtomicUsize, Ordering}, Arc}};
 
 use ahash::HashSet;
 use analysis::defs::calculate_defs;
-use cfg::{bblock::convert_insts_to_bblocks, cfg::Cfg};
+use cfg::bblock::convert_insts_to_bblocks;
+use cfg::cfg::Cfg;
 use crossbeam_utils::sync::WaitGroup;
 use dashmap::DashMap;
 use dom::Dom;
-use opt::{optpass_cfg_prune::optpass_cfg_prune, optpass_dvn::optpass_dvn, optpass_impossible_branches::optpass_impossible_branches, optpass_redundant_assigns::optpass_redundant_assigns, optpass_trivial_dce::optpass_trivial_dce};
-use parse_js::ast::{stmt::Stmt, stx::TopLevel};
-use serde::Serialize;
+use opt::optpass_cfg_prune::optpass_cfg_prune;
+use opt::optpass_dvn::optpass_dvn;
+use opt::optpass_impossible_branches::optpass_impossible_branches;
+use opt::optpass_redundant_assigns::optpass_redundant_assigns;
+use opt::optpass_trivial_dce::optpass_trivial_dce;
 use parse_js::ast::node::Node;
-use ssa::{ssa_deconstruct::deconstruct_ssa, ssa_insert_phis::insert_phis_for_ssa_construction, ssa_rename::rename_targets_for_ssa_construction};
+use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stx::TopLevel;
+use serde::Serialize;
+use ssa::ssa_deconstruct::deconstruct_ssa;
+use ssa::ssa_insert_phis::insert_phis_for_ssa_construction;
+use ssa::ssa_rename::rename_targets_for_ssa_construction;
+use std::ops::Deref;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use symbol::var_analysis::VarAnalysis;
 use symbol_js::symbol::Symbol;
-use util::{counter::Counter, debug::OptimizerDebug};
+use util::counter::Counter;
+use util::debug::OptimizerDebug;
 
 // The top level is considered a function (the optimizer concept, not parser or symbolizer).
 #[derive(Debug, Serialize)]
@@ -155,7 +166,9 @@ impl Program {
     } = Arc::try_unwrap(program.0).unwrap();
     let fn_count = next_fn_id.load(Ordering::Relaxed);
     Self {
-      functions: (0..fn_count).map(|i| functions.remove(&i).unwrap().1).collect(),
+      functions: (0..fn_count)
+        .map(|i| functions.remove(&i).unwrap().1)
+        .collect(),
       top_level,
     }
   }
@@ -163,10 +176,10 @@ impl Program {
 
 #[cfg(test)]
 mod tests {
-    use parse_js::parse;
-    use symbol_js::{compute_symbols, TopLevelMode};
-
-    use crate::Program;
+  use crate::Program;
+  use parse_js::parse;
+  use symbol_js::compute_symbols;
+  use symbol_js::TopLevelMode;
 
   #[test]
   fn test_compile_js_statements() {

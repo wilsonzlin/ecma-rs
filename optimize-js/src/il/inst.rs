@@ -1,10 +1,10 @@
 use num_bigint::BigInt;
 use parse_js::num::JsNumber;
 use serde::Serialize;
-use symbol_js::symbol::Symbol;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::{self};
+use symbol_js::symbol::Symbol;
 
 // PartialOrd and Ord are for some arbitrary canonical order, even if semantics of ordering is opaque.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -48,9 +48,7 @@ impl Arg {
   }
 
   pub fn to_var(&self) -> u32 {
-    self
-      .maybe_var()
-      .expect("not a variable")
+    self.maybe_var().expect("not a variable")
   }
 
   pub fn to_const(&self) -> Const {
@@ -142,19 +140,19 @@ impl Debug for UnOp {
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize)]
 pub enum InstTyp {
-  Bin, // tgts[0] = args[0] bin_op args[1]
-  Un, // tgts[0] = un_op args[0]
-  VarAssign, // tgts[0] = args[0]
+  Bin,        // tgts[0] = args[0] bin_op args[1]
+  Un,         // tgts[0] = un_op args[0]
+  VarAssign,  // tgts[0] = args[0]
   PropAssign, // args[0][args[1]] = args[2]
-  CondGoto, // goto labels[0] if args[0] else labels[1]
-  Call, // tgts.at(0)? = args[0](this=args[1], ...args[2..])
+  CondGoto,   // goto labels[0] if args[0] else labels[1]
+  Call,       // tgts.at(0)? = args[0](this=args[1], ...args[2..])
   // A foreign variable is one in an ancestor scope, all the way up to and including the global scope.
   // We don't simply add another Target variant (e.g. Target::Foreign) as it makes analyses and optimisations more tedious. Consider that standard SSA doesn't really have a concept of nonlocal memory locations. In LLVM such vars are covered using ordinary memory location read/write instructions.
   // NOTE: It still violates SSA if we only have ForeignStore but not ForeignLoad (and instead use another enum variant for Arg). Consider: `%a0 = foreign(3); %a1 = %a0 + 42; foreign(3) = %a1; %a2 = foreign(3);` but `%a0` and `%a2` are not identical.
-  ForeignLoad, // tgts[0] = foreign
+  ForeignLoad,  // tgts[0] = foreign
   ForeignStore, // foreign = args[0]
-  UnknownLoad, // tgts[0] = unknown
-  UnknownStore,  // unknown = args[0]
+  UnknownLoad,  // tgts[0] = unknown
+  UnknownStore, // unknown = args[0]
   // Pick one assigned value of `tgt` from one of these blocks. Due to const propagation, input targets could be transformed to const values, which is why we have `Arg` and not just `Target`.
   Phi, // tgts[0] = ϕ{labels[0]: args[0], labels[1]: args[1], ...}
   // No-op marker for a position in Vec<Inst> during source_to_inst. We can't just use indices as we may reorder and splice the instructions during optimisations.
@@ -184,11 +182,17 @@ pub struct Inst {
   pub spreads: Vec<usize>, // Indices into `args` that are spread, for Call. Cannot have values less than 2 as the first two args are `callee` and `this`.
   pub labels: Vec<u32>,
   // Garbage values if not applicable.
-  #[serde(default = "BinOp::_Unreachable", skip_serializing_if = "is_dummy_binop")]
+  #[serde(
+    default = "BinOp::_Unreachable",
+    skip_serializing_if = "is_dummy_binop"
+  )]
   pub bin_op: BinOp,
   #[serde(default = "UnOp::_Unreachable", skip_serializing_if = "is_dummy_unop")]
   pub un_op: UnOp,
-  #[serde(default = "Symbol::from_raw_id_max", skip_serializing_if = "is_dummy_symbol")]
+  #[serde(
+    default = "Symbol::from_raw_id_max",
+    skip_serializing_if = "is_dummy_symbol"
+  )]
   pub foreign: Symbol,
   #[serde(default, skip_serializing_if = "String::is_empty")]
   pub unknown: String,
@@ -207,7 +211,10 @@ impl Inst {
     assert!(self.t == InstTyp::Phi);
     assert_eq!(self.labels.len(), self.args.len());
     // This catches a lot of bugs.
-    assert!(!self.labels.contains(&label), "can't insert {label}=>{arg:?} to {self:?}");
+    assert!(
+      !self.labels.contains(&label),
+      "can't insert {label}=>{arg:?} to {self:?}"
+    );
     self.labels.push(label);
     self.args.push(arg);
   }
@@ -285,7 +292,13 @@ impl Inst {
     }
   }
 
-  pub fn call(tgt: impl Into<Option<u32>>, callee: Arg, this: Arg, args: Vec<Arg>, spreads: Vec<usize>) -> Self {
+  pub fn call(
+    tgt: impl Into<Option<u32>>,
+    callee: Arg,
+    this: Arg,
+    args: Vec<Arg>,
+    spreads: Vec<usize>,
+  ) -> Self {
     assert!(spreads.iter().all(|&i| i >= 2 && i < args.len()));
     Self {
       t: InstTyp::Call,
@@ -379,7 +392,13 @@ impl Inst {
 
   pub fn as_call(&self) -> (Option<u32>, &Arg, &Arg, &[Arg], &[usize]) {
     assert_eq!(self.t, InstTyp::Call);
-    (self.tgts.get(0).copied(), &self.args[0], &self.args[1], &self.args[2..], &self.spreads)
+    (
+      self.tgts.get(0).copied(),
+      &self.args[0],
+      &self.args[1],
+      &self.args[2..],
+      &self.spreads,
+    )
   }
 
   pub fn as_foreign_load(&self) -> (u32, Symbol) {

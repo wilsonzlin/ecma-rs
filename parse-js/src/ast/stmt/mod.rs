@@ -1,11 +1,21 @@
 pub mod decl;
 
-use decl::{ClassDecl, FuncDecl, PatDecl, VarDecl, VarDeclMode};
-use derive_more::derive::{From, TryInto};
-use derive_visitor::{Drive, DriveMut};
-use serde::{Deserialize, Serialize};
-
-use super::{expr::{pat::Pat, Expr}, import_export::{ExportNames, ImportNames}, node::Node, stx::TopLevel};
+use super::expr::pat::Pat;
+use super::expr::Expr;
+use super::import_export::ExportNames;
+use super::import_export::ImportNames;
+use super::node::Node;
+use super::ts_stmt::*;
+use decl::ClassDecl;
+use decl::FuncDecl;
+use decl::PatDecl;
+use decl::VarDecl;
+use decl::VarDeclMode;
+use derive_more::derive::From;
+use derive_more::derive::TryInto;
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use serde::Serialize;
 
 // We must wrap each variant with Node<T> as otherwise we won't be able to visit Node<T> instead of just T.
 #[derive(Debug, Drive, DriveMut, From, Serialize, TryInto)]
@@ -31,14 +41,27 @@ pub enum Stmt {
   Throw(Node<ThrowStmt>),
   Try(Node<TryStmt>),
   While(Node<WhileStmt>),
+  With(Node<WithStmt>),
 
   ClassDecl(Node<ClassDecl>),
   FunctionDecl(Node<FuncDecl>),
   VarDecl(Node<VarDecl>),
+
+  // TypeScript statements
+  InterfaceDecl(Node<InterfaceDecl>),
+  TypeAliasDecl(Node<TypeAliasDecl>),
+  EnumDecl(Node<EnumDecl>),
+  NamespaceDecl(Node<NamespaceDecl>),
+  ModuleDecl(Node<ModuleDecl>),
+  GlobalDecl(Node<GlobalDecl>),
+  AmbientVarDecl(Node<AmbientVarDecl>),
+  AmbientFunctionDecl(Node<AmbientFunctionDecl>),
+  AmbientClassDecl(Node<AmbientClassDecl>),
+  ImportTypeDecl(Node<ImportTypeDecl>),
+  ExportTypeDecl(Node<ExportTypeDecl>),
+  ImportEqualsDecl(Node<ImportEqualsDecl>),
+  ExportAssignmentDecl(Node<ExportAssignmentDecl>),
 }
-
-
-
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct CatchBlock {
@@ -59,80 +82,75 @@ pub struct SwitchBranch {
   pub body: Vec<Node<Stmt>>,
 }
 
-  // Statements.
+// Statements.
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct BlockStmt {
-   pub body: Vec<Node<Stmt>>,
-  }
-
-
-#[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct BreakStmt {
-    #[drive(skip)]
-    pub label: Option<String>,
-  }
-
+pub struct BlockStmt {
+  pub body: Vec<Node<Stmt>>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct ContinueStmt {
-    #[drive(skip)]
-    pub label: Option<String>,
-  }
-
-
-#[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct DebuggerStmt {}
-
+pub struct BreakStmt {
+  #[drive(skip)]
+  pub label: Option<String>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct DoWhileStmt {
-    pub condition: Node<Expr>,
-    pub body: Node<Stmt>,
-  }
-
-
-#[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct EmptyStmt {}
-
+pub struct ContinueStmt {
+  #[drive(skip)]
+  pub label: Option<String>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct ExportDefaultExprStmt {
-    pub expression: Node<Expr>,
-  }
-
+pub struct DebuggerStmt {}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct ExportListStmt {
-    pub names: ExportNames,
-    #[drive(skip)]
-    pub from: Option<String>,
-  }
-
+pub struct DoWhileStmt {
+  pub condition: Node<Expr>,
+  pub body: Node<Stmt>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct ExprStmt {
-    pub expr: Node<Expr>,
-  }
-
+pub struct EmptyStmt {}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct IfStmt {
-    pub test: Node<Expr>,
-    pub consequent: Node<Stmt>,
-    pub alternate: Option<Node<Stmt>>,
-  }
-
+pub struct ExportDefaultExprStmt {
+  pub expression: Node<Expr>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct ImportStmt {
-    // PatDecl always contains IdPat.
-    pub default: Option<Node<PatDecl>>,
-    pub names: Option<ImportNames>,
-    #[drive(skip)]
-    pub module: String,
-  }
+pub struct ExportListStmt {
+  #[drive(skip)]
+  pub type_only: bool, // TypeScript: export type
+  pub names: ExportNames,
+  #[drive(skip)]
+  pub from: Option<String>,
+  pub attributes: Option<Node<Expr>>,
+}
 
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ExprStmt {
+  pub expr: Node<Expr>,
+}
+
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct IfStmt {
+  pub test: Node<Expr>,
+  pub consequent: Node<Stmt>,
+  pub alternate: Option<Node<Stmt>>,
+}
+
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ImportStmt {
+  #[drive(skip)]
+  pub type_only: bool, // TypeScript: import type
+  // PatDecl always contains IdPat.
+  pub default: Option<Node<PatDecl>>,
+  pub names: Option<ImportNames>,
+  #[drive(skip)]
+  pub module: String,
+  pub attributes: Option<Node<Expr>>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ForTripleStmt {
@@ -164,55 +182,54 @@ pub struct ForInStmt {
   pub body: Node<ForBody>,
 }
 
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ForOfStmt {
+  #[drive(skip)]
+  pub await_: bool,
+  pub lhs: ForInOfLhs,
+  pub rhs: Node<Expr>,
+  pub body: Node<ForBody>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct ForOfStmt {
-    #[drive(skip)]
-    pub await_: bool,
-    pub lhs: ForInOfLhs,
-    pub rhs: Node<Expr>,
-    pub body: Node<ForBody>,
-  }
-
+pub struct LabelStmt {
+  #[drive(skip)]
+  pub name: String,
+  pub statement: Node<Stmt>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct LabelStmt {
-    #[drive(skip)]
-    pub name: String,
-    pub statement: Node<Stmt>,
-  }
-
+pub struct ReturnStmt {
+  pub value: Option<Node<Expr>>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct ReturnStmt {
-    pub value: Option<Node<Expr>>,
-  }
-
-
-#[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct SwitchStmt {
-    pub test: Node<Expr>,
-    pub branches: Vec<Node<SwitchBranch>>,
-  }
-
+pub struct SwitchStmt {
+  pub test: Node<Expr>,
+  pub branches: Vec<Node<SwitchBranch>>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct ThrowStmt {
-    pub value: Node<Expr>,
-  }
-
-
-#[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct TryStmt {
-    pub wrapped: Node<BlockStmt>,
-    // One of these must be present.
-    pub catch: Option<Node<CatchBlock>>,
-    pub finally: Option<Node<BlockStmt>>,
-  }
-
+pub struct ThrowStmt {
+  pub value: Node<Expr>,
+}
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
-  pub struct WhileStmt {
-    pub condition: Node<Expr>,
-    pub body: Node<Stmt>,
-  }
+pub struct TryStmt {
+  pub wrapped: Node<BlockStmt>,
+  // One of these must be present.
+  pub catch: Option<Node<CatchBlock>>,
+  pub finally: Option<Node<BlockStmt>>,
+}
+
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct WhileStmt {
+  pub condition: Node<Expr>,
+  pub body: Node<Stmt>,
+}
+
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct WithStmt {
+  pub object: Node<Expr>,
+  pub body: Node<Stmt>,
+}

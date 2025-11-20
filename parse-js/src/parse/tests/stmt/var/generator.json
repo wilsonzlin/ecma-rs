@@ -3,22 +3,19 @@
   "export": false,
   "export_default": false,
   "function": {
-    "$t": "Function",
     "arrow": false,
     "async_": false,
     "body": {
-      "$t": "FunctionBody",
-      "body": [
+      "Block": [
         {
-          "$t": "ExpressionStmt",
-          "expression": {
-            "$t": "UnaryExpr",
+          "$t": "Expr",
+          "expr": {
+            "$t": "Unary",
             "argument": {
-              "$t": "LiteralNumberExpr",
+              "$t": "LitNum",
               "value": 1.0
             },
-            "operator": "Yield",
-            "parenthesised": false
+            "operator": "Yield"
           }
         }
       ]
@@ -27,7 +24,6 @@
     "parameters": []
   },
   "name": {
-    "$t": "ClassOrFunctionName",
     "name": "a"
   }
 }

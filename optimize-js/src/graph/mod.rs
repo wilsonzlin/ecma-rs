@@ -1,7 +1,12 @@
-use std::{collections::hash_set, hash::Hash, iter, option};
-
-use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
+use ahash::HashMap;
+use ahash::HashMapExt;
+use ahash::HashSet;
+use ahash::HashSetExt;
 use serde::Serialize;
+use std::collections::hash_set;
+use std::hash::Hash;
+use std::iter;
+use std::option;
 
 struct PostOrderVisitor<'a, K: Clone + Default + Eq + Hash> {
   graph: &'a Graph<K>,
@@ -57,30 +62,51 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
     }
   }
 
-  pub fn nodes(&self) -> impl Iterator<Item=&K> + '_ {
+  pub fn nodes(&self) -> impl Iterator<Item = &K> + '_ {
     self.nodes.keys()
   }
 
-  pub fn edges<'a>(&'a self) -> impl Iterator<Item=(&'a K, &'a K)> + 'a {
-    self.nodes.iter().flat_map(|(parent, node)| {
-      node.children.iter().map(move |child| (parent, child))
-    })
+  pub fn edges<'a>(&'a self) -> impl Iterator<Item = (&'a K, &'a K)> + 'a {
+    self
+      .nodes
+      .iter()
+      .flat_map(|(parent, node)| node.children.iter().map(move |child| (parent, child)))
   }
 
   pub fn parents(&self, node: &K) -> GraphRelatedNodesIter<'_, K> {
-    self.nodes.get(node).map(|node| node.parents.iter()).into_iter().flatten()
+    self
+      .nodes
+      .get(node)
+      .map(|node| node.parents.iter())
+      .into_iter()
+      .flatten()
   }
 
   /// Will never contain duplicates as we use a set internally.
   pub fn children(&self, node: &K) -> GraphRelatedNodesIter<'_, K> {
-    self.nodes.get(node).map(|node| node.children.iter()).into_iter().flatten()
+    self
+      .nodes
+      .get(node)
+      .map(|node| node.children.iter())
+      .into_iter()
+      .flatten()
   }
 
   /// Insert the nodes and connect them with an edge.
   /// It's safe if the edge already exists.
   pub fn connect(&mut self, parent: &K, child: &K) {
-    self.nodes.entry(parent.clone()).or_default().children.insert(child.clone());
-    self.nodes.entry(child.clone()).or_default().parents.insert(parent.clone());
+    self
+      .nodes
+      .entry(parent.clone())
+      .or_default()
+      .children
+      .insert(child.clone());
+    self
+      .nodes
+      .entry(child.clone())
+      .or_default()
+      .parents
+      .insert(parent.clone());
   }
 
   /// The nodes must already exist.
@@ -100,18 +126,31 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
 
   /// Remove a node from the graph, connecting all its parents to all its children.
   pub fn contract(&mut self, node: &K) {
-    let GraphNode { mut children, mut parents } = self.nodes.remove(node).unwrap();
+    let GraphNode {
+      mut children,
+      mut parents,
+    } = self.nodes.remove(node).unwrap();
     // All of the following graph operations will fail if there's a self-edge since we've just removed it from the graph,
     // so remove any self-edge now.
     children.remove(node);
     parents.remove(node);
 
     for parent in &parents {
-      self.nodes.get_mut(&parent).unwrap().children.extend(children.iter().cloned());
+      self
+        .nodes
+        .get_mut(&parent)
+        .unwrap()
+        .children
+        .extend(children.iter().cloned());
     }
 
     for child in &children {
-      self.nodes.get_mut(&child).unwrap().parents.extend(parents.iter().cloned());
+      self
+        .nodes
+        .get_mut(&child)
+        .unwrap()
+        .parents
+        .extend(parents.iter().cloned());
     }
 
     for parent in parents {
@@ -147,10 +186,7 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
   }
 
   /// Postorder: visit all children, then self.
-  pub fn calculate_postorder<'a>(
-    &'a self,
-    entry: &'a K,
-  ) -> (Vec<&'a K>, HashMap<&'a K, usize>) {
+  pub fn calculate_postorder<'a>(&'a self, entry: &'a K) -> (Vec<&'a K>, HashMap<&'a K, usize>) {
     self._calculate_postorder(entry, false)
   }
 
@@ -166,20 +202,19 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
 
 #[cfg(test)]
 mod tests {
-    use ahash::HashSet;
-    use itertools::Itertools;
+  use super::Graph;
+  use ahash::HashSet;
+  use itertools::Itertools;
 
-    use super::Graph;
-
-
-    fn assert_edges(graph: &Graph<u32>, edges: &[(u32, u32)]) {
-        assert_eq!(
-          graph.edges()
-            .map(|(parent, child)| (parent.clone(), child.clone()))
-            .collect::<HashSet<_>>(),
-          HashSet::from_iter(edges.into_iter().cloned())
-        );
-    }
+  fn assert_edges(graph: &Graph<u32>, edges: &[(u32, u32)]) {
+    assert_eq!(
+      graph
+        .edges()
+        .map(|(parent, child)| (parent.clone(), child.clone()))
+        .collect::<HashSet<_>>(),
+      HashSet::from_iter(edges.into_iter().cloned())
+    );
+  }
 
   #[test]
   fn test_contract_with_self_edge_and_no_parents_and_no_children() {

@@ -1,219 +1,189 @@
 {
-  "$t": "CallExpr",
+  "$t": "Call",
   "arguments": [
     {
-      "$t": "CallArg",
       "spread": false,
       "value": {
-        "$t": "CallExpr",
+        "$t": "Call",
         "arguments": [],
         "callee": {
-          "$t": "MemberExpr",
+          "$t": "Member",
           "left": {
-            "$t": "IdentifierExpr",
+            "$t": "Id",
             "name": "a"
           },
           "optional_chaining": true,
-          "parenthesised": false,
           "right": "b"
         },
-        "optional_chaining": true,
-        "parenthesised": false
+        "optional_chaining": true
       }
     },
     {
-      "$t": "CallArg",
       "spread": false,
       "value": {
-        "$t": "CallExpr",
+        "$t": "Call",
         "arguments": [
           {
-            "$t": "CallArg",
             "spread": false,
             "value": {
-              "$t": "IdentifierExpr",
+              "$t": "Id",
               "name": "a"
             }
           },
           {
-            "$t": "CallArg",
             "spread": false,
             "value": {
-              "$t": "IdentifierExpr",
+              "$t": "Id",
               "name": "b"
             }
           }
         ],
         "callee": {
-          "$t": "MemberExpr",
+          "$t": "Member",
           "left": {
-            "$t": "IdentifierExpr",
+            "$t": "Id",
             "name": "a"
           },
           "optional_chaining": true,
-          "parenthesised": false,
           "right": "b"
         },
-        "optional_chaining": true,
-        "parenthesised": false
+        "optional_chaining": true
       }
     },
     {
-      "$t": "CallArg",
       "spread": false,
       "value": {
-        "$t": "CallExpr",
+        "$t": "Call",
         "arguments": [
           {
-            "$t": "CallArg",
             "spread": false,
             "value": {
-              "$t": "IdentifierExpr",
+              "$t": "Id",
               "name": "a"
             }
           }
         ],
         "callee": {
-          "$t": "MemberExpr",
+          "$t": "Member",
           "left": {
-            "$t": "IdentifierExpr",
+            "$t": "Id",
             "name": "a"
           },
           "optional_chaining": true,
-          "parenthesised": false,
           "right": "b"
         },
-        "optional_chaining": true,
-        "parenthesised": false
+        "optional_chaining": true
       }
     },
     {
-      "$t": "CallArg",
       "spread": false,
       "value": {
-        "$t": "CallExpr",
+        "$t": "Call",
         "arguments": [],
         "callee": {
-          "$t": "MemberExpr",
+          "$t": "Member",
           "left": {
-            "$t": "IdentifierExpr",
+            "$t": "Id",
             "name": "a"
           },
           "optional_chaining": true,
-          "parenthesised": false,
           "right": "b"
         },
-        "optional_chaining": false,
-        "parenthesised": false
+        "optional_chaining": false
       }
     },
     {
-      "$t": "CallArg",
       "spread": false,
       "value": {
-        "$t": "CallExpr",
+        "$t": "Call",
         "arguments": [
           {
-            "$t": "CallArg",
             "spread": false,
             "value": {
-              "$t": "IdentifierExpr",
+              "$t": "Id",
               "name": "a"
             }
           },
           {
-            "$t": "CallArg",
             "spread": false,
             "value": {
-              "$t": "IdentifierExpr",
+              "$t": "Id",
               "name": "b"
             }
           }
         ],
         "callee": {
-          "$t": "MemberExpr",
+          "$t": "Member",
           "left": {
-            "$t": "IdentifierExpr",
+            "$t": "Id",
             "name": "a"
           },
           "optional_chaining": true,
-          "parenthesised": false,
           "right": "b"
         },
-        "optional_chaining": false,
-        "parenthesised": false
+        "optional_chaining": false
       }
     },
     {
-      "$t": "CallArg",
       "spread": false,
       "value": {
-        "$t": "CallExpr",
+        "$t": "Call",
         "arguments": [],
         "callee": {
-          "$t": "MemberExpr",
+          "$t": "Member",
           "left": {
-            "$t": "IdentifierExpr",
+            "$t": "Id",
             "name": "a"
           },
           "optional_chaining": false,
-          "parenthesised": false,
           "right": "b"
         },
-        "optional_chaining": true,
-        "parenthesised": false
+        "optional_chaining": true
       }
     },
     {
-      "$t": "CallArg",
       "spread": false,
       "value": {
-        "$t": "CallExpr",
+        "$t": "Call",
         "arguments": [],
         "callee": {
-          "$t": "IdentifierExpr",
+          "$t": "Id",
           "name": "ab"
         },
-        "optional_chaining": true,
-        "parenthesised": false
+        "optional_chaining": true
       }
     },
     {
-      "$t": "CallArg",
       "spread": false,
       "value": {
-        "$t": "CallExpr",
+        "$t": "Call",
         "arguments": [
           {
-            "$t": "CallArg",
             "spread": false,
             "value": {
-              "$t": "IdentifierExpr",
+              "$t": "Id",
               "name": "a"
             }
           },
           {
-            "$t": "CallArg",
             "spread": false,
             "value": {
-              "$t": "IdentifierExpr",
+              "$t": "Id",
               "name": "b"
             }
           }
         ],
         "callee": {
-          "$t": "IdentifierExpr",
+          "$t": "Id",
           "name": "ab"
         },
-        "optional_chaining": true,
-        "parenthesised": false
+        "optional_chaining": true
       }
     }
   ],
   "callee": {
-    "$t": "IdentifierExpr",
+    "$t": "Id",
     "name": "call"
   },
-  "optional_chaining": false,
-  "parenthesised": false
+  "optional_chaining": false
 }

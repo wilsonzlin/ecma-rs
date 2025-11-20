@@ -1,12 +1,14 @@
 mod expr;
 mod stmt;
 
-use crate::{lex::{LexMode, Lexer}, token::TT};
 use super::Parser;
+use crate::lex::LexMode;
+use crate::lex::Lexer;
+use crate::token::TT;
 
 #[test]
 fn test_parser() {
-  let lexer = Lexer::new(b"let x = /a/ / 1;");
+  let lexer = Lexer::new("let x = /a/ / 1;");
   let mut p = Parser::new(lexer);
   // Initial state.
   let cp = p.checkpoint();

@@ -1,74 +1,60 @@
 {
-  "$t": "BinaryExpr",
+  "$t": "Binary",
   "left": {
-    "$t": "BinaryExpr",
+    "$t": "Binary",
     "left": {
-      "$t": "CallExpr",
+      "$t": "Call",
       "arguments": [],
       "callee": {
-        "$t": "FunctionExpr",
-        "function": {
-          "$t": "Function",
+        "$t": "Func",
+        "func": {
           "arrow": false,
           "async_": false,
           "body": {
-            "$t": "FunctionBody",
-            "body": []
+            "Block": []
           },
           "generator": false,
           "parameters": []
         },
-        "name": null,
-        "parenthesised": true
+        "name": null
       },
-      "optional_chaining": false,
-      "parenthesised": false
+      "optional_chaining": false
     },
     "operator": "Comma",
-    "parenthesised": false,
     "right": {
-      "$t": "CallExpr",
+      "$t": "Call",
       "arguments": [],
       "callee": {
-        "$t": "ArrowFunctionExpr",
-        "function": {
-          "$t": "Function",
+        "$t": "ArrowFunc",
+        "func": {
           "arrow": true,
           "async_": false,
           "body": {
-            "$t": "FunctionBody",
-            "body": []
+            "Block": []
           },
           "generator": false,
           "parameters": []
-        },
-        "parenthesised": true
+        }
       },
-      "optional_chaining": false,
-      "parenthesised": false
+      "optional_chaining": false
     }
   },
   "operator": "Comma",
-  "parenthesised": false,
   "right": {
-    "$t": "CallExpr",
+    "$t": "Call",
     "arguments": [],
     "callee": {
-      "$t": "ArrowFunctionExpr",
-      "function": {
-        "$t": "Function",
+      "$t": "ArrowFunc",
+      "func": {
         "arrow": true,
         "async_": true,
         "body": {
-          "$t": "FunctionBody",
-          "body": []
+          "Block": []
         },
         "generator": false,
         "parameters": []
-      },
-      "parenthesised": true
+      }
     },
-    "optional_chaining": false,
-    "parenthesised": false
+    "optional_chaining": false
   }
 }

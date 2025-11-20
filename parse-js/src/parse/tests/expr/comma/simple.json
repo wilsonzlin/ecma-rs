@@ -1,22 +1,20 @@
 {
-  "$t": "BinaryExpr",
+  "$t": "Binary",
   "left": {
-    "$t": "BinaryExpr",
+    "$t": "Binary",
     "left": {
-      "$t": "LiteralNumberExpr",
+      "$t": "LitNum",
       "value": 1.0
     },
     "operator": "Comma",
-    "parenthesised": false,
     "right": {
-      "$t": "LiteralBooleanExpr",
+      "$t": "LitBool",
       "value": true
     }
   },
   "operator": "Comma",
-  "parenthesised": false,
   "right": {
-    "$t": "LiteralStringExpr",
+    "$t": "LitStr",
     "value": ""
   }
 }

@@ -1,9 +1,29 @@
-use parse_js::{ast::{class_or_object::ClassOrObjKey, expr::{pat::{ArrPat, IdPat, ObjPat, ObjPatProp, Pat}, Expr}, node::Node, stmt::{decl::{VarDecl, VarDeclarator}, BlockStmt, BreakStmt, ExprStmt, ForTripleStmt, ForTripleStmtInit, IfStmt, Stmt, WhileStmt}}, num::JsNumber};
-
-use crate::il::inst::{Arg, BinOp, Const, Inst};
-
-use super::{SourceToInst, VarType, DUMMY_LABEL};
-
+use super::SourceToInst;
+use super::VarType;
+use super::DUMMY_LABEL;
+use crate::il::inst::Arg;
+use crate::il::inst::BinOp;
+use crate::il::inst::Const;
+use crate::il::inst::Inst;
+use parse_js::ast::class_or_object::ClassOrObjKey;
+use parse_js::ast::expr::pat::ArrPat;
+use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::pat::ObjPat;
+use parse_js::ast::expr::pat::ObjPatProp;
+use parse_js::ast::expr::pat::Pat;
+use parse_js::ast::expr::Expr;
+use parse_js::ast::node::Node;
+use parse_js::ast::stmt::decl::VarDecl;
+use parse_js::ast::stmt::decl::VarDeclarator;
+use parse_js::ast::stmt::BlockStmt;
+use parse_js::ast::stmt::BreakStmt;
+use parse_js::ast::stmt::ExprStmt;
+use parse_js::ast::stmt::ForTripleStmt;
+use parse_js::ast::stmt::ForTripleStmtInit;
+use parse_js::ast::stmt::IfStmt;
+use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stmt::WhileStmt;
+use parse_js::num::JsNumber;
 
 impl<'p> SourceToInst<'p> {
   // Handle `[a = 1] = x;` or `{b: c = 2} = y;`.
@@ -15,12 +35,7 @@ impl<'p> SourceToInst<'p> {
     default_value: Option<Node<Expr>>,
   ) {
     let tmp_var = self.c_temp.bump();
-    self.out.push(Inst::bin(
-      tmp_var,
-      obj,
-      BinOp::GetProp,
-      prop,
-    ));
+    self.out.push(Inst::bin(tmp_var, obj, BinOp::GetProp, prop));
     if let Some(dv) = default_value {
       // Compile default value. If `%tmp` is undefined, we need to assign `e.default_value` to it.
       let after_label_id = self.c_label.bump();
@@ -31,13 +46,14 @@ impl<'p> SourceToInst<'p> {
         BinOp::StrictEq,
         Arg::Const(Const::Undefined),
       ));
-      self.out.push(Inst::cond_goto( Arg::Var(is_undefined_tmp_var), DUMMY_LABEL,  after_label_id));
-      let dv_arg = self.compile_expr(dv);
-      self.out.push(Inst::var_assign(
-        tmp_var,
-        dv_arg,
+      self.out.push(Inst::cond_goto(
+        Arg::Var(is_undefined_tmp_var),
+        DUMMY_LABEL,
+        after_label_id,
       ));
-      self.out.push(Inst::label( after_label_id));
+      let dv_arg = self.compile_expr(dv);
+      self.out.push(Inst::var_assign(tmp_var, dv_arg));
+      self.out.push(Inst::label(after_label_id));
     };
     self.compile_destructuring(target, Arg::Var(tmp_var));
   }
@@ -45,7 +61,7 @@ impl<'p> SourceToInst<'p> {
   pub fn compile_destructuring(&mut self, pat: Node<Pat>, rval: Arg) {
     match *pat.stx {
       Pat::Arr(n) => {
-        let ArrPat {elements, rest} = *n.stx;
+        let ArrPat { elements, rest } = *n.stx;
         for (i, e) in elements.into_iter().enumerate() {
           let Some(e) = e else {
             continue;
@@ -80,18 +96,9 @@ impl<'p> SourceToInst<'p> {
         let IdPat { name } = *n.stx;
         // NOTE: It's possible to destructure-assign to ancestor scope vars (including globals), so just because this is a pattern doesn't mean it's for a local var.
         let inst = match self.var_type(pat.assoc, name.clone()) {
-          VarType::Local(local) => Inst::var_assign(
-            self.symbol_to_temp(local),
-            rval.clone(),
-          ),
-          VarType::Foreign(foreign) => Inst::foreign_store(
-            foreign,
-            rval.clone(),
-          ),
-          VarType::Unknown(unknown) => Inst::unknown_store(
-            unknown,
-            rval.clone(),
-          ),
+          VarType::Local(local) => Inst::var_assign(self.symbol_to_temp(local), rval.clone()),
+          VarType::Foreign(foreign) => Inst::foreign_store(foreign, rval.clone()),
+          VarType::Unknown(unknown) => Inst::unknown_store(unknown, rval.clone()),
           VarType::Builtin(builtin) => panic!("assignment to builtin {builtin}"),
         };
         self.out.push(inst);
@@ -111,7 +118,15 @@ impl<'p> SourceToInst<'p> {
     self.out.push(Inst::goto(*self.break_stack.last().unwrap()));
   }
 
-  pub fn compile_for_triple_stmt(&mut self, ForTripleStmt { init, cond, post, body }: ForTripleStmt) {
+  pub fn compile_for_triple_stmt(
+    &mut self,
+    ForTripleStmt {
+      init,
+      cond,
+      post,
+      body,
+    }: ForTripleStmt,
+  ) {
     match init {
       ForTripleStmtInit::None => {}
       ForTripleStmtInit::Expr(e) => {
@@ -123,10 +138,12 @@ impl<'p> SourceToInst<'p> {
     };
     let loop_entry_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
-    self.out.push(Inst::label( loop_entry_label));
+    self.out.push(Inst::label(loop_entry_label));
     if let Some(cond) = cond {
       let cond_arg = self.compile_expr(cond);
-      self.out.push(Inst::cond_goto(cond_arg, DUMMY_LABEL,  after_loop_label));
+      self
+        .out
+        .push(Inst::cond_goto(cond_arg, DUMMY_LABEL, after_loop_label));
     };
     self.break_stack.push(after_loop_label);
     self.compile_stmts(body.stx.body);
@@ -134,35 +151,58 @@ impl<'p> SourceToInst<'p> {
     if let Some(post) = post {
       self.compile_expr(post);
     };
-    self.out.push(Inst::goto( loop_entry_label,));
-    self.out.push(Inst::label( after_loop_label));
+    self.out.push(Inst::goto(loop_entry_label));
+    self.out.push(Inst::label(after_loop_label));
   }
 
-  pub fn compile_if_stmt(&mut self, IfStmt { test, consequent, alternate }: IfStmt) {
+  pub fn compile_if_stmt(
+    &mut self,
+    IfStmt {
+      test,
+      consequent,
+      alternate,
+    }: IfStmt,
+  ) {
     let test_arg = self.compile_expr(test);
     match alternate {
       Some(alternate) => {
         let cons_label_id = self.c_label.bump();
         let after_label_id = self.c_label.bump();
-        self.out.push(Inst::cond_goto( test_arg,  cons_label_id, DUMMY_LABEL));
+        self
+          .out
+          .push(Inst::cond_goto(test_arg, cons_label_id, DUMMY_LABEL));
         self.compile_stmt(alternate);
-        self.out.push(Inst::goto( after_label_id,));
-        self.out.push(Inst::label( cons_label_id));
+        self.out.push(Inst::goto(after_label_id));
+        self.out.push(Inst::label(cons_label_id));
         self.compile_stmt(consequent);
-        self.out.push(Inst::label( after_label_id));
+        self.out.push(Inst::label(after_label_id));
       }
       None => {
         let after_label_id = self.c_label.bump();
-        self.out.push(Inst::cond_goto( test_arg, DUMMY_LABEL,  after_label_id));
+        self
+          .out
+          .push(Inst::cond_goto(test_arg, DUMMY_LABEL, after_label_id));
         self.compile_stmt(consequent);
-        self.out.push(Inst::label( after_label_id));
+        self.out.push(Inst::label(after_label_id));
       }
     };
   }
 
-  pub fn compile_var_decl(&mut self, VarDecl { export, mode, declarators }: VarDecl) {
+  pub fn compile_var_decl(
+    &mut self,
+    VarDecl {
+      export,
+      mode,
+      declarators,
+    }: VarDecl,
+  ) {
     // TODO export.
-    for VarDeclarator { initializer, pattern } in declarators
+    for VarDeclarator {
+      initializer,
+      pattern,
+      type_annotation,
+      definite_assignment: _,
+    } in declarators
     {
       // TODO `initializer` must exist if `pattern` isn't IdentifierPattern (e.g. `var [a]; var {b};`).
       let Some(init) = initializer else {
@@ -178,14 +218,16 @@ impl<'p> SourceToInst<'p> {
   pub fn compile_while_stmt(&mut self, WhileStmt { condition, body }: WhileStmt) {
     let before_test_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
-    self.out.push(Inst::label( before_test_label));
+    self.out.push(Inst::label(before_test_label));
     let test_arg = self.compile_expr(condition);
-    self.out.push(Inst::cond_goto( test_arg, DUMMY_LABEL,  after_loop_label));
+    self
+      .out
+      .push(Inst::cond_goto(test_arg, DUMMY_LABEL, after_loop_label));
     self.break_stack.push(after_loop_label);
     self.compile_stmt(body);
     self.break_stack.pop();
-    self.out.push(Inst::goto( before_test_label));
-    self.out.push(Inst::label( after_loop_label));
+    self.out.push(Inst::goto(before_test_label));
+    self.out.push(Inst::label(after_loop_label));
   }
 
   pub fn compile_expr_stmt(&mut self, ExprStmt { expr }: ExprStmt) {

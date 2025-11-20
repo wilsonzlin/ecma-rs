@@ -1,12 +1,12 @@
 {
-  "$t": "TaggedTemplateExpr",
+  "$t": "TaggedTemplate",
   "function": {
-    "$t": "IdentifierExpr",
+    "$t": "Id",
     "name": "a"
   },
   "parts": [
     {
-      "String": ""
+      "String": "``"
     }
   ]
 }

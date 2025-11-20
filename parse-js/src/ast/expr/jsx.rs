@@ -1,16 +1,15 @@
-use derive_visitor::{Drive, DriveMut};
-use serde::Serialize;
-
+use super::Expr;
+use super::IdExpr;
 use crate::ast::node::Node;
-
-use super::{Expr, IdExpr};
-
-
+use derive_visitor::Drive;
+use derive_visitor::DriveMut;
+use serde::Serialize;
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub enum JsxAttrVal {
   Expression(Node<JsxExprContainer>),
   Text(Node<JsxText>),
+  Element(Node<JsxElem>),
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -34,8 +33,12 @@ pub enum JsxElemName {
 impl PartialEq for JsxElemName {
   fn eq(&self, other: &Self) -> bool {
     match (self, other) {
-      (JsxElemName::Member(a), JsxElemName::Member(b)) => a.stx.base.stx.name == b.stx.base.stx.name && a.stx.path == b.stx.path,
-      (JsxElemName::Name(a), JsxElemName::Name(b)) => a.stx.namespace == b.stx.namespace && a.stx.name == b.stx.name,
+      (JsxElemName::Member(a), JsxElemName::Member(b)) => {
+        a.stx.base.stx.name == b.stx.base.stx.name && a.stx.path == b.stx.path
+      }
+      (JsxElemName::Name(a), JsxElemName::Name(b)) => {
+        a.stx.namespace == b.stx.namespace && a.stx.name == b.stx.name
+      }
       (JsxElemName::Id(a), JsxElemName::Id(b)) => a.stx.name == b.stx.name,
       _ => false,
     }
@@ -51,23 +54,22 @@ pub enum JsxElemChild {
   Text(Node<JsxText>),
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxElem {
   // When an element name starts with a lowercase ASCII character, it's a built-in component like '<div>' or '<span>'.
   // For easier differentiation, we use IdentifierExpr for user-defined components as they are references to symbols and built-in components are not.
   // https://reactjs.org/docs/jsx-in-depth.html#user-defined-components-must-be-capitalized
   pub name: Option<JsxElemName>, // None if fragment
-  pub attributes: Vec<JsxAttr>, // Always empty if fragment
+  pub attributes: Vec<JsxAttr>,  // Always empty if fragment
   pub children: Vec<JsxElemChild>,
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxExprContainer {
+  #[drive(skip)]
+  pub spread: bool,
   pub value: Node<Expr>,
 }
-
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxMemberExpr {
@@ -77,7 +79,6 @@ pub struct JsxMemberExpr {
   pub path: Vec<String>,
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxName {
   #[drive(skip)]
@@ -86,12 +87,10 @@ pub struct JsxName {
   pub name: String,
 }
 
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxSpreadAttr {
   pub value: Node<Expr>,
 }
-
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxText {

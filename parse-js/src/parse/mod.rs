@@ -1,5 +1,3 @@
-use expr::pat::ParsePatternRules;
-
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
@@ -9,17 +7,20 @@ use crate::lex::Lexer;
 use crate::loc::Loc;
 use crate::token::Token;
 use crate::token::TT;
+use expr::pat::ParsePatternRules;
 
 pub mod class_or_object;
+pub mod drive;
 pub mod expr;
 pub mod func;
+pub mod import_export;
 pub mod operator;
 pub mod stmt;
 #[cfg(test)]
 mod tests;
 pub mod top_level;
-pub mod drive;
-pub mod import_export;
+pub mod ts_decl;
+pub mod type_expr;
 
 // Almost every parse_* function takes these field values as parameters. Instead of having to enumerate them as parameters on every function and ordered unnamed arguments on every call, we simply pass this struct around. Fields are public to allow destructuring, but the value should be immutable; the with_* methods can be used to create an altered copy for passing into other functions, which is useful as most calls simply pass through the values unchanged. This struct should be received as a value, not a reference (i.e. `ctx: ParseCtx` not `ctx: &ParseCtx`) as the latter will require a separate lifetime.
 // All fields except `session` can (although not often) change between calls, so we don't simply put them in Parser, as otherwise we'd have to "unwind" (i.e. reset) those values after each call returns.
@@ -61,7 +62,11 @@ impl MaybeToken {
   }
 
   pub fn map<R, F: FnOnce(Self) -> R>(self, f: F) -> Option<R> {
-    if self.matched { Some(f(self)) } else { None }
+    if self.matched {
+      Some(f(self))
+    } else {
+      None
+    }
   }
 
   pub fn and_then<R, F: FnOnce() -> SyntaxResult<R>>(self, f: F) -> SyntaxResult<Option<R>> {
@@ -105,12 +110,12 @@ impl<'a> Parser<'a> {
     self.lexer.source_range()
   }
 
-  pub fn bytes(&self, loc: Loc) -> &[u8] {
+  pub fn bytes(&self, loc: Loc) -> &str {
     &self.lexer[loc]
   }
 
   pub fn str(&self, loc: Loc) -> &str {
-    std::str::from_utf8(self.bytes(loc)).unwrap()
+    self.bytes(loc)
   }
 
   pub fn string(&self, loc: Loc) -> String {
@@ -119,7 +124,7 @@ impl<'a> Parser<'a> {
 
   pub fn checkpoint(&self) -> ParserCheckpoint {
     ParserCheckpoint {
-      next_tok_i: self.next_tok_i
+      next_tok_i: self.next_tok_i,
     }
   }
 
@@ -141,18 +146,21 @@ impl<'a> Parser<'a> {
     };
   }
 
-  fn forward<K: FnOnce(&Token) -> bool>(
-    &mut self,
-    mode: LexMode,
-    keep: K,
-  ) -> (bool, Token) {
-    if self.buf.get(self.next_tok_i).is_some_and(|t| t.lex_mode != mode) {
+  fn forward<K: FnOnce(&Token) -> bool>(&mut self, mode: LexMode, keep: K) -> (bool, Token) {
+    if self
+      .buf
+      .get(self.next_tok_i)
+      .is_some_and(|t| t.lex_mode != mode)
+    {
       self.reset_to(self.next_tok_i);
     }
     assert!(self.next_tok_i <= self.buf.len());
     if self.buf.len() == self.next_tok_i {
       let token = lex_next(&mut self.lexer, mode);
-      self.buf.push(BufferedToken { token, lex_mode: mode });
+      self.buf.push(BufferedToken {
+        token,
+        lex_mode: mode,
+      });
     }
     let t = self.buf[self.next_tok_i].token.clone();
     let k = keep(&t);
@@ -186,7 +194,10 @@ impl<'a> Parser<'a> {
 
   pub fn peek_n_with_mode<const N: usize>(&mut self, modes: [LexMode; N]) -> [Token; N] {
     let cp = self.checkpoint();
-    let tokens = modes.into_iter().map(|m| self.forward(m, |_| true).1).collect::<Vec<_>>();
+    let tokens = modes
+      .into_iter()
+      .map(|m| self.forward(m, |_| true).1)
+      .collect::<Vec<_>>();
     let tokens: [Token; N] = tokens.try_into().unwrap();
     self.restore_checkpoint(cp);
     tokens
@@ -194,7 +205,9 @@ impl<'a> Parser<'a> {
 
   pub fn peek_n<const N: usize>(&mut self) -> [Token; N] {
     let cp = self.checkpoint();
-    let tokens = (0..N).map(|_| self.forward(LexMode::Standard, |_| true).1).collect::<Vec<_>>();
+    let tokens = (0..N)
+      .map(|_| self.forward(LexMode::Standard, |_| true).1)
+      .collect::<Vec<_>>();
     let tokens: [Token; N] = tokens.try_into().unwrap();
     self.restore_checkpoint(cp);
     tokens
@@ -213,10 +226,7 @@ impl<'a> Parser<'a> {
     self.maybe_consume_with_mode(typ, LexMode::Standard)
   }
 
-  pub fn consume_if_pred<F: FnOnce(&Token) -> bool>(
-    &mut self,
-    pred: F,
-  ) -> MaybeToken {
+  pub fn consume_if_pred<F: FnOnce(&Token) -> bool>(&mut self, pred: F) -> MaybeToken {
     let (matched, t) = self.forward(LexMode::Standard, pred);
     MaybeToken {
       typ: t.typ,
@@ -249,5 +259,100 @@ impl<'a> Parser<'a> {
 
   pub fn require(&mut self, typ: TT) -> SyntaxResult<Token> {
     self.require_with_mode(typ, LexMode::Standard)
+  }
+
+  /// Require ChevronRight with support for splitting >> and >>> tokens
+  /// This is needed for parsing nested generic types like List<List<T>>
+  pub fn require_chevron_right(&mut self) -> SyntaxResult<Token> {
+    let t = self.peek();
+    match t.typ {
+      TT::ChevronRight => {
+        // Normal case - consume and return
+        Ok(self.consume())
+      }
+      TT::ChevronRightChevronRight => {
+        // Split >> into > and >
+        self.consume(); // Consume the >>
+                        // Create a replacement > token to push back
+        let split_token = Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0 + 1, t.loc.1), // Second > starts one char later
+          preceded_by_line_terminator: false,
+        };
+        // Insert the second > into the buffer at current position
+        self.buf.insert(self.next_tok_i, BufferedToken {
+          token: split_token,
+          lex_mode: LexMode::Standard,
+        });
+        // Return a token representing the first >
+        Ok(Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0, t.loc.0 + 1),
+          preceded_by_line_terminator: t.preceded_by_line_terminator,
+        })
+      }
+      TT::ChevronRightChevronRightChevronRight => {
+        // Split >>> into > and >>
+        self.consume(); // Consume the >>>
+                        // Create a >> token to push back
+        let split_token = Token {
+          typ: TT::ChevronRightChevronRight,
+          loc: Loc(t.loc.0 + 1, t.loc.1), // >> starts one char later
+          preceded_by_line_terminator: false,
+        };
+        // Insert the >> into the buffer at current position
+        self.buf.insert(self.next_tok_i, BufferedToken {
+          token: split_token,
+          lex_mode: LexMode::Standard,
+        });
+        // Return a token representing the first >
+        Ok(Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0, t.loc.0 + 1),
+          preceded_by_line_terminator: t.preceded_by_line_terminator,
+        })
+      }
+      _ => Err(t.error(SyntaxErrorType::RequiredTokenNotFound(TT::ChevronRight))),
+    }
+  }
+
+  /// Require and consume an identifier, returning its string value
+  pub fn require_identifier(&mut self) -> SyntaxResult<String> {
+    let t = self.consume();
+    if t.typ != TT::Identifier {
+      return Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier")));
+    }
+    Ok(self.string(t.loc))
+  }
+
+  /// Require an identifier, but allow TypeScript type keywords as identifiers
+  /// TypeScript allows type keywords like "any", "string", "number", etc. as identifiers in some contexts
+  pub fn require_identifier_or_ts_keyword(&mut self) -> SyntaxResult<String> {
+    let t = self.consume();
+    // Allow regular identifiers
+    if t.typ == TT::Identifier {
+      return Ok(self.string(t.loc));
+    }
+    // Allow TypeScript type keywords as identifiers
+    match t.typ {
+      TT::KeywordAny
+      | TT::KeywordBooleanType
+      | TT::KeywordNumberType
+      | TT::KeywordStringType
+      | TT::KeywordSymbolType
+      | TT::KeywordVoid
+      | TT::KeywordNever
+      | TT::KeywordUndefinedType
+      | TT::KeywordUnknown
+      | TT::KeywordObjectType
+      | TT::KeywordBigIntType => Ok(self.string(t.loc)),
+      _ => Err(t.error(SyntaxErrorType::ExpectedSyntax("identifier"))),
+    }
+  }
+
+  /// Get string value of a template part literal
+  pub fn lit_template_part_str_val(&mut self) -> SyntaxResult<String> {
+    let t = self.require(TT::LiteralTemplatePartString)?;
+    Ok(self.string(t.loc))
   }
 }
