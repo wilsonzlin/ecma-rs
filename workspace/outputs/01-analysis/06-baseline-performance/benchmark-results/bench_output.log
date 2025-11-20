@@ -1,0 +1,476 @@
+warning: /home/user/ecma-rs/parse-js/Cargo.toml: file `/home/user/ecma-rs/parse-js/tests/conformance_runner.rs` found to be present in multiple build targets:
+  * `bin` target `conformance_runner`
+  * `integration-test` target `conformance_runner`
+ Downloading crates ...
+  Downloaded ciborium-io v0.2.2
+  Downloaded plotters-svg v0.3.7
+  Downloaded once_cell v1.21.3
+  Downloaded version_check v0.9.5
+  Downloaded zerocopy-derive v0.8.28
+  Downloaded unicode-ident v1.0.22
+  Downloaded serde_derive v1.0.228
+  Downloaded quote v1.0.42
+  Downloaded zerocopy v0.8.28
+  Downloaded rayon-core v1.13.0
+  Downloaded rayon v1.11.0
+  Downloaded aho-corasick v1.1.4
+  Downloaded regex v1.12.2
+  Downloaded itertools v0.13.0
+  Downloaded serde_json v1.0.145
+  Downloaded clap_builder v4.5.53
+  Downloaded derive_more-impl v1.0.0
+  Downloaded memchr v2.7.6
+  Downloaded syn v1.0.109
+  Downloaded derive_more v1.0.0
+  Downloaded syn v2.0.110
+  Downloaded criterion v0.7.0
+  Downloaded itertools v0.10.5
+  Downloaded crossbeam-epoch v0.9.18
+  Downloaded regex-syntax v0.8.8
+  Downloaded crossbeam-deque v0.8.6
+  Downloaded ahash v0.8.12
+  Downloaded itoa v1.0.15
+  Downloaded crossbeam-utils v0.8.21
+  Downloaded clap_lex v0.7.6
+  Downloaded regex-automata v0.4.13
+  Downloaded cfg-if v1.0.4
+  Downloaded autocfg v1.5.0
+  Downloaded anstyle v1.0.13
+  Downloaded similar v2.7.0
+  Downloaded serde_core v1.0.228
+  Downloaded ryu v1.0.20
+  Downloaded oorandom v11.1.5
+  Downloaded either v1.15.0
+  Downloaded libc v0.2.177
+  Downloaded derive-visitor-macros v0.4.0
+  Downloaded cast v0.3.0
+  Downloaded walkdir v2.5.0
+  Downloaded tinytemplate v1.2.1
+  Downloaded same-file v1.0.6
+  Downloaded proc-macro2 v1.0.103
+  Downloaded plotters v0.3.7
+  Downloaded getrandom v0.3.4
+  Downloaded derive-visitor v0.4.0
+  Downloaded criterion-plot v0.6.0
+  Downloaded clap v4.5.53
+  Downloaded ciborium-ll v0.2.2
+  Downloaded ciborium v0.2.2
+  Downloaded serde v1.0.228
+  Downloaded plotters-backend v0.3.7
+  Downloaded num-traits v0.2.19
+  Downloaded half v2.7.1
+  Downloaded convert_case v0.4.0
+  Downloaded anes v0.1.6
+   Compiling proc-macro2 v1.0.103
+   Compiling unicode-ident v1.0.22
+   Compiling quote v1.0.42
+   Compiling zerocopy v0.8.28
+   Compiling either v1.15.0
+   Compiling serde_core v1.0.228
+   Compiling crossbeam-utils v0.8.21
+   Compiling cfg-if v1.0.4
+   Compiling serde v1.0.228
+   Compiling autocfg v1.5.0
+   Compiling libc v0.2.177
+   Compiling serde_json v1.0.145
+   Compiling memchr v2.7.6
+   Compiling syn v1.0.109
+   Compiling ryu v1.0.20
+   Compiling version_check v0.9.5
+   Compiling getrandom v0.3.4
+   Compiling itoa v1.0.15
+   Compiling rayon-core v1.13.0
+   Compiling itertools v0.10.5
+   Compiling anstyle v1.0.13
+   Compiling convert_case v0.4.0
+   Compiling ciborium-io v0.2.2
+   Compiling regex-syntax v0.8.8
+   Compiling ahash v0.8.12
+   Compiling plotters-backend v0.3.7
+   Compiling clap_lex v0.7.6
+   Compiling itertools v0.13.0
+   Compiling same-file v1.0.6
+   Compiling once_cell v1.21.3
+   Compiling num-traits v0.2.19
+   Compiling cast v0.3.0
+   Compiling aho-corasick v1.1.4
+   Compiling clap_builder v4.5.53
+   Compiling plotters-svg v0.3.7
+   Compiling walkdir v2.5.0
+   Compiling crossbeam-epoch v0.9.18
+   Compiling oorandom v11.1.5
+   Compiling anes v0.1.6
+   Compiling similar v2.7.0
+   Compiling crossbeam-deque v0.8.6
+   Compiling syn v2.0.110
+   Compiling regex-automata v0.4.13
+   Compiling rayon v1.11.0
+   Compiling plotters v0.3.7
+   Compiling criterion-plot v0.6.0
+   Compiling clap v4.5.53
+   Compiling regex v1.12.2
+   Compiling derive-visitor-macros v0.4.0
+   Compiling derive-visitor v0.4.0
+   Compiling zerocopy-derive v0.8.28
+   Compiling serde_derive v1.0.228
+   Compiling derive_more-impl v1.0.0
+   Compiling half v2.7.1
+   Compiling ciborium-ll v0.2.2
+   Compiling derive_more v1.0.0
+   Compiling tinytemplate v1.2.1
+   Compiling ciborium v0.2.2
+   Compiling parse-js v0.24.1 (/home/user/ecma-rs/parse-js)
+   Compiling criterion v0.7.0
+warning: type `LexNotFound` is more private than the item `lex_template_string_continue`
+   --> parse-js/src/lex/mod.rs:949:1
+    |
+949 | pub fn lex_template_string_continue(lexer: &mut Lexer<'_>) -> LexResult<TT> {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ function `lex_template_string_continue` is reachable at visibility `pub`
+    |
+note: but type `LexNotFound` is only usable at visibility `pub(self)`
+   --> parse-js/src/lex/mod.rs:111:1
+    |
+111 | struct LexNotFound;
+    | ^^^^^^^^^^^^^^^^^^
+    = note: `#[warn(private_interfaces)]` on by default
+
+warning: methods `through_char`, `while_not_char`, and `range` are never used
+   --> parse-js/src/lex/mod.rs:207:6
+    |
+120 | impl<'a> Lexer<'a> {
+    | ------------------ methods in this implementation
+...
+207 |   fn through_char(&self, c: char) -> LexResult<Match> {
+    |      ^^^^^^^^^^^^
+...
+220 |   fn while_not_char(&self, a: char) -> Match {
+    |      ^^^^^^^^^^^^^^
+...
+280 |   fn range(&self, m: Match) -> Loc {
+    |      ^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: function `check` is never used
+ --> parse-js/src/lex/tests/mod.rs:7:4
+  |
+7 | fn check<const N: usize>(code: &str, expecteds: [TT; N]) {
+  |    ^^^^^
+
+warning: `parse-js` (lib) generated 3 warnings
+warning: use of deprecated function `criterion::black_box`: use `std::hint::black_box()` instead
+ --> parse-js/benches/baseline_performance.rs:1:17
+  |
+1 | use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, Throughput};
+  |                 ^^^^^^^^^
+  |
+  = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated function `criterion::black_box`: use `std::hint::black_box()` instead
+  --> parse-js/benches/baseline_performance.rs:31:40
+   |
+31 |                     let result = parse(black_box(src));
+   |                                        ^^^^^^^^^
+
+warning: use of deprecated function `criterion::black_box`: use `std::hint::black_box()` instead
+  --> parse-js/benches/baseline_performance.rs:69:29
+   |
+69 |             b.iter(|| parse(black_box(source)))
+   |                             ^^^^^^^^^
+
+warning: use of deprecated function `criterion::black_box`: use `std::hint::black_box()` instead
+   --> parse-js/benches/baseline_performance.rs:157:29
+    |
+157 |             b.iter(|| parse(black_box(source)))
+    |                             ^^^^^^^^^
+
+warning: use of deprecated function `criterion::black_box`: use `std::hint::black_box()` instead
+   --> parse-js/benches/baseline_performance.rs:199:25
+    |
+199 |         b.iter(|| parse(black_box(&deep_nesting)))
+    |                         ^^^^^^^^^
+
+warning: use of deprecated function `criterion::black_box`: use `std::hint::black_box()` instead
+   --> parse-js/benches/baseline_performance.rs:203:25
+    |
+203 |         b.iter(|| parse(black_box(&wide_union)))
+    |                         ^^^^^^^^^
+
+warning: use of deprecated function `criterion::black_box`: use `std::hint::black_box()` instead
+   --> parse-js/benches/baseline_performance.rs:207:25
+    |
+207 |         b.iter(|| parse(black_box(&many_types)))
+    |                         ^^^^^^^^^
+
+warning: `parse-js` (bench "baseline_performance") generated 7 warnings
+    Finished `bench` profile [optimized] target(s) in 1m 15s
+     Running benches/baseline_performance.rs (/home/user/ecma-rs/target/release/deps/baseline_performance-938e0bbb164c2b0f)
+Gnuplot not found, using plotters backend
+Benchmarking type_parsing/primitive_types
+Benchmarking type_parsing/primitive_types: Warming up for 3.0000 s
+Benchmarking type_parsing/primitive_types: Collecting 100 samples in estimated 5.0418 s (288k iterations)
+Benchmarking type_parsing/primitive_types: Analyzing
+type_parsing/primitive_types
+                        time:   [17.541 µs 17.606 µs 17.675 µs]
+                        thrpt:  [34.262 MiB/s 34.396 MiB/s 34.524 MiB/s]
+Found 4 outliers among 100 measurements (4.00%)
+  3 (3.00%) high mild
+  1 (1.00%) high severe
+primitive_types: 27 lines, 635 bytes
+Benchmarking type_parsing/simple_interface
+Benchmarking type_parsing/simple_interface: Warming up for 3.0000 s
+Benchmarking type_parsing/simple_interface: Collecting 100 samples in estimated 5.0148 s (167k iterations)
+Benchmarking type_parsing/simple_interface: Analyzing
+type_parsing/simple_interface
+                        time:   [30.627 µs 31.220 µs 31.991 µs]
+                        thrpt:  [24.683 MiB/s 25.293 MiB/s 25.782 MiB/s]
+Found 5 outliers among 100 measurements (5.00%)
+  3 (3.00%) high mild
+  2 (2.00%) high severe
+simple_interface: 53 lines, 828 bytes
+Benchmarking type_parsing/complex_types
+Benchmarking type_parsing/complex_types: Warming up for 3.0000 s
+Benchmarking type_parsing/complex_types: Collecting 100 samples in estimated 5.1534 s (106k iterations)
+Benchmarking type_parsing/complex_types: Analyzing
+type_parsing/complex_types
+                        time:   [46.702 µs 46.855 µs 47.020 µs]
+                        thrpt:  [73.361 MiB/s 73.620 MiB/s 73.861 MiB/s]
+Found 2 outliers among 100 measurements (2.00%)
+  2 (2.00%) high mild
+complex_types: 120 lines, 3617 bytes
+Benchmarking type_parsing/medium_file
+Benchmarking type_parsing/medium_file: Warming up for 3.0000 s
+Benchmarking type_parsing/medium_file: Collecting 100 samples in estimated 5.0798 s (20k iterations)
+Benchmarking type_parsing/medium_file: Analyzing
+type_parsing/medium_file
+                        time:   [242.20 µs 243.10 µs 244.50 µs]
+                        thrpt:  [24.179 MiB/s 24.318 MiB/s 24.409 MiB/s]
+Found 5 outliers among 100 measurements (5.00%)
+  5 (5.00%) high severe
+medium_file: 318 lines, 6199 bytes
+Benchmarking type_parsing/large_file
+Benchmarking type_parsing/large_file: Warming up for 3.0000 s
+Benchmarking type_parsing/large_file: Collecting 100 samples in estimated 5.6384 s (10k iterations)
+Benchmarking type_parsing/large_file: Analyzing
+type_parsing/large_file time:   [540.60 µs 541.65 µs 542.80 µs]
+                        thrpt:  [30.708 MiB/s 30.773 MiB/s 30.833 MiB/s]
+Found 11 outliers among 100 measurements (11.00%)
+  6 (6.00%) high mild
+  5 (5.00%) high severe
+large_file: 836 lines, 17478 bytes
+Benchmarking type_parsing/very_large_file
+Benchmarking type_parsing/very_large_file: Warming up for 3.0000 s
+Benchmarking type_parsing/very_large_file: Collecting 100 samples in estimated 5.6259 s (10k iterations)
+Benchmarking type_parsing/very_large_file: Analyzing
+type_parsing/very_large_file
+                        time:   [544.50 µs 545.54 µs 546.57 µs]
+                        thrpt:  [91.488 MiB/s 91.662 MiB/s 91.836 MiB/s]
+Found 4 outliers among 100 measurements (4.00%)
+  2 (2.00%) high mild
+  2 (2.00%) high severe
+very_large_file: 2508 lines, 52434 bytes
+
+Benchmarking type_features/union_small
+Benchmarking type_features/union_small: Warming up for 3.0000 s
+Benchmarking type_features/union_small: Collecting 100 samples in estimated 5.0056 s (3.1M iterations)
+Benchmarking type_features/union_small: Analyzing
+type_features/union_small
+                        time:   [1.5776 µs 1.5815 µs 1.5860 µs]
+Found 8 outliers among 100 measurements (8.00%)
+  4 (4.00%) high mild
+  4 (4.00%) high severe
+Benchmarking type_features/union_large
+Benchmarking type_features/union_large: Warming up for 3.0000 s
+Benchmarking type_features/union_large: Collecting 100 samples in estimated 5.0075 s (1.1M iterations)
+Benchmarking type_features/union_large: Analyzing
+type_features/union_large
+                        time:   [4.3068 µs 4.3510 µs 4.4150 µs]
+Found 17 outliers among 100 measurements (17.00%)
+  5 (5.00%) high mild
+  12 (12.00%) high severe
+Benchmarking type_features/conditional
+Benchmarking type_features/conditional: Warming up for 3.0000 s
+Benchmarking type_features/conditional: Collecting 100 samples in estimated 5.0088 s (2.5M iterations)
+Benchmarking type_features/conditional: Analyzing
+type_features/conditional
+                        time:   [2.0096 µs 2.0189 µs 2.0335 µs]
+Found 12 outliers among 100 measurements (12.00%)
+  1 (1.00%) high mild
+  11 (11.00%) high severe
+Benchmarking type_features/mapped
+Benchmarking type_features/mapped: Warming up for 3.0000 s
+Benchmarking type_features/mapped: Collecting 100 samples in estimated 5.0101 s (1.7M iterations)
+Benchmarking type_features/mapped: Analyzing
+type_features/mapped    time:   [2.9062 µs 2.9156 µs 2.9274 µs]
+Found 6 outliers among 100 measurements (6.00%)
+  3 (3.00%) high mild
+  3 (3.00%) high severe
+Benchmarking type_features/template
+Benchmarking type_features/template: Warming up for 3.0000 s
+Benchmarking type_features/template: Collecting 100 samples in estimated 5.0005 s (4.1M iterations)
+Benchmarking type_features/template: Analyzing
+type_features/template  time:   [1.1871 µs 1.1935 µs 1.2015 µs]
+Found 13 outliers among 100 measurements (13.00%)
+  5 (5.00%) high mild
+  8 (8.00%) high severe
+Benchmarking type_features/tuple
+Benchmarking type_features/tuple: Warming up for 3.0000 s
+Benchmarking type_features/tuple: Collecting 100 samples in estimated 5.0039 s (2.8M iterations)
+Benchmarking type_features/tuple: Analyzing
+type_features/tuple     time:   [1.7691 µs 1.7741 µs 1.7799 µs]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking type_features/nested_conditional
+Benchmarking type_features/nested_conditional: Warming up for 3.0000 s
+Benchmarking type_features/nested_conditional: Collecting 100 samples in estimated 5.0070 s (853k iterations)
+Benchmarking type_features/nested_conditional: Analyzing
+type_features/nested_conditional
+                        time:   [5.8962 µs 5.9271 µs 5.9635 µs]
+Found 8 outliers among 100 measurements (8.00%)
+  3 (3.00%) high mild
+  5 (5.00%) high severe
+Benchmarking type_features/intersection
+Benchmarking type_features/intersection: Warming up for 3.0000 s
+Benchmarking type_features/intersection: Collecting 100 samples in estimated 5.0173 s (1.4M iterations)
+Benchmarking type_features/intersection: Analyzing
+type_features/intersection
+                        time:   [3.5846 µs 3.6022 µs 3.6222 µs]
+Found 8 outliers among 100 measurements (8.00%)
+  5 (5.00%) high mild
+  3 (3.00%) high severe
+Benchmarking type_features/indexed_access
+Benchmarking type_features/indexed_access: Warming up for 3.0000 s
+Benchmarking type_features/indexed_access: Collecting 100 samples in estimated 5.0092 s (2.0M iterations)
+Benchmarking type_features/indexed_access: Analyzing
+type_features/indexed_access
+                        time:   [2.5548 µs 2.6199 µs 2.7014 µs]
+Found 11 outliers among 100 measurements (11.00%)
+  3 (3.00%) high mild
+  8 (8.00%) high severe
+Benchmarking type_features/function_type
+Benchmarking type_features/function_type: Warming up for 3.0000 s
+Benchmarking type_features/function_type: Collecting 100 samples in estimated 5.0011 s (2.3M iterations)
+Benchmarking type_features/function_type: Analyzing
+type_features/function_type
+                        time:   [2.2004 µs 2.2111 µs 2.2231 µs]
+Found 9 outliers among 100 measurements (9.00%)
+  5 (5.00%) high mild
+  4 (4.00%) high severe
+Benchmarking type_features/generic_function
+Benchmarking type_features/generic_function: Warming up for 3.0000 s
+Benchmarking type_features/generic_function: Collecting 100 samples in estimated 5.0055 s (1.3M iterations)
+Benchmarking type_features/generic_function: Analyzing
+type_features/generic_function
+                        time:   [3.9655 µs 4.0395 µs 4.1402 µs]
+Found 10 outliers among 100 measurements (10.00%)
+  6 (6.00%) high mild
+  4 (4.00%) high severe
+Benchmarking type_features/array_type
+Benchmarking type_features/array_type: Warming up for 3.0000 s
+Benchmarking type_features/array_type: Collecting 100 samples in estimated 5.0052 s (3.2M iterations)
+Benchmarking type_features/array_type: Analyzing
+type_features/array_type
+                        time:   [1.5819 µs 1.5925 µs 1.6039 µs]
+Found 7 outliers among 100 measurements (7.00%)
+  5 (5.00%) high mild
+  2 (2.00%) high severe
+Benchmarking type_features/readonly_array
+Benchmarking type_features/readonly_array: Warming up for 3.0000 s
+Benchmarking type_features/readonly_array: Collecting 100 samples in estimated 5.0019 s (3.1M iterations)
+Benchmarking type_features/readonly_array: Analyzing
+type_features/readonly_array
+                        time:   [1.5661 µs 1.5749 µs 1.5857 µs]
+Found 11 outliers among 100 measurements (11.00%)
+  5 (5.00%) high mild
+  6 (6.00%) high severe
+Benchmarking type_features/optional_props
+Benchmarking type_features/optional_props: Warming up for 3.0000 s
+Benchmarking type_features/optional_props: Collecting 100 samples in estimated 5.0043 s (2.4M iterations)
+Benchmarking type_features/optional_props: Analyzing
+type_features/optional_props
+                        time:   [2.1055 µs 2.1123 µs 2.1196 µs]
+Found 16 outliers among 100 measurements (16.00%)
+  6 (6.00%) high mild
+  10 (10.00%) high severe
+Benchmarking type_features/string_literal_union
+Benchmarking type_features/string_literal_union: Warming up for 3.0000 s
+Benchmarking type_features/string_literal_union: Collecting 100 samples in estimated 5.0067 s (2.7M iterations)
+Benchmarking type_features/string_literal_union: Analyzing
+type_features/string_literal_union
+                        time:   [1.8539 µs 1.8611 µs 1.8704 µs]
+Found 4 outliers among 100 measurements (4.00%)
+  1 (1.00%) high mild
+  3 (3.00%) high severe
+
+Benchmarking real_world_patterns/interface_with_methods
+Benchmarking real_world_patterns/interface_with_methods: Warming up for 3.0000 s
+Benchmarking real_world_patterns/interface_with_methods: Collecting 100 samples in estimated 5.0157 s (601k iterations)
+Benchmarking real_world_patterns/interface_with_methods: Analyzing
+real_world_patterns/interface_with_methods
+                        time:   [8.3144 µs 8.3648 µs 8.4290 µs]
+Found 9 outliers among 100 measurements (9.00%)
+  2 (2.00%) high mild
+  7 (7.00%) high severe
+Benchmarking real_world_patterns/class_with_generics
+Benchmarking real_world_patterns/class_with_generics: Warming up for 3.0000 s
+Benchmarking real_world_patterns/class_with_generics: Collecting 100 samples in estimated 5.0483 s (313k iterations)
+Benchmarking real_world_patterns/class_with_generics: Analyzing
+real_world_patterns/class_with_generics
+                        time:   [15.858 µs 15.901 µs 15.954 µs]
+Found 10 outliers among 100 measurements (10.00%)
+  4 (4.00%) high mild
+  6 (6.00%) high severe
+Benchmarking real_world_patterns/react_component_type
+Benchmarking real_world_patterns/react_component_type: Warming up for 3.0000 s
+Benchmarking real_world_patterns/react_component_type: Collecting 100 samples in estimated 5.0212 s (717k iterations)
+Benchmarking real_world_patterns/react_component_type: Analyzing
+real_world_patterns/react_component_type
+                        time:   [6.9139 µs 7.0579 µs 7.3292 µs]
+Found 8 outliers among 100 measurements (8.00%)
+  4 (4.00%) high mild
+  4 (4.00%) high severe
+Benchmarking real_world_patterns/api_response_type
+Benchmarking real_world_patterns/api_response_type: Warming up for 3.0000 s
+Benchmarking real_world_patterns/api_response_type: Collecting 100 samples in estimated 5.0250 s (424k iterations)
+Benchmarking real_world_patterns/api_response_type: Analyzing
+real_world_patterns/api_response_type
+                        time:   [11.328 µs 11.468 µs 11.721 µs]
+Found 8 outliers among 100 measurements (8.00%)
+  2 (2.00%) high mild
+  6 (6.00%) high severe
+Benchmarking real_world_patterns/discriminated_union
+Benchmarking real_world_patterns/discriminated_union: Warming up for 3.0000 s
+Benchmarking real_world_patterns/discriminated_union: Collecting 100 samples in estimated 5.0121 s (374k iterations)
+Benchmarking real_world_patterns/discriminated_union: Analyzing
+real_world_patterns/discriminated_union
+                        time:   [13.273 µs 13.314 µs 13.361 µs]
+Found 2 outliers among 100 measurements (2.00%)
+  1 (1.00%) high mild
+  1 (1.00%) high severe
+
+Benchmarking stress_test/deep_nesting
+Benchmarking stress_test/deep_nesting: Warming up for 3.0000 s
+Benchmarking stress_test/deep_nesting: Collecting 100 samples in estimated 5.0586 s (172k iterations)
+Benchmarking stress_test/deep_nesting: Analyzing
+stress_test/deep_nesting
+                        time:   [29.626 µs 29.890 µs 30.229 µs]
+Found 3 outliers among 100 measurements (3.00%)
+  2 (2.00%) high mild
+  1 (1.00%) high severe
+Benchmarking stress_test/wide_union
+Benchmarking stress_test/wide_union: Warming up for 3.0000 s
+Benchmarking stress_test/wide_union: Collecting 100 samples in estimated 5.0064 s (227k iterations)
+Benchmarking stress_test/wide_union: Analyzing
+stress_test/wide_union  time:   [21.869 µs 22.082 µs 22.461 µs]
+Found 19 outliers among 100 measurements (19.00%)
+  19 (19.00%) high severe
+Benchmarking stress_test/many_types
+Benchmarking stress_test/many_types: Warming up for 3.0000 s
+Benchmarking stress_test/many_types: Collecting 100 samples in estimated 5.1218 s (40k iterations)
+Benchmarking stress_test/many_types: Analyzing
+stress_test/many_types  time:   [127.16 µs 129.05 µs 131.52 µs]
+Found 13 outliers among 100 measurements (13.00%)
+  7 (7.00%) high mild
+  6 (6.00%) high severe
+
