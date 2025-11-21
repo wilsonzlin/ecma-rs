@@ -1,0 +1,634 @@
+{
+  "timestamp": "2025-11-20T00:00:00Z",
+  "analysis_version": "1.0",
+  "total_type_nodes": 67,
+  "total_supporting_structs": 45,
+
+  "categories": {
+    "primitive_types": {
+      "count": 13,
+      "nodes": [
+        {"name": "TypeAny", "file": "type_expr.rs", "line": 58, "enum_variant": "Any", "enum_line": 13},
+        {"name": "TypeUnknown", "file": "type_expr.rs", "line": 62, "enum_variant": "Unknown", "enum_line": 14},
+        {"name": "TypeNever", "file": "type_expr.rs", "line": 66, "enum_variant": "Never", "enum_line": 15},
+        {"name": "TypeVoid", "file": "type_expr.rs", "line": 70, "enum_variant": "Void", "enum_line": 16},
+        {"name": "TypeString", "file": "type_expr.rs", "line": 74, "enum_variant": "String", "enum_line": 17},
+        {"name": "TypeNumber", "file": "type_expr.rs", "line": 78, "enum_variant": "Number", "enum_line": 18},
+        {"name": "TypeBoolean", "file": "type_expr.rs", "line": 82, "enum_variant": "Boolean", "enum_line": 19},
+        {"name": "TypeBigInt", "file": "type_expr.rs", "line": 86, "enum_variant": "BigInt", "enum_line": 20},
+        {"name": "TypeSymbol", "file": "type_expr.rs", "line": 90, "enum_variant": "Symbol", "enum_line": 21},
+        {"name": "TypeUniqueSymbol", "file": "type_expr.rs", "line": 94, "enum_variant": "UniqueSymbol", "enum_line": 22},
+        {"name": "TypeObject", "file": "type_expr.rs", "line": 98, "enum_variant": "Object", "enum_line": 23},
+        {"name": "TypeNull", "file": "type_expr.rs", "line": 102, "enum_variant": "Null", "enum_line": 24},
+        {"name": "TypeUndefined", "file": "type_expr.rs", "line": 106, "enum_variant": "Undefined", "enum_line": 25}
+      ]
+    },
+
+    "reference_and_literal_types": {
+      "count": 5,
+      "nodes": [
+        {
+          "name": "TypeReference",
+          "file": "type_expr.rs",
+          "line": 110,
+          "enum_variant": "TypeReference",
+          "enum_line": 28,
+          "fields": ["name: TypeEntityName", "type_arguments: Option<Vec<Node<TypeExpr>>>"]
+        },
+        {
+          "name": "TypeEntityName",
+          "file": "type_expr.rs",
+          "line": 118,
+          "is_enum": true,
+          "variants": ["Identifier", "Qualified", "Import"]
+        },
+        {
+          "name": "TypeQualifiedName",
+          "file": "type_expr.rs",
+          "line": 126,
+          "fields": ["left: TypeEntityName", "right: String"]
+        },
+        {
+          "name": "TypeLiteral",
+          "file": "type_expr.rs",
+          "line": 135,
+          "enum_variant": "LiteralType",
+          "enum_line": 29,
+          "is_enum": true,
+          "variants": ["String", "Number", "BigInt", "Boolean", "Null"]
+        }
+      ]
+    },
+
+    "array_and_tuple_types": {
+      "count": 3,
+      "nodes": [
+        {
+          "name": "TypeArray",
+          "file": "type_expr.rs",
+          "line": 145,
+          "enum_variant": "ArrayType",
+          "enum_line": 30,
+          "fields": ["readonly: bool", "element_type: Box<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeTuple",
+          "file": "type_expr.rs",
+          "line": 153,
+          "enum_variant": "TupleType",
+          "enum_line": 31,
+          "fields": ["readonly: bool", "elements: Vec<Node<TypeTupleElement>>"]
+        },
+        {
+          "name": "TypeTupleElement",
+          "file": "type_expr.rs",
+          "line": 161,
+          "fields": ["label: Option<String>", "optional: bool", "rest: bool", "type_expr: Node<TypeExpr>"]
+        }
+      ]
+    },
+
+    "union_and_intersection_types": {
+      "count": 2,
+      "nodes": [
+        {
+          "name": "TypeUnion",
+          "file": "type_expr.rs",
+          "line": 173,
+          "enum_variant": "UnionType",
+          "enum_line": 32,
+          "fields": ["types: Vec<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeIntersection",
+          "file": "type_expr.rs",
+          "line": 179,
+          "enum_variant": "IntersectionType",
+          "enum_line": 33,
+          "fields": ["types: Vec<Node<TypeExpr>>"]
+        }
+      ]
+    },
+
+    "function_types": {
+      "count": 3,
+      "nodes": [
+        {
+          "name": "TypeFunction",
+          "file": "type_expr.rs",
+          "line": 185,
+          "enum_variant": "FunctionType",
+          "enum_line": 34,
+          "fields": ["type_parameters: Option<Vec<Node<TypeParameter>>>", "parameters: Vec<Node<TypeFunctionParameter>>", "return_type: Box<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeConstructor",
+          "file": "type_expr.rs",
+          "line": 193,
+          "enum_variant": "ConstructorType",
+          "enum_line": 35,
+          "fields": ["type_parameters: Option<Vec<Node<TypeParameter>>>", "parameters: Vec<Node<TypeFunctionParameter>>", "return_type: Box<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeFunctionParameter",
+          "file": "type_expr.rs",
+          "line": 201,
+          "fields": ["name: Option<String>", "optional: bool", "rest: bool", "type_expr: Node<TypeExpr>"]
+        }
+      ]
+    },
+
+    "type_parameters": {
+      "count": 2,
+      "nodes": [
+        {
+          "name": "TypeParameter",
+          "file": "type_expr.rs",
+          "line": 221,
+          "fields": ["const_: bool", "variance: Option<Variance>", "name: String", "constraint: Option<Box<Node<TypeExpr>>>", "default: Option<Box<Node<TypeExpr>>>"],
+          "note": "Supports const type parameters (TS 5.0+) and variance annotations"
+        },
+        {
+          "name": "Variance",
+          "file": "type_expr.rs",
+          "line": 213,
+          "is_enum": true,
+          "variants": ["In", "Out", "InOut"]
+        }
+      ]
+    },
+
+    "object_types": {
+      "count": 13,
+      "nodes": [
+        {
+          "name": "TypeObjectLiteral",
+          "file": "type_expr.rs",
+          "line": 234,
+          "enum_variant": "ObjectType",
+          "enum_line": 36,
+          "fields": ["members: Vec<Node<TypeMember>>"]
+        },
+        {
+          "name": "TypeMember",
+          "file": "type_expr.rs",
+          "line": 241,
+          "is_enum": true,
+          "variants": ["Property", "Method", "Constructor", "CallSignature", "IndexSignature", "GetAccessor", "SetAccessor", "MappedProperty"]
+        },
+        {
+          "name": "TypePropertySignature",
+          "file": "type_expr.rs",
+          "line": 254,
+          "fields": ["readonly: bool", "optional: bool", "key: TypePropertyKey", "type_annotation: Option<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeMethodSignature",
+          "file": "type_expr.rs",
+          "line": 265,
+          "fields": ["optional: bool", "key: TypePropertyKey", "type_parameters: Option<Vec<Node<TypeParameter>>>", "parameters: Vec<Node<TypeFunctionParameter>>", "return_type: Option<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeConstructSignature",
+          "file": "type_expr.rs",
+          "line": 276,
+          "fields": ["type_parameters: Option<Vec<Node<TypeParameter>>>", "parameters: Vec<Node<TypeFunctionParameter>>", "return_type: Option<Node<TypeExpr>>"],
+          "note": "Does not have abstract modifier in struct definition"
+        },
+        {
+          "name": "TypeCallSignature",
+          "file": "type_expr.rs",
+          "line": 284,
+          "fields": ["type_parameters: Option<Vec<Node<TypeParameter>>>", "parameters: Vec<Node<TypeFunctionParameter>>", "return_type: Option<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeIndexSignature",
+          "file": "type_expr.rs",
+          "line": 292,
+          "fields": ["readonly: bool", "parameter_name: String", "parameter_type: Node<TypeExpr>", "type_annotation: Node<TypeExpr>"]
+        },
+        {
+          "name": "TypeGetAccessor",
+          "file": "type_expr.rs",
+          "line": 303,
+          "fields": ["key: TypePropertyKey", "return_type: Option<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeSetAccessor",
+          "file": "type_expr.rs",
+          "line": 310,
+          "fields": ["key: TypePropertyKey", "parameter: Node<TypeFunctionParameter>"]
+        },
+        {
+          "name": "TypePropertyKey",
+          "file": "type_expr.rs",
+          "line": 318,
+          "is_enum": true,
+          "variants": ["Identifier", "String", "Number", "Computed"]
+        }
+      ]
+    },
+
+    "utility_types": {
+      "count": 2,
+      "nodes": [
+        {
+          "name": "TypeParenthesized",
+          "file": "type_expr.rs",
+          "line": 327,
+          "enum_variant": "ParenthesizedType",
+          "enum_line": 37,
+          "fields": ["type_expr: Box<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeThis",
+          "file": "type_expr.rs",
+          "line": 417,
+          "enum_variant": "ThisType",
+          "enum_line": 52,
+          "fields": []
+        }
+      ]
+    },
+
+    "type_operators": {
+      "count": 3,
+      "nodes": [
+        {
+          "name": "TypeQuery",
+          "file": "type_expr.rs",
+          "line": 333,
+          "enum_variant": "TypeQuery",
+          "enum_line": 40,
+          "fields": ["expr_name: TypeEntityName"],
+          "note": "Represents 'typeof' operator"
+        },
+        {
+          "name": "TypeKeyOf",
+          "file": "type_expr.rs",
+          "line": 339,
+          "enum_variant": "KeyOfType",
+          "enum_line": 41,
+          "fields": ["type_expr: Box<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeIndexedAccess",
+          "file": "type_expr.rs",
+          "line": 345,
+          "enum_variant": "IndexedAccessType",
+          "enum_line": 42,
+          "fields": ["object_type: Box<Node<TypeExpr>>", "index_type: Box<Node<TypeExpr>>"]
+        }
+      ]
+    },
+
+    "advanced_types": {
+      "count": 7,
+      "nodes": [
+        {
+          "name": "TypeConditional",
+          "file": "type_expr.rs",
+          "line": 352,
+          "enum_variant": "ConditionalType",
+          "enum_line": 43,
+          "fields": ["check_type: Box<Node<TypeExpr>>", "extends_type: Box<Node<TypeExpr>>", "true_type: Box<Node<TypeExpr>>", "false_type: Box<Node<TypeExpr>>"]
+        },
+        {
+          "name": "TypeInfer",
+          "file": "type_expr.rs",
+          "line": 361,
+          "enum_variant": "InferType",
+          "enum_line": 44,
+          "fields": ["type_parameter: String", "constraint: Option<Box<Node<TypeExpr>>>"],
+          "note": "Supports 'infer T extends U' syntax"
+        },
+        {
+          "name": "TypeMapped",
+          "file": "type_expr.rs",
+          "line": 369,
+          "enum_variant": "MappedType",
+          "enum_line": 45,
+          "fields": ["readonly_modifier: Option<MappedTypeModifier>", "type_parameter: String", "constraint: Box<Node<TypeExpr>>", "name_type: Option<Box<Node<TypeExpr>>>", "optional_modifier: Option<MappedTypeModifier>", "type_expr: Box<Node<TypeExpr>>"],
+          "note": "Has name_type field for 'as' clause (TS 4.1+), supports +/- modifiers"
+        },
+        {
+          "name": "MappedTypeModifier",
+          "file": "type_expr.rs",
+          "line": 383,
+          "is_enum": true,
+          "variants": ["Plus", "Minus", "None"]
+        },
+        {
+          "name": "TypeTemplateLiteral",
+          "file": "type_expr.rs",
+          "line": 391,
+          "enum_variant": "TemplateLiteralType",
+          "enum_line": 46,
+          "fields": ["head: String", "spans: Vec<Node<TypeTemplateLiteralSpan>>"]
+        },
+        {
+          "name": "TypeTemplateLiteralSpan",
+          "file": "type_expr.rs",
+          "line": 399,
+          "fields": ["type_expr: Node<TypeExpr>", "literal: String"]
+        }
+      ]
+    },
+
+    "type_predicates": {
+      "count": 1,
+      "nodes": [
+        {
+          "name": "TypePredicate",
+          "file": "type_expr.rs",
+          "line": 407,
+          "enum_variant": "TypePredicate",
+          "enum_line": 49,
+          "fields": ["asserts: bool", "parameter_name: String", "type_annotation: Option<Box<Node<TypeExpr>>>"],
+          "note": "Supports both 'x is T' and 'asserts x' and 'asserts x is T'"
+        }
+      ]
+    },
+
+    "import_types": {
+      "count": 1,
+      "nodes": [
+        {
+          "name": "TypeImport",
+          "file": "type_expr.rs",
+          "line": 421,
+          "enum_variant": "ImportType",
+          "enum_line": 53,
+          "fields": ["module_specifier: String", "qualifier: Option<TypeEntityName>", "type_arguments: Option<Vec<Node<TypeExpr>>>"],
+          "note": "Represents import('module').Type syntax"
+        }
+      ]
+    },
+
+    "typescript_declarations": {
+      "count": 14,
+      "nodes": [
+        {
+          "name": "InterfaceDecl",
+          "file": "ts_stmt.rs",
+          "line": 13,
+          "fields": ["export: bool", "declare: bool", "name: String", "type_parameters: Option<Vec<Node<TypeParameter>>>", "extends: Vec<Node<TypeExpr>>", "members: Vec<Node<TypeMember>>"]
+        },
+        {
+          "name": "TypeAliasDecl",
+          "file": "ts_stmt.rs",
+          "line": 27,
+          "fields": ["export: bool", "declare: bool", "name: String", "type_parameters: Option<Vec<Node<TypeParameter>>>", "type_expr: Node<TypeExpr>"]
+        },
+        {
+          "name": "EnumDecl",
+          "file": "ts_stmt.rs",
+          "line": 40,
+          "fields": ["export: bool", "declare: bool", "const_: bool", "name: String", "members: Vec<Node<EnumMember>>"],
+          "note": "Has const_ field for const enums"
+        },
+        {
+          "name": "EnumMember",
+          "file": "ts_stmt.rs",
+          "line": 54,
+          "fields": ["name: String", "initializer: Option<Node<Expr>>"]
+        },
+        {
+          "name": "NamespaceDecl",
+          "file": "ts_stmt.rs",
+          "line": 62,
+          "fields": ["export: bool", "declare: bool", "name: String", "body: NamespaceBody"]
+        },
+        {
+          "name": "NamespaceBody",
+          "file": "ts_stmt.rs",
+          "line": 75,
+          "is_enum": true,
+          "variants": ["Block", "Namespace"]
+        },
+        {
+          "name": "ModuleDecl",
+          "file": "ts_stmt.rs",
+          "line": 82,
+          "fields": ["export: bool", "declare: bool", "name: ModuleName", "body: Option<Vec<Node<Stmt>>>"],
+          "note": "Supports ambient modules via declare flag"
+        },
+        {
+          "name": "ModuleName",
+          "file": "ts_stmt.rs",
+          "line": 94,
+          "is_enum": true,
+          "variants": ["Identifier", "String"]
+        },
+        {
+          "name": "GlobalDecl",
+          "file": "ts_stmt.rs",
+          "line": 101,
+          "fields": ["body: Vec<Node<Stmt>>"],
+          "note": "For 'declare global' augmentation"
+        },
+        {
+          "name": "AmbientVarDecl",
+          "file": "ts_stmt.rs",
+          "line": 107,
+          "fields": ["export: bool", "name: String", "type_annotation: Option<Node<TypeExpr>>"]
+        },
+        {
+          "name": "AmbientFunctionDecl",
+          "file": "ts_stmt.rs",
+          "line": 117,
+          "fields": ["export: bool", "name: String", "type_parameters: Option<Vec<Node<TypeParameter>>>", "parameters: Vec<Node<AmbientFunctionParameter>>", "return_type: Option<Node<TypeExpr>>"]
+        },
+        {
+          "name": "AmbientFunctionParameter",
+          "file": "ts_stmt.rs",
+          "line": 129,
+          "fields": ["name: String", "optional: bool", "rest: bool", "type_annotation: Option<Node<TypeExpr>>"]
+        },
+        {
+          "name": "AmbientClassDecl",
+          "file": "ts_stmt.rs",
+          "line": 141,
+          "fields": ["export: bool", "abstract_: bool", "name: String", "type_parameters: Option<Vec<Node<TypeParameter>>>", "extends: Option<Node<TypeExpr>>", "implements: Vec<Node<TypeExpr>>", "members: Vec<Node<TypeMember>>"],
+          "note": "Has abstract_ field for abstract classes"
+        },
+        {
+          "name": "ImportTypeDecl",
+          "file": "ts_stmt.rs",
+          "line": 156,
+          "fields": ["names: Vec<ImportTypeName>", "module: String"]
+        },
+        {
+          "name": "ImportTypeName",
+          "file": "ts_stmt.rs",
+          "line": 164,
+          "fields": ["imported: String", "local: Option<String>"]
+        },
+        {
+          "name": "ExportTypeDecl",
+          "file": "ts_stmt.rs",
+          "line": 173,
+          "fields": ["names: Vec<ExportTypeName>", "module: Option<String>"]
+        },
+        {
+          "name": "ExportTypeName",
+          "file": "ts_stmt.rs",
+          "line": 181,
+          "fields": ["local: String", "exported: Option<String>"]
+        },
+        {
+          "name": "ImportEqualsDecl",
+          "file": "ts_stmt.rs",
+          "line": 190,
+          "fields": ["export: bool", "name: String", "module: String"]
+        },
+        {
+          "name": "ExportAssignmentDecl",
+          "file": "ts_stmt.rs",
+          "line": 201,
+          "fields": ["expression: Node<Expr>"]
+        }
+      ]
+    },
+
+    "typescript_expressions": {
+      "count": 4,
+      "nodes": [
+        {
+          "name": "TypeAssertionExpr",
+          "file": "expr/mod.rs",
+          "line": 206,
+          "fields": ["expression: Box<Node<Expr>>", "type_annotation: Option<Node<TypeExpr>>", "const_assertion: bool"],
+          "note": "Handles both 'as Type' and 'as const', const_assertion=true for 'as const'"
+        },
+        {
+          "name": "NonNullAssertionExpr",
+          "file": "expr/mod.rs",
+          "line": 215,
+          "fields": ["expression: Box<Node<Expr>>"],
+          "note": "Represents the postfix ! operator"
+        },
+        {
+          "name": "SatisfiesExpr",
+          "file": "expr/mod.rs",
+          "line": 221,
+          "fields": ["expression: Box<Node<Expr>>", "type_annotation: Node<TypeExpr>"],
+          "note": "TS 4.9+ satisfies operator"
+        },
+        {
+          "name": "Decorator",
+          "file": "expr/mod.rs",
+          "line": 228,
+          "fields": ["expression: Node<Expr>"],
+          "note": "Used for both legacy and TC39 decorators"
+        }
+      ]
+    },
+
+    "annotations_on_declarations": {
+      "count": 7,
+      "nodes": [
+        {
+          "name": "ClassDecl",
+          "file": "stmt/decl.rs",
+          "line": 15,
+          "fields": ["decorators: Vec<Node<Decorator>>", "export: bool", "export_default: bool", "declare: bool", "abstract_: bool", "name: Option<Node<ClassOrFuncName>>", "type_parameters: Option<Vec<Node<TypeParameter>>>", "extends: Option<Node<Expr>>", "implements: Vec<Node<Expr>>", "members: Vec<Node<ClassMember>>"],
+          "note": "Has abstract_ field, type_parameters, implements"
+        },
+        {
+          "name": "FuncDecl",
+          "file": "stmt/decl.rs",
+          "line": 33,
+          "fields": ["export: bool", "export_default: bool", "name: Option<Node<ClassOrFuncName>>", "function: Node<Func>"]
+        },
+        {
+          "name": "ParamDecl",
+          "file": "stmt/decl.rs",
+          "line": 43,
+          "fields": ["decorators: Vec<Node<Decorator>>", "rest: bool", "optional: bool", "accessibility: Option<Accessibility>", "readonly: bool", "pattern: Node<PatDecl>", "type_annotation: Option<Node<TypeExpr>>", "default_value: Option<Node<Expr>>"],
+          "note": "Full TypeScript parameter support with accessibility modifiers"
+        },
+        {
+          "name": "Accessibility",
+          "file": "stmt/decl.rs",
+          "line": 58,
+          "is_enum": true,
+          "variants": ["Public", "Private", "Protected"]
+        },
+        {
+          "name": "VarDecl",
+          "file": "stmt/decl.rs",
+          "line": 71,
+          "fields": ["export: bool", "mode: VarDeclMode", "declarators: Vec<VarDeclarator>"]
+        },
+        {
+          "name": "VarDeclarator",
+          "file": "stmt/decl.rs",
+          "line": 79,
+          "fields": ["pattern: Node<PatDecl>", "definite_assignment: bool", "type_annotation: Option<Node<TypeExpr>>", "initializer: Option<Node<Expr>>"],
+          "note": "Has definite_assignment for the ! operator"
+        },
+        {
+          "name": "VarDeclMode",
+          "file": "stmt/decl.rs",
+          "line": 88,
+          "is_enum": true,
+          "variants": ["Const", "Let", "Var", "Using", "AwaitUsing"],
+          "note": "IMPORTANT: Has Using and AwaitUsing (TS 5.2+)"
+        }
+      ]
+    },
+
+    "function_structures": {
+      "count": 1,
+      "nodes": [
+        {
+          "name": "Func",
+          "file": "func.rs",
+          "line": 14,
+          "fields": ["arrow: bool", "async_: bool", "generator: bool", "type_parameters: Option<Vec<Node<TypeParameter>>>", "parameters: Vec<Node<ParamDecl>>", "return_type: Option<Node<TypeExpr>>", "body: Option<FuncBody>"],
+          "note": "body is Option to support overload signatures"
+        }
+      ]
+    },
+
+    "class_members": {
+      "count": 2,
+      "nodes": [
+        {
+          "name": "ClassMember",
+          "file": "class_or_object.rs",
+          "line": 91,
+          "fields": ["decorators: Vec<Node<Decorator>>", "key: ClassOrObjKey", "static_: bool", "abstract_: bool", "readonly: bool", "accessor: bool", "optional: bool", "override_: bool", "definite_assignment: bool", "accessibility: Option<Accessibility>", "type_annotation: Option<Node<TypeExpr>>", "val: ClassOrObjVal"],
+          "note": "Has accessor field for TS 4.9+ auto-accessors, abstract_, readonly, override_, definite_assignment"
+        },
+        {
+          "name": "ClassIndexSignature",
+          "file": "class_or_object.rs",
+          "line": 16,
+          "fields": ["parameter_name: String", "parameter_type: Node<TypeExpr>", "type_annotation: Node<TypeExpr>"]
+        }
+      ]
+    }
+  },
+
+  "summary": {
+    "total_categories": 17,
+    "typescript_version_features": {
+      "ts_4_1": ["Mapped type 'as' clause (TypeMapped.name_type)"],
+      "ts_4_9": ["satisfies operator (SatisfiesExpr)", "auto-accessors (ClassMember.accessor)"],
+      "ts_5_0": ["const type parameters (TypeParameter.const_)"],
+      "ts_5_2": ["using/await using declarations (VarDeclMode::Using, VarDeclMode::AwaitUsing)"]
+    },
+    "comprehensive_coverage": {
+      "all_primitive_types": true,
+      "all_literal_types": true,
+      "object_types_complete": true,
+      "function_types_complete": true,
+      "advanced_types_complete": true,
+      "type_operators_complete": true,
+      "declarations_complete": true,
+      "modern_features_present": true
+    }
+  }
+}

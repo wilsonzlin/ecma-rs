@@ -1,0 +1,80 @@
+vue/packages-private/dts-test/utils.d.ts:export type Prettify<T> = { [K in keyof T]: T[K] } & {}
+--
+vue/packages-private/dts-test/setupHelpers.test-d.ts:      [K in keyof T as `slot-${K & string}`]?: (props: { item: T }) => any
+vue/packages-private/dts-test/setupHelpers.test-d.ts-    } & {
+vue/packages-private/dts-test/setupHelpers.test-d.ts-      label?: (props: { item: T }) => any
+--
+vue/packages-private/dts-test/setupHelpers.test-d.ts:      [K in keyof T as `slot-${K & string}`]?: (props: { item: T }) => any
+vue/packages-private/dts-test/setupHelpers.test-d.ts-    } & {
+vue/packages-private/dts-test/setupHelpers.test-d.ts-      label?: (props: { item: T }) => any
+--
+vue/packages-private/dts-test/setupHelpers.test-d.ts:      [K in keyof T as `slot-${K & string}`]?: (props: { item: T }) => any
+vue/packages-private/dts-test/setupHelpers.test-d.ts-    } & {
+vue/packages-private/dts-test/setupHelpers.test-d.ts-      label?: (props: { item: T }) => any
+--
+vue/packages/shared/src/typeUtils.ts:export type Prettify<T> = { [K in keyof T]: T[K] } & {}
+vue/packages/shared/src/typeUtils.ts-
+vue/packages/shared/src/typeUtils.ts-export type UnionToIntersection<U> = (
+--
+vue/packages/shared/src/typeUtils.ts:export type LooseRequired<T> = { [P in keyof (T & Required<T>)]: T[P] }
+vue/packages/shared/src/typeUtils.ts-
+vue/packages/shared/src/typeUtils.ts-// If the type T accepts type "any", output type Y, otherwise output type N.
+--
+vue/packages/runtime-dom/src/jsx.ts:  [K in keyof E]?: E[K] extends (...args: any) => any
+vue/packages/runtime-dom/src/jsx.ts-    ? E[K]
+vue/packages/runtime-dom/src/jsx.ts-    : (payload: E[K]) => void
+--
+vue/packages/runtime-dom/src/jsx.ts:  [K in keyof IntrinsicElementAttributes]: IntrinsicElementAttributes[K] &
+vue/packages/runtime-dom/src/jsx.ts-    ReservedProps
+vue/packages/runtime-dom/src/jsx.ts-}
+--
+TypeScript/tests/lib/react16.d.ts:    export type RequiredKeys<V> = { [K in keyof V]: V[K] extends Validator<infer T> ? IsOptional<T> extends true ? never : K : never }[keyof V];
+TypeScript/tests/lib/react16.d.ts-    export type OptionalKeys<V> = Exclude<keyof V, RequiredKeys<V>>;
+TypeScript/tests/lib/react16.d.ts:    export type InferPropsInner<V> = { [K in keyof V]: InferType<V[K]>; };
+TypeScript/tests/lib/react16.d.ts-
+TypeScript/tests/lib/react16.d.ts-    export interface Validator<T> {
+--
+TypeScript/tests/lib/react16.d.ts:    export type ValidationMap<T> = { [K in keyof T]-?: Validator<T[K]> };
+TypeScript/tests/lib/react16.d.ts-
+TypeScript/tests/lib/react16.d.ts-    export type InferType<V> = V extends Validator<infer T> ? T : any;
+--
+TypeScript/tests/lib/react16.d.ts:    export function objectOf<T>(type: Validator<T>): Requireable<{ [K in keyof any]: T; }>;
+TypeScript/tests/lib/react16.d.ts-    export function shape<P extends ValidationMap<any>>(type: P): Requireable<InferProps<P>>;
+TypeScript/tests/lib/react16.d.ts-    export function exact<P extends ValidationMap<any>>(type: P): Requireable<Required<InferProps<P>>>;
+--
+TypeScript/tests/lib/react16.d.ts:            [K in keyof T]?: null extends T[K]
+TypeScript/tests/lib/react16.d.ts-                ? Validator<T[K] | null | undefined>
+TypeScript/tests/lib/react16.d.ts-                : undefined extends T[K]
+--
+TypeScript/tests/lib/react16.d.ts:            [K in keyof JSX.IntrinsicElements]: P extends JSX.IntrinsicElements[K] ? K : never
+TypeScript/tests/lib/react16.d.ts-        }[keyof JSX.IntrinsicElements] |
+TypeScript/tests/lib/react16.d.ts-        ComponentType<P>;
+--
+TypeScript/tests/lib/react18/react18.d.ts:            [K in keyof JSX.IntrinsicElements]: P extends JSX.IntrinsicElements[K] ? K : never
+TypeScript/tests/lib/react18/react18.d.ts-        }[keyof JSX.IntrinsicElements] |
+TypeScript/tests/lib/react18/react18.d.ts-        ComponentType<P>;
+--
+TypeScript/tests/lib/react18/react18.d.ts:        [K in keyof T]?: null extends T[K]
+TypeScript/tests/lib/react18/react18.d.ts-            ? Validator<T[K] | null | undefined>
+TypeScript/tests/lib/react18/react18.d.ts-            : undefined extends T[K]
+--
+TypeScript/tests/lib/react18/react18.d.ts:type ExactlyAnyPropertyKeys<T> = { [K in keyof T]: IsExactlyAny<T[K]> extends true ? K : never }[keyof T];
+TypeScript/tests/lib/react18/react18.d.ts-type NotExactlyAnyPropertyKeys<T> = Exclude<keyof T, ExactlyAnyPropertyKeys<T>>;
+TypeScript/tests/lib/react18/react18.d.ts-
+--
+TypeScript/tests/lib/react18/react18.d.ts:type InexactPartial<T> = { [K in keyof T]?: T[K] | undefined };
+TypeScript/tests/lib/react18/react18.d.ts-
+TypeScript/tests/lib/react18/react18.d.ts-// Any prop that has a default prop becomes optional, but its type is unchanged
+--
+DefinitelyTyped/types/camelize/index.d.ts:            [K in keyof T as CamelCase<string & K>]: Camelize<T[K]>;
+DefinitelyTyped/types/camelize/index.d.ts-        }
+DefinitelyTyped/types/camelize/index.d.ts-    : T;
+--
+vue/packages/runtime-core/src/componentSlots.ts:        [K in keyof T]: NonNullable<T[K]> extends (...args: any[]) => any
+vue/packages/runtime-core/src/componentSlots.ts-          ? T[K]
+vue/packages/runtime-core/src/componentSlots.ts-          : Slot<T[K]>
+--
+vue/packages/compiler-sfc/src/script/resolveType.ts:        // only support { [K in keyof T]: T[K] }
+vue/packages/compiler-sfc/src/script/resolveType.ts-        const { typeAnnotation, typeParameter } = node
+vue/packages/compiler-sfc/src/script/resolveType.ts-        if (
+--
