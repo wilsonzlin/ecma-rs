@@ -1,0 +1,9 @@
+{
+  "$t": "ImportEqualsDecl",
+  "export": false,
+  "name": "foo",
+  "rhs": {
+    "$t": "Require",
+    "module": "bar"
+  }
+}
