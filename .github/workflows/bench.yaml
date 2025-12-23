@@ -25,8 +25,10 @@ jobs:
         with:
           go-version: "1.22.x"
 
-      - name: Install gnuplot
-        run: sudo apt install -yqq gnuplot
+      - name: Install bench dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnuplot jq bc
 
       - name: Build bench
         working-directory: ./bench
