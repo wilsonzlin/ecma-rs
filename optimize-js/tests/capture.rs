@@ -95,6 +95,7 @@ fn captured_variables_lower_to_foreign_everywhere() {
 
   assert!(analysis.foreign.contains(&captured_sym));
   assert!(!analysis.foreign.contains(&only_local_sym));
+  assert!(unknown_names(&program.top_level).is_empty());
 
   // IIFE arrow function is Fn0, its nested inner arrow is Fn1.
   assert!(program.functions.len() >= 2);
@@ -118,6 +119,8 @@ fn captured_variables_lower_to_foreign_everywhere() {
       && !inner_foreign.iter().any(|n| n == "only_local"),
     "locals that are not captured should stay local",
   );
+  assert!(unknown_names(outer).is_empty());
+  assert!(unknown_names(inner).is_empty());
 }
 
 #[test]
