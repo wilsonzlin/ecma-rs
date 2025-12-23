@@ -1,0 +1,389 @@
+use std::fmt;
+
+use parse_js::ast::expr::{
+  BinaryExpr,
+  CallArg,
+  CallExpr,
+  Expr,
+  IdExpr,
+  MemberExpr,
+};
+use parse_js::ast::node::Node;
+use parse_js::ast::type_expr::TypeExpr;
+use parse_js::operator::{Associativity, OperatorName, OPERATORS};
+
+use crate::expr_ts::{
+  NON_NULL_ASSERTION_PRECEDENCE,
+  SATISFIES_PRECEDENCE,
+  TYPE_ASSERTION_PRECEDENCE,
+};
+
+const PRIMARY_PRECEDENCE: u8 = 19;
+const CALL_MEMBER_PRECEDENCE: u8 = 18; // Matches OperatorName::Call/MemberAccess precedence.
+
+pub type EmitResult = Result<(), EmitError>;
+
+#[derive(Debug)]
+pub enum EmitError {
+  Fmt(fmt::Error),
+  Unsupported(&'static str),
+  MissingTypeAnnotation,
+}
+
+impl From<fmt::Error> for EmitError {
+  fn from(value: fmt::Error) -> Self {
+    EmitError::Fmt(value)
+  }
+}
+
+pub struct ExprEmitter<'a, W, F>
+where
+  W: fmt::Write,
+  F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
+{
+  pub(crate) out: &'a mut W,
+  pub(crate) emit_type: F,
+}
+
+impl<'a, W, F> ExprEmitter<'a, W, F>
+where
+  W: fmt::Write,
+  F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
+{
+  pub fn new(out: &'a mut W, emit_type: F) -> Self {
+    Self { out, emit_type }
+  }
+
+  pub fn emit_expr(&mut self, expr: &Node<Expr>) -> EmitResult {
+    self.emit_expr_with_min_prec(expr, 1)
+  }
+
+  pub(crate) fn emit_expr_with_min_prec(&mut self, expr: &Node<Expr>, min_prec: u8) -> EmitResult {
+    let prec = expr_precedence(expr)?;
+    let needs_parens = prec < min_prec;
+
+    if needs_parens {
+      write!(self.out, "(")?;
+    }
+    self.emit_expr_no_parens(expr)?;
+    if needs_parens {
+      write!(self.out, ")")?;
+    }
+
+    Ok(())
+  }
+
+  fn emit_expr_no_parens(&mut self, expr: &Node<Expr>) -> EmitResult {
+    match expr.stx.as_ref() {
+      Expr::Id(id) => self.emit_id(id),
+      Expr::Binary(binary) => self.emit_binary(binary),
+      Expr::Call(call) => self.emit_call(call),
+      Expr::Member(member) => self.emit_member(member),
+      Expr::NonNullAssertion(non_null) => self.emit_non_null_assertion(non_null),
+      Expr::TypeAssertion(assertion) => self.emit_type_assertion(assertion),
+      Expr::SatisfiesExpr(satisfies) => self.emit_satisfies_expr(satisfies),
+      _ => Err(EmitError::Unsupported("expression kind not supported")),
+    }
+  }
+
+  fn emit_id(&mut self, id: &Node<IdExpr>) -> EmitResult {
+    self.out.write_str(&id.stx.name)?;
+    Ok(())
+  }
+
+  fn emit_binary(&mut self, binary: &Node<BinaryExpr>) -> EmitResult {
+    let op = OPERATORS
+      .get(&binary.stx.operator)
+      .ok_or(EmitError::Unsupported("unknown operator"))?;
+    let op_txt = binary_operator_text(binary.stx.operator)?;
+    let prec = op.precedence;
+
+    self.emit_expr_with_min_prec(&binary.stx.left, prec)?;
+    if binary.stx.operator == OperatorName::Comma {
+      write!(self.out, ", ")?;
+    } else {
+      write!(self.out, " {} ", op_txt)?;
+    }
+    let right_prec = prec + (op.associativity == Associativity::Left) as u8;
+    self.emit_expr_with_min_prec(&binary.stx.right, right_prec)
+  }
+
+  fn emit_call(&mut self, call: &Node<CallExpr>) -> EmitResult {
+    self.emit_expr_with_min_prec(&call.stx.callee, CALL_MEMBER_PRECEDENCE)?;
+    if call.stx.optional_chaining {
+      write!(self.out, "?.(")?;
+    } else {
+      write!(self.out, "(")?;
+    }
+    for (i, arg) in call.stx.arguments.iter().enumerate() {
+      if i > 0 {
+        write!(self.out, ", ")?;
+      }
+      let CallArg { spread, value } = arg.stx.as_ref();
+      if *spread {
+        write!(self.out, "...")?;
+      }
+      self.emit_expr_with_min_prec(value, 1)?;
+    }
+    write!(self.out, ")")?;
+    Ok(())
+  }
+
+  fn emit_member(&mut self, member: &Node<MemberExpr>) -> EmitResult {
+    self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
+    if member.stx.optional_chaining {
+      write!(self.out, "?.")?;
+    } else {
+      write!(self.out, ".")?;
+    }
+    self.out.write_str(&member.stx.right)?;
+    Ok(())
+  }
+
+  pub(crate) fn emit_type(&mut self, ty: &Node<TypeExpr>) -> EmitResult {
+    (self.emit_type)(&mut self.out, ty).map_err(EmitError::from)
+  }
+}
+
+pub fn emit_expr<W, F>(out: &mut W, expr: &Node<Expr>, emit_type: F) -> EmitResult
+where
+  W: fmt::Write,
+  F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
+{
+  let mut emitter = ExprEmitter::new(out, emit_type);
+  emitter.emit_expr(expr)
+}
+
+fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
+  match expr.stx.as_ref() {
+    Expr::Id(_) => Ok(PRIMARY_PRECEDENCE),
+    Expr::Binary(binary) => Ok(
+      OPERATORS
+        .get(&binary.stx.operator)
+        .map(|op| op.precedence)
+        .ok_or(EmitError::Unsupported("unknown operator"))?,
+    ),
+    Expr::Call(_) => Ok(CALL_MEMBER_PRECEDENCE),
+    Expr::Member(_) => Ok(CALL_MEMBER_PRECEDENCE),
+    Expr::NonNullAssertion(_) => Ok(NON_NULL_ASSERTION_PRECEDENCE),
+    Expr::TypeAssertion(_) => Ok(TYPE_ASSERTION_PRECEDENCE),
+    Expr::SatisfiesExpr(_) => Ok(SATISFIES_PRECEDENCE),
+    _ => Err(EmitError::Unsupported("expression kind not supported")),
+  }
+}
+
+fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
+  match op {
+    OperatorName::Addition => Ok("+"),
+    OperatorName::Subtraction => Ok("-"),
+    OperatorName::Multiplication => Ok("*"),
+    OperatorName::Division => Ok("/"),
+    OperatorName::Remainder => Ok("%"),
+    OperatorName::Exponentiation => Ok("**"),
+    OperatorName::LessThan => Ok("<"),
+    OperatorName::LessThanOrEqual => Ok("<="),
+    OperatorName::GreaterThan => Ok(">"),
+    OperatorName::GreaterThanOrEqual => Ok(">="),
+    OperatorName::Equality => Ok("=="),
+    OperatorName::Inequality => Ok("!="),
+    OperatorName::StrictEquality => Ok("==="),
+    OperatorName::StrictInequality => Ok("!=="),
+    OperatorName::BitwiseAnd => Ok("&"),
+    OperatorName::BitwiseOr => Ok("|"),
+    OperatorName::BitwiseXor => Ok("^"),
+    OperatorName::BitwiseLeftShift => Ok("<<"),
+    OperatorName::BitwiseRightShift => Ok(">>"),
+    OperatorName::BitwiseUnsignedRightShift => Ok(">>>"),
+    OperatorName::LogicalAnd => Ok("&&"),
+    OperatorName::LogicalOr => Ok("||"),
+    OperatorName::NullishCoalescing => Ok("??"),
+    OperatorName::In => Ok("in"),
+    OperatorName::Instanceof => Ok("instanceof"),
+    OperatorName::Comma => Ok(","),
+    OperatorName::Assignment => Ok("="),
+    OperatorName::AssignmentAddition => Ok("+="),
+    OperatorName::AssignmentBitwiseAnd => Ok("&="),
+    OperatorName::AssignmentBitwiseLeftShift => Ok("<<="),
+    OperatorName::AssignmentBitwiseOr => Ok("|="),
+    OperatorName::AssignmentBitwiseRightShift => Ok(">>="),
+    OperatorName::AssignmentBitwiseUnsignedRightShift => Ok(">>>="),
+    OperatorName::AssignmentBitwiseXor => Ok("^="),
+    OperatorName::AssignmentDivision => Ok("/="),
+    OperatorName::AssignmentExponentiation => Ok("**="),
+    OperatorName::AssignmentLogicalAnd => Ok("&&="),
+    OperatorName::AssignmentLogicalOr => Ok("||="),
+    OperatorName::AssignmentMultiplication => Ok("*="),
+    OperatorName::AssignmentNullishCoalescing => Ok("??="),
+    OperatorName::AssignmentRemainder => Ok("%="),
+    OperatorName::AssignmentSubtraction => Ok("-="),
+    // Operators that should be handled in dedicated branches instead of generic binary printing.
+    OperatorName::Call
+    | OperatorName::ComputedMemberAccess
+    | OperatorName::Conditional
+    | OperatorName::ConditionalAlternate
+    | OperatorName::MemberAccess
+    | OperatorName::OptionalChainingCall
+    | OperatorName::OptionalChainingComputedMemberAccess
+    | OperatorName::OptionalChainingMemberAccess
+    | OperatorName::Await
+    | OperatorName::BitwiseNot
+    | OperatorName::Delete
+    | OperatorName::LogicalNot
+    | OperatorName::New
+    | OperatorName::PrefixDecrement
+    | OperatorName::PrefixIncrement
+    | OperatorName::Typeof
+    | OperatorName::UnaryNegation
+    | OperatorName::UnaryPlus
+    | OperatorName::Void
+    | OperatorName::Yield
+    | OperatorName::YieldDelegated
+    | OperatorName::PostfixDecrement
+    | OperatorName::PostfixIncrement => Err(EmitError::Unsupported("operator not supported in binary emitter")),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use parse_js::ast::expr::NonNullAssertionExpr;
+  use parse_js::ast::expr::SatisfiesExpr;
+  use parse_js::ast::expr::TypeAssertionExpr;
+  use parse_js::ast::type_expr::{TypeEntityName, TypeReference};
+  use parse_js::loc::Loc;
+
+  fn node<T: derive_visitor::Drive + derive_visitor::DriveMut>(stx: T) -> Node<T> {
+    Node::new(Loc(0, 0), stx)
+  }
+
+  fn type_ref(name: &str) -> Node<TypeExpr> {
+    node(TypeExpr::TypeReference(node(TypeReference {
+      name: TypeEntityName::Identifier(name.to_string()),
+      type_arguments: None,
+    })))
+  }
+
+  fn id(name: &str) -> Node<Expr> {
+    node(Expr::Id(node(IdExpr { name: name.to_string() })))
+  }
+
+  fn binary_add(left: Node<Expr>, right: Node<Expr>) -> Node<Expr> {
+    node(Expr::Binary(node(BinaryExpr {
+      operator: OperatorName::Addition,
+      left,
+      right,
+    })))
+  }
+
+  fn assert_emit(expr: Node<Expr>, expected: &str) {
+    let mut out = String::new();
+    let mut emit_type = |out: &mut String, ty: &Node<TypeExpr>| match ty.stx.as_ref() {
+      TypeExpr::TypeReference(reference) => match &reference.stx.name {
+        TypeEntityName::Identifier(name) => {
+          out.push_str(name);
+          Ok(())
+        }
+        _ => Err(fmt::Error),
+      },
+      _ => Err(fmt::Error),
+    };
+
+    emit_expr(&mut out, &expr, &mut emit_type).unwrap();
+    assert_eq!(out, expected);
+  }
+
+  #[test]
+  fn emits_type_assertion_const() {
+    let assertion = node(TypeAssertionExpr {
+      expression: Box::new(id("x")),
+      type_annotation: None,
+      const_assertion: true,
+    });
+    let expr = node(Expr::TypeAssertion(assertion));
+
+    assert_emit(expr, "x as const");
+  }
+
+  #[test]
+  fn emits_type_assertion_type() {
+    let assertion = node(TypeAssertionExpr {
+      expression: Box::new(id("x")),
+      type_annotation: Some(type_ref("T")),
+      const_assertion: false,
+    });
+    let expr = node(Expr::TypeAssertion(assertion));
+
+    assert_emit(expr, "x as T");
+  }
+
+  #[test]
+  fn emits_satisfies_expression() {
+    let satisfies = node(SatisfiesExpr {
+      expression: Box::new(id("x")),
+      type_annotation: type_ref("T"),
+    });
+    let expr = node(Expr::SatisfiesExpr(satisfies));
+
+    assert_emit(expr, "x satisfies T");
+  }
+
+  #[test]
+  fn wraps_type_assertion_operand_when_needed() {
+    let assertion = node(TypeAssertionExpr {
+      expression: Box::new(binary_add(id("a"), id("b"))),
+      type_annotation: Some(type_ref("T")),
+      const_assertion: false,
+    });
+    let expr = node(Expr::TypeAssertion(assertion));
+
+    assert_emit(expr, "(a + b) as T");
+  }
+
+  #[test]
+  fn emits_non_null_with_parentheses_for_low_precedence_operand() {
+    let non_null = node(NonNullAssertionExpr {
+      expression: Box::new(binary_add(id("a"), id("b"))),
+    });
+    let expr = node(Expr::NonNullAssertion(non_null));
+
+    let mut out = String::new();
+    let mut emit_type = |_out: &mut String, _ty: &Node<TypeExpr>| Ok(());
+    emit_expr(&mut out, &expr, &mut emit_type).unwrap();
+    assert_eq!(out, "(a + b)!");
+  }
+
+  #[test]
+  fn type_assertion_inside_call_argument() {
+    let arg = node(CallArg {
+      spread: false,
+      value: node(Expr::TypeAssertion(node(TypeAssertionExpr {
+        expression: Box::new(id("x")),
+        type_annotation: Some(type_ref("T")),
+        const_assertion: false,
+      }))),
+    });
+    let call = node(Expr::Call(node(CallExpr {
+      optional_chaining: false,
+      callee: id("f"),
+      arguments: vec![arg],
+    })));
+
+    assert_emit(call, "f(x as T)");
+  }
+
+  #[test]
+  fn type_assertion_operand_in_binary_respects_grouping() {
+    let assertion = node(TypeAssertionExpr {
+      expression: Box::new(binary_add(id("a"), id("b"))),
+      type_annotation: Some(type_ref("T")),
+      const_assertion: false,
+    });
+    let outer = node(Expr::Binary(node(BinaryExpr {
+      operator: OperatorName::Addition,
+      left: node(Expr::TypeAssertion(assertion)),
+      right: id("c"),
+    })));
+
+    assert_emit(outer, "(a + b) as T + c");
+  }
+}
