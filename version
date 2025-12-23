@@ -101,7 +101,13 @@ if (
 ) {
   throw new Error("Working directory not clean");
 }
-cmd("git", "pull");
+const hasRemote =
+  cmd("git", "remote", { captureStdio: true }).stdout.trim().length > 0;
+if (hasRemote) {
+  cmd("git", "pull");
+} else {
+  console.log("Skipping git pull: no remotes configured");
+}
 
 for (const file of [
   "minify-js/Cargo.toml",
@@ -143,4 +149,8 @@ cmd("git", "commit", "-m", NEW_VERSION);
 cmd("git", "tag", "-a", `v${NEW_VERSION}`, "-m", "");
 // minify-js is publishable; CLI and Node bindings are marked publish = false.
 cmd("cargo", "publish", "--allow-dirty", "-p", "minify-js");
-cmd("git", "push", "--follow-tags");
+if (hasRemote) {
+  cmd("git", "push", "--follow-tags");
+} else {
+  console.log("Skipping git push: no remotes configured");
+}
