@@ -38,7 +38,7 @@ use symbol::var_analysis::VarAnalysis;
 use symbol_js::compute_symbols;
 use symbol_js::symbol::Scope;
 use symbol_js::symbol::Symbol;
-use symbol_js::TopLevelMode;
+pub use symbol_js::TopLevelMode;
 use util::counter::Counter;
 use util::debug::OptimizerDebug;
 
