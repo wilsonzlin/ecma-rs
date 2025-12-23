@@ -91,6 +91,9 @@ impl TextRange {
 }
 
 impl From<Loc> for TextRange {
+  /// Converts a `Loc` by saturating to `u32`. Use
+  /// [`TextRange::from_loc_with_overflow_note`] when you need to surface
+  /// truncation to the user.
   fn from(value: Loc) -> Self {
     let (start, _) = saturating_to_u32(value.0);
     let (end, _) = saturating_to_u32(value.1);
