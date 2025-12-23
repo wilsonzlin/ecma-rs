@@ -31,7 +31,7 @@ conformance-runner = ["rayon"]
 
 [[bin]]
 name = "conformance_runner"
-path = "tests/conformance_runner.rs"
+path = "src/bin/conformance_runner.rs"
 required-features = ["conformance-runner"]
 
 [[bench]]
