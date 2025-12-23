@@ -109,6 +109,8 @@ if (hasRemote) {
   console.log("Skipping git pull: no remotes configured");
 }
 
+cmd("cargo", "test");
+
 for (const file of [
   "minify-js/Cargo.toml",
   "minify-js-cli/Cargo.toml",
