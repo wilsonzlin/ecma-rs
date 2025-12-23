@@ -31,3 +31,8 @@ fn test_module_export_bindings_preserved() {
   assert_eq!(result, "export const x=1; const a=2;");
 }
 
+#[test]
+fn test_export_function_inner_locals_renamed() {
+  let result = minified(TopLevelMode::Module, "export function foo(){let bar=1;return bar;}");
+  assert_eq!(result, "export function foo(){let a=1;return a;}");
+}
