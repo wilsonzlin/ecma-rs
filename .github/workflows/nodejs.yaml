@@ -33,7 +33,7 @@ jobs:
           default: true
 
       - name: Build native module
-        working-directory: ./nodejs
+        working-directory: ./minify-js-nodejs
         id: module
         shell: bash
         run: |
@@ -48,7 +48,7 @@ jobs:
           uploadKey: minify-js/nodejs/${{ steps.version.outputs.VERSION }}/${{ steps.module.outputs.BINARY_NAME }}.node
           keyId: ${{ secrets.B2_KEY_ID }}
           applicationKey: ${{ secrets.B2_APPLICATION_KEY }}
-          file: ./nodejs/index.node
+          file: ./minify-js-nodejs/index.node
 
   package:
     runs-on: ubuntu-latest
@@ -64,14 +64,14 @@ jobs:
         with:
           node-version: 18.x
       - name: Pack and publish package
-        working-directory: ./nodejs
+        working-directory: ./minify-js-nodejs
         run: |
           cat << 'EOF' > .npmrc
           package-lock=false
           //registry.npmjs.org/:_authToken=${{ secrets.NPM_AUTH_TOKEN }}
           EOF
           # npm refuses to work with symlinks.
-          cp ../README.md .
+          cp ../minify-js/README.md ./README.md
           if [[ "${{ steps.version.outputs.VERSION }}" != "0.0.0" ]]; then
             npm publish --access public
           fi
