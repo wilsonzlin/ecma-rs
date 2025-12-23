@@ -4,6 +4,7 @@ use axum::Router;
 use axum_msgpack::MsgPack;
 use optimize_js::Program;
 use optimize_js::ProgramFunction;
+use optimize_js::ProgramSymbols;
 use parse_js::parse;
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,6 +23,7 @@ pub struct PostCompileReq {
 pub struct PostCompileRes {
   pub functions: Vec<ProgramFunction>,
   pub top_level: ProgramFunction,
+  pub symbols: Option<ProgramSymbols>,
 }
 
 pub async fn handle_post_compile(
@@ -37,10 +39,12 @@ pub async fn handle_post_compile(
   let Program {
     functions,
     top_level,
+    symbols,
   } = Program::compile(top_level_node, true);
   MsgPack(PostCompileRes {
     functions,
     top_level,
+    symbols,
   })
 }
 

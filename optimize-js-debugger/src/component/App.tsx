@@ -140,6 +140,23 @@ const vInst = new VStruct({
 
 type Inst = Valid<typeof vInst>;
 
+const vProgramSymbol = new VStruct({
+  id: new VInteger(),
+  name: new VString(),
+  scope: new VInteger(),
+  captured: new VBoolean(),
+});
+
+const vProgramSymbols = new VStruct({
+  symbols: new VArray(vProgramSymbol),
+  free_symbols: new VOptional(
+    new VStruct({
+      top_level: new VArray(new VInteger()),
+      functions: new VArray(new VArray(new VInteger())),
+    }),
+  ),
+});
+
 const vDebugStep = new VStruct({
   name: new VString(),
   bblockOrder: new VArray(new VInteger()),
@@ -164,6 +181,7 @@ const vProgramFunction = new VStruct({
 const vBuiltJs = new VStruct({
   functions: new VArray(vProgramFunction),
   top_level : vProgramFunction,
+  symbols: new VOptional(vProgramSymbols),
 });
 
 type BuiltJs = Valid<typeof vBuiltJs>;
@@ -218,7 +236,15 @@ const ArgElement = ({ arg }: { arg: Arg }) => {
   throw new UnreachableError();
 };
 
-const InstElement = ({ inst }: { inst: Inst }) => {
+const InstElement = ({ inst, symbolNames }: { inst: Inst, symbolNames?: Map<number, string> }) => {
+  const foreignLabel = (id: number | undefined) => {
+    if (id == undefined) {
+      return "foreign";
+    }
+    const name = symbolNames?.get(id);
+    return name ? `foreign ${id} (${name})` : `foreign ${id}`;
+  };
+
   switch (inst.t) {
     case "Bin":
       return (
@@ -280,7 +306,7 @@ const InstElement = ({ inst }: { inst: Inst }) => {
             <span className="eq"> =</span>
           </div>
           <div>
-            <span className="foreign">foreign {inst.foreign}</span>
+            <span className="foreign">{foreignLabel(inst.foreign)}</span>
           </div>
         </>
       );
@@ -288,7 +314,7 @@ const InstElement = ({ inst }: { inst: Inst }) => {
       return (
         <>
           <div>
-            <span className="foreign">foreign {inst.foreign}</span>
+            <span className="foreign">{foreignLabel(inst.foreign)}</span>
             <span className="eq"> =</span>
           </div>
           <div>
@@ -419,8 +445,10 @@ const InstElement = ({ inst }: { inst: Inst }) => {
 
 const BBlockElement = ({
   data: { label, insts },
+  symbolNames,
 }: {
   data: BBlockNode["data"];
+  symbolNames?: Map<number, string>;
 }) => {
   // Due to the way our layout is calculated, loops will sometimes have edges in a straight line that overlap with each other and obscures the flow, so we use the left as the target instead of the top.
   return (
@@ -431,7 +459,7 @@ const BBlockElement = ({
         <ol className="insts">
           {insts.map((s, i) => (
             <li key={i} className="inst">
-              <InstElement inst={s} />
+              <InstElement inst={s} symbolNames={symbolNames} />
             </li>
           ))}
         </ol>
@@ -475,16 +503,14 @@ const getLayoutedElements = (
   };
 };
 
-const nodeTypes = {
-  bblock: BBlockElement,
-};
-
 const Graph = ({
   stepNames,
   step,
+  symbolNames,
 }: {
   stepNames: Array<string>;
   step: DebugStep;
+  symbolNames?: Map<number, string>;
 }) => {
   const initNodes = useMemo(
     () =>
@@ -511,6 +537,13 @@ const Graph = ({
         })),
       ),
     [step],
+  );
+
+  const nodeTypes = useMemo(
+    () => ({
+      bblock: (props: any) => <BBlockElement {...props} symbolNames={symbolNames} />,
+    }),
+    [symbolNames],
   );
 
   const { fitView } = useReactFlow();
@@ -591,8 +624,10 @@ const INIT_SOURCE = `
 
 const BBlocksExplorer = ({
   data,
+  symbolNames,
 }: {
   data: Debug;
+  symbolNames?: Map<number, string>;
 }) => {
   const [stepIdx, setStepIdx] = useState(0);
   const actualStepIdx = Math.min(stepIdx, data.steps.length - 1);
@@ -614,7 +649,7 @@ const BBlocksExplorer = ({
   return (
     <div className="BBlocksExplorer">
       <ReactFlowProvider>
-        <Graph step={step} stepNames={stepNames} />
+        <Graph step={step} stepNames={stepNames} symbolNames={symbolNames} />
       </ReactFlowProvider>
     </div>
   )
@@ -646,6 +681,13 @@ export const App = ({}: {}) => {
     })();
     return () => ac.abort();
   }, [source]);
+  const symbolNames = useMemo(() => {
+    const symbols = data?.symbols?.symbols;
+    if (!symbols) {
+      return undefined;
+    }
+    return new Map<number, string>(symbols.map(({ id, name }) => [id, name]));
+  }, [data]);
   const curFn = data?.functions[curFnId!] ?? data?.top_level;
 
   return (
@@ -660,7 +702,7 @@ export const App = ({}: {}) => {
             ))}
           </div>
           {curFn && (
-            <BBlocksExplorer data={curFn.debug} />
+            <BBlocksExplorer data={curFn.debug} symbolNames={symbolNames} />
           )}
         </div>
         <div className="pane">
