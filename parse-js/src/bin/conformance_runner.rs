@@ -2,30 +2,216 @@
 // Runs all TypeScript conformance tests in parallel with timeouts
 
 use parse_js;
+use parse_js::lex::{lex_next, LexMode, Lexer};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use serde::Serialize;
+use std::collections::{BTreeMap, HashSet};
+use std::env;
 use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone, Serialize)]
+struct HarnessDirective {
+  name: String,
+  value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+enum FileKind {
+  TypeScript,
+  Tsx,
+  JavaScript,
+  Jsx,
+  Other,
+}
 
 #[derive(Debug, Clone)]
+struct VirtualFile {
+  name: String,
+  content: String,
+  directives: Vec<HarnessDirective>,
+  module: bool,
+  kind: FileKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct VirtualFileResult {
+  name: String,
+  module: bool,
+  kind: FileKind,
+  directives: Vec<HarnessDirective>,
+  skipped: bool,
+  error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct TestResult {
   path: PathBuf,
-  passed: bool,
-  error: Option<String>,
+  directives: Vec<HarnessDirective>,
+  files: Vec<VirtualFileResult>,
+  #[serde(skip_serializing)]
   duration: Duration,
+  duration_ms: u128,
+  error: Option<String>,
+  timed_out: bool,
+}
+
+impl TestResult {
+  fn passed(&self) -> bool {
+    !self.timed_out && self.error.is_none() && self.files.iter().all(|f| f.error.is_none())
+  }
+
+  fn failed_files(&self) -> Vec<&VirtualFileResult> {
+    self
+      .files
+      .iter()
+      .filter(|f| f.error.is_some())
+      .collect::<Vec<_>>()
+  }
+}
+
+#[derive(Debug, Clone, Default)]
+struct RunnerOptions {
+  filter: Option<String>,
+  failures_path: Option<PathBuf>,
+  json_output: Option<PathBuf>,
+  timeout_secs: u64,
+}
+
+fn normalize_path(path: &Path) -> String {
+  path.to_string_lossy().replace('\\', "/")
+}
+
+fn parse_directive(line: &str) -> Option<HarnessDirective> {
+  let trimmed = line.trim_start();
+  if !trimmed.starts_with("//") {
+    return None;
+  }
+
+  let directive = trimmed.trim_start_matches('/').trim_start();
+  if !directive.starts_with('@') {
+    return None;
+  }
+
+  let mut parts = directive[1..].splitn(2, ':');
+  let name = parts.next()?.trim();
+  let value = parts.next().map(|v| v.trim().to_string());
+  Some(HarnessDirective {
+    name: name.to_ascii_lowercase(),
+    value,
+  })
+}
+
+fn has_module_directive(directives: &[HarnessDirective]) -> Option<bool> {
+  directives
+    .iter()
+    .rev()
+    .find(|d| d.name == "module")
+    .map(|d| match d.value.as_deref() {
+      Some(v) if v.eq_ignore_ascii_case("none") => false,
+      _ => true,
+    })
+}
+
+fn contains_import_export(content: &str) -> bool {
+  let mut lexer = Lexer::new(content);
+  loop {
+    let token = lex_next(&mut lexer, LexMode::Standard);
+    match token.typ {
+      parse_js::token::TT::KeywordImport | parse_js::token::TT::KeywordExport => return true,
+      parse_js::token::TT::EOF => return false,
+      _ => {}
+    }
+  }
+}
+
+fn detect_file_kind(name: &str) -> FileKind {
+  let ext = Path::new(name)
+    .extension()
+    .and_then(|e| e.to_str())
+    .unwrap_or("")
+    .to_ascii_lowercase();
+  match ext.as_str() {
+    "ts" | "mts" | "cts" => FileKind::TypeScript,
+    "tsx" | "mtsx" | "ctsx" => FileKind::Tsx,
+    "js" | "mjs" | "cjs" => FileKind::JavaScript,
+    "jsx" => FileKind::Jsx,
+    _ => FileKind::Other,
+  }
+}
+
+fn should_parse(kind: &FileKind) -> bool {
+  matches!(
+    kind,
+    FileKind::TypeScript | FileKind::Tsx | FileKind::JavaScript | FileKind::Jsx
+  )
+}
+
+fn split_virtual_files(path: &Path, source: &str) -> (Vec<VirtualFile>, Vec<HarnessDirective>) {
+  let mut global_directives: Vec<HarnessDirective> = Vec::new();
+  let mut files: Vec<VirtualFile> = Vec::new();
+
+  let mut current_name: Option<String> = None;
+  let mut current_content: Vec<String> = Vec::new();
+
+  for line in source.lines() {
+    if let Some(directive) = parse_directive(line) {
+      // Capture all directives for debugging purposes
+      global_directives.push(directive.clone());
+
+      if directive.name.eq_ignore_ascii_case("filename") {
+        if current_name.is_some() || !current_content.is_empty() {
+          let name = current_name
+            .clone()
+            .unwrap_or_else(|| path.file_name().unwrap().to_string_lossy().to_string());
+          let content = current_content.join("\n");
+          let kind = detect_file_kind(&name);
+          let module_directive = has_module_directive(&global_directives).unwrap_or(false);
+          let module = module_directive || contains_import_export(&content);
+          files.push(VirtualFile {
+            name,
+            content,
+            directives: global_directives.clone(),
+            module,
+            kind,
+          });
+          current_content.clear();
+        }
+        current_name = directive.value.clone();
+        continue;
+      }
+    }
+
+    current_content.push(line.to_string());
+  }
+
+  let final_name =
+    current_name.unwrap_or_else(|| path.file_name().unwrap().to_string_lossy().to_string());
+  let content = current_content.join("\n");
+  let kind = detect_file_kind(&final_name);
+  let module_directive = has_module_directive(&global_directives).unwrap_or(false);
+  let module = module_directive || contains_import_export(&content);
+  files.push(VirtualFile {
+    name: final_name,
+    content,
+    directives: global_directives.clone(),
+    module,
+    kind,
+  });
+
+  (files, global_directives)
 }
 
 fn discover_tests(dir: &Path) -> Vec<PathBuf> {
   let mut tests = Vec::new();
-
   if let Ok(entries) = fs::read_dir(dir) {
-    for entry in entries.flatten() {
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.path());
+
+    for entry in entries {
       let path = entry.path();
       if path.is_dir() {
         tests.extend(discover_tests(&path));
@@ -36,93 +222,188 @@ fn discover_tests(dir: &Path) -> Vec<PathBuf> {
       }
     }
   }
-
   tests
 }
 
-fn run_test_with_timeout(path: &Path, timeout_secs: u64) -> TestResult {
-  let start = Instant::now();
-  let path = path.to_path_buf();
+fn load_failure_paths(path: &Path) -> HashSet<String> {
+  let Ok(report) = fs::read_to_string(path) else {
+    return HashSet::new();
+  };
+  report
+    .lines()
+    .filter_map(|line| line.strip_prefix("File: "))
+    .map(|p| p.trim().replace('\\', "/"))
+    .collect()
+}
 
-  // Read file
-  let source = match fs::read_to_string(&path) {
+fn run_test(path: &Path) -> TestResult {
+  let start = Instant::now();
+  let mut base_result = TestResult {
+    path: path.to_path_buf(),
+    directives: Vec::new(),
+    files: Vec::new(),
+    duration: Duration::from_millis(0),
+    duration_ms: 0,
+    error: None,
+    timed_out: false,
+  };
+
+  let source = match fs::read_to_string(path) {
     Ok(s) => s,
     Err(e) => {
-      return TestResult {
-        path,
-        passed: false,
-        error: Some(format!("Failed to read file: {}", e)),
-        duration: start.elapsed(),
-      };
+      base_result.error = Some(format!("Failed to read file: {}", e));
+      base_result.duration = start.elapsed();
+      base_result.duration_ms = base_result.duration.as_millis();
+      return base_result;
     }
   };
 
-  // Skip multi-file tests (tests with @filename: directives)
-  // These tests require special handling to split into multiple files
-  if source.contains("@filename:") || source.contains("@Filename:") {
-    return TestResult {
-      path,
-      passed: true, // Mark as passed to not count as failure
-      error: Some(String::from("SKIPPED: Multi-file test")),
-      duration: start.elapsed(),
+  let (virtual_files, directives) = split_virtual_files(path, &source);
+  base_result.directives = directives;
+
+  for vf in virtual_files {
+    let should_parse = should_parse(&vf.kind);
+    let mut vf_result = VirtualFileResult {
+      name: vf.name,
+      module: vf.module,
+      kind: vf.kind,
+      directives: vf.directives.clone(),
+      skipped: !should_parse,
+      error: None,
     };
+
+    if should_parse {
+      match parse_js::parse(&vf.content) {
+        Ok(_) => {}
+        Err(err) => vf_result.error = Some(format!("{:?}", err)),
+      }
+    }
+
+    base_result.files.push(vf_result);
   }
 
-  // Run with timeout using a channel
+  base_result.duration = start.elapsed();
+  base_result.duration_ms = base_result.duration.as_millis();
+  base_result
+}
+
+fn run_test_with_timeout(path: &Path, timeout_secs: u64) -> TestResult {
+  let path_buf = path.to_path_buf();
+  let start = Instant::now();
   let (tx, rx) = std::sync::mpsc::channel();
-  let source_clone = source.clone();
 
   std::thread::spawn(move || {
-    let result = std::panic::catch_unwind(|| parse_js::parse(&source_clone));
+    let result = std::panic::catch_unwind(|| run_test(&path_buf));
     let _ = tx.send(result);
   });
 
-  // Wait for result with timeout
   match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
     Ok(result) => match result {
-      Ok(Ok(_)) => TestResult {
-        path,
-        passed: true,
-        error: None,
-        duration: start.elapsed(),
-      },
-      Ok(Err(e)) => TestResult {
-        path,
-        passed: false,
-        error: Some(format!("{:?}", e)),
-        duration: start.elapsed(),
-      },
+      Ok(mut r) => {
+        r.duration = start.elapsed();
+        r.duration_ms = r.duration.as_millis();
+        r
+      }
       Err(panic_err) => TestResult {
-        path,
-        passed: false,
-        error: Some(format!("PANIC: {:?}", panic_err)),
+        path: path.to_path_buf(),
+        directives: Vec::new(),
+        files: Vec::new(),
         duration: start.elapsed(),
+        duration_ms: start.elapsed().as_millis(),
+        error: Some(format!("PANIC: {:?}", panic_err)),
+        timed_out: false,
       },
     },
     Err(_) => TestResult {
-      path,
-      passed: false,
-      error: Some(format!("TIMEOUT after {} seconds", timeout_secs)),
+      path: path.to_path_buf(),
+      directives: Vec::new(),
+      files: Vec::new(),
       duration: Duration::from_secs(timeout_secs),
+      duration_ms: Duration::from_secs(timeout_secs).as_millis(),
+      error: Some(format!("TIMEOUT after {} seconds", timeout_secs)),
+      timed_out: true,
     },
   }
 }
 
+fn parse_args() -> RunnerOptions {
+  let mut options = RunnerOptions {
+    timeout_secs: 10,
+    ..RunnerOptions::default()
+  };
+
+  let args: Vec<String> = env::args().skip(1).collect();
+  let mut i = 0;
+  while i < args.len() {
+    match args[i].as_str() {
+      "--filter" => {
+        if let Some(next) = args.get(i + 1) {
+          options.filter = Some(next.clone());
+          i += 1;
+        }
+      }
+      "--failures" | "--from-report" => {
+        if let Some(next) = args.get(i + 1) {
+          if !next.starts_with('-') {
+            options.failures_path = Some(PathBuf::from(next));
+            i += 1;
+          }
+        }
+        if options.failures_path.is_none() {
+          options.failures_path = Some(PathBuf::from("typescript_conformance_failures.txt"));
+        }
+      }
+      "--json" => {
+        if let Some(next) = args.get(i + 1) {
+          options.json_output = Some(PathBuf::from(next));
+          i += 1;
+        }
+      }
+      "--timeout" => {
+        if let Some(next) = args.get(i + 1) {
+          if let Ok(v) = next.parse::<u64>() {
+            options.timeout_secs = v;
+          }
+          i += 1;
+        }
+      }
+      other => {
+        eprintln!("Unknown argument: {}", other);
+      }
+    }
+    i += 1;
+  }
+
+  options
+}
+
 fn main() {
+  let options = parse_args();
   let test_dir = Path::new("tests/TypeScript/tests/cases/conformance");
 
   println!("🔍 Discovering TypeScript conformance tests...");
   let mut tests = discover_tests(test_dir);
-  tests.sort(); // Sort for reproducible ordering
-  println!("📊 Found {} test files\n", tests.len());
+  tests.sort();
 
-  println!("🚀 Running tests in parallel...");
+  if let Some(filter) = &options.filter {
+    tests.retain(|path| normalize_path(path).contains(filter));
+  }
+
+  if let Some(report_path) = &options.failures_path {
+    let failing = load_failure_paths(report_path);
+    if !failing.is_empty() {
+      tests.retain(|path| failing.contains(&normalize_path(path)));
+    }
+  }
+
+  tests.sort();
+  println!("📊 Running {} test files\n", tests.len());
+
   let passed = Arc::new(AtomicUsize::new(0));
   let failed = Arc::new(AtomicUsize::new(0));
   let processed = Arc::new(AtomicUsize::new(0));
   let total = tests.len();
 
-  // Progress reporter thread
   let processed_clone = Arc::clone(&processed);
   let progress_handle = std::thread::spawn(move || loop {
     std::thread::sleep(Duration::from_secs(5));
@@ -138,27 +419,21 @@ fn main() {
     );
   });
 
-  // Run tests in parallel
   let results: Vec<TestResult> = tests
     .par_iter()
     .map(|test_path| {
-      let result = run_test_with_timeout(test_path, 10); // 10 second timeout per test
+      let result = run_test_with_timeout(test_path, options.timeout_secs);
 
       let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
       if current % 100 == 0 {
         eprintln!("[{}/{}] {}", current, total, test_path.display());
       }
 
-      if result.passed {
+      if result.passed() {
         passed.fetch_add(1, Ordering::Relaxed);
       } else {
         failed.fetch_add(1, Ordering::Relaxed);
-        if result
-          .error
-          .as_ref()
-          .map(|e| e.contains("TIMEOUT"))
-          .unwrap_or(false)
-        {
+        if result.timed_out {
           eprintln!("⏱️  TIMEOUT: {}", test_path.display());
         }
       }
@@ -169,14 +444,20 @@ fn main() {
 
   progress_handle.join().ok();
 
+  let mut results = results;
+  results.sort_by(|a, b| a.path.cmp(&b.path));
+
   let passed_count = passed.load(Ordering::Relaxed);
   let failed_count = failed.load(Ordering::Relaxed);
-  let pass_rate = (passed_count as f64 / total as f64) * 100.0;
+  let pass_rate = if total == 0 {
+    100.0
+  } else {
+    (passed_count as f64 / total as f64) * 100.0
+  };
 
-  // Categorize failures
-  let mut failures_by_category: HashMap<String, Vec<TestResult>> = HashMap::new();
+  let mut failures_by_category: BTreeMap<String, Vec<TestResult>> = BTreeMap::new();
   for result in &results {
-    if !result.passed {
+    if !result.passed() {
       if let Some(parent) = result.path.parent() {
         let category = parent
           .strip_prefix(test_dir)
@@ -204,16 +485,7 @@ fn main() {
   );
   println!("{}", separator);
 
-  // Show timeout count
-  let timeout_count = results
-    .iter()
-    .filter(|r| {
-      r.error
-        .as_ref()
-        .map(|e| e.contains("TIMEOUT"))
-        .unwrap_or(false)
-    })
-    .count();
+  let timeout_count = results.iter().filter(|r| r.timed_out).count();
   if timeout_count > 0 {
     println!("⏱️  Timeouts:   {}", timeout_count);
   }
@@ -223,7 +495,14 @@ fn main() {
     println!("{}", separator);
 
     let mut categories: Vec<_> = failures_by_category.iter().collect();
-    categories.sort_by_key(|(_, failures)| std::cmp::Reverse(failures.len()));
+    categories.sort_by(|(a_cat, a), (b_cat, b)| {
+      let len_cmp = b.len().cmp(&a.len());
+      if len_cmp == std::cmp::Ordering::Equal {
+        a_cat.cmp(b_cat)
+      } else {
+        len_cmp
+      }
+    });
 
     for (category, failures) in categories.iter().take(20) {
       println!("{}: {} failures", category, failures.len());
@@ -232,7 +511,7 @@ fn main() {
     println!("\n🔍 SAMPLE FAILURES (first 50):");
     println!("{}", separator);
 
-    let failed_results: Vec<_> = results.iter().filter(|r| !r.passed).take(50).collect();
+    let failed_results: Vec<_> = results.iter().filter(|r| !r.passed()).take(50).collect();
     for (idx, result) in failed_results.iter().enumerate() {
       println!(
         "\n{}. {} ({:?})",
@@ -244,14 +523,28 @@ fn main() {
         let err_str = err.lines().take(3).collect::<Vec<_>>().join("\n");
         println!("   Error: {}", err_str);
       }
+      for file in result.failed_files() {
+        println!(
+          "   {} -> {}",
+          file.name,
+          file.error.as_deref().unwrap_or("")
+        );
+      }
     }
   }
 
-  // Write detailed failure report
+  if let Some(json_path) = options.json_output.as_ref() {
+    if let Err(err) = fs::write(json_path, serde_json::to_string_pretty(&results).unwrap()) {
+      eprintln!("Failed to write JSON output: {}", err);
+    } else {
+      println!("🧾 JSON results written to {}", json_path.display());
+    }
+  }
+
   if failed_count > 0 {
     let report_path = "typescript_conformance_failures.txt";
     let mut report = String::new();
-    report.push_str(&format!("TypeScript Conformance Test Failures Report\n\n"));
+    report.push_str("TypeScript Conformance Test Failures Report\n\n");
     report.push_str(&format!(
       "Total: {}, Passed: {}, Failed: {}\n",
       total, passed_count, failed_count
@@ -260,12 +553,20 @@ fn main() {
     report.push_str("=".repeat(80).as_str());
     report.push_str("\n\nFAILURES:\n\n");
 
-    for result in results.iter().filter(|r| !r.passed) {
+    for result in results.iter().filter(|r| !r.passed()) {
       report.push_str(&format!("\n{}\n", "=".repeat(80)));
       report.push_str(&format!("File: {}\n", result.path.display()));
       report.push_str(&format!("Duration: {:?}\n", result.duration));
       if let Some(err) = &result.error {
         report.push_str(&format!("Error: {}\n", err));
+      }
+
+      for file in result.failed_files() {
+        if let Some(err) = &file.error {
+          report.push_str(&format!("  Virtual file: {}\n", file.name));
+          report.push_str(&format!("  Module mode: {}\n", file.module));
+          report.push_str(&format!("  Error: {}\n", err));
+        }
       }
     }
 
