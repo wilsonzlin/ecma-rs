@@ -1,14 +1,12 @@
 use ahash::HashMap;
 use ahash::HashSet;
-use derive_visitor::Drive;
-use derive_visitor::Visitor;
+use derive_visitor::DriveMut;
+use derive_visitor::VisitorMut;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::PatDecl;
-use parse_js::ast::stmt::decl::VarDecl;
-use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use symbol_js::symbol::Scope;
@@ -21,7 +19,7 @@ type ClassOrFuncNameNode = Node<ClassOrFuncName>;
 type IdPatNode = Node<IdPat>;
 
 // Four tasks (fill out each field as appropriate).
-#[derive(Debug, Default, Visitor)]
+#[derive(Debug, Default, VisitorMut)]
 #[visitor(
   PatDeclNode,
   IdExprNode(enter),
@@ -52,19 +50,27 @@ fn lifted_scope(scope: &Scope) -> Scope {
 }
 
 impl VarVisitor {
-  pub fn enter_pat_decl_node(&mut self, _node: &Node<PatDecl>) {
+  pub fn enter_pat_decl_node(&mut self, _node: &mut Node<PatDecl>) {
     self.in_pat_decl_stack.push(true);
   }
 
-  pub fn exit_pat_decl_node(&mut self, _node: &Node<PatDecl>) {
+  pub fn exit_pat_decl_node(&mut self, _node: &mut Node<PatDecl>) {
     self.in_pat_decl_stack.pop();
   }
 
-  pub fn enter_id_expr_node(&mut self, node: &Node<IdExpr>) {
+  pub fn enter_id_expr_node(&mut self, node: &mut Node<IdExpr>) {
     let name = &node.stx.name;
     let usage_scope = node.assoc.get::<Scope>().unwrap();
     let usage_ls = lifted_scope(usage_scope);
-    match usage_scope.find_symbol_up_to_with_scope(name.clone(), |_| false) {
+    // Walk ancestors manually to recover the actual declaration scope. `find_symbol_up_to_with_scope` currently returns the usage scope rather than the scope containing the symbol.
+    let decl = usage_scope.self_and_ancestors().find_map(|scope| {
+      let symbol = {
+        let data = scope.data();
+        data.get_symbol(name.as_str())
+      };
+      symbol.map(|sym| (scope, sym))
+    });
+    match decl {
       None => {
         // Unknown.
         self.unknown.insert(name.clone());
@@ -82,7 +88,7 @@ impl VarVisitor {
     };
   }
 
-  pub fn enter_class_or_func_name_node(&mut self, node: &Node<ClassOrFuncName>) {
+  pub fn enter_class_or_func_name_node(&mut self, node: &mut Node<ClassOrFuncName>) {
     let scope = node.assoc.get::<Scope>().unwrap();
     // It won't exist if it's a global declaration.
     // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
@@ -91,8 +97,8 @@ impl VarVisitor {
     };
   }
 
-  pub fn enter_id_pat_node(&mut self, node: &Node<IdPat>) {
-    // An identifier pattern doesn't always mean declaration e.g. simple assignment.
+  pub fn enter_id_pat_node(&mut self, node: &mut Node<IdPat>) {
+    // Identifier patterns can also appear in assignment targets; only treat them as declarations when a pattern declaration wrapper is active.
     if *self.in_pat_decl_stack.last().unwrap_or(&false) {
       let scope = node.assoc.get::<Scope>().unwrap();
       // It won't exist if it's a global declaration.
@@ -113,9 +119,9 @@ pub struct VarAnalysis {
 }
 
 impl VarAnalysis {
-  pub fn analyze(top_level_node: &Node<TopLevel>) -> Self {
+  pub fn analyze(top_level_node: &mut Node<TopLevel>) -> Self {
     let mut var_visitor = VarVisitor::default();
-    top_level_node.drive(&mut var_visitor);
+    top_level_node.drive_mut(&mut var_visitor);
     Self {
       declared: var_visitor.declared,
       foreign: var_visitor.foreign,
@@ -131,7 +137,7 @@ mod tests {
   use ahash::HashMap;
   use ahash::HashMapExt;
   use ahash::HashSet;
-  use derive_visitor::Drive;
+  use derive_visitor::DriveMut;
   use parse_js::parse;
   use symbol_js::compute_symbols;
   use symbol_js::symbol::Scope;
@@ -143,7 +149,7 @@ mod tests {
     let mut parsed = parse(source).unwrap();
     let top_level_scope = compute_symbols(&mut parsed, TopLevelMode::Global);
     let mut var_visitor = VarVisitor::default();
-    parsed.drive(&mut var_visitor);
+    parsed.drive_mut(&mut var_visitor);
     (top_level_scope, var_visitor)
   }
 
@@ -333,5 +339,49 @@ mod tests {
         "z".to_string(),
       ]),
     );
+  }
+
+  #[test]
+  fn test_var_visitor_function_params() {
+    let (s, v) = parse_and_visit(
+      r#"
+        (() => {
+          function f(x, { y }) {
+            x;
+            y;
+          }
+          w;
+        })();
+      "#,
+    );
+
+    let mut syms = HashMap::new();
+    #[rustfmt::skip]
+    test_scope_tree(&mut syms, &s, &T {
+      typ: ScopeType::Global,
+      syms: vec![],
+      children: vec![
+        T {
+          typ: ScopeType::ArrowFunction,
+          syms: vec![("f", "f")],
+          children: vec![
+            T {
+              typ: ScopeType::NonArrowFunction,
+              syms: vec![("x", "x"), ("y", "y")],
+              children: vec![],
+            },
+          ],
+        },
+      ],
+    });
+
+    assert_eq!(
+      v.declared,
+      HashSet::from_iter([syms["f"], syms["x"], syms["y"],]),
+    );
+
+    assert_eq!(v.foreign, HashSet::default());
+    assert!(v.use_before_decl.is_empty());
+    assert_eq!(v.unknown, HashSet::from_iter(["w".to_string()]));
   }
 }

@@ -140,13 +140,13 @@ pub struct Program {
 
 impl Program {
   // The AST must already have symbol analysis done by compute_symbols.
-  pub fn compile(top_level_node: Node<TopLevel>, debug: bool) -> Self {
+  pub fn compile(mut top_level_node: Node<TopLevel>, debug: bool) -> Self {
     let VarAnalysis {
       declared,
       foreign,
       unknown,
       use_before_decl,
-    } = VarAnalysis::analyze(&top_level_node);
+    } = VarAnalysis::analyze(&mut top_level_node);
     // SSA requires no use before declaration.
     if let Some((_, loc)) = use_before_decl.iter().next() {
       panic!("Use before declaration at {:?}", loc);
