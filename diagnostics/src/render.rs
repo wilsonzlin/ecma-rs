@@ -21,12 +21,12 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
   labels.extend(diagnostic.labels.iter().cloned());
 
   labels.sort_by(|a, b| {
-    a.span
-      .file
-      .cmp(&b.span.file)
+    b
+      .is_primary
+      .cmp(&a.is_primary)
+      .then(a.span.file.cmp(&b.span.file))
       .then(a.span.range.start.cmp(&b.span.range.start))
       .then(a.span.range.end.cmp(&b.span.range.end))
-      .then(b.is_primary.cmp(&a.is_primary))
       .then(a.message.cmp(&b.message))
   });
 
@@ -59,7 +59,18 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
   .unwrap();
   writeln!(output, "  |").unwrap();
 
+  let mut current_file = Some(diagnostic.primary.file);
+
   for label in labels {
+    if Some(label.span.file) != current_file {
+      let (line, col) = line_and_column(
+        provider.file_text(label.span.file),
+        label.span.range.start as usize,
+      );
+      writeln!(output, " --> {}:{}:{}", provider.file_name(label.span.file), line, col).unwrap();
+      writeln!(output, "  |").unwrap();
+      current_file = Some(label.span.file);
+    }
     render_label(provider, &mut output, &label, gutter_width);
   }
 

@@ -313,6 +313,21 @@ mod tests {
     }
   }
 
+  struct MultiSource {
+    names: Vec<String>,
+    texts: Vec<String>,
+  }
+
+  impl SourceProvider for MultiSource {
+    fn file_name(&self, file: FileId) -> &str {
+      &self.names[file.0 as usize]
+    }
+
+    fn file_text(&self, file: FileId) -> &str {
+      &self.texts[file.0 as usize]
+    }
+  }
+
   #[test]
   fn converts_syntax_error() {
     let err = SyntaxError::new(SyntaxErrorType::UnexpectedEnd, Loc(2, 5), None);
@@ -414,5 +429,32 @@ mod tests {
     let first_pos = rendered.find("first").unwrap();
     let second_pos = rendered.find("second").unwrap();
     assert!(first_pos < second_pos);
+  }
+
+  #[test]
+  fn renders_additional_files() {
+    let source = MultiSource {
+      names: vec!["a.js".into(), "b.js".into()],
+      texts: vec!["const a = 1;".into(), "const b = 2;".into()],
+    };
+    let diagnostic = Diagnostic::error(
+      "TEST0004",
+      "primary",
+      Span {
+        file: FileId(1),
+        range: TextRange::new(6, 7),
+      },
+    )
+    .with_label(Label::secondary(
+      Span {
+        file: FileId(0),
+        range: TextRange::new(6, 7),
+      },
+      "secondary",
+    ));
+
+    let rendered = render_diagnostic(&source, &diagnostic);
+    assert!(rendered.contains(" --> b.js:1:7"));
+    assert!(rendered.contains(" --> a.js:1:7"));
   }
 }
