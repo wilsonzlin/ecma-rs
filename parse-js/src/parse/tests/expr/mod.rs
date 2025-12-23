@@ -1,5 +1,5 @@
-use crate::ast::node::Node;
 use crate::ast::expr::Expr;
+use crate::ast::node::Node;
 use crate::ast::type_expr::TypeEntityName;
 use crate::ast::type_expr::TypeExpr;
 use crate::lex::Lexer;

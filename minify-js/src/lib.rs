@@ -31,13 +31,17 @@ pub fn minify_str(
   Ok(())
 }
 
-/// Minifies UTF-8 JavaScript code.
+mod err;
+#[cfg(test)]
+mod tests;
+
+/// Processes UTF-8 JavaScript code.
 ///
 /// # Arguments
 ///
 /// * `top_level_mode` - How to parse the provided code.
-/// * `source` - A string slice representing the source code to minify.
-/// * `output` - Destination to write minified output JavaScript code.
+/// * `source` - A string slice representing the source code to process.
+/// * `output` - Destination to write output JavaScript code.
 ///
 /// # Examples
 ///
