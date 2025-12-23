@@ -1,0 +1,6 @@
+[package]
+name = "typecheck-ts-ops16"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]

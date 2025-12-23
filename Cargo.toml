@@ -21,6 +21,7 @@ members = [
   "typecheck-ts-class17",
   "typecheck-ts-flow14",
   "typecheck-ts-trace23",
+  "typecheck-ts-ops16",
   "test262",
   "typecheck-ts-harness",
   "typecheck-ts-harness-trace23",
