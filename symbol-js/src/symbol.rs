@@ -283,13 +283,18 @@ impl Scope {
     scope_pred: impl Fn(ScopeType) -> bool,
   ) -> Option<(Scope, Symbol)> {
     for scope in self.self_and_ancestors() {
-      let cur = scope.data();
-      if let Some(symbol) = cur.symbols.get(&identifier) {
-        return Some((self.clone(), symbol.clone()));
-      }
-      if scope_pred(cur.typ) {
-        break;
+      let (symbol, scope_type) = {
+        let cur = scope.data();
+        (cur.symbols.get(&identifier).copied(), cur.typ)
       };
+
+      if let Some(symbol) = symbol {
+        return Some((scope, symbol));
+      }
+
+      if scope_pred(scope_type) {
+        break;
+      }
     }
     None
   }
