@@ -882,61 +882,37 @@ fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
 
 // TODO Validate string.
 fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
-  let quote = lexer.peek(0)?;
-  lexer.skip_expect(quote.len_utf8());
+  let quote = lexer.consume_next()?;
   let mut invalid = false;
   loop {
-    // Look for backslash, line terminators, or closing quote
-    lexer.consume(lexer.while_not_3_chars('\\', '\r', quote));
-    // Also check for \n and Unicode line separators
-    if let Ok(c) = lexer.peek(0) {
-      if c == '\n' || c == '\u{2028}' || c == '\u{2029}' {
-        // Bare line terminator without backslash - invalid
-        invalid = true;
-        lexer.skip_expect(c.len_utf8());
-        continue;
-      }
+    let c = lexer.consume_next()?;
+    if c == quote {
+      break;
     }
-    match lexer.peek(0)? {
+    match c {
       '\\' => {
-        // Consume the backslash
-        lexer.skip_expect(1);
-        // Check if next character is a line terminator (line continuation)
-        if let Ok(next_char) = lexer.peek(0) {
-          match next_char {
-            '\r' => {
-              // Consume \r, and if followed by \n, consume that too (CRLF)
+        let escaped_char = lexer.consume_next()?;
+        match escaped_char {
+          '\r' => {
+            if lexer.peek_or_eof(0) == Some('\n') {
               lexer.skip_expect(1);
-              if lexer.peek(0).ok() == Some('\n') {
-                lexer.skip_expect(1);
-              }
-            }
-            '\n' | '\u{2028}' | '\u{2029}' => {
-              // Line continuation
-              lexer.skip_expect(next_char.len_utf8());
-            }
-            _ => {
-              // Regular escape sequence
-              lexer.skip_expect(next_char.len_utf8());
             }
           }
+          '\n' | '\u{2028}' | '\u{2029}' => {}
+          _ => {}
         }
       }
-      '\r' => {
-        // Bare \r without backslash - invalid
+      '\n' | '\u{2028}' | '\u{2029}' => {
         invalid = true;
-        lexer.skip_expect(1);
-        // Also consume \n if it follows (CRLF)
-        if lexer.peek(0).ok() == Some('\n') {
+      }
+      '\r' => {
+        invalid = true;
+        if lexer.peek_or_eof(0) == Some('\n') {
           lexer.skip_expect(1);
         }
       }
-      c if c == quote => {
-        lexer.skip_expect(c.len_utf8());
-        break;
-      }
-      _ => unreachable!(),
-    };
+      _ => {}
+    }
   }
   if invalid {
     Ok(TT::Invalid)

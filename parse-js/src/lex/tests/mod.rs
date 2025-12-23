@@ -54,6 +54,13 @@ fn test_lex_literal_bigints() {
 fn test_lex_literal_strings() {
   check("'hello world'", [LiteralString]);
   check("'hello world\n'", [Invalid]);
+  check("'hello world\r'", [Invalid]);
+  check("'hello world\r\n'", [Invalid]);
+  check("'hello world\u{2028}'", [Invalid]);
+  check("'hello world\u{2029}'", [Invalid]);
+  check("'hello\\\nworld'", [LiteralString]);
+  check("'hello\\\r\nworld'", [LiteralString]);
+  check("'hello\\\u{2028}world'", [LiteralString]);
 }
 
 #[test]
