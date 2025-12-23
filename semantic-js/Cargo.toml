@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-hir-js-trace23 = { path = "../hir-js-trace23" }
-tracing = "0.1"
+ahash = "0.8.7"
+derive-visitor = "0.4.0"
+parse-js = { version = "0.24.1", path = "../parse-js" }
