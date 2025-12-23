@@ -7,6 +7,8 @@ use parse_js::ast::ArrayElement;
 use parse_js::ast::ClassOrObjectMemberKey;
 use parse_js::ast::ClassOrObjectMemberValue;
 use parse_js::ast::ExportNames;
+use parse_js::ast::ImportNames;
+use parse_js::ast::import_export::ModuleExportImportName;
 use parse_js::ast::ForInit;
 use parse_js::ast::LiteralTemplatePart;
 use parse_js::ast::ObjectMemberType;
@@ -95,6 +97,40 @@ static TEMPLATE_LITERAL_ESCAPE_MAT: Lazy<AhoCorasick> =
   Lazy::new(|| AhoCorasick::new(&["\\", "`", "$"]));
 
 const TEMPLATE_LITERAL_ESCAPE_REP: &[&str] = &["\\\\", "\\`", "\\$"];
+const HEX: [u8; 16] = *b"0123456789abcdef";
+
+fn emit_string_literal(out: &mut Vec<u8>, value: &str) {
+  out.push(b'"');
+  for ch in value.chars() {
+    match ch {
+      '"' => out.extend_from_slice(b"\\\""),
+      '\\' => out.extend_from_slice(b"\\\\"),
+      '\n' => out.extend_from_slice(b"\\n"),
+      '\r' => out.extend_from_slice(b"\\r"),
+      '\t' => out.extend_from_slice(b"\\t"),
+      '\u{08}' => out.extend_from_slice(b"\\b"),
+      '\u{0C}' => out.extend_from_slice(b"\\f"),
+      c if c.is_control() => {
+        let mut buf = [0u8; 6];
+        // Write as \uXXXX
+        let code = c as u32;
+        buf[0] = b'\\';
+        buf[1] = b'u';
+        buf[2] = HEX[(code >> 12) as usize & 0xF];
+        buf[3] = HEX[(code >> 8) as usize & 0xF];
+        buf[4] = HEX[(code >> 4) as usize & 0xF];
+        buf[5] = HEX[(code) as usize & 0xF];
+        out.extend_from_slice(&buf);
+      }
+      c => {
+        let mut buf = [0u8; 4];
+        let encoded = c.encode_utf8(&mut buf);
+        out.extend_from_slice(encoded.as_bytes());
+      }
+    }
+  }
+  out.push(b'"');
+}
 
 // Returns whether or not the value is a property.
 fn emit_class_or_object_member(
@@ -257,7 +293,14 @@ fn emit_class(
   out.extend_from_slice("}".as_bytes());
 }
 
-fn emit_import_or_export_statement_trailer(
+fn emit_module_export_import_name(out: &mut Vec<u8>, name: &ModuleExportImportName) {
+  match name {
+    ModuleExportImportName::Ident(name) => out.extend_from_slice(name.as_bytes()),
+    ModuleExportImportName::Str(value) => emit_string_literal(out, value),
+  }
+}
+
+fn emit_export_statement_trailer(
   out: &mut Vec<u8>,
   names: Option<&ExportNames>,
   from: Option<&String>,
@@ -279,8 +322,8 @@ fn emit_import_or_export_statement_trailer(
         if i > 0 {
           out.extend_from_slice(",".as_bytes());
         }
-        out.extend_from_slice(e.target.as_bytes());
-        // TODO Omit if identical to `target`.
+        emit_module_export_import_name(out, &e.exportable);
+        // TODO Omit if identical to `exportable`.
         out.extend_from_slice(" as ".as_bytes());
         emit_js(out, &e.alias);
       }
@@ -294,6 +337,29 @@ fn emit_import_or_export_statement_trailer(
     out.extend_from_slice(from.as_bytes());
     out.extend_from_slice("\"".as_bytes());
   };
+}
+
+fn emit_import_statement_names(out: &mut Vec<u8>, names: Option<&ImportNames>) {
+  match names {
+    Some(ImportNames::All(alias)) => {
+      out.extend_from_slice("* as ".as_bytes());
+      emit_js(out, alias);
+    }
+    Some(ImportNames::Specific(names)) => {
+      out.extend_from_slice("{".as_bytes());
+      for (i, e) in names.iter().enumerate() {
+        if i > 0 {
+          out.extend_from_slice(",".as_bytes());
+        }
+        emit_module_export_import_name(out, &e.importable);
+        // TODO Omit if identical to `importable`.
+        out.extend_from_slice(" as ".as_bytes());
+        emit_js(out, &e.alias);
+      }
+      out.extend_from_slice("}".as_bytes());
+    }
+    None => {}
+  }
 }
 
 fn emit_function_parameters(out: &mut Vec<u8>, params: &[Node]) {
@@ -1007,7 +1073,7 @@ fn emit_js_under_operator(
     }
     Syntax::ExportListStmt { names, from } => {
       out.extend_from_slice("export".as_bytes());
-      emit_import_or_export_statement_trailer(out, Some(names), from.as_ref());
+      emit_export_statement_trailer(out, Some(names), from.as_ref());
     }
     Syntax::ExpressionStmt { expression } => {
       emit_js(out, expression);
@@ -1116,11 +1182,24 @@ fn emit_js_under_operator(
         emit_js(out, default);
         if names.is_some() {
           out.extend_from_slice(",".as_bytes());
+        }
+      }
+      if let Some(names) = names.as_ref() {
+        if default.is_some() {
+          // Comma already emitted above.
         } else {
           out.extend_from_slice(" ".as_bytes());
-        };
-      };
-      emit_import_or_export_statement_trailer(out, names.as_ref(), Some(module));
+        }
+        emit_import_statement_names(out, Some(names));
+      }
+      out.extend_from_slice(" ".as_bytes());
+      if names.is_some() || default.is_some() {
+        out.extend_from_slice("from\"".as_bytes());
+      } else {
+        out.extend_from_slice("\"".as_bytes());
+      }
+      out.extend_from_slice(module.as_bytes());
+      out.extend_from_slice("\"".as_bytes());
     }
     Syntax::ReturnStmt { value } => {
       out.extend_from_slice("return".as_bytes());
