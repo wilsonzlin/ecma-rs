@@ -41,7 +41,9 @@ pub fn check(source: &str) -> CheckerResult {
     }
     Err(err) => match err {
       hir_js::LowerError::Parse(parse_err) => {
-        result.diagnostics.push(Diagnostic { message: format!("parse error: {parse_err}") });
+        result.diagnostics.push(Diagnostic {
+          message: format!("parse error: {parse_err}"),
+        });
       }
     },
   }

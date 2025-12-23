@@ -1,5 +1,7 @@
 use proptest::prelude::*;
-use types_ts::{canon, is_assignable, Type};
+use types_ts::canon;
+use types_ts::is_assignable;
+use types_ts::Type;
 
 fn arb_leaf() -> impl Strategy<Value = Type> {
   prop_oneof![
@@ -71,19 +73,17 @@ fn type_rank(t: &Type) -> u8 {
 }
 
 fn is_canonically_sorted(list: &[Type]) -> bool {
-  list
-    .windows(2)
-    .all(|w| {
-      let (a,b) = (&w[0], &w[1]);
-      let ra = type_rank(a);
-      let rb = type_rank(b);
-      if ra != rb {
-        ra <= rb
-      } else {
-        match (a, b) {
-          (Type::Ref(a_id), Type::Ref(b_id)) => a_id <= b_id,
-          _ => format!("{:?}", a) <= format!("{:?}", b),
-        }
+  list.windows(2).all(|w| {
+    let (a, b) = (&w[0], &w[1]);
+    let ra = type_rank(a);
+    let rb = type_rank(b);
+    if ra != rb {
+      ra <= rb
+    } else {
+      match (a, b) {
+        (Type::Ref(a_id), Type::Ref(b_id)) => a_id <= b_id,
+        _ => format!("{:?}", a) <= format!("{:?}", b),
       }
-    })
+    }
+  })
 }

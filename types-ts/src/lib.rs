@@ -8,7 +8,8 @@
 //! The guardrails here are exercised via property tests and fuzz entry points
 //! to ensure we never panic and always produce deterministic canonical forms.
 
-use ahash::{AHashMap, AHashSet};
+use ahash::AHashMap;
+use ahash::AHashSet;
 use std::cmp::Ordering;
 
 /// Maximum recursion depth used by canonicalization/relations to avoid stack

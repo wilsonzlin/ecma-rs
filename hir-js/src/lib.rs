@@ -6,7 +6,8 @@
 //! entry points to ensure termination and stability while the real lowering
 //! pipeline evolves.
 
-use parse_js::{error::SyntaxError, parse};
+use parse_js::error::SyntaxError;
+use parse_js::parse;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirRoot {
