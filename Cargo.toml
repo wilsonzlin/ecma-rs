@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "diagnostics",
   "bench/minify-js",
+  "bench/typecheck-ts",
   "minify-js-cli",
   "minify-js-nodejs",
   "minify-js",
