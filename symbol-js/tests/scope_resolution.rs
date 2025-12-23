@@ -1,4 +1,5 @@
-use derive_visitor::{Drive, Visitor};
+use derive_visitor::Drive;
+use derive_visitor::Visitor;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::node::Node;
@@ -53,13 +54,19 @@ fn resolves_outer_let_with_declaration_scope() {
   let decl_scope = collector.decl_scope.expect("declaration scope captured");
   let use_scope = collector.use_scope.expect("usage scope captured");
 
-  assert_ne!(decl_scope, use_scope, "declaration should be in an outer closure");
+  assert_ne!(
+    decl_scope, use_scope,
+    "declaration should be in an outer closure"
+  );
 
   let (resolved_scope, symbol) = use_scope
     .find_symbol_up_to_with_scope("value".to_string(), |_| false)
     .expect("symbol should resolve across nested closures");
 
-  assert_eq!(resolved_scope, decl_scope, "should return the declaration scope");
+  assert_eq!(
+    resolved_scope, decl_scope,
+    "should return the declaration scope"
+  );
 
   let decl_symbol = decl_scope
     .find_symbol("value".to_string())

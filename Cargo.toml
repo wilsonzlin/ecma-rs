@@ -30,6 +30,7 @@ members = [
   "diagnostics-salsa6",
   "typecheck-ts-salsa6",
   "semantic-js-ts9",
+  "typecheck-ts-const18",
 ]
 
 [profile.release]
