@@ -1,16 +1,15 @@
-//! Minimal type representation with canonicalization and bounded relations.
+//! Minimal type representation, canonicalization, and relation guardrails.
 //!
-//! This crate is intentionally lightweight: it provides a small `Type` model,
-//! a `canon` canonicalization routine that flattens/sorts/dedups unions and
-//! intersections, and a cycle-safe `is_assignable` relation with explicit step
-//! limits to guarantee termination on adversarial graphs.
-//!
-//! The guardrails here are exercised via property tests and fuzz entry points
-//! to ensure we never panic and always produce deterministic canonical forms.
+//! This crate provides two complementary layers:
+//! - A lightweight `Type` model with canonicalization (`canon`) and a bounded
+//!   assignability relation (`is_assignable`) backed by property tests.
+//! - A minimal `TypeStore`/`RelationEngine` pair used by the checker to
+//!   exercise cycle-safe alias resolution and relations that never panic,
+//!   instead returning conservative `Unknown` outcomes with optional notes.
 
-use ahash::AHashMap;
-use ahash::AHashSet;
+use ahash::{AHashMap, AHashSet};
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 /// Maximum recursion depth used by canonicalization/relations to avoid stack
 /// blow-ups on adversarial inputs.
@@ -222,4 +221,209 @@ pub fn fuzz_canon_and_assign(data: &[u8]) {
   let ty = Type::Union(vec![Type::Ref(id), Type::Bool, Type::Ref(id)]);
   let canon_ty = canon(ty);
   let _ = is_assignable(&canon_ty, &Type::Any);
+}
+
+// === Type store / relation engine used by the checker ===
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TypeId(usize);
+
+impl TypeId {
+  pub fn raw(&self) -> usize {
+    self.0
+  }
+
+  pub fn from_raw(raw: usize) -> Self {
+    TypeId(raw)
+  }
+}
+
+#[derive(Clone, Debug)]
+pub enum TypeKind {
+  Any,
+  Never,
+  Named(String),
+  Union(Vec<TypeId>),
+  Alias(TypeId),
+}
+
+#[derive(Debug, Default)]
+pub struct TypeStore {
+  types: Vec<TypeKind>,
+}
+
+impl TypeStore {
+  pub fn new() -> Self {
+    Self { types: Vec::new() }
+  }
+
+  pub fn intern(&mut self, kind: TypeKind) -> TypeId {
+    let id = TypeId(self.types.len());
+    self.types.push(kind);
+    id
+  }
+
+  pub fn kind(&self, id: TypeId) -> &TypeKind {
+    &self.types[id.0]
+  }
+
+  /// Resolves a chain of aliases, returning the final `TypeId` and an optional
+  /// note when a cycle is detected. The function never panics and will stop at
+  /// the first repeated type.
+  pub fn resolve_alias(&self, mut id: TypeId) -> EvalResult {
+    let mut visited = HashSet::new();
+    let mut note = None;
+
+    while let TypeKind::Alias(next) = self.kind(id).clone() {
+      if !visited.insert(id) {
+        note = Some(format!("alias cycle detected at type {:?}", id));
+        break;
+      }
+      id = next;
+    }
+
+    EvalResult { resolved: id, note }
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelationOutcome {
+  True,
+  False,
+  Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelationResult {
+  pub outcome: RelationOutcome,
+  /// Optional note explaining why the conservative `Unknown` result was
+  /// produced. This allows callers to surface an ICE note without panicking.
+  pub ice_note: Option<String>,
+}
+
+pub struct RelationEngine<'a> {
+  store: &'a TypeStore,
+  visiting: HashSet<(TypeId, TypeId)>,
+}
+
+impl<'a> RelationEngine<'a> {
+  pub fn new(store: &'a TypeStore) -> Self {
+    Self {
+      store,
+      visiting: HashSet::new(),
+    }
+  }
+
+  pub fn is_assignable(&mut self, source: TypeId, target: TypeId) -> RelationResult {
+    self.relate(source, target)
+  }
+
+  fn relate(&mut self, source: TypeId, target: TypeId) -> RelationResult {
+    if !self.visiting.insert((source, target)) {
+      return RelationResult {
+        outcome: RelationOutcome::Unknown,
+        ice_note: Some(format!(
+          "cycle detected while relating {:?} to {:?}",
+          source, target
+        )),
+      };
+    }
+
+    let mut ice_note = None;
+    let outcome = match (self.store.kind(source), self.store.kind(target)) {
+      (TypeKind::Any, _) | (_, TypeKind::Any) => RelationOutcome::True,
+      (TypeKind::Never, _) => RelationOutcome::True,
+      (_, TypeKind::Never) => RelationOutcome::False,
+      (TypeKind::Named(lhs), TypeKind::Named(rhs)) => {
+        if lhs == rhs {
+          RelationOutcome::True
+        } else {
+          RelationOutcome::False
+        }
+      }
+      (TypeKind::Alias(inner), _) => {
+        let nested = self.relate(*inner, target);
+        ice_note = ice_note.or(nested.ice_note.clone());
+        nested.outcome
+      }
+      (_, TypeKind::Alias(inner)) => {
+        let nested = self.relate(source, *inner);
+        ice_note = ice_note.or(nested.ice_note.clone());
+        nested.outcome
+      }
+      (TypeKind::Union(members), _) => {
+        let mut outcome = RelationOutcome::True;
+        for member in members {
+          let nested = self.relate(*member, target);
+          ice_note = ice_note.or(nested.ice_note.clone());
+          match nested.outcome {
+            RelationOutcome::False => {
+              outcome = RelationOutcome::False;
+              break;
+            }
+            RelationOutcome::Unknown => outcome = RelationOutcome::Unknown,
+            RelationOutcome::True => {}
+          }
+        }
+        outcome
+      }
+      (_, TypeKind::Union(members)) => {
+        let mut outcome = RelationOutcome::False;
+        for member in members {
+          let nested = self.relate(source, *member);
+          ice_note = ice_note.or(nested.ice_note.clone());
+          match nested.outcome {
+            RelationOutcome::True => {
+              outcome = RelationOutcome::True;
+              break;
+            }
+            RelationOutcome::Unknown => outcome = RelationOutcome::Unknown,
+            RelationOutcome::False => {}
+          }
+        }
+        outcome
+      }
+    };
+
+    self.visiting.remove(&(source, target));
+
+    RelationResult { outcome, ice_note }
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalResult {
+  pub resolved: TypeId,
+  pub note: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn alias_cycles_do_not_panic() {
+    let mut store = TypeStore::new();
+    let first = store.intern(TypeKind::Alias(TypeId::from_raw(0)));
+    // Force a cycle by pointing to self; the interned ID above is 0.
+    let result = store.resolve_alias(first);
+    assert_eq!(result.resolved, first);
+    assert!(result.note.is_some());
+  }
+
+  #[test]
+  fn relation_cycles_are_conservative() {
+    let mut store = TypeStore::new();
+    let a = store.intern(TypeKind::Named("A".to_string()));
+    let b = store.intern(TypeKind::Alias(a));
+    // Construct union that references itself to simulate a recursive shape.
+    let recursive_union = store.intern(TypeKind::Union(vec![TypeId::from_raw(2)]));
+    // Overwrite the union reference to point back to itself via aliasing.
+    let _ = store.intern(TypeKind::Alias(recursive_union));
+
+    let mut engine = RelationEngine::new(&store);
+    let result = engine.is_assignable(recursive_union, b);
+    assert_eq!(result.outcome, RelationOutcome::Unknown);
+    assert!(result.ice_note.is_some());
+  }
 }
