@@ -1037,6 +1037,7 @@ dependencies = [
  "parse-js",
  "rayon",
  "serde",
+ "serde_json",
  "symbol-js",
 ]
 
