@@ -5,11 +5,10 @@ edition = "2021"
 
 [features]
 fuzzing = []
+capture-backtrace = []
 
 [dependencies]
-hir-js = { path = "../hir-js" }
-parse-js = { path = "../parse-js" }
-thiserror = "1"
+types-ts = { path = "../types-ts" }
 
 [dev-dependencies]
 proptest = "1"

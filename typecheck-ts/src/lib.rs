@@ -1,58 +1,13 @@
-//! Minimal type checking stub wired to parser + HIR lowering.
+//! TypeScript checker façade and error handling primitives.
 //!
-//! The purpose of this crate in this repository state is to provide
-//! panic-resistant end-to-end wiring (parse -> lower -> check) for fuzzing and
-//! property testing. Real type checking logic will replace the stubbed
-//! `Checker` later; for now we ensure diagnostics are surfaced instead of
-//! panics.
+//! This crate is intentionally focused on robustness: user-facing errors are
+//! reported as diagnostics and internal issues are surfaced as ICE diagnostics
+//! rather than panicking the process.
 
-use hir_js::lower_from_source;
-use parse_js::error::SyntaxError;
-use thiserror::Error;
+mod diagnostic;
+mod error;
+mod program;
 
-#[derive(Debug, Error)]
-pub enum CheckError {
-  #[error("parse error: {0}")]
-  Parse(#[from] SyntaxError),
-  #[error("lowering error: {0}")]
-  Lower(#[from] hir_js::LowerError),
-  #[error("internal error: {0}")]
-  Internal(String),
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct Diagnostic {
-  pub message: String,
-}
-
-#[derive(Debug, Default)]
-pub struct CheckerResult {
-  pub diagnostics: Vec<Diagnostic>,
-}
-
-/// Stub type checker: parse, lower, and emit no diagnostics unless the input
-/// fails earlier phases. This function must not panic; failures are converted
-/// into diagnostics.
-pub fn check(source: &str) -> CheckerResult {
-  let mut result = CheckerResult::default();
-  match lower_from_source(source) {
-    Ok(_) => {
-      // No-op checker for now.
-    }
-    Err(err) => match err {
-      hir_js::LowerError::Parse(parse_err) => {
-        result.diagnostics.push(Diagnostic {
-          message: format!("parse error: {parse_err}"),
-        });
-      }
-    },
-  }
-  result
-}
-
-/// Fuzz entry point to exercise parse -> lower -> check without panicking.
-#[cfg(feature = "fuzzing")]
-pub fn fuzz_check(data: &[u8]) {
-  let source = String::from_utf8_lossy(data);
-  let _ = check(&source);
-}
+pub use diagnostic::{Diagnostic, DiagnosticSeverity};
+pub use error::{BodyId, FatalError, FileId, HostError, Ice};
+pub use program::{CheckReport, Host, Program};
