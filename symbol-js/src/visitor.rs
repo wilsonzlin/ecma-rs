@@ -16,6 +16,9 @@ use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::BlockStmt;
 use parse_js::ast::stmt::CatchBlock;
 use parse_js::ast::stmt::ForBody;
+use parse_js::ast::stmt::ForInOfLhs;
+use parse_js::ast::stmt::ForInStmt;
+use parse_js::ast::stmt::ForOfStmt;
 use parse_js::ast::stmt::ImportStmt;
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -29,6 +32,8 @@ type CatchBlockNode = Node<CatchBlock>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
 type ForBodyNode = Node<ForBody>;
+type ForInStmtNode = Node<ForInStmt>;
+type ForOfStmtNode = Node<ForOfStmt>;
 type FuncNode = Node<Func>;
 type FuncDeclNode = Node<FuncDecl>;
 type FuncExprNode = Node<FuncExpr>;
@@ -44,6 +49,8 @@ type VarDeclNode = Node<VarDecl>;
   ClassDeclNode,
   ClassExprNode,
   ForBodyNode,
+  ForInStmtNode,
+  ForOfStmtNode,
   FuncNode,
   FuncDeclNode(enter),
   FuncExprNode,
@@ -171,6 +178,40 @@ impl DeclVisitor {
 
   fn exit_for_body_node(&mut self, _node: &mut ForBodyNode) {
     self.restore_scope();
+  }
+
+  fn enter_for_in_stmt_node(&mut self, node: &mut ForInStmtNode) {
+    if let ForInOfLhs::Decl((mode, _)) = &node.stx.lhs {
+      self.enter_pattern_decl();
+      self.new_pattern_action(match mode {
+        VarDeclMode::Var => AddToScope::NearestClosure,
+        _ => AddToScope::IfNotGlobal,
+      });
+    }
+  }
+
+  fn exit_for_in_stmt_node(&mut self, node: &mut ForInStmtNode) {
+    if let ForInOfLhs::Decl(_) = &node.stx.lhs {
+      self.exit_pattern_decl();
+      self.restore_pattern_action();
+    }
+  }
+
+  fn enter_for_of_stmt_node(&mut self, node: &mut ForOfStmtNode) {
+    if let ForInOfLhs::Decl((mode, _)) = &node.stx.lhs {
+      self.enter_pattern_decl();
+      self.new_pattern_action(match mode {
+        VarDeclMode::Var => AddToScope::NearestClosure,
+        _ => AddToScope::IfNotGlobal,
+      });
+    }
+  }
+
+  fn exit_for_of_stmt_node(&mut self, node: &mut ForOfStmtNode) {
+    if let ForInOfLhs::Decl(_) = &node.stx.lhs {
+      self.exit_pattern_decl();
+      self.restore_pattern_action();
+    }
   }
 
   fn enter_func_node(&mut self, node: &mut FuncNode) {
