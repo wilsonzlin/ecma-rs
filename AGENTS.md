@@ -663,7 +663,7 @@ Create a harness that:
 
 - **Parser conformance (existing)**:
 
-  - `cargo test -p parse-js --release --test conformance_runner`
+  - `cargo run -p parse-js --release --features conformance-runner --bin conformance_runner`
 
   Notes:
   - the current parser runner skips `@filename:` multi-file tests; the typecheck harness must not
@@ -824,5 +824,4 @@ Assume a “one-shot” rebuild with unlimited resources. The phases below are *
   - memoization
   - a termination story documented in code comments
 - Tests are first-class: every bug fix should come with a regression test.
-
 
