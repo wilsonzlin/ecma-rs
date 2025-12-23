@@ -26,22 +26,18 @@ jobs:
             MIME: application/vnd.microsoft.portable-executable
             EXT: ".exe"
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
 
       - name: Get version
         id: version
         shell: bash
-        run: echo ::set-output name=VERSION::"$([[ "$GITHUB_REF" == refs/tags/v* ]] && echo ${GITHUB_REF#refs/tags/v} || echo '0.0.0')"
+        run: echo "VERSION=$([[ \"$GITHUB_REF\" == refs/tags/v* ]] && echo ${GITHUB_REF#refs/tags/v} || echo '0.0.0')" >> "$GITHUB_OUTPUT"
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          default: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build CLI
-        working-directory: ./cli
+        working-directory: ./minify-js-cli
         run: cargo build --release -vvv
 
       - name: Upload to B2
