@@ -740,6 +740,13 @@ name = "hir-js-w8"
 version = "0.1.0"
 
 [[package]]
+name = "hir-js-w82"
+version = "0.1.0"
+dependencies = [
+ "parse-js",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1644,6 +1651,15 @@ version = "0.1.0"
 dependencies = [
  "bitflags 2.10.0",
  "maplit",
+]
+
+[[package]]
+name = "semantic-js-w111"
+version = "0.1.0"
+dependencies = [
+ "rmp-serde",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
