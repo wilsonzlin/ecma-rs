@@ -45,7 +45,6 @@ fn main() {
     None => Box::new(stdin()),
   };
   input_file.read_to_end(&mut input).expect("read input");
-  let input = String::from_utf8(input).expect("input must be valid UTF-8");
   let mut output = Vec::new();
   let session = Session::new();
   minify(&session, args.mode, &input, &mut output).expect("minify");
