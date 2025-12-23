@@ -1,6 +1,8 @@
 use clap::Parser;
 use std::process::ExitCode;
-use typecheck_ts_harness::difftsc::{self, CommandStatus, DifftscArgs};
+use typecheck_ts_harness::difftsc::CommandStatus;
+use typecheck_ts_harness::difftsc::DifftscArgs;
+use typecheck_ts_harness::difftsc::{self};
 
 #[derive(Parser)]
 #[command(
