@@ -16,6 +16,7 @@ members = [
   "types-ts-relate11",
   "hir-js",
   "typecheck-ts",
+  "typecheck-ts-class17",
   "test262",
   "typecheck-ts-harness",
 ]
