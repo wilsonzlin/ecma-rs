@@ -15,3 +15,6 @@ parse-js = { version = "0.24.1", path = "../parse-js" }
 rayon = "1.10.0"
 serde = { version = "1.0.216", features = ["derive"] }
 symbol-js = { version = "0.2.0", path = "../symbol-js" }
+
+[dev-dependencies]
+serde_json = { version = "1.0" }

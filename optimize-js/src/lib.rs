@@ -178,8 +178,17 @@ impl Program {
 mod tests {
   use crate::Program;
   use parse_js::parse;
+  use serde_json::to_string;
   use symbol_js::compute_symbols;
   use symbol_js::TopLevelMode;
+
+  fn compile_with_debug_json(source: &str) -> String {
+    let mut top_level_node = parse(source).expect("parse input");
+    compute_symbols(&mut top_level_node, TopLevelMode::Module);
+    let Program { top_level, .. } = Program::compile(top_level_node, true);
+    let debug = top_level.debug.expect("debug enabled");
+    to_string(&debug).expect("serialize debug output")
+  }
 
   #[test]
   fn test_compile_js_statements() {
@@ -203,5 +212,26 @@ mod tests {
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
     let bblocks = Program::compile(top_level_node, false).top_level;
+  }
+
+  #[test]
+  fn optimizer_debug_output_is_deterministic() {
+    let source = r#"
+      let x = 1;
+      if (x > 0) {
+        x = x + 1;
+      } else {
+        x = x - 1;
+      }
+      while (x < 3) {
+        x += 1;
+      }
+      x += 2;
+    "#;
+
+    let first = compile_with_debug_json(source);
+    let second = compile_with_debug_json(source);
+
+    assert_eq!(first, second, "debug output should be deterministic");
   }
 }
