@@ -6,7 +6,7 @@ fn test_minify() {
   let mut out = Vec::new();
   minify(
     TopLevelMode::Global,
-    br##"
+    r##"
 
   let myvar = 1;
 

@@ -24,9 +24,9 @@ pub use symbol_js::TopLevelMode;
 /// # Examples
 ///
 /// ```
-/// use minify_js::{Session, TopLevelMode, minify};
+/// use minify_js::{TopLevelMode, minify};
 ///
-/// let mut code: &str = "const main = () => { let my_first_variable = 1; };";
+/// let code: &str = "const main = () => { let my_first_variable = 1; };";
 /// let mut out = Vec::new();
 /// minify(TopLevelMode::Global, code, &mut out).unwrap();
 /// assert_eq!(out.as_slice(), b"const main=()=>{let a=1}");

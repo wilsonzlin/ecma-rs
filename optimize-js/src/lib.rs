@@ -200,7 +200,7 @@ mod tests {
         f(x);
       })();
     "#;
-    let mut top_level_node = parse(source.as_bytes()).expect("parse input");
+    let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
     let bblocks = Program::compile(top_level_node, false).top_level;
   }

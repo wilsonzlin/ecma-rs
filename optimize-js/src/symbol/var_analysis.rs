@@ -139,7 +139,7 @@ mod tests {
   use symbol_js::symbol::Symbol;
   use symbol_js::TopLevelMode;
 
-  fn parse_and_visit(source: &[u8]) -> (Scope, VarVisitor) {
+  fn parse_and_visit(source: &str) -> (Scope, VarVisitor) {
     let mut parsed = parse(source).unwrap();
     let top_level_scope = compute_symbols(&mut parsed, TopLevelMode::Global);
     let mut var_visitor = VarVisitor::default();
@@ -173,7 +173,7 @@ mod tests {
   #[test]
   fn test_var_visitor() {
     let (s, v) = parse_and_visit(
-      br#"
+      r#"
         (() => {
           let a, b;
           z;
@@ -265,7 +265,7 @@ mod tests {
 
   #[test]
   fn test_var_visitor_with_globals() {
-    let source = br#"
+    let source = r#"
       let globalVar;
       anotherGlobalVar, z;
       {
