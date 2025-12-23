@@ -1,4 +1,5 @@
-use crate::error::{HostError, Ice};
+use crate::error::HostError;
+use crate::error::Ice;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiagnosticSeverity {

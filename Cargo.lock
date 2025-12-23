@@ -1648,10 +1648,8 @@ dependencies = [
 name = "typecheck-ts"
 version = "0.1.0"
 dependencies = [
- "hir-js",
- "parse-js",
  "proptest",
- "thiserror",
+ "types-ts",
 ]
 
 [[package]]

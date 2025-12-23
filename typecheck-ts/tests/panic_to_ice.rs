@@ -1,10 +1,19 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
-use typecheck_ts::{
-  BodyId, Diagnostic, DiagnosticSeverity, FatalError, FileId, Host, HostError, Program,
-};
-use types_ts::{RelationEngine, RelationOutcome, TypeId, TypeKind, TypeStore};
+use std::sync::Arc;
+use std::sync::Mutex;
+use typecheck_ts::BodyId;
+use typecheck_ts::Diagnostic;
+use typecheck_ts::DiagnosticSeverity;
+use typecheck_ts::FatalError;
+use typecheck_ts::FileId;
+use typecheck_ts::Host;
+use typecheck_ts::HostError;
+use typecheck_ts::Program;
+use types_ts::RelationEngine;
+use types_ts::RelationOutcome;
+use types_ts::TypeId;
+use types_ts::TypeKind;
+use types_ts::TypeStore;
 
 #[derive(Default)]
 struct RecordingHost {

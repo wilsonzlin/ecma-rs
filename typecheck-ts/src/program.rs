@@ -1,7 +1,12 @@
 use crate::diagnostic::Diagnostic;
-use crate::error::{BodyId, FatalError, FileId, HostError, Ice};
+use crate::error::BodyId;
+use crate::error::FatalError;
+use crate::error::FileId;
+use crate::error::HostError;
+use crate::error::Ice;
 use std::any::Any;
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::catch_unwind;
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 
 pub trait Host: Send + Sync {

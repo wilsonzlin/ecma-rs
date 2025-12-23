@@ -7,7 +7,8 @@
 //!   exercise cycle-safe alias resolution and relations that never panic,
 //!   instead returning conservative `Unknown` outcomes with optional notes.
 
-use ahash::{AHashMap, AHashSet};
+use ahash::AHashMap;
+use ahash::AHashSet;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 

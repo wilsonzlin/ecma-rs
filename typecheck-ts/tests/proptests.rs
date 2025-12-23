@@ -1,6 +1,12 @@
 use proptest::prelude::*;
 use std::sync::Arc;
-use typecheck_ts::{BodyId, Diagnostic, DiagnosticSeverity, FatalError, FileId, Host, Program};
+use typecheck_ts::BodyId;
+use typecheck_ts::Diagnostic;
+use typecheck_ts::DiagnosticSeverity;
+use typecheck_ts::FatalError;
+use typecheck_ts::FileId;
+use typecheck_ts::Host;
+use typecheck_ts::Program;
 
 fn arb_source() -> impl Strategy<Value = String> {
   prop::collection::vec(any::<char>(), 0..96).prop_map(|chars| chars.into_iter().collect())

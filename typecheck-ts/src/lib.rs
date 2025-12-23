@@ -8,6 +8,13 @@ mod diagnostic;
 mod error;
 mod program;
 
-pub use diagnostic::{Diagnostic, DiagnosticSeverity};
-pub use error::{BodyId, FatalError, FileId, HostError, Ice};
-pub use program::{CheckReport, Host, Program};
+pub use diagnostic::Diagnostic;
+pub use diagnostic::DiagnosticSeverity;
+pub use error::BodyId;
+pub use error::FatalError;
+pub use error::FileId;
+pub use error::HostError;
+pub use error::Ice;
+pub use program::CheckReport;
+pub use program::Host;
+pub use program::Program;
