@@ -71,7 +71,7 @@ jobs:
           //registry.npmjs.org/:_authToken=${{ secrets.NPM_AUTH_TOKEN }}
           EOF
           # npm refuses to work with symlinks.
-          cp ../minify-js/README.md ./README.md
+          cp ../minify-js/README.md README.md
           if [[ "${{ steps.version.outputs.VERSION }}" != "0.0.0" ]]; then
             npm publish --access public
           fi
