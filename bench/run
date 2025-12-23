@@ -35,11 +35,17 @@ for candidate_idx in ${!candidates[@]}; do
   candidate=${candidates[$candidate_idx]}
 
   min_len_sum=${candidate_output_min_lens[$candidate_idx]}
-  avg_min_pct=$(bc -l <<< "($min_len_sum/$src_len_sum) * 100")
+  avg_min_pct=$(awk -v numerator="$min_len_sum" -v denominator="$src_len_sum" 'BEGIN {
+    if (denominator == 0) {
+      print 0
+      exit
+    }
+    printf "%.20f", (numerator / denominator) * 100
+  }')
   echo -e "$candidate_idx\t$candidate\t$avg_min_pct" >> results/average-sizes.txt
 
   time_ns_sum=${candidate_output_times[$candidate_idx]}
-  time_sec_sum=$(bc -l <<< "$time_ns_sum / 1000000000")
+  time_sec_sum=$(awk -v ns="$time_ns_sum" 'BEGIN { printf "%.20f", ns / 1000000000 }')
   echo -e "$candidate_idx\t$candidate\t$time_sec_sum" >> results/total-times.txt
 done
 
