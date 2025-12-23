@@ -1,0 +1,11 @@
+[package]
+name = "hir-js-w72"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+derive-visitor = "0.4"
+parse-js = { path = "../parse-js" }
+
+[dev-dependencies]
+symbol-js = { path = "../symbol-js" }

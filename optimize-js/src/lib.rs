@@ -33,6 +33,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use symbol::var_analysis::VarAnalysis;
+use symbol_js::symbol::Scope;
 use symbol_js::symbol::Symbol;
 use util::counter::Counter;
 use util::debug::OptimizerDebug;
@@ -42,6 +43,30 @@ use util::debug::OptimizerDebug;
 pub struct ProgramFunction {
   pub debug: Option<OptimizerDebug>,
   pub body: Cfg,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+pub struct ScopeId(pub u32);
+
+#[derive(Debug, Serialize)]
+pub struct ProgramSymbol {
+  pub id: Symbol,
+  pub name: String,
+  pub scope: ScopeId,
+  pub captured: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProgramFreeSymbols {
+  pub top_level: Vec<Symbol>,
+  pub functions: Vec<Vec<Symbol>>, // Index aligned with Program::functions.
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProgramSymbols {
+  pub symbols: Vec<ProgramSymbol>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub free_symbols: Option<ProgramFreeSymbols>,
 }
 
 pub fn compile_js_statements(
@@ -136,6 +161,67 @@ impl Deref for ProgramCompiler {
 pub struct Program {
   pub functions: Vec<ProgramFunction>,
   pub top_level: ProgramFunction,
+  pub symbols: Option<ProgramSymbols>,
+}
+
+fn collect_symbol_table(root: &Scope, captured: &HashSet<Symbol>) -> ProgramSymbols {
+  fn collect_scope_symbols(
+    scope: &Scope,
+    scope_id: &mut u32,
+    captured: &HashSet<Symbol>,
+    out: &mut Vec<ProgramSymbol>,
+  ) {
+    let this_scope_id = ScopeId(*scope_id);
+    *scope_id += 1;
+
+    let (symbols, children) = {
+      let data = scope.data();
+      let symbols = data
+        .symbol_names()
+        .iter()
+        .map(|name| (name.clone(), data.get_symbol(name).unwrap()))
+        .collect::<Vec<_>>();
+      let children = data.children().clone();
+      (symbols, children)
+    };
+
+    for (name, id) in symbols {
+      out.push(ProgramSymbol {
+        id,
+        name,
+        scope: this_scope_id,
+        captured: captured.contains(&id),
+      });
+    }
+
+    for child in children {
+      collect_scope_symbols(&child, scope_id, captured, out);
+    }
+  }
+
+  let mut symbols = Vec::new();
+  collect_scope_symbols(root, &mut 0, captured, &mut symbols);
+  ProgramSymbols {
+    symbols,
+    free_symbols: None,
+  }
+}
+
+fn collect_free_symbols(func: &ProgramFunction) -> Vec<Symbol> {
+  let mut free = HashSet::default();
+  for (_, insts) in func.body.bblocks.all() {
+    for inst in insts {
+      match inst.t {
+        il::inst::InstTyp::ForeignLoad | il::inst::InstTyp::ForeignStore => {
+          free.insert(inst.foreign);
+        }
+        _ => {}
+      }
+    }
+  }
+  let mut out = free.into_iter().collect::<Vec<_>>();
+  out.sort_by_key(|s| s.raw_id());
+  out
 }
 
 impl Program {
@@ -151,6 +237,11 @@ impl Program {
     if let Some((_, loc)) = use_before_decl.iter().next() {
       panic!("Use before declaration at {:?}", loc);
     };
+    let symbol_table = top_level_node
+      .assoc
+      .get::<Scope>()
+      .map(|scope| collect_symbol_table(scope, &foreign));
+
     let TopLevel { body } = *top_level_node.stx;
     let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
       foreign_vars: foreign,
@@ -165,11 +256,35 @@ impl Program {
       ..
     } = Arc::try_unwrap(program.0).unwrap();
     let fn_count = next_fn_id.load(Ordering::Relaxed);
+    let mut functions: Vec<_> = (0..fn_count)
+      .map(|i| functions.remove(&i).unwrap().1)
+      .collect();
+
+    let free_symbols = symbol_table.as_ref().map(|_| ProgramFreeSymbols {
+      top_level: collect_free_symbols(&top_level),
+      functions: functions.iter().map(collect_free_symbols).collect(),
+    });
+
+    if let (Some(sym), Some(free)) = (symbol_table.as_ref(), free_symbols.as_ref()) {
+      if sym.symbols.is_empty()
+        && free.top_level.is_empty()
+        && free.functions.iter().all(|f| f.is_empty())
+      {
+        return Self {
+          functions,
+          top_level,
+          symbols: None,
+        };
+      }
+    }
+
     Self {
-      functions: (0..fn_count)
-        .map(|i| functions.remove(&i).unwrap().1)
-        .collect(),
+      functions,
       top_level,
+      symbols: symbol_table.map(|mut table| {
+        table.free_symbols = free_symbols;
+        table
+      }),
     }
   }
 }

@@ -40,6 +40,7 @@ members = [
   "typecheck-ts-harness19",
   "typecheck-ts-w24",
   "typecheck-ts-w13",
+  "hir-js-w72",
 ]
 
 [profile.release]

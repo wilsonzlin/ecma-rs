@@ -701,6 +701,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hir-js-w72"
+version = "0.1.0"
+dependencies = [
+ "derive-visitor",
+ "parse-js",
+ "symbol-js",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
