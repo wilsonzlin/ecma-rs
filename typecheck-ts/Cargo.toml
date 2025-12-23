@@ -2,13 +2,14 @@
 name = "typecheck-ts"
 version = "0.1.0"
 edition = "2021"
-
-[features]
-fuzzing = []
-capture-backtrace = []
+description = "Lightweight TypeScript type checking facade for ecma-rs"
+license = "Apache-2.0"
 
 [dependencies]
-types-ts = { path = "../types-ts" }
+parse-js = { version = "0.24.1", path = "../parse-js" }
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "1.0"
 
 [dev-dependencies]
-proptest = "1"
+serde_json = "1.0"
+
