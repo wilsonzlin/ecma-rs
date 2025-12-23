@@ -1,4 +1,6 @@
-use symbol_js::symbol::{Scope, ScopeType, SymbolGenerator};
+use symbol_js::symbol::Scope;
+use symbol_js::symbol::ScopeType;
+use symbol_js::symbol::SymbolGenerator;
 
 #[test]
 fn find_symbol_returns_decl_scope() {
@@ -39,11 +41,9 @@ fn find_symbol_stops_at_matching_scope_predicate() {
   let block = global.create_child_scope(ScopeType::Block);
   let inner = block.create_child_scope(ScopeType::ArrowFunction);
 
-  assert!(
-    inner
-      .find_symbol_up_to_with_scope("name".into(), |t| t == ScopeType::Block)
-      .is_none()
-  );
+  assert!(inner
+    .find_symbol_up_to_with_scope("name".into(), |t| t == ScopeType::Block)
+    .is_none());
 
   block.data_mut().add_symbol("name".into());
 
@@ -67,10 +67,11 @@ fn symbol_declaration_order_is_deterministic() {
   }
 
   let names_once = { scope.data().symbol_names().clone() };
-  assert_eq!(
-    names_once,
-    vec!["first".to_string(), "second".to_string(), "third".to_string()]
-  );
+  assert_eq!(names_once, vec![
+    "first".to_string(),
+    "second".to_string(),
+    "third".to_string()
+  ]);
 
   let names_again = scope.data().symbol_names().clone();
   assert_eq!(names_once, names_again);
