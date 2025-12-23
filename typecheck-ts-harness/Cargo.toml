@@ -1,0 +1,17 @@
+[package]
+name = "typecheck-ts-harness"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["with-node"]
+with-node = []
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5.17", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tempfile = "3.12"
+walkdir = "2.5"

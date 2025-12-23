@@ -1,28 +1,32 @@
-# Fuzzing and property testing
+# typecheck-ts-harness
 
-This workspace wires minimal guardrails around parsing, lowering, and type
-operations using property tests and fuzz-friendly entry points.
+Utilities for running TypeScript type-checker conformance tests.
 
-## Running property tests
+## `difftsc`
+
+The `difftsc` subcommand runs `tsc` via Node.js to produce structured diagnostics
+for fixture suites and compares them to committed baselines.
 
 ```
-cargo test -p types-ts    # canon/idempotence + assignability termination
-cargo test -p hir-js      # random source strings -> parse + lower, no panics
-cargo test -p typecheck-ts
+cargo run -p typecheck-ts-harness -- difftsc --suite fixtures/difftsc --update-baselines
+cargo run -p typecheck-ts-harness -- difftsc --suite fixtures/difftsc
 ```
 
-These tests are intentionally bounded (size-limited generators, recursion/step
-caps) to avoid runaway cases while still catching panics.
+- Fixtures live under `fixtures/<suite>/` and can be single files or directories
+  containing multiple files. The test name matches the file stem or directory
+  name.
+- Baselines are stored in `baselines/<suite>/<test>.json` and contain normalized
+  diagnostic codes and spans.
+- Span comparison tolerance can be adjusted with `--span-tolerance`.
+- Node execution lives behind the `with-node` feature (enabled by default). When
+  the feature is disabled or `node` is unavailable, the command will skip
+  instead of failing.
 
-## Fuzz entry points
+Dependencies:
 
-Each crate exposes a `fuzzing` feature with a helper suitable for cargo-fuzz or
-other fuzzers:
+- Node.js (`--node` can override the binary path)
+- The `typescript` npm package available on the Node resolution path (e.g.
+  `npm install typescript` in the repository root)
 
-- `types-ts::fuzz_canon_and_assign`
-- `hir-js::fuzz_lower`
-- `typecheck-ts::fuzz_check`
-
-You can wire these into a fuzz harness or call them directly under the
-`fuzzing` feature. All entry points are designed to be panic-free and
-self-bounding.
+The Node wrapper lives at `scripts/tsc_wrapper.js` and returns JSON diagnostics
+that include code, category, file, and span offsets.
