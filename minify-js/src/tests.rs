@@ -10,8 +10,7 @@ fn test_minify() {
 
   let myvar = 1;
 
-  "##
-      ,
+  "##,
     &mut out,
   )
   .unwrap();

@@ -1,0 +1,10 @@
+[package]
+name = "semantic-js-w117"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic scopes and symbols for JavaScript/TypeScript semantics"
+
+[dependencies]
+ahash = "0.8.7"
+derive-visitor = "0.4.0"
+parse-js = { version = "0.24.1", path = "../parse-js" }

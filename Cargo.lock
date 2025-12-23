@@ -1670,6 +1670,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "semantic-js-w117"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "derive-visitor",
+ "parse-js",
+]
+
+[[package]]
 name = "semantic-js-w12"
 version = "0.1.0"
 dependencies = [
@@ -1700,6 +1709,14 @@ name = "semantic-js-w88"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "derive-visitor",
+ "parse-js",
+]
+
+[[package]]
+name = "semantic-js-w89"
+version = "0.1.0"
+dependencies = [
  "derive-visitor",
  "parse-js",
 ]
@@ -1839,6 +1856,17 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "symbol-js"
+version = "0.2.0"
+dependencies = [
+ "ahash",
+ "derive-visitor",
+ "parking_lot 0.12.5",
+ "parse-js",
+ "serde",
+]
+
+[[package]]
+name = "symbol-js-w94"
 version = "0.2.0"
 dependencies = [
  "ahash",
