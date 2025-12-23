@@ -3,12 +3,18 @@ name = "hir-js"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-fuzzing = []
-
 [dependencies]
+ahash = "0.8.7"
+diagnostics = { path = "../diagnostics" }
 parse-js = { path = "../parse-js" }
+serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "1"
 
 [dev-dependencies]
+pretty_assertions = "1.4"
 proptest = "1"
+
+[features]
+default = []
+fuzzing = []
+serde = ["dep:serde"]

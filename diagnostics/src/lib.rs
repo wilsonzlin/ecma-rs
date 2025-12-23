@@ -70,6 +70,12 @@ impl TextRange {
     self.end.saturating_sub(self.start)
   }
 
+  /// Returns true if the given offset is within the range (inclusive start,
+  /// exclusive end).
+  pub fn contains(&self, offset: u32) -> bool {
+    offset >= self.start && offset < self.end
+  }
+
   pub fn is_empty(&self) -> bool {
     self.start >= self.end
   }
@@ -108,6 +114,16 @@ impl From<Loc> for TextRange {
 pub struct Span {
   pub file: FileId,
   pub range: TextRange,
+}
+
+impl Span {
+  pub const fn new(file: FileId, range: TextRange) -> Self {
+    Self { file, range }
+  }
+
+  pub fn contains(&self, offset: u32) -> bool {
+    self.range.contains(offset)
+  }
 }
 
 /// Diagnostic severity.
@@ -450,6 +466,14 @@ mod tests {
     let rendered = render_diagnostic(&source, &diagnostic);
     assert!(rendered.contains(" --> b.js:1:7"));
     assert!(rendered.contains(" --> a.js:1:7"));
+  }
+
+  #[test]
+  fn contains_offset() {
+    let span = Span::new(FileId(0), TextRange::new(2, 6));
+    assert!(span.contains(2));
+    assert!(span.contains(5));
+    assert!(!span.contains(6));
   }
 
   #[test]

@@ -1,33 +1,31 @@
-//! Minimal HIR lowering stub that round-trips the parse tree to ensure we have
-//! a deterministic, non-panicking path from tokens to a lowered form.
-//!
-//! This is intentionally small: full HIR support lives elsewhere. Here we keep
-//! a placeholder `HirRoot` structure and guard it with property tests and fuzz
-//! entry points to ensure termination and stability while the real lowering
-//! pipeline evolves.
+pub mod hir;
+pub mod ids;
+pub mod intern;
+pub mod lower;
+pub mod span_map;
 
-use parse_js::error::SyntaxError;
+pub use hir::{Body, BodyKind, DefData, Expr, ExprKind, HirFile, LowerResult, Pat, PatKind, Stmt, StmtKind};
+pub use ids::{BodyId, DefId, DefKind, DefPath, ExprId, NameId, PatId, StmtId};
+pub use intern::NameInterner;
+pub use lower::lower_file;
+pub use span_map::SpanMap;
+
+use diagnostics::FileId;
 use parse_js::parse;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HirRoot {
-  /// Placeholder: number of top-level statements parsed.
-  pub stmt_count: usize,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum LowerError {
   #[error("parse error: {0}")]
-  Parse(#[from] SyntaxError),
+  Parse(#[from] parse_js::error::SyntaxError),
 }
 
-/// Parse JS/TS source and produce a placeholder HIR root. The emphasis is on
-/// non-panicking behavior; syntax errors are surfaced as `Err`.
-pub fn lower_from_source(source: &str) -> Result<HirRoot, LowerError> {
+/// Parse JS/TS source and lower it into HIR for a synthetic file id.
+///
+/// This is primarily a convenience for tests and fuzzing; callers that already
+/// have parsed ASTs should use [`lower_file`] directly.
+pub fn lower_from_source(source: &str) -> Result<LowerResult, LowerError> {
   let parsed = parse(source)?;
-  Ok(HirRoot {
-    stmt_count: parsed.stx.body.len(),
-  })
+  Ok(lower_file(FileId(0), &parsed))
 }
 
 /// Fuzzing entry point to exercise parsing + lowering without panicking.
