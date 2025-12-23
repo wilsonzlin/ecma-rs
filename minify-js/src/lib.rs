@@ -31,10 +31,6 @@ pub fn minify_str(
   Ok(())
 }
 
-mod err;
-#[cfg(test)]
-mod tests;
-
 /// Processes UTF-8 JavaScript code.
 ///
 /// # Arguments

@@ -1,0 +1,9 @@
+[package]
+name = "hir-js-w98"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Lower parse-js AST into a JS HIR subset"
+
+[dependencies]
+parse-js = { version = "0.24.1", path = "../parse-js" }

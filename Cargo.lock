@@ -747,6 +747,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hir-js-w98"
+version = "0.1.0"
+dependencies = [
+ "parse-js",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
