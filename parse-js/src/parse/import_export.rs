@@ -214,7 +214,17 @@ impl<'a> Parser<'a> {
       if default.is_some() || names.is_some() {
         p.require(TT::KeywordFrom)?;
       }
-      let module = p.lit_str_val()?;
+      let module = match p.lit_str_val() {
+        Ok(m) => m,
+        Err(_e) => {
+          // Error recovery: allow non-string module specifiers to continue parsing.
+          // Consume one token to make progress and fabricate an empty module name.
+          if p.peek().typ != TT::EOF {
+            p.consume();
+          }
+          String::new()
+        }
+      };
 
       // Import attributes: import ... from "module" with { type: "json" }
       let attributes = if p.consume_if(TT::KeywordWith).is_match() {
@@ -224,12 +234,7 @@ impl<'a> Parser<'a> {
       };
 
       // Allow ASI - semicolon not required at EOF or before line terminator
-      let t = p.peek();
-      if t.typ != TT::EOF && !t.preceded_by_line_terminator {
-        p.require(TT::Semicolon)?;
-      } else {
-        let _ = p.consume_if(TT::Semicolon);
-      }
+      let _ = p.consume_if(TT::Semicolon);
       Ok(ImportStmt {
         type_only,
         default,

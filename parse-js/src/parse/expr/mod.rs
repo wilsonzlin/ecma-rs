@@ -1129,22 +1129,35 @@ impl<'a> Parser<'a> {
               .into_wrapped()
             }
             OperatorName::MemberAccess | OperatorName::OptionalChainingMemberAccess => {
+              let checkpoint = self.checkpoint();
               let right_tok = self.consume();
+              let mut prop = String::new();
+              let mut right = right_tok.loc;
               match right_tok.typ {
-                TT::Identifier => {}
-                TT::PrivateMember => {}
-                t if KEYWORDS_MAPPING.contains_key(&t) => {}
-                _ => {
-                  return Err(
-                    right_tok.error(SyntaxErrorType::ExpectedSyntax("member access property")),
-                  )
+                TT::Identifier | TT::PrivateMember => {
+                  prop = self.string(right);
                 }
-              };
-              let right = right_tok.loc;
+                t if KEYWORDS_MAPPING.contains_key(&t) => {
+                  prop = self.string(right);
+                }
+                _ => {
+                  // Error recovery: if the next token is a likely terminator for the containing
+                  // expression/block, don't consume it; instead, fabricate an empty property name
+                  // and let the outer parser handle the terminator.
+                  if matches!(
+                    right_tok.typ,
+                    TT::BraceClose | TT::ParenthesisClose | TT::BracketClose | TT::Semicolon | TT::EOF
+                  ) {
+                    self.restore_checkpoint(checkpoint);
+                    right = left.loc;
+                    prop.clear();
+                  }
+                }
+              }
               Node::new(left.loc + right, MemberExpr {
                 optional_chaining: operator.name == OperatorName::OptionalChainingMemberAccess,
                 left,
-                right: self.string(right),
+                right: prop,
               })
               .into_wrapped()
             }

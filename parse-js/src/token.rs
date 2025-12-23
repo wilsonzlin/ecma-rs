@@ -191,6 +191,7 @@ pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   set.insert(TT::KeywordSet);
   set.insert(TT::KeywordStatic);
   set.insert(TT::KeywordUsing);
+  set.insert(TT::KeywordDefault);
   // TypeScript contextual keywords
   set.insert(TT::KeywordAbstract);
   set.insert(TT::KeywordAny);
