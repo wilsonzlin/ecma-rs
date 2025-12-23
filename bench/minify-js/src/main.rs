@@ -1,4 +1,5 @@
 use minify_js::minify;
+use minify_js::Session;
 use minify_js::TopLevelMode;
 use std::env;
 use std::fs::File;
@@ -13,15 +14,14 @@ fn main() {
     .read_to_end(&mut code)
     .expect("read file");
 
-  let code = String::from_utf8(code).expect("input must be valid UTF-8");
-
   let iterations = u64::from_str_radix(&args[2], 10).expect("parse iterations argument");
   let mut output_len = 0;
   let mut output = Vec::new();
   let started = Instant::now();
+  let session = Session::new();
   for _ in 0..iterations {
     output.clear();
-    minify(TopLevelMode::Global, &code, &mut output).expect("minify");
+    minify(&session, TopLevelMode::Global, &code, &mut output).expect("minify");
     output_len = output.len();
   }
   let elapsed_ns = started.elapsed().as_nanos();

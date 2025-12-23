@@ -1,0 +1,11 @@
+[package]
+name = "typecheck-ts-trace23"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hir-js-trace23 = { path = "../hir-js-trace23" }
+semantic-js = { path = "../semantic-js" }
+serde = { version = "1", features = ["derive"] }
+tracing = "0.1"
+types-ts-trace23 = { path = "../types-ts-trace23" }

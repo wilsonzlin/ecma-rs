@@ -1,0 +1,8 @@
+[package]
+name = "semantic-js"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hir-js-trace23 = { path = "../hir-js-trace23" }
+tracing = "0.1"

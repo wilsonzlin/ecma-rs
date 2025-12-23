@@ -14,11 +14,16 @@ members = [
   "types-ts",
   "types-ts-interned",
   "types-ts-relate11",
+  "types-ts-trace23",
   "hir-js",
+  "hir-js-trace23",
   "typecheck-ts",
   "typecheck-ts-class17",
+  "typecheck-ts-trace23",
   "test262",
   "typecheck-ts-harness",
+  "typecheck-ts-harness-trace23",
+  "semantic-js",
 ]
 
 [profile.release]
