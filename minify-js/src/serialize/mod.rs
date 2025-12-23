@@ -1269,7 +1269,11 @@ fn emit_js_under_operator(
       }
       out.extend_from_slice("}".as_bytes());
     }
-    Syntax::CatchBlock { parameter, body } => {
+    Syntax::CatchBlock {
+      parameter,
+      body,
+      ..
+    } => {
       out.extend_from_slice("catch".as_bytes());
       if let Some(p) = parameter {
         out.extend_from_slice("(".as_bytes());
