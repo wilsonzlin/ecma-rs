@@ -2,7 +2,9 @@ use super::expr::pat::is_valid_pattern_identifier;
 use super::expr::Asi;
 use super::ParseCtx;
 use super::Parser;
+use super::ParserCheckpoint;
 use crate::ast::expr::pat::IdPat;
+use crate::ast::expr::pat::Pat;
 use crate::ast::expr::ImportExpr;
 use crate::ast::expr::ImportMeta;
 use crate::ast::import_export::ExportName;
@@ -16,6 +18,8 @@ use crate::ast::stmt::ExportDefaultExprStmt;
 use crate::ast::stmt::ExportListStmt;
 use crate::ast::stmt::ImportStmt;
 use crate::ast::stmt::Stmt;
+use crate::ast::ts_stmt::ImportEqualsDecl;
+use crate::ast::ts_stmt::ImportEqualsRhs;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::KEYWORDS_MAPPING;
@@ -116,140 +120,133 @@ impl<'a> Parser<'a> {
   /// - `import a from "module"`
   /// - `import a, * as b from "module"`
   /// - `import a, {"b" as c, d, e as f, default as g} from "module"`
-  pub fn import_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ImportStmt>> {
+  /// - TypeScript import equals: `import a = require("module")` or `import a = Foo.Bar`
+  pub fn import_stmt(&mut self, ctx: ParseCtx, export: bool) -> SyntaxResult<Node<Stmt>> {
     // TODO Ensure top-level.
-    self.with_loc(|p| {
-      p.require(TT::KeywordImport)?;
-      // TypeScript: import type
-      let type_only = p.consume_if(TT::KeywordType).is_match();
-      let (default, can_have_names) = if p.peek().typ == TT::Identifier {
-        let alias = p.id_pat_decl(ctx)?;
+    let start = self.checkpoint();
+    self.require(TT::KeywordImport)?;
 
-        // TypeScript: check for import equals: import id = require("module") or import id = EntityName
-        if p.peek().typ == TT::Equals {
-          p.consume(); // =
+    // TypeScript: import type
+    let type_only = self.consume_if(TT::KeywordType).is_match();
+    let (default, can_have_names) = if self.peek().typ == TT::Identifier {
+      let alias = self.id_pat_decl(ctx)?;
 
-          // Check if this is require() or entity name
-          if p.peek().typ == TT::Identifier {
-            let _checkpoint = p.checkpoint();
-            let first_name = p.consume_as_string();
-
-            if first_name == "require" && p.peek().typ == TT::ParenthesisOpen {
-              // import id = require("module")
-              p.require(TT::ParenthesisOpen)?;
-              let module = p.lit_str_val()?;
-              p.require(TT::ParenthesisClose)?;
-
-              // Allow ASI
-              let t = p.peek();
-              if t.typ != TT::EOF && !t.preceded_by_line_terminator {
-                let _ = p.consume_if(TT::Semicolon);
-              }
-
-              return Ok(ImportStmt {
-                type_only: false,
-                default: Some(alias),
-                module,
-                names: None,
-                attributes: None,
-              });
-            } else {
-              // import id = EntityName (e.g., import A = B.C.D)
-              // Consume dotted name: identifier(.identifier)*
-              while p.peek().typ == TT::Dot {
-                p.consume(); // .
-                if p.peek().typ == TT::Identifier
-                  || crate::lex::KEYWORDS_MAPPING.contains_key(&p.peek().typ)
-                {
-                  p.consume();
-                } else {
-                  // Error recovery: allow incomplete dotted names
-                  break;
-                }
-              }
-
-              // Allow ASI
-              let t = p.peek();
-              if t.typ != TT::EOF && !t.preceded_by_line_terminator {
-                let _ = p.consume_if(TT::Semicolon);
-              }
-
-              // Return as ImportStmt with marker (empty module string)
-              return Ok(ImportStmt {
-                type_only: false,
-                default: Some(alias),
-                module: String::new(),
-                names: None,
-                attributes: None,
-              });
-            }
-          } else {
-            return Err(p.peek().error(SyntaxErrorType::ExpectedNotFound));
-          }
-        }
-
-        (Some(alias), p.consume_if(TT::Comma).is_match())
-      } else {
-        (None, true)
-      };
-      let names = if !can_have_names {
-        None
-      } else if p.consume_if(TT::Asterisk).is_match() {
-        p.require(TT::KeywordAs)?;
-        let alias = p.id_pat_decl(ctx)?;
-        Some(ImportNames::All(alias))
-      } else if p.peek().typ == TT::BraceOpen {
-        p.require(TT::BraceOpen)?;
-        let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
-          // TypeScript: per-specifier type-only import
-          let type_only = p.consume_if(TT::KeywordType).is_match();
-          let (target, alias) = p.import_or_export_name(ctx, false)?;
-          let alias = alias.into_wrapped();
-          let alias = alias.wrap(|pat| PatDecl { pat });
-          Ok(ImportName {
-            type_only,
-            importable: target,
-            alias,
-          })
-        })?;
-        Some(ImportNames::Specific(names))
-      } else {
-        // No names - side-effect only import like `import "foo"`
-        None
-      };
-      // For side-effect imports (import "foo"), there's no `from` keyword
-      if default.is_some() || names.is_some() {
-        p.require(TT::KeywordFrom)?;
+      // TypeScript: import equals: import id = require("module") or import id = EntityName
+      if self.peek().typ == TT::Equals {
+        self.consume(); // =
+        return self.import_equals_decl(export, alias, start);
       }
-      let module = match p.lit_str_val() {
-        Ok(m) => m,
-        Err(_e) => {
-          // Error recovery: allow non-string module specifiers to continue parsing.
-          // Consume one token to make progress and fabricate an empty module name.
-          if p.peek().typ != TT::EOF {
-            p.consume();
-          }
-          String::new()
-        }
-      };
 
-      // Import attributes: import ... from "module" with { type: "json" }
-      let attributes = if p.consume_if(TT::KeywordWith).is_match() {
-        Some(p.expr(ctx, [])?)
-      } else {
-        None
-      };
+      (Some(alias), self.consume_if(TT::Comma).is_match())
+    } else {
+      (None, true)
+    };
+    let names = if !can_have_names {
+      None
+    } else if self.consume_if(TT::Asterisk).is_match() {
+      self.require(TT::KeywordAs)?;
+      let alias = self.id_pat_decl(ctx)?;
+      Some(ImportNames::All(alias))
+    } else if self.peek().typ == TT::BraceOpen {
+      self.require(TT::BraceOpen)?;
+      let names = self.list_with_loc(TT::Comma, TT::BraceClose, |p| {
+        // TypeScript: per-specifier type-only import
+        let type_only = p.consume_if(TT::KeywordType).is_match();
+        let (target, alias) = p.import_or_export_name(ctx, false)?;
+        let alias = alias.into_wrapped();
+        let alias = alias.wrap(|pat| PatDecl { pat });
+        Ok(ImportName {
+          type_only,
+          importable: target,
+          alias,
+        })
+      })?;
+      Some(ImportNames::Specific(names))
+    } else {
+      // No names - side-effect only import like `import "foo"`
+      None
+    };
+    // For side-effect imports (import "foo"), there's no `from` keyword
+    if default.is_some() || names.is_some() {
+      self.require(TT::KeywordFrom)?;
+    }
+    let module = self.lit_str_val()?;
 
-      // Allow ASI - semicolon not required at EOF or before line terminator
-      let _ = p.consume_if(TT::Semicolon);
-      Ok(ImportStmt {
+    // Import attributes: import ... from "module" with { type: "json" }
+    let attributes = if self.consume_if(TT::KeywordWith).is_match() {
+      Some(self.expr(ctx, [])?)
+    } else {
+      None
+    };
+
+    // Allow ASI - semicolon not required at EOF or before line terminator
+    let t = self.peek();
+    if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+      self.require(TT::Semicolon)?;
+    } else {
+      let _ = self.consume_if(TT::Semicolon);
+    }
+
+    let loc = self.since_checkpoint(&start);
+    let import_stmt = Node::new(
+      loc,
+      ImportStmt {
         type_only,
         default,
         module,
         names,
         attributes,
-      })
-    })
+      },
+    );
+    Ok(import_stmt.into_wrapped())
+  }
+
+  fn import_equals_decl(
+    &mut self,
+    export: bool,
+    alias: Node<PatDecl>,
+    start: ParserCheckpoint,
+  ) -> SyntaxResult<Node<Stmt>> {
+    let name = match alias.stx.pat.stx.as_ref() {
+      Pat::Id(id) => id.stx.name.clone(),
+      _ => return Err(alias.error(SyntaxErrorType::ExpectedSyntax("identifier"))),
+    };
+
+    if self.peek().typ != TT::Identifier {
+      return Err(self.peek().error(SyntaxErrorType::ExpectedNotFound));
+    }
+
+    let first_name = self.consume_as_string();
+    let rhs = if first_name == "require" && self.peek().typ == TT::ParenthesisOpen {
+      self.require(TT::ParenthesisOpen)?;
+      let module = self.lit_str_val()?;
+      self.require(TT::ParenthesisClose)?;
+      ImportEqualsRhs::Require { module }
+    } else {
+      // import id = EntityName (e.g., import A = B.C.D)
+      // Consume dotted name: identifier(.identifier)*
+      let mut path = vec![first_name];
+      while self.peek().typ == TT::Dot {
+        self.consume(); // .
+        let next = self.peek();
+        if next.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&next.typ) {
+          path.push(self.consume_as_string());
+        } else {
+          // Error recovery: allow incomplete dotted names
+          break;
+        }
+      }
+      ImportEqualsRhs::EntityName { path }
+    };
+
+    // Allow ASI
+    let t = self.peek();
+    if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+      let _ = self.consume_if(TT::Semicolon);
+    }
+
+    let loc = self.since_checkpoint(&start);
+    Ok(Node::new(loc, ImportEqualsDecl { export, name, rhs }).into_wrapped())
   }
 
   pub fn export_list_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ExportListStmt>> {
@@ -360,7 +357,7 @@ impl<'a> Parser<'a> {
       // TypeScript: export import a = A (exported import alias)
       (TT::KeywordImport, _) => {
         self.consume(); // export
-        self.import_stmt(ctx)?.into_wrapped()
+        self.import_stmt(ctx, true)?
       },
       // TypeScript: export interface, export type, export enum, export namespace, export declare
       (TT::KeywordInterface, _) => {

@@ -185,15 +185,27 @@ pub struct ExportTypeName {
   pub exported: Option<String>,
 }
 
-/// Import equals declaration: import id = require("module")
+/// Import equals declaration: import id = require("module") or import id = Namespace.Sub
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ImportEqualsDecl {
   #[drive(skip)]
   pub export: bool,
   #[drive(skip)]
   pub name: String,
-  #[drive(skip)]
-  pub module: String,
+  pub rhs: ImportEqualsRhs,
+}
+
+#[derive(Debug, Drive, DriveMut, Serialize)]
+#[serde(tag = "$t")]
+pub enum ImportEqualsRhs {
+  Require {
+    #[drive(skip)]
+    module: String,
+  },
+  EntityName {
+    #[drive(skip)]
+    path: Vec<String>,
+  },
 }
 
 /// Export assignment: export = expression
