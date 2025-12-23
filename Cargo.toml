@@ -28,6 +28,7 @@ members = [
   "semantic-js",
   "diagnostics-salsa6",
   "typecheck-ts-salsa6",
+  "semantic-js-ts9",
 ]
 
 [profile.release]
