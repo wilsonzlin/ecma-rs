@@ -9,6 +9,7 @@ use crate::ast::import_export::ExportName;
 use crate::ast::import_export::ExportNames;
 use crate::ast::import_export::ImportName;
 use crate::ast::import_export::ImportNames;
+use crate::ast::import_export::ModuleExportImportName;
 use crate::ast::node::Node;
 use crate::ast::stmt::decl::PatDecl;
 use crate::ast::stmt::ExportDefaultExprStmt;
@@ -28,16 +29,16 @@ impl<'a> Parser<'a> {
     &mut self,
     ctx: ParseCtx,
     is_export: bool,
-  ) -> SyntaxResult<(String, Node<IdPat>)> {
+  ) -> SyntaxResult<(ModuleExportImportName, Node<IdPat>)> {
     let t0 = self.peek();
     #[rustfmt::skip]
     let (target, alias_is_required) = match t0.typ {
-      TT::LiteralString => (self.lit_str_val()?, true),
-      t if is_valid_pattern_identifier(t, ctx.rules) => (self.consume_as_string(), false),
+      TT::LiteralString => (ModuleExportImportName::Str(self.lit_str_val()?), true),
+      t if is_valid_pattern_identifier(t, ctx.rules) => (ModuleExportImportName::Ident(self.consume_as_string()), false),
       // `default` is special: in exports it can be used without alias, but in imports it requires an alias
-      TT::KeywordDefault if is_export => (self.consume_as_string(), false),
+      TT::KeywordDefault if is_export => (ModuleExportImportName::Ident(self.consume_as_string()), false),
       // Any other keyword is allowed, but if reserved, an alias must be used.
-      t if KEYWORDS_MAPPING.contains_key(&t) => (self.consume_as_string(), true),
+      t if KEYWORDS_MAPPING.contains_key(&t) => (ModuleExportImportName::Ident(self.consume_as_string()), true),
       _ => return Err(t0.error(SyntaxErrorType::ExpectedNotFound)),
     };
     let alias = if self.consume_if(TT::KeywordAs).is_match() {
@@ -46,9 +47,12 @@ impl<'a> Parser<'a> {
       let t_alias = self.peek();
       if is_export && t_alias.typ == TT::KeywordDefault {
         self.consume();
-        Node::new(t_alias.loc, IdPat {
-          name: "default".to_string(),
-        })
+        Node::new(
+          t_alias.loc,
+          IdPat {
+            name: "default".to_string(),
+          },
+        )
       } else if t_alias.typ == TT::LiteralString {
         // ES2022: arbitrary module namespace identifiers - allow string literals as aliases
         let name = self.lit_str_val()?;
@@ -60,9 +64,12 @@ impl<'a> Parser<'a> {
       return Err(t0.error(SyntaxErrorType::ExpectedNotFound));
     } else {
       // Create a "virtual" node representing the alias as if `a as a` was declared instead. (See AST for rationale.)
-      Node::new(t0.loc, IdPat {
-        name: target.clone(),
-      })
+      Node::new(
+        t0.loc,
+        IdPat {
+          name: target.as_str().to_string(),
+        },
+      )
     };
     Ok((target, alias))
   }
