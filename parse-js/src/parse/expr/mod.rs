@@ -418,11 +418,13 @@ impl<'a> Parser<'a> {
     // Quick lookahead: check if this looks like a type assertion
     // Type assertions start with type expression keywords or identifiers that are type names
     let [_, t1] = self.peek_n::<2>();
-    eprintln!(
-      "DEBUG try_parse_angle_bracket_type_assertion: t1 = {:?} '{}'",
-      t1.typ,
-      self.str(t1.loc)
-    );
+    if cfg!(debug_assertions) {
+      eprintln!(
+        "DEBUG try_parse_angle_bracket_type_assertion: t1 = {:?} '{}'",
+        t1.typ,
+        self.str(t1.loc)
+      );
+    }
 
     // Check if it's an identifier that looks like a JSX tag (starts with lowercase)
     // JSX built-in tags like <div>, <span> start with lowercase, while type names typically start with uppercase
@@ -465,10 +467,12 @@ impl<'a> Parser<'a> {
           | TT::KeywordConst
       );
 
-    eprintln!(
-      "DEBUG: is_likely_jsx_tag = {}, looks_like_type_assertion = {}",
-      is_likely_jsx_tag, looks_like_type_assertion
-    );
+    if cfg!(debug_assertions) {
+      eprintln!(
+        "DEBUG: is_likely_jsx_tag = {}, looks_like_type_assertion = {}",
+        is_likely_jsx_tag, looks_like_type_assertion
+      );
+    }
 
     if !looks_like_type_assertion {
       return Err(
