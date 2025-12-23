@@ -19,6 +19,7 @@ members = [
   "hir-js-trace23",
   "typecheck-ts",
   "typecheck-ts-class17",
+  "typecheck-ts-flow14",
   "typecheck-ts-trace23",
   "test262",
   "typecheck-ts-harness",
