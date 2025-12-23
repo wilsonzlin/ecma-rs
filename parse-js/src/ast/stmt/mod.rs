@@ -6,6 +6,7 @@ use super::import_export::ExportNames;
 use super::import_export::ImportNames;
 use super::node::Node;
 use super::ts_stmt::*;
+use super::type_expr::TypeExpr;
 use decl::ClassDecl;
 use decl::FuncDecl;
 use decl::PatDecl;
@@ -66,6 +67,7 @@ pub enum Stmt {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct CatchBlock {
   pub parameter: Option<Node<PatDecl>>,
+  pub type_annotation: Option<Node<TypeExpr>>,
   pub body: Vec<Node<Stmt>>, // We don't want to use BlockStmt as the new block scope starts with the parameter, not the braces. This differentiation ensures BlockStmt specifically means a new scope, helpful for downstream usages. See also: FunctionBody.
 }
 

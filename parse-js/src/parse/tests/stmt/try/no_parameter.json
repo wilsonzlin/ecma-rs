@@ -1,0 +1,12 @@
+{
+  "$t": "Try",
+  "catch": {
+    "body": [],
+    "parameter": null,
+    "type_annotation": null
+  },
+  "finally": null,
+  "wrapped": {
+    "body": []
+  }
+}

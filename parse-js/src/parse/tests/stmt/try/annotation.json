@@ -1,0 +1,19 @@
+{
+  "$t": "Try",
+  "catch": {
+    "body": [],
+    "parameter": {
+      "pat": {
+        "$t": "Id",
+        "name": "e"
+      }
+    },
+    "type_annotation": {
+      "$t": "Any"
+    }
+  },
+  "finally": null,
+  "wrapped": {
+    "body": []
+  }
+}
