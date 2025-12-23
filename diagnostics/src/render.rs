@@ -1,4 +1,6 @@
-use crate::{Diagnostic, FileId, Label};
+use crate::Diagnostic;
+use crate::FileId;
+use crate::Label;
 use std::cmp::max;
 use std::fmt::Write;
 
@@ -21,8 +23,7 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
   labels.extend(diagnostic.labels.iter().cloned());
 
   labels.sort_by(|a, b| {
-    b
-      .is_primary
+    b.is_primary
       .cmp(&a.is_primary)
       .then(a.span.file.cmp(&b.span.file))
       .then(a.span.range.start.cmp(&b.span.range.start))
@@ -67,7 +68,14 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
         provider.file_text(label.span.file),
         label.span.range.start as usize,
       );
-      writeln!(output, " --> {}:{}:{}", provider.file_name(label.span.file), line, col).unwrap();
+      writeln!(
+        output,
+        " --> {}:{}:{}",
+        provider.file_name(label.span.file),
+        line,
+        col
+      )
+      .unwrap();
       writeln!(output, "  |").unwrap();
       current_file = Some(label.span.file);
     }

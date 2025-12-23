@@ -44,9 +44,11 @@
 
 pub mod render;
 
-use parse_js::error::{SyntaxError, SyntaxErrorType};
+use parse_js::error::SyntaxError;
+use parse_js::error::SyntaxErrorType;
 use parse_js::loc::Loc;
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 /// A stable identifier for a file in a program.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
@@ -298,7 +300,8 @@ fn saturating_to_u32(value: usize) -> (u32, bool) {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::render::{render_diagnostic, SourceProvider};
+  use crate::render::render_diagnostic;
+  use crate::render::SourceProvider;
 
   #[derive(Default)]
   struct TestSource {
@@ -358,14 +361,10 @@ mod tests {
       name: "test.js".into(),
       text: "let x = 1;".into(),
     };
-    let diagnostic = Diagnostic::error(
-      "TEST0001",
-      "unused variable",
-      Span {
-        file: FileId(0),
-        range: TextRange::new(4, 5),
-      },
-    );
+    let diagnostic = Diagnostic::error("TEST0001", "unused variable", Span {
+      file: FileId(0),
+      range: TextRange::new(4, 5),
+    });
 
     let rendered = render_diagnostic(&source, &diagnostic);
     let expected = "error[TEST0001]: unused variable\n --> test.js:1:5\n  |\n1 | let x = 1;\n  |     ^ unused variable\n";
@@ -378,14 +377,10 @@ mod tests {
       name: "main.ts".into(),
       text: "function test() {\n  return 1;\n}\n".into(),
     };
-    let diagnostic = Diagnostic::error(
-      "TEST0002",
-      "broken function",
-      Span {
-        file: FileId(0),
-        range: TextRange::new(0, source.text.len() as u32),
-      },
-    );
+    let diagnostic = Diagnostic::error("TEST0002", "broken function", Span {
+      file: FileId(0),
+      range: TextRange::new(0, source.text.len() as u32),
+    });
 
     let rendered = render_diagnostic(&source, &diagnostic);
     let expected = concat!(
@@ -440,14 +435,10 @@ mod tests {
       names: vec!["a.js".into(), "b.js".into()],
       texts: vec!["const a = 1;".into(), "const b = 2;".into()],
     };
-    let diagnostic = Diagnostic::error(
-      "TEST0004",
-      "primary",
-      Span {
-        file: FileId(1),
-        range: TextRange::new(6, 7),
-      },
-    )
+    let diagnostic = Diagnostic::error("TEST0004", "primary", Span {
+      file: FileId(1),
+      range: TextRange::new(6, 7),
+    })
     .with_label(Label::secondary(
       Span {
         file: FileId(0),
