@@ -13,6 +13,11 @@ const BIND_ITERS: u64 = 40;
 const CHECK_BODY_ITERS: u64 = 60;
 const RELATIONS_ITERS: u64 = 80;
 
+// To emit JSON alongside the human summary without tripping libtest argument
+// parsing, set `TYPECHECK_TS_BENCH_JSON=1` in the environment. The `--json`
+// flag is also accepted by this harness but will be forwarded to all test
+// binaries by `cargo bench`.
+
 const CONTROL_BODY_DEPTH: usize = 6;
 const UNION_BODY_DEPTH: usize = 4;
 const GENERIC_BODY_DEPTH: usize = 5;
