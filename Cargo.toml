@@ -55,6 +55,7 @@ members = [
   "semantic-js-w89",
   "semantic-js-w117",
   "symbol-js-w94",
+  "symbol-js-w75",
 ]
 
 [profile.release]

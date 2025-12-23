@@ -1866,6 +1866,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "symbol-js-w75"
+version = "0.2.0"
+dependencies = [
+ "ahash",
+ "derive-visitor",
+ "parking_lot 0.12.5",
+ "parse-js",
+ "serde",
+]
+
+[[package]]
 name = "symbol-js-w94"
 version = "0.2.0"
 dependencies = [
