@@ -74,7 +74,7 @@ Install the dependency:
 npm i @minify-js/node
 ```
 
-Call the method:
+Call the method (signature: `minify(topLevelType: "global" | "module", src: Buffer): Buffer`):
 
 ```typescript
 import {minify} from "@minify-js/node";
