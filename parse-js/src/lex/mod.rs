@@ -886,14 +886,20 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let mut invalid = false;
   loop {
     // Look for backslash, line terminators, or closing quote
-    let segment_start = lexer.next;
-    lexer.consume(lexer.while_not_3_chars('\\', '\r', quote));
-    if lexer.source[segment_start..lexer.next]
-      .chars()
-      .any(|c| matches!(c, '\n' | '\u{2028}' | '\u{2029}'))
-    {
-      invalid = true;
+    let mut m = lexer.while_not_3_chars('\\', '\r', quote);
+    let newline = lexer.while_not_char('\n');
+    if newline.len() < m.len() {
+      m = newline;
     }
+    let line_sep = lexer.while_not_char('\u{2028}');
+    if line_sep.len() < m.len() {
+      m = line_sep;
+    }
+    let para_sep = lexer.while_not_char('\u{2029}');
+    if para_sep.len() < m.len() {
+      m = para_sep;
+    }
+    lexer.consume(m);
     // Also check for \n and Unicode line separators
     if let Ok(c) = lexer.peek(0) {
       if c == '\n' || c == '\u{2028}' || c == '\u{2029}' {
