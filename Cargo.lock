@@ -1887,6 +1887,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "typecheck-ts-bench"
+version = "0.0.1"
+dependencies = [
+ "ahash",
+ "derive-visitor",
+ "parse-js",
+ "serde",
+ "serde_json",
+ "symbol-js",
+]
+
+[[package]]
 name = "typecheck-ts-class17"
 version = "0.1.0"
 

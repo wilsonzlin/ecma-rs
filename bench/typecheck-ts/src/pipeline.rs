@@ -1,12 +1,15 @@
-use crate::fixtures::{Fixture, ModuleGraphFixture};
-use derive_visitor::{Drive, Visitor};
-use parse_js::ast::node::{Node, NodeAssocData};
+use crate::fixtures::Fixture;
+use crate::fixtures::ModuleGraphFixture;
+use derive_visitor::Drive;
+use derive_visitor::Visitor;
+use parse_js::ast::node::Node;
+use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stx::TopLevel;
 use parse_js::error::SyntaxResult;
 use parse_js::parse;
+use symbol_js::compute_symbols;
 use symbol_js::symbol::Scope;
 use symbol_js::TopLevelMode;
-use symbol_js::compute_symbols;
 
 #[derive(Clone, Copy, Debug)]
 pub struct HirSummary {

@@ -1,11 +1,19 @@
 use serde::Serialize;
 use std::env;
 use std::hint::black_box;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use std::time::Instant;
 use symbol_js::TopLevelMode;
-use typecheck_ts::fixtures::{all_fixtures, module_graph_fixtures};
-use typecheck_ts::mini_types::{assignability_stress, control_flow_body, generic_overload_body, union_intersection_body};
-use typecheck_ts::pipeline::{bind_module_graph, bind_single_file, lower_to_hir, parse_only};
+use typecheck_ts::fixtures::all_fixtures;
+use typecheck_ts::fixtures::module_graph_fixtures;
+use typecheck_ts::mini_types::assignability_stress;
+use typecheck_ts::mini_types::control_flow_body;
+use typecheck_ts::mini_types::generic_overload_body;
+use typecheck_ts::mini_types::union_intersection_body;
+use typecheck_ts::pipeline::bind_module_graph;
+use typecheck_ts::pipeline::bind_single_file;
+use typecheck_ts::pipeline::lower_to_hir;
+use typecheck_ts::pipeline::parse_only;
 
 const PARSE_ITERS: u64 = 50;
 const LOWER_ITERS: u64 = 120;
@@ -137,7 +145,10 @@ fn main() {
 
   if args.json {
     let json = serde_json::json!({ "benches": results });
-    println!("{}", serde_json::to_string_pretty(&json).expect("json serialisation"));
+    println!(
+      "{}",
+      serde_json::to_string_pretty(&json).expect("json serialisation")
+    );
   }
 }
 

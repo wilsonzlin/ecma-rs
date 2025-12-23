@@ -196,12 +196,12 @@ impl Relations {
         .iter()
         .zip(dst.iter())
         .all(|(s, d)| self.assignable(store, *s, *d)),
-      (SimpleType::Tuple(src), SimpleType::Array(dst_elem)) => src
-        .iter()
-        .all(|s| self.assignable(store, *s, *dst_elem)),
-      (SimpleType::Array(src_elem), SimpleType::Tuple(dst)) => dst
-        .iter()
-        .all(|d| self.assignable(store, *src_elem, *d)),
+      (SimpleType::Tuple(src), SimpleType::Array(dst_elem)) => {
+        src.iter().all(|s| self.assignable(store, *s, *dst_elem))
+      }
+      (SimpleType::Array(src_elem), SimpleType::Tuple(dst)) => {
+        dst.iter().all(|d| self.assignable(store, *src_elem, *d))
+      }
       (SimpleType::Generic(a), SimpleType::Generic(b)) => a == b,
       (SimpleType::Generic(_), _) => true,
       (SimpleType::Boolean, SimpleType::Boolean)
@@ -276,7 +276,11 @@ fn match_pattern(
   }
 }
 
-fn instantiate_pattern(store: &mut TypeStore, mapping: &AHashMap<u8, TypeId>, pattern: &TypePattern) -> TypeId {
+fn instantiate_pattern(
+  store: &mut TypeStore,
+  mapping: &AHashMap<u8, TypeId>,
+  pattern: &TypePattern,
+) -> TypeId {
   match pattern {
     TypePattern::Concrete(id) => *id,
     TypePattern::Generic(id) => mapping.get(id).copied().unwrap_or(store.any),
@@ -450,7 +454,9 @@ pub fn generic_overload_body(iterations: usize) -> CheckStats {
     ];
 
     for args in calls {
-      if let Some(resolved) = resolve_overload(&mut store, &mut relations, &signatures, &args, &mut steps) {
+      if let Some(resolved) =
+        resolve_overload(&mut store, &mut relations, &signatures, &args, &mut steps)
+      {
         steps += 1;
         if relations.assignable(&store, resolved, store.any) {
           successes += 1;
@@ -497,7 +503,11 @@ pub fn assignability_stress(iterations: usize, warm_cache: bool) -> CheckStats {
 
     for i in 0..iterations {
       steps += 2;
-      let pick = if i % 2 == 0 { primary_union } else { secondary_union };
+      let pick = if i % 2 == 0 {
+        primary_union
+      } else {
+        secondary_union
+      };
       if relations.assignable(&store, pick, guarded) {
         successes += 1;
       }
@@ -511,7 +521,11 @@ pub fn assignability_stress(iterations: usize, warm_cache: bool) -> CheckStats {
     for i in 0..iterations {
       let mut relations = Relations::new();
       steps += 2;
-      let pick = if i % 2 == 0 { primary_union } else { secondary_union };
+      let pick = if i % 2 == 0 {
+        primary_union
+      } else {
+        secondary_union
+      };
       if relations.assignable(&store, pick, guarded) {
         successes += 1;
       }

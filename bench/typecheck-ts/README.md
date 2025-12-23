@@ -5,7 +5,7 @@ Deterministic, small-input performance exercises for the TypeScript pipeline.
 ## Running
 
 ```
-cargo bench -p typecheck-ts
+cargo bench -p typecheck-ts-bench
 ```
 
 By default a human-readable summary is printed. To additionally emit structured

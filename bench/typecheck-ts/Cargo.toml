@@ -1,5 +1,5 @@
 [package]
-name = "typecheck-ts"
+name = "typecheck-ts-bench"
 version = "0.0.1"
 edition = "2021"
 publish = false
