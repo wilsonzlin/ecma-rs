@@ -1,15 +1,12 @@
 use axum::routing::post;
-use axum::Json;
 use axum::Router;
 use axum_msgpack::MsgPack;
 use optimize_js::Program;
 use optimize_js::ProgramFunction;
 use optimize_js::ProgramSymbols;
-use parse_js::parse;
+use optimize_js::TopLevelMode;
 use serde::Deserialize;
 use serde::Serialize;
-use symbol_js::compute_symbols;
-use symbol_js::TopLevelMode;
 use tower_http::cors::Any;
 use tower_http::cors::CorsLayer;
 
@@ -34,13 +31,11 @@ pub async fn handle_post_compile(
   } else {
     TopLevelMode::Module
   };
-  let mut top_level_node = parse(&source).expect("parse input");
-  compute_symbols(&mut top_level_node, top_level_mode);
   let Program {
     functions,
     top_level,
     symbols,
-  } = Program::compile(top_level_node, true);
+  } = optimize_js::compile_source(&source, top_level_mode, true).expect("compile input");
   MsgPack(PostCompileRes {
     functions,
     top_level,

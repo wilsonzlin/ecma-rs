@@ -660,6 +660,7 @@ export const App = ({}: {}) => {
   const [data, setData] = useState<BuiltJs>();
   const [curFnId, setCurFnId] = useState<number>();
   const [error, setError] = useState<string>();
+  const [isGlobal, setIsGlobal] = useState(true);
   useEffect(() => {
     const src = source.trim();
     if (!src) {
@@ -667,20 +668,33 @@ export const App = ({}: {}) => {
     }
     const ac = new AbortController();
     (async () => {
-      const res = await fetch("//localhost:3001/compile", {
-        signal: ac.signal,
-        method: "POST",
-        headers: {
-          "Content-Type": "application/msgpack",
-        },
-        // TODO Module mode.
-        body: encode({ source: src, is_global: true }),
-      });
-      const raw = decode(await res.arrayBuffer());
-      setData(vBuiltJs.parseRoot(raw));
+      try {
+        const res = await fetch("//localhost:3001/compile", {
+          signal: ac.signal,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/msgpack",
+          },
+          body: encode({ source: src, is_global: isGlobal }),
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const raw = decode(await res.arrayBuffer());
+        setData(vBuiltJs.parseRoot(raw));
+        setError(undefined);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return;
+        }
+        console.error(err);
+        setError(String(err));
+        setData(undefined);
+        setCurFnId(undefined);
+      }
     })();
     return () => ac.abort();
-  }, [source]);
+  }, [source, isGlobal]);
   const symbolNames = useMemo(() => {
     const symbols = data?.symbols?.symbols;
     if (!symbols) {
@@ -710,6 +724,15 @@ export const App = ({}: {}) => {
             {error && <p className="error">{error}</p>}
           </div>
           <div className="editor">
+            <div className="controls">
+              <label>
+                Top-level mode:
+                <select value={isGlobal ? "global" : "module"} onChange={(e) => setIsGlobal(e.target.value === "global")}>
+                  <option value="global">global</option>
+                  <option value="module">module</option>
+                </select>
+              </label>
+            </div>
             <Editor
               height="50vh"
               width="40vw"
