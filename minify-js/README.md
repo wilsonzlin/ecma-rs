@@ -30,11 +30,14 @@ Comparison with esbuild, run on [common libraries](./bench).
 
 ### CLI
 
-Precompiled binaries are available for Linux, macOS, and Windows.
+Precompiled binaries are available for Linux, macOS (Intel and Apple Silicon), and Windows.
 
-[Linux x64](https://static.wilsonl.in/minify-js/cli/0.6.0/linux-x86_64/minify-js) |
-[macOS x64](https://static.wilsonl.in/minify-js/cli/0.6.0/macos-x86_64/minify-js) |
-[Windows x64](https://static.wilsonl.in/minify-js/cli/0.6.0/windows-x86_64/minify-js.exe)
+Download URLs (replace `VERSION` with the release tag, e.g. `0.6.0`):
+
+- Linux x64: https://static.wilsonl.in/minify-js/cli/VERSION/linux-x86_64/minify-js
+- macOS x64: https://static.wilsonl.in/minify-js/cli/VERSION/macos-x86_64/minify-js
+- macOS arm64: https://static.wilsonl.in/minify-js/cli/VERSION/macos-arm64/minify-js
+- Windows x64: https://static.wilsonl.in/minify-js/cli/VERSION/windows-x86_64/minify-js.exe
 
 Use the `--help` argument for more details.
 
