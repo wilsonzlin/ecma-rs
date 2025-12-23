@@ -1,0 +1,8 @@
+[package]
+name = "hir-js-w69"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parse-js = { version = "0.24.1", path = "../parse-js" }
+symbol-js = { version = "0.2.0", path = "../symbol-js" }

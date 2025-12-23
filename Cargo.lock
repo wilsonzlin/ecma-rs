@@ -715,6 +715,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hir-js-w69"
+version = "0.1.0"
+dependencies = [
+ "parse-js",
+ "symbol-js",
+]
+
+[[package]]
 name = "hir-js-w72"
 version = "0.1.0"
 dependencies = [
