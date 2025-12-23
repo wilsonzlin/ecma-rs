@@ -1,7 +1,14 @@
-use crate::ids::{BodyId, DefId, DefPath, ExprId, NameId, PatId, StmtId};
+use crate::ids::BodyId;
+use crate::ids::DefId;
+use crate::ids::DefPath;
+use crate::ids::ExprId;
+use crate::ids::NameId;
+use crate::ids::PatId;
+use crate::ids::StmtId;
 use crate::intern::NameInterner;
 use crate::span_map::SpanMap;
-use diagnostics::{FileId, TextRange};
+use diagnostics::FileId;
+use diagnostics::TextRange;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -59,16 +66,41 @@ pub enum ExprKind {
   Missing,
   Ident(NameId),
   Literal,
-  Binary { left: ExprId, right: ExprId },
-  Call { callee: ExprId, args: Vec<ExprId>, optional: bool },
-  Member { object: ExprId, property: NameId, optional: bool },
-  Conditional { test: ExprId, consequent: ExprId, alternate: ExprId },
-  Assignment { target: PatId, value: ExprId },
-  FunctionExpr { body: BodyId },
-  ClassExpr { body: BodyId, name: Option<NameId> },
+  Binary {
+    left: ExprId,
+    right: ExprId,
+  },
+  Call {
+    callee: ExprId,
+    args: Vec<ExprId>,
+    optional: bool,
+  },
+  Member {
+    object: ExprId,
+    property: NameId,
+    optional: bool,
+  },
+  Conditional {
+    test: ExprId,
+    consequent: ExprId,
+    alternate: ExprId,
+  },
+  Assignment {
+    target: PatId,
+    value: ExprId,
+  },
+  FunctionExpr {
+    body: BodyId,
+  },
+  ClassExpr {
+    body: BodyId,
+    name: Option<NameId>,
+  },
   This,
   Super,
-  Await { expr: ExprId },
+  Await {
+    expr: ExprId,
+  },
   Object,
   Array,
   Other,

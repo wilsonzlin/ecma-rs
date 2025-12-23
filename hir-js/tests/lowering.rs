@@ -1,5 +1,8 @@
 use diagnostics::FileId;
-use hir_js::{lower_file, DefKind, ExprId, ExprKind};
+use hir_js::lower_file;
+use hir_js::DefKind;
+use hir_js::ExprId;
+use hir_js::ExprKind;
 use parse_js::parse;
 use proptest::prelude::*;
 
@@ -24,7 +27,13 @@ fn def_ids_are_sorted_and_stable() {
   let names_again: Vec<_> = result_again
     .defs
     .iter()
-    .map(|def| result_again.names.resolve(def.path.name).unwrap().to_string())
+    .map(|def| {
+      result_again
+        .names
+        .resolve(def.path.name)
+        .unwrap()
+        .to_string()
+    })
     .collect();
   assert_eq!(names, names_again);
 }
@@ -49,7 +58,9 @@ fn expr_at_offset_prefers_inner_expression() {
     .iter()
     .enumerate()
     .find_map(|(idx, expr)| match expr.kind {
-      ExprKind::Binary { left, right: _ } => Some((ExprId(idx as u32), body.exprs[left.0 as usize].span)),
+      ExprKind::Binary { left, right: _ } => {
+        Some((ExprId(idx as u32), body.exprs[left.0 as usize].span))
+      }
       _ => None,
     })
     .expect("binary expression present");
@@ -68,7 +79,9 @@ fn expr_at_offset_prefers_inner_expression() {
   assert_eq!(mapped, expected);
 
   let binary_span = body.exprs[binary_id.0 as usize].span;
-  let mapped_binary = map.expr_at_offset(binary_span.start).expect("mapped binary expr");
+  let mapped_binary = map
+    .expr_at_offset(binary_span.start)
+    .expect("mapped binary expr");
   assert!(body.exprs[mapped_binary.0 as usize].span.len() <= binary_span.len());
 }
 

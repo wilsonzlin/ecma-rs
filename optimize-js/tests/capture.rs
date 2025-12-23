@@ -1,10 +1,14 @@
 use optimize_js::il::inst::InstTyp;
 use optimize_js::symbol::var_analysis::VarAnalysis;
-use optimize_js::{Program, ProgramFunction};
+use optimize_js::Program;
+use optimize_js::ProgramFunction;
 use parse_js::parse;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::collections::VecDeque;
 use symbol_js::compute_symbols;
-use symbol_js::symbol::{Scope, Symbol};
+use symbol_js::symbol::Scope;
+use symbol_js::symbol::Symbol;
 use symbol_js::TopLevelMode;
 
 fn collect_symbol_names(scope: &Scope) -> HashMap<Symbol, String> {

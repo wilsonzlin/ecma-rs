@@ -1,4 +1,5 @@
-use crate::ids::{DefId, ExprId};
+use crate::ids::DefId;
+use crate::ids::ExprId;
 use diagnostics::TextRange;
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -21,10 +22,12 @@ impl SpanMap {
   }
 
   pub fn finalize(&mut self) {
-    self.exprs
-      .sort_by(|(a_range, a_id), (b_range, b_id)| (a_range.start, a_range.end, a_id).cmp(&(b_range.start, b_range.end, b_id)));
-    self.defs
-      .sort_by(|(a_range, a_id), (b_range, b_id)| (a_range.start, a_range.end, a_id).cmp(&(b_range.start, b_range.end, b_id)));
+    self.exprs.sort_by(|(a_range, a_id), (b_range, b_id)| {
+      (a_range.start, a_range.end, a_id).cmp(&(b_range.start, b_range.end, b_id))
+    });
+    self.defs.sort_by(|(a_range, a_id), (b_range, b_id)| {
+      (a_range.start, a_range.end, a_id).cmp(&(b_range.start, b_range.end, b_id))
+    });
   }
 
   pub fn expr_at_offset(&self, offset: u32) -> Option<ExprId> {
@@ -57,7 +60,8 @@ impl SpanMap {
 #[cfg(test)]
 mod tests {
   use super::SpanMap;
-  use crate::ids::{DefId, ExprId};
+  use crate::ids::DefId;
+  use crate::ids::ExprId;
   use diagnostics::TextRange;
 
   #[test]

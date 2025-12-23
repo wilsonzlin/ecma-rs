@@ -1,16 +1,47 @@
-use crate::hir::{Body, BodyKind, DefData, Expr, ExprKind, HirFile, LowerResult, Pat, PatKind, Stmt, StmtKind};
-use crate::ids::{BodyId, DefId, DefKind, DefPath, ExprId, NameId, PatId, StmtId};
+use crate::hir::Body;
+use crate::hir::BodyKind;
+use crate::hir::DefData;
+use crate::hir::Expr;
+use crate::hir::ExprKind;
+use crate::hir::HirFile;
+use crate::hir::LowerResult;
+use crate::hir::Pat;
+use crate::hir::PatKind;
+use crate::hir::Stmt;
+use crate::hir::StmtKind;
+use crate::ids::BodyId;
+use crate::ids::DefId;
+use crate::ids::DefKind;
+use crate::ids::DefPath;
+use crate::ids::ExprId;
+use crate::ids::NameId;
+use crate::ids::PatId;
+use crate::ids::StmtId;
 use crate::intern::NameInterner;
 use crate::span_map::SpanMap;
-use diagnostics::{FileId, TextRange};
-use parse_js::ast::expr::{ArrowFuncExpr, Expr as AstExpr, FuncExpr};
-use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, Pat as AstPat};
-use parse_js::ast::func::{Func, FuncBody};
+use diagnostics::FileId;
+use diagnostics::TextRange;
+use parse_js::ast::expr::pat::ArrPat;
+use parse_js::ast::expr::pat::ClassOrFuncName;
+use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::pat::ObjPat;
+use parse_js::ast::expr::pat::Pat as AstPat;
+use parse_js::ast::expr::ArrowFuncExpr;
+use parse_js::ast::expr::Expr as AstExpr;
+use parse_js::ast::expr::FuncExpr;
+use parse_js::ast::func::Func;
+use parse_js::ast::func::FuncBody;
+use parse_js::ast::import_export::*;
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::{FuncDecl, VarDeclarator};
-use parse_js::ast::stmt::{CatchBlock, ForBody, ForInOfLhs, ForTripleStmtInit, Stmt as AstStmt};
+use parse_js::ast::stmt::decl::FuncDecl;
+use parse_js::ast::stmt::decl::VarDeclarator;
+use parse_js::ast::stmt::CatchBlock;
+use parse_js::ast::stmt::ForBody;
+use parse_js::ast::stmt::ForInOfLhs;
+use parse_js::ast::stmt::ForTripleStmtInit;
+use parse_js::ast::stmt::Stmt as AstStmt;
+use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::*;
-use parse_js::ast::{import_export::*, stx::TopLevel};
 use parse_js::loc::Loc;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -40,7 +71,14 @@ enum DefSource<'a> {
 }
 
 impl<'a> DefDescriptor<'a> {
-  fn new(kind: DefKind, name: NameId, name_text: String, span: TextRange, is_item: bool, source: DefSource<'a>) -> Self {
+  fn new(
+    kind: DefKind,
+    name: NameId,
+    name_text: String,
+    span: TextRange,
+    is_item: bool,
+    source: DefSource<'a>,
+  ) -> Self {
     Self {
       kind,
       name,
@@ -404,7 +442,8 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
     AstExpr::LitArr(arr) => {
       for element in arr.stx.elements.iter() {
         match element {
-          parse_js::ast::expr::lit::LitArrElem::Single(expr) | parse_js::ast::expr::lit::LitArrElem::Rest(expr) => {
+          parse_js::ast::expr::lit::LitArrElem::Single(expr)
+          | parse_js::ast::expr::lit::LitArrElem::Rest(expr) => {
             lower_expr(expr, builder);
           }
           parse_js::ast::expr::lit::LitArrElem::Empty => {}
@@ -413,7 +452,8 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
       ExprKind::Array
     }
     AstExpr::LitObj(obj) => {
-      use parse_js::ast::class_or_object::{ClassOrObjVal, ObjMemberType};
+      use parse_js::ast::class_or_object::ClassOrObjVal;
+      use parse_js::ast::class_or_object::ObjMemberType;
       for member in obj.stx.members.iter() {
         match &member.stx.typ {
           ObjMemberType::Valued { val, .. } => match val {
@@ -508,7 +548,12 @@ struct BodyBuilder<'a> {
 }
 
 impl<'a> BodyBuilder<'a> {
-  fn new(owner: DefId, kind: BodyKind, names: &'a mut NameInterner, span_map: &'a mut SpanMap) -> Self {
+  fn new(
+    owner: DefId,
+    kind: BodyKind,
+    names: &'a mut NameInterner,
+    span_map: &'a mut SpanMap,
+  ) -> Self {
     Self {
       owner,
       kind,
@@ -706,36 +751,34 @@ fn collect_stmt<'a>(
         }
       }
     }
-    AstStmt::ExportList(export) => {
-      match &export.stx.names {
-        ExportNames::All(Some(alias)) => {
-          let name_id = names.intern(&alias.stx.name);
+    AstStmt::ExportList(export) => match &export.stx.names {
+      ExportNames::All(Some(alias)) => {
+        let name_id = names.intern(&alias.stx.name);
+        descriptors.push(DefDescriptor::new(
+          DefKind::ExportAlias,
+          name_id,
+          names.resolve(name_id).unwrap().to_string(),
+          to_range(alias.loc),
+          is_item,
+          DefSource::None,
+        ));
+      }
+      ExportNames::Specific(list) => {
+        for export_name in list.iter() {
+          let alias_node: &Node<IdPat> = &export_name.stx.alias;
+          let name_id = names.intern(&alias_node.stx.name);
           descriptors.push(DefDescriptor::new(
             DefKind::ExportAlias,
             name_id,
             names.resolve(name_id).unwrap().to_string(),
-            to_range(alias.loc),
+            to_range(alias_node.loc),
             is_item,
             DefSource::None,
           ));
         }
-        ExportNames::Specific(list) => {
-          for export_name in list.iter() {
-            let alias_node: &Node<IdPat> = &export_name.stx.alias;
-            let name_id = names.intern(&alias_node.stx.name);
-            descriptors.push(DefDescriptor::new(
-              DefKind::ExportAlias,
-              name_id,
-              names.resolve(name_id).unwrap().to_string(),
-              to_range(alias_node.loc),
-              is_item,
-              DefSource::None,
-            ));
-          }
-        }
-        _ => {}
       }
-    }
+      _ => {}
+    },
     AstStmt::ExportDefaultExpr(_) => {
       let name_id = names.intern("default");
       let span = to_range(stmt.loc);
@@ -1031,7 +1074,11 @@ fn collect_for_body<'a>(
   }
 }
 
-fn collect_expr<'a>(expr: &'a Node<AstExpr>, descriptors: &mut Vec<DefDescriptor<'a>>, names: &mut NameInterner) {
+fn collect_expr<'a>(
+  expr: &'a Node<AstExpr>,
+  descriptors: &mut Vec<DefDescriptor<'a>>,
+  names: &mut NameInterner,
+) {
   match &*expr.stx {
     AstExpr::Func(f) => {
       let (name_id, name_text) = name_from_optional(&f.stx.name, names);
@@ -1101,7 +1148,8 @@ fn collect_expr<'a>(expr: &'a Node<AstExpr>, descriptors: &mut Vec<DefDescriptor
     AstExpr::LitArr(arr) => {
       for el in arr.stx.elements.iter() {
         match el {
-          parse_js::ast::expr::lit::LitArrElem::Single(expr) | parse_js::ast::expr::lit::LitArrElem::Rest(expr) => {
+          parse_js::ast::expr::lit::LitArrElem::Single(expr)
+          | parse_js::ast::expr::lit::LitArrElem::Rest(expr) => {
             collect_expr(expr, descriptors, names);
           }
           parse_js::ast::expr::lit::LitArrElem::Empty => {}
@@ -1109,7 +1157,8 @@ fn collect_expr<'a>(expr: &'a Node<AstExpr>, descriptors: &mut Vec<DefDescriptor
       }
     }
     AstExpr::LitObj(obj) => {
-      use parse_js::ast::class_or_object::{ClassOrObjVal, ObjMemberType};
+      use parse_js::ast::class_or_object::ClassOrObjVal;
+      use parse_js::ast::class_or_object::ObjMemberType;
       for member in obj.stx.members.iter() {
         match &member.stx.typ {
           ObjMemberType::Valued { val, .. } => match val {
@@ -1196,7 +1245,10 @@ fn collect_exprs_from_pat<'a>(
   }
 }
 
-fn name_from_optional(name: &Option<Node<ClassOrFuncName>>, names: &mut NameInterner) -> (NameId, String) {
+fn name_from_optional(
+  name: &Option<Node<ClassOrFuncName>>,
+  names: &mut NameInterner,
+) -> (NameId, String) {
   match name {
     Some(n) => {
       let id = names.intern(&n.stx.name);
@@ -1249,7 +1301,14 @@ fn collect_pat_defs<'a>(
 ) {
   for (name_id, span) in collect_pat_names(&pat_decl.stx.pat, names) {
     let text = names.resolve(name_id).unwrap().to_string();
-    descriptors.push(DefDescriptor::new(kind, name_id, text, span, false, DefSource::None));
+    descriptors.push(DefDescriptor::new(
+      kind,
+      name_id,
+      text,
+      span,
+      false,
+      DefSource::None,
+    ));
   }
 }
 
@@ -1259,7 +1318,11 @@ fn collect_pat_names(pat: &Node<AstPat>, names: &mut NameInterner) -> Vec<(NameI
   acc
 }
 
-fn collect_pat_names_inner(pat: &Node<AstPat>, names: &mut NameInterner, acc: &mut Vec<(NameId, TextRange)>) {
+fn collect_pat_names_inner(
+  pat: &Node<AstPat>,
+  names: &mut NameInterner,
+  acc: &mut Vec<(NameId, TextRange)>,
+) {
   match &*pat.stx {
     AstPat::Id(id) => {
       let name_id = names.intern(&id.stx.name);
