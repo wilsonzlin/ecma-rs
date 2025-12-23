@@ -1,7 +1,8 @@
 /**
- * Minifies a Buffer containing UTF-8 JavaScript code.
+ * Minifies JavaScript code.
  *
- * @param src - Source JS code
- * @returns Minified JS code
+ * @param topLevelType - Parse mode for the top level ("global" or "module")
+ * @param src - Source JS code as a string or UTF-8 Buffer
+ * @returns Minified JS code as a UTF-8 Buffer
  */
-export function minify(topLevelType: "global" | "module", src: Buffer): Buffer;
+export function minify(topLevelType: "global" | "module", src: string | Buffer): Buffer;
