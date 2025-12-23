@@ -90,7 +90,7 @@ pub struct ModuleDecl {
 
 /// Module name - either identifier or string literal
 #[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t")]
+#[serde(tag = "$t", content = "v")]
 pub enum ModuleName {
   Identifier(#[drive(skip)] String),
   String(#[drive(skip)] String),

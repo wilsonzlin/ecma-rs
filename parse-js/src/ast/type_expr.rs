@@ -114,7 +114,7 @@ pub struct TypeReference {
 
 /// Entity name in type reference (can be qualified)
 #[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t")]
+#[serde(tag = "$t", content = "v")]
 pub enum TypeEntityName {
   Identifier(#[drive(skip)] String),
   Qualified(Box<TypeQualifiedName>),
@@ -131,7 +131,7 @@ pub struct TypeQualifiedName {
 
 /// Literal type: "foo", 42, true, false, etc.
 #[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t")]
+#[serde(tag = "$t", content = "v")]
 pub enum TypeLiteral {
   String(#[drive(skip)] String),
   Number(#[drive(skip)] String),
@@ -314,7 +314,7 @@ pub struct TypeSetAccessor {
 
 /// Property key in type members
 #[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t")]
+#[serde(tag = "$t", content = "v")]
 pub enum TypePropertyKey {
   Identifier(#[drive(skip)] String),
   String(#[drive(skip)] String),
