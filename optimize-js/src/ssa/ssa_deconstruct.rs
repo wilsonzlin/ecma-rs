@@ -2,9 +2,7 @@ use crate::cfg::cfg::Cfg;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::util::counter::Counter;
-use ahash::HashMap;
-use ahash::HashMapExt;
-use ahash::HashSet;
+use std::collections::BTreeMap;
 use std::iter::zip;
 
 pub fn deconstruct_ssa(cfg: &mut Cfg, c_label: &mut Counter) {
@@ -15,8 +13,11 @@ pub fn deconstruct_ssa(cfg: &mut Cfg, c_label: &mut Counter) {
     insts: Vec<Inst>,
   }
   let mut new_bblocks = Vec::<NewBblock>::new();
-  for (label, bblock) in cfg.bblocks.all_mut() {
-    let mut new_bblocks_by_parent = HashMap::<u32, NewBblock>::new();
+  let mut labels: Vec<u32> = cfg.bblocks.all().map(|(label, _)| label).collect();
+  labels.sort_unstable();
+  for label in labels {
+    let bblock = cfg.bblocks.get_mut(label);
+    let mut new_bblocks_by_parent = BTreeMap::<u32, NewBblock>::new();
     while bblock.first().is_some_and(|i| i.t == InstTyp::Phi) {
       let removed_phi_inst = bblock.remove(0);
       let tgt = removed_phi_inst.tgts[0];
@@ -35,6 +36,7 @@ pub fn deconstruct_ssa(cfg: &mut Cfg, c_label: &mut Counter) {
     }
     new_bblocks.extend(new_bblocks_by_parent.into_values());
   }
+  new_bblocks.sort_by_key(|b| b.label);
   for mut b in new_bblocks {
     // Detach parent from child.
     cfg.graph.disconnect(b.parent, b.child);

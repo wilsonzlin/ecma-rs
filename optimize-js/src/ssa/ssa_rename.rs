@@ -5,7 +5,6 @@ use crate::il::inst::InstTyp;
 use crate::util::counter::Counter;
 use ahash::HashMap;
 use ahash::HashMapExt;
-use ahash::HashSet;
 use itertools::Itertools;
 
 fn inner(
@@ -36,7 +35,9 @@ fn inner(
     }
   }
 
-  for s in cfg.graph.children(label).collect_vec() {
+  let mut children = cfg.graph.children(label).collect_vec();
+  children.sort_unstable();
+  for s in children {
     for (inst_no, inst) in cfg.bblocks.get_mut(s).iter_mut().enumerate() {
       if inst.t != InstTyp::Phi {
         // No more phi nodes.

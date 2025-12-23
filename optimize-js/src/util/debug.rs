@@ -1,16 +1,15 @@
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::Inst;
-use ahash::HashMap;
-use ahash::HashSet;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerDebugStep {
   pub name: String,
   pub bblock_order: Vec<u32>,
-  pub bblocks: HashMap<u32, Vec<Inst>>,
-  pub cfg_children: HashMap<u32, HashSet<u32>>,
+  pub bblocks: BTreeMap<u32, Vec<Inst>>,
+  pub cfg_children: BTreeMap<u32, Vec<u32>>,
 }
 
 #[derive(Serialize, Debug)]
@@ -32,7 +31,11 @@ impl OptimizerDebug {
       cfg_children: cfg
         .graph
         .labels()
-        .map(|k| (k, cfg.graph.children(k).collect()))
+        .map(|k| {
+          let mut children: Vec<u32> = cfg.graph.children(k).collect();
+          children.sort_unstable();
+          (k, children)
+        })
         .collect(),
     });
   }

@@ -157,7 +157,8 @@ impl<const POST: bool> Dom<POST> {
   pub fn dominance_frontiers(&self, cfg: &Cfg) -> HashMap<u32, HashSet<u32>> {
     let mut domfront = HashMap::<u32, HashSet<u32>>::new();
     for &b in self.postorder.iter().rev() {
-      let parents = cfg.graph.parents(b).collect_vec();
+      let mut parents = cfg.graph.parents(b).collect_vec();
+      parents.sort_unstable();
       if parents.len() < 2 {
         continue;
       };
@@ -177,7 +178,11 @@ impl<const POST: bool> Dom<POST> {
     self
       .domtree
       .get(&parent)
-      .map(|s| s.iter().cloned())
+      .map(|s| {
+        let mut children = s.iter().copied().collect_vec();
+        children.sort_unstable();
+        children
+      })
       .into_iter()
       .flatten()
   }

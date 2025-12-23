@@ -8,7 +8,7 @@ use std::hash::Hash;
 use std::iter;
 use std::option;
 
-struct PostOrderVisitor<'a, K: Clone + Default + Eq + Hash> {
+struct PostOrderVisitor<'a, K: Clone + Default + Eq + Hash + Ord> {
   graph: &'a Graph<K>,
   seen: HashSet<&'a K>,
   order: Vec<&'a K>,
@@ -17,17 +17,20 @@ struct PostOrderVisitor<'a, K: Clone + Default + Eq + Hash> {
   reversed_graph: bool,
 }
 
-impl<'a, K: Clone + Default + Eq + Hash> PostOrderVisitor<'a, K> {
+impl<'a, K: Clone + Default + Eq + Hash + Ord> PostOrderVisitor<'a, K> {
   fn visit(&mut self, n: &'a K) {
     if self.seen.contains(n) {
       return;
     };
     self.seen.insert(n);
-    for c in if self.reversed_graph {
+    let mut children: Vec<&K> = if self.reversed_graph {
       self.graph.parents(n)
     } else {
       self.graph.children(n)
-    } {
+    }
+    .collect();
+    children.sort_unstable();
+    for c in children {
       self.visit(c);
     }
     self.order.push(n);
@@ -166,7 +169,10 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
     &'a self,
     entry: &'a K,
     reversed_graph: bool,
-  ) -> (Vec<&'a K>, HashMap<&'a K, usize>) {
+  ) -> (Vec<&'a K>, HashMap<&'a K, usize>)
+  where
+    K: Ord,
+  {
     let mut order_po_v = PostOrderVisitor {
       graph: self,
       order: Vec::new(),
@@ -186,7 +192,13 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
   }
 
   /// Postorder: visit all children, then self.
-  pub fn calculate_postorder<'a>(&'a self, entry: &'a K) -> (Vec<&'a K>, HashMap<&'a K, usize>) {
+  pub fn calculate_postorder<'a>(
+    &'a self,
+    entry: &'a K,
+  ) -> (Vec<&'a K>, HashMap<&'a K, usize>)
+  where
+    K: Ord,
+  {
     self._calculate_postorder(entry, false)
   }
 
@@ -195,7 +207,10 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
   pub fn calculate_reversed_graph_postorder<'a>(
     &'a self,
     entry: &'a K,
-  ) -> (Vec<&'a K>, HashMap<&'a K, usize>) {
+  ) -> (Vec<&'a K>, HashMap<&'a K, usize>)
+  where
+    K: Ord,
+  {
     self._calculate_postorder(entry, true)
   }
 }
