@@ -43,16 +43,23 @@
                       "generator": false,
                       "parameters": [
                         {
+                          "accessibility": null,
+                          "decorators": [],
                           "default_value": null,
+                          "optional": false,
                           "pattern": {
                             "pat": {
                               "$t": "Id",
                               "name": "y"
                             }
                           },
-                          "rest": false
+                          "readonly": false,
+                          "rest": false,
+                          "type_annotation": null
                         }
-                      ]
+                      ],
+                      "return_type": null,
+                      "type_parameters": null
                     }
                   },
                   "optional_chaining": false
@@ -67,51 +74,75 @@
           "generator": false,
           "parameters": [
             {
+              "accessibility": null,
+              "decorators": [],
               "default_value": null,
+              "optional": false,
               "pattern": {
                 "pat": {
                   "$t": "Id",
                   "name": "x"
                 }
               },
-              "rest": false
+              "readonly": false,
+              "rest": false,
+              "type_annotation": null
             }
-          ]
+          ],
+          "return_type": null,
+          "type_parameters": null
         }
       }
     },
     "generator": false,
     "parameters": [
       {
+        "accessibility": null,
+        "decorators": [],
         "default_value": null,
+        "optional": false,
         "pattern": {
           "pat": {
             "$t": "Id",
             "name": "a"
           }
         },
-        "rest": false
+        "readonly": false,
+        "rest": false,
+        "type_annotation": null
       },
       {
+        "accessibility": null,
+        "decorators": [],
         "default_value": null,
+        "optional": false,
         "pattern": {
           "pat": {
             "$t": "Id",
             "name": "b"
           }
         },
-        "rest": false
+        "readonly": false,
+        "rest": false,
+        "type_annotation": null
       },
       {
+        "accessibility": null,
+        "decorators": [],
         "default_value": null,
+        "optional": false,
         "pattern": {
           "pat": {
             "$t": "Id",
             "name": "c"
           }
         },
-        "rest": false
+        "readonly": false,
+        "rest": false,
+        "type_annotation": null
       }
-    ]
+    ],
+    "return_type": null,
+    "type_parameters": null
   }
 }

@@ -2,6 +2,7 @@
   "$t": "VarDecl",
   "declarators": [
     {
+      "definite_assignment": false,
       "initializer": {
         "$t": "Call",
         "arguments": [
@@ -28,9 +29,11 @@
           "$t": "Id",
           "name": "f"
         }
-      }
+      },
+      "type_annotation": null
     },
     {
+      "definite_assignment": false,
       "initializer": {
         "$t": "ArrowFunc",
         "func": {
@@ -42,6 +45,7 @@
                 "$t": "VarDecl",
                 "declarators": [
                   {
+                    "definite_assignment": false,
                     "initializer": {
                       "$t": "Call",
                       "arguments": [
@@ -90,7 +94,8 @@
                         ],
                         "rest": null
                       }
-                    }
+                    },
+                    "type_annotation": null
                   }
                 ],
                 "export": false,
@@ -116,6 +121,7 @@
                                   "$t": "VarDecl",
                                   "declarators": [
                                     {
+                                      "definite_assignment": false,
                                       "initializer": {
                                         "$t": "ArrowFunc",
                                         "func": {
@@ -151,7 +157,9 @@
                                             }
                                           },
                                           "generator": false,
-                                          "parameters": []
+                                          "parameters": [],
+                                          "return_type": null,
+                                          "type_parameters": null
                                         }
                                       },
                                       "pattern": {
@@ -159,7 +167,8 @@
                                           "$t": "Id",
                                           "name": "r"
                                         }
-                                      }
+                                      },
+                                      "type_annotation": null
                                     }
                                   ],
                                   "export": false,
@@ -222,7 +231,9 @@
                                           }
                                         },
                                         "generator": false,
-                                        "parameters": []
+                                        "parameters": [],
+                                        "return_type": null,
+                                        "type_parameters": null
                                       }
                                     }
                                   }
@@ -230,7 +241,9 @@
                               ]
                             },
                             "generator": false,
-                            "parameters": []
+                            "parameters": [],
+                            "return_type": null,
+                            "type_parameters": null
                           }
                         }
                       },
@@ -260,16 +273,23 @@
           "generator": false,
           "parameters": [
             {
+              "accessibility": null,
+              "decorators": [],
               "default_value": null,
+              "optional": false,
               "pattern": {
                 "pat": {
                   "$t": "Id",
                   "name": "t"
                 }
               },
-              "rest": false
+              "readonly": false,
+              "rest": false,
+              "type_annotation": null
             }
-          ]
+          ],
+          "return_type": null,
+          "type_parameters": null
         }
       },
       "pattern": {
@@ -277,7 +297,8 @@
           "$t": "Id",
           "name": "y"
         }
-      }
+      },
+      "type_annotation": null
     }
   ],
   "export": false,

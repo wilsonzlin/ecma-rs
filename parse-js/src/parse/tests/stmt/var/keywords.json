@@ -2,6 +2,7 @@
   "$t": "VarDecl",
   "declarators": [
     {
+      "definite_assignment": false,
       "initializer": {
         "$t": "LitObj",
         "members": [
@@ -49,18 +50,22 @@
           "$t": "Id",
           "name": "set"
         }
-      }
+      },
+      "type_annotation": null
     },
     {
+      "definite_assignment": false,
       "initializer": null,
       "pattern": {
         "pat": {
           "$t": "Id",
           "name": "of"
         }
-      }
+      },
+      "type_annotation": null
     },
     {
+      "definite_assignment": false,
       "initializer": {
         "$t": "LitObj",
         "members": [
@@ -158,9 +163,11 @@
           ],
           "rest": null
         }
-      }
+      },
+      "type_annotation": null
     },
     {
+      "definite_assignment": false,
       "initializer": {
         "$t": "Id",
         "name": "let"
@@ -170,16 +177,19 @@
           "$t": "Id",
           "name": "await"
         }
-      }
+      },
+      "type_annotation": null
     },
     {
+      "definite_assignment": false,
       "initializer": null,
       "pattern": {
         "pat": {
           "$t": "Id",
           "name": "yield"
         }
-      }
+      },
+      "type_annotation": null
     }
   ],
   "export": false,

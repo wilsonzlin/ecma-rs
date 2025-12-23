@@ -36,16 +36,23 @@
         "generator": false,
         "parameters": [
           {
+            "accessibility": null,
+            "decorators": [],
             "default_value": null,
+            "optional": false,
             "pattern": {
               "pat": {
                 "$t": "Id",
                 "name": "x"
               }
             },
-            "rest": false
+            "readonly": false,
+            "rest": false,
+            "type_annotation": null
           }
-        ]
+        ],
+        "return_type": null,
+        "type_parameters": null
       }
     },
     "test": {

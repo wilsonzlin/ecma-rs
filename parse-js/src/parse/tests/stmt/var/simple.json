@@ -2,6 +2,7 @@
   "$t": "VarDecl",
   "declarators": [
     {
+      "definite_assignment": false,
       "initializer": {
         "$t": "LitNum",
         "value": 1.0
@@ -11,16 +12,19 @@
           "$t": "Id",
           "name": "a"
         }
-      }
+      },
+      "type_annotation": null
     },
     {
+      "definite_assignment": false,
       "initializer": null,
       "pattern": {
         "pat": {
           "$t": "Id",
           "name": "b"
         }
-      }
+      },
+      "type_annotation": null
     }
   ],
   "export": false,

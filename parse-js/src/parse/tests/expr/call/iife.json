@@ -14,7 +14,9 @@
             "Block": []
           },
           "generator": false,
-          "parameters": []
+          "parameters": [],
+          "return_type": null,
+          "type_parameters": null
         },
         "name": null
       },
@@ -33,7 +35,9 @@
             "Block": []
           },
           "generator": false,
-          "parameters": []
+          "parameters": [],
+          "return_type": null,
+          "type_parameters": null
         }
       },
       "optional_chaining": false
@@ -52,7 +56,9 @@
           "Block": []
         },
         "generator": false,
-        "parameters": []
+        "parameters": [],
+        "return_type": null,
+        "type_parameters": null
       }
     },
     "optional_chaining": false

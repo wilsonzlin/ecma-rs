@@ -2,6 +2,7 @@
   "$t": "VarDecl",
   "declarators": [
     {
+      "definite_assignment": false,
       "initializer": {
         "$t": "ArrowFunc",
         "func": {
@@ -13,7 +14,10 @@
           "generator": false,
           "parameters": [
             {
+              "accessibility": null,
+              "decorators": [],
               "default_value": null,
+              "optional": false,
               "pattern": {
                 "pat": {
                   "$t": "Obj",
@@ -21,9 +25,13 @@
                   "rest": null
                 }
               },
-              "rest": false
+              "readonly": false,
+              "rest": false,
+              "type_annotation": null
             }
-          ]
+          ],
+          "return_type": null,
+          "type_parameters": null
         }
       },
       "pattern": {
@@ -31,7 +39,8 @@
           "$t": "Id",
           "name": "x"
         }
-      }
+      },
+      "type_annotation": null
     }
   ],
   "export": false,
