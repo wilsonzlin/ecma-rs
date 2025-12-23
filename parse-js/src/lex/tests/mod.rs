@@ -61,6 +61,8 @@ fn test_lex_literal_strings() {
   check("'hello\\\nworld'", [LiteralString]);
   check("'hello\\\r\nworld'", [LiteralString]);
   check("'hello\\\u{2028}world'", [LiteralString]);
+  check("'hello\\\u{2029}world'", [LiteralString]);
+  check("\"hello world\n\"", [Invalid]);
 }
 
 #[test]
