@@ -5,8 +5,7 @@
       "file": "use.ts",
       "start": 70,
       "end": 73,
-      "category": "error",
-      "message": "Type 'string' is not assignable to type 'number'."
+      "category": "error"
     }
   ]
 }
