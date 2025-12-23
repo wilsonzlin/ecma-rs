@@ -35,6 +35,11 @@ members = [
   "semantic-js-w12",
   "types-ts-w12",
   "typecheck-ts-w12",
+  "diagnostics-h19",
+  "typecheck-ts-h19",
+  "typecheck-ts-harness19",
+  "typecheck-ts-w24",
+  "typecheck-ts-w13",
 ]
 
 [profile.release]
