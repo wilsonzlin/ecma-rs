@@ -1,13 +1,17 @@
-use crate::graph::{ModuleEdge, ModuleGraph};
-use crate::host::{FileId, FileKind};
+use crate::graph::ModuleEdge;
+use crate::graph::ModuleGraph;
+use crate::host::FileId;
+use crate::host::FileKind;
 use crate::options::CompilerOptions;
-use crate::parse::{self, ParseOutput};
+use crate::parse::ParseOutput;
+use crate::parse::{self};
 use crate::program::ProgramInput;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
-use parse_js::ast::ts_stmt::ModuleName;
 use parse_js::ast::stx::TopLevel;
-use std::collections::{BTreeSet, VecDeque};
+use parse_js::ast::ts_stmt::ModuleName;
+use std::collections::BTreeSet;
+use std::collections::VecDeque;
 use std::sync::Arc;
 
 /// Salsa query interface for the type checker.

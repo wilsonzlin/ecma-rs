@@ -1,8 +1,12 @@
-use crate::db::{collect_specifiers, Db, Database};
+use crate::db::collect_specifiers;
+use crate::db::Database;
+use crate::db::Db;
 use crate::graph::ModuleGraph;
-use crate::host::{FileId, Host};
+use crate::host::FileId;
+use crate::host::Host;
 use crate::options::CompilerOptions;
-use crate::{Diagnostic, ParseOutput};
+use crate::Diagnostic;
+use crate::ParseOutput;
 use std::collections::BTreeSet;
 use std::collections::VecDeque;
 use std::sync::Arc;

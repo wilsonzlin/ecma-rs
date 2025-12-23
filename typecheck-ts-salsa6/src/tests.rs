@@ -1,5 +1,11 @@
-use crate::host::{FileId, FileKind, Host, Resolver};
-use crate::{CompilerOptions, DiagnosticCode, Program, Severity};
+use crate::host::FileId;
+use crate::host::FileKind;
+use crate::host::Host;
+use crate::host::Resolver;
+use crate::CompilerOptions;
+use crate::DiagnosticCode;
+use crate::Program;
+use crate::Severity;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -60,7 +66,11 @@ impl Host for InMemoryHost {
 #[test]
 fn module_graph_edges_are_sorted() {
   let host = InMemoryHost::new(CompilerOptions::default())
-    .with_file(FileId(0), "import \"./b\";\nimport \"./a\";\n", FileKind::Ts)
+    .with_file(
+      FileId(0),
+      "import \"./b\";\nimport \"./a\";\n",
+      FileKind::Ts,
+    )
     .with_file(FileId(1), "", FileKind::Ts)
     .with_file(FileId(2), "", FileKind::Ts)
     .with_resolution(FileId(0), "./b", FileId(2))
@@ -73,7 +83,10 @@ fn module_graph_edges_are_sorted() {
   assert_eq!(keys, vec![FileId(0), FileId(1), FileId(2)]);
 
   let edges = graph.edges.get(&FileId(0)).expect("root present");
-  let specs: Vec<_> = edges.iter().map(|edge| edge.specifier.as_ref().to_string()).collect();
+  let specs: Vec<_> = edges
+    .iter()
+    .map(|edge| edge.specifier.as_ref().to_string())
+    .collect();
   assert_eq!(specs, vec!["./a", "./b"]);
   assert_eq!(edges[0].target, Some(FileId(1)));
   assert_eq!(edges[1].target, Some(FileId(2)));
@@ -81,8 +94,11 @@ fn module_graph_edges_are_sorted() {
 
 #[test]
 fn parse_errors_are_reported() {
-  let host = InMemoryHost::new(CompilerOptions::default())
-    .with_file(FileId(0), "function () {", FileKind::Ts);
+  let host = InMemoryHost::new(CompilerOptions::default()).with_file(
+    FileId(0),
+    "function () {",
+    FileKind::Ts,
+  );
 
   let mut program = Program::new(Arc::new(host), vec![FileId(0)]);
   let diagnostics = program.check_parse_only();

@@ -1,7 +1,10 @@
 use crate::db::Db;
 use crate::host::FileId;
 use crate::options::CompilerOptions;
-use crate::{Diagnostic, DiagnosticCode, Span, TextRange};
+use crate::Diagnostic;
+use crate::DiagnosticCode;
+use crate::Span;
+use crate::TextRange;
 use parse_js as parse_js_crate;
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
@@ -28,8 +31,7 @@ impl Eq for ParseOutput {}
 
 impl fmt::Debug for ParseOutput {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f
-      .debug_struct("ParseOutput")
+    f.debug_struct("ParseOutput")
       .field("diagnostics", &self.diagnostics)
       .finish()
   }
@@ -55,10 +57,9 @@ pub(crate) fn parse(db: &dyn Db, file: FileId) -> ParseOutput {
       diagnostics: Vec::new(),
     },
     Err(error) => ParseOutput {
-      ast: Arc::new(Node::new(
-        parse_js_crate::loc::Loc(0, 0),
-        TopLevel { body: Vec::new() },
-      )),
+      ast: Arc::new(Node::new(parse_js_crate::loc::Loc(0, 0), TopLevel {
+        body: Vec::new(),
+      })),
       diagnostics: vec![syntax_error_to_diagnostic(file, error)],
     },
   }
