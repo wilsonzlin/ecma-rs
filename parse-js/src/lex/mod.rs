@@ -885,6 +885,24 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let quote = lexer.consume_next()?;
   let mut invalid = false;
   loop {
+    // Look for backslash, line terminators, or closing quote
+    let segment_start = lexer.next;
+    lexer.consume(lexer.while_not_3_chars('\\', '\r', quote));
+    if lexer.source[segment_start..lexer.next]
+      .chars()
+      .any(|c| matches!(c, '\n' | '\u{2028}' | '\u{2029}'))
+    {
+      invalid = true;
+    }
+    // Also check for \n and Unicode line separators
+    if let Ok(c) = lexer.peek(0) {
+      if c == '\n' || c == '\u{2028}' || c == '\u{2029}' {
+        // Bare line terminator without backslash - invalid
+        invalid = true;
+        lexer.skip_expect(c.len_utf8());
+        continue;
+      }
+    }
     let c = lexer.consume_next()?;
     if c == quote {
       break;
