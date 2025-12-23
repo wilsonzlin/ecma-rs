@@ -18,7 +18,7 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
   };
 
   let src_arg = cx.argument::<JsValue>(1)?;
-  let source_str = if let Ok(js_string) = src_arg.downcast::<JsString, _>(&mut cx) {
+  let source = if let Ok(js_string) = src_arg.downcast::<JsString, _>(&mut cx) {
     js_string.value(&mut cx)
   } else if let Ok(js_buffer) = src_arg.downcast::<JsBuffer, _>(&mut cx) {
     let bytes = js_buffer.as_slice(&mut cx);
@@ -31,7 +31,7 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
   };
 
   let mut out = Vec::new();
-  match minify_js::minify(top_level_mode, &source_str, &mut out) {
+  match minify_js::minify(top_level_mode, &source, &mut out) {
     Ok(()) => Ok(JsBuffer::external(&mut cx, out)),
     Err(err) => cx.throw_error(format!("{:?}", err)),
   }
@@ -54,3 +54,4 @@ mod tests {
     assert_eq!(parse_top_level_mode("unknown"), None);
   }
 }
+
