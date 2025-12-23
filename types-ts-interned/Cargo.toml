@@ -1,0 +1,16 @@
+[package]
+name = "types-ts-interned"
+version = "0.1.0"
+edition = "2021"
+description = "Interned TypeScript type representation (imported from worker-10)"
+
+[dependencies]
+ahash = "0.8"
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ordered-float = { version = "3", features = ["serde"] }
+num-bigint = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+pretty_assertions = "1"
