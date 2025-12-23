@@ -10,6 +10,9 @@ members = [
   "parse-js-cli",
   "parse-js",
   "symbol-js",
+  "types-ts",
+  "hir-js",
+  "typecheck-ts",
   "test262",
 ]
 

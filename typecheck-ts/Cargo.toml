@@ -1,0 +1,15 @@
+[package]
+name = "typecheck-ts"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+fuzzing = []
+
+[dependencies]
+hir-js = { path = "../hir-js" }
+parse-js = { path = "../parse-js" }
+thiserror = "1"
+
+[dev-dependencies]
+proptest = "1"

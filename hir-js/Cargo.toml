@@ -1,0 +1,14 @@
+[package]
+name = "hir-js"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+fuzzing = []
+
+[dependencies]
+parse-js = { path = "../parse-js" }
+thiserror = "1"
+
+[dev-dependencies]
+proptest = "1"

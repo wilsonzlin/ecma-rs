@@ -1,0 +1,13 @@
+[package]
+name = "types-ts"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+fuzzing = []
+
+[dependencies]
+ahash = "0.8"
+
+[dev-dependencies]
+proptest = "1"
