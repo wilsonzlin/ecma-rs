@@ -1,10 +1,9 @@
 [package]
-name = "diagnostics"
+name = "diagnostics-salsa6"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-parse-js = { path = "../parse-js" }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [features]

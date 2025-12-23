@@ -26,6 +26,7 @@ members = [
   "typecheck-ts-harness",
   "typecheck-ts-harness-trace23",
   "semantic-js",
+  "diagnostics-salsa6",
 ]
 
 [profile.release]
