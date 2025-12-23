@@ -1,0 +1,44 @@
+name: Nightly full validation
+
+on:
+  schedule:
+    # Run once per day to exercise the full workspace, including the heavier
+    # targets that are skipped in PR CI.
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          # TypeScript and test262 corpora live in submodules; they stay off in
+          # PR CI but are available here for full validation.
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # The workspace ignores Cargo.lock; generate it per-run so --locked is
+      # usable for reproducible resolution in CI.
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo test --workspace (full suite)
+        run: cargo test --workspace --locked
+
+      # Optional: run the TypeScript conformance runner when the submodule is
+      # available. This is intentionally scheduled-only because it is very
+      # expensive and requires the vendored corpus.
+      - name: TypeScript conformance runner
+        if: ${{ always() && hashFiles('parse-js/tests/TypeScript/README.md') != '' }}
+        run: cargo test -p parse-js --features conformance-runner --bin conformance_runner --locked
+        timeout-minutes: 120
