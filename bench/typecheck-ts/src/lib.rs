@@ -4,6 +4,10 @@
 //! for parsing, lowering, binding, and a small toy type checking engine. The
 //! actual checker is expected to replace the toy engine, but the harness keeps
 //! the structure and data flows we want to measure.
+//!
+//! Run with `cargo bench -p typecheck-ts`. To emit JSON alongside the human
+//! summary, set `TYPECHECK_TS_BENCH_JSON=1` (preferred over passing `--json`
+//! directly to `cargo bench`, which forwards arguments to all test binaries).
 
 pub mod fixtures;
 pub mod mini_types;
