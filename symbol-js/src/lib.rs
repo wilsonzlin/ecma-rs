@@ -1,6 +1,7 @@
 use derive_visitor::DriveMut;
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
+use std::str::FromStr;
 use symbol::Scope;
 use symbol::ScopeType;
 use symbol::SymbolGenerator;
@@ -13,6 +14,18 @@ pub mod visitor;
 pub enum TopLevelMode {
   Global,
   Module,
+}
+
+impl FromStr for TopLevelMode {
+  type Err = ();
+
+  fn from_str(s: &str) -> Result<Self, Self::Err> {
+    match s {
+      "global" | "Global" => Ok(TopLevelMode::Global),
+      "module" | "Module" => Ok(TopLevelMode::Module),
+      _ => Err(()),
+    }
+  }
 }
 
 pub fn compute_symbols(top_level_node: &mut Node<TopLevel>, top_level_mode: TopLevelMode) -> Scope {

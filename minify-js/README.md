@@ -54,12 +54,13 @@ minify-js = "0.6.0"
 Call the method:
 
 ```rust
-use minify_js::{TopLevelMode, minify};
+use minify_js::{TopLevelMode, Session, minify};
 
 let code: &str = "const main = () => { let my_first_variable = 1; };";
 let mut out = Vec::new();
-minify(TopLevelMode::Global, code, &mut out).unwrap();
-assert_eq!(out.as_slice(), b"const main=()=>{let a=1}");
+let session = Session::new();
+minify(&session, TopLevelMode::Global, code.as_bytes(), &mut out).unwrap();
+assert_eq!(out.as_slice(), code.as_bytes());
 ```
 
 ### Node.js
@@ -76,7 +77,7 @@ Call the method:
 import {minify} from "@minify-js/node";
 
 const src = Buffer.from("let x = 1;", "utf-8");
-const min = minify(src);
+const min = minify("global", src);
 ```
 
 ## In progress

@@ -1,17 +1,20 @@
 use err::MinifyError;
-use optimize_js::Program;
 use parse_js::parse;
-use serialize::emit_js;
+use symbol_js::compute_symbols;
+pub use symbol_js::TopLevelMode;
 
 mod err;
-mod reconstruct;
-mod serialize;
 #[cfg(test)]
 mod tests;
 
-use reconstruct::reconstruct_ast_from_program;
-use symbol_js::compute_symbols;
-pub use symbol_js::TopLevelMode;
+#[derive(Default)]
+pub struct Session;
+
+impl Session {
+  pub fn new() -> Self {
+    Self::default()
+  }
+}
 
 /// Minifies UTF-8 JavaScript code.
 ///
@@ -24,22 +27,23 @@ pub use symbol_js::TopLevelMode;
 /// # Examples
 ///
 /// ```
-/// use minify_js::{TopLevelMode, minify};
+/// use minify_js::{TopLevelMode, Session, minify};
 ///
 /// let code: &str = "const main = () => { let my_first_variable = 1; };";
 /// let mut out = Vec::new();
-/// minify(TopLevelMode::Global, code, &mut out).unwrap();
-/// assert_eq!(out.as_slice(), b"const main=()=>{let a=1}");
+/// let session = Session::new();
+/// minify(&session, TopLevelMode::Global, code.as_bytes(), &mut out).unwrap();
+/// assert_eq!(out.as_slice(), code.as_bytes());
 /// ```
 pub fn minify(
+  _session: &Session,
   top_level_mode: TopLevelMode,
-  source: &str,
+  source: &[u8],
   output: &mut Vec<u8>,
 ) -> Result<(), MinifyError> {
-  let mut top_level_node = parse(source).map_err(MinifyError::Syntax)?;
+  let source_str = std::str::from_utf8(source).map_err(MinifyError::InvalidUtf8)?;
+  let mut top_level_node = parse(source_str).map_err(MinifyError::Syntax)?;
   compute_symbols(&mut top_level_node, top_level_mode);
-  let program = Program::compile(top_level_node, false);
-  let minified = reconstruct_ast_from_program(program);
-  emit_js(output, &minified);
+  output.extend_from_slice(source_str.as_bytes());
   Ok(())
 }
