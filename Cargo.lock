@@ -523,6 +523,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "diagnostics-w8"
+version = "0.1.0"
+dependencies = [
+ "hir-js-w8",
+]
+
+[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -539,6 +546,13 @@ name = "either"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "48c757948c5ede0e46177b7add2e67155f70e33c07fea8284df6576da70b3719"
+
+[[package]]
+name = "emit-js-w70"
+version = "0.1.0"
+dependencies = [
+ "parse-js",
+]
 
 [[package]]
 name = "errno"
@@ -708,6 +722,10 @@ dependencies = [
  "parse-js",
  "symbol-js",
 ]
+
+[[package]]
+name = "hir-js-w8"
+version = "0.1.0"
 
 [[package]]
 name = "http"
@@ -1622,6 +1640,16 @@ version = "0.1.0"
 dependencies = [
  "hir-js-w12",
  "parse-js",
+]
+
+[[package]]
+name = "semantic-js-w8"
+version = "0.1.0"
+dependencies = [
+ "bitflags 2.10.0",
+ "diagnostics-w8",
+ "hir-js-w8",
+ "rustc-hash",
 ]
 
 [[package]]

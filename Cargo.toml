@@ -41,6 +41,10 @@ members = [
   "typecheck-ts-w24",
   "typecheck-ts-w13",
   "hir-js-w72",
+  "diagnostics-w8",
+  "hir-js-w8",
+  "semantic-js-w8",
+  "emit-js-w70",
 ]
 
 [profile.release]

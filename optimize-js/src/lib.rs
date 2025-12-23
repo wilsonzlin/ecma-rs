@@ -24,8 +24,8 @@ use opt::optpass_trivial_dce::optpass_trivial_dce;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
+use parse_js::error::SyntaxResult;
 use parse_js::parse;
-use parse_js::SyntaxResult;
 use serde::Serialize;
 use ssa::ssa_deconstruct::deconstruct_ssa;
 use ssa::ssa_insert_phis::insert_phis_for_ssa_construction;
@@ -38,6 +38,7 @@ use symbol::var_analysis::VarAnalysis;
 use symbol_js::compute_symbols;
 use symbol_js::symbol::Scope;
 use symbol_js::symbol::Symbol;
+use symbol_js::TopLevelMode;
 use util::counter::Counter;
 use util::debug::OptimizerDebug;
 
@@ -170,7 +171,7 @@ pub struct Program {
 /// Parse, symbolize, and compile source text in one step.
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> SyntaxResult<Program> {
   let mut top_level_node = parse(source)?;
-  compute_symbols(&mut top_level_node, mode.into());
+  compute_symbols(&mut top_level_node, mode);
   Ok(Program::compile(top_level_node, debug))
 }
 
