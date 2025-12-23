@@ -1,0 +1,7 @@
+[package]
+name = "types-ts-w12"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+semantic_js = { package = "semantic-js-w12", path = "../semantic-js-w12" }

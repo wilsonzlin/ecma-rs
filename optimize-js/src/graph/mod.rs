@@ -192,10 +192,7 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
   }
 
   /// Postorder: visit all children, then self.
-  pub fn calculate_postorder<'a>(
-    &'a self,
-    entry: &'a K,
-  ) -> (Vec<&'a K>, HashMap<&'a K, usize>)
+  pub fn calculate_postorder<'a>(&'a self, entry: &'a K) -> (Vec<&'a K>, HashMap<&'a K, usize>)
   where
     K: Ord,
   {

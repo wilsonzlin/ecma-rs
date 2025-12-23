@@ -31,6 +31,10 @@ members = [
   "typecheck-ts-salsa6",
   "semantic-js-ts9",
   "typecheck-ts-const18",
+  "hir-js-w12",
+  "semantic-js-w12",
+  "types-ts-w12",
+  "typecheck-ts-w12",
 ]
 
 [profile.release]

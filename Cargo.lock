@@ -642,6 +642,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "hir-js-w12"
+version = "0.1.0"
+dependencies = [
+ "parse-js",
+]
+
+[[package]]
 name = "http"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1522,6 +1529,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "semantic-js-w12"
+version = "0.1.0"
+dependencies = [
+ "hir-js-w12",
+ "parse-js",
+]
+
+[[package]]
 name = "semver"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1973,6 +1988,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "typecheck-ts-w12"
+version = "0.1.0"
+dependencies = [
+ "hir-js-w12",
+ "parse-js",
+ "pretty_assertions",
+ "semantic-js-w12",
+ "types-ts-w12",
+]
+
+[[package]]
 name = "types-ts"
 version = "0.1.0"
 dependencies = [
@@ -2006,6 +2032,13 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "tracing",
+]
+
+[[package]]
+name = "types-ts-w12"
+version = "0.1.0"
+dependencies = [
+ "semantic-js-w12",
 ]
 
 [[package]]

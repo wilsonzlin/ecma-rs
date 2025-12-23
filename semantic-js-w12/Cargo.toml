@@ -1,0 +1,8 @@
+[package]
+name = "semantic-js-w12"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hir_js = { package = "hir-js-w12", path = "../hir-js-w12" }
+parse-js = { path = "../parse-js" }
