@@ -18,8 +18,10 @@ pub struct Func {
   pub async_: bool,
   #[drive(skip)]
   pub generator: bool,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub type_parameters: Option<Vec<Node<TypeParameter>>>,
   pub parameters: Vec<Node<ParamDecl>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   pub return_type: Option<Node<TypeExpr>>,
   pub body: Option<FuncBody>, // TypeScript: overload signatures have no body
 }

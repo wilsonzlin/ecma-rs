@@ -885,7 +885,7 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let quote = lexer.consume_next()?;
   let mut invalid = false;
   loop {
-    // Look for backslash, line terminators, or closing quote
+    // Consume everything up to an escape, a line terminator, or the closing quote.
     let mut m = lexer.while_not_3_chars('\\', '\r', quote);
     let newline = lexer.while_not_char('\n');
     if newline.len() < m.len() {
@@ -900,49 +900,48 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
       m = para_sep;
     }
     lexer.consume(m);
-    // Also check for \n and Unicode line separators
-    if let Ok(c) = lexer.peek(0) {
-      if c == '\n' || c == '\u{2028}' || c == '\u{2029}' {
-        // Bare line terminator without backslash - invalid
-        invalid = true;
-        lexer.skip_expect(c.len_utf8());
-        continue;
-      }
-    }
-    let c = lexer.consume_next()?;
-    if c == quote {
-      break;
-    }
+
+    let c = lexer.peek(0)?;
     match c {
       '\\' => {
-        let escaped_char = lexer.consume_next()?;
-        match escaped_char {
-          '\r' => {
+        // Escape sequence (including line continuations).
+        lexer.skip_expect(1);
+        match lexer.peek_or_eof(0) {
+          Some('\r') => {
+            lexer.skip_expect(1);
             if lexer.peek_or_eof(0) == Some('\n') {
               lexer.skip_expect(1);
             }
           }
-          '\n' | '\u{2028}' | '\u{2029}' => {}
-          _ => {}
-        }
-      }
-      '\n' | '\u{2028}' | '\u{2029}' => {
-        invalid = true;
+          Some('\n') | Some('\u{2028}') | Some('\u{2029}') => {
+            // Line continuation.
+            lexer.skip_expect(c.len_utf8());
+          }
+          Some(next_char) => {
+            lexer.skip_expect(next_char.len_utf8());
+          }
+          None => {}
+        };
       }
       '\r' => {
         invalid = true;
+        lexer.skip_expect(1);
         if lexer.peek_or_eof(0) == Some('\n') {
           lexer.skip_expect(1);
         }
       }
-      _ => {}
-    }
+      '\n' | '\u{2028}' | '\u{2029}' => {
+        invalid = true;
+        lexer.skip_expect(c.len_utf8());
+      }
+      c if c == quote => {
+        lexer.skip_expect(c.len_utf8());
+        break;
+      }
+      _ => unreachable!(),
+    };
   }
-  if invalid {
-    Ok(TT::Invalid)
-  } else {
-    Ok(TT::LiteralString)
-  }
+  Ok(if invalid { TT::Invalid } else { TT::LiteralString })
 }
 
 /// Ends with `${` or backtick.

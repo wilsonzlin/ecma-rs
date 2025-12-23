@@ -5,6 +5,10 @@ use derive_visitor::Drive;
 use derive_visitor::DriveMut;
 use serde::Serialize;
 
+fn is_false(value: &bool) -> bool {
+  !*value
+}
+
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub enum JsxAttrVal {
   Expression(Node<JsxExprContainer>),
@@ -67,6 +71,7 @@ pub struct JsxElem {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct JsxExprContainer {
   #[drive(skip)]
+  #[serde(skip_serializing_if = "is_false")]
   pub spread: bool,
   pub value: Node<Expr>,
 }
