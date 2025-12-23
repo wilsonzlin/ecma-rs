@@ -457,4 +457,11 @@ mod tests {
     assert!(rendered.contains(" --> b.js:1:7"));
     assert!(rendered.contains(" --> a.js:1:7"));
   }
+
+  #[test]
+  fn loc_conversion_is_lossless_when_fitting() {
+    let loc = Loc(10, 20);
+    let range: TextRange = loc.into();
+    assert_eq!(range, TextRange::new(10, 20));
+  }
 }
