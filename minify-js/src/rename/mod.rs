@@ -7,7 +7,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
-use symbol_js::symbol::{Scope, Symbol};
+use symbol_js::symbol::{Scope, ScopeType, Symbol};
 use symbol_js::TopLevelMode;
 
 #[derive(Clone, Debug, Default)]
@@ -102,10 +102,10 @@ impl SymbolCollector {
     }
   }
 
-  fn attach_symbol(&mut self, name: &str, scope: &Scope) -> Option<Symbol> {
+  fn attach_symbol(&mut self, name: &str, scope: &Scope, mark_export: bool) -> Option<Symbol> {
     scope.find_symbol(name.to_string()).map(|sym| {
       self.record_symbol_usage(name, sym, scope);
-      if *self.export_decl_stack.last().unwrap_or(&false) {
+      if mark_export && scope.data().typ() == ScopeType::Module {
         self.exported.insert(sym);
       }
       sym
@@ -145,7 +145,7 @@ impl SymbolCollectorVisitor {
     let scope = node.assoc.get::<Scope>().unwrap();
     match self
       .inner
-      .attach_symbol(&node.stx.name, scope)
+      .attach_symbol(&node.stx.name, scope, false)
       .map(ResolvedSymbol)
     {
       Some(sym) => node.assoc.set(sym),
@@ -157,10 +157,11 @@ impl SymbolCollectorVisitor {
     if self.inner.ignore_id_pats > 0 {
       return;
     }
+    let mark_export = *self.inner.export_decl_stack.last().unwrap_or(&false);
     let scope = node.assoc.get::<Scope>().unwrap();
     match self
       .inner
-      .attach_symbol(&node.stx.name, scope)
+      .attach_symbol(&node.stx.name, scope, mark_export)
       .map(ResolvedSymbol)
     {
       Some(sym) => node.assoc.set(sym),
@@ -170,9 +171,10 @@ impl SymbolCollectorVisitor {
 
   fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
     let scope = node.assoc.get::<Scope>().unwrap();
+    let mark_export = *self.inner.export_decl_stack.last().unwrap_or(&false);
     if let Some(sym) = self
       .inner
-      .attach_symbol(&node.stx.name, scope)
+      .attach_symbol(&node.stx.name, scope, mark_export)
       .map(ResolvedSymbol)
     {
       node.assoc.set(sym);
