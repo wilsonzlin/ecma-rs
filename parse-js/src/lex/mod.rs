@@ -108,7 +108,7 @@ impl PatternMatcher {
 }
 
 #[derive(Debug)]
-struct LexNotFound;
+pub(crate) struct LexNotFound;
 
 type LexResult<T> = Result<T, LexNotFound>;
 
@@ -940,7 +940,7 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
 }
 
 /// Ends with `${` or backtick.
-pub fn lex_template_string_continue(lexer: &mut Lexer<'_>) -> LexResult<TT> {
+pub(crate) fn lex_template_string_continue(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let mut ended = false;
   loop {
     lexer.consume(lexer.while_not_3_chars('\\', '`', '$'));

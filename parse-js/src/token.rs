@@ -206,6 +206,7 @@ pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   set.insert(TT::KeywordModule);
   set.insert(TT::KeywordNamespace);
   set.insert(TT::KeywordNever);
+  set.insert(TT::KeywordVoid);
   set.insert(TT::KeywordNumberType);
   set.insert(TT::KeywordObjectType);
   set.insert(TT::KeywordOverride);

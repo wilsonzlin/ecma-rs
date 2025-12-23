@@ -599,6 +599,7 @@ impl<'a> Parser<'a> {
                 && next_token.typ != TT::BracketClose
                 && next_token.typ != TT::BraceClose
                 && next_token.typ != TT::EOF
+                && !terminators.contains(&next_token.typ)
             };
 
             let operand = if has_operand {

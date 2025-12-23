@@ -4,6 +4,7 @@ use crate::ast::node::Node;
 use crate::ast::type_expr::*;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
+use crate::lex::KEYWORDS_MAPPING;
 use crate::token::TT;
 
 impl<'a> Parser<'a> {
@@ -1188,16 +1189,19 @@ impl<'a> Parser<'a> {
 
       // Check for named tuple element: name: Type or name?: Type
       let checkpoint = p.checkpoint();
-      let label = if p.peek().typ == TT::Identifier {
-        let name = p.consume_as_string();
-        if p.peek().typ == TT::Colon || p.peek().typ == TT::Question {
-          Some(name)
+      let label = {
+        let t = p.peek();
+        if t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ) {
+          let name = p.consume_as_string();
+          if p.peek().typ == TT::Colon || p.peek().typ == TT::Question {
+            Some(name)
+          } else {
+            p.restore_checkpoint(checkpoint);
+            None
+          }
         } else {
-          p.restore_checkpoint(checkpoint);
           None
         }
-      } else {
-        None
       };
 
       // For named elements, check for optional before colon: name?: Type

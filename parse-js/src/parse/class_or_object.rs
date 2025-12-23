@@ -21,6 +21,32 @@ use crate::lex::KEYWORDS_MAPPING;
 use crate::token::TT;
 
 impl<'a> Parser<'a> {
+  fn probable_class_member_start(tt: TT) -> bool {
+    matches!(
+      tt,
+      TT::At
+        | TT::Asterisk
+        | TT::BracketOpen
+        | TT::BraceClose
+        | TT::Identifier
+        | TT::LiteralNumber
+        | TT::LiteralString
+        | TT::ParenthesisOpen
+        | TT::PrivateMember
+        | TT::KeywordConstructor
+        | TT::KeywordGet
+        | TT::KeywordSet
+        | TT::KeywordAsync
+        | TT::KeywordStatic
+        | TT::KeywordReadonly
+        | TT::KeywordAccessor
+        | TT::KeywordPublic
+        | TT::KeywordPrivate
+        | TT::KeywordProtected
+        | TT::KeywordAbstract
+    )
+  }
+
   /// Creates a synthetic empty key for special class members (static blocks, index signatures, generators).
   /// These members don't have real keys in the source code.
   fn create_synthetic_class_key(&self) -> ClassOrObjKey {
@@ -422,22 +448,13 @@ impl<'a> Parser<'a> {
             };
             // TypeScript: method overload signatures and abstract methods have no body
             // Also check if next token could start a new member (for overloads without semicolons)
-            let next_could_be_new_member = matches!(
-              p.peek().typ,
-              TT::KeywordPublic
-                | TT::KeywordPrivate
-                | TT::KeywordProtected
-                | TT::KeywordAbstract
-                | TT::KeywordStatic
-                | TT::KeywordReadonly
-                | TT::BraceClose
-            );
+            let next_could_be_new_member = Self::probable_class_member_start(p.peek().typ);
             // For constructors, if next token is not an opening brace, it's an overload signature
             let constructor_without_body = is_constructor && p.peek().typ != TT::BraceOpen;
 
             let body = if p.peek().typ == TT::Semicolon
               || (abstract_ && p.peek().typ != TT::BraceOpen)
-              || next_could_be_new_member
+              || (next_could_be_new_member && p.peek().typ != TT::BraceOpen)
               || constructor_without_body
             {
               let _ = p.consume_if(TT::Semicolon);
@@ -503,7 +520,10 @@ impl<'a> Parser<'a> {
       };
       // TypeScript: method overload signatures and abstract methods have no body
       // Method overloads are indicated by a semicolon instead of a body
-      let body = if p.peek().typ == TT::Semicolon || (abstract_ && p.peek().typ != TT::BraceOpen) {
+      let body = if p.peek().typ == TT::Semicolon
+        || (abstract_ && p.peek().typ != TT::BraceOpen)
+        || (Self::probable_class_member_start(p.peek().typ) && p.peek().typ != TT::BraceOpen)
+      {
         let _ = p.consume_if(TT::Semicolon);
         None
       } else {
