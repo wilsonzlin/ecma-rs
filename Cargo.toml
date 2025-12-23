@@ -17,6 +17,7 @@ members = [
   "hir-js",
   "typecheck-ts",
   "test262",
+  "typecheck-ts-harness",
 ]
 
 [profile.release]

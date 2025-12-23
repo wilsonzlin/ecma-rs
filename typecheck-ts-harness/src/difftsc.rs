@@ -46,7 +46,6 @@ pub struct TscDiagnostic {
   pub start: u32,
   pub end: u32,
   pub category: Option<String>,
-  pub message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -462,7 +461,6 @@ mod tests {
       start: 0,
       end: 4,
       category: None,
-      message: None,
     }];
     let actual = vec![TscDiagnostic {
       code: 1,
@@ -470,9 +468,8 @@ mod tests {
       start: 1,
       end: 5,
       category: None,
-      message: None,
     }];
-    assert!(compare_diagnostics(&expected, &actual, 0).is_some());
-    assert!(compare_diagnostics(&expected, &actual, 1).is_none());
+    assert!(compare_diagnostics(&expected, &actual, 1).is_some());
+    assert!(compare_diagnostics(&expected, &actual, 2).is_none());
   }
 }
