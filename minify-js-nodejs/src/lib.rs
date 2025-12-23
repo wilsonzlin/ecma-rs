@@ -1,4 +1,3 @@
-use minify_js::Session;
 use minify_js::TopLevelMode;
 use neon::prelude::*;
 use neon::types::buffer::TypedArray;
@@ -19,18 +18,20 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
   };
 
   let src_arg = cx.argument::<JsValue>(1)?;
-  let source_bytes: Vec<u8> = if let Ok(js_string) = src_arg.downcast::<JsString, _>(&mut cx) {
-    js_string.value(&mut cx).into_bytes()
+  let source_str = if let Ok(js_string) = src_arg.downcast::<JsString, _>(&mut cx) {
+    js_string.value(&mut cx)
   } else if let Ok(js_buffer) = src_arg.downcast::<JsBuffer, _>(&mut cx) {
     let bytes = js_buffer.as_slice(&mut cx);
-    bytes.to_vec()
+    match std::str::from_utf8(bytes) {
+      Ok(s) => s.to_owned(),
+      Err(_) => return cx.throw_type_error("src buffer must be valid UTF-8"),
+    }
   } else {
     return cx.throw_type_error("src must be a string or Buffer");
   };
 
   let mut out = Vec::new();
-  let session = Session::new();
-  match minify_js::minify(&session, top_level_mode, &source_bytes, &mut out) {
+  match minify_js::minify(top_level_mode, &source_str, &mut out) {
     Ok(()) => Ok(JsBuffer::external(&mut cx, out)),
     Err(err) => cx.throw_error(format!("{:?}", err)),
   }

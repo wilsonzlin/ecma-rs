@@ -2,7 +2,6 @@ use clap::builder::PossibleValuesParser;
 use clap::builder::TypedValueParser;
 use clap::Parser;
 use minify_js::minify;
-use minify_js::Session;
 use minify_js::TopLevelMode;
 use std::fs::File;
 use std::io::stdin;
@@ -54,8 +53,7 @@ fn main() {
     }
   };
   let mut output = Vec::new();
-  let session = Session::new();
-  minify(&session, args.mode, source.as_bytes(), &mut output).expect("minify");
+  minify(args.mode, source, &mut output).expect("minify");
   match args.output {
     Some(p) => File::create(p)
       .expect("open output file")

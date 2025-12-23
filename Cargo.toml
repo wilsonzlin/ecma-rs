@@ -51,6 +51,7 @@ members = [
   "hir-js-w69",
   "semantic-js-w111",
   "hir-js-w98",
+  "semantic-js-w88",
 ]
 
 [profile.release]
