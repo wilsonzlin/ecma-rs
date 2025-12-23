@@ -1,0 +1,35 @@
+{
+  "$t": "Import",
+  "attributes": null,
+  "default": null,
+  "module": "mod",
+  "names": {
+    "Specific": [
+      {
+        "alias": {
+          "pat": {
+            "$t": "Id",
+            "name": "b"
+          }
+        },
+        "importable": {
+          "Ident": "\\u0062"
+        },
+        "type_only": false
+      },
+      {
+        "alias": {
+          "pat": {
+            "$t": "Id",
+            "name": "c"
+          }
+        },
+        "importable": {
+          "Str": "\\u0062"
+        },
+        "type_only": false
+      }
+    ]
+  },
+  "type_only": false
+}
