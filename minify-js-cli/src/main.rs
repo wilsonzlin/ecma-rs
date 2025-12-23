@@ -10,6 +10,7 @@ use std::io::stdout;
 use std::io::Read;
 use std::io::Write;
 use std::path::PathBuf;
+use std::str;
 
 #[derive(Parser)]
 #[command(name = "minify-js", about = "Extremely fast JS minifier")]
@@ -45,9 +46,10 @@ fn main() {
     None => Box::new(stdin()),
   };
   input_file.read_to_end(&mut input).expect("read input");
+  let input = str::from_utf8(&input).expect("input must be valid UTF-8");
   let mut output = Vec::new();
   let session = Session::new();
-  minify(&session, args.mode, &input, &mut output).expect("minify");
+  minify(&session, args.mode, input.as_bytes(), &mut output).expect("minify");
   match args.output {
     Some(p) => File::create(p)
       .expect("open output file")

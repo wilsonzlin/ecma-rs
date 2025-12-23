@@ -16,6 +16,21 @@ impl Session {
   }
 }
 
+/// Minify UTF-8 JavaScript from a string slice and write to the provided
+/// output buffer. This helper mirrors the worker’s simplified API while we
+/// retain the Session-based byte API for existing callers.
+pub fn minify_str(
+  top_level_mode: TopLevelMode,
+  source: &str,
+  output: &mut Vec<u8>,
+) -> Result<(), MinifyError> {
+  let mut top_level_node = parse(source).map_err(MinifyError::Syntax)?;
+  compute_symbols(&mut top_level_node, top_level_mode);
+  output.clear();
+  output.extend_from_slice(source.as_bytes());
+  Ok(())
+}
+
 /// Minifies UTF-8 JavaScript code.
 ///
 /// # Arguments
@@ -42,8 +57,5 @@ pub fn minify(
   output: &mut Vec<u8>,
 ) -> Result<(), MinifyError> {
   let source_str = std::str::from_utf8(source).map_err(MinifyError::InvalidUtf8)?;
-  let mut top_level_node = parse(source_str).map_err(MinifyError::Syntax)?;
-  compute_symbols(&mut top_level_node, top_level_mode);
-  output.extend_from_slice(source_str.as_bytes());
-  Ok(())
+  minify_str(top_level_mode, source_str, output)
 }
