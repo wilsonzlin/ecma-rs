@@ -3,6 +3,25 @@
 Utilities for running the TypeScript conformance suites and differential tests
 against `tsc`.
 
+## Quick start
+
+```
+# 1) Bring in the upstream TS suite (submodule)
+git submodule update --init --recursive parse-js/tests/TypeScript
+
+# 2) Install Node prereqs (once)
+npm install typescript
+
+# 3) Run the Rust conformance harness
+cargo run -p typecheck-ts-harness --release -- conformance --filter "*/es2020/**" --shard 0/8
+
+# 4) (Optional) Regenerate difftsc baselines for local fixtures
+cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --update-baselines
+```
+
+If any step silently produces zero tests or fails with “cannot find module
+`typescript`”, revisit the prerequisites below.
+
 ## Prerequisites
 
 ### TypeScript upstream suite (submodule)
