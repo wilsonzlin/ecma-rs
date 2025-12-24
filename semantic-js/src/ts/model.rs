@@ -27,6 +27,11 @@
 //! only represented through re-exports/imports rather than global name
 //! injection.
 //!
+//! Binder diagnostics use the shared [`diagnostics`] crate with stable codes:
+//! - `BIND1001`: duplicate export
+//! - `BIND1002`: unresolved import/export or missing export
+//! - `BIND1003`: unsupported export assignment or exports in a script module
+//!
 //! ## Determinism expectations
 //!
 //! - Export maps and global symbol maps use [`BTreeMap`] to provide stable,
@@ -132,11 +137,13 @@ pub struct Decl {
   pub kind: DeclKind,
   pub is_ambient: bool,
   pub exported: Exported,
+  pub span: TextRange,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Import {
   pub specifier: String,
+  pub specifier_span: TextRange,
   pub default: Option<ImportDefault>,
   pub namespace: Option<ImportNamespace>,
   pub named: Vec<ImportNamed>,
@@ -147,12 +154,14 @@ pub struct Import {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportDefault {
   pub local: String,
+  pub local_span: TextRange,
   pub is_type_only: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportNamespace {
   pub local: String,
+  pub local_span: TextRange,
   pub is_type_only: bool,
 }
 
@@ -161,17 +170,22 @@ pub struct ImportNamed {
   pub imported: String,
   pub local: String,
   pub is_type_only: bool,
+  pub imported_span: TextRange,
+  pub local_span: TextRange,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportSpecifier {
   pub local: String,
   pub exported: Option<String>,
+  pub local_span: TextRange,
+  pub exported_span: Option<TextRange>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamedExport {
   pub specifier: Option<String>,
+  pub specifier_span: Option<TextRange>,
   pub items: Vec<ExportSpecifier>,
   pub is_type_only: bool,
 }
@@ -180,6 +194,7 @@ pub struct NamedExport {
 pub struct ExportAll {
   pub specifier: String,
   pub is_type_only: bool,
+  pub specifier_span: TextRange,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -187,7 +202,10 @@ pub enum Export {
   Named(NamedExport),
   All(ExportAll),
   /// `export =` assignments are tracked for diagnostics.
-  ExportAssignment(String),
+  ExportAssignment {
+    expr: String,
+    span: TextRange,
+  },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

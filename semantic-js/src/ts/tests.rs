@@ -28,7 +28,12 @@ fn mk_decl(def: u32, name: &str, kind: DeclKind, exported: Exported) -> Decl {
     kind,
     is_ambient: false,
     exported,
+    span: span(def),
   }
+}
+
+fn span(start: u32) -> TextRange {
+  TextRange::new(start, start + 1)
 }
 
 #[test]
@@ -85,9 +90,12 @@ fn reexport_chain_uses_original_symbols() {
   let mut b = HirFile::module(file_b);
   b.exports.push(Export::Named(NamedExport {
     specifier: Some("a".to_string()),
+    specifier_span: Some(span(10)),
     items: vec![ExportSpecifier {
       local: "foo".to_string(),
       exported: None,
+      local_span: span(11),
+      exported_span: None,
     }],
     is_type_only: false,
   }));
@@ -96,6 +104,7 @@ fn reexport_chain_uses_original_symbols() {
   c.exports.push(Export::All(ExportAll {
     specifier: "b".to_string(),
     is_type_only: false,
+    specifier_span: span(12),
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -148,6 +157,7 @@ fn circular_export_is_cycle_safe() {
   a.exports.push(Export::All(ExportAll {
     specifier: "b".to_string(),
     is_type_only: false,
+    specifier_span: span(20),
   }));
 
   let mut b = HirFile::module(file_b);
@@ -156,6 +166,7 @@ fn circular_export_is_cycle_safe() {
   b.exports.push(Export::All(ExportAll {
     specifier: "a".to_string(),
     is_type_only: false,
+    specifier_span: span(21),
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -206,20 +217,26 @@ fn type_only_import_export_isolated() {
   let mut b = HirFile::module(file_b);
   b.imports.push(Import {
     specifier: "a".to_string(),
+    specifier_span: span(30),
     default: None,
     namespace: None,
     named: vec![ImportNamed {
       imported: "Foo".to_string(),
       local: "Foo".to_string(),
       is_type_only: true,
+      imported_span: span(31),
+      local_span: span(32),
     }],
     is_type_only: false,
   });
   b.exports.push(Export::Named(NamedExport {
     specifier: None,
+    specifier_span: None,
     items: vec![ExportSpecifier {
       local: "Foo".to_string(),
       exported: None,
+      local_span: span(33),
+      exported_span: None,
     }],
     is_type_only: false,
   }));
@@ -272,9 +289,12 @@ fn declaration_merging_orders_deterministically() {
     .push(mk_decl(7, "Classy", DeclKind::Class, Exported::No));
   hir.exports.push(Export::Named(NamedExport {
     specifier: None,
+    specifier_span: None,
     items: vec![ExportSpecifier {
       local: "Classy".to_string(),
       exported: None,
+      local_span: span(50),
+      exported_span: None,
     }],
     is_type_only: true,
   }));
@@ -338,8 +358,11 @@ fn declaration_merging_orders_deterministically() {
 fn unresolved_import_export_have_spans() {
   let file = FileId(50);
   let mut hir = HirFile::module(file);
+  let import_span = span(1);
+  let export_span = span(2);
   hir.imports.push(Import {
     specifier: "missing".to_string(),
+    specifier_span: import_span,
     default: None,
     namespace: None,
     named: Vec::new(),
@@ -348,6 +371,7 @@ fn unresolved_import_export_have_spans() {
   hir.exports.push(Export::All(ExportAll {
     specifier: "missing".to_string(),
     is_type_only: false,
+    specifier_span: export_span,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
@@ -368,7 +392,11 @@ fn unresolved_import_export_have_spans() {
   for diag in diags {
     assert_eq!(diag.code, "BIND1002");
     assert_eq!(diag.primary.file, file);
-    assert_eq!(diag.primary.range, TextRange::new(0, 0));
+    assert!(
+      diag.primary.range == import_span || diag.primary.range == export_span,
+      "unexpected span: {:?}",
+      diag.primary.range
+    );
   }
 }
 
@@ -410,12 +438,15 @@ fn resolve_imports_point_to_origin_module() {
   let mut b = HirFile::module(file_b);
   b.imports.push(Import {
     specifier: "a".to_string(),
+    specifier_span: span(50),
     default: None,
     namespace: None,
     named: vec![ImportNamed {
       imported: "Foo".to_string(),
       local: "Foo".to_string(),
       is_type_only: false,
+      imported_span: span(60),
+      local_span: span(61),
     }],
     is_type_only: false,
   });
@@ -452,6 +483,37 @@ fn resolve_imports_point_to_origin_module() {
 }
 
 #[test]
+fn unresolved_import_reports_specifier_span() {
+  let file = FileId(50);
+  let mut hir = HirFile::module(file);
+  let spec_range = TextRange::new(5, 15);
+  hir.imports.push(Import {
+    specifier: "./missing".to_string(),
+    specifier_span: spec_range,
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Foo".to_string(),
+      local: "Foo".to_string(),
+      is_type_only: false,
+      imported_span: span(60),
+      local_span: span(61),
+    }],
+    is_type_only: false,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1002");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, spec_range);
+}
+
+#[test]
 fn type_only_imports_skip_value_namespace() {
   let file_a = FileId(60);
   let file_b = FileId(61);
@@ -463,12 +525,15 @@ fn type_only_imports_skip_value_namespace() {
   let mut b = HirFile::module(file_b);
   b.imports.push(Import {
     specifier: "a".to_string(),
+    specifier_span: span(70),
     default: None,
     namespace: None,
     named: vec![ImportNamed {
       imported: "Foo".to_string(),
       local: "Foo".to_string(),
       is_type_only: true,
+      imported_span: span(71),
+      local_span: span(72),
     }],
     is_type_only: false,
   });
@@ -508,6 +573,7 @@ fn resolve_export_handles_export_star_cycles() {
   a.exports.push(Export::All(ExportAll {
     specifier: "b".to_string(),
     is_type_only: false,
+    specifier_span: span(80),
   }));
 
   let mut b = HirFile::module(file_b);
@@ -516,6 +582,7 @@ fn resolve_export_handles_export_star_cycles() {
   b.exports.push(Export::All(ExportAll {
     specifier: "a".to_string(),
     is_type_only: false,
+    specifier_span: span(81),
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -588,4 +655,58 @@ fn global_symbol_groups_are_deterministic() {
   assert!(alpha_value.is_some());
   assert!(alpha_type.is_some());
   assert_ne!(alpha_value, alpha_type);
+}
+
+#[test]
+fn duplicate_export_has_two_labels() {
+  let file_a = FileId(60);
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "Dup", DeclKind::Var, Exported::Named));
+
+  let file_b = FileId(61);
+  let mut b = HirFile::module(file_b);
+  b.decls
+    .push(mk_decl(1, "Dup", DeclKind::Var, Exported::Named));
+  b.imports.push(Import {
+    specifier: "a".to_string(),
+    specifier_span: TextRange::new(10, 13),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Dup".to_string(),
+      local: "FromA".to_string(),
+      is_type_only: false,
+      imported_span: span(62),
+      local_span: span(63),
+    }],
+    is_type_only: false,
+  });
+  b.exports.push(Export::Named(NamedExport {
+    specifier: None,
+    specifier_span: None,
+    items: vec![ExportSpecifier {
+      local: "FromA".to_string(),
+      exported: Some("Dup".to_string()),
+      local_span: span(64),
+      exported_span: Some(TextRange::new(200, 203)),
+    }],
+    is_type_only: false,
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> =
+    maplit::hashmap! { file_a => Arc::new(a), file_b => Arc::new(b) };
+  let resolver = StaticResolver::new(maplit::hashmap! { "a".to_string() => file_a });
+
+  let (_semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1001");
+  assert_eq!(diag.primary.file, file_b);
+  assert_eq!(diag.primary.range, TextRange::new(200, 203));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.file, file_b);
+  assert_eq!(diag.labels[0].span.range, span(1));
+  assert!(!diag.labels[0].is_primary);
 }
