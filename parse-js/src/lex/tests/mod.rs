@@ -4,14 +4,18 @@ use crate::lex::Lexer;
 use crate::token::TT;
 use crate::token::TT::*;
 
-fn check<const N: usize>(code: &str, expecteds: [TT; N]) {
+fn check_with_mode<const N: usize>(code: &str, mode: LexMode, expecteds: [TT; N]) {
   let mut lexer = Lexer::new(code);
   for expected in expecteds {
-    let t = lex_next(&mut lexer, LexMode::Standard);
+    let t = lex_next(&mut lexer, mode);
     assert_eq!(t.typ, expected);
   }
-  let t = lex_next(&mut lexer, LexMode::Standard);
+  let t = lex_next(&mut lexer, mode);
   assert_eq!(EOF, t.typ);
+}
+
+fn check<const N: usize>(code: &str, expecteds: [TT; N]) {
+  check_with_mode(code, LexMode::Standard, expecteds);
 }
 
 fn check_preceded_by_line_terminator(code: &str, expected: TT, preceded: bool) {
@@ -28,8 +32,26 @@ fn test_lex_keywords() {
 }
 
 #[test]
+fn test_keyword_prefix_with_unicode_identifiers() {
+  check("classΩ", [Identifier]);
+  check("interfaceЖ", [Identifier]);
+}
+
+#[test]
 fn test_lex_identifiers() {
   check("h929", [Identifier]);
+}
+
+#[test]
+fn test_unicode_escape_identifiers() {
+  check(r"\u0061bc", [Identifier]);
+  check(r"a\u{62}c", [Identifier]);
+  check(r"\u0063lass", [Identifier]);
+}
+
+#[test]
+fn test_jsx_identifier_with_hyphen_and_unicode() {
+  check_with_mode("Ω-foo", LexMode::JsxTag, [Identifier]);
 }
 
 #[test]
