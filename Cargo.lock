@@ -1901,15 +1901,6 @@ name = "typecheck-ts-flow14"
 version = "0.1.0"
 
 [[package]]
-name = "typecheck-ts-h19"
-version = "0.1.0"
-dependencies = [
- "diagnostics",
- "parse-js",
- "thiserror",
-]
-
-[[package]]
 name = "typecheck-ts-harness"
 version = "0.1.0"
 dependencies = [
@@ -1923,23 +1914,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "typecheck-ts",
- "walkdir",
-]
-
-[[package]]
-name = "typecheck-ts-harness19"
-version = "0.1.0"
-dependencies = [
- "assert_cmd",
- "clap",
- "diagnostics",
- "globset",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "typecheck-ts-h19",
  "walkdir",
 ]
 

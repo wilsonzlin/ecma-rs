@@ -28,8 +28,6 @@ members = [
   "semantic-js-w12",
   "types-ts-w12",
   "typecheck-ts-w12",
-  "typecheck-ts-h19",
-  "typecheck-ts-harness19",
   "typecheck-ts-w13",
   "diagnostics-w8",
   "hir-js-w8",

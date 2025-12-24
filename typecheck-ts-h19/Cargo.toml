@@ -1,9 +1,0 @@
-[package]
-name = "typecheck-ts-h19"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-diagnostics = { path = "../diagnostics", features = ["parse-js"] }
-parse-js = { path = "../parse-js" }
-thiserror = "1.0"
