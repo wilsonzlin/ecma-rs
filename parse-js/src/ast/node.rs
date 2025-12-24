@@ -1,11 +1,11 @@
 use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::loc::Loc;
-use ahash::HashMap;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
 use serde::Serialize;
 use serde::Serializer;
+use smallvec::SmallVec;
 use std::any::Any;
 use std::any::TypeId;
 use std::fmt::Debug;
@@ -16,18 +16,47 @@ use std::fmt::{self};
 pub struct NodeAssocData {
   // Make Node movable across threads (e.g. rayon) by bounding value to Send + Sync too.
   #[drive(skip)]
-  map: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+  items: SmallVec<[(TypeId, Box<dyn Any + Send + Sync>); 1]>,
 }
 
 impl NodeAssocData {
+  pub fn is_empty(&self) -> bool {
+    self.items.is_empty()
+  }
+
   pub fn get<T: Any>(&self) -> Option<&T> {
     let t = TypeId::of::<T>();
-    self.map.get(&t).map(|v| v.downcast_ref().unwrap())
+    self
+      .items
+      .iter()
+      .find(|(id, _)| *id == t)
+      .map(|(_, v)| v.downcast_ref().unwrap())
+  }
+
+  pub fn get_mut<T: Any>(&mut self) -> Option<&mut T> {
+    let t = TypeId::of::<T>();
+    self
+      .items
+      .iter_mut()
+      .find(|(id, _)| *id == t)
+      .map(|(_, v)| v.downcast_mut().unwrap())
   }
 
   pub fn set<T: Any + Send + Sync>(&mut self, v: T) {
     let t = TypeId::of::<T>();
-    self.map.insert(t, Box::from(v));
+    if let Some((_, existing)) = self.items.iter_mut().find(|(id, _)| *id == t) {
+      *existing = Box::new(v);
+    } else {
+      self.items.push((t, Box::new(v)));
+    }
+  }
+
+  pub fn remove<T: Any>(&mut self) -> Option<T> {
+    let t = TypeId::of::<T>();
+    self.items.iter().position(|(id, _)| *id == t).map(|idx| {
+      let (_, v) = self.items.remove(idx);
+      *v.downcast::<T>().unwrap()
+    })
   }
 }
 
@@ -128,10 +157,32 @@ mod tests {
 
   #[test]
   fn test_node_assoc_data() {
-    struct MyType(u32);
+    struct First(u32);
+    struct Second(&'static str);
+
     let mut assoc = NodeAssocData::default();
-    assoc.set(MyType(32));
-    let v = assoc.get::<MyType>().unwrap();
-    assert_eq!(v.0, 32);
+    assert!(assoc.is_empty());
+
+    assoc.set(First(32));
+    assert!(!assoc.is_empty());
+    assert_eq!(assoc.get::<First>().unwrap().0, 32);
+
+    assoc.set(Second("ok"));
+    assert_eq!(assoc.get::<First>().unwrap().0, 32);
+    assert_eq!(assoc.get::<Second>().unwrap().0, "ok");
+
+    assoc.set(First(64));
+    assert_eq!(assoc.get::<First>().unwrap().0, 64);
+
+    let first_mut = assoc.get_mut::<First>().unwrap();
+    first_mut.0 = 128;
+    assert_eq!(assoc.get::<First>().unwrap().0, 128);
+
+    assert_eq!(assoc.remove::<First>().unwrap().0, 128);
+    assert!(assoc.get::<First>().is_none());
+    assert!(!assoc.is_empty());
+    assert_eq!(assoc.remove::<Second>().unwrap().0, "ok");
+    assert!(assoc.is_empty());
+    assert!(assoc.remove::<Second>().is_none());
   }
 }
