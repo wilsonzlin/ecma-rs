@@ -4,15 +4,11 @@ use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::il::s2i::DUMMY_LABEL;
 use ahash::HashMap;
-use ahash::HashMapExt;
 use ahash::HashSet;
-use ahash::HashSetExt;
 use itertools::Itertools;
 use serde::Serialize;
 use std::collections::VecDeque;
 use std::iter;
-use std::ops::Deref;
-use std::ops::DerefMut;
 
 /// Wrapper over a Graph<u32> that provides owned types and better method names,
 /// as well as domain-specific methods.

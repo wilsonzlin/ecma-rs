@@ -169,7 +169,7 @@ fn emit_jsx_child<W: fmt::Write>(out: &mut W, child: &JsxElemChild) -> EmitResul
   match child {
     JsxElemChild::Element(elem) => emit_jsx_elem(out, elem),
     JsxElemChild::Expr(expr) => emit_jsx_expr_container(out, expr),
-    JsxElemChild::Text(text) => escape_jsx_child_text(out, &text.stx.value),
+    JsxElemChild::Text(text) => emit_jsx_expression_text(out, text),
   }
 }
 

@@ -1,7 +1,6 @@
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::Arg;
 use crate::il::inst::InstTyp;
-use ahash::HashMap;
 use ahash::HashSet;
 use ahash::HashSetExt;
 

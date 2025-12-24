@@ -1,5 +1,4 @@
 use crate::cfg::cfg::Cfg;
-use crate::cfg::cfg::CfgBBlocks;
 use crate::il::inst::Inst;
 use ahash::HashMap;
 use ahash::HashMapExt;
@@ -7,7 +6,6 @@ use ahash::HashSet;
 use ahash::HashSetExt;
 use itertools::chain;
 use itertools::Itertools;
-use std::collections::hash_map::Entry;
 use std::collections::VecDeque;
 use std::hash::Hash;
 

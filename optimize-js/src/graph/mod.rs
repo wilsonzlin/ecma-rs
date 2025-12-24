@@ -216,7 +216,6 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
 mod tests {
   use super::Graph;
   use ahash::HashSet;
-  use itertools::Itertools;
 
   fn assert_edges(graph: &Graph<u32>, edges: &[(u32, u32)]) {
     assert_eq!(

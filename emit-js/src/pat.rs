@@ -41,6 +41,7 @@ pub fn emit_param_decl<W: Write>(out: &mut W, decl: &Node<ParamDecl>) -> fmt::Re
   Ok(())
 }
 
+#[allow(dead_code)] // Public helper for downstream emitters that need to print standalone class/function names.
 pub fn emit_class_or_func_name<W: Write>(out: &mut W, name: &Node<ClassOrFuncName>) -> fmt::Result {
   out.write_str(&name.stx.name)
 }

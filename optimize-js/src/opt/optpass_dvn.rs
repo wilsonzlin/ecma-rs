@@ -10,7 +10,6 @@ use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::il::inst::UnOp;
 use ahash::HashMap;
-use ahash::HashSet;
 use itertools::Itertools;
 use std::collections::hash_map::Entry;
 use std::mem::swap;
@@ -97,7 +96,7 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
         let (tgt, func, this, args, spreads) = inst.as_call();
         // TODO If constevalable and `tgt` is None.
         match (tgt, func, this, args, spreads) {
-          (Some(_), Arg::Builtin(func), _, args, spread)
+          (Some(_), Arg::Builtin(func), _, args, spreads)
             if spreads.is_empty() && args.iter().all(|a| matches!(a, Arg::Const(_))) =>
           {
             maybe_eval_const_builtin_call(&func, &args.iter().map(|a| a.to_const()).collect_vec())
@@ -127,7 +126,7 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
           })
         }
         InstTyp::Un => {
-          let (tgt, op, arg) = new_inst.as_un();
+          let (_tgt, op, arg) = new_inst.as_un();
           Some(Val::Un {
             op,
             arg: arg.clone(),

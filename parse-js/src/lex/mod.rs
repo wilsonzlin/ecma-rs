@@ -207,19 +207,6 @@ impl<'a> Lexer<'a> {
     }
   }
 
-  fn through_char(&self, c: char) -> LexResult<Match> {
-    if c.is_ascii() {
-      memchr(c as u8, self.source[self.next..].as_bytes())
-        .map(|pos| Match(pos + 1))
-        .ok_or_else(|| LexNotFound)
-    } else {
-      self.source[self.next..]
-        .find(c)
-        .map(|pos| Match(pos + c.len_utf8()))
-        .ok_or_else(|| LexNotFound)
-    }
-  }
-
   fn while_not_char(&self, a: char) -> Match {
     if a.is_ascii() {
       Match(memchr(a as u8, self.source[self.next..].as_bytes()).unwrap_or(self.remaining()))
@@ -278,10 +265,6 @@ impl<'a> Lexer<'a> {
       }
     }
     Match(len)
-  }
-
-  fn range(&self, m: Match) -> Loc {
-    Loc(self.next, self.next + m.len())
   }
 
   fn consume(&mut self, m: Match) -> Match {

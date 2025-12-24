@@ -3,9 +3,6 @@ use crate::eval::consteval::coerce_to_bool;
 use crate::il::inst::Arg;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
-use ahash::HashMap;
-use ahash::HashSet;
-use ahash::HashSetExt;
 use itertools::Itertools;
 
 // Correctness:
@@ -33,10 +30,10 @@ pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
       let Arg::Const(cond) = cond else {
         continue;
       };
-      let (always_child, never_child) = if coerce_to_bool(cond) {
-        (true_label, false_label)
+      let never_child = if coerce_to_bool(cond) {
+        false_label
       } else {
-        (false_label, true_label)
+        true_label
       };
       // Drop CondGoto inst.
       cfg.bblocks.get_mut(label).pop().unwrap();

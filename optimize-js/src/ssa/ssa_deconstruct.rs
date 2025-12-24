@@ -37,7 +37,7 @@ pub fn deconstruct_ssa(cfg: &mut Cfg, c_label: &mut Counter) {
     new_bblocks.extend(new_bblocks_by_parent.into_values());
   }
   new_bblocks.sort_by_key(|b| b.label);
-  for mut b in new_bblocks {
+  for b in new_bblocks {
     // Detach parent from child.
     cfg.graph.disconnect(b.parent, b.child);
     // Update any CondGoto inst in parent.
