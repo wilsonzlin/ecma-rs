@@ -1,3 +1,4 @@
+#![doc = include_str!("../README.md")]
 //! Shared diagnostics model and rendering utilities.
 //!
 //! The data structures here are intentionally minimal and deterministic so they
@@ -359,6 +360,30 @@ impl Ord for Diagnostic {
   }
 }
 
+/// Helper for emitting an Internal Compiler Error diagnostic (`ICE0001`).
+pub fn ice(primary: Span, message: impl Into<String>) -> Diagnostic {
+  Diagnostic::error("ICE0001", message, primary).with_note(
+    "internal compiler error: this is a bug in the tool; please file an issue with a reproduction",
+  )
+}
+
+/// Helper for emitting a host/environment failure diagnostic (`HOST0001`).
+///
+/// Provide a span when the failure can be tied back to user input; otherwise a
+/// zero-length placeholder span is used so renderers can still produce output.
+pub fn host_error(primary: Option<Span>, message: impl Into<String>) -> Diagnostic {
+  let mut diagnostic = Diagnostic::error(
+    "HOST0001",
+    message,
+    primary.unwrap_or_else(|| Span::new(FileId(0), TextRange::new(0, 0))),
+  );
+  if primary.is_none() {
+    diagnostic =
+      diagnostic.with_note("no source span available for this host error; input may be missing");
+  }
+  diagnostic
+}
+
 /// Convert a parse-js [`SyntaxError`] into a [`Diagnostic`].
 #[cfg(feature = "parse-js")]
 pub fn diagnostic_from_syntax_error(file: FileId, err: &SyntaxError) -> Diagnostic {
@@ -609,6 +634,31 @@ mod tests {
     assert!(span.contains(2));
     assert!(span.contains(5));
     assert!(!span.contains(6));
+  }
+
+  #[test]
+  fn ice_helper_sets_defaults() {
+    let span = Span::new(FileId(1), TextRange::new(1, 2));
+    let diagnostic = ice(span, "boom");
+    assert_eq!(diagnostic.code, "ICE0001");
+    assert_eq!(diagnostic.primary, span);
+    assert_eq!(diagnostic.severity, Severity::Error);
+    assert!(diagnostic
+      .notes
+      .iter()
+      .any(|note| note.contains("internal compiler error")));
+  }
+
+  #[test]
+  fn host_error_without_span_adds_placeholder_and_note() {
+    let diagnostic = host_error(None, "disk full");
+    assert_eq!(diagnostic.code, "HOST0001");
+    assert_eq!(diagnostic.primary.file, FileId(0));
+    assert_eq!(diagnostic.primary.range, TextRange::new(0, 0));
+    assert!(diagnostic
+      .notes
+      .iter()
+      .any(|note| note.contains("no source span available")));
   }
 
   #[cfg(feature = "parse-js")]
