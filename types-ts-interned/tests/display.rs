@@ -3,6 +3,7 @@ use types_ts_interned::Indexer;
 use types_ts_interned::ObjectType;
 use types_ts_interned::PropData;
 use types_ts_interned::PropKey;
+use types_ts_interned::Property;
 use types_ts_interned::Shape;
 use types_ts_interned::Signature;
 use types_ts_interned::TemplateChunk;
@@ -115,4 +116,84 @@ fn formats_nested_combinations() {
     formatted,
     "true | `foo${string}bar` & keyof { public readonly a: string; b?: number; [string]: number } | { public readonly a: string; b?: number; [string]: number }[keyof { public readonly a: string; b?: number; [string]: number }]",
   );
+}
+
+#[test]
+fn escapes_string_literals_and_property_keys() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let name = store.intern_name("line\"one\"\nline\\two");
+
+  let shape_id = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(name),
+      data: PropData {
+        ty: primitives.string,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let obj = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  assert_eq!(
+    format!("{}", store.display(obj)),
+    "{ \"line\\\"one\\\"\\nline\\\\two\": string }"
+  );
+
+  let str_lit = store.intern_type(TypeKind::StringLiteral(name));
+  assert_eq!(
+    format!("{}", store.display(str_lit)),
+    "\"line\\\"one\\\"\\nline\\\\two\""
+  );
+}
+
+#[test]
+fn escapes_template_literal_chunks() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tpl = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+    head: "start`".into(),
+    spans: vec![TemplateChunk {
+      literal: "`and ${finish}".into(),
+      ty: primitives.number,
+    }],
+  }));
+
+  let formatted = format!("{}", store.display(tpl));
+  assert_eq!(formatted, "`start\\`${number}\\`and \\${finish}`");
+}
+
+#[test]
+fn formats_unicode_identifier_property() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let pi = store.intern_name("π");
+
+  let shape_id = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(pi),
+      data: PropData {
+        ty: primitives.number,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let obj = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  assert_eq!(format!("{}", store.display(obj)), "{ π: number }");
 }
