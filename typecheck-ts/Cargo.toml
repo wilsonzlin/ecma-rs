@@ -15,6 +15,7 @@ parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"
 tracing = "0.1"
+types-ts-interned = { path = "../types-ts-interned" }
 
 [dev-dependencies]
 serde_json = "1.0"

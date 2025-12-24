@@ -1949,6 +1949,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
+ "types-ts-interned",
 ]
 
 [[package]]
