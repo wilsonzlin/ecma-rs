@@ -4,6 +4,7 @@ use crate::ids::ObjectId;
 use crate::ids::ShapeId;
 use crate::ids::SignatureId;
 use crate::ids::TypeId;
+use crate::ids::TypeParamId;
 use crate::kind::CompositeKind;
 use crate::kind::TypeKind;
 use crate::options::TypeOptions;
@@ -13,6 +14,7 @@ use crate::shape::ObjectType;
 use crate::shape::Property;
 use crate::shape::Shape;
 use crate::shape::ShapeInterner;
+use crate::signature::Param;
 use crate::signature::Signature;
 use crate::signature::SignatureInterner;
 use parking_lot::RwLock;
@@ -182,9 +184,13 @@ impl TypeStore {
           .cmp_with(&b.key, &|id| names.items[id.index()].clone())
       });
     }
-    shape.call_signatures.sort();
+    shape
+      .call_signatures
+      .sort_by(|a, b| self.signature_cmp(*a, *b));
     shape.call_signatures.dedup();
-    shape.construct_signatures.sort();
+    shape
+      .construct_signatures
+      .sort_by(|a, b| self.signature_cmp(*a, *b));
     shape.construct_signatures.dedup();
     shape
       .indexers
@@ -266,7 +272,7 @@ impl TypeStore {
       },
       TypeKind::KeyOf(inner) => TypeKind::KeyOf(self.canon(inner)),
       TypeKind::Callable { mut overloads } => {
-        overloads.sort();
+        overloads.sort_by(|a, b| self.signature_cmp(*a, *b));
         overloads.dedup();
         TypeKind::Callable { overloads }
       }
@@ -479,37 +485,60 @@ impl TypeStore {
   }
 
   fn signature_cmp(&self, a: SignatureId, b: SignatureId) -> Ordering {
+    if a == b {
+      return Ordering::Equal;
+    }
     let a_sig = self.signature(a);
     let b_sig = self.signature(b);
+    self
+      .compare_params(&a_sig.params, &b_sig.params)
+      .then_with(|| self.type_cmp(a_sig.ret, b_sig.ret))
+      .then_with(|| self.compare_type_params(&a_sig.type_params, &b_sig.type_params))
+      .then_with(|| self.option_type_cmp(a_sig.this_param, b_sig.this_param))
+      .then_with(|| a.cmp(&b))
+  }
+
+  fn compare_params(&self, a: &[Param], b: &[Param]) -> Ordering {
     let mut idx = 0;
     loop {
-      let Some(a_param) = a_sig.params.get(idx) else {
-        return a_sig
-          .params
-          .len()
-          .cmp(&b_sig.params.len())
-          .then_with(|| self.type_cmp(a_sig.ret, b_sig.ret))
-          .then_with(|| a_sig.type_params.len().cmp(&b_sig.type_params.len()));
+      let Some(a_param) = a.get(idx) else {
+        return a.len().cmp(&b.len());
       };
-      let Some(b_param) = b_sig.params.get(idx) else {
-        return a_sig
-          .params
-          .len()
-          .cmp(&b_sig.params.len())
-          .then_with(|| self.type_cmp(a_sig.ret, b_sig.ret))
-          .then_with(|| a_sig.type_params.len().cmp(&b_sig.type_params.len()));
+      let Some(b_param) = b.get(idx) else {
+        return a.len().cmp(&b.len());
       };
       let ord = a_param
         .optional
         .cmp(&b_param.optional)
         .then_with(|| a_param.rest.cmp(&b_param.rest))
         .then_with(|| self.type_cmp(a_param.ty, b_param.ty))
-        .then_with(|| match (a_param.name, b_param.name) {
-          (Some(a), Some(b)) => self.name(a).cmp(&self.name(b)),
-          (None, None) => Ordering::Equal,
-          (Some(_), None) => Ordering::Greater,
-          (None, Some(_)) => Ordering::Less,
-        });
+        .then_with(|| self.compare_param_names(a_param.name, b_param.name));
+      if ord != Ordering::Equal {
+        return ord;
+      }
+      idx += 1;
+    }
+  }
+
+  fn compare_param_names(&self, a: Option<NameId>, b: Option<NameId>) -> Ordering {
+    match (a, b) {
+      (Some(a), Some(b)) => self.name(a).cmp(&self.name(b)),
+      (None, None) => Ordering::Equal,
+      (Some(_), None) => Ordering::Greater,
+      (None, Some(_)) => Ordering::Less,
+    }
+  }
+
+  fn compare_type_params(&self, a: &[TypeParamId], b: &[TypeParamId]) -> Ordering {
+    let mut idx = 0;
+    loop {
+      let Some(a_param) = a.get(idx) else {
+        return a.len().cmp(&b.len());
+      };
+      let Some(b_param) = b.get(idx) else {
+        return a.len().cmp(&b.len());
+      };
+      let ord = a_param.cmp(b_param);
       if ord != Ordering::Equal {
         return ord;
       }
