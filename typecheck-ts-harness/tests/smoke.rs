@@ -9,7 +9,6 @@ use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::HarnessError;
 use typecheck_ts_harness::JsonReport;
 use typecheck_ts_harness::TestStatus;
-use typecheck_ts_harness::DEFAULT_EXTENSIONS;
 
 fn write_fixtures() -> (tempfile::TempDir, PathBuf) {
   let dir = tempdir().expect("tempdir");
@@ -35,19 +34,13 @@ fn smoke_runs_on_small_fixtures() {
   let options = ConformanceOptions {
     root: root.clone(),
     filter: build_filter(None).unwrap(),
-    filter_pattern: None,
     shard: None,
     json: false,
     update_snapshots: false,
     timeout: Duration::from_secs(2),
     trace: false,
     profile: false,
-    profile_out: PathBuf::from("typecheck_profile.json"),
-    extensions: DEFAULT_EXTENSIONS
-      .iter()
-      .map(|ext| ext.to_string())
-      .collect(),
-    allow_empty: false,
+    ..ConformanceOptions::default()
   };
 
   let report = run_conformance(options).expect("run_conformance");
@@ -102,19 +95,13 @@ fn errors_on_missing_root_unless_allowed() {
   let base_options = ConformanceOptions {
     root: missing_root.clone(),
     filter: build_filter(None).unwrap(),
-    filter_pattern: None,
     shard: None,
     json: false,
     update_snapshots: false,
     timeout: Duration::from_millis(10),
     trace: false,
     profile: false,
-    profile_out: PathBuf::from("typecheck_profile.json"),
-    extensions: DEFAULT_EXTENSIONS
-      .iter()
-      .map(|ext| ext.to_string())
-      .collect(),
-    allow_empty: false,
+    ..ConformanceOptions::default()
   };
 
   let err = run_conformance(base_options.clone()).expect_err("missing root should error");

@@ -10,9 +10,13 @@ use typecheck_ts_harness::difftsc::CommandStatus;
 use typecheck_ts_harness::difftsc::DifftscArgs;
 use typecheck_ts_harness::difftsc::{self};
 use typecheck_ts_harness::run_conformance;
+use typecheck_ts_harness::run_single_conformance;
+use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::HarnessError;
+use typecheck_ts_harness::Isolation;
 use typecheck_ts_harness::Shard;
+use typecheck_ts_harness::SingleTestOptions;
 use typecheck_ts_harness::DEFAULT_EXTENSIONS;
 use typecheck_ts_harness::DEFAULT_PROFILE_OUT;
 
@@ -76,6 +80,22 @@ enum Commands {
     /// Allow running with zero discovered tests
     #[arg(long)]
     allow_empty: bool,
+
+    /// Maximum number of child processes to run concurrently
+    #[arg(long, default_value_t = default_jobs())]
+    jobs: usize,
+
+    /// Isolation strategy for individual tests
+    #[arg(long, value_enum)]
+    isolate: Option<Isolation>,
+
+    /// Run only a single test id and emit a single TestResult JSON line
+    #[arg(long)]
+    single: Option<String>,
+
+    /// Comparison strategy (placeholder)
+    #[arg(long, value_enum, default_value_t = CompareMode::None)]
+    compare: CompareMode,
   },
 }
 
@@ -101,6 +121,10 @@ fn main() -> ExitCode {
       root,
       extensions,
       allow_empty,
+      jobs,
+      isolate,
+      compare,
+      single,
     } => {
       init_tracing(trace);
 
@@ -122,38 +146,72 @@ fn main() -> ExitCode {
         Err(err) => return print_error(err),
       };
 
-      let options = ConformanceOptions {
-        root: root.unwrap_or_else(|| DEFAULT_ROOT.into()),
-        filter,
-        filter_pattern: raw_filter,
-        shard,
-        json,
-        update_snapshots,
-        timeout: Duration::from_secs(timeout_secs),
-        trace,
-        profile,
-        profile_out,
-        extensions,
-        allow_empty,
-      };
-
-      match run_conformance(options) {
-        Ok(report) => {
-          if json {
-            match serde_json::to_string_pretty(&report) {
-              Ok(output) => println!("{output}"),
-              Err(err) => return print_error(err),
-            }
-          } else {
-            println!("Ran {} test(s)", report.summary.total);
-            println!(
-              "Passed: {}, Failed: {}, Timed out: {}",
-              report.summary.passed, report.summary.failed, report.summary.timed_out
-            );
-          }
-          ExitCode::SUCCESS
+      let isolate = isolate.unwrap_or_else(|| {
+        if timeout_secs > 0 || jobs > 1 {
+          Isolation::Process
+        } else {
+          Isolation::None
         }
-        Err(err) => print_error(err),
+      });
+
+      if let Some(id) = single {
+        let options = SingleTestOptions {
+          root: root.clone().unwrap_or_else(|| DEFAULT_ROOT.into()),
+          id,
+          timeout: Duration::from_secs(timeout_secs),
+          trace,
+          profile,
+          profile_out,
+          compare,
+        };
+
+        match run_single_conformance(options) {
+          Ok(result) => match serde_json::to_string(&result) {
+            Ok(output) => {
+              println!("{output}");
+              ExitCode::SUCCESS
+            }
+            Err(err) => print_error(err),
+          },
+          Err(err) => print_error(err),
+        }
+      } else {
+        let options = ConformanceOptions {
+          root: root.unwrap_or_else(|| DEFAULT_ROOT.into()),
+          filter,
+          filter_pattern: raw_filter,
+          shard,
+          json,
+          update_snapshots,
+          timeout: Duration::from_secs(timeout_secs),
+          trace,
+          profile,
+          profile_out,
+          extensions,
+          allow_empty,
+          jobs,
+          isolate,
+          compare,
+        };
+
+        match run_conformance(options) {
+          Ok(report) => {
+            if json {
+              match serde_json::to_string_pretty(&report) {
+                Ok(output) => println!("{output}"),
+                Err(err) => return print_error(err),
+              }
+            } else {
+              println!("Ran {} test(s)", report.summary.total);
+              println!(
+                "Passed: {}, Failed: {}, Timed out: {}",
+                report.summary.passed, report.summary.failed, report.summary.timed_out
+              );
+            }
+            ExitCode::SUCCESS
+          }
+          Err(err) => print_error(err),
+        }
       }
     }
   }
@@ -207,4 +265,8 @@ fn parse_extensions(raw: Option<&str>) -> Result<Vec<String>, HarnessError> {
         .collect(),
     ),
   }
+}
+
+fn default_jobs() -> usize {
+  num_cpus::get().max(1)
 }

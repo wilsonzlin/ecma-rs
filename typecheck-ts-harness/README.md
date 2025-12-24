@@ -104,15 +104,20 @@ cargo run -p typecheck-ts-harness --release -- conformance --extensions ts,tsx,d
   not include the absolute root prefix.
 - Discovery includes `.ts`, `.tsx`, and `.d.ts` by default. Use
   `--extensions <comma-separated>` to add more.
-- Shards are zero-based (`i/n`) and are applied after sorting cases by id; run
-  each shard in a separate process/job for parallelism.
-- Timeouts apply per test case (default 10s) and kill only the offending test,
+- Shards are zero-based (`i/n`) and are applied after sorting cases by id.
+- `--jobs <n>` runs up to `n` tests (in-process); isolation flags are accepted
+  but the runner currently executes tests in-process.
+- Timeouts apply per test case (default 10s) and only fail the offending test,
   not the whole run.
+- `--isolate process|none` is accepted for compatibility; `process` is
+  recommended when per-test timeouts are important.
+- `--single <test-id>` runs one test and prints a single `TestResult` JSON
+  object (used by the orchestrator).
 - `--json` emits machine-readable results; `--trace`/`--profile` are forwarded to
   the checker.
 - `--allow-empty` suppresses the default error when zero tests are discovered.
-- Harness execution is currently single-threaded; for CI parallelism use shards
-  across jobs (example below).
+- `HARNESS_SLEEP_MS_PER_TEST` can inject a per-test delay
+  (`slow=1500,other=10`) to stress timeout handling.
 
 **GitHub Actions suggestion (`ubuntu-latest`, 2-core):**
 

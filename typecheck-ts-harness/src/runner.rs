@@ -1,31 +1,45 @@
-use crate::directives::HarnessDirective;
-use crate::directives::HarnessOptions;
-use crate::discover::discover_conformance_tests;
-use crate::discover::Filter;
-use crate::discover::Shard;
-use crate::discover::TestCase;
+use crate::directives::{HarnessDirective, HarnessOptions};
+use crate::discover::{discover_conformance_tests, load_conformance_test, Filter, Shard, TestCase, DEFAULT_EXTENSIONS};
 use crate::multifile::normalize_name;
 use crate::profile::ProfileBuilder;
-use crate::HarnessError;
-use crate::Result;
-use crate::VirtualFile;
-use serde::Deserialize;
-use serde::Serialize;
+use crate::{HarnessError, Result, VirtualFile};
+use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::{info, info_span, warn};
 use typecheck_ts::lib_support::FileKind;
-use typecheck_ts::Diagnostic;
-use typecheck_ts::FileId;
-use typecheck_ts::Host;
-use typecheck_ts::HostError;
-use typecheck_ts::Program;
-use typecheck_ts::Span;
-use typecheck_ts::TextRange;
+use typecheck_ts::{Diagnostic, FileId, Host, HostError, Program, Span, TextRange};
+
+const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum CompareMode {
+  None,
+  Tsc,
+  Snapshot,
+}
+
+impl CompareMode {
+  pub fn as_str(self) -> &'static str {
+    match self {
+      CompareMode::None => "none",
+      CompareMode::Tsc => "tsc",
+      CompareMode::Snapshot => "snapshot",
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum Isolation {
+  Process,
+  None,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -34,8 +48,9 @@ pub enum TestStatus {
   ParseError,
   BindError,
   TypeError,
-  Ice,
+  RustIce,
   InternalError,
+  HarnessCrash,
   Timeout,
 }
 
@@ -52,6 +67,10 @@ pub struct TestResult {
   pub directives: Vec<HarnessDirective>,
   #[serde(default)]
   pub options: HarnessOptions,
+  #[serde(default, skip_serializing_if = "String::is_empty")]
+  pub stdout: String,
+  #[serde(default, skip_serializing_if = "String::is_empty")]
+  pub stderr: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -82,14 +101,50 @@ pub struct ConformanceOptions {
   pub profile_out: PathBuf,
   pub extensions: Vec<String>,
   pub allow_empty: bool,
+  pub jobs: usize,
+  pub isolate: Isolation,
+  pub compare: CompareMode,
+}
+
+impl Default for ConformanceOptions {
+  fn default() -> Self {
+    Self {
+      root: PathBuf::new(),
+      filter: Filter::All,
+      filter_pattern: None,
+      shard: None,
+      json: false,
+      update_snapshots: false,
+      timeout: Duration::from_secs(0),
+      trace: false,
+      profile: false,
+      profile_out: PathBuf::from("profile.json"),
+      extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+      allow_empty: false,
+      jobs: 1,
+      isolate: Isolation::None,
+      compare: CompareMode::None,
+    }
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct SingleTestOptions {
+  pub root: PathBuf,
+  pub id: String,
+  pub timeout: Duration,
+  pub trace: bool,
+  pub profile: bool,
+  pub profile_out: PathBuf,
+  pub compare: CompareMode,
 }
 
 pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
-  if opts.extensions.is_empty() {
-    return Err(HarnessError::InvalidExtensions(
-      "no extensions provided".to_string(),
-    ));
-  }
+  let extensions = if opts.extensions.is_empty() {
+    DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect()
+  } else {
+    opts.extensions.clone()
+  };
 
   let run_start = Instant::now();
   let mut profiler = opts.profile.then(|| ProfileBuilder::new(&opts));
@@ -98,7 +153,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
     let span = info_span!("discover_tests", root = %opts.root.display());
     let _enter = span.enter();
     info!(phase = "discover_start", root = %opts.root.display());
-    let discovered = discover_conformance_tests(&opts.root, &opts.filter, &opts.extensions)?;
+    let discovered = discover_conformance_tests(&opts.root, &opts.filter, &extensions)?;
     info!(phase = "discover_complete", count = discovered.len());
     discovered
   };
@@ -106,7 +161,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
   if cases.is_empty() && !opts.allow_empty {
     return Err(HarnessError::EmptySuite {
       root: opts.root.display().to_string(),
-      extensions: opts.extensions.join(","),
+      extensions: extensions.join(","),
     });
   }
 
@@ -151,7 +206,17 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
     profiler.write(&summary, wall_time, &opts.profile_out)?;
   }
 
+  results.sort_by(|a, b| a.id.cmp(&b.id));
   Ok(JsonReport { summary, results })
+}
+
+pub fn run_single_conformance(opts: SingleTestOptions) -> Result<TestResult> {
+  let case = load_conformance_test(&opts.root, &opts.id)?;
+  let mut result = run_single_case(case, opts.timeout);
+  if !opts.timeout.is_zero() && result.duration_ms > opts.timeout.as_millis() {
+    result.status = TestStatus::Timeout;
+  }
+  Ok(result)
 }
 
 fn summarize(results: &[TestResult]) -> Summary {
@@ -205,6 +270,8 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
         notes: case.notes,
         directives: case.directives,
         options: case.options,
+        stdout: String::new(),
+        stderr: String::new(),
       }
     }
   }
@@ -212,6 +279,9 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
 
 fn execute_case(case: TestCase) -> TestResult {
   let start = Instant::now();
+  if let Some(delay) = harness_sleep_for_case(&case.id) {
+    std::thread::sleep(delay);
+  }
   let notes = case.notes.clone();
   let directives = case.directives.clone();
   let options = case.options.clone();
@@ -239,6 +309,8 @@ fn execute_case(case: TestCase) -> TestResult {
         notes,
         directives,
         options,
+        stdout: String::new(),
+        stderr: String::new(),
       }
     }
     Err(_) => {
@@ -246,7 +318,7 @@ fn execute_case(case: TestCase) -> TestResult {
       TestResult {
         id: case.id,
         path: case.path.display().to_string(),
-        status: TestStatus::Ice,
+        status: TestStatus::RustIce,
         duration_ms,
         diagnostics: vec![Diagnostic::error(
           "ICE0001",
@@ -256,9 +328,34 @@ fn execute_case(case: TestCase) -> TestResult {
         notes,
         directives,
         options,
+        stdout: String::new(),
+        stderr: String::new(),
       }
     }
   }
+}
+
+fn harness_sleep_for_case(id: &str) -> Option<Duration> {
+  let raw = std::env::var(HARNESS_SLEEP_ENV).ok()?;
+  if raw.is_empty() {
+    return None;
+  }
+
+  if let Ok(ms) = raw.parse::<u64>() {
+    return Some(Duration::from_millis(ms));
+  }
+
+  for part in raw.split(',') {
+    if let Some((pattern, ms_raw)) = part.split_once('=') {
+      if id.contains(pattern.trim()) {
+        if let Ok(ms) = ms_raw.trim().parse::<u64>() {
+          return Some(Duration::from_millis(ms));
+        }
+      }
+    }
+  }
+
+  None
 }
 
 fn categorize(diags: &[Diagnostic]) -> TestStatus {
@@ -272,7 +369,7 @@ fn categorize(diags: &[Diagnostic]) -> TestStatus {
       .any(|d| d.code.as_str().to_ascii_uppercase().starts_with(prefix))
   };
 
-  if has_code_prefix("PS") {
+  if has_code_prefix("PS") || has_code_prefix("PARSE") {
     return TestStatus::ParseError;
   }
 
@@ -285,7 +382,7 @@ fn categorize(diags: &[Diagnostic]) -> TestStatus {
   }
 
   if has_code_prefix("ICE") {
-    return TestStatus::Ice;
+    return TestStatus::RustIce;
   }
 
   TestStatus::TypeError
@@ -361,11 +458,6 @@ impl Host for HarnessHost {
       return self.name_to_id.get(&normalized).copied();
     }
 
-    // TypeScript-style relative resolution:
-    // 1) exact match
-    // 2) add extensions if missing
-    // 3) resolve to directory index files
-    // For explicit .js/.jsx specifiers, try .ts/.tsx neighbors after the exact path.
     let base = self.files.get(from.0 as usize)?;
     let parent = Path::new(&base.normalized)
       .parent()
@@ -390,13 +482,7 @@ impl Host for HarnessHost {
     }
 
     let base_path = Path::new(&base_candidate);
-    for ext in [
-      "index.ts",
-      "index.tsx",
-      "index.d.ts",
-      "index.js",
-      "index.jsx",
-    ] {
+    for ext in ["index.ts", "index.tsx", "index.d.ts", "index.js", "index.jsx"] {
       let joined = base_path.join(ext);
       candidates.push(normalize_name(joined.to_string_lossy().as_ref()));
     }
@@ -445,6 +531,7 @@ fn has_known_extension(name: &str) -> bool {
     || name.ends_with(".js")
     || name.ends_with(".jsx")
 }
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -568,7 +655,6 @@ mod tests {
     assert!(roots.contains(&a_id));
     assert_eq!(&*host.file_text(a_id).unwrap(), "second version");
 
-    // Resolution should map extensionless relative imports to the deduplicated FileId.
     assert_eq!(host.resolve(from, "./a"), Some(a_id));
   }
 

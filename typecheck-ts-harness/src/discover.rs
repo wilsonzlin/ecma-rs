@@ -173,6 +173,57 @@ fn normalize_id(root: &Path, path: &Path) -> String {
     .replace('\\', "/")
 }
 
+pub fn load_conformance_test(root: &Path, id: &str) -> Result<TestCase> {
+  if Path::new(id).is_absolute() {
+    return Err(HarnessError::Typecheck(format!(
+      "test id must be relative: {id}"
+    )));
+  }
+
+  if !root.exists() {
+    return Err(HarnessError::Typecheck(format!(
+      "conformance root {} does not exist",
+      root.display()
+    )));
+  }
+
+  let joined = root.join(id);
+  if !joined.exists() {
+    return Err(HarnessError::Typecheck(format!(
+      "test {id} not found under {}",
+      root.display()
+    )));
+  }
+
+  let canonical_root = root.canonicalize()?;
+  let canonical_path = joined.canonicalize()?;
+  if !canonical_path.starts_with(&canonical_root) {
+    return Err(HarnessError::Typecheck(format!(
+      "test id '{id}' escapes root {}",
+      root.display()
+    )));
+  }
+
+  let content = fs::read_to_string(&canonical_path)?;
+  let split = split_test_file(&canonical_path, &content);
+
+  let normalized_id = canonical_path
+    .strip_prefix(&canonical_root)
+    .unwrap_or(&canonical_path)
+    .to_string_lossy()
+    .replace('\\', "/");
+
+  Ok(TestCase {
+    id: normalized_id,
+    path: canonical_path,
+    files: split.files,
+    deduped_files: split.deduped_files,
+    directives: split.directives.clone(),
+    options: HarnessOptions::from_directives(&split.directives),
+    notes: split.notes,
+  })
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -245,4 +296,53 @@ mod tests {
     assert_eq!(case.files.len(), 1);
     assert_eq!(case.deduped_files[0].name, "subdir/foo.ts");
   }
+=======
+pub fn load_conformance_test(root: &Path, id: &str) -> Result<TestCase> {
+  if Path::new(id).is_absolute() {
+    return Err(HarnessError::Typecheck(format!(
+      "test id must be relative: {id}"
+    )));
+  }
+
+  if !root.exists() {
+    return Err(HarnessError::Typecheck(format!(
+      "conformance root {} does not exist",
+      root.display()
+    )));
+  }
+
+  let joined = root.join(id);
+  if !joined.exists() {
+    return Err(HarnessError::Typecheck(format!(
+      "test {id} not found under {}",
+      root.display()
+    )));
+  }
+
+  let canonical_root = root.canonicalize()?;
+  let canonical_path = joined.canonicalize()?;
+  if !canonical_path.starts_with(&canonical_root) {
+    return Err(HarnessError::Typecheck(format!(
+      "test id '{id}' escapes root {}",
+      root.display()
+    )));
+  }
+
+  let content = fs::read_to_string(&canonical_path)?;
+  let split = split_test_file(&canonical_path, &content);
+
+  let normalized_id = canonical_path
+    .strip_prefix(&canonical_root)
+    .unwrap_or(&canonical_path)
+    .to_string_lossy()
+    .replace('\\', "/");
+
+  Ok(TestCase {
+    id: normalized_id,
+    path: canonical_path,
+    files: split.files,
+    module_directive: split.module_directive,
+    notes: split.notes,
+  })
+>>>>>>> bdffdc0 (Refactor conformance runner with process isolation)
 }
