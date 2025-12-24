@@ -20,6 +20,5 @@ derive-visitor = "0.4.0"
 itertools = "0.12.0"
 num-bigint = "0.4.4"
 once_cell = "1.19.0"
-optimize-js = { version = "0.1.0", path = "../optimize-js" }
 parse-js = { version = "0.24.1", path = "../parse-js" }
 symbol-js = { version = "0.2.0", path = "../symbol-js" }
