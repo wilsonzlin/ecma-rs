@@ -1024,6 +1024,7 @@ dependencies = [
  "crossbeam-utils",
  "dashmap",
  "derive-visitor",
+ "diagnostics",
  "itertools 0.12.1",
  "num-bigint",
  "once_cell",
@@ -1040,6 +1041,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-msgpack",
+ "diagnostics",
  "optimize-js",
  "parse-js",
  "serde",

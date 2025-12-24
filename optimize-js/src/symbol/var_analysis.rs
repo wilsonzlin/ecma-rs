@@ -30,7 +30,7 @@ struct VarVisitor {
   declared: HashSet<Symbol>,
   foreign: HashSet<Symbol>,
   unknown: HashSet<String>,
-  use_before_decl: HashMap<Symbol, Loc>,
+  use_before_decl: HashMap<Symbol, (String, Loc)>,
 
   in_pat_decl_stack: Vec<bool>,
 }
@@ -76,7 +76,9 @@ impl VarVisitor {
           let end = start + name.len();
           // Check for use before declaration to ensure strict SSA.
           // NOTE: This doesn't check across closures, as that is mostly a runtime determination (see symbol-js/examples/let.js), but we don't care as those are foreign vars and don't affect strict SSA (i.e. correctness).
-          self.use_before_decl.insert(symbol, Loc(start, end));
+          self
+            .use_before_decl
+            .insert(symbol, (name.clone(), Loc(start, end)));
         }
       }
     };
@@ -120,7 +122,9 @@ impl VarVisitor {
           let end = start + name.len();
           // Check for use before declaration to ensure strict SSA.
           // NOTE: This doesn't check across closures, as that is mostly a runtime determination (see symbol-js/examples/let.js), but we don't care as those are foreign vars and don't affect strict SSA (i.e. correctness).
-          self.use_before_decl.insert(symbol, Loc(start, end));
+          self
+            .use_before_decl
+            .insert(symbol, (name.clone(), Loc(start, end)));
         }
       }
     };
@@ -132,7 +136,7 @@ pub struct VarAnalysis {
   pub declared: HashSet<Symbol>,
   pub foreign: HashSet<Symbol>,
   pub unknown: HashSet<String>,
-  pub use_before_decl: HashMap<Symbol, Loc>,
+  pub use_before_decl: HashMap<Symbol, (String, Loc)>,
 }
 
 impl VarAnalysis {

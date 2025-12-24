@@ -9,9 +9,8 @@ use crate::il::inst::Const;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::il::inst::UnOp;
-use crate::OptimizeError;
+use crate::unsupported_syntax;
 use crate::OptimizeResult;
-use crate::Span;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::BinaryExpr;
@@ -28,6 +27,7 @@ use parse_js::ast::func::Func;
 use parse_js::ast::func::FuncBody;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
+use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
 use std::sync::atomic::Ordering;
@@ -103,7 +103,7 @@ impl<'p> SourceToInst<'p> {
     let func = match body {
       Some(FuncBody::Block(stmts)) => compile_js_statements(&pg, stmts)?,
       Some(FuncBody::Expression(node)) => {
-        return Err(OptimizeError::unsupported(
+        return Err(unsupported_syntax(
           node.loc,
           "expression-bodied functions are not supported",
         ))
@@ -129,7 +129,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_assignment(
     &mut self,
-    span: Span,
+    span: Loc,
     operator: OperatorName,
     target: Node<Expr>,
     value: Node<Expr>,
@@ -138,7 +138,7 @@ impl<'p> SourceToInst<'p> {
     match *stx {
       Expr::ArrPat(pat) => {
         if operator != OperatorName::Assignment {
-          return Err(OptimizeError::unsupported(
+          return Err(unsupported_syntax(
             span,
             format!("unsupported destructuring assignment operator {operator:?}"),
           ));
@@ -156,7 +156,7 @@ impl<'p> SourceToInst<'p> {
       }
       Expr::ObjPat(pat) => {
         if operator != OperatorName::Assignment {
-          return Err(OptimizeError::unsupported(
+          return Err(unsupported_syntax(
             span,
             format!("unsupported destructuring assignment operator {operator:?}"),
           ));
@@ -192,7 +192,7 @@ impl<'p> SourceToInst<'p> {
               VarType::Foreign(f) => Inst::foreign_store(f, dummy_val),
               VarType::Unknown(n) => Inst::unknown_store(n, dummy_val),
               VarType::Builtin(builtin) => {
-                return Err(OptimizeError::unsupported(
+                return Err(unsupported_syntax(
                   span,
                   format!("assignment to builtin {builtin}"),
                 ))
@@ -206,7 +206,7 @@ impl<'p> SourceToInst<'p> {
               right,
             } = *n.stx;
             if optional_chaining {
-              return Err(OptimizeError::unsupported(
+              return Err(unsupported_syntax(
                 span,
                 "optional chaining in assignment target",
               ));
@@ -222,7 +222,7 @@ impl<'p> SourceToInst<'p> {
               member,
             } = *n.stx;
             if optional_chaining {
-              return Err(OptimizeError::unsupported(
+              return Err(unsupported_syntax(
                 span,
                 "optional chaining in assignment target",
               ));
@@ -231,12 +231,7 @@ impl<'p> SourceToInst<'p> {
             let member_arg = self.compile_expr(member)?;
             Inst::prop_assign(left_arg, member_arg, dummy_val)
           }
-          _ => {
-            return Err(OptimizeError::unsupported(
-              span,
-              "unsupported assignment target",
-            ))
-          }
+          _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
         };
         let value_tmp_var = self.c_temp.bump();
         let mut value_arg = self.compile_expr(value)?;
@@ -253,7 +248,7 @@ impl<'p> SourceToInst<'p> {
             OperatorName::AssignmentMultiplication => BinOp::Mul,
             OperatorName::AssignmentDivision => BinOp::Div,
             _ => {
-              return Err(OptimizeError::unsupported(
+              return Err(unsupported_syntax(
                 span,
                 format!("unsupported assignment operator {operator:?}"),
               ))
@@ -287,12 +282,7 @@ impl<'p> SourceToInst<'p> {
               ));
               Arg::Var(left_tmp_var)
             }
-            _ => {
-              return Err(OptimizeError::unsupported(
-                span,
-                "unsupported assignment target",
-              ))
-            }
+            _ => return Err(unsupported_syntax(span, "unsupported assignment target")),
           };
           let rhs_inst = Inst::bin(value_tmp_var, left_arg, op, value_arg);
           self.out.push(rhs_inst);
@@ -312,7 +302,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_logical_expr(
     &mut self,
-    span: Span,
+    span: Loc,
     operator: OperatorName,
     left: Node<Expr>,
     right: Node<Expr>,
@@ -327,7 +317,7 @@ impl<'p> SourceToInst<'p> {
       // Given `a || b`, skip `b` only IF `a`.
       OperatorName::LogicalOr => Inst::cond_goto(left, converge_label_id, DUMMY_LABEL),
       other => {
-        return Err(OptimizeError::unsupported(
+        return Err(unsupported_syntax(
           span,
           format!("unsupported logical operator {other:?}"),
         ))
@@ -341,7 +331,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_binary_expr(
     &mut self,
-    span: Span,
+    span: Loc,
     BinaryExpr {
       left,
       operator,
@@ -368,7 +358,7 @@ impl<'p> SourceToInst<'p> {
         OperatorName::Subtraction => BinOp::Sub,
         OperatorName::GreaterThan => BinOp::Gt,
         _ => {
-          return Err(OptimizeError::unsupported(
+          return Err(unsupported_syntax(
             span,
             format!("unsupported binary operator {operator:?}"),
           ))
@@ -409,7 +399,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_unary_postfix_expr(
     &mut self,
-    span: Span,
+    span: Loc,
     UnaryPostfixExpr { operator, argument }: UnaryPostfixExpr,
   ) -> OptimizeResult<Arg> {
     let arg = self.compile_expr(argument)?;
@@ -422,7 +412,7 @@ impl<'p> SourceToInst<'p> {
         OperatorName::PostfixDecrement => BinOp::Sub,
         OperatorName::PostfixIncrement => BinOp::Add,
         other => {
-          return Err(OptimizeError::unsupported(
+          return Err(unsupported_syntax(
             span,
             format!("unsupported postfix operator {other:?}"),
           ))
@@ -435,7 +425,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_unary_expr(
     &mut self,
-    span: Span,
+    span: Loc,
     UnaryExpr { operator, argument }: UnaryExpr,
   ) -> OptimizeResult<Arg> {
     match operator {
@@ -449,7 +439,7 @@ impl<'p> SourceToInst<'p> {
             OperatorName::PrefixDecrement => BinOp::Sub,
             OperatorName::PrefixIncrement => BinOp::Add,
             other => {
-              return Err(OptimizeError::unsupported(
+              return Err(unsupported_syntax(
                 span,
                 format!("unsupported prefix operator {other:?}"),
               ))
@@ -464,7 +454,7 @@ impl<'p> SourceToInst<'p> {
         let op = match operator {
           OperatorName::UnaryNegation => UnOp::Neg,
           _ => {
-            return Err(OptimizeError::unsupported(
+            return Err(unsupported_syntax(
               span,
               format!("unsupported unary operator {operator:?}"),
             ))
@@ -594,7 +584,7 @@ impl<'p> SourceToInst<'p> {
     n: Node<Expr>,
     chain: impl Into<Option<Chain>>,
   ) -> OptimizeResult<Arg> {
-    let span = n.loc.into();
+    let span = n.loc;
     match *n.stx {
       Expr::ArrowFunc(n) => self.compile_func(*n.stx.func.stx),
       Expr::Binary(n) => self.compile_binary_expr(span, *n.stx),
@@ -608,7 +598,7 @@ impl<'p> SourceToInst<'p> {
       Expr::Member(n) => Ok(self.compile_member_expr(*n.stx, chain)?.res),
       Expr::Unary(n) => self.compile_unary_expr(span, *n.stx),
       Expr::UnaryPostfix(n) => self.compile_unary_postfix_expr(span, *n.stx),
-      other => Err(OptimizeError::unsupported(
+      other => Err(unsupported_syntax(
         span,
         format!("unsupported expression {other:?}"),
       )),

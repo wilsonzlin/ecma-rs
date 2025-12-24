@@ -5,7 +5,7 @@ use crate::il::inst::Arg;
 use crate::il::inst::BinOp;
 use crate::il::inst::Const;
 use crate::il::inst::Inst;
-use crate::OptimizeError;
+use crate::unsupported_syntax;
 use crate::OptimizeResult;
 use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::expr::pat::ArrPat;
@@ -104,7 +104,7 @@ impl<'p> SourceToInst<'p> {
           VarType::Foreign(foreign) => Inst::foreign_store(foreign, rval.clone()),
           VarType::Unknown(unknown) => Inst::unknown_store(unknown, rval.clone()),
           VarType::Builtin(builtin) => {
-            return Err(OptimizeError::unsupported(
+            return Err(unsupported_syntax(
               pat.loc,
               format!("assignment to builtin {builtin}"),
             ))
@@ -113,7 +113,7 @@ impl<'p> SourceToInst<'p> {
         self.out.push(inst);
       }
       _ => {
-        return Err(OptimizeError::unsupported(
+        return Err(unsupported_syntax(
           pat.loc,
           "unsupported destructuring pattern",
         ))
@@ -269,7 +269,7 @@ impl<'p> SourceToInst<'p> {
       Stmt::If(n) => self.compile_if_stmt(*n.stx),
       Stmt::VarDecl(n) => self.compile_var_decl(*n.stx),
       Stmt::While(n) => self.compile_while_stmt(*n.stx),
-      other => Err(OptimizeError::unsupported(
+      other => Err(unsupported_syntax(
         span,
         format!("unsupported statement {other:?}"),
       )),

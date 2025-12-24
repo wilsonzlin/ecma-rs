@@ -14,6 +14,7 @@ use analysis::defs::calculate_defs;
 use cfg::bblock::convert_insts_to_bblocks;
 use cfg::cfg::Cfg;
 use dashmap::DashMap;
+use diagnostics::diagnostic_from_syntax_error;
 use dom::Dom;
 use opt::optpass_cfg_prune::optpass_cfg_prune;
 use opt::optpass_dvn::optpass_dvn;
@@ -23,7 +24,6 @@ use opt::optpass_trivial_dce::optpass_trivial_dce;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
-use parse_js::error::SyntaxError;
 use parse_js::loc::Loc;
 use parse_js::parse;
 use serde::Serialize;
@@ -41,48 +41,51 @@ use symbol_js::symbol::Symbol;
 pub use symbol_js::TopLevelMode;
 use util::debug::OptimizerDebug;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
-pub struct Span {
-  pub start: usize,
-  pub end: usize,
-}
+pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
 
-impl From<Loc> for Span {
-  fn from(value: Loc) -> Self {
-    Self {
-      start: value.0,
-      end: value.1,
-    }
+const SOURCE_FILE: FileId = FileId(0);
+
+pub type OptimizeResult<T> = Result<T, Vec<Diagnostic>>;
+
+fn diagnostic_with_span(code: &'static str, message: impl Into<String>, loc: Loc) -> Diagnostic {
+  let (range, note) = TextRange::from_loc_with_overflow_note(loc);
+  let mut diagnostic = Diagnostic::error(
+    code,
+    message,
+    Span {
+      file: SOURCE_FILE,
+      range,
+    },
+  );
+  if let Some(note) = note {
+    diagnostic = diagnostic.with_note(note);
   }
+  diagnostic
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum OptimizeError {
-  ParseError { at: Span, message: String },
-  UseBeforeDeclaration { symbol: Symbol, at: Span },
-  UnsupportedSyntax { at: Span, kind: String },
+fn unsupported_syntax(loc: Loc, message: impl Into<String>) -> Vec<Diagnostic> {
+  vec![diagnostic_with_span("OPT0002", message, loc)]
 }
 
-impl OptimizeError {
-  pub fn unsupported(at: impl Into<Span>, kind: impl Into<String>) -> Self {
-    OptimizeError::UnsupportedSyntax {
-      at: at.into(),
-      kind: kind.into(),
-    }
-  }
+fn use_before_declaration(name: &str, loc: Loc) -> Diagnostic {
+  diagnostic_with_span(
+    "OPT0001",
+    format!("use of `{name}` before declaration"),
+    loc,
+  )
 }
 
-impl From<SyntaxError> for OptimizeError {
-  fn from(value: SyntaxError) -> Self {
-    OptimizeError::ParseError {
-      at: value.loc.into(),
-      message: value.to_string(),
-    }
-  }
+fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
+  diagnostics.sort_by(|a, b| {
+    a.primary
+      .file
+      .cmp(&b.primary.file)
+      .then(a.primary.range.start.cmp(&b.primary.range.start))
+      .then(a.primary.range.end.cmp(&b.primary.range.end))
+      .then(a.code.cmp(&b.code))
+      .then(a.message.cmp(&b.message))
+  });
 }
-
-pub type OptimizeResult<T> = Result<T, OptimizeError>;
 
 // The top level is considered a function (the optimizer concept, not parser or symbolizer).
 #[derive(Debug, Serialize)]
@@ -213,7 +216,8 @@ pub struct Program {
 
 /// Parse, symbolize, and compile source text in one step.
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
-  let mut top_level_node = parse(source)?;
+  let mut top_level_node =
+    parse(source).map_err(|err| vec![diagnostic_from_syntax_error(SOURCE_FILE, &err)])?;
   compute_symbols(&mut top_level_node, mode);
   Program::compile(top_level_node, debug)
 }
@@ -287,11 +291,13 @@ impl Program {
       ..
     } = VarAnalysis::analyze(&mut top_level_node);
     // SSA requires no use before declaration.
-    if let Some((symbol, loc)) = use_before_decl.into_iter().next() {
-      return Err(OptimizeError::UseBeforeDeclaration {
-        symbol,
-        at: loc.into(),
-      });
+    if !use_before_decl.is_empty() {
+      let mut diagnostics: Vec<_> = use_before_decl
+        .into_iter()
+        .map(|(_, (name, loc))| use_before_declaration(&name, loc))
+        .collect();
+      sort_diagnostics(&mut diagnostics);
+      return Err(diagnostics);
     };
     let symbol_table = top_level_node
       .assoc
@@ -312,7 +318,7 @@ impl Program {
       ..
     } = Arc::try_unwrap(program.0).unwrap();
     let fn_count = next_fn_id.load(Ordering::Relaxed);
-    let mut functions: Vec<_> = (0..fn_count)
+    let functions: Vec<_> = (0..fn_count)
       .map(|i| functions.remove(&i).unwrap().1)
       .collect();
 
@@ -351,7 +357,6 @@ mod tests {
   use crate::il::inst::Inst;
   use crate::il::inst::InstTyp;
   use crate::symbol::var_analysis::VarAnalysis;
-  use crate::OptimizeError;
   use crate::Program;
   use parse_js::parse;
   use serde_json::to_string;
@@ -423,13 +428,12 @@ mod tests {
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
     let err = Program::compile(top_level_node, false).expect_err("expected use-before-decl error");
-    match err {
-      OptimizeError::UseBeforeDeclaration { at, .. } => {
-        assert!(at.start < at.end);
-        assert_eq!(&source[at.start..at.end], "a");
-      }
-      other => panic!("unexpected error: {other:?}"),
-    }
+    assert_eq!(err.len(), 1);
+    let diagnostic = &err[0];
+    assert_eq!(diagnostic.code, "OPT0001");
+    let range = diagnostic.primary.range;
+    assert!(range.start < range.end);
+    assert_eq!(&source[range.start as usize..range.end as usize], "a");
   }
 
   #[test]
@@ -542,11 +546,10 @@ mod tests {
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
     let err = Program::compile(top_level_node, false).expect_err("expected error");
-    match err {
-      OptimizeError::UnsupportedSyntax { kind, .. } => {
-        assert!(kind.contains("optional chaining in assignment target"));
-      }
-      other => panic!("unexpected error: {other:?}"),
-    }
+    assert_eq!(err.len(), 1);
+    assert_eq!(err[0].code, "OPT0002");
+    assert!(err[0]
+      .message
+      .contains("optional chaining in assignment target"));
   }
 }
