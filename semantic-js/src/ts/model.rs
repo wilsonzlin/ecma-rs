@@ -1,3 +1,38 @@
+//! Binder data model for TypeScript mode.
+//!
+//! The TS binder operates in the three TypeScript namespaces (`value`, `type`,
+//! and `namespace`) and groups declarations by name into [`SymbolGroup`]s. Each
+//! [`SymbolData`] holds the merged declarations for the namespaces it
+//! participates in; declaration ordering is preserved via an incrementing
+//! `order` counter to keep merged overloads deterministic.
+//!
+//! A [`HirFile`] describes a single module or script's top-level declarations,
+//! imports, and exports. [`bind_ts_program`](crate::ts::bind_ts_program) walks
+//! these files with a host-provided [`Resolver`] to build:
+//! - a [`SymbolTable`] of all merged symbols across the program (with stable
+//!   `SymbolId`/`DeclId` indices),
+//! - per-file [`ExportMap`]s keyed by name in sorted order,
+//! - a map of merged global symbol groups for consumers that want a holistic
+//!   view.
+//!
+//! The binder currently focuses on module graph semantics and declaration
+//! merging. It does not model statement-level scopes, contextual type-only
+//! exports beyond the supplied `is_type_only` flags, or `export =` assignments
+//! (which are reported as diagnostics). Cross-file ambient augmentations are
+//! only represented through re-exports/imports rather than global name
+//! injection.
+//!
+//! ## Determinism expectations
+//!
+//! - Export maps and global symbol maps use [`BTreeMap`] to provide stable,
+//!   sorted iteration for public APIs.
+//! - Declaration lists inside symbols are sorted by their `order` field, which
+//!   increments deterministically as HIR declarations are visited.
+//! - `SymbolId`, `DeclId`, and `DefId` allocation is sequential and repeatable
+//!   for the same traversal order; consumers should not assume stability across
+//!   different root orders or resolver outputs.
+//! - Internal caches may use hash maps, but public APIs avoid exposing their
+//!   iteration order.
 use bitflags::bitflags;
 use std::collections::BTreeMap;
 

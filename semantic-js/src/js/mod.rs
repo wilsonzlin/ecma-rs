@@ -1,3 +1,50 @@
+//! JavaScript mode semantics: build a lexical scope tree and resolve identifiers
+//! in the value namespace.
+//!
+//! The JS entry points are intentionally small:
+//! - [`declare()`] walks a parse-js AST, allocates [`ScopeId`]s and [`SymbolId`]s,
+//!   and attaches the current [`ScopeId`] to every
+//!   [`parse_js::ast::node::NodeAssocData`]. Declarations encountered in
+//!   patterns receive [`crate::DeclaredSymbol`] handles.
+//! - [`resolve()`] uses the attached [`ScopeId`]s to resolve identifier
+//!   expressions and patterns to their nearest enclosing declaration and stores
+//!   a [`crate::ResolvedSymbol`] next to the node.
+//! - [`bind_js`] simply runs both passes.
+//!
+//! ## Scope kinds
+//!
+//! Scopes are hierarchical and stored in [`JsSemantics`] with stable indices:
+//! - [`ScopeKind::Global`]: top-level in `"global"` [`TopLevelMode`]; top-level
+//!   declarations are intentionally skipped so hosts can map globals separately.
+//! - [`ScopeKind::Module`]: top-level in `"module"` [`TopLevelMode`]; acts as a
+//!   closure for `var` declarations.
+//! - [`ScopeKind::Class`]: class bodies.
+//! - [`ScopeKind::NonArrowFunction`] / [`ScopeKind::ArrowFunction`]: function
+//!   bodies; `var` hoists to the nearest of these or the module scope.
+//! - [`ScopeKind::Block`]: block-scoped regions (including `for`/`catch`).
+//! - [`ScopeKind::FunctionExpressionName`]: the dedicated scope for a named
+//!   function expression's own name.
+//!
+//! ## Attachments and simplifications
+//!
+//! - Every AST node receives its enclosing [`ScopeId`] in `NodeAssocData`.
+//! - Identifier patterns that introduce bindings receive [`crate::DeclaredSymbol`];
+//!   the same pattern positions without a declaration (e.g. destructuring
+//!   assignment) are resolved as uses by [`resolve()`].
+//! - Identifier expressions and non-decl patterns receive [`crate::ResolvedSymbol`]
+//!   pointing to the nearest lexically visible declaration.
+//! - The pass operates purely syntactically: it does not attempt to model
+//!   hoisting, TDZ errors, `with`/`eval` semantics, or re-declaration
+//!   diagnostics. `var` simply targets the nearest closure, and top-level
+//!   bindings can be skipped entirely via [`TopLevelMode::Global`].
+//!
+//! ## Determinism caveats
+//!
+//! Scope and symbol IDs are allocated in traversal order and stored in `Vec`s.
+//! Lookups are deterministic, but [`ScopeData::symbols`] uses `ahash::HashMap`
+//! with a random state; iterating over it is not stable across runs. Downstream
+//! code should rely on lookups by [`NameId`] or provide its own deterministic
+//! ordering when exposing results publicly.
 use ahash::HashMap;
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
