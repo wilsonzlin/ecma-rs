@@ -18,12 +18,12 @@ struct SingleFileSource<'a> {
 }
 
 impl<'a> SourceProvider for SingleFileSource<'a> {
-  fn file_name(&self, _file: FileId) -> &str {
-    self.name
+  fn file_name(&self, _file: FileId) -> Option<&str> {
+    Some(self.name)
   }
 
-  fn file_text(&self, _file: FileId) -> &str {
-    self.text
+  fn file_text(&self, _file: FileId) -> Option<&str> {
+    Some(self.text)
   }
 }
 
