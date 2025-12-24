@@ -3,6 +3,7 @@ use derive_visitor::{DriveMut, VisitorMut};
 use parse_js::ast::expr::pat::{ClassOrFuncName, IdPat};
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::import_export::ExportName;
+use parse_js::ast::import_export::ModuleExportImportName;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
 use parse_js::ast::stx::TopLevel;
@@ -183,11 +184,10 @@ impl SymbolCollectorVisitor {
 
   fn enter_export_name_node(&mut self, node: &mut ExportNameNode) {
     let scope = node.assoc.get::<Scope>().unwrap();
-    if let Some(sym) = scope
-      .find_symbol(node.stx.exportable.clone())
-      .map(ExportNameSymbol)
-    {
-      node.assoc.set(sym);
+    if let ModuleExportImportName::Ident(name) = &node.stx.exportable {
+      if let Some(sym) = scope.find_symbol(name.clone()).map(ExportNameSymbol) {
+        node.assoc.set(sym);
+      }
     }
     // Avoid treating the alias IdPat as a usage/exported binding.
     self.inner.ignore_id_pats += 1;
@@ -342,7 +342,8 @@ impl<'a> ApplyVisitor<'a> {
     if &*name == new_name {
       return;
     }
-    let start = loc.0.saturating_sub(name.len());
+    let identifier_end = loc.0;
+    let start = identifier_end.saturating_sub(name.len());
     let end = start + name.len();
     self.replacements.push(Replacement {
       start,
@@ -382,8 +383,8 @@ impl<'a> ApplyVisitor<'a> {
     } else {
       format!("{} as {}", new_name, alias)
     };
-    if node.stx.exportable != *new_name {
-      node.stx.exportable = new_name.clone();
+    if node.stx.exportable.as_str() != new_name {
+      node.stx.exportable = ModuleExportImportName::Ident(new_name.clone());
     }
     self.replacements.push(Replacement {
       start: node.loc.0,
