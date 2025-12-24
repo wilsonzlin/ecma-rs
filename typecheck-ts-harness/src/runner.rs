@@ -7,6 +7,7 @@ use crate::VirtualFile;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -205,6 +206,10 @@ fn categorize(diags: &[Diagnostic]) -> TestStatus {
     return TestStatus::BindError;
   }
 
+  if has_code_prefix("HOST") {
+    return TestStatus::InternalError;
+  }
+
   if has_code_prefix("ICE") {
     return TestStatus::Ice;
   }
@@ -257,25 +262,58 @@ impl Host for HarnessHost {
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, _from: FileId, specifier: &str) -> Option<FileId> {
+  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
+    let mut candidates = Vec::new();
     let normalized = normalize_name(specifier);
-    if let Some(id) = self.name_to_id.get(&normalized) {
-      return Some(*id);
-    }
+    candidates.push(normalized.clone());
 
-    if normalized.ends_with(".d.ts") || normalized.ends_with(".ts") || normalized.ends_with(".tsx")
+    if !normalized.ends_with(".d.ts")
+      && !normalized.ends_with(".ts")
+      && !normalized.ends_with(".tsx")
     {
-      return None;
+      candidates.push(format!("{normalized}.ts"));
+      candidates.push(format!("{normalized}.tsx"));
+      candidates.push(format!("{normalized}.d.ts"));
     }
 
-    let ts = format!("{normalized}.ts");
-    self.name_to_id.get(&ts).copied()
+    for cand in &candidates {
+      if let Some(found) = self.name_to_id.get(cand) {
+        return Some(*found);
+      }
+    }
+
+    if let Some(base) = self.files.get(from.0 as usize) {
+      let parent = Path::new(&base.normalized)
+        .parent()
+        .unwrap_or_else(|| Path::new(""));
+      for cand in candidates {
+        let joined = parent.join(&cand);
+        let normalized = normalize_name(joined.to_string_lossy().as_ref());
+        if let Some(found) = self.name_to_id.get(&normalized) {
+          return Some(*found);
+        }
+      }
+    }
+
+    None
   }
 }
 
 fn normalize_name(name: &str) -> String {
+  use std::path::Component;
   let name = name.replace('\\', "/");
-  name.trim_start_matches("./").to_string()
+  let mut normalized = PathBuf::new();
+  for component in Path::new(&name).components() {
+    match component {
+      Component::CurDir => {}
+      Component::ParentDir => {
+        normalized.pop();
+      }
+      other => normalized.push(other.as_os_str()),
+    }
+  }
+
+  normalized.to_string_lossy().replace('\\', "/")
 }
 
 #[cfg(test)]

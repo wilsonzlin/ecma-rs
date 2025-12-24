@@ -19,3 +19,6 @@ tempfile = "3.12"
 thiserror = "1.0"
 typecheck-ts = { path = "../typecheck-ts" }
 walkdir = "2.5"
+
+[dev-dependencies]
+assert_cmd = "2.0"
