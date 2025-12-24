@@ -16,12 +16,12 @@ struct StdinSource {
 }
 
 impl SourceProvider for StdinSource {
-  fn file_name(&self, _file: FileId) -> &str {
-    "<stdin>"
+  fn file_name(&self, _file: FileId) -> Option<&str> {
+    Some("<stdin>")
   }
 
-  fn file_text(&self, _file: FileId) -> &str {
-    &self.text
+  fn file_text(&self, _file: FileId) -> Option<&str> {
+    Some(&self.text)
   }
 }
 

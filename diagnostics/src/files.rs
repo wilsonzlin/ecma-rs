@@ -53,11 +53,17 @@ impl SimpleFiles {
 
 impl SourceProvider for SimpleFiles {
   fn file_name(&self, file: FileId) -> Option<&str> {
-    self.files.get(file.0 as usize).map(|file| file.name.as_ref())
+    self
+      .files
+      .get(file.0 as usize)
+      .map(|file| file.name.as_ref())
   }
 
   fn file_text(&self, file: FileId) -> Option<&str> {
-    self.files.get(file.0 as usize).map(|file| file.text.as_ref())
+    self
+      .files
+      .get(file.0 as usize)
+      .map(|file| file.text.as_ref())
   }
 }
 

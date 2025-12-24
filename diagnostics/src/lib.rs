@@ -26,8 +26,8 @@
 //! assert!(rendered.contains("--> example.js:1:5"));
 //! ```
 
-pub mod render;
 pub mod files;
+pub mod render;
 pub use files::SimpleFiles;
 
 #[cfg(feature = "parse-js")]

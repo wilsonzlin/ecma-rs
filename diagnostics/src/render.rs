@@ -55,14 +55,7 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
     .as_ref()
     .map(|text| line_and_column(text, diagnostic.primary.range.start as usize))
     .unwrap_or((1, diagnostic.primary.range.start as usize + 1));
-  writeln!(
-    output,
-    " --> {}:{}:{}",
-    primary_name,
-    line,
-    col
-  )
-  .unwrap();
+  writeln!(output, " --> {}:{}:{}", primary_name, line, col).unwrap();
   writeln!(output, "  |").unwrap();
 
   let mut current_file = Some(diagnostic.primary.file);
@@ -75,14 +68,7 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
         .map(|text| line_and_column(text, label.span.range.start as usize))
         .unwrap_or((1, label.span.range.start as usize + 1));
       let name = provider.file_name(label.span.file).unwrap_or("<unknown>");
-      writeln!(
-        output,
-        " --> {}:{}:{}",
-        name,
-        line,
-        col
-      )
-      .unwrap();
+      writeln!(output, " --> {}:{}:{}", name, line, col).unwrap();
       writeln!(output, "  |").unwrap();
       current_file = Some(label.span.file);
     }
@@ -96,12 +82,7 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
   output
 }
 
-fn render_label(
-  text: Option<&str>,
-  output: &mut String,
-  label: &Label,
-  gutter_width: usize,
-) {
+fn render_label(text: Option<&str>, output: &mut String, label: &Label, gutter_width: usize) {
   if let Some(text) = text {
     render_label_with_text(text, output, label, gutter_width);
   } else {
@@ -109,12 +90,7 @@ fn render_label(
   }
 }
 
-fn render_label_with_text(
-  text: &str,
-  output: &mut String,
-  label: &Label,
-  gutter_width: usize,
-) {
+fn render_label_with_text(text: &str, output: &mut String, label: &Label, gutter_width: usize) {
   let starts = line_starts(text);
   let text_len = text.len();
   let start_offset = (label.span.range.start as usize).min(text_len);
