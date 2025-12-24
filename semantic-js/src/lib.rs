@@ -1,9 +1,17 @@
-use parse_js::ast::node::NodeAssocData;
+mod assoc;
 
 pub mod js;
+pub mod ts;
 
+pub use assoc::declared_symbol;
+pub use assoc::resolved_symbol;
+pub use assoc::scope_id;
+pub use assoc::DeclaredSymbol;
+pub use assoc::ResolvedSymbol;
+pub use js::bind_js;
 pub use js::declare;
-pub use js::DeclaredSymbol;
+pub use js::resolve;
+pub use js::JsResolution;
 pub use js::JsSemantics;
 pub use js::NameId;
 pub use js::ScopeData;
@@ -12,7 +20,3 @@ pub use js::ScopeKind;
 pub use js::SymbolData;
 pub use js::SymbolId;
 pub use js::TopLevelMode;
-
-pub fn scope_id(assoc: &NodeAssocData) -> Option<ScopeId> {
-  assoc.get::<ScopeId>().copied()
-}

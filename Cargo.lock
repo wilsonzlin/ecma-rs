@@ -1482,33 +1482,9 @@ name = "semantic-js"
 version = "0.1.0"
 dependencies = [
  "ahash",
- "derive-visitor",
- "parse-js",
-]
-
-[[package]]
-name = "semantic-js-ts9"
-version = "0.1.0"
-dependencies = [
  "bitflags",
- "maplit",
-]
-
-[[package]]
-name = "semantic-js-w111"
-version = "0.1.0"
-dependencies = [
- "rmp-serde",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "semantic-js-w117"
-version = "0.1.0"
-dependencies = [
- "ahash",
  "derive-visitor",
+ "maplit",
  "parse-js",
 ]
 
@@ -1528,31 +1504,6 @@ dependencies = [
  "diagnostics-w8",
  "hir-js-w8",
  "rustc-hash",
-]
-
-[[package]]
-name = "semantic-js-w87"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "serde",
-]
-
-[[package]]
-name = "semantic-js-w88"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "derive-visitor",
- "parse-js",
-]
-
-[[package]]
-name = "semantic-js-w89"
-version = "0.1.0"
-dependencies = [
- "derive-visitor",
- "parse-js",
 ]
 
 [[package]]
@@ -1690,17 +1641,6 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "symbol-js"
-version = "0.2.0"
-dependencies = [
- "ahash",
- "derive-visitor",
- "parking_lot",
- "parse-js",
- "serde",
-]
-
-[[package]]
-name = "symbol-js-w94"
 version = "0.2.0"
 dependencies = [
  "ahash",

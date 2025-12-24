@@ -1,9 +1,0 @@
-[package]
-name = "semantic-js-w88"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-ahash = "0.8.7"
-derive-visitor = "0.4.0"
-parse-js = { version = "0.24.1", path = "../parse-js" }

@@ -1,4 +1,3 @@
-use super::DeclaredSymbol;
 use super::JsSemantics;
 use super::NameId;
 use super::ScopeData;
@@ -7,6 +6,7 @@ use super::ScopeKind;
 use super::SymbolData;
 use super::SymbolId;
 use super::TopLevelMode;
+use crate::DeclaredSymbol;
 use ahash::HashMap;
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;

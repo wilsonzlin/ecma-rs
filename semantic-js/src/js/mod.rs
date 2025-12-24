@@ -1,9 +1,14 @@
 use ahash::HashMap;
+use parse_js::ast::node::Node;
+use parse_js::ast::stx::TopLevel;
 use std::str::FromStr;
 
 pub mod declare;
+pub mod resolve;
 
 pub use declare::declare;
+pub use resolve::resolve;
+pub use resolve::JsResolution;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TopLevelMode {
@@ -124,5 +129,11 @@ impl JsSemantics {
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DeclaredSymbol(pub SymbolId);
+pub fn bind_js(top_level: &mut Node<TopLevel>, mode: TopLevelMode) -> (JsSemantics, JsResolution) {
+  let sem = declare(top_level, mode);
+  let res = resolve(top_level, &sem);
+  (sem, res)
+}
+
+#[cfg(test)]
+mod tests;

@@ -25,7 +25,6 @@ members = [
   "test262",
   "typecheck-ts-harness",
   "semantic-js",
-  "semantic-js-ts9",
   "typecheck-ts-const18",
   "hir-js-w12",
   "semantic-js-w12",
@@ -37,12 +36,6 @@ members = [
   "diagnostics-w8",
   "hir-js-w8",
   "semantic-js-w8",
-  "semantic-js-w87",
-  "semantic-js-w111",
-  "semantic-js-w88",
-  "semantic-js-w89",
-  "semantic-js-w117",
-  "symbol-js-w94",
 ]
 
 [profile.release]

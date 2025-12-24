@@ -5,5 +5,9 @@ edition = "2021"
 
 [dependencies]
 ahash = "0.8.7"
+bitflags = "2"
 derive-visitor = "0.4.0"
 parse-js = { version = "0.24.1", path = "../parse-js" }
+
+[dev-dependencies]
+maplit = "1"
