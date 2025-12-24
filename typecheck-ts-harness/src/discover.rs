@@ -1,3 +1,5 @@
+use crate::directives::HarnessDirective;
+use crate::directives::HarnessOptions;
 use crate::multifile::split_test_file;
 use crate::HarnessError;
 use crate::Result;
@@ -18,7 +20,9 @@ pub struct TestCase {
   pub id: String,
   pub path: PathBuf,
   pub files: Vec<VirtualFile>,
-  pub module_directive: Option<String>,
+  pub deduped_files: Vec<VirtualFile>,
+  pub directives: Vec<HarnessDirective>,
+  pub options: HarnessOptions,
   pub notes: Vec<String>,
 }
 
@@ -130,7 +134,9 @@ pub fn discover_conformance_tests(
       id,
       path,
       files: split.files,
-      module_directive: split.module_directive,
+      deduped_files: split.deduped_files,
+      directives: split.directives.clone(),
+      options: HarnessOptions::from_directives(&split.directives),
       notes: split.notes,
     });
   }
@@ -217,5 +223,26 @@ mod tests {
     let cases = discover_conformance_tests(root, &Filter::All, &default_extensions()).unwrap();
     assert_eq!(cases.len(), 1);
     assert_eq!(cases[0].id, "types.d.ts");
+  }
+
+  #[test]
+  fn discover_carries_directives_and_options() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("case.ts");
+    fs::write(
+      &path,
+      "// @strict: false\n// @strict: true\n// @filename: subdir/foo.ts\nconst value = 1;\n",
+    )
+    .unwrap();
+
+    let cases =
+      discover_conformance_tests(dir.path(), &Filter::All, &default_extensions()).unwrap();
+    assert_eq!(cases.len(), 1);
+    let case = &cases[0];
+    assert_eq!(case.directives.len(), 3);
+    assert_eq!(case.options.strict, Some(true));
+    assert_eq!(case.deduped_files.len(), 1);
+    assert_eq!(case.files.len(), 1);
+    assert_eq!(case.deduped_files[0].name, "subdir/foo.ts");
   }
 }

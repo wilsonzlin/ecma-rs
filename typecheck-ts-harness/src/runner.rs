@@ -1,3 +1,5 @@
+use crate::directives::HarnessDirective;
+use crate::directives::HarnessOptions;
 use crate::discover::discover_conformance_tests;
 use crate::discover::Filter;
 use crate::discover::Shard;
@@ -42,6 +44,10 @@ pub struct TestResult {
   pub diagnostics: Vec<Diagnostic>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub notes: Vec<String>,
+  #[serde(default)]
+  pub directives: Vec<HarnessDirective>,
+  #[serde(default)]
+  pub options: HarnessOptions,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -161,6 +167,8 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
       duration_ms: timeout.as_millis(),
       diagnostics: Vec::new(),
       notes: case.notes,
+      directives: case.directives,
+      options: case.options,
     },
   }
 }
@@ -168,7 +176,9 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
 fn execute_case(case: TestCase) -> TestResult {
   let start = Instant::now();
   let notes = case.notes.clone();
-  let host = HarnessHost::new(&case.files);
+  let directives = case.directives.clone();
+  let options = case.options.clone();
+  let host = HarnessHost::new(&case.deduped_files);
   let roots = host.root_files();
 
   let result = std::panic::catch_unwind(|| Program::new(host, roots).check());
@@ -184,6 +194,8 @@ fn execute_case(case: TestCase) -> TestResult {
         duration_ms,
         diagnostics,
         notes,
+        directives,
+        options,
       }
     }
     Err(_) => TestResult {
@@ -198,6 +210,8 @@ fn execute_case(case: TestCase) -> TestResult {
         severity: Severity::Error,
       }],
       notes,
+      directives,
+      options,
     },
   }
 }
@@ -375,14 +389,17 @@ mod tests {
 
   #[test]
   fn conformance_runner_runs_single_case() {
+    let files = vec![VirtualFile {
+      name: "inline.ts".to_string(),
+      content: "const x: number = 1;".to_string(),
+    }];
     let case = TestCase {
       id: "inline".to_string(),
       path: PathBuf::from("inline.ts"),
-      files: vec![VirtualFile {
-        name: "inline.ts".to_string(),
-        content: "const x: number = 1;".to_string(),
-      }],
-      module_directive: None,
+      deduped_files: files.clone(),
+      files,
+      directives: Vec::new(),
+      options: HarnessOptions::default(),
       notes: Vec::new(),
     };
 

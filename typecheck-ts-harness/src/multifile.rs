@@ -1,4 +1,7 @@
+use crate::directives::parse_directive;
+use crate::directives::HarnessDirective;
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -28,12 +31,10 @@ pub struct VirtualFile {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SplitResult {
   pub files: Vec<VirtualFile>,
-  pub module_directive: Option<String>,
+  pub deduped_files: Vec<VirtualFile>,
+  pub directives: Vec<HarnessDirective>,
   pub notes: Vec<String>,
 }
-
-const FILENAME_DIRECTIVE: &str = "@filename:";
-const MODULE_DIRECTIVE: &str = "@module:";
 
 pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
   let mut result = SplitResult::default();
@@ -42,51 +43,53 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
     .map(|p| p.to_string_lossy().to_string())
     .unwrap_or_else(|| "input.ts".to_string());
 
-  let mut current_name = default_name;
-  let mut current_content = String::new();
+  let mut current = VirtualFile {
+    name: default_name,
+    content: String::new(),
+  };
   let mut has_started = false;
-  let mut seen_directive = false;
 
-  for raw_line in contents.split_inclusive('\n') {
+  for (idx, raw_line) in contents.split_inclusive('\n').enumerate() {
+    let line_number = idx + 1;
     let line = raw_line.trim_end_matches(|c| c == '\n' || c == '\r');
 
-    if let Some(name) = extract_directive(line, FILENAME_DIRECTIVE) {
-      if has_started || seen_directive {
-        result.files.push(VirtualFile {
-          name: current_name.clone(),
-          content: current_content.clone(),
-        });
+    if let Some(directive) = parse_directive(line, line_number) {
+      let name = directive.name.as_str();
+      if name == "filename" {
+        if let Some(value) = directive.value.clone() {
+          if has_started {
+            result.files.push(current);
+            current = VirtualFile {
+              name: value,
+              content: String::new(),
+            };
+          } else {
+            current.name = value;
+            current.content.clear();
+            has_started = true;
+          }
+        } else {
+          result.notes.push(format!(
+            "missing @filename value at line {line_number}; ignoring directive"
+          ));
+        }
+        result.directives.push(directive);
+        continue;
       }
 
-      current_name = name;
-      current_content.clear();
-      has_started = false;
-      seen_directive = true;
-      continue;
-    }
-
-    if let Some(module) = extract_directive(line, MODULE_DIRECTIVE) {
-      result.module_directive = Some(module.clone());
-      result
-        .notes
-        .push(format!("module directive @module: {} ignored", module));
+      result.directives.push(directive);
+      // Directive lines are metadata and are not included in the emitted virtual files.
       continue;
     }
 
     has_started = true;
-    current_content.push_str(raw_line);
+    current.content.push_str(raw_line);
   }
 
-  if has_started || seen_directive || !current_content.is_empty() {
-    result.files.push(VirtualFile {
-      name: current_name,
-      content: current_content,
-    });
+  if has_started || !current.content.is_empty() {
+    result.files.push(current);
   } else if result.files.is_empty() {
-    result.files.push(VirtualFile {
-      name: current_name,
-      content: current_content,
-    });
+    result.files.push(current);
   }
 
   let mut duplicates = BTreeMap::new();
@@ -95,35 +98,26 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
     *duplicates.entry(normalized).or_insert(0usize) += 1;
   }
 
-  for (name, count) in duplicates {
-    if count > 1 {
+  for (name, count) in duplicates.iter() {
+    if *count > 1 {
       result.notes.push(format!(
         "duplicate @filename entry for {name}; last one wins"
       ));
     }
   }
 
+  let mut last_occurrence = HashMap::new();
+  for (idx, file) in result.files.iter().enumerate() {
+    last_occurrence.insert(normalize_name(&file.name), idx);
+  }
+  for (idx, file) in result.files.iter().enumerate() {
+    let normalized = normalize_name(&file.name);
+    if last_occurrence.get(&normalized).copied() == Some(idx) {
+      result.deduped_files.push(file.clone());
+    }
+  }
+
   result
-}
-
-fn extract_directive(line: &str, directive: &str) -> Option<String> {
-  let trimmed = line.trim_start();
-  if !trimmed.starts_with("//") {
-    return None;
-  }
-
-  let content = trimmed.trim_start_matches('/').trim_start();
-  let lower = content.to_ascii_lowercase();
-  if !lower.starts_with(directive) {
-    return None;
-  }
-
-  let value = content[directive.len()..].trim();
-  if value.is_empty() {
-    None
-  } else {
-    Some(value.to_string())
-  }
 }
 
 #[cfg(test)]
@@ -157,9 +151,10 @@ mod tests {
   fn records_module_directive() {
     let source = "// @module: commonjs\nconst a = 1;\n";
     let result = split_test_file(&PathBuf::from("mod.ts"), source);
-    assert_eq!(result.module_directive.as_deref(), Some("commonjs"));
-    assert_eq!(result.notes.len(), 1);
-    assert!(result.notes[0].contains("module directive"));
+    assert!(result
+      .directives
+      .iter()
+      .any(|d| d.name == "module" && d.value.as_deref() == Some("commonjs")));
   }
 
   #[test]
@@ -188,7 +183,10 @@ mod tests {
     let result = split_test_file(Path::new("module.ts"), source);
     assert_eq!(result.files.len(), 1);
     assert_eq!(result.files[0].content, "const value = 1;\n");
-    assert_eq!(result.module_directive.as_deref(), Some("amd"));
+    assert!(result
+      .directives
+      .iter()
+      .any(|d| d.name == "module" && d.value.as_deref() == Some("amd")));
   }
 
   #[test]
@@ -197,6 +195,9 @@ mod tests {
     let result = split_test_file(Path::new("dupe.ts"), source);
 
     assert_eq!(result.files.len(), 2);
+    assert_eq!(result.deduped_files.len(), 1);
+    assert_eq!(result.deduped_files[0].name, "./a.ts");
+    assert_eq!(result.deduped_files[0].content, "const second = 2;\n");
     assert_eq!(
       result.notes,
       vec!["duplicate @filename entry for a.ts; last one wins"]
@@ -219,6 +220,53 @@ mod tests {
     let result = split_test_file(Path::new("module.ts"), source);
     assert_eq!(result.files.len(), 1);
     assert_eq!(result.files[0].content, "const value = 1;\r\n");
-    assert_eq!(result.module_directive.as_deref(), Some("commonjs"));
+    assert!(result
+      .directives
+      .iter()
+      .any(|d| d.name == "module" && d.value.as_deref() == Some("commonjs")));
+  }
+
+  #[test]
+  fn captures_directives_across_files() {
+    let source = "\
+// @target: ESNext
+// @filename: a.ts
+const a = 1;
+// @strict: true
+// @filename: folder/b.ts
+// @jsx: react
+const b = a;
+";
+    let result = split_test_file(Path::new("case.ts"), source);
+    let directive_names: Vec<_> = result.directives.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(
+      directive_names,
+      vec!["target", "filename", "strict", "filename", "jsx"]
+    );
+    assert_eq!(result.files.len(), 2);
+    assert_eq!(result.files[0].name, "a.ts");
+    assert_eq!(result.files[0].content.trim(), "const a = 1;");
+    assert_eq!(result.files[1].name, "folder/b.ts");
+    assert_eq!(result.files[1].content.trim(), "const b = a;");
+  }
+
+  #[test]
+  fn deduplicates_windows_style_paths() {
+    let source = "\
+// @filename: src\\\\util.ts
+const first = 1;
+// @filename: src/util.ts
+const second = 2;
+";
+
+    let result = split_test_file(Path::new("paths.ts"), source);
+    assert_eq!(result.files.len(), 2);
+    assert_eq!(result.deduped_files.len(), 1);
+    assert_eq!(result.deduped_files[0].name, "src/util.ts");
+    assert_eq!(result.deduped_files[0].content.trim(), "const second = 2;");
+    assert!(result
+      .notes
+      .iter()
+      .any(|n| n.contains("duplicate @filename entry for src/util.ts")));
   }
 }

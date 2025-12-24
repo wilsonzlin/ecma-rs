@@ -2,6 +2,7 @@ use std::io;
 use thiserror::Error;
 
 pub mod difftsc;
+pub mod directives;
 pub mod discover;
 pub mod multifile;
 pub mod runner;
@@ -28,6 +29,8 @@ pub enum HarnessError {
   EmptySuite { root: String, extensions: String },
 }
 
+pub use directives::HarnessDirective;
+pub use directives::HarnessOptions;
 pub use discover::build_filter;
 pub use discover::discover_conformance_tests;
 pub use discover::Filter;
