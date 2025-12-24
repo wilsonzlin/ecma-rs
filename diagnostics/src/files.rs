@@ -127,7 +127,7 @@ mod tests {
     assert!(files.file_text(missing).is_none());
 
     let rendered = render_diagnostic(&files, &diagnostic);
-    assert!(rendered.contains("<unknown>"));
-    assert!(rendered.contains("<source unavailable>"));
+    assert!(rendered.contains("<unknown file>"));
+    assert!(rendered.contains("(source unavailable)"));
   }
 }

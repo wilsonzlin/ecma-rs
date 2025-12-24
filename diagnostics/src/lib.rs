@@ -448,6 +448,8 @@ fn saturating_to_u32(value: usize) -> (u32, bool) {
 mod tests {
   use super::*;
   use crate::render::render_diagnostic;
+  use crate::render::render_diagnostic_with_options;
+  use crate::render::RenderOptions;
   use crate::render::SourceProvider;
 
   #[derive(Default)]
@@ -611,6 +613,241 @@ mod tests {
     let rendered = render_diagnostic(&source, &diagnostic);
     assert!(rendered.contains(" --> b.js:1:7"));
     assert!(rendered.contains(" --> a.js:1:7"));
+  }
+
+  #[test]
+  fn render_handles_missing_text() {
+    struct MissingSource;
+
+    impl SourceProvider for MissingSource {
+      fn file_name(&self, _file: FileId) -> Option<&str> {
+        None
+      }
+
+      fn file_text(&self, _file: FileId) -> Option<&str> {
+        None
+      }
+    }
+
+    let diagnostic = Diagnostic::error(
+      "TEST0005",
+      "cannot read source",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(10, 5),
+      },
+    )
+    .with_label(Label::secondary(
+      Span {
+        file: FileId(0),
+        range: TextRange::new(0, 0),
+      },
+      "secondary detail",
+    ));
+
+    let rendered = render_diagnostic(&MissingSource, &diagnostic);
+    assert!(rendered.contains("<unknown file>"));
+    assert!(rendered.contains("source unavailable"));
+    assert!(rendered.contains("secondary detail"));
+  }
+
+  #[test]
+  fn render_clamps_out_of_bounds_ranges() {
+    let source = TestSource {
+      name: "clamp.js".into(),
+      text: "abc".into(),
+    };
+    let diagnostic = Diagnostic::error(
+      "TEST0009",
+      "oob",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(10, 20),
+      },
+    );
+
+    let rendered = render_diagnostic(&source, &diagnostic);
+    assert!(rendered.contains("1 | abc"));
+    assert!(rendered.contains("^ oob"));
+  }
+
+  #[test]
+  fn render_clamps_non_char_boundaries() {
+    let source = TestSource {
+      name: "utf8.js".into(),
+      text: "écho".into(),
+    };
+    let diagnostic = Diagnostic::error(
+      "TEST0012",
+      "inside utf8 char",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(1, 2),
+      },
+    );
+
+    let rendered = render_diagnostic(&source, &diagnostic);
+    assert!(rendered.contains("1 | écho"));
+    assert!(rendered.contains("inside utf8 char"));
+  }
+
+  #[test]
+  fn render_expands_tabs() {
+    let source = TestSource {
+      name: "tab.js".into(),
+      text: "\tlet x = 1;".into(),
+    };
+    let diagnostic = Diagnostic::error(
+      "TEST0013",
+      "tab width",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(5, 6),
+      },
+    );
+
+    let rendered = render_diagnostic(&source, &diagnostic);
+    assert!(rendered.contains("1 |   let x = 1;"));
+    assert!(rendered.contains("^ tab width"));
+  }
+
+  #[test]
+  fn render_coalesces_labels_on_same_line() {
+    let source = TestSource {
+      name: "same-line.js".into(),
+      text: "let value = 1;".into(),
+    };
+    let diagnostic = Diagnostic::error(
+      "TEST0006",
+      "two labels",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(4, 9),
+      },
+    )
+    .with_label(Label::secondary(
+      Span {
+        file: FileId(0),
+        range: TextRange::new(8, 9),
+      },
+      "secondary",
+    ));
+
+    let rendered = render_diagnostic(&source, &diagnostic);
+    assert_eq!(rendered.matches("let value = 1;").count(), 1);
+    assert!(rendered.contains("two labels"));
+    assert!(rendered.contains("secondary"));
+  }
+
+  #[test]
+  fn render_elides_large_spans() {
+    let source = TestSource {
+      name: "long.js".into(),
+      text: "a\nb\nc\nd\ne\nf\n".into(),
+    };
+    let options = RenderOptions {
+      max_lines_per_label: 2,
+      context_lines: 0,
+      render_secondary_files: true,
+    };
+    let diagnostic = Diagnostic::error(
+      "TEST0007",
+      "long span",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(0, source.text.len() as u32),
+      },
+    );
+
+    let rendered = render_diagnostic_with_options(&source, &diagnostic, options);
+    assert!(rendered.contains("... (4 lines elided)"));
+    assert!(rendered.contains("1 | a"));
+    assert!(rendered.contains("6 | f"));
+  }
+
+  #[test]
+  fn render_orders_multiple_files_stably() {
+    let source = MultiSource {
+      names: vec!["a.js".into(), "b.js".into()],
+      texts: vec!["a = 1".into(), "b = 2".into()],
+    };
+    let diagnostic = Diagnostic::warning(
+      "TEST0008",
+      "ordering",
+      Span {
+        file: FileId(1),
+        range: TextRange::new(0, 0),
+      },
+    )
+    .with_label(Label::secondary(
+      Span {
+        file: FileId(0),
+        range: TextRange::new(0, 0),
+      },
+      "secondary file",
+    ));
+
+    let rendered = render_diagnostic(&source, &diagnostic);
+    let primary_idx = rendered.find(" --> b.js").unwrap();
+    let secondary_idx = rendered.find(" --> a.js").unwrap();
+    assert!(primary_idx < secondary_idx);
+  }
+
+  #[test]
+  fn render_includes_context_lines() {
+    let source = TestSource {
+      name: "ctx.js".into(),
+      text: "first\nsecond\nthird\n".into(),
+    };
+    let options = RenderOptions {
+      context_lines: 1,
+      ..RenderOptions::default()
+    };
+    let diagnostic = Diagnostic::error(
+      "TEST0010",
+      "context",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(6, 12),
+      },
+    );
+
+    let rendered = render_diagnostic_with_options(&source, &diagnostic, options);
+    assert!(rendered.contains("1 | first"));
+    assert!(rendered.contains("2 | second"));
+    assert!(rendered.contains("3 | third"));
+  }
+
+  #[test]
+  fn render_skips_secondary_files_when_requested() {
+    let source = MultiSource {
+      names: vec!["primary.js".into(), "secondary.js".into()],
+      texts: vec!["p".into(), "s".into()],
+    };
+    let diagnostic = Diagnostic::error(
+      "TEST0011",
+      "primary file only",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(0, 1),
+      },
+    )
+    .with_label(Label::secondary(
+      Span {
+        file: FileId(1),
+        range: TextRange::new(0, 1),
+      },
+      "should be hidden",
+    ));
+    let options = RenderOptions {
+      render_secondary_files: false,
+      ..RenderOptions::default()
+    };
+
+    let rendered = render_diagnostic_with_options(&source, &diagnostic, options);
+    assert!(rendered.contains("primary.js"));
+    assert!(!rendered.contains("secondary.js"));
+    assert!(!rendered.contains("should be hidden"));
   }
 
   #[test]
