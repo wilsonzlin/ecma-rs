@@ -8,7 +8,9 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::type_expr::{TypeArray, TypeExpr, TypeLiteral, TypeUnion};
+use parse_js::ast::type_expr::{
+  TypeArray, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
+};
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
@@ -1254,11 +1256,11 @@ impl ProgramState {
           | OperatorName::BitwiseXor
           | OperatorName::BitwiseLeftShift
           | OperatorName::BitwiseRightShift
-          | OperatorName::BitwiseUnsignedRightShift
-          | OperatorName::GreaterThan
+          | OperatorName::BitwiseUnsignedRightShift => self.builtin.number,
+          OperatorName::GreaterThan
           | OperatorName::GreaterThanOrEqual
           | OperatorName::LessThan
-          | OperatorName::LessThanOrEqual => self.builtin.number,
+          | OperatorName::LessThanOrEqual => self.builtin.boolean,
           OperatorName::Equality
           | OperatorName::Inequality
           | OperatorName::StrictEquality
@@ -1448,6 +1450,7 @@ impl ProgramState {
 
   fn type_from_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeId {
     match expr.stx.as_ref() {
+      TypeExpr::Object(_) => self.builtin.object,
       TypeExpr::Number(_) => self.builtin.number,
       TypeExpr::String(_) => self.builtin.string,
       TypeExpr::Boolean(_) => self.builtin.boolean,
@@ -1467,6 +1470,65 @@ impl ProgramState {
         let elem = self.type_from_type_expr(element_type);
         self.type_store.array(elem)
       }
+      TypeExpr::FunctionType(func) => {
+        let params = func
+          .stx
+          .parameters
+          .iter()
+          .map(|p| self.type_from_type_expr(&p.stx.type_expr))
+          .collect();
+        let ret = self.type_from_type_expr(&func.stx.return_type);
+        self.type_store.function(params, ret)
+      }
+      TypeExpr::ConstructorType(cons) => {
+        let params = cons
+          .stx
+          .parameters
+          .iter()
+          .map(|p| self.type_from_type_expr(&p.stx.type_expr))
+          .collect();
+        let ret = self.type_from_type_expr(&cons.stx.return_type);
+        self.type_store.function(params, ret)
+      }
+      TypeExpr::ObjectType(obj) => {
+        let mut props = BTreeMap::new();
+        for member in obj.stx.members.iter() {
+          match member.stx.as_ref() {
+            TypeMember::Property(prop) => {
+              if let Some(name) = type_member_name(&prop.stx.key) {
+                let ty = prop
+                  .stx
+                  .type_annotation
+                  .as_ref()
+                  .map(|t| self.type_from_type_expr(t))
+                  .unwrap_or(self.builtin.unknown);
+                props.insert(name, ty);
+              }
+            }
+            TypeMember::Method(method) => {
+              if let Some(name) = type_member_name(&method.stx.key) {
+                let params = method
+                  .stx
+                  .parameters
+                  .iter()
+                  .map(|p| self.type_from_type_expr(&p.stx.type_expr))
+                  .collect();
+                let ret = method
+                  .stx
+                  .return_type
+                  .as_ref()
+                  .map(|t| self.type_from_type_expr(t))
+                  .unwrap_or(self.builtin.unknown);
+                let func_ty = self.type_store.function(params, ret);
+                props.insert(name, func_ty);
+              }
+            }
+            _ => {}
+          }
+        }
+        self.type_store.object(props)
+      }
+      TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(&inner.stx.type_expr),
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {
         TypeLiteral::Boolean(value) => {
           if *value {
@@ -1706,6 +1768,15 @@ fn lower_object_literal(
     }
   }
   props
+}
+
+fn type_member_name(key: &TypePropertyKey) -> Option<String> {
+  match key {
+    TypePropertyKey::Identifier(name) => Some(name.clone()),
+    TypePropertyKey::String(name) => Some(name.clone()),
+    TypePropertyKey::Number(name) => Some(name.clone()),
+    TypePropertyKey::Computed(_) => None,
+  }
 }
 
 fn loc_to_span(file: FileId, loc: Loc) -> Span {
