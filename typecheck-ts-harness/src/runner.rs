@@ -2,6 +2,7 @@ use crate::discover::discover_conformance_tests;
 use crate::discover::Filter;
 use crate::discover::Shard;
 use crate::discover::TestCase;
+use crate::multifile::normalize_name;
 use crate::Result;
 use crate::VirtualFile;
 use serde::Deserialize;
@@ -229,16 +230,30 @@ struct HarnessFile {
 
 impl HarnessHost {
   fn new(files: &[VirtualFile]) -> Self {
-    let mut stored = Vec::with_capacity(files.len());
+    let mut normalized_names = Vec::with_capacity(files.len());
+    for file in files {
+      normalized_names.push(normalize_name(&file.name));
+    }
+
+    let mut last_occurrence = HashMap::new();
+    for (idx, normalized) in normalized_names.iter().enumerate() {
+      last_occurrence.insert(normalized.clone(), idx);
+    }
+
+    let mut stored = Vec::with_capacity(last_occurrence.len());
     let mut name_to_id = HashMap::new();
 
-    for (idx, file) in files.iter().enumerate() {
-      let normalized = normalize_name(&file.name);
+    for (idx, normalized) in normalized_names.into_iter().enumerate() {
+      if last_occurrence.get(&normalized).copied() != Some(idx) {
+        continue;
+      }
+
+      let file_id = FileId(stored.len() as u32);
+      name_to_id.insert(normalized.clone(), file_id);
       stored.push(HarnessFile {
-        normalized: normalized.clone(),
-        content: Arc::from(file.content.clone()),
+        normalized,
+        content: Arc::from(files[idx].content.clone()),
       });
-      name_to_id.insert(normalized, FileId(idx as u32));
     }
 
     Self {
@@ -319,23 +334,6 @@ impl Host for HarnessHost {
   }
 }
 
-fn normalize_name(name: &str) -> String {
-  use std::path::Component;
-  let name = name.replace('\\', "/");
-  let mut normalized = PathBuf::new();
-  for component in Path::new(&name).components() {
-    match component {
-      Component::CurDir => {}
-      Component::ParentDir => {
-        normalized.pop();
-      }
-      other => normalized.push(other.as_os_str()),
-    }
-  }
-
-  normalized.to_string_lossy().replace('\\', "/")
-}
-
 fn has_known_extension(name: &str) -> bool {
   name.ends_with(".d.ts")
     || name.ends_with(".ts")
@@ -343,7 +341,6 @@ fn has_known_extension(name: &str) -> bool {
     || name.ends_with(".js")
     || name.ends_with(".jsx")
 }
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -429,6 +426,43 @@ mod tests {
     ];
     let host = HarnessHost::new(&files);
     assert_eq!(host.resolve(FileId(0), "./foo.js"), Some(FileId(1)));
+  }
+
+  #[test]
+  fn host_deduplicates_virtual_files() {
+    use std::collections::HashSet;
+
+    let files = vec![
+      VirtualFile {
+        name: "a.ts".to_string(),
+        content: "first version".to_string(),
+      },
+      VirtualFile {
+        name: "./a.ts".to_string(),
+        content: "second version".to_string(),
+      },
+      VirtualFile {
+        name: "b.ts".to_string(),
+        content: "unrelated".to_string(),
+      },
+    ];
+
+    let host = HarnessHost::new(&files);
+    let roots = host.root_files();
+
+    let unique_names = files
+      .iter()
+      .map(|f| normalize_name(&f.name))
+      .collect::<HashSet<_>>();
+    assert_eq!(roots.len(), unique_names.len());
+
+    let from = *roots.last().unwrap();
+    let a_id = host.resolve(from, "a.ts").expect("a.ts should resolve");
+    assert!(roots.contains(&a_id));
+    assert_eq!(&*host.file_text(a_id).unwrap(), "second version");
+
+    // Resolution should map extensionless relative imports to the deduplicated FileId.
+    assert_eq!(host.resolve(from, "./a"), Some(a_id));
   }
 
   #[test]

@@ -1,4 +1,23 @@
+use std::collections::BTreeMap;
 use std::path::Path;
+use std::path::PathBuf;
+
+pub(crate) fn normalize_name(name: &str) -> String {
+  use std::path::Component;
+  let name = name.replace('\\', "/");
+  let mut normalized = PathBuf::new();
+  for component in Path::new(&name).components() {
+    match component {
+      Component::CurDir => {}
+      Component::ParentDir => {
+        normalized.pop();
+      }
+      other => normalized.push(other.as_os_str()),
+    }
+  }
+
+  normalized.to_string_lossy().replace('\\', "/")
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VirtualFile {
@@ -68,6 +87,20 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
       name: current_name,
       content: current_content,
     });
+  }
+
+  let mut duplicates = BTreeMap::new();
+  for file in &result.files {
+    let normalized = normalize_name(&file.name);
+    *duplicates.entry(normalized).or_insert(0usize) += 1;
+  }
+
+  for (name, count) in duplicates {
+    if count > 1 {
+      result.notes.push(format!(
+        "duplicate @filename entry for {name}; last one wins"
+      ));
+    }
   }
 
   result
@@ -156,5 +189,17 @@ mod tests {
     assert_eq!(result.files.len(), 1);
     assert_eq!(result.files[0].content, "const value = 1;\n");
     assert_eq!(result.module_directive.as_deref(), Some("amd"));
+  }
+
+  #[test]
+  fn records_duplicate_filename_entries() {
+    let source = "// @filename: a.ts\nconst first = 1;\n// @filename: ./a.ts\nconst second = 2;\n";
+    let result = split_test_file(Path::new("dupe.ts"), source);
+
+    assert_eq!(result.files.len(), 2);
+    assert_eq!(
+      result.notes,
+      vec!["duplicate @filename entry for a.ts; last one wins"]
+    );
   }
 }
