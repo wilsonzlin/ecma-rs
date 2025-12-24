@@ -263,35 +263,49 @@ impl Host for HarnessHost {
   }
 
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
-    let mut candidates = Vec::new();
-    let normalized = normalize_name(specifier);
-    candidates.push(normalized.clone());
-
-    if !normalized.ends_with(".d.ts")
-      && !normalized.ends_with(".ts")
-      && !normalized.ends_with(".tsx")
-    {
-      candidates.push(format!("{normalized}.ts"));
-      candidates.push(format!("{normalized}.tsx"));
-      candidates.push(format!("{normalized}.d.ts"));
+    let is_relative = specifier.starts_with("./") || specifier.starts_with("../");
+    if !is_relative {
+      let normalized = normalize_name(specifier);
+      return self.name_to_id.get(&normalized).copied();
     }
 
-    for cand in &candidates {
-      if let Some(found) = self.name_to_id.get(cand) {
-        return Some(*found);
+    // TypeScript-style relative resolution:
+    // 1) exact match
+    // 2) add extensions if missing
+    // 3) resolve to directory index files
+    // For explicit .js/.jsx specifiers, try .ts/.tsx neighbors after the exact path.
+    let base = self.files.get(from.0 as usize)?;
+    let parent = Path::new(&base.normalized)
+      .parent()
+      .unwrap_or_else(|| Path::new(""));
+    let joined = parent.join(specifier);
+    let base_candidate = normalize_name(joined.to_string_lossy().as_ref());
+
+    let mut candidates = Vec::new();
+    candidates.push(base_candidate.clone());
+
+    if base_candidate.ends_with(".js") {
+      let trimmed = base_candidate.trim_end_matches(".js");
+      candidates.push(format!("{trimmed}.ts"));
+      candidates.push(format!("{trimmed}.tsx"));
+    } else if base_candidate.ends_with(".jsx") {
+      let trimmed = base_candidate.trim_end_matches(".jsx");
+      candidates.push(format!("{trimmed}.tsx"));
+    } else if !has_known_extension(&base_candidate) {
+      for ext in ["ts", "tsx", "d.ts", "js", "jsx"] {
+        candidates.push(format!("{base_candidate}.{ext}"));
       }
     }
 
-    if let Some(base) = self.files.get(from.0 as usize) {
-      let parent = Path::new(&base.normalized)
-        .parent()
-        .unwrap_or_else(|| Path::new(""));
-      for cand in candidates {
-        let joined = parent.join(&cand);
-        let normalized = normalize_name(joined.to_string_lossy().as_ref());
-        if let Some(found) = self.name_to_id.get(&normalized) {
-          return Some(*found);
-        }
+    let base_path = Path::new(&base_candidate);
+    for ext in ["index.ts", "index.tsx", "index.d.ts", "index.js", "index.jsx"] {
+      let joined = base_path.join(ext);
+      candidates.push(normalize_name(joined.to_string_lossy().as_ref()));
+    }
+
+    for cand in candidates {
+      if let Some(found) = self.name_to_id.get(&cand) {
+        return Some(*found);
       }
     }
 
@@ -314,6 +328,14 @@ fn normalize_name(name: &str) -> String {
   }
 
   normalized.to_string_lossy().replace('\\', "/")
+}
+
+fn has_known_extension(name: &str) -> bool {
+  name.ends_with(".d.ts")
+    || name.ends_with(".ts")
+    || name.ends_with(".tsx")
+    || name.ends_with(".js")
+    || name.ends_with(".jsx")
 }
 
 #[cfg(test)]
@@ -353,6 +375,54 @@ mod tests {
   fn host_resolves_missing_file_errors() {
     let host = HarnessHost::new(&[]);
     assert!(host.file_text(FileId(0)).is_err());
+  }
+
+  #[test]
+  fn resolve_directory_imports_to_index_files() {
+    let files = vec![
+      VirtualFile {
+        name: "src/main.ts".to_string(),
+        content: "import \"./dir\";".to_string(),
+      },
+      VirtualFile {
+        name: "src/dir/index.ts".to_string(),
+        content: "".to_string(),
+      },
+    ];
+    let host = HarnessHost::new(&files);
+    assert_eq!(host.resolve(FileId(0), "./dir"), Some(FileId(1)));
+  }
+
+  #[test]
+  fn resolve_prefers_declaration_files() {
+    let files = vec![
+      VirtualFile {
+        name: "main.ts".to_string(),
+        content: "import \"./foo\";".to_string(),
+      },
+      VirtualFile {
+        name: "foo.d.ts".to_string(),
+        content: "export declare const value: number;".to_string(),
+      },
+    ];
+    let host = HarnessHost::new(&files);
+    assert_eq!(host.resolve(FileId(0), "./foo"), Some(FileId(1)));
+  }
+
+  #[test]
+  fn resolve_maps_js_specifier_to_ts() {
+    let files = vec![
+      VirtualFile {
+        name: "main.ts".to_string(),
+        content: "import \"./foo.js\";".to_string(),
+      },
+      VirtualFile {
+        name: "foo.ts".to_string(),
+        content: "export const value = 1;".to_string(),
+      },
+    ];
+    let host = HarnessHost::new(&files);
+    assert_eq!(host.resolve(FileId(0), "./foo.js"), Some(FileId(1)));
   }
 
   #[test]
