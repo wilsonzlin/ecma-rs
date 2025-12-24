@@ -16,6 +16,7 @@ use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::FuncExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::node::Node;
+use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::decl::ClassDecl;
 use parse_js::ast::stmt::decl::FuncDecl;
 use parse_js::ast::stmt::decl::PatDecl;
@@ -148,7 +149,8 @@ enum DeclTarget {
   IdPatNode(enter),
   ImportStmtNode,
   PatDeclNode,
-  VarDeclNode
+  VarDeclNode,
+  NodeAssocData(enter)
 )]
 struct DeclareVisitor {
   builder: SemanticsBuilder,
@@ -237,6 +239,10 @@ impl DeclareVisitor {
     if let Some(symbol) = self.declare_with_target(&node.stx.name, target) {
       node.assoc.set(DeclaredSymbol(symbol));
     }
+  }
+
+  fn enter_node_assoc_data(&mut self, assoc: &mut NodeAssocData) {
+    assoc.set(self.current_scope());
   }
 }
 
@@ -383,9 +389,31 @@ impl DeclareVisitor {
 #[cfg(test)]
 mod tests {
   use super::declare;
+  use crate::scope_id;
+  use crate::ScopeId;
   use crate::js::ScopeKind;
   use crate::js::TopLevelMode;
+  use derive_visitor::Drive;
+  use derive_visitor::Visitor;
+  use parse_js::ast::expr::IdExpr;
+  use parse_js::ast::node::Node;
+  use parse_js::loc::Loc;
   use parse_js::parse;
+
+  type IdExprNode = Node<IdExpr>;
+
+  #[derive(Default, Visitor)]
+  #[visitor(IdExprNode(enter))]
+  struct IdCollector {
+    seen: Vec<(String, ScopeId, Loc)>,
+  }
+
+  impl IdCollector {
+    fn enter_id_expr_node(&mut self, node: &IdExprNode) {
+      let scope = scope_id(&node.assoc).expect("expected scope id");
+      self.seen.push((node.stx.name.clone(), scope, node.loc));
+    }
+  }
 
   #[test]
   fn builds_scope_tree() {
@@ -448,5 +476,32 @@ mod tests {
     let func_scope = semantics.scope(func_scope);
     assert!(func_scope.symbols.get(&c).is_some());
     assert!(func_scope.symbols.get(&d).is_some());
+  }
+
+  #[test]
+  fn attaches_scope_ids_per_node() {
+    let mut parsed = parse(
+      r#"
+      let value = 0;
+      function wrap() {
+        {
+          value;
+        }
+      }
+      value;
+    "#,
+    )
+    .unwrap();
+
+    let semantics = declare(&mut parsed, TopLevelMode::Global);
+    let mut collector = IdCollector::default();
+    parsed.drive(&mut collector);
+
+    collector.seen.sort_by_key(|(_, _, loc)| loc.0);
+    assert_eq!(collector.seen.len(), 2);
+    assert_eq!(collector.seen[0].0, "value");
+    assert_eq!(collector.seen[1].0, "value");
+    assert_ne!(collector.seen[0].1, collector.seen[1].1);
+    assert_eq!(semantics.scope(collector.seen[1].1).kind, ScopeKind::Global);
   }
 }
