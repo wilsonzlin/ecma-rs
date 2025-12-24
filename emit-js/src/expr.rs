@@ -1,7 +1,7 @@
 use std::fmt;
 
 use parse_js::ast::expr::{
-  lit::{LitBigIntExpr, LitBoolExpr, LitNumExpr, LitStrExpr},
+  lit::{LitBigIntExpr, LitBoolExpr, LitNumExpr, LitRegexExpr, LitStrExpr},
   BinaryExpr,
   CallArg,
   CallExpr,
@@ -78,11 +78,16 @@ where
   fn emit_expr_no_parens(&mut self, expr: &Node<Expr>) -> EmitResult {
     match expr.stx.as_ref() {
       Expr::Id(id) => self.emit_id(id),
+      Expr::This(_) => self.emit_this(),
+      Expr::Super(_) => self.emit_super(),
+      Expr::NewTarget(_) => self.emit_new_target(),
+      Expr::ImportMeta(_) => self.emit_import_meta(),
       Expr::LitNum(num) => self.emit_lit_num(num),
       Expr::LitBool(lit) => self.emit_lit_bool(lit),
       Expr::LitNull(_) => self.emit_lit_null(),
       Expr::LitBigInt(lit) => self.emit_lit_big_int(lit),
       Expr::LitStr(lit) => self.emit_lit_str(lit),
+      Expr::LitRegex(lit) => self.emit_lit_regex(lit),
       Expr::JsxElem(elem) => crate::jsx::emit_jsx_elem(self.out, elem),
       Expr::Binary(binary) => self.emit_binary(binary),
       Expr::Call(call) => self.emit_call(call),
@@ -97,6 +102,26 @@ where
 
   fn emit_id(&mut self, id: &Node<IdExpr>) -> EmitResult {
     self.out.write_str(&id.stx.name)?;
+    Ok(())
+  }
+
+  fn emit_this(&mut self) -> EmitResult {
+    self.out.write_str("this")?;
+    Ok(())
+  }
+
+  fn emit_super(&mut self) -> EmitResult {
+    self.out.write_str("super")?;
+    Ok(())
+  }
+
+  fn emit_new_target(&mut self) -> EmitResult {
+    self.out.write_str("new.target")?;
+    Ok(())
+  }
+
+  fn emit_import_meta(&mut self) -> EmitResult {
+    self.out.write_str("import.meta")?;
     Ok(())
   }
 
@@ -126,6 +151,11 @@ where
     self
       .out
       .write_str(std::str::from_utf8(&buf).expect("string literal escape output is UTF-8"))?;
+    Ok(())
+  }
+
+  fn emit_lit_regex(&mut self, lit: &Node<LitRegexExpr>) -> EmitResult {
+    self.out.write_str(&lit.stx.value)?;
     Ok(())
   }
 
@@ -207,11 +237,16 @@ where
 fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
   match expr.stx.as_ref() {
     Expr::Id(_) => Ok(PRIMARY_PRECEDENCE),
+    Expr::This(_) => Ok(PRIMARY_PRECEDENCE),
+    Expr::Super(_) => Ok(PRIMARY_PRECEDENCE),
+    Expr::NewTarget(_) => Ok(PRIMARY_PRECEDENCE),
+    Expr::ImportMeta(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::LitNum(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::LitBool(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::LitNull(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::LitBigInt(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::LitStr(_) => Ok(PRIMARY_PRECEDENCE),
+    Expr::LitRegex(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::JsxElem(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::Binary(binary) => Ok(
       OPERATORS
