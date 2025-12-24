@@ -8,9 +8,8 @@ use crate::{HarnessError, Result, VirtualFile};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info, info_span, warn};
 use typecheck_ts::lib_support::FileKind;
@@ -284,15 +283,21 @@ fn execute_case(case: TestCase) -> TestResult {
   if let Some(delay) = harness_sleep_for_case(&case.id) {
     std::thread::sleep(delay);
   }
-  let notes = case.notes.clone();
+
+  let mut notes = case.notes.clone();
   let directives = case.directives.clone();
   let options = case.options.clone();
   let host = HarnessHost::new(&case.deduped_files);
   let roots = host.root_files();
+  let program_host = host.clone();
 
-  info!(phase = "rust_check_start", file_count = case.files.len());
-  let result = std::panic::catch_unwind(|| Program::new(host, roots).check());
+  info!(
+    phase = "rust_check_start",
+    file_count = case.deduped_files.len()
+  );
+  let result = std::panic::catch_unwind(|| Program::new(program_host, roots).check());
   let duration_ms = start.elapsed().as_millis();
+  notes.extend(host.take_resolution_notes());
 
   match result {
     Ok(diagnostics) => {
@@ -390,9 +395,21 @@ fn categorize(diags: &[Diagnostic]) -> TestStatus {
   TestStatus::TypeError
 }
 
+#[derive(Clone)]
 struct HarnessHost {
+  inner: Arc<HarnessHostInner>,
+}
+
+struct HarnessHostInner {
   files: Vec<HarnessFile>,
   name_to_id: HashMap<String, FileId>,
+  failed_resolutions: Mutex<Vec<ResolutionFailure>>,
+}
+
+struct ResolutionFailure {
+  from: FileId,
+  specifier: String,
+  candidates: Vec<String>,
 }
 
 struct HarnessFile {
@@ -429,17 +446,82 @@ impl HarnessHost {
     }
 
     Self {
-      files: stored,
-      name_to_id,
+      inner: Arc::new(HarnessHostInner {
+        files: stored,
+        name_to_id,
+        failed_resolutions: Mutex::new(Vec::new()),
+      }),
     }
   }
 
   fn root_files(&self) -> Vec<FileId> {
-    (0..self.files.len()).map(|i| FileId(i as u32)).collect()
+    (0..self.inner.files.len())
+      .map(|i| FileId(i as u32))
+      .collect()
+  }
+
+  fn record_failure(&self, from: FileId, specifier: &str, candidates: Vec<String>) {
+    let mut failures = self.inner.failed_resolutions.lock().unwrap();
+    if failures
+      .iter()
+      .any(|f| f.from == from && f.specifier == specifier)
+    {
+      return;
+    }
+
+    failures.push(ResolutionFailure {
+      from,
+      specifier: specifier.to_string(),
+      candidates,
+    });
+  }
+
+  fn take_resolution_notes(&self) -> Vec<String> {
+    const MAX_LISTED_CANDIDATES: usize = 10;
+
+    let mut failures = self.inner.failed_resolutions.lock().unwrap();
+    let mut notes = Vec::new();
+    for failure in failures.drain(..) {
+      let from_name = self
+        .inner
+        .files
+        .get(failure.from.0 as usize)
+        .map(|f| f.normalized.as_str())
+        .unwrap_or("<unknown>");
+
+      let total = failure.candidates.len();
+      let mut listed = failure.candidates;
+      if listed.len() > MAX_LISTED_CANDIDATES {
+        listed.truncate(MAX_LISTED_CANDIDATES);
+      }
+      let suffix = if total > listed.len() {
+        format!(" ({} more)", total - listed.len())
+      } else {
+        String::new()
+      };
+
+      let tried = if listed.is_empty() {
+        "<none>".to_string()
+      } else {
+        listed.join(", ")
+      };
+
+      notes.push(format!(
+        "failed to resolve \"{}\" from {} (tried {}{})",
+        failure.specifier, from_name, tried, suffix
+      ));
+    }
+
+    notes
   }
 
   fn file_names(&self) -> Vec<String> {
-    self.files.iter().map(|f| f.normalized.clone()).collect()
+    self
+      .inner
+      .files
+      .iter()
+      .map(|f| f.normalized.clone())
+      .collect()
   }
 }
 
@@ -447,6 +529,7 @@ impl Host for HarnessHost {
   fn file_text(&self, file: FileId) -> std::result::Result<Arc<str>, HostError> {
     let idx = file.0 as usize;
     self
+      .inner
       .files
       .get(idx)
       .map(|f| f.content.clone())
@@ -454,58 +537,38 @@ impl Host for HarnessHost {
   }
 
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
-    let is_relative = specifier.starts_with("./") || specifier.starts_with("../");
-    if !is_relative {
-      let normalized = normalize_name(specifier);
-      return self.name_to_id.get(&normalized).copied();
-    }
+    // Resolution strategy (mirrors the TypeScript test harness):
+    // 1) Canonicalise all paths to the virtual root (`/`), applying `.`/`..` collapse and
+    //    forwarding drive-letter inputs to `c:/...` style names.
+    // 2) If the specifier is relative, join it against the containing directory of `from`.
+    //    Otherwise, anchor it at `/` so `"foo"` resolves like `"/foo"`.
+    // 3) Expand the base path using a preferred extension order of:
+    //       .d.ts -> .ts -> .tsx -> .js -> .jsx
+    //    (explicit .js/.jsx specifiers are still tried first).
+    // 4) Attempt `index.*` files in the same preferred order.
+    // 5) Return the first matching candidate.
+    let base_candidate = if is_relative_specifier(specifier) {
+      let base = self.inner.files.get(from.0 as usize)?;
+      let parent = parent_dir(&base.normalized);
+      normalize_name(&format!("{parent}/{}", specifier))
+    } else {
+      anchor_at_root(specifier)
+    };
 
-    let base = self.files.get(from.0 as usize)?;
-    let parent = Path::new(&base.normalized)
-      .parent()
-      .unwrap_or_else(|| Path::new(""));
-    let joined = parent.join(specifier);
-    let base_candidate = normalize_name(joined.to_string_lossy().as_ref());
-
-    let mut candidates = Vec::new();
-    candidates.push(base_candidate.clone());
-
-    if base_candidate.ends_with(".js") {
-      let trimmed = base_candidate.trim_end_matches(".js");
-      candidates.push(format!("{trimmed}.ts"));
-      candidates.push(format!("{trimmed}.tsx"));
-    } else if base_candidate.ends_with(".jsx") {
-      let trimmed = base_candidate.trim_end_matches(".jsx");
-      candidates.push(format!("{trimmed}.tsx"));
-    } else if !has_known_extension(&base_candidate) {
-      for ext in ["ts", "tsx", "d.ts", "js", "jsx"] {
-        candidates.push(format!("{base_candidate}.{ext}"));
-      }
-    }
-
-    let base_path = Path::new(&base_candidate);
-    for ext in [
-      "index.ts",
-      "index.tsx",
-      "index.d.ts",
-      "index.js",
-      "index.jsx",
-    ] {
-      let joined = base_path.join(ext);
-      candidates.push(normalize_name(joined.to_string_lossy().as_ref()));
-    }
-
-    for cand in candidates {
-      if let Some(found) = self.name_to_id.get(&cand) {
+    let candidates = build_candidates(&base_candidate);
+    for cand in &candidates {
+      if let Some(found) = self.inner.name_to_id.get(cand) {
         return Some(*found);
       }
     }
 
+    self.record_failure(from, specifier, candidates);
     None
   }
 
   fn file_kind(&self, file: FileId) -> FileKind {
     let name = self
+      .inner
       .files
       .get(file.0 as usize)
       .map(|f| f.normalized.as_str())
@@ -532,12 +595,83 @@ pub(crate) fn run_rust(files: &[VirtualFile]) -> (Vec<Diagnostic>, Vec<String>) 
   (diagnostics, names)
 }
 
-fn has_known_extension(name: &str) -> bool {
-  name.ends_with(".d.ts")
-    || name.ends_with(".ts")
-    || name.ends_with(".tsx")
-    || name.ends_with(".js")
-    || name.ends_with(".jsx")
+fn anchor_at_root(specifier: &str) -> String {
+  if specifier.starts_with('/') {
+    normalize_name(specifier)
+  } else {
+    normalize_name(&format!("/{}", specifier))
+  }
+}
+
+fn is_relative_specifier(specifier: &str) -> bool {
+  specifier.starts_with("./") || specifier.starts_with("../")
+}
+
+fn build_candidates(base_candidate: &str) -> Vec<String> {
+  let mut candidates = Vec::new();
+  push_candidate(base_candidate, &mut candidates);
+
+  match detect_known_extension(base_candidate) {
+    Some("js") => {
+      let trimmed = base_candidate.trim_end_matches(".js");
+      for ext in ["d.ts", "ts", "tsx"] {
+        push_candidate(&format!("{trimmed}.{ext}"), &mut candidates);
+      }
+    }
+    Some("jsx") => {
+      let trimmed = base_candidate.trim_end_matches(".jsx");
+      for ext in ["d.ts", "tsx"] {
+        push_candidate(&format!("{trimmed}.{ext}"), &mut candidates);
+      }
+    }
+    Some(_) => {}
+    None => {
+      for ext in ["d.ts", "ts", "tsx", "js", "jsx"] {
+        push_candidate(&format!("{base_candidate}.{ext}"), &mut candidates);
+      }
+    }
+  }
+
+  for ext in [
+    "index.d.ts",
+    "index.ts",
+    "index.tsx",
+    "index.js",
+    "index.jsx",
+  ] {
+    push_candidate(&format!("{base_candidate}/{ext}"), &mut candidates);
+  }
+
+  candidates
+}
+
+fn push_candidate(raw: &str, candidates: &mut Vec<String>) {
+  let normalized = normalize_name(raw);
+  if !candidates.contains(&normalized) {
+    candidates.push(normalized);
+  }
+}
+
+fn detect_known_extension(name: &str) -> Option<&'static str> {
+  for ext in ["d.ts", "ts", "tsx", "js", "jsx"] {
+    if name.ends_with(ext) {
+      return Some(ext);
+    }
+  }
+  None
+}
+
+fn parent_dir(path: &str) -> &str {
+  if path == "/" || path.ends_with(":/") {
+    return path;
+  }
+
+  match path.rfind('/') {
+    Some(0) => "/",
+    Some(idx) if idx == 2 && path.as_bytes().get(1) == Some(&b':') => &path[..idx + 1],
+    Some(idx) => &path[..idx],
+    None => "",
+  }
 }
 
 #[cfg(test)]
@@ -668,16 +802,80 @@ mod tests {
 
   #[test]
   fn normalize_name_strips_dot_slash() {
-    assert_eq!(normalize_name("./foo.ts"), "foo.ts");
+    assert_eq!(normalize_name("./foo.ts"), "/foo.ts");
   }
 
   #[test]
   fn normalize_name_preserves_subdirs() {
-    assert_eq!(normalize_name("./sub/foo.ts"), "sub/foo.ts");
+    assert_eq!(normalize_name("./sub/foo.ts"), "/sub/foo.ts");
   }
 
   #[test]
   fn normalize_name_normalizes_backslashes() {
-    assert_eq!(normalize_name(".\\sub\\foo.ts"), "sub/foo.ts");
+    assert_eq!(normalize_name(".\\sub\\foo.ts"), "/sub/foo.ts");
+  }
+
+  #[test]
+  fn resolves_rooted_paths() {
+    let files = vec![
+      VirtualFile {
+        name: "/src/main.ts".to_string(),
+        content: "import \"./dep\";".to_string(),
+      },
+      VirtualFile {
+        name: "/src/dep/index.ts".to_string(),
+        content: "".to_string(),
+      },
+    ];
+
+    let host = HarnessHost::new(&files);
+    assert_eq!(host.resolve(FileId(0), "./dep"), Some(FileId(1)));
+  }
+
+  #[test]
+  fn resolves_non_relative_specifiers_from_root() {
+    let files = vec![
+      VirtualFile {
+        name: "entry.ts".to_string(),
+        content: "import \"lib\";".to_string(),
+      },
+      VirtualFile {
+        name: "/lib/index.ts".to_string(),
+        content: "".to_string(),
+      },
+    ];
+
+    let host = HarnessHost::new(&files);
+    assert_eq!(host.resolve(FileId(0), "lib"), Some(FileId(1)));
+  }
+
+  #[test]
+  fn treats_rooted_and_unrooted_names_as_aliases() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "first".to_string(),
+      },
+      VirtualFile {
+        name: "a.ts".to_string(),
+        content: "second".to_string(),
+      },
+      VirtualFile {
+        name: "/main.ts".to_string(),
+        content: "import \"a\";".to_string(),
+      },
+    ];
+
+    let host = HarnessHost::new(&files);
+    let roots = host.root_files();
+    let main_id = roots
+      .iter()
+      .copied()
+      .find(|id| host.file_text(*id).unwrap().contains("import"))
+      .expect("should find main file");
+
+    let resolved = host.resolve(main_id, "a").expect("should resolve a");
+    assert_eq!(&*host.file_text(resolved).unwrap(), "second");
+    assert_eq!(host.resolve(main_id, "/a"), Some(resolved));
   }
 }
