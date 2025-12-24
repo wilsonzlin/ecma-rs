@@ -60,3 +60,26 @@ fn readme_example_is_parseable() {
   let result = minified(TopLevelMode::Global, code);
   parse(&result).expect("minified output should be parseable JavaScript");
 }
+
+#[test]
+fn test_with_statement_disables_renaming() {
+  let src = "with ({x:2}){x}";
+  let result = minified(TopLevelMode::Global, src);
+  assert_eq!(result, src);
+}
+
+#[test]
+fn test_direct_eval_disables_renaming() {
+  let src = "function f(){let x;eval(\"x\");}";
+  let result = minified(TopLevelMode::Global, src);
+  assert_eq!(result, src);
+}
+
+#[test]
+fn test_shadowed_eval_allows_renaming() {
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(eval){let x;eval(\"x\");}",
+  );
+  assert_eq!(result, "function f(a){let b;a(\"x\");}");
+}
