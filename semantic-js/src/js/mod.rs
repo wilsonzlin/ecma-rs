@@ -85,7 +85,7 @@ impl FromStr for TopLevelMode {
 pub struct ScopeId(u32);
 
 impl ScopeId {
-  pub(crate) fn index(self) -> usize {
+  pub fn index(self) -> usize {
     self.0 as usize
   }
 }
@@ -94,7 +94,7 @@ impl ScopeId {
 pub struct SymbolId(u32);
 
 impl SymbolId {
-  pub(crate) fn index(self) -> usize {
+  pub fn index(self) -> usize {
     self.0 as usize
   }
 }
@@ -103,7 +103,7 @@ impl SymbolId {
 pub struct NameId(u32);
 
 impl NameId {
-  pub(crate) fn index(self) -> usize {
+  pub fn index(self) -> usize {
     self.0 as usize
   }
 }
