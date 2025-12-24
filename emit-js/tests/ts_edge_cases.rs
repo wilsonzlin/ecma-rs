@@ -75,4 +75,3 @@ fn emits_typeof_queries_with_spacing() {
   roundtrip_type_alias("type T=typeof undefined;", "type T = typeof undefined;");
   roundtrip_type_alias("type T=typeof this;", "type T = typeof this;");
 }
-

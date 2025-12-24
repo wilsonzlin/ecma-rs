@@ -67,22 +67,28 @@ fn test_lex_literal_strings() {
 
 #[test]
 fn test_lex_import_statement() {
-  check("import * as a from \"./a\";", [
-    KeywordImport,
-    Asterisk,
-    KeywordAs,
-    Identifier,
-    KeywordFrom,
-    LiteralString,
-    Semicolon,
-  ]);
-  check("import * as a from './a';", [
-    KeywordImport,
-    Asterisk,
-    KeywordAs,
-    Identifier,
-    KeywordFrom,
-    LiteralString,
-    Semicolon,
-  ]);
+  check(
+    "import * as a from \"./a\";",
+    [
+      KeywordImport,
+      Asterisk,
+      KeywordAs,
+      Identifier,
+      KeywordFrom,
+      LiteralString,
+      Semicolon,
+    ],
+  );
+  check(
+    "import * as a from './a';",
+    [
+      KeywordImport,
+      Asterisk,
+      KeywordAs,
+      Identifier,
+      KeywordFrom,
+      LiteralString,
+      Semicolon,
+    ],
+  );
 }

@@ -36,9 +36,12 @@ fn emit_expr_with_ctx<W: fmt::Write>(
     Expr::LitNum(node) => literal::emit_number_literal(
       out,
       node.stx.value,
-      matches!(ctx, ExprContext::MemberObject {
-        needs_numeric_fix: true
-      }),
+      matches!(
+        ctx,
+        ExprContext::MemberObject {
+          needs_numeric_fix: true
+        }
+      ),
     ),
     Expr::LitRegex(node) => literal::emit_regex_literal(out, node.stx.as_ref()),
     Expr::LitStr(node) => literal::emit_string_literal_expr(out, node.stx.as_ref(), mode),
@@ -64,9 +67,14 @@ fn emit_tagged_template_expr<W: fmt::Write>(
 }
 
 fn emit_member_expr<W: fmt::Write>(out: &mut W, expr: &MemberExpr, mode: EmitMode) -> fmt::Result {
-  emit_expr_with_ctx(out, &expr.left, mode, ExprContext::MemberObject {
-    needs_numeric_fix: !expr.optional_chaining,
-  })?;
+  emit_expr_with_ctx(
+    out,
+    &expr.left,
+    mode,
+    ExprContext::MemberObject {
+      needs_numeric_fix: !expr.optional_chaining,
+    },
+  )?;
   if expr.optional_chaining {
     out.write_str("?.")?;
   } else {

@@ -35,4 +35,3 @@ fn avoids_shadowing_renamed_outer_bindings() {
     "inner scope must not reuse the renamed outer binding name"
   );
 }
-

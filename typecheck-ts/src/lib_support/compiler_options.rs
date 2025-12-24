@@ -126,4 +126,3 @@ fn es_lib_for_target(target: ScriptTarget) -> LibName {
     ScriptTarget::EsNext => LibName::EsNext,
   }
 }
-

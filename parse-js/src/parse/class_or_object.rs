@@ -53,10 +53,13 @@ impl<'a> Parser<'a> {
     use crate::ast::class_or_object::ClassOrObjKey;
     use crate::ast::class_or_object::ClassOrObjMemberDirectKey;
     use crate::loc::Loc;
-    ClassOrObjKey::Direct(Node::new(Loc(0, 0), ClassOrObjMemberDirectKey {
-      key: String::new(),
-      tt: TT::Identifier,
-    }))
+    ClassOrObjKey::Direct(Node::new(
+      Loc(0, 0),
+      ClassOrObjMemberDirectKey {
+        key: String::new(),
+        tt: TT::Identifier,
+      },
+    ))
   }
 
   pub fn class_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<ClassMember>>> {
@@ -600,24 +603,33 @@ impl<'a> Parser<'a> {
           p.consume(); // consume 'this'
           p.require(TT::Colon)?;
           let type_annotation = Some(p.type_expr(ctx)?);
-          let this_pattern = Node::new(Loc(0, 0), PatDecl {
-            pat: Node::new(
-              Loc(0, 0),
-              Pat::Id(Node::new(Loc(0, 0), IdPat {
-                name: String::from("this"),
-              })),
-            ),
-          });
-          parameters.push(Node::new(Loc(0, 0), ParamDecl {
-            decorators: Vec::new(),
-            rest: false,
-            optional: false,
-            accessibility: None,
-            readonly: false,
-            pattern: this_pattern,
-            type_annotation,
-            default_value: None,
-          }));
+          let this_pattern = Node::new(
+            Loc(0, 0),
+            PatDecl {
+              pat: Node::new(
+                Loc(0, 0),
+                Pat::Id(Node::new(
+                  Loc(0, 0),
+                  IdPat {
+                    name: String::from("this"),
+                  },
+                )),
+              ),
+            },
+          );
+          parameters.push(Node::new(
+            Loc(0, 0),
+            ParamDecl {
+              decorators: Vec::new(),
+              rest: false,
+              optional: false,
+              accessibility: None,
+              readonly: false,
+              pattern: this_pattern,
+              type_annotation,
+              default_value: None,
+            },
+          ));
         }
       }
 
@@ -683,28 +695,37 @@ impl<'a> Parser<'a> {
       if p.peek().typ != TT::ParenthesisOpen {
         // Missing parentheses - create synthetic parameter for error recovery
         let loc = p.peek().loc;
-        let synthetic_pattern = Node::new(loc, PatDecl {
-          pat: Node::new(loc, IdPat {
-            name: String::from("_"),
-          })
-          .into_wrapped(),
-        });
+        let synthetic_pattern = Node::new(
+          loc,
+          PatDecl {
+            pat: Node::new(
+              loc,
+              IdPat {
+                name: String::from("_"),
+              },
+            )
+            .into_wrapped(),
+          },
+        );
         let param_loc = synthetic_pattern.loc;
         return Ok(Func {
           arrow: false,
           async_: false,
           generator: false,
           type_parameters,
-          parameters: vec![Node::new(param_loc, ParamDecl {
-            decorators: Vec::new(),
-            rest: false,
-            optional: false,
-            accessibility: None,
-            readonly: false,
-            pattern: synthetic_pattern,
-            type_annotation: None,
-            default_value: None,
-          })],
+          parameters: vec![Node::new(
+            param_loc,
+            ParamDecl {
+              decorators: Vec::new(),
+              rest: false,
+              optional: false,
+              accessibility: None,
+              readonly: false,
+              pattern: synthetic_pattern,
+              type_annotation: None,
+              default_value: None,
+            },
+          )],
           return_type: None,
           body: None,
         });
@@ -731,24 +752,33 @@ impl<'a> Parser<'a> {
           p.consume(); // consume 'this'
           p.require(TT::Colon)?;
           let type_annotation = Some(p.type_expr(ctx)?);
-          let this_pattern = Node::new(Loc(0, 0), PatDecl {
-            pat: Node::new(
-              Loc(0, 0),
-              Pat::Id(Node::new(Loc(0, 0), IdPat {
-                name: String::from("this"),
-              })),
-            ),
-          });
-          parameters.push(Node::new(Loc(0, 0), ParamDecl {
-            decorators: Vec::new(),
-            rest: false,
-            optional: false,
-            accessibility: None,
-            readonly: false,
-            pattern: this_pattern,
-            type_annotation,
-            default_value: None,
-          }));
+          let this_pattern = Node::new(
+            Loc(0, 0),
+            PatDecl {
+              pat: Node::new(
+                Loc(0, 0),
+                Pat::Id(Node::new(
+                  Loc(0, 0),
+                  IdPat {
+                    name: String::from("this"),
+                  },
+                )),
+              ),
+            },
+          );
+          parameters.push(Node::new(
+            Loc(0, 0),
+            ParamDecl {
+              decorators: Vec::new(),
+              rest: false,
+              optional: false,
+              accessibility: None,
+              readonly: false,
+              pattern: this_pattern,
+              type_annotation,
+              default_value: None,
+            },
+          ));
           // Consume comma after this parameter
           if p.consume_if(TT::Comma).is_match() {
             // Continue to parse value parameter
@@ -760,12 +790,18 @@ impl<'a> Parser<'a> {
       let (pattern, type_annotation, default_value) = if p.peek().typ == TT::ParenthesisClose {
         // Empty parameter list - create synthetic parameter for error recovery
         let loc = p.peek().loc;
-        let synthetic_pattern = Node::new(loc, PatDecl {
-          pat: Node::new(loc, IdPat {
-            name: String::from("_"),
-          })
-          .into_wrapped(),
-        });
+        let synthetic_pattern = Node::new(
+          loc,
+          PatDecl {
+            pat: Node::new(
+              loc,
+              IdPat {
+                name: String::from("_"),
+              },
+            )
+            .into_wrapped(),
+          },
+        );
         (synthetic_pattern, None, None)
       } else {
         let pattern = p.pat_decl(setter_ctx)?;
@@ -783,16 +819,19 @@ impl<'a> Parser<'a> {
       let param_loc = pattern.loc;
 
       // Add the value parameter to the parameters list
-      parameters.push(Node::new(param_loc, ParamDecl {
-        decorators: Vec::new(),
-        rest: false,
-        optional: false,
-        accessibility: None,
-        readonly: false,
-        pattern,
-        type_annotation,
-        default_value,
-      }));
+      parameters.push(Node::new(
+        param_loc,
+        ParamDecl {
+          decorators: Vec::new(),
+          rest: false,
+          optional: false,
+          accessibility: None,
+          readonly: false,
+          pattern,
+          type_annotation,
+          default_value,
+        },
+      ));
 
       // ES2017+: Allow trailing comma in setter parameter list
       let _ = p.consume_if(TT::Comma);

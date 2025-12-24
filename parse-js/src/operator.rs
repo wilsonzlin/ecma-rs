@@ -207,12 +207,15 @@ pub static OPERATORS: Lazy<HashMap<OperatorName, Operator>> = Lazy::new(|| {
   for (i, ops) in PRECEDENCE_LEVELS.iter().enumerate() {
     let precedence = (PRECEDENCE_LEVELS.len() - i) as u8;
     for &(name, arity, associativity) in ops.iter() {
-      map.insert(name, Operator {
+      map.insert(
         name,
-        arity,
-        associativity,
-        precedence,
-      });
+        Operator {
+          name,
+          arity,
+          associativity,
+          precedence,
+        },
+      );
     }
   }
   map

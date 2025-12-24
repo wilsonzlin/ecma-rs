@@ -54,4 +54,3 @@ mod tests {
     assert_eq!(parse_top_level_mode("unknown"), None);
   }
 }
-

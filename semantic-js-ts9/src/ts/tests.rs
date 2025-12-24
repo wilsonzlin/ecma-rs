@@ -310,9 +310,8 @@ fn export_map_is_deterministic() {
   assert!(diags.is_empty());
 
   let names: Vec<_> = semantics.exports_of(file).keys().cloned().collect();
-  assert_eq!(names, vec![
-    "a".to_string(),
-    "b".to_string(),
-    "c".to_string()
-  ]);
+  assert_eq!(
+    names,
+    vec!["a".to_string(), "b".to_string(), "c".to_string()]
+  );
 }

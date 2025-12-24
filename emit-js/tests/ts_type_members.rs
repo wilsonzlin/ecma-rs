@@ -66,4 +66,3 @@ fn emits_type_predicate_return_types() {
     emit_members_from_interface("interface I{assertFoo(x:any):asserts x is Foo}");
   assert_eq!(asserts_predicate, "assertFoo(x: any): asserts x is Foo;");
 }
-

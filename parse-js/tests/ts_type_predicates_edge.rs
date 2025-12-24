@@ -10,9 +10,7 @@ use parse_js::parse;
 fn parse_interface(src: &str) -> InterfaceDecl {
   let Node { stx: top_stx, .. } = parse(src).expect("failed to parse interface");
   let mut body_iter = top_stx.body.into_iter();
-  let stmt = body_iter
-    .next()
-    .expect("expected interface statement");
+  let stmt = body_iter.next().expect("expected interface statement");
 
   match *stmt.stx {
     Stmt::InterfaceDecl(interface) => *interface.stx,
@@ -24,9 +22,7 @@ fn parse_predicate_from_interface(src: &str) -> TypePredicate {
   let interface = parse_interface(src);
 
   let mut members = interface.members.into_iter();
-  let member = members
-    .next()
-    .expect("expected interface to have a member");
+  let member = members.next().expect("expected interface to have a member");
 
   let method = match *member.stx {
     TypeMember::Method(method) => method,

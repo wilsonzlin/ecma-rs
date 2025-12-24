@@ -27,36 +27,49 @@ fn expr_node(stx: Expr) -> Node<Expr> {
 }
 
 fn lit_num(value: f64) -> Node<Expr> {
-  expr_node(Expr::LitNum(Node::new(Loc(0, 0), LitNumExpr {
-    value: JsNumber(value),
-  })))
+  expr_node(Expr::LitNum(Node::new(
+    Loc(0, 0),
+    LitNumExpr {
+      value: JsNumber(value),
+    },
+  )))
 }
 
 fn lit_regex(value: &str) -> Node<Expr> {
-  expr_node(Expr::LitRegex(Node::new(Loc(0, 0), LitRegexExpr {
-    value: value.to_string(),
-  })))
+  expr_node(Expr::LitRegex(Node::new(
+    Loc(0, 0),
+    LitRegexExpr {
+      value: value.to_string(),
+    },
+  )))
 }
 
 fn lit_str(value: &str) -> Node<Expr> {
-  expr_node(Expr::LitStr(Node::new(Loc(0, 0), LitStrExpr {
-    value: value.to_string(),
-  })))
+  expr_node(Expr::LitStr(Node::new(
+    Loc(0, 0),
+    LitStrExpr {
+      value: value.to_string(),
+    },
+  )))
 }
 
 fn lit_template(parts: Vec<LitTemplatePart>) -> Node<Expr> {
-  expr_node(Expr::LitTemplate(Node::new(Loc(0, 0), LitTemplateExpr {
-    parts,
-  })))
+  expr_node(Expr::LitTemplate(Node::new(
+    Loc(0, 0),
+    LitTemplateExpr { parts },
+  )))
 }
 
 fn member_with_number(value: f64, prop: &str) -> Node<Expr> {
   let left = lit_num(value);
-  expr_node(Expr::Member(Node::new(Loc(0, 0), MemberExpr {
-    optional_chaining: false,
-    left,
-    right: prop.to_string(),
-  })))
+  expr_node(Expr::Member(Node::new(
+    Loc(0, 0),
+    MemberExpr {
+      optional_chaining: false,
+      left,
+      right: prop.to_string(),
+    },
+  )))
 }
 
 #[test]

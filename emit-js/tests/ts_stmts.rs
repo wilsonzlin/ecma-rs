@@ -33,4 +33,3 @@ fn type_alias_roundtrip() {
   let re_emitted = emit_type_alias_to_string(&reparsed);
   assert_eq!(emitted, re_emitted);
 }
-

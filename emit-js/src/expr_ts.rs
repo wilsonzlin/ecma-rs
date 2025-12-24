@@ -30,7 +30,10 @@ where
     }
   }
 
-  pub(crate) fn emit_non_null_assertion(&mut self, assertion: &Node<NonNullAssertionExpr>) -> EmitResult {
+  pub(crate) fn emit_non_null_assertion(
+    &mut self,
+    assertion: &Node<NonNullAssertionExpr>,
+  ) -> EmitResult {
     self.emit_expr_with_min_prec(&assertion.stx.expression, NON_NULL_ASSERTION_PRECEDENCE)?;
     write!(self.out, "!")?;
     Ok(())

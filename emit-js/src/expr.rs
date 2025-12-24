@@ -2,22 +2,14 @@ use std::fmt;
 
 use parse_js::ast::expr::{
   lit::{LitBigIntExpr, LitBoolExpr, LitNumExpr, LitRegexExpr, LitStrExpr},
-  BinaryExpr,
-  CallArg,
-  CallExpr,
-  ComputedMemberExpr,
-  Expr,
-  IdExpr,
-  MemberExpr,
+  BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr,
 };
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::operator::{Associativity, OperatorName, OPERATORS};
 
 use crate::expr_ts::{
-  NON_NULL_ASSERTION_PRECEDENCE,
-  SATISFIES_PRECEDENCE,
-  TYPE_ASSERTION_PRECEDENCE,
+  NON_NULL_ASSERTION_PRECEDENCE, SATISFIES_PRECEDENCE, TYPE_ASSERTION_PRECEDENCE,
 };
 
 const PRIMARY_PRECEDENCE: u8 = 19;
@@ -131,7 +123,9 @@ where
   }
 
   fn emit_lit_bool(&mut self, lit: &Node<LitBoolExpr>) -> EmitResult {
-    self.out.write_str(if lit.stx.value { "true" } else { "false" })?;
+    self
+      .out
+      .write_str(if lit.stx.value { "true" } else { "false" })?;
     Ok(())
   }
 
@@ -331,7 +325,9 @@ fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
     | OperatorName::Yield
     | OperatorName::YieldDelegated
     | OperatorName::PostfixDecrement
-    | OperatorName::PostfixIncrement => Err(EmitError::Unsupported("operator not supported in binary emitter")),
+    | OperatorName::PostfixIncrement => Err(EmitError::Unsupported(
+      "operator not supported in binary emitter",
+    )),
   }
 }
 
@@ -356,7 +352,9 @@ mod tests {
   }
 
   fn id(name: &str) -> Node<Expr> {
-    node(Expr::Id(node(IdExpr { name: name.to_string() })))
+    node(Expr::Id(node(IdExpr {
+      name: name.to_string(),
+    })))
   }
 
   fn binary_add(left: Node<Expr>, right: Node<Expr>) -> Node<Expr> {

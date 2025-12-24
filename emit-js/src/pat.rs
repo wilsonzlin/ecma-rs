@@ -5,7 +5,7 @@ use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::{PatDecl, ParamDecl};
+use parse_js::ast::stmt::decl::{ParamDecl, PatDecl};
 use parse_js::ast::type_expr::TypeExpr;
 
 fn emit_expr<W: fmt::Write>(out: &mut W, expr: &Node<Expr>) -> fmt::Result {
@@ -114,4 +114,3 @@ fn emit_obj_pat_prop<W: Write>(out: &mut W, prop: &Node<ObjPatProp>) -> fmt::Res
   }
   Ok(())
 }
-

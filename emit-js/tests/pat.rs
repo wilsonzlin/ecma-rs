@@ -4,7 +4,7 @@ use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::pat::{ArrPat, ArrPatElem, IdPat, ObjPat, ObjPatProp, Pat};
 use parse_js::ast::expr::{Expr, IdExpr};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::{PatDecl, ParamDecl};
+use parse_js::ast::stmt::decl::{ParamDecl, PatDecl};
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::token::TT;
@@ -14,11 +14,17 @@ fn dummy_loc() -> Loc {
 }
 
 fn id_pat(name: &str) -> Node<Pat> {
-  Node::new(dummy_loc(), Pat::Id(Node::new(dummy_loc(), IdPat { name: name.into() })))
+  Node::new(
+    dummy_loc(),
+    Pat::Id(Node::new(dummy_loc(), IdPat { name: name.into() })),
+  )
 }
 
 fn id_expr(name: &str) -> Node<Expr> {
-  Node::new(dummy_loc(), Expr::Id(Node::new(dummy_loc(), IdExpr { name: name.into() })))
+  Node::new(
+    dummy_loc(),
+    Expr::Id(Node::new(dummy_loc(), IdExpr { name: name.into() })),
+  )
 }
 
 fn num_expr(value: f64) -> Node<Expr> {
@@ -56,10 +62,14 @@ fn emits_array_pattern_with_elisions_and_rest() {
     Pat::Arr(Node::new(
       dummy_loc(),
       ArrPat {
-        elements: vec![None, Some(ArrPatElem {
-          target: id_pat("a"),
-          default_value: None,
-        }), None],
+        elements: vec![
+          None,
+          Some(ArrPatElem {
+            target: id_pat("a"),
+            default_value: None,
+          }),
+          None,
+        ],
         rest: Some(id_pat("b")),
       },
     )),
@@ -184,7 +194,12 @@ fn emits_param_decl_with_rest() {
       optional: false,
       accessibility: None,
       readonly: false,
-      pattern: Node::new(dummy_loc(), PatDecl { pat: id_pat("args") }),
+      pattern: Node::new(
+        dummy_loc(),
+        PatDecl {
+          pat: id_pat("args"),
+        },
+      ),
       type_annotation: None,
       default_value: None,
     },
@@ -199,4 +214,3 @@ fn emits_assignment_target_pattern() {
   let pat = Node::new(dummy_loc(), Pat::AssignTarget(id_expr("value")));
   assert_eq!(emit_pat_to_string(&pat), "value");
 }
-

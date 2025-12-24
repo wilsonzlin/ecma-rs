@@ -248,7 +248,11 @@ fn needs_space(prev: Boundary, next: Leading) -> bool {
 }
 
 fn classify_fragment(bytes: &[u8]) -> FragmentBoundary {
-  let Some((leading_idx, &leading_char)) = bytes.iter().enumerate().find(|(_, b)| !b.is_ascii_whitespace()) else {
+  let Some((leading_idx, &leading_char)) = bytes
+    .iter()
+    .enumerate()
+    .find(|(_, b)| !b.is_ascii_whitespace())
+  else {
     return FragmentBoundary {
       leading: Leading::None,
       trailing: Boundary::None,
@@ -283,7 +287,11 @@ fn classify_fragment(bytes: &[u8]) -> FragmentBoundary {
 }
 
 fn classify_fragment_with_kind(bytes: &[u8], kind: TokenKind) -> FragmentBoundary {
-  let Some((leading_idx, _)) = bytes.iter().enumerate().find(|(_, b)| !b.is_ascii_whitespace()) else {
+  let Some((leading_idx, _)) = bytes
+    .iter()
+    .enumerate()
+    .find(|(_, b)| !b.is_ascii_whitespace())
+  else {
     return FragmentBoundary {
       leading: Leading::None,
       trailing: Boundary::None,
@@ -386,4 +394,3 @@ impl TokenKind {
     }
   }
 }
-

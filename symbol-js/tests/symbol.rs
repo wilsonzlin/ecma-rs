@@ -67,11 +67,14 @@ fn symbol_declaration_order_is_deterministic() {
   }
 
   let names_once = { scope.data().symbol_names().clone() };
-  assert_eq!(names_once, vec![
-    "first".to_string(),
-    "second".to_string(),
-    "third".to_string()
-  ]);
+  assert_eq!(
+    names_once,
+    vec![
+      "first".to_string(),
+      "second".to_string(),
+      "third".to_string()
+    ]
+  );
 
   let names_again = scope.data().symbol_names().clone();
   assert_eq!(names_once, names_again);

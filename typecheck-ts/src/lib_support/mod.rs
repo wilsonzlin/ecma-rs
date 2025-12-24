@@ -160,10 +160,19 @@ impl GlobalEnv {
   }
 
   fn set_any(&mut self, name: &str) {
-    self.globals.entry(name.to_string()).or_insert(GlobalValue::Any);
+    self
+      .globals
+      .entry(name.to_string())
+      .or_insert(GlobalValue::Any);
   }
 
-  fn merge_object(&mut self, name: &str, props: Vec<String>, diags: &mut Vec<Diagnostic>, file: FileId) {
+  fn merge_object(
+    &mut self,
+    name: &str,
+    props: Vec<String>,
+    diags: &mut Vec<Diagnostic>,
+    file: FileId,
+  ) {
     match self.globals.entry(name.to_string()) {
       Entry::Vacant(v) => {
         let mut obj = GlobalObject::default();
@@ -207,7 +216,9 @@ fn add_lib_decls(env: &mut GlobalEnv, lib: &LibFile, diags: &mut Vec<Diagnostic>
   if text.contains("declare global") {
     diags.push(Diagnostic {
       code: "TC0002",
-      message: "Global augmentations are only partially supported; declaration will be treated as-is.".into(),
+      message:
+        "Global augmentations are only partially supported; declaration will be treated as-is."
+          .into(),
       file: Some(lib.id),
     });
   }
@@ -314,7 +325,10 @@ fn check_global_use(
   if !env.has_global(name) {
     diags.push(Diagnostic {
       code: "TC0005",
-      message: format!("Cannot find name '{}'. Consider adding appropriate libs.", name),
+      message: format!(
+        "Cannot find name '{}'. Consider adding appropriate libs.",
+        name
+      ),
       file: Some(file),
     });
     return;
@@ -409,8 +423,11 @@ mod tests {
 
   #[test]
   fn bundled_lib_allows_console_usage() {
-    let host = TestHost::new(CompilerOptions::default())
-      .with_file(FileId(0), FileKind::Ts, "console.log(\"hi\")");
+    let host = TestHost::new(CompilerOptions::default()).with_file(
+      FileId(0),
+      FileKind::Ts,
+      "console.log(\"hi\")",
+    );
     let program = Program::new(Arc::new(host));
     let diags = program.check();
     assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
@@ -432,7 +449,10 @@ mod tests {
 
     let program = Program::new(Arc::new(host));
     let diags = program.check();
-    assert!(diags.is_empty(), "console should be resolved from host libs");
+    assert!(
+      diags.is_empty(),
+      "console should be resolved from host libs"
+    );
   }
 
   #[test]
@@ -521,8 +541,7 @@ mod tests {
     );
 
     options.include_dom = true;
-    let host_with_dom =
-      TestHost::new(options).with_file(FileId(1), FileKind::Ts, "document.title");
+    let host_with_dom = TestHost::new(options).with_file(FileId(1), FileKind::Ts, "document.title");
     let program_with_dom = Program::new(Arc::new(host_with_dom));
     let diags = program_with_dom.check();
     assert!(
@@ -562,4 +581,3 @@ mod tests {
     );
   }
 }
-

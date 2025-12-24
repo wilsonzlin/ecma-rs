@@ -319,9 +319,12 @@ impl Lowerer {
   }
 
   fn lower_id_pat(&mut self, id: &Node<pat::IdPat>) -> PatId {
-    self.alloc_pat(id.loc, PatKind::Id {
-      name: id.stx.name.clone(),
-    })
+    self.alloc_pat(
+      id.loc,
+      PatKind::Id {
+        name: id.stx.name.clone(),
+      },
+    )
   }
 
   fn lower_obj_pat(&mut self, obj: &Node<pat::ObjPat>) -> PatId {

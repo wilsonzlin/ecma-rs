@@ -55,21 +55,27 @@ impl<'a> Parser<'a> {
         let end_loc = type_annotation.as_ref().unwrap().loc;
         use crate::loc::Loc;
         let outer_loc = Loc(start_loc.0, end_loc.1);
-        let predicate = Node::new(start_loc, TypePredicate {
-          asserts,
-          parameter_name,
-          type_annotation,
-        });
+        let predicate = Node::new(
+          start_loc,
+          TypePredicate {
+            asserts,
+            parameter_name,
+            type_annotation,
+          },
+        );
         return Ok(Node::new(outer_loc, TypeExpr::TypePredicate(predicate)));
       } else if asserts {
         // This is `asserts x` without 'is Type'
         use crate::loc::Loc;
         let outer_loc = Loc(start_loc.0, param_loc.1);
-        let predicate = Node::new(start_loc, TypePredicate {
-          asserts: true,
-          parameter_name,
-          type_annotation: None,
-        });
+        let predicate = Node::new(
+          start_loc,
+          TypePredicate {
+            asserts: true,
+            parameter_name,
+            type_annotation: None,
+          },
+        );
         return Ok(Node::new(outer_loc, TypeExpr::TypePredicate(predicate)));
       } else {
         // Not a type predicate, restore and parse as normal type
@@ -164,12 +170,15 @@ impl<'a> Parser<'a> {
     let end_loc = false_type.loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let conditional = Node::new(start_loc, TypeConditional {
-      check_type: Box::new(check_type),
-      extends_type: Box::new(extends_type),
-      true_type: Box::new(true_type),
-      false_type: Box::new(false_type),
-    });
+    let conditional = Node::new(
+      start_loc,
+      TypeConditional {
+        check_type: Box::new(check_type),
+        extends_type: Box::new(extends_type),
+        true_type: Box::new(true_type),
+        false_type: Box::new(false_type),
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::ConditionalType(conditional)))
   }
 
@@ -197,10 +206,13 @@ impl<'a> Parser<'a> {
             self.consume();
             use crate::loc::Loc;
             let outer_loc = Loc(start_loc.0, end_loc.1);
-            let array = Node::new(start_loc, TypeArray {
-              readonly: false,
-              element_type: Box::new(base),
-            });
+            let array = Node::new(
+              start_loc,
+              TypeArray {
+                readonly: false,
+                element_type: Box::new(base),
+              },
+            );
             base = Node::new(outer_loc, TypeExpr::ArrayType(array));
           } else {
             // Indexed access: T[K]
@@ -209,10 +221,13 @@ impl<'a> Parser<'a> {
             self.require(TT::BracketClose)?;
             use crate::loc::Loc;
             let outer_loc = Loc(start_loc.0, end_loc.1);
-            let indexed = Node::new(start_loc, TypeIndexedAccess {
-              object_type: Box::new(base),
-              index_type: Box::new(index),
-            });
+            let indexed = Node::new(
+              start_loc,
+              TypeIndexedAccess {
+                object_type: Box::new(base),
+                index_type: Box::new(index),
+              },
+            );
             base = Node::new(outer_loc, TypeExpr::IndexedAccessType(indexed));
           }
         }
@@ -533,10 +548,13 @@ impl<'a> Parser<'a> {
     };
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let reference = Node::new(start_loc, TypeReference {
-      name,
-      type_arguments,
-    });
+    let reference = Node::new(
+      start_loc,
+      TypeReference {
+        name,
+        type_arguments,
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::TypeReference(reference)))
   }
 
@@ -706,9 +724,12 @@ impl<'a> Parser<'a> {
     let end_loc = type_expr.loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let keyof = Node::new(start_loc, TypeKeyOf {
-      type_expr: Box::new(type_expr),
-    });
+    let keyof = Node::new(
+      start_loc,
+      TypeKeyOf {
+        type_expr: Box::new(type_expr),
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::KeyOfType(keyof)))
   }
 
@@ -728,10 +749,13 @@ impl<'a> Parser<'a> {
     let end_loc = self.peek().loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let infer = Node::new(start_loc, TypeInfer {
-      type_parameter,
-      constraint,
-    });
+    let infer = Node::new(
+      start_loc,
+      TypeInfer {
+        type_parameter,
+        constraint,
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::InferType(infer)))
   }
 
@@ -762,11 +786,14 @@ impl<'a> Parser<'a> {
     };
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let import = Node::new(start_loc, TypeImport {
-      module_specifier,
-      qualifier,
-      type_arguments,
-    });
+    let import = Node::new(
+      start_loc,
+      TypeImport {
+        module_specifier,
+        qualifier,
+        type_arguments,
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::ImportType(import)))
   }
 
@@ -956,12 +983,15 @@ impl<'a> Parser<'a> {
     };
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let prop = Node::new(start_loc, TypePropertySignature {
-      readonly,
-      optional,
-      key,
-      type_annotation,
-    });
+    let prop = Node::new(
+      start_loc,
+      TypePropertySignature {
+        readonly,
+        optional,
+        key,
+        type_annotation,
+      },
+    );
     Ok(Node::new(outer_loc, TypeMember::Property(prop)))
   }
 
@@ -998,13 +1028,16 @@ impl<'a> Parser<'a> {
     };
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let method = Node::new(start_loc, TypeMethodSignature {
-      optional,
-      key,
-      type_parameters,
-      parameters,
-      return_type,
-    });
+    let method = Node::new(
+      start_loc,
+      TypeMethodSignature {
+        optional,
+        key,
+        type_parameters,
+        parameters,
+        return_type,
+      },
+    );
     Ok(Node::new(outer_loc, TypeMember::Method(method)))
   }
 
@@ -1064,11 +1097,14 @@ impl<'a> Parser<'a> {
     };
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let constructor = Node::new(start_loc, TypeConstructSignature {
-      type_parameters,
-      parameters,
-      return_type,
-    });
+    let constructor = Node::new(
+      start_loc,
+      TypeConstructSignature {
+        type_parameters,
+        parameters,
+        return_type,
+      },
+    );
     Ok(Node::new(outer_loc, TypeMember::Constructor(constructor)))
   }
 
@@ -1086,12 +1122,15 @@ impl<'a> Parser<'a> {
     let end_loc = type_annotation.loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let index = Node::new(start_loc, TypeIndexSignature {
-      readonly,
-      parameter_name,
-      parameter_type,
-      type_annotation,
-    });
+    let index = Node::new(
+      start_loc,
+      TypeIndexSignature {
+        readonly,
+        parameter_name,
+        parameter_type,
+        type_annotation,
+      },
+    );
     Ok(Node::new(outer_loc, TypeMember::IndexSignature(index)))
   }
 
@@ -1137,15 +1176,18 @@ impl<'a> Parser<'a> {
     let parameter = if self.peek().typ == TT::ParenthesisClose {
       // Empty parameter list - create synthetic parameter for error recovery
       let loc = self.peek().loc;
-      Node::new(loc, TypeFunctionParameter {
-        rest: false,
-        name: Some("_".to_string()),
-        optional: false,
-        type_expr: Node::new(
-          loc,
-          TypeExpr::Any(Node::new(loc, crate::ast::type_expr::TypeAny {})),
-        ),
-      })
+      Node::new(
+        loc,
+        TypeFunctionParameter {
+          rest: false,
+          name: Some("_".to_string()),
+          optional: false,
+          type_expr: Node::new(
+            loc,
+            TypeExpr::Any(Node::new(loc, crate::ast::type_expr::TypeAny {})),
+          ),
+        },
+      )
     } else {
       self.function_type_parameter(ctx)?
     };
@@ -1181,10 +1223,13 @@ impl<'a> Parser<'a> {
     }
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let tuple = Node::new(start_loc, TypeTuple {
-      readonly: false,
-      elements,
-    });
+    let tuple = Node::new(
+      start_loc,
+      TypeTuple {
+        readonly: false,
+        elements,
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::TupleType(tuple)))
   }
 
@@ -1261,9 +1306,12 @@ impl<'a> Parser<'a> {
       self.require(TT::ParenthesisClose)?;
       use crate::loc::Loc;
       let outer_loc = Loc(start_loc.0, end_loc.1);
-      let paren = Node::new(start_loc, TypeParenthesized {
-        type_expr: Box::new(type_expr),
-      });
+      let paren = Node::new(
+        start_loc,
+        TypeParenthesized {
+          type_expr: Box::new(type_expr),
+        },
+      );
       return Ok(Node::new(outer_loc, TypeExpr::ParenthesizedType(paren)));
     }
 
@@ -1360,11 +1408,14 @@ impl<'a> Parser<'a> {
     let end_loc = return_type.loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let func = Node::new(start_loc, TypeFunction {
-      type_parameters,
-      parameters,
-      return_type: Box::new(return_type),
-    });
+    let func = Node::new(
+      start_loc,
+      TypeFunction {
+        type_parameters,
+        parameters,
+        return_type: Box::new(return_type),
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::FunctionType(func)))
   }
 
@@ -1389,11 +1440,14 @@ impl<'a> Parser<'a> {
     let end_loc = return_type.loc;
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let constructor = Node::new(start_loc, TypeConstructor {
-      type_parameters,
-      parameters,
-      return_type: Box::new(return_type),
-    });
+    let constructor = Node::new(
+      start_loc,
+      TypeConstructor {
+        type_parameters,
+        parameters,
+        return_type: Box::new(return_type),
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::ConstructorType(constructor)))
   }
 
@@ -1603,10 +1657,13 @@ impl<'a> Parser<'a> {
       let span_start = type_expr.loc;
       use crate::loc::Loc;
       let span_loc = Loc(span_start.0, t.loc.1);
-      spans.push(Node::new(span_loc, TypeTemplateLiteralSpan {
-        type_expr,
-        literal: literal.clone(),
-      }));
+      spans.push(Node::new(
+        span_loc,
+        TypeTemplateLiteralSpan {
+          type_expr,
+          literal: literal.clone(),
+        },
+      ));
 
       if t.typ == TT::LiteralTemplatePartStringEnd {
         break;
@@ -1656,14 +1713,17 @@ impl<'a> Parser<'a> {
 
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let mapped = Node::new(start_loc, TypeMapped {
-      readonly_modifier,
-      type_parameter,
-      constraint: Box::new(constraint),
-      name_type,
-      optional_modifier,
-      type_expr: Box::new(type_expr),
-    });
+    let mapped = Node::new(
+      start_loc,
+      TypeMapped {
+        readonly_modifier,
+        type_parameter,
+        constraint: Box::new(constraint),
+        name_type,
+        optional_modifier,
+        type_expr: Box::new(type_expr),
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::MappedType(mapped)))
   }
 
@@ -1702,14 +1762,17 @@ impl<'a> Parser<'a> {
 
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let mapped = Node::new(start_loc, TypeMapped {
-      readonly_modifier,
-      type_parameter,
-      constraint: Box::new(constraint),
-      name_type,
-      optional_modifier,
-      type_expr: Box::new(type_expr),
-    });
+    let mapped = Node::new(
+      start_loc,
+      TypeMapped {
+        readonly_modifier,
+        type_parameter,
+        constraint: Box::new(constraint),
+        name_type,
+        optional_modifier,
+        type_expr: Box::new(type_expr),
+      },
+    );
     Ok(Node::new(outer_loc, TypeExpr::MappedType(mapped)))
   }
 
@@ -1754,14 +1817,17 @@ impl<'a> Parser<'a> {
 
     use crate::loc::Loc;
     let outer_loc = Loc(start_loc.0, end_loc.1);
-    let mapped = Node::new(start_loc, TypeMapped {
-      readonly_modifier,
-      type_parameter,
-      constraint: Box::new(constraint),
-      name_type,
-      optional_modifier,
-      type_expr,
-    });
+    let mapped = Node::new(
+      start_loc,
+      TypeMapped {
+        readonly_modifier,
+        type_parameter,
+        constraint: Box::new(constraint),
+        name_type,
+        optional_modifier,
+        type_expr,
+      },
+    );
     Ok(Node::new(outer_loc, TypeMember::MappedProperty(mapped)))
   }
 }

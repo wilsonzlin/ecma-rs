@@ -36,10 +36,14 @@ impl FromStr for TopLevelMode {
 }
 
 pub fn compute_symbols(top_level_node: &mut Node<TopLevel>, top_level_mode: TopLevelMode) -> Scope {
-  let top_level_scope = Scope::new(SymbolGenerator::new(), None, match top_level_mode {
-    TopLevelMode::Global => ScopeType::Global,
-    TopLevelMode::Module => ScopeType::Module,
-  });
+  let top_level_scope = Scope::new(
+    SymbolGenerator::new(),
+    None,
+    match top_level_mode {
+      TopLevelMode::Global => ScopeType::Global,
+      TopLevelMode::Module => ScopeType::Module,
+    },
+  );
   let mut visitor = DeclVisitor::new(top_level_scope.clone());
   top_level_node.drive_mut(&mut visitor);
   top_level_scope

@@ -54,4 +54,3 @@ fn emits_tuple_and_array_types() {
     assert_roundtrip(input, expected);
   }
 }
-

@@ -145,4 +145,3 @@ fn emits_punctuated_lists() {
   });
   assert_eq!(text(&emitter), "1;2;3;");
 }
-

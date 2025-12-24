@@ -60,4 +60,3 @@ fn precedence_parentheses_and_unions() {
     roundtrip_type_expr(input);
   }
 }
-

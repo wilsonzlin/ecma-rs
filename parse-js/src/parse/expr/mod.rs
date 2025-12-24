@@ -66,9 +66,12 @@ impl<'a> Parser<'a> {
   /// Creates a synthetic `undefined` identifier expression for error recovery.
   /// Used when parsing fails or encounters empty expressions like `()`.
   fn create_synthetic_undefined(&self, loc: crate::loc::Loc) -> Node<Expr> {
-    Node::new(loc, IdExpr {
-      name: "undefined".to_string(),
-    })
+    Node::new(
+      loc,
+      IdExpr {
+        name: "undefined".to_string(),
+      },
+    )
     .into_wrapped()
   }
 
@@ -157,18 +160,20 @@ impl<'a> Parser<'a> {
       // Check if this is a single-unparenthesised-parameter arrow function
       // Works for both sync (x => ...) and async (async x => ...)
       let next_token = p.peek().typ;
-      let is_unparenthesised_single_param =
-        is_valid_pattern_identifier(next_token, ParsePatternRules {
+      let is_unparenthesised_single_param = is_valid_pattern_identifier(
+        next_token,
+        ParsePatternRules {
           await_allowed: false,
           yield_allowed: ctx.rules.yield_allowed,
-        }) && {
-          // Need to peek further to see if there's => coming up
-          let peek2 = p.peek_n::<2>()[1].typ;
-          // Could be either:
-          // - identifier =>
-          // - identifier : type =>
-          peek2 == TT::EqualsChevronRight || peek2 == TT::Colon
-        };
+        },
+      ) && {
+        // Need to peek further to see if there's => coming up
+        let peek2 = p.peek_n::<2>()[1].typ;
+        // Could be either:
+        // - identifier =>
+        // - identifier : type =>
+        peek2 == TT::EqualsChevronRight || peek2 == TT::Colon
+      };
 
       let (type_parameters, parameters, return_type, arrow) = if is_unparenthesised_single_param {
         // Single-unparenthesised-parameter arrow function.
@@ -181,22 +186,31 @@ impl<'a> Parser<'a> {
           None
         };
         let arrow = p.require(TT::EqualsChevronRight)?;
-        let pattern = Node::new(param_name, PatDecl {
-          pat: Node::new(param_name, IdPat {
-            name: p.string(param_name),
-          })
-          .into_wrapped(),
-        });
-        let param = Node::new(param_name, ParamDecl {
-          decorators: vec![],
-          rest: false,
-          optional: false,
-          accessibility: None,
-          readonly: false,
-          pattern,
-          type_annotation: None,
-          default_value: None,
-        });
+        let pattern = Node::new(
+          param_name,
+          PatDecl {
+            pat: Node::new(
+              param_name,
+              IdPat {
+                name: p.string(param_name),
+              },
+            )
+            .into_wrapped(),
+          },
+        );
+        let param = Node::new(
+          param_name,
+          ParamDecl {
+            decorators: vec![],
+            rest: false,
+            optional: false,
+            accessibility: None,
+            readonly: false,
+            pattern,
+            type_annotation: None,
+            default_value: None,
+          },
+        );
         (None, vec![param], return_type, arrow)
       } else {
         // TypeScript: generic type parameters
@@ -821,10 +835,13 @@ impl<'a> Parser<'a> {
             self.restore_checkpoint(cp);
             break;
           };
-          left = Node::new(left.loc + t.loc, UnaryPostfixExpr {
-            operator: operator_name,
-            argument: left,
-          })
+          left = Node::new(
+            left.loc + t.loc,
+            UnaryPostfixExpr {
+              operator: operator_name,
+              argument: left,
+            },
+          )
           .into_wrapped();
           continue;
         }
@@ -835,9 +852,12 @@ impl<'a> Parser<'a> {
           if next.typ != TT::Equals && next.typ != TT::EqualsEquals {
             // This is a non-null assertion: expr!
             use crate::ast::expr::NonNullAssertionExpr;
-            left = Node::new(left.loc + t.loc, NonNullAssertionExpr {
-              expression: Box::new(left),
-            })
+            left = Node::new(
+              left.loc + t.loc,
+              NonNullAssertionExpr {
+                expression: Box::new(left),
+              },
+            )
             .into_wrapped();
             continue;
           }
@@ -854,10 +874,13 @@ impl<'a> Parser<'a> {
           self.restore_checkpoint(cp);
           // ES2018: Tagged templates allow invalid escape sequences
           let parts = self.lit_template_parts(ctx, true)?;
-          left = Node::new(left.loc + loc, TaggedTemplateExpr {
-            function: left,
-            parts,
-          })
+          left = Node::new(
+            left.loc + loc,
+            TaggedTemplateExpr {
+              function: left,
+              parts,
+            },
+          )
           .into_wrapped();
           continue;
         }
@@ -867,20 +890,26 @@ impl<'a> Parser<'a> {
           if self.peek().typ == TT::KeywordConst {
             let const_loc = self.consume().loc;
             use crate::ast::expr::TypeAssertionExpr;
-            left = Node::new(left.loc + const_loc, TypeAssertionExpr {
-              expression: Box::new(left),
-              type_annotation: None,
-              const_assertion: true,
-            })
+            left = Node::new(
+              left.loc + const_loc,
+              TypeAssertionExpr {
+                expression: Box::new(left),
+                type_annotation: None,
+                const_assertion: true,
+              },
+            )
             .into_wrapped();
           } else {
             let type_annotation = self.type_expr(ctx)?;
             use crate::ast::expr::TypeAssertionExpr;
-            left = Node::new(left.loc + type_annotation.loc, TypeAssertionExpr {
-              expression: Box::new(left),
-              type_annotation: Some(type_annotation),
-              const_assertion: false,
-            })
+            left = Node::new(
+              left.loc + type_annotation.loc,
+              TypeAssertionExpr {
+                expression: Box::new(left),
+                type_annotation: Some(type_annotation),
+                const_assertion: false,
+              },
+            )
             .into_wrapped();
           }
           continue;
@@ -889,10 +918,13 @@ impl<'a> Parser<'a> {
         TT::KeywordSatisfies => {
           let type_annotation = self.type_expr(ctx)?;
           use crate::ast::expr::SatisfiesExpr;
-          left = Node::new(left.loc + type_annotation.loc, SatisfiesExpr {
-            expression: Box::new(left),
-            type_annotation,
-          })
+          left = Node::new(
+            left.loc + type_annotation.loc,
+            SatisfiesExpr {
+              expression: Box::new(left),
+              type_annotation,
+            },
+          )
           .into_wrapped();
           continue;
         }
@@ -1003,11 +1035,14 @@ impl<'a> Parser<'a> {
                   Err(_) => Vec::new(), // Error recovery
                 };
                 if let Ok(end) = self.require(TT::ParenthesisClose) {
-                  left = Node::new(left.loc + end.loc, CallExpr {
-                    optional_chaining: false,
-                    arguments,
-                    callee: left,
-                  })
+                  left = Node::new(
+                    left.loc + end.loc,
+                    CallExpr {
+                      optional_chaining: false,
+                      arguments,
+                      callee: left,
+                    },
+                  )
                   .into_wrapped();
                 }
               }
@@ -1081,14 +1116,17 @@ impl<'a> Parser<'a> {
             OperatorName::Call | OperatorName::OptionalChainingCall => {
               let arguments = self.call_args(ctx)?;
               let end = self.require(TT::ParenthesisClose)?;
-              Node::new(left.loc + end.loc, CallExpr {
-                optional_chaining: match operator.name {
-                  OperatorName::OptionalChainingCall => true,
-                  _ => false,
+              Node::new(
+                left.loc + end.loc,
+                CallExpr {
+                  optional_chaining: match operator.name {
+                    OperatorName::OptionalChainingCall => true,
+                    _ => false,
+                  },
+                  arguments,
+                  callee: left,
                 },
-                arguments,
-                callee: left,
-              })
+              )
               .into_wrapped()
             }
             OperatorName::ComputedMemberAccess
@@ -1104,12 +1142,15 @@ impl<'a> Parser<'a> {
                 })
               };
               let end = self.require(TT::BracketClose)?;
-              Node::new(left.loc + end.loc, ComputedMemberExpr {
-                optional_chaining: operator.name
-                  == OperatorName::OptionalChainingComputedMemberAccess,
-                object: left,
-                member,
-              })
+              Node::new(
+                left.loc + end.loc,
+                ComputedMemberExpr {
+                  optional_chaining: operator.name
+                    == OperatorName::OptionalChainingComputedMemberAccess,
+                  object: left,
+                  member,
+                },
+              )
               .into_wrapped()
             }
             OperatorName::Conditional => {
@@ -1121,11 +1162,14 @@ impl<'a> Parser<'a> {
                 terminators,
                 asi,
               )?;
-              Node::new(left.loc + alternate.loc, CondExpr {
-                test: left,
-                consequent,
-                alternate,
-              })
+              Node::new(
+                left.loc + alternate.loc,
+                CondExpr {
+                  test: left,
+                  consequent,
+                  alternate,
+                },
+              )
               .into_wrapped()
             }
             OperatorName::MemberAccess | OperatorName::OptionalChainingMemberAccess => {
@@ -1146,7 +1190,11 @@ impl<'a> Parser<'a> {
                   // and let the outer parser handle the terminator.
                   if matches!(
                     right_tok.typ,
-                    TT::BraceClose | TT::ParenthesisClose | TT::BracketClose | TT::Semicolon | TT::EOF
+                    TT::BraceClose
+                      | TT::ParenthesisClose
+                      | TT::BracketClose
+                      | TT::Semicolon
+                      | TT::EOF
                   ) {
                     self.restore_checkpoint(checkpoint);
                     right = left.loc;
@@ -1154,11 +1202,14 @@ impl<'a> Parser<'a> {
                   }
                 }
               }
-              Node::new(left.loc + right, MemberExpr {
-                optional_chaining: operator.name == OperatorName::OptionalChainingMemberAccess,
-                left,
-                right: prop,
-              })
+              Node::new(
+                left.loc + right,
+                MemberExpr {
+                  optional_chaining: operator.name == OperatorName::OptionalChainingMemberAccess,
+                  left,
+                  right: prop,
+                },
+              )
               .into_wrapped()
             }
             _ => {
@@ -1166,11 +1217,14 @@ impl<'a> Parser<'a> {
                 left = lhs_expr_to_assign_target(left, operator.name)?;
               };
               let right = self.expr_with_min_prec(ctx, next_min_prec, terminators, asi)?;
-              Node::new(left.loc + right.loc, BinaryExpr {
-                operator: operator.name,
-                left,
-                right,
-              })
+              Node::new(
+                left.loc + right.loc,
+                BinaryExpr {
+                  operator: operator.name,
+                  left,
+                  right,
+                },
+              )
               .into_wrapped()
             }
           };

@@ -74,10 +74,13 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
         };
       }
       Ok(
-        Node::new(loc, ArrPat {
-          elements: pat_elements,
-          rest,
-        })
+        Node::new(
+          loc,
+          ArrPat {
+            elements: pat_elements,
+            rest,
+          },
+        )
         .into_wrapped(),
       )
     }
@@ -110,27 +113,33 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
                 },
                 _ => return Err(loc.error(SyntaxErrorType::InvalidAssigmentTarget, None)),
               };
-              properties.push(Node::new(loc, ObjPatProp {
-                key,
-                target,
-                default_value,
-                shorthand: true,
-              }));
+              properties.push(Node::new(
+                loc,
+                ObjPatProp {
+                  key,
+                  target,
+                  default_value,
+                  shorthand: true,
+                },
+              ));
             }
             ObjMemberType::Shorthand { id } => {
-              properties.push(Node::new(loc, ObjPatProp {
-                key: ClassOrObjKey::Direct(id.derive_stx(|id| ClassOrObjMemberDirectKey {
-                  key: id.name.clone(),
-                  tt: TT::Identifier,
-                })),
-                target: id
-                  .derive_stx(|id| IdPat {
-                    name: id.name.clone(),
-                  })
-                  .into_wrapped(),
-                default_value: None,
-                shorthand: true,
-              }));
+              properties.push(Node::new(
+                loc,
+                ObjPatProp {
+                  key: ClassOrObjKey::Direct(id.derive_stx(|id| ClassOrObjMemberDirectKey {
+                    key: id.name.clone(),
+                    tt: TT::Identifier,
+                  })),
+                  target: id
+                    .derive_stx(|id| IdPat {
+                      name: id.name.clone(),
+                    })
+                    .into_wrapped(),
+                  default_value: None,
+                  shorthand: true,
+                },
+              ));
             }
             ObjMemberType::Rest { val: value } => {
               // TypeScript: For error recovery, allow any pattern in rest position
@@ -144,9 +153,12 @@ pub fn lit_to_pat(node: Node<Expr>) -> SyntaxResult<Node<Pat>> {
       Ok(Node::new(loc, ObjPat { properties, rest }).into_wrapped())
     }
     Expr::Id(n) => Ok(
-      Node::new(loc, IdPat {
-        name: n.stx.name.clone(),
-      })
+      Node::new(
+        loc,
+        IdPat {
+          name: n.stx.name.clone(),
+        },
+      )
       .into_wrapped(),
     ),
     // It's possible to encounter patterns already parsed e.g. `{a: [b] = 1}`, where `[b]` was already converted to a pattern.

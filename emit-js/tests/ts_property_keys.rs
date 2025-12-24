@@ -85,11 +85,7 @@ fn expect_computed(key: &TypePropertyKey) {
   panic!("expected computed key, got {key:?}");
 }
 
-fn check_object_case(
-  src: &str,
-  expected: &str,
-  assert_key: impl Fn(&TypePropertyKey),
-) {
+fn check_object_case(src: &str, expected: &str, assert_key: impl Fn(&TypePropertyKey)) {
   let parsed = parse_type_expr(src);
   assert_key(object_member_key(&parsed));
 
@@ -101,11 +97,7 @@ fn check_object_case(
   assert_key(object_member_key(&reparsed));
 }
 
-fn check_interface_case(
-  src: &str,
-  expected: &str,
-  assert_key: impl Fn(&TypePropertyKey),
-) {
+fn check_interface_case(src: &str, expected: &str, assert_key: impl Fn(&TypePropertyKey)) {
   let parsed = parse_interface(src);
   assert_key(interface_member_key(&parsed));
 
@@ -120,24 +112,39 @@ fn check_interface_case(
 #[test]
 fn emits_identifier_property_keys() {
   check_object_case("{foo:string}", "{foo: string;}", expect_identifier);
-  check_interface_case("interface I{foo:string}", "interface I {foo: string;}", expect_identifier);
+  check_interface_case(
+    "interface I{foo:string}",
+    "interface I {foo: string;}",
+    expect_identifier,
+  );
 }
 
 #[test]
 fn emits_string_property_keys() {
   check_object_case("{\"x\":number}", "{\"x\": number;}", expect_string);
-  check_interface_case("interface I{\"x\":number}", "interface I {\"x\": number;}", expect_string);
+  check_interface_case(
+    "interface I{\"x\":number}",
+    "interface I {\"x\": number;}",
+    expect_string,
+  );
 }
 
 #[test]
 fn emits_numeric_property_keys() {
   check_object_case("{1:boolean}", "{1: boolean;}", expect_number);
-  check_interface_case("interface I{1:boolean}", "interface I {1: boolean;}", expect_number);
+  check_interface_case(
+    "interface I{1:boolean}",
+    "interface I {1: boolean;}",
+    expect_number,
+  );
 }
 
 #[test]
 fn emits_computed_property_keys() {
   check_object_case("{[foo]?:T}", "{[foo]?: T;}", expect_computed);
-  check_interface_case("interface I{[foo]?:T}", "interface I {[foo]?: T;}", expect_computed);
+  check_interface_case(
+    "interface I{[foo]?:T}",
+    "interface I {[foo]?: T;}",
+    expect_computed,
+  );
 }
-

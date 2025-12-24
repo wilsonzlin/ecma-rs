@@ -238,74 +238,74 @@ impl<'p> SourceToInst<'p> {
             ))
           }
         };
-    let value_tmp_var = self.c_temp.bump();
-    let mut value_arg = self.compile_expr(value)?;
-    if operator == OperatorName::Assignment {
-      // Direct assignment. Since we need to return a var holding the result of this assignment expression, assign the value to our tmp var. (This is a precaution, in case the value isn't already a var.)
-      self
-        .out
-        .push(Inst::var_assign(value_tmp_var, value_arg.clone()));
-    } else {
-      // Not direct assignment. We need to perform the operation first. No need for a new tmp var, we can just assign to our expr result tmp var.
-      let op = match operator {
-        OperatorName::AssignmentAddition => BinOp::Add,
-        OperatorName::AssignmentSubtraction => BinOp::Sub,
-        OperatorName::AssignmentMultiplication => BinOp::Mul,
-        OperatorName::AssignmentDivision => BinOp::Div,
-        _ => {
-          return Err(OptimizeError::unsupported(
-            span,
-            format!("unsupported assignment operator {operator:?}"),
-          ))
-        }
-      };
-      let left_arg = match assign_inst.t {
-        InstTyp::VarAssign => Arg::Var(assign_inst.tgts[0]),
-        InstTyp::ForeignStore => {
-          let left_tmp_var = self.c_temp.bump();
+        let value_tmp_var = self.c_temp.bump();
+        let mut value_arg = self.compile_expr(value)?;
+        if operator == OperatorName::Assignment {
+          // Direct assignment. Since we need to return a var holding the result of this assignment expression, assign the value to our tmp var. (This is a precaution, in case the value isn't already a var.)
           self
             .out
-            .push(Inst::foreign_load(left_tmp_var, assign_inst.foreign));
-          Arg::Var(left_tmp_var)
-        }
-        InstTyp::UnknownStore => {
-          let left_tmp_var = self.c_temp.bump();
-          self.out.push(Inst::unknown_load(
-            left_tmp_var,
-            assign_inst.unknown.clone(),
-          ));
-          Arg::Var(left_tmp_var)
-        }
-        InstTyp::PropAssign => {
-          let (obj, prop, _) = assign_inst.as_prop_assign();
-          let left_tmp_var = self.c_temp.bump();
-          self.out.push(Inst::bin(
-            left_tmp_var,
-            obj.clone(),
-            BinOp::GetProp,
-            prop.clone(),
-          ));
-          Arg::Var(left_tmp_var)
-        }
-        _ => {
-          return Err(OptimizeError::unsupported(
-            span,
-            "unsupported assignment target",
-          ))
-        }
-      };
-      let rhs_inst = Inst::bin(value_tmp_var, left_arg, op, value_arg);
-      self.out.push(rhs_inst);
-      value_arg = Arg::Var(value_tmp_var);
-    };
-    // The last Inst arg is the dummy arg position for all cases (check above usages).
-    // We can't just find the arg that equals our dummy as it's possible actual source produces it.
-    *assign_inst.args.last_mut().unwrap() = value_arg;
-    self.out.push(assign_inst);
-    // The result of an assignment is always the value.
-    // - For member access like `a.b = c`, the getter is not invoked.
-    // - For non-direct assignment operators like `a += b`, the result is `a + b` since it's a shorthand for `a = a + b`.
-    Ok(Arg::Var(value_tmp_var))
+            .push(Inst::var_assign(value_tmp_var, value_arg.clone()));
+        } else {
+          // Not direct assignment. We need to perform the operation first. No need for a new tmp var, we can just assign to our expr result tmp var.
+          let op = match operator {
+            OperatorName::AssignmentAddition => BinOp::Add,
+            OperatorName::AssignmentSubtraction => BinOp::Sub,
+            OperatorName::AssignmentMultiplication => BinOp::Mul,
+            OperatorName::AssignmentDivision => BinOp::Div,
+            _ => {
+              return Err(OptimizeError::unsupported(
+                span,
+                format!("unsupported assignment operator {operator:?}"),
+              ))
+            }
+          };
+          let left_arg = match assign_inst.t {
+            InstTyp::VarAssign => Arg::Var(assign_inst.tgts[0]),
+            InstTyp::ForeignStore => {
+              let left_tmp_var = self.c_temp.bump();
+              self
+                .out
+                .push(Inst::foreign_load(left_tmp_var, assign_inst.foreign));
+              Arg::Var(left_tmp_var)
+            }
+            InstTyp::UnknownStore => {
+              let left_tmp_var = self.c_temp.bump();
+              self.out.push(Inst::unknown_load(
+                left_tmp_var,
+                assign_inst.unknown.clone(),
+              ));
+              Arg::Var(left_tmp_var)
+            }
+            InstTyp::PropAssign => {
+              let (obj, prop, _) = assign_inst.as_prop_assign();
+              let left_tmp_var = self.c_temp.bump();
+              self.out.push(Inst::bin(
+                left_tmp_var,
+                obj.clone(),
+                BinOp::GetProp,
+                prop.clone(),
+              ));
+              Arg::Var(left_tmp_var)
+            }
+            _ => {
+              return Err(OptimizeError::unsupported(
+                span,
+                "unsupported assignment target",
+              ))
+            }
+          };
+          let rhs_inst = Inst::bin(value_tmp_var, left_arg, op, value_arg);
+          self.out.push(rhs_inst);
+          value_arg = Arg::Var(value_tmp_var);
+        };
+        // The last Inst arg is the dummy arg position for all cases (check above usages).
+        // We can't just find the arg that equals our dummy as it's possible actual source produces it.
+        *assign_inst.args.last_mut().unwrap() = value_arg;
+        self.out.push(assign_inst);
+        // The result of an assignment is always the value.
+        // - For member access like `a.b = c`, the getter is not invoked.
+        // - For non-direct assignment operators like `a += b`, the result is `a + b` since it's a shorthand for `a = a + b`.
+        Ok(Arg::Var(value_tmp_var))
       }
     }
   }

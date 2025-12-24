@@ -790,21 +790,22 @@ impl<'a> Parser<'a> {
       let start = p.require(TT::KeywordTry)?;
       let wrapped = p.block_stmt(ctx)?;
       let catch = p.consume_if(TT::KeywordCatch).and_then(|| {
-        let (parameter, type_annotation) = match p.consume_if(TT::ParenthesisOpen).and_then(|| {
-          let pattern = p.pat_decl(ctx)?;
-          // TypeScript: optional type annotation in catch clause
-          // e.g. `catch (e: any)` or `catch (e: unknown)`
-          let type_annotation = if p.consume_if(TT::Colon).is_match() {
-            Some(p.type_expr(ctx)?)
-          } else {
-            None
+        let (parameter, type_annotation) =
+          match p.consume_if(TT::ParenthesisOpen).and_then(|| {
+            let pattern = p.pat_decl(ctx)?;
+            // TypeScript: optional type annotation in catch clause
+            // e.g. `catch (e: any)` or `catch (e: unknown)`
+            let type_annotation = if p.consume_if(TT::Colon).is_match() {
+              Some(p.type_expr(ctx)?)
+            } else {
+              None
+            };
+            p.require(TT::ParenthesisClose)?;
+            Ok((pattern, type_annotation))
+          })? {
+            Some((pattern, type_annotation)) => (Some(pattern), type_annotation),
+            None => (None, None),
           };
-          p.require(TT::ParenthesisClose)?;
-          Ok((pattern, type_annotation))
-        })? {
-          Some((pattern, type_annotation)) => (Some(pattern), type_annotation),
-          None => (None, None),
-        };
         p.with_loc(|p| {
           p.require(TT::BraceOpen)?;
           let body = p.stmts(ctx, TT::BraceClose)?;

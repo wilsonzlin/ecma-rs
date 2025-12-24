@@ -529,10 +529,13 @@ impl<'a> RenameVisitor<'a> {
       assoc,
     };
     let value_expr = value_id.into_wrapped::<parse_js::ast::expr::Expr>();
-    let key_node = Node::new(id.loc, ClassOrObjMemberDirectKey {
-      key: old_name.clone(),
-      tt: tt_for_identifier(&old_name),
-    });
+    let key_node = Node::new(
+      id.loc,
+      ClassOrObjMemberDirectKey {
+        key: old_name.clone(),
+        tt: tt_for_identifier(&old_name),
+      },
+    );
     *typ = ObjMemberType::Valued {
       key: ClassOrObjKey::Direct(key_node),
       val: ClassOrObjVal::Prop(Some(value_expr)),

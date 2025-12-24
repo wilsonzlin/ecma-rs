@@ -71,6 +71,8 @@ fn emits_mapped_members_in_interfaces() {
     emit_interface_decl(&mut buf, reparsed.stx.as_ref()).expect("emit interface roundtrip");
     buf
   };
-  assert_eq!(roundtrip, "interface I {[K in keyof T]: T[K]; foo: string;}");
+  assert_eq!(
+    roundtrip,
+    "interface I {[K in keyof T]: T[K]; foo: string;}"
+  );
 }
-

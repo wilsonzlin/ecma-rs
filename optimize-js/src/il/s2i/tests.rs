@@ -89,7 +89,9 @@ fn destructuring_decl_shadowing_binds_local_symbol() {
     "expected destructured `a` to resolve to a local symbol, got unknowns: {make_unknowns:?}"
   );
   assert!(
-    make_insts.iter().any(|t| matches!(t, InstTyp::ForeignStore)),
+    make_insts
+      .iter()
+      .any(|t| matches!(t, InstTyp::ForeignStore)),
     "captured local should use foreign stores: {:?}",
     make_insts
   );

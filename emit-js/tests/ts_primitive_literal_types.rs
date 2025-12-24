@@ -73,4 +73,3 @@ fn literal_types_roundtrip() {
     roundtrip(src, expected);
   }
 }
-

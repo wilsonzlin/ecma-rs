@@ -257,10 +257,13 @@ fn type_assertion_suppresses_excess_property_check() {
 fn call_argument_runs_excess_property_check() {
   let mut checker = Checker::new();
   let target = object_type(vec![("foo", Type::Number)]);
-  checker.call(&[target], vec![Expr::Object(vec![
-    field("foo", Expr::Number(1.0)),
-    field("extra", Expr::Boolean(true)),
-  ])]);
+  checker.call(
+    &[target],
+    vec![Expr::Object(vec![
+      field("foo", Expr::Number(1.0)),
+      field("extra", Expr::Boolean(true)),
+    ])],
+  );
   assert_eq!(checker.diagnostics.len(), 1);
   assert!(matches!(
       checker.diagnostics[0].kind,

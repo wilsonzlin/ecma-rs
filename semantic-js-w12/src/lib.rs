@@ -243,10 +243,17 @@ fn bind_var_decl(
 ) {
   for (decl_idx, declarator) in var_decl.stx.declarators.iter().enumerate() {
     if let Some((name, kind)) = var_decl_name_kind(var_decl, declarator) {
-      push_def(defs, file_id, kind, name, span, DefSource::VarDecl {
-        stmt: stmt_idx,
-        decl: decl_idx,
-      });
+      push_def(
+        defs,
+        file_id,
+        kind,
+        name,
+        span,
+        DefSource::VarDecl {
+          stmt: stmt_idx,
+          decl: decl_idx,
+        },
+      );
     }
   }
 }

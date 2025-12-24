@@ -636,10 +636,13 @@ impl TypeChecker {
         } else {
           member.ty.clone()
         };
-        obj.properties.insert(name, ObjectProperty {
-          ty,
-          optional: member.optional,
-        });
+        obj.properties.insert(
+          name,
+          ObjectProperty {
+            ty,
+            optional: member.optional,
+          },
+        );
       }
     }
     obj.string_index = info.instance_string_index.map(|m| Box::new(m.ty));

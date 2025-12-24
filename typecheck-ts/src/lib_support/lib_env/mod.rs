@@ -86,11 +86,11 @@ fn bundled_file_id_for(index: usize) -> FileId {
 mod bundled {
   use std::sync::Arc;
 
-  use super::bundled_file_id_for;
   use super::super::FileKind;
   use super::super::LibFile;
   use super::super::LibName;
   use super::super::LibSet;
+  use super::bundled_file_id_for;
 
   pub fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
     lib_set

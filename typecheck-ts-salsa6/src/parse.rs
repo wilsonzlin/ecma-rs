@@ -57,9 +57,10 @@ pub(crate) fn parse(db: &dyn Db, file: FileId) -> ParseOutput {
       diagnostics: Vec::new(),
     },
     Err(error) => ParseOutput {
-      ast: Arc::new(Node::new(parse_js_crate::loc::Loc(0, 0), TopLevel {
-        body: Vec::new(),
-      })),
+      ast: Arc::new(Node::new(
+        parse_js_crate::loc::Loc(0, 0),
+        TopLevel { body: Vec::new() },
+      )),
       diagnostics: vec![syntax_error_to_diagnostic(file, error)],
     },
   }

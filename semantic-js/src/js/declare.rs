@@ -389,10 +389,10 @@ impl DeclareVisitor {
 #[cfg(test)]
 mod tests {
   use super::declare;
-  use crate::scope_id;
-  use crate::ScopeId;
   use crate::js::ScopeKind;
   use crate::js::TopLevelMode;
+  use crate::scope_id;
+  use crate::ScopeId;
   use derive_visitor::Drive;
   use derive_visitor::Visitor;
   use parse_js::ast::expr::IdExpr;

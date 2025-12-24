@@ -1,16 +1,8 @@
 use std::fmt;
 
 use parse_js::ast::expr::jsx::{
-  JsxAttr,
-  JsxAttrVal,
-  JsxElem,
-  JsxElemChild,
-  JsxElemName,
-  JsxExprContainer,
-  JsxMemberExpr,
-  JsxName,
-  JsxSpreadAttr,
-  JsxText,
+  JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxExprContainer, JsxMemberExpr,
+  JsxName, JsxSpreadAttr, JsxText,
 };
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
@@ -70,7 +62,10 @@ pub fn emit_jsx_expr_container<W: fmt::Write>(
   Ok(())
 }
 
-pub fn emit_jsx_member_expr<W: fmt::Write>(out: &mut W, member: &Node<JsxMemberExpr>) -> EmitResult {
+pub fn emit_jsx_member_expr<W: fmt::Write>(
+  out: &mut W,
+  member: &Node<JsxMemberExpr>,
+) -> EmitResult {
   out.write_str(&member.stx.base.stx.name)?;
   for segment in &member.stx.path {
     out.write_char('.')?;
@@ -171,6 +166,5 @@ fn emit_jsx_child<W: fmt::Write>(out: &mut W, child: &JsxElemChild) -> EmitResul
 }
 
 fn is_empty_jsx_expr_placeholder(expr: &Node<Expr>) -> bool {
-  expr.loc.is_empty()
-    && matches!(expr.stx.as_ref(), Expr::Id(id) if id.stx.name.is_empty())
+  expr.loc.is_empty() && matches!(expr.stx.as_ref(), Expr::Id(id) if id.stx.name.is_empty())
 }

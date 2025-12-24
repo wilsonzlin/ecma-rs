@@ -350,9 +350,9 @@ mod tests {
   use crate::cfg::cfg::Cfg;
   use crate::il::inst::Inst;
   use crate::il::inst::InstTyp;
+  use crate::symbol::var_analysis::VarAnalysis;
   use crate::OptimizeError;
   use crate::Program;
-  use crate::symbol::var_analysis::VarAnalysis;
   use parse_js::parse;
   use serde_json::to_string;
   use std::collections::HashSet;

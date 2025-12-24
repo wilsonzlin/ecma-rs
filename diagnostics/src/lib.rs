@@ -377,10 +377,14 @@ mod tests {
       name: "test.js".into(),
       text: "let x = 1;".into(),
     };
-    let diagnostic = Diagnostic::error("TEST0001", "unused variable", Span {
-      file: FileId(0),
-      range: TextRange::new(4, 5),
-    });
+    let diagnostic = Diagnostic::error(
+      "TEST0001",
+      "unused variable",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(4, 5),
+      },
+    );
 
     let rendered = render_diagnostic(&source, &diagnostic);
     let expected = "error[TEST0001]: unused variable\n --> test.js:1:5\n  |\n1 | let x = 1;\n  |     ^ unused variable\n";
@@ -393,10 +397,14 @@ mod tests {
       name: "main.ts".into(),
       text: "function test() {\n  return 1;\n}\n".into(),
     };
-    let diagnostic = Diagnostic::error("TEST0002", "broken function", Span {
-      file: FileId(0),
-      range: TextRange::new(0, source.text.len() as u32),
-    });
+    let diagnostic = Diagnostic::error(
+      "TEST0002",
+      "broken function",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(0, source.text.len() as u32),
+      },
+    );
 
     let rendered = render_diagnostic(&source, &diagnostic);
     let expected = concat!(
@@ -451,10 +459,14 @@ mod tests {
       names: vec!["a.js".into(), "b.js".into()],
       texts: vec!["const a = 1;".into(), "const b = 2;".into()],
     };
-    let diagnostic = Diagnostic::error("TEST0004", "primary", Span {
-      file: FileId(1),
-      range: TextRange::new(6, 7),
-    })
+    let diagnostic = Diagnostic::error(
+      "TEST0004",
+      "primary",
+      Span {
+        file: FileId(1),
+        range: TextRange::new(6, 7),
+      },
+    )
     .with_label(Label::secondary(
       Span {
         file: FileId(0),

@@ -343,20 +343,29 @@ impl<'a> Parser<'a> {
           // Use an empty shorthand property as a placeholder
           use crate::ast::expr::IdExpr;
           use crate::loc::Loc;
-          members.push(Node::new(member_start, ObjMember {
-            typ: ObjMemberType::Shorthand {
-              id: Node::new(Loc(0, 0), IdExpr {
-                name: String::new(),
-              }),
+          members.push(Node::new(
+            member_start,
+            ObjMember {
+              typ: ObjMemberType::Shorthand {
+                id: Node::new(
+                  Loc(0, 0),
+                  IdExpr {
+                    name: String::new(),
+                  },
+                ),
+              },
             },
-          }));
+          ));
         } else {
           let rest = p.consume_if(TT::DotDotDot).is_match();
           if rest {
             let value = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
-            members.push(Node::new(member_start, ObjMember {
-              typ: ObjMemberType::Rest { val: value },
-            }));
+            members.push(Node::new(
+              member_start,
+              ObjMember {
+                typ: ObjMemberType::Rest { val: value },
+              },
+            ));
           } else {
             let (key, value) = p.class_or_obj_member(
               ctx,
@@ -373,9 +382,12 @@ impl<'a> Parser<'a> {
                     // TypeScript: Error recovery - computed properties without value like { [e] }
                     // Create synthetic undefined value for error recovery
                     let loc = expr.loc;
-                    let synthetic_value = Node::new(loc, IdExpr {
-                      name: "undefined".to_string(),
-                    })
+                    let synthetic_value = Node::new(
+                      loc,
+                      IdExpr {
+                        name: "undefined".to_string(),
+                      },
+                    )
                     .into_wrapped();
                     ObjMemberType::Valued {
                       key: ClassOrObjKey::Computed(expr),
@@ -402,21 +414,30 @@ impl<'a> Parser<'a> {
                       let key_name = direct_key.stx.key.clone();
                       let key_loc = direct_key.loc;
                       let default_val = p.expr(ctx, [TT::Comma, TT::Semicolon, TT::BraceClose])?;
-                      let id_expr = Node::new(key_loc, IdExpr {
-                        name: key_name.clone(),
-                      })
+                      let id_expr = Node::new(
+                        key_loc,
+                        IdExpr {
+                          name: key_name.clone(),
+                        },
+                      )
                       .into_wrapped();
-                      let bin_expr = Node::new(key_loc + default_val.loc, BinaryExpr {
-                        operator: OperatorName::Assignment,
-                        left: id_expr,
-                        right: default_val,
-                      })
+                      let bin_expr = Node::new(
+                        key_loc + default_val.loc,
+                        BinaryExpr {
+                          operator: OperatorName::Assignment,
+                          left: id_expr,
+                          right: default_val,
+                        },
+                      )
                       .into_wrapped();
                       ObjMemberType::Valued {
-                        key: ClassOrObjKey::Direct(Node::new(key_loc, ClassOrObjMemberDirectKey {
-                          key: key_name,
-                          tt: TT::Identifier,
-                        })),
+                        key: ClassOrObjKey::Direct(Node::new(
+                          key_loc,
+                          ClassOrObjMemberDirectKey {
+                            key: key_name,
+                            tt: TT::Identifier,
+                          },
+                        )),
                         val: ClassOrObjVal::Prop(Some(bin_expr)),
                       }
                     } else {

@@ -198,7 +198,11 @@ impl<'a> std::fmt::Display for TypeDisplay<'a> {
   }
 }
 
-fn format_type(kind: TypeKind, program: &Program, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+fn format_type(
+  kind: TypeKind,
+  program: &Program,
+  f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
   match kind {
     TypeKind::Any => write!(f, "any"),
     TypeKind::Unknown => write!(f, "unknown"),
@@ -306,7 +310,11 @@ impl Program {
     state
       .symbol_occurrences
       .get(&file)
-      .and_then(|occurs| occurs.iter().find(|o| o.range.start <= offset && offset < o.range.end))
+      .and_then(|occurs| {
+        occurs
+          .iter()
+          .find(|o| o.range.start <= offset && offset < o.range.end)
+      })
       .map(|o| o.symbol)
   }
 
@@ -344,14 +352,11 @@ impl Program {
   pub fn body_of_def(&self, def: DefId) -> Option<BodyId> {
     let mut state = self.state.lock().unwrap();
     state.ensure_analyzed(&self.host, &self.roots);
-    state
-      .def_data
-      .get(&def)
-      .and_then(|d| match &d.kind {
-        DefKind::Function(func) => func.body,
-        DefKind::Var(var) => Some(var.body),
-        DefKind::Import(_) => None,
-      })
+    state.def_data.get(&def).and_then(|d| match &d.kind {
+      DefKind::Function(func) => func.body,
+      DefKind::Var(var) => Some(var.body),
+      DefKind::Import(_) => None,
+    })
   }
 
   /// Implicit top-level body for a file, if any.
@@ -551,12 +556,7 @@ impl TypeStore {
   }
 
   fn alloc(&mut self, kind: TypeKind) -> TypeId {
-    if let Some((idx, _)) = self
-      .kinds
-      .iter()
-      .enumerate()
-      .find(|(_, k)| **k == kind)
-    {
+    if let Some((idx, _)) = self.kinds.iter().enumerate().find(|(_, k)| **k == kind) {
       return TypeId(idx as u32);
     }
     let id = TypeId(self.kinds.len() as u32);
@@ -646,11 +646,15 @@ impl ProgramState {
           Ok(ast) => self.bind_file(file, ast, host, &mut queue),
           Err(err) => {
             let span = loc_to_span(file, err.loc);
-            self.diagnostics.push(Diagnostic::error(err.to_string(), Some(span)));
+            self
+              .diagnostics
+              .push(Diagnostic::error(err.to_string(), Some(span)));
           }
         },
         Err(err) => {
-          self.diagnostics.push(Diagnostic::error(err.to_string(), None));
+          self
+            .diagnostics
+            .push(Diagnostic::error(err.to_string(), None));
         }
       }
     }
@@ -680,7 +684,8 @@ impl ProgramState {
       match *stmt.stx {
         Stmt::VarDecl(var) => {
           let var_span = loc_to_span(file, stmt.loc);
-          let (new_defs, stmts) = self.handle_var_decl(file, var_span.range, *var.stx, &mut top_body);
+          let (new_defs, stmts) =
+            self.handle_var_decl(file, var_span.range, *var.stx, &mut top_body);
           for (def_id, binding, export_name) in new_defs {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -771,9 +776,10 @@ impl ProgramState {
             if let Some(target) = host.resolve(file, &module) {
               queue.push_back(target);
             } else {
-              self
-                .diagnostics
-                .push(Diagnostic::error(format!("unresolved module {module}"), Some(loc_to_span(file, stmt.loc))));
+              self.diagnostics.push(Diagnostic::error(
+                format!("unresolved module {module}"),
+                Some(loc_to_span(file, stmt.loc)),
+              ));
             }
           }
           if let ExportNames::Specific(names) = &export_list.stx.names {
@@ -791,9 +797,10 @@ impl ProgramState {
                   },
                 );
               } else {
-                self
-                  .diagnostics
-                  .push(Diagnostic::error(format!("unknown export {exportable}"), Some(loc_to_span(file, name.loc))));
+                self.diagnostics.push(Diagnostic::error(
+                  format!("unknown export {exportable}"),
+                  Some(loc_to_span(file, name.loc)),
+                ));
               }
             }
           }
@@ -804,9 +811,10 @@ impl ProgramState {
           if let Some(target) = resolved {
             queue.push_back(target);
           } else {
-            self
-              .diagnostics
-              .push(Diagnostic::error(format!("unresolved module {module}"), Some(loc_to_span(file, stmt.loc))));
+            self.diagnostics.push(Diagnostic::error(
+              format!("unresolved module {module}"),
+              Some(loc_to_span(file, stmt.loc)),
+            ));
           }
           match import_stmt.stx.names {
             Some(ImportNames::Specific(ref list)) => {
@@ -816,9 +824,10 @@ impl ProgramState {
                 let alias_name = match &alias_pat.stx.pat.stx.as_ref() {
                   Pat::Id(id) => id.stx.name.clone(),
                   _ => {
-                    self
-                      .diagnostics
-                      .push(Diagnostic::error("unsupported import pattern", Some(loc_to_span(file, alias_pat.loc))));
+                    self.diagnostics.push(Diagnostic::error(
+                      "unsupported import pattern",
+                      Some(loc_to_span(file, alias_pat.loc)),
+                    ));
                     continue;
                   }
                 };
@@ -854,9 +863,10 @@ impl ProgramState {
               let alias_name = match &pat.stx.pat.stx.as_ref() {
                 Pat::Id(id) => id.stx.name.clone(),
                 _ => {
-                  self
-                    .diagnostics
-                    .push(Diagnostic::error("unsupported import pattern", Some(loc_to_span(file, pat.loc))));
+                  self.diagnostics.push(Diagnostic::error(
+                    "unsupported import pattern",
+                    Some(loc_to_span(file, pat.loc)),
+                  ));
                   continue;
                 }
               };
@@ -917,7 +927,10 @@ impl ProgramState {
     span: TextRange,
     var: VarDecl,
     builder: &mut BodyBuilder,
-  ) -> (Vec<(DefId, (String, SymbolBinding), Option<String>)>, Vec<HirStmt>) {
+  ) -> (
+    Vec<(DefId, (String, SymbolBinding), Option<String>)>,
+    Vec<HirStmt>,
+  ) {
     let mut defs = Vec::new();
     let mut stmts = Vec::new();
     for declarator in var.declarators.into_iter() {
@@ -925,9 +938,10 @@ impl ProgramState {
       let name = match pat.stx.pat.stx.as_ref() {
         Pat::Id(id) => id.stx.name.clone(),
         _ => {
-          self
-            .diagnostics
-            .push(Diagnostic::error("unsupported pattern", Some(loc_to_span(file, pat.loc))));
+          self.diagnostics.push(Diagnostic::error(
+            "unsupported pattern",
+            Some(loc_to_span(file, pat.loc)),
+          ));
           continue;
         }
       };
@@ -1029,7 +1043,10 @@ impl ProgramState {
         params.push(data);
       }
     }
-    let return_ann = func.return_type.as_ref().map(|t| self.type_from_type_expr(t));
+    let return_ann = func
+      .return_type
+      .as_ref()
+      .map(|t| self.type_from_type_expr(t));
     let body_id = func.body.as_ref().map(|_| self.alloc_body(file, Some(def)));
     if let Some(body) = body_id {
       match func.body.unwrap() {
@@ -1065,9 +1082,10 @@ impl ProgramState {
     let name = match param.stx.pattern.stx.pat.stx.as_ref() {
       Pat::Id(id) => id.stx.name.clone(),
       _ => {
-        self
-          .diagnostics
-          .push(Diagnostic::error("unsupported parameter pattern", Some(loc_to_span(file, param.loc))));
+        self.diagnostics.push(Diagnostic::error(
+          "unsupported parameter pattern",
+          Some(loc_to_span(file, param.loc)),
+        ));
         return None;
       }
     };
@@ -1205,7 +1223,9 @@ impl ProgramState {
             } else if left_ty == self.builtin.number && right_ty == self.builtin.number {
               self.builtin.number
             } else {
-              self.type_store.union(vec![left_ty, right_ty], &self.builtin)
+              self
+                .type_store
+                .union(vec![left_ty, right_ty], &self.builtin)
             }
           }
           OperatorName::Subtraction
@@ -1222,7 +1242,10 @@ impl ProgramState {
           | OperatorName::GreaterThanOrEqual
           | OperatorName::LessThan
           | OperatorName::LessThanOrEqual => self.builtin.number,
-          OperatorName::Equality | OperatorName::Inequality | OperatorName::StrictEquality | OperatorName::StrictInequality => self.builtin.boolean,
+          OperatorName::Equality
+          | OperatorName::Inequality
+          | OperatorName::StrictEquality
+          | OperatorName::StrictInequality => self.builtin.boolean,
           _ => self.builtin.unknown,
         }
       }
@@ -1230,9 +1253,13 @@ impl ProgramState {
         let callee_ty = self.check_expr(callee, env, result, file);
         if let TypeKind::Function { params, ret } = self.type_store.kind(callee_ty).clone() {
           if params.len() != args.len() {
-            result
-              .diagnostics
-              .push(Diagnostic::error("argument count mismatch", Some(Span { file, range: expr.span })));
+            result.diagnostics.push(Diagnostic::error(
+              "argument count mismatch",
+              Some(Span {
+                file,
+                range: expr.span,
+              }),
+            ));
           }
           for (idx, arg) in args.iter().enumerate() {
             let arg_ty = self.check_expr(arg, env, result, file);
@@ -1240,7 +1267,10 @@ impl ProgramState {
               if expected != &self.builtin.any && expected != &arg_ty {
                 result.diagnostics.push(Diagnostic::error(
                   format!("argument {} has incompatible type", idx + 1),
-                  Some(Span { file, range: arg.span }),
+                  Some(Span {
+                    file,
+                    range: arg.span,
+                  }),
                 ));
               }
             }
@@ -1351,7 +1381,9 @@ impl ProgramState {
       if res.return_types.is_empty() {
         self.builtin.void
       } else {
-        self.type_store.union(res.return_types.clone(), &self.builtin)
+        self
+          .type_store
+          .union(res.return_types.clone(), &self.builtin)
       }
     } else {
       self.builtin.unknown
@@ -1390,14 +1422,11 @@ impl ProgramState {
   }
 
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {
-    self
-      .def_data
-      .get(&def)
-      .and_then(|d| match &d.kind {
-        DefKind::Function(func) => func.body,
-        DefKind::Var(var) => Some(var.body),
-        DefKind::Import(_) => None,
-      })
+    self.def_data.get(&def).and_then(|d| match &d.kind {
+      DefKind::Function(func) => func.body,
+      DefKind::Var(var) => Some(var.body),
+      DefKind::Import(_) => None,
+    })
   }
 
   fn type_from_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeId {
@@ -1423,7 +1452,11 @@ impl ProgramState {
       }
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {
         TypeLiteral::Boolean(value) => {
-          if *value { self.builtin.boolean } else { self.builtin.boolean }
+          if *value {
+            self.builtin.boolean
+          } else {
+            self.builtin.boolean
+          }
         }
         TypeLiteral::Number(_) => self.builtin.number,
         TypeLiteral::String(_) => self.builtin.string,
@@ -1505,9 +1538,10 @@ impl BodyBuilder {
           let name = match pat.stx.pat.stx.as_ref() {
             Pat::Id(id) => id.stx.name.clone(),
             _ => {
-              state
-                .diagnostics
-                .push(Diagnostic::error("unsupported pattern", Some(loc_to_span(self.file, pat.loc))));
+              state.diagnostics.push(Diagnostic::error(
+                "unsupported pattern",
+                Some(loc_to_span(self.file, pat.loc)),
+              ));
               continue;
             }
           };
@@ -1589,7 +1623,9 @@ impl BodyBuilder {
         }
         HirExprKind::Array(values)
       }
-      Expr::LitObj(obj) => HirExprKind::Object(lower_object_literal(self.file, *obj.stx, state, self)),
+      Expr::LitObj(obj) => {
+        HirExprKind::Object(lower_object_literal(self.file, *obj.stx, state, self))
+      }
       Expr::LitTemplate(_) => HirExprKind::String,
       _ => HirExprKind::Unknown,
     };
@@ -1619,7 +1655,9 @@ fn lower_object_literal(
   for member in obj.members.into_iter() {
     let _member_span = loc_to_span(file, member.loc).range;
     match *member.stx {
-      ObjMember { typ: ObjMemberType::Valued { key, val } } => {
+      ObjMember {
+        typ: ObjMemberType::Valued { key, val },
+      } => {
         let key_name = match key {
           ClassOrObjKey::Direct(direct) => direct.stx.key,
           ClassOrObjKey::Computed(_) => {
@@ -1632,7 +1670,9 @@ fn lower_object_literal(
           props.push((key_name, value));
         }
       }
-      ObjMember { typ: ObjMemberType::Shorthand { id } } => {
+      ObjMember {
+        typ: ObjMemberType::Shorthand { id },
+      } => {
         let name = id.stx.name.clone();
         let expr = builder.new_expr(
           loc_to_span(file, id.loc).range,
@@ -1640,7 +1680,9 @@ fn lower_object_literal(
         );
         props.push((name, expr));
       }
-      ObjMember { typ: ObjMemberType::Rest { val } } => {
+      ObjMember {
+        typ: ObjMemberType::Rest { val },
+      } => {
         let expr = builder.lower_expr(val, state);
         props.push(("...".to_string(), expr));
       }

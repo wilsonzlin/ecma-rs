@@ -53,11 +53,15 @@ impl<'a> TypeDisplay<'a> {
 
   fn fmt_property(&self, prop: &Property, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     if let Some(access) = &prop.data.accessibility {
-      write!(f, "{} ", match access {
-        crate::shape::Accessibility::Public => "public",
-        crate::shape::Accessibility::Protected => "protected",
-        crate::shape::Accessibility::Private => "private",
-      })?;
+      write!(
+        f,
+        "{} ",
+        match access {
+          crate::shape::Accessibility::Public => "public",
+          crate::shape::Accessibility::Protected => "protected",
+          crate::shape::Accessibility::Private => "private",
+        }
+      )?;
     }
     if prop.data.readonly {
       write!(f, "readonly ")?;
@@ -256,11 +260,15 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::Mapped(mapped) => {
         write!(f, "{{ ")?;
         self.fmt_mapped_modifier(mapped.readonly, "readonly", f)?;
-        write!(f, "[K{} in ", match mapped.optional {
-          MappedModifier::Add => "?",
-          MappedModifier::Remove => "-?",
-          MappedModifier::Preserve => "",
-        })?;
+        write!(
+          f,
+          "[K{} in ",
+          match mapped.optional {
+            MappedModifier::Add => "?",
+            MappedModifier::Remove => "-?",
+            MappedModifier::Preserve => "",
+          }
+        )?;
         self.fmt_type(mapped.source, f)?;
         if let Some(as_type) = mapped.as_type {
           write!(f, " as ")?;

@@ -64,7 +64,12 @@ fn div_elem_name() -> JsxElemName {
 
 fn empty_attr_placeholder_expr() -> Node<Expr> {
   let loc = Loc(0, 0);
-  let empty_id = Node::new(loc, IdExpr { name: String::new() });
+  let empty_id = Node::new(
+    loc,
+    IdExpr {
+      name: String::new(),
+    },
+  );
   Node::new(loc, Expr::Id(empty_id))
 }
 
@@ -94,7 +99,10 @@ fn emits_element_names() {
     vec![],
     vec![],
   );
-  assert_eq!(emit_expr_to_string(&Node::new(div.loc, Expr::JsxElem(div))), "<div/>");
+  assert_eq!(
+    emit_expr_to_string(&Node::new(div.loc, Expr::JsxElem(div))),
+    "<div/>"
+  );
 
   let ns = jsx_elem_from(
     Some(JsxElemName::Name(Node::new(
@@ -107,10 +115,16 @@ fn emits_element_names() {
     vec![],
     vec![],
   );
-  assert_eq!(emit_expr_to_string(&Node::new(ns.loc, Expr::JsxElem(ns))), "<ns:div/>");
+  assert_eq!(
+    emit_expr_to_string(&Node::new(ns.loc, Expr::JsxElem(ns))),
+    "<ns:div/>"
+  );
 
   let id = jsx_elem_from(Some(JsxElemName::Id(id_expr("Foo"))), vec![], vec![]);
-  assert_eq!(emit_expr_to_string(&Node::new(id.loc, Expr::JsxElem(id))), "<Foo/>");
+  assert_eq!(
+    emit_expr_to_string(&Node::new(id.loc, Expr::JsxElem(id))),
+    "<Foo/>"
+  );
 
   let member = jsx_elem_from(
     Some(JsxElemName::Member(Node::new(
@@ -217,7 +231,12 @@ fn emits_attributes() {
   let spread_attr = jsx_elem_from(
     Some(div_elem_name()),
     vec![JsxAttr::Spread {
-      value: Node::new(Loc(0, 0), JsxSpreadAttr { value: expr_from_id("props") }),
+      value: Node::new(
+        Loc(0, 0),
+        JsxSpreadAttr {
+          value: expr_from_id("props"),
+        },
+      ),
     }],
     vec![],
   );
@@ -233,7 +252,10 @@ fn emits_attributes() {
           name: "a".into(),
         },
       ),
-      value: Some(JsxAttrVal::Expression(jsx_container(expr_from_id("x"), false))),
+      value: Some(JsxAttrVal::Expression(jsx_container(
+        expr_from_id("x"),
+        false,
+      ))),
     }],
     vec![],
   );
@@ -306,7 +328,10 @@ fn emits_children() {
     vec![],
     vec![JsxElemChild::Expr(jsx_container(expr_from_id("xs"), true))],
   );
-  assert_eq!(emit_elem_to_string(&spread_expr_child), "<div>{...xs}</div>");
+  assert_eq!(
+    emit_elem_to_string(&spread_expr_child),
+    "<div>{...xs}</div>"
+  );
 
   let escaped_child = jsx_elem_from(
     Some(div_elem_name()),

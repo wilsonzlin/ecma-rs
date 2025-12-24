@@ -197,31 +197,35 @@ mod tests {
 
     // Verify the entire scope tree from the top.
     let mut map = HashMap::new();
-    test_scope_tree(&mut map, &s, &T {
-      typ: ScopeType::Global,
-      syms: vec![("z", "z"), ("x", "x"), ("w", "w")],
-      children: vec![T {
-        typ: ScopeType::ArrowFunction,
-        syms: vec![("a", "a"), ("b", "b")],
+    test_scope_tree(
+      &mut map,
+      &s,
+      &T {
+        typ: ScopeType::Global,
+        syms: vec![("z", "z"), ("x", "x"), ("w", "w")],
         children: vec![T {
           typ: ScopeType::ArrowFunction,
-          syms: vec![("c", "c")],
+          syms: vec![("a", "a"), ("b", "b")],
           children: vec![T {
             typ: ScopeType::ArrowFunction,
-            syms: vec![("b", "b1")],
+            syms: vec![("c", "c")],
             children: vec![T {
-              typ: ScopeType::Block,
-              syms: vec![("d", "d")],
+              typ: ScopeType::ArrowFunction,
+              syms: vec![("b", "b1")],
               children: vec![T {
                 typ: ScopeType::Block,
-                syms: vec![("e", "e")],
-                children: vec![],
+                syms: vec![("d", "d")],
+                children: vec![T {
+                  typ: ScopeType::Block,
+                  syms: vec![("e", "e")],
+                  children: vec![],
+                }],
               }],
             }],
           }],
         }],
-      }],
-    });
+      },
+    );
     assert_eq!(map.len(), 8);
 
     // Verify foreign/unknown/use-before-decl.

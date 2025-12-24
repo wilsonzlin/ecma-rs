@@ -26,14 +26,20 @@ impl<'a> Parser<'a> {
           use crate::ast::expr::pat::Pat;
           use crate::ast::stmt::decl::PatDecl;
           use crate::loc::Loc;
-          let this_pattern = Node::new(Loc(0, 0), PatDecl {
-            pat: Node::new(
-              Loc(0, 0),
-              Pat::Id(Node::new(Loc(0, 0), IdPat {
-                name: String::from("this"),
-              })),
-            ),
-          });
+          let this_pattern = Node::new(
+            Loc(0, 0),
+            PatDecl {
+              pat: Node::new(
+                Loc(0, 0),
+                Pat::Id(Node::new(
+                  Loc(0, 0),
+                  IdPat {
+                    name: String::from("this"),
+                  },
+                )),
+              ),
+            },
+          );
           return Ok(ParamDecl {
             decorators: Vec::new(),
             rest: false,

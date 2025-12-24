@@ -553,18 +553,21 @@ impl TypeStore {
     let null = store.alloc(TypeKind::Null);
     let undefined = store.alloc(TypeKind::Undefined);
     let object = store.alloc(TypeKind::Object(BTreeMap::new()));
-    (store, BuiltinTypes {
-      any,
-      unknown,
-      never,
-      void,
-      number,
-      string,
-      boolean,
-      null,
-      undefined,
-      object,
-    })
+    (
+      store,
+      BuiltinTypes {
+        any,
+        unknown,
+        never,
+        void,
+        number,
+        string,
+        boolean,
+        null,
+        undefined,
+        object,
+      },
+    )
   }
 
   fn alloc(&mut self, kind: TypeKind) -> TypeId {
@@ -703,11 +706,14 @@ impl ProgramState {
             let (binding_name, binding_value) = binding;
             bindings.insert(binding_name.clone(), binding_value.clone());
             if let Some(name) = export_name {
-              exports.insert(name, ExportEntry {
-                symbol: binding_value.symbol,
-                def: Some(def_id),
-                type_id: binding_value.type_id,
-              });
+              exports.insert(
+                name,
+                ExportEntry {
+                  symbol: binding_value.symbol,
+                  def: Some(def_id),
+                  type_id: binding_value.type_id,
+                },
+              );
             }
           }
           top_body.stmts.extend(stmts);
@@ -721,11 +727,14 @@ impl ProgramState {
             let (binding_name, binding_value) = binding;
             bindings.insert(binding_name.clone(), binding_value.clone());
             if let Some(name) = export_name {
-              exports.insert(name, ExportEntry {
-                symbol: binding_value.symbol,
-                def: Some(def_id),
-                type_id: binding_value.type_id,
-              });
+              exports.insert(
+                name,
+                ExportEntry {
+                  symbol: binding_value.symbol,
+                  def: Some(def_id),
+                  type_id: binding_value.type_id,
+                },
+              );
             }
           }
         }
@@ -744,29 +753,38 @@ impl ProgramState {
             def: Some(def_id),
           };
           top_body.stmts.push(hir_stmt);
-          self.def_data.insert(def_id, DefData {
-            name: "default".to_string(),
-            file,
-            span: span.range,
-            symbol,
-            export: true,
-            kind: DefKind::Var(VarData {
-              typ: None,
-              init: Some(expr_id),
-              body: top_body_id,
-            }),
-          });
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: "default".to_string(),
+              file,
+              span: span.range,
+              symbol,
+              export: true,
+              kind: DefKind::Var(VarData {
+                typ: None,
+                init: Some(expr_id),
+                body: top_body_id,
+              }),
+            },
+          );
           defs.push(def_id);
-          bindings.insert("default".to_string(), SymbolBinding {
-            symbol,
-            def: Some(def_id),
-            type_id: None,
-          });
-          exports.insert("default".to_string(), ExportEntry {
-            symbol,
-            def: Some(def_id),
-            type_id: None,
-          });
+          bindings.insert(
+            "default".to_string(),
+            SymbolBinding {
+              symbol,
+              def: Some(def_id),
+              type_id: None,
+            },
+          );
+          exports.insert(
+            "default".to_string(),
+            ExportEntry {
+              symbol,
+              def: Some(def_id),
+              type_id: None,
+            },
+          );
         }
         Stmt::ExportList(export_list) => {
           if let Some(module) = export_list.stx.from.clone() {
@@ -785,11 +803,14 @@ impl ProgramState {
               let alias = name.stx.alias.stx.name.clone();
               let mapped = bindings.get(&exportable);
               if let Some(binding) = mapped {
-                exports.insert(alias.clone(), ExportEntry {
-                  symbol: binding.symbol,
-                  def: binding.def,
-                  type_id: binding.type_id,
-                });
+                exports.insert(
+                  alias.clone(),
+                  ExportEntry {
+                    symbol: binding.symbol,
+                    def: binding.def,
+                    type_id: binding.type_id,
+                  },
+                );
               } else {
                 self.diagnostics.push(Diagnostic::error(
                   format!("unknown export {exportable}"),
@@ -827,23 +848,29 @@ impl ProgramState {
                 };
                 let symbol = self.alloc_symbol();
                 let def_id = self.alloc_def();
-                self.def_data.insert(def_id, DefData {
-                  name: alias_name.clone(),
-                  file,
-                  span: loc_to_span(file, alias_pat.loc).range,
-                  symbol,
-                  export: false,
-                  kind: DefKind::Import(ImportData {
-                    from: resolved.unwrap_or(file),
-                    original: name.clone(),
-                  }),
-                });
+                self.def_data.insert(
+                  def_id,
+                  DefData {
+                    name: alias_name.clone(),
+                    file,
+                    span: loc_to_span(file, alias_pat.loc).range,
+                    symbol,
+                    export: false,
+                    kind: DefKind::Import(ImportData {
+                      from: resolved.unwrap_or(file),
+                      original: name.clone(),
+                    }),
+                  },
+                );
                 defs.push(def_id);
-                bindings.insert(alias_name.clone(), SymbolBinding {
-                  symbol,
-                  def: Some(def_id),
-                  type_id: None,
-                });
+                bindings.insert(
+                  alias_name.clone(),
+                  SymbolBinding {
+                    symbol,
+                    def: Some(def_id),
+                    type_id: None,
+                  },
+                );
                 self.record_symbol(file, loc_to_span(file, alias_pat.loc).range, symbol);
               }
             }
@@ -860,23 +887,29 @@ impl ProgramState {
               };
               let symbol = self.alloc_symbol();
               let def_id = self.alloc_def();
-              self.def_data.insert(def_id, DefData {
-                name: alias_name.clone(),
-                file,
-                span: loc_to_span(file, pat.loc).range,
-                symbol,
-                export: false,
-                kind: DefKind::Import(ImportData {
-                  from: resolved.unwrap_or(file),
-                  original: "*".to_string(),
-                }),
-              });
+              self.def_data.insert(
+                def_id,
+                DefData {
+                  name: alias_name.clone(),
+                  file,
+                  span: loc_to_span(file, pat.loc).range,
+                  symbol,
+                  export: false,
+                  kind: DefKind::Import(ImportData {
+                    from: resolved.unwrap_or(file),
+                    original: "*".to_string(),
+                  }),
+                },
+              );
               defs.push(def_id);
-              bindings.insert(alias_name.clone(), SymbolBinding {
-                symbol,
-                def: Some(def_id),
-                type_id: None,
-              });
+              bindings.insert(
+                alias_name.clone(),
+                SymbolBinding {
+                  symbol,
+                  def: Some(def_id),
+                  type_id: None,
+                },
+              );
               self.record_symbol(file, loc_to_span(file, pat.loc).range, symbol);
             }
             None => {}
@@ -892,12 +925,15 @@ impl ProgramState {
 
     let body_data = top_body.finish(None);
     self.body_data.insert(top_body_id, body_data);
-    self.files.insert(file, FileState {
-      defs,
-      exports,
-      bindings,
-      top_body: Some(top_body_id),
-    });
+    self.files.insert(
+      file,
+      FileState {
+        defs,
+        exports,
+        bindings,
+        top_body: Some(top_body_id),
+      },
+    );
   }
 
   fn handle_var_decl(
@@ -943,25 +979,31 @@ impl ProgramState {
         symbol,
         def: Some(def_id),
       });
-      self.def_data.insert(def_id, DefData {
-        name: name.clone(),
-        file,
-        span,
-        symbol,
-        export: var.export,
-        kind: DefKind::Var(VarData {
-          typ: type_ann,
-          init: init_id,
-          body: builder.id,
-        }),
-      });
+      self.def_data.insert(
+        def_id,
+        DefData {
+          name: name.clone(),
+          file,
+          span,
+          symbol,
+          export: var.export,
+          kind: DefKind::Var(VarData {
+            typ: type_ann,
+            init: init_id,
+            body: builder.id,
+          }),
+        },
+      );
       defs.push((
         def_id,
-        (name.clone(), SymbolBinding {
-          symbol,
-          def: Some(def_id),
-          type_id: type_ann,
-        }),
+        (
+          name.clone(),
+          SymbolBinding {
+            symbol,
+            def: Some(def_id),
+            type_id: type_ann,
+          },
+        ),
         if var.export { Some(name) } else { None },
       ));
     }
@@ -980,19 +1022,25 @@ impl ProgramState {
     self.record_symbol(file, loc_to_span(file, name_node.loc).range, symbol);
     let def_id = self.alloc_def();
     let func_data = self.lower_function(file, *func.function.stx, def_id);
-    self.def_data.insert(def_id, DefData {
-      name: name.clone(),
-      file,
-      span,
-      symbol,
-      export: func.export || func.export_default,
-      kind: DefKind::Function(func_data),
-    });
-    let binding = (name.clone(), SymbolBinding {
-      symbol,
-      def: Some(def_id),
-      type_id: None,
-    });
+    self.def_data.insert(
+      def_id,
+      DefData {
+        name: name.clone(),
+        file,
+        span,
+        symbol,
+        export: func.export || func.export_default,
+        kind: DefKind::Function(func_data),
+      },
+    );
+    let binding = (
+      name.clone(),
+      SymbolBinding {
+        symbol,
+        def: Some(def_id),
+        type_id: None,
+      },
+    );
     let export_name = if func.export_default {
       Some("default".to_string())
     } else if func.export {
@@ -1123,11 +1171,14 @@ impl ProgramState {
         if let Some(def_id) = def {
           self.def_types.insert(*def_id, declared);
         }
-        env.insert(name.clone(), SymbolBinding {
-          symbol: *symbol,
-          def: *def,
-          type_id: Some(declared),
-        });
+        env.insert(
+          name.clone(),
+          SymbolBinding {
+            symbol: *symbol,
+            def: *def,
+            type_id: Some(declared),
+          },
+        );
         self.record_symbol(file, *span, *symbol);
       }
       HirStmt::Return { expr, .. } => {
@@ -1162,10 +1213,13 @@ impl ProgramState {
             ty
           } else if let Some(def_id) = binding.def {
             let ty = self.type_of_def(def_id);
-            env.insert(name.clone(), SymbolBinding {
-              type_id: Some(ty),
-              ..binding
-            });
+            env.insert(
+              name.clone(),
+              SymbolBinding {
+                type_id: Some(ty),
+                ..binding
+              },
+            );
             ty
           } else {
             self.builtin.unknown
@@ -1274,11 +1328,14 @@ impl ProgramState {
     if let Some(def) = owner {
       if let Some(DefKind::Function(func)) = self.def_data.get(&def).map(|d| &d.kind) {
         for param in func.params.iter() {
-          env.insert(param.name.clone(), SymbolBinding {
-            symbol: param.symbol,
-            def: None,
-            type_id: param.typ,
-          });
+          env.insert(
+            param.name.clone(),
+            SymbolBinding {
+              symbol: param.symbol,
+              def: None,
+              type_id: param.typ,
+            },
+          );
         }
       }
     }
@@ -1435,13 +1492,16 @@ impl ProgramState {
     let id = BodyId(self.next_body);
     self.next_body += 1;
     if !self.body_data.contains_key(&id) {
-      self.body_data.insert(id, BodyData {
+      self.body_data.insert(
         id,
-        file,
-        owner,
-        stmts: Vec::new(),
-        expr_spans: Vec::new(),
-      });
+        BodyData {
+          id,
+          file,
+          owner,
+          stmts: Vec::new(),
+          expr_spans: Vec::new(),
+        },
+      );
     }
     id
   }

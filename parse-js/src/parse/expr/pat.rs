@@ -78,9 +78,12 @@ impl<'a> Parser<'a> {
     self
       .consume_if_pred(|t| is_valid_class_or_func_name(t.typ, ctx.rules))
       .map(|t| {
-        Node::new(t.loc, ClassOrFuncName {
-          name: self.string(t.loc),
-        })
+        Node::new(
+          t.loc,
+          ClassOrFuncName {
+            name: self.string(t.loc),
+          },
+        )
       })
   }
 
@@ -242,9 +245,12 @@ impl<'a> Parser<'a> {
       TT::BracketOpen => self.arr_pat(ctx)?.into_wrapped(),
       // TypeScript: For error recovery, create synthetic identifier when pattern is missing
       // Handles cases like `var;`, `let;`, `const;`, `export var;`
-      TT::Semicolon | TT::Comma | TT::EOF => Node::new(t.loc, IdPat {
-        name: String::from(""),
-      })
+      TT::Semicolon | TT::Comma | TT::EOF => Node::new(
+        t.loc,
+        IdPat {
+          name: String::from(""),
+        },
+      )
       .into_wrapped(),
       // TypeScript: Allow any keyword as pattern identifier for error recovery
       // Examples: `var { while: while } = x` or `let [if] = arr`

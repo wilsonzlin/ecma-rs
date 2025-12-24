@@ -90,14 +90,20 @@ fn protected_members_require_shared_origin() {
 fn implements_checks_structural_members() {
   let mut checker = TypeChecker::new();
   let mut iface = InterfaceDef::new("I");
-  iface.properties.insert("x".into(), ObjectProperty {
-    ty: Type::Number,
-    optional: false,
-  });
-  iface.properties.insert("m".into(), ObjectProperty {
-    ty: Type::Function(FunctionType::new(vec![], Type::Number)),
-    optional: false,
-  });
+  iface.properties.insert(
+    "x".into(),
+    ObjectProperty {
+      ty: Type::Number,
+      optional: false,
+    },
+  );
+  iface.properties.insert(
+    "m".into(),
+    ObjectProperty {
+      ty: Type::Function(FunctionType::new(vec![], Type::Number)),
+      optional: false,
+    },
+  );
   let iface_id = checker.add_interface(iface);
 
   let mut good = ClassDef::new("Good");

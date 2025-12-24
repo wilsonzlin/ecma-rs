@@ -67,10 +67,13 @@ impl<'a> Parser<'a> {
     let name = if self.consume_if(TT::Colon).is_match() {
       // Namespaced name.
       let name = self.jsx_name_token()?;
-      JsxElemName::Name(Node::new(start + name.loc, JsxName {
-        namespace: Some(self.string(start)),
-        name: self.string(name.loc),
-      }))
+      JsxElemName::Name(Node::new(
+        start + name.loc,
+        JsxName {
+          namespace: Some(self.string(start)),
+          name: self.string(name.loc),
+        },
+      ))
     } else if self.peek().typ == TT::Dot && !self.str(start).contains('-') {
       // Member name.
       let mut path = Vec::new();
@@ -80,12 +83,18 @@ impl<'a> Parser<'a> {
         path.push(self.string(l));
         loc += l;
       }
-      JsxElemName::Member(Node::new(loc, JsxMemberExpr {
-        base: Node::new(start, IdExpr {
-          name: self.string(start),
-        }),
-        path,
-      }))
+      JsxElemName::Member(Node::new(
+        loc,
+        JsxMemberExpr {
+          base: Node::new(
+            start,
+            IdExpr {
+              name: self.string(start),
+            },
+          ),
+          path,
+        },
+      ))
     } else if !self
       .bytes(start)
       .chars()
@@ -94,15 +103,21 @@ impl<'a> Parser<'a> {
       .is_ascii_lowercase()
     {
       // User-defined component.
-      JsxElemName::Id(Node::new(start, IdExpr {
-        name: self.string(start),
-      }))
+      JsxElemName::Id(Node::new(
+        start,
+        IdExpr {
+          name: self.string(start),
+        },
+      ))
     } else {
       // Built-in component without namespace.
-      JsxElemName::Name(Node::new(start, JsxName {
-        namespace: None,
-        name: self.string(start),
-      }))
+      JsxElemName::Name(Node::new(
+        start,
+        JsxName {
+          namespace: None,
+          name: self.string(start),
+        },
+      ))
     };
     Ok(Some(name))
   }
@@ -128,21 +143,30 @@ impl<'a> Parser<'a> {
         use crate::loc::Loc;
         let empty_expr = Node::new(
           Loc(loc.0, loc.0),
-          Expr::Id(Node::new(Loc(loc.0, loc.0), IdExpr {
-            name: String::new(),
-          })),
+          Expr::Id(Node::new(
+            Loc(loc.0, loc.0),
+            IdExpr {
+              name: String::new(),
+            },
+          )),
         );
-        let expr = Node::new(loc, JsxExprContainer {
-          spread: false,
-          value: empty_expr,
-        });
+        let expr = Node::new(
+          loc,
+          JsxExprContainer {
+            spread: false,
+            value: empty_expr,
+          },
+        );
         JsxAttrVal::Expression(expr)
       } else {
         let value = self.expr(ctx, [TT::BraceClose])?;
-        let expr = Node::new(value.loc, JsxExprContainer {
-          spread: false,
-          value,
-        });
+        let expr = Node::new(
+          value.loc,
+          JsxExprContainer {
+            spread: false,
+            value,
+          },
+        );
         self.require(TT::BraceClose)?;
         JsxAttrVal::Expression(expr)
       }
@@ -189,9 +213,12 @@ impl<'a> Parser<'a> {
       };
       let text = self.require_with_mode(TT::JsxTextContent, LexMode::JsxTextContent)?;
       if !text.loc.is_empty() {
-        children.push(JsxElemChild::Text(Node::new(text.loc, JsxText {
-          value: self.string(text.loc),
-        })));
+        children.push(JsxElemChild::Text(Node::new(
+          text.loc,
+          JsxText {
+            value: self.string(text.loc),
+          },
+        )));
       };
       if self.peek().typ == TT::ChevronLeft {
         let child = self.jsx_elem(ctx)?;
@@ -207,17 +234,23 @@ impl<'a> Parser<'a> {
           // This is valid JSX - the spread creates multiple children from an array
           self.consume(); // consume ...
           let value = self.expr(ctx, [TT::BraceClose])?;
-          children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
-            spread: true,
-            value,
-          })));
+          children.push(JsxElemChild::Expr(Node::new(
+            value.loc,
+            JsxExprContainer {
+              spread: true,
+              value,
+            },
+          )));
           self.require(TT::BraceClose)?;
         } else {
           let value = self.expr(ctx, [TT::BraceClose])?;
-          children.push(JsxElemChild::Expr(Node::new(value.loc, JsxExprContainer {
-            spread: false,
-            value,
-          })));
+          children.push(JsxElemChild::Expr(Node::new(
+            value.loc,
+            JsxExprContainer {
+              spread: false,
+              value,
+            },
+          )));
           self.require(TT::BraceClose)?;
         }
       };

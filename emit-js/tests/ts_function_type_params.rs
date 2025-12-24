@@ -49,4 +49,3 @@ fn emits_mixed_named_and_unnamed_params_function_type() {
     "type H = (x: string, number) => void;",
   );
 }
-

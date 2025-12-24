@@ -30,4 +30,3 @@ pub trait Host: Send + Sync {
   /// Compiler options for this program.
   fn compiler_options(&self) -> CompilerOptions;
 }
-

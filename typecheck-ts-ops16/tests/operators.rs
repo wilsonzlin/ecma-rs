@@ -101,16 +101,22 @@ fn indexed_access_union_key() {
   let string_ty = store.string();
   let number_ty = store.number();
   let obj = store.object(vec![
-    ("a".into(), Property {
-      ty: string_ty,
-      optional: false,
-      readonly: false,
-    }),
-    ("b".into(), Property {
-      ty: number_ty,
-      optional: false,
-      readonly: false,
-    }),
+    (
+      "a".into(),
+      Property {
+        ty: string_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
+    (
+      "b".into(),
+      Property {
+        ty: number_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
   ]);
   let lit_a = store.literal_string("a");
   let lit_b = store.literal_string("b");
@@ -126,11 +132,14 @@ fn indexed_access_union_key() {
 fn indexed_access_missing_property_yields_unknown() {
   let mut store = TypeStore::new();
   let string_ty = store.string();
-  let obj = store.object(vec![("a".into(), Property {
-    ty: string_ty,
-    optional: false,
-    readonly: false,
-  })]);
+  let obj = store.object(vec![(
+    "a".into(),
+    Property {
+      ty: string_ty,
+      optional: false,
+      readonly: false,
+    },
+  )]);
   let lit_b = store.literal_string("b");
   let access = store.indexed_access(obj, lit_b);
   let mut norm = Normalizer::new(&mut store);
@@ -144,16 +153,22 @@ fn indexed_access_distributes_over_object_union() {
   let mut store = TypeStore::new();
   let string_ty = store.string();
   let number_ty = store.number();
-  let a = store.object(vec![("a".into(), Property {
-    ty: string_ty,
-    optional: false,
-    readonly: false,
-  })]);
-  let b = store.object(vec![("a".into(), Property {
-    ty: number_ty,
-    optional: false,
-    readonly: false,
-  })]);
+  let a = store.object(vec![(
+    "a".into(),
+    Property {
+      ty: string_ty,
+      optional: false,
+      readonly: false,
+    },
+  )]);
+  let b = store.object(vec![(
+    "a".into(),
+    Property {
+      ty: number_ty,
+      optional: false,
+      readonly: false,
+    },
+  )]);
   let obj_union = store.union(vec![a, b]);
   let lit_a = store.literal_string("a");
   let access = store.indexed_access(obj_union, lit_a);
@@ -298,28 +313,40 @@ fn keyof_union_intersection_behavior() {
   let number_ty = store.number();
   let boolean_ty = store.boolean();
   let a = store.object(vec![
-    ("a".into(), Property {
-      ty: string_ty,
-      optional: false,
-      readonly: false,
-    }),
-    ("b".into(), Property {
-      ty: number_ty,
-      optional: false,
-      readonly: false,
-    }),
+    (
+      "a".into(),
+      Property {
+        ty: string_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
+    (
+      "b".into(),
+      Property {
+        ty: number_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
   ]);
   let b = store.object(vec![
-    ("b".into(), Property {
-      ty: string_ty,
-      optional: false,
-      readonly: false,
-    }),
-    ("c".into(), Property {
-      ty: boolean_ty,
-      optional: false,
-      readonly: false,
-    }),
+    (
+      "b".into(),
+      Property {
+        ty: string_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
+    (
+      "c".into(),
+      Property {
+        ty: boolean_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
   ]);
   let union = store.union(vec![a, b]);
   let keys = store.keyof(union);
@@ -356,16 +383,22 @@ fn keyof_intersection_merges_keys() {
   let mut store = TypeStore::new();
   let string_ty = store.string();
   let number_ty = store.number();
-  let a = store.object(vec![("a".into(), Property {
-    ty: string_ty,
-    optional: false,
-    readonly: false,
-  })]);
-  let b = store.object(vec![("b".into(), Property {
-    ty: number_ty,
-    optional: false,
-    readonly: false,
-  })]);
+  let a = store.object(vec![(
+    "a".into(),
+    Property {
+      ty: string_ty,
+      optional: false,
+      readonly: false,
+    },
+  )]);
+  let b = store.object(vec![(
+    "b".into(),
+    Property {
+      ty: number_ty,
+      optional: false,
+      readonly: false,
+    },
+  )]);
   let intersection = store.intersection(vec![a, b]);
   let keys = store.keyof(intersection);
   let mut norm = Normalizer::new(&mut store);
@@ -380,16 +413,22 @@ fn keyof_object_basic() {
   let string_ty = store.string();
   let number_ty = store.number();
   let obj = store.object(vec![
-    ("foo".into(), Property {
-      ty: string_ty,
-      optional: false,
-      readonly: false,
-    }),
-    ("bar".into(), Property {
-      ty: number_ty,
-      optional: false,
-      readonly: false,
-    }),
+    (
+      "foo".into(),
+      Property {
+        ty: string_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
+    (
+      "bar".into(),
+      Property {
+        ty: number_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
   ]);
   let keys = store.keyof(obj);
   let mut norm = Normalizer::new(&mut store);
@@ -435,16 +474,22 @@ fn indexed_access_with_keyof_result() {
   let string_ty = store.string();
   let number_ty = store.number();
   let obj = store.object(vec![
-    ("a".into(), Property {
-      ty: string_ty,
-      optional: false,
-      readonly: false,
-    }),
-    ("b".into(), Property {
-      ty: number_ty,
-      optional: false,
-      readonly: false,
-    }),
+    (
+      "a".into(),
+      Property {
+        ty: string_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
+    (
+      "b".into(),
+      Property {
+        ty: number_ty,
+        optional: false,
+        readonly: false,
+      },
+    ),
   ]);
   let keys = store.keyof(obj);
   let access = store.indexed_access(obj, keys);
@@ -500,11 +545,14 @@ fn mapped_value_uses_key_parameter() {
 fn conditional_with_keyof_operand() {
   let mut store = TypeStore::new();
   let string_ty = store.string();
-  let obj = store.object(vec![("a".into(), Property {
-    ty: string_ty,
-    optional: false,
-    readonly: false,
-  })]);
+  let obj = store.object(vec![(
+    "a".into(),
+    Property {
+      ty: string_ty,
+      optional: false,
+      readonly: false,
+    },
+  )]);
   let keys = store.keyof(obj);
   let lit_a = store.literal_string("a");
   let cond = store.conditional(keys, lit_a, store.true_type(), store.false_type(), None);

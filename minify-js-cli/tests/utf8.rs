@@ -17,7 +17,11 @@ fn binary_path() -> String {
 
   let target_dir = std::env::var("CARGO_TARGET_DIR")
     .map(PathBuf::from)
-    .unwrap_or_else(|_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("target"));
+    .unwrap_or_else(|_| {
+      PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("target")
+    });
   for name in names {
     let candidate = target_dir.join("debug").join(name);
     if candidate.exists() {

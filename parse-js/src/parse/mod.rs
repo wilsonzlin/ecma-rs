@@ -301,10 +301,13 @@ impl<'a> Parser<'a> {
           preceded_by_line_terminator: false,
         };
         // Insert the second > into the buffer at current position
-        self.buf.insert(self.next_tok_i, BufferedToken {
-          token: split_token,
-          lex_mode: LexMode::Standard,
-        });
+        self.buf.insert(
+          self.next_tok_i,
+          BufferedToken {
+            token: split_token,
+            lex_mode: LexMode::Standard,
+          },
+        );
         // Return a token representing the first >
         Ok(Token {
           typ: TT::ChevronRight,
@@ -356,10 +359,13 @@ impl<'a> Parser<'a> {
           preceded_by_line_terminator: false,
         };
         // Insert the >> into the buffer at current position
-        self.buf.insert(self.next_tok_i, BufferedToken {
-          token: split_token,
-          lex_mode: LexMode::Standard,
-        });
+        self.buf.insert(
+          self.next_tok_i,
+          BufferedToken {
+            token: split_token,
+            lex_mode: LexMode::Standard,
+          },
+        );
         // Return a token representing the first >
         Ok(Token {
           typ: TT::ChevronRight,

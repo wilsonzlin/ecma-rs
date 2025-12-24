@@ -39,4 +39,3 @@ fn emits_nested_generic_type_arguments() {
     "type T = import(\"m\").Foo<Bar<Baz>>;",
   );
 }
-

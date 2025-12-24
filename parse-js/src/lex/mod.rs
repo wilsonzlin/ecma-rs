@@ -547,47 +547,53 @@ static SIG: Lazy<PatternMatcher> = Lazy::new(|| {
 });
 
 static ML_COMMENT: Lazy<PatternMatcher> = Lazy::new(|| {
-  PatternMatcher::new::<&str>(false, vec![
-    (TT::CommentMultilineEnd, "*/"),
-    // WARNING: Does not consider Unicode whitespace allowed by spec.
-    (TT::LineTerminator, "\r"),
-    (TT::LineTerminator, "\n"),
-  ])
+  PatternMatcher::new::<&str>(
+    false,
+    vec![
+      (TT::CommentMultilineEnd, "*/"),
+      // WARNING: Does not consider Unicode whitespace allowed by spec.
+      (TT::LineTerminator, "\r"),
+      (TT::LineTerminator, "\n"),
+    ],
+  )
 });
 
 static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
-  PatternMatcher::new::<&str>(true, vec![
-    (TT::LineTerminator, "\r"),
-    (TT::LineTerminator, "\n"),
-    (TT::LineTerminator, "\u{2028}"), // Line Separator
-    (TT::LineTerminator, "\u{2029}"), // Paragraph Separator
-    (TT::Whitespace, "\x09"),
-    (TT::Whitespace, "\x0b"),
-    (TT::Whitespace, "\x0c"),
-    (TT::Whitespace, "\x20"),
-    // Unicode whitespace
-    (TT::Whitespace, "\u{00A0}"),
-    (TT::Whitespace, "\u{1680}"),
-    (TT::Whitespace, "\u{2000}"),
-    (TT::Whitespace, "\u{2001}"),
-    (TT::Whitespace, "\u{2002}"),
-    (TT::Whitespace, "\u{2003}"),
-    (TT::Whitespace, "\u{2004}"),
-    (TT::Whitespace, "\u{2005}"),
-    (TT::Whitespace, "\u{2006}"),
-    (TT::Whitespace, "\u{2007}"),
-    (TT::Whitespace, "\u{2008}"),
-    (TT::Whitespace, "\u{2009}"),
-    (TT::Whitespace, "\u{200A}"),
-    (TT::Whitespace, "\u{202F}"),
-    (TT::Whitespace, "\u{205F}"),
-    (TT::Whitespace, "\u{3000}"),
-    (TT::Whitespace, "\u{FEFF}"),
-    (TT::CommentMultiline, "/*"),
-    (TT::CommentSingle, "//"),
-    (TT::CommentSingle, "<!--"),
-    (TT::CommentSingle, "-->"),
-  ])
+  PatternMatcher::new::<&str>(
+    true,
+    vec![
+      (TT::LineTerminator, "\r"),
+      (TT::LineTerminator, "\n"),
+      (TT::LineTerminator, "\u{2028}"), // Line Separator
+      (TT::LineTerminator, "\u{2029}"), // Paragraph Separator
+      (TT::Whitespace, "\x09"),
+      (TT::Whitespace, "\x0b"),
+      (TT::Whitespace, "\x0c"),
+      (TT::Whitespace, "\x20"),
+      // Unicode whitespace
+      (TT::Whitespace, "\u{00A0}"),
+      (TT::Whitespace, "\u{1680}"),
+      (TT::Whitespace, "\u{2000}"),
+      (TT::Whitespace, "\u{2001}"),
+      (TT::Whitespace, "\u{2002}"),
+      (TT::Whitespace, "\u{2003}"),
+      (TT::Whitespace, "\u{2004}"),
+      (TT::Whitespace, "\u{2005}"),
+      (TT::Whitespace, "\u{2006}"),
+      (TT::Whitespace, "\u{2007}"),
+      (TT::Whitespace, "\u{2008}"),
+      (TT::Whitespace, "\u{2009}"),
+      (TT::Whitespace, "\u{200A}"),
+      (TT::Whitespace, "\u{202F}"),
+      (TT::Whitespace, "\u{205F}"),
+      (TT::Whitespace, "\u{3000}"),
+      (TT::Whitespace, "\u{FEFF}"),
+      (TT::CommentMultiline, "/*"),
+      (TT::CommentSingle, "//"),
+      (TT::CommentSingle, "<!--"),
+      (TT::CommentSingle, "-->"),
+    ],
+  )
 });
 
 /// Returns whether the comment includes a line terminator.
@@ -941,7 +947,11 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
       _ => unreachable!(),
     };
   }
-  Ok(if invalid { TT::Invalid } else { TT::LiteralString })
+  Ok(if invalid {
+    TT::Invalid
+  } else {
+    TT::LiteralString
+  })
 }
 
 /// Ends with `${` or backtick.

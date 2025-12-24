@@ -99,14 +99,14 @@ fn instanceof_narrows() {
 
 #[test]
 fn discriminant_property_narrows() {
-  let foo = make_object(None, &[
-    ("kind", Type::string_literal("foo")),
-    ("a", Type::number()),
-  ]);
-  let bar = make_object(None, &[
-    ("kind", Type::string_literal("bar")),
-    ("b", Type::string()),
-  ]);
+  let foo = make_object(
+    None,
+    &[("kind", Type::string_literal("foo")), ("a", Type::number())],
+  );
+  let bar = make_object(
+    None,
+    &[("kind", Type::string_literal("bar")), ("b", Type::string())],
+  );
 
   let mut body = Body::new();
   let x = body.add_var("x", foo.clone().union(&bar));
@@ -176,10 +176,14 @@ fn user_defined_type_guard() {
   let mut body = Body::new();
   let x = body.add_var("x", foo.clone().union(&bar));
 
-  let fn_id = body.add_function("isFoo", x, FunctionReturn::TypeGuard {
-    narrows: x,
-    to: foo.clone(),
-  });
+  let fn_id = body.add_function(
+    "isFoo",
+    x,
+    FunctionReturn::TypeGuard {
+      narrows: x,
+      to: foo.clone(),
+    },
+  );
 
   let arg_expr = body.alloc_expr(Expr::Var(x));
   let cond = body.alloc_expr(Expr::Call {
@@ -210,10 +214,14 @@ fn assertion_function_updates_environment() {
   let mut body = Body::new();
   let x = body.add_var("x", foo.clone().union(&bar));
 
-  let assert_fn = body.add_function("assertFoo", x, FunctionReturn::Asserts {
-    narrows: x,
-    to: foo.clone(),
-  });
+  let assert_fn = body.add_function(
+    "assertFoo",
+    x,
+    FunctionReturn::Asserts {
+      narrows: x,
+      to: foo.clone(),
+    },
+  );
 
   let arg_expr = body.alloc_expr(Expr::Var(x));
   let call = body.alloc_expr(Expr::Call {
