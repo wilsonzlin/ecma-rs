@@ -24,10 +24,6 @@ members = [
   "typecheck-ts-harness",
   "semantic-js",
   "typecheck-ts-const18",
-  "hir-js-w12",
-  "semantic-js-w12",
-  "types-ts-w12",
-  "typecheck-ts-w12",
   "typecheck-ts-w13",
 ]
 
