@@ -41,10 +41,13 @@ pub fn emit_top_level_diagnostic(
 }
 
 fn diagnostic_from_emit_error(file: FileId, err: EmitError) -> Diagnostic {
-  let (range, mut notes) = err
+  let (mut range, mut notes) = err
     .loc
     .map(TextRange::from_loc_with_overflow_note)
-    .unwrap_or((TextRange::new(0, 0), None));
+    .unwrap_or((TextRange::new(0, 1), None));
+  if range.is_empty() {
+    range.end = range.start.saturating_add(1);
+  }
   let mut collected_notes = Vec::new();
   if let Some(note) = notes.take() {
     collected_notes.push(note);
