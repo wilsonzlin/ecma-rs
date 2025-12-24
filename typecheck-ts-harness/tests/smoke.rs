@@ -6,8 +6,10 @@ use tempfile::tempdir;
 use typecheck_ts_harness::build_filter;
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::ConformanceOptions;
+use typecheck_ts_harness::HarnessError;
 use typecheck_ts_harness::JsonReport;
 use typecheck_ts_harness::TestStatus;
+use typecheck_ts_harness::DEFAULT_EXTENSIONS;
 
 fn write_fixtures() -> (tempfile::TempDir, PathBuf) {
   let dir = tempdir().expect("tempdir");
@@ -39,6 +41,11 @@ fn smoke_runs_on_small_fixtures() {
     timeout: Duration::from_secs(2),
     trace: false,
     profile: false,
+    extensions: DEFAULT_EXTENSIONS
+      .iter()
+      .map(|ext| ext.to_string())
+      .collect(),
+    allow_empty: false,
   };
 
   let report = run_conformance(options).expect("run_conformance");
@@ -68,7 +75,7 @@ fn cli_runs_with_filter_and_json() {
     .arg("--root")
     .arg(root)
     .arg("--filter")
-    .arg("*basic*")
+    .arg("**/*basic*")
     .arg("--json")
     .arg("--timeout-secs")
     .arg("5");
@@ -85,4 +92,34 @@ fn cli_runs_with_filter_and_json() {
     report.results.first().map(|r| &r.status),
     Some(TestStatus::Passed)
   ));
+}
+
+#[test]
+fn errors_on_missing_root_unless_allowed() {
+  let missing_root = PathBuf::from("nonexistent/test/root");
+  let base_options = ConformanceOptions {
+    root: missing_root.clone(),
+    filter: build_filter(None).unwrap(),
+    shard: None,
+    json: false,
+    update_snapshots: false,
+    timeout: Duration::from_millis(10),
+    trace: false,
+    profile: false,
+    extensions: DEFAULT_EXTENSIONS
+      .iter()
+      .map(|ext| ext.to_string())
+      .collect(),
+    allow_empty: false,
+  };
+
+  let err = run_conformance(base_options.clone()).expect_err("missing root should error");
+  assert!(matches!(err, HarnessError::EmptySuite { .. }));
+
+  let report = run_conformance(ConformanceOptions {
+    allow_empty: true,
+    ..base_options
+  })
+  .expect("allow_empty should permit empty suites");
+  assert_eq!(report.summary.total, 0);
 }

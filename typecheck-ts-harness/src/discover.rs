@@ -11,6 +11,8 @@ use std::path::Path;
 use std::path::PathBuf;
 use walkdir::WalkDir;
 
+pub const DEFAULT_EXTENSIONS: &[&str] = &["ts", "tsx", "d.ts"];
+
 #[derive(Debug, Clone)]
 pub struct TestCase {
   pub id: String,
@@ -47,11 +49,11 @@ pub fn build_filter(pattern: Option<&str>) -> Result<Filter> {
 }
 
 impl Filter {
-  pub fn matches(&self, path: &Path) -> bool {
+  pub fn matches(&self, id: &str) -> bool {
     match self {
       Filter::All => true,
-      Filter::Glob(set) => set.is_match(path),
-      Filter::Regex(re) => re.is_match(&path.to_string_lossy()),
+      Filter::Glob(set) => set.is_match(id),
+      Filter::Regex(re) => re.is_match(id),
     }
   }
 }
@@ -88,12 +90,17 @@ impl Shard {
   }
 }
 
-pub fn discover_conformance_tests(root: &Path, filter: &Filter) -> Result<Vec<TestCase>> {
+pub fn discover_conformance_tests(
+  root: &Path,
+  filter: &Filter,
+  extensions: &[String],
+) -> Result<Vec<TestCase>> {
   if !root.exists() {
     return Ok(Vec::new());
   }
 
   let mut cases = Vec::new();
+  let normalized_extensions = normalize_extensions(extensions);
 
   for entry in WalkDir::new(root).into_iter().filter_map(|e| e.ok()) {
     if !entry.file_type().is_file() {
@@ -101,25 +108,23 @@ pub fn discover_conformance_tests(root: &Path, filter: &Filter) -> Result<Vec<Te
     }
 
     let path = entry.into_path();
-    if !matches!(
-      path.extension().and_then(|s| s.to_str()),
-      Some("ts" | "tsx")
-    ) {
+    let file_name = match path.file_name().and_then(|s| s.to_str()) {
+      Some(name) => name,
+      None => continue,
+    };
+
+    if !has_allowed_extension(file_name, &normalized_extensions) {
       continue;
     }
 
-    if !filter.matches(&path) {
+    let id = normalize_id(root, &path);
+
+    if !filter.matches(&id) {
       continue;
     }
 
     let content = fs::read_to_string(&path)?;
     let split = split_test_file(&path, &content);
-
-    let id = path
-      .strip_prefix(root)
-      .unwrap_or(&path)
-      .to_string_lossy()
-      .replace('\\', "/");
 
     cases.push(TestCase {
       id,
@@ -132,4 +137,85 @@ pub fn discover_conformance_tests(root: &Path, filter: &Filter) -> Result<Vec<Te
 
   cases.sort_by(|a, b| a.id.cmp(&b.id));
   Ok(cases)
+}
+
+fn normalize_extensions(extensions: &[String]) -> Vec<String> {
+  let mut normalized = Vec::new();
+  for ext in extensions {
+    let trimmed = ext.trim().trim_start_matches('.');
+    if trimmed.is_empty() {
+      continue;
+    }
+
+    let needle = format!(".{trimmed}");
+    if !normalized.contains(&needle) {
+      normalized.push(needle);
+    }
+  }
+  normalized
+}
+
+fn has_allowed_extension(file_name: &str, extensions: &[String]) -> bool {
+  extensions.iter().any(|ext| file_name.ends_with(ext))
+}
+
+fn normalize_id(root: &Path, path: &Path) -> String {
+  path
+    .strip_prefix(root)
+    .unwrap_or(path)
+    .to_string_lossy()
+    .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::build_filter;
+  use std::fs;
+  use tempfile::tempdir;
+
+  fn default_extensions() -> Vec<String> {
+    DEFAULT_EXTENSIONS
+      .iter()
+      .map(|ext| ext.to_string())
+      .collect()
+  }
+
+  #[test]
+  fn glob_filter_matches_relative_ids() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("ok")).unwrap();
+    fs::write(root.join("ok/keep.ts"), "").unwrap();
+    fs::write(root.join("skip.ts"), "").unwrap();
+
+    let filter = build_filter(Some("ok/*.ts")).unwrap();
+    let cases = discover_conformance_tests(root, &filter, &default_extensions()).unwrap();
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0].id, "ok/keep.ts");
+  }
+
+  #[test]
+  fn regex_filter_applies_to_normalized_ids() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::create_dir_all(root.join("nested")).unwrap();
+    fs::write(root.join("nested/file.tsx"), "").unwrap();
+
+    let filter = Filter::Regex(Regex::new("^nested/").unwrap());
+    let cases = discover_conformance_tests(root, &filter, &default_extensions()).unwrap();
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0].id, "nested/file.tsx");
+  }
+
+  #[test]
+  fn discovers_declaration_files() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+    fs::write(root.join("types.d.ts"), "declare const value: string;").unwrap();
+
+    let cases = discover_conformance_tests(root, &Filter::All, &default_extensions()).unwrap();
+    assert_eq!(cases.len(), 1);
+    assert_eq!(cases[0].id, "types.d.ts");
+  }
 }

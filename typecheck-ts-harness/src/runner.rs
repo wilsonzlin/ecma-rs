@@ -3,6 +3,7 @@ use crate::discover::Filter;
 use crate::discover::Shard;
 use crate::discover::TestCase;
 use crate::multifile::normalize_name;
+use crate::HarnessError;
 use crate::Result;
 use crate::VirtualFile;
 use serde::Deserialize;
@@ -67,10 +68,25 @@ pub struct ConformanceOptions {
   pub timeout: Duration,
   pub trace: bool,
   pub profile: bool,
+  pub extensions: Vec<String>,
+  pub allow_empty: bool,
 }
 
 pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
-  let mut cases = discover_conformance_tests(&opts.root, &opts.filter)?;
+  if opts.extensions.is_empty() {
+    return Err(HarnessError::InvalidExtensions(
+      "no extensions provided".to_string(),
+    ));
+  }
+
+  let mut cases = discover_conformance_tests(&opts.root, &opts.filter, &opts.extensions)?;
+
+  if cases.is_empty() && !opts.allow_empty {
+    return Err(HarnessError::EmptySuite {
+      root: opts.root.display().to_string(),
+      extensions: opts.extensions.join(","),
+    });
+  }
 
   if let Some(shard) = opts.shard {
     cases = cases

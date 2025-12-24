@@ -8,7 +8,9 @@ use typecheck_ts_harness::difftsc::DifftscArgs;
 use typecheck_ts_harness::difftsc::{self};
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::ConformanceOptions;
+use typecheck_ts_harness::HarnessError;
 use typecheck_ts_harness::Shard;
+use typecheck_ts_harness::DEFAULT_EXTENSIONS;
 
 const DEFAULT_ROOT: &str = "parse-js/tests/TypeScript/tests/cases/conformance";
 const DEFAULT_TIMEOUT: u64 = 10;
@@ -58,6 +60,14 @@ enum Commands {
     /// Override the conformance root directory
     #[arg(long)]
     root: Option<std::path::PathBuf>,
+
+    /// Comma-separated list of extensions to include (default: ts,tsx,d.ts)
+    #[arg(long)]
+    extensions: Option<String>,
+
+    /// Allow running with zero discovered tests
+    #[arg(long)]
+    allow_empty: bool,
   },
 }
 
@@ -80,6 +90,8 @@ fn main() -> ExitCode {
       trace,
       profile,
       root,
+      extensions,
+      allow_empty,
     } => {
       let filter = match build_filter(filter.as_deref()) {
         Ok(filter) => filter,
@@ -93,6 +105,11 @@ fn main() -> ExitCode {
         None => None,
       };
 
+      let extensions = match parse_extensions(extensions.as_deref()) {
+        Ok(ext) => ext,
+        Err(err) => return print_error(err),
+      };
+
       let options = ConformanceOptions {
         root: root.unwrap_or_else(|| DEFAULT_ROOT.into()),
         filter,
@@ -102,6 +119,8 @@ fn main() -> ExitCode {
         timeout: Duration::from_secs(timeout_secs),
         trace,
         profile,
+        extensions,
+        allow_empty,
       };
 
       match run_conformance(options) {
@@ -129,4 +148,35 @@ fn main() -> ExitCode {
 fn print_error(err: impl std::fmt::Display) -> ExitCode {
   eprintln!("error: {err}");
   ExitCode::from(1)
+}
+
+fn parse_extensions(raw: Option<&str>) -> Result<Vec<String>, HarnessError> {
+  match raw {
+    Some(raw) => {
+      let mut parsed = Vec::new();
+      for part in raw.split(',') {
+        let trimmed = part.trim().trim_start_matches('.');
+        if trimmed.is_empty() {
+          continue;
+        }
+
+        let value = trimmed.to_string();
+        if !parsed.contains(&value) {
+          parsed.push(value);
+        }
+      }
+
+      if parsed.is_empty() {
+        return Err(HarnessError::InvalidExtensions(raw.to_string()));
+      }
+
+      Ok(parsed)
+    }
+    None => Ok(
+      DEFAULT_EXTENSIONS
+        .iter()
+        .map(|ext| ext.to_string())
+        .collect(),
+    ),
+  }
 }

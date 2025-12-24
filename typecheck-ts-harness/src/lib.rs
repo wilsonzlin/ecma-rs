@@ -16,10 +16,16 @@ pub enum HarnessError {
   InvalidShard(String),
   #[error("invalid filter '{0}'")]
   InvalidFilter(String),
+  #[error("invalid extensions list '{0}'")]
+  InvalidExtensions(String),
   #[error("typecheck failed: {0}")]
   Typecheck(String),
   #[error("output failed: {0}")]
   Output(String),
+  #[error(
+    "no conformance tests discovered under '{root}' (extensions: {extensions}); ensure the TypeScript suite is present or pass --allow-empty"
+  )]
+  EmptySuite { root: String, extensions: String },
 }
 
 pub use discover::build_filter;
@@ -27,6 +33,7 @@ pub use discover::discover_conformance_tests;
 pub use discover::Filter;
 pub use discover::Shard;
 pub use discover::TestCase;
+pub use discover::DEFAULT_EXTENSIONS;
 pub use multifile::split_test_file;
 pub use multifile::VirtualFile;
 pub use runner::run_conformance;
