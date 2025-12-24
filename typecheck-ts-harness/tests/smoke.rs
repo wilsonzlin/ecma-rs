@@ -9,6 +9,7 @@ use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::JsonReport;
 use typecheck_ts_harness::TestOutcome;
+use typecheck_ts_harness::FailOn;
 
 fn write_fixtures() -> (tempfile::TempDir, PathBuf) {
   let dir = tempdir().expect("tempdir");
@@ -44,6 +45,8 @@ fn smoke_runs_on_small_fixtures() {
     timeout: Duration::from_secs(2),
     trace: false,
     profile: false,
+    manifest: None,
+    fail_on: FailOn::New,
     allow_mismatches: true,
     extensions: typecheck_ts_harness::DEFAULT_EXTENSIONS
       .iter()
@@ -92,4 +95,46 @@ fn cli_runs_with_filter_and_json() {
     report.results.first().map(|r| r.outcome),
     Some(TestOutcome::Match)
   ));
+}
+
+#[test]
+fn fail_on_new_ignores_manifested_expectations() {
+  let (_dir, root) = write_fixtures();
+  fs::write(root.join("err/type_error.ts"), "const = ;").unwrap();
+
+  let manifest =
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/conformance_manifest.toml");
+
+  let options = ConformanceOptions {
+    root: root.clone(),
+    filter: build_filter(None).unwrap(),
+    filter_pattern: None,
+    shard: None,
+    json: false,
+    update_snapshots: false,
+    compare: CompareMode::None,
+    node_path: "node".into(),
+    span_tolerance: 0,
+    timeout: Duration::from_secs(2),
+    trace: false,
+    profile: false,
+    manifest: Some(manifest),
+    fail_on: FailOn::New,
+    allow_mismatches: true,
+    extensions: typecheck_ts_harness::DEFAULT_EXTENSIONS
+      .iter()
+      .map(|s| s.to_string())
+      .collect(),
+    allow_empty: false,
+    profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
+    jobs: 1,
+  };
+
+  let report = run_conformance(options).expect("run_conformance");
+  let parse_expectation = report
+    .results
+    .iter()
+    .find(|r| r.path.ends_with("err/type_error.ts"))
+    .and_then(|r| r.expectation.as_ref());
+  assert!(parse_expectation.is_some());
 }

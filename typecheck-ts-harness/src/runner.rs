@@ -3,9 +3,10 @@ use crate::diagnostic_norm::{
   within_tolerance, NormalizedDiagnostic,
 };
 use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS};
+use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::tsc::{TscDiagnostic, TscDiagnostics};
-use crate::{Result, VirtualFile};
+use crate::{FailOn, Result, VirtualFile};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -59,6 +60,8 @@ pub struct ConformanceOptions {
   pub span_tolerance: u32,
   pub allow_mismatches: bool,
   pub jobs: usize,
+  pub manifest: Option<PathBuf>,
+  pub fail_on: FailOn,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -103,11 +106,35 @@ impl OutcomeCounts {
 pub struct Summary {
   pub total: usize,
   pub outcomes: OutcomeCounts,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub mismatches: Option<MismatchSummary>,
 }
 
 impl Summary {
   pub fn has_mismatches(&self) -> bool {
     self.outcomes.mismatches() > 0
+  }
+
+  pub fn should_fail(&self, fail_on: FailOn, mismatches: usize) -> bool {
+    let unexpected = self
+      .mismatches
+      .as_ref()
+      .map(|m| m.unexpected)
+      .unwrap_or(mismatches);
+    fail_on.should_fail(unexpected, mismatches)
+  }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MismatchSummary {
+  pub expected: usize,
+  pub unexpected: usize,
+  pub flaky: usize,
+}
+
+impl MismatchSummary {
+  pub fn total(&self) -> usize {
+    self.expected + self.unexpected + self.flaky
   }
 }
 
@@ -184,6 +211,10 @@ pub struct TestResult {
   pub notes: Vec<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub detail: Option<MismatchDetail>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub expectation: Option<ExpectationOutcome>,
+  #[serde(default)]
+  pub mismatched: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,6 +224,23 @@ pub struct MismatchDetail {
   pub rust: Option<NormalizedDiagnostic>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub tsc: Option<NormalizedDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExpectationOutcome {
+  pub expectation: ExpectationKind,
+  #[serde(default)]
+  pub expected: bool,
+  #[serde(default, skip_serializing_if = "is_false")]
+  pub from_manifest: bool,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub reason: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub tracking_issue: Option<String>,
+}
+
+fn is_false(value: &bool) -> bool {
+  !*value
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -310,6 +358,11 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     )));
   }
 
+  let expectations = match &opts.manifest {
+    Some(path) => Expectations::from_path(path)?,
+    None => Expectations::empty(),
+  };
+
   if let Some(shard) = opts.shard {
     cases = cases
       .into_iter()
@@ -326,6 +379,29 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
 
   let mut results = Vec::new();
   for case in cases.into_iter() {
+    let expectation = expectations.lookup(&case.id);
+    if expectation.expectation.kind == ExpectationKind::Skip {
+      results.push(TestResult {
+        id: case.id,
+        path: case.path.display().to_string(),
+        outcome: TestOutcome::Match,
+        duration_ms: 0,
+        rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
+        tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
+        notes: case.notes,
+        detail: None,
+        expectation: Some(ExpectationOutcome {
+          expectation: ExpectationKind::Skip,
+          expected: true,
+          from_manifest: expectation.from_manifest,
+          reason: expectation.expectation.reason.clone(),
+          tracking_issue: expectation.expectation.tracking_issue.clone(),
+        }),
+        mismatched: false,
+      });
+      continue;
+    }
+
     let result = run_single_case(
       case,
       compare_mode,
@@ -334,10 +410,50 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
       &snapshot_store,
       &opts,
     );
-    results.push(result);
+    let mismatched = result.outcome != TestOutcome::Match;
+    let expected = expectation.matches(mismatched);
+    let expectation_outcome = ExpectationOutcome {
+      expectation: expectation.expectation.kind,
+      expected,
+      from_manifest: expectation.from_manifest,
+      reason: expectation.expectation.reason.clone(),
+      tracking_issue: expectation.expectation.tracking_issue.clone(),
+    };
+    results.push(TestResult {
+      mismatched,
+      expectation: Some(expectation_outcome),
+      ..result
+    });
   }
 
-  let summary = summarize(&results);
+  let mut summary = summarize(&results);
+  let mut mismatch_summary = MismatchSummary::default();
+  for result in results.iter() {
+    if !result.mismatched {
+      continue;
+    }
+    if let Some(exp) = &result.expectation {
+      if exp.expectation == ExpectationKind::Flaky {
+        mismatch_summary.flaky += 1;
+      } else if exp.expected {
+        mismatch_summary.expected += 1;
+      } else {
+        mismatch_summary.unexpected += 1;
+      }
+    } else {
+      mismatch_summary.unexpected += 1;
+    }
+  }
+  if mismatch_summary.total() > 0 {
+    summary.mismatches = Some(mismatch_summary);
+  }
+
+  if !opts.allow_mismatches && summary.should_fail(opts.fail_on, summary.outcomes.mismatches()) {
+    return Err(crate::HarnessError::Typecheck(
+      "conformance mismatches".to_string(),
+    ));
+  }
+
   Ok(ConformanceReport {
     summary,
     compare_mode,
@@ -411,6 +527,8 @@ fn run_single_case(
       tsc: EngineDiagnostics::skipped(None),
       notes: timeout_notes,
       detail: None,
+      expectation: None,
+      mismatched: true,
     },
   }
 }
@@ -485,6 +603,8 @@ fn execute_case(
     tsc,
     notes,
     detail,
+    expectation: None,
+    mismatched: false,
   }
 }
 

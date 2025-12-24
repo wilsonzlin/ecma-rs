@@ -1,0 +1,13 @@
+[[expectations]]
+id = "err/parse_error.ts"
+status = "xfail"
+reason = "fixture manifest example"
+
+[[expectations]]
+glob = "multi/**"
+status = "flaky"
+tracking_issue = "TICKET-123"
+
+[[expectations]]
+regex = "skip_me"
+status = "skip"

@@ -84,6 +84,14 @@ enum Commands {
     /// Allow empty test suites without erroring
     #[arg(long)]
     allow_empty: bool,
+
+    /// Path to a manifest of expected failures/skips
+    #[arg(long)]
+    manifest: Option<std::path::PathBuf>,
+
+    /// When to fail the run on mismatches
+    #[arg(long, value_enum, default_value_t = FailOn::New)]
+    fail_on: FailOn,
   },
 }
 
@@ -131,6 +139,8 @@ fn main() -> ExitCode {
       root,
       allow_mismatches,
       allow_empty,
+      manifest,
+      fail_on,
     } => {
       let filter = match build_filter(filter.as_deref()) {
         Ok(filter) => filter,
@@ -171,6 +181,8 @@ fn main() -> ExitCode {
         node_path: node,
         span_tolerance,
         allow_mismatches,
+        manifest,
+        fail_on,
         extensions,
         allow_empty,
         jobs: 1,
@@ -197,8 +209,18 @@ fn main() -> ExitCode {
               o.tsc_crashed,
               o.timeout
             );
+            if let Some(m) = &report.summary.mismatches {
+              println!(
+                "Mismatches — expected: {}, unexpected: {}, flaky: {}",
+                m.expected, m.unexpected, m.flaky
+              );
+            }
           }
-          if !allow_mismatches && report.summary.has_mismatches() {
+          if !allow_mismatches
+            && report
+              .summary
+              .should_fail(fail_on, report.summary.outcomes.mismatches())
+          {
             ExitCode::from(1)
           } else {
             ExitCode::SUCCESS

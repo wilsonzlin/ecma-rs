@@ -6,6 +6,7 @@ pub mod diagnostic_norm;
 pub mod difftsc;
 pub mod directives;
 pub mod discover;
+pub mod expectations;
 pub mod multifile;
 pub mod profile;
 pub mod runner;
@@ -35,6 +36,8 @@ pub enum HarnessError {
   EmptySuite { root: String, extensions: String },
   #[error("snapshot error: {0}")]
   Snapshot(String),
+  #[error("manifest error: {0}")]
+  Manifest(String),
 }
 
 pub use directives::HarnessDirective;
@@ -46,6 +49,8 @@ pub use discover::Filter;
 pub use discover::Shard;
 pub use discover::TestCase;
 pub use discover::DEFAULT_EXTENSIONS;
+pub use expectations::Expectations;
+pub use expectations::FailOn;
 pub use multifile::split_test_file;
 pub use multifile::VirtualFile;
 pub use runner::run_conformance;
