@@ -8,27 +8,13 @@ use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::operator::{Associativity, OperatorName, OPERATORS};
 
+use crate::emitter::{with_node_context, EmitError, EmitResult};
 use crate::expr_ts::{
   NON_NULL_ASSERTION_PRECEDENCE, SATISFIES_PRECEDENCE, TYPE_ASSERTION_PRECEDENCE,
 };
 
 const PRIMARY_PRECEDENCE: u8 = 19;
 const CALL_MEMBER_PRECEDENCE: u8 = 18; // Matches OperatorName::Call/MemberAccess precedence.
-
-pub type EmitResult = Result<(), EmitError>;
-
-#[derive(Debug)]
-pub enum EmitError {
-  Fmt(fmt::Error),
-  Unsupported(&'static str),
-  MissingTypeAnnotation,
-}
-
-impl From<fmt::Error> for EmitError {
-  fn from(value: fmt::Error) -> Self {
-    EmitError::Fmt(value)
-  }
-}
 
 pub struct ExprEmitter<'a, W, F>
 where
@@ -49,26 +35,28 @@ where
   }
 
   pub fn emit_expr(&mut self, expr: &Node<Expr>) -> EmitResult {
-    self.emit_expr_with_min_prec(expr, 1)
+    with_node_context(expr.loc, || self.emit_expr_with_min_prec(expr, 1))
   }
 
   pub(crate) fn emit_expr_with_min_prec(&mut self, expr: &Node<Expr>, min_prec: u8) -> EmitResult {
-    let prec = expr_precedence(expr)?;
-    let needs_parens = prec < min_prec;
+    with_node_context(expr.loc, || {
+      let prec = expr_precedence(expr)?;
+      let needs_parens = prec < min_prec;
 
-    if needs_parens {
-      write!(self.out, "(")?;
-    }
-    self.emit_expr_no_parens(expr)?;
-    if needs_parens {
-      write!(self.out, ")")?;
-    }
+      if needs_parens {
+        write!(self.out, "(")?;
+      }
+      self.emit_expr_no_parens(expr)?;
+      if needs_parens {
+        write!(self.out, ")")?;
+      }
 
-    Ok(())
+      Ok(())
+    })
   }
 
   fn emit_expr_no_parens(&mut self, expr: &Node<Expr>) -> EmitResult {
-    match expr.stx.as_ref() {
+    with_node_context(expr.loc, || match expr.stx.as_ref() {
       Expr::Id(id) => self.emit_id(id),
       Expr::This(_) => self.emit_this(),
       Expr::Super(_) => self.emit_super(),
@@ -88,13 +76,15 @@ where
       Expr::NonNullAssertion(non_null) => self.emit_non_null_assertion(non_null),
       Expr::TypeAssertion(assertion) => self.emit_type_assertion(assertion),
       Expr::SatisfiesExpr(satisfies) => self.emit_satisfies_expr(satisfies),
-      _ => Err(EmitError::Unsupported("expression kind not supported")),
-    }
+      _ => Err(EmitError::unsupported("expression kind not supported")),
+    })
   }
 
   fn emit_id(&mut self, id: &Node<IdExpr>) -> EmitResult {
-    self.out.write_str(&id.stx.name)?;
-    Ok(())
+    with_node_context(id.loc, || {
+      self.out.write_str(&id.stx.name)?;
+      Ok(())
+    })
   }
 
   fn emit_this(&mut self) -> EmitResult {
@@ -118,15 +108,19 @@ where
   }
 
   fn emit_lit_num(&mut self, lit: &Node<LitNumExpr>) -> EmitResult {
-    write!(self.out, "{}", lit.stx.value)?;
-    Ok(())
+    with_node_context(lit.loc, || {
+      write!(self.out, "{}", lit.stx.value)?;
+      Ok(())
+    })
   }
 
   fn emit_lit_bool(&mut self, lit: &Node<LitBoolExpr>) -> EmitResult {
-    self
-      .out
-      .write_str(if lit.stx.value { "true" } else { "false" })?;
-    Ok(())
+    with_node_context(lit.loc, || {
+      self
+        .out
+        .write_str(if lit.stx.value { "true" } else { "false" })?;
+      Ok(())
+    })
   }
 
   fn emit_lit_null(&mut self) -> EmitResult {
@@ -135,95 +129,111 @@ where
   }
 
   fn emit_lit_big_int(&mut self, lit: &Node<LitBigIntExpr>) -> EmitResult {
-    self.out.write_str(&lit.stx.value)?;
-    Ok(())
+    with_node_context(lit.loc, || {
+      self.out.write_str(&lit.stx.value)?;
+      Ok(())
+    })
   }
 
   fn emit_lit_str(&mut self, lit: &Node<LitStrExpr>) -> EmitResult {
-    let mut buf = Vec::new();
-    crate::emit_string_literal_double_quoted(&mut buf, &lit.stx.value);
-    self
-      .out
-      .write_str(std::str::from_utf8(&buf).expect("string literal escape output is UTF-8"))?;
-    Ok(())
+    with_node_context(lit.loc, || {
+      let mut buf = Vec::new();
+      crate::emit_string_literal_double_quoted(&mut buf, &lit.stx.value);
+      self
+        .out
+        .write_str(std::str::from_utf8(&buf).expect("string literal escape output is UTF-8"))?;
+      Ok(())
+    })
   }
 
   fn emit_lit_regex(&mut self, lit: &Node<LitRegexExpr>) -> EmitResult {
-    self.out.write_str(&lit.stx.value)?;
-    Ok(())
+    with_node_context(lit.loc, || {
+      self.out.write_str(&lit.stx.value)?;
+      Ok(())
+    })
   }
 
   fn emit_binary(&mut self, binary: &Node<BinaryExpr>) -> EmitResult {
-    let op = OPERATORS
-      .get(&binary.stx.operator)
-      .ok_or(EmitError::Unsupported("unknown operator"))?;
-    let op_txt = binary_operator_text(binary.stx.operator)?;
-    let prec = op.precedence;
+    with_node_context(binary.loc, || {
+      let op = OPERATORS
+        .get(&binary.stx.operator)
+        .ok_or(EmitError::unsupported("unknown operator"))?;
+      let op_txt = binary_operator_text(binary.stx.operator)?;
+      let prec = op.precedence;
 
-    self.emit_expr_with_min_prec(&binary.stx.left, prec)?;
-    if binary.stx.operator == OperatorName::Comma {
-      write!(self.out, ", ")?;
-    } else {
-      write!(self.out, " {} ", op_txt)?;
-    }
-    let right_prec = prec + (op.associativity == Associativity::Left) as u8;
-    self.emit_expr_with_min_prec(&binary.stx.right, right_prec)
+      self.emit_expr_with_min_prec(&binary.stx.left, prec)?;
+      if binary.stx.operator == OperatorName::Comma {
+        write!(self.out, ", ")?;
+      } else {
+        write!(self.out, " {} ", op_txt)?;
+      }
+      let right_prec = prec + (op.associativity == Associativity::Left) as u8;
+      self.emit_expr_with_min_prec(&binary.stx.right, right_prec)
+    })
   }
 
   fn emit_call(&mut self, call: &Node<CallExpr>) -> EmitResult {
-    self.emit_expr_with_min_prec(&call.stx.callee, CALL_MEMBER_PRECEDENCE)?;
-    if call.stx.optional_chaining {
-      write!(self.out, "?.(")?;
-    } else {
-      write!(self.out, "(")?;
-    }
-    for (i, arg) in call.stx.arguments.iter().enumerate() {
-      if i > 0 {
-        write!(self.out, ", ")?;
+    with_node_context(call.loc, || {
+      self.emit_expr_with_min_prec(&call.stx.callee, CALL_MEMBER_PRECEDENCE)?;
+      if call.stx.optional_chaining {
+        write!(self.out, "?.(")?;
+      } else {
+        write!(self.out, "(")?;
       }
-      let CallArg { spread, value } = arg.stx.as_ref();
-      if *spread {
-        write!(self.out, "...")?;
+      for (i, arg) in call.stx.arguments.iter().enumerate() {
+        if i > 0 {
+          write!(self.out, ", ")?;
+        }
+        let CallArg { spread, value } = arg.stx.as_ref();
+        if *spread {
+          write!(self.out, "...")?;
+        }
+        self.emit_expr_with_min_prec(value, 1)?;
       }
-      self.emit_expr_with_min_prec(value, 1)?;
-    }
-    write!(self.out, ")")?;
-    Ok(())
+      write!(self.out, ")")?;
+      Ok(())
+    })
   }
 
   fn emit_member(&mut self, member: &Node<MemberExpr>) -> EmitResult {
-    if member.stx.optional_chaining {
-      self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
-      write!(self.out, "?.")?;
-    } else if let Expr::LitNum(num) = member.stx.left.stx.as_ref() {
-      let rendered = num.stx.value.to_string();
-      self.out.write_str(&rendered)?;
-      if requires_trailing_dot(&rendered) {
+    with_node_context(member.loc, || {
+      if member.stx.optional_chaining {
+        self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
+        write!(self.out, "?.")?;
+      } else if let Expr::LitNum(num) = member.stx.left.stx.as_ref() {
+        let rendered = num.stx.value.to_string();
+        self.out.write_str(&rendered)?;
+        if requires_trailing_dot(&rendered) {
+          self.out.write_char('.')?;
+        }
+        self.out.write_char('.')?;
+      } else {
+        self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
         self.out.write_char('.')?;
       }
-      self.out.write_char('.')?;
-    } else {
-      self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
-      self.out.write_char('.')?;
-    }
-    self.out.write_str(&member.stx.right)?;
-    Ok(())
+      self.out.write_str(&member.stx.right)?;
+      Ok(())
+    })
   }
 
   fn emit_computed_member(&mut self, member: &Node<ComputedMemberExpr>) -> EmitResult {
-    self.emit_expr_with_min_prec(&member.stx.object, CALL_MEMBER_PRECEDENCE)?;
-    if member.stx.optional_chaining {
-      write!(self.out, "?.[")?;
-    } else {
-      write!(self.out, "[")?;
-    }
-    self.emit_expr_with_min_prec(&member.stx.member, 1)?;
-    write!(self.out, "]")?;
-    Ok(())
+    with_node_context(member.loc, || {
+      self.emit_expr_with_min_prec(&member.stx.object, CALL_MEMBER_PRECEDENCE)?;
+      if member.stx.optional_chaining {
+        write!(self.out, "?.[")?;
+      } else {
+        write!(self.out, "[")?;
+      }
+      self.emit_expr_with_min_prec(&member.stx.member, 1)?;
+      write!(self.out, "]")?;
+      Ok(())
+    })
   }
 
   pub(crate) fn emit_type(&mut self, ty: &Node<TypeExpr>) -> EmitResult {
-    (self.emit_type)(&mut self.out, ty).map_err(EmitError::from)
+    with_node_context(ty.loc, || {
+      (self.emit_type)(&mut self.out, ty).map_err(EmitError::from)
+    })
   }
 }
 
@@ -237,7 +247,7 @@ where
 }
 
 fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
-  match expr.stx.as_ref() {
+  with_node_context(expr.loc, || match expr.stx.as_ref() {
     Expr::Id(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::This(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::Super(_) => Ok(PRIMARY_PRECEDENCE),
@@ -254,7 +264,7 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
       OPERATORS
         .get(&binary.stx.operator)
         .map(|op| op.precedence)
-        .ok_or(EmitError::Unsupported("unknown operator"))?,
+        .ok_or(EmitError::unsupported("unknown operator"))?,
     ),
     Expr::Call(_) => Ok(CALL_MEMBER_PRECEDENCE),
     Expr::Member(_) => Ok(CALL_MEMBER_PRECEDENCE),
@@ -262,8 +272,8 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
     Expr::NonNullAssertion(_) => Ok(NON_NULL_ASSERTION_PRECEDENCE),
     Expr::TypeAssertion(_) => Ok(TYPE_ASSERTION_PRECEDENCE),
     Expr::SatisfiesExpr(_) => Ok(SATISFIES_PRECEDENCE),
-    _ => Err(EmitError::Unsupported("expression kind not supported")),
-  }
+    _ => Err(EmitError::unsupported("expression kind not supported")),
+  })
 }
 
 fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
@@ -333,7 +343,7 @@ fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
     | OperatorName::Yield
     | OperatorName::YieldDelegated
     | OperatorName::PostfixDecrement
-    | OperatorName::PostfixIncrement => Err(EmitError::Unsupported(
+    | OperatorName::PostfixIncrement => Err(EmitError::unsupported(
       "operator not supported in binary emitter",
     )),
   }

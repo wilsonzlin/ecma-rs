@@ -525,6 +525,7 @@ name = "emit-js"
 version = "0.1.0"
 dependencies = [
  "derive-visitor",
+ "diagnostics",
  "parse-js",
  "serde_json",
 ]

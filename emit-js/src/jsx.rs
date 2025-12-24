@@ -8,10 +8,10 @@ use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 
-use crate::expr::EmitResult;
+use crate::emitter::{with_node_context, EmitResult};
 
 pub fn emit_jsx_elem<W: fmt::Write>(out: &mut W, elem: &Node<JsxElem>) -> EmitResult {
-  match &elem.stx.name {
+  with_node_context(elem.loc, || match &elem.stx.name {
     Some(name) => {
       out.write_char('<')?;
       emit_jsx_elem_name(out, name)?;
@@ -40,47 +40,53 @@ pub fn emit_jsx_elem<W: fmt::Write>(out: &mut W, elem: &Node<JsxElem>) -> EmitRe
       out.write_str("</>")?;
       Ok(())
     }
-  }
+  })
 }
 
 pub fn emit_jsx_expr_container<W: fmt::Write>(
   out: &mut W,
   container: &Node<JsxExprContainer>,
 ) -> EmitResult {
-  if is_empty_jsx_expr_placeholder(&container.stx.value) {
-    out.write_str("{}")?;
-    return Ok(());
-  }
+  with_node_context(container.loc, || {
+    if is_empty_jsx_expr_placeholder(&container.stx.value) {
+      out.write_str("{}")?;
+      return Ok(());
+    }
 
-  out.write_char('{')?;
-  if container.stx.spread {
-    out.write_str("...")?;
-  }
-  let mut emit_type = |out: &mut W, ty: &Node<TypeExpr>| crate::emit_type_expr(out, ty);
-  crate::expr::emit_expr(out, &container.stx.value, &mut emit_type)?;
-  out.write_char('}')?;
-  Ok(())
+    out.write_char('{')?;
+    if container.stx.spread {
+      out.write_str("...")?;
+    }
+    let mut emit_type = |out: &mut W, ty: &Node<TypeExpr>| crate::emit_type_expr(out, ty);
+    crate::expr::emit_expr(out, &container.stx.value, &mut emit_type)?;
+    out.write_char('}')?;
+    Ok(())
+  })
 }
 
 pub fn emit_jsx_member_expr<W: fmt::Write>(
   out: &mut W,
   member: &Node<JsxMemberExpr>,
 ) -> EmitResult {
-  out.write_str(&member.stx.base.stx.name)?;
-  for segment in &member.stx.path {
-    out.write_char('.')?;
-    out.write_str(segment)?;
-  }
-  Ok(())
+  with_node_context(member.loc, || {
+    out.write_str(&member.stx.base.stx.name)?;
+    for segment in &member.stx.path {
+      out.write_char('.')?;
+      out.write_str(segment)?;
+    }
+    Ok(())
+  })
 }
 
 pub fn emit_jsx_name<W: fmt::Write>(out: &mut W, name: &Node<JsxName>) -> EmitResult {
-  if let Some(namespace) = &name.stx.namespace {
-    out.write_str(namespace)?;
-    out.write_char(':')?;
-  }
-  out.write_str(&name.stx.name)?;
-  Ok(())
+  with_node_context(name.loc, || {
+    if let Some(namespace) = &name.stx.namespace {
+      out.write_str(namespace)?;
+      out.write_char(':')?;
+    }
+    out.write_str(&name.stx.name)?;
+    Ok(())
+  })
 }
 
 pub fn emit_jsx_elem_name<W: fmt::Write>(out: &mut W, name: &JsxElemName) -> EmitResult {
@@ -109,11 +115,13 @@ pub fn emit_jsx_attr<W: fmt::Write>(out: &mut W, attr: &JsxAttr) -> EmitResult {
 }
 
 pub fn emit_jsx_spread_attr<W: fmt::Write>(out: &mut W, attr: &Node<JsxSpreadAttr>) -> EmitResult {
-  out.write_str("{...")?;
-  let mut emit_type = |out: &mut W, ty: &Node<TypeExpr>| crate::emit_type_expr(out, ty);
-  crate::expr::emit_expr(out, &attr.stx.value, &mut emit_type)?;
-  out.write_char('}')?;
-  Ok(())
+  with_node_context(attr.loc, || {
+    out.write_str("{...")?;
+    let mut emit_type = |out: &mut W, ty: &Node<TypeExpr>| crate::emit_type_expr(out, ty);
+    crate::expr::emit_expr(out, &attr.stx.value, &mut emit_type)?;
+    out.write_char('}')?;
+    Ok(())
+  })
 }
 
 pub fn emit_jsx_attr_value<W: fmt::Write>(out: &mut W, value: &JsxAttrVal) -> EmitResult {
@@ -125,7 +133,7 @@ pub fn emit_jsx_attr_value<W: fmt::Write>(out: &mut W, value: &JsxAttrVal) -> Em
 }
 
 pub fn emit_jsx_expression_text<W: fmt::Write>(out: &mut W, text: &Node<JsxText>) -> EmitResult {
-  escape_jsx_child_text(out, &text.stx.value)
+  with_node_context(text.loc, || escape_jsx_child_text(out, &text.stx.value))
 }
 
 pub fn escape_jsx_string_literal<W: fmt::Write>(out: &mut W, value: &str) -> EmitResult {

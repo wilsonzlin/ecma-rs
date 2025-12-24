@@ -5,6 +5,9 @@
 //! insert the minimal whitespace required to prevent the concatenation from
 //! being lexed as a different token (e.g. `returnx`, `a++b`, `a--b`).
 
+use parse_js::loc::Loc;
+use std::fmt;
+
 /// Controls how the emitter inserts whitespace.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EmitMode {
@@ -29,6 +32,64 @@ impl Default for EmitOptions {
       mode: EmitMode::Minified,
     }
   }
+}
+
+#[derive(Debug)]
+pub enum EmitErrorKind {
+  Fmt(fmt::Error),
+  Unsupported(&'static str),
+  MissingTypeAnnotation,
+}
+
+#[derive(Debug)]
+pub struct EmitError {
+  pub kind: EmitErrorKind,
+  pub loc: Option<Loc>,
+}
+
+impl EmitError {
+  pub(crate) fn fmt(err: fmt::Error) -> Self {
+    Self {
+      kind: EmitErrorKind::Fmt(err),
+      loc: None,
+    }
+  }
+
+  pub(crate) fn unsupported(message: &'static str) -> Self {
+    Self {
+      kind: EmitErrorKind::Unsupported(message),
+      loc: None,
+    }
+  }
+
+  pub(crate) fn missing_type_annotation() -> Self {
+    Self {
+      kind: EmitErrorKind::MissingTypeAnnotation,
+      loc: None,
+    }
+  }
+
+  pub(crate) fn with_loc(mut self, loc: Loc) -> Self {
+    if self.loc.is_none() {
+      self.loc = Some(loc);
+    }
+    self
+  }
+}
+
+impl From<fmt::Error> for EmitError {
+  fn from(value: fmt::Error) -> Self {
+    EmitError::fmt(value)
+  }
+}
+
+pub type EmitResult = Result<(), EmitError>;
+
+pub(crate) fn with_node_context<T>(
+  loc: Loc,
+  f: impl FnOnce() -> Result<T, EmitError>,
+) -> Result<T, EmitError> {
+  f().map_err(|err| err.with_loc(loc))
 }
 
 #[derive(Debug, Clone)]

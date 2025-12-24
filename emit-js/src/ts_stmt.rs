@@ -2,6 +2,7 @@ use crate::emit_interface_decl;
 use crate::emit_type_alias_decl;
 use crate::emit_type_expr;
 use crate::emit_type_members;
+use crate::emitter::{with_node_context, EmitError, EmitResult};
 use crate::ts_type::emit_type_parameters;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
@@ -11,7 +12,7 @@ use parse_js::ast::ts_stmt::*;
 use std::fmt;
 use std::fmt::Write;
 
-pub fn emit_top_level<W: fmt::Write>(out: &mut W, top: &TopLevel) -> fmt::Result {
+pub fn emit_top_level<W: fmt::Write>(out: &mut W, top: &TopLevel) -> EmitResult {
   let mut first = true;
   for stmt in &top.body {
     if matches!(stmt.stx.as_ref(), Stmt::Empty(_)) {
@@ -26,23 +27,62 @@ pub fn emit_top_level<W: fmt::Write>(out: &mut W, top: &TopLevel) -> fmt::Result
   Ok(())
 }
 
-pub fn emit_ts_stmt<W: fmt::Write>(out: &mut W, stmt: &Node<Stmt>) -> fmt::Result {
-  match stmt.stx.as_ref() {
-    Stmt::InterfaceDecl(decl) => emit_interface_decl(out, decl.stx.as_ref()),
-    Stmt::TypeAliasDecl(decl) => emit_type_alias_decl(out, decl.stx.as_ref()),
-    Stmt::EnumDecl(decl) => emit_enum_decl(out, decl.stx.as_ref()),
-    Stmt::NamespaceDecl(decl) => emit_namespace_decl(out, decl.stx.as_ref()),
-    Stmt::ModuleDecl(decl) => emit_module_decl(out, decl.stx.as_ref()),
-    Stmt::GlobalDecl(decl) => emit_global_decl(out, decl.stx.as_ref()),
-    Stmt::AmbientVarDecl(decl) => emit_ambient_var_decl(out, decl.stx.as_ref()),
-    Stmt::AmbientFunctionDecl(decl) => emit_ambient_function_decl(out, decl.stx.as_ref()),
-    Stmt::AmbientClassDecl(decl) => emit_ambient_class_decl(out, decl.stx.as_ref()),
-    Stmt::ImportTypeDecl(decl) => emit_import_type_decl(out, decl.stx.as_ref()),
-    Stmt::ExportTypeDecl(decl) => emit_export_type_decl(out, decl.stx.as_ref()),
-    Stmt::ImportEqualsDecl(decl) => emit_import_equals_decl(out, decl.stx.as_ref()),
-    Stmt::ExportAssignmentDecl(decl) => emit_export_assignment_decl(out, decl.stx.as_ref()),
-    _ => Err(fmt::Error),
-  }
+pub fn emit_ts_stmt<W: fmt::Write>(out: &mut W, stmt: &Node<Stmt>) -> EmitResult {
+  with_node_context(stmt.loc, || match stmt.stx.as_ref() {
+    Stmt::InterfaceDecl(decl) => {
+      emit_interface_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::TypeAliasDecl(decl) => {
+      emit_type_alias_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::EnumDecl(decl) => {
+      emit_enum_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::NamespaceDecl(decl) => {
+      emit_namespace_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::ModuleDecl(decl) => {
+      emit_module_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::GlobalDecl(decl) => {
+      emit_global_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::AmbientVarDecl(decl) => {
+      emit_ambient_var_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::AmbientFunctionDecl(decl) => {
+      emit_ambient_function_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::AmbientClassDecl(decl) => {
+      emit_ambient_class_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::ImportTypeDecl(decl) => {
+      emit_import_type_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::ExportTypeDecl(decl) => {
+      emit_export_type_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::ImportEqualsDecl(decl) => {
+      emit_import_equals_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    Stmt::ExportAssignmentDecl(decl) => {
+      emit_export_assignment_decl(out, decl.stx.as_ref())?;
+      Ok(())
+    }
+    _ => Err(EmitError::unsupported("statement kind not supported")),
+  })
 }
 
 fn emit_enum_decl<W: fmt::Write>(out: &mut W, decl: &EnumDecl) -> fmt::Result {
@@ -80,7 +120,7 @@ fn emit_enum_member<W: fmt::Write>(out: &mut W, member: &EnumMember) -> fmt::Res
   Ok(())
 }
 
-fn emit_namespace_decl<W: fmt::Write>(out: &mut W, decl: &NamespaceDecl) -> fmt::Result {
+fn emit_namespace_decl<W: fmt::Write>(out: &mut W, decl: &NamespaceDecl) -> EmitResult {
   if decl.export {
     out.write_str("export ")?;
   }
@@ -99,7 +139,7 @@ fn emit_namespace_decl<W: fmt::Write>(out: &mut W, decl: &NamespaceDecl) -> fmt:
 
   match body {
     NamespaceBody::Block(stmts) => emit_block_like_body(out, stmts),
-    NamespaceBody::Namespace(_) => Err(fmt::Error),
+    NamespaceBody::Namespace(_) => Err(EmitError::fmt(fmt::Error)),
   }
 }
 
@@ -115,7 +155,7 @@ fn flatten_namespace<'a>(decl: &'a NamespaceDecl) -> (Vec<&'a str>, &'a Namespac
   }
 }
 
-fn emit_module_decl<W: fmt::Write>(out: &mut W, decl: &ModuleDecl) -> fmt::Result {
+fn emit_module_decl<W: fmt::Write>(out: &mut W, decl: &ModuleDecl) -> EmitResult {
   if decl.export {
     out.write_str("export ")?;
   }
@@ -139,7 +179,7 @@ fn emit_module_name<W: fmt::Write>(out: &mut W, name: &ModuleName) -> fmt::Resul
   }
 }
 
-fn emit_global_decl<W: fmt::Write>(out: &mut W, decl: &GlobalDecl) -> fmt::Result {
+fn emit_global_decl<W: fmt::Write>(out: &mut W, decl: &GlobalDecl) -> EmitResult {
   out.write_str("declare global")?;
   emit_block_like_body(out, &decl.body)
 }
@@ -318,7 +358,7 @@ fn emit_export_assignment_decl<W: fmt::Write>(
   out.write_char(';')
 }
 
-fn emit_block_like_body<W: fmt::Write>(out: &mut W, stmts: &[Node<Stmt>]) -> fmt::Result {
+fn emit_block_like_body<W: fmt::Write>(out: &mut W, stmts: &[Node<Stmt>]) -> EmitResult {
   out.write_char(' ')?;
   out.write_char('{')?;
   if !stmts.is_empty() {
@@ -331,7 +371,8 @@ fn emit_block_like_body<W: fmt::Write>(out: &mut W, stmts: &[Node<Stmt>]) -> fmt
     }
     out.write_char(' ')?;
   }
-  out.write_char('}')
+  out.write_char('}')?;
+  Ok(())
 }
 
 fn emit_string_literal<W: fmt::Write>(out: &mut W, value: &str) -> fmt::Result {
