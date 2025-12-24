@@ -254,6 +254,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_logical_expr(
     &mut self,
+    span: Span,
     operator: OperatorName,
     left: Node<Expr>,
     right: Node<Expr>,
@@ -267,7 +268,12 @@ impl<'p> SourceToInst<'p> {
       OperatorName::LogicalAnd => Inst::cond_goto(left, DUMMY_LABEL, converge_label_id),
       // Given `a || b`, skip `b` only IF `a`.
       OperatorName::LogicalOr => Inst::cond_goto(left, converge_label_id, DUMMY_LABEL),
-      _ => unreachable!(),
+      other => {
+        return Err(OptimizeError::unsupported(
+          span,
+          format!("unsupported logical operator {other:?}"),
+        ))
+      }
     });
     let right = self.compile_expr(right)?;
     self.out.push(Inst::var_assign(res_tmp_var, right));
@@ -293,7 +299,7 @@ impl<'p> SourceToInst<'p> {
     {
       self.compile_assignment(span, operator, left, right)
     } else if matches!(operator, OperatorName::LogicalAnd | OperatorName::LogicalOr) {
-      self.compile_logical_expr(operator, left, right)
+      self.compile_logical_expr(span, operator, left, right)
     } else {
       let op = match operator {
         OperatorName::Addition => BinOp::Add,
@@ -345,6 +351,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_unary_postfix_expr(
     &mut self,
+    span: Span,
     UnaryPostfixExpr { operator, argument }: UnaryPostfixExpr,
   ) -> OptimizeResult<Arg> {
     let arg = self.compile_expr(argument)?;
@@ -356,7 +363,12 @@ impl<'p> SourceToInst<'p> {
       match operator {
         OperatorName::PostfixDecrement => BinOp::Sub,
         OperatorName::PostfixIncrement => BinOp::Add,
-        _ => unreachable!(),
+        other => {
+          return Err(OptimizeError::unsupported(
+            span,
+            format!("unsupported postfix operator {other:?}"),
+          ))
+        }
       },
       Arg::Const(Const::Num(JsNumber(1.0))),
     ));
@@ -378,7 +390,12 @@ impl<'p> SourceToInst<'p> {
           match operator {
             OperatorName::PrefixDecrement => BinOp::Sub,
             OperatorName::PrefixIncrement => BinOp::Add,
-            _ => unreachable!(),
+            other => {
+              return Err(OptimizeError::unsupported(
+                span,
+                format!("unsupported prefix operator {other:?}"),
+              ))
+            }
           },
           Arg::Const(Const::Num(JsNumber(1.0))),
         ));
@@ -532,7 +549,7 @@ impl<'p> SourceToInst<'p> {
       Expr::LitStr(n) => Ok(Arg::Const(Const::Str(n.stx.value))),
       Expr::Member(n) => Ok(self.compile_member_expr(*n.stx, chain)?.res),
       Expr::Unary(n) => self.compile_unary_expr(span, *n.stx),
-      Expr::UnaryPostfix(n) => self.compile_unary_postfix_expr(*n.stx),
+      Expr::UnaryPostfix(n) => self.compile_unary_postfix_expr(span, *n.stx),
       other => Err(OptimizeError::unsupported(
         span,
         format!("unsupported expression {other:?}"),
