@@ -1199,11 +1199,26 @@ impl<'a> Parser<'a> {
         let t = p.peek();
         if t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ) {
           let name = p.consume_as_string();
-          if p.peek().typ == TT::Colon || p.peek().typ == TT::Question {
-            Some(name)
-          } else {
-            p.restore_checkpoint(checkpoint);
-            None
+          match p.peek().typ {
+            TT::Colon => Some(name),
+            TT::Question => {
+              // Disambiguate between named tuple elements (`x?: T`) and optional tuple elements
+              // where the optional marker appears after the element type (`T?`).
+              let q_checkpoint = p.checkpoint();
+              p.consume(); // ?
+              let is_named = p.peek().typ == TT::Colon;
+              p.restore_checkpoint(q_checkpoint);
+              if is_named {
+                Some(name)
+              } else {
+                p.restore_checkpoint(checkpoint);
+                None
+              }
+            }
+            _ => {
+              p.restore_checkpoint(checkpoint);
+              None
+            }
           }
         } else {
           None

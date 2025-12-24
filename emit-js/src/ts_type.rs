@@ -59,6 +59,21 @@ pub fn emit_type_alias_decl<W: std::fmt::Write>(
   out.write_char(';')
 }
 
+pub fn emit_type_members<W: std::fmt::Write>(
+  out: &mut W,
+  members: &[Node<TypeMember>],
+) -> std::fmt::Result {
+  let mut buf = String::new();
+  for (i, member) in members.iter().enumerate() {
+    if i > 0 {
+      buf.push(' ');
+    }
+    emit_type_member(&mut buf, member);
+    buf.push(';');
+  }
+  out.write_str(&buf)
+}
+
 pub fn emit_interface_decl<W: std::fmt::Write>(
   out: &mut W,
   decl: &InterfaceDecl,

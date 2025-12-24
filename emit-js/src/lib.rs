@@ -14,6 +14,7 @@ pub use ts_type::{
   emit_interface_decl,
   emit_ts_type,
   emit_type_alias_decl,
+  emit_type_members,
   emit_type_expr,
   ts_type_to_string,
 };
