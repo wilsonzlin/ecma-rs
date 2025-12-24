@@ -10,7 +10,9 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Instant;
 use tempfile::TempDir;
+use tracing::{info, info_span};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Args)]
@@ -128,6 +130,11 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
   }
 
   let tests = collect_tests(&suite_path)?;
+  info!(
+    phase = "discover_difftsc",
+    suite = %suite_name,
+    count = tests.len()
+  );
   if tests.is_empty() {
     return Err(anyhow!("suite `{}` contains no tests", suite_name));
   }
@@ -135,6 +142,8 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
   let mut mismatches = Vec::new();
 
   for test in tests {
+    let span = info_span!("difftsc_case", test = %test.name);
+    let _enter = span.enter();
     let actual = run_test(&test, &args.node)?;
     let baseline_path = baselines_root.join(format!("{}.json", test.name));
 
@@ -142,6 +151,7 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
       write_baseline(&baseline_path, &actual)
         .with_context(|| format!("write baseline for {}", test.name))?;
     } else {
+      let diff_start = Instant::now();
       let baseline = read_baseline(&baseline_path)
         .with_context(|| format!("read baseline for {}", test.name))?;
       if let Some(diff) = compare_diagnostics(
@@ -151,6 +161,10 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
       ) {
         mismatches.push((test.name, diff));
       }
+      info!(
+        phase = "diff",
+        duration_ms = diff_start.elapsed().as_millis()
+      );
     }
   }
 
@@ -183,6 +197,8 @@ fn node_available(node_path: &Path) -> Result<bool> {
 
 #[cfg(feature = "with-node")]
 fn run_test(test: &TestCase, node_path: &Path) -> Result<TscDiagnostics> {
+  let span = info_span!("difftsc_test", test = %test.name);
+  let _enter = span.enter();
   let temp_dir = tempfile::tempdir()?;
   write_test_files(&temp_dir, test)?;
   let root_files: Vec<_> = test
@@ -190,8 +206,15 @@ fn run_test(test: &TestCase, node_path: &Path) -> Result<TscDiagnostics> {
     .iter()
     .map(|file| temp_dir.path().join(&file.relative_path))
     .collect();
-  run_tsc(node_path, temp_dir.path(), &root_files)
-    .with_context(|| format!("run tsc for test {}", test.name))
+  let start = Instant::now();
+  let diagnostics = run_tsc(node_path, temp_dir.path(), &root_files)
+    .with_context(|| format!("run tsc for test {}", test.name))?;
+  info!(
+    phase = "tsc_run",
+    duration_ms = start.elapsed().as_millis(),
+    file_count = test.files.len()
+  );
+  Ok(diagnostics)
 }
 
 #[cfg(feature = "with-node")]

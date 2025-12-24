@@ -1,7 +1,10 @@
 use clap::Parser;
 use clap::Subcommand;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
+use tracing_subscriber::fmt;
+use tracing_subscriber::EnvFilter;
 use typecheck_ts_harness::build_filter;
 use typecheck_ts_harness::difftsc::CommandStatus;
 use typecheck_ts_harness::difftsc::DifftscArgs;
@@ -11,6 +14,7 @@ use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::HarnessError;
 use typecheck_ts_harness::Shard;
 use typecheck_ts_harness::DEFAULT_EXTENSIONS;
+use typecheck_ts_harness::DEFAULT_PROFILE_OUT;
 
 const DEFAULT_ROOT: &str = "parse-js/tests/TypeScript/tests/cases/conformance";
 const DEFAULT_TIMEOUT: u64 = 10;
@@ -49,17 +53,21 @@ enum Commands {
     #[arg(long, default_value_t = DEFAULT_TIMEOUT)]
     timeout_secs: u64,
 
-    /// Enable tracing in the checker (passthrough)
+    /// Enable tracing output from the harness
     #[arg(long)]
     trace: bool,
 
-    /// Enable profiling output (passthrough)
+    /// Enable profiling output
     #[arg(long)]
     profile: bool,
 
+    /// Path to write profiling data to (used with --profile)
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_PROFILE_OUT)]
+    profile_out: PathBuf,
+
     /// Override the conformance root directory
     #[arg(long)]
-    root: Option<std::path::PathBuf>,
+    root: Option<PathBuf>,
 
     /// Comma-separated list of extensions to include (default: ts,tsx,d.ts)
     #[arg(long)]
@@ -89,10 +97,14 @@ fn main() -> ExitCode {
       timeout_secs,
       trace,
       profile,
+      profile_out,
       root,
       extensions,
       allow_empty,
     } => {
+      init_tracing(trace);
+
+      let raw_filter = filter.clone();
       let filter = match build_filter(filter.as_deref()) {
         Ok(filter) => filter,
         Err(err) => return print_error(err),
@@ -113,12 +125,14 @@ fn main() -> ExitCode {
       let options = ConformanceOptions {
         root: root.unwrap_or_else(|| DEFAULT_ROOT.into()),
         filter,
+        filter_pattern: raw_filter,
         shard,
         json,
         update_snapshots,
         timeout: Duration::from_secs(timeout_secs),
         trace,
         profile,
+        profile_out,
         extensions,
         allow_empty,
       };
@@ -148,6 +162,20 @@ fn main() -> ExitCode {
 fn print_error(err: impl std::fmt::Display) -> ExitCode {
   eprintln!("error: {err}");
   ExitCode::from(1)
+}
+
+fn init_tracing(enable: bool) {
+  if !enable {
+    return;
+  }
+
+  let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+  let builder = fmt()
+    .with_env_filter(env_filter)
+    .with_writer(std::io::stderr);
+  if let Err(err) = builder.try_init() {
+    eprintln!("failed to install tracing subscriber: {err}");
+  }
 }
 
 fn parse_extensions(raw: Option<&str>) -> Result<Vec<String>, HarnessError> {

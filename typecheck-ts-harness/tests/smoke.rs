@@ -35,12 +35,14 @@ fn smoke_runs_on_small_fixtures() {
   let options = ConformanceOptions {
     root: root.clone(),
     filter: build_filter(None).unwrap(),
+    filter_pattern: None,
     shard: None,
     json: false,
     update_snapshots: false,
     timeout: Duration::from_secs(2),
     trace: false,
     profile: false,
+    profile_out: PathBuf::from("typecheck_profile.json"),
     extensions: DEFAULT_EXTENSIONS
       .iter()
       .map(|ext| ext.to_string())
@@ -106,6 +108,7 @@ fn errors_on_missing_root_unless_allowed() {
     timeout: Duration::from_millis(10),
     trace: false,
     profile: false,
+    profile_out: PathBuf::from("typecheck_profile.json"),
     extensions: DEFAULT_EXTENSIONS
       .iter()
       .map(|ext| ext.to_string())

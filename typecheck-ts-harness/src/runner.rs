@@ -5,6 +5,7 @@ use crate::discover::Filter;
 use crate::discover::Shard;
 use crate::discover::TestCase;
 use crate::multifile::normalize_name;
+use crate::profile::ProfileBuilder;
 use crate::HarnessError;
 use crate::Result;
 use crate::VirtualFile;
@@ -16,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
+use tracing::{info, info_span, warn};
 use typecheck_ts::Diagnostic;
 use typecheck_ts::FileId;
 use typecheck_ts::Host;
@@ -68,12 +70,14 @@ pub struct JsonReport {
 pub struct ConformanceOptions {
   pub root: PathBuf,
   pub filter: Filter,
+  pub filter_pattern: Option<String>,
   pub shard: Option<Shard>,
   pub json: bool,
   pub update_snapshots: bool,
   pub timeout: Duration,
   pub trace: bool,
   pub profile: bool,
+  pub profile_out: PathBuf,
   pub extensions: Vec<String>,
   pub allow_empty: bool,
 }
@@ -85,7 +89,18 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
     ));
   }
 
-  let mut cases = discover_conformance_tests(&opts.root, &opts.filter, &opts.extensions)?;
+  let run_start = Instant::now();
+  let mut profiler = opts.profile.then(|| ProfileBuilder::new(&opts));
+
+  let mut cases = {
+    let span = info_span!("discover_tests", root = %opts.root.display());
+    let _enter = span.enter();
+    info!(phase = "discover_start", root = %opts.root.display());
+    let discovered =
+      discover_conformance_tests(&opts.root, &opts.filter, &opts.extensions)?;
+    info!(phase = "discover_complete", count = discovered.len());
+    discovered
+  };
 
   if cases.is_empty() && !opts.allow_empty {
     return Err(HarnessError::EmptySuite {
@@ -93,23 +108,49 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
       extensions: opts.extensions.join(","),
     });
   }
+>>>>>>> cfe930a (Add tracing and profiling support to typecheck harness)
 
   if let Some(shard) = opts.shard {
+    let before = cases.len();
     cases = cases
       .into_iter()
       .enumerate()
       .filter(|(idx, _)| shard.includes(*idx))
       .map(|(_, case)| case)
       .collect();
+    info!(
+      phase = "shard",
+      shard_index = shard.index,
+      shard_total = shard.total,
+      before = before,
+      after = cases.len()
+    );
   }
 
   let mut results = Vec::new();
   for case in cases.into_iter() {
     let result = run_single_case(case, opts.timeout);
+    if let Some(profiler) = profiler.as_mut() {
+      profiler.record_test(&result);
+    }
     results.push(result);
   }
 
   let summary = summarize(&results);
+  let wall_time = run_start.elapsed();
+  info!(
+    phase = "summary",
+    duration_ms = wall_time.as_millis(),
+    total = summary.total,
+    passed = summary.passed,
+    failed = summary.failed,
+    timed_out = summary.timed_out
+  );
+
+  if let Some(profiler) = profiler {
+    profiler.write(&summary, wall_time, &opts.profile_out)?;
+  }
+
   Ok(JsonReport { summary, results })
 }
 
@@ -128,16 +169,28 @@ fn summarize(results: &[TestResult]) -> Summary {
 
 fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
   use std::sync::mpsc;
+  let span = info_span!("test_case", test_id = %case.id);
+  let _enter = span.enter();
   let (tx, rx) = mpsc::channel();
   let cloned = case.clone();
 
-  std::thread::spawn(move || {
-    let result = execute_case(cloned);
-    let _ = tx.send(result);
+  info!(phase = "start", timeout_ms = timeout.as_millis());
+  std::thread::spawn({
+    let span = span.clone();
+    move || {
+      let _entered = span.enter();
+      let result = execute_case(cloned);
+      let _ = tx.send(result);
+    }
   });
 
   match rx.recv_timeout(timeout) {
     Ok(mut result) => {
+      info!(
+        phase = "finish",
+        status = ?result.status,
+        duration_ms = result.duration_ms
+      );
       result.diagnostics.sort_by(|a, b| {
         let code_a = a.code.as_deref().unwrap_or("");
         let code_b = b.code.as_deref().unwrap_or("");
@@ -160,6 +213,7 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
       });
       result
     }
+<<<<<<< HEAD
     Err(_) => TestResult {
       id: case.id,
       path: case.path.display().to_string(),
@@ -170,6 +224,19 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
       directives: case.directives,
       options: case.options,
     },
+=======
+    Err(_) => {
+      warn!(phase = "timeout", timeout_ms = timeout.as_millis());
+      TestResult {
+        id: case.id,
+        path: case.path.display().to_string(),
+        status: TestStatus::Timeout,
+        duration_ms: timeout.as_millis(),
+        diagnostics: Vec::new(),
+        notes: case.notes,
+      }
+    }
+>>>>>>> cfe930a (Add tracing and profiling support to typecheck harness)
   }
 }
 
@@ -181,12 +248,18 @@ fn execute_case(case: TestCase) -> TestResult {
   let host = HarnessHost::new(&case.deduped_files);
   let roots = host.root_files();
 
+  info!(phase = "rust_check_start", file_count = case.files.len());
   let result = std::panic::catch_unwind(|| Program::new(host, roots).check());
   let duration_ms = start.elapsed().as_millis();
 
   match result {
     Ok(diagnostics) => {
       let status = categorize(&diagnostics);
+      info!(
+        phase = "rust_check_complete",
+        status = ?status,
+        duration_ms = duration_ms
+      );
       TestResult {
         id: case.id,
         path: case.path.display().to_string(),
@@ -198,6 +271,7 @@ fn execute_case(case: TestCase) -> TestResult {
         options,
       }
     }
+<<<<<<< HEAD
     Err(_) => TestResult {
       id: case.id,
       path: case.path.display().to_string(),
@@ -213,6 +287,24 @@ fn execute_case(case: TestCase) -> TestResult {
       directives,
       options,
     },
+=======
+    Err(_) => {
+      warn!(phase = "ice", duration_ms = duration_ms);
+      TestResult {
+        id: case.id,
+        path: case.path.display().to_string(),
+        status: TestStatus::Ice,
+        duration_ms,
+        diagnostics: vec![Diagnostic {
+          code: Some("ICE0001".to_string()),
+          message: "typechecker panicked".to_string(),
+          span: None,
+          severity: Severity::Error,
+        }],
+        notes,
+      }
+    }
+>>>>>>> cfe930a (Add tracing and profiling support to typecheck harness)
   }
 }
 
