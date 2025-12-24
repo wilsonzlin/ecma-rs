@@ -26,6 +26,7 @@ pub use ids::PatId;
 pub use ids::StmtId;
 pub use intern::NameInterner;
 pub use lower::lower_file;
+pub use lower::lower_file_with_diagnostics;
 use parse_js::parse;
 pub use span_map::SpanMap;
 
@@ -38,7 +39,8 @@ pub enum LowerError {
 /// Parse JS/TS source and lower it into HIR for a synthetic file id.
 ///
 /// This is primarily a convenience for tests and fuzzing; callers that already
-/// have parsed ASTs should use [`lower_file`] directly.
+/// have parsed ASTs should prefer [`lower_file_with_diagnostics`] (or
+/// [`lower_file`] if diagnostics are not needed).
 pub fn lower_from_source(source: &str) -> Result<LowerResult, LowerError> {
   let parsed = parse(source)?;
   Ok(lower_file(FileId(0), &parsed))

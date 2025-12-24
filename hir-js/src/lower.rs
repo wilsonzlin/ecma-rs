@@ -19,7 +19,9 @@ use crate::ids::PatId;
 use crate::ids::StmtId;
 use crate::intern::NameInterner;
 use crate::span_map::SpanMap;
+use diagnostics::Diagnostic;
 use diagnostics::FileId;
+use diagnostics::Span;
 use diagnostics::TextRange;
 use parse_js::ast::expr::pat::ArrPat;
 use parse_js::ast::expr::pat::ClassOrFuncName;
@@ -46,9 +48,51 @@ use parse_js::loc::Loc;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-/// Convert a parser `Loc` into a `TextRange` used by HIR.
-fn to_range(loc: Loc) -> TextRange {
-  TextRange::new(loc.0 as u32, loc.1 as u32)
+struct LoweringContext {
+  file: FileId,
+  diagnostics: Vec<Diagnostic>,
+}
+
+impl LoweringContext {
+  fn new(file: FileId) -> Self {
+    Self {
+      file,
+      diagnostics: Vec::new(),
+    }
+  }
+
+  fn to_range(&mut self, loc: Loc) -> TextRange {
+    let (range, note) = TextRange::from_loc_with_overflow_note(loc);
+    if let Some(note) = note {
+      self.diagnostics.push(
+        Diagnostic::warning(
+          "LOWER0001",
+          "span exceeds supported range; offsets truncated",
+          Span {
+            file: self.file,
+            range,
+          },
+        )
+        .with_note(note),
+      );
+    }
+    range
+  }
+
+  fn unsupported(&mut self, range: TextRange, message: impl Into<String>) {
+    self.diagnostics.push(Diagnostic::warning(
+      "LOWER0002",
+      message,
+      Span {
+        file: self.file,
+        range,
+      },
+    ));
+  }
+
+  fn into_diagnostics(self) -> Vec<Diagnostic> {
+    self.diagnostics
+  }
 }
 
 #[derive(Debug)]
@@ -90,11 +134,15 @@ impl<'a> DefDescriptor<'a> {
   }
 }
 
-/// Lower a parsed file into HIR structures.
-pub fn lower_file(file: FileId, ast: &Node<TopLevel>) -> LowerResult {
+/// Lower a parsed file into HIR structures, returning lowering diagnostics.
+pub fn lower_file_with_diagnostics(
+  file: FileId,
+  ast: &Node<TopLevel>,
+) -> (LowerResult, Vec<Diagnostic>) {
+  let mut ctx = LoweringContext::new(file);
   let mut names = NameInterner::default();
   let mut descriptors = Vec::new();
-  collect_top_level(file, ast, &mut descriptors, &mut names);
+  collect_top_level(ast, &mut descriptors, &mut names, &mut ctx);
 
   descriptors.sort_by(|a, b| {
     (a.kind, a.name_text.as_str(), a.span.start).cmp(&(b.kind, b.name_text.as_str(), b.span.start))
@@ -126,7 +174,9 @@ pub fn lower_file(file: FileId, ast: &Node<TopLevel>) -> LowerResult {
       body: None,
     };
 
-    if let Some(body) = lower_body_from_source(def_id, &desc.source, &mut names, &mut span_map) {
+    if let Some(body) =
+      lower_body_from_source(def_id, &desc.source, &mut names, &mut span_map, &mut ctx)
+    {
       let body_id = BodyId(bodies.len() as u32);
       def_data.body = Some(body_id);
       body_ids.push(body_id);
@@ -138,12 +188,23 @@ pub fn lower_file(file: FileId, ast: &Node<TopLevel>) -> LowerResult {
 
   span_map.finalize();
 
-  LowerResult {
-    hir: Arc::new(HirFile::new(file, items, body_ids, span_map)),
-    defs,
-    bodies,
-    names: Arc::new(names),
-  }
+  (
+    LowerResult {
+      hir: Arc::new(HirFile::new(file, items, body_ids, span_map)),
+      defs,
+      bodies,
+      names: Arc::new(names),
+    },
+    ctx.into_diagnostics(),
+  )
+}
+
+/// Lower a parsed file into HIR structures, discarding diagnostics.
+///
+/// Prefer [`lower_file_with_diagnostics`] when calling from user-facing
+/// tooling so overflow and unsupported constructs can be surfaced.
+pub fn lower_file(file: FileId, ast: &Node<TopLevel>) -> LowerResult {
+  lower_file_with_diagnostics(file, ast).0
 }
 
 fn lower_body_from_source(
@@ -151,12 +212,17 @@ fn lower_body_from_source(
   source: &DefSource,
   names: &mut NameInterner,
   span_map: &mut SpanMap,
+  ctx: &mut LoweringContext,
 ) -> Option<Body> {
   match source {
-    DefSource::Function(decl) => lower_function_body(owner, &decl.stx.function, names, span_map),
-    DefSource::ArrowFunction(func) => lower_function_body(owner, &func.stx.func, names, span_map),
-    DefSource::FuncExpr(func) => lower_function_body(owner, &func.stx.func, names, span_map),
-    DefSource::Var(decl) => lower_var_body(owner, decl, names, span_map),
+    DefSource::Function(decl) => {
+      lower_function_body(owner, &decl.stx.function, names, span_map, ctx)
+    }
+    DefSource::ArrowFunction(func) => {
+      lower_function_body(owner, &func.stx.func, names, span_map, ctx)
+    }
+    DefSource::FuncExpr(func) => lower_function_body(owner, &func.stx.func, names, span_map, ctx),
+    DefSource::Var(decl) => lower_var_body(owner, decl, names, span_map, ctx),
     DefSource::None => None,
   }
 }
@@ -166,12 +232,13 @@ fn lower_var_body(
   decl: &VarDeclarator,
   names: &mut NameInterner,
   span_map: &mut SpanMap,
+  ctx: &mut LoweringContext,
 ) -> Option<Body> {
   let mut builder = BodyBuilder::new(owner, BodyKind::Initializer, names, span_map);
-  lower_pat(&decl.pattern.stx.pat, &mut builder);
+  lower_pat(&decl.pattern.stx.pat, &mut builder, ctx);
   if let Some(init) = &decl.initializer {
-    let expr_id = lower_expr(init, &mut builder);
-    builder.alloc_stmt(to_range(init.loc), StmtKind::Expr(expr_id));
+    let expr_id = lower_expr(init, &mut builder, ctx);
+    builder.alloc_stmt(ctx.to_range(init.loc), StmtKind::Expr(expr_id));
   }
   Some(builder.finish())
 }
@@ -181,24 +248,25 @@ fn lower_function_body(
   func: &Node<Func>,
   names: &mut NameInterner,
   span_map: &mut SpanMap,
+  ctx: &mut LoweringContext,
 ) -> Option<Body> {
   let mut builder = BodyBuilder::new(owner, BodyKind::Function, names, span_map);
   for param in func.stx.parameters.iter() {
-    lower_pat(&param.stx.pattern.stx.pat, &mut builder);
+    lower_pat(&param.stx.pattern.stx.pat, &mut builder, ctx);
     if let Some(default) = &param.stx.default_value {
-      lower_expr(default, &mut builder);
+      lower_expr(default, &mut builder, ctx);
     }
   }
 
   match &func.stx.body {
     Some(FuncBody::Block(stmts)) => {
       for stmt in stmts.iter() {
-        lower_stmt(stmt, &mut builder);
+        lower_stmt(stmt, &mut builder, ctx);
       }
     }
     Some(FuncBody::Expression(expr)) => {
-      let expr_id = lower_expr(expr, &mut builder);
-      builder.alloc_stmt(to_range(expr.loc), StmtKind::Return(Some(expr_id)));
+      let expr_id = lower_expr(expr, &mut builder, ctx);
+      builder.alloc_stmt(ctx.to_range(expr.loc), StmtKind::Return(Some(expr_id)));
     }
     None => {}
   }
@@ -206,110 +274,114 @@ fn lower_function_body(
   Some(builder.finish())
 }
 
-fn lower_stmt(stmt: &Node<AstStmt>, builder: &mut BodyBuilder<'_>) -> StmtId {
-  let span = to_range(stmt.loc);
+fn lower_stmt(
+  stmt: &Node<AstStmt>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> StmtId {
+  let span = ctx.to_range(stmt.loc);
   let kind = match &*stmt.stx {
     AstStmt::Expr(expr_stmt) => {
-      let expr_id = lower_expr(&expr_stmt.stx.expr, builder);
+      let expr_id = lower_expr(&expr_stmt.stx.expr, builder, ctx);
       StmtKind::Expr(expr_id)
     }
     AstStmt::Return(ret) => {
-      let value = ret.stx.value.as_ref().map(|v| lower_expr(v, builder));
+      let value = ret.stx.value.as_ref().map(|v| lower_expr(v, builder, ctx));
       StmtKind::Return(value)
     }
     AstStmt::Block(block) => {
       let mut stmts = Vec::new();
       for s in block.stx.body.iter() {
-        stmts.push(lower_stmt(s, builder));
+        stmts.push(lower_stmt(s, builder, ctx));
       }
       StmtKind::Block(stmts)
     }
     AstStmt::If(if_stmt) => {
-      lower_expr(&if_stmt.stx.test, builder);
-      lower_stmt(&if_stmt.stx.consequent, builder);
+      lower_expr(&if_stmt.stx.test, builder, ctx);
+      lower_stmt(&if_stmt.stx.consequent, builder, ctx);
       if let Some(alt) = &if_stmt.stx.alternate {
-        lower_stmt(alt, builder);
+        lower_stmt(alt, builder, ctx);
       }
       StmtKind::Other
     }
     AstStmt::While(wh) => {
-      lower_expr(&wh.stx.condition, builder);
-      lower_stmt(&wh.stx.body, builder);
+      lower_expr(&wh.stx.condition, builder, ctx);
+      lower_stmt(&wh.stx.body, builder, ctx);
       StmtKind::Other
     }
     AstStmt::DoWhile(dw) => {
-      lower_expr(&dw.stx.condition, builder);
-      lower_stmt(&dw.stx.body, builder);
+      lower_expr(&dw.stx.condition, builder, ctx);
+      lower_stmt(&dw.stx.body, builder, ctx);
       StmtKind::Other
     }
     AstStmt::ForTriple(for_stmt) => {
       match &for_stmt.stx.init {
         ForTripleStmtInit::Expr(e) => {
-          lower_expr(e, builder);
+          lower_expr(e, builder, ctx);
         }
         ForTripleStmtInit::Decl(decl) => {
-          lower_var_decl(decl, builder);
+          lower_var_decl(decl, builder, ctx);
         }
         ForTripleStmtInit::None => {}
       }
       if let Some(cond) = &for_stmt.stx.cond {
-        lower_expr(cond, builder);
+        lower_expr(cond, builder, ctx);
       }
       if let Some(post) = &for_stmt.stx.post {
-        lower_expr(post, builder);
+        lower_expr(post, builder, ctx);
       }
-      lower_for_body(&for_stmt.stx.body, builder);
+      lower_for_body(&for_stmt.stx.body, builder, ctx);
       StmtKind::Other
     }
     AstStmt::ForIn(for_in) => {
-      lower_for_lhs(&for_in.stx.lhs, builder);
-      lower_expr(&for_in.stx.rhs, builder);
-      lower_for_body(&for_in.stx.body, builder);
+      lower_for_lhs(&for_in.stx.lhs, builder, ctx);
+      lower_expr(&for_in.stx.rhs, builder, ctx);
+      lower_for_body(&for_in.stx.body, builder, ctx);
       StmtKind::Other
     }
     AstStmt::ForOf(for_of) => {
-      lower_for_lhs(&for_of.stx.lhs, builder);
-      lower_expr(&for_of.stx.rhs, builder);
-      lower_for_body(&for_of.stx.body, builder);
+      lower_for_lhs(&for_of.stx.lhs, builder, ctx);
+      lower_expr(&for_of.stx.rhs, builder, ctx);
+      lower_for_body(&for_of.stx.body, builder, ctx);
       StmtKind::Other
     }
     AstStmt::Switch(sw) => {
-      lower_expr(&sw.stx.test, builder);
+      lower_expr(&sw.stx.test, builder, ctx);
       for branch in sw.stx.branches.iter() {
         if let Some(case) = &branch.stx.case {
-          lower_expr(case, builder);
+          lower_expr(case, builder, ctx);
         }
         for stmt in branch.stx.body.iter() {
-          lower_stmt(stmt, builder);
+          lower_stmt(stmt, builder, ctx);
         }
       }
       StmtKind::Other
     }
     AstStmt::Try(tr) => {
-      lower_block_stmt(&tr.stx.wrapped, builder);
+      lower_block_stmt(&tr.stx.wrapped, builder, ctx);
       if let Some(catch) = &tr.stx.catch {
-        lower_catch(catch, builder);
+        lower_catch(catch, builder, ctx);
       }
       if let Some(finally) = &tr.stx.finally {
-        lower_block_stmt(finally, builder);
+        lower_block_stmt(finally, builder, ctx);
       }
       StmtKind::Other
     }
     AstStmt::Throw(th) => {
-      lower_expr(&th.stx.value, builder);
+      lower_expr(&th.stx.value, builder, ctx);
       StmtKind::Other
     }
     AstStmt::Label(label) => {
-      lower_stmt(&label.stx.statement, builder);
+      lower_stmt(&label.stx.statement, builder, ctx);
       StmtKind::Other
     }
     AstStmt::With(w) => {
-      lower_expr(&w.stx.object, builder);
-      lower_stmt(&w.stx.body, builder);
+      lower_expr(&w.stx.object, builder, ctx);
+      lower_stmt(&w.stx.body, builder, ctx);
       StmtKind::Other
     }
     AstStmt::VarDecl(decl) => {
-      lower_var_decl(decl, builder);
+      lower_var_decl(decl, builder, ctx);
       StmtKind::Other
     }
     _ => StmtKind::Other,
@@ -318,63 +390,75 @@ fn lower_stmt(stmt: &Node<AstStmt>, builder: &mut BodyBuilder<'_>) -> StmtId {
   builder.alloc_stmt(span, kind)
 }
 
-fn lower_for_body(body: &Node<ForBody>, builder: &mut BodyBuilder<'_>) {
+fn lower_for_body(body: &Node<ForBody>, builder: &mut BodyBuilder<'_>, ctx: &mut LoweringContext) {
   for stmt in body.stx.body.iter() {
-    lower_stmt(stmt, builder);
+    lower_stmt(stmt, builder, ctx);
   }
 }
 
-fn lower_for_lhs(lhs: &ForInOfLhs, builder: &mut BodyBuilder<'_>) {
+fn lower_for_lhs(lhs: &ForInOfLhs, builder: &mut BodyBuilder<'_>, ctx: &mut LoweringContext) {
   match lhs {
     ForInOfLhs::Assign(pat) => {
-      lower_pat(pat, builder);
+      lower_pat(pat, builder, ctx);
     }
     ForInOfLhs::Decl((_, pat_decl)) => {
-      lower_pat(&pat_decl.stx.pat, builder);
+      lower_pat(&pat_decl.stx.pat, builder, ctx);
     }
   }
 }
 
-fn lower_var_decl(decl: &Node<parse_js::ast::stmt::decl::VarDecl>, builder: &mut BodyBuilder<'_>) {
+fn lower_var_decl(
+  decl: &Node<parse_js::ast::stmt::decl::VarDecl>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) {
   for declarator in decl.stx.declarators.iter() {
-    lower_pat(&declarator.pattern.stx.pat, builder);
+    lower_pat(&declarator.pattern.stx.pat, builder, ctx);
     if let Some(init) = &declarator.initializer {
-      lower_expr(init, builder);
+      lower_expr(init, builder, ctx);
     }
   }
 }
 
-fn lower_block_stmt(block: &Node<parse_js::ast::stmt::BlockStmt>, builder: &mut BodyBuilder<'_>) {
+fn lower_block_stmt(
+  block: &Node<parse_js::ast::stmt::BlockStmt>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) {
   for stmt in block.stx.body.iter() {
-    lower_stmt(stmt, builder);
+    lower_stmt(stmt, builder, ctx);
   }
 }
 
-fn lower_catch(catch: &Node<CatchBlock>, builder: &mut BodyBuilder<'_>) {
+fn lower_catch(catch: &Node<CatchBlock>, builder: &mut BodyBuilder<'_>, ctx: &mut LoweringContext) {
   if let Some(param) = &catch.stx.parameter {
-    lower_pat(&param.stx.pat, builder);
+    lower_pat(&param.stx.pat, builder, ctx);
   }
   for stmt in catch.stx.body.iter() {
-    lower_stmt(stmt, builder);
+    lower_stmt(stmt, builder, ctx);
   }
 }
 
-fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
-  let span = to_range(expr.loc);
+fn lower_expr(
+  expr: &Node<AstExpr>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> ExprId {
+  let span = ctx.to_range(expr.loc);
   let kind = match &*expr.stx {
     AstExpr::Id(id) => ExprKind::Ident(builder.intern_name(&id.stx.name)),
     AstExpr::Binary(bin) => {
-      let left = lower_expr(&bin.stx.left, builder);
-      let right = lower_expr(&bin.stx.right, builder);
+      let left = lower_expr(&bin.stx.left, builder, ctx);
+      let right = lower_expr(&bin.stx.right, builder, ctx);
       ExprKind::Binary { left, right }
     }
     AstExpr::Call(call) => {
-      let callee = lower_expr(&call.stx.callee, builder);
+      let callee = lower_expr(&call.stx.callee, builder, ctx);
       let args = call
         .stx
         .arguments
         .iter()
-        .map(|arg| lower_expr(&arg.stx.value, builder))
+        .map(|arg| lower_expr(&arg.stx.value, builder, ctx))
         .collect();
       ExprKind::Call {
         callee,
@@ -383,7 +467,7 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
       }
     }
     AstExpr::Member(mem) => {
-      let object = lower_expr(&mem.stx.left, builder);
+      let object = lower_expr(&mem.stx.left, builder, ctx);
       let property = builder.intern_name(&mem.stx.right);
       ExprKind::Member {
         object,
@@ -392,14 +476,14 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
       }
     }
     AstExpr::ComputedMember(mem) => {
-      lower_expr(&mem.stx.object, builder);
-      lower_expr(&mem.stx.member, builder);
+      lower_expr(&mem.stx.object, builder, ctx);
+      lower_expr(&mem.stx.member, builder, ctx);
       ExprKind::Other
     }
     AstExpr::Cond(cond) => {
-      let test = lower_expr(&cond.stx.test, builder);
-      let cons = lower_expr(&cond.stx.consequent, builder);
-      let alt = lower_expr(&cond.stx.alternate, builder);
+      let test = lower_expr(&cond.stx.test, builder, ctx);
+      let cons = lower_expr(&cond.stx.consequent, builder, ctx);
+      let alt = lower_expr(&cond.stx.alternate, builder, ctx);
       ExprKind::Conditional {
         test,
         consequent: cons,
@@ -413,28 +497,28 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
       ExprKind::Other
     }
     AstExpr::ArrPat(arr) => {
-      let kind = lower_arr_pat(arr, builder);
-      builder.alloc_pat(to_range(arr.loc), kind);
+      let kind = lower_arr_pat(arr, builder, ctx);
+      builder.alloc_pat(ctx.to_range(arr.loc), kind);
       ExprKind::Other
     }
     AstExpr::ObjPat(obj) => {
-      let kind = lower_obj_pat(obj, builder);
-      builder.alloc_pat(to_range(obj.loc), kind);
+      let kind = lower_obj_pat(obj, builder, ctx);
+      builder.alloc_pat(ctx.to_range(obj.loc), kind);
       ExprKind::Other
     }
     AstExpr::Unary(unary) => {
-      lower_expr(&unary.stx.argument, builder);
+      lower_expr(&unary.stx.argument, builder, ctx);
       ExprKind::Other
     }
     AstExpr::UnaryPostfix(post) => {
-      lower_expr(&post.stx.argument, builder);
+      lower_expr(&post.stx.argument, builder, ctx);
       ExprKind::Other
     }
     AstExpr::TaggedTemplate(tag) => {
-      lower_expr(&tag.stx.function, builder);
+      lower_expr(&tag.stx.function, builder, ctx);
       for part in tag.stx.parts.iter() {
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
-          lower_expr(expr, builder);
+          lower_expr(expr, builder, ctx);
         }
       }
       ExprKind::Other
@@ -444,7 +528,7 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
         match element {
           parse_js::ast::expr::lit::LitArrElem::Single(expr)
           | parse_js::ast::expr::lit::LitArrElem::Rest(expr) => {
-            lower_expr(expr, builder);
+            lower_expr(expr, builder, ctx);
           }
           parse_js::ast::expr::lit::LitArrElem::Empty => {}
         }
@@ -452,27 +536,35 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
       ExprKind::Array
     }
     AstExpr::LitObj(obj) => {
+      use parse_js::ast::class_or_object::ClassOrObjKey;
       use parse_js::ast::class_or_object::ClassOrObjVal;
       use parse_js::ast::class_or_object::ObjMemberType;
       for member in obj.stx.members.iter() {
         match &member.stx.typ {
-          ObjMemberType::Valued { val, .. } => match val {
-            ClassOrObjVal::Prop(Some(expr)) => {
-              lower_expr(expr, builder);
+          ObjMemberType::Valued { key, val } => {
+            if let ClassOrObjKey::Computed(key_expr) = key {
+              let key_span = ctx.to_range(key_expr.loc);
+              ctx.unsupported(key_span, "computed property keys are not lowered yet");
+              lower_expr(key_expr, builder, ctx);
             }
-            ClassOrObjVal::StaticBlock(block) => {
-              for stmt in block.stx.body.iter() {
-                lower_stmt(stmt, builder);
+            match val {
+              ClassOrObjVal::Prop(Some(expr)) => {
+                lower_expr(expr, builder, ctx);
               }
+              ClassOrObjVal::StaticBlock(block) => {
+                for stmt in block.stx.body.iter() {
+                  lower_stmt(stmt, builder, ctx);
+                }
+              }
+              ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_) | ClassOrObjVal::Method(_) => {}
+              ClassOrObjVal::Prop(None) | ClassOrObjVal::IndexSignature(_) => {}
             }
-            ClassOrObjVal::Getter(_) | ClassOrObjVal::Setter(_) | ClassOrObjVal::Method(_) => {}
-            ClassOrObjVal::Prop(None) | ClassOrObjVal::IndexSignature(_) => {}
-          },
+          }
           ObjMemberType::Shorthand { id } => {
             let _ = builder.intern_name(&id.stx.name);
           }
           ObjMemberType::Rest { val } => {
-            lower_expr(val, builder);
+            lower_expr(val, builder, ctx);
           }
         }
       }
@@ -481,7 +573,7 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
     AstExpr::LitTemplate(tmpl) => {
       for part in tmpl.stx.parts.iter() {
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
-          lower_expr(expr, builder);
+          lower_expr(expr, builder, ctx);
         }
       }
       ExprKind::Other
@@ -494,14 +586,18 @@ fn lower_expr(expr: &Node<AstExpr>, builder: &mut BodyBuilder<'_>) -> ExprId {
   builder.alloc_expr(span, kind)
 }
 
-fn lower_pat(pat: &Node<AstPat>, builder: &mut BodyBuilder<'_>) -> PatId {
-  let span = to_range(pat.loc);
+fn lower_pat(
+  pat: &Node<AstPat>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> PatId {
+  let span = ctx.to_range(pat.loc);
   let kind = match &*pat.stx {
     AstPat::Id(id) => PatKind::Ident(builder.intern_name(&id.stx.name)),
-    AstPat::Arr(arr) => lower_arr_pat(arr, builder),
-    AstPat::Obj(obj) => lower_obj_pat(obj, builder),
+    AstPat::Arr(arr) => lower_arr_pat(arr, builder, ctx),
+    AstPat::Obj(obj) => lower_obj_pat(obj, builder, ctx),
     AstPat::AssignTarget(expr) => {
-      let expr_id = lower_expr(expr, builder);
+      let expr_id = lower_expr(expr, builder, ctx);
       PatKind::AssignTarget(expr_id)
     }
   };
@@ -509,30 +605,38 @@ fn lower_pat(pat: &Node<AstPat>, builder: &mut BodyBuilder<'_>) -> PatId {
   builder.alloc_pat(span, kind)
 }
 
-fn lower_arr_pat(arr: &Node<ArrPat>, builder: &mut BodyBuilder<'_>) -> PatKind {
+fn lower_arr_pat(
+  arr: &Node<ArrPat>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> PatKind {
   let mut children = Vec::new();
   for elem in arr.stx.elements.iter().flatten() {
-    children.push(lower_pat(&elem.target, builder));
+    children.push(lower_pat(&elem.target, builder, ctx));
     if let Some(default) = &elem.default_value {
-      lower_expr(default, builder);
+      lower_expr(default, builder, ctx);
     }
   }
   if let Some(rest) = &arr.stx.rest {
-    children.push(lower_pat(rest, builder));
+    children.push(lower_pat(rest, builder, ctx));
   }
   PatKind::Destructure(children)
 }
 
-fn lower_obj_pat(obj: &Node<ObjPat>, builder: &mut BodyBuilder<'_>) -> PatKind {
+fn lower_obj_pat(
+  obj: &Node<ObjPat>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> PatKind {
   let mut children = Vec::new();
   for prop in obj.stx.properties.iter() {
-    children.push(lower_pat(&prop.stx.target, builder));
+    children.push(lower_pat(&prop.stx.target, builder, ctx));
     if let Some(default) = &prop.stx.default_value {
-      lower_expr(default, builder);
+      lower_expr(default, builder, ctx);
     }
   }
   if let Some(rest) = &obj.stx.rest {
-    children.push(lower_pat(rest, builder));
+    children.push(lower_pat(rest, builder, ctx));
   }
   PatKind::Destructure(children)
 }
@@ -601,27 +705,27 @@ impl<'a> BodyBuilder<'a> {
 }
 
 fn collect_top_level<'a>(
-  file: FileId,
   ast: &'a Node<TopLevel>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
   for stmt in ast.stx.body.iter() {
-    collect_stmt(file, stmt, descriptors, names, true);
+    collect_stmt(stmt, descriptors, names, true, ctx);
   }
 }
 
 fn collect_stmt<'a>(
-  file: FileId,
   stmt: &'a Node<AstStmt>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
   is_item: bool,
+  ctx: &mut LoweringContext,
 ) {
   match &*stmt.stx {
     AstStmt::FunctionDecl(func) => {
       let (name_id, name_text) = name_from_optional(&func.stx.name, names);
-      let span = to_range(stmt.loc);
+      let span = ctx.to_range(stmt.loc);
       descriptors.push(DefDescriptor::new(
         DefKind::Function,
         name_id,
@@ -630,11 +734,11 @@ fn collect_stmt<'a>(
         is_item,
         DefSource::Function(func),
       ));
-      collect_func_params(&func.stx.function, descriptors, names);
+      collect_func_params(&func.stx.function, descriptors, names, ctx);
     }
     AstStmt::ClassDecl(class_decl) => {
       let (name_id, name_text) = name_from_optional(&class_decl.stx.name, names);
-      let span = to_range(stmt.loc);
+      let span = ctx.to_range(stmt.loc);
       descriptors.push(DefDescriptor::new(
         DefKind::Class,
         name_id,
@@ -645,9 +749,9 @@ fn collect_stmt<'a>(
       ));
     }
     AstStmt::VarDecl(var_decl) => {
-      collect_var_decl(var_decl, descriptors, names, is_item);
+      collect_var_decl(var_decl, descriptors, names, is_item, ctx);
     }
-    AstStmt::NamespaceDecl(ns) => collect_namespace(file, ns, descriptors, names, is_item),
+    AstStmt::NamespaceDecl(ns) => collect_namespace(ns, descriptors, names, is_item, ctx),
     AstStmt::ModuleDecl(module) => {
       let name_text = match &module.stx.name {
         ModuleName::Identifier(name) => name.clone(),
@@ -658,13 +762,13 @@ fn collect_stmt<'a>(
         DefKind::Module,
         name_id,
         name_text,
-        to_range(stmt.loc),
+        ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
       ));
       if let Some(body) = &module.stx.body {
         for st in body.iter() {
-          collect_stmt(file, st, descriptors, names, false);
+          collect_stmt(st, descriptors, names, false, ctx);
         }
       }
     }
@@ -675,7 +779,7 @@ fn collect_stmt<'a>(
         DefKind::Interface,
         name_id,
         text,
-        to_range(stmt.loc),
+        ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
       ));
@@ -687,7 +791,7 @@ fn collect_stmt<'a>(
         DefKind::TypeAlias,
         name_id,
         text,
-        to_range(stmt.loc),
+        ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
       ));
@@ -699,14 +803,14 @@ fn collect_stmt<'a>(
         DefKind::Enum,
         name_id,
         text,
-        to_range(stmt.loc),
+        ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
       ));
     }
     AstStmt::Import(stmt_import) => {
       if let Some(default) = &stmt_import.stx.default {
-        let pat_names = collect_pat_names(&default.stx.pat, names);
+        let pat_names = collect_pat_names(&default.stx.pat, names, ctx);
         for (id, span) in pat_names {
           descriptors.push(DefDescriptor::new(
             DefKind::ImportBinding,
@@ -721,7 +825,7 @@ fn collect_stmt<'a>(
       if let Some(names_list) = &stmt_import.stx.names {
         match names_list {
           ImportNames::All(pat) => {
-            let pat_names = collect_pat_names(&pat.stx.pat, names);
+            let pat_names = collect_pat_names(&pat.stx.pat, names, ctx);
             for (id, span) in pat_names {
               descriptors.push(DefDescriptor::new(
                 DefKind::ImportBinding,
@@ -735,7 +839,7 @@ fn collect_stmt<'a>(
           }
           ImportNames::Specific(list) => {
             for item in list.iter() {
-              let pat_names = collect_pat_names(&item.stx.alias.stx.pat, names);
+              let pat_names = collect_pat_names(&item.stx.alias.stx.pat, names, ctx);
               for (id, span) in pat_names {
                 descriptors.push(DefDescriptor::new(
                   DefKind::ImportBinding,
@@ -758,7 +862,7 @@ fn collect_stmt<'a>(
           DefKind::ExportAlias,
           name_id,
           names.resolve(name_id).unwrap().to_string(),
-          to_range(alias.loc),
+          ctx.to_range(alias.loc),
           is_item,
           DefSource::None,
         ));
@@ -771,7 +875,7 @@ fn collect_stmt<'a>(
             DefKind::ExportAlias,
             name_id,
             names.resolve(name_id).unwrap().to_string(),
-            to_range(alias_node.loc),
+            ctx.to_range(alias_node.loc),
             is_item,
             DefSource::None,
           ));
@@ -781,7 +885,7 @@ fn collect_stmt<'a>(
     },
     AstStmt::ExportDefaultExpr(_) => {
       let name_id = names.intern("default");
-      let span = to_range(stmt.loc);
+      let span = ctx.to_range(stmt.loc);
       descriptors.push(DefDescriptor::new(
         DefKind::ExportAlias,
         name_id,
@@ -797,7 +901,7 @@ fn collect_stmt<'a>(
         DefKind::Var,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
-        to_range(stmt.loc),
+        ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
       ));
@@ -808,11 +912,11 @@ fn collect_stmt<'a>(
         DefKind::Function,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
-        to_range(stmt.loc),
+        ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
       ));
-      collect_func_params_from_parts(&af.stx.parameters, descriptors, names);
+      collect_func_params_from_parts(&af.stx.parameters, descriptors, names, ctx);
     }
     AstStmt::ImportEqualsDecl(ie) => {
       let name_id = names.intern(&ie.stx.name);
@@ -820,7 +924,7 @@ fn collect_stmt<'a>(
         DefKind::ImportBinding,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
-        to_range(stmt.loc),
+        ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
       ));
@@ -831,7 +935,7 @@ fn collect_stmt<'a>(
         DefKind::ExportAlias,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
-        to_range(stmt.loc),
+        ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
       ));
@@ -839,7 +943,7 @@ fn collect_stmt<'a>(
     AstStmt::ForIn(for_in) => {
       match &for_in.stx.lhs {
         ForInOfLhs::Decl((_, pat_decl)) => {
-          for (id, span) in collect_pat_names(&pat_decl.stx.pat, names) {
+          for (id, span) in collect_pat_names(&pat_decl.stx.pat, names, ctx) {
             descriptors.push(DefDescriptor::new(
               DefKind::Var,
               id,
@@ -851,16 +955,16 @@ fn collect_stmt<'a>(
           }
         }
         ForInOfLhs::Assign(pat) => {
-          let _ = collect_pat_names(pat, names);
+          let _ = collect_pat_names(pat, names, ctx);
         }
       }
-      collect_expr(&for_in.stx.rhs, descriptors, names);
-      collect_for_body(file, &for_in.stx.body, descriptors, names);
+      collect_expr(&for_in.stx.rhs, descriptors, names, ctx);
+      collect_for_body(&for_in.stx.body, descriptors, names, ctx);
     }
     AstStmt::ForOf(for_of) => {
       match &for_of.stx.lhs {
         ForInOfLhs::Decl((_, pat_decl)) => {
-          for (id, span) in collect_pat_names(&pat_decl.stx.pat, names) {
+          for (id, span) in collect_pat_names(&pat_decl.stx.pat, names, ctx) {
             descriptors.push(DefDescriptor::new(
               DefKind::Var,
               id,
@@ -872,28 +976,28 @@ fn collect_stmt<'a>(
           }
         }
         ForInOfLhs::Assign(pat) => {
-          let _ = collect_pat_names(pat, names);
+          let _ = collect_pat_names(pat, names, ctx);
         }
       }
-      collect_expr(&for_of.stx.rhs, descriptors, names);
-      collect_for_body(file, &for_of.stx.body, descriptors, names);
+      collect_expr(&for_of.stx.rhs, descriptors, names, ctx);
+      collect_for_body(&for_of.stx.body, descriptors, names, ctx);
     }
     _ => {
       // Walk expressions and nested statements to ensure nested definitions are collected.
-      walk_stmt_children(file, stmt, descriptors, names);
+      walk_stmt_children(stmt, descriptors, names, ctx);
     }
   }
 }
 
 fn collect_namespace<'a>(
-  file: FileId,
   ns: &'a Node<NamespaceDecl>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
   is_item: bool,
+  ctx: &mut LoweringContext,
 ) {
   let name_id = names.intern(&ns.stx.name);
-  let span = to_range(ns.loc);
+  let span = ctx.to_range(ns.loc);
   let text = names.resolve(name_id).unwrap().to_string();
   descriptors.push(DefDescriptor::new(
     DefKind::Namespace,
@@ -906,11 +1010,11 @@ fn collect_namespace<'a>(
   match &ns.stx.body {
     NamespaceBody::Block(stmts) => {
       for st in stmts.iter() {
-        collect_stmt(file, st, descriptors, names, false);
+        collect_stmt(st, descriptors, names, false, ctx);
       }
     }
     NamespaceBody::Namespace(inner) => {
-      collect_namespace(file, inner, descriptors, names, false);
+      collect_namespace(inner, descriptors, names, false, ctx);
     }
   }
 }
@@ -920,16 +1024,17 @@ fn collect_var_decl<'a>(
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
   is_item: bool,
+  ctx: &mut LoweringContext,
 ) {
   for declarator in var_decl.stx.declarators.iter() {
-    let pat_names = collect_pat_names(&declarator.pattern.stx.pat, names);
+    let pat_names = collect_pat_names(&declarator.pattern.stx.pat, names, ctx);
     if pat_names.is_empty() {
       let anon = names.intern("<anon>");
       descriptors.push(DefDescriptor::new(
         DefKind::Var,
         anon,
         names.resolve(anon).unwrap().to_string(),
-        to_range(declarator.pattern.loc),
+        ctx.to_range(declarator.pattern.loc),
         is_item,
         DefSource::Var(declarator),
       ));
@@ -949,128 +1054,128 @@ fn collect_var_decl<'a>(
 }
 
 fn walk_stmt_children<'a>(
-  file: FileId,
   stmt: &'a Node<AstStmt>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
   match &*stmt.stx {
-    AstStmt::Expr(expr_stmt) => collect_expr(&expr_stmt.stx.expr, descriptors, names),
+    AstStmt::Expr(expr_stmt) => collect_expr(&expr_stmt.stx.expr, descriptors, names, ctx),
     AstStmt::Return(ret) => {
       if let Some(v) = &ret.stx.value {
-        collect_expr(v, descriptors, names);
+        collect_expr(v, descriptors, names, ctx);
       }
     }
     AstStmt::If(if_stmt) => {
-      collect_expr(&if_stmt.stx.test, descriptors, names);
-      collect_stmt(file, &if_stmt.stx.consequent, descriptors, names, false);
+      collect_expr(&if_stmt.stx.test, descriptors, names, ctx);
+      collect_stmt(&if_stmt.stx.consequent, descriptors, names, false, ctx);
       if let Some(alt) = &if_stmt.stx.alternate {
-        collect_stmt(file, alt, descriptors, names, false);
+        collect_stmt(alt, descriptors, names, false, ctx);
       }
     }
     AstStmt::Block(block) => {
       for stmt in block.stx.body.iter() {
-        collect_stmt(file, stmt, descriptors, names, false);
+        collect_stmt(stmt, descriptors, names, false, ctx);
       }
     }
     AstStmt::While(wh) => {
-      collect_expr(&wh.stx.condition, descriptors, names);
-      collect_stmt(file, &wh.stx.body, descriptors, names, false);
+      collect_expr(&wh.stx.condition, descriptors, names, ctx);
+      collect_stmt(&wh.stx.body, descriptors, names, false, ctx);
     }
     AstStmt::DoWhile(dw) => {
-      collect_expr(&dw.stx.condition, descriptors, names);
-      collect_stmt(file, &dw.stx.body, descriptors, names, false);
+      collect_expr(&dw.stx.condition, descriptors, names, ctx);
+      collect_stmt(&dw.stx.body, descriptors, names, false, ctx);
     }
     AstStmt::ForTriple(for_stmt) => {
       match &for_stmt.stx.init {
-        ForTripleStmtInit::Expr(e) => collect_expr(e, descriptors, names),
-        ForTripleStmtInit::Decl(d) => collect_var_decl(d, descriptors, names, false),
+        ForTripleStmtInit::Expr(e) => collect_expr(e, descriptors, names, ctx),
+        ForTripleStmtInit::Decl(d) => collect_var_decl(d, descriptors, names, false, ctx),
         ForTripleStmtInit::None => {}
       }
       if let Some(cond) = &for_stmt.stx.cond {
-        collect_expr(cond, descriptors, names);
+        collect_expr(cond, descriptors, names, ctx);
       }
       if let Some(post) = &for_stmt.stx.post {
-        collect_expr(post, descriptors, names);
+        collect_expr(post, descriptors, names, ctx);
       }
-      collect_for_body(file, &for_stmt.stx.body, descriptors, names);
+      collect_for_body(&for_stmt.stx.body, descriptors, names, ctx);
     }
     AstStmt::ForIn(for_in) => {
       match &for_in.stx.lhs {
         ForInOfLhs::Assign(p) => {
-          let _ = collect_pat_names(p, names);
+          let _ = collect_pat_names(p, names, ctx);
         }
         ForInOfLhs::Decl((_, pat_decl)) => {
-          let _ = collect_pat_names(&pat_decl.stx.pat, names);
+          let _ = collect_pat_names(&pat_decl.stx.pat, names, ctx);
         }
       }
-      collect_expr(&for_in.stx.rhs, descriptors, names);
-      collect_for_body(file, &for_in.stx.body, descriptors, names);
+      collect_expr(&for_in.stx.rhs, descriptors, names, ctx);
+      collect_for_body(&for_in.stx.body, descriptors, names, ctx);
     }
     AstStmt::ForOf(for_of) => {
       match &for_of.stx.lhs {
         ForInOfLhs::Assign(p) => {
-          let _ = collect_pat_names(p, names);
+          let _ = collect_pat_names(p, names, ctx);
         }
         ForInOfLhs::Decl((_, pat_decl)) => {
-          let _ = collect_pat_names(&pat_decl.stx.pat, names);
+          let _ = collect_pat_names(&pat_decl.stx.pat, names, ctx);
         }
       }
-      collect_expr(&for_of.stx.rhs, descriptors, names);
-      collect_for_body(file, &for_of.stx.body, descriptors, names);
+      collect_expr(&for_of.stx.rhs, descriptors, names, ctx);
+      collect_for_body(&for_of.stx.body, descriptors, names, ctx);
     }
     AstStmt::Switch(sw) => {
-      collect_expr(&sw.stx.test, descriptors, names);
+      collect_expr(&sw.stx.test, descriptors, names, ctx);
       for branch in sw.stx.branches.iter() {
         if let Some(case) = &branch.stx.case {
-          collect_expr(case, descriptors, names);
+          collect_expr(case, descriptors, names, ctx);
         }
         for stmt in branch.stx.body.iter() {
-          collect_stmt(file, stmt, descriptors, names, false);
+          collect_stmt(stmt, descriptors, names, false, ctx);
         }
       }
     }
     AstStmt::Try(tr) => {
-      collect_block(file, &tr.stx.wrapped, descriptors, names);
+      collect_block(&tr.stx.wrapped, descriptors, names, ctx);
       if let Some(catch) = &tr.stx.catch {
         if let Some(param) = &catch.stx.parameter {
-          let _ = collect_pat_names(&param.stx.pat, names);
+          let _ = collect_pat_names(&param.stx.pat, names, ctx);
         }
         for stmt in catch.stx.body.iter() {
-          collect_stmt(file, stmt, descriptors, names, false);
+          collect_stmt(stmt, descriptors, names, false, ctx);
         }
       }
       if let Some(finally) = &tr.stx.finally {
-        collect_block(file, finally, descriptors, names);
+        collect_block(finally, descriptors, names, ctx);
       }
     }
     AstStmt::With(w) => {
-      collect_expr(&w.stx.object, descriptors, names);
-      collect_stmt(file, &w.stx.body, descriptors, names, false);
+      collect_expr(&w.stx.object, descriptors, names, ctx);
+      collect_stmt(&w.stx.body, descriptors, names, false, ctx);
     }
     _ => {}
   }
 }
 
 fn collect_block<'a>(
-  file: FileId,
   block: &'a Node<parse_js::ast::stmt::BlockStmt>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
   for stmt in block.stx.body.iter() {
-    collect_stmt(file, stmt, descriptors, names, false);
+    collect_stmt(stmt, descriptors, names, false, ctx);
   }
 }
 
 fn collect_for_body<'a>(
-  file: FileId,
   body: &'a Node<ForBody>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
   for stmt in body.stx.body.iter() {
-    collect_stmt(file, stmt, descriptors, names, false);
+    collect_stmt(stmt, descriptors, names, false, ctx);
   }
 }
 
@@ -1078,6 +1183,7 @@ fn collect_expr<'a>(
   expr: &'a Node<AstExpr>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
   match &*expr.stx {
     AstExpr::Func(f) => {
@@ -1086,11 +1192,11 @@ fn collect_expr<'a>(
         DefKind::Function,
         name_id,
         name_text,
-        to_range(expr.loc),
+        ctx.to_range(expr.loc),
         false,
         DefSource::FuncExpr(f),
       ));
-      collect_func_params(&f.stx.func, descriptors, names);
+      collect_func_params(&f.stx.func, descriptors, names, ctx);
     }
     AstExpr::ArrowFunc(f) => {
       let name_id = names.intern("<arrow>");
@@ -1098,11 +1204,11 @@ fn collect_expr<'a>(
         DefKind::Function,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
-        to_range(expr.loc),
+        ctx.to_range(expr.loc),
         false,
         DefSource::ArrowFunction(f),
       ));
-      collect_func_params(&f.stx.func, descriptors, names);
+      collect_func_params(&f.stx.func, descriptors, names, ctx);
     }
     AstExpr::Class(class_expr) => {
       let (name_id, text) = name_from_optional(&class_expr.stx.name, names);
@@ -1110,38 +1216,38 @@ fn collect_expr<'a>(
         DefKind::Class,
         name_id,
         text,
-        to_range(expr.loc),
+        ctx.to_range(expr.loc),
         false,
         DefSource::None,
       ));
     }
     AstExpr::Cond(cond) => {
-      collect_expr(&cond.stx.test, descriptors, names);
-      collect_expr(&cond.stx.consequent, descriptors, names);
-      collect_expr(&cond.stx.alternate, descriptors, names);
+      collect_expr(&cond.stx.test, descriptors, names, ctx);
+      collect_expr(&cond.stx.consequent, descriptors, names, ctx);
+      collect_expr(&cond.stx.alternate, descriptors, names, ctx);
     }
     AstExpr::Binary(bin) => {
-      collect_expr(&bin.stx.left, descriptors, names);
-      collect_expr(&bin.stx.right, descriptors, names);
+      collect_expr(&bin.stx.left, descriptors, names, ctx);
+      collect_expr(&bin.stx.right, descriptors, names, ctx);
     }
     AstExpr::Call(call) => {
-      collect_expr(&call.stx.callee, descriptors, names);
+      collect_expr(&call.stx.callee, descriptors, names, ctx);
       for arg in call.stx.arguments.iter() {
-        collect_expr(&arg.stx.value, descriptors, names);
+        collect_expr(&arg.stx.value, descriptors, names, ctx);
       }
     }
     AstExpr::Member(mem) => {
-      collect_expr(&mem.stx.left, descriptors, names);
+      collect_expr(&mem.stx.left, descriptors, names, ctx);
     }
     AstExpr::ComputedMember(mem) => {
-      collect_expr(&mem.stx.object, descriptors, names);
-      collect_expr(&mem.stx.member, descriptors, names);
+      collect_expr(&mem.stx.object, descriptors, names, ctx);
+      collect_expr(&mem.stx.member, descriptors, names, ctx);
     }
     AstExpr::TaggedTemplate(tag) => {
-      collect_expr(&tag.stx.function, descriptors, names);
+      collect_expr(&tag.stx.function, descriptors, names, ctx);
       for part in tag.stx.parts.iter() {
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
-          collect_expr(expr, descriptors, names);
+          collect_expr(expr, descriptors, names, ctx);
         }
       }
     }
@@ -1150,7 +1256,7 @@ fn collect_expr<'a>(
         match el {
           parse_js::ast::expr::lit::LitArrElem::Single(expr)
           | parse_js::ast::expr::lit::LitArrElem::Rest(expr) => {
-            collect_expr(expr, descriptors, names);
+            collect_expr(expr, descriptors, names, ctx);
           }
           parse_js::ast::expr::lit::LitArrElem::Empty => {}
         }
@@ -1162,10 +1268,10 @@ fn collect_expr<'a>(
       for member in obj.stx.members.iter() {
         match &member.stx.typ {
           ObjMemberType::Valued { val, .. } => match val {
-            ClassOrObjVal::Prop(Some(expr)) => collect_expr(expr, descriptors, names),
+            ClassOrObjVal::Prop(Some(expr)) => collect_expr(expr, descriptors, names, ctx),
             _ => {}
           },
-          ObjMemberType::Rest { val } => collect_expr(val, descriptors, names),
+          ObjMemberType::Rest { val } => collect_expr(val, descriptors, names, ctx),
           ObjMemberType::Shorthand { .. } => {}
         }
       }
@@ -1173,40 +1279,40 @@ fn collect_expr<'a>(
     AstExpr::LitTemplate(tmpl) => {
       for part in tmpl.stx.parts.iter() {
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
-          collect_expr(expr, descriptors, names);
+          collect_expr(expr, descriptors, names, ctx);
         }
       }
     }
     AstExpr::ArrPat(arr) => {
       for elem in arr.stx.elements.iter().flatten() {
-        collect_exprs_from_pat(&elem.target, descriptors, names);
+        collect_exprs_from_pat(&elem.target, descriptors, names, ctx);
         if let Some(default) = &elem.default_value {
-          collect_expr(default, descriptors, names);
+          collect_expr(default, descriptors, names, ctx);
         }
       }
       if let Some(rest) = &arr.stx.rest {
-        collect_exprs_from_pat(rest, descriptors, names);
+        collect_exprs_from_pat(rest, descriptors, names, ctx);
       }
     }
     AstExpr::ObjPat(obj) => {
       for prop in obj.stx.properties.iter() {
-        collect_exprs_from_pat(&prop.stx.target, descriptors, names);
+        collect_exprs_from_pat(&prop.stx.target, descriptors, names, ctx);
         if let Some(default) = &prop.stx.default_value {
-          collect_expr(default, descriptors, names);
+          collect_expr(default, descriptors, names, ctx);
         }
       }
       if let Some(rest) = &obj.stx.rest {
-        collect_exprs_from_pat(rest, descriptors, names);
+        collect_exprs_from_pat(rest, descriptors, names, ctx);
       }
     }
     AstExpr::TypeAssertion(assert) => {
-      collect_expr(&assert.stx.expression, descriptors, names);
+      collect_expr(&assert.stx.expression, descriptors, names, ctx);
     }
     AstExpr::NonNullAssertion(nn) => {
-      collect_expr(&nn.stx.expression, descriptors, names);
+      collect_expr(&nn.stx.expression, descriptors, names, ctx);
     }
     AstExpr::SatisfiesExpr(sat) => {
-      collect_expr(&sat.stx.expression, descriptors, names);
+      collect_expr(&sat.stx.expression, descriptors, names, ctx);
     }
     _ => {}
   }
@@ -1216,31 +1322,32 @@ fn collect_exprs_from_pat<'a>(
   pat: &'a Node<AstPat>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
   match &*pat.stx {
     AstPat::Arr(arr) => {
       for elem in arr.stx.elements.iter().flatten() {
-        collect_exprs_from_pat(&elem.target, descriptors, names);
+        collect_exprs_from_pat(&elem.target, descriptors, names, ctx);
         if let Some(default) = &elem.default_value {
-          collect_expr(default, descriptors, names);
+          collect_expr(default, descriptors, names, ctx);
         }
       }
       if let Some(rest) = &arr.stx.rest {
-        collect_exprs_from_pat(rest, descriptors, names);
+        collect_exprs_from_pat(rest, descriptors, names, ctx);
       }
     }
     AstPat::Obj(obj) => {
       for prop in obj.stx.properties.iter() {
-        collect_exprs_from_pat(&prop.stx.target, descriptors, names);
+        collect_exprs_from_pat(&prop.stx.target, descriptors, names, ctx);
         if let Some(default) = &prop.stx.default_value {
-          collect_expr(default, descriptors, names);
+          collect_expr(default, descriptors, names, ctx);
         }
       }
       if let Some(rest) = &obj.stx.rest {
-        collect_exprs_from_pat(rest, descriptors, names);
+        collect_exprs_from_pat(rest, descriptors, names, ctx);
       }
     }
-    AstPat::AssignTarget(expr) => collect_expr(expr, descriptors, names),
+    AstPat::AssignTarget(expr) => collect_expr(expr, descriptors, names, ctx),
     AstPat::Id(_) => {}
   }
 }
@@ -1265,11 +1372,12 @@ fn collect_func_params<'a>(
   func: &'a Node<Func>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
   for param in func.stx.parameters.iter() {
-    collect_pat_defs(&param.stx.pattern, DefKind::Param, descriptors, names);
+    collect_pat_defs(&param.stx.pattern, DefKind::Param, descriptors, names, ctx);
     if let Some(default) = &param.stx.default_value {
-      collect_expr(default, descriptors, names);
+      collect_expr(default, descriptors, names, ctx);
     }
   }
 }
@@ -1278,10 +1386,11 @@ fn collect_func_params_from_parts<'a>(
   params: &'a [Node<AmbientFunctionParameter>],
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
   for param in params.iter() {
     let id = names.intern(&param.stx.name);
-    let span = to_range(param.loc);
+    let span = ctx.to_range(param.loc);
     descriptors.push(DefDescriptor::new(
       DefKind::Param,
       id,
@@ -1298,8 +1407,9 @@ fn collect_pat_defs<'a>(
   kind: DefKind,
   descriptors: &mut Vec<DefDescriptor<'a>>,
   names: &mut NameInterner,
+  ctx: &mut LoweringContext,
 ) {
-  for (name_id, span) in collect_pat_names(&pat_decl.stx.pat, names) {
+  for (name_id, span) in collect_pat_names(&pat_decl.stx.pat, names, ctx) {
     let text = names.resolve(name_id).unwrap().to_string();
     descriptors.push(DefDescriptor::new(
       kind,
@@ -1312,9 +1422,13 @@ fn collect_pat_defs<'a>(
   }
 }
 
-fn collect_pat_names(pat: &Node<AstPat>, names: &mut NameInterner) -> Vec<(NameId, TextRange)> {
+fn collect_pat_names(
+  pat: &Node<AstPat>,
+  names: &mut NameInterner,
+  ctx: &mut LoweringContext,
+) -> Vec<(NameId, TextRange)> {
   let mut acc = Vec::new();
-  collect_pat_names_inner(pat, names, &mut acc);
+  collect_pat_names_inner(pat, names, &mut acc, ctx);
   acc
 }
 
@@ -1322,32 +1436,33 @@ fn collect_pat_names_inner(
   pat: &Node<AstPat>,
   names: &mut NameInterner,
   acc: &mut Vec<(NameId, TextRange)>,
+  ctx: &mut LoweringContext,
 ) {
   match &*pat.stx {
     AstPat::Id(id) => {
       let name_id = names.intern(&id.stx.name);
-      acc.push((name_id, to_range(pat.loc)));
+      acc.push((name_id, ctx.to_range(pat.loc)));
     }
     AstPat::Arr(arr) => {
       for elem in arr.stx.elements.iter().flatten() {
-        collect_pat_names_inner(&elem.target, names, acc);
+        collect_pat_names_inner(&elem.target, names, acc, ctx);
       }
       if let Some(rest) = &arr.stx.rest {
-        collect_pat_names_inner(rest, names, acc);
+        collect_pat_names_inner(rest, names, acc, ctx);
       }
     }
     AstPat::Obj(obj) => {
       for prop in obj.stx.properties.iter() {
-        collect_pat_names_inner(&prop.stx.target, names, acc);
+        collect_pat_names_inner(&prop.stx.target, names, acc, ctx);
       }
       if let Some(rest) = &obj.stx.rest {
-        collect_pat_names_inner(rest, names, acc);
+        collect_pat_names_inner(rest, names, acc, ctx);
       }
     }
     AstPat::AssignTarget(expr) => match &*expr.stx {
       AstExpr::Id(id) => {
         let name_id = names.intern(&id.stx.name);
-        acc.push((name_id, to_range(expr.loc)));
+        acc.push((name_id, ctx.to_range(expr.loc)));
       }
       _ => {}
     },
