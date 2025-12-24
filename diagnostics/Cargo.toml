@@ -11,3 +11,6 @@ serde = { version = "1", features = ["derive"], optional = true }
 default = []
 serde = ["dep:serde"]
 parse-js = ["dep:parse-js"]
+
+[dev-dependencies]
+serde_json = "1"

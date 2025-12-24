@@ -500,6 +500,7 @@ version = "0.1.0"
 dependencies = [
  "parse-js",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
