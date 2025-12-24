@@ -9,10 +9,8 @@ axum = "0.7.9"
 axum-msgpack = "0.4.0"
 diagnostics = { path = "../diagnostics", features = ["serde"] }
 optimize-js = { version = "0.1.0", path = "../optimize-js" }
-parse-js = { version = "0.24.1", path = "../parse-js" }
 serde = { version = "1.0.216", features = ["derive"] }
 serde_json = "1.0.133"
-symbol-js = { version = "0.2.0", path = "../symbol-js" }
 tokio = { version = "1.42.0", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["cors"] }
 tracing-subscriber = "0.3.19"
