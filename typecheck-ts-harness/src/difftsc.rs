@@ -1,18 +1,21 @@
 #![cfg_attr(not(feature = "with-node"), allow(dead_code, unused_imports))]
 
+use crate::multifile::normalize_name;
+use crate::tsc::node_available;
+use crate::tsc::TscDiagnostic;
+use crate::tsc::TscDiagnostics;
+use crate::tsc::TscRequest;
+use crate::tsc::TscRunner;
 use anyhow::anyhow;
 use anyhow::Context;
 use anyhow::Result;
 use clap::Args;
-use serde::Deserialize;
-use serde::Serialize;
+use serde_json::Map;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use std::time::Instant;
-use tempfile::TempDir;
-use tracing::{info, info_span};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Args)]
@@ -38,20 +41,6 @@ pub struct DifftscArgs {
 pub enum CommandStatus {
   Success,
   Skipped,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TscDiagnostics {
-  pub diagnostics: Vec<TscDiagnostic>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TscDiagnostic {
-  pub code: u32,
-  pub file: Option<String>,
-  pub start: u32,
-  pub end: u32,
-  pub category: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +71,7 @@ pub fn run(args: DifftscArgs) -> Result<CommandStatus> {
 
 #[cfg(feature = "with-node")]
 fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
-  if !node_available(&args.node)? {
+  if !node_available(&args.node) {
     eprintln!(
       "difftsc skipped: Node.js not available at {}",
       args.node.display()
@@ -130,28 +119,21 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
   }
 
   let tests = collect_tests(&suite_path)?;
-  info!(
-    phase = "discover_difftsc",
-    suite = %suite_name,
-    count = tests.len()
-  );
   if tests.is_empty() {
     return Err(anyhow!("suite `{}` contains no tests", suite_name));
   }
 
   let mut mismatches = Vec::new();
+  let mut runner = TscRunner::new(args.node.clone())?;
 
   for test in tests {
-    let span = info_span!("difftsc_case", test = %test.name);
-    let _enter = span.enter();
-    let actual = run_test(&test, &args.node)?;
+    let actual = run_test(&test, &mut runner)?;
     let baseline_path = baselines_root.join(format!("{}.json", test.name));
 
     if args.update_baselines {
       write_baseline(&baseline_path, &actual)
         .with_context(|| format!("write baseline for {}", test.name))?;
     } else {
-      let diff_start = Instant::now();
       let baseline = read_baseline(&baseline_path)
         .with_context(|| format!("read baseline for {}", test.name))?;
       if let Some(diff) = compare_diagnostics(
@@ -161,10 +143,6 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
       ) {
         mismatches.push((test.name, diff));
       }
-      info!(
-        phase = "diff",
-        duration_ms = diff_start.elapsed().as_millis()
-      );
     }
   }
 
@@ -186,70 +164,37 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
 }
 
 #[cfg(feature = "with-node")]
-fn node_available(node_path: &Path) -> Result<bool> {
-  let output = Command::new(node_path).arg("--version").output();
-
-  Ok(match output {
-    Ok(output) => output.status.success(),
-    Err(_) => false,
-  })
+fn run_test(test: &TestCase, runner: &mut TscRunner) -> Result<TscDiagnostics> {
+  let request = build_request(test);
+  runner
+    .check(request)
+    .with_context(|| format!("run tsc for test {}", test.name))
 }
 
 #[cfg(feature = "with-node")]
-fn run_test(test: &TestCase, node_path: &Path) -> Result<TscDiagnostics> {
-  let span = info_span!("difftsc_test", test = %test.name);
-  let _enter = span.enter();
-  let temp_dir = tempfile::tempdir()?;
-  write_test_files(&temp_dir, test)?;
-  let root_files: Vec<_> = test
-    .files
-    .iter()
-    .map(|file| temp_dir.path().join(&file.relative_path))
-    .collect();
-  let start = Instant::now();
-  let diagnostics = run_tsc(node_path, temp_dir.path(), &root_files)
-    .with_context(|| format!("run tsc for test {}", test.name))?;
-  info!(
-    phase = "tsc_run",
-    duration_ms = start.elapsed().as_millis(),
-    file_count = test.files.len()
-  );
-  Ok(diagnostics)
-}
+fn build_request(test: &TestCase) -> TscRequest {
+  let mut files = HashMap::new();
+  let mut root_names = Vec::new();
 
-#[cfg(feature = "with-node")]
-fn run_tsc(node_path: &Path, cwd: &Path, files: &[PathBuf]) -> Result<TscDiagnostics> {
-  let wrapper = Path::new(env!("CARGO_MANIFEST_DIR"))
-    .join("scripts")
-    .join("tsc_wrapper.js");
-  if !wrapper.exists() {
-    return Err(anyhow!("missing tsc wrapper at {}", wrapper.display()));
+  for file in &test.files {
+    let normalized = normalize_name(file.relative_path.to_string_lossy().as_ref());
+    root_names.push(normalized.clone());
+    files.insert(normalized, file.content.clone());
   }
 
-  let mut cmd = Command::new(node_path);
-  cmd.current_dir(cwd);
-  cmd.arg(&wrapper);
-  for file in files {
-    cmd.arg(file);
+  root_names.sort();
+  root_names.dedup();
+
+  let mut options = Map::new();
+  options.insert("noEmit".into(), Value::Bool(true));
+  options.insert("skipLibCheck".into(), Value::Bool(true));
+  options.insert("pretty".into(), Value::Bool(false));
+
+  TscRequest {
+    root_names,
+    files,
+    options,
   }
-
-  let output = cmd
-    .output()
-    .with_context(|| format!("spawn node at {}", node_path.display()))?;
-
-  if !output.status.success() {
-    return Err(anyhow!(
-      "tsc wrapper exited with status {}: stdout={} stderr={}",
-      output.status,
-      String::from_utf8_lossy(&output.stdout),
-      String::from_utf8_lossy(&output.stderr)
-    ));
-  }
-
-  let parsed: TscDiagnostics =
-    serde_json::from_slice(&output.stdout).context("parse tsc JSON output")?;
-
-  Ok(parsed)
 }
 
 fn compare_diagnostics(
@@ -420,19 +365,6 @@ fn test_name_from_path(path: &Path) -> Result<String> {
     .context("test file missing stem")
 }
 
-fn write_test_files(temp_dir: &TempDir, test: &TestCase) -> Result<()> {
-  for file in &test.files {
-    let output_path = temp_dir.path().join(&file.relative_path);
-    if let Some(parent) = output_path.parent() {
-      fs::create_dir_all(parent)?;
-    }
-    fs::write(&output_path, &file.content)
-      .with_context(|| format!("write temp file {}", output_path.display()))?;
-  }
-
-  Ok(())
-}
-
 fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
   if let Some(parent) = path.parent() {
     fs::create_dir_all(parent)?;
@@ -488,6 +420,7 @@ mod tests {
       start: 0,
       end: 4,
       category: None,
+      message: None,
     }];
     let actual = vec![TscDiagnostic {
       code: 1,
@@ -495,6 +428,7 @@ mod tests {
       start: 1,
       end: 5,
       category: None,
+      message: None,
     }];
     assert!(compare_diagnostics(&expected, &actual, 0).is_some());
     assert!(compare_diagnostics(&expected, &actual, 1).is_none());
