@@ -95,7 +95,9 @@ pub enum TypeKind {
     overloads: Vec<SignatureId>,
   },
   Ref {
+    /// Canonical definition identifier from `hir-js` for the referenced type.
     def: DefId,
+    /// Type arguments applied to the referenced definition.
     args: Vec<TypeId>,
   },
   TypeParam(TypeParamId),

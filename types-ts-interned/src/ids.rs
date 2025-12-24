@@ -26,4 +26,7 @@ id_newtype!(ShapeId);
 id_newtype!(NameId);
 id_newtype!(TypeParamId);
 id_newtype!(SignatureId);
-id_newtype!(DefId);
+
+// `DefId` is shared with `hir-js` to ensure a single canonical definition identity
+// throughout the pipeline. It is re-exported here for convenience.
+pub use hir_js::DefId;

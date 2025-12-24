@@ -1921,6 +1921,7 @@ name = "types-ts-interned"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "hir-js",
  "num-bigint",
  "ordered-float",
  "parking_lot",
