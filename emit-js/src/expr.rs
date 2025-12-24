@@ -83,6 +83,7 @@ where
       Expr::LitNull(_) => self.emit_lit_null(),
       Expr::LitBigInt(lit) => self.emit_lit_big_int(lit),
       Expr::LitStr(lit) => self.emit_lit_str(lit),
+      Expr::JsxElem(elem) => crate::jsx::emit_jsx_elem(self.out, elem),
       Expr::Binary(binary) => self.emit_binary(binary),
       Expr::Call(call) => self.emit_call(call),
       Expr::Member(member) => self.emit_member(member),
@@ -211,6 +212,7 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
     Expr::LitNull(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::LitBigInt(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::LitStr(_) => Ok(PRIMARY_PRECEDENCE),
+    Expr::JsxElem(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::Binary(binary) => Ok(
       OPERATORS
         .get(&binary.stx.operator)
