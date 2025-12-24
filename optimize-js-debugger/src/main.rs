@@ -1,7 +1,9 @@
+use axum::http::StatusCode;
 use axum::routing::post;
 use axum::Router;
 use axum_msgpack::MsgPack;
-use optimize_js::Program;
+use optimize_js::compile_source;
+use optimize_js::OptimizeError;
 use optimize_js::ProgramFunction;
 use optimize_js::ProgramSymbols;
 use optimize_js::TopLevelMode;
@@ -23,24 +25,31 @@ pub struct PostCompileRes {
   pub symbols: Option<ProgramSymbols>,
 }
 
+#[derive(Serialize)]
+pub struct PostCompileErrorRes {
+  pub ok: bool,
+  pub error: OptimizeError,
+}
+
 pub async fn handle_post_compile(
   MsgPack(PostCompileReq { source, is_global }): MsgPack<PostCompileReq>,
-) -> MsgPack<PostCompileRes> {
+) -> Result<MsgPack<PostCompileRes>, (StatusCode, MsgPack<PostCompileErrorRes>)> {
   let top_level_mode = if is_global {
     TopLevelMode::Global
   } else {
     TopLevelMode::Module
   };
-  let Program {
-    functions,
-    top_level,
-    symbols,
-  } = optimize_js::compile_source(&source, top_level_mode, true).expect("compile input");
-  MsgPack(PostCompileRes {
-    functions,
-    top_level,
-    symbols,
-  })
+  match compile_source(&source, top_level_mode, true) {
+    Ok(program) => Ok(MsgPack(PostCompileRes {
+      functions: program.functions,
+      top_level: program.top_level,
+      symbols: program.symbols,
+    })),
+    Err(error) => Err((
+      StatusCode::BAD_REQUEST,
+      MsgPack(PostCompileErrorRes { ok: false, error }),
+    )),
+  }
 }
 
 #[tokio::main]

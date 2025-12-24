@@ -5,6 +5,8 @@ use crate::il::inst::Arg;
 use crate::il::inst::BinOp;
 use crate::il::inst::Const;
 use crate::il::inst::Inst;
+use crate::OptimizeError;
+use crate::OptimizeResult;
 use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::expr::pat::ArrPat;
 use parse_js::ast::expr::pat::IdPat;
@@ -15,7 +17,6 @@ use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::VarDecl;
 use parse_js::ast::stmt::decl::VarDeclarator;
-use parse_js::ast::stmt::BlockStmt;
 use parse_js::ast::stmt::BreakStmt;
 use parse_js::ast::stmt::ExprStmt;
 use parse_js::ast::stmt::ForTripleStmt;
@@ -33,7 +34,7 @@ impl<'p> SourceToInst<'p> {
     prop: Arg,
     target: Node<Pat>,
     default_value: Option<Node<Expr>>,
-  ) {
+  ) -> OptimizeResult<()> {
     let tmp_var = self.c_temp.bump();
     self.out.push(Inst::bin(tmp_var, obj, BinOp::GetProp, prop));
     if let Some(dv) = default_value {
@@ -51,17 +52,17 @@ impl<'p> SourceToInst<'p> {
         DUMMY_LABEL,
         after_label_id,
       ));
-      let dv_arg = self.compile_expr(dv);
+      let dv_arg = self.compile_expr(dv)?;
       self.out.push(Inst::var_assign(tmp_var, dv_arg));
       self.out.push(Inst::label(after_label_id));
     };
-    self.compile_destructuring(target, Arg::Var(tmp_var));
+    self.compile_destructuring(target, Arg::Var(tmp_var))
   }
 
-  pub fn compile_destructuring(&mut self, pat: Node<Pat>, rval: Arg) {
+  pub fn compile_destructuring(&mut self, pat: Node<Pat>, rval: Arg) -> OptimizeResult<()> {
     match *pat.stx {
       Pat::Arr(n) => {
-        let ArrPat { elements, rest } = *n.stx;
+        let ArrPat { elements, rest: _ } = *n.stx;
         for (i, e) in elements.into_iter().enumerate() {
           let Some(e) = e else {
             continue;
@@ -71,12 +72,15 @@ impl<'p> SourceToInst<'p> {
             Arg::Const(Const::Num(JsNumber(i as f64))),
             e.target,
             e.default_value,
-          );
+          )?;
         }
         // TODO `rest`.
       }
       Pat::Obj(n) => {
-        let ObjPat { properties, rest } = *n.stx;
+        let ObjPat {
+          properties,
+          rest: _,
+        } = *n.stx;
         for p in properties {
           let ObjPatProp {
             key,
@@ -86,9 +90,9 @@ impl<'p> SourceToInst<'p> {
           } = *p.stx;
           let prop = match key {
             ClassOrObjKey::Direct(d) => Arg::Const(Const::Str(d.stx.key)),
-            ClassOrObjKey::Computed(c) => self.compile_expr(c),
+            ClassOrObjKey::Computed(c) => self.compile_expr(c)?,
           };
-          self.compile_destructuring_via_prop(rval.clone(), prop, target, default_value);
+          self.compile_destructuring_via_prop(rval.clone(), prop, target, default_value)?;
         }
         // TODO `rest`.
       }
@@ -99,23 +103,36 @@ impl<'p> SourceToInst<'p> {
           VarType::Local(local) => Inst::var_assign(self.symbol_to_temp(local), rval.clone()),
           VarType::Foreign(foreign) => Inst::foreign_store(foreign, rval.clone()),
           VarType::Unknown(unknown) => Inst::unknown_store(unknown, rval.clone()),
-          VarType::Builtin(builtin) => panic!("assignment to builtin {builtin}"),
+          VarType::Builtin(builtin) => {
+            return Err(OptimizeError::unsupported(
+              pat.loc,
+              format!("assignment to builtin {builtin}"),
+            ))
+          }
         };
         self.out.push(inst);
       }
-      _ => unreachable!(),
+      _ => {
+        return Err(OptimizeError::unsupported(
+          pat.loc,
+          "unsupported destructuring pattern",
+        ))
+      }
     };
+    Ok(())
   }
 
-  pub fn compile_stmts(&mut self, stmts: Vec<Node<Stmt>>) {
+  pub fn compile_stmts(&mut self, stmts: Vec<Node<Stmt>>) -> OptimizeResult<()> {
     for stmt in stmts {
-      self.compile_stmt(stmt);
+      self.compile_stmt(stmt)?;
     }
+    Ok(())
   }
 
-  pub fn compile_break_stmt(&mut self, BreakStmt { label }: BreakStmt) {
+  pub fn compile_break_stmt(&mut self, BreakStmt { label: _ }: BreakStmt) -> OptimizeResult<()> {
     // TODO Label.
     self.out.push(Inst::goto(*self.break_stack.last().unwrap()));
+    Ok(())
   }
 
   pub fn compile_for_triple_stmt(
@@ -126,33 +143,34 @@ impl<'p> SourceToInst<'p> {
       post,
       body,
     }: ForTripleStmt,
-  ) {
+  ) -> OptimizeResult<()> {
     match init {
       ForTripleStmtInit::None => {}
       ForTripleStmtInit::Expr(e) => {
-        self.compile_expr(e);
+        self.compile_expr(e)?;
       }
       ForTripleStmtInit::Decl(d) => {
-        self.compile_var_decl(*d.stx);
+        self.compile_var_decl(*d.stx)?;
       }
     };
     let loop_entry_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
     self.out.push(Inst::label(loop_entry_label));
     if let Some(cond) = cond {
-      let cond_arg = self.compile_expr(cond);
+      let cond_arg = self.compile_expr(cond)?;
       self
         .out
         .push(Inst::cond_goto(cond_arg, DUMMY_LABEL, after_loop_label));
     };
     self.break_stack.push(after_loop_label);
-    self.compile_stmts(body.stx.body);
+    self.compile_stmts(body.stx.body)?;
     self.break_stack.pop().unwrap();
     if let Some(post) = post {
-      self.compile_expr(post);
+      self.compile_expr(post)?;
     };
     self.out.push(Inst::goto(loop_entry_label));
     self.out.push(Inst::label(after_loop_label));
+    Ok(())
   }
 
   pub fn compile_if_stmt(
@@ -162,8 +180,8 @@ impl<'p> SourceToInst<'p> {
       consequent,
       alternate,
     }: IfStmt,
-  ) {
-    let test_arg = self.compile_expr(test);
+  ) -> OptimizeResult<()> {
+    let test_arg = self.compile_expr(test)?;
     match alternate {
       Some(alternate) => {
         let cons_label_id = self.c_label.bump();
@@ -171,10 +189,10 @@ impl<'p> SourceToInst<'p> {
         self
           .out
           .push(Inst::cond_goto(test_arg, cons_label_id, DUMMY_LABEL));
-        self.compile_stmt(alternate);
+        self.compile_stmt(alternate)?;
         self.out.push(Inst::goto(after_label_id));
         self.out.push(Inst::label(cons_label_id));
-        self.compile_stmt(consequent);
+        self.compile_stmt(consequent)?;
         self.out.push(Inst::label(after_label_id));
       }
       None => {
@@ -182,25 +200,26 @@ impl<'p> SourceToInst<'p> {
         self
           .out
           .push(Inst::cond_goto(test_arg, DUMMY_LABEL, after_label_id));
-        self.compile_stmt(consequent);
+        self.compile_stmt(consequent)?;
         self.out.push(Inst::label(after_label_id));
       }
     };
+    Ok(())
   }
 
   pub fn compile_var_decl(
     &mut self,
     VarDecl {
-      export,
-      mode,
+      export: _,
+      mode: _,
       declarators,
     }: VarDecl,
-  ) {
+  ) -> OptimizeResult<()> {
     // TODO export.
     for VarDeclarator {
       initializer,
       pattern,
-      type_annotation,
+      type_annotation: _,
       definite_assignment: _,
     } in declarators
     {
@@ -209,32 +228,39 @@ impl<'p> SourceToInst<'p> {
         continue;
       };
       let tmp = self.c_temp.bump();
-      let rval = self.compile_expr(init);
+      let rval = self.compile_expr(init)?;
       self.out.push(Inst::var_assign(tmp, rval));
-      self.compile_destructuring(pattern.stx.pat, Arg::Var(tmp));
+      self.compile_destructuring(pattern.stx.pat, Arg::Var(tmp))?;
     }
+    Ok(())
   }
 
-  pub fn compile_while_stmt(&mut self, WhileStmt { condition, body }: WhileStmt) {
+  pub fn compile_while_stmt(
+    &mut self,
+    WhileStmt { condition, body }: WhileStmt,
+  ) -> OptimizeResult<()> {
     let before_test_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
     self.out.push(Inst::label(before_test_label));
-    let test_arg = self.compile_expr(condition);
+    let test_arg = self.compile_expr(condition)?;
     self
       .out
       .push(Inst::cond_goto(test_arg, DUMMY_LABEL, after_loop_label));
     self.break_stack.push(after_loop_label);
-    self.compile_stmt(body);
+    self.compile_stmt(body)?;
     self.break_stack.pop();
     self.out.push(Inst::goto(before_test_label));
     self.out.push(Inst::label(after_loop_label));
+    Ok(())
   }
 
-  pub fn compile_expr_stmt(&mut self, ExprStmt { expr }: ExprStmt) {
-    self.compile_expr(expr);
+  pub fn compile_expr_stmt(&mut self, ExprStmt { expr }: ExprStmt) -> OptimizeResult<()> {
+    self.compile_expr(expr)?;
+    Ok(())
   }
 
-  pub fn compile_stmt(&mut self, n: Node<Stmt>) {
+  pub fn compile_stmt(&mut self, n: Node<Stmt>) -> OptimizeResult<()> {
+    let span = n.loc;
     match *n.stx {
       Stmt::Block(n) => self.compile_stmts(n.stx.body),
       Stmt::Break(n) => self.compile_break_stmt(*n.stx),
@@ -243,7 +269,10 @@ impl<'p> SourceToInst<'p> {
       Stmt::If(n) => self.compile_if_stmt(*n.stx),
       Stmt::VarDecl(n) => self.compile_var_decl(*n.stx),
       Stmt::While(n) => self.compile_while_stmt(*n.stx),
-      _ => unreachable!(),
-    };
+      other => Err(OptimizeError::unsupported(
+        span,
+        format!("unsupported statement {other:?}"),
+      )),
+    }
   }
 }

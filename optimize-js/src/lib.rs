@@ -13,7 +13,6 @@ use ahash::HashSet;
 use analysis::defs::calculate_defs;
 use cfg::bblock::convert_insts_to_bblocks;
 use cfg::cfg::Cfg;
-use crossbeam_utils::sync::WaitGroup;
 use dashmap::DashMap;
 use dom::Dom;
 use opt::optpass_cfg_prune::optpass_cfg_prune;
@@ -24,7 +23,8 @@ use opt::optpass_trivial_dce::optpass_trivial_dce;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
-use parse_js::error::SyntaxResult;
+use parse_js::error::SyntaxError;
+use parse_js::loc::Loc;
 use parse_js::parse;
 use serde::Serialize;
 use ssa::ssa_deconstruct::deconstruct_ssa;
@@ -39,8 +39,50 @@ use symbol_js::compute_symbols;
 use symbol_js::symbol::Scope;
 use symbol_js::symbol::Symbol;
 pub use symbol_js::TopLevelMode;
-use util::counter::Counter;
 use util::debug::OptimizerDebug;
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct Span {
+  pub start: usize,
+  pub end: usize,
+}
+
+impl From<Loc> for Span {
+  fn from(value: Loc) -> Self {
+    Self {
+      start: value.0,
+      end: value.1,
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum OptimizeError {
+  ParseError { at: Span, message: String },
+  UseBeforeDeclaration { symbol: Symbol, at: Span },
+  UnsupportedSyntax { at: Span, kind: String },
+}
+
+impl OptimizeError {
+  pub fn unsupported(at: impl Into<Span>, kind: impl Into<String>) -> Self {
+    OptimizeError::UnsupportedSyntax {
+      at: at.into(),
+      kind: kind.into(),
+    }
+  }
+}
+
+impl From<SyntaxError> for OptimizeError {
+  fn from(value: SyntaxError) -> Self {
+    OptimizeError::ParseError {
+      at: value.loc.into(),
+      message: value.to_string(),
+    }
+  }
+}
+
+pub type OptimizeResult<T> = Result<T, OptimizeError>;
 
 // The top level is considered a function (the optimizer concept, not parser or symbolizer).
 #[derive(Debug, Serialize)]
@@ -76,13 +118,13 @@ pub struct ProgramSymbols {
 pub fn compile_js_statements(
   program: &ProgramCompiler,
   statements: Vec<Node<Stmt>>,
-) -> ProgramFunction {
+) -> OptimizeResult<ProgramFunction> {
   let mut dbg = program.debug.then(|| OptimizerDebug::new());
   let mut dbg_checkpoint = |name: &str, cfg: &Cfg| {
     dbg.as_mut().map(|dbg| dbg.add_step(name, cfg));
   };
 
-  let (insts, mut c_label, mut c_temp) = program.translate_source_to_inst(statements);
+  let (insts, mut c_label, mut c_temp) = program.translate_source_to_inst(statements)?;
   let (bblocks, bblock_order) = convert_insts_to_bblocks(insts, &mut c_label);
   let mut cfg = Cfg::from_bblocks(bblocks, bblock_order);
   // Prune unreachable blocks from 0. This is necessary for dominance calculation to be correct (basic example: every block should be dominated by 0, but if there's an unreachable block it'll make all its descendants not dominated by 0).
@@ -131,10 +173,10 @@ pub fn compile_js_statements(
   deconstruct_ssa(&mut cfg, &mut c_label);
   dbg_checkpoint("ssa_deconstruct", &cfg);
 
-  ProgramFunction {
+  Ok(ProgramFunction {
     debug: dbg,
     body: cfg,
-  }
+  })
 }
 
 pub type FnId = usize;
@@ -162,6 +204,7 @@ impl Deref for ProgramCompiler {
   }
 }
 
+#[derive(Debug)]
 pub struct Program {
   pub functions: Vec<ProgramFunction>,
   pub top_level: ProgramFunction,
@@ -169,10 +212,10 @@ pub struct Program {
 }
 
 /// Parse, symbolize, and compile source text in one step.
-pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> SyntaxResult<Program> {
+pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
   let mut top_level_node = parse(source)?;
   compute_symbols(&mut top_level_node, mode);
-  Ok(Program::compile(top_level_node, debug))
+  Program::compile(top_level_node, debug)
 }
 
 fn collect_symbol_table(root: &Scope, captured: &HashSet<Symbol>) -> ProgramSymbols {
@@ -237,16 +280,18 @@ fn collect_free_symbols(func: &ProgramFunction) -> Vec<Symbol> {
 
 impl Program {
   // The AST must already have symbol analysis done by compute_symbols.
-  pub fn compile(mut top_level_node: Node<TopLevel>, debug: bool) -> Self {
+  pub fn compile(mut top_level_node: Node<TopLevel>, debug: bool) -> OptimizeResult<Self> {
     let VarAnalysis {
-      declared,
       foreign,
-      unknown,
       use_before_decl,
+      ..
     } = VarAnalysis::analyze(&mut top_level_node);
     // SSA requires no use before declaration.
-    if let Some((_, loc)) = use_before_decl.iter().next() {
-      panic!("Use before declaration at {:?}", loc);
+    if let Some((symbol, loc)) = use_before_decl.into_iter().next() {
+      return Err(OptimizeError::UseBeforeDeclaration {
+        symbol,
+        at: loc.into(),
+      });
     };
     let symbol_table = top_level_node
       .assoc
@@ -260,7 +305,7 @@ impl Program {
       next_fn_id: AtomicUsize::new(0),
       debug,
     }));
-    let top_level = compile_js_statements(&program, body);
+    let top_level = compile_js_statements(&program, body)?;
     let ProgramCompilerInner {
       functions,
       next_fn_id,
@@ -281,27 +326,28 @@ impl Program {
         && free.top_level.is_empty()
         && free.functions.iter().all(|f| f.is_empty())
       {
-        return Self {
+        return Ok(Self {
           functions,
           top_level,
           symbols: None,
-        };
+        });
       }
     }
 
-    Self {
+    Ok(Self {
       functions,
       top_level,
       symbols: symbol_table.map(|mut table| {
         table.free_symbols = free_symbols;
         table
       }),
-    }
+    })
   }
 }
 
 #[cfg(test)]
 mod tests {
+  use crate::OptimizeError;
   use crate::Program;
   use parse_js::parse;
   use serde_json::to_string;
@@ -311,7 +357,7 @@ mod tests {
   fn compile_with_debug_json(source: &str) -> String {
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
-    let Program { top_level, .. } = Program::compile(top_level_node, true);
+    let Program { top_level, .. } = Program::compile(top_level_node, true).expect("compile");
     let debug = top_level.debug.expect("debug enabled");
     to_string(&debug).expect("serialize debug output")
   }
@@ -337,7 +383,24 @@ mod tests {
     "#;
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
-    let bblocks = Program::compile(top_level_node, false).top_level;
+    let _bblocks = Program::compile(top_level_node, false)
+      .expect("compile")
+      .top_level;
+  }
+
+  #[test]
+  fn test_use_before_declaration_error() {
+    let source = "function demo(){ a; let a = 1; }";
+    let mut top_level_node = parse(source).expect("parse input");
+    compute_symbols(&mut top_level_node, TopLevelMode::Module);
+    let err = Program::compile(top_level_node, false).expect_err("expected use-before-decl error");
+    match err {
+      OptimizeError::UseBeforeDeclaration { at, .. } => {
+        assert!(at.start < at.end);
+        assert_eq!(&source[at.start..at.end], "a");
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
   }
 
   #[test]

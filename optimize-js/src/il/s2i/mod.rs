@@ -1,30 +1,16 @@
 pub mod expr;
 pub mod stmt;
 
-use super::inst::Arg;
-use super::inst::BinOp;
-use super::inst::Const;
 use super::inst::Inst;
-use super::inst::InstTyp;
-use super::inst::UnOp;
-use crate::compile_js_statements;
 use crate::eval::builtin::BUILTINS;
 use crate::util::counter::Counter;
+use crate::OptimizeResult;
 use crate::ProgramCompiler;
 use ahash::HashMap;
 use ahash::HashMapExt;
-use crossbeam_utils::sync::WaitGroup;
-use derive_visitor::Drive;
-use derive_visitor::DriveMut;
-use parse_js::ast::expr::pat::Pat;
-use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::Stmt;
-use parse_js::num::JsNumber;
-use parse_js::operator::OperatorName;
-use std::collections::VecDeque;
-use std::sync::atomic::Ordering;
 use symbol_js::symbol::Scope;
 use symbol_js::symbol::Symbol;
 
@@ -47,8 +33,6 @@ struct SourceToInst<'p> {
   symbol_to_temp: HashMap<Symbol, u32>,
   // Upon `break`, generate Inst::Goto to the label at the top of this stack.
   break_stack: Vec<u32>,
-  // Functions are processed in parallel. This waits for them.
-  wg: WaitGroup,
 }
 
 enum VarType {
@@ -86,7 +70,10 @@ impl<'p> SourceToInst<'p> {
 }
 
 impl ProgramCompiler {
-  pub fn translate_source_to_inst(&self, stmts: Vec<Node<Stmt>>) -> (Vec<Inst>, Counter, Counter) {
+  pub fn translate_source_to_inst(
+    &self,
+    stmts: Vec<Node<Stmt>>,
+  ) -> OptimizeResult<(Vec<Inst>, Counter, Counter)> {
     let mut compiler = SourceToInst {
       program: self,
       // Label 0 is for entry.
@@ -95,12 +82,10 @@ impl ProgramCompiler {
       out: Vec::new(),
       symbol_to_temp: HashMap::new(),
       break_stack: Vec::new(),
-      wg: WaitGroup::new(),
     };
     for stmt in stmts {
-      compiler.compile_stmt(stmt);
+      compiler.compile_stmt(stmt)?;
     }
-    compiler.wg.wait();
-    (compiler.out, compiler.c_label, compiler.c_temp)
+    Ok((compiler.out, compiler.c_label, compiler.c_temp))
   }
 }

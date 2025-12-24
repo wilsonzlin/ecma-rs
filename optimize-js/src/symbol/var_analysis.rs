@@ -80,9 +80,11 @@ impl VarVisitor {
         if usage_ls != decl_ls {
           self.foreign.insert(symbol);
         } else if !self.declared.contains(&symbol) {
+          let start = node.loc.0.saturating_sub(name.len());
+          let end = start + name.len();
           // Check for use before declaration to ensure strict SSA.
           // NOTE: This doesn't check across closures, as that is mostly a runtime determination (see symbol-js/examples/let.js), but we don't care as those are foreign vars and don't affect strict SSA (i.e. correctness).
-          self.use_before_decl.insert(symbol, node.loc);
+          self.use_before_decl.insert(symbol, Loc(start, end));
         }
       }
     };
@@ -93,7 +95,7 @@ impl VarVisitor {
     // It won't exist if it's a global declaration.
     // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
     if let Some(symbol) = scope.find_symbol(node.stx.name.clone()) {
-      assert!(self.declared.insert(symbol));
+      self.declared.insert(symbol);
     };
   }
 
@@ -104,7 +106,7 @@ impl VarVisitor {
       // It won't exist if it's a global declaration.
       // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
       if let Some(symbol) = scope.find_symbol(node.stx.name.clone()) {
-        assert!(self.declared.insert(symbol));
+        self.declared.insert(symbol);
       };
     };
   }

@@ -9,8 +9,10 @@ use crate::il::inst::Const;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::il::inst::UnOp;
+use crate::OptimizeError;
+use crate::OptimizeResult;
+use crate::Span;
 use parse_js::ast::expr::pat::IdPat;
-use parse_js::ast::expr::ArrowFuncExpr;
 use parse_js::ast::expr::BinaryExpr;
 use parse_js::ast::expr::CallArg;
 use parse_js::ast::expr::CallExpr;
@@ -47,9 +49,12 @@ impl<'p> SourceToInst<'p> {
   fn maybe_setup_chain(&mut self, chain: impl Into<Option<Chain>>) -> (bool, Chain) {
     match chain.into() {
       Some(chain) => (false, chain),
-      None => (true, Chain {
-        is_nullish_label: self.c_label.bump(),
-      }),
+      None => (
+        true,
+        Chain {
+          is_nullish_label: self.c_label.bump(),
+        },
+      ),
     }
   }
 
@@ -90,58 +95,44 @@ impl<'p> SourceToInst<'p> {
     }
   }
 
-  pub fn compile_func(
-    &mut self,
-    Func {
-      arrow,
-      async_,
-      generator,
-      type_parameters,
-      parameters,
-      return_type,
-      body,
-    }: Func,
-  ) -> Arg {
+  pub fn compile_func(&mut self, Func { body, .. }: Func) -> OptimizeResult<Arg> {
     let pg = self.program.clone();
-    // We must clone the WaitGroup outside the spawn, as the function inside spawn may not be called immediately.
-    let wg = self.wg.clone();
     let id = pg.next_fn_id.fetch_add(1, Ordering::Relaxed);
-    rayon::spawn(move || {
-      // TODO params, arrow, async, etc.
-      match body {
-        Some(FuncBody::Block(stmts)) => {
-          let func = compile_js_statements(&pg, stmts);
-          pg.functions.insert(id, func);
-        }
-        Some(FuncBody::Expression(node)) => todo!(),
-        None => {
-          // Empty function body (e.g. ambient declaration)
-          let func = compile_js_statements(&pg, Vec::new());
-          pg.functions.insert(id, func);
-        }
-      };
-      // Drop Arc ref first, as our top-level waits on the WaitGroup then immediately tries to unwrap the Arc.
-      drop(pg);
-      drop(wg);
-    });
-    Arg::Fn(id)
+    // TODO params, arrow, async, etc.
+    let func = match body {
+      Some(FuncBody::Block(stmts)) => compile_js_statements(&pg, stmts)?,
+      Some(FuncBody::Expression(node)) => {
+        return Err(OptimizeError::unsupported(
+          node.loc,
+          "expression-bodied functions are not supported",
+        ))
+      }
+      None => compile_js_statements(&pg, Vec::new())?,
+    };
+    pg.functions.insert(id, func);
+    Ok(Arg::Fn(id))
   }
 
-  pub fn compile_id_expr(&mut self, assoc: NodeAssocData, IdExpr { name }: IdExpr) -> Arg {
-    match self.var_type(assoc, name) {
+  pub fn compile_id_expr(
+    &mut self,
+    assoc: NodeAssocData,
+    IdExpr { name }: IdExpr,
+  ) -> OptimizeResult<Arg> {
+    Ok(match self.var_type(assoc, name) {
       VarType::Local(local) => Arg::Var(self.symbol_to_temp(local)),
       VarType::Builtin(builtin) => Arg::Builtin(builtin),
       VarType::Foreign(foreign) => self.temp_var_arg(|tgt| Inst::foreign_load(tgt, foreign)),
       VarType::Unknown(name) => self.temp_var_arg(|tgt| Inst::unknown_load(tgt, name)),
-    }
+    })
   }
 
   pub fn compile_assignment(
     &mut self,
+    span: Span,
     operator: OperatorName,
     target: Node<Expr>,
     value: Node<Expr>,
-  ) -> Arg {
+  ) -> OptimizeResult<Arg> {
     // We'll use this as a placeholder that will be replaced at the end.
     let dummy_val = Arg::Const(Const::Num(JsNumber(0xdeadbeefu32 as f64)));
     // The LHS of an assignment cannot contain a conditional chaining anywhere in the chain, as prohibited by the spec.
@@ -154,7 +145,12 @@ impl<'p> SourceToInst<'p> {
           VarType::Local(l) => Inst::var_assign(self.symbol_to_temp(l), dummy_val),
           VarType::Foreign(f) => Inst::foreign_store(f, dummy_val),
           VarType::Unknown(n) => Inst::unknown_store(n, dummy_val),
-          VarType::Builtin(builtin) => panic!("assignment to builtin {builtin}"),
+          VarType::Builtin(builtin) => {
+            return Err(OptimizeError::unsupported(
+              span,
+              format!("assignment to builtin {builtin}"),
+            ))
+          }
         }
       }
       Expr::Member(n) => {
@@ -164,7 +160,7 @@ impl<'p> SourceToInst<'p> {
           right,
         } = *n.stx;
         assert!(!optional_chaining);
-        let left_arg = self.compile_expr(left);
+        let left_arg = self.compile_expr(left)?;
         let member_arg = Arg::Const(Const::Str(right.to_string()));
         Inst::prop_assign(left_arg, member_arg, dummy_val)
       }
@@ -175,14 +171,19 @@ impl<'p> SourceToInst<'p> {
           member,
         } = *n.stx;
         assert!(!optional_chaining);
-        let left_arg = self.compile_expr(object);
-        let member_arg = self.compile_expr(member);
+        let left_arg = self.compile_expr(object)?;
+        let member_arg = self.compile_expr(member)?;
         Inst::prop_assign(left_arg, member_arg, dummy_val)
       }
-      _ => unreachable!(),
+      _ => {
+        return Err(OptimizeError::unsupported(
+          span,
+          "unsupported assignment target",
+        ))
+      }
     };
     let value_tmp_var = self.c_temp.bump();
-    let mut value_arg = self.compile_expr(value);
+    let mut value_arg = self.compile_expr(value)?;
     if operator == OperatorName::Assignment {
       // Direct assignment. Since we need to return a var holding the result of this assignment expression, assign the value to our tmp var. (This is a precaution, in case the value isn't already a var.)
       self
@@ -195,7 +196,12 @@ impl<'p> SourceToInst<'p> {
         OperatorName::AssignmentSubtraction => BinOp::Sub,
         OperatorName::AssignmentMultiplication => BinOp::Mul,
         OperatorName::AssignmentDivision => BinOp::Div,
-        _ => unimplemented!(),
+        _ => {
+          return Err(OptimizeError::unsupported(
+            span,
+            format!("unsupported assignment operator {operator:?}"),
+          ))
+        }
       };
       let left_arg = match assign_inst.t {
         InstTyp::VarAssign => Arg::Var(assign_inst.tgts[0]),
@@ -225,7 +231,12 @@ impl<'p> SourceToInst<'p> {
           ));
           Arg::Var(left_tmp_var)
         }
-        _ => unreachable!(),
+        _ => {
+          return Err(OptimizeError::unsupported(
+            span,
+            "unsupported assignment target",
+          ))
+        }
       };
       let rhs_inst = Inst::bin(value_tmp_var, left_arg, op, value_arg);
       self.out.push(rhs_inst);
@@ -238,7 +249,7 @@ impl<'p> SourceToInst<'p> {
     // The result of an assignment is always the value.
     // - For member access like `a.b = c`, the getter is not invoked.
     // - For non-direct assignment operators like `a += b`, the result is `a + b` since it's a shorthand for `a = a + b`.
-    Arg::Var(value_tmp_var)
+    Ok(Arg::Var(value_tmp_var))
   }
 
   pub fn compile_logical_expr(
@@ -246,10 +257,10 @@ impl<'p> SourceToInst<'p> {
     operator: OperatorName,
     left: Node<Expr>,
     right: Node<Expr>,
-  ) -> Arg {
+  ) -> OptimizeResult<Arg> {
     let converge_label_id = self.c_label.bump();
     let res_tmp_var = self.c_temp.bump();
-    let left = self.compile_expr(left);
+    let left = self.compile_expr(left)?;
     self.out.push(Inst::var_assign(res_tmp_var, left.clone()));
     self.out.push(match operator {
       // Given `a && b`, skip `b` only if NOT `a`.
@@ -258,20 +269,21 @@ impl<'p> SourceToInst<'p> {
       OperatorName::LogicalOr => Inst::cond_goto(left, converge_label_id, DUMMY_LABEL),
       _ => unreachable!(),
     });
-    let right = self.compile_expr(right);
+    let right = self.compile_expr(right)?;
     self.out.push(Inst::var_assign(res_tmp_var, right));
     self.out.push(Inst::label(converge_label_id));
-    Arg::Var(res_tmp_var)
+    Ok(Arg::Var(res_tmp_var))
   }
 
   pub fn compile_binary_expr(
     &mut self,
+    span: Span,
     BinaryExpr {
       left,
       operator,
       right,
     }: BinaryExpr,
-  ) -> Arg {
+  ) -> OptimizeResult<Arg> {
     // TODO Shorthand logic for `&&=` and `||=`.
     if operator.is_assignment()
       && !matches!(
@@ -279,7 +291,7 @@ impl<'p> SourceToInst<'p> {
         OperatorName::AssignmentLogicalAnd | OperatorName::AssignmentLogicalOr
       )
     {
-      self.compile_assignment(operator, left, right)
+      self.compile_assignment(span, operator, left, right)
     } else if matches!(operator, OperatorName::LogicalAnd | OperatorName::LogicalOr) {
       self.compile_logical_expr(operator, left, right)
     } else {
@@ -291,13 +303,18 @@ impl<'p> SourceToInst<'p> {
         OperatorName::StrictEquality => BinOp::StrictEq,
         OperatorName::Subtraction => BinOp::Sub,
         OperatorName::GreaterThan => BinOp::Gt,
-        _ => unimplemented!(),
+        _ => {
+          return Err(OptimizeError::unsupported(
+            span,
+            format!("unsupported binary operator {operator:?}"),
+          ))
+        }
       };
-      let left = self.compile_expr(left);
-      let right = self.compile_expr(right);
+      let left = self.compile_expr(left)?;
+      let right = self.compile_expr(right)?;
       let res_tmp_var = self.c_temp.bump();
       self.out.push(Inst::bin(res_tmp_var, left, op, right));
-      Arg::Var(res_tmp_var)
+      Ok(Arg::Var(res_tmp_var))
     }
   }
 
@@ -308,29 +325,29 @@ impl<'p> SourceToInst<'p> {
       consequent,
       alternate,
     }: CondExpr,
-  ) -> Arg {
+  ) -> OptimizeResult<Arg> {
     let res_tmp_var = self.c_temp.bump();
-    let test_arg = self.compile_expr(test);
+    let test_arg = self.compile_expr(test)?;
     let cons_label_id = self.c_label.bump();
     let after_label_id = self.c_label.bump();
     self
       .out
       .push(Inst::cond_goto(test_arg, cons_label_id, DUMMY_LABEL));
-    let alt_res = self.compile_expr(alternate);
+    let alt_res = self.compile_expr(alternate)?;
     self.out.push(Inst::var_assign(res_tmp_var, alt_res));
     self.out.push(Inst::goto(after_label_id));
     self.out.push(Inst::label(cons_label_id));
-    let cons_res = self.compile_expr(consequent);
+    let cons_res = self.compile_expr(consequent)?;
     self.out.push(Inst::var_assign(res_tmp_var, cons_res));
     self.out.push(Inst::label(after_label_id));
-    Arg::Var(res_tmp_var)
+    Ok(Arg::Var(res_tmp_var))
   }
 
   pub fn compile_unary_postfix_expr(
     &mut self,
     UnaryPostfixExpr { operator, argument }: UnaryPostfixExpr,
-  ) -> Arg {
-    let arg = self.compile_expr(argument);
+  ) -> OptimizeResult<Arg> {
+    let arg = self.compile_expr(argument)?;
     let tmp_var = self.c_temp.bump();
     self.out.push(Inst::var_assign(tmp_var, arg.clone()));
     self.out.push(Inst::bin(
@@ -343,14 +360,18 @@ impl<'p> SourceToInst<'p> {
       },
       Arg::Const(Const::Num(JsNumber(1.0))),
     ));
-    Arg::Var(tmp_var)
+    Ok(Arg::Var(tmp_var))
   }
 
-  pub fn compile_unary_expr(&mut self, UnaryExpr { operator, argument }: UnaryExpr) -> Arg {
+  pub fn compile_unary_expr(
+    &mut self,
+    span: Span,
+    UnaryExpr { operator, argument }: UnaryExpr,
+  ) -> OptimizeResult<Arg> {
     match operator {
       // Prefix increment/decrement.
       OperatorName::PrefixDecrement | OperatorName::PrefixIncrement => {
-        let arg = self.compile_expr(argument);
+        let arg = self.compile_expr(argument)?;
         self.out.push(Inst::bin(
           arg.to_var(),
           arg.clone(),
@@ -361,18 +382,23 @@ impl<'p> SourceToInst<'p> {
           },
           Arg::Const(Const::Num(JsNumber(1.0))),
         ));
-        arg
+        Ok(arg)
       }
       // Other expressions.
       _ => {
         let op = match operator {
           OperatorName::UnaryNegation => UnOp::Neg,
-          _ => unimplemented!(),
+          _ => {
+            return Err(OptimizeError::unsupported(
+              span,
+              format!("unsupported unary operator {operator:?}"),
+            ))
+          }
         };
-        let arg = self.compile_expr(argument);
+        let arg = self.compile_expr(argument)?;
         let tmp = self.c_temp.bump();
         self.out.push(Inst::un(tmp, op, arg));
-        Arg::Var(tmp)
+        Ok(Arg::Var(tmp))
       }
     }
   }
@@ -385,9 +411,9 @@ impl<'p> SourceToInst<'p> {
       right,
     }: MemberExpr,
     chain: impl Into<Option<Chain>>,
-  ) -> CompiledMemberExpr {
+  ) -> OptimizeResult<CompiledMemberExpr> {
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
-    let left_arg = self.compile_expr_with_chain(left, chain);
+    let left_arg = self.compile_expr_with_chain(left, chain)?;
     // Handle `maybe_obj?.a`: skip access if nullish.
     self.conditional_chain_jump(optional_chaining, &left_arg, chain);
     let res_tmp_var = self.c_temp.bump();
@@ -399,10 +425,10 @@ impl<'p> SourceToInst<'p> {
       right_arg,
     ));
     self.complete_chain_setup(did_chain_setup, res_tmp_var, chain);
-    CompiledMemberExpr {
+    Ok(CompiledMemberExpr {
       res: Arg::Var(res_tmp_var),
       left: left_arg.clone(),
-    }
+    })
   }
 
   pub fn compile_computed_member_expr(
@@ -413,14 +439,14 @@ impl<'p> SourceToInst<'p> {
       member,
     }: ComputedMemberExpr,
     chain: impl Into<Option<Chain>>,
-  ) -> CompiledMemberExpr {
+  ) -> OptimizeResult<CompiledMemberExpr> {
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
-    let left_arg = self.compile_expr_with_chain(object, chain);
+    let left_arg = self.compile_expr_with_chain(object, chain)?;
     // Handle `maybe_obj?.["a"]`: skip access if nullish.
     self.conditional_chain_jump(optional_chaining, &left_arg, chain);
     let res_tmp_var = self.c_temp.bump();
     // WARNING: The computed member expr does *not* use the same chain!
-    let right_arg = self.compile_expr(member);
+    let right_arg = self.compile_expr(member)?;
     self.out.push(Inst::bin(
       res_tmp_var,
       left_arg.clone(),
@@ -428,10 +454,10 @@ impl<'p> SourceToInst<'p> {
       right_arg,
     ));
     self.complete_chain_setup(did_chain_setup, res_tmp_var, chain);
-    CompiledMemberExpr {
+    Ok(CompiledMemberExpr {
       res: Arg::Var(res_tmp_var),
       left: left_arg.clone(),
-    }
+    })
   }
 
   pub fn compile_call_expr(
@@ -442,20 +468,20 @@ impl<'p> SourceToInst<'p> {
       arguments,
     }: CallExpr,
     chain: impl Into<Option<Chain>>,
-  ) -> Arg {
+  ) -> OptimizeResult<Arg> {
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
     // We need to handle methods specially due to `this`.
     let (this_arg, callee_arg) = match *callee.stx {
       Expr::Member(m) => {
-        let c = self.compile_member_expr(*m.stx, chain);
+        let c = self.compile_member_expr(*m.stx, chain)?;
         (c.left, c.res)
       }
       Expr::ComputedMember(m) => {
-        let c = self.compile_computed_member_expr(*m.stx, chain);
+        let c = self.compile_computed_member_expr(*m.stx, chain)?;
         (c.left, c.res)
       }
       _ => {
-        let c = self.compile_expr_with_chain(callee, chain);
+        let c = self.compile_expr_with_chain(callee, chain)?;
         // If there's no `this`, Const::Undefined is correct, no need for None.
         // Calling a function without an explicit this does use undefined in strict mode (try `function f() { console.log(this); }; f()`).
         // If a function has a bound this (e.g. arrow function, `fn.bind`), that's "decl-site"; it doesn't change our "call-site" (e.g. `fn.call(this)`, `obj.method()`) `this` (but does ignore it at runtime).
@@ -474,7 +500,7 @@ impl<'p> SourceToInst<'p> {
     let mut spreads = Vec::new();
     for a in arguments.into_iter() {
       let CallArg { spread, value } = *a.stx;
-      args.push(self.compile_expr(value));
+      args.push(self.compile_expr(value)?);
       if spread {
         spreads.push(args.len());
       }
@@ -484,29 +510,37 @@ impl<'p> SourceToInst<'p> {
       .out
       .push(Inst::call(res_tmp_var, callee_arg, this_arg, args, spreads));
     self.complete_chain_setup(did_chain_setup, res_tmp_var, chain);
-    Arg::Var(res_tmp_var)
+    Ok(Arg::Var(res_tmp_var))
   }
 
   #[rustfmt::skip]
-  pub fn compile_expr_with_chain(&mut self, n: Node<Expr>, chain: impl Into<Option<Chain>>) -> Arg {
+  pub fn compile_expr_with_chain(
+    &mut self,
+    n: Node<Expr>,
+    chain: impl Into<Option<Chain>>,
+  ) -> OptimizeResult<Arg> {
+    let span = n.loc.into();
     match *n.stx {
       Expr::ArrowFunc(n) => self.compile_func(*n.stx.func.stx),
-      Expr::Binary(n) => self.compile_binary_expr(*n.stx),
+      Expr::Binary(n) => self.compile_binary_expr(span, *n.stx),
       Expr::Call(n) => self.compile_call_expr(*n.stx, chain),
-      Expr::ComputedMember(n) => self.compile_computed_member_expr(*n.stx, chain).res,
+      Expr::ComputedMember(n) => Ok(self.compile_computed_member_expr(*n.stx, chain)?.res),
       Expr::Cond(n) => self.compile_cond_expr(*n.stx),
       Expr::Id(s) => self.compile_id_expr(n.assoc, *s.stx),
-      Expr::LitBool(n) => Arg::Const(Const::Bool(n.stx.value)),
-      Expr::LitNum(n) => Arg::Const(Const::Num(n.stx.value)),
-      Expr::LitStr(n) => Arg::Const(Const::Str(n.stx.value)),
-      Expr::Member(n) => self.compile_member_expr(*n.stx, chain).res,
-      Expr::Unary(n) => self.compile_unary_expr(*n.stx),
+      Expr::LitBool(n) => Ok(Arg::Const(Const::Bool(n.stx.value))),
+      Expr::LitNum(n) => Ok(Arg::Const(Const::Num(n.stx.value))),
+      Expr::LitStr(n) => Ok(Arg::Const(Const::Str(n.stx.value))),
+      Expr::Member(n) => Ok(self.compile_member_expr(*n.stx, chain)?.res),
+      Expr::Unary(n) => self.compile_unary_expr(span, *n.stx),
       Expr::UnaryPostfix(n) => self.compile_unary_postfix_expr(*n.stx),
-      _ => unimplemented!()
+      other => Err(OptimizeError::unsupported(
+        span,
+        format!("unsupported expression {other:?}"),
+      )),
     }
   }
 
-  pub fn compile_expr(&mut self, n: Node<Expr>) -> Arg {
+  pub fn compile_expr(&mut self, n: Node<Expr>) -> OptimizeResult<Arg> {
     self.compile_expr_with_chain(n, None)
   }
 }

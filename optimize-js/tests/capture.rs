@@ -33,8 +33,8 @@ fn compile_with_symbols(
   let mut node = parse(source).expect("parse source");
   let scope = compute_symbols(&mut node, mode);
   let names = collect_symbol_names(&scope);
-  let analysis = VarAnalysis::analyze(&node);
-  let program = Program::compile(node, false);
+  let analysis = VarAnalysis::analyze(&mut node);
+  let program = Program::compile(node, false).expect("compile");
   (program, analysis, names)
 }
 
