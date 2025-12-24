@@ -14,6 +14,13 @@ fn check<const N: usize>(code: &str, expecteds: [TT; N]) {
   assert_eq!(EOF, t.typ);
 }
 
+fn check_preceded_by_line_terminator(code: &str, expected: TT, preceded: bool) {
+  let mut lexer = Lexer::new(code);
+  let t = lex_next(&mut lexer, LexMode::Standard);
+  assert_eq!(expected, t.typ);
+  assert_eq!(preceded, t.preceded_by_line_terminator);
+}
+
 #[test]
 fn test_lex_keywords() {
   check("class", [KeywordClass]);
@@ -91,4 +98,25 @@ fn test_lex_import_statement() {
       Semicolon,
     ],
   );
+}
+
+#[test]
+fn test_single_line_comment_sets_line_terminator_flag_for_unicode_separator() {
+  check_preceded_by_line_terminator("// comment\u{2028} token", Identifier, true);
+}
+
+#[test]
+fn test_multiline_comment_sets_line_terminator_flag_for_unicode_separator() {
+  check_preceded_by_line_terminator("/* multi\u{2029}line */ token", Identifier, true);
+}
+
+#[test]
+fn test_html_close_comment_only_at_line_start() {
+  check("a-->b", [Identifier, HyphenHyphen, ChevronRight, Identifier]);
+}
+
+#[test]
+fn test_html_close_comment_after_crlf_and_unicode_line_separator() {
+  check_preceded_by_line_terminator("\r\n--> comment\r\nfoo", Identifier, true);
+  check_preceded_by_line_terminator("\u{2028}--> comment\u{2028}foo", Identifier, true);
 }
