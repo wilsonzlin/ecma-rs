@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 //! TypeScript mode semantics: bind module-level declarations, imports, and
 //! exports into deterministic symbol groups.
 //!

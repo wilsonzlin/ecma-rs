@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 //! JavaScript mode semantics: build a lexical scope tree and resolve identifiers
 //! in the value namespace.
 //!

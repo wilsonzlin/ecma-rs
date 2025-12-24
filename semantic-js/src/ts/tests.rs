@@ -1,6 +1,5 @@
 use super::*;
-use crate::TsDeclaredSymbol;
-use crate::TsResolvedSymbol;
+use crate::assoc::{js, ts};
 use parse_js::ast::node::NodeAssocData;
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -35,42 +34,42 @@ fn mk_decl(def: u32, name: &str, kind: DeclKind, exported: Exported) -> Decl {
 #[test]
 fn ts_assoc_helpers_round_trip() {
   let mut assoc = NodeAssocData::default();
-  let declared = TsDeclaredSymbol(SymbolId(123));
+  let declared = ts::DeclaredSymbol(SymbolId(123));
   let resolved = SymbolId(456);
 
   assoc.set(declared);
-  assoc.set(TsResolvedSymbol(Some(resolved)));
+  assoc.set(ts::ResolvedSymbol(Some(resolved)));
 
-  assert_eq!(crate::ts_declared_symbol(&assoc), Some(declared.0));
-  assert_eq!(crate::ts_resolved_symbol(&assoc), Some(resolved));
+  assert_eq!(ts::declared_symbol(&assoc), Some(declared.0));
+  assert_eq!(ts::resolved_symbol(&assoc), Some(resolved));
 }
 
 #[test]
 fn ts_assoc_keys_do_not_overlap_js_accessors() {
   let mut assoc = NodeAssocData::default();
-  assoc.set(TsDeclaredSymbol(SymbolId(7)));
-  assoc.set(TsResolvedSymbol(Some(SymbolId(9))));
+  assoc.set(ts::DeclaredSymbol(SymbolId(7)));
+  assoc.set(ts::ResolvedSymbol(Some(SymbolId(9))));
 
-  assert_eq!(crate::declared_symbol(&assoc), None);
-  assert_eq!(crate::resolved_symbol(&assoc), None);
-  assert_eq!(crate::ts_declared_symbol(&assoc), Some(SymbolId(7)));
-  assert_eq!(crate::ts_resolved_symbol(&assoc), Some(SymbolId(9)));
+  assert_eq!(js::declared_symbol(&assoc), None);
+  assert_eq!(js::resolved_symbol(&assoc), None);
+  assert_eq!(ts::declared_symbol(&assoc), Some(SymbolId(7)));
+  assert_eq!(ts::resolved_symbol(&assoc), Some(SymbolId(9)));
 
   assert_ne!(
-    TypeId::of::<crate::TsDeclaredSymbol>(),
-    TypeId::of::<crate::DeclaredSymbol>()
+    TypeId::of::<ts::DeclaredSymbol>(),
+    TypeId::of::<js::DeclaredSymbol>()
   );
   assert_ne!(
-    TypeId::of::<crate::TsResolvedSymbol>(),
-    TypeId::of::<crate::ResolvedSymbol>()
+    TypeId::of::<ts::ResolvedSymbol>(),
+    TypeId::of::<js::ResolvedSymbol>()
   );
 
   // Explicit type annotations ensure the accessors expose TS symbol IDs and
   // cannot be mistaken for JS ones at compile time.
-  let _: Option<SymbolId> = crate::ts_declared_symbol(&assoc);
-  let _: Option<SymbolId> = crate::ts_resolved_symbol(&assoc);
-  let _: Option<crate::js::SymbolId> = crate::declared_symbol(&assoc);
-  let _: Option<crate::js::SymbolId> = crate::resolved_symbol(&assoc);
+  let _: Option<SymbolId> = ts::declared_symbol(&assoc);
+  let _: Option<SymbolId> = ts::resolved_symbol(&assoc);
+  let _: Option<crate::js::SymbolId> = js::declared_symbol(&assoc);
+  let _: Option<crate::js::SymbolId> = js::resolved_symbol(&assoc);
 }
 
 #[test]
