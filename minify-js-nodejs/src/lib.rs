@@ -1,3 +1,5 @@
+use diagnostics::render::{render_diagnostic, SourceProvider};
+use diagnostics::FileId;
 use minify_js::TopLevelMode;
 use neon::prelude::*;
 use neon::types::buffer::TypedArray;
@@ -7,6 +9,21 @@ fn parse_top_level_mode(value: &str) -> Option<TopLevelMode> {
     "global" => Some(TopLevelMode::Global),
     "module" => Some(TopLevelMode::Module),
     _ => None,
+  }
+}
+
+struct SingleFileSource<'a> {
+  name: &'a str,
+  text: &'a str,
+}
+
+impl<'a> SourceProvider for SingleFileSource<'a> {
+  fn file_name(&self, _file: FileId) -> &str {
+    self.name
+  }
+
+  fn file_text(&self, _file: FileId) -> &str {
+    self.text
   }
 }
 
@@ -33,7 +50,20 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
   let mut out = Vec::new();
   match minify_js::minify(top_level_mode, &source, &mut out) {
     Ok(()) => Ok(JsBuffer::external(&mut cx, out)),
-    Err(err) => cx.throw_error(format!("{:?}", err)),
+    Err(diagnostics) => {
+      let provider = SingleFileSource {
+        name: "<input>",
+        text: &source,
+      };
+      let mut rendered = String::new();
+      for (idx, diagnostic) in diagnostics.iter().enumerate() {
+        if idx > 0 && !rendered.ends_with('\n') {
+          rendered.push('\n');
+        }
+        rendered.push_str(&render_diagnostic(&provider, diagnostic));
+      }
+      cx.throw_error(rendered)
+    }
   }
 }
 

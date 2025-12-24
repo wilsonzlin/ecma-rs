@@ -1,6 +1,8 @@
 use clap::builder::PossibleValuesParser;
 use clap::builder::TypedValueParser;
 use clap::Parser;
+use diagnostics::render::{render_diagnostic, SourceProvider};
+use diagnostics::{FileId, Severity};
 use minify_js::minify;
 use minify_js::TopLevelMode;
 use std::fs::File;
@@ -37,14 +39,43 @@ struct Cli {
   mode: TopLevelMode,
 }
 
+struct SingleFileSource<'a> {
+  name: String,
+  text: &'a str,
+}
+
+impl<'a> SourceProvider for SingleFileSource<'a> {
+  fn file_name(&self, _file: FileId) -> &str {
+    &self.name
+  }
+
+  fn file_text(&self, _file: FileId) -> &str {
+    self.text
+  }
+}
+
 fn main() {
   let args = Cli::parse();
+  let input_name = args
+    .input
+    .as_ref()
+    .map(|p| p.to_string_lossy().into_owned())
+    .unwrap_or_else(|| "<stdin>".to_string());
   let mut input = Vec::new();
-  let mut input_file: Box<dyn Read> = match args.input {
-    Some(p) => Box::new(File::open(p).expect("open input file")),
+  let mut input_file: Box<dyn Read> = match args.input.as_ref() {
+    Some(p) => match File::open(p) {
+      Ok(f) => Box::new(f),
+      Err(err) => {
+        eprintln!("error: failed to open {}: {err}", p.display());
+        process::exit(1);
+      }
+    },
     None => Box::new(stdin()),
   };
-  input_file.read_to_end(&mut input).expect("read input");
+  if let Err(err) = input_file.read_to_end(&mut input) {
+    eprintln!("error: failed to read input: {err}");
+    process::exit(1);
+  }
   let source = match std::str::from_utf8(&input) {
     Ok(source) => source,
     Err(err) => {
@@ -53,12 +84,30 @@ fn main() {
     }
   };
   let mut output = Vec::new();
-  minify(args.mode, source, &mut output).expect("minify");
-  match args.output {
-    Some(p) => File::create(p)
-      .expect("open output file")
-      .write_all(&output),
-    None => stdout().write_all(&output),
+  match minify(args.mode, source, &mut output) {
+    Ok(()) => {
+      let write_result = match args.output.as_ref() {
+        Some(p) => File::create(p).and_then(|mut file| file.write_all(&output)),
+        None => stdout().write_all(&output),
+      };
+      if let Err(err) = write_result {
+        eprintln!("error: failed to write output: {err}");
+        process::exit(1);
+      }
+    }
+    Err(diagnostics) => {
+      let provider = SingleFileSource {
+        name: input_name,
+        text: source,
+      };
+      let mut exit_code = 0;
+      for diagnostic in diagnostics {
+        if diagnostic.severity == Severity::Error {
+          exit_code = 1;
+        }
+        eprintln!("{}", render_diagnostic(&provider, &diagnostic));
+      }
+      process::exit(exit_code);
+    }
   }
-  .expect("write output");
 }
