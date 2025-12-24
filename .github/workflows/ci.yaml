@@ -33,5 +33,5 @@ jobs:
       - name: cargo check (workspace)
         run: cargo check --workspace --all-targets --locked
 
-      - name: cargo test (parse-js)
-        run: cargo test --locked -p parse-js
+      - name: cargo test (workspace)
+        run: cargo test --workspace --locked
