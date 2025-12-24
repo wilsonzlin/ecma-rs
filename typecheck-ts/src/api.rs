@@ -88,6 +88,19 @@ impl Diagnostic {
       severity: Severity::Error,
     }
   }
+
+  fn error_with_code(
+    code: impl Into<String>,
+    message: impl Into<String>,
+    span: Option<Span>,
+  ) -> Diagnostic {
+    Diagnostic {
+      code: Some(code.into()),
+      message: message.into(),
+      span,
+      severity: Severity::Error,
+    }
+  }
 }
 
 /// Error returned by a [`Host`].
@@ -646,15 +659,19 @@ impl ProgramState {
           Ok(ast) => self.bind_file(file, ast, host, &mut queue),
           Err(err) => {
             let span = loc_to_span(file, err.loc);
-            self
-              .diagnostics
-              .push(Diagnostic::error(err.to_string(), Some(span)));
+            self.diagnostics.push(Diagnostic::error_with_code(
+              "PARSE0001",
+              err.to_string(),
+              Some(span),
+            ));
           }
         },
         Err(err) => {
-          self
-            .diagnostics
-            .push(Diagnostic::error(err.to_string(), None));
+          self.diagnostics.push(Diagnostic::error_with_code(
+            "HOST0001",
+            err.to_string(),
+            None,
+          ));
         }
       }
     }
