@@ -255,6 +255,16 @@ impl TypeStore {
     match kind {
       TypeKind::Union(members) => TypeKind::Union(members),
       TypeKind::Intersection(members) => TypeKind::Intersection(members),
+      TypeKind::Array { ty, readonly } => TypeKind::Array {
+        ty: self.canon(ty),
+        readonly,
+      },
+      TypeKind::Tuple(mut elems) => {
+        for elem in elems.iter_mut() {
+          elem.ty = self.canon(elem.ty);
+        }
+        TypeKind::Tuple(elems)
+      }
       TypeKind::Ref { def, args } => TypeKind::Ref {
         def,
         args: args.into_iter().map(|t| self.canon(t)).collect(),
@@ -485,6 +495,38 @@ impl TypeStore {
         }
         self.compare_slices(&a_args, &b_args)
       }
+      (TypeKind::This, TypeKind::This) => Ordering::Equal,
+      (TypeKind::Infer(a), TypeKind::Infer(b)) => a.0.cmp(&b.0),
+      (TypeKind::Tuple(a), TypeKind::Tuple(b)) => {
+        let mut idx = 0;
+        loop {
+          let Some(a_elem) = a.get(idx) else {
+            return a.len().cmp(&b.len());
+          };
+          let Some(b_elem) = b.get(idx) else {
+            return a.len().cmp(&b.len());
+          };
+          let ord = self
+            .type_cmp(a_elem.ty, b_elem.ty)
+            .then_with(|| a_elem.optional.cmp(&b_elem.optional))
+            .then_with(|| a_elem.rest.cmp(&b_elem.rest))
+            .then_with(|| a_elem.readonly.cmp(&b_elem.readonly));
+          if ord != Ordering::Equal {
+            return ord;
+          }
+          idx += 1;
+        }
+      }
+      (
+        TypeKind::Array {
+          ty: a,
+          readonly: ar,
+        },
+        TypeKind::Array {
+          ty: b,
+          readonly: br,
+        },
+      ) => ar.cmp(&br).then_with(|| self.type_cmp(a, b)),
       (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) => a.0.cmp(&b.0),
       (
         TypeKind::Conditional {
@@ -777,6 +819,20 @@ impl TypeStore {
       }
       TypeKind::Ref { def, args } => {
         json!({ "kind": "ref", "def": def.0, "args": args.iter().map(|a| a.0).collect::<Vec<_>>() })
+      }
+      TypeKind::This => json!({ "kind": "this" }),
+      TypeKind::Infer(param) => json!({ "kind": "infer", "param": param.0 }),
+      TypeKind::Tuple(elems) => json!({
+        "kind": "tuple",
+        "elems": elems.iter().map(|e| json!({
+          "ty": e.ty.0,
+          "optional": e.optional,
+          "rest": e.rest,
+          "readonly": e.readonly,
+        })).collect::<Vec<_>>(),
+      }),
+      TypeKind::Array { ty, readonly } => {
+        json!({ "kind": "array", "ty": ty.0, "readonly": readonly })
       }
       TypeKind::TypeParam(id) => json!({ "kind": "type_param", "id": id.0 }),
       TypeKind::Conditional {

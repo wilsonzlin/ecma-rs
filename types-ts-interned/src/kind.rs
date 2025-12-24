@@ -47,6 +47,14 @@ pub struct TemplateChunk {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TupleElem {
+  pub ty: TypeId,
+  pub optional: bool,
+  pub rest: bool,
+  pub readonly: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TypeKind {
   Any,
   Unknown,
@@ -64,6 +72,13 @@ pub enum TypeKind {
   NumberLiteral(OrderedFloat<f64>),
   StringLiteral(NameId),
   BigIntLiteral(BigInt),
+  This,
+  Infer(TypeParamId),
+  Tuple(Vec<TupleElem>),
+  Array {
+    ty: TypeId,
+    readonly: bool,
+  },
   Union(Vec<TypeId>),
   Intersection(Vec<TypeId>),
   Object(ObjectId),
@@ -110,17 +125,21 @@ impl TypeKind {
       TypeKind::NumberLiteral(_) => 13,
       TypeKind::StringLiteral(_) => 14,
       TypeKind::BigIntLiteral(_) => 15,
-      TypeKind::Union(_) => 16,
-      TypeKind::Intersection(_) => 17,
-      TypeKind::Object(_) => 18,
-      TypeKind::Callable { .. } => 19,
-      TypeKind::Ref { .. } => 20,
-      TypeKind::TypeParam(_) => 21,
-      TypeKind::Conditional { .. } => 22,
-      TypeKind::Mapped(_) => 23,
-      TypeKind::TemplateLiteral(_) => 24,
-      TypeKind::IndexedAccess { .. } => 25,
-      TypeKind::KeyOf(_) => 26,
+      TypeKind::This => 16,
+      TypeKind::Infer(_) => 17,
+      TypeKind::Tuple(_) => 18,
+      TypeKind::Array { .. } => 19,
+      TypeKind::Union(_) => 20,
+      TypeKind::Intersection(_) => 21,
+      TypeKind::Object(_) => 22,
+      TypeKind::Callable { .. } => 23,
+      TypeKind::Ref { .. } => 24,
+      TypeKind::TypeParam(_) => 25,
+      TypeKind::Conditional { .. } => 26,
+      TypeKind::Mapped(_) => 27,
+      TypeKind::TemplateLiteral(_) => 28,
+      TypeKind::IndexedAccess { .. } => 29,
+      TypeKind::KeyOf(_) => 30,
     }
   }
 }

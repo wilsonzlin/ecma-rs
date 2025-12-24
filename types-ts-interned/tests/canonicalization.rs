@@ -5,7 +5,9 @@ use types_ts_interned::PropData;
 use types_ts_interned::PropKey;
 use types_ts_interned::Property;
 use types_ts_interned::Shape;
+use types_ts_interned::TupleElem;
 use types_ts_interned::TypeKind;
+use types_ts_interned::TypeParamId;
 use types_ts_interned::TypeStore;
 
 #[test]
@@ -184,4 +186,62 @@ fn canon_is_idempotent_on_nested_unions() {
   let once = store.canon(nested);
   let twice = store.canon(once);
   assert_eq!(once, twice);
+}
+
+#[test]
+fn canon_is_idempotent_for_new_variants() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let readonly_array = store.intern_type(TypeKind::Array {
+    ty: store.union(vec![
+      primitives.string,
+      primitives.number,
+      primitives.string,
+    ]),
+    readonly: true,
+  });
+  let array_once = store.canon(readonly_array);
+  let array_twice = store.canon(array_once);
+  assert_eq!(array_once, array_twice);
+
+  match store.type_kind(readonly_array) {
+    TypeKind::Array { ty, .. } => match store.type_kind(ty) {
+      TypeKind::Union(members) => assert_eq!(members, vec![primitives.number, primitives.string]),
+      other => panic!("expected union, got {:?}", other),
+    },
+    other => panic!("expected array, got {:?}", other),
+  }
+
+  let tuple = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: store.union(vec![primitives.string, primitives.number]),
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.boolean,
+      optional: true,
+      rest: false,
+      readonly: true,
+    },
+  ]));
+  let tuple_once = store.canon(tuple);
+  let tuple_twice = store.canon(tuple_once);
+  assert_eq!(tuple_once, tuple_twice);
+
+  match store.type_kind(tuple) {
+    TypeKind::Tuple(elems) => match store.type_kind(elems[0].ty) {
+      TypeKind::Union(members) => assert_eq!(members, vec![primitives.number, primitives.string]),
+      other => panic!("expected union, got {:?}", other),
+    },
+    other => panic!("expected tuple, got {:?}", other),
+  }
+
+  let infer = store.intern_type(TypeKind::Infer(TypeParamId(42)));
+  assert_eq!(infer, store.canon(store.canon(infer)));
+
+  let this_ty = store.intern_type(TypeKind::This);
+  assert_eq!(this_ty, store.canon(store.canon(this_ty)));
 }

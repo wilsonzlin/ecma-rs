@@ -8,7 +8,9 @@ use types_ts_interned::Shape;
 use types_ts_interned::Signature;
 use types_ts_interned::TemplateChunk;
 use types_ts_interned::TemplateLiteralType;
+use types_ts_interned::TupleElem;
 use types_ts_interned::TypeKind;
+use types_ts_interned::TypeParamId;
 use types_ts_interned::TypeStore;
 
 fn make_object_type(store: &TypeStore) -> (types_ts_interned::TypeId, Shape) {
@@ -196,4 +198,59 @@ fn formats_unicode_identifier_property() {
   ));
 
   assert_eq!(format!("{}", store.display(obj)), "{ π: number }");
+}
+
+#[test]
+fn formats_new_type_variants() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let this_ty = store.intern_type(TypeKind::This);
+  assert_eq!(format!("{}", store.display(this_ty)), "this");
+
+  let infer_ty = store.intern_type(TypeKind::Infer(TypeParamId(3)));
+  assert_eq!(format!("{}", store.display(infer_ty)), "infer T3");
+
+  let array = store.intern_type(TypeKind::Array {
+    ty: primitives.boolean,
+    readonly: false,
+  });
+  assert_eq!(format!("{}", store.display(array)), "boolean[]");
+
+  let ro_array = store.intern_type(TypeKind::Array {
+    ty: store.union(vec![primitives.string, primitives.number]),
+    readonly: true,
+  });
+  assert_eq!(
+    format!("{}", store.display(ro_array)),
+    "readonly (number | string)[]"
+  );
+
+  let tuple = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: primitives.string,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.number,
+      optional: true,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: store.intern_type(TypeKind::Array {
+        ty: primitives.boolean,
+        readonly: false,
+      }),
+      optional: false,
+      rest: true,
+      readonly: true,
+    },
+  ]));
+  assert_eq!(
+    format!("{}", store.display(tuple)),
+    "[string, number?, ...readonly boolean[]]"
+  );
 }

@@ -141,6 +141,35 @@ impl<'a> TypeDisplay<'a> {
         write!(f, "\"{}\"", escape_ts_string_literal(&s))
       }
       TypeKind::BigIntLiteral(ref val) => write!(f, "{}n", val),
+      TypeKind::This => write!(f, "this"),
+      TypeKind::Infer(param) => write!(f, "infer T{}", param.0),
+      TypeKind::Tuple(elems) => {
+        write!(f, "[")?;
+        let mut iter = elems.iter().peekable();
+        while let Some(elem) = iter.next() {
+          if elem.rest {
+            write!(f, "...")?;
+          }
+          if elem.readonly {
+            write!(f, "readonly ")?;
+          }
+          self.fmt_with_prec(elem.ty, Precedence::Primary, f)?;
+          if elem.optional {
+            write!(f, "?")?;
+          }
+          if iter.peek().is_some() {
+            write!(f, ", ")?;
+          }
+        }
+        write!(f, "]")
+      }
+      TypeKind::Array { ty, readonly } => {
+        if readonly {
+          write!(f, "readonly ")?;
+        }
+        self.fmt_with_prec(ty, Precedence::Primary, f)?;
+        write!(f, "[]")
+      }
       TypeKind::Union(members) => {
         let mut iter = members.iter().peekable();
         while let Some(member) = iter.next() {
@@ -306,6 +335,13 @@ impl<'a> TypeDisplay<'a> {
     f: &mut fmt::Formatter<'_>,
   ) -> fmt::Result {
     write!(f, "(")?;
+    if let Some(this) = sig.this_param {
+      write!(f, "this: ")?;
+      self.fmt_type(this, f)?;
+      if !sig.params.is_empty() {
+        write!(f, ", ")?;
+      }
+    }
     let mut iter = sig.params.iter().peekable();
     while let Some(param) = iter.next() {
       if param.rest {

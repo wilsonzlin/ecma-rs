@@ -20,6 +20,7 @@ pub use kind::MappedModifier;
 pub use kind::MappedType;
 pub use kind::TemplateChunk;
 pub use kind::TemplateLiteralType;
+pub use kind::TupleElem;
 pub use kind::TypeKind;
 pub use options::TypeOptions;
 pub use shape::Accessibility;
