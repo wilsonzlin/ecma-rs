@@ -3,11 +3,14 @@ use crate::char::DIGIT;
 use crate::char::DIGIT_BIN;
 use crate::char::DIGIT_HEX;
 use crate::char::DIGIT_OCT;
+use crate::char::ECMASCRIPT_LINE_TERMINATORS;
+use crate::char::ECMASCRIPT_WHITESPACE;
 use crate::char::ID_CONTINUE;
 use crate::char::ID_CONTINUE_CHARSTR;
 use crate::char::ID_CONTINUE_JSX;
 use crate::char::ID_START;
 use crate::char::ID_START_CHARSTR;
+use crate::char::is_line_terminator;
 use crate::loc::Loc;
 use crate::token::Token;
 use crate::token::TT;
@@ -26,6 +29,7 @@ use memchr::memchr2;
 use memchr::memchr3;
 use once_cell::sync::Lazy;
 
+#[cfg(test)]
 mod tests;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -547,54 +551,55 @@ static SIG: Lazy<PatternMatcher> = Lazy::new(|| {
 });
 
 static ML_COMMENT: Lazy<PatternMatcher> = Lazy::new(|| {
-  PatternMatcher::new::<&str>(
-    false,
-    vec![
-      (TT::CommentMultilineEnd, "*/"),
-      // WARNING: Does not consider Unicode whitespace allowed by spec.
-      (TT::LineTerminator, "\r"),
-      (TT::LineTerminator, "\n"),
-    ],
-  )
+  let mut patterns: Vec<(TT, String)> = vec![(TT::CommentMultilineEnd, "*/".into())];
+  // Always match CRLF as a single line terminator if present.
+  patterns.push((TT::LineTerminator, "\r\n".into()));
+  for terminator in ECMASCRIPT_LINE_TERMINATORS {
+    patterns.push((TT::LineTerminator, terminator.to_string()));
+  }
+  PatternMatcher::new(false, patterns)
 });
 
 static INSIG: Lazy<PatternMatcher> = Lazy::new(|| {
-  PatternMatcher::new::<&str>(
-    true,
-    vec![
-      (TT::LineTerminator, "\r"),
-      (TT::LineTerminator, "\n"),
-      (TT::LineTerminator, "\u{2028}"), // Line Separator
-      (TT::LineTerminator, "\u{2029}"), // Paragraph Separator
-      (TT::Whitespace, "\x09"),
-      (TT::Whitespace, "\x0b"),
-      (TT::Whitespace, "\x0c"),
-      (TT::Whitespace, "\x20"),
-      // Unicode whitespace
-      (TT::Whitespace, "\u{00A0}"),
-      (TT::Whitespace, "\u{1680}"),
-      (TT::Whitespace, "\u{2000}"),
-      (TT::Whitespace, "\u{2001}"),
-      (TT::Whitespace, "\u{2002}"),
-      (TT::Whitespace, "\u{2003}"),
-      (TT::Whitespace, "\u{2004}"),
-      (TT::Whitespace, "\u{2005}"),
-      (TT::Whitespace, "\u{2006}"),
-      (TT::Whitespace, "\u{2007}"),
-      (TT::Whitespace, "\u{2008}"),
-      (TT::Whitespace, "\u{2009}"),
-      (TT::Whitespace, "\u{200A}"),
-      (TT::Whitespace, "\u{202F}"),
-      (TT::Whitespace, "\u{205F}"),
-      (TT::Whitespace, "\u{3000}"),
-      (TT::Whitespace, "\u{FEFF}"),
-      (TT::CommentMultiline, "/*"),
-      (TT::CommentSingle, "//"),
-      (TT::CommentSingle, "<!--"),
-      (TT::CommentSingle, "-->"),
-    ],
-  )
+  let mut patterns: Vec<(TT, String)> = Vec::new();
+  // Match CRLF as a single line terminator when present.
+  patterns.push((TT::LineTerminator, "\r\n".into()));
+  for terminator in ECMASCRIPT_LINE_TERMINATORS {
+    patterns.push((TT::LineTerminator, terminator.to_string()));
+  }
+  for whitespace in ECMASCRIPT_WHITESPACE {
+    patterns.push((TT::Whitespace, whitespace.to_string()));
+  }
+  patterns.extend(
+    [
+      (TT::CommentMultiline, "/*".into()),
+      (TT::CommentSingle, "//".into()),
+      (TT::CommentSingle, "<!--".into()),
+      (TT::CommentSingle, "-->".into()),
+    ]
+    .into_iter(),
+  );
+  PatternMatcher::new(true, patterns)
 });
+
+fn find_line_terminator(text: &str) -> Option<(usize, usize)> {
+  let mut earliest: Option<(usize, char)> = None;
+  for terminator in ECMASCRIPT_LINE_TERMINATORS {
+    if let Some(pos) = text.find(terminator) {
+      if earliest.map_or(true, |(earliest_pos, _)| pos < earliest_pos) {
+        earliest = Some((pos, terminator));
+      }
+    }
+  }
+  earliest.map(|(pos, terminator)| {
+    let len = if terminator == '\r' && text.as_bytes().get(pos + 1) == Some(&b'\n') {
+      2
+    } else {
+      terminator.len_utf8()
+    };
+    (pos, len)
+  })
+}
 
 /// Returns whether the comment includes a line terminator.
 fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
@@ -620,11 +625,16 @@ fn lex_multiline_comment(lexer: &mut Lexer<'_>) -> bool {
   contains_newline
 }
 
-fn lex_single_comment(lexer: &mut Lexer<'_>, prefix: Match) {
+fn lex_single_comment(lexer: &mut Lexer<'_>, prefix: Match) -> bool {
   // Consume the comment prefix (//, <!--, or -->).
   lexer.skip_expect(prefix.len());
-  // WARNING: Does not consider other line terminators allowed by spec.
-  lexer.consume(lexer.through_char_or_end('\n'));
+  if let Some((offset, terminator_len)) = find_line_terminator(&lexer.source[lexer.next..]) {
+    lexer.skip_expect(offset + terminator_len);
+    true
+  } else {
+    lexer.skip_expect(lexer.remaining());
+    false
+  }
 }
 
 fn lex_unicode_escape(lexer: &mut Lexer<'_>) -> LexResult<()> {
@@ -856,13 +866,11 @@ fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   lexer.consume(lexer.n(1)?);
   let mut in_charset = false;
   loop {
-    // WARNING: Does not consider other line terminators allowed by spec.
     match lexer.consume_next()? {
       '\\' => {
         // Cannot escape line terminator.
-        // WARNING: Does not consider other line terminators allowed by spec.
         let escaped_char = lexer.peek(0)?;
-        if escaped_char == '\n' {
+        if is_line_terminator(escaped_char) {
           return Ok(TT::Invalid);
         };
         lexer.skip_expect(escaped_char.len_utf8());
@@ -876,7 +884,7 @@ fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
       ']' if in_charset => {
         in_charset = false;
       }
-      '\n' => {
+      c if is_line_terminator(c) => {
         return Ok(TT::Invalid);
       }
       _ => {}
@@ -1051,10 +1059,9 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode) -> Token {
         preceded_by_line_terminator |= comment_has_line_terminator;
       }
       TT::CommentSingle => {
-        // A single-line comment always ends with a line terminator.
-        at_line_start = true;
-        preceded_by_line_terminator = true;
-        lex_single_comment(lexer, mat);
+        let comment_has_line_terminator = lex_single_comment(lexer, mat);
+        at_line_start |= comment_has_line_terminator;
+        preceded_by_line_terminator |= comment_has_line_terminator;
       }
       _ => unreachable!(),
     };
