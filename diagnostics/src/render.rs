@@ -5,8 +5,13 @@ use std::cmp::max;
 use std::fmt::Write;
 
 /// Provides access to source text for rendering diagnostics.
+///
+/// Returning `None` allows consumers to gracefully handle missing files (for
+/// example, when a `FileId` has been invalidated in an incremental host).
 pub trait SourceProvider {
+  /// Returns the display name for a file, or `None` if the file is unknown.
   fn file_name(&self, file: FileId) -> Option<&str>;
+  /// Returns the file contents, or `None` if the file is unavailable.
   fn file_text(&self, file: FileId) -> Option<&str>;
 }
 

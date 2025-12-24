@@ -2,6 +2,12 @@ use crate::render::SourceProvider;
 use crate::FileId;
 use std::sync::Arc;
 
+/// A minimal in-memory store of file names and source text for rendering
+/// diagnostics in tests, CLIs, and harnesses without needing a custom
+/// [`SourceProvider`] implementation.
+///
+/// `FileId`s are allocated deterministically in insertion order starting from
+/// zero. Source text is stored in `Arc<str>` to make cloning cheap.
 #[derive(Clone, Debug, Default)]
 pub struct SimpleFiles {
   files: Vec<SimpleFile>,
@@ -18,6 +24,8 @@ impl SimpleFiles {
     Self::default()
   }
 
+  /// Adds a new file and returns its [`FileId`]. The id is monotonically
+  /// increasing and stable for the lifetime of the `SimpleFiles` instance.
   pub fn add(&mut self, name: impl Into<Arc<str>>, text: impl Into<Arc<str>>) -> FileId {
     assert!(self.files.len() < u32::MAX as usize, "file count overflow");
     let file = FileId(self.files.len() as u32);
@@ -28,6 +36,8 @@ impl SimpleFiles {
     file
   }
 
+  /// Replaces the text for an existing file, returning the previous text if the
+  /// file existed.
   pub fn set_text(&mut self, file: FileId, text: impl Into<Arc<str>>) -> Option<Arc<str>> {
     self
       .files
@@ -35,6 +45,7 @@ impl SimpleFiles {
       .map(|file| std::mem::replace(&mut file.text, text.into()))
   }
 
+  /// Alias for [`set_text`] to align with some incremental APIs.
   pub fn replace_text(&mut self, file: FileId, text: impl Into<Arc<str>>) -> Option<Arc<str>> {
     self.set_text(file, text)
   }
