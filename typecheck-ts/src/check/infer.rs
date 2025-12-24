@@ -72,6 +72,27 @@ pub fn infer_type_arguments_for_call(
   ctx.solve(&sig.type_params)
 }
 
+/// Infer type arguments using a contextual function type (e.g. arrow function
+/// assignment) paired with the actual inferred signature of the expression.
+pub fn infer_type_arguments_from_contextual_signature(
+  store: &Arc<TypeStore>,
+  contextual_sig: &Signature,
+  type_params: &[TypeParamDecl],
+  actual_sig: &Signature,
+) -> InferenceResult {
+  let mut decls: HashMap<TypeParamId, TypeParamDecl> = type_params
+    .iter()
+    .map(|decl| (decl.id, decl.clone()))
+    .collect();
+  for tp in contextual_sig.type_params.iter() {
+    decls.entry(*tp).or_insert_with(|| TypeParamDecl::new(*tp));
+  }
+
+  let mut ctx = InferenceContext::new(Arc::clone(store), decls);
+  ctx.constrain_signature(contextual_sig, actual_sig, Variance::Covariant);
+  ctx.solve(&contextual_sig.type_params)
+}
+
 #[derive(Clone, Copy, Debug)]
 enum Variance {
   Covariant,

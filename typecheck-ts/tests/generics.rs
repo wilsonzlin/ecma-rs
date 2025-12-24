@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::check::infer::{infer_type_arguments_for_call, TypeParamDecl};
+use typecheck_ts::check::infer::{
+  infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature, TypeParamDecl,
+};
 use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
 use types_ts_interned::{DefId, Param, Signature, TypeId, TypeKind, TypeParamId, TypeStore};
 
@@ -214,4 +216,68 @@ fn caches_instantiations_for_same_def() {
   let first = cache.instantiate_signature(&store, DefId(1), &sig, &subst);
   let second = cache.instantiate_signature(&store, DefId(1), &sig, &subst);
   assert_eq!(first, second);
+}
+
+#[test]
+fn infers_from_contextual_signature_return_type() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let t_param = TypeParamId(0);
+  let t_type = store.intern_type(TypeKind::TypeParam(t_param));
+
+  let contextual_sig = Signature {
+    params: vec![param("value", t_type, &store)],
+    ret: t_type,
+    type_params: vec![t_param],
+    this_param: None,
+  };
+
+  // Actual lambda inferred to return number (body literal), no explicit param
+  // type.
+  let actual_sig = Signature {
+    params: vec![param("value", primitives.unknown, &store)],
+    ret: primitives.number,
+    type_params: Vec::new(),
+    this_param: None,
+  };
+
+  let result = infer_type_arguments_from_contextual_signature(
+    &store,
+    &contextual_sig,
+    &[TypeParamDecl::new(t_param)],
+    &actual_sig,
+  );
+  assert!(result.diagnostics.is_empty());
+  assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
+}
+
+#[test]
+fn infers_from_contextual_signature_parameter() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let t_param = TypeParamId(0);
+  let t_type = store.intern_type(TypeKind::TypeParam(t_param));
+
+  let contextual_sig = Signature {
+    params: vec![param("value", t_type, &store)],
+    ret: primitives.void,
+    type_params: vec![t_param],
+    this_param: None,
+  };
+
+  let actual_sig = Signature {
+    params: vec![param("value", primitives.string, &store)],
+    ret: primitives.void,
+    type_params: Vec::new(),
+    this_param: None,
+  };
+
+  let result = infer_type_arguments_from_contextual_signature(
+    &store,
+    &contextual_sig,
+    &[TypeParamDecl::new(t_param)],
+    &actual_sig,
+  );
+  assert!(result.diagnostics.is_empty());
+  assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
 }
