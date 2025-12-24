@@ -881,7 +881,7 @@ dependencies = [
  "num-bigint",
  "once_cell",
  "parse-js",
- "symbol-js",
+ "semantic-js",
 ]
 
 [[package]]

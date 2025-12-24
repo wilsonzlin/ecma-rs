@@ -1,8 +1,6 @@
 use crate::minify;
-use crate::FileId;
-use crate::Severity;
+use crate::{FileId, Severity, TopLevelMode};
 use parse_js::parse;
-use symbol_js::TopLevelMode;
 
 fn minified(mode: TopLevelMode, src: &str) -> String {
   let mut out = Vec::new();
@@ -52,6 +50,15 @@ fn test_export_function_inner_locals_renamed() {
     "export function foo(){let bar=1;return bar;}",
   );
   assert_eq!(result, "export function foo(){let a=1;return a;}");
+}
+
+#[test]
+fn test_minify_determinism() {
+  let src =
+    "const foo=1; const qux=2; function bar(){ let baz=foo+qux; return baz; } export { bar };";
+  let first = minified(TopLevelMode::Module, src);
+  let second = minified(TopLevelMode::Module, src);
+  assert_eq!(first, second);
 }
 
 #[test]

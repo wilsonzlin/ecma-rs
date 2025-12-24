@@ -1,28 +1,25 @@
-use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
+use ahash::{HashMap, HashSet};
 use derive_visitor::{DriveMut, VisitorMut};
+use parse_js::ast::expr::{CallExpr, Expr};
 use parse_js::ast::expr::pat::{ClassOrFuncName, IdPat};
-use parse_js::ast::expr::{CallExpr, Expr, IdExpr};
-use parse_js::ast::import_export::ExportName;
-use parse_js::ast::import_export::ModuleExportImportName;
+use parse_js::ast::expr::IdExpr;
+use parse_js::ast::import_export::{ExportName, ModuleExportImportName};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
-use symbol_js::symbol::{ResolvedSymbol as SymbolResolvedSymbol, Scope, ScopeType, Symbol};
-use symbol_js::TopLevelMode;
+use semantic_js::assoc::js::{declared_symbol, resolved_symbol, scope_id};
+use semantic_js::js::{JsSemantics, ScopeId, ScopeKind, SymbolId, TopLevelMode};
 
 #[derive(Clone, Debug, Default)]
 pub struct ScopeUsages {
-  pub foreign: HashSet<Symbol>,
+  pub foreign: HashSet<SymbolId>,
   pub unknown: HashSet<String>,
 }
 
 #[derive(Clone, Copy)]
-struct ResolvedSymbol(Symbol);
-
-#[derive(Clone, Copy)]
-struct ExportNameSymbol(Symbol);
+struct ExportNameSymbol(SymbolId);
 
 #[derive(Clone, Debug)]
 pub struct Replacement {
@@ -32,9 +29,11 @@ pub struct Replacement {
 }
 
 pub struct UsageData {
-  pub top_scope: Scope,
-  pub exported: HashSet<Symbol>,
-  pub symbol_names: HashMap<Symbol, String>,
+  pub top_scope: ScopeId,
+  pub exported: HashSet<SymbolId>,
+  pub symbol_names: HashMap<SymbolId, String>,
+  pub scope_symbol_order: HashMap<ScopeId, Vec<SymbolId>>,
+  pub scope_usages: HashMap<ScopeId, ScopeUsages>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -49,11 +48,13 @@ impl RenameAnalysis {
   }
 }
 
-struct SymbolCollector {
+struct SymbolCollector<'a> {
+  sem: &'a JsSemantics,
   top_level_mode: TopLevelMode,
-  exported: HashSet<Symbol>,
+  exported: HashSet<SymbolId>,
   export_decl_stack: Vec<bool>,
   ignore_id_pats: usize,
+  scope_usages: HashMap<ScopeId, ScopeUsages>,
 }
 
 type CallExprNode = Node<CallExpr>;
@@ -82,12 +83,7 @@ impl RenameAnalysisVisitor {
       if id_node.stx.name != "eval" {
         return;
       }
-      let resolved_eval = id_node
-        .assoc
-        .get::<SymbolResolvedSymbol>()
-        .copied()
-        .flatten();
-      if resolved_eval.is_none() {
+      if resolved_symbol(&id_node.assoc).is_none() {
         self.analysis.has_direct_eval = true;
       }
     }
@@ -116,59 +112,73 @@ pub fn analyze_renaming(top: &mut TopLevelNode) -> RenameAnalysis {
   IdPatNode(enter),
   VarDeclNode(enter, exit)
 )]
-struct SymbolCollectorVisitor {
-  inner: SymbolCollector,
+struct SymbolCollectorVisitor<'a> {
+  inner: SymbolCollector<'a>,
 }
 
-impl SymbolCollector {
-  fn new(top_level_mode: TopLevelMode) -> Self {
+impl<'a> SymbolCollector<'a> {
+  fn new(sem: &'a JsSemantics, top_level_mode: TopLevelMode) -> Self {
     Self {
+      sem,
       top_level_mode,
-      exported: HashSet::new(),
+      exported: HashSet::default(),
       export_decl_stack: vec![false],
       ignore_id_pats: 0,
+      scope_usages: HashMap::default(),
     }
   }
 
-  fn record_unknown(&mut self, name: &str, scope: &Scope) {
-    for anc in scope.self_and_ancestors() {
-      anc
-        .data_mut()
-        .get_or_insert_assoc::<ScopeUsages>()
+  fn record_unknown(&mut self, scope: ScopeId, name: &str) {
+    let mut current = Some(scope);
+    while let Some(scope_id) = current {
+      self
+        .scope_usages
+        .entry(scope_id)
+        .or_default()
         .unknown
         .insert(name.to_string());
+      current = self.sem.scope(scope_id).parent;
     }
   }
 
-  fn record_symbol_usage(&mut self, name: &str, sym: Symbol, scope: &Scope) {
-    for anc in scope.self_and_ancestors() {
-      let defines = {
-        let data = anc.data();
-        data.get_symbol(name).is_some_and(|s| s == sym)
-      };
-      if defines {
+  fn record_symbol_usage(&mut self, scope: ScopeId, sym: SymbolId) {
+    let decl_scope = self.sem.symbol(sym).decl_scope;
+    let mut current = Some(scope);
+    while let Some(scope_id) = current {
+      if scope_id == decl_scope {
         break;
       }
-      anc
-        .data_mut()
-        .get_or_insert_assoc::<ScopeUsages>()
+      self
+        .scope_usages
+        .entry(scope_id)
+        .or_default()
         .foreign
         .insert(sym);
+      current = self.sem.scope(scope_id).parent;
     }
   }
 
-  fn attach_symbol(&mut self, name: &str, scope: &Scope, mark_export: bool) -> Option<Symbol> {
-    scope.find_symbol(name.to_string()).map(|sym| {
-      self.record_symbol_usage(name, sym, scope);
-      if mark_export && scope.data().typ() == ScopeType::Module {
-        self.exported.insert(sym);
+  fn maybe_mark_export(&mut self, scope: ScopeId, sym: SymbolId, mark_export: bool) {
+    if mark_export && self.sem.scope(scope).kind == ScopeKind::Module {
+      self.exported.insert(sym);
+    }
+  }
+
+  fn resolve_export_name(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+    let name_id = self.sem.name_id(name)?;
+    let mut current = Some(scope);
+    while let Some(scope_id) = current {
+      let scope_data = self.sem.scope(scope_id);
+      if let Some(sym) = scope_data.get(name_id) {
+        return Some(sym);
       }
-      sym
-    })
+      current = scope_data.parent;
+    }
+    None
   }
 }
 
-impl SymbolCollectorVisitor {
+impl SymbolCollectorVisitor<'_> {
   fn enter_class_decl_node(&mut self, node: &mut ClassDeclNode) {
     let export = self.inner.top_level_mode == TopLevelMode::Module && node.stx.export;
     self.inner.export_decl_stack.push(export);
@@ -197,14 +207,12 @@ impl SymbolCollectorVisitor {
   }
 
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
-    let scope = node.assoc.get::<Scope>().unwrap();
-    match self
-      .inner
-      .attach_symbol(&node.stx.name, scope, false)
-      .map(ResolvedSymbol)
-    {
-      Some(sym) => node.assoc.set(sym),
-      None => self.inner.record_unknown(&node.stx.name, scope),
+    let Some(scope) = scope_id(&node.assoc) else {
+      return;
+    };
+    match resolved_symbol(&node.assoc) {
+      Some(sym) => self.inner.record_symbol_usage(scope, sym),
+      None => self.inner.record_unknown(scope, &node.stx.name),
     }
   }
 
@@ -212,38 +220,44 @@ impl SymbolCollectorVisitor {
     if self.inner.ignore_id_pats > 0 {
       return;
     }
+    let Some(scope) = scope_id(&node.assoc) else {
+      return;
+    };
     let mark_export = *self.inner.export_decl_stack.last().unwrap_or(&false);
-    let scope = node.assoc.get::<Scope>().unwrap();
-    match self
-      .inner
-      .attach_symbol(&node.stx.name, scope, mark_export)
-      .map(ResolvedSymbol)
-    {
-      Some(sym) => node.assoc.set(sym),
-      None => self.inner.record_unknown(&node.stx.name, scope),
+    match resolved_symbol(&node.assoc) {
+      Some(sym) => {
+        self.inner.maybe_mark_export(scope, sym, mark_export);
+        self.inner.record_symbol_usage(scope, sym);
+      }
+      None => self.inner.record_unknown(scope, &node.stx.name),
     }
   }
 
   fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
-    let scope = node.assoc.get::<Scope>().unwrap();
+    let Some(scope) = scope_id(&node.assoc) else {
+      return;
+    };
     let mark_export = *self.inner.export_decl_stack.last().unwrap_or(&false);
-    if let Some(sym) = self
-      .inner
-      .attach_symbol(&node.stx.name, scope, mark_export)
-      .map(ResolvedSymbol)
-    {
-      node.assoc.set(sym);
+    if let Some(sym) = declared_symbol(&node.assoc) {
+      self.inner.maybe_mark_export(scope, sym, mark_export);
+      self.inner.record_symbol_usage(scope, sym);
+    } else {
+      self.inner.record_unknown(scope, &node.stx.name);
     }
   }
 
   fn enter_export_name_node(&mut self, node: &mut ExportNameNode) {
-    let scope = node.assoc.get::<Scope>().unwrap();
+    let Some(scope) = scope_id(&node.assoc) else {
+      return;
+    };
     if let ModuleExportImportName::Ident(name) = &node.stx.exportable {
-      if let Some(sym) = scope.find_symbol(name.clone()).map(ExportNameSymbol) {
-        node.assoc.set(sym);
+      if let Some(sym) = self.inner.resolve_export_name(scope, name) {
+        node.assoc.set(ExportNameSymbol(sym));
+        self.inner.record_symbol_usage(scope, sym);
+      } else {
+        self.inner.record_unknown(scope, name);
       }
     }
-    // Avoid treating the alias IdPat as a usage/exported binding.
     self.inner.ignore_id_pats += 1;
   }
 
@@ -252,29 +266,46 @@ impl SymbolCollectorVisitor {
   }
 }
 
-pub fn collect_usages(top: &mut TopLevelNode, top_level_mode: TopLevelMode) -> UsageData {
+pub fn collect_usages(
+  top: &mut TopLevelNode,
+  sem: &JsSemantics,
+  top_level_mode: TopLevelMode,
+) -> UsageData {
   let mut visitor = SymbolCollectorVisitor {
-    inner: SymbolCollector::new(top_level_mode),
+    inner: SymbolCollector::new(sem, top_level_mode),
   };
   top.drive_mut(&mut visitor);
 
-  let top_scope = top.assoc.get::<Scope>().unwrap().clone();
-  let mut symbol_names = HashMap::new();
-  let mut queue = vec![top_scope.clone()];
-  while let Some(scope) = queue.pop() {
-    let data = scope.data();
-    for name in data.symbol_names() {
-      if let Some(sym) = data.get_symbol(name) {
-        symbol_names.insert(sym, name.clone());
-      }
+  let SymbolCollector {
+    exported,
+    scope_usages,
+    ..
+  } = visitor.inner;
+
+  let mut symbol_names = HashMap::default();
+  let mut scope_symbol_order: HashMap<ScopeId, Vec<SymbolId>> = HashMap::default();
+  let mut queue = vec![sem.top_scope()];
+  while let Some(scope_id) = queue.pop() {
+    let scope_data = sem.scope(scope_id);
+    let mut symbols: Vec<SymbolId> = scope_data.symbols.values().copied().collect();
+    symbols.sort_by_key(|s| s.index());
+    for sym in symbols.iter().copied() {
+      symbol_names
+        .entry(sym)
+        .or_insert_with(|| sem.name(sem.symbol(sym).name).to_string());
     }
-    queue.extend(data.children().iter().cloned());
+    if !symbols.is_empty() {
+      scope_symbol_order.insert(scope_id, symbols);
+    }
+    queue.extend(scope_data.children.iter().copied());
   }
 
   UsageData {
-    top_scope,
-    exported: visitor.inner.exported,
+    top_scope: sem.top_scope(),
+    exported,
     symbol_names,
+    scope_symbol_order,
+    scope_usages,
   }
 }
 
@@ -318,21 +349,24 @@ fn reserved_names() -> HashSet<String> {
   KEYWORDS_MAPPING.values().map(|s| s.to_string()).collect()
 }
 
-pub fn assign_names(usage: &UsageData) -> HashMap<Symbol, String> {
+pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, String> {
   let reserved = reserved_names();
-  let mut renames = HashMap::new();
+  let mut renames = HashMap::default();
 
   fn assign_scope(
-    scope: Scope,
+    scope: ScopeId,
+    sem: &JsSemantics,
     usage: &UsageData,
     reserved: &HashSet<String>,
-    renames: &mut HashMap<Symbol, String>,
+    renames: &mut HashMap<SymbolId, String>,
   ) {
-    let data = scope.data();
-    let symbol_order = data.symbol_names().clone();
-    let usage_data = data.get_assoc::<ScopeUsages>().cloned();
-    let children = data.children().clone();
-    drop(data);
+    let symbol_order = usage
+      .scope_symbol_order
+      .get(&scope)
+      .cloned()
+      .unwrap_or_default();
+    let usage_data = usage.scope_usages.get(&scope);
+    let children = sem.scope(scope).children.clone();
 
     let mut disallowed: HashSet<String> = reserved.clone();
     if let Some(u) = usage_data {
@@ -343,35 +377,33 @@ pub fn assign_names(usage: &UsageData) -> HashMap<Symbol, String> {
           disallowed.insert(name.clone());
         }
       }
-      for name in u.unknown {
-        disallowed.insert(name);
+      for name in u.unknown.iter() {
+        disallowed.insert(name.clone());
       }
     }
 
     let mut generator = NameGenerator::new();
-    let mut used = HashSet::new();
-    for ident in symbol_order {
-      let data = scope.data();
-      let Some(sym) = data.get_symbol(&ident) else {
+    let mut used = HashSet::default();
+    for sym in symbol_order {
+      let Some(name) = usage.symbol_names.get(&sym) else {
         continue;
       };
-      drop(data);
       if usage.exported.contains(&sym) {
-        used.insert(ident);
+        used.insert(name.clone());
         continue;
       }
-      let name = generator
+      let new_name = generator
         .next_name(|candidate| !disallowed.contains(candidate) && !used.contains(candidate));
-      used.insert(name.clone());
-      renames.insert(sym, name);
+      used.insert(new_name.clone());
+      renames.insert(sym, new_name);
     }
 
     for child in children {
-      assign_scope(child, usage, reserved, renames);
+      assign_scope(child, sem, usage, reserved, renames);
     }
   }
 
-  assign_scope(usage.top_scope.clone(), usage, &reserved, &mut renames);
+  assign_scope(usage.top_scope, sem, usage, &reserved, &mut renames);
   renames
 }
 
@@ -383,12 +415,12 @@ pub fn assign_names(usage: &UsageData) -> HashMap<Symbol, String> {
   IdPatNode(enter)
 )]
 struct ApplyVisitor<'a> {
-  renames: &'a HashMap<Symbol, String>,
+  renames: &'a HashMap<SymbolId, String>,
   replacements: Vec<Replacement>,
 }
 
 impl<'a> ApplyVisitor<'a> {
-  fn maybe_apply(&mut self, loc: (usize, usize), sym: Option<Symbol>, name: &mut String) {
+  fn maybe_apply(&mut self, loc: (usize, usize), sym: Option<SymbolId>, name: &mut String) {
     let Some(sym) = sym else { return };
     let Some(new_name) = self.renames.get(&sym) else {
       return;
@@ -410,17 +442,17 @@ impl<'a> ApplyVisitor<'a> {
 
 impl<'a> ApplyVisitor<'a> {
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
-    let sym = node.assoc.get::<ResolvedSymbol>().map(|s| s.0);
+    let sym = resolved_symbol(&node.assoc);
     self.maybe_apply((node.loc.0, node.loc.1), sym, &mut node.stx.name);
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
-    let sym = node.assoc.get::<ResolvedSymbol>().map(|s| s.0);
+    let sym = resolved_symbol(&node.assoc);
     self.maybe_apply((node.loc.0, node.loc.1), sym, &mut node.stx.name);
   }
 
   fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
-    let sym = node.assoc.get::<ResolvedSymbol>().map(|s| s.0);
+    let sym = declared_symbol(&node.assoc);
     self.maybe_apply((node.loc.0, node.loc.1), sym, &mut node.stx.name);
   }
 
@@ -450,7 +482,7 @@ impl<'a> ApplyVisitor<'a> {
 
 pub fn apply_renames(
   top: &mut TopLevelNode,
-  renames: &HashMap<Symbol, String>,
+  renames: &HashMap<SymbolId, String>,
 ) -> Vec<Replacement> {
   let mut visitor = ApplyVisitor {
     renames,
