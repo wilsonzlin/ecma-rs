@@ -1,0 +1,7 @@
+// Minimal ES2019 lib for tests
+declare const console: {
+  log(msg: string): void;
+};
+
+declare const esVersion: "es2019";
+
