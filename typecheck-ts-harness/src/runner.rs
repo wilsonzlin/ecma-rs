@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::{info, info_span, warn};
+use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::Diagnostic;
 use typecheck_ts::FileId;
 use typecheck_ts::Host;
@@ -407,6 +408,25 @@ impl Host for HarnessHost {
     }
 
     None
+  }
+
+  fn file_kind(&self, file: FileId) -> FileKind {
+    let name = self
+      .files
+      .get(file.0 as usize)
+      .map(|f| f.normalized.as_str())
+      .unwrap_or("");
+    if name.ends_with(".d.ts") {
+      FileKind::Dts
+    } else if name.ends_with(".tsx") {
+      FileKind::Tsx
+    } else if name.ends_with(".ts") {
+      FileKind::Ts
+    } else if name.ends_with(".jsx") {
+      FileKind::Jsx
+    } else {
+      FileKind::Js
+    }
   }
 }
 

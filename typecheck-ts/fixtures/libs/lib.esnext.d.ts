@@ -3,5 +3,7 @@ declare const console: {
   log(msg: string): void;
 };
 
-declare const esVersion: "esnext";
+declare const Array: any[];
+declare const Promise: any;
 
+declare const esVersion: "esnext";

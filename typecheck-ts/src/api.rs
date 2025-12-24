@@ -20,6 +20,9 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use thiserror::Error;
 
+use crate::lib_support::{CompilerOptions, FileKind, LibFile, LibManager};
+const CODE_NON_DTS_LIB: &str = "TC0004";
+const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
 /// Identifier for a definition (function/variable/import).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct DefId(pub u32);
@@ -67,6 +70,15 @@ pub trait Host: Send + Sync + 'static {
   fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError>;
   /// Resolve a module specifier relative to `from`.
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId>;
+
+  /// Compiler options influencing lib selection and strictness.
+  fn compiler_options(&self) -> CompilerOptions { CompilerOptions::default() }
+
+  /// Additional library files to include alongside bundled libs.
+  fn lib_files(&self) -> Vec<LibFile> { Vec::new() }
+
+  /// Kind of the file; defaults to TypeScript.
+  fn file_kind(&self, _file: FileId) -> FileKind { FileKind::Ts }
 }
 
 /// Public symbol identifier exposed through [`Program::symbol_at`].
@@ -215,10 +227,19 @@ pub struct Program {
 impl Program {
   /// Create a new program from a host and root file list.
   pub fn new(host: impl Host, roots: Vec<FileId>) -> Program {
+    Program::with_lib_manager(host, roots, Arc::new(LibManager::new()))
+  }
+
+  /// Create a new program with a provided lib manager (useful for observing invalidation in tests).
+  pub fn with_lib_manager(
+    host: impl Host,
+    roots: Vec<FileId>,
+    lib_manager: Arc<LibManager>,
+  ) -> Program {
     Program {
       host: Arc::new(host),
       roots,
-      state: std::sync::Mutex::new(ProgramState::new()),
+      state: std::sync::Mutex::new(ProgramState::new(lib_manager)),
     }
   }
 
@@ -551,12 +572,17 @@ impl TypeStore {
 
 struct ProgramState {
   analyzed: bool,
+  lib_manager: Arc<LibManager>,
+  compiler_options: CompilerOptions,
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_data: HashMap<BodyId, BodyData>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
+  file_kinds: HashMap<FileId, FileKind>,
+  lib_texts: HashMap<FileId, Arc<str>>,
+  global_bindings: HashMap<String, SymbolBinding>,
   diagnostics: Vec<Diagnostic>,
   type_store: TypeStore,
   builtin: BuiltinTypes,
@@ -567,16 +593,21 @@ struct ProgramState {
 }
 
 impl ProgramState {
-  fn new() -> ProgramState {
+  fn new(lib_manager: Arc<LibManager>) -> ProgramState {
     let (type_store, builtin) = TypeStore::new();
     ProgramState {
       analyzed: false,
+      lib_manager,
+      compiler_options: CompilerOptions::default(),
       files: HashMap::new(),
       def_data: HashMap::new(),
       body_data: HashMap::new(),
       def_types: HashMap::new(),
       body_results: HashMap::new(),
       symbol_occurrences: HashMap::new(),
+      file_kinds: HashMap::new(),
+      lib_texts: HashMap::new(),
+      global_bindings: HashMap::new(),
       diagnostics: Vec::new(),
       type_store,
       builtin,
@@ -591,12 +622,27 @@ impl ProgramState {
     if self.analyzed {
       return;
     }
-    let mut queue: VecDeque<FileId> = roots.iter().copied().collect();
+    let libs = self.collect_libraries(host.as_ref());
+    let mut queue: VecDeque<FileId> = libs.iter().map(|l| l.id).collect();
+    for lib in libs {
+      self.lib_texts.insert(lib.id, lib.text.clone());
+    }
+    for root in roots {
+      self
+        .file_kinds
+        .entry(*root)
+        .or_insert_with(|| host.file_kind(*root));
+      queue.push_back(*root);
+    }
     while let Some(file) = queue.pop_front() {
       if self.files.contains_key(&file) {
         continue;
       }
-      match host.file_text(file) {
+      self
+        .file_kinds
+        .entry(file)
+        .or_insert_with(|| host.file_kind(file));
+      match self.load_text(file, host) {
         Ok(text) => match parse(&text) {
           Ok(ast) => self.bind_file(file, ast, host, &mut queue),
           Err(err) => {
@@ -612,7 +658,54 @@ impl ProgramState {
         }
       }
     }
+    self.recompute_global_bindings();
     self.analyzed = true;
+  }
+
+  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<LibFile> {
+    let options = host.compiler_options();
+    self.compiler_options = options.clone();
+    let mut libs = host.lib_files();
+    if !options.no_default_lib {
+      let bundled = self.lib_manager.bundled_libs(&options);
+      libs.extend(bundled.files);
+    }
+
+    for lib in libs.iter() {
+      self.file_kinds.insert(lib.id, lib.kind);
+      if lib.kind != FileKind::Dts {
+        self.diagnostics.push(Diagnostic::error(
+          CODE_NON_DTS_LIB,
+          format!(
+            "Library '{}' is not a .d.ts file; it will be ignored for global declarations.",
+            lib.name
+          ),
+          Span::new(lib.id, TextRange::new(0, 0)),
+        ));
+      }
+    }
+
+    libs
+  }
+
+  fn load_text(&self, file: FileId, host: &Arc<dyn Host>) -> Result<Arc<str>, HostError> {
+    if let Some(text) = self.lib_texts.get(&file) {
+      return Ok(text.clone());
+    }
+    host.file_text(file)
+  }
+
+  fn recompute_global_bindings(&mut self) {
+    let mut globals = HashMap::new();
+    for (file, state) in self.files.iter() {
+      if self.file_kinds.get(file) != Some(&FileKind::Dts) {
+        continue;
+      }
+      for (name, binding) in state.bindings.iter() {
+        globals.entry(name.clone()).or_insert(binding.clone());
+      }
+    }
+    self.global_bindings = globals;
   }
 
   fn bind_file(
@@ -1175,6 +1268,11 @@ impl ProgramState {
             self.builtin.unknown
           }
         } else {
+          result.diagnostics.push(Diagnostic::error(
+            CODE_UNKNOWN_IDENTIFIER,
+            format!("Cannot find name '{name}'."),
+            Span::new(file, expr.span),
+          ));
           self.builtin.unknown
         }
       }
@@ -1272,11 +1370,10 @@ impl ProgramState {
   }
 
   fn initial_env(&self, owner: Option<DefId>, file: FileId) -> HashMap<String, SymbolBinding> {
-    let mut env = self
-      .files
-      .get(&file)
-      .map(|f| f.bindings.clone())
-      .unwrap_or_default();
+    let mut env = self.global_bindings.clone();
+    if let Some(file_env) = self.files.get(&file).map(|f| f.bindings.clone()) {
+      env.extend(file_env);
+    }
     if let Some(def) = owner {
       if let Some(DefKind::Function(func)) = self.def_data.get(&def).map(|d| &d.kind) {
         for param in func.params.iter() {
