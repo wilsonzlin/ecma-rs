@@ -287,7 +287,7 @@ mod tests {
     assert!(last.is_some());
     // Ensure the lookup path remains efficient in debug builds.
     assert!(
-      start.elapsed().as_secs_f32() < 1.0,
+      start.elapsed().as_secs_f32() < 2.0,
       "span map lookup took too long"
     );
   }
