@@ -893,6 +893,7 @@ dependencies = [
 name = "minify-js-bench"
 version = "0.0.1"
 dependencies = [
+ "diagnostics",
  "minify-js",
 ]
 
