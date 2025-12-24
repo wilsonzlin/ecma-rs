@@ -1,21 +1,20 @@
 #![cfg_attr(not(feature = "with-node"), allow(dead_code, unused_imports))]
 
+use crate::diagnostic::{
+  diff_diagnostics, normalize_rust_diagnostics, normalize_tsc_diagnostics, DiagnosticDiff,
+  NormalizedDiagnostic,
+};
 use crate::multifile::normalize_name;
-use crate::tsc::node_available;
-use crate::tsc::TscDiagnostic;
-use crate::tsc::TscDiagnostics;
-use crate::tsc::TscRequest;
-use crate::tsc::TscRunner;
-use anyhow::anyhow;
-use anyhow::Context;
-use anyhow::Result;
+use crate::runner::run_rust;
+use crate::tsc::{node_available, TscDiagnostic, TscDiagnostics, TscRequest, TscRunner};
+use crate::VirtualFile;
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
-use serde_json::Map;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Args)]
@@ -27,6 +26,22 @@ pub struct DifftscArgs {
   /// Whether to regenerate baselines from tsc output.
   #[arg(long)]
   pub update_baselines: bool,
+
+  /// Compare Rust checker diagnostics against tsc for each test.
+  #[arg(long, alias = "differential")]
+  pub compare_rust: bool,
+
+  /// Use stored baselines instead of running tsc (useful when Node is unavailable).
+  #[arg(long)]
+  pub use_baselines: bool,
+
+  /// Allow mismatches without failing the command.
+  #[arg(long)]
+  pub allow_mismatches: bool,
+
+  /// Emit JSON output in addition to the human summary.
+  #[arg(long)]
+  pub json: bool,
 
   /// Path to the Node.js executable.
   #[arg(long, default_value = "node")]
@@ -43,16 +58,73 @@ pub enum CommandStatus {
   Skipped,
 }
 
-#[derive(Debug, Clone)]
-struct TestCase {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CaseStatus {
+  Matched,
+  Mismatch,
+  BaselineUpdated,
+  BaselineMissing,
+  TscFailed,
+  RustFailed,
+  Skipped,
+}
+
+impl CaseStatus {
+  fn is_error(&self) -> bool {
+    matches!(
+      self,
+      CaseStatus::BaselineMissing | CaseStatus::TscFailed | CaseStatus::RustFailed
+    )
+  }
+
+  fn as_str(&self) -> &'static str {
+    match self {
+      CaseStatus::Matched => "matched",
+      CaseStatus::Mismatch => "mismatch",
+      CaseStatus::BaselineUpdated => "baseline_updated",
+      CaseStatus::BaselineMissing => "baseline_missing",
+      CaseStatus::TscFailed => "tsc_failed",
+      CaseStatus::RustFailed => "rust_failed",
+      CaseStatus::Skipped => "skipped",
+    }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CaseReport {
   name: String,
-  files: Vec<TestFile>,
+  status: CaseStatus,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  expected: Option<Vec<NormalizedDiagnostic>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  actual: Option<Vec<NormalizedDiagnostic>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  diff: Option<DiagnosticDiff>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  notes: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct Summary {
+  total: usize,
+  matched: usize,
+  mismatched: usize,
+  updated: usize,
+  skipped: usize,
+  errors: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct JsonReport {
+  summary: Summary,
+  results: Vec<CaseReport>,
 }
 
 #[derive(Debug, Clone)]
-struct TestFile {
-  relative_path: PathBuf,
-  content: String,
+struct TestCase {
+  name: String,
+  files: Vec<VirtualFile>,
 }
 
 pub fn run(args: DifftscArgs) -> Result<CommandStatus> {
@@ -71,31 +143,7 @@ pub fn run(args: DifftscArgs) -> Result<CommandStatus> {
 
 #[cfg(feature = "with-node")]
 fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
-  if !node_available(&args.node) {
-    eprintln!(
-      "difftsc skipped: Node.js not available at {}",
-      args.node.display()
-    );
-    return Ok(CommandStatus::Skipped);
-  }
-
-  let suite_path = if args.suite.is_absolute() {
-    args.suite.clone()
-  } else {
-    std::env::current_dir()?.join(&args.suite)
-  };
-
-  let suite_path = if suite_path.exists() || args.suite.is_absolute() {
-    suite_path
-  } else {
-    let manifest_candidate = Path::new(env!("CARGO_MANIFEST_DIR")).join(&args.suite);
-    if manifest_candidate.exists() {
-      manifest_candidate
-    } else {
-      suite_path
-    }
-  };
-
+  let suite_path = resolve_suite_path(&args.suite)?;
   if !suite_path.exists() {
     return Err(anyhow!(
       "suite path does not exist: {}",
@@ -123,52 +171,270 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
     return Err(anyhow!("suite `{}` contains no tests", suite_name));
   }
 
-  let mut mismatches = Vec::new();
-  let mut runner = TscRunner::new(args.node.clone())?;
+  let mut runner = if needs_live_tsc(&args) {
+    if !node_available(&args.node) {
+      eprintln!(
+        "difftsc skipped: Node.js not available at {}",
+        args.node.display()
+      );
+      return Ok(CommandStatus::Skipped);
+    }
+    Some(TscRunner::new(args.node.clone())?)
+  } else {
+    None
+  };
 
+  let mut results = Vec::new();
   for test in tests {
-    let actual = run_test(&test, &mut runner)?;
-    let baseline_path = baselines_root.join(format!("{}.json", test.name));
+    let report = run_single_test(&test, &args, runner.as_mut(), &baselines_root);
+    results.push(report);
+  }
 
-    if args.update_baselines {
-      write_baseline(&baseline_path, &actual)
-        .with_context(|| format!("write baseline for {}", test.name))?;
-    } else {
-      let baseline = read_baseline(&baseline_path)
-        .with_context(|| format!("read baseline for {}", test.name))?;
-      if let Some(diff) = compare_diagnostics(
-        &baseline.diagnostics,
-        &actual.diagnostics,
-        args.span_tolerance,
-      ) {
-        mismatches.push((test.name, diff));
+  let summary = summarize(&results);
+
+  if args.update_baselines && !args.json {
+    println!("updated baselines under {}", baselines_root.display());
+  }
+
+  if args.json {
+    let json = serde_json::to_string_pretty(&JsonReport {
+      summary: summary.clone(),
+      results: results.clone(),
+    })
+    .context("serialize JSON output")?;
+    println!("{json}");
+  } else {
+    print_human_summary(&suite_name, &summary, &results);
+  }
+
+  if (summary.mismatched > 0 && !args.allow_mismatches) || summary.errors > 0 {
+    return Err(anyhow!(
+      "{} difftsc mismatches ({} error(s))",
+      summary.mismatched,
+      summary.errors
+    ));
+  }
+
+  Ok(CommandStatus::Success)
+}
+
+#[cfg(feature = "with-node")]
+fn summarize(results: &[CaseReport]) -> Summary {
+  let mut summary = Summary::default();
+  summary.total = results.len();
+  for case in results {
+    match case.status {
+      CaseStatus::Matched => summary.matched += 1,
+      CaseStatus::Mismatch => summary.mismatched += 1,
+      CaseStatus::BaselineUpdated => summary.updated += 1,
+      CaseStatus::Skipped => summary.skipped += 1,
+      CaseStatus::BaselineMissing | CaseStatus::TscFailed | CaseStatus::RustFailed => {
+        summary.errors += 1
       }
     }
   }
+  summary
+}
 
-  if args.update_baselines {
-    println!("updated baselines under {}", baselines_root.display());
-    return Ok(CommandStatus::Success);
+#[cfg(feature = "with-node")]
+fn print_human_summary(suite: &str, summary: &Summary, results: &[CaseReport]) {
+  println!(
+    "difftsc: suite `{suite}` — total={}, matched={}, mismatched={}, updated={}, errors={}, skipped={}",
+    summary.total, summary.matched, summary.mismatched, summary.updated, summary.errors, summary.skipped
+  );
+
+  if summary.mismatched == 0 && summary.errors == 0 {
+    return;
   }
 
-  if mismatches.is_empty() {
-    println!("difftsc: all tests matched for suite `{suite_name}`");
-    Ok(CommandStatus::Success)
-  } else {
-    eprintln!("difftsc: {} mismatches", mismatches.len());
-    for (name, diff) in &mismatches {
-      eprintln!("  {name}: {diff}");
-    }
-    Err(anyhow!("{} difftsc mismatches", mismatches.len()))
+  for case in results.iter().filter(|c| c.status.is_error()) {
+    let note = if case.notes.is_empty() {
+      String::new()
+    } else {
+      format!(" ({})", case.notes.join("; "))
+    };
+    eprintln!("  {}: {}{}", case.name, case.status.as_str(), note);
+  }
+
+  for case in results
+    .iter()
+    .filter(|c| matches!(c.status, CaseStatus::Mismatch))
+  {
+    let detail = case
+      .diff
+      .as_ref()
+      .map(|d| {
+        format!(
+          "missing={}, unexpected={}, mismatched={}",
+          d.missing.len(),
+          d.unexpected.len(),
+          d.mismatched.len()
+        )
+      })
+      .unwrap_or_else(|| "differences detected".to_string());
+    eprintln!("  {}: {}", case.name, detail);
   }
 }
 
 #[cfg(feature = "with-node")]
-fn run_test(test: &TestCase, runner: &mut TscRunner) -> Result<TscDiagnostics> {
-  let request = build_request(test);
-  runner
-    .check(request)
-    .with_context(|| format!("run tsc for test {}", test.name))
+fn run_single_test(
+  test: &TestCase,
+  args: &DifftscArgs,
+  runner: Option<&mut TscRunner>,
+  baselines_root: &Path,
+) -> CaseReport {
+  let baseline_path = baselines_root.join(format!("{}.json", test.name));
+  let notes = Vec::new();
+
+  let live_tsc = if needs_live_tsc(args) {
+    let Some(runner) = runner else {
+      return CaseReport {
+        name: test.name.clone(),
+        status: CaseStatus::TscFailed,
+        expected: None,
+        actual: None,
+        diff: None,
+        notes: vec!["tsc runner unavailable".to_string()],
+      };
+    };
+
+    match run_tsc_on_test(test, runner) {
+      Ok(diags) => Some(diags),
+      Err(err) => {
+        return CaseReport {
+          name: test.name.clone(),
+          status: CaseStatus::TscFailed,
+          expected: None,
+          actual: None,
+          diff: None,
+          notes: vec![err.to_string()],
+        };
+      }
+    }
+  } else {
+    None
+  };
+
+  if args.update_baselines {
+    if let Some(tsc) = &live_tsc {
+      if let Err(err) = write_baseline(&baseline_path, tsc) {
+        return CaseReport {
+          name: test.name.clone(),
+          status: CaseStatus::TscFailed,
+          expected: None,
+          actual: None,
+          diff: None,
+          notes: vec![err.to_string()],
+        };
+      }
+    }
+  }
+
+  if !args.compare_rust {
+    if args.update_baselines {
+      return CaseReport {
+        name: test.name.clone(),
+        status: CaseStatus::BaselineUpdated,
+        expected: None,
+        actual: None,
+        diff: None,
+        notes,
+      };
+    }
+
+    let baseline = match read_baseline(&baseline_path) {
+      Ok(data) => data,
+      Err(err) => {
+        return CaseReport {
+          name: test.name.clone(),
+          status: CaseStatus::BaselineMissing,
+          expected: None,
+          actual: None,
+          diff: None,
+          notes: vec![err.to_string()],
+        };
+      }
+    };
+    let expected = normalize_tsc_diagnostics(&baseline.diagnostics);
+    let actual = normalize_tsc_diagnostics(&live_tsc.expect("live tsc required").diagnostics);
+    let diff = diff_diagnostics(&expected, &actual, args.span_tolerance);
+    let status = if diff.is_some() {
+      CaseStatus::Mismatch
+    } else {
+      CaseStatus::Matched
+    };
+    return CaseReport {
+      name: test.name.clone(),
+      status,
+      expected: Some(expected),
+      actual: Some(actual),
+      diff,
+      notes,
+    };
+  }
+
+  let tsc_diags = if let Some(live) = live_tsc {
+    live
+  } else {
+    match read_baseline(&baseline_path) {
+      Ok(data) => data,
+      Err(err) => {
+        return CaseReport {
+          name: test.name.clone(),
+          status: CaseStatus::BaselineMissing,
+          expected: None,
+          actual: None,
+          diff: None,
+          notes: vec![err.to_string()],
+        };
+      }
+    }
+  };
+
+  let (rust_diags, file_names) = run_rust(&test.files);
+  let expected = normalize_tsc_diagnostics(&tsc_diags.diagnostics);
+  let actual = normalize_rust_diagnostics(&rust_diags, &file_names);
+  let diff = diff_diagnostics(&expected, &actual, args.span_tolerance);
+  let status = if diff.is_some() {
+    CaseStatus::Mismatch
+  } else {
+    CaseStatus::Matched
+  };
+
+  CaseReport {
+    name: test.name.clone(),
+    status,
+    expected: Some(expected),
+    actual: Some(actual),
+    diff,
+    notes,
+  }
+}
+
+#[cfg(feature = "with-node")]
+fn needs_live_tsc(args: &DifftscArgs) -> bool {
+  // Updating baselines or baseline-only mode always require a live tsc run.
+  args.update_baselines || !args.compare_rust || !args.use_baselines
+}
+
+#[cfg(feature = "with-node")]
+fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
+  let suite_path = if suite.is_absolute() {
+    suite.to_path_buf()
+  } else {
+    std::env::current_dir()?.join(suite)
+  };
+
+  if suite_path.exists() || suite.is_absolute() {
+    return Ok(suite_path);
+  }
+
+  let manifest_candidate = Path::new(env!("CARGO_MANIFEST_DIR")).join(suite);
+  if manifest_candidate.exists() {
+    Ok(manifest_candidate)
+  } else {
+    Ok(suite_path)
+  }
 }
 
 #[cfg(feature = "with-node")]
@@ -177,7 +443,7 @@ fn build_request(test: &TestCase) -> TscRequest {
   let mut root_names = Vec::new();
 
   for file in &test.files {
-    let normalized = normalize_name(file.relative_path.to_string_lossy().as_ref());
+    let normalized = normalize_name(&file.name);
     root_names.push(normalized.clone());
     files.insert(normalized, file.content.clone());
   }
@@ -197,80 +463,12 @@ fn build_request(test: &TestCase) -> TscRequest {
   }
 }
 
-fn compare_diagnostics(
-  expected: &[TscDiagnostic],
-  actual: &[TscDiagnostic],
-  tolerance: u32,
-) -> Option<String> {
-  let expected_sorted = normalize(expected);
-  let actual_sorted = normalize(actual);
-
-  if expected_sorted.len() != actual_sorted.len() {
-    return Some(format!(
-      "diagnostic count mismatch (expected {}, got {})",
-      expected_sorted.len(),
-      actual_sorted.len()
-    ));
-  }
-
-  for (idx, (exp, act)) in expected_sorted.iter().zip(actual_sorted.iter()).enumerate() {
-    let file_match = exp.file == act.file;
-    let code_match = exp.code == act.code;
-    let start_match = within_tolerance(exp.start, act.start, tolerance);
-    let end_match = within_tolerance(exp.end, act.end, tolerance);
-    if !(file_match && code_match && start_match && end_match) {
-      return Some(format!(
-        "diagnostic {idx} mismatch: expected {} but got {}",
-        describe(exp),
-        describe(act)
-      ));
-    }
-  }
-
-  None
-}
-
-fn within_tolerance(a: u32, b: u32, tolerance: u32) -> bool {
-  let (min, max) = if a <= b { (a, b) } else { (b, a) };
-  max - min <= tolerance
-}
-
-fn describe(diag: &NormalizedDiagnostic) -> String {
-  match &diag.file {
-    Some(file) => format!("{}:{}-{} (code {})", file, diag.start, diag.end, diag.code),
-    None => format!("<no-file>:{}-{} (code {})", diag.start, diag.end, diag.code),
-  }
-}
-
-fn normalize(diags: &[TscDiagnostic]) -> Vec<NormalizedDiagnostic> {
-  let mut normalized: Vec<_> = diags
-    .iter()
-    .map(|d| NormalizedDiagnostic {
-      code: d.code,
-      file: d.file.clone(),
-      start: d.start,
-      end: d.end,
-    })
-    .collect();
-
-  normalized.sort_by(|a, b| {
-    (a.file.as_deref().unwrap_or(""), a.start, a.end, a.code).cmp(&(
-      b.file.as_deref().unwrap_or(""),
-      b.start,
-      b.end,
-      b.code,
-    ))
-  });
-
-  normalized
-}
-
-#[derive(Debug, Clone)]
-struct NormalizedDiagnostic {
-  code: u32,
-  file: Option<String>,
-  start: u32,
-  end: u32,
+#[cfg(feature = "with-node")]
+fn run_tsc_on_test(test: &TestCase, runner: &mut TscRunner) -> Result<TscDiagnostics> {
+  let request = build_request(test);
+  runner
+    .check(request)
+    .with_context(|| format!("run tsc for test {}", test.name))
 }
 
 fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
@@ -295,10 +493,10 @@ fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
         fs::read_to_string(&path).with_context(|| format!("read test file {}", path.display()))?;
       tests.push(TestCase {
         name,
-        files: vec![TestFile {
-          relative_path: path
+        files: vec![VirtualFile {
+          name: path
             .file_name()
-            .map(PathBuf::from)
+            .map(|n| n.to_string_lossy().to_string())
             .context("test file missing name")?,
           content,
         }],
@@ -309,7 +507,7 @@ fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
   Ok(tests)
 }
 
-fn collect_files_recursively(dir: &Path) -> Result<Vec<TestFile>> {
+fn collect_files_recursively(dir: &Path) -> Result<Vec<VirtualFile>> {
   let mut files = Vec::new();
   for entry in WalkDir::new(dir)
     .into_iter()
@@ -323,16 +521,17 @@ fn collect_files_recursively(dir: &Path) -> Result<Vec<TestFile>> {
     let relative_path = path
       .strip_prefix(dir)
       .context("compute relative path")?
-      .to_path_buf();
+      .to_string_lossy()
+      .to_string();
     let content =
       fs::read_to_string(path).with_context(|| format!("read test file {}", path.display()))?;
-    files.push(TestFile {
-      relative_path,
+    files.push(VirtualFile {
+      name: relative_path,
       content,
     });
   }
 
-  files.sort_by(|a, b| a.relative_path.cmp(&b.relative_path));
+  files.sort_by(|a, b| a.name.cmp(&b.name));
   Ok(files)
 }
 
@@ -378,8 +577,8 @@ fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
 }
 
 fn read_baseline(path: &Path) -> Result<TscDiagnostics> {
-  let data =
-    fs::read_to_string(path).with_context(|| format!("read baseline {}", path.display()))?;
+  let data = fs::read_to_string(path)
+    .with_context(|| format!("read baseline {}", path.display()))?;
   let parsed = serde_json::from_str(&data).context("parse baseline JSON")?;
   Ok(parsed)
 }
@@ -414,7 +613,7 @@ mod tests {
 
   #[test]
   fn compares_diagnostics_with_tolerance() {
-    let expected = vec![TscDiagnostic {
+    let expected_raw = vec![TscDiagnostic {
       code: 1,
       file: Some("a.ts".to_string()),
       start: 0,
@@ -422,7 +621,7 @@ mod tests {
       category: None,
       message: None,
     }];
-    let actual = vec![TscDiagnostic {
+    let actual_raw = vec![TscDiagnostic {
       code: 1,
       file: Some("a.ts".to_string()),
       start: 1,
@@ -430,7 +629,9 @@ mod tests {
       category: None,
       message: None,
     }];
-    assert!(compare_diagnostics(&expected, &actual, 0).is_some());
-    assert!(compare_diagnostics(&expected, &actual, 1).is_none());
+    let expected = normalize_tsc_diagnostics(&expected_raw);
+    let actual = normalize_tsc_diagnostics(&actual_raw);
+    assert!(diff_diagnostics(&expected, &actual, 0).is_some());
+    assert!(diff_diagnostics(&expected, &actual, 1).is_none());
   }
 }

@@ -337,6 +337,10 @@ impl HarnessHost {
   fn root_files(&self) -> Vec<FileId> {
     (0..self.files.len()).map(|i| FileId(i as u32)).collect()
   }
+
+  fn file_names(&self) -> Vec<String> {
+    self.files.iter().map(|f| f.normalized.clone()).collect()
+  }
 }
 
 impl Host for HarnessHost {
@@ -404,6 +408,14 @@ impl Host for HarnessHost {
 
     None
   }
+}
+
+pub(crate) fn run_rust(files: &[VirtualFile]) -> (Vec<Diagnostic>, Vec<String>) {
+  let host = HarnessHost::new(files);
+  let names = host.file_names();
+  let roots = host.root_files();
+  let diagnostics = Program::new(host, roots).check();
+  (diagnostics, names)
 }
 
 fn has_known_extension(name: &str) -> bool {

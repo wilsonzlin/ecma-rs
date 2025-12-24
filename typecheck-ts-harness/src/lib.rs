@@ -1,6 +1,7 @@
 use std::io;
 use thiserror::Error;
 
+pub mod diagnostic;
 pub mod difftsc;
 pub mod directives;
 pub mod discover;
