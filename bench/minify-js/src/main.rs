@@ -15,12 +15,12 @@ struct SingleFileSource<'a> {
 }
 
 impl SourceProvider for SingleFileSource<'_> {
-  fn file_name(&self, _file: FileId) -> &str {
-    self.name
+  fn file_name(&self, _file: FileId) -> Option<&str> {
+    Some(self.name)
   }
 
-  fn file_text(&self, _file: FileId) -> &str {
-    self.text
+  fn file_text(&self, _file: FileId) -> Option<&str> {
+    Some(self.text)
   }
 }
 
@@ -35,11 +35,7 @@ trait IntoMinifyOutcome {
 
 impl IntoMinifyOutcome for Vec<Diagnostic> {
   fn into_outcome(self, _file: FileId) -> MinifyOutcome {
-    if self.is_empty() {
-      MinifyOutcome::Ok
-    } else {
-      MinifyOutcome::Diagnostics(self)
-    }
+    diagnostics_outcome(self)
   }
 }
 
@@ -50,7 +46,7 @@ where
   fn into_outcome(self, file: FileId) -> MinifyOutcome {
     match self {
       Ok(()) => MinifyOutcome::Ok,
-      Err(err) => MinifyOutcome::Diagnostics(error_to_diagnostics(err, file)),
+      Err(err) => MinifyOutcome::Diagnostics(fallback_diagnostics(err, file)),
     }
   }
 }
@@ -61,19 +57,21 @@ where
 {
   fn into_outcome(self, file: FileId) -> MinifyOutcome {
     match self {
-      Ok(diagnostics) => {
-        if diagnostics.is_empty() {
-          MinifyOutcome::Ok
-        } else {
-          MinifyOutcome::Diagnostics(diagnostics)
-        }
-      }
-      Err(err) => MinifyOutcome::Diagnostics(error_to_diagnostics(err, file)),
+      Ok(diagnostics) => diagnostics_outcome(diagnostics),
+      Err(err) => MinifyOutcome::Diagnostics(fallback_diagnostics(err, file)),
     }
   }
 }
 
-fn error_to_diagnostics<E>(err: E, file: FileId) -> Vec<Diagnostic>
+fn diagnostics_outcome(diagnostics: Vec<Diagnostic>) -> MinifyOutcome {
+  if diagnostics.is_empty() {
+    MinifyOutcome::Ok
+  } else {
+    MinifyOutcome::Diagnostics(diagnostics)
+  }
+}
+
+fn fallback_diagnostics<E>(err: E, file: FileId) -> Vec<Diagnostic>
 where
   E: 'static + std::fmt::Debug,
 {
