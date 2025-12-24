@@ -225,14 +225,14 @@ impl<'a, S: Serialize + Drive + DriveMut> Serialize for LocatedNode<'a, S> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use serde::Serialize;
+  use crate::ast::expr::Expr;
+  use crate::ast::expr::IdExpr;
   use serde_json::json;
   use serde_json::to_value;
 
-  #[derive(Debug, Serialize, derive_visitor::Drive, derive_visitor::DriveMut)]
-  struct DummySyntax {
-    #[drive(skip)]
-    value: &'static str,
+  fn id_expr(loc: Loc, name: &'static str) -> Node<Expr> {
+    let ident = Node::new(loc, IdExpr { name: name.into() });
+    Node::new(loc, Expr::Id(ident))
   }
 
   #[test]
@@ -268,33 +268,41 @@ mod tests {
 
   #[test]
   fn serializes_located_node_with_location() {
-    let node = Node::new(Loc(2, 5), DummySyntax { value: "abc" });
-    let node_json = to_value(&node).unwrap();
-    if cfg!(feature = "serde-loc") {
-      assert_eq!(
-        node_json,
-        json!({
-          "loc": { "start": 2, "end": 5 },
-          "stx": { "value": "abc" },
-        })
-      );
+    let loc = Loc(2, 5);
+    let node = id_expr(loc, "abc");
+    let expected_stx = if cfg!(feature = "serde-loc") {
+      json!({
+        "$t": "Id",
+        "loc": { "start": 2, "end": 5 },
+        "stx": { "name": "abc" },
+      })
     } else {
-      assert_eq!(node_json, json!({ "value": "abc" }));
-    }
+      json!({ "$t": "Id", "name": "abc" })
+    };
+    let node_json = to_value(&node).unwrap();
+    let expected_node = if cfg!(feature = "serde-loc") {
+      json!({
+        "loc": { "start": 2, "end": 5 },
+        "stx": expected_stx.clone(),
+      })
+    } else {
+      expected_stx.clone()
+    };
+    assert_eq!(node_json, expected_node);
 
     let serialized = to_value(LocatedNode(&node)).unwrap();
     assert_eq!(
       serialized,
       json!({
         "loc": { "start": 2, "end": 5 },
-        "stx": { "value": "abc" },
+        "stx": expected_stx,
       })
     );
   }
 
   #[test]
   fn located_node_formats_include_location() {
-    let node = Node::new(Loc(10, 42), DummySyntax { value: "fmt" });
+    let node = id_expr(Loc(10, 42), "fmt");
     let located = node.located();
     let debug_fmt = format!("{:?}", located);
     let display_fmt = format!("{}", located);
