@@ -4,13 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-parse-js = { path = "../parse-js", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }
 
 [features]
 default = []
 serde = ["dep:serde"]
-parse-js = ["dep:parse-js"]
 
 [dev-dependencies]
 serde_json = "1"

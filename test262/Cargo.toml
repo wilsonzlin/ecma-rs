@@ -5,6 +5,6 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.0.32", features = ["derive"] }
-diagnostics = { path = "../diagnostics", features = ["parse-js"] }
-parse-js = { path = "../parse-js" }
+diagnostics = { path = "../diagnostics" }
+parse-js = { path = "../parse-js", features = ["diagnostics"] }
 rayon = "1.6"

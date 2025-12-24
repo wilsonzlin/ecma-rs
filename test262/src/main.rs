@@ -1,7 +1,7 @@
 use clap::command;
 use clap::Parser;
 use diagnostics::render::{render_diagnostic, SourceProvider};
-use diagnostics::{diagnostic_from_syntax_error, Diagnostic, FileId};
+use diagnostics::{Diagnostic, FileId};
 use rayon::prelude::*;
 use std::fs;
 use std::fs::read_dir;
@@ -49,9 +49,7 @@ fn main() {
     .map(|entry| {
       let file_name = entry.file_name().to_string_lossy().into_owned();
       let src = fs::read_to_string(entry.path()).unwrap();
-      let error = parse_js::parse(&src)
-        .err()
-        .map(|err| diagnostic_from_syntax_error(FileId(0), &err));
+      let error = parse_js::parse(&src).err().map(|err| err.to_diagnostic(FileId(0)));
       let source = error.as_ref().map(|_| src);
       TestResult {
         file_name,

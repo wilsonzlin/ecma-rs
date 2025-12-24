@@ -1,6 +1,6 @@
 use clap::Parser;
 use diagnostics::render::{render_diagnostic, SourceProvider};
-use diagnostics::{diagnostic_from_syntax_error, host_error, Diagnostic, FileId, Span, TextRange};
+use diagnostics::{host_error, Diagnostic, FileId, Span, TextRange};
 use parse_js::parse;
 use std::io::stdin;
 use std::io::stdout;
@@ -53,7 +53,7 @@ fn main() {
   let parsed = match parse(&source) {
     Ok(parsed) => parsed,
     Err(err) => {
-      let diagnostic = diagnostic_from_syntax_error(file, &err);
+      let diagnostic = err.to_diagnostic(file);
       exit_with_diagnostic(&provider, diagnostic);
     }
   };

@@ -271,7 +271,7 @@ fn categorize(diags: &[Diagnostic]) -> TestStatus {
       .any(|d| d.code.as_str().to_ascii_uppercase().starts_with(prefix))
   };
 
-  if has_code_prefix("PARSE") {
+  if has_code_prefix("PS") {
     return TestStatus::ParseError;
   }
 

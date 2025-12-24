@@ -1,4 +1,3 @@
-use diagnostics::diagnostic_from_syntax_error;
 pub use diagnostics::{Diagnostic, FileId, Label, Severity, Span, TextRange};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};
@@ -601,8 +600,7 @@ impl ProgramState {
         Ok(text) => match parse(&text) {
           Ok(ast) => self.bind_file(file, ast, host, &mut queue),
           Err(err) => {
-            let diagnostic = diagnostic_from_syntax_error(file, &err);
-            self.diagnostics.push(diagnostic);
+            self.diagnostics.push(err.to_diagnostic(file));
           }
         },
         Err(err) => {

@@ -30,12 +30,6 @@ pub mod files;
 pub mod render;
 pub use files::SimpleFiles;
 
-#[cfg(feature = "parse-js")]
-use parse_js::error::SyntaxError;
-#[cfg(feature = "parse-js")]
-use parse_js::error::SyntaxErrorType;
-#[cfg(feature = "parse-js")]
-use parse_js::loc::Loc;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -72,36 +66,6 @@ impl TextRange {
 
   pub fn is_empty(&self) -> bool {
     self.start >= self.end
-  }
-
-  /// Convert a `parse_js::loc::Loc` into a `TextRange`, saturating to `u32` if
-  /// necessary and returning a note describing any truncation that occurred.
-  #[cfg(feature = "parse-js")]
-  pub fn from_loc_with_overflow_note(loc: Loc) -> (Self, Option<String>) {
-    let (start, start_overflow) = saturating_to_u32(loc.0);
-    let (end, end_overflow) = saturating_to_u32(loc.1);
-    let note = if start_overflow || end_overflow {
-      Some(format!(
-        "byte offsets truncated to fit u32 (start={}, end={})",
-        loc.0, loc.1
-      ))
-    } else {
-      None
-    };
-
-    (Self { start, end }, note)
-  }
-}
-
-#[cfg(feature = "parse-js")]
-impl From<Loc> for TextRange {
-  /// Converts a `Loc` by saturating to `u32`. Use
-  /// [`TextRange::from_loc_with_overflow_note`] when you need to surface
-  /// truncation to the user.
-  fn from(value: Loc) -> Self {
-    let (start, _) = saturating_to_u32(value.0);
-    let (end, _) = saturating_to_u32(value.1);
-    Self { start, end }
   }
 }
 
@@ -369,81 +333,6 @@ pub fn host_error(primary: Option<Span>, message: impl Into<String>) -> Diagnost
   diagnostic
 }
 
-/// Convert a parse-js [`SyntaxError`] into a [`Diagnostic`].
-#[cfg(feature = "parse-js")]
-pub fn diagnostic_from_syntax_error(file: FileId, err: &SyntaxError) -> Diagnostic {
-  let (range, note) = TextRange::from_loc_with_overflow_note(err.loc);
-  let span = Span { file, range };
-  let (code, message) =
-    syntax_error_metadata(&err.typ, err.actual_token.map(|tok| format!("{:?}", tok)));
-  let mut diagnostic = Diagnostic::error(code, message, span);
-  if let Some(note) = note {
-    diagnostic = diagnostic.with_note(note);
-  }
-  diagnostic
-}
-
-#[cfg(feature = "parse-js")]
-fn syntax_error_metadata(
-  typ: &SyntaxErrorType,
-  actual_token: Option<String>,
-) -> (&'static str, String) {
-  match typ {
-    SyntaxErrorType::ExpectedNotFound => ("PARSE0001", "expected token not found".into()),
-    SyntaxErrorType::ExpectedSyntax(expected) => ("PARSE0002", format!("expected {}", expected)),
-    SyntaxErrorType::InvalidAssigmentTarget => ("PARSE0003", "invalid assignment target".into()),
-    SyntaxErrorType::InvalidCharacterEscape => ("PARSE0004", "invalid character escape".into()),
-    SyntaxErrorType::JsxClosingTagMismatch => (
-      "PARSE0005",
-      "JSX closing tag does not match opening tag".into(),
-    ),
-    SyntaxErrorType::LineTerminatorAfterArrowFunctionParameters => (
-      "PARSE0006",
-      "line terminator not allowed after arrow function parameters".into(),
-    ),
-    SyntaxErrorType::LineTerminatorAfterThrow => (
-      "PARSE0007",
-      "line terminator not allowed after `throw`".into(),
-    ),
-    SyntaxErrorType::LineTerminatorAfterYield => (
-      "PARSE0008",
-      "line terminator not allowed after `yield`".into(),
-    ),
-    SyntaxErrorType::LineTerminatorInRegex => (
-      "PARSE0009",
-      "line terminator not allowed in regular expression".into(),
-    ),
-    SyntaxErrorType::LineTerminatorInString => (
-      "PARSE0010",
-      "line terminator not allowed in string literal".into(),
-    ),
-    SyntaxErrorType::MalformedLiteralBigInt => ("PARSE0011", "malformed bigint literal".into()),
-    SyntaxErrorType::MalformedLiteralNumber => ("PARSE0012", "malformed number literal".into()),
-    SyntaxErrorType::RequiredTokenNotFound(token) => {
-      ("PARSE0013", format!("expected token {:?}", token))
-    }
-    SyntaxErrorType::TryStatementHasNoCatchOrFinally => (
-      "PARSE0014",
-      "try statement requires a catch or finally block".into(),
-    ),
-    SyntaxErrorType::UnexpectedEnd => (
-      "PARSE0015",
-      actual_token
-        .map(|tok| format!("unexpected end before {}", tok))
-        .unwrap_or_else(|| "unexpected end of input".into()),
-    ),
-  }
-}
-
-#[cfg(feature = "parse-js")]
-fn saturating_to_u32(value: usize) -> (u32, bool) {
-  if value > u32::MAX as usize {
-    (u32::MAX, true)
-  } else {
-    (value as u32, false)
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -481,29 +370,6 @@ mod tests {
     fn file_text(&self, file: FileId) -> Option<&str> {
       self.texts.get(file.0 as usize).map(|text| text.as_str())
     }
-  }
-
-  #[cfg(feature = "parse-js")]
-  #[test]
-  fn converts_syntax_error() {
-    let err = SyntaxError::new(SyntaxErrorType::UnexpectedEnd, Loc(2, 5), None);
-    let diagnostic = diagnostic_from_syntax_error(FileId(1), &err);
-    assert_eq!(diagnostic.code, "PARSE0015");
-    assert_eq!(diagnostic.primary.file, FileId(1));
-    assert_eq!(diagnostic.primary.range, TextRange::new(2, 5));
-    assert!(diagnostic.notes.is_empty());
-  }
-
-  #[cfg(feature = "parse-js")]
-  #[test]
-  fn records_overflow_note_from_loc() {
-    let loc = Loc(usize::MAX - 1, usize::MAX);
-    let err = SyntaxError::new(SyntaxErrorType::ExpectedNotFound, loc, None);
-    let diagnostic = diagnostic_from_syntax_error(FileId(0), &err);
-    assert_eq!(diagnostic.primary.range.start, u32::MAX);
-    assert_eq!(diagnostic.primary.range.end, u32::MAX);
-    assert_eq!(diagnostic.notes.len(), 1);
-    assert!(diagnostic.notes[0].contains("truncated"));
   }
 
   #[test]
@@ -857,6 +723,7 @@ mod tests {
     assert!(span.contains(5));
     assert!(!span.contains(6));
   }
+<<<<<<< HEAD
 
   #[test]
   fn ice_helper_sets_defaults() {
@@ -991,7 +858,7 @@ mod tests {
   #[test]
   fn serde_roundtrip_parse_error_code() {
     let diagnostic = Diagnostic::error(
-      "PARSE0015",
+      "PS0015",
       "unexpected end of input",
       Span {
         file: FileId(1),
@@ -1003,7 +870,7 @@ mod tests {
     let deserialized: Diagnostic = serde_json::from_str(&first).unwrap();
     let second = serde_json::to_string(&deserialized).unwrap();
 
-    assert_eq!(deserialized.code, "PARSE0015");
+    assert_eq!(deserialized.code, "PS0015");
     assert_eq!(first, second);
   }
 

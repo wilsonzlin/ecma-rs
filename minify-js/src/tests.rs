@@ -38,7 +38,7 @@ fn returns_diagnostics_on_parse_error() {
   let diagnostics = minify(TopLevelMode::Global, "let =", &mut output).unwrap_err();
   assert_eq!(diagnostics.len(), 1);
   let diagnostic = &diagnostics[0];
-  assert!(diagnostic.code.as_str().starts_with("PARSE"));
+  assert!(diagnostic.code.as_str().starts_with("PS"));
   assert_eq!(diagnostic.primary.file, FileId(0));
   assert_eq!(diagnostic.severity, Severity::Error);
 }
