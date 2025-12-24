@@ -1116,15 +1116,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "parse-js-test262-runner"
-version = "0.0.1"
-dependencies = [
- "clap",
- "parse-js",
- "rayon",
-]
-
-[[package]]
 name = "paste"
 version = "1.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1674,6 +1665,16 @@ name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
+
+[[package]]
+name = "test262"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "diagnostics",
+ "parse-js",
+ "rayon",
+]
 
 [[package]]
 name = "thiserror"
