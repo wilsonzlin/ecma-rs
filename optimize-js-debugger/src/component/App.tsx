@@ -157,6 +157,43 @@ const vProgramSymbols = new VStruct({
   ),
 });
 
+enum Severity {
+  Error = "Error",
+  Warning = "Warning",
+  Note = "Note",
+  Help = "Help",
+}
+
+const vTextRange = new VStruct({
+  start: new VInteger(),
+  end: new VInteger(),
+});
+
+const vSpan = new VStruct({
+  file: new VInteger(),
+  range: vTextRange,
+});
+
+const vLabel = new VStruct({
+  span: vSpan,
+  message: new VString(),
+  is_primary: new VBoolean(),
+});
+
+const vDiagnostic = new VStruct({
+  code: new VString(),
+  severity: new VStringEnum(Severity),
+  message: new VString(),
+  primary: vSpan,
+  labels: new VArray(vLabel),
+  notes: new VArray(new VString()),
+});
+
+const vCompileError = new VStruct({
+  ok: new VBoolean(),
+  diagnostics: new VArray(vDiagnostic),
+});
+
 const vDebugStep = new VStruct({
   name: new VString(),
   bblockOrder: new VArray(new VInteger()),
@@ -677,10 +714,12 @@ export const App = ({}: {}) => {
           },
           body: encode({ source: src, is_global: isGlobal }),
         });
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
         const raw = decode(await res.arrayBuffer());
+        if (!res.ok) {
+          const parsedError = vCompileError.parseRoot(raw);
+          const message = parsedError.diagnostics.map(d => `${d.code}: ${d.message}`).join("\n") || `HTTP ${res.status}`;
+          throw new Error(message);
+        }
         setData(vBuiltJs.parseRoot(raw));
         setError(undefined);
       } catch (err) {

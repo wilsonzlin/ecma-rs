@@ -2,8 +2,8 @@ use axum::http::StatusCode;
 use axum::routing::post;
 use axum::Router;
 use axum_msgpack::MsgPack;
+use diagnostics::Diagnostic;
 use optimize_js::compile_source;
-use optimize_js::OptimizeError;
 use optimize_js::ProgramFunction;
 use optimize_js::ProgramSymbols;
 use optimize_js::TopLevelMode;
@@ -28,7 +28,7 @@ pub struct PostCompileRes {
 #[derive(Serialize)]
 pub struct PostCompileErrorRes {
   pub ok: bool,
-  pub error: OptimizeError,
+  pub diagnostics: Vec<Diagnostic>,
 }
 
 pub async fn handle_post_compile(
@@ -45,9 +45,12 @@ pub async fn handle_post_compile(
       top_level: program.top_level,
       symbols: program.symbols,
     })),
-    Err(error) => Err((
+    Err(diagnostics) => Err((
       StatusCode::BAD_REQUEST,
-      MsgPack(PostCompileErrorRes { ok: false, error }),
+      MsgPack(PostCompileErrorRes {
+        ok: false,
+        diagnostics,
+      }),
     )),
   }
 }

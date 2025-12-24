@@ -7,6 +7,7 @@ edition = "2018"
 [dependencies]
 axum = "0.7.9"
 axum-msgpack = "0.4.0"
+diagnostics = { path = "../diagnostics", features = ["serde"] }
 optimize-js = { version = "0.1.0", path = "../optimize-js" }
 parse-js = { version = "0.24.1", path = "../parse-js" }
 serde = { version = "1.0.216", features = ["derive"] }
