@@ -19,6 +19,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       # Cargo.lock is ignored in this repository. Generate it on the fly so we
       # can use --locked for reproducible dependency resolution in CI.
