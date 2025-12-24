@@ -98,6 +98,7 @@ cargo run -p typecheck-ts-harness --release -- conformance \
   `--trace`/`--profile` are forwarded to the checker.
 - Harness execution is currently single-threaded; for CI parallelism use shards
   across jobs (example below).
+- A tiny demo corpus lives at `typecheck-ts-harness/fixtures/conformance-mini`.
 
 **GitHub Actions suggestion (`ubuntu-latest`, 2-core):**
 
