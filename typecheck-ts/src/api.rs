@@ -20,9 +20,14 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use thiserror::Error;
 
+#[path = "check/mod.rs"]
+mod check;
+
 use crate::lib_support::{CompilerOptions, FileKind, LibFile, LibManager};
-const CODE_NON_DTS_LIB: &str = "TC0004";
-const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
+pub(crate) const CODE_NON_DTS_LIB: &str = "TC0004";
+pub(crate) const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
+pub(crate) const CODE_EXCESS_PROPERTY: &str = "TC0006";
+pub(crate) const CODE_TYPE_MISMATCH: &str = "TC0007";
 /// Identifier for a definition (function/variable/import).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct DefId(pub u32);
@@ -46,7 +51,6 @@ const CODE_UNSUPPORTED_PATTERN: &str = "TC1004";
 const CODE_UNSUPPORTED_PARAM_PATTERN: &str = "TC1005";
 const CODE_MISSING_BODY: &str = "ICE0002";
 const CODE_ARGUMENT_COUNT_MISMATCH: &str = "TC1006";
-const CODE_ARGUMENT_TYPE_MISMATCH: &str = "TC1007";
 
 /// Error returned by a [`Host`].
 #[derive(Debug, Error, Serialize, Deserialize, Clone)]
@@ -208,15 +212,34 @@ fn format_type(
       }
       write!(f, ") -> {}", program.display_type(ret))
     }
-    TypeKind::Object(map) => {
+    TypeKind::Object(obj) => {
       write!(f, "{{")?;
       let mut first = true;
-      for (k, v) in map.iter() {
+      for (k, v) in obj.props.iter() {
         if !first {
           write!(f, ", ")?;
         }
         first = false;
-        write!(f, "{}: {}", k, program.display_type(*v))?;
+        write!(
+          f,
+          "{}{}: {}",
+          k,
+          if v.optional { "?" } else { "" },
+          program.display_type(v.typ)
+        )?;
+      }
+      if let Some(ty) = obj.string_index {
+        if !first {
+          write!(f, ", ")?;
+        }
+        first = false;
+        write!(f, "[key: string]: {}", program.display_type(ty))?;
+      }
+      if let Some(ty) = obj.number_index {
+        if !first {
+          write!(f, ", ")?;
+        }
+        write!(f, "[index: number]: {}", program.display_type(ty))?;
       }
       write!(f, "}}")
     }
@@ -466,6 +489,11 @@ enum HirExprKind {
     args: Vec<HirExpr>,
   },
   Object(Vec<(String, HirExpr)>),
+  TypeAssertion {
+    expr: Box<HirExpr>,
+    typ: Option<TypeId>,
+    _const_assertion: bool,
+  },
   Array(Vec<HirExpr>),
   Unknown,
 }
@@ -473,6 +501,33 @@ enum HirExprKind {
 #[derive(Clone, Debug)]
 struct TypeStore {
   kinds: Vec<TypeKind>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObjectProperty {
+  pub(crate) typ: TypeId,
+  pub(crate) optional: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ObjectType {
+  pub(crate) props: BTreeMap<String, ObjectProperty>,
+  pub(crate) string_index: Option<TypeId>,
+  pub(crate) number_index: Option<TypeId>,
+}
+
+impl ObjectType {
+  pub(crate) fn empty() -> ObjectType {
+    ObjectType {
+      props: BTreeMap::new(),
+      string_index: None,
+      number_index: None,
+    }
+  }
+
+  pub(crate) fn has_index_signature(&self) -> bool {
+    self.string_index.is_some() || self.number_index.is_some()
+  }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -489,7 +544,7 @@ enum TypeKind {
   Array(TypeId),
   Union(Vec<TypeId>),
   Function { params: Vec<TypeId>, ret: TypeId },
-  Object(BTreeMap<String, TypeId>),
+  Object(ObjectType),
 }
 
 #[allow(dead_code)]
@@ -519,7 +574,7 @@ impl TypeStore {
     let boolean = store.alloc(TypeKind::Boolean);
     let null = store.alloc(TypeKind::Null);
     let undefined = store.alloc(TypeKind::Undefined);
-    let object = store.alloc(TypeKind::Object(BTreeMap::new()));
+    let object = store.alloc(TypeKind::Object(ObjectType::empty()));
     (
       store,
       BuiltinTypes {
@@ -571,8 +626,8 @@ impl TypeStore {
     self.alloc(TypeKind::Function { params, ret })
   }
 
-  fn object(&mut self, props: BTreeMap<String, TypeId>) -> TypeId {
-    self.alloc(TypeKind::Object(props))
+  fn object(&mut self, obj: ObjectType) -> TypeId {
+    self.alloc(TypeKind::Object(obj))
   }
 }
 
@@ -711,6 +766,13 @@ impl ProgramState {
         globals.entry(name.clone()).or_insert(binding.clone());
       }
     }
+    globals
+      .entry("undefined".to_string())
+      .or_insert(SymbolBinding {
+        symbol: self.alloc_symbol(),
+        def: None,
+        type_id: Some(self.builtin.undefined),
+      });
     self.global_bindings = globals;
   }
 
@@ -1216,7 +1278,16 @@ impl ProgramState {
         def,
       } => {
         let init_ty = init.as_ref().map(|e| self.check_expr(e, env, result, file));
-        let declared = typ.or(init_ty).unwrap_or(self.builtin.unknown);
+        let declared = if let Some(annotated) = *typ {
+          if let (Some(expr), Some(source_ty)) = (init.as_ref(), init_ty) {
+            check::assign::check_assignment(self, Some(expr), source_ty, annotated, result, file);
+          }
+          annotated
+        } else if let Some(init_ty) = init_ty {
+          init_ty
+        } else {
+          self.builtin.unknown
+        };
         if let Some(def_id) = def {
           self.def_types.insert(*def_id, declared);
         }
@@ -1334,16 +1405,7 @@ impl ProgramState {
           for (idx, arg) in args.iter().enumerate() {
             let arg_ty = self.check_expr(arg, env, result, file);
             if let Some(expected) = params.get(idx) {
-              if expected != &self.builtin.any && expected != &arg_ty {
-                result.diagnostics.push(Diagnostic::error(
-                  CODE_ARGUMENT_TYPE_MISMATCH,
-                  format!("argument {} has incompatible type", idx + 1),
-                  Span {
-                    file,
-                    range: arg.span,
-                  },
-                ));
-              }
+              check::assign::check_assignment(self, Some(arg), arg_ty, *expected, result, file);
             }
           }
           ret
@@ -1352,12 +1414,21 @@ impl ProgramState {
         }
       }
       HirExprKind::Object(props) => {
-        let mut map = BTreeMap::new();
+        let mut obj = ObjectType::empty();
         for (k, v) in props.iter() {
+          if k == "..." {
+            continue;
+          }
           let ty = self.check_expr(v, env, result, file);
-          map.insert(k.clone(), ty);
+          obj.props.insert(
+            k.clone(),
+            ObjectProperty {
+              typ: ty,
+              optional: false,
+            },
+          );
         }
-        self.type_store.object(map)
+        self.type_store.object(obj)
       }
       HirExprKind::Array(values) => {
         let mut tys = Vec::new();
@@ -1366,6 +1437,10 @@ impl ProgramState {
         }
         let elem = self.type_store.union(tys, &self.builtin);
         self.type_store.array(elem)
+      }
+      HirExprKind::TypeAssertion { expr, typ, .. } => {
+        let inner = self.check_expr(expr, env, result, file);
+        typ.unwrap_or(inner)
       }
       HirExprKind::Unknown => self.builtin.unknown,
     };
@@ -1542,7 +1617,7 @@ impl ProgramState {
         self.type_store.function(params, ret)
       }
       TypeExpr::ObjectType(obj) => {
-        let mut props = BTreeMap::new();
+        let mut object = ObjectType::empty();
         for member in obj.stx.members.iter() {
           match member.stx.as_ref() {
             TypeMember::Property(prop) => {
@@ -1553,7 +1628,13 @@ impl ProgramState {
                   .as_ref()
                   .map(|t| self.type_from_type_expr(t))
                   .unwrap_or(self.builtin.unknown);
-                props.insert(name, ty);
+                object.props.insert(
+                  name,
+                  ObjectProperty {
+                    typ: ty,
+                    optional: prop.stx.optional,
+                  },
+                );
               }
             }
             TypeMember::Method(method) => {
@@ -1571,13 +1652,29 @@ impl ProgramState {
                   .map(|t| self.type_from_type_expr(t))
                   .unwrap_or(self.builtin.unknown);
                 let func_ty = self.type_store.function(params, ret);
-                props.insert(name, func_ty);
+                object.props.insert(
+                  name,
+                  ObjectProperty {
+                    typ: func_ty,
+                    optional: method.stx.optional,
+                  },
+                );
+              }
+            }
+            TypeMember::IndexSignature(index) => {
+              let value = self.type_from_type_expr(&index.stx.type_annotation);
+              let param_type = self.type_from_type_expr(&index.stx.parameter_type);
+              let param_kind = self.type_store.kind(param_type).clone();
+              match param_kind {
+                TypeKind::Number => object.number_index = Some(value),
+                TypeKind::String => object.string_index = Some(value),
+                _ => object.string_index = Some(value),
               }
             }
             _ => {}
           }
         }
-        self.type_store.object(props)
+        self.type_store.object(object)
       }
       TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(&inner.stx.type_expr),
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {
@@ -1758,6 +1855,19 @@ impl BodyBuilder {
         HirExprKind::Object(lower_object_literal(self.file, *obj.stx, state, self))
       }
       Expr::LitTemplate(_) => HirExprKind::String,
+      Expr::TypeAssertion(assert) => {
+        let expr = self.lower_expr(*assert.stx.expression, state);
+        let typ = assert
+          .stx
+          .type_annotation
+          .as_ref()
+          .map(|t| state.type_from_type_expr(t));
+        HirExprKind::TypeAssertion {
+          expr: Box::new(expr),
+          typ,
+          _const_assertion: assert.stx.const_assertion,
+        }
+      }
       _ => HirExprKind::Unknown,
     };
     let id = ExprId(self.expr_spans.len() as u32);

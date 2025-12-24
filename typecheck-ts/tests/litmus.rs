@@ -379,24 +379,26 @@ fn assert_diagnostics(
   let mut remaining: Vec<_> = diagnostics
     .iter()
     .map(|d| {
-      let span = d.span.map(|s| {
-        (
-          host.path(s.file).to_string(),
-          s.range.start,
-          s.range.end,
-          d.severity,
-        )
-      });
-      (d.code.clone(), span)
+      let primary = &d.primary;
+      let span = Some((
+        host.path(primary.file).to_string(),
+        primary.range.start,
+        primary.range.end,
+        d.severity,
+      ));
+      (d.code.as_str().to_string(), span)
     })
     .collect();
   for expected in expectations.diagnostics.iter() {
     let pos = remaining.iter().position(|(code, span)| {
-      if code.as_ref() != expected.code.as_ref() {
-        return false;
+      if let Some(expected_code) = &expected.code {
+        if code != expected_code {
+          return false;
+        }
       }
       match (&expected.span, span) {
         (None, None) => true,
+        (None, Some(_)) => true,
         (Some((s, e)), Some((file, actual_start, actual_end, severity))) => {
           if expected.severity != *severity {
             return false;
