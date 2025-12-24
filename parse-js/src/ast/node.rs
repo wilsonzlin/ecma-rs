@@ -3,14 +3,13 @@ use crate::error::SyntaxErrorType;
 use crate::loc::Loc;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
+use serde::ser::SerializeStruct;
 use serde::Serialize;
 use serde::Serializer;
 use smallvec::SmallVec;
 use std::any::Any;
 use std::any::TypeId;
-use std::fmt::Debug;
-use std::fmt::Formatter;
-use std::fmt::{self};
+use std::fmt::{self, Debug, Display, Formatter};
 
 #[derive(Default, Drive, DriveMut)]
 pub struct NodeAssocData {
@@ -133,10 +132,53 @@ impl<S: Drive + DriveMut> Node<S> {
     Node::new(loc, stx)
   }
 
+  pub fn located(&self) -> LocatedNode<'_, S> {
+    LocatedNode(self)
+  }
+
   /// Create an error at this node's location.
   pub fn error(&self, typ: SyntaxErrorType) -> SyntaxError {
     self.loc.error(typ, None)
   }
+}
+
+#[derive(Clone, Copy)]
+pub struct LocatedNode<'a, S: Drive + DriveMut>(pub &'a Node<S>);
+
+#[derive(Clone, Copy)]
+struct LocSpan(Loc);
+
+impl Display for LocSpan {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    let Loc(start, end) = self.0;
+    write!(f, "{}..{}", start, end)
+  }
+}
+
+impl Debug for LocSpan {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    Display::fmt(self, f)
+  }
+}
+
+impl Serialize for LocSpan {
+  fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    let Loc(start, end) = self.0;
+    let mut state = serializer.serialize_struct("Loc", 2)?;
+    state.serialize_field("start", &start)?;
+    state.serialize_field("end", &end)?;
+    state.end()
+  }
+}
+
+fn serialize_located_node<S: Serialize + Drive + DriveMut, Se: Serializer>(
+  node: &Node<S>,
+  serializer: Se,
+) -> Result<Se::Ok, Se::Error> {
+  let mut state = serializer.serialize_struct("Node", 2)?;
+  state.serialize_field("loc", &LocSpan(node.loc))?;
+  state.serialize_field("stx", &node.stx)?;
+  state.end()
 }
 
 impl<S: Debug + Drive + DriveMut> Debug for Node<S> {
@@ -145,15 +187,53 @@ impl<S: Debug + Drive + DriveMut> Debug for Node<S> {
   }
 }
 
+impl<'a, S: Debug + Drive + DriveMut> Debug for LocatedNode<'a, S> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    f.debug_struct("Node")
+      .field("loc", &LocSpan(self.0.loc))
+      .field("stx", &self.0.stx)
+      .finish()
+  }
+}
+
+impl<'a, S: Debug + Drive + DriveMut> Display for LocatedNode<'a, S> {
+  fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    write!(f, "{} {:?}", LocSpan(self.0.loc), self.0.stx)
+  }
+}
+
+#[cfg(feature = "serde-loc")]
+impl<S: Serialize + Drive + DriveMut> Serialize for Node<S> {
+  fn serialize<Se: Serializer>(&self, serializer: Se) -> Result<Se::Ok, Se::Error> {
+    serialize_located_node(self, serializer)
+  }
+}
+
+#[cfg(not(feature = "serde-loc"))]
 impl<S: Serialize + Drive + DriveMut> Serialize for Node<S> {
   fn serialize<Se: Serializer>(&self, serializer: Se) -> Result<Se::Ok, Se::Error> {
     self.stx.serialize(serializer)
   }
 }
 
+impl<'a, S: Serialize + Drive + DriveMut> Serialize for LocatedNode<'a, S> {
+  fn serialize<Se: Serializer>(&self, serializer: Se) -> Result<Se::Ok, Se::Error> {
+    serialize_located_node(self.0, serializer)
+  }
+}
+
 #[cfg(test)]
 mod tests {
-  use crate::ast::node::NodeAssocData;
+  use super::*;
+  use serde::Serialize;
+  use serde_json::json;
+  use serde_json::to_value;
+
+  #[derive(Debug, Serialize, derive_visitor::Drive, derive_visitor::DriveMut)]
+  struct DummySyntax {
+    #[drive(skip)]
+    value: &'static str,
+  }
 
   #[test]
   fn test_node_assoc_data() {
@@ -184,5 +264,44 @@ mod tests {
     assert_eq!(assoc.remove::<Second>().unwrap().0, "ok");
     assert!(assoc.is_empty());
     assert!(assoc.remove::<Second>().is_none());
+  }
+
+  #[test]
+  fn serializes_located_node_with_location() {
+    let node = Node::new(Loc(2, 5), DummySyntax { value: "abc" });
+    let node_json = to_value(&node).unwrap();
+    if cfg!(feature = "serde-loc") {
+      assert_eq!(
+        node_json,
+        json!({
+          "loc": { "start": 2, "end": 5 },
+          "stx": { "value": "abc" },
+        })
+      );
+    } else {
+      assert_eq!(node_json, json!({ "value": "abc" }));
+    }
+
+    let serialized = to_value(LocatedNode(&node)).unwrap();
+    assert_eq!(
+      serialized,
+      json!({
+        "loc": { "start": 2, "end": 5 },
+        "stx": { "value": "abc" },
+      })
+    );
+  }
+
+  #[test]
+  fn located_node_formats_include_location() {
+    let node = Node::new(Loc(10, 42), DummySyntax { value: "fmt" });
+    let located = node.located();
+    let debug_fmt = format!("{:?}", located);
+    let display_fmt = format!("{}", located);
+
+    for output in [debug_fmt, display_fmt] {
+      assert!(output.contains("10..42"));
+      assert!(output.contains("fmt"));
+    }
   }
 }
