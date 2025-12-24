@@ -1,4 +1,6 @@
 use super::super::inst::InstTyp;
+use crate::compile_source;
+use crate::OptimizeError;
 use crate::Program;
 use crate::ProgramFunction;
 use parse_js::parse;
@@ -101,4 +103,27 @@ fn destructuring_decl_shadowing_binds_local_symbol() {
     .flat_map(inst_types)
     .any(|t| matches!(t, InstTyp::ForeignLoad));
   assert!(has_foreign_load, "captured read should be a foreign load");
+}
+
+#[test]
+fn direct_eval_is_unsupported() {
+  let source = r#"const f = () => { let x = 1; eval("x"); };"#;
+  let err = compile_source(source, TopLevelMode::Module, false)
+    .expect_err("direct eval should be rejected");
+
+  match err {
+    OptimizeError::UnsupportedSyntax { kind, .. } => {
+      assert!(
+        kind.contains("direct eval"),
+        "expected direct eval messaging, got {kind}"
+      );
+    }
+    other => panic!("expected unsupported syntax for direct eval, got {other:?}"),
+  }
+}
+
+#[test]
+fn shadowed_eval_is_allowed() {
+  let source = r#"const f = (eval) => { let x = 1; eval("x"); };"#;
+  compile_source(source, TopLevelMode::Module, false).expect("shadowed eval should compile");
 }
