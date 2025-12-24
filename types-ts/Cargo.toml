@@ -7,7 +7,4 @@ edition = "2021"
 fuzzing = []
 
 [dependencies]
-ahash = "0.8"
-
-[dev-dependencies]
-proptest = "1"
+bitflags = "2.4"

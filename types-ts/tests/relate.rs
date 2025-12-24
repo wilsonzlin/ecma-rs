@@ -1,4 +1,4 @@
-use types_ts_relate11::*;
+use types_ts::*;
 
 fn default_options() -> TypeOptions {
   TypeOptions {

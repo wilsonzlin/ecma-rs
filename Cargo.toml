@@ -15,8 +15,6 @@ members = [
   "symbol-js",
   "types-ts",
   "types-ts-interned",
-  "types-ts-relate11",
-  "types-ts-trace23",
   "hir-js",
   "typecheck-ts",
   "typecheck-ts-class17",
