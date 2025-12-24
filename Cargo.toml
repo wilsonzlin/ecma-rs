@@ -17,14 +17,9 @@ members = [
   "types-ts-interned",
   "hir-js",
   "typecheck-ts",
-  "typecheck-ts-class17",
-  "typecheck-ts-flow14",
-  "typecheck-ts-ops16",
   "test262",
   "typecheck-ts-harness",
   "semantic-js",
-  "typecheck-ts-const18",
-  "typecheck-ts-w13",
 ]
 
 [profile.release]

@@ -743,15 +743,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "indoc"
-version = "2.0.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "79cf5c93f93228cf8efb3ba362535fb11199ac548a09ce117c9b1adc3030d706"
-dependencies = [
- "rustversion",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1844,21 +1835,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "typecheck-ts-class17"
-version = "0.1.0"
-
-[[package]]
-name = "typecheck-ts-const18"
-version = "0.1.0"
-dependencies = [
- "indoc",
-]
-
-[[package]]
-name = "typecheck-ts-flow14"
-version = "0.1.0"
-
-[[package]]
 name = "typecheck-ts-harness"
 version = "0.1.0"
 dependencies = [
@@ -1873,19 +1849,6 @@ dependencies = [
  "thiserror",
  "typecheck-ts",
  "walkdir",
-]
-
-[[package]]
-name = "typecheck-ts-ops16"
-version = "0.1.0"
-
-[[package]]
-name = "typecheck-ts-w13"
-version = "0.1.0"
-dependencies = [
- "bumpalo",
- "once_cell",
- "parse-js",
 ]
 
 [[package]]
