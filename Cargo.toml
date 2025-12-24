@@ -22,14 +22,11 @@ members = [
   "typecheck-ts",
   "typecheck-ts-class17",
   "typecheck-ts-flow14",
-  "typecheck-ts-trace23",
   "typecheck-ts-ops16",
   "test262",
   "typecheck-ts-harness",
-  "typecheck-ts-harness-trace23",
   "semantic-js",
   "diagnostics-salsa6",
-  "typecheck-ts-salsa6",
   "semantic-js-ts9",
   "typecheck-ts-const18",
   "hir-js-w12",
@@ -39,7 +36,6 @@ members = [
   "diagnostics-h19",
   "typecheck-ts-h19",
   "typecheck-ts-harness19",
-  "typecheck-ts-w24",
   "typecheck-ts-w13",
   "hir-js-w72",
   "diagnostics-w8",
@@ -56,7 +52,6 @@ members = [
   "semantic-js-w89",
   "semantic-js-w117",
   "symbol-js-w94",
-  "symbol-js-w75",
 ]
 
 [profile.release]
