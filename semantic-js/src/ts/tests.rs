@@ -335,6 +335,44 @@ fn declaration_merging_orders_deterministically() {
 }
 
 #[test]
+fn unresolved_import_export_have_spans() {
+  let file = FileId(50);
+  let mut hir = HirFile::module(file);
+  hir.imports.push(Import {
+    specifier: "missing".to_string(),
+    default: None,
+    namespace: None,
+    named: Vec::new(),
+    is_type_only: false,
+  });
+  hir.exports.push(Export::All(ExportAll {
+    specifier: "missing".to_string(),
+    is_type_only: false,
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert_eq!(diags.len(), 2);
+
+  let messages: Vec<_> = diags.iter().map(|d| d.message.clone()).collect();
+  assert_eq!(
+    messages,
+    vec![
+      "unresolved import: missing".to_string(),
+      "unresolved export: missing".to_string()
+    ]
+  );
+
+  for diag in diags {
+    assert_eq!(diag.code, "BIND1002");
+    assert_eq!(diag.primary.file, file);
+    assert_eq!(diag.primary.range, TextRange::new(0, 0));
+  }
+}
+
+#[test]
 fn export_map_is_deterministic() {
   let file = FileId(40);
   let mut hir = HirFile::module(file);
@@ -508,4 +546,46 @@ fn resolve_export_handles_export_star_cycles() {
     .resolve_export(file_a, "bar", Namespace::VALUE)
     .expect("bar re-exported through a");
   assert_eq!(bar_a, bar_b);
+}
+
+#[test]
+fn global_symbol_groups_are_deterministic() {
+  let file_a = FileId(60);
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "alpha", DeclKind::Var, Exported::Named));
+  a.decls
+    .push(mk_decl(1, "zeta", DeclKind::Var, Exported::Named));
+
+  let file_b = FileId(61);
+  let mut b = HirFile::module(file_b);
+  b.decls
+    .push(mk_decl(2, "alpha", DeclKind::Interface, Exported::Named));
+  b.decls
+    .push(mk_decl(3, "beta", DeclKind::Interface, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (semantics, diags) = bind_ts_program(&[file_b, file_a], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
+  assert!(diags.is_empty());
+
+  let names: Vec<_> = semantics.global_symbols().keys().cloned().collect();
+  assert_eq!(
+    names,
+    vec!["alpha".to_string(), "beta".to_string(), "zeta".to_string()]
+  );
+
+  let symbols = semantics.symbols();
+  let alpha = semantics.global_symbols().get("alpha").unwrap();
+  let alpha_value = alpha.symbol_for(Namespace::VALUE, symbols);
+  let alpha_type = alpha.symbol_for(Namespace::TYPE, symbols);
+  assert!(alpha_value.is_some());
+  assert!(alpha_type.is_some());
+  assert_ne!(alpha_value, alpha_type);
 }
