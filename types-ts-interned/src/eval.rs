@@ -36,7 +36,9 @@ struct Substitution {
 
 impl Substitution {
   fn empty() -> Self {
-    Self { bindings: Vec::new() }
+    Self {
+      bindings: Vec::new(),
+    }
   }
 
   fn get(&self, param: TypeParamId) -> Option<TypeId> {
@@ -256,8 +258,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           .into_iter()
           .map(|sig| self.evaluate_signature(sig, subst, depth + 1))
           .collect();
-        self.store
-          .intern_type(TypeKind::Callable { overloads })
+        self.store.intern_type(TypeKind::Callable { overloads })
       }
       TypeKind::Ref { def, args } => self.evaluate_ref(def, args, subst, depth + 1),
       TypeKind::Conditional {
@@ -326,7 +327,9 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       .map(|sig| self.evaluate_signature(sig, subst, depth + 1))
       .collect();
     let shape_id = self.store.intern_shape(shape);
-    let obj_id = self.store.intern_object(crate::ObjectType { shape: shape_id });
+    let obj_id = self
+      .store
+      .intern_object(crate::ObjectType { shape: shape_id });
     self.store.intern_type(TypeKind::Object(obj_id))
   }
 
@@ -349,9 +352,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       return *cached;
     }
     if self.ref_in_progress.contains(&key) {
-      return self
-        .store
-        .intern_type(TypeKind::Ref { def, args: evaluated_args });
+      return self.store.intern_type(TypeKind::Ref {
+        def,
+        args: evaluated_args,
+      });
     }
     self.ref_in_progress.insert(key.clone());
     let expanded = self
@@ -366,7 +370,12 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         self.evaluate_with_subst(expanded.ty, &next_subst, depth + 1)
       })
-      .unwrap_or_else(|| self.store.intern_type(TypeKind::Ref { def, args: evaluated_args }));
+      .unwrap_or_else(|| {
+        self.store.intern_type(TypeKind::Ref {
+          def,
+          args: evaluated_args,
+        })
+      });
     self.ref_in_progress.remove(&key);
     self.ref_cache.insert(key, expanded);
     expanded
@@ -415,12 +424,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     self.evaluate_with_subst(branch, subst, depth + 1)
   }
 
-  fn evaluate_mapped(
-    &mut self,
-    mapped: MappedType,
-    subst: &Substitution,
-    depth: usize,
-  ) -> TypeId {
+  fn evaluate_mapped(&mut self, mapped: MappedType, subst: &Substitution, depth: usize) -> TypeId {
     let entries = self.mapped_entries(mapped.source, subst, depth + 1);
 
     let mut properties = Vec::new();
@@ -467,7 +471,9 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       indexers: Vec::new(),
     };
     let shape_id = self.store.intern_shape(shape);
-    let obj = self.store.intern_object(crate::ObjectType { shape: shape_id });
+    let obj = self
+      .store
+      .intern_object(crate::ObjectType { shape: shape_id });
     self.store.intern_type(TypeKind::Object(obj))
   }
 
@@ -618,12 +624,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     if let TypeKind::Union(keys) = self.store.type_kind(index_eval) {
       let mut results = Vec::new();
       for key in keys {
-        results.push(self.evaluate_indexed_access(
-          obj_eval,
-          key,
-          subst,
-          depth + 1,
-        ));
+        results.push(self.evaluate_indexed_access(obj_eval, key, subst, depth + 1));
       }
       return self.store.union(results);
     }
@@ -631,12 +632,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     if let TypeKind::Union(objs) = self.store.type_kind(obj_eval) {
       let mut results = Vec::new();
       for member in objs {
-        results.push(self.evaluate_indexed_access(
-          member,
-          index_eval,
-          subst,
-          depth + 1,
-        ));
+        results.push(self.evaluate_indexed_access(member, index_eval, subst, depth + 1));
       }
       return self.store.union(results);
     }
@@ -659,12 +655,12 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           KeySet::Unknown => self.store.primitive_ids().unknown,
         }
       }
-      TypeKind::Array { ty, .. } => {
-        match self.store.type_kind(index_eval) {
-          TypeKind::NumberLiteral(_) | TypeKind::Number => self.evaluate_with_subst(ty, subst, depth + 1),
-          _ => self.store.primitive_ids().unknown,
+      TypeKind::Array { ty, .. } => match self.store.type_kind(index_eval) {
+        TypeKind::NumberLiteral(_) | TypeKind::Number => {
+          self.evaluate_with_subst(ty, subst, depth + 1)
         }
-      }
+        _ => self.store.primitive_ids().unknown,
+      },
       TypeKind::Tuple(elems) => match self.store.type_kind(index_eval) {
         TypeKind::NumberLiteral(num) => {
           let idx = num.0 as usize;
@@ -743,8 +739,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         KeySet::known(keys, &self.store)
       }
-      TypeKind::StringLiteral(id) => KeySet::known(vec![Key::Literal(PropKey::String(id))], &self.store),
-      TypeKind::NumberLiteral(num) => KeySet::known(vec![Key::Literal(PropKey::Number(num.0 as i64))], &self.store),
+      TypeKind::StringLiteral(id) => {
+        KeySet::known(vec![Key::Literal(PropKey::String(id))], &self.store)
+      }
+      TypeKind::NumberLiteral(num) => KeySet::known(
+        vec![Key::Literal(PropKey::Number(num.0 as i64))],
+        &self.store,
+      ),
       TypeKind::TemplateLiteral(tpl) => {
         match self.compute_template_strings(&tpl, &Substitution::empty(), 0) {
           Some(strings) => KeySet::known(
@@ -883,8 +884,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           None => KeySet::Unknown,
         }
       }
-      TypeKind::StringLiteral(id) => KeySet::known(vec![Key::Literal(PropKey::String(id))], &self.store),
-      TypeKind::NumberLiteral(num) => KeySet::known(vec![Key::Literal(PropKey::Number(num.0 as i64))], &self.store),
+      TypeKind::StringLiteral(id) => {
+        KeySet::known(vec![Key::Literal(PropKey::String(id))], &self.store)
+      }
+      TypeKind::NumberLiteral(num) => KeySet::known(
+        vec![Key::Literal(PropKey::Number(num.0 as i64))],
+        &self.store,
+      ),
       TypeKind::UniqueSymbol => KeySet::known(vec![Key::Symbol], &self.store),
       TypeKind::Symbol => KeySet::known(vec![Key::Symbol], &self.store),
       TypeKind::String => KeySet::known(vec![Key::String], &self.store),
@@ -992,12 +998,22 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       (TypeKind::Any, _) => true,
       (_, TypeKind::Unknown) => true,
       (TypeKind::Never, _) => true,
-      (TypeKind::Union(members), target_kind) => members
-        .into_iter()
-        .all(|m| self.is_assignable(m, self.store.intern_type(target_kind.clone()), subst, depth + 1)),
-      (src_kind, TypeKind::Union(members)) => members
-        .into_iter()
-        .any(|member| self.is_assignable(self.store.intern_type(src_kind.clone()), member, subst, depth + 1)),
+      (TypeKind::Union(members), target_kind) => members.into_iter().all(|m| {
+        self.is_assignable(
+          m,
+          self.store.intern_type(target_kind.clone()),
+          subst,
+          depth + 1,
+        )
+      }),
+      (src_kind, TypeKind::Union(members)) => members.into_iter().any(|member| {
+        self.is_assignable(
+          self.store.intern_type(src_kind.clone()),
+          member,
+          subst,
+          depth + 1,
+        )
+      }),
       (TypeKind::BooleanLiteral(_), TypeKind::Boolean) => true,
       (TypeKind::NumberLiteral(_), TypeKind::Number) => true,
       (TypeKind::StringLiteral(_), TypeKind::String) => true,
