@@ -104,6 +104,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       .iter()
       .map(|(id, m)| (*id, m.exports.clone()))
       .collect();
+    let module_symbols = self
+      .modules
+      .iter()
+      .map(|(id, m)| (*id, m.symbols.clone()))
+      .collect();
 
     let mut global_symbols: BTreeMap<String, SymbolGroup> = BTreeMap::new();
     for module in self.modules.values() {
@@ -120,6 +125,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     (
       TsProgramSemantics {
         symbols: self.symbols.clone(),
+        module_symbols,
         module_exports,
         global_symbols,
       },

@@ -464,6 +464,7 @@ pub(crate) fn ns_index(ns: Namespace) -> usize {
 #[derive(Clone, Debug)]
 pub struct TsProgramSemantics {
   pub(crate) symbols: SymbolTable,
+  pub(crate) module_symbols: BTreeMap<FileId, SymbolGroups>,
   pub(crate) module_exports: BTreeMap<FileId, ExportMap>,
   pub(crate) global_symbols: BTreeMap<String, SymbolGroup>,
 }
@@ -478,6 +479,32 @@ impl TsProgramSemantics {
 
   pub fn symbols(&self) -> &SymbolTable {
     &self.symbols
+  }
+
+  /// Resolve a name within the lexical scope of a module (including imports).
+  /// Returns the symbol for the requested namespace, if present.
+  pub fn resolve_in_module(&self, file: FileId, name: &str, ns: Namespace) -> Option<SymbolId> {
+    let module = self.module_symbols.get(&file)?;
+    let group = module.get(name)?;
+    group.symbol_for(ns, &self.symbols)
+  }
+
+  /// Resolve an exported name from a module to the canonical symbol for the
+  /// requested namespace. Export maps are deterministic and cycle-safe.
+  pub fn resolve_export(&self, file: FileId, name: &str, ns: Namespace) -> Option<SymbolId> {
+    let exports = self.module_exports.get(&file)?;
+    let group = exports.get(name)?;
+    group.symbol_for(ns, &self.symbols)
+  }
+
+  /// Returns the declarations that participate in a symbol's namespace in
+  /// deterministic order (by binder visit order).
+  pub fn symbol_decls(&self, symbol: SymbolId, ns: Namespace) -> &[DeclId] {
+    let sym = self.symbols.symbol(symbol);
+    if !ns.is_single() || !sym.namespaces.contains(ns) {
+      return &[];
+    }
+    sym.decls_for(ns).as_slice()
   }
 
   pub fn global_symbols(&self) -> &BTreeMap<String, SymbolGroup> {
