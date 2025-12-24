@@ -6,29 +6,12 @@
 //! any heavy dependencies.
 //!
 //! ```
-//! use diagnostics::render::{render_diagnostic, SourceProvider};
-//! use diagnostics::{Diagnostic, FileId, Span, TextRange};
+//! use diagnostics::files::SimpleFiles;
+//! use diagnostics::render::render_diagnostic;
+//! use diagnostics::{Diagnostic, Span, TextRange};
 //!
-//! struct SingleFile {
-//!   name: String,
-//!   text: String,
-//! }
-//!
-//! impl SourceProvider for SingleFile {
-//!   fn file_name(&self, _file: FileId) -> &str {
-//!     &self.name
-//!   }
-//!
-//!   fn file_text(&self, _file: FileId) -> &str {
-//!     &self.text
-//!   }
-//! }
-//!
-//! let file = FileId(0);
-//! let provider = SingleFile {
-//!   name: "example.js".into(),
-//!   text: "let x = 1;".into(),
-//! };
+//! let mut files = SimpleFiles::new();
+//! let file = files.add("example.js", "let x = 1;");
 //! let diag = Diagnostic::error(
 //!   "TEST0001",
 //!   "an example error",
@@ -38,12 +21,14 @@
 //!   },
 //! );
 //!
-//! let rendered = render_diagnostic(&provider, &diag);
+//! let rendered = render_diagnostic(&files, &diag);
 //! assert!(rendered.contains("TEST0001"));
 //! assert!(rendered.contains("--> example.js:1:5"));
 //! ```
 
 pub mod render;
+pub mod files;
+pub use files::SimpleFiles;
 
 #[cfg(feature = "parse-js")]
 use parse_js::error::SyntaxError;
@@ -472,12 +457,12 @@ mod tests {
   }
 
   impl SourceProvider for TestSource {
-    fn file_name(&self, _file: FileId) -> &str {
-      &self.name
+    fn file_name(&self, _file: FileId) -> Option<&str> {
+      Some(&self.name)
     }
 
-    fn file_text(&self, _file: FileId) -> &str {
-      &self.text
+    fn file_text(&self, _file: FileId) -> Option<&str> {
+      Some(&self.text)
     }
   }
 
@@ -487,12 +472,12 @@ mod tests {
   }
 
   impl SourceProvider for MultiSource {
-    fn file_name(&self, file: FileId) -> &str {
-      &self.names[file.0 as usize]
+    fn file_name(&self, file: FileId) -> Option<&str> {
+      self.names.get(file.0 as usize).map(|name| name.as_str())
     }
 
-    fn file_text(&self, file: FileId) -> &str {
-      &self.texts[file.0 as usize]
+    fn file_text(&self, file: FileId) -> Option<&str> {
+      self.texts.get(file.0 as usize).map(|text| text.as_str())
     }
   }
 

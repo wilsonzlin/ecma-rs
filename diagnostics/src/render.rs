@@ -6,8 +6,8 @@ use std::fmt::Write;
 
 /// Provides access to source text for rendering diagnostics.
 pub trait SourceProvider {
-  fn file_name(&self, file: FileId) -> &str;
-  fn file_text(&self, file: FileId) -> &str;
+  fn file_name(&self, file: FileId) -> Option<&str>;
+  fn file_text(&self, file: FileId) -> Option<&str>;
 }
 
 /// Render a diagnostic into a human-readable string with caret highlighting.
@@ -26,12 +26,13 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
 
   let mut max_line_no = 1usize;
   for label in &labels {
-    let text = provider.file_text(label.span.file);
-    let starts = line_starts(text);
-    let start_line = line_index_at_offset(&starts, label.span.range.start as usize) + 1;
-    let end_line =
-      line_index_at_offset(&starts, label.span.range.end.saturating_sub(1) as usize) + 1;
-    max_line_no = max(max_line_no, max(start_line, end_line));
+    if let Some(text) = provider.file_text(label.span.file) {
+      let starts = line_starts(text);
+      let start_line = line_index_at_offset(&starts, label.span.range.start as usize) + 1;
+      let end_line =
+        line_index_at_offset(&starts, label.span.range.end.saturating_sub(1) as usize) + 1;
+      max_line_no = max(max_line_no, max(start_line, end_line));
+    }
   }
   let gutter_width = max_line_no.to_string().len().max(1);
 
@@ -42,11 +43,17 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
   )
   .unwrap();
   let primary_text = provider.file_text(diagnostic.primary.file);
-  let (line, col) = line_and_column(primary_text, diagnostic.primary.range.start as usize);
+  let primary_name = provider
+    .file_name(diagnostic.primary.file)
+    .unwrap_or("<unknown>");
+  let (line, col) = primary_text
+    .as_ref()
+    .map(|text| line_and_column(text, diagnostic.primary.range.start as usize))
+    .unwrap_or((1, diagnostic.primary.range.start as usize + 1));
   writeln!(
     output,
     " --> {}:{}:{}",
-    provider.file_name(diagnostic.primary.file),
+    primary_name,
     line,
     col
   )
@@ -56,15 +63,17 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
   let mut current_file = Some(diagnostic.primary.file);
 
   for label in labels {
+    let text = provider.file_text(label.span.file);
     if Some(label.span.file) != current_file {
-      let (line, col) = line_and_column(
-        provider.file_text(label.span.file),
-        label.span.range.start as usize,
-      );
+      let (line, col) = text
+        .as_ref()
+        .map(|text| line_and_column(text, label.span.range.start as usize))
+        .unwrap_or((1, label.span.range.start as usize + 1));
+      let name = provider.file_name(label.span.file).unwrap_or("<unknown>");
       writeln!(
         output,
         " --> {}:{}:{}",
-        provider.file_name(label.span.file),
+        name,
         line,
         col
       )
@@ -72,7 +81,7 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
       writeln!(output, "  |").unwrap();
       current_file = Some(label.span.file);
     }
-    render_label(provider, &mut output, &label, gutter_width);
+    render_label(text, &mut output, &label, gutter_width);
   }
 
   for note in &diagnostic.notes {
@@ -83,12 +92,24 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
 }
 
 fn render_label(
-  provider: &dyn SourceProvider,
+  text: Option<&str>,
   output: &mut String,
   label: &Label,
   gutter_width: usize,
 ) {
-  let text = provider.file_text(label.span.file);
+  if let Some(text) = text {
+    render_label_with_text(text, output, label, gutter_width);
+  } else {
+    render_label_without_text(output, label, gutter_width);
+  }
+}
+
+fn render_label_with_text(
+  text: &str,
+  output: &mut String,
+  label: &Label,
+  gutter_width: usize,
+) {
   let starts = line_starts(text);
   let text_len = text.len();
   let start_offset = (label.span.range.start as usize).min(text_len);
@@ -148,6 +169,30 @@ fn render_label(
     underline_line.push('\n');
     output.push_str(&underline_line);
   }
+}
+
+fn render_label_without_text(output: &mut String, label: &Label, gutter_width: usize) {
+  let marker_char = if label.is_primary { '^' } else { '-' };
+  writeln!(
+    output,
+    "{:>width$} | <source unavailable>",
+    "",
+    width = gutter_width
+  )
+  .unwrap();
+  let mut underline_line = String::new();
+  underline_line.push_str(&format!("{:>width$} | ", "", width = gutter_width));
+  underline_line.push(marker_char);
+  underline_line.push_str(&format!(
+    " [{}..{}]",
+    label.span.range.start, label.span.range.end
+  ));
+  if !label.message.is_empty() {
+    underline_line.push(' ');
+    underline_line.push_str(&label.message);
+  }
+  underline_line.push('\n');
+  output.push_str(&underline_line);
 }
 
 fn line_and_column(text: &str, offset: usize) -> (usize, usize) {
