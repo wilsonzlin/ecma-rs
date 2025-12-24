@@ -1,8 +1,11 @@
 use diagnostics::FileId;
 use hir_js::lower_file;
+use hir_js::lower_file_with_diagnostics;
 use hir_js::DefKind;
 use hir_js::ExprId;
 use hir_js::ExprKind;
+use parse_js::ast::stmt::Stmt as AstStmt;
+use parse_js::loc::Loc;
 use parse_js::parse;
 use proptest::prelude::*;
 
@@ -10,7 +13,8 @@ use proptest::prelude::*;
 fn def_ids_are_sorted_and_stable() {
   let source = "function f() {}\nconst b = 2;\nconst a = 1;";
   let ast = parse(source).expect("parse");
-  let result = lower_file(FileId(0), &ast);
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(0), &ast);
+  assert!(diagnostics.is_empty());
 
   let names: Vec<_> = result
     .defs
@@ -23,7 +27,8 @@ fn def_ids_are_sorted_and_stable() {
   assert_eq!(kinds, vec![DefKind::Function, DefKind::Var, DefKind::Var]);
 
   let ast_again = parse(source).expect("parse");
-  let result_again = lower_file(FileId(0), &ast_again);
+  let (result_again, diagnostics_again) = lower_file_with_diagnostics(FileId(0), &ast_again);
+  assert!(diagnostics_again.is_empty());
   let names_again: Vec<_> = result_again
     .defs
     .iter()
@@ -101,6 +106,57 @@ namespace NS { export const x = 1; }
   assert!(kinds.contains(&DefKind::TypeAlias));
   assert!(kinds.contains(&DefKind::Enum));
   assert!(kinds.contains(&DefKind::Namespace));
+}
+
+#[test]
+fn saturates_overflowing_spans() {
+  let mut ast = parse("const x = 1;").expect("parse");
+  let huge_start = u32::MAX as usize + 10;
+  let huge_end = huge_start + 5;
+
+  let stmt = ast.stx.body.first_mut().expect("stmt");
+  stmt.loc = Loc(huge_start, huge_end);
+  match &mut *stmt.stx {
+    AstStmt::VarDecl(var_decl) => {
+      var_decl.loc = Loc(huge_start, huge_end);
+      if let Some(declarator) = var_decl.stx.declarators.first_mut() {
+        declarator.pattern.loc = Loc(huge_start, huge_end);
+        declarator.pattern.stx.pat.loc = Loc(huge_start, huge_end);
+        if let Some(init) = declarator.initializer.as_mut() {
+          init.loc = Loc(huge_start, huge_end);
+        }
+      }
+    }
+    other => panic!("expected var decl, got {:?}", other),
+  }
+
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(3), &ast);
+  assert!(
+    diagnostics.iter().any(|d| d.code == "LOWER0001"),
+    "expected overflow diagnostic",
+  );
+
+  let def = result.defs.first().expect("def");
+  assert_eq!(def.span.start, u32::MAX);
+  assert_eq!(def.span.end, u32::MAX);
+
+  let body_id = def.body.expect("initializer");
+  let body = result.bodies[body_id.0 as usize].as_ref();
+  let stmt_span = body.stmts.first().expect("stmt").span;
+  assert_eq!(stmt_span.start, u32::MAX);
+  assert_eq!(stmt_span.end, u32::MAX);
+
+  let expr_span = body.exprs.first().expect("expr").span;
+  assert_eq!(expr_span.start, u32::MAX);
+  assert_eq!(expr_span.end, u32::MAX);
+}
+
+#[test]
+fn reports_unsupported_computed_keys() {
+  let ast = parse("const obj = { [foo]: 1 };").expect("parse");
+  let (_, diagnostics) = lower_file_with_diagnostics(FileId(4), &ast);
+
+  assert!(diagnostics.iter().any(|d| d.code == "LOWER0002"));
 }
 
 proptest! {
