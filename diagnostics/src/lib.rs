@@ -50,15 +50,20 @@ use parse_js::error::SyntaxError;
 use parse_js::error::SyntaxErrorType;
 #[cfg(feature = "parse-js")]
 use parse_js::loc::Loc;
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
 /// A stable identifier for a file in a program.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct FileId(pub u32);
 
 /// A byte range in a file.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct TextRange {
   pub start: u32,
   pub end: u32,
@@ -115,7 +120,8 @@ impl From<Loc> for TextRange {
 }
 
 /// A span across a specific file.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct Span {
   pub file: FileId,
   pub range: TextRange,
@@ -132,7 +138,8 @@ impl Span {
 }
 
 /// Diagnostic severity.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum Severity {
   Error,
   Warning,
@@ -158,6 +165,7 @@ impl Display for Severity {
 }
 
 /// A label attached to a diagnostic.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Label {
   pub span: Span,
@@ -183,10 +191,75 @@ impl Label {
   }
 }
 
+impl PartialOrd for Label {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl Ord for Label {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    other
+      .is_primary
+      .cmp(&self.is_primary)
+      .then_with(|| self.span.cmp(&other.span))
+      .then_with(|| self.message.cmp(&other.message))
+  }
+}
+
+/// A diagnostic code that prefers borrowed `'static` values but can own a string
+/// when deserialized.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct DiagnosticCode(pub Cow<'static, str>);
+
+impl DiagnosticCode {
+  pub fn as_str(&self) -> &str {
+    &self.0
+  }
+}
+
+impl Display for DiagnosticCode {
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    f.write_str(self.as_str())
+  }
+}
+
+impl From<&'static str> for DiagnosticCode {
+  fn from(value: &'static str) -> Self {
+    Self(Cow::Borrowed(value))
+  }
+}
+
+impl From<String> for DiagnosticCode {
+  fn from(value: String) -> Self {
+    Self(Cow::Owned(value))
+  }
+}
+
+impl From<Cow<'static, str>> for DiagnosticCode {
+  fn from(value: Cow<'static, str>) -> Self {
+    Self(value)
+  }
+}
+
+impl PartialEq<&str> for DiagnosticCode {
+  fn eq(&self, other: &&str) -> bool {
+    self.as_str() == *other
+  }
+}
+
+impl PartialEq<DiagnosticCode> for &str {
+  fn eq(&self, other: &DiagnosticCode) -> bool {
+    *self == other.as_str()
+  }
+}
+
 /// A user-facing diagnostic with optional labels and notes.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Diagnostic {
-  pub code: &'static str,
+  pub code: DiagnosticCode,
   pub severity: Severity,
   pub message: String,
   pub primary: Span,
@@ -197,12 +270,12 @@ pub struct Diagnostic {
 impl Diagnostic {
   pub fn new(
     severity: Severity,
-    code: &'static str,
+    code: impl Into<DiagnosticCode>,
     message: impl Into<String>,
     primary: Span,
   ) -> Self {
     Self {
-      code,
+      code: code.into(),
       severity,
       message: message.into(),
       primary,
@@ -211,30 +284,47 @@ impl Diagnostic {
     }
   }
 
-  pub fn error(code: &'static str, message: impl Into<String>, primary: Span) -> Self {
+  pub fn error(code: impl Into<DiagnosticCode>, message: impl Into<String>, primary: Span) -> Self {
     Self::new(Severity::Error, code, message, primary)
   }
 
-  pub fn warning(code: &'static str, message: impl Into<String>, primary: Span) -> Self {
+  pub fn warning(
+    code: impl Into<DiagnosticCode>,
+    message: impl Into<String>,
+    primary: Span,
+  ) -> Self {
     Self::new(Severity::Warning, code, message, primary)
   }
 
-  pub fn note(code: &'static str, message: impl Into<String>, primary: Span) -> Self {
+  pub fn note(code: impl Into<DiagnosticCode>, message: impl Into<String>, primary: Span) -> Self {
     Self::new(Severity::Note, code, message, primary)
   }
 
-  pub fn help(code: &'static str, message: impl Into<String>, primary: Span) -> Self {
+  pub fn help(code: impl Into<DiagnosticCode>, message: impl Into<String>, primary: Span) -> Self {
     Self::new(Severity::Help, code, message, primary)
   }
 
   pub fn with_label(mut self, label: Label) -> Self {
-    self.labels.push(label);
+    self.push_label(label);
     self
   }
 
-  pub fn with_note(mut self, note: impl Into<String>) -> Self {
-    self.notes.push(note.into());
+  pub fn add_label(mut self, label: Label) -> Self {
+    self.push_label(label);
     self
+  }
+
+  pub fn push_label(&mut self, label: Label) {
+    self.labels.push(label);
+  }
+
+  pub fn with_note(mut self, note: impl Into<String>) -> Self {
+    self.push_note(note);
+    self
+  }
+
+  pub fn push_note(&mut self, note: impl Into<String>) {
+    self.notes.push(note.into());
   }
 
   pub fn merge_related<I>(mut self, labels: I) -> Self
@@ -243,6 +333,29 @@ impl Diagnostic {
   {
     self.labels.extend(labels);
     self
+  }
+
+  /// Canonical deterministic ordering for diagnostics: severity, code, primary
+  /// span, then message.
+  pub fn sort_key(&self) -> (Severity, &DiagnosticCode, Span, &str) {
+    (
+      self.severity,
+      &self.code,
+      self.primary,
+      self.message.as_str(),
+    )
+  }
+}
+
+impl PartialOrd for Diagnostic {
+  fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    Some(self.cmp(other))
+  }
+}
+
+impl Ord for Diagnostic {
+  fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    self.sort_key().cmp(&other.sort_key())
   }
 }
 
@@ -504,5 +617,159 @@ mod tests {
     let loc = Loc(10, 20);
     let range: TextRange = loc.into();
     assert_eq!(range, TextRange::new(10, 20));
+  }
+
+  #[test]
+  fn diagnostic_sorting_is_deterministic() {
+    let file = FileId(0);
+    let mut diagnostics = vec![
+      Diagnostic::error(
+        "CODE1",
+        "later span",
+        Span {
+          file,
+          range: TextRange::new(5, 6),
+        },
+      ),
+      Diagnostic::error(
+        "CODE1",
+        "message tie",
+        Span {
+          file,
+          range: TextRange::new(5, 6),
+        },
+      ),
+      Diagnostic::warning(
+        "CODE1",
+        "warning",
+        Span {
+          file,
+          range: TextRange::new(0, 1),
+        },
+      ),
+      Diagnostic::error(
+        "CODE0",
+        "alpha",
+        Span {
+          file,
+          range: TextRange::new(4, 5),
+        },
+      ),
+      Diagnostic::error(
+        "CODE1",
+        "earlier span",
+        Span {
+          file,
+          range: TextRange::new(3, 4),
+        },
+      ),
+    ];
+
+    diagnostics.sort();
+
+    let ordered: Vec<_> = diagnostics
+      .into_iter()
+      .map(|diag| {
+        (
+          diag.severity,
+          diag.code,
+          diag.primary.range.start,
+          diag.message,
+        )
+      })
+      .collect();
+    assert_eq!(
+      ordered,
+      vec![
+        (
+          Severity::Error,
+          DiagnosticCode::from("CODE0"),
+          4,
+          "alpha".to_string()
+        ),
+        (
+          Severity::Error,
+          DiagnosticCode::from("CODE1"),
+          3,
+          "earlier span".to_string()
+        ),
+        (
+          Severity::Error,
+          DiagnosticCode::from("CODE1"),
+          5,
+          "later span".to_string()
+        ),
+        (
+          Severity::Error,
+          DiagnosticCode::from("CODE1"),
+          5,
+          "message tie".to_string()
+        ),
+        (
+          Severity::Warning,
+          DiagnosticCode::from("CODE1"),
+          0,
+          "warning".to_string()
+        ),
+      ]
+    );
+  }
+
+  #[cfg(feature = "serde")]
+  #[test]
+  fn serde_roundtrip_parse_error_code() {
+    let diagnostic = Diagnostic::error(
+      "PARSE0015",
+      "unexpected end of input",
+      Span {
+        file: FileId(1),
+        range: TextRange::new(10, 10),
+      },
+    );
+
+    let first = serde_json::to_string(&diagnostic).unwrap();
+    let deserialized: Diagnostic = serde_json::from_str(&first).unwrap();
+    let second = serde_json::to_string(&deserialized).unwrap();
+
+    assert_eq!(deserialized.code, "PARSE0015");
+    assert_eq!(first, second);
+  }
+
+  #[cfg(feature = "serde")]
+  #[test]
+  fn serde_roundtrip_multi_label_with_notes() {
+    let mut diagnostic = Diagnostic::warning(
+      "TEST1234",
+      "multi-label diagnostic",
+      Span {
+        file: FileId(0),
+        range: TextRange::new(1, 2),
+      },
+    );
+    diagnostic.push_label(Label::secondary(
+      Span {
+        file: FileId(0),
+        range: TextRange::new(3, 4),
+      },
+      "secondary one",
+    ));
+    diagnostic.push_label(Label::secondary(
+      Span {
+        file: FileId(1),
+        range: TextRange::new(5, 6),
+      },
+      "secondary two",
+    ));
+    diagnostic.push_note("first note");
+    diagnostic.push_note("second note");
+
+    let first = serde_json::to_string(&diagnostic).unwrap();
+    let deserialized: Diagnostic = serde_json::from_str(&first).unwrap();
+    let second = serde_json::to_string(&deserialized).unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(deserialized.labels, diagnostic.labels);
+    assert_eq!(deserialized.notes, diagnostic.notes);
+    assert_eq!(deserialized.primary, diagnostic.primary);
   }
 }

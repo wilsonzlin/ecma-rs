@@ -22,14 +22,7 @@ pub fn render_diagnostic(provider: &dyn SourceProvider, diagnostic: &Diagnostic)
   });
   labels.extend(diagnostic.labels.iter().cloned());
 
-  labels.sort_by(|a, b| {
-    b.is_primary
-      .cmp(&a.is_primary)
-      .then(a.span.file.cmp(&b.span.file))
-      .then(a.span.range.start.cmp(&b.span.range.start))
-      .then(a.span.range.end.cmp(&b.span.range.end))
-      .then(a.message.cmp(&b.message))
-  });
+  labels.sort();
 
   let mut max_line_no = 1usize;
   for label in &labels {
