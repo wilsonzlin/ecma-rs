@@ -11,10 +11,6 @@ use derive_visitor::Drive;
 use derive_visitor::DriveMut;
 use serde::Serialize;
 
-fn is_false(value: &bool) -> bool {
-  !*value
-}
-
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ClassDecl {
   pub decorators: Vec<Node<Decorator>>,
@@ -45,20 +41,15 @@ pub struct FuncDecl {
 
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct ParamDecl {
-  #[serde(skip_serializing_if = "Vec::is_empty")]
   pub decorators: Vec<Node<Decorator>>,
   #[drive(skip)]
   pub rest: bool,
   #[drive(skip)]
-  #[serde(skip_serializing_if = "is_false")]
   pub optional: bool,
-  #[serde(skip_serializing_if = "Option::is_none")]
   pub accessibility: Option<Accessibility>,
   #[drive(skip)]
-  #[serde(skip_serializing_if = "is_false")]
   pub readonly: bool,
   pub pattern: Node<PatDecl>,
-  #[serde(skip_serializing_if = "Option::is_none")]
   pub type_annotation: Option<Node<TypeExpr>>,
   pub default_value: Option<Node<Expr>>,
 }
@@ -88,9 +79,7 @@ pub struct VarDecl {
 pub struct VarDeclarator {
   pub pattern: Node<PatDecl>,
   #[drive(skip)]
-  #[serde(skip_serializing_if = "is_false")]
   pub definite_assignment: bool,
-  #[serde(skip_serializing_if = "Option::is_none")]
   pub type_annotation: Option<Node<TypeExpr>>,
   pub initializer: Option<Node<Expr>>,
 }

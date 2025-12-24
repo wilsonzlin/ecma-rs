@@ -913,9 +913,9 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
               lexer.skip_expect(1);
             }
           }
-          Some('\n') | Some('\u{2028}') | Some('\u{2029}') => {
+          Some(next_char @ ('\n' | '\u{2028}' | '\u{2029}')) => {
             // Line continuation.
-            lexer.skip_expect(c.len_utf8());
+            lexer.skip_expect(next_char.len_utf8());
           }
           Some(next_char) => {
             lexer.skip_expect(next_char.len_utf8());
