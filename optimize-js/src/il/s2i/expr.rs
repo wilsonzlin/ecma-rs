@@ -30,7 +30,17 @@ use parse_js::ast::node::NodeAssocData;
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
+use semantic_js::assoc::js as semantic_js_assoc;
 use std::sync::atomic::Ordering;
+use symbol_js::symbol::ResolvedSymbol;
+
+fn assoc_has_resolved_symbol(assoc: &NodeAssocData) -> bool {
+  if semantic_js_assoc::resolved_symbol(assoc).is_some() {
+    return true;
+  }
+
+  assoc.get::<ResolvedSymbol>().copied().flatten().is_some()
+}
 
 pub struct CompiledMemberExpr {
   pub left: Arg,
@@ -527,6 +537,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_call_expr(
     &mut self,
+    span: Span,
     CallExpr {
       optional_chaining,
       callee,
@@ -534,6 +545,15 @@ impl<'p> SourceToInst<'p> {
     }: CallExpr,
     chain: impl Into<Option<Chain>>,
   ) -> OptimizeResult<Arg> {
+    if let Expr::Id(id_expr) = callee.stx.as_ref() {
+      if id_expr.stx.name == "eval" && !assoc_has_resolved_symbol(&id_expr.assoc) {
+        return Err(OptimizeError::unsupported(
+          span,
+          "direct eval is not supported",
+        ));
+      }
+    }
+
     let (did_chain_setup, chain) = self.maybe_setup_chain(chain);
     // We need to handle methods specially due to `this`.
     let (this_arg, callee_arg) = match *callee.stx {
@@ -588,7 +608,7 @@ impl<'p> SourceToInst<'p> {
     match *n.stx {
       Expr::ArrowFunc(n) => self.compile_func(*n.stx.func.stx),
       Expr::Binary(n) => self.compile_binary_expr(span, *n.stx),
-      Expr::Call(n) => self.compile_call_expr(*n.stx, chain),
+      Expr::Call(n) => self.compile_call_expr(span, *n.stx, chain),
       Expr::ComputedMember(n) => Ok(self.compile_computed_member_expr(*n.stx, chain)?.res),
       Expr::Cond(n) => self.compile_cond_expr(*n.stx),
       Expr::Id(s) => self.compile_id_expr(s.assoc, *s.stx),
