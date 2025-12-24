@@ -347,10 +347,15 @@ impl Program {
 
 #[cfg(test)]
 mod tests {
+  use crate::cfg::cfg::Cfg;
+  use crate::il::inst::Inst;
+  use crate::il::inst::InstTyp;
   use crate::OptimizeError;
   use crate::Program;
+  use crate::symbol::var_analysis::VarAnalysis;
   use parse_js::parse;
   use serde_json::to_string;
+  use std::collections::HashSet;
   use symbol_js::compute_symbols;
   use symbol_js::TopLevelMode;
 
@@ -360,6 +365,30 @@ mod tests {
     let Program { top_level, .. } = Program::compile(top_level_node, true).expect("compile");
     let debug = top_level.debug.expect("debug enabled");
     to_string(&debug).expect("serialize debug output")
+  }
+
+  fn collect_insts(cfg: &Cfg) -> Vec<Inst> {
+    let mut blocks: Vec<_> = cfg.bblocks.all().collect();
+    blocks.sort_by_key(|(label, _)| *label);
+    let mut insts = Vec::new();
+    for (_, block) in blocks.into_iter() {
+      insts.extend(block.iter().cloned());
+    }
+    insts
+  }
+
+  fn collect_all_insts(program: &Program) -> Vec<Inst> {
+    let mut insts = collect_insts(&program.top_level.body);
+    for func in &program.functions {
+      insts.extend(collect_insts(&func.body));
+    }
+    insts
+  }
+
+  fn compile_with_mode(source: &str, mode: TopLevelMode) -> Program {
+    let mut top_level_node = parse(source).expect("parse input");
+    compute_symbols(&mut top_level_node, mode);
+    Program::compile(top_level_node, false).expect("compile input")
   }
 
   #[test]
@@ -422,5 +451,88 @@ mod tests {
     let second = compile_with_debug_json(source);
 
     assert_eq!(first, second, "debug output should be deterministic");
+  }
+
+  #[test]
+  fn captured_reads_and_writes_use_foreign_insts() {
+    let source = r#"
+      let runner = () => {
+        let x = 0;
+        const bump = () => {
+          x = x + 1;
+          (() => {
+            x = x + 1;
+            x;
+          })();
+          x;
+        };
+        bump();
+      };
+
+      runner();
+    "#;
+
+    let program = compile_with_mode(source, TopLevelMode::Module);
+    let insts = collect_all_insts(&program);
+
+    let mut loads = HashSet::new();
+    let mut stores = HashSet::new();
+    for inst in insts {
+      match inst.t {
+        InstTyp::ForeignLoad => {
+          loads.insert(inst.as_foreign_load().1);
+        }
+        InstTyp::ForeignStore => {
+          stores.insert(inst.as_foreign_store().0);
+        }
+        _ => {}
+      }
+    }
+
+    assert!(!loads.is_empty());
+    assert!(!stores.is_empty());
+    assert!(loads.intersection(&stores).next().is_some());
+  }
+
+  #[test]
+  fn destructuring_declares_locals() {
+    let source = r#"
+      let {a} = obj;
+      a = a + 1;
+      call_me(a);
+    "#;
+
+    let mut top_level_node = parse(source).expect("parse input");
+    compute_symbols(&mut top_level_node, TopLevelMode::Module);
+    let analysis = VarAnalysis::analyze(&mut top_level_node);
+    assert_eq!(analysis.declared.len(), 1);
+    assert!(analysis.unknown.contains("obj"));
+    assert!(analysis.unknown.contains("call_me"));
+    assert!(!analysis.unknown.contains("a"));
+
+    let program = Program::compile(top_level_node, false).expect("compile input");
+    let insts = collect_all_insts(&program);
+
+    assert!(insts.iter().all(|i| i.t != InstTyp::UnknownStore));
+    let unknown_names: HashSet<_> = insts
+      .iter()
+      .filter(|i| matches!(i.t, InstTyp::UnknownLoad | InstTyp::UnknownStore))
+      .map(|i| i.unknown.clone())
+      .collect();
+    assert!(!unknown_names.contains("a"));
+  }
+
+  #[test]
+  fn global_mode_uses_unknown_memory_ops() {
+    let source = r#"
+      var a = 1;
+      a = a + 2;
+    "#;
+
+    let program = compile_with_mode(source, TopLevelMode::Global);
+    let insts = collect_insts(&program.top_level.body);
+
+    assert!(insts.iter().any(|i| i.t == InstTyp::UnknownStore));
+    assert!(insts.iter().any(|i| i.t == InstTyp::UnknownLoad));
   }
 }
