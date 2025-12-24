@@ -184,6 +184,29 @@ impl TypeStore {
           .cmp_with(&b.key, &|id| names.items[id.index()].clone())
       });
     }
+    // Merge duplicate property keys deterministically by intersecting their
+    // types, requiring presence if any declaration is required, propagating
+    // readonly if any declaration is readonly, and keeping the most
+    // restrictive accessibility modifier if present.
+    let mut merged_properties: Vec<Property> = Vec::with_capacity(shape.properties.len());
+    for prop in shape.properties.into_iter() {
+      if let Some(last) = merged_properties.last_mut() {
+        if last.key == prop.key {
+          last.data.ty = self.intersection(vec![last.data.ty, prop.data.ty]);
+          last.data.optional = last.data.optional && prop.data.optional;
+          last.data.readonly = last.data.readonly || prop.data.readonly;
+          let existing_access = last.data.accessibility.take();
+          last.data.accessibility = match (existing_access, prop.data.accessibility) {
+            (Some(a), Some(b)) => Some(std::cmp::max(a, b)),
+            (Some(a), None) | (None, Some(a)) => Some(a),
+            (None, None) => None,
+          };
+          continue;
+        }
+      }
+      merged_properties.push(prop);
+    }
+    shape.properties = merged_properties;
     shape
       .call_signatures
       .sort_by(|a, b| self.signature_cmp(*a, *b));
@@ -299,6 +322,31 @@ impl TypeStore {
       return self.primitives.unknown;
     }
 
+    let mut has_boolean = false;
+    let mut has_number = false;
+    let mut has_string = false;
+    let mut has_bigint = false;
+    let mut has_symbol = false;
+    for member in &flat {
+      match self.type_kind(*member) {
+        TypeKind::Boolean => has_boolean = true,
+        TypeKind::Number => has_number = true,
+        TypeKind::String => has_string = true,
+        TypeKind::BigInt => has_bigint = true,
+        TypeKind::Symbol => has_symbol = true,
+        _ => {}
+      }
+    }
+
+    flat.retain(|member| match self.type_kind(*member) {
+      TypeKind::BooleanLiteral(_) => !has_boolean,
+      TypeKind::NumberLiteral(_) => !has_number,
+      TypeKind::StringLiteral(_) => !has_string,
+      TypeKind::BigIntLiteral(_) => !has_bigint,
+      TypeKind::UniqueSymbol => !has_symbol,
+      _ => true,
+    });
+
     self.sort_and_dedup(&mut flat);
     if flat.is_empty() {
       return self.primitives.never;
@@ -314,13 +362,12 @@ impl TypeStore {
   pub fn intersection(&self, members: Vec<TypeId>) -> TypeId {
     let mut flat = Vec::new();
     let mut has_any = false;
-    let mut has_unknown = false;
 
     for member in members.into_iter().map(|m| self.canon(m)) {
       match self.type_kind(member) {
         TypeKind::Never => return self.primitives.never,
         TypeKind::Any => has_any = true,
-        TypeKind::Unknown => has_unknown = true,
+        TypeKind::Unknown => {}
         TypeKind::Intersection(inner) => flat.extend(inner),
         _ => flat.push(member),
       }
@@ -330,13 +377,36 @@ impl TypeStore {
       return self.primitives.any;
     }
 
+    let mut has_boolean_literal = false;
+    let mut has_number_literal = false;
+    let mut has_string_literal = false;
+    let mut has_bigint_literal = false;
+    for member in &flat {
+      match self.type_kind(*member) {
+        TypeKind::BooleanLiteral(_) => has_boolean_literal = true,
+        TypeKind::NumberLiteral(_) => has_number_literal = true,
+        TypeKind::StringLiteral(_) => has_string_literal = true,
+        TypeKind::BigIntLiteral(_) => has_bigint_literal = true,
+        _ => {}
+      }
+    }
+
+    if has_boolean_literal {
+      flat.retain(|member| !matches!(self.type_kind(*member), TypeKind::Boolean));
+    }
+    if has_number_literal {
+      flat.retain(|member| !matches!(self.type_kind(*member), TypeKind::Number));
+    }
+    if has_string_literal {
+      flat.retain(|member| !matches!(self.type_kind(*member), TypeKind::String));
+    }
+    if has_bigint_literal {
+      flat.retain(|member| !matches!(self.type_kind(*member), TypeKind::BigInt));
+    }
+
     // unknown acts as identity; if no other members, it is the result.
     if flat.is_empty() {
-      return if has_unknown {
-        self.primitives.unknown
-      } else {
-        self.primitives.never
-      };
+      return self.primitives.unknown;
     }
 
     self.sort_and_dedup(&mut flat);
