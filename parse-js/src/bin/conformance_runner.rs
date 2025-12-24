@@ -3,6 +3,7 @@
 
 use parse_js;
 use parse_js::lex::{lex_next, LexMode, Lexer};
+use parse_js::Dialect;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -119,7 +120,7 @@ fn has_module_directive(directives: &[HarnessDirective]) -> Option<bool> {
 fn contains_import_export(content: &str) -> bool {
   let mut lexer = Lexer::new(content);
   loop {
-    let token = lex_next(&mut lexer, LexMode::Standard);
+    let token = lex_next(&mut lexer, LexMode::Standard, Dialect::Tsx);
     match token.typ {
       parse_js::token::TT::KeywordImport | parse_js::token::TT::KeywordExport => return true,
       parse_js::token::TT::EOF => return false,

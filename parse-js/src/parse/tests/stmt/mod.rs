@@ -3,10 +3,17 @@ use crate::parse::expr::pat::ParsePatternRules;
 use crate::parse::ParseCtx;
 use crate::parse::Parser;
 use crate::util::test::evaluate_test_input_files;
+use crate::Dialect;
+use crate::ParseOptions;
+use crate::SourceType;
 use serde_json::Value;
 
 fn parse_stmt_and_serialize(input: String) -> Value {
-  let mut parser = Parser::new(Lexer::new(&input));
+  let opts = ParseOptions {
+    dialect: Dialect::Ts,
+    source_type: SourceType::Module,
+  };
+  let mut parser = Parser::new(Lexer::new(&input), opts);
   let ctx = ParseCtx {
     rules: ParsePatternRules {
       await_allowed: true,

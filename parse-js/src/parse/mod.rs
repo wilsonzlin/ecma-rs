@@ -7,6 +7,9 @@ use crate::lex::Lexer;
 use crate::loc::Loc;
 use crate::token::Token;
 use crate::token::TT;
+use crate::Dialect;
+use crate::ParseOptions;
+use crate::SourceType;
 use expr::pat::ParsePatternRules;
 
 pub mod class_or_object;
@@ -74,6 +77,7 @@ impl MaybeToken {
   }
 }
 
+#[derive(Clone, Copy)]
 pub struct ParserCheckpoint {
   next_tok_i: usize,
 }
@@ -88,6 +92,7 @@ pub struct Parser<'a> {
   lexer: Lexer<'a>,
   buf: Vec<BufferedToken>,
   next_tok_i: usize,
+  options: ParseOptions,
 }
 
 // We extend this struct with added methods in the various submodules, instead of simply using free functions and passing `&mut Parser` around, for several reasons:
@@ -98,12 +103,41 @@ pub struct Parser<'a> {
 // - For general consistency; if there's no reason why it should be a free function (e.g. more than one ambiguous base type), it should be a method.
 // - Makes free functions truly separate independent utility functions.
 impl<'a> Parser<'a> {
-  pub fn new(lexer: Lexer<'a>) -> Parser<'a> {
+  pub fn new(lexer: Lexer<'a>, options: ParseOptions) -> Parser<'a> {
     Parser {
       lexer,
       buf: Vec::new(),
       next_tok_i: 0,
+      options,
     }
+  }
+
+  pub fn options(&self) -> ParseOptions {
+    self.options
+  }
+
+  pub fn dialect(&self) -> Dialect {
+    self.options.dialect
+  }
+
+  pub fn source_type(&self) -> SourceType {
+    self.options.source_type
+  }
+
+  pub fn is_module(&self) -> bool {
+    matches!(self.source_type(), SourceType::Module)
+  }
+
+  pub fn allows_jsx(&self) -> bool {
+    self.dialect().allows_jsx()
+  }
+
+  pub fn is_typescript(&self) -> bool {
+    self.dialect().is_typescript()
+  }
+
+  pub fn allows_angle_bracket_type_assertions(&self) -> bool {
+    self.dialect().allows_angle_bracket_type_assertions()
   }
 
   pub fn source_range(&self) -> Loc {
@@ -156,7 +190,8 @@ impl<'a> Parser<'a> {
     }
     assert!(self.next_tok_i <= self.buf.len());
     if self.buf.len() == self.next_tok_i {
-      let token = lex_next(&mut self.lexer, mode);
+      let dialect = self.dialect();
+      let token = lex_next(&mut self.lexer, mode, dialect);
       self.buf.push(BufferedToken {
         token,
         lex_mode: mode,

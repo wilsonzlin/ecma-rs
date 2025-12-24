@@ -13,7 +13,13 @@ fn main() {
   let mut failed = 0;
 
   for (code, desc) in cases {
-    match parse_js::parse(code) {
+    match parse_js::parse_with_options(
+      code,
+      parse_js::ParseOptions {
+        dialect: parse_js::Dialect::Jsx,
+        source_type: parse_js::SourceType::Module,
+      },
+    ) {
       Ok(_) => {
         println!("✓ {}", desc);
         passed += 1;

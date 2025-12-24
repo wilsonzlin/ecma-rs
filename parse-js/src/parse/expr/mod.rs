@@ -726,48 +726,30 @@ impl<'a> Parser<'a> {
       TT::BracketOpen => self.lit_arr(ctx)?.into_wrapped(),
       TT::BraceOpen => self.lit_obj(ctx)?.into_wrapped(),
       TT::ChevronLeft => {
-        // TypeScript: Could be:
-        // 1. Arrow function with type parameters: <T>(x: T) => ...
-        // 2. Angle-bracket type assertion: <Type>expr
-        // 3. JSX element: <Component>
+        let allow_jsx = self.allows_jsx();
+        let allow_type_assertions = self.allows_angle_bracket_type_assertions();
+        let chevron_checkpoint = self.checkpoint();
 
-        // Try parsing as arrow function first if it looks like one
-        let checkpoint = self.checkpoint();
-        if self.is_start_of_type_arguments() {
-          // Could be arrow function with type parameters
-          // Try to parse it as such
-          match self.arrow_func_expr(ctx, terminators) {
-            Ok(arrow) => {
-              arrow.into_wrapped()
-            }
-            Err(_e) => {
-              // Failed to parse as arrow function, restore and try other options
-              self.restore_checkpoint(checkpoint);
-              let assertion_checkpoint = self.checkpoint();
-              match self.try_parse_angle_bracket_type_assertion(ctx) {
-                Ok(assertion) => {
-                  assertion
-                }
-                Err(_e2) => {
-                  self.restore_checkpoint(assertion_checkpoint);
-                  self.jsx_elem(ctx)?.into_wrapped()
-                }
-              }
-            }
+        if self.is_typescript() && self.is_start_of_type_arguments() {
+          if let Ok(arrow) = self.arrow_func_expr(ctx, terminators) {
+            return Ok(arrow.into_wrapped());
           }
+          self.restore_checkpoint(chevron_checkpoint);
+        }
+
+        if allow_type_assertions {
+          if let Ok(assertion) = self.try_parse_angle_bracket_type_assertion(ctx) {
+            return Ok(assertion);
+          }
+          self.restore_checkpoint(chevron_checkpoint);
+        }
+
+        if allow_jsx {
+          self.restore_checkpoint(chevron_checkpoint);
+          self.jsx_elem(ctx)?.into_wrapped()
         } else {
-          // Not type arguments, try type assertion or JSX
-
-          match self.try_parse_angle_bracket_type_assertion(ctx) {
-            Ok(assertion) => {
-
-              assertion
-            }
-            Err(_e) => {
-              self.restore_checkpoint(checkpoint);
-              self.jsx_elem(ctx)?.into_wrapped()
-            }
-          }
+          self.restore_checkpoint(chevron_checkpoint);
+          return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand")));
         }
       },
       TT::KeywordClass => self.class_expr(ctx)?.into_wrapped(),

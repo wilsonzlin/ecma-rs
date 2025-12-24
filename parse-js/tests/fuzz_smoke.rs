@@ -1,4 +1,4 @@
-use parse_js::{parse_with_options, ParseMode, ParseOptions};
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -192,31 +192,30 @@ fn preview(input: &str) -> String {
   preview
 }
 
-fn run_under_budget(input: String, mode: ParseMode) {
+fn run_under_budget(input: String, dialect: Dialect) {
   let input_len = input.len();
   let input_preview = preview(&input);
   let (tx, rx) = mpsc::channel();
   let handle = thread::spawn(move || {
     let start = Instant::now();
-    let result = std::panic::catch_unwind(|| parse_with_options(&input, ParseOptions { mode }));
+    let result = std::panic::catch_unwind(|| {
+      parse_with_options(
+        &input,
+        ParseOptions {
+          dialect,
+          source_type: SourceType::Module,
+        },
+      )
+    });
     let _ = tx.send((result, start.elapsed()));
   });
 
   match rx.recv_timeout(TIMEOUT_PER_CASE) {
-    Ok((Ok(output), elapsed)) => {
-      let max_diagnostics = input_len.min(1_000);
-      assert!(
-        output.diagnostics.len() <= max_diagnostics,
-        "mode {:?} produced {} diagnostics for len {} on {:?}",
-        mode,
-        output.diagnostics.len(),
-        input_len,
-        input_preview,
-      );
+    Ok((Ok(_), elapsed)) => {
       assert!(
         elapsed <= TIMEOUT_PER_CASE,
-        "mode {:?} finished in {:?} which exceeds budget {:?} on {:?}",
-        mode,
+        "dialect {:?} finished in {:?} which exceeds budget {:?} on {:?}",
+        dialect,
         elapsed,
         TIMEOUT_PER_CASE,
         input_preview,
@@ -225,14 +224,14 @@ fn run_under_budget(input: String, mode: ParseMode) {
     Ok((Err(panic), _)) => {
       let _ = handle.join();
       panic!(
-        "mode {:?} panicked on {:?}: {:?}",
-        mode, input_preview, panic
+        "dialect {:?} panicked on {:?}: {:?}",
+        dialect, input_preview, panic
       );
     }
     Err(_) => {
       panic!(
-        "mode {:?} timed out after {:?} on {:?}",
-        mode, TIMEOUT_PER_CASE, input_preview
+        "dialect {:?} timed out after {:?} on {:?}",
+        dialect, TIMEOUT_PER_CASE, input_preview
       );
     }
   };
@@ -249,8 +248,8 @@ fn parser_handles_adversarial_inputs_quickly() {
   }
 
   for (i, case) in cases.into_iter().enumerate() {
-    for mode in [ParseMode::TypeScript, ParseMode::Tsx] {
-      run_under_budget(case.clone(), mode);
+    for dialect in [Dialect::Ts, Dialect::Tsx] {
+      run_under_budget(case.clone(), dialect);
     }
     // Keep iteration count deterministic.
     assert!(i < RANDOM_INPUTS);

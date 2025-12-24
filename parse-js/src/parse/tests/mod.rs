@@ -5,11 +5,12 @@ use super::Parser;
 use crate::lex::LexMode;
 use crate::lex::Lexer;
 use crate::token::TT;
+use crate::ParseOptions;
 
 #[test]
 fn test_parser() {
   let lexer = Lexer::new("let x = /a/ / 1;");
-  let mut p = Parser::new(lexer);
+  let mut p = Parser::new(lexer, ParseOptions::default());
   // Initial state.
   let cp = p.checkpoint();
   assert_eq!(p.next_tok_i, 0);

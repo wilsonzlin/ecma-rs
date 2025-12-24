@@ -8,20 +8,31 @@ use parse_js::lex::Lexer;
 use parse_js::parse::expr::pat::ParsePatternRules;
 use parse_js::parse::{ParseCtx, Parser};
 use parse_js::token::TT;
+use parse_js::Dialect;
+use parse_js::ParseOptions;
+use parse_js::SourceType;
 
-fn default_ctx() -> ParseCtx {
+fn default_opts() -> ParseOptions {
+  ParseOptions {
+    dialect: Dialect::Ts,
+    source_type: SourceType::Module,
+  }
+}
+
+fn default_ctx(opts: &ParseOptions) -> ParseCtx {
   ParseCtx {
     rules: ParsePatternRules {
-      await_allowed: true,
+      await_allowed: !matches!(opts.source_type, SourceType::Module),
       yield_allowed: true,
     },
   }
 }
 
 fn parse_type_expr(src: &str) -> Node<TypeExpr> {
-  let mut parser = Parser::new(Lexer::new(src));
+  let opts = default_opts();
+  let mut parser = Parser::new(Lexer::new(src), opts);
   let ty = parser
-    .type_expr(default_ctx())
+    .type_expr(default_ctx(&opts))
     .expect("parse type expression");
   parser.require(TT::EOF).expect("expected EOF");
   ty

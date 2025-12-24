@@ -2,9 +2,19 @@ use crate::serialize::emit_js;
 use crate::TopLevelMode;
 use parse_js::lex::Lexer;
 use parse_js::parse::Parser;
+use parse_js::Dialect;
+use parse_js::ParseOptions;
+use parse_js::SourceType;
 
 fn check(top_level_mode: TopLevelMode, src: &str, expected: &str) -> () {
-  let mut parser = Parser::new(Lexer::new(src.as_bytes()));
+  let opts = ParseOptions {
+    dialect: Dialect::Tsx,
+    source_type: match top_level_mode {
+      TopLevelMode::Module => SourceType::Module,
+      _ => SourceType::Script,
+    },
+  };
+  let mut parser = Parser::new(Lexer::new(src), opts);
   let node = parser.parse_top_level().unwrap();
   let mut out = Vec::new();
   minify_js(&node);

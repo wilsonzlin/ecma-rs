@@ -10,7 +10,7 @@ impl<'a> Parser<'a> {
   pub fn parse_top_level(&mut self) -> SyntaxResult<Node<TopLevel>> {
     let ctx = ParseCtx {
       rules: ParsePatternRules {
-        await_allowed: true,
+        await_allowed: !self.is_module(),
         yield_allowed: true,
       },
     };

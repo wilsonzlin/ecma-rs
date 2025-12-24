@@ -597,6 +597,9 @@ impl<'a> Parser<'a> {
   /// Check if we're at the start of type arguments <...>
   /// This is tricky - need to disambiguate from < operator
   pub fn is_start_of_type_arguments(&mut self) -> bool {
+    if !self.is_typescript() {
+      return false;
+    }
     if self.peek().typ != TT::ChevronLeft {
       return false;
     }

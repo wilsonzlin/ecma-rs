@@ -8,17 +8,30 @@ use crate::parse::ParseCtx;
 use crate::parse::Parser;
 use crate::token::TT;
 use crate::util::test::evaluate_test_input_files;
+use crate::Dialect;
+use crate::ParseOptions;
+use crate::SourceType;
 use serde_json::Value;
 
-fn parse_expr(input: &str) -> Node<Expr> {
-  let mut parser = Parser::new(Lexer::new(input));
+fn parse_expr_with_options(input: &str, opts: ParseOptions) -> Node<Expr> {
+  let mut parser = Parser::new(Lexer::new(input), opts);
   let ctx = ParseCtx {
     rules: ParsePatternRules {
-      await_allowed: true,
+      await_allowed: !matches!(opts.source_type, SourceType::Module),
       yield_allowed: true,
     },
   };
   parser.expr(ctx, [TT::Semicolon]).unwrap()
+}
+
+fn parse_expr(input: &str) -> Node<Expr> {
+  parse_expr_with_options(
+    input,
+    ParseOptions {
+      dialect: Dialect::Tsx,
+      source_type: SourceType::Script,
+    },
+  )
 }
 
 fn parse_expr_and_serialize(input: String) -> Value {
@@ -33,7 +46,13 @@ fn test_parse_expression() {
 
 #[test]
 fn parses_angle_bracket_type_assertion_expression() {
-  let expr = parse_expr("<Foo>bar;");
+  let expr = parse_expr_with_options(
+    "<Foo>bar;",
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  );
 
   match *expr.stx {
     Expr::TypeAssertion(ref assertion) => {
@@ -63,7 +82,13 @@ fn parses_angle_bracket_type_assertion_expression() {
 
 #[test]
 fn parses_jsx_element_instead_of_type_assertion() {
-  let expr = parse_expr("<foo>bar</foo>;");
+  let expr = parse_expr_with_options(
+    "<foo>bar</foo>;",
+    ParseOptions {
+      dialect: Dialect::Tsx,
+      source_type: SourceType::Module,
+    },
+  );
 
   match *expr.stx {
     Expr::JsxElem(_) => {}

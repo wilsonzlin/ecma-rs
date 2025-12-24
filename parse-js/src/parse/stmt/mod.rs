@@ -63,13 +63,27 @@ impl<'a> Parser<'a> {
       TT::KeywordContinue => self.continue_stmt(ctx)?.into_wrapped(),
       TT::KeywordDebugger => self.debugger_stmt()?.into_wrapped(),
       TT::KeywordDo => self.do_while_stmt(ctx)?.into_wrapped(),
-      TT::KeywordExport => self.export_stmt(ctx)?,
+      TT::KeywordExport => {
+        if !self.is_module() {
+          return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
+            "export not allowed in scripts",
+          )));
+        }
+        self.export_stmt(ctx)?
+      }
       TT::KeywordFor => self.for_stmt(ctx)?,
       // Only treat async as function decl if followed by function keyword
       TT::KeywordAsync if t1.typ == TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
       TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
       TT::KeywordIf => self.if_stmt(ctx)?.into_wrapped(),
-      TT::KeywordImport if t1.typ != TT::ParenthesisOpen => self.import_stmt(ctx, false)?,
+      TT::KeywordImport if t1.typ != TT::ParenthesisOpen => {
+        if !self.is_module() {
+          return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
+            "import not allowed in scripts",
+          )));
+        }
+        self.import_stmt(ctx, false)?
+      }
       TT::KeywordReturn => self.return_stmt(ctx)?.into_wrapped(),
       TT::KeywordSwitch => self.switch_stmt(ctx)?.into_wrapped(),
       TT::KeywordThrow => self.throw_stmt(ctx)?.into_wrapped(),

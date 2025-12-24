@@ -42,10 +42,8 @@ impl ParsePatternRules {
 pub fn is_valid_pattern_identifier(typ: TT, _rules: ParsePatternRules) -> bool {
   match typ {
     TT::Identifier => true,
-    // TypeScript: Allow await/yield unconditionally as parameter names
-    // (semantic errors will be caught later by type checker)
-    TT::KeywordAwait => true, // was: rules.await_allowed,
-    TT::KeywordYield => true, // was: rules.yield_allowed,
+    TT::KeywordAwait => _rules.await_allowed,
+    TT::KeywordYield => _rules.yield_allowed,
     t => UNRESERVED_KEYWORDS.contains(&t),
   }
 }
