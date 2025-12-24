@@ -7,6 +7,7 @@ use crate::shape::PropKey;
 use crate::shape::Property;
 use crate::store::TypeStore;
 use std::fmt;
+use unicode_ident::{is_xid_continue, is_xid_start};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Precedence {
@@ -91,17 +92,17 @@ impl<'a> TypeDisplay<'a> {
     if is_identifier(&name) {
       write!(f, "{}", name)
     } else {
-      write!(f, "\"{}\"", name)
+      write!(f, "\"{}\"", escape_ts_string_literal(&name))
     }
   }
 
   fn fmt_template(&self, tpl: &TemplateLiteralType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     write!(f, "`")?;
-    write!(f, "{}", tpl.head)?;
+    write!(f, "{}", escape_ts_template_literal_chunk(&tpl.head))?;
     for span in &tpl.spans {
       write!(f, "${{")?;
       self.fmt_type(span.ty, f)?;
-      write!(f, "}}{}", span.literal)?;
+      write!(f, "}}{}", escape_ts_template_literal_chunk(&span.literal))?;
     }
     write!(f, "`")
   }
@@ -137,7 +138,7 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::NumberLiteral(val) => write!(f, "{}", val.0),
       TypeKind::StringLiteral(id) => {
         let s = self.store.name(id);
-        write!(f, "\"{}\"", s)
+        write!(f, "\"{}\"", escape_ts_string_literal(&s))
       }
       TypeKind::BigIntLiteral(ref val) => write!(f, "{}n", val),
       TypeKind::Union(members) => {
@@ -333,11 +334,63 @@ impl<'a> fmt::Display for TypeDisplay<'a> {
   }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum EscapeKind {
+  StringLiteral,
+  TemplateChunk,
+}
+
+fn escape_ts_string_literal(s: &str) -> String {
+  escape_string_like(s, EscapeKind::StringLiteral)
+}
+
+fn escape_ts_template_literal_chunk(s: &str) -> String {
+  escape_string_like(s, EscapeKind::TemplateChunk)
+}
+
+fn escape_string_like(s: &str, kind: EscapeKind) -> String {
+  let mut escaped = String::with_capacity(s.len());
+  let mut chars = s.chars().peekable();
+  while let Some(ch) = chars.next() {
+    if matches!(kind, EscapeKind::TemplateChunk) && ch == '$' {
+      if let Some('{') = chars.peek() {
+        escaped.push_str("\\${");
+        chars.next();
+        continue;
+      }
+    }
+    match ch {
+      '\\' => escaped.push_str("\\\\"),
+      '"' if matches!(kind, EscapeKind::StringLiteral) => escaped.push_str("\\\""),
+      '`' if matches!(kind, EscapeKind::TemplateChunk) => escaped.push_str("\\`"),
+      '\n' => escaped.push_str("\\n"),
+      '\r' => escaped.push_str("\\r"),
+      '\t' => escaped.push_str("\\t"),
+      '\u{08}' => escaped.push_str("\\b"),
+      '\u{0B}' => escaped.push_str("\\v"),
+      '\u{0C}' => escaped.push_str("\\f"),
+      '\0' => escaped.push_str("\\0"),
+      '\u{2028}' => escaped.push_str("\\u2028"),
+      '\u{2029}' => escaped.push_str("\\u2029"),
+      other => escaped.push(other),
+    }
+  }
+  escaped
+}
+
 fn is_identifier(name: &str) -> bool {
   let mut chars = name.chars();
   match chars.next() {
-    Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$' => {}
+    Some(c) if is_identifier_start(c) => {}
     _ => return false,
   }
-  chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
+  chars.all(is_identifier_continue)
+}
+
+fn is_identifier_start(ch: char) -> bool {
+  ch == '_' || ch == '$' || is_xid_start(ch)
+}
+
+fn is_identifier_continue(ch: char) -> bool {
+  ch == '_' || ch == '$' || is_xid_continue(ch)
 }
