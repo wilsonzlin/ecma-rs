@@ -17,6 +17,7 @@ ahash = "0.8.6"
 aho-corasick = "0.7"
 croaring = "1.0.1"
 derive-visitor = "0.4.0"
+diagnostics = { path = "../diagnostics", features = ["parse-js"] }
 itertools = "0.12.0"
 num-bigint = "0.4.4"
 once_cell = "1.19.0"

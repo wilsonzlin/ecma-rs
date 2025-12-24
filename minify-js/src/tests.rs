@@ -1,4 +1,6 @@
 use crate::minify;
+use crate::FileId;
+use crate::Severity;
 use parse_js::parse;
 use symbol_js::TopLevelMode;
 
@@ -30,6 +32,17 @@ fn test_unknown_globals_not_shadowed() {
 fn test_module_export_bindings_preserved() {
   let result = minified(TopLevelMode::Module, "export const x=1; const y=2;");
   assert_eq!(result, "export const x=1; const a=2;");
+}
+
+#[test]
+fn returns_diagnostics_on_parse_error() {
+  let mut output = Vec::new();
+  let diagnostics = minify(TopLevelMode::Global, "let =", &mut output).unwrap_err();
+  assert_eq!(diagnostics.len(), 1);
+  let diagnostic = &diagnostics[0];
+  assert!(diagnostic.code.starts_with("PARSE"));
+  assert_eq!(diagnostic.primary.file, FileId(0));
+  assert_eq!(diagnostic.severity, Severity::Error);
 }
 
 #[test]

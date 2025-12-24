@@ -867,6 +867,7 @@ dependencies = [
  "aho-corasick 0.7.20",
  "croaring",
  "derive-visitor",
+ "diagnostics",
  "itertools 0.12.1",
  "num-bigint",
  "once_cell",

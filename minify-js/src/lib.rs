@@ -1,10 +1,14 @@
-use err::MinifyError;
+use diagnostics::diagnostic_from_syntax_error;
+pub use diagnostics::Diagnostic;
+pub use diagnostics::FileId;
+pub use diagnostics::Severity;
+pub use diagnostics::Span;
+pub use diagnostics::TextRange;
 use parse_js::parse;
 use rename::{apply_renames, assign_names, collect_usages, rewrite_source};
 use symbol_js::compute_symbols;
 pub use symbol_js::TopLevelMode;
 
-mod err;
 mod rename;
 #[cfg(test)]
 mod tests;
@@ -16,6 +20,9 @@ mod tests;
 /// * `top_level_mode` - How to parse the provided code.
 /// * `source` - A string slice representing the source code to process.
 /// * `output` - Destination to write output JavaScript code.
+///
+/// Returns `Ok(())` on success, or a list of diagnostics describing any
+/// failures (e.g. parse errors).
 ///
 /// # Examples
 ///
@@ -31,8 +38,9 @@ pub fn minify(
   top_level_mode: TopLevelMode,
   source: &str,
   output: &mut Vec<u8>,
-) -> Result<(), MinifyError> {
-  let mut top_level_node = parse(source).map_err(MinifyError::Syntax)?;
+) -> Result<(), Vec<Diagnostic>> {
+  let mut top_level_node =
+    parse(source).map_err(|err| vec![diagnostic_from_syntax_error(FileId(0), &err)])?;
   compute_symbols(&mut top_level_node, top_level_mode);
   let usage = collect_usages(&mut top_level_node, top_level_mode);
   let renames = assign_names(&usage);

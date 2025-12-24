@@ -65,6 +65,9 @@ minify(TopLevelMode::Global, code, &mut out).unwrap();
 assert_eq!(out.as_slice(), b"const main = () => { let a = 1; };");
 ```
 
+`minify` returns a `Result<(), Vec<diagnostics::Diagnostic>>`, allowing you to
+inspect structured diagnostics (including parse errors) when minification fails.
+
 ### Node.js
 
 Install the dependency:
