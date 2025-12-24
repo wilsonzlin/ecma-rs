@@ -13,7 +13,8 @@ use crate::TopLevelMode;
 #[derive(Default)]
 struct MangleScopeData {
   dynamic: bool,
-  inherited: HashSet<String>,
+  foreign: HashSet<Symbol>,
+  unknown: HashSet<String>,
 }
 
 /// Mangles identifiers in-place, returning the mapping from Symbols to new identifier names.
@@ -24,10 +25,11 @@ pub fn mangle(
   top_level_scope: &Scope,
 ) -> HashMap<Symbol, String> {
   mark_dynamic_scopes(top_level_node);
-  compute_inherited_names(top_level_node);
+  collect_scope_constraints(top_level_node);
+  let original_names = collect_original_names(top_level_scope);
 
   let mut mapping = HashMap::default();
-  assign_names(top_level_scope, &mut mapping);
+  assign_names(top_level_scope, &original_names, &mut mapping);
   rename_ast(top_level_node, &mapping);
 
   mapping
@@ -47,18 +49,37 @@ fn mark_dynamic_scopes(top_level_node: &mut Node<TopLevel>) {
   top_level_node.drive_mut(&mut visitor);
 }
 
-fn compute_inherited_names(top_level_node: &mut Node<TopLevel>) {
-  let mut visitor = InheritedNameVisitor;
+fn collect_scope_constraints(top_level_node: &mut Node<TopLevel>) {
+  let mut visitor = ConstraintVisitor;
   top_level_node.drive_mut(&mut visitor);
 }
 
-fn assign_names(top_level_scope: &Scope, mapping: &mut HashMap<Symbol, String>) {
+fn collect_original_names(top_level_scope: &Scope) -> HashMap<Symbol, String> {
+  let mut names = HashMap::default();
+  let mut queue = vec![top_level_scope.clone()];
+  while let Some(scope) = queue.pop() {
+    let data = scope.data();
+    for name in data.symbol_names() {
+      if let Some(sym) = data.get_symbol(name) {
+        names.entry(sym).or_insert_with(|| name.clone());
+      }
+    }
+    queue.extend(data.children().iter().cloned());
+  }
+  names
+}
+
+fn assign_names(
+  top_level_scope: &Scope,
+  original_names: &HashMap<Symbol, String>,
+  mapping: &mut HashMap<Symbol, String>,
+) {
   let mut scopes = Vec::new();
   scopes.push(top_level_scope.clone());
   scopes.extend(top_level_scope.descendants());
 
   for scope in scopes {
-    assign_scope_names(&scope, mapping);
+    assign_scope_names(&scope, original_names, mapping);
   }
 }
 
@@ -100,23 +121,30 @@ fn is_direct_eval_call(node: &Node<CallExpr>) -> bool {
   scope.find_symbol("eval".to_string()).is_none()
 }
 
-fn mark_inherited(scope: &Scope, name: &str) {
-  let mut cur = Some(scope.clone());
-  while let Some(scope) = cur {
-    if scope.data().get_symbol(name).is_some() {
+fn mark_unknown(scope: &Scope, name: &str) {
+  for anc in scope.self_and_ancestors() {
+    anc
+      .data_mut()
+      .get_or_insert_assoc::<MangleScopeData>()
+      .unknown
+      .insert(name.to_string());
+  }
+}
+
+fn mark_foreign(scope: &Scope, name: &str, sym: Symbol) {
+  for anc in scope.self_and_ancestors() {
+    let defines = {
+      let data = anc.data();
+      data.get_symbol(name).is_some_and(|s| s == sym)
+    };
+    if defines {
       break;
     }
-
-    let parent = {
-      let mut data = scope.data_mut();
-      data
-        .get_or_insert_assoc::<MangleScopeData>()
-        .inherited
-        .insert(name.to_string());
-      data.parent().cloned()
-    };
-
-    cur = parent;
+    anc
+      .data_mut()
+      .get_or_insert_assoc::<MangleScopeData>()
+      .foreign
+      .insert(sym);
   }
 }
 
@@ -128,15 +156,27 @@ fn is_dynamic(scope: &Scope) -> bool {
     .unwrap_or(false)
 }
 
-fn inherited_names(scope: &Scope) -> HashSet<String> {
+fn foreign_symbols(scope: &Scope) -> HashSet<Symbol> {
   scope
     .data()
     .get_assoc::<MangleScopeData>()
-    .map(|d| d.inherited.clone())
+    .map(|d| d.foreign.clone())
     .unwrap_or_default()
 }
 
-fn assign_scope_names(scope: &Scope, mapping: &mut HashMap<Symbol, String>) {
+fn unknown_names(scope: &Scope) -> HashSet<String> {
+  scope
+    .data()
+    .get_assoc::<MangleScopeData>()
+    .map(|d| d.unknown.clone())
+    .unwrap_or_default()
+}
+
+fn assign_scope_names(
+  scope: &Scope,
+  original_names: &HashMap<Symbol, String>,
+  mapping: &mut HashMap<Symbol, String>,
+) {
   if is_dynamic(scope) {
     return;
   }
@@ -151,7 +191,14 @@ fn assign_scope_names(scope: &Scope, mapping: &mut HashMap<Symbol, String>) {
   };
 
   let mut reserved = default_reserved_names();
-  reserved.extend(inherited_names(scope).into_iter());
+  reserved.extend(unknown_names(scope).into_iter());
+  for sym in foreign_symbols(scope) {
+    if let Some(name) = mapping.get(&sym) {
+      reserved.insert(name.clone());
+    } else if let Some(name) = original_names.get(&sym) {
+      reserved.insert(name.clone());
+    }
+  }
 
   let mut generator = NameGenerator::default();
 
@@ -284,12 +331,16 @@ impl DynamicScopeVisitor {
 
 #[derive(VisitorMut)]
 #[visitor(IdExprNode(enter))]
-struct InheritedNameVisitor;
+struct ConstraintVisitor;
 
-impl InheritedNameVisitor {
+impl ConstraintVisitor {
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
     let scope = scope_from_assoc(&node.assoc);
-    mark_inherited(&scope, &node.stx.name);
+    if let Some(sym) = scope.find_symbol(node.stx.name.clone()) {
+      mark_foreign(&scope, &node.stx.name, sym);
+    } else {
+      mark_unknown(&scope, &node.stx.name);
+    }
   }
 }
 
