@@ -18,7 +18,9 @@ use parse_js::parse;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
+use std::time::Instant;
 use thiserror::Error;
+use tracing::debug_span;
 
 #[path = "check/mod.rs"]
 mod check;
@@ -631,6 +633,54 @@ impl TypeStore {
   }
 }
 
+macro_rules! query_span {
+  ($name:literal, $file:expr, $def:expr, $body:expr, $cache_hit:expr) => {
+    debug_span!(
+      $name,
+      file = $file,
+      def = $def,
+      body = $body,
+      type_id = tracing::field::Empty,
+      cache_hit = $cache_hit,
+      duration_ms = tracing::field::Empty,
+    )
+  };
+}
+
+/// Lightweight helper for emitting structured tracing spans around query-like
+/// boundaries. When tracing is disabled, this is a no-op to keep hot paths
+/// cheap.
+struct QuerySpan {
+  span: tracing::Span,
+  start: Instant,
+}
+
+impl QuerySpan {
+  fn enter(span: tracing::Span, type_id: Option<TypeId>) -> Option<QuerySpan> {
+    if span.is_disabled() {
+      return None;
+    }
+    if let Some(ty) = type_id {
+      span.record("type_id", ty.0);
+    }
+    let _guard = span.enter();
+    drop(_guard);
+    Some(QuerySpan {
+      span,
+      start: Instant::now(),
+    })
+  }
+
+  fn finish(self, type_id: Option<TypeId>) {
+    if let Some(ty) = type_id {
+      self.span.record("type_id", ty.0);
+    }
+    self
+      .span
+      .record("duration_ms", self.start.elapsed().as_secs_f64() * 1000.0);
+  }
+}
+
 struct ProgramState {
   analyzed: bool,
   lib_manager: Arc<LibManager>,
@@ -704,12 +754,80 @@ impl ProgramState {
         .entry(file)
         .or_insert_with(|| host.file_kind(file));
       match self.load_text(file, host) {
-        Ok(text) => match parse(&text) {
-          Ok(ast) => self.bind_file(file, ast, host, &mut queue),
-          Err(err) => {
-            self.diagnostics.push(err.to_diagnostic(file));
+        Ok(text) => {
+          let parse_span = QuerySpan::enter(
+            query_span!(
+              "typecheck_ts.parse",
+              Some(file.0),
+              Option::<u32>::None,
+              Option::<u32>::None,
+              false
+            ),
+            None,
+          );
+          let parsed = parse(&text);
+          if let Some(span) = parse_span {
+            span.finish(None);
           }
-        },
+          match parsed {
+            Ok(ast) => {
+              let bind_span = QuerySpan::enter(
+                query_span!(
+                  "typecheck_ts.bind",
+                  Some(file.0),
+                  Option::<u32>::None,
+                  Option::<u32>::None,
+                  false
+                ),
+                None,
+              );
+              self.bind_file(file, ast, host, &mut queue);
+              if let Some(span) = bind_span {
+                span.finish(None);
+              }
+            }
+            Err(err) => {
+              self.diagnostics.push(err.to_diagnostic(file));
+            }
+          }
+        }
+        Err(err) => {
+          self.diagnostics.push(Diagnostic::error(
+            "HOST0001",
+            err.to_string(),
+            Span::new(file, TextRange::new(0, 0)),
+          ));
+        }
+      }
+
+          }
+          match parsed {
+            Ok(ast) => {
+              let bind_span = QuerySpan::enter(
+                query_span!(
+                  "typecheck_ts.bind",
+                  Some(file.0),
+                  Option::<u32>::None,
+                  Option::<u32>::None,
+                  false
+                ),
+                None,
+              );
+              self.bind_file(file, ast, host, &mut queue);
+              if let Some(span) = bind_span {
+                span.finish(None);
+              }
+            }
+            Err(err) => {
+              let span = loc_to_span(file, err.loc);
+              self.diagnostics.push(Diagnostic::error_with_code(
+                "PARSE0001",
+                err.to_string(),
+                Some(span),
+              ));
+            }
+          }
+        }
         Err(err) => {
           self.diagnostics.push(Diagnostic::error(
             "HOST0001",
@@ -1222,11 +1340,26 @@ impl ProgramState {
   }
 
   fn check_body(&mut self, body_id: BodyId) -> Arc<BodyCheckResult> {
+    let cache_hit = self.body_results.contains_key(&body_id);
+    let body_meta = self.body_data.get(&body_id).cloned();
+    let mut span = QuerySpan::enter(
+      query_span!(
+        "typecheck_ts.check_body",
+        body_meta.as_ref().map(|b| b.file.0),
+        body_meta.as_ref().and_then(|b| b.owner.map(|d| d.0)),
+        Some(body_id.0),
+        cache_hit
+      ),
+      None,
+    );
     if let Some(existing) = self.body_results.get(&body_id) {
+      if let Some(span) = span.take() {
+        span.finish(None);
+      }
       return existing.clone();
     }
-    let body = match self.body_data.get(&body_id) {
-      Some(b) => b.clone(),
+    let body = match body_meta {
+      Some(b) => b,
       None => {
         let res = Arc::new(BodyCheckResult {
           body: body_id,
@@ -1240,6 +1373,9 @@ impl ProgramState {
           return_types: Vec::new(),
         });
         self.body_results.insert(body_id, res.clone());
+        if let Some(span) = span.take() {
+          span.finish(None);
+        }
         return res;
       }
     };
@@ -1258,6 +1394,9 @@ impl ProgramState {
 
     let res = Arc::new(result);
     self.body_results.insert(body_id, res.clone());
+    if let Some(span) = span.take() {
+      span.finish(None);
+    }
     res
   }
 
@@ -1473,10 +1612,27 @@ impl ProgramState {
   }
 
   fn type_of_def(&mut self, def: DefId) -> TypeId {
+    let cache_hit = self.def_types.contains_key(&def);
+    let mut span = QuerySpan::enter(
+      query_span!(
+        "typecheck_ts.type_of_def",
+        self.def_data.get(&def).map(|d| d.file.0),
+        Some(def.0),
+        self.body_of_def(def).map(|b| b.0),
+        cache_hit
+      ),
+      self.def_types.get(&def).copied(),
+    );
     if let Some(existing) = self.def_types.get(&def) {
+      if let Some(span) = span.take() {
+        span.finish(Some(*existing));
+      }
       return *existing;
     }
     if self.type_stack.contains(&def) {
+      if let Some(span) = span.take() {
+        span.finish(Some(self.builtin.any));
+      }
       return self.builtin.any;
     }
     self.type_stack.push(def);
@@ -1510,6 +1666,9 @@ impl ProgramState {
     };
     self.type_stack.pop();
     self.def_types.insert(def, ty);
+    if let Some(span) = span.take() {
+      span.finish(Some(ty));
+    }
     ty
   }
 

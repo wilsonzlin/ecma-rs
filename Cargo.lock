@@ -1947,6 +1947,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1980,6 +1982,14 @@ dependencies = [
  "tracing-subscriber",
  "typecheck-ts",
  "walkdir",
+]
+
+[[package]]
+name = "types-ts"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "tracing",
 ]
 
 [[package]]
