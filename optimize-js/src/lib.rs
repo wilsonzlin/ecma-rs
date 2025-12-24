@@ -535,4 +535,18 @@ mod tests {
     assert!(insts.iter().any(|i| i.t == InstTyp::UnknownStore));
     assert!(insts.iter().any(|i| i.t == InstTyp::UnknownLoad));
   }
+
+  #[test]
+  fn optional_chaining_assignment_target_is_rejected() {
+    let source = "a?.b = 1;";
+    let mut top_level_node = parse(source).expect("parse input");
+    compute_symbols(&mut top_level_node, TopLevelMode::Module);
+    let err = Program::compile(top_level_node, false).expect_err("expected error");
+    match err {
+      OptimizeError::UnsupportedSyntax { kind, .. } => {
+        assert!(kind.contains("optional chaining in assignment target"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
+  }
 }

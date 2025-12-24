@@ -205,7 +205,12 @@ impl<'p> SourceToInst<'p> {
               left,
               right,
             } = *n.stx;
-            assert!(!optional_chaining);
+            if optional_chaining {
+              return Err(OptimizeError::unsupported(
+                span,
+                "optional chaining in assignment target",
+              ));
+            }
             let left_arg = self.compile_expr(left)?;
             let member_arg = Arg::Const(Const::Str(right.to_string()));
             Inst::prop_assign(left_arg, member_arg, dummy_val)
@@ -216,7 +221,12 @@ impl<'p> SourceToInst<'p> {
               object,
               member,
             } = *n.stx;
-            assert!(!optional_chaining);
+            if optional_chaining {
+              return Err(OptimizeError::unsupported(
+                span,
+                "optional chaining in assignment target",
+              ));
+            }
             let left_arg = self.compile_expr(object)?;
             let member_arg = self.compile_expr(member)?;
             Inst::prop_assign(left_arg, member_arg, dummy_val)
