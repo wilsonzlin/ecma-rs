@@ -47,7 +47,7 @@ const SOURCE_FILE: FileId = FileId(0);
 pub type OptimizeResult<T> = Result<T, Vec<Diagnostic>>;
 
 fn diagnostic_with_span(code: &'static str, message: impl Into<String>, loc: Loc) -> Diagnostic {
-  let (range, note) = loc.to_diagnostics_range();
+  let (range, note) = loc.to_diagnostics_range_with_note();
   let mut diagnostic = Diagnostic::error(code, message, Span::new(SOURCE_FILE, range));
   if let Some(note) = note {
     diagnostic = diagnostic.with_note(note);

@@ -4,9 +4,7 @@ use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Formatter;
 #[cfg(feature = "diagnostics")]
-use diagnostics::Diagnostic;
-#[cfg(feature = "diagnostics")]
-use diagnostics::FileId;
+use diagnostics::{Diagnostic, FileId, Span};
 use std::error::Error;
 use std::fmt::Display;
 
@@ -66,11 +64,11 @@ impl SyntaxError {
   /// Convert this syntax error into a shared [`diagnostics::Diagnostic`].
   #[cfg(feature = "diagnostics")]
   pub fn to_diagnostic(&self, file: FileId) -> Diagnostic {
-    let (primary, overflow_note) = self.loc.to_diagnostics_span(file);
+    let (range, overflow_note) = self.loc.to_diagnostics_range_with_note();
     let mut diagnostic = Diagnostic::error(
       self.typ.code(),
       self.typ.message(self.actual_token),
-      primary,
+      Span::new(file, range),
     );
 
     if let Some(expected) = self.typ.expected_note() {
