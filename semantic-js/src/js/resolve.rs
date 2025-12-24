@@ -1,6 +1,4 @@
 use super::JsSemantics;
-use super::NameId;
-use super::ScopeId;
 use super::SymbolId;
 use crate::assoc::js::{declared_symbol, scope_id, ResolvedSymbol};
 use derive_visitor::DriveMut;
@@ -42,18 +40,6 @@ struct ResolveVisitor<'a> {
 }
 
 impl ResolveVisitor<'_> {
-  fn resolve_in_scope(&self, scope: ScopeId, name: NameId) -> Option<SymbolId> {
-    let mut current = Some(scope);
-    while let Some(scope_id) = current {
-      let scope_data = self.sem.scope(scope_id);
-      if let Some(symbol) = scope_data.get(name) {
-        return Some(symbol);
-      }
-      current = scope_data.parent;
-    }
-    None
-  }
-
   fn mark(&mut self, assoc: &mut NodeAssocData, symbol: Option<SymbolId>) {
     assoc.set(ResolvedSymbol(symbol));
     if symbol.is_some() {
@@ -64,13 +50,8 @@ impl ResolveVisitor<'_> {
   }
 
   fn resolve_use(&mut self, assoc: &mut NodeAssocData, name: &str) {
-    let Some(name_id) = self.sem.name_id(name) else {
-      self.mark(assoc, None);
-      return;
-    };
-
     if let Some(scope) = scope_id(assoc) {
-      let symbol = self.resolve_in_scope(scope, name_id);
+      let symbol = self.sem.resolve_name_in_scope(scope, name);
       self.mark(assoc, symbol);
     } else {
       self.mark(assoc, None);

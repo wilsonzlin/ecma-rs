@@ -122,6 +122,7 @@ impl SemanticsBuilder {
   fn finish(self) -> JsSemantics {
     JsSemantics {
       names: self.names,
+      name_lookup: self.name_lookup,
       scopes: self.scopes,
       symbols: self.symbols,
       top_scope: self.top_scope,

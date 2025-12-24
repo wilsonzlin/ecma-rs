@@ -151,6 +151,7 @@ pub struct SymbolData {
 #[derive(Debug)]
 pub struct JsSemantics {
   pub names: Vec<String>,
+  pub name_lookup: HashMap<String, NameId>,
   pub scopes: Vec<ScopeData>,
   pub symbols: Vec<SymbolData>,
   pub top_scope: ScopeId,
@@ -174,11 +175,26 @@ impl JsSemantics {
   }
 
   pub fn name_id(&self, name: &str) -> Option<NameId> {
-    self
-      .names
-      .iter()
-      .position(|n| n == name)
-      .map(|i| NameId(i as u32))
+    self.name_lookup.get(name).copied()
+  }
+
+  pub fn resolve_name_id_in_scope(&self, scope: ScopeId, name: NameId) -> Option<SymbolId> {
+    let mut current = Some(scope);
+    while let Some(scope_id) = current {
+      let scope_data = self.scope(scope_id);
+      if let Some(symbol) = scope_data.get(name) {
+        return Some(symbol);
+      }
+      current = scope_data.parent;
+    }
+    None
+  }
+
+  pub fn resolve_name_in_scope(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
+    let Some(name_id) = self.name_id(name) else {
+      return None;
+    };
+    self.resolve_name_id_in_scope(scope, name_id)
   }
 }
 
