@@ -778,9 +778,9 @@ impl ProgramState {
           }
           if let ExportNames::Specific(names) = &export_list.stx.names {
             for name in names {
-              let exportable = name.stx.exportable.clone();
+              let exportable = name.stx.exportable.as_str();
               let alias = name.stx.alias.stx.name.clone();
-              let mapped = bindings.get(&exportable);
+              let mapped = bindings.get(exportable);
               if let Some(binding) = mapped {
                 exports.insert(
                   alias.clone(),
@@ -811,7 +811,7 @@ impl ProgramState {
           match import_stmt.stx.names {
             Some(ImportNames::Specific(ref list)) => {
               for entry in list {
-                let name = entry.stx.importable.clone();
+                let name = entry.stx.importable.as_str().to_string();
                 let alias_pat = &entry.stx.alias;
                 let alias_name = match &alias_pat.stx.pat.stx.as_ref() {
                   Pat::Id(id) => id.stx.name.clone(),

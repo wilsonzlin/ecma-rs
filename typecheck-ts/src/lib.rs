@@ -52,12 +52,12 @@
 //! let def = program
 //!   .definitions_in_file(FileId(0))
 //!   .into_iter()
-//!   .find(|d| program.def_name(*d).as_deref() == Some(\"add\"))
+//!   .find(|d| program.def_name(*d).as_deref() == Some("add"))
 //!   .unwrap();
 //! let body = program.body_of_def(def).unwrap();
 //! let _body_result = program.check_body(body);
 //! let ty = program.type_of_expr(body, ExprId(0));
-//! assert_eq!(program.display_type(ty).to_string(), \"number\");
+//! assert_eq!(program.display_type(ty).to_string(), "number");
 //! ```
 //!
 //! # Example: cross-file exports and imports
@@ -106,16 +106,16 @@
 //!   FileId(1),
 //!   "export function add(a: number, b: number): number { return a + b; }",
 //! );
-//! host.link(FileId(0), \"./math\", FileId(1));
+//! host.link(FileId(0), "./math", FileId(1));
 //!
 //! let mut program = Program::new(host, vec![FileId(0)]);
 //! let diagnostics = program.check();
 //! assert!(diagnostics.is_empty());
 //!
 //! let exports: ExportMap = program.exports_of(FileId(0));
-//! let total_def = exports.get(\"total\").unwrap().def.unwrap();
+//! let total_def = exports.get("total").unwrap().def.unwrap();
 //! let total_type = program.type_of_def(total_def);
-//! assert_eq!(program.display_type(total_type).to_string(), \"number\");
+//! assert_eq!(program.display_type(total_type).to_string(), "number");
 //! ```
 //!
 //! The public API intentionally hides internal storage (arenas, caches, ASTs).
@@ -125,4 +125,3 @@
 mod api;
 
 pub use api::*;
-

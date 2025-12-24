@@ -2130,8 +2130,10 @@ dependencies = [
 name = "typecheck-ts"
 version = "0.1.0"
 dependencies = [
- "proptest",
- "types-ts",
+ "parse-js",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
