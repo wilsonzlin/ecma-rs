@@ -7,6 +7,7 @@ pub mod discover;
 pub mod multifile;
 pub mod profile;
 pub mod runner;
+pub mod tsc;
 
 pub const DEFAULT_PROFILE_OUT: &str = "typecheck_profile.json";
 
