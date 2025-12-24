@@ -210,11 +210,182 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
   Ok(JsonReport { summary, results })
 }
 
+<<<<<<< HEAD
 pub fn run_single_conformance(opts: SingleTestOptions) -> Result<TestResult> {
   let case = load_conformance_test(&opts.root, &opts.id)?;
   let mut result = run_single_case(case, opts.timeout);
   if !opts.timeout.is_zero() && result.duration_ms > opts.timeout.as_millis() {
     result.status = TestStatus::Timeout;
+=======
+fn run_process_isolated(
+  cases: Vec<TestCase>,
+  opts: &ConformanceOptions,
+) -> Result<Vec<TestResult>> {
+  let jobs = opts.jobs.max(1);
+  let timeout = if opts.timeout.is_zero() {
+    Duration::MAX
+  } else {
+    opts.timeout
+  };
+
+  let mut pending: VecDeque<TestCase> = cases.into_iter().collect();
+  let mut active: Vec<RunningChild> = Vec::new();
+  let mut results = Vec::new();
+  let exe = std::env::current_exe()?;
+
+  while !pending.is_empty() || !active.is_empty() {
+    while active.len() < jobs {
+      if let Some(case) = pending.pop_front() {
+        let child = spawn_child(&case, opts, &exe)?;
+        active.push(child);
+      } else {
+        break;
+      }
+    }
+
+    let mut idx = 0;
+    let mut made_progress = false;
+    while idx < active.len() {
+      let elapsed = active[idx].started.elapsed();
+      let child_finished = active[idx].child.try_wait()?.is_some();
+      let timed_out = elapsed >= timeout;
+
+      if timed_out {
+        let mut finished = active.swap_remove(idx);
+        let _ = finished.child.kill();
+        let output = finished.child.wait_with_output()?;
+        results.push(timeout_result(&finished.case, timeout, output));
+        made_progress = true;
+      } else if child_finished {
+        let finished = active.swap_remove(idx);
+        let elapsed_ms = elapsed.as_millis();
+        let output = finished.child.wait_with_output()?;
+        results.push(parse_child_output(&finished.case, output, elapsed_ms));
+        made_progress = true;
+      } else {
+        idx += 1;
+      }
+    }
+
+    if !made_progress {
+      std::thread::sleep(Duration::from_millis(10));
+    }
+  }
+
+  Ok(results)
+}
+
+struct RunningChild {
+  case: TestCase,
+  child: std::process::Child,
+  started: Instant,
+}
+
+fn spawn_child(case: &TestCase, opts: &ConformanceOptions, exe: &Path) -> Result<RunningChild> {
+  let mut cmd = Command::new(exe);
+  cmd
+    .arg("conformance")
+    .arg("--single")
+    .arg(&case.id)
+    .arg("--root")
+    .arg(&opts.root)
+    .arg("--compare")
+    .arg(opts.compare.as_str())
+    .arg("--timeout-secs")
+    .arg(opts.timeout.as_secs().to_string());
+
+  if opts.trace {
+    cmd.arg("--trace");
+  }
+  if opts.profile {
+    cmd.arg("--profile");
+  }
+  if opts.update_snapshots {
+    cmd.arg("--update-snapshots");
+  }
+
+  cmd
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .stdin(Stdio::null());
+
+  let child = cmd.spawn()?;
+  Ok(RunningChild {
+    case: case.clone(),
+    child,
+    started: Instant::now(),
+  })
+}
+
+fn parse_child_output(case: &TestCase, output: Output, elapsed_ms: u128) -> TestResult {
+  let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+  let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+  if output.status.success() {
+    if let Ok(mut result) = serde_json::from_str::<TestResult>(stdout.trim()) {
+      if result.id != case.id {
+        let mut notes = result.notes;
+        notes.push(format!(
+          "child returned result for unexpected case {}; expected {}",
+          result.id, case.id
+        ));
+        return TestResult {
+          id: case.id.clone(),
+          path: case.path.display().to_string(),
+          status: TestStatus::HarnessCrash,
+          duration_ms: elapsed_ms,
+          diagnostics: Vec::new(),
+          notes,
+          stdout,
+          stderr,
+        };
+      }
+
+      if result.stderr.is_empty() {
+        result.stderr = stderr;
+      }
+      if result.stdout.is_empty() && !stdout.trim().is_empty() {
+        result.stdout = stdout;
+      }
+      return result;
+    }
+  }
+
+  harness_crash_result(case, elapsed_ms, stdout, stderr)
+}
+
+fn timeout_result(case: &TestCase, timeout: Duration, output: Output) -> TestResult {
+  TestResult {
+    id: case.id.clone(),
+    path: case.path.display().to_string(),
+    status: TestStatus::Timeout,
+    duration_ms: timeout.as_millis(),
+    diagnostics: Vec::new(),
+    notes: case.notes.clone(),
+    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+  }
+}
+
+fn harness_crash_result(
+  case: &TestCase,
+  elapsed_ms: u128,
+  stdout: String,
+  stderr: String,
+) -> TestResult {
+  let mut notes = case.notes.clone();
+  notes.push("harness crash: child process exited without a result".to_string());
+
+  TestResult {
+    id: case.id.clone(),
+    path: case.path.display().to_string(),
+    status: TestStatus::HarnessCrash,
+    duration_ms: elapsed_ms,
+    diagnostics: Vec::new(),
+    notes,
+    stdout,
+    stderr,
+>>>>>>> 407bb94 (Treat elapsed timeouts before parsing child output)
   }
   Ok(result)
 }
