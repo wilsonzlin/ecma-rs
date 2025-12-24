@@ -30,25 +30,8 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all --check
 
-      # minify-js* crates currently do not build against the latest parser; we
-      # keep them off PR CI to stay green while still exercising the rest of
-      # the workspace. Using --workspace with explicit excludes keeps coverage
-      # broad even if new crates are added. Nightly runs the full workspace to
-      # surface broader breakage.
-      - name: cargo check (workspace minus minifier crates)
-        run: |
-          cargo check --workspace --all-targets --locked \
-            --exclude minify-js \
-            --exclude minify-js-cli \
-            --exclude minify-js-node \
-            --exclude minify-js-bench
+      - name: cargo check (workspace)
+        run: cargo check --workspace --all-targets --locked
 
-      # A few parser snapshot/lexing tests are currently red; skip them to keep
-      # PR CI stable while still running the rest of the parser suite. Nightly
-      # runs the full set (and will fail until these are addressed).
-      - name: cargo test (parser subset)
-        run: |
-          cargo test --locked -p parse-js --lib -- \
-            --skip lex::tests::test_lex_literal_strings \
-            --skip parse::tests::expr::test_parse_expression \
-            --skip parse::tests::stmt::test_parse_expression
+      - name: cargo test (parse-js)
+        run: cargo test --locked -p parse-js
