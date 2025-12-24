@@ -1,8 +1,5 @@
-use crate::declared_symbol;
-use crate::js::bind_js;
-use crate::js::SymbolId;
-use crate::resolved_symbol;
-use crate::TopLevelMode;
+use crate::assoc::js::{declared_symbol, resolved_symbol};
+use crate::js::{bind_js, SymbolId, TopLevelMode};
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
 use parse_js::ast::expr::pat::IdPat;

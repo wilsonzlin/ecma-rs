@@ -6,7 +6,7 @@ use super::ScopeKind;
 use super::SymbolData;
 use super::SymbolId;
 use super::TopLevelMode;
-use crate::DeclaredSymbol;
+use crate::assoc::js::DeclaredSymbol;
 use ahash::HashMap;
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
@@ -389,10 +389,8 @@ impl DeclareVisitor {
 #[cfg(test)]
 mod tests {
   use super::declare;
-  use crate::js::ScopeKind;
-  use crate::js::TopLevelMode;
-  use crate::scope_id;
-  use crate::ScopeId;
+  use crate::assoc::js::scope_id;
+  use crate::js::{ScopeId, ScopeKind, TopLevelMode};
   use derive_visitor::Drive;
   use derive_visitor::Visitor;
   use parse_js::ast::expr::IdExpr;
