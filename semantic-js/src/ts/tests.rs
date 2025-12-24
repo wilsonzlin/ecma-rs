@@ -359,3 +359,153 @@ fn export_map_is_deterministic() {
     vec!["a".to_string(), "b".to_string(), "c".to_string()]
   );
 }
+
+#[test]
+fn resolve_imports_point_to_origin_module() {
+  let file_a = FileId(50);
+  let file_b = FileId(51);
+
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "Foo", DeclKind::Class, Exported::Named));
+
+  let mut b = HirFile::module(file_b);
+  b.imports.push(Import {
+    specifier: "a".to_string(),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Foo".to_string(),
+      local: "Foo".to_string(),
+      is_type_only: false,
+    }],
+    is_type_only: false,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let import_symbol = semantics
+    .resolve_in_module(file_b, "Foo", Namespace::VALUE)
+    .expect("import binding present");
+  match semantics.symbols().symbol(import_symbol).origin {
+    SymbolOrigin::Import { from, ref imported } => {
+      assert_eq!(from, Some(file_a));
+      assert_eq!(imported, "Foo");
+    }
+    ref other => panic!("expected import origin, got {:?}", other),
+  }
+
+  let origin_symbol = semantics
+    .resolve_export(file_a, "Foo", Namespace::VALUE)
+    .expect("origin module exports Foo");
+  let origin_decls = semantics.symbol_decls(origin_symbol, Namespace::VALUE);
+  assert_eq!(origin_decls.len(), 1);
+  assert_eq!(semantics.symbols().decl(origin_decls[0]).file, file_a);
+}
+
+#[test]
+fn type_only_imports_skip_value_namespace() {
+  let file_a = FileId(60);
+  let file_b = FileId(61);
+
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "Foo", DeclKind::Interface, Exported::Named));
+
+  let mut b = HirFile::module(file_b);
+  b.imports.push(Import {
+    specifier: "a".to_string(),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Foo".to_string(),
+      local: "Foo".to_string(),
+      is_type_only: true,
+    }],
+    is_type_only: false,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  assert!(semantics
+    .resolve_in_module(file_b, "Foo", Namespace::VALUE)
+    .is_none());
+  let type_symbol = semantics
+    .resolve_in_module(file_b, "Foo", Namespace::TYPE)
+    .expect("type-only import resolves in type namespace");
+  match semantics.symbols().symbol(type_symbol).origin {
+    SymbolOrigin::Import { from, .. } => assert_eq!(from, Some(file_a)),
+    ref other => panic!("expected import origin, got {:?}", other),
+  }
+}
+
+#[test]
+fn resolve_export_handles_export_star_cycles() {
+  let file_a = FileId(70);
+  let file_b = FileId(71);
+
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "foo", DeclKind::Var, Exported::Named));
+  a.exports.push(Export::All(ExportAll {
+    specifier: "b".to_string(),
+    is_type_only: false,
+  }));
+
+  let mut b = HirFile::module(file_b);
+  b.decls
+    .push(mk_decl(1, "bar", DeclKind::Var, Exported::Named));
+  b.exports.push(Export::All(ExportAll {
+    specifier: "a".to_string(),
+    is_type_only: false,
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+    "b".to_string() => file_b,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_a], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let foo_a = semantics
+    .resolve_export(file_a, "foo", Namespace::VALUE)
+    .expect("foo exported from a");
+  let foo_b = semantics
+    .resolve_export(file_b, "foo", Namespace::VALUE)
+    .expect("foo re-exported through b");
+  assert_eq!(foo_a, foo_b);
+
+  let bar_b = semantics
+    .resolve_export(file_b, "bar", Namespace::VALUE)
+    .expect("bar exported from b");
+  let bar_a = semantics
+    .resolve_export(file_a, "bar", Namespace::VALUE)
+    .expect("bar re-exported through a");
+  assert_eq!(bar_a, bar_b);
+}
