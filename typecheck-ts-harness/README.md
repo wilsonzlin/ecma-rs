@@ -116,26 +116,36 @@ submodule before assuming green.
 
 ## Differential testing (`difftsc`)
 
-Today `difftsc` runs `tsc` (via Node) on fixture suites, writes/reads structured
-JSON baselines, and compares diagnostics.
+`difftsc` supports both baseline stability checks (tsc vs stored JSON) and true
+differential testing (tsc vs the Rust checker).
 
 ```
 # Regenerate baselines for the bundled suite
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --update-baselines
 
-# Compare against committed baselines
+# Compare live tsc output against baselines
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc
+
+# Differential mode: tsc vs Rust
+cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust
+
+# Differential mode using stored baselines instead of shelling out to tsc
+cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --use-baselines
 
 # Allow small span drift (bytes)
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --span-tolerance 2
+
+# Emit JSON (includes diff details) and continue even if mismatches are found
+cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --json --allow-mismatches
 ```
 
 - Node is discovered by running `node --version`; use `--node` to override.
 - `with-node` feature disabled or missing Node → command logs `difftsc skipped`
-  and exits successfully.
+  and exits successfully. Differential runs with `--use-baselines` can proceed
+  without Node.
 - Baselines are read from/written to `baselines/<suite>/<test>.json` (see below).
 - The wrapper uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
-  writes `{ diagnostics: [{ code, category, file, start, end }] }`.
+  writes `{ diagnostics: [{ code, category, file, start, end, message }] }`.
 
 ### Expectations manifests
 
@@ -162,13 +172,6 @@ Use `--fail-on new|all|none` to control exit status (default `all`):
 
 Conformance test ids are the path under the suite root. `difftsc` ids include
 the suite name (e.g. `difftsc/assignability`).
-
-**Planned differential mode (once the Rust checker exposes matching JSON):**
-- The same `difftsc` entry point will also run the Rust checker and diff directly
-  against `tsc` without precomputed baselines.
-- Expect a flag such as `--differential`/`--compare-rust` alongside `--suite`:
-  `cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --differential`
-- Until that lands, keep baselines up to date with `--update-baselines`.
 
 ## Fixtures and baselines layout
 
