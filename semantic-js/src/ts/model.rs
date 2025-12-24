@@ -33,6 +33,20 @@
 //!   different root orders or resolver outputs.
 //! - Internal caches may use hash maps, but public APIs avoid exposing their
 //!   iteration order.
+//!
+//! ## Namespaces and merging
+//!
+//! - Every declaration carries a [`Namespace`] mask derived from its [`DeclKind`]
+//!   (e.g. classes occupy value+type, enums value+type, namespaces value+namespace).
+//! - [`SymbolGroup`]s hold up to one symbol per namespace (`Separate`) or a
+//!   single merged symbol (`Merged`) when declaration kinds allow combining
+//!   value/namespace (functions/classes/enums with namespaces). Interface and
+//!   namespace merging are represented by multiple declarations attached to the
+//!   same symbol, ordered by `DeclData::order`.
+//! - Imports are modeled as [`DeclKind::ImportBinding`] that participate in all
+//!   three namespaces unless marked type-only.
+//! - Exports store [`SymbolGroup`]s per name; type-only exports filter out the
+//!   value/namespace bits before insertion.
 use bitflags::bitflags;
 use std::collections::BTreeMap;
 
