@@ -4,6 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-diagnostics-h19 = { path = "../diagnostics-h19" }
+diagnostics = { path = "../diagnostics", features = ["parse-js"] }
 parse-js = { path = "../parse-js" }
 thiserror = "1.0"

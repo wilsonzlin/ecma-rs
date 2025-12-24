@@ -503,20 +503,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "diagnostics-h19"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "diagnostics-salsa6"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "diagnostics-w8"
 version = "0.1.0"
 dependencies = [
@@ -2039,7 +2025,7 @@ version = "0.1.0"
 name = "typecheck-ts-h19"
 version = "0.1.0"
 dependencies = [
- "diagnostics-h19",
+ "diagnostics",
  "parse-js",
  "thiserror",
 ]
@@ -2062,7 +2048,7 @@ version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "clap",
- "diagnostics-h19",
+ "diagnostics",
  "globset",
  "regex",
  "serde",

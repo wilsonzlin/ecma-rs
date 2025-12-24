@@ -44,8 +44,11 @@
 
 pub mod render;
 
+#[cfg(feature = "parse-js")]
 use parse_js::error::SyntaxError;
+#[cfg(feature = "parse-js")]
 use parse_js::error::SyntaxErrorType;
+#[cfg(feature = "parse-js")]
 use parse_js::loc::Loc;
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -82,6 +85,7 @@ impl TextRange {
 
   /// Convert a `parse_js::loc::Loc` into a `TextRange`, saturating to `u32` if
   /// necessary and returning a note describing any truncation that occurred.
+  #[cfg(feature = "parse-js")]
   pub fn from_loc_with_overflow_note(loc: Loc) -> (Self, Option<String>) {
     let (start, start_overflow) = saturating_to_u32(loc.0);
     let (end, end_overflow) = saturating_to_u32(loc.1);
@@ -98,6 +102,7 @@ impl TextRange {
   }
 }
 
+#[cfg(feature = "parse-js")]
 impl From<Loc> for TextRange {
   /// Converts a `Loc` by saturating to `u32`. Use
   /// [`TextRange::from_loc_with_overflow_note`] when you need to surface
@@ -242,6 +247,7 @@ impl Diagnostic {
 }
 
 /// Convert a parse-js [`SyntaxError`] into a [`Diagnostic`].
+#[cfg(feature = "parse-js")]
 pub fn diagnostic_from_syntax_error(file: FileId, err: &SyntaxError) -> Diagnostic {
   let (range, note) = TextRange::from_loc_with_overflow_note(err.loc);
   let span = Span { file, range };
@@ -254,6 +260,7 @@ pub fn diagnostic_from_syntax_error(file: FileId, err: &SyntaxError) -> Diagnost
   diagnostic
 }
 
+#[cfg(feature = "parse-js")]
 fn syntax_error_metadata(
   typ: &SyntaxErrorType,
   actual_token: Option<String>,
@@ -305,6 +312,7 @@ fn syntax_error_metadata(
   }
 }
 
+#[cfg(feature = "parse-js")]
 fn saturating_to_u32(value: usize) -> (u32, bool) {
   if value > u32::MAX as usize {
     (u32::MAX, true)
@@ -350,6 +358,7 @@ mod tests {
     }
   }
 
+  #[cfg(feature = "parse-js")]
   #[test]
   fn converts_syntax_error() {
     let err = SyntaxError::new(SyntaxErrorType::UnexpectedEnd, Loc(2, 5), None);
@@ -360,6 +369,7 @@ mod tests {
     assert!(diagnostic.notes.is_empty());
   }
 
+  #[cfg(feature = "parse-js")]
   #[test]
   fn records_overflow_note_from_loc() {
     let loc = Loc(usize::MAX - 1, usize::MAX);

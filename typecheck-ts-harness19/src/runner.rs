@@ -4,8 +4,8 @@ use crate::discover::Shard;
 use crate::discover::TestCase;
 use crate::Result;
 use crate::VirtualFile;
-use diagnostics_h19::Diagnostic;
-use diagnostics_h19::Severity;
+use diagnostics::Diagnostic as InternalDiagnostic;
+use diagnostics::Severity as InternalSeverity;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -17,6 +17,83 @@ use std::time::Instant;
 use typecheck_ts_h19::FileId;
 use typecheck_ts_h19::Host;
 use typecheck_ts_h19::{self};
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JsonSpan {
+  pub file: u32,
+  pub start: u32,
+  pub end: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JsonSeverity {
+  Error,
+  Warning,
+  Note,
+  Help,
+}
+
+impl Default for JsonSeverity {
+  fn default() -> Self {
+    JsonSeverity::Error
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct JsonDiagnostic {
+  pub code: String,
+  pub message: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub span: Option<JsonSpan>,
+  #[serde(default)]
+  pub severity: JsonSeverity,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub notes: Vec<String>,
+}
+
+impl JsonDiagnostic {
+  pub fn new(code: impl Into<String>, message: impl Into<String>, span: Option<JsonSpan>) -> Self {
+    Self {
+      code: code.into(),
+      message: message.into(),
+      span,
+      severity: JsonSeverity::Error,
+      notes: Vec::new(),
+    }
+  }
+
+  fn from_internal(diag: InternalDiagnostic) -> Self {
+    let InternalDiagnostic {
+      code,
+      severity,
+      message,
+      primary,
+      notes,
+      ..
+    } = diag;
+    let span = Some(JsonSpan {
+      file: primary.file.0,
+      start: primary.range.start,
+      end: primary.range.end,
+    });
+
+    let severity = match severity {
+      InternalSeverity::Error => JsonSeverity::Error,
+      InternalSeverity::Warning => JsonSeverity::Warning,
+      InternalSeverity::Note => JsonSeverity::Note,
+      InternalSeverity::Help => JsonSeverity::Help,
+    };
+
+    Self {
+      code: code.to_string(),
+      message,
+      span,
+      severity,
+      notes,
+    }
+  }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -36,7 +113,7 @@ pub struct TestResult {
   pub path: String,
   pub status: TestStatus,
   pub duration_ms: u128,
-  pub diagnostics: Vec<Diagnostic>,
+  pub diagnostics: Vec<JsonDiagnostic>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub notes: Vec<String>,
 }
@@ -154,14 +231,19 @@ fn execute_case(case: TestCase) -> TestResult {
 
   match result {
     Ok(Ok(report)) => {
-      let status = categorize(&report.diagnostics);
+      let diagnostics = report
+        .diagnostics
+        .into_iter()
+        .map(JsonDiagnostic::from_internal)
+        .collect::<Vec<_>>();
+      let status = categorize(&diagnostics);
 
       TestResult {
         id: case.id,
         path: case.path.display().to_string(),
         status,
         duration_ms,
-        diagnostics: report.diagnostics,
+        diagnostics,
         notes,
       }
     }
@@ -170,13 +252,7 @@ fn execute_case(case: TestCase) -> TestResult {
       path: case.path.display().to_string(),
       status: TestStatus::InternalError,
       duration_ms,
-      diagnostics: vec![Diagnostic {
-        code: "HOST".to_string(),
-        message: err.to_string(),
-        span: None,
-        severity: Severity::Error,
-        notes: Vec::new(),
-      }],
+      diagnostics: vec![JsonDiagnostic::new("HOST", err.to_string(), None)],
       notes,
     },
     Err(_) => TestResult {
@@ -184,24 +260,21 @@ fn execute_case(case: TestCase) -> TestResult {
       path: case.path.display().to_string(),
       status: TestStatus::Ice,
       duration_ms,
-      diagnostics: vec![Diagnostic {
-        code: "ICE0001".to_string(),
-        message: "typechecker panicked".to_string(),
-        span: None,
-        severity: Severity::Error,
-        notes: Vec::new(),
-      }],
+      diagnostics: vec![JsonDiagnostic::new("ICE0001", "typechecker panicked", None)],
       notes,
     },
   }
 }
 
-fn categorize(diags: &[Diagnostic]) -> TestStatus {
+fn categorize(diags: &[JsonDiagnostic]) -> TestStatus {
   if diags.is_empty() {
     return TestStatus::Passed;
   }
 
-  if diags.iter().any(|d| d.code == "PARSE") {
+  if diags
+    .iter()
+    .any(|d| d.code.to_ascii_uppercase().starts_with("PARSE"))
+  {
     return TestStatus::ParseError;
   }
 
@@ -228,25 +301,25 @@ mod tests {
 
   #[test]
   fn categorizes_parse() {
-    let diags = vec![Diagnostic::new("PARSE", "", None)];
+    let diags = vec![JsonDiagnostic::new("PARSE", "", None)];
     assert_eq!(categorize(&diags), TestStatus::ParseError);
   }
 
   #[test]
   fn categorizes_bind() {
-    let diags = vec![Diagnostic::new("BIND001", "", None)];
+    let diags = vec![JsonDiagnostic::new("BIND001", "", None)];
     assert_eq!(categorize(&diags), TestStatus::BindError);
   }
 
   #[test]
   fn categorizes_ice() {
-    let diags = vec![Diagnostic::new("ICE999", "", None)];
+    let diags = vec![JsonDiagnostic::new("ICE999", "", None)];
     assert_eq!(categorize(&diags), TestStatus::Ice);
   }
 
   #[test]
   fn categorizes_type_default() {
-    let diags = vec![Diagnostic::new("T100", "", None)];
+    let diags = vec![JsonDiagnostic::new("T100", "", None)];
     assert_eq!(categorize(&diags), TestStatus::TypeError);
   }
 }

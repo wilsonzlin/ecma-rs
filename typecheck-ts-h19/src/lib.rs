@@ -1,5 +1,6 @@
-use diagnostics_h19::Diagnostic;
-use diagnostics_h19::Span;
+use diagnostics::diagnostic_from_syntax_error;
+use diagnostics::Diagnostic;
+use diagnostics::FileId as DiagnosticFileId;
 use parse_js;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -89,13 +90,8 @@ pub fn check_program(host: &impl Host) -> Result<CheckReport, CheckError> {
     match parse_js::parse(&source) {
       Ok(_) => {}
       Err(err) => {
-        let span = Span {
-          file: file_id as u32,
-          start: err.loc.0 as u32,
-          end: err.loc.1 as u32,
-        };
-
-        diagnostics.push(Diagnostic::new("PARSE", format!("{}", err), Some(span)));
+        let diag_file = DiagnosticFileId(u32::try_from(file_id).unwrap_or(u32::MAX));
+        diagnostics.push(diagnostic_from_syntax_error(diag_file, &err));
       }
     }
 
