@@ -48,7 +48,7 @@ pub fn split_test_file(path: &Path, contents: &str) -> SplitResult {
   let mut seen_directive = false;
 
   for raw_line in contents.split_inclusive('\n') {
-    let line = raw_line.trim_end_matches('\n');
+    let line = raw_line.trim_end_matches(|c| c == '\n' || c == '\r');
 
     if let Some(name) = extract_directive(line, FILENAME_DIRECTIVE) {
       if has_started || seen_directive {
@@ -201,5 +201,24 @@ mod tests {
       result.notes,
       vec!["duplicate @filename entry for a.ts; last one wins"]
     );
+  }
+
+  #[test]
+  fn handles_crlf_filename_directive() {
+    let source = "// @filename: a.ts\r\nconst a = 1;\r\n";
+    let result = split_test_file(Path::new("case.ts"), source);
+
+    assert_eq!(result.files.len(), 1);
+    assert_eq!(result.files[0].name, "a.ts");
+    assert_eq!(result.files[0].content, "const a = 1;\r\n");
+  }
+
+  #[test]
+  fn removes_crlf_module_directive_from_content() {
+    let source = "// @module: commonjs\r\nconst value = 1;\r\n";
+    let result = split_test_file(Path::new("module.ts"), source);
+    assert_eq!(result.files.len(), 1);
+    assert_eq!(result.files[0].content, "const value = 1;\r\n");
+    assert_eq!(result.module_directive.as_deref(), Some("commonjs"));
   }
 }
