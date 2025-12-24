@@ -1,6 +1,7 @@
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::ImportExpr;
 use parse_js::ast::node::Node;
+use parse_js::ast::ts_stmt::TypeAliasDecl;
 use parse_js::ast::type_expr::*;
 use std::fmt::Write;
 
@@ -17,14 +18,44 @@ enum TypePrec {
 
 /// Emit a TypeScript type expression into the provided buffer.
 pub fn emit_ts_type(out: &mut String, expr: &Node<TypeExpr>) {
-  emit_type_expr(out, expr, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, expr, TypePrec::ArrowOrConditional);
+}
+
+pub fn emit_type_expr_to_string(expr: &Node<TypeExpr>) -> String {
+  let mut out = String::new();
+  emit_ts_type(&mut out, expr);
+  out
 }
 
 /// Convenience helper returning the emitted representation as a [`String`].
 pub fn ts_type_to_string(expr: &Node<TypeExpr>) -> String {
-  let mut out = String::new();
-  emit_ts_type(&mut out, expr);
-  out
+  emit_type_expr_to_string(expr)
+}
+
+pub fn emit_type_expr<W: std::fmt::Write>(out: &mut W, expr: &Node<TypeExpr>) -> std::fmt::Result {
+  out.write_str(&emit_type_expr_to_string(expr))
+}
+
+pub fn emit_type_alias_decl<W: std::fmt::Write>(
+  out: &mut W,
+  decl: &TypeAliasDecl,
+) -> std::fmt::Result {
+  if decl.export {
+    out.write_str("export ")?;
+  }
+  if decl.declare {
+    out.write_str("declare ")?;
+  }
+  out.write_str("type ")?;
+  out.write_str(&decl.name)?;
+
+  let mut type_parameters = String::new();
+  emit_type_parameters(&mut type_parameters, decl.type_parameters.as_deref());
+  out.write_str(&type_parameters)?;
+
+  out.write_str(" = ")?;
+  emit_type_expr(out, &decl.type_expr)?;
+  out.write_char(';')
 }
 
 fn type_prec(expr: &TypeExpr) -> TypePrec {
@@ -41,11 +72,15 @@ fn type_prec(expr: &TypeExpr) -> TypePrec {
   }
 }
 
-fn emit_type_expr(out: &mut String, expr: &Node<TypeExpr>, parent_prec: TypePrec) {
+fn emit_type_expr_with_prec(out: &mut String, expr: &Node<TypeExpr>, parent_prec: TypePrec) {
   if let TypeExpr::ParenthesizedType(inner) = expr.stx.as_ref() {
     // Preserve explicit parentheses exactly once.
     out.push('(');
-    emit_type_expr(out, &inner.stx.as_ref().type_expr, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(
+      out,
+      &inner.stx.as_ref().type_expr,
+      TypePrec::ArrowOrConditional,
+    );
     out.push(')');
     return;
   }
@@ -126,7 +161,7 @@ fn emit_array_type(out: &mut String, array: &Node<TypeArray>) {
   if array.readonly {
     out.push_str("readonly ");
   }
-  emit_type_expr(out, &array.element_type, TypePrec::Postfix);
+  emit_type_expr_with_prec(out, &array.element_type, TypePrec::Postfix);
   out.push_str("[]");
 }
 
@@ -164,10 +199,10 @@ fn emit_tuple_element(out: &mut String, elem: &Node<TypeTupleElement>) {
         out.push('?');
       }
       out.push_str(": ");
-      emit_type_expr(out, type_expr, TypePrec::ArrowOrConditional);
+      emit_type_expr_with_prec(out, type_expr, TypePrec::ArrowOrConditional);
     }
     None => {
-      emit_type_expr(out, type_expr, TypePrec::ArrowOrConditional);
+      emit_type_expr_with_prec(out, type_expr, TypePrec::ArrowOrConditional);
       if *optional {
         out.push('?');
       }
@@ -180,7 +215,7 @@ fn emit_union_type(out: &mut String, union: &Node<TypeUnion>) {
     if i > 0 {
       out.push_str(" | ");
     }
-    emit_type_expr(out, ty, TypePrec::Union);
+    emit_type_expr_with_prec(out, ty, TypePrec::Union);
   }
 }
 
@@ -189,7 +224,7 @@ fn emit_intersection_type(out: &mut String, intersection: &Node<TypeIntersection
     if i > 0 {
       out.push_str(" & ");
     }
-    emit_type_expr(out, ty, TypePrec::Intersection);
+    emit_type_expr_with_prec(out, ty, TypePrec::Intersection);
   }
 }
 
@@ -205,7 +240,7 @@ fn emit_function_type(out: &mut String, func: &Node<TypeFunction>) {
   }
   out.push(')');
   out.push_str(" => ");
-  emit_type_expr(out, &func.return_type, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &func.return_type, TypePrec::ArrowOrConditional);
 }
 
 fn emit_constructor_type(out: &mut String, cons: &Node<TypeConstructor>) {
@@ -221,7 +256,7 @@ fn emit_constructor_type(out: &mut String, cons: &Node<TypeConstructor>) {
   }
   out.push(')');
   out.push_str(" => ");
-  emit_type_expr(out, &cons.return_type, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &cons.return_type, TypePrec::ArrowOrConditional);
 }
 
 fn emit_function_param(out: &mut String, param: &Node<TypeFunctionParameter>) {
@@ -242,9 +277,9 @@ fn emit_function_param(out: &mut String, param: &Node<TypeFunctionParameter>) {
       out.push('?');
     }
     out.push_str(": ");
-    emit_type_expr(out, type_expr, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, type_expr, TypePrec::ArrowOrConditional);
   } else {
-    emit_type_expr(out, type_expr, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, type_expr, TypePrec::ArrowOrConditional);
     if *optional {
       out.push('?');
     }
@@ -288,7 +323,7 @@ fn emit_property_signature(out: &mut String, prop: &Node<TypePropertySignature>)
   }
   if let Some(ty) = &prop.type_annotation {
     out.push_str(": ");
-    emit_type_expr(out, ty, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, ty, TypePrec::ArrowOrConditional);
   }
 }
 
@@ -309,7 +344,7 @@ fn emit_method_signature(out: &mut String, method: &Node<TypeMethodSignature>) {
   out.push(')');
   if let Some(ret) = &method.return_type {
     out.push_str(": ");
-    emit_type_expr(out, ret, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, ret, TypePrec::ArrowOrConditional);
   }
 }
 
@@ -327,7 +362,7 @@ fn emit_construct_signature(out: &mut String, cons: &Node<TypeConstructSignature
   out.push(')');
   if let Some(ret) = &cons.return_type {
     out.push_str(": ");
-    emit_type_expr(out, ret, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, ret, TypePrec::ArrowOrConditional);
   }
 }
 
@@ -344,7 +379,7 @@ fn emit_call_signature(out: &mut String, call: &Node<TypeCallSignature>) {
   out.push(')');
   if let Some(ret) = &call.return_type {
     out.push_str(": ");
-    emit_type_expr(out, ret, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, ret, TypePrec::ArrowOrConditional);
   }
 }
 
@@ -356,10 +391,10 @@ fn emit_index_signature(out: &mut String, index: &Node<TypeIndexSignature>) {
   out.push('[');
   out.push_str(&index.parameter_name);
   out.push_str(": ");
-  emit_type_expr(out, &index.parameter_type, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &index.parameter_type, TypePrec::ArrowOrConditional);
   out.push(']');
   out.push_str(": ");
-  emit_type_expr(out, &index.type_annotation, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &index.type_annotation, TypePrec::ArrowOrConditional);
 }
 
 fn emit_get_accessor(out: &mut String, get: &Node<TypeGetAccessor>) {
@@ -368,7 +403,7 @@ fn emit_get_accessor(out: &mut String, get: &Node<TypeGetAccessor>) {
   emit_property_key(out, &get.key);
   out.push_str("(): ");
   if let Some(ret) = &get.return_type {
-    emit_type_expr(out, ret, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, ret, TypePrec::ArrowOrConditional);
   } else {
     out.push_str("void");
   }
@@ -436,11 +471,11 @@ fn emit_type_parameter(out: &mut String, param: &Node<TypeParameter>) {
   out.push_str(name);
   if let Some(constraint) = constraint {
     out.push_str(" extends ");
-    emit_type_expr(out, constraint, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, constraint, TypePrec::ArrowOrConditional);
   }
   if let Some(default) = default {
     out.push_str(" = ");
-    emit_type_expr(out, default, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, default, TypePrec::ArrowOrConditional);
   }
 }
 
@@ -453,26 +488,26 @@ fn emit_type_query(out: &mut String, query: &Node<TypeQuery>) {
 fn emit_keyof(out: &mut String, keyof: &Node<TypeKeyOf>) {
   let keyof = keyof.stx.as_ref();
   out.push_str("keyof ");
-  emit_type_expr(out, &keyof.type_expr, TypePrec::Unary);
+  emit_type_expr_with_prec(out, &keyof.type_expr, TypePrec::Unary);
 }
 
 fn emit_indexed_access(out: &mut String, indexed: &Node<TypeIndexedAccess>) {
   let indexed = indexed.stx.as_ref();
-  emit_type_expr(out, &indexed.object_type, TypePrec::Postfix);
+  emit_type_expr_with_prec(out, &indexed.object_type, TypePrec::Postfix);
   out.push('[');
-  emit_type_expr(out, &indexed.index_type, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &indexed.index_type, TypePrec::ArrowOrConditional);
   out.push(']');
 }
 
 fn emit_conditional_type(out: &mut String, cond: &Node<TypeConditional>) {
   let cond = cond.stx.as_ref();
-  emit_type_expr(out, &cond.check_type, TypePrec::Union);
+  emit_type_expr_with_prec(out, &cond.check_type, TypePrec::Union);
   out.push_str(" extends ");
-  emit_type_expr(out, &cond.extends_type, TypePrec::Union);
+  emit_type_expr_with_prec(out, &cond.extends_type, TypePrec::Union);
   out.push_str(" ? ");
-  emit_type_expr(out, &cond.true_type, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &cond.true_type, TypePrec::ArrowOrConditional);
   out.push_str(" : ");
-  emit_type_expr(out, &cond.false_type, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &cond.false_type, TypePrec::ArrowOrConditional);
 }
 
 fn emit_infer(out: &mut String, infer_ty: &Node<TypeInfer>) {
@@ -481,7 +516,7 @@ fn emit_infer(out: &mut String, infer_ty: &Node<TypeInfer>) {
   out.push_str(&infer_ty.type_parameter);
   if let Some(constraint) = &infer_ty.constraint {
     out.push_str(" extends ");
-    emit_type_expr(out, constraint, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, constraint, TypePrec::ArrowOrConditional);
   }
 }
 
@@ -495,17 +530,17 @@ fn emit_mapped_type(out: &mut String, mapped: &Node<TypeMapped>) {
   out.push('[');
   out.push_str(&mapped.type_parameter);
   out.push_str(" in ");
-  emit_type_expr(out, &mapped.constraint, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &mapped.constraint, TypePrec::ArrowOrConditional);
   if let Some(name_type) = &mapped.name_type {
     out.push_str(" as ");
-    emit_type_expr(out, name_type, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, name_type, TypePrec::ArrowOrConditional);
   }
   out.push(']');
   if let Some(modifier) = mapped.optional_modifier {
     emit_mapped_modifier(out, modifier, "?");
   }
   out.push_str(": ");
-  emit_type_expr(out, &mapped.type_expr, TypePrec::ArrowOrConditional);
+  emit_type_expr_with_prec(out, &mapped.type_expr, TypePrec::ArrowOrConditional);
   out.push(' ');
   out.push('}');
 }
@@ -525,7 +560,7 @@ fn emit_template_literal(out: &mut String, template: &Node<TypeTemplateLiteral>)
   out.push_str(&template.head);
   for span in &template.spans {
     out.push_str("${");
-    emit_type_expr(out, &span.stx.type_expr, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, &span.stx.type_expr, TypePrec::ArrowOrConditional);
     out.push('}');
     out.push_str(&span.stx.literal);
   }
@@ -540,7 +575,7 @@ fn emit_type_predicate(out: &mut String, pred: &Node<TypePredicate>) {
   out.push_str(&pred.parameter_name);
   if let Some(ann) = &pred.type_annotation {
     out.push_str(" is ");
-    emit_type_expr(out, ann, TypePrec::ArrowOrConditional);
+    emit_type_expr_with_prec(out, ann, TypePrec::ArrowOrConditional);
   }
 }
 
@@ -589,7 +624,7 @@ fn emit_type_arguments(out: &mut String, args: Option<&[Node<TypeExpr>]>) {
       if i > 0 {
         out.push_str(", ");
       }
-      emit_type_expr(out, arg, TypePrec::ArrowOrConditional);
+      emit_type_expr_with_prec(out, arg, TypePrec::ArrowOrConditional);
     }
     out.push('>');
   }

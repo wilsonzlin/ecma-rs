@@ -553,6 +553,7 @@ version = "0.1.0"
 dependencies = [
  "derive-visitor",
  "parse-js",
+ "serde_json",
 ]
 
 [[package]]
