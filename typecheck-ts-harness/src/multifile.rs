@@ -3,23 +3,65 @@ use crate::directives::HarnessDirective;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
-use std::path::PathBuf;
-
 pub(crate) fn normalize_name(name: &str) -> String {
-  use std::path::Component;
-  let name = name.replace('\\', "/");
-  let mut normalized = PathBuf::new();
-  for component in Path::new(&name).components() {
-    match component {
-      Component::CurDir => {}
-      Component::ParentDir => {
-        normalized.pop();
-      }
-      other => normalized.push(other.as_os_str()),
+  // Canonicalise to a virtual, POSIX-like path:
+  // - backslashes become `/`
+  // - `.` segments are removed, `..` pops a segment
+  // - paths are rooted at `/` unless a drive letter prefix is present
+  // - drive letters are normalised to lowercase (`C:\foo` → `c:/foo`)
+  //
+  // This makes `/a.ts` and `a.ts` equivalent in the harness VFS and keeps
+  // Windows-style inputs stable and deterministic for test comparisons.
+  let path = name.replace('\\', "/");
+  let mut rooted = path.starts_with('/');
+  let mut rest = path.trim_start_matches('/');
+
+  // Extract an optional drive letter (e.g. c: or C:).
+  let mut drive = None;
+  if rest.len() >= 2 {
+    let bytes = rest.as_bytes();
+    if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+      let mut prefix = rest[..2].to_string();
+      prefix.make_ascii_lowercase();
+      drive = Some(prefix);
+      rest = &rest[2..];
+      rest = rest.trim_start_matches('/');
+      rooted = true;
     }
   }
 
-  normalized.to_string_lossy().replace('\\', "/")
+  // Treat bare relative inputs as rooted at `/` for determinism.
+  if !rooted {
+    rooted = true;
+  }
+
+  let mut components = Vec::new();
+  for part in rest.split('/') {
+    if part.is_empty() || part == "." {
+      continue;
+    }
+    if part == ".." {
+      components.pop();
+      continue;
+    }
+    components.push(part);
+  }
+
+  let mut normalized = String::new();
+  if let Some(drive) = drive {
+    normalized.push_str(&drive);
+    normalized.push('/');
+  } else if rooted {
+    normalized.push('/');
+  }
+
+  normalized.push_str(&components.join("/"));
+
+  if normalized.is_empty() {
+    "/".to_string()
+  } else {
+    normalized
+  }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,7 +242,7 @@ mod tests {
     assert_eq!(result.deduped_files[0].content, "const second = 2;\n");
     assert_eq!(
       result.notes,
-      vec!["duplicate @filename entry for a.ts; last one wins"]
+      vec!["duplicate @filename entry for /a.ts; last one wins"]
     );
   }
 
