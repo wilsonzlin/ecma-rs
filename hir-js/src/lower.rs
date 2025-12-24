@@ -18,6 +18,7 @@ use crate::ids::NameId;
 use crate::ids::PatId;
 use crate::ids::StmtId;
 use crate::intern::NameInterner;
+use crate::lower_types::TypeLowerer;
 use crate::span_map::SpanMap;
 use diagnostics::Diagnostic;
 use diagnostics::FileId;
@@ -103,6 +104,7 @@ struct DefDescriptor<'a> {
   span: TextRange,
   is_item: bool,
   source: DefSource<'a>,
+  type_source: Option<TypeSource<'a>>,
 }
 
 #[derive(Debug)]
@@ -112,6 +114,12 @@ enum DefSource<'a> {
   ArrowFunction(&'a Node<ArrowFuncExpr>),
   FuncExpr(&'a Node<FuncExpr>),
   Var(&'a VarDeclarator),
+}
+
+#[derive(Debug, Copy, Clone)]
+enum TypeSource<'a> {
+  TypeAlias(&'a Node<TypeAliasDecl>),
+  Interface(&'a Node<InterfaceDecl>),
 }
 
 impl<'a> DefDescriptor<'a> {
@@ -130,6 +138,7 @@ impl<'a> DefDescriptor<'a> {
       span,
       is_item,
       source,
+      type_source: None,
     }
   }
 }
@@ -153,6 +162,7 @@ pub fn lower_file_with_diagnostics(
   let mut bodies = Vec::new();
   let mut body_ids = Vec::new();
   let mut items = Vec::new();
+  let mut pending_types = Vec::new();
   let mut disambiguators: BTreeMap<(DefKind, NameId), u32> = BTreeMap::new();
 
   for (idx, desc) in descriptors.into_iter().enumerate() {
@@ -172,6 +182,7 @@ pub fn lower_file_with_diagnostics(
       path: def_path,
       span: desc.span,
       body: None,
+      type_info: None,
     };
 
     if let Some(body) =
@@ -183,8 +194,28 @@ pub fn lower_file_with_diagnostics(
       bodies.push(Arc::new(body));
     }
 
+    if let Some(type_source) = desc.type_source {
+      pending_types.push((def_id, type_source));
+    }
+
     defs.push(def_data);
   }
+
+  let types = {
+    let mut type_lowerer = TypeLowerer::new(&mut names, &mut span_map);
+    for (def_id, source) in pending_types {
+      let type_info = match source {
+        TypeSource::TypeAlias(alias) => Some(type_lowerer.lower_type_alias(alias)),
+        TypeSource::Interface(intf) => Some(type_lowerer.lower_interface(intf)),
+      };
+      if let Some(info) = type_info {
+        if let Some(def) = defs.get_mut(def_id.0 as usize) {
+          def.type_info = Some(info);
+        }
+      }
+    }
+    type_lowerer.finish()
+  };
 
   span_map.finalize();
 
@@ -193,6 +224,7 @@ pub fn lower_file_with_diagnostics(
       hir: Arc::new(HirFile::new(file, items, body_ids, span_map)),
       defs,
       bodies,
+      types,
       names: Arc::new(names),
     },
     ctx.into_diagnostics(),
@@ -775,26 +807,30 @@ fn collect_stmt<'a>(
     AstStmt::InterfaceDecl(intf) => {
       let name_id = names.intern(&intf.stx.name);
       let text = names.resolve(name_id).unwrap().to_string();
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::Interface,
         name_id,
         text,
         ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
-      ));
+      );
+      desc.type_source = Some(TypeSource::Interface(intf));
+      descriptors.push(desc);
     }
     AstStmt::TypeAliasDecl(ta) => {
       let name_id = names.intern(&ta.stx.name);
       let text = names.resolve(name_id).unwrap().to_string();
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::TypeAlias,
         name_id,
         text,
         ctx.to_range(stmt.loc),
         is_item,
         DefSource::None,
-      ));
+      );
+      desc.type_source = Some(TypeSource::TypeAlias(ta));
+      descriptors.push(desc);
     }
     AstStmt::EnumDecl(en) => {
       let name_id = names.intern(&en.stx.name);

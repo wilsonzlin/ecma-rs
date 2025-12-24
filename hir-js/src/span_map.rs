@@ -1,15 +1,18 @@
 use crate::ids::DefId;
 use crate::ids::ExprId;
+use crate::ids::TypeExprId;
 use diagnostics::TextRange;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
-/// An index of expression and definition spans that supports deterministic,
-/// logarithmic lookups for the innermost span that contains an offset.
+/// An index of expression, definition, and type expression spans that supports
+/// deterministic, logarithmic lookups for the innermost span that contains an
+/// offset.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SpanMap {
   exprs: SpanIndex<ExprId>,
   defs: SpanIndex<DefId>,
+  type_exprs: SpanIndex<TypeExprId>,
 }
 
 impl SpanMap {
@@ -25,16 +28,25 @@ impl SpanMap {
     self.defs.add(range, id);
   }
 
+  pub fn add_type_expr(&mut self, range: TextRange, id: TypeExprId) {
+    self.type_exprs.add(range, id);
+  }
+
   /// Sorts all spans and builds interval indexes for deterministic lookup.
   pub fn finalize(&mut self) {
     self.exprs.finalize();
     self.defs.finalize();
+    self.type_exprs.finalize();
   }
 
   /// Returns the innermost expression that contains the offset, preferring the
   /// smallest range length and breaking ties by start offset then id.
   pub fn expr_at_offset(&self, offset: u32) -> Option<ExprId> {
     self.exprs.query(offset)
+  }
+
+  pub fn type_expr_at_offset(&self, offset: u32) -> Option<TypeExprId> {
+    self.type_exprs.query(offset)
   }
 
   /// Returns the innermost definition that contains the offset, preferring the
@@ -241,6 +253,7 @@ mod tests {
   use super::SpanMap;
   use crate::ids::DefId;
   use crate::ids::ExprId;
+  use crate::ids::TypeExprId;
   use diagnostics::TextRange;
   use std::time::Instant;
 
@@ -290,5 +303,15 @@ mod tests {
       start.elapsed().as_secs_f32() < 2.0,
       "span map lookup took too long"
     );
+  }
+
+  #[test]
+  fn type_expr_lookup_prefers_inner_span() {
+    let mut map = SpanMap::new();
+    map.add_type_expr(TextRange::new(0, 10), TypeExprId(0));
+    map.add_type_expr(TextRange::new(2, 5), TypeExprId(1));
+    map.finalize();
+
+    assert_eq!(map.type_expr_at_offset(3), Some(TypeExprId(1)));
   }
 }
