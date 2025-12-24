@@ -298,7 +298,13 @@ impl Host for HarnessHost {
     }
 
     let base_path = Path::new(&base_candidate);
-    for ext in ["index.ts", "index.tsx", "index.d.ts", "index.js", "index.jsx"] {
+    for ext in [
+      "index.ts",
+      "index.tsx",
+      "index.d.ts",
+      "index.js",
+      "index.jsx",
+    ] {
       let joined = base_path.join(ext);
       candidates.push(normalize_name(joined.to_string_lossy().as_ref()));
     }
