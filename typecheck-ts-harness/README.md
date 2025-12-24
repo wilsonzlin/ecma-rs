@@ -155,7 +155,7 @@ tracking_issue = "TICKET-123"
 ```
 
 Use `--fail-on new|all|none` to control exit status (default `all`):
-- `new`: only uncovered mismatches fail the run
+- `new` (default): only uncovered mismatches fail the run
 - `all`: any mismatch fails
 - `none`: always succeed (useful for generating reports)
 
