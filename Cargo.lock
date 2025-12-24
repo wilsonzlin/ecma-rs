@@ -1095,7 +1095,9 @@ dependencies = [
 name = "parse-js-cli"
 version = "0.0.1"
 dependencies = [
+ "assert_cmd",
  "clap",
+ "diagnostics",
  "parse-js",
  "serde",
  "serde_json",
