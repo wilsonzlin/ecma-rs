@@ -1008,7 +1008,6 @@ dependencies = [
  "itertools 0.12.1",
  "num-bigint",
  "once_cell",
- "optimize-js",
  "parse-js",
  "symbol-js",
 ]
