@@ -6,8 +6,14 @@ use super::CompilerOptions;
 use super::FileKind;
 use super::LibFile;
 
-/// Abstraction over file access and compiler configuration.
-pub trait Host: Send + Sync {
+/// Legacy abstraction over file access and compiler configuration.
+///
+/// This is only used by the deprecated string-scanning lib checker. It is **not**
+/// the real type checker host API.
+#[deprecated(
+  note = "lib_support::LibCheckHost is a legacy helper for the lib checker; it is not the real type checker host API."
+)]
+pub trait LibCheckHost: Send + Sync {
   /// Entry files that should be checked.
   fn root_files(&self) -> Vec<FileId>;
 

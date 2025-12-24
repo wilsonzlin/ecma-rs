@@ -126,4 +126,8 @@ mod api;
 
 pub use api::*;
 
+/// Utilities for selecting bundled `.d.ts` libraries and the legacy lib checker.
+///
+/// The deprecated [`lib_support::LibCheckProgram`] is a string-scanning stub,
+/// not the real [`Program`] type checker.
 pub mod lib_support;

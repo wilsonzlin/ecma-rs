@@ -1,9 +1,16 @@
+//! Helpers for selecting and loading TypeScript lib declaration files.
+//!
+//! This module exposes the lib selection and loading utilities used by the real
+//! checker. The legacy [`LibCheckProgram`] is a string-scanning helper retained
+//! for transitional testing; it is **not** the actual type checker API.
+
 mod compiler_options;
 mod host;
 pub mod lib_env;
 
-pub use compiler_options::*;
-pub use host::*;
+pub use compiler_options::{CompilerOptions, LibName, LibSet, ScriptTarget};
+#[allow(deprecated)]
+pub use host::LibCheckHost;
 pub use lib_env::{LibManager, LoadedLibs};
 
 use std::collections::hash_map::Entry;
@@ -39,29 +46,37 @@ pub struct Diagnostic {
   pub file: Option<FileId>,
 }
 
-/// A program is a checked set of files and libraries.
-pub struct Program {
-  host: Arc<dyn Host>,
+/// Deprecated, string-scanning helper that checks root files against loaded libs.
+///
+/// This is **not** the real `typecheck_ts::Program`. It only loads bundled libs
+/// and emits basic diagnostics about missing globals.
+#[allow(deprecated)]
+#[deprecated(
+  note = "LibCheckProgram is a legacy string-scanning helper; it is not the real type checker API."
+)]
+pub struct LibCheckProgram {
+  host: Arc<dyn LibCheckHost>,
   libs: Vec<LibFile>,
   global_env: GlobalEnv,
   lib_diags: Vec<Diagnostic>,
   lib_manager: Arc<LibManager>,
 }
 
-impl Program {
+#[allow(deprecated)]
+impl LibCheckProgram {
   /// Construct a program using the default lib manager.
-  pub fn new(host: Arc<dyn Host>) -> Self {
-    Program::with_lib_manager(host, Arc::new(LibManager::new()))
+  pub fn new(host: Arc<dyn LibCheckHost>) -> Self {
+    LibCheckProgram::with_lib_manager(host, Arc::new(LibManager::new()))
   }
 
   /// Construct a program with a provided lib manager (useful for tests to observe invalidation).
-  pub fn with_lib_manager(host: Arc<dyn Host>, lib_manager: Arc<LibManager>) -> Self {
+  pub fn with_lib_manager(host: Arc<dyn LibCheckHost>, lib_manager: Arc<LibManager>) -> Self {
     let options = host.compiler_options();
     let mut lib_diags = Vec::new();
     let libs = collect_libraries(host.as_ref(), &options, &lib_manager, &mut lib_diags);
     let global_env = build_global_env(&libs, &mut lib_diags);
 
-    Program {
+    LibCheckProgram {
       host,
       libs,
       global_env,
@@ -102,8 +117,9 @@ impl Program {
   }
 }
 
+#[allow(deprecated)]
 fn collect_libraries(
-  host: &dyn Host,
+  host: &dyn LibCheckHost,
   options: &CompilerOptions,
   lib_manager: &LibManager,
   diags: &mut Vec<Diagnostic>,
@@ -302,7 +318,8 @@ fn extract_props(after: &str) -> Option<Vec<String>> {
   None
 }
 
-fn check_file(file: FileId, host: &dyn Host, env: &GlobalEnv, diags: &mut Vec<Diagnostic>) {
+#[allow(deprecated)]
+fn check_file(file: FileId, host: &dyn LibCheckHost, env: &GlobalEnv, diags: &mut Vec<Diagnostic>) {
   let text = host.file_text(file);
 
   check_global_use(&text, file, "console", env, diags, Some("log"));
@@ -346,6 +363,7 @@ fn check_global_use(
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
   use super::*;
 
@@ -378,7 +396,7 @@ mod tests {
     }
   }
 
-  impl Host for TestHost {
+  impl LibCheckHost for TestHost {
     fn root_files(&self) -> Vec<FileId> {
       self.root.clone()
     }
@@ -428,7 +446,7 @@ mod tests {
       FileKind::Ts,
       "console.log(\"hi\")",
     );
-    let program = Program::new(Arc::new(host));
+    let program = LibCheckProgram::new(Arc::new(host));
     let diags = program.check();
     assert!(diags.is_empty(), "expected no diagnostics, got {diags:?}");
     assert!(
@@ -447,7 +465,7 @@ mod tests {
       .with_lib(console_lib(FileId(99), "host-lib"))
       .with_file(FileId(0), FileKind::Ts, "console.log(\"hi\")");
 
-    let program = Program::new(Arc::new(host));
+    let program = LibCheckProgram::new(Arc::new(host));
     let diags = program.check();
     assert!(
       diags.is_empty(),
@@ -462,7 +480,7 @@ mod tests {
       ..Default::default()
     };
     let host = TestHost::new(options).with_file(FileId(0), FileKind::Ts, "console.log('x')");
-    let program = Program::new(Arc::new(host));
+    let program = LibCheckProgram::new(Arc::new(host));
     let diags = program.check();
     assert_eq!(
       diags.len(),
@@ -484,12 +502,12 @@ mod tests {
     options_es5.include_dom = false;
 
     let host_a = TestHost::new(options_es5.clone()).with_file(FileId(0), FileKind::Ts, "");
-    let program_a = Program::with_lib_manager(Arc::new(host_a), manager.clone());
+    let program_a = LibCheckProgram::with_lib_manager(Arc::new(host_a), manager.clone());
     program_a.check();
     let count_after_first = manager.load_count();
 
     let host_b = TestHost::new(options_es5.clone()).with_file(FileId(1), FileKind::Ts, "");
-    let program_b = Program::with_lib_manager(Arc::new(host_b), manager.clone());
+    let program_b = LibCheckProgram::with_lib_manager(Arc::new(host_b), manager.clone());
     program_b.check();
     let count_after_second = manager.load_count();
     assert_eq!(
@@ -500,7 +518,7 @@ mod tests {
     let mut options_es2015 = options_es5.clone();
     options_es2015.target = ScriptTarget::Es2015;
     let host_c = TestHost::new(options_es2015).with_file(FileId(2), FileKind::Ts, "");
-    let program_c = Program::with_lib_manager(Arc::new(host_c), manager.clone());
+    let program_c = LibCheckProgram::with_lib_manager(Arc::new(host_c), manager.clone());
     program_c.check();
     let count_after_third = manager.load_count();
     assert!(
@@ -516,7 +534,7 @@ mod tests {
       .with_lib(console_lib(FileId(100), "host-lib"))
       .with_file(FileId(0), FileKind::Ts, "console.log('hi')");
 
-    let program = Program::new(Arc::new(host));
+    let program = LibCheckProgram::new(Arc::new(host));
     let libs = program.libs();
     assert!(
       libs.iter().any(|l| l.name.as_ref() == "host-lib"),
@@ -533,7 +551,7 @@ mod tests {
     let mut options = CompilerOptions::default();
     options.include_dom = false;
     let host = TestHost::new(options.clone()).with_file(FileId(0), FileKind::Ts, "document.title");
-    let program = Program::new(Arc::new(host));
+    let program = LibCheckProgram::new(Arc::new(host));
     let diags = program.check();
     assert!(
       diags.iter().any(|d| d.code == "TC0005"),
@@ -542,7 +560,7 @@ mod tests {
 
     options.include_dom = true;
     let host_with_dom = TestHost::new(options).with_file(FileId(1), FileKind::Ts, "document.title");
-    let program_with_dom = Program::new(Arc::new(host_with_dom));
+    let program_with_dom = LibCheckProgram::new(Arc::new(host_with_dom));
     let diags = program_with_dom.check();
     assert!(
       diags.is_empty(),
@@ -555,7 +573,7 @@ mod tests {
     let mut options_es5 = CompilerOptions::default();
     options_es5.target = ScriptTarget::Es5;
     let host_es5 = TestHost::new(options_es5).with_file(FileId(0), FileKind::Ts, "");
-    let program_es5 = Program::new(Arc::new(host_es5));
+    let program_es5 = LibCheckProgram::new(Arc::new(host_es5));
     let libs_es5: Vec<_> = program_es5
       .libs()
       .iter()
@@ -569,7 +587,7 @@ mod tests {
     let mut options_es2015 = CompilerOptions::default();
     options_es2015.target = ScriptTarget::Es2015;
     let host_es2015 = TestHost::new(options_es2015).with_file(FileId(1), FileKind::Ts, "");
-    let program_es2015 = Program::new(Arc::new(host_es2015));
+    let program_es2015 = LibCheckProgram::new(Arc::new(host_es2015));
     let libs_es2015: Vec<_> = program_es2015
       .libs()
       .iter()
