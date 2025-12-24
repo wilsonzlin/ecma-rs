@@ -1,7 +1,0 @@
-[package]
-name = "hir-js-w82"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-parse-js = { path = "../parse-js" }

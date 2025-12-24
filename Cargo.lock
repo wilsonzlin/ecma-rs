@@ -668,13 +668,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hir-js-trace23"
-version = "0.1.0"
-dependencies = [
- "tracing",
-]
-
-[[package]]
 name = "hir-js-w12"
 version = "0.1.0"
 dependencies = [
@@ -682,39 +675,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "hir-js-w69"
-version = "0.1.0"
-dependencies = [
- "parse-js",
- "symbol-js",
-]
-
-[[package]]
-name = "hir-js-w72"
-version = "0.1.0"
-dependencies = [
- "derive-visitor",
- "parse-js",
- "symbol-js",
-]
-
-[[package]]
 name = "hir-js-w8"
 version = "0.1.0"
-
-[[package]]
-name = "hir-js-w82"
-version = "0.1.0"
-dependencies = [
- "parse-js",
-]
-
-[[package]]
-name = "hir-js-w98"
-version = "0.1.0"
-dependencies = [
- "parse-js",
-]
 
 [[package]]
 name = "http"
