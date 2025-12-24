@@ -96,3 +96,16 @@ fn union_target_allows_member_with_props() {
     diagnostics
   );
 }
+
+#[test]
+fn union_target_requires_single_compatible_member() {
+  let diagnostics =
+    run("let x: { foo: number } | { bar: number } = { foo: 1, bar: 2 };");
+  assert_eq!(diagnostics.len(), 1);
+}
+
+#[test]
+fn union_target_allows_member_with_props() {
+  let diagnostics = run("let x: { foo: number } | { bar: number } = { foo: 1 };");
+  assert!(diagnostics.is_empty(), "unexpected diagnostics: {:?}", diagnostics);
+}
