@@ -126,3 +126,26 @@ fn errors_on_missing_root_unless_allowed() {
   .expect("allow_empty should permit empty suites");
   assert_eq!(report.summary.total, 0);
 }
+
+#[test]
+fn cli_emits_profile_file() {
+  let (_dir, root) = write_fixtures();
+  let profile_path = root.join("profile.json");
+
+  #[allow(deprecated)]
+  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd
+    .arg("conformance")
+    .arg("--root")
+    .arg(&root)
+    .arg("--filter")
+    .arg("*basic*")
+    .arg("--profile")
+    .arg("--profile-out")
+    .arg(&profile_path);
+
+  cmd.assert().success();
+
+  let data = fs::read_to_string(&profile_path).expect("profile output");
+  serde_json::from_str::<serde_json::Value>(&data).expect("valid profile json");
+}
