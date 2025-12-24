@@ -13,14 +13,14 @@ git submodule update --init --recursive parse-js/tests/TypeScript
 npm install typescript
 
 # 3) Run the Rust conformance harness
-cargo run -p typecheck-ts-harness --release -- conformance --filter "*/es2020/**" --shard 0/8
+cargo run -p typecheck-ts-harness --release -- conformance --filter "**/es2020/**" --shard 0/8
 
 # 4) (Optional) Regenerate difftsc baselines for local fixtures
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --update-baselines
 ```
 
-If any step silently produces zero tests or fails with “cannot find module
-`typescript`”, revisit the prerequisites below.
+If any step fails (e.g. missing tests or “cannot find module `typescript`”),
+revisit the prerequisites below.
 
 ## Prerequisites
 
@@ -35,9 +35,8 @@ ls parse-js/tests/TypeScript/tests/cases/conformance | head
 ```
 
 - Default root: `parse-js/tests/TypeScript/tests/cases/conformance`
-- If the submodule is missing/empty, conformance discovery returns **zero**
-  tests and the command prints `Ran 0 test(s)` (treat this as a misconfiguration,
-  not success).
+- If the submodule is missing/empty, conformance discovery now errors. Pass
+  `--allow-empty` only when intentionally running with an empty suite.
 - Override the root with `--root <path>` to point at a different checkout or a
   reduced local corpus.
 
@@ -71,21 +70,28 @@ cargo run -p typecheck-ts-harness --release -- conformance
 
 # Filter (glob or regex) and shard
 cargo run -p typecheck-ts-harness --release -- conformance \
-  --filter "*/es2020/**" \
+  --filter "**/es2020/**" \
   --shard 3/16
 
 # Larger timeout per test (seconds)
 cargo run -p typecheck-ts-harness --release -- conformance --timeout-secs 30
+
+# Include additional extensions
+cargo run -p typecheck-ts-harness --release -- conformance --extensions ts,tsx,d.ts,js
 ```
 
 - Filters accept globs or regexes; they match the path under the root (e.g.
-  `**/es2020/**`, `optionalChaining`).
+  `**/es2020/**`, `**/*optionalChaining*`). Paths are normalized with `/` and do
+  not include the absolute root prefix.
+- Discovery includes `.ts`, `.tsx`, and `.d.ts` by default. Use
+  `--extensions <comma-separated>` to add more.
 - Shards are zero-based (`i/n`) and are applied after sorting cases by id; run
   each shard in a separate process/job for parallelism.
 - Timeouts apply per test case (default 10s) and kill only the offending test,
   not the whole run.
 - `--json` emits machine-readable results; `--trace`/`--profile` are forwarded to
   the checker.
+- `--allow-empty` suppresses the default error when zero tests are discovered.
 - Harness execution is currently single-threaded; for CI parallelism use shards
   across jobs (example below).
 
@@ -100,8 +106,8 @@ matrix:
 run: cargo run -p typecheck-ts-harness --release -- conformance --shard ${{matrix.shard}}/16 --timeout-secs 20 --json
 ```
 
-If the TypeScript suite is missing you will see `Ran 0 test(s)`; check the
-submodule before assuming green.
+If the TypeScript suite is missing the command will fail fast; check the
+submodule before assuming green or use `--allow-empty` for ad-hoc runs.
 
 ## Differential testing (`difftsc`)
 
