@@ -47,7 +47,8 @@ fn reports_excess_property_on_fresh_object_literal() {
 
 #[test]
 fn allows_index_signature_for_extra_properties() {
-  let diagnostics = run("let x: { foo: number; [key: string]: number } = { foo: 1, bar: 2 };");
+  let diagnostics =
+    run("let x: { foo: number; [key: string]: number } = { foo: 1, bar: 2 };");
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {:?}",
@@ -70,7 +71,8 @@ fn allows_intermediate_variable_without_excess_check() {
 
 #[test]
 fn type_assertion_suppresses_excess_property_check() {
-  let diagnostics = run("let x: { foo: number } = ({ foo: 1, bar: 2 } as { foo: number });");
+  let diagnostics =
+    run("let x: { foo: number } = ({ foo: 1, bar: 2 } as { foo: number });");
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {:?}",
@@ -80,7 +82,8 @@ fn type_assertion_suppresses_excess_property_check() {
 
 #[test]
 fn union_target_requires_single_compatible_member() {
-  let diagnostics = run("let x: { foo: number } | { bar: number } = { foo: 1, bar: 2 };");
+  let diagnostics =
+    run("let x: { foo: number } | { bar: number } = { foo: 1, bar: 2 };");
   assert_eq!(diagnostics.len(), 1);
 }
 
