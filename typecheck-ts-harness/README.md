@@ -10,7 +10,7 @@ against `tsc`.
 git submodule update --init --recursive parse-js/tests/TypeScript
 
 # 2) Install Node prereqs (once)
-npm install typescript
+npm install --prefix typecheck-ts-harness --no-save typescript
 
 # 3) Run the Rust conformance harness
 cargo run -p typecheck-ts-harness --release -- conformance --filter "**/es2020/**" --shard 0/8
@@ -42,13 +42,15 @@ ls parse-js/tests/TypeScript/tests/cases/conformance | head
 
 ### Node.js + `typescript` npm package
 
-The `difftsc` command shells out to Node and loads the `typescript` package via
-`scripts/tsc_wrapper.js`.
+The harness shells out to a long-lived Node helper (`scripts/tsc_runner.js`)
+that loads the `typescript` package. Install it anywhere on Node's resolution
+path for that script (installing under `typecheck-ts-harness/` works out of the
+box):
 
 ```
 node --version
-npm install typescript          # or pnpm/yarn; install anywhere on Node's resolution path
-node -p "require('typescript').version"
+npm install --prefix typecheck-ts-harness --no-save typescript
+node -C typecheck-ts-harness -p "require('typescript').version"
 ```
 
 - Use `--node /path/to/node` if `node` is not on `PATH` or you want a specific
@@ -57,8 +59,25 @@ node -p "require('typescript').version"
   - Built without `with-node` feature **or** `node --version` fails → `difftsc`
     logs a skip instead of failing.
 - Missing `typescript` package:
-  - `scripts/tsc_wrapper.js` will exit with a require error; install the package
-    and re-run.
+  - The Node helper returns a `crash` payload; install the package and re-run.
+
+### Node TypeScript runner protocol
+
+`scripts/tsc_runner.js` speaks NDJSON over stdin/stdout and serves files from
+memory (no tempdirs). Each input line is:
+
+```json
+{ "rootNames": ["main.ts"], "files": { "main.ts": "const x: string = 1;" }, "options": { "strict": true } }
+```
+
+Output is one JSON object per line:
+
+```json
+{ "diagnostics": [{ "code": 2322, "file": "main.ts", "start": 22, "end": 23, "category": "error", "message": "Type '1' is not assignable to type 'string'." }] }
+```
+
+If the runner encounters an internal error, it sets a `crash` field on the
+output. Paths are normalized relative to `/` for deterministic baselines.
 
 ## Conformance runner (`conformance`)
 
@@ -111,8 +130,9 @@ submodule before assuming green or use `--allow-empty` for ad-hoc runs.
 
 ## Differential testing (`difftsc`)
 
-Today `difftsc` runs `tsc` (via Node) on fixture suites, writes/reads structured
-JSON baselines, and compares diagnostics.
+`difftsc` runs `tsc` (via the reusable `TscRunner` and `scripts/tsc_runner.js`)
+on fixture suites, writes/reads structured JSON baselines, and compares
+diagnostics.
 
 ```
 # Regenerate baselines for the bundled suite
@@ -129,8 +149,8 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 - `with-node` feature disabled or missing Node → command logs `difftsc skipped`
   and exits successfully.
 - Baselines are read from/written to `baselines/<suite>/<test>.json` (see below).
-- The wrapper uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
-  writes `{ diagnostics: [{ code, category, file, start, end }] }`.
+- The runner uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
+  in-memory virtual files (no tempdirs).
 
 **Planned differential mode (once the Rust checker exposes matching JSON):**
 - The same `difftsc` entry point will also run the Rust checker and diff directly
