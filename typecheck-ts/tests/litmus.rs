@@ -151,16 +151,10 @@ fn load_fixture(dir: &Path) -> Fixture {
   let mut file_map = HashMap::new();
   for entry in fs::read_dir(dir).expect("read fixture dir") {
     let entry = entry.expect("dir entry");
-    if entry
-      .file_type()
-      .expect("file type")
-      .is_file()
+    if entry.file_type().expect("file type").is_file()
       && entry.path().extension().map(|e| e == "ts").unwrap_or(false)
     {
-      let relative = entry
-        .file_name()
-        .into_string()
-        .expect("utf-8 file name");
+      let relative = entry.file_name().into_string().expect("utf-8 file name");
       let source = fs::read_to_string(entry.path()).expect("read file");
       parse_expectations(&relative, &source, &mut expectations);
       file_map.insert(relative.clone(), source.clone());
@@ -219,7 +213,10 @@ fn parse_expectations(file: &str, source: &str, expectations: &mut FixtureExpect
       });
     } else if let Some(rest) = trimmed.strip_prefix("// expect-diagnostic:") {
       let mut parts = rest.trim().splitn(2, ' ');
-      let code_raw = parts.next().expect("diagnostic expectation missing code").trim();
+      let code_raw = parts
+        .next()
+        .expect("diagnostic expectation missing code")
+        .trim();
       let code = if code_raw.eq_ignore_ascii_case("none") {
         None
       } else {
@@ -238,10 +235,7 @@ fn parse_expectations(file: &str, source: &str, expectations: &mut FixtureExpect
   }
 }
 
-fn finalize_expectations(
-  files: &HashMap<String, String>,
-  expectations: &mut FixtureExpectations,
-) {
+fn finalize_expectations(files: &HashMap<String, String>, expectations: &mut FixtureExpectations) {
   for expr in expectations.expr_types.iter_mut() {
     let source = files
       .get(&expr.file)
@@ -255,10 +249,7 @@ fn finalize_expectations(
   }
   for diag in expectations.diagnostics.iter_mut() {
     if let Some(snippet) = &diag.snippet {
-      let file = diag
-        .file
-        .as_ref()
-        .expect("diagnostic snippets need a file");
+      let file = diag.file.as_ref().expect("diagnostic snippets need a file");
       let source = files
         .get(file)
         .unwrap_or_else(|| panic!("missing source for {}", file));
@@ -312,12 +303,7 @@ fn assert_def_types(program: &mut Program, host: &FixtureHost, expectations: &Fi
       .definitions_in_file(file)
       .into_iter()
       .find(|d| program.def_name(*d).as_deref() == Some(expect.name.as_str()))
-      .unwrap_or_else(|| {
-        panic!(
-          "definition `{}` not found in {}",
-          expect.name, expect.file
-        )
-      });
+      .unwrap_or_else(|| panic!("definition `{}` not found in {}", expect.name, expect.file));
     let ty = program.type_of_def(def);
     let rendered = program.display_type(ty).to_string();
     assert_eq!(
@@ -353,7 +339,11 @@ fn assert_expr_types(
   }
 }
 
-fn resolve_expr_type(program: &mut Program, file: FileId, offset: u32) -> Option<typecheck_ts::TypeId> {
+fn resolve_expr_type(
+  program: &mut Program,
+  file: FileId,
+  offset: u32,
+) -> Option<typecheck_ts::TypeId> {
   let mut candidates: Vec<BodyId> = Vec::new();
   if let Some(body) = program.file_body(file) {
     candidates.push(body);
@@ -447,7 +437,9 @@ fn normalize_path(path: &Path) -> String {
         components.pop();
       }
       Component::Normal(seg) => components.push(seg.to_string_lossy()),
-      Component::RootDir | Component::Prefix(_) => components.push(component.as_os_str().to_string_lossy()),
+      Component::RootDir | Component::Prefix(_) => {
+        components.push(component.as_os_str().to_string_lossy())
+      }
     }
   }
   components.join("/")
