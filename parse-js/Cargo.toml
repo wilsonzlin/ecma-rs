@@ -39,3 +39,7 @@ required-features = ["conformance-runner"]
 [[bench]]
 name = "baseline_performance"
 harness = false
+
+[[bench]]
+name = "node_assoc_data"
+harness = false
