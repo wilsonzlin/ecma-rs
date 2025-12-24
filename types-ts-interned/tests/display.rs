@@ -1,6 +1,9 @@
 use types_ts_interned::Accessibility;
 use types_ts_interned::Indexer;
+use types_ts_interned::MappedModifier;
+use types_ts_interned::MappedType;
 use types_ts_interned::ObjectType;
+use types_ts_interned::Param;
 use types_ts_interned::PropData;
 use types_ts_interned::PropKey;
 use types_ts_interned::Property;
@@ -252,5 +255,114 @@ fn formats_new_type_variants() {
   assert_eq!(
     format!("{}", store.display(tuple)),
     "[string, number?, ...readonly boolean[]]"
+  );
+}
+
+#[test]
+fn formats_mapped_type_modifiers() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let make_mapped = |readonly, optional| {
+    store.intern_type(TypeKind::Mapped(MappedType {
+      param: TypeParamId(0),
+      source: primitives.string,
+      value: primitives.number,
+      readonly,
+      optional,
+      name_type: None,
+      as_type: None,
+    }))
+  };
+
+  let expected = |readonly: MappedModifier, optional: MappedModifier| {
+    let readonly_prefix = match readonly {
+      MappedModifier::Preserve => "",
+      MappedModifier::Add => "readonly ",
+      MappedModifier::Remove => "-readonly ",
+    };
+    let optional_suffix = match optional {
+      MappedModifier::Preserve => "]: number }",
+      MappedModifier::Add => "]?: number }",
+      MappedModifier::Remove => "]-?: number }",
+    };
+
+    let mut out = String::from("{ ");
+    out.push_str(readonly_prefix);
+    out.push_str("[K in string");
+    out.push_str(optional_suffix);
+    out
+  };
+
+  for readonly in [
+    MappedModifier::Preserve,
+    MappedModifier::Add,
+    MappedModifier::Remove,
+  ]
+  .iter()
+  .cloned()
+  {
+    for optional in [
+      MappedModifier::Preserve,
+      MappedModifier::Add,
+      MappedModifier::Remove,
+    ]
+    .iter()
+    .cloned()
+    {
+      let mapped = make_mapped(readonly.clone(), optional.clone());
+      assert_eq!(
+        format!("{}", store.display(mapped)),
+        expected(readonly.clone(), optional.clone())
+      );
+    }
+  }
+}
+
+#[test]
+fn formats_mapped_type_as_clause() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let mapped = store.intern_type(TypeKind::Mapped(MappedType {
+    param: TypeParamId(0),
+    source: primitives.string,
+    value: primitives.number,
+    readonly: MappedModifier::Preserve,
+    optional: MappedModifier::Add,
+    name_type: None,
+    as_type: Some(primitives.boolean),
+  }));
+
+  assert_eq!(
+    format!("{}", store.display(mapped)),
+    "{ [K in string as boolean]?: number }"
+  );
+}
+
+#[test]
+fn formats_signature_with_this_param() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let sig = store.intern_signature(Signature {
+    params: vec![Param {
+      name: Some(store.intern_name("value")),
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+    }],
+    ret: primitives.string,
+    type_params: Vec::new(),
+    this_param: Some(primitives.boolean),
+  });
+
+  let callable = store.intern_type(TypeKind::Callable {
+    overloads: vec![sig],
+  });
+
+  assert_eq!(
+    format!("{}", store.display(callable)),
+    "(this: boolean, value: number) => string"
   );
 }
