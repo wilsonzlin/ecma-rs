@@ -1910,17 +1910,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "types-ts"
-version = "0.1.0"
-dependencies = [
- "bitflags",
-]
-
-[[package]]
 name = "types-ts-interned"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "bitflags",
  "hir-js",
  "num-bigint",
  "ordered-float",

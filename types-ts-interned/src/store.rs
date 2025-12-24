@@ -195,6 +195,10 @@ impl TypeStore {
           last.data.ty = self.intersection(vec![last.data.ty, prop.data.ty]);
           last.data.optional = last.data.optional && prop.data.optional;
           last.data.readonly = last.data.readonly || prop.data.readonly;
+          last.data.is_method = last.data.is_method || prop.data.is_method;
+          if last.data.declared_on.is_none() {
+            last.data.declared_on = prop.data.declared_on;
+          }
           let existing_access = last.data.accessibility.take();
           last.data.accessibility = match (existing_access, prop.data.accessibility) {
             (Some(a), Some(b)) => Some(std::cmp::max(a, b)),
@@ -721,7 +725,9 @@ impl TypeStore {
       .type_cmp(a.data.ty, b.data.ty)
       .then_with(|| a.data.optional.cmp(&b.data.optional))
       .then_with(|| a.data.readonly.cmp(&b.data.readonly))
+      .then_with(|| a.data.is_method.cmp(&b.data.is_method))
       .then_with(|| a.data.accessibility.cmp(&b.data.accessibility))
+      .then_with(|| a.data.declared_on.cmp(&b.data.declared_on))
   }
 
   fn compare_indexers(&self, a: &[Indexer], b: &[Indexer]) -> Ordering {

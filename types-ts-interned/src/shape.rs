@@ -6,7 +6,7 @@ use crate::ids::TypeId;
 use serde::Deserialize;
 use serde::Serialize;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 pub enum Accessibility {
   Public,
   Protected,
@@ -19,6 +19,14 @@ pub struct PropData {
   pub optional: bool,
   pub readonly: bool,
   pub accessibility: Option<Accessibility>,
+  /// Whether this property originated from a method declaration. Methods are
+  /// treated with bivariant parameter checking in strict function mode to match
+  /// TypeScript's behavior.
+  pub is_method: bool,
+  /// Optional identifier for the declaration that introduced this property.
+  /// This can be used by relation hooks to decide if otherwise-incompatible
+  /// private members share the same origin.
+  pub declared_on: Option<crate::ids::DefId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

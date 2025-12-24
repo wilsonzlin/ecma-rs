@@ -143,6 +143,8 @@ fn shape_canonicalization_merges_duplicate_properties() {
           optional: false,
           readonly: false,
           accessibility: None,
+          is_method: false,
+          declared_on: None,
         },
       },
       Property {
@@ -152,6 +154,8 @@ fn shape_canonicalization_merges_duplicate_properties() {
           optional: true,
           readonly: true,
           accessibility: Some(Accessibility::Private),
+          is_method: false,
+          declared_on: None,
         },
       },
     ],
