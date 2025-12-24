@@ -99,7 +99,7 @@ impl<'p> SourceToInst<'p> {
       Pat::Id(n) => {
         let IdPat { name } = *n.stx;
         // NOTE: It's possible to destructure-assign to ancestor scope vars (including globals), so just because this is a pattern doesn't mean it's for a local var.
-        let inst = match self.var_type(pat.assoc, name.clone()) {
+        let inst = match self.var_type(n.assoc, name.clone()) {
           VarType::Local(local) => Inst::var_assign(self.symbol_to_temp(local), rval.clone()),
           VarType::Foreign(foreign) => Inst::foreign_store(foreign, rval.clone()),
           VarType::Unknown(unknown) => Inst::unknown_store(unknown, rval.clone()),

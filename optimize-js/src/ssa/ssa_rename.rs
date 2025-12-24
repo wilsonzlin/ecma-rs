@@ -22,7 +22,11 @@ fn inner(
     if inst.t != InstTyp::Phi {
       for arg in inst.args.iter_mut() {
         if let Some(tgt) = arg.maybe_var() {
-          let new_arg = Arg::Var(*rename_stacks.get(&tgt).unwrap().last().unwrap());
+          let stack = rename_stacks.entry(tgt).or_default();
+          if stack.is_empty() {
+            stack.push(tgt);
+          }
+          let new_arg = Arg::Var(*stack.last().unwrap());
           *arg = new_arg;
         };
       }

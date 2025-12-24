@@ -1,6 +1,9 @@
 pub mod expr;
 pub mod stmt;
 
+#[cfg(test)]
+mod tests;
+
 use super::inst::Inst;
 use crate::eval::builtin::BUILTINS;
 use crate::util::counter::Counter;
@@ -11,7 +14,7 @@ use ahash::HashMapExt;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::Stmt;
-use symbol_js::symbol::Scope;
+use symbol_js::symbol::ResolvedSymbol;
 use symbol_js::symbol::Symbol;
 
 // CondGoto fallthrough placeholder label.
@@ -44,14 +47,12 @@ enum VarType {
 
 impl<'p> SourceToInst<'p> {
   fn var_type(&self, node_assoc: NodeAssocData, name: String) -> VarType {
-    let scope = node_assoc.get::<Scope>().unwrap();
-    // WARNING: Don't simply find_symbol_up_to_with_scope to nearest closure, as just because it's locally declared doesn't mean it's not a foreign.
-    match scope.find_symbol(name.clone()) {
-      Some(local_or_foreign) => {
-        if self.program.foreign_vars.contains(&local_or_foreign) {
-          VarType::Foreign(local_or_foreign)
+    match node_assoc.get::<ResolvedSymbol>().copied().flatten() {
+      Some(sym) => {
+        if self.program.foreign_vars.contains(&sym) {
+          VarType::Foreign(sym)
         } else {
-          VarType::Local(local_or_foreign)
+          VarType::Local(sym)
         }
       }
       None => match BUILTINS.get(name.as_str()) {

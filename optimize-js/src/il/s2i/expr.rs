@@ -13,6 +13,7 @@ use crate::OptimizeError;
 use crate::OptimizeResult;
 use crate::Span;
 use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::BinaryExpr;
 use parse_js::ast::expr::CallArg;
 use parse_js::ast::expr::CallExpr;
@@ -133,55 +134,100 @@ impl<'p> SourceToInst<'p> {
     target: Node<Expr>,
     value: Node<Expr>,
   ) -> OptimizeResult<Arg> {
-    // We'll use this as a placeholder that will be replaced at the end.
-    let dummy_val = Arg::Const(Const::Num(JsNumber(0xdeadbeefu32 as f64)));
-    // The LHS of an assignment cannot contain a conditional chaining anywhere in the chain, as prohibited by the spec.
-    // We assume this is enforced at a previous stage (e.g. parsing).
-    // The LHS is earlier in execution order, which is why we do this first, before processing the value, which is why we need a dummy (we don't have the value yet). The LHS can be complex (e.g. `(a + b).c[d + e] = f`), so it does matter.
-    let mut assign_inst = match *target.stx {
-      Expr::IdPat(n) => {
-        let IdPat { name } = *n.stx;
-        match self.var_type(target.assoc, name) {
-          VarType::Local(l) => Inst::var_assign(self.symbol_to_temp(l), dummy_val),
-          VarType::Foreign(f) => Inst::foreign_store(f, dummy_val),
-          VarType::Unknown(n) => Inst::unknown_store(n, dummy_val),
-          VarType::Builtin(builtin) => {
+    let Node { loc, assoc, stx } = target;
+    match *stx {
+      Expr::ArrPat(pat) => {
+        if operator != OperatorName::Assignment {
+          return Err(OptimizeError::unsupported(
+            span,
+            format!("unsupported destructuring assignment operator {operator:?}"),
+          ));
+        }
+        let value_tmp_var = self.c_temp.bump();
+        let value_arg = self.compile_expr(value)?;
+        self.out.push(Inst::var_assign(value_tmp_var, value_arg));
+        let pat = Node {
+          loc,
+          assoc,
+          stx: Box::new(Pat::Arr(pat)),
+        };
+        self.compile_destructuring(pat, Arg::Var(value_tmp_var))?;
+        Ok(Arg::Var(value_tmp_var))
+      }
+      Expr::ObjPat(pat) => {
+        if operator != OperatorName::Assignment {
+          return Err(OptimizeError::unsupported(
+            span,
+            format!("unsupported destructuring assignment operator {operator:?}"),
+          ));
+        }
+        let value_tmp_var = self.c_temp.bump();
+        let value_arg = self.compile_expr(value)?;
+        self.out.push(Inst::var_assign(value_tmp_var, value_arg));
+        let pat = Node {
+          loc,
+          assoc,
+          stx: Box::new(Pat::Obj(pat)),
+        };
+        self.compile_destructuring(pat, Arg::Var(value_tmp_var))?;
+        Ok(Arg::Var(value_tmp_var))
+      }
+      other => {
+        let target = Node {
+          loc,
+          assoc,
+          stx: Box::new(other),
+        };
+
+        // We'll use this as a placeholder that will be replaced at the end.
+        let dummy_val = Arg::Const(Const::Num(JsNumber(0xdeadbeefu32 as f64)));
+        // The LHS of an assignment cannot contain a conditional chaining anywhere in the chain, as prohibited by the spec.
+        // We assume this is enforced at a previous stage (e.g. parsing).
+        // The LHS is earlier in execution order, which is why we do this first, before processing the value, which is why we need a dummy (we don't have the value yet). The LHS can be complex (e.g. `(a + b).c[d + e] = f`), so it does matter.
+        let mut assign_inst = match *target.stx {
+          Expr::IdPat(n) => {
+            let IdPat { name } = *n.stx;
+            match self.var_type(n.assoc, name) {
+              VarType::Local(l) => Inst::var_assign(self.symbol_to_temp(l), dummy_val),
+              VarType::Foreign(f) => Inst::foreign_store(f, dummy_val),
+              VarType::Unknown(n) => Inst::unknown_store(n, dummy_val),
+              VarType::Builtin(builtin) => {
+                return Err(OptimizeError::unsupported(
+                  span,
+                  format!("assignment to builtin {builtin}"),
+                ))
+              }
+            }
+          }
+          Expr::Member(n) => {
+            let MemberExpr {
+              optional_chaining,
+              left,
+              right,
+            } = *n.stx;
+            assert!(!optional_chaining);
+            let left_arg = self.compile_expr(left)?;
+            let member_arg = Arg::Const(Const::Str(right.to_string()));
+            Inst::prop_assign(left_arg, member_arg, dummy_val)
+          }
+          Expr::ComputedMember(n) => {
+            let ComputedMemberExpr {
+              optional_chaining,
+              object,
+              member,
+            } = *n.stx;
+            assert!(!optional_chaining);
+            let left_arg = self.compile_expr(object)?;
+            let member_arg = self.compile_expr(member)?;
+            Inst::prop_assign(left_arg, member_arg, dummy_val)
+          }
+          _ => {
             return Err(OptimizeError::unsupported(
               span,
-              format!("assignment to builtin {builtin}"),
+              "unsupported assignment target",
             ))
           }
-        }
-      }
-      Expr::Member(n) => {
-        let MemberExpr {
-          optional_chaining,
-          left,
-          right,
-        } = *n.stx;
-        assert!(!optional_chaining);
-        let left_arg = self.compile_expr(left)?;
-        let member_arg = Arg::Const(Const::Str(right.to_string()));
-        Inst::prop_assign(left_arg, member_arg, dummy_val)
-      }
-      Expr::ComputedMember(n) => {
-        let ComputedMemberExpr {
-          optional_chaining,
-          object,
-          member,
-        } = *n.stx;
-        assert!(!optional_chaining);
-        let left_arg = self.compile_expr(object)?;
-        let member_arg = self.compile_expr(member)?;
-        Inst::prop_assign(left_arg, member_arg, dummy_val)
-      }
-      _ => {
-        return Err(OptimizeError::unsupported(
-          span,
-          "unsupported assignment target",
-        ))
-      }
-    };
+        };
     let value_tmp_var = self.c_temp.bump();
     let mut value_arg = self.compile_expr(value)?;
     if operator == OperatorName::Assignment {
@@ -250,6 +296,8 @@ impl<'p> SourceToInst<'p> {
     // - For member access like `a.b = c`, the getter is not invoked.
     // - For non-direct assignment operators like `a += b`, the result is `a + b` since it's a shorthand for `a = a + b`.
     Ok(Arg::Var(value_tmp_var))
+      }
+    }
   }
 
   pub fn compile_logical_expr(
@@ -543,7 +591,7 @@ impl<'p> SourceToInst<'p> {
       Expr::Call(n) => self.compile_call_expr(*n.stx, chain),
       Expr::ComputedMember(n) => Ok(self.compile_computed_member_expr(*n.stx, chain)?.res),
       Expr::Cond(n) => self.compile_cond_expr(*n.stx),
-      Expr::Id(s) => self.compile_id_expr(n.assoc, *s.stx),
+      Expr::Id(s) => self.compile_id_expr(s.assoc, *s.stx),
       Expr::LitBool(n) => Ok(Arg::Const(Const::Bool(n.stx.value))),
       Expr::LitNum(n) => Ok(Arg::Const(Const::Num(n.stx.value))),
       Expr::LitStr(n) => Ok(Arg::Const(Const::Str(n.stx.value))),

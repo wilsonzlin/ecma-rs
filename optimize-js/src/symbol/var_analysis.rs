@@ -62,15 +62,7 @@ impl VarVisitor {
     let name = &node.stx.name;
     let usage_scope = node.assoc.get::<Scope>().unwrap();
     let usage_ls = lifted_scope(usage_scope);
-    // Walk ancestors manually to recover the actual declaration scope. `find_symbol_up_to_with_scope` currently returns the usage scope rather than the scope containing the symbol.
-    let decl = usage_scope.self_and_ancestors().find_map(|scope| {
-      let symbol = {
-        let data = scope.data();
-        data.get_symbol(name.as_str())
-      };
-      symbol.map(|sym| (scope, sym))
-    });
-    match decl {
+    match usage_scope.find_symbol_up_to_with_scope(name.clone(), |_| false) {
       None => {
         // Unknown.
         self.unknown.insert(name.clone());
@@ -100,14 +92,37 @@ impl VarVisitor {
   }
 
   pub fn enter_id_pat_node(&mut self, node: &mut Node<IdPat>) {
-    // Identifier patterns can also appear in assignment targets; only treat them as declarations when a pattern declaration wrapper is active.
+    // An identifier pattern doesn't always mean declaration e.g. simple assignment.
+    let scope = node.assoc.get::<Scope>().unwrap();
     if *self.in_pat_decl_stack.last().unwrap_or(&false) {
-      let scope = node.assoc.get::<Scope>().unwrap();
       // It won't exist if it's a global declaration.
       // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
       if let Some(symbol) = scope.find_symbol(node.stx.name.clone()) {
         self.declared.insert(symbol);
       };
+      return;
+    };
+
+    let name = &node.stx.name;
+    let usage_scope = scope;
+    let usage_ls = lifted_scope(usage_scope);
+    match usage_scope.find_symbol_up_to_with_scope(name.clone(), |_| false) {
+      None => {
+        // Unknown.
+        self.unknown.insert(name.clone());
+      }
+      Some((decl_scope, symbol)) => {
+        let decl_ls = lifted_scope(&decl_scope);
+        if usage_ls != decl_ls {
+          self.foreign.insert(symbol);
+        } else if !self.declared.contains(&symbol) {
+          let start = node.loc.0.saturating_sub(name.len());
+          let end = start + name.len();
+          // Check for use before declaration to ensure strict SSA.
+          // NOTE: This doesn't check across closures, as that is mostly a runtime determination (see symbol-js/examples/let.js), but we don't care as those are foreign vars and don't affect strict SSA (i.e. correctness).
+          self.use_before_decl.insert(symbol, Loc(start, end));
+        }
+      }
     };
   }
 }
