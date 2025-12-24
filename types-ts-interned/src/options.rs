@@ -10,9 +10,13 @@ use serde::Serialize;
 pub struct TypeOptions {
   /// Whether `null`/`undefined` are distinct from other types.
   pub strict_null_checks: bool,
-  /// Whether function parameters are checked contravariantly (`true`) or with
-  /// the legacy bivariant behavior (`false`).
+  /// Whether function parameters are checked contravariantly (when `true`) or
+  /// bivariantly (when `false`, mirroring `strictFunctionTypes: false`).
   pub strict_function_types: bool,
+  /// Whether optional properties implicitly include `undefined` in their type
+  /// (`false`, the default) or are treated as "exact" without an added
+  /// `undefined` (`true`).
+  pub exact_optional_property_types: bool,
 }
 
 impl Default for TypeOptions {
@@ -20,6 +24,7 @@ impl Default for TypeOptions {
     Self {
       strict_null_checks: true,
       strict_function_types: true,
+      exact_optional_property_types: false,
     }
   }
 }
