@@ -26,6 +26,10 @@ Comparison with esbuild, run on [common libraries](./bench).
 - Transforms functions to arrow functions when `new`, `this`, `arguments`, and `prototype` aren't used.
 - Transforms `if` statements to expressions.
 
+## Limitations
+
+- Identifier renaming is disabled when code contains `with` statements or direct calls to the global `eval` function to avoid changing runtime name resolution semantics.
+
 ## Usage
 
 ### CLI

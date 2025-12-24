@@ -1,14 +1,15 @@
 use ahash::{HashMap, HashMapExt, HashSet, HashSetExt};
 use derive_visitor::{DriveMut, VisitorMut};
 use parse_js::ast::expr::pat::{ClassOrFuncName, IdPat};
-use parse_js::ast::expr::IdExpr;
+use parse_js::ast::expr::{CallExpr, Expr, IdExpr};
 use parse_js::ast::import_export::ExportName;
 use parse_js::ast::import_export::ModuleExportImportName;
 use parse_js::ast::node::Node;
+use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
-use symbol_js::symbol::{Scope, ScopeType, Symbol};
+use symbol_js::symbol::{ResolvedSymbol as SymbolResolvedSymbol, Scope, ScopeType, Symbol};
 use symbol_js::TopLevelMode;
 
 #[derive(Clone, Debug, Default)]
@@ -36,6 +37,18 @@ pub struct UsageData {
   pub symbol_names: HashMap<Symbol, String>,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RenameAnalysis {
+  pub has_direct_eval: bool,
+  pub has_with: bool,
+}
+
+impl RenameAnalysis {
+  pub fn should_disable_renaming(&self) -> bool {
+    self.has_direct_eval || self.has_with
+  }
+}
+
 struct SymbolCollector {
   top_level_mode: TopLevelMode,
   exported: HashSet<Symbol>,
@@ -43,6 +56,7 @@ struct SymbolCollector {
   ignore_id_pats: usize,
 }
 
+type CallExprNode = Node<CallExpr>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassOrFuncNameNode = Node<ClassOrFuncName>;
 type ExportNameNode = Node<ExportName>;
@@ -50,7 +64,47 @@ type FuncDeclNode = Node<FuncDecl>;
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type TopLevelNode = Node<TopLevel>;
+type WithStmtNode = Node<WithStmt>;
 type VarDeclNode = Node<VarDecl>;
+
+#[derive(VisitorMut)]
+#[visitor(CallExprNode(enter), WithStmtNode(enter))]
+struct RenameAnalysisVisitor {
+  analysis: RenameAnalysis,
+}
+
+impl RenameAnalysisVisitor {
+  fn enter_call_expr_node(&mut self, node: &mut CallExprNode) {
+    if self.analysis.has_direct_eval || node.stx.optional_chaining {
+      return;
+    }
+    if let Expr::Id(id_node) = node.stx.callee.stx.as_ref() {
+      if id_node.stx.name != "eval" {
+        return;
+      }
+      let resolved_eval = id_node
+        .assoc
+        .get::<SymbolResolvedSymbol>()
+        .copied()
+        .flatten();
+      if resolved_eval.is_none() {
+        self.analysis.has_direct_eval = true;
+      }
+    }
+  }
+
+  fn enter_with_stmt_node(&mut self, _node: &mut WithStmtNode) {
+    self.analysis.has_with = true;
+  }
+}
+
+pub fn analyze_renaming(top: &mut TopLevelNode) -> RenameAnalysis {
+  let mut visitor = RenameAnalysisVisitor {
+    analysis: RenameAnalysis::default(),
+  };
+  top.drive_mut(&mut visitor);
+  visitor.analysis
+}
 
 #[derive(VisitorMut)]
 #[visitor(
