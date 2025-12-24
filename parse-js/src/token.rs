@@ -2,6 +2,7 @@ use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::lex::KEYWORDS_MAPPING;
 use crate::loc::Loc;
+use ahash::HashMap;
 use ahash::HashSet;
 use ahash::HashSetExt;
 use once_cell::sync::Lazy;
@@ -177,6 +178,11 @@ pub enum TT {
   Tilde,
 }
 
+/// Map of keyword strings to their corresponding token type.
+pub static KEYWORDS_BY_STR: Lazy<HashMap<&'static str, TT>> = Lazy::new(|| {
+  HashMap::from_iter(KEYWORDS_MAPPING.iter().map(|(&tt, &name)| (name, tt)))
+});
+
 // These can be used as parameter and variable names.
 pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {
   let mut set = HashSet::<TT>::new();
@@ -230,6 +236,12 @@ pub static UNRESERVED_KEYWORD_STRS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     .map(|tt| *KEYWORDS_MAPPING.get(tt).unwrap())
     .collect()
 });
+
+/// Returns the keyword token type for the given identifier string, if it is a keyword.
+/// Escape sequences are handled by the lexer; callers should only pass raw identifier text.
+pub fn keyword_from_str(ident: &str) -> Option<TT> {
+  KEYWORDS_BY_STR.get(ident).copied()
+}
 
 #[derive(Clone, Debug)]
 pub struct Token {

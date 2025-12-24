@@ -58,11 +58,6 @@ impl CharFilter {
   }
 }
 
-// WARNING: These do not consider Unicode characters allowed by spec.
-pub const ID_START_CHARSTR: &str = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$";
-pub const ID_CONTINUE_CHARSTR: &str =
-  "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_$";
-
 pub const ECMASCRIPT_LINE_TERMINATORS: [char; 4] = ['\n', '\r', '\u{2028}', '\u{2029}'];
 
 pub const ECMASCRIPT_WHITESPACE: [char; 21] = [
@@ -93,7 +88,6 @@ pub const ECMASCRIPT_WHITESPACE: [char; 21] = [
 pub fn is_line_terminator(c: char) -> bool {
   ECMASCRIPT_LINE_TERMINATORS.contains(&c)
 }
-
 pub static DIGIT: Lazy<CharFilter> = Lazy::new(|| {
   let mut filter = CharFilter::new();
   filter.add_chars('0'..='9');
@@ -117,32 +111,6 @@ pub static DIGIT_HEX: Lazy<CharFilter> = Lazy::new(|| {
 pub static DIGIT_OCT: Lazy<CharFilter> = Lazy::new(|| {
   let mut filter = CharFilter::new();
   filter.add_chars('0'..='7');
-  filter
-});
-
-pub static ID_START: Lazy<CharFilter> = Lazy::new(|| {
-  let mut filter = CharFilter::new();
-  filter.add_chars_from_slice(ID_START_CHARSTR);
-  filter
-});
-
-pub static ID_CONTINUE: Lazy<CharFilter> = Lazy::new(|| {
-  let mut filter = ID_START.clone();
-  // WARNING: Does not consider Unicode characters allowed by spec.
-  filter.add_chars('0'..='9');
-  filter
-});
-
-pub static ID_CONTINUE_JSX: Lazy<CharFilter> = Lazy::new(|| {
-  let mut filter = ID_CONTINUE.clone();
-  filter.add_char('-');
-  filter
-});
-
-pub static ID_CONTINUE_OR_PARENTHESIS_CLOSE_OR_BRACKET_CLOSE: Lazy<CharFilter> = Lazy::new(|| {
-  let mut filter = ID_CONTINUE.clone();
-  filter.add_char(')');
-  filter.add_char(']');
   filter
 });
 
