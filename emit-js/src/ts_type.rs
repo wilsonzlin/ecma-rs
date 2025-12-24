@@ -113,9 +113,7 @@ fn emit_type_reference(out: &mut String, reference: &Node<TypeReference>) {
 fn emit_type_literal(out: &mut String, lit: &Node<TypeLiteral>) {
   match lit.stx.as_ref() {
     TypeLiteral::String(value) => {
-      out.push('"');
-      out.push_str(value);
-      out.push('"');
+      emit_string_literal(out, value);
     }
     TypeLiteral::Number(value) | TypeLiteral::BigInt(value) => out.push_str(value),
     TypeLiteral::Boolean(value) => out.push_str(if *value { "true" } else { "false" }),
@@ -389,9 +387,7 @@ fn emit_property_key(out: &mut String, key: &TypePropertyKey) {
   match key {
     TypePropertyKey::Identifier(name) => out.push_str(name),
     TypePropertyKey::String(value) => {
-      out.push('"');
-      out.push_str(value);
-      out.push('"');
+      emit_string_literal(out, value);
     }
     TypePropertyKey::Number(value) => out.push_str(value),
     TypePropertyKey::Computed(expr) => {
@@ -550,9 +546,9 @@ fn emit_type_predicate(out: &mut String, pred: &Node<TypePredicate>) {
 
 fn emit_import_type(out: &mut String, import: &Node<TypeImport>) {
   let import = import.stx.as_ref();
-  out.push_str("import(\"");
-  out.push_str(&import.module_specifier);
-  out.push_str("\")");
+  out.push_str("import(");
+  emit_string_literal(out, &import.module_specifier);
+  out.push(')');
   if let Some(qualifier) = &import.qualifier {
     out.push('.');
     emit_type_entity_name(out, qualifier);
@@ -603,9 +599,7 @@ fn emit_expr(out: &mut String, expr: &Node<Expr>) {
   match expr.stx.as_ref() {
     Expr::Id(id) => out.push_str(&id.stx.name),
     Expr::LitStr(lit) => {
-      out.push('"');
-      out.push_str(&lit.stx.value);
-      out.push('"');
+      emit_string_literal(out, &lit.stx.value);
     }
     Expr::LitNum(lit) => {
       write!(out, "{}", lit.stx.value).unwrap();
@@ -634,11 +628,14 @@ fn emit_expr(out: &mut String, expr: &Node<Expr>) {
       emit_expr(out, &member.member);
       out.push(']');
     }
-    // Basic fallback to keep emission total; use debug formatting for determinism.
-    other => {
-      write!(out, "{:?}", other).unwrap();
-    }
+    _ => out.push_str("undefined"),
   }
+}
+
+fn emit_string_literal(out: &mut String, value: &str) {
+  let mut buf = Vec::new();
+  crate::emit_string_literal_double_quoted(&mut buf, value);
+  out.push_str(std::str::from_utf8(&buf).expect("string literal escape output is UTF-8"));
 }
 
 #[cfg(test)]
