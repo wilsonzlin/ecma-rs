@@ -192,11 +192,19 @@ where
   }
 
   fn emit_member(&mut self, member: &Node<MemberExpr>) -> EmitResult {
-    self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
     if member.stx.optional_chaining {
+      self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
       write!(self.out, "?.")?;
+    } else if let Expr::LitNum(num) = member.stx.left.stx.as_ref() {
+      let rendered = num.stx.value.to_string();
+      self.out.write_str(&rendered)?;
+      if requires_trailing_dot(&rendered) {
+        self.out.write_char('.')?;
+      }
+      self.out.write_char('.')?;
     } else {
-      write!(self.out, ".")?;
+      self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
+      self.out.write_char('.')?;
     }
     self.out.write_str(&member.stx.right)?;
     Ok(())
@@ -331,14 +339,24 @@ fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
   }
 }
 
+fn requires_trailing_dot(rendered: &str) -> bool {
+  let mut bytes = rendered.as_bytes();
+  if bytes.starts_with(b"-") {
+    bytes = &bytes[1..];
+  }
+  bytes.iter().all(|b| b.is_ascii_digit())
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
+  use parse_js::ast::expr::lit::LitNumExpr;
   use parse_js::ast::expr::NonNullAssertionExpr;
   use parse_js::ast::expr::SatisfiesExpr;
   use parse_js::ast::expr::TypeAssertionExpr;
   use parse_js::ast::type_expr::{TypeEntityName, TypeReference};
   use parse_js::loc::Loc;
+  use parse_js::num::JsNumber;
 
   fn node<T: derive_visitor::Drive + derive_visitor::DriveMut>(stx: T) -> Node<T> {
     Node::new(Loc(0, 0), stx)
@@ -365,6 +383,20 @@ mod tests {
     })))
   }
 
+  fn lit_num(value: f64) -> Node<Expr> {
+    node(Expr::LitNum(node(LitNumExpr {
+      value: JsNumber(value),
+    })))
+  }
+
+  fn member(left: Node<Expr>, right: &str, optional_chaining: bool) -> Node<Expr> {
+    node(Expr::Member(node(MemberExpr {
+      optional_chaining,
+      left,
+      right: right.to_string(),
+    })))
+  }
+
   fn assert_emit(expr: Node<Expr>, expected: &str) {
     let mut out = String::new();
     let mut emit_type = |out: &mut String, ty: &Node<TypeExpr>| match ty.stx.as_ref() {
@@ -380,6 +412,21 @@ mod tests {
 
     emit_expr(&mut out, &expr, &mut emit_type).unwrap();
     assert_eq!(out, expected);
+  }
+
+  #[test]
+  fn emits_member_after_integer_literal_with_extra_dot() {
+    assert_emit(member(lit_num(1.0), "toString", false), "1..toString");
+  }
+
+  #[test]
+  fn emits_member_after_decimal_literal_without_extra_dot() {
+    assert_emit(member(lit_num(1.2), "toString", false), "1.2.toString");
+  }
+
+  #[test]
+  fn emits_optional_chaining_member_after_integer_literal_without_extra_dot() {
+    assert_emit(member(lit_num(1.0), "toString", true), "1?.toString");
   }
 
   #[test]
