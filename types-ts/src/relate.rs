@@ -12,6 +12,8 @@ use bitflags::bitflags;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::time::Instant;
+use tracing::debug_span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelationKind {
@@ -64,6 +66,44 @@ struct RelationKey {
   dst: TypeId,
   kind: RelationKind,
   mode: RelationMode,
+}
+
+struct RelationSpan {
+  span: tracing::Span,
+  start: Instant,
+}
+
+impl RelationSpan {
+  fn enter(key: RelationKey, cache_hit: bool) -> Option<RelationSpan> {
+    let span = debug_span!(
+      "types_ts.relate",
+      file = Option::<u32>::None,
+      def = Option::<u32>::None,
+      body = Option::<u32>::None,
+      type_id = key.src.0,
+      target_type_id = key.dst.0,
+      relation = ?key.kind,
+      cache_hit,
+      duration_ms = tracing::field::Empty,
+      outcome = tracing::field::Empty,
+    );
+    if span.is_disabled() {
+      return None;
+    }
+    let _guard = span.enter();
+    drop(_guard);
+    Some(RelationSpan {
+      span,
+      start: Instant::now(),
+    })
+  }
+
+  fn finish(self, outcome: bool) {
+    self.span.record("outcome", outcome);
+    self
+      .span
+      .record("duration_ms", self.start.elapsed().as_secs_f64() * 1000.0);
+  }
 }
 
 pub trait TypeExpander {
@@ -129,13 +169,21 @@ impl<'a> RelateCtx<'a> {
       kind,
       mode,
     };
-    if let Some(hit) = self.cache.borrow().get(&key).copied() {
+    let cached = self.cache.borrow().get(&key).copied();
+    let mut span = RelationSpan::enter(key, cached.is_some());
+    if let Some(hit) = cached {
+      if let Some(span) = span.take() {
+        span.finish(hit);
+      }
       return RelationResult {
         result: hit,
         reason: record.then(|| self.cached_reason(key, hit)),
       };
     }
     if self.in_progress.borrow().contains(&key) {
+      if let Some(span) = span.take() {
+        span.finish(true);
+      }
       return RelationResult {
         result: true,
         reason: record.then(|| self.cycle_reason(key)),
@@ -187,6 +235,9 @@ impl<'a> RelateCtx<'a> {
 
     self.cache.borrow_mut().insert(key, outcome.result);
     self.in_progress.borrow_mut().remove(&key);
+    if let Some(span) = span.take() {
+      span.finish(outcome.result);
+    }
     outcome
   }
 

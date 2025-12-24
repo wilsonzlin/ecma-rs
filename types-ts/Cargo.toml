@@ -8,3 +8,4 @@ fuzzing = []
 
 [dependencies]
 bitflags = "2.4"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
