@@ -28,6 +28,7 @@ pub use kind::TemplateLiteralType;
 pub use kind::TupleElem;
 pub use kind::TypeKind;
 pub use options::TypeOptions;
+pub use relate::ReasonNode;
 pub use relate::RelateCtx;
 pub use relate::RelateHooks;
 pub use relate::RelateTypeExpander;
