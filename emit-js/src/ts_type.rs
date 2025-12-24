@@ -605,15 +605,12 @@ fn emit_mapped_modifier(out: &mut String, modifier: MappedTypeModifier, token: &
 
 fn emit_template_literal(out: &mut String, template: &Node<TypeTemplateLiteral>) {
   let template = template.stx.as_ref();
-  out.push('`');
   out.push_str(&template.head);
   for span in &template.spans {
-    out.push_str("${");
     emit_type_expr_with_prec(out, &span.stx.type_expr, TypePrec::ArrowOrConditional);
     out.push('}');
     out.push_str(&span.stx.literal);
   }
-  out.push('`');
 }
 
 fn emit_type_predicate(out: &mut String, pred: &Node<TypePredicate>) {
