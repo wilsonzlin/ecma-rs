@@ -1,10 +1,10 @@
-use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::BenchmarkId;
 use criterion::Criterion;
 use criterion::Throughput;
 use parse_js::parse;
+use std::hint::black_box;
 
 fn bench_type_parsing(c: &mut Criterion) {
   let samples = vec![

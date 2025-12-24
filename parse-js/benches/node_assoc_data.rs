@@ -1,8 +1,8 @@
-use criterion::black_box;
 use criterion::criterion_group;
 use criterion::criterion_main;
 use criterion::Criterion;
 use parse_js::ast::node::NodeAssocData;
+use std::hint::black_box;
 
 fn bench_node_assoc_data(c: &mut Criterion) {
   c.bench_function("set_single", |b| {
