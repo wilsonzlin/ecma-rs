@@ -60,6 +60,7 @@ enum Boundary {
   PlusPlus,
   Minus,
   MinusMinus,
+  Slash,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +70,8 @@ enum Leading {
   Number,
   Plus,
   Minus,
+  Slash,
+  Star,
   Other,
 }
 
@@ -242,7 +245,9 @@ fn needs_space(prev: Boundary, next: Leading) -> bool {
     (Boundary::Plus, Leading::Plus)
     | (Boundary::PlusPlus, Leading::Plus)
     | (Boundary::Minus, Leading::Minus)
-    | (Boundary::MinusMinus, Leading::Minus) => true,
+    | (Boundary::MinusMinus, Leading::Minus)
+    | (Boundary::Slash, Leading::Slash)
+    | (Boundary::Slash, Leading::Star) => true,
     _ => false,
   }
 }
@@ -299,7 +304,14 @@ fn classify_fragment_with_kind(bytes: &[u8], kind: TokenKind) -> FragmentBoundar
   };
 
   let leading = if leading_idx == 0 {
-    kind.leading()
+    match kind {
+      TokenKind::Other => match bytes[leading_idx] {
+        b'/' => Leading::Slash,
+        b'*' => Leading::Star,
+        _ => Leading::Other,
+      },
+      _ => kind.leading(),
+    }
   } else {
     Leading::None
   };
@@ -344,6 +356,8 @@ fn classify_leading_char(ch: u8) -> Leading {
     b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'$' => Leading::Word,
     b'+' => Leading::Plus,
     b'-' => Leading::Minus,
+    b'/' => Leading::Slash,
+    b'*' => Leading::Star,
     _ => Leading::Other,
   }
 }
@@ -367,6 +381,7 @@ fn classify_trailing_char(bytes: &[u8], idx: usize) -> Boundary {
         Boundary::Minus
       }
     }
+    b'/' => Boundary::Slash,
     _ => Boundary::None,
   }
 }

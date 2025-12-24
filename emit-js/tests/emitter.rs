@@ -145,3 +145,38 @@ fn emits_punctuated_lists() {
   });
   assert_eq!(text(&emitter), "1;2;3;");
 }
+
+#[test]
+fn avoids_forming_block_comment_after_division() {
+  let mut emitter = Emitter::new(EmitOptions::default());
+  emitter.write_identifier("a");
+  emitter.write_punct("/");
+  emitter.write_punct("*");
+  emitter.write_identifier("b");
+  let output = text(&emitter);
+  assert!(!output.contains("/*"));
+  assert_eq!(output, "a/ *b");
+}
+
+#[test]
+fn avoids_forming_line_comment_from_adjacent_slashes() {
+  let mut emitter = Emitter::new(EmitOptions::default());
+  emitter.write_identifier("a");
+  emitter.write_str("/");
+  emitter.write_punct("/");
+  emitter.write_identifier("b");
+  let output = text(&emitter);
+  assert!(!output.contains("//"));
+  assert_eq!(output, "a/ /b");
+}
+
+#[test]
+fn separates_regex_literal_from_following_division() {
+  let mut emitter = Emitter::new(EmitOptions::default());
+  emitter.write_str("/a/");
+  emitter.write_punct("/");
+  emitter.write_identifier("b");
+  let output = text(&emitter);
+  assert!(!output.contains("//"));
+  assert_eq!(output, "/a/ /b");
+}
