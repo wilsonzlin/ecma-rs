@@ -25,12 +25,21 @@ impl Default for MappedModifier {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MappedType {
+  /// Type parameter used for the mapped key variable.
   pub param: TypeParamId,
+  /// Source type from the `in` clause.
   pub source: TypeId,
+  /// Value type assigned to each mapped property.
   pub value: TypeId,
+  /// Readonly modifier applied to the mapped properties.
   pub readonly: MappedModifier,
+  /// Optional modifier applied to the mapped properties.
   pub optional: MappedModifier,
+  /// Mirrors TypeScript's internal `nameType` used during key remapping.
+  /// This has no distinct surface syntax from `as_type`, so it is retained
+  /// for fidelity but intentionally omitted from `TypeDisplay`.
   pub name_type: Option<TypeId>,
+  /// Explicit `as` clause used to remap keys.
   pub as_type: Option<TypeId>,
 }
 

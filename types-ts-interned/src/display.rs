@@ -290,21 +290,21 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::Mapped(mapped) => {
         write!(f, "{{ ")?;
         self.fmt_mapped_modifier(mapped.readonly, "readonly", f)?;
-        write!(
-          f,
-          "[K{} in ",
-          match mapped.optional {
-            MappedModifier::Add => "?",
-            MappedModifier::Remove => "-?",
-            MappedModifier::Preserve => "",
-          }
-        )?;
+        write!(f, "[K in ")?;
         self.fmt_type(mapped.source, f)?;
         if let Some(as_type) = mapped.as_type {
           write!(f, " as ")?;
           self.fmt_type(as_type, f)?;
         }
-        write!(f, "]: ")?;
+        write!(
+          f,
+          "]{}",
+          match mapped.optional {
+            MappedModifier::Preserve => ": ",
+            MappedModifier::Add => "?: ",
+            MappedModifier::Remove => "-?: ",
+          }
+        )?;
         self.fmt_type(mapped.value, f)?;
         write!(f, " }}")
       }
@@ -335,15 +335,19 @@ impl<'a> TypeDisplay<'a> {
     f: &mut fmt::Formatter<'_>,
   ) -> fmt::Result {
     write!(f, "(")?;
-    if let Some(this) = sig.this_param {
+    let mut needs_comma = false;
+
+    if let Some(this_param) = sig.this_param {
       write!(f, "this: ")?;
-      self.fmt_type(this, f)?;
-      if !sig.params.is_empty() {
-        write!(f, ", ")?;
-      }
+      self.fmt_type(this_param, f)?;
+      needs_comma = true;
     }
+
     let mut iter = sig.params.iter().peekable();
     while let Some(param) = iter.next() {
+      if needs_comma {
+        write!(f, ", ")?;
+      }
       if param.rest {
         write!(f, "...")?;
       }
@@ -355,9 +359,7 @@ impl<'a> TypeDisplay<'a> {
         write!(f, ": ")?;
       }
       self.fmt_type(param.ty, f)?;
-      if iter.peek().is_some() {
-        write!(f, ", ")?;
-      }
+      needs_comma = true;
     }
     write!(f, ") => ")?;
     self.fmt_type(sig.ret, f)
