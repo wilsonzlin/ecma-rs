@@ -464,7 +464,8 @@ fn execute_case(case: TestCase) -> TestResult {
   let duration_ms = start.elapsed().as_millis();
 
   match result {
-    Ok(diagnostics) => {
+    Ok(mut diagnostics) => {
+      sort_diagnostics(&mut diagnostics);
       let status = categorize(&diagnostics);
       info!(
         phase = "rust_check_complete",
@@ -557,6 +558,26 @@ fn categorize(diags: &[Diagnostic]) -> TestStatus {
   }
 
   TestStatus::TypeError
+}
+
+fn sort_diagnostics(diags: &mut [Diagnostic]) {
+  diags.sort_by(|a, b| {
+    let code_a = a.code.as_deref().unwrap_or("");
+    let code_b = b.code.as_deref().unwrap_or("");
+    let code_ord = code_a.cmp(code_b);
+    if code_ord != std::cmp::Ordering::Equal {
+      return code_ord;
+    }
+
+    match (a.span, b.span) {
+      (Some(sa), Some(sb)) => {
+        (sa.file, sa.range.start, sa.range.end).cmp(&(sb.file, sb.range.start, sb.range.end))
+      }
+      (Some(_), None) => std::cmp::Ordering::Less,
+      (None, Some(_)) => std::cmp::Ordering::Greater,
+      (None, None) => a.message.cmp(&b.message),
+    }
+  });
 }
 
 struct HarnessHost {
