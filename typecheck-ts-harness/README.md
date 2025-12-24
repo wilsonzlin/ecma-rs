@@ -76,6 +76,11 @@ cargo run -p typecheck-ts-harness --release -- conformance \
 
 # Larger timeout per test (seconds)
 cargo run -p typecheck-ts-harness --release -- conformance --timeout-secs 30
+
+# Ignore known failures via manifest + allow-only-new-failures
+cargo run -p typecheck-ts-harness --release -- conformance \
+  --manifest typecheck-ts-harness/fixtures/conformance_manifest.toml \
+  --fail-on new
 ```
 
 - Filters accept globs or regexes; they match the path under the root (e.g.
@@ -130,6 +135,32 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 - Baselines are read from/written to `baselines/<suite>/<test>.json` (see below).
 - The wrapper uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
   writes `{ diagnostics: [{ code, category, file, start, end }] }`.
+
+### Expectations manifests
+
+Both `conformance` and `difftsc` accept `--manifest <path>` describing expected
+skips or failures. Statuses are `skip`, `xfail`, or `flaky` (like `xfail` but
+reported separately). Example (`toml` or JSON):
+
+```
+[[expectations]]
+id = "err/parse_error.ts"
+status = "xfail"
+reason = "parser gaps"
+
+[[expectations]]
+glob = "flaky/**"
+status = "flaky"
+tracking_issue = "TICKET-123"
+```
+
+Use `--fail-on new|all|none` to control exit status (default `all`):
+- `new`: only uncovered mismatches fail the run
+- `all`: any mismatch fails
+- `none`: always succeed (useful for generating reports)
+
+Conformance test ids are the path under the suite root. `difftsc` ids include
+the suite name (e.g. `difftsc/assignability`).
 
 **Planned differential mode (once the Rust checker exposes matching JSON):**
 - The same `difftsc` entry point will also run the Rust checker and diff directly

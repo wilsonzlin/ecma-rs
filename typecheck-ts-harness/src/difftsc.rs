@@ -4,10 +4,11 @@ use crate::diagnostic::{
   diff_diagnostics, normalize_tsc_diagnostics, DiagnosticDiff, NormalizedDiagnostic,
 };
 use crate::diagnostic_norm::DiagnosticCode as NormDiagnosticCode;
+use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{run_rust, EngineStatus, HarnessFileSet};
 use crate::tsc::{node_available, TscDiagnostics, TscRequest, TscRunner};
-use crate::VirtualFile;
+use crate::{FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,14 @@ pub struct DifftscArgs {
   /// Allowed byte tolerance when comparing spans.
   #[arg(long, default_value_t = 0)]
   pub span_tolerance: u32,
+
+  /// Path to a manifest describing expected failures.
+  #[arg(long)]
+  pub manifest: Option<PathBuf>,
+
+  /// When to fail the run on mismatches.
+  #[arg(long, value_enum, default_value_t = FailOn::New)]
+  pub fail_on: FailOn,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -113,6 +122,9 @@ struct Summary {
   updated: usize,
   skipped: usize,
   errors: usize,
+  expected_mismatches: usize,
+  unexpected_mismatches: usize,
+  flaky_mismatches: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +173,11 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
     .join("baselines")
     .join(&suite_name);
 
+  let expectations = match &args.manifest {
+    Some(path) => Expectations::from_path(path).map_err(|err| anyhow!(err.to_string()))?,
+    None => Expectations::empty(),
+  };
+
   if args.update_baselines {
     fs::create_dir_all(&baselines_root)
       .with_context(|| format!("create baselines directory at {}", baselines_root.display()))?;
@@ -185,12 +202,45 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
   };
 
   let mut results = Vec::new();
+  let mut expected_mismatches = 0usize;
+  let mut unexpected_mismatches = 0usize;
+  let mut flaky_mismatches = 0usize;
   for test in tests {
+    let test_id = format!("{suite_name}/{}", test.name);
+    let expectation = expectations.lookup(&test_id);
+    if expectation.expectation.kind == ExpectationKind::Skip {
+      results.push(CaseReport {
+        name: test.name.clone(),
+        status: CaseStatus::Skipped,
+        expected: None,
+        actual: None,
+        diff: None,
+        notes: vec!["skipped by manifest".to_string()],
+      });
+      continue;
+    }
+
     let report = run_single_test(&test, &args, runner.as_mut(), &baselines_root);
+    if matches!(report.status, CaseStatus::Mismatch) {
+      if expectation.expectation.kind == ExpectationKind::Flaky {
+        flaky_mismatches += 1;
+      } else if expectation.covers_mismatch() {
+        expected_mismatches += 1;
+      } else {
+        unexpected_mismatches += 1;
+      }
+    }
     results.push(report);
   }
 
   let summary = summarize(&results);
+  let mismatch_total = summary.mismatched + summary.errors;
+  let summary = Summary {
+    expected_mismatches,
+    unexpected_mismatches,
+    flaky_mismatches,
+    ..summary
+  };
 
   if args.update_baselines && !args.json {
     println!("updated baselines under {}", baselines_root.display());
@@ -207,10 +257,17 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
     print_human_summary(&suite_name, &summary, &results);
   }
 
-  if (summary.mismatched > 0 && !args.allow_mismatches) || summary.errors > 0 {
+  if !args.allow_mismatches
+    && args
+      .fail_on
+      .should_fail(unexpected_mismatches, mismatch_total)
+  {
     return Err(anyhow!(
-      "{} difftsc mismatches ({} error(s))",
-      summary.mismatched,
+      "{} difftsc mismatches ({} unexpected, {} expected, {} flaky, {} error(s))",
+      mismatch_total,
+      unexpected_mismatches,
+      expected_mismatches,
+      flaky_mismatches,
       summary.errors
     ));
   }
