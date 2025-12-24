@@ -1,3 +1,4 @@
+use crate::symbol::ResolvedSymbol;
 use crate::symbol::Scope;
 use crate::symbol::ScopeType;
 use derive_visitor::VisitorMut;
@@ -5,6 +6,7 @@ use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::FuncExpr;
+use parse_js::ast::expr::IdExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
@@ -37,6 +39,7 @@ type ForOfStmtNode = Node<ForOfStmt>;
 type FuncNode = Node<Func>;
 type FuncDeclNode = Node<FuncDecl>;
 type FuncExprNode = Node<FuncExpr>;
+type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type ImportStmtNode = Node<ImportStmt>;
 type PatDeclNode = Node<PatDecl>;
@@ -54,6 +57,7 @@ type VarDeclNode = Node<VarDecl>;
   FuncNode,
   FuncDeclNode(enter),
   FuncExprNode,
+  IdExprNode(enter),
   IdPatNode(enter),
   ImportStmtNode,
   PatDeclNode,
@@ -252,11 +256,18 @@ impl DeclVisitor {
     self.restore_scope();
   }
 
+  fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+    let resolved = self.scope().find_symbol(node.stx.name.clone());
+    node.assoc.set::<ResolvedSymbol>(resolved);
+  }
+
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
     // An identifier pattern doesn't always mean declaration e.g. simple assignment, assignment to global. This is why we need in_param_decl; an assignment is an expression that could appear almost anywhere (e.g. function parameter default value expression).
     if self.is_in_pattern_decl() {
       self.add_to_scope(node.stx.name.clone(), self.pattern_action());
     }
+    let resolved = self.scope().find_symbol(node.stx.name.clone());
+    node.assoc.set::<ResolvedSymbol>(resolved);
   }
 
   fn enter_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
