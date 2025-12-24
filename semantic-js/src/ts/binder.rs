@@ -50,6 +50,10 @@ enum ExportSpec {
   },
 }
 
+fn binder_diagnostic(file: FileId, code: &'static str, message: impl Into<String>) -> Diagnostic {
+  Diagnostic::error(code, message, Span::new(file, TextRange::new(0, 0)))
+}
+
 pub fn bind_ts_program(
   roots: &[FileId],
   resolver: &dyn Resolver,
@@ -257,22 +261,22 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           has_exports = true;
         }
         Export::ExportAssignment(_) => {
-          self.diagnostics.push(Diagnostic {
-            code: "BIND1003",
-            message: "export assignments are not supported in this module kind".to_string(),
-            file: Some(hir.file_id),
-          });
+          self.diagnostics.push(binder_diagnostic(
+            hir.file_id,
+            "BIND1003",
+            "export assignments are not supported in this module kind",
+          ));
           has_exports = true;
         }
       }
     }
 
     if matches!(hir.module_kind, ModuleKind::Script) && has_exports {
-      self.diagnostics.push(Diagnostic {
-        code: "BIND1003",
-        message: "exports are not allowed in script modules".to_string(),
-        file: Some(hir.file_id),
-      });
+      self.diagnostics.push(binder_diagnostic(
+        hir.file_id,
+        "BIND1003",
+        "exports are not allowed in script modules",
+      ));
     }
 
     self.modules.insert(hir.file_id, state);
@@ -318,15 +322,15 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   fn resolve_spec(&mut self, from: FileId, spec: &str, is_import: bool) -> Option<FileId> {
     let resolved = self.resolver.resolve(from, spec);
     if resolved.is_none() {
-      self.diagnostics.push(Diagnostic {
-        code: "BIND1002",
-        message: format!(
+      self.diagnostics.push(binder_diagnostic(
+        from,
+        "BIND1002",
+        format!(
           "unresolved {}: {}",
           if is_import { "import" } else { "export" },
           spec
         ),
-        file: Some(from),
-      });
+      ));
     }
     resolved
   }
@@ -431,11 +435,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             return;
           }
         } else {
-          self.diagnostics.push(Diagnostic {
-            code: "BIND1002",
-            message: format!("cannot find export '{}' in module", target_name),
-            file: Some(module.file_id),
-          });
+          self.diagnostics.push(binder_diagnostic(
+            module.file_id,
+            "BIND1002",
+            format!("cannot find export '{}' in module", target_name),
+          ));
           return;
         }
       }
@@ -461,18 +465,18 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           module.file_id,
         );
       } else {
-        self.diagnostics.push(Diagnostic {
-          code: "BIND1002",
-          message: format!("cannot export '{}': symbol not found", name),
-          file: Some(module.file_id),
-        });
+        self.diagnostics.push(binder_diagnostic(
+          module.file_id,
+          "BIND1002",
+          format!("cannot export '{}': symbol not found", name),
+        ));
       }
     } else {
-      self.diagnostics.push(Diagnostic {
-        code: "BIND1002",
-        message: format!("cannot export '{}': symbol not found", name),
-        file: Some(module.file_id),
-      });
+      self.diagnostics.push(binder_diagnostic(
+        module.file_id,
+        "BIND1002",
+        format!("cannot export '{}': symbol not found", name),
+      ));
     }
   }
 
@@ -507,11 +511,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           );
         }
       } else {
-        self.diagnostics.push(Diagnostic {
-          code: "BIND1002",
-          message: format!("cannot re-export '{}': not found", name),
-          file: Some(module.file_id),
-        });
+        self.diagnostics.push(binder_diagnostic(
+          module.file_id,
+          "BIND1002",
+          format!("cannot re-export '{}': not found", name),
+        ));
       }
     }
   }
@@ -859,11 +863,11 @@ fn merge_groups(
       .enumerate()
     {
       if temp[idx].len() > 1 {
-        diags.push(Diagnostic {
-          code: "BIND1001",
-          message: format!("duplicate export for namespace {:?}", bit),
-          file: Some(file),
-        });
+        diags.push(binder_diagnostic(
+          file,
+          "BIND1001",
+          format!("duplicate export for namespace {:?}", bit),
+        ));
       }
     }
   }

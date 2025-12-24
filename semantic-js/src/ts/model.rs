@@ -6,6 +6,11 @@
 //! participates in; declaration ordering is preserved via an incrementing
 //! `order` counter to keep merged overloads deterministic.
 //!
+//! File identity and diagnostics reuse shared workspace types from
+//! [`diagnostics`], and declaration IDs are shared with HIR via
+//! [`hir_js::DefId`] so consumers can correlate symbols with lowered
+//! definitions.
+//!
 //! A [`HirFile`] describes a single module or script's top-level declarations,
 //! imports, and exports. [`bind_ts_program`](crate::ts::bind_ts_program) walks
 //! these files with a host-provided [`Resolver`] to build:
@@ -48,6 +53,8 @@
 //! - Exports store [`SymbolGroup`]s per name; type-only exports filter out the
 //!   value/namespace bits before insertion.
 use bitflags::bitflags;
+pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
+pub use hir_js::DefId;
 use std::collections::BTreeMap;
 
 bitflags! {
@@ -74,16 +81,10 @@ impl Namespace {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct FileId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SymbolId(pub u32);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeclId(pub u32);
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DefId(pub u32);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeclKind {
@@ -347,13 +348,6 @@ impl SymbolGroup {
 }
 
 pub type ExportMap = BTreeMap<String, SymbolGroup>;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Diagnostic {
-  pub code: &'static str,
-  pub message: String,
-  pub file: Option<FileId>,
-}
 
 pub trait Resolver {
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId>;

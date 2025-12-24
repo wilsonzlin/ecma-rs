@@ -1458,6 +1458,8 @@ dependencies = [
  "ahash",
  "bitflags",
  "derive-visitor",
+ "diagnostics",
+ "hir-js",
  "maplit",
  "parse-js",
 ]
