@@ -1,9 +1,0 @@
-[package]
-name = "typecheck-ts-salsa6"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-diagnostics-salsa6 = { path = "../diagnostics-salsa6" }
-parse-js = { path = "../parse-js" }
-salsa = "0.17.0-pre.2"
