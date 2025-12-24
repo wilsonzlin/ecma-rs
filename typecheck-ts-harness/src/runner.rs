@@ -23,7 +23,8 @@ use typecheck_ts::FileId;
 use typecheck_ts::Host;
 use typecheck_ts::HostError;
 use typecheck_ts::Program;
-use typecheck_ts::Severity;
+use typecheck_ts::Span;
+use typecheck_ts::TextRange;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -190,26 +191,7 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
         status = ?result.status,
         duration_ms = result.duration_ms
       );
-      result.diagnostics.sort_by(|a, b| {
-        let code_a = a.code.as_deref().unwrap_or("");
-        let code_b = b.code.as_deref().unwrap_or("");
-        let code_ord = code_a.cmp(code_b);
-        if code_ord != std::cmp::Ordering::Equal {
-          return code_ord;
-        }
-
-        let span_a = a.span;
-        let span_b = b.span;
-
-        match (span_a, span_b) {
-          (Some(sa), Some(sb)) => {
-            (sa.file, sa.range.start, sa.range.end).cmp(&(sb.file, sb.range.start, sb.range.end))
-          }
-          (Some(_), None) => std::cmp::Ordering::Less,
-          (None, Some(_)) => std::cmp::Ordering::Greater,
-          (None, None) => a.message.cmp(&b.message),
-        }
-      });
+      result.diagnostics.sort();
       result
     }
     Err(_) => {
@@ -266,12 +248,11 @@ fn execute_case(case: TestCase) -> TestResult {
         path: case.path.display().to_string(),
         status: TestStatus::Ice,
         duration_ms,
-        diagnostics: vec![Diagnostic {
-          code: Some("ICE0001".to_string()),
-          message: "typechecker panicked".to_string(),
-          span: None,
-          severity: Severity::Error,
-        }],
+        diagnostics: vec![Diagnostic::error(
+          "ICE0001",
+          "typechecker panicked",
+          Span::new(FileId(0), TextRange::new(0, 0)),
+        )],
         notes,
         directives,
         options,
@@ -286,11 +267,9 @@ fn categorize(diags: &[Diagnostic]) -> TestStatus {
   }
 
   let has_code_prefix = |prefix: &str| {
-    diags.iter().any(|d| {
-      d.code
-        .as_deref()
-        .is_some_and(|code| code.to_ascii_uppercase().starts_with(prefix))
-    })
+    diags
+      .iter()
+      .any(|d| d.code.as_str().to_ascii_uppercase().starts_with(prefix))
   };
 
   if has_code_prefix("PARSE") {

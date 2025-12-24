@@ -1,3 +1,5 @@
+use diagnostics::diagnostic_from_syntax_error;
+pub use diagnostics::{Diagnostic, FileId, Label, Severity, Span, TextRange};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};
 use parse_js::ast::expr::pat::Pat;
@@ -19,10 +21,6 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
 use thiserror::Error;
 
-/// Identifier for a file in a [`Program`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct FileId(pub u32);
-
 /// Identifier for a definition (function/variable/import).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct DefId(pub u32);
@@ -39,71 +37,14 @@ pub struct ExprId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct TypeId(pub u32);
 
-/// Simple range inside a file (UTF-8 byte offsets).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub struct TextRange {
-  /// Starting byte offset, inclusive.
-  pub start: u32,
-  /// Ending byte offset, exclusive.
-  pub end: u32,
-}
-
-/// Range paired with a [`FileId`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub struct Span {
-  /// File containing the span.
-  pub file: FileId,
-  /// Byte range inside the file.
-  pub range: TextRange,
-}
-
-/// Severity for diagnostics.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
-pub enum Severity {
-  /// Error that prevents successful checking.
-  Error,
-  /// Warning that does not block checking.
-  Warning,
-  /// Informational note.
-  Info,
-}
-
-/// Diagnostic produced while parsing/binding/checking.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Diagnostic {
-  /// Machine-consumable code, if available.
-  pub code: Option<String>,
-  /// Human-readable message.
-  pub message: String,
-  /// Where the issue occurred.
-  pub span: Option<Span>,
-  /// Severity level.
-  pub severity: Severity,
-}
-
-impl Diagnostic {
-  fn error(message: impl Into<String>, span: Option<Span>) -> Diagnostic {
-    Diagnostic {
-      code: None,
-      message: message.into(),
-      span,
-      severity: Severity::Error,
-    }
-  }
-
-  fn error_with_code(
-    code: impl Into<String>,
-    message: impl Into<String>,
-    span: Option<Span>,
-  ) -> Diagnostic {
-    Diagnostic {
-      code: Some(code.into()),
-      message: message.into(),
-      span,
-      severity: Severity::Error,
-    }
-  }
-}
+const CODE_UNRESOLVED_MODULE: &str = "TC1001";
+const CODE_UNKNOWN_EXPORT: &str = "TC1002";
+const CODE_UNSUPPORTED_IMPORT_PATTERN: &str = "TC1003";
+const CODE_UNSUPPORTED_PATTERN: &str = "TC1004";
+const CODE_UNSUPPORTED_PARAM_PATTERN: &str = "TC1005";
+const CODE_MISSING_BODY: &str = "ICE0002";
+const CODE_ARGUMENT_COUNT_MISMATCH: &str = "TC1006";
+const CODE_ARGUMENT_TYPE_MISMATCH: &str = "TC1007";
 
 /// Error returned by a [`Host`].
 #[derive(Debug, Error, Serialize, Deserialize, Clone)]
@@ -660,19 +601,15 @@ impl ProgramState {
         Ok(text) => match parse(&text) {
           Ok(ast) => self.bind_file(file, ast, host, &mut queue),
           Err(err) => {
-            let span = loc_to_span(file, err.loc);
-            self.diagnostics.push(Diagnostic::error_with_code(
-              "PARSE0001",
-              err.to_string(),
-              Some(span),
-            ));
+            let diagnostic = diagnostic_from_syntax_error(file, &err);
+            self.diagnostics.push(diagnostic);
           }
         },
         Err(err) => {
-          self.diagnostics.push(Diagnostic::error_with_code(
+          self.diagnostics.push(Diagnostic::error(
             "HOST0001",
             err.to_string(),
-            None,
+            Span::new(file, TextRange::new(0, 0)),
           ));
         }
       }
@@ -796,8 +733,9 @@ impl ProgramState {
               queue.push_back(target);
             } else {
               self.diagnostics.push(Diagnostic::error(
+                CODE_UNRESOLVED_MODULE,
                 format!("unresolved module {module}"),
-                Some(loc_to_span(file, stmt.loc)),
+                loc_to_span(file, stmt.loc),
               ));
             }
           }
@@ -817,8 +755,9 @@ impl ProgramState {
                 );
               } else {
                 self.diagnostics.push(Diagnostic::error(
+                  CODE_UNKNOWN_EXPORT,
                   format!("unknown export {exportable}"),
-                  Some(loc_to_span(file, name.loc)),
+                  loc_to_span(file, name.loc),
                 ));
               }
             }
@@ -831,8 +770,9 @@ impl ProgramState {
             queue.push_back(target);
           } else {
             self.diagnostics.push(Diagnostic::error(
+              CODE_UNRESOLVED_MODULE,
               format!("unresolved module {module}"),
-              Some(loc_to_span(file, stmt.loc)),
+              loc_to_span(file, stmt.loc),
             ));
           }
           match import_stmt.stx.names {
@@ -844,8 +784,9 @@ impl ProgramState {
                   Pat::Id(id) => id.stx.name.clone(),
                   _ => {
                     self.diagnostics.push(Diagnostic::error(
+                      CODE_UNSUPPORTED_IMPORT_PATTERN,
                       "unsupported import pattern",
-                      Some(loc_to_span(file, alias_pat.loc)),
+                      loc_to_span(file, alias_pat.loc),
                     ));
                     continue;
                   }
@@ -883,8 +824,9 @@ impl ProgramState {
                 Pat::Id(id) => id.stx.name.clone(),
                 _ => {
                   self.diagnostics.push(Diagnostic::error(
+                    CODE_UNSUPPORTED_IMPORT_PATTERN,
                     "unsupported import pattern",
-                    Some(loc_to_span(file, pat.loc)),
+                    loc_to_span(file, pat.loc),
                   ));
                   continue;
                 }
@@ -958,8 +900,9 @@ impl ProgramState {
         Pat::Id(id) => id.stx.name.clone(),
         _ => {
           self.diagnostics.push(Diagnostic::error(
+            CODE_UNSUPPORTED_PATTERN,
             "unsupported pattern",
-            Some(loc_to_span(file, pat.loc)),
+            loc_to_span(file, pat.loc),
           ));
           continue;
         }
@@ -1102,8 +1045,9 @@ impl ProgramState {
       Pat::Id(id) => id.stx.name.clone(),
       _ => {
         self.diagnostics.push(Diagnostic::error(
+          CODE_UNSUPPORTED_PARAM_PATTERN,
           "unsupported parameter pattern",
-          Some(loc_to_span(file, param.loc)),
+          loc_to_span(file, param.loc),
         ));
         return None;
       }
@@ -1129,7 +1073,11 @@ impl ProgramState {
           body: body_id,
           expr_types: Vec::new(),
           expr_spans: Vec::new(),
-          diagnostics: vec![Diagnostic::error("missing body", None)],
+          diagnostics: vec![Diagnostic::error(
+            CODE_MISSING_BODY,
+            "missing body",
+            Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
+          )],
           return_types: Vec::new(),
         });
         self.body_results.insert(body_id, res.clone());
@@ -1273,11 +1221,12 @@ impl ProgramState {
         if let TypeKind::Function { params, ret } = self.type_store.kind(callee_ty).clone() {
           if params.len() != args.len() {
             result.diagnostics.push(Diagnostic::error(
+              CODE_ARGUMENT_COUNT_MISMATCH,
               "argument count mismatch",
-              Some(Span {
+              Span {
                 file,
                 range: expr.span,
-              }),
+              },
             ));
           }
           for (idx, arg) in args.iter().enumerate() {
@@ -1285,11 +1234,12 @@ impl ProgramState {
             if let Some(expected) = params.get(idx) {
               if expected != &self.builtin.any && expected != &arg_ty {
                 result.diagnostics.push(Diagnostic::error(
+                  CODE_ARGUMENT_TYPE_MISMATCH,
                   format!("argument {} has incompatible type", idx + 1),
-                  Some(Span {
+                  Span {
                     file,
                     range: arg.span,
-                  }),
+                  },
                 ));
               }
             }
@@ -1618,8 +1568,9 @@ impl BodyBuilder {
             Pat::Id(id) => id.stx.name.clone(),
             _ => {
               state.diagnostics.push(Diagnostic::error(
+                CODE_UNSUPPORTED_PATTERN,
                 "unsupported pattern",
-                Some(loc_to_span(self.file, pat.loc)),
+                loc_to_span(self.file, pat.loc),
               ));
               continue;
             }

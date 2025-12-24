@@ -17,7 +17,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::FileId;
+use crate::{Diagnostic, FileId, Span, TextRange};
 
 /// Kinds of supported files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,12 +38,16 @@ pub struct LibFile {
   pub text: Arc<str>,
 }
 
-/// Diagnostic emitted by the lib checker.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Diagnostic {
-  pub code: &'static str,
-  pub message: String,
-  pub file: Option<FileId>,
+fn lib_diagnostic(
+  code: &'static str,
+  message: impl Into<String>,
+  file: Option<FileId>,
+) -> Diagnostic {
+  Diagnostic::error(
+    code,
+    message,
+    Span::new(file.unwrap_or(FileId(u32::MAX)), TextRange::new(0, 0)),
+  )
 }
 
 /// Deprecated, string-scanning helper that checks root files against loaded libs.
@@ -90,13 +94,11 @@ impl LibCheckProgram {
     let mut diags = self.lib_diags.clone();
 
     if self.libs.is_empty() {
-      diags.push(Diagnostic {
-        code: "TC0001",
-        message:
-          "No library files were loaded. Provide libs via the host or enable the bundled-libs feature / disable no_default_lib."
-            .into(),
-        file: None,
-      });
+      diags.push(lib_diagnostic(
+        "TC0001",
+        "No library files were loaded. Provide libs via the host or enable the bundled-libs feature / disable no_default_lib.",
+        None,
+      ));
       return diags;
     }
 
@@ -132,14 +134,14 @@ fn collect_libraries(
 
   for lib in libs.iter() {
     if lib.kind != FileKind::Dts {
-      diags.push(Diagnostic {
-        code: "TC0004",
-        message: format!(
+      diags.push(lib_diagnostic(
+        "TC0004",
+        format!(
           "Library '{}' is not a .d.ts file; it will be ignored for global declarations.",
           lib.name
         ),
-        file: Some(lib.id),
-      });
+        Some(lib.id),
+      ));
     }
   }
 
@@ -204,11 +206,11 @@ impl GlobalEnv {
           }
         }
         GlobalValue::Any => {
-          diags.push(Diagnostic {
-            code: "TC0003",
-            message: format!("Unsupported global augmentation for '{}'.", name),
-            file: Some(file),
-          });
+          diags.push(lib_diagnostic(
+            "TC0003",
+            format!("Unsupported global augmentation for '{}'.", name),
+            Some(file),
+          ));
         }
       },
     }
@@ -230,13 +232,11 @@ fn add_lib_decls(env: &mut GlobalEnv, lib: &LibFile, diags: &mut Vec<Diagnostic>
 
   let text = lib.text.as_ref();
   if text.contains("declare global") {
-    diags.push(Diagnostic {
-      code: "TC0002",
-      message:
-        "Global augmentations are only partially supported; declaration will be treated as-is."
-          .into(),
-      file: Some(lib.id),
-    });
+    diags.push(lib_diagnostic(
+      "TC0002",
+      "Global augmentations are only partially supported; declaration will be treated as-is.",
+      Some(lib.id),
+    ));
   }
 
   for segment in text.split("declare") {
@@ -340,24 +340,24 @@ fn check_global_use(
   }
 
   if !env.has_global(name) {
-    diags.push(Diagnostic {
-      code: "TC0005",
-      message: format!(
+    diags.push(lib_diagnostic(
+      "TC0005",
+      format!(
         "Cannot find name '{}'. Consider adding appropriate libs.",
         name
       ),
-      file: Some(file),
-    });
+      Some(file),
+    ));
     return;
   }
 
   if let Some(prop) = property {
     if text.contains(&format!("{}.", name)) && !env.has_property(name, prop) {
-      diags.push(Diagnostic {
-        code: "TC0006",
-        message: format!("Property '{}' does not exist on '{}'.", prop, name),
-        file: Some(file),
-      });
+      diags.push(lib_diagnostic(
+        "TC0006",
+        format!("Property '{}' does not exist on '{}'.", prop, name),
+        Some(file),
+      ));
     }
   }
 }

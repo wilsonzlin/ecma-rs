@@ -10,6 +10,7 @@ default = ["bundled-libs"]
 bundled-libs = []
 
 [dependencies]
+diagnostics = { path = "../diagnostics", features = ["serde", "parse-js"] }
 parse-js = { version = "0.24.1", path = "../parse-js" }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "1.0"

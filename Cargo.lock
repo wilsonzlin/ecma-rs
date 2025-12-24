@@ -1852,6 +1852,7 @@ dependencies = [
 name = "typecheck-ts"
 version = "0.1.0"
 dependencies = [
+ "diagnostics",
  "parse-js",
  "serde",
  "serde_json",
