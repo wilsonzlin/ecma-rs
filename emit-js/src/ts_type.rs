@@ -494,7 +494,7 @@ fn emit_property_key(out: &mut String, key: &TypePropertyKey) {
   }
 }
 
-fn emit_type_parameters(out: &mut String, params: Option<&[Node<TypeParameter>]>) {
+pub(crate) fn emit_type_parameters(out: &mut String, params: Option<&[Node<TypeParameter>]>) {
   if let Some(params) = params {
     if params.is_empty() {
       return;
@@ -510,7 +510,7 @@ fn emit_type_parameters(out: &mut String, params: Option<&[Node<TypeParameter>]>
   }
 }
 
-fn emit_type_parameter(out: &mut String, param: &Node<TypeParameter>) {
+pub(crate) fn emit_type_parameter(out: &mut String, param: &Node<TypeParameter>) {
   let TypeParameter {
     const_,
     variance,
