@@ -1,6 +1,7 @@
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::ImportExpr;
 use parse_js::ast::node::Node;
+use parse_js::ast::ts_stmt::InterfaceDecl;
 use parse_js::ast::ts_stmt::TypeAliasDecl;
 use parse_js::ast::type_expr::*;
 use std::fmt::Write;
@@ -56,6 +57,51 @@ pub fn emit_type_alias_decl<W: std::fmt::Write>(
   out.write_str(" = ")?;
   emit_type_expr(out, &decl.type_expr)?;
   out.write_char(';')
+}
+
+pub fn emit_interface_decl<W: std::fmt::Write>(
+  out: &mut W,
+  decl: &InterfaceDecl,
+) -> std::fmt::Result {
+  out.write_str(&interface_decl_to_string(decl))
+}
+
+fn interface_decl_to_string(decl: &InterfaceDecl) -> String {
+  let mut out = String::new();
+
+  if decl.export {
+    out.push_str("export ");
+  }
+  if decl.declare {
+    out.push_str("declare ");
+  }
+
+  out.push_str("interface ");
+  out.push_str(&decl.name);
+  emit_type_parameters(&mut out, decl.type_parameters.as_deref());
+
+  if !decl.extends.is_empty() {
+    out.push_str(" extends ");
+    for (i, ty) in decl.extends.iter().enumerate() {
+      if i > 0 {
+        out.push_str(", ");
+      }
+      emit_type_expr_with_prec(&mut out, ty, TypePrec::ArrowOrConditional);
+    }
+  }
+
+  out.push(' ');
+  out.push('{');
+  for (i, member) in decl.members.iter().enumerate() {
+    if i > 0 {
+      out.push(' ');
+    }
+    emit_type_member(&mut out, member);
+    out.push(';');
+  }
+  out.push('}');
+
+  out
 }
 
 fn type_prec(expr: &TypeExpr) -> TypePrec {
@@ -129,7 +175,7 @@ fn emit_type_expr_no_paren(out: &mut String, expr: &Node<TypeExpr>) {
     TypeExpr::IndexedAccessType(indexed) => emit_indexed_access(out, indexed),
     TypeExpr::ConditionalType(cond) => emit_conditional_type(out, cond),
     TypeExpr::InferType(infer_ty) => emit_infer(out, infer_ty),
-    TypeExpr::MappedType(mapped) => emit_mapped_type(out, mapped),
+    TypeExpr::MappedType(mapped) => emit_mapped_type_expr(out, mapped),
     TypeExpr::TemplateLiteralType(template) => emit_template_literal(out, template),
     TypeExpr::TypePredicate(pred) => emit_type_predicate(out, pred),
     TypeExpr::ThisType(_) => out.push_str("this"),
@@ -308,7 +354,7 @@ fn emit_type_member(out: &mut String, member: &Node<TypeMember>) {
     TypeMember::IndexSignature(index) => emit_index_signature(out, index),
     TypeMember::GetAccessor(get) => emit_get_accessor(out, get),
     TypeMember::SetAccessor(set) => emit_set_accessor(out, set),
-    TypeMember::MappedProperty(mapped) => emit_mapped_type(out, mapped),
+    TypeMember::MappedProperty(mapped) => emit_mapped_signature(out, mapped.stx.as_ref()),
   }
 }
 
@@ -520,10 +566,15 @@ fn emit_infer(out: &mut String, infer_ty: &Node<TypeInfer>) {
   }
 }
 
-fn emit_mapped_type(out: &mut String, mapped: &Node<TypeMapped>) {
-  let mapped = mapped.stx.as_ref();
+fn emit_mapped_type_expr(out: &mut String, mapped: &Node<TypeMapped>) {
   out.push('{');
   out.push(' ');
+  emit_mapped_signature(out, mapped.stx.as_ref());
+  out.push(' ');
+  out.push('}');
+}
+
+fn emit_mapped_signature(out: &mut String, mapped: &TypeMapped) {
   if let Some(modifier) = mapped.readonly_modifier {
     emit_mapped_modifier(out, modifier, "readonly ");
   }
@@ -541,8 +592,6 @@ fn emit_mapped_type(out: &mut String, mapped: &Node<TypeMapped>) {
   }
   out.push_str(": ");
   emit_type_expr_with_prec(out, &mapped.type_expr, TypePrec::ArrowOrConditional);
-  out.push(' ');
-  out.push('}');
 }
 
 fn emit_mapped_modifier(out: &mut String, modifier: MappedTypeModifier, token: &str) {
