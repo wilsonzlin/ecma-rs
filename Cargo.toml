@@ -29,9 +29,6 @@ members = [
   "types-ts-w12",
   "typecheck-ts-w12",
   "typecheck-ts-w13",
-  "diagnostics-w8",
-  "hir-js-w8",
-  "semantic-js-w8",
 ]
 
 [profile.release]

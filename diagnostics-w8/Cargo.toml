@@ -1,7 +1,0 @@
-[package]
-name = "diagnostics-w8"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-hir-js-w8 = { path = "../hir-js-w8" }
