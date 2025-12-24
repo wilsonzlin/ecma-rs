@@ -57,19 +57,31 @@ fn union_absorbs_literals_and_unique_symbols() {
 
   let bool_lit = store.intern_type(TypeKind::BooleanLiteral(true));
   assert_eq!(store.union(vec![bool_lit]), bool_lit);
-  assert_eq!(store.union(vec![primitives.boolean, bool_lit]), primitives.boolean);
+  assert_eq!(
+    store.union(vec![primitives.boolean, bool_lit]),
+    primitives.boolean
+  );
 
   let num_lit = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.0)));
   assert_eq!(store.union(vec![num_lit]), num_lit);
-  assert_eq!(store.union(vec![primitives.number, num_lit]), primitives.number);
+  assert_eq!(
+    store.union(vec![primitives.number, num_lit]),
+    primitives.number
+  );
 
   let str_lit = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
   assert_eq!(store.union(vec![str_lit]), str_lit);
-  assert_eq!(store.union(vec![primitives.string, str_lit]), primitives.string);
+  assert_eq!(
+    store.union(vec![primitives.string, str_lit]),
+    primitives.string
+  );
 
   let bigint_lit = store.intern_type(TypeKind::BigIntLiteral(BigInt::from(5u8)));
   assert_eq!(store.union(vec![bigint_lit]), bigint_lit);
-  assert_eq!(store.union(vec![primitives.bigint, bigint_lit]), primitives.bigint);
+  assert_eq!(
+    store.union(vec![primitives.bigint, bigint_lit]),
+    primitives.bigint
+  );
 
   assert_eq!(
     store.union(vec![primitives.unique_symbol, primitives.symbol]),
