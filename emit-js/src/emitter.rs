@@ -3,7 +3,12 @@
 //! The core contract: when callers emit token-like fragments (keywords,
 //! identifiers, numbers, punctuation), the [`Emitter`] will automatically
 //! insert the minimal whitespace required to prevent the concatenation from
-//! being lexed as a different token (e.g. `returnx`, `a++b`, `a--b`).
+//! being lexed as a different token (e.g. `returnx`, `a++b`, `a--b`). To
+//! preserve that boundary tracking, prefer the typed helpers like
+//! [`Emitter::write_keyword`], [`Emitter::write_identifier`], and
+//! [`Emitter::write_punct`] so the emitter can classify fragments; reserve
+//! [`Emitter::write_str`] for a single lexical token or whitespace-only
+//! fragments (e.g. indentation, newlines).
 
 use parse_js::loc::Loc;
 use std::fmt;
@@ -170,6 +175,16 @@ impl Emitter {
     }
   }
 
+  /// Returns the configured emit mode.
+  pub fn mode(&self) -> EmitMode {
+    self.opts.mode
+  }
+
+  /// Returns the configured options.
+  pub fn options(&self) -> EmitOptions {
+    self.opts
+  }
+
   /// Returns a read-only view of the buffer.
   pub fn as_bytes(&self) -> &[u8] {
     &self.out
@@ -195,9 +210,13 @@ impl Emitter {
   }
 
   /// Writes an arbitrary string fragment, automatically inserting a space if
-  /// it would otherwise merge with the previous token. This should only be
-  /// used for single-token fragments (keywords, identifiers, numbers, or
-  /// punctuation).
+  /// it would otherwise merge with the previous token.
+  ///
+  /// This should only be used for single-token fragments (keywords,
+  /// identifiers, numbers, or punctuation) or whitespace-only text. For
+  /// multi-token sequences, emit each token via [`Emitter::write_keyword`],
+  /// [`Emitter::write_identifier`], or [`Emitter::write_punct`] so the
+  /// emitter can correctly track boundaries between them.
   pub fn write_str(&mut self, text: &str) {
     if text.is_empty() {
       return;
@@ -239,6 +258,36 @@ impl Emitter {
     self.insert_boundary(Leading::None);
     self.out.push(b' ');
     self.state.trailing = Boundary::None;
+  }
+
+  /// Emits a newline and clears boundary tracking.
+  pub fn write_newline(&mut self) {
+    self.write_byte(b'\n');
+  }
+
+  /// Emits a comma, respecting token boundaries.
+  pub fn write_comma(&mut self) {
+    self.write_punct(",");
+  }
+
+  /// Emits a semicolon, respecting token boundaries.
+  pub fn write_semicolon(&mut self) {
+    self.write_punct(";");
+  }
+
+  /// Emits a newline and clears boundary tracking.
+  pub fn write_newline(&mut self) {
+    self.write_byte(b'\n');
+  }
+
+  /// Emits a comma, respecting token boundaries.
+  pub fn write_comma(&mut self) {
+    self.write_punct(",");
+  }
+
+  /// Emits a semicolon, respecting token boundaries.
+  pub fn write_semicolon(&mut self) {
+    self.write_punct(";");
   }
 
   /// Emits a list of items separated by `separator` and optionally including a

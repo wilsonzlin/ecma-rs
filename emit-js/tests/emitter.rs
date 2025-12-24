@@ -97,6 +97,17 @@ fn auto_classifies_raw_str_fragments() {
 }
 
 #[test]
+fn exposes_mode_and_options() {
+  let opts = EmitOptions {
+    mode: EmitMode::Canonical,
+  };
+  let emitter = Emitter::new(opts);
+
+  assert_eq!(emitter.mode(), EmitMode::Canonical);
+  assert_eq!(emitter.options().mode, EmitMode::Canonical);
+}
+
+#[test]
 fn write_byte_tracks_boundaries() {
   let mut emitter = Emitter::new(EmitOptions::default());
   emitter.write_keyword("return");
@@ -144,6 +155,32 @@ fn emits_punctuated_lists() {
     em.write_number(value.to_string().as_str());
   });
   assert_eq!(text(&emitter), "1;2;3;");
+}
+
+fn writes_newlines_and_punctuation_with_helpers() {
+  let mut emitter = Emitter::new(EmitOptions::default());
+  emitter.write_identifier("foo");
+  emitter.write_newline();
+  emitter.write_identifier("bar");
+  assert_eq!(text(&emitter), "foo\nbar");
+
+  emitter.clear();
+  emitter.write_number("1");
+  emitter.write_comma();
+  emitter.write_number("2");
+  assert_eq!(text(&emitter), "1,2");
+
+  emitter.clear();
+  emitter.write_punct("+");
+  emitter.write_newline();
+  emitter.write_punct("+");
+  assert_eq!(text(&emitter), "+\n+");
+
+  emitter.clear();
+  emitter.write_identifier("a");
+  emitter.write_semicolon();
+  emitter.write_keyword("return");
+  assert_eq!(text(&emitter), "a;return");
 }
 
 #[test]
