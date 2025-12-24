@@ -1,6 +1,7 @@
 #![deny(missing_debug_implementations)]
 
 mod display;
+mod eval;
 mod ids;
 mod kind;
 mod options;
@@ -16,6 +17,9 @@ pub use ids::ShapeId;
 pub use ids::SignatureId;
 pub use ids::TypeId;
 pub use ids::TypeParamId;
+pub use eval::ExpandedType;
+pub use eval::TypeEvaluator;
+pub use eval::TypeExpander;
 pub use kind::MappedModifier;
 pub use kind::MappedType;
 pub use kind::TemplateChunk;
