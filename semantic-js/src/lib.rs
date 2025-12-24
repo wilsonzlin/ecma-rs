@@ -16,6 +16,17 @@
 //! into vectors. Consumers should treat the IDs as opaque handles that are
 //! repeatable for the same inputs; there is no support yet for cross-run
 //! stability guarantees beyond deterministic traversal of the provided HIR/AST.
+//!
+//! ## Determinism and integration notes
+//!
+//! - JS mode writes attachments into [`parse_js::ast::node::NodeAssocData`];
+//!   lookups are stable, but iteration over internal `HashMap` tables is not
+//!   guaranteed to be deterministic.
+//! - TS mode exposes only ordered structures (`BTreeMap`, sorted declaration
+//!   lists) in its public API; root ordering and resolver results still drive
+//!   the final ID allocation.
+//! - Neither mode relies on global locks; semantics are built per invocation
+//!   and returned as immutable snapshots.
 mod assoc;
 
 pub mod js;
