@@ -270,6 +270,27 @@ impl<'a> Parser<'a> {
         // Normal case - consume and return
         Ok(self.consume())
       }
+      TT::ChevronRightEquals => {
+        // Split >= into > and =
+        self.consume();
+        let equals_token = Token {
+          typ: TT::Equals,
+          loc: Loc(t.loc.1 - 1, t.loc.1),
+          preceded_by_line_terminator: false,
+        };
+        self.buf.insert(
+          self.next_tok_i,
+          BufferedToken {
+            token: equals_token,
+            lex_mode: LexMode::Standard,
+          },
+        );
+        Ok(Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0, t.loc.0 + 1),
+          preceded_by_line_terminator: t.preceded_by_line_terminator,
+        })
+      }
       TT::ChevronRightChevronRight => {
         // Split >> into > and >
         self.consume(); // Consume the >>
@@ -291,6 +312,40 @@ impl<'a> Parser<'a> {
           preceded_by_line_terminator: t.preceded_by_line_terminator,
         })
       }
+      TT::ChevronRightChevronRightEquals => {
+        // Split >>= into >, >, =
+        self.consume();
+        let equals_token = Token {
+          typ: TT::Equals,
+          loc: Loc(t.loc.1 - 1, t.loc.1),
+          preceded_by_line_terminator: false,
+        };
+        let second = Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0 + 1, t.loc.1 - 1),
+          preceded_by_line_terminator: false,
+        };
+        // Insert in reverse order so the second > is seen before =
+        self.buf.insert(
+          self.next_tok_i,
+          BufferedToken {
+            token: equals_token,
+            lex_mode: LexMode::Standard,
+          },
+        );
+        self.buf.insert(
+          self.next_tok_i,
+          BufferedToken {
+            token: second,
+            lex_mode: LexMode::Standard,
+          },
+        );
+        Ok(Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0, t.loc.0 + 1),
+          preceded_by_line_terminator: t.preceded_by_line_terminator,
+        })
+      }
       TT::ChevronRightChevronRightChevronRight => {
         // Split >>> into > and >>
         self.consume(); // Consume the >>>
@@ -306,6 +361,39 @@ impl<'a> Parser<'a> {
           lex_mode: LexMode::Standard,
         });
         // Return a token representing the first >
+        Ok(Token {
+          typ: TT::ChevronRight,
+          loc: Loc(t.loc.0, t.loc.0 + 1),
+          preceded_by_line_terminator: t.preceded_by_line_terminator,
+        })
+      }
+      TT::ChevronRightChevronRightChevronRightEquals => {
+        // Split >>>= into >, >>, =
+        self.consume();
+        let equals_token = Token {
+          typ: TT::Equals,
+          loc: Loc(t.loc.1 - 1, t.loc.1),
+          preceded_by_line_terminator: false,
+        };
+        let split_token = Token {
+          typ: TT::ChevronRightChevronRight,
+          loc: Loc(t.loc.0 + 1, t.loc.1 - 1),
+          preceded_by_line_terminator: false,
+        };
+        self.buf.insert(
+          self.next_tok_i,
+          BufferedToken {
+            token: equals_token,
+            lex_mode: LexMode::Standard,
+          },
+        );
+        self.buf.insert(
+          self.next_tok_i,
+          BufferedToken {
+            token: split_token,
+            lex_mode: LexMode::Standard,
+          },
+        );
         Ok(Token {
           typ: TT::ChevronRight,
           loc: Loc(t.loc.0, t.loc.0 + 1),

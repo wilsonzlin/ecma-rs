@@ -609,6 +609,9 @@ impl<'a> Parser<'a> {
       // Type operators
       TT::KeywordTypeof | TT::KeywordKeyof | TT::KeywordInfer => true,
 
+      // Variance/const modifiers for type parameters
+      TT::KeywordConst | TT::KeywordIn | TT::KeywordOut => true,
+
       // Constructor types: new () => T, abstract new () => T
       TT::KeywordNew | TT::KeywordAbstract => true,
 
@@ -632,8 +635,11 @@ impl<'a> Parser<'a> {
           self.peek().typ,
           TT::ChevronLeft
             | TT::ChevronRight
+            | TT::ChevronRightEquals
             | TT::ChevronRightChevronRight
+            | TT::ChevronRightChevronRightEquals
             | TT::ChevronRightChevronRightChevronRight
+            | TT::ChevronRightChevronRightChevronRightEquals
             | TT::Comma
             | TT::KeywordExtends
             | TT::Equals
