@@ -150,7 +150,9 @@ pub struct SymbolData {
 
 #[derive(Debug)]
 pub struct JsSemantics {
+  /// Interned identifier strings in order of first encounter.
   pub names: Vec<String>,
+  /// String → [`NameId`] lookup for O(1) resolution of raw names.
   pub name_lookup: HashMap<String, NameId>,
   pub scopes: Vec<ScopeData>,
   pub symbols: Vec<SymbolData>,
@@ -178,6 +180,8 @@ impl JsSemantics {
     self.name_lookup.get(name).copied()
   }
 
+  /// Resolves a [`NameId`] starting from `scope`, walking ancestor scopes until a
+  /// symbol is found.
   pub fn resolve_name_id_in_scope(&self, scope: ScopeId, name: NameId) -> Option<SymbolId> {
     let mut current = Some(scope);
     while let Some(scope_id) = current {
@@ -190,6 +194,7 @@ impl JsSemantics {
     None
   }
 
+  /// Resolves a raw identifier string starting from `scope`.
   pub fn resolve_name_in_scope(&self, scope: ScopeId, name: &str) -> Option<SymbolId> {
     let Some(name_id) = self.name_id(name) else {
       return None;
