@@ -1,5 +1,9 @@
+<<<<<<< HEAD
 //! TypeScript mode semantics: bind module-level declarations, imports, and
 //! exports into deterministic symbol groups.
+//!
+//! TS mode is namespaced under `ts` to avoid collisions with JS-only scopes
+//! and symbols. APIs here are still evolving.
 //!
 //! The binder operates over pre-lowered [`HirFile`] inputs (typically produced
 //! by a frontend such as `hir-js`). [`bind_ts_program`] walks the reachable

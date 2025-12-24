@@ -1,14 +1,19 @@
+<<<<<<< HEAD
 //! JavaScript mode semantics: build a lexical scope tree and resolve identifiers
 //! in the value namespace.
+//!
+//! This module builds scopes and symbols for plain JS inputs without TS
+//! namespaces. After binding/resolving, use [`crate::assoc::js`] helpers to read
+//! `ScopeId`/`SymbolId` attached to `parse-js` AST nodes.
 //!
 //! The JS entry points are intentionally small:
 //! - [`declare()`] walks a parse-js AST, allocates [`ScopeId`]s and [`SymbolId`]s,
 //!   and attaches the current [`ScopeId`] to every
 //!   [`parse_js::ast::node::NodeAssocData`]. Declarations encountered in
-//!   patterns receive [`crate::DeclaredSymbol`] handles.
+//!   patterns receive [`crate::assoc::js::DeclaredSymbol`] handles.
 //! - [`resolve()`] uses the attached [`ScopeId`]s to resolve identifier
 //!   expressions and patterns to their nearest enclosing declaration and stores
-//!   a [`crate::ResolvedSymbol`] next to the node.
+//!   a [`crate::assoc::js::ResolvedSymbol`] next to the node.
 //! - [`bind_js`] simply runs both passes.
 //!
 //! ## Scope kinds
@@ -28,11 +33,13 @@
 //! ## Attachments and simplifications
 //!
 //! - Every AST node receives its enclosing [`ScopeId`] in `NodeAssocData`.
-//! - Identifier patterns that introduce bindings receive [`crate::DeclaredSymbol`];
-//!   the same pattern positions without a declaration (e.g. destructuring
-//!   assignment) are resolved as uses by [`resolve()`].
-//! - Identifier expressions and non-decl patterns receive [`crate::ResolvedSymbol`]
-//!   pointing to the nearest lexically visible declaration.
+//! - Identifier patterns that introduce bindings receive
+//!   [`crate::assoc::js::DeclaredSymbol`]; the same pattern positions without a
+//!   declaration (e.g. destructuring assignment) are resolved as uses by
+//!   [`resolve()`].
+//! - Identifier expressions and non-decl patterns receive
+//!   [`crate::assoc::js::ResolvedSymbol`] pointing to the nearest lexically
+//!   visible declaration.
 //! - The pass operates purely syntactically: it does not attempt to model
 //!   hoisting, TDZ errors, `with`/`eval` semantics, or re-declaration
 //!   diagnostics. `var` simply targets the nearest closure, and top-level
