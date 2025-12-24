@@ -498,6 +498,7 @@ mod tests {
     assert!(!span.contains(6));
   }
 
+  #[cfg(feature = "parse-js")]
   #[test]
   fn loc_conversion_is_lossless_when_fitting() {
     let loc = Loc(10, 20);
