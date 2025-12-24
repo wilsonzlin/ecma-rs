@@ -10,17 +10,17 @@ against `tsc`.
 git submodule update --init --recursive parse-js/tests/TypeScript
 
 # 2) Install Node prereqs (once)
-npm install --prefix typecheck-ts-harness --no-save typescript
+npm install typescript
 
 # 3) Run the Rust conformance harness
-cargo run -p typecheck-ts-harness --release -- conformance --filter "**/es2020/**" --shard 0/8
+cargo run -p typecheck-ts-harness --release -- conformance --filter "*/es2020/**" --shard 0/8
 
 # 4) (Optional) Regenerate difftsc baselines for local fixtures
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --update-baselines
 ```
 
-If any step fails (e.g. missing tests or “cannot find module `typescript`”),
-revisit the prerequisites below.
+If any step silently produces zero tests or fails with “cannot find module
+`typescript`”, revisit the prerequisites below.
 
 ## Prerequisites
 
@@ -35,22 +35,21 @@ ls parse-js/tests/TypeScript/tests/cases/conformance | head
 ```
 
 - Default root: `parse-js/tests/TypeScript/tests/cases/conformance`
-- If the submodule is missing/empty, conformance discovery now errors. Pass
-  `--allow-empty` only when intentionally running with an empty suite.
+- If the submodule is missing/empty, conformance discovery returns **zero**
+  tests and the command prints `Ran 0 test(s)` (treat this as a misconfiguration,
+  not success).
 - Override the root with `--root <path>` to point at a different checkout or a
   reduced local corpus.
 
 ### Node.js + `typescript` npm package
 
-The harness shells out to a long-lived Node helper (`scripts/tsc_runner.js`)
-that loads the `typescript` package. Install it anywhere on Node's resolution
-path for that script (installing under `typecheck-ts-harness/` works out of the
-box):
+The `difftsc` command shells out to Node and loads the `typescript` package via
+`scripts/tsc_wrapper.js`.
 
 ```
 node --version
-npm install --prefix typecheck-ts-harness --no-save typescript
-node -C typecheck-ts-harness -p "require('typescript').version"
+npm install typescript          # or pnpm/yarn; install anywhere on Node's resolution path
+node -p "require('typescript').version"
 ```
 
 - Use `--node /path/to/node` if `node` is not on `PATH` or you want a specific
@@ -59,25 +58,8 @@ node -C typecheck-ts-harness -p "require('typescript').version"
   - Built without `with-node` feature **or** `node --version` fails → `difftsc`
     logs a skip instead of failing.
 - Missing `typescript` package:
-  - The Node helper returns a `crash` payload; install the package and re-run.
-
-### Node TypeScript runner protocol
-
-`scripts/tsc_runner.js` speaks NDJSON over stdin/stdout and serves files from
-memory (no tempdirs). Each input line is:
-
-```json
-{ "rootNames": ["main.ts"], "files": { "main.ts": "const x: string = 1;" }, "options": { "strict": true } }
-```
-
-Output is one JSON object per line:
-
-```json
-{ "diagnostics": [{ "code": 2322, "file": "main.ts", "start": 22, "end": 23, "category": "error", "message": "Type '1' is not assignable to type 'string'." }] }
-```
-
-If the runner encounters an internal error, it sets a `crash` field on the
-output. Paths are normalized relative to `/` for deterministic baselines.
+  - `scripts/tsc_wrapper.js` will exit with a require error; install the package
+    and re-run.
 
 ## Conformance runner (`conformance`)
 
@@ -89,35 +71,28 @@ cargo run -p typecheck-ts-harness --release -- conformance
 
 # Filter (glob or regex) and shard
 cargo run -p typecheck-ts-harness --release -- conformance \
-  --filter "**/es2020/**" \
+  --filter "*/es2020/**" \
   --shard 3/16
 
 # Larger timeout per test (seconds)
 cargo run -p typecheck-ts-harness --release -- conformance --timeout-secs 30
-
-# Include additional extensions
-cargo run -p typecheck-ts-harness --release -- conformance --extensions ts,tsx,d.ts,js
 ```
 
 - Filters accept globs or regexes; they match the path under the root (e.g.
-  `**/es2020/**`, `**/*optionalChaining*`). Paths are normalized with `/` and do
-  not include the absolute root prefix.
-- Discovery includes `.ts`, `.tsx`, and `.d.ts` by default. Use
-  `--extensions <comma-separated>` to add more.
-- Shards are zero-based (`i/n`) and are applied after sorting cases by id.
-- `--jobs <n>` runs up to `n` tests (in-process); isolation flags are accepted
-  but the runner currently executes tests in-process.
-- Timeouts apply per test case (default 10s) and only fail the offending test,
+  `**/es2020/**`, `optionalChaining`).
+- Shards are zero-based (`i/n`) and are applied after sorting cases by id; run
+  each shard in a separate process/job for parallelism.
+- Timeouts apply per test case (default 10s) and kill only the offending test,
   not the whole run.
-- `--isolate process|none` is accepted for compatibility; `process` is
-  recommended when per-test timeouts are important.
-- `--single <test-id>` runs one test and prints a single `TestResult` JSON
-  object (used by the orchestrator).
-- `--json` emits machine-readable results; `--trace`/`--profile` are forwarded to
-  the checker.
-- `--allow-empty` suppresses the default error when zero tests are discovered.
-- `HARNESS_SLEEP_MS_PER_TEST` can inject a per-test delay
-  (`slow=1500,other=10`) to stress timeout handling.
+- Comparison is configurable:
+  - `--compare auto|tsc|snapshot|none` (default auto: prefer `tsc`, then
+    snapshots, else none with a warning)
+  - `--node /path/to/node` overrides the Node.js executable used for `tsc`
+  - `--span-tolerance <bytes>` allows small span drift when diffing
+- `--json` emits machine-readable results (including both engines’ diagnostics);
+  `--trace`/`--profile` are forwarded to the checker.
+- Harness execution is currently single-threaded; for CI parallelism use shards
+  across jobs (example below).
 
 **GitHub Actions suggestion (`ubuntu-latest`, 2-core):**
 
@@ -130,43 +105,38 @@ matrix:
 run: cargo run -p typecheck-ts-harness --release -- conformance --shard ${{matrix.shard}}/16 --timeout-secs 20 --json
 ```
 
-If the TypeScript suite is missing the command will fail fast; check the
-submodule before assuming green or use `--allow-empty` for ad-hoc runs.
+If the TypeScript suite is missing you will see `Ran 0 test(s)`; check the
+submodule before assuming green.
 
 ## Differential testing (`difftsc`)
 
-`difftsc` supports both baseline stability checks (tsc vs stored JSON) and true
-differential testing (tsc vs the Rust checker). It runs `tsc` via the reusable
-`TscRunner` (`scripts/tsc_runner.js`) with in-memory virtual files and structured
-JSON.
+Today `difftsc` runs `tsc` (via Node) on fixture suites, writes/reads structured
+JSON baselines, and compares diagnostics.
 
 ```
 # Regenerate baselines for the bundled suite
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --update-baselines
 
-# Compare live tsc output against baselines
+# Compare against committed baselines
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc
-
-# Differential mode: tsc vs Rust
-cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust
-
-# Differential mode using stored baselines instead of shelling out to tsc
-cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --use-baselines
 
 # Allow small span drift (bytes)
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --span-tolerance 2
-
-# Emit JSON (includes diff details) and continue even if mismatches are found
-cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --json --allow-mismatches
 ```
 
 - Node is discovered by running `node --version`; use `--node` to override.
 - `with-node` feature disabled or missing Node → command logs `difftsc skipped`
-  and exits successfully. Differential runs with `--use-baselines` can proceed
-  without Node.
+  and exits successfully.
 - Baselines are read from/written to `baselines/<suite>/<test>.json` (see below).
-- The runner uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
-  writes `{ diagnostics: [{ code, category, file, start, end, message }] }`.
+- The wrapper uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
+  writes `{ diagnostics: [{ code, category, file, start, end }] }`.
+
+**Planned differential mode (once the Rust checker exposes matching JSON):**
+- The same `difftsc` entry point will also run the Rust checker and diff directly
+  against `tsc` without precomputed baselines.
+- Expect a flag such as `--differential`/`--compare-rust` alongside `--suite`:
+  `cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --differential`
+- Until that lands, keep baselines up to date with `--update-baselines`.
 
 ## Fixtures and baselines layout
 

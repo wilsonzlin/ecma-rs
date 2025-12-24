@@ -35,6 +35,28 @@ function serializeDiagnostic(diagnostic) {
   };
 }
 
+function loadHarnessOptions() {
+  const raw = process.env.HARNESS_OPTIONS;
+  if (!raw) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    const converted = ts.convertCompilerOptionsFromJson(parsed, process.cwd(), undefined);
+    if (converted.errors && converted.errors.length) {
+      converted.errors.forEach((d) => {
+        console.error(formatMessage(d.messageText));
+      });
+      process.exit(1);
+    }
+    return converted.options || {};
+  } catch (err) {
+    console.error("failed to parse HARNESS_OPTIONS", err);
+    process.exit(1);
+  }
+}
+
 function main() {
   const files = process.argv.slice(2);
   if (files.length === 0) {
@@ -46,6 +68,7 @@ function main() {
     noEmit: true,
     pretty: false,
     skipLibCheck: true,
+    ...loadHarnessOptions(),
   };
 
   const program = ts.createProgram({ rootNames: files, options });

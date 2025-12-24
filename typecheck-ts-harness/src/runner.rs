@@ -1,423 +1,226 @@
-use crate::directives::{HarnessDirective, HarnessOptions};
-use crate::discover::{
-  discover_conformance_tests, load_conformance_test, Filter, Shard, TestCase, DEFAULT_EXTENSIONS,
+use crate::diagnostic_norm::{
+  describe, normalize_rust_diagnostics, normalize_tsc_diagnostics, sort_diagnostics,
+  within_tolerance, NormalizedDiagnostic,
 };
+use crate::difftsc::{TscDiagnostic, TscDiagnostics};
+use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase};
 use crate::multifile::normalize_name;
-use crate::profile::ProfileBuilder;
-use crate::{HarnessError, Result, VirtualFile};
-use clap::ValueEnum;
+use crate::{Result, VirtualFile};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info, info_span, warn};
-use typecheck_ts::lib_support::FileKind;
-use typecheck_ts::{Diagnostic, FileId, Host, HostError, Program, Span, TextRange};
+use typecheck_ts::{FileId, Host, HostError, Program};
+use walkdir::WalkDir;
 
-const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CompareMode {
+  Auto,
   None,
   Tsc,
   Snapshot,
 }
 
-impl CompareMode {
-  pub fn as_str(self) -> &'static str {
-    match self {
-      CompareMode::None => "none",
-      CompareMode::Tsc => "tsc",
-      CompareMode::Snapshot => "snapshot",
-    }
-  }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum Isolation {
-  Process,
-  None,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum TestStatus {
-  Passed,
-  ParseError,
-  BindError,
-  TypeError,
+pub enum TestOutcome {
+  Match,
+  RustExtraDiagnostics,
+  RustMissingDiagnostics,
+  SpanMismatch,
+  CodeMismatch,
   RustIce,
-  InternalError,
-  HarnessCrash,
+  TscCrashed,
   Timeout,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TestResult {
-  pub id: String,
-  pub path: String,
-  pub status: TestStatus,
-  pub duration_ms: u128,
-  pub diagnostics: Vec<Diagnostic>,
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
-  pub notes: Vec<String>,
-  #[serde(default)]
-  pub directives: Vec<HarnessDirective>,
-  #[serde(default)]
-  pub options: HarnessOptions,
-  #[serde(default, skip_serializing_if = "String::is_empty")]
-  pub stdout: String,
-  #[serde(default, skip_serializing_if = "String::is_empty")]
-  pub stderr: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct Summary {
-  pub total: usize,
-  pub passed: usize,
-  pub failed: usize,
-  pub timed_out: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct JsonReport {
-  pub summary: Summary,
-  pub results: Vec<TestResult>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ConformanceOptions {
   pub root: PathBuf,
   pub filter: Filter,
-  pub filter_pattern: Option<String>,
   pub shard: Option<Shard>,
   pub json: bool,
   pub update_snapshots: bool,
   pub timeout: Duration,
   pub trace: bool,
   pub profile: bool,
-  pub profile_out: PathBuf,
-  pub extensions: Vec<String>,
-  pub allow_empty: bool,
-  pub jobs: usize,
-  pub isolate: Isolation,
   pub compare: CompareMode,
+  pub node_path: PathBuf,
+  pub span_tolerance: u32,
+  pub allow_mismatches: bool,
 }
 
-impl Default for ConformanceOptions {
-  fn default() -> Self {
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OutcomeCounts {
+  #[serde(rename = "match")]
+  pub match_: usize,
+  pub rust_extra_diagnostics: usize,
+  pub rust_missing_diagnostics: usize,
+  pub span_mismatch: usize,
+  pub code_mismatch: usize,
+  pub rust_ice: usize,
+  pub tsc_crashed: usize,
+  pub timeout: usize,
+}
+
+impl OutcomeCounts {
+  fn increment(&mut self, outcome: TestOutcome) {
+    match outcome {
+      TestOutcome::Match => self.match_ += 1,
+      TestOutcome::RustExtraDiagnostics => self.rust_extra_diagnostics += 1,
+      TestOutcome::RustMissingDiagnostics => self.rust_missing_diagnostics += 1,
+      TestOutcome::SpanMismatch => self.span_mismatch += 1,
+      TestOutcome::CodeMismatch => self.code_mismatch += 1,
+      TestOutcome::RustIce => self.rust_ice += 1,
+      TestOutcome::TscCrashed => self.tsc_crashed += 1,
+      TestOutcome::Timeout => self.timeout += 1,
+    }
+  }
+
+  fn mismatches(&self) -> usize {
+    self.rust_extra_diagnostics
+      + self.rust_missing_diagnostics
+      + self.span_mismatch
+      + self.code_mismatch
+      + self.rust_ice
+      + self.tsc_crashed
+      + self.timeout
+  }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Summary {
+  pub total: usize,
+  pub outcomes: OutcomeCounts,
+}
+
+impl Summary {
+  pub fn has_mismatches(&self) -> bool {
+    self.outcomes.mismatches() > 0
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConformanceReport {
+  pub summary: Summary,
+  pub compare_mode: CompareMode,
+  pub results: Vec<TestResult>,
+}
+
+pub type JsonReport = ConformanceReport;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EngineStatus {
+  Ok,
+  Ice,
+  Crashed,
+  Skipped,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineDiagnostics {
+  pub status: EngineStatus,
+  pub diagnostics: Vec<NormalizedDiagnostic>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub error: Option<String>,
+}
+
+impl EngineDiagnostics {
+  fn ok(mut diagnostics: Vec<NormalizedDiagnostic>) -> Self {
+    sort_diagnostics(&mut diagnostics);
     Self {
-      root: PathBuf::new(),
-      filter: Filter::All,
-      filter_pattern: None,
-      shard: None,
-      json: false,
-      update_snapshots: false,
-      timeout: Duration::from_secs(0),
-      trace: false,
-      profile: false,
-      profile_out: PathBuf::from("profile.json"),
-      extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-      allow_empty: false,
-      jobs: 1,
-      isolate: Isolation::None,
-      compare: CompareMode::None,
+      status: EngineStatus::Ok,
+      diagnostics,
+      error: None,
+    }
+  }
+
+  fn crashed(error: impl Into<String>) -> Self {
+    Self {
+      status: EngineStatus::Crashed,
+      diagnostics: Vec::new(),
+      error: Some(error.into()),
+    }
+  }
+
+  fn ice(error: impl Into<String>) -> Self {
+    Self {
+      status: EngineStatus::Ice,
+      diagnostics: Vec::new(),
+      error: Some(error.into()),
+    }
+  }
+
+  fn skipped(message: Option<String>) -> Self {
+    Self {
+      status: EngineStatus::Skipped,
+      diagnostics: Vec::new(),
+      error: message,
     }
   }
 }
 
-#[derive(Debug, Clone)]
-pub struct SingleTestOptions {
-  pub root: PathBuf,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestResult {
   pub id: String,
-  pub timeout: Duration,
-  pub trace: bool,
-  pub profile: bool,
-  pub profile_out: PathBuf,
-  pub compare: CompareMode,
+  pub path: String,
+  pub outcome: TestOutcome,
+  pub duration_ms: u128,
+  pub rust: EngineDiagnostics,
+  pub tsc: EngineDiagnostics,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub notes: Vec<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub detail: Option<MismatchDetail>,
 }
 
-pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
-  let extensions = if opts.extensions.is_empty() {
-    DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect()
-  } else {
-    opts.extensions.clone()
-  };
-
-  let run_start = Instant::now();
-  let mut profiler = opts.profile.then(|| ProfileBuilder::new(&opts));
-
-  let mut cases = {
-    let span = info_span!("discover_tests", root = %opts.root.display());
-    let _enter = span.enter();
-    info!(phase = "discover_start", root = %opts.root.display());
-    let discovered = discover_conformance_tests(&opts.root, &opts.filter, &extensions)?;
-    info!(phase = "discover_complete", count = discovered.len());
-    discovered
-  };
-
-  if cases.is_empty() && !opts.allow_empty {
-    return Err(HarnessError::EmptySuite {
-      root: opts.root.display().to_string(),
-      extensions: extensions.join(","),
-    });
-  }
-
-  if let Some(shard) = opts.shard {
-    let before = cases.len();
-    cases = cases
-      .into_iter()
-      .enumerate()
-      .filter(|(idx, _)| shard.includes(*idx))
-      .map(|(_, case)| case)
-      .collect();
-    info!(
-      phase = "shard",
-      shard_index = shard.index,
-      shard_total = shard.total,
-      before = before,
-      after = cases.len()
-    );
-  }
-
-  let mut results = Vec::new();
-  for case in cases.into_iter() {
-    let result = run_single_case(case, opts.timeout);
-    if let Some(profiler) = profiler.as_mut() {
-      profiler.record_test(&result);
-    }
-    results.push(result);
-  }
-
-  let summary = summarize(&results);
-  let wall_time = run_start.elapsed();
-  info!(
-    phase = "summary",
-    duration_ms = wall_time.as_millis(),
-    total = summary.total,
-    passed = summary.passed,
-    failed = summary.failed,
-    timed_out = summary.timed_out
-  );
-
-  if let Some(profiler) = profiler {
-    profiler.write(&summary, wall_time, &opts.profile_out)?;
-  }
-
-  results.sort_by(|a, b| a.id.cmp(&b.id));
-  Ok(JsonReport { summary, results })
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MismatchDetail {
+  pub message: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub rust: Option<NormalizedDiagnostic>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub tsc: Option<NormalizedDiagnostic>,
 }
 
-pub fn run_single_conformance(opts: SingleTestOptions) -> Result<TestResult> {
-  let case = load_conformance_test(&opts.root, &opts.id)?;
-  let mut result = run_single_case(case, opts.timeout);
-  if !opts.timeout.is_zero() && result.duration_ms > opts.timeout.as_millis() {
-    result.status = TestStatus::Timeout;
-  }
-  Ok(result)
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HarnessOptions {
+  pub module: Option<String>,
 }
 
-fn summarize(results: &[TestResult]) -> Summary {
-  let mut summary = Summary::default();
-  summary.total = results.len();
-  for result in results {
-    match result.status {
-      TestStatus::Passed => summary.passed += 1,
-      TestStatus::Timeout => summary.timed_out += 1,
-      _ => summary.failed += 1,
-    }
-  }
-  summary
-}
-
-fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
-  use std::sync::mpsc;
-  let span = info_span!("test_case", test_id = %case.id);
-  let _enter = span.enter();
-  let (tx, rx) = mpsc::channel();
-  let cloned = case.clone();
-
-  info!(phase = "start", timeout_ms = timeout.as_millis());
-  std::thread::spawn({
-    let span = span.clone();
-    move || {
-      let _entered = span.enter();
-      let result = execute_case(cloned);
-      let _ = tx.send(result);
-    }
-  });
-
-  match rx.recv_timeout(timeout) {
-    Ok(mut result) => {
-      info!(
-        phase = "finish",
-        status = ?result.status,
-        duration_ms = result.duration_ms
-      );
-      result.diagnostics.sort();
-      result
-    }
-    Err(_) => {
-      warn!(phase = "timeout", timeout_ms = timeout.as_millis());
-      TestResult {
-        id: case.id,
-        path: case.path.display().to_string(),
-        status: TestStatus::Timeout,
-        duration_ms: timeout.as_millis(),
-        diagnostics: Vec::new(),
-        notes: case.notes,
-        directives: case.directives,
-        options: case.options,
-        stdout: String::new(),
-        stderr: String::new(),
-      }
-    }
-  }
-}
-
-fn execute_case(case: TestCase) -> TestResult {
-  let start = Instant::now();
-  if let Some(delay) = harness_sleep_for_case(&case.id) {
-    std::thread::sleep(delay);
-  }
-
-  let mut notes = case.notes.clone();
-  let directives = case.directives.clone();
-  let options = case.options.clone();
-  let host = HarnessHost::new(&case.deduped_files);
-  let roots = host.root_files();
-  let program_host = host.clone();
-
-  info!(
-    phase = "rust_check_start",
-    file_count = case.deduped_files.len()
-  );
-  let result = std::panic::catch_unwind(|| Program::new(program_host, roots).check());
-  let duration_ms = start.elapsed().as_millis();
-  notes.extend(host.take_resolution_notes());
-
-  match result {
-    Ok(diagnostics) => {
-      let status = categorize(&diagnostics);
-      info!(
-        phase = "rust_check_complete",
-        status = ?status,
-        duration_ms = duration_ms
-      );
-      TestResult {
-        id: case.id,
-        path: case.path.display().to_string(),
-        status,
-        duration_ms,
-        diagnostics,
-        notes,
-        directives,
-        options,
-        stdout: String::new(),
-        stderr: String::new(),
-      }
-    }
-    Err(_) => {
-      warn!(phase = "ice", duration_ms = duration_ms);
-      TestResult {
-        id: case.id,
-        path: case.path.display().to_string(),
-        status: TestStatus::RustIce,
-        duration_ms,
-        diagnostics: vec![Diagnostic::error(
-          "ICE0001",
-          "typechecker panicked",
-          Span::new(FileId(0), TextRange::new(0, 0)),
-        )],
-        notes,
-        directives,
-        options,
-        stdout: String::new(),
-        stderr: String::new(),
-      }
-    }
-  }
-}
-
-fn harness_sleep_for_case(id: &str) -> Option<Duration> {
-  let raw = std::env::var(HARNESS_SLEEP_ENV).ok()?;
-  if raw.is_empty() {
-    return None;
-  }
-
-  if let Ok(ms) = raw.parse::<u64>() {
-    return Some(Duration::from_millis(ms));
-  }
-
-  for part in raw.split(',') {
-    if let Some((pattern, ms_raw)) = part.split_once('=') {
-      if id.contains(pattern.trim()) {
-        if let Ok(ms) = ms_raw.trim().parse::<u64>() {
-          return Some(Duration::from_millis(ms));
-        }
-      }
+impl HarnessOptions {
+  fn from_test_case(case: &TestCase) -> Self {
+    HarnessOptions {
+      module: case.module_directive.clone(),
     }
   }
 
-  None
-}
+  fn to_env_json(&self) -> Option<String> {
+    if self.module.is_none() {
+      return None;
+    }
 
-fn categorize(diags: &[Diagnostic]) -> TestStatus {
-  if diags.is_empty() {
-    return TestStatus::Passed;
+    serde_json::to_string(self).ok()
   }
-
-  let has_code_prefix = |prefix: &str| {
-    diags
-      .iter()
-      .any(|d| d.code.as_str().to_ascii_uppercase().starts_with(prefix))
-  };
-
-  if has_code_prefix("PS") || has_code_prefix("PARSE") {
-    return TestStatus::ParseError;
-  }
-
-  if has_code_prefix("BIND") {
-    return TestStatus::BindError;
-  }
-
-  if has_code_prefix("HOST") {
-    return TestStatus::InternalError;
-  }
-
-  if has_code_prefix("ICE") {
-    return TestStatus::RustIce;
-  }
-
-  TestStatus::TypeError
 }
 
 #[derive(Clone)]
-struct HarnessHost {
-  inner: Arc<HarnessHostInner>,
-}
-
-struct HarnessHostInner {
-  files: Vec<HarnessFile>,
-  name_to_id: HashMap<String, FileId>,
-  failed_resolutions: Mutex<Vec<ResolutionFailure>>,
-}
-
-struct ResolutionFailure {
-  from: FileId,
-  specifier: String,
-  candidates: Vec<String>,
-}
-
 struct HarnessFile {
   normalized: String,
   content: Arc<str>,
 }
 
-impl HarnessHost {
+#[derive(Clone)]
+struct HarnessFileSet {
+  files: Vec<HarnessFile>,
+  name_to_id: HashMap<String, FileId>,
+}
+
+impl HarnessFileSet {
   fn new(files: &[VirtualFile]) -> Self {
     let mut normalized_names = Vec::with_capacity(files.len());
     for file in files {
@@ -446,82 +249,371 @@ impl HarnessHost {
     }
 
     Self {
-      inner: Arc::new(HarnessHostInner {
-        files: stored,
-        name_to_id,
-        failed_resolutions: Mutex::new(Vec::new()),
-      }),
+      files: stored,
+      name_to_id,
     }
   }
 
   fn root_files(&self) -> Vec<FileId> {
-    (0..self.inner.files.len())
-      .map(|i| FileId(i as u32))
-      .collect()
+    (0..self.files.len()).map(|i| FileId(i as u32)).collect()
   }
 
-  fn record_failure(&self, from: FileId, specifier: &str, candidates: Vec<String>) {
-    let mut failures = self.inner.failed_resolutions.lock().unwrap();
-    if failures
-      .iter()
-      .any(|f| f.from == from && f.specifier == specifier)
-    {
-      return;
-    }
-
-    failures.push(ResolutionFailure {
-      from,
-      specifier: specifier.to_string(),
-      candidates,
-    });
-  }
-
-  fn take_resolution_notes(&self) -> Vec<String> {
-    const MAX_LISTED_CANDIDATES: usize = 10;
-
-    let mut failures = self.inner.failed_resolutions.lock().unwrap();
-    let mut notes = Vec::new();
-    for failure in failures.drain(..) {
-      let from_name = self
-        .inner
-        .files
-        .get(failure.from.0 as usize)
-        .map(|f| f.normalized.as_str())
-        .unwrap_or("<unknown>");
-
-      let total = failure.candidates.len();
-      let mut listed = failure.candidates;
-      if listed.len() > MAX_LISTED_CANDIDATES {
-        listed.truncate(MAX_LISTED_CANDIDATES);
-      }
-      let suffix = if total > listed.len() {
-        format!(" ({} more)", total - listed.len())
-      } else {
-        String::new()
-      };
-
-      let tried = if listed.is_empty() {
-        "<none>".to_string()
-      } else {
-        listed.join(", ")
-      };
-
-      notes.push(format!(
-        "failed to resolve \"{}\" from {} (tried {}{})",
-        failure.specifier, from_name, tried, suffix
-      ));
-    }
-
-    notes
-  }
-
-  fn file_names(&self) -> Vec<String> {
+  fn file_name(&self, file: FileId) -> Option<String> {
     self
-      .inner
       .files
-      .iter()
+      .get(file.0 as usize)
       .map(|f| f.normalized.clone())
-      .collect()
+  }
+
+  fn resolve(&self, normalized: &str) -> Option<FileId> {
+    self.name_to_id.get(normalized).copied()
+  }
+
+  fn iter(&self) -> impl Iterator<Item = &HarnessFile> {
+    self.files.iter()
+  }
+
+  fn write_to_dir(&self, dir: &Path) -> std::io::Result<()> {
+    for file in &self.files {
+      let path = dir.join(&file.normalized);
+      if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+      }
+      std::fs::write(&path, &*file.content)?;
+    }
+    Ok(())
+  }
+}
+
+pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
+  let mut cases = discover_conformance_tests(&opts.root, &opts.filter)?;
+
+  if let Some(shard) = opts.shard {
+    cases = cases
+      .into_iter()
+      .enumerate()
+      .filter(|(idx, _)| shard.includes(*idx))
+      .map(|(_, case)| case)
+      .collect();
+  }
+
+  let tsc_runner = TscRunner::new(opts.node_path.clone());
+  let tsc_available = tsc_runner.available();
+  let snapshot_store = SnapshotStore::new(&opts.root);
+  let compare_mode = resolve_compare_mode(opts.compare, tsc_available, &snapshot_store);
+
+  let mut results = Vec::new();
+  for case in cases.into_iter() {
+    let result = run_single_case(
+      case,
+      compare_mode,
+      &tsc_runner,
+      tsc_available,
+      &snapshot_store,
+      &opts,
+    );
+    results.push(result);
+  }
+
+  let summary = summarize(&results);
+  Ok(ConformanceReport {
+    summary,
+    compare_mode,
+    results,
+  })
+}
+
+fn resolve_compare_mode(
+  requested: CompareMode,
+  tsc_available: bool,
+  snapshots: &SnapshotStore,
+) -> CompareMode {
+  match requested {
+    CompareMode::Auto => {
+      if tsc_available {
+        CompareMode::Tsc
+      } else if snapshots.has_any() {
+        eprintln!("tsc unavailable; falling back to conformance snapshots");
+        CompareMode::Snapshot
+      } else {
+        eprintln!("warning: comparison disabled (tsc unavailable and no snapshots found)");
+        CompareMode::None
+      }
+    }
+    other => other,
+  }
+}
+
+fn run_single_case(
+  case: TestCase,
+  compare_mode: CompareMode,
+  tsc_runner: &TscRunner,
+  tsc_available: bool,
+  snapshots: &SnapshotStore,
+  opts: &ConformanceOptions,
+) -> TestResult {
+  let (tx, rx) = mpsc::channel();
+  let cloned_runner = tsc_runner.clone();
+  let cloned_snapshots = snapshots.clone();
+  let timeout_id = case.id.clone();
+  let timeout_path = case.path.display().to_string();
+  let timeout_notes = case.notes.clone();
+  let timeout = opts.timeout;
+  let span_tolerance = opts.span_tolerance;
+  let update_snapshots = opts.update_snapshots;
+  std::thread::spawn(move || {
+    let result = execute_case(
+      case,
+      compare_mode,
+      cloned_runner,
+      tsc_available,
+      cloned_snapshots,
+      span_tolerance,
+      update_snapshots,
+    );
+    let _ = tx.send(result);
+  });
+
+  match rx.recv_timeout(timeout) {
+    Ok(result) => result,
+    Err(_) => TestResult {
+      id: timeout_id,
+      path: timeout_path,
+      outcome: TestOutcome::Timeout,
+      duration_ms: timeout.as_millis(),
+      rust: EngineDiagnostics::skipped(None),
+      tsc: EngineDiagnostics::skipped(None),
+      notes: timeout_notes,
+      detail: None,
+    },
+  }
+}
+
+fn execute_case(
+  case: TestCase,
+  compare_mode: CompareMode,
+  tsc_runner: TscRunner,
+  tsc_available: bool,
+  snapshots: SnapshotStore,
+  span_tolerance: u32,
+  update_snapshots: bool,
+) -> TestResult {
+  let start = Instant::now();
+  let notes = case.notes.clone();
+  let file_set = HarnessFileSet::new(&case.files);
+  let harness_options = HarnessOptions::from_test_case(&case);
+
+  let rust = run_rust(&file_set);
+
+  let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
+  let tsc = match compare_mode {
+    CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
+    CompareMode::Tsc => {
+      if tsc_available {
+        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &harness_options);
+        tsc_raw = raw;
+        diag
+      } else {
+        EngineDiagnostics::crashed("tsc unavailable")
+      }
+    }
+    CompareMode::Snapshot => {
+      if update_snapshots {
+        if tsc_available {
+          let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &harness_options);
+          tsc_raw = raw;
+          diag
+        } else {
+          EngineDiagnostics::crashed("tsc unavailable for snapshot update")
+        }
+      } else {
+        match snapshots.load(&case.id) {
+          Ok(diags) => {
+            tsc_raw = Some(diags.clone());
+            EngineDiagnostics::ok(normalize_tsc_diagnostics(&diags))
+          }
+          Err(err) => EngineDiagnostics::crashed(format!("missing snapshot: {err}")),
+        }
+      }
+    }
+    CompareMode::Auto => unreachable!("compare mode should be resolved before execution"),
+  };
+
+  if update_snapshots {
+    if let Some(raw) = tsc_raw.as_ref() {
+      let _ = snapshots.save(&case.id, raw);
+    }
+  }
+
+  let (outcome, detail) = compute_outcome(compare_mode, &rust, &tsc, span_tolerance);
+
+  TestResult {
+    id: case.id,
+    path: case.path.display().to_string(),
+    outcome,
+    duration_ms: start.elapsed().as_millis(),
+    rust,
+    tsc,
+    notes,
+    detail,
+  }
+}
+
+fn run_rust(file_set: &HarnessFileSet) -> EngineDiagnostics {
+  let host = HarnessHost::new(file_set.clone());
+  let roots = file_set.root_files();
+  let result = std::panic::catch_unwind(|| {
+    let program = Program::new(host, roots);
+    program.check()
+  });
+  match result {
+    Ok(diags) => EngineDiagnostics::ok(normalize_rust_diagnostics(&diags, |id| {
+      file_set.file_name(id)
+    })),
+    Err(_) => EngineDiagnostics::ice("typechecker panicked"),
+  }
+}
+
+fn run_tsc_with_raw(
+  runner: &TscRunner,
+  file_set: &HarnessFileSet,
+  options: &HarnessOptions,
+) -> (EngineDiagnostics, Option<Vec<TscDiagnostic>>) {
+  match runner.run(file_set, options) {
+    Ok(diags) => (
+      EngineDiagnostics::ok(normalize_tsc_diagnostics(&diags)),
+      Some(diags),
+    ),
+    Err(err) => (EngineDiagnostics::crashed(err), None),
+  }
+}
+
+fn compute_outcome(
+  compare_mode: CompareMode,
+  rust: &EngineDiagnostics,
+  tsc: &EngineDiagnostics,
+  span_tolerance: u32,
+) -> (TestOutcome, Option<MismatchDetail>) {
+  if rust.status == EngineStatus::Ice {
+    return (
+      TestOutcome::RustIce,
+      rust.error.as_ref().map(|msg| MismatchDetail {
+        message: msg.clone(),
+        rust: None,
+        tsc: None,
+      }),
+    );
+  }
+
+  if matches!(compare_mode, CompareMode::None) {
+    return (TestOutcome::Match, None);
+  }
+
+  if tsc.status != EngineStatus::Ok {
+    return (
+      TestOutcome::TscCrashed,
+      tsc.error.as_ref().map(|msg| MismatchDetail {
+        message: msg.clone(),
+        rust: None,
+        tsc: None,
+      }),
+    );
+  }
+
+  diff_diagnostics(&rust.diagnostics, &tsc.diagnostics, span_tolerance)
+}
+
+fn diff_diagnostics(
+  rust_diags: &[NormalizedDiagnostic],
+  tsc_diags: &[NormalizedDiagnostic],
+  span_tolerance: u32,
+) -> (TestOutcome, Option<MismatchDetail>) {
+  let mut rust_sorted = rust_diags.to_vec();
+  let mut tsc_sorted = tsc_diags.to_vec();
+  sort_diagnostics(&mut rust_sorted);
+  sort_diagnostics(&mut tsc_sorted);
+
+  let len = rust_sorted.len().min(tsc_sorted.len());
+  for idx in 0..len {
+    let rust = &rust_sorted[idx];
+    let tsc = &tsc_sorted[idx];
+    if rust.file != tsc.file
+      || !within_tolerance(rust.start, tsc.start, span_tolerance)
+      || !within_tolerance(rust.end, tsc.end, span_tolerance)
+    {
+      return (
+        TestOutcome::SpanMismatch,
+        Some(MismatchDetail {
+          message: format!(
+            "span mismatch between {} and {}",
+            describe(rust),
+            describe(tsc)
+          ),
+          rust: Some(rust.clone()),
+          tsc: Some(tsc.clone()),
+        }),
+      );
+    }
+
+    if rust.code != tsc.code {
+      return (
+        TestOutcome::CodeMismatch,
+        Some(MismatchDetail {
+          message: format!(
+            "code mismatch between {} and {}",
+            describe(rust),
+            describe(tsc)
+          ),
+          rust: Some(rust.clone()),
+          tsc: Some(tsc.clone()),
+        }),
+      );
+    }
+  }
+
+  if rust_sorted.len() > tsc_sorted.len() {
+    let rust = rust_sorted.get(len).cloned();
+    return (
+      TestOutcome::RustExtraDiagnostics,
+      Some(MismatchDetail {
+        message: "rust produced extra diagnostics".to_string(),
+        rust,
+        tsc: None,
+      }),
+    );
+  }
+
+  if rust_sorted.len() < tsc_sorted.len() {
+    let tsc = tsc_sorted.get(len).cloned();
+    return (
+      TestOutcome::RustMissingDiagnostics,
+      Some(MismatchDetail {
+        message: "rust missed diagnostics".to_string(),
+        rust: None,
+        tsc,
+      }),
+    );
+  }
+
+  (TestOutcome::Match, None)
+}
+
+fn summarize(results: &[TestResult]) -> Summary {
+  let mut summary = Summary::default();
+  summary.total = results.len();
+  for result in results {
+    summary.outcomes.increment(result.outcome);
+  }
+  summary
+}
+
+struct HarnessHost {
+  files: HarnessFileSet,
+}
+
+impl HarnessHost {
+  fn new(files: HarnessFileSet) -> Self {
+    Self { files }
   }
 }
 
@@ -529,7 +621,7 @@ impl Host for HarnessHost {
   fn file_text(&self, file: FileId) -> std::result::Result<Arc<str>, HostError> {
     let idx = file.0 as usize;
     self
-      .inner
+      .files
       .files
       .get(idx)
       .map(|f| f.content.clone())
@@ -537,140 +629,193 @@ impl Host for HarnessHost {
   }
 
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
-    // Resolution strategy (mirrors the TypeScript test harness):
-    // 1) Canonicalise all paths to the virtual root (`/`), applying `.`/`..` collapse and
-    //    forwarding drive-letter inputs to `c:/...` style names.
-    // 2) If the specifier is relative, join it against the containing directory of `from`.
-    //    Otherwise, anchor it at `/` so `"foo"` resolves like `"/foo"`.
-    // 3) Expand the base path using a preferred extension order of:
-    //       .d.ts -> .ts -> .tsx -> .js -> .jsx
-    //    (explicit .js/.jsx specifiers are still tried first).
-    // 4) Attempt `index.*` files in the same preferred order.
-    // 5) Return the first matching candidate.
-    let base_candidate = if is_relative_specifier(specifier) {
-      let base = self.inner.files.get(from.0 as usize)?;
-      let parent = parent_dir(&base.normalized);
-      normalize_name(&format!("{parent}/{}", specifier))
-    } else {
-      anchor_at_root(specifier)
-    };
+    let is_relative = specifier.starts_with("./") || specifier.starts_with("../");
+    if !is_relative {
+      let normalized = normalize_name(specifier);
+      return self.files.resolve(&normalized);
+    }
 
-    let candidates = build_candidates(&base_candidate);
-    for cand in &candidates {
-      if let Some(found) = self.inner.name_to_id.get(cand) {
-        return Some(*found);
+    let base = self.files.file_name(from)?;
+    let parent = Path::new(&base).parent().unwrap_or_else(|| Path::new(""));
+    let joined = parent.join(specifier);
+    let base_candidate = normalize_name(joined.to_string_lossy().as_ref());
+
+    let mut candidates = Vec::new();
+    candidates.push(base_candidate.clone());
+
+    if base_candidate.ends_with(".js") {
+      let trimmed = base_candidate.trim_end_matches(".js");
+      candidates.push(format!("{trimmed}.ts"));
+      candidates.push(format!("{trimmed}.tsx"));
+    } else if base_candidate.ends_with(".jsx") {
+      let trimmed = base_candidate.trim_end_matches(".jsx");
+      candidates.push(format!("{trimmed}.tsx"));
+    } else if !has_known_extension(&base_candidate) {
+      for ext in ["ts", "tsx", "d.ts", "js", "jsx"] {
+        candidates.push(format!("{base_candidate}.{ext}"));
       }
     }
 
-    self.record_failure(from, specifier, candidates);
+    let base_path = Path::new(&base_candidate);
+    for ext in [
+      "index.ts",
+      "index.tsx",
+      "index.d.ts",
+      "index.js",
+      "index.jsx",
+    ] {
+      let joined = base_path.join(ext);
+      candidates.push(normalize_name(joined.to_string_lossy().as_ref()));
+    }
+
+    for cand in candidates {
+      if let Some(found) = self.files.resolve(&cand) {
+        return Some(found);
+      }
+    }
+
     None
   }
+}
 
-  fn file_kind(&self, file: FileId) -> FileKind {
-    let name = self
-      .inner
-      .files
-      .get(file.0 as usize)
-      .map(|f| f.normalized.as_str())
-      .unwrap_or("");
-    if name.ends_with(".d.ts") {
-      FileKind::Dts
-    } else if name.ends_with(".tsx") {
-      FileKind::Tsx
-    } else if name.ends_with(".ts") {
-      FileKind::Ts
-    } else if name.ends_with(".jsx") {
-      FileKind::Jsx
-    } else {
-      FileKind::Js
+fn has_known_extension(name: &str) -> bool {
+  name.ends_with(".d.ts")
+    || name.ends_with(".ts")
+    || name.ends_with(".tsx")
+    || name.ends_with(".js")
+    || name.ends_with(".jsx")
+}
+
+#[derive(Clone)]
+struct TscRunner {
+  node_path: PathBuf,
+}
+
+impl TscRunner {
+  fn new(node_path: PathBuf) -> Self {
+    Self { node_path }
+  }
+
+  fn available(&self) -> bool {
+    #[cfg(feature = "with-node")]
+    {
+      std::process::Command::new(&self.node_path)
+        .arg("--version")
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false)
+    }
+
+    #[cfg(not(feature = "with-node"))]
+    {
+      false
     }
   }
-}
 
-pub(crate) fn run_rust(files: &[VirtualFile]) -> (Vec<Diagnostic>, Vec<String>) {
-  let host = HarnessHost::new(files);
-  let names = host.file_names();
-  let roots = host.root_files();
-  let diagnostics = Program::new(host, roots).check();
-  (diagnostics, names)
-}
+  fn run(
+    &self,
+    files: &HarnessFileSet,
+    options: &HarnessOptions,
+  ) -> std::result::Result<Vec<TscDiagnostic>, String> {
+    #[cfg(not(feature = "with-node"))]
+    {
+      let _ = (files, options);
+      return Err("built without `with-node` feature".to_string());
+    }
 
-fn anchor_at_root(specifier: &str) -> String {
-  if specifier.starts_with('/') {
-    normalize_name(specifier)
-  } else {
-    normalize_name(&format!("/{}", specifier))
-  }
-}
-
-fn is_relative_specifier(specifier: &str) -> bool {
-  specifier.starts_with("./") || specifier.starts_with("../")
-}
-
-fn build_candidates(base_candidate: &str) -> Vec<String> {
-  let mut candidates = Vec::new();
-  push_candidate(base_candidate, &mut candidates);
-
-  match detect_known_extension(base_candidate) {
-    Some("js") => {
-      let trimmed = base_candidate.trim_end_matches(".js");
-      for ext in ["d.ts", "ts", "tsx"] {
-        push_candidate(&format!("{trimmed}.{ext}"), &mut candidates);
+    #[cfg(feature = "with-node")]
+    {
+      let wrapper = wrapper_path();
+      if !wrapper.exists() {
+        return Err(format!("missing tsc wrapper at {}", wrapper.display()));
       }
-    }
-    Some("jsx") => {
-      let trimmed = base_candidate.trim_end_matches(".jsx");
-      for ext in ["d.ts", "tsx"] {
-        push_candidate(&format!("{trimmed}.{ext}"), &mut candidates);
+      let temp_dir = tempfile::tempdir().map_err(|err| err.to_string())?;
+      files
+        .write_to_dir(temp_dir.path())
+        .map_err(|err| err.to_string())?;
+      let mut cmd = std::process::Command::new(&self.node_path);
+      cmd.current_dir(temp_dir.path());
+      cmd.arg(wrapper);
+      if let Some(env) = options.to_env_json() {
+        cmd.env("HARNESS_OPTIONS", env);
       }
-    }
-    Some(_) => {}
-    None => {
-      for ext in ["d.ts", "ts", "tsx", "js", "jsx"] {
-        push_candidate(&format!("{base_candidate}.{ext}"), &mut candidates);
+      for file in files.iter() {
+        cmd.arg(temp_dir.path().join(&file.normalized));
       }
+
+      let output = cmd.output().map_err(|err| format!("spawn node: {err}"))?;
+
+      if !output.status.success() {
+        return Err(format!(
+          "tsc wrapper exited with status {}: stdout={} stderr={}",
+          output.status,
+          String::from_utf8_lossy(&output.stdout),
+          String::from_utf8_lossy(&output.stderr)
+        ));
+      }
+
+      let parsed: TscDiagnostics = serde_json::from_slice(&output.stdout)
+        .map_err(|err| format!("parse tsc JSON output: {err}"))?;
+
+      Ok(parsed.diagnostics)
     }
   }
-
-  for ext in [
-    "index.d.ts",
-    "index.ts",
-    "index.tsx",
-    "index.js",
-    "index.jsx",
-  ] {
-    push_candidate(&format!("{base_candidate}/{ext}"), &mut candidates);
-  }
-
-  candidates
 }
 
-fn push_candidate(raw: &str, candidates: &mut Vec<String>) {
-  let normalized = normalize_name(raw);
-  if !candidates.contains(&normalized) {
-    candidates.push(normalized);
-  }
+fn wrapper_path() -> PathBuf {
+  Path::new(env!("CARGO_MANIFEST_DIR"))
+    .join("scripts")
+    .join("tsc_wrapper.js")
 }
 
-fn detect_known_extension(name: &str) -> Option<&'static str> {
-  for ext in ["d.ts", "ts", "tsx", "js", "jsx"] {
-    if name.ends_with(ext) {
-      return Some(ext);
+#[derive(Clone)]
+struct SnapshotStore {
+  base: PathBuf,
+}
+
+impl SnapshotStore {
+  fn new(root: &Path) -> Self {
+    let suite_name = root
+      .file_name()
+      .map(|p| p.to_string_lossy().to_string())
+      .unwrap_or_else(|| "conformance".to_string());
+    let base = Path::new(env!("CARGO_MANIFEST_DIR"))
+      .join("baselines")
+      .join(suite_name);
+    SnapshotStore { base }
+  }
+
+  fn has_any(&self) -> bool {
+    WalkDir::new(&self.base)
+      .into_iter()
+      .filter_map(|e| e.ok())
+      .any(|entry| entry.file_type().is_file())
+  }
+
+  fn path_for(&self, id: &str) -> PathBuf {
+    let mut path = self.base.join(id);
+    path.set_extension("json");
+    path
+  }
+
+  fn load(&self, id: &str) -> std::io::Result<Vec<TscDiagnostic>> {
+    let path = self.path_for(id);
+    let data = std::fs::read_to_string(path)?;
+    let parsed: TscDiagnostics = serde_json::from_str(&data)?;
+    Ok(parsed.diagnostics)
+  }
+
+  fn save(&self, id: &str, diagnostics: &[TscDiagnostic]) -> std::io::Result<()> {
+    let path = self.path_for(id);
+    if let Some(parent) = path.parent() {
+      std::fs::create_dir_all(parent)?;
     }
-  }
-  None
-}
 
-fn parent_dir(path: &str) -> &str {
-  if path == "/" || path.ends_with(":/") {
-    return path;
-  }
-
-  match path.rfind('/') {
-    Some(0) => "/",
-    Some(idx) if idx == 2 && path.as_bytes().get(1) == Some(&b':') => &path[..idx + 1],
-    Some(idx) => &path[..idx],
-    None => "",
+    let payload = TscDiagnostics {
+      diagnostics: diagnostics.to_vec(),
+    };
+    let json = serde_json::to_string_pretty(&payload)?;
+    std::fs::write(path, format!("{json}\n"))
   }
 }
 
@@ -686,88 +831,27 @@ mod tests {
   }
 
   #[test]
-  fn conformance_runner_categorizes_empty_as_passed() {
-    assert_eq!(categorize(&[]), TestStatus::Passed);
-  }
-
-  #[test]
-  fn conformance_runner_runs_single_case() {
-    let files = vec![VirtualFile {
-      name: "inline.ts".to_string(),
-      content: "const x: number = 1;".to_string(),
+  fn diff_detects_extra_and_missing() {
+    let rust = vec![NormalizedDiagnostic {
+      engine: crate::diagnostic_norm::DiagnosticEngine::Rust,
+      code: Some(crate::diagnostic_norm::DiagnosticCode::Rust("A".into())),
+      file: Some("a.ts".into()),
+      start: 0,
+      end: 1,
+      severity: None,
+      message: None,
     }];
-    let case = TestCase {
-      id: "inline".to_string(),
-      path: PathBuf::from("inline.ts"),
-      deduped_files: files.clone(),
-      files,
-      directives: Vec::new(),
-      options: HarnessOptions::default(),
-      notes: Vec::new(),
-    };
+    let tsc = Vec::new();
+    let (outcome, detail) = diff_diagnostics(&rust, &tsc, 0);
+    assert_eq!(outcome, TestOutcome::RustExtraDiagnostics);
+    assert!(detail.is_some());
 
-    let result = execute_case(case);
-    assert_eq!(result.status, TestStatus::Passed);
-  }
-
-  #[test]
-  fn host_resolves_missing_file_errors() {
-    let host = HarnessHost::new(&[]);
-    assert!(host.file_text(FileId(0)).is_err());
-  }
-
-  #[test]
-  fn resolve_directory_imports_to_index_files() {
-    let files = vec![
-      VirtualFile {
-        name: "src/main.ts".to_string(),
-        content: "import \"./dir\";".to_string(),
-      },
-      VirtualFile {
-        name: "src/dir/index.ts".to_string(),
-        content: "".to_string(),
-      },
-    ];
-    let host = HarnessHost::new(&files);
-    assert_eq!(host.resolve(FileId(0), "./dir"), Some(FileId(1)));
-  }
-
-  #[test]
-  fn resolve_prefers_declaration_files() {
-    let files = vec![
-      VirtualFile {
-        name: "main.ts".to_string(),
-        content: "import \"./foo\";".to_string(),
-      },
-      VirtualFile {
-        name: "foo.d.ts".to_string(),
-        content: "export declare const value: number;".to_string(),
-      },
-    ];
-    let host = HarnessHost::new(&files);
-    assert_eq!(host.resolve(FileId(0), "./foo"), Some(FileId(1)));
-  }
-
-  #[test]
-  fn resolve_maps_js_specifier_to_ts() {
-    let files = vec![
-      VirtualFile {
-        name: "main.ts".to_string(),
-        content: "import \"./foo.js\";".to_string(),
-      },
-      VirtualFile {
-        name: "foo.ts".to_string(),
-        content: "export const value = 1;".to_string(),
-      },
-    ];
-    let host = HarnessHost::new(&files);
-    assert_eq!(host.resolve(FileId(0), "./foo.js"), Some(FileId(1)));
+    let (outcome, _) = diff_diagnostics(&tsc, &rust, 0);
+    assert_eq!(outcome, TestOutcome::RustMissingDiagnostics);
   }
 
   #[test]
   fn host_deduplicates_virtual_files() {
-    use std::collections::HashSet;
-
     let files = vec![
       VirtualFile {
         name: "a.ts".to_string(),
@@ -783,99 +867,15 @@ mod tests {
       },
     ];
 
-    let host = HarnessHost::new(&files);
-    let roots = host.root_files();
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone());
+    let roots = file_set.root_files();
 
-    let unique_names = files
-      .iter()
-      .map(|f| normalize_name(&f.name))
-      .collect::<HashSet<_>>();
-    assert_eq!(roots.len(), unique_names.len());
+    assert_eq!(roots.len(), 2);
 
     let from = *roots.last().unwrap();
     let a_id = host.resolve(from, "a.ts").expect("a.ts should resolve");
     assert!(roots.contains(&a_id));
     assert_eq!(&*host.file_text(a_id).unwrap(), "second version");
-
-    assert_eq!(host.resolve(from, "./a"), Some(a_id));
-  }
-
-  #[test]
-  fn normalize_name_strips_dot_slash() {
-    assert_eq!(normalize_name("./foo.ts"), "/foo.ts");
-  }
-
-  #[test]
-  fn normalize_name_preserves_subdirs() {
-    assert_eq!(normalize_name("./sub/foo.ts"), "/sub/foo.ts");
-  }
-
-  #[test]
-  fn normalize_name_normalizes_backslashes() {
-    assert_eq!(normalize_name(".\\sub\\foo.ts"), "/sub/foo.ts");
-  }
-
-  #[test]
-  fn resolves_rooted_paths() {
-    let files = vec![
-      VirtualFile {
-        name: "/src/main.ts".to_string(),
-        content: "import \"./dep\";".to_string(),
-      },
-      VirtualFile {
-        name: "/src/dep/index.ts".to_string(),
-        content: "".to_string(),
-      },
-    ];
-
-    let host = HarnessHost::new(&files);
-    assert_eq!(host.resolve(FileId(0), "./dep"), Some(FileId(1)));
-  }
-
-  #[test]
-  fn resolves_non_relative_specifiers_from_root() {
-    let files = vec![
-      VirtualFile {
-        name: "entry.ts".to_string(),
-        content: "import \"lib\";".to_string(),
-      },
-      VirtualFile {
-        name: "/lib/index.ts".to_string(),
-        content: "".to_string(),
-      },
-    ];
-
-    let host = HarnessHost::new(&files);
-    assert_eq!(host.resolve(FileId(0), "lib"), Some(FileId(1)));
-  }
-
-  #[test]
-  fn treats_rooted_and_unrooted_names_as_aliases() {
-    let files = vec![
-      VirtualFile {
-        name: "/a.ts".to_string(),
-        content: "first".to_string(),
-      },
-      VirtualFile {
-        name: "a.ts".to_string(),
-        content: "second".to_string(),
-      },
-      VirtualFile {
-        name: "/main.ts".to_string(),
-        content: "import \"a\";".to_string(),
-      },
-    ];
-
-    let host = HarnessHost::new(&files);
-    let roots = host.root_files();
-    let main_id = roots
-      .iter()
-      .copied()
-      .find(|id| host.file_text(*id).unwrap().contains("import"))
-      .expect("should find main file");
-
-    let resolved = host.resolve(main_id, "a").expect("should resolve a");
-    assert_eq!(&*host.file_text(resolved).unwrap(), "second");
-    assert_eq!(host.resolve(main_id, "/a"), Some(resolved));
   }
 }
