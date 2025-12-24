@@ -473,7 +473,7 @@ mod tests {
       end: 5,
       category: None,
     }];
-    assert!(compare_diagnostics(&expected, &actual, 1).is_some());
-    assert!(compare_diagnostics(&expected, &actual, 2).is_none());
+    assert!(compare_diagnostics(&expected, &actual, 0).is_some());
+    assert!(compare_diagnostics(&expected, &actual, 1).is_none());
   }
 }

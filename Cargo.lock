@@ -1915,9 +1915,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "globset",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror",
+ "typecheck-ts",
  "walkdir",
 ]
 

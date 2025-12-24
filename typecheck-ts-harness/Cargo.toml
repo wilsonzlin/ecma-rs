@@ -11,7 +11,11 @@ with-node = []
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5.17", features = ["derive"] }
+globset = "0.4"
+regex = "1.11"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.12"
+thiserror = "1.0"
+typecheck-ts = { path = "../typecheck-ts" }
 walkdir = "2.5"
