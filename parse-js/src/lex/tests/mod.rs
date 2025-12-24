@@ -120,3 +120,8 @@ fn test_html_close_comment_after_crlf_and_unicode_line_separator() {
   check_preceded_by_line_terminator("\r\n--> comment\r\nfoo", Identifier, true);
   check_preceded_by_line_terminator("\u{2028}--> comment\u{2028}foo", Identifier, true);
 }
+
+#[test]
+fn test_bom_is_skipped_at_file_start() {
+  check_preceded_by_line_terminator("\u{FEFF}foo", Identifier, false);
+}
