@@ -129,6 +129,19 @@ where
     })
   }
 
+  // TypeScript requires parentheses when `as`/`satisfies` are used as receivers of call/member access.
+  fn emit_memberish_receiver(&mut self, expr: &Node<Expr>) -> EmitResult {
+    match expr.stx.as_ref() {
+      Expr::TypeAssertion(_) | Expr::SatisfiesExpr(_) => {
+        write!(self.out, "(")?;
+        self.emit_expr_no_parens(expr)?;
+        write!(self.out, ")")?;
+        Ok(())
+      }
+      _ => self.emit_expr_with_min_prec(expr, CALL_MEMBER_PRECEDENCE),
+    }
+  }
+
   fn emit_id(&mut self, id: &Node<IdExpr>) -> EmitResult {
     with_node_context(id.loc, || {
       self.out.write_str(&id.stx.name)?;
@@ -559,7 +572,7 @@ where
 
   fn emit_call(&mut self, call: &Node<CallExpr>) -> EmitResult {
     with_node_context(call.loc, || {
-      self.emit_expr_with_min_prec(&call.stx.callee, CALL_MEMBER_PRECEDENCE)?;
+      self.emit_memberish_receiver(&call.stx.callee)?;
       if call.stx.optional_chaining {
         write!(self.out, "?.(")?;
       } else {
@@ -583,7 +596,7 @@ where
   fn emit_member(&mut self, member: &Node<MemberExpr>) -> EmitResult {
     with_node_context(member.loc, || {
       if member.stx.optional_chaining {
-        self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
+        self.emit_memberish_receiver(&member.stx.left)?;
         write!(self.out, "?.")?;
       } else if let Expr::LitNum(num) = member.stx.left.stx.as_ref() {
         let rendered = num.stx.value.to_string();
@@ -593,7 +606,7 @@ where
         }
         self.out.write_char('.')?;
       } else {
-        self.emit_expr_with_min_prec(&member.stx.left, CALL_MEMBER_PRECEDENCE)?;
+        self.emit_memberish_receiver(&member.stx.left)?;
         self.out.write_char('.')?;
       }
       self.out.write_str(&member.stx.right)?;
@@ -603,7 +616,7 @@ where
 
   fn emit_computed_member(&mut self, member: &Node<ComputedMemberExpr>) -> EmitResult {
     with_node_context(member.loc, || {
-      self.emit_expr_with_min_prec(&member.stx.object, CALL_MEMBER_PRECEDENCE)?;
+      self.emit_memberish_receiver(&member.stx.object)?;
       if member.stx.optional_chaining {
         write!(self.out, "?.[")?;
       } else {
@@ -617,7 +630,7 @@ where
 
   fn emit_tagged_template(&mut self, tagged: &Node<TaggedTemplateExpr>) -> EmitResult {
     with_node_context(tagged.loc, || {
-      self.emit_expr_with_min_prec(&tagged.stx.function, CALL_MEMBER_PRECEDENCE)?;
+      self.emit_memberish_receiver(&tagged.stx.function)?;
       self.emit_template_literal(&tagged.stx.parts)
     })
   }
