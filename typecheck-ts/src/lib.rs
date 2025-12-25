@@ -138,6 +138,10 @@ pub mod check {
   pub mod instantiate {
     pub use crate::api::check::instantiate::*;
   }
+
+  pub mod type_expr {
+    pub use crate::api::check::type_expr::*;
+  }
 }
 
 pub mod queries;
