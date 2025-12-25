@@ -30,11 +30,20 @@ pub mod type_expr;
 #[derive(Clone, Copy)]
 pub struct ParseCtx {
   pub rules: ParsePatternRules, // For simplicity, this is a copy, not a non-mutable reference, to avoid having a separate lifetime for it. The value is only two booleans, so a reference is probably slower, and it's supposed to be immutable (i.e. changes come from altered copying, not mutating the original single instance), so there shouldn't be any difference between a reference and a copy.
+  pub top_level: bool,
 }
 
 impl ParseCtx {
   pub fn with_rules(&self, rules: ParsePatternRules) -> ParseCtx {
     ParseCtx { rules, ..*self }
+  }
+
+  pub fn with_top_level(&self, top_level: bool) -> ParseCtx {
+    ParseCtx { top_level, ..*self }
+  }
+
+  pub fn non_top_level(&self) -> ParseCtx {
+    self.with_top_level(false)
   }
 }
 

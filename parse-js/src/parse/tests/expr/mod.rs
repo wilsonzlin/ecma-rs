@@ -20,6 +20,7 @@ fn parse_expr_with_options(input: &str, opts: ParseOptions) -> Node<Expr> {
       await_allowed: !matches!(opts.source_type, SourceType::Module),
       yield_allowed: true,
     },
+    top_level: true,
   };
   parser.expr(ctx, [TT::Semicolon]).unwrap()
 }

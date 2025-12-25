@@ -13,6 +13,7 @@ impl<'a> Parser<'a> {
         await_allowed: !self.is_module(),
         yield_allowed: true,
       },
+      top_level: true,
     };
     let body = self.stmts(ctx, TT::EOF)?;
     self.require(TT::EOF)?;

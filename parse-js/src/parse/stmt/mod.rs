@@ -69,6 +69,11 @@ impl<'a> Parser<'a> {
             "export not allowed in scripts",
           )));
         }
+        if !ctx.top_level {
+          return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
+            "export declarations must be at top level",
+          )));
+        }
         self.export_stmt(ctx)?
       }
       TT::KeywordFor => self.for_stmt(ctx)?,
@@ -82,6 +87,11 @@ impl<'a> Parser<'a> {
         if !self.is_module() {
           return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
             "import not allowed in scripts",
+          )));
+        }
+        if !ctx.top_level {
+          return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
+            "import declarations must be at top level",
           )));
         }
         self.import_stmt(ctx, false)?
@@ -283,7 +293,7 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       let label_name = p.consume_as_string();
       p.require(TT::Colon)?;
-      let statement = p.stmt(ctx)?;
+      let statement = p.stmt(ctx.non_top_level())?;
       Ok(LabelStmt {
         name: label_name,
         statement,
@@ -298,7 +308,7 @@ impl<'a> Parser<'a> {
   pub fn block_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<BlockStmt>> {
     self.with_loc(|p| {
       p.require(TT::BraceOpen)?;
-      let body = p.stmts(ctx, TT::BraceClose)?;
+      let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
       p.require(TT::BraceClose)?;
       Ok(BlockStmt { body })
     })
@@ -375,13 +385,13 @@ impl<'a> Parser<'a> {
       if p.peek().typ == TT::BraceOpen {
         // Block.
         p.require(TT::BraceOpen)?;
-        let body = p.stmts(ctx, TT::BraceClose)?;
+        let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
         p.require(TT::BraceClose)?;
         Ok(ForBody { body })
       } else {
         // Single statement.
         Ok(ForBody {
-          body: vec![p.stmt(ctx)?],
+          body: vec![p.stmt(ctx.non_top_level())?],
         })
       }
     })
@@ -755,8 +765,10 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisOpen)?;
       let test = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
-      let consequent = p.stmt(ctx)?;
-      let alternate = p.consume_if(TT::KeywordElse).and_then(|| p.stmt(ctx))?;
+      let consequent = p.stmt(ctx.non_top_level())?;
+      let alternate = p
+        .consume_if(TT::KeywordElse)
+        .and_then(|| p.stmt(ctx.non_top_level()))?;
       Ok(IfStmt {
         test,
         consequent,
@@ -824,7 +836,7 @@ impl<'a> Parser<'a> {
           };
         p.with_loc(|p| {
           p.require(TT::BraceOpen)?;
-          let body = p.stmts(ctx, TT::BraceClose)?;
+          let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
           p.require(TT::BraceClose)?;
           Ok(CatchBlock {
             parameter,
@@ -853,7 +865,7 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisOpen)?;
       let condition = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.stmt(ctx)?;
+      let body = p.stmt(ctx.non_top_level())?;
       Ok(WhileStmt { condition, body })
     })
   }
@@ -864,7 +876,7 @@ impl<'a> Parser<'a> {
       p.require(TT::ParenthesisOpen)?;
       let object = p.expr(ctx, [TT::ParenthesisClose])?;
       p.require(TT::ParenthesisClose)?;
-      let body = p.stmt(ctx)?;
+      let body = p.stmt(ctx.non_top_level())?;
       Ok(WithStmt { object, body })
     })
   }
@@ -872,7 +884,7 @@ impl<'a> Parser<'a> {
   pub fn do_while_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<DoWhileStmt>> {
     self.with_loc(|p| {
       p.require(TT::KeywordDo)?;
-      let body = p.stmt(ctx)?;
+      let body = p.stmt(ctx.non_top_level())?;
       // Consume optional semicolon after body statement (ASI)
       let _ = p.consume_if(TT::Semicolon);
       p.require(TT::KeywordWhile)?;
@@ -905,7 +917,7 @@ impl<'a> Parser<'a> {
               TT::KeywordCase | TT::KeywordDefault | TT::BraceClose
             )
           },
-          |p| p.stmt(ctx),
+          |p| p.stmt(ctx.non_top_level()),
         )?;
         Ok(SwitchBranch { case, body })
       })?;

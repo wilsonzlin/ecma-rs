@@ -122,7 +122,11 @@ impl<'a> Parser<'a> {
   /// - `import a, {"b" as c, d, e as f, default as g} from "module"`
   /// - TypeScript import equals: `import a = require("module")` or `import a = Foo.Bar`
   pub fn import_stmt(&mut self, ctx: ParseCtx, export: bool) -> SyntaxResult<Node<Stmt>> {
-    // TODO Ensure top-level.
+    if !ctx.top_level {
+      return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax(
+        "import declarations must be at top level",
+      )));
+    }
     let start = self.checkpoint();
     self.require(TT::KeywordImport)?;
 
@@ -320,7 +324,11 @@ impl<'a> Parser<'a> {
   // https://tc39.es/ecma262/#sec-exports
   // https://jakearchibald.com/2021/export-default-thing-vs-thing-as-default/
   pub fn export_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
-    // TODO Ensure top-level.
+    if !ctx.top_level {
+      return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax(
+        "export declarations must be at top level",
+      )));
+    }
     let [t0, t1, t2] = self.peek_n();
     // The first token should always be `export`, but it will be parsed in the subroutines and not here.
     assert_eq!(t0.typ, TT::KeywordExport);

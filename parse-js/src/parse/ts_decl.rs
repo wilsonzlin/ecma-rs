@@ -183,7 +183,7 @@ impl<'a> Parser<'a> {
         NamespaceBody::Namespace(Box::new(nested))
       } else {
         p.require(TT::BraceOpen)?;
-        let statements = p.stmts(ctx, TT::BraceClose)?;
+        let statements = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
         p.require(TT::BraceClose)?;
         NamespaceBody::Block(statements)
       };
@@ -215,7 +215,7 @@ impl<'a> Parser<'a> {
 
       let body = if p.peek().typ == TT::BraceOpen {
         p.require(TT::BraceOpen)?;
-        let statements = p.stmts(ctx, TT::BraceClose)?;
+        let statements = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
         p.require(TT::BraceClose)?;
         Some(statements)
       } else {
@@ -240,7 +240,7 @@ impl<'a> Parser<'a> {
       p.require(TT::Identifier)?;
 
       p.require(TT::BraceOpen)?;
-      let body = p.stmts(ctx, TT::BraceClose)?;
+      let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
       p.require(TT::BraceClose)?;
 
       Ok(GlobalDecl { body })

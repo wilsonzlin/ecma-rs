@@ -2,7 +2,7 @@
   "$t": "Binary",
   "left": {
     "$t": "LitRegex",
-    "value": "/a/g0"
+    "value": "/a/g"
   },
   "operator": "Division",
   "right": {

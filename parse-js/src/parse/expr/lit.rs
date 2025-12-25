@@ -20,10 +20,13 @@ use crate::ast::expr::lit::LitTemplatePart;
 use crate::ast::expr::BinaryExpr;
 use crate::ast::expr::IdExpr;
 use crate::ast::node::Node;
+use crate::char::is_line_terminator;
+use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
 use crate::lex::KEYWORDS_MAPPING;
+use crate::loc::Loc;
 use crate::num::JsNumber;
 use crate::operator::OperatorName;
 use crate::token::TT;
@@ -83,120 +86,346 @@ pub fn normalise_literal_bigint(raw: &str) -> Option<String> {
   Some(raw.to_string())
 }
 
-pub fn normalise_literal_string_or_template_inner(mut raw: &str) -> Option<String> {
-  let mut norm = String::new();
-  while !raw.is_empty() {
-    let Some(escape_pos) = raw.find('\\') else {
-      norm.push_str(raw);
-      break;
-    };
-    norm.push_str(&raw[..escape_pos]);
-    raw = &raw[escape_pos + 1..];
-    // https://mathiasbynens.be/notes/javascript-escapes
-    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String#escape_sequences
-    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Template_literals#tagged_templates_and_escape_sequences
-    let first_char = raw.chars().next()?;
-    let (skip, add): (usize, &str) = match first_char {
-      '\n' => (1, ""),
-      'b' => (1, "\x08"),
-      'f' => (1, "\x0c"),
-      'n' => (1, "\n"),
-      'r' => (1, "\r"),
-      't' => (1, "\t"),
-      'v' => (1, "\x0b"),
-      '0'..='7' => {
-        // Octal escape.
-        let mut len = 1;
-        if raw
-          .chars()
-          .nth(len)
-          .filter(|&c| ('0'..='7').contains(&c))
-          .is_some()
-        {
-          len += 1;
-          if raw
-            .chars()
-            .nth(len)
-            .filter(|&c| ('0'..='7').contains(&c))
-            .is_some()
-          {
-            len += 1;
-          };
-        };
-        let octal_str = raw.chars().take(len).collect::<String>();
-        let cp = u32::from_str_radix(&octal_str, 8).unwrap();
-        let c = char::from_u32(cp).unwrap();
-        let char_str = c.to_string();
-        norm.push_str(&char_str);
-        raw = &raw[octal_str.len()..];
-        continue;
+#[derive(Clone, Copy, Debug)]
+enum LiteralErrorKind {
+  InvalidEscape,
+  UnexpectedEnd,
+  LineTerminator,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LiteralError {
+  kind: LiteralErrorKind,
+  offset: usize,
+  len: usize,
+}
+
+fn decode_escape_sequence(
+  raw: &str,
+  escape_start: usize,
+) -> Result<(usize, Option<char>), LiteralError> {
+  let mut chars = raw.chars();
+  let Some(first) = chars.next() else {
+    return Err(LiteralError {
+      kind: LiteralErrorKind::UnexpectedEnd,
+      offset: escape_start,
+      len: 0,
+    });
+  };
+  match first {
+    '\r' => {
+      let mut consumed = first.len_utf8();
+      if raw[first.len_utf8()..].starts_with('\n') {
+        consumed += '\n'.len_utf8();
       }
-      'x' => {
-        // Hexadecimal escape.
-        if raw.chars().count() < 3 {
-          return None;
-        };
-        let hex_chars: String = raw.chars().skip(1).take(2).collect();
-        if !hex_chars.chars().all(|c| c.is_ascii_hexdigit()) {
-          return None;
-        };
-        let cp = u32::from_str_radix(&hex_chars, 16).unwrap();
-        let c = char::from_u32(cp).unwrap();
-        norm.push(c);
-        raw = &raw[3..];
-        continue;
-      }
-      'u' => {
-        let second_char = raw.chars().nth(1);
-        match second_char {
-          Some('{') => {
-            // Unicode code point escape.
-            let Some(end_pos) = raw.find('}') else {
-              return None;
-            };
-            let hex_chars = &raw[2..end_pos];
-            // Must have at least 1 hex digit
-            if hex_chars.is_empty() || !hex_chars.chars().all(|c| c.is_ascii_hexdigit()) {
-              return None;
-            };
-            let cp = u32::from_str_radix(hex_chars, 16).ok()?;
-            // char::from_u32 validates that cp is a valid Unicode code point (<= 0x10FFFF)
-            let c = char::from_u32(cp)?;
-            norm.push(c);
-            raw = &raw[end_pos + 1..];
-            continue;
-          }
-          Some(_) => {
-            // Unicode escape.
-            if raw.chars().count() < 5 {
-              return None;
-            };
-            let hex_chars: String = raw.chars().skip(1).take(4).collect();
-            let cp = u32::from_str_radix(&hex_chars, 16).ok()?;
-            let c = char::from_u32(cp)?;
-            norm.push(c);
-            raw = &raw[5..];
-            continue;
-          }
-          None => {
-            return None;
-          }
+      Ok((consumed, None))
+    }
+    '\n' | '\u{2028}' | '\u{2029}' => Ok((first.len_utf8(), None)),
+    'b' => Ok((1, Some('\x08'))),
+    'f' => Ok((1, Some('\x0c'))),
+    'n' => Ok((1, Some('\n'))),
+    'r' => Ok((1, Some('\r'))),
+    't' => Ok((1, Some('\t'))),
+    'v' => Ok((1, Some('\x0b'))),
+    '0'..='7' => {
+      let mut consumed = first.len_utf8();
+      let mut value = first.to_digit(8).unwrap();
+      for ch in raw[consumed..].chars().take(2) {
+        if ('0'..='7').contains(&ch) {
+          consumed += ch.len_utf8();
+          value = (value << 3) + ch.to_digit(8).unwrap();
+        } else {
+          break;
         }
       }
-      c => {
+      let Some(c) = char::from_u32(value) else {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::InvalidEscape,
+          offset: escape_start,
+          len: 1,
+        });
+      };
+      Ok((consumed, Some(c)))
+    }
+    'x' => {
+      let mut hex_iter = raw[first.len_utf8()..].chars();
+      let Some(h1) = hex_iter.next() else {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::UnexpectedEnd,
+          offset: escape_start,
+          len: 0,
+        });
+      };
+      let Some(h2) = hex_iter.next() else {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::UnexpectedEnd,
+          offset: escape_start,
+          len: 0,
+        });
+      };
+      if !h1.is_ascii_hexdigit() || !h2.is_ascii_hexdigit() {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::InvalidEscape,
+          offset: escape_start,
+          len: 1,
+        });
+      }
+      let cp = u32::from_str_radix(&format!("{h1}{h2}"), 16).unwrap();
+      let Some(c) = char::from_u32(cp) else {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::InvalidEscape,
+          offset: escape_start,
+          len: 1,
+        });
+      };
+      let consumed = first.len_utf8() + h1.len_utf8() + h2.len_utf8();
+      Ok((consumed, Some(c)))
+    }
+    'u' => {
+      let after_u = &raw[first.len_utf8()..];
+      if after_u.starts_with('{') {
+        let Some(end) = after_u.find('}') else {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::UnexpectedEnd,
+            offset: escape_start,
+            len: 0,
+          });
+        };
+        let hex = &after_u[1..end];
+        if hex.is_empty() || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::InvalidEscape,
+            offset: escape_start,
+            len: 1,
+          });
+        }
+        let cp = u32::from_str_radix(hex, 16)
+          .ok()
+          .and_then(char::from_u32)
+          .ok_or(LiteralError {
+            kind: LiteralErrorKind::InvalidEscape,
+            offset: escape_start,
+            len: 1,
+          })?;
+        let consumed = first.len_utf8() + end + 1;
+        Ok((consumed, Some(cp)))
+      } else {
+        let mut hex = String::new();
+        let mut consumed = first.len_utf8();
+        for ch in after_u.chars().take(4) {
+          hex.push(ch);
+          consumed += ch.len_utf8();
+        }
+        if hex.len() < 4 {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::UnexpectedEnd,
+            offset: escape_start,
+            len: 0,
+          });
+        }
+        if !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+          return Err(LiteralError {
+            kind: LiteralErrorKind::InvalidEscape,
+            offset: escape_start,
+            len: 1,
+          });
+        }
+        let cp = u32::from_str_radix(&hex, 16)
+          .ok()
+          .and_then(char::from_u32)
+          .ok_or(LiteralError {
+            kind: LiteralErrorKind::InvalidEscape,
+            offset: escape_start,
+            len: 1,
+          })?;
+        Ok((consumed, Some(cp)))
+      }
+    }
+    c => Ok((c.len_utf8(), Some(c))),
+  }
+}
+
+fn decode_literal(raw: &str, allow_line_terminators: bool) -> Result<String, LiteralError> {
+  let mut norm = String::new();
+  let mut offset = 0;
+  while offset < raw.len() {
+    let mut iter = raw[offset..].char_indices();
+    let (rel, ch) = iter.next().unwrap();
+    debug_assert_eq!(rel, 0);
+    if ch == '\\' {
+      let escape_start = offset;
+      let after_backslash = offset + ch.len_utf8();
+      let (consumed, addition) = decode_escape_sequence(&raw[after_backslash..], escape_start)?;
+      if let Some(c) = addition {
         norm.push(c);
-        raw = &raw[c.len_utf8()..];
-        continue;
+      }
+      offset = after_backslash + consumed;
+    } else {
+      if !allow_line_terminators && is_line_terminator(ch) {
+        return Err(LiteralError {
+          kind: LiteralErrorKind::LineTerminator,
+          offset,
+          len: ch.len_utf8(),
+        });
+      }
+      norm.push(ch);
+      offset += ch.len_utf8();
+    }
+  }
+  Ok(norm)
+}
+
+fn literal_error_to_syntax(
+  err: LiteralError,
+  base: usize,
+  token: TT,
+  line_error: SyntaxErrorType,
+) -> SyntaxError {
+  let typ = match err.kind {
+    LiteralErrorKind::InvalidEscape => SyntaxErrorType::InvalidCharacterEscape,
+    LiteralErrorKind::UnexpectedEnd => SyntaxErrorType::UnexpectedEnd,
+    LiteralErrorKind::LineTerminator => line_error,
+  };
+  let start = base + err.offset;
+  let end = start + err.len;
+  Loc(start, end).error(typ, Some(token))
+}
+
+fn template_content(raw: &str, is_end: bool) -> Option<(usize, &str)> {
+  let mut start = 0;
+  let mut end = raw.len();
+  if raw.starts_with('`') {
+    start += '`'.len_utf8();
+  }
+  if is_end {
+    if !raw.ends_with('`') {
+      return None;
+    }
+    end = end.saturating_sub('`'.len_utf8());
+  } else {
+    if !raw.ends_with("${") {
+      return None;
+    }
+    end = end.saturating_sub("${".len());
+  }
+  if end < start {
+    return None;
+  }
+  raw.get(start..end).map(|body| (start, body))
+}
+
+#[derive(Debug)]
+enum RegexErrorKind {
+  LineTerminator,
+  Unterminated,
+  InvalidFlag,
+  DuplicateFlag,
+}
+
+#[derive(Debug)]
+struct RegexError {
+  kind: RegexErrorKind,
+  offset: usize,
+  len: usize,
+}
+
+fn validate_regex_flags(raw: &str, start: usize) -> Result<(), RegexError> {
+  let mut seen_flags: u16 = 0;
+  for (offset, ch) in raw[start..].char_indices() {
+    let bit = match ch {
+      'd' => 1 << 0,
+      'g' => 1 << 1,
+      'i' => 1 << 2,
+      'm' => 1 << 3,
+      's' => 1 << 4,
+      'u' => 1 << 5,
+      'v' => 1 << 6,
+      'y' => 1 << 7,
+      _ => {
+        return Err(RegexError {
+          kind: RegexErrorKind::InvalidFlag,
+          offset: start + offset,
+          len: ch.len_utf8(),
+        })
       }
     };
-    norm.push_str(add);
-    raw = &raw[skip..];
+    if seen_flags & bit != 0 {
+      return Err(RegexError {
+        kind: RegexErrorKind::DuplicateFlag,
+        offset: start + offset,
+        len: ch.len_utf8(),
+      });
+    }
+    seen_flags |= bit;
   }
-  Some(norm)
+  Ok(())
+}
+
+fn validate_regex_literal(raw: &str) -> Result<(), RegexError> {
+  let mut offset = '/'.len_utf8();
+  let mut in_charset = false;
+  while offset < raw.len() {
+    let mut iter = raw[offset..].char_indices();
+    let (rel, ch) = iter.next().unwrap();
+    debug_assert_eq!(rel, 0);
+    if ch == '\\' {
+      let after_backslash = offset + ch.len_utf8();
+      let Some(escaped) = raw[after_backslash..].chars().next() else {
+        return Err(RegexError {
+          kind: RegexErrorKind::Unterminated,
+          offset: after_backslash,
+          len: 0,
+        });
+      };
+      offset = after_backslash + escaped.len_utf8();
+      continue;
+    }
+    if !in_charset && ch == '/' {
+      let flags_start = offset + ch.len_utf8();
+      return validate_regex_flags(raw, flags_start);
+    }
+    if ch == '[' {
+      in_charset = true;
+    } else if ch == ']' && in_charset {
+      in_charset = false;
+    } else if is_line_terminator(ch) {
+      return Err(RegexError {
+        kind: RegexErrorKind::LineTerminator,
+        offset,
+        len: ch.len_utf8(),
+      });
+    }
+    offset += ch.len_utf8();
+  }
+  Err(RegexError {
+    kind: RegexErrorKind::Unterminated,
+    offset: raw.len(),
+    len: 0,
+  })
+}
+
+fn regex_error_to_syntax(err: RegexError, token_start: usize) -> SyntaxError {
+  let typ = match err.kind {
+    RegexErrorKind::LineTerminator => SyntaxErrorType::LineTerminatorInRegex,
+    RegexErrorKind::Unterminated => SyntaxErrorType::UnexpectedEnd,
+    RegexErrorKind::InvalidFlag | RegexErrorKind::DuplicateFlag => {
+      SyntaxErrorType::ExpectedSyntax("valid regex flags")
+    }
+  };
+  let start = token_start + err.offset;
+  let end = start + err.len;
+  Loc(start, end).error(typ, Some(TT::LiteralRegex))
+}
+
+pub fn normalise_literal_string_or_template_inner(raw: &str) -> Option<String> {
+  decode_literal(raw, true).ok()
 }
 
 pub fn normalise_literal_string(raw: &str) -> Option<String> {
-  normalise_literal_string_or_template_inner(&raw[1..raw.len() - 1])
+  if raw.len() < 2 {
+    return None;
+  }
+  decode_literal(&raw[1..raw.len() - 1], false).ok()
 }
 
 impl<'a> Parser<'a> {
@@ -470,9 +699,12 @@ impl<'a> Parser<'a> {
 
   pub fn lit_regex(&mut self) -> SyntaxResult<Node<LitRegexExpr>> {
     self.with_loc(|p| {
-      let t = p.require_with_mode(TT::LiteralRegex, LexMode::SlashIsRegex)?;
-      // TODO Parse, validate, flags.
+      let t = match p.peek().typ {
+        TT::LiteralRegex | TT::Invalid => p.consume_with_mode(LexMode::SlashIsRegex),
+        _ => p.require_with_mode(TT::LiteralRegex, LexMode::SlashIsRegex)?,
+      };
       let value = p.string(t.loc);
+      validate_regex_literal(&value).map_err(|err| regex_error_to_syntax(err, t.loc.0))?;
       Ok(LitRegexExpr { value })
     })
   }
@@ -486,12 +718,42 @@ impl<'a> Parser<'a> {
 
   /// Parses a literal string and returns the raw string value normalized (e.g. escapes decoded).
   /// Does *not* return a node; use `lit_str` for that.
-  /// TypeScript: Allows invalid escape sequences (permissive parsing, semantic errors caught later)
   pub fn lit_str_val(&mut self) -> SyntaxResult<String> {
-    let t = self.require(TT::LiteralString)?;
-    // TypeScript: Allow invalid escapes (e.g., \u{110000} out of range)
-    // Use empty string for invalid escapes to continue parsing
-    Ok(normalise_literal_string(self.str(t.loc)).unwrap_or_else(|| String::new()))
+    let peek = self.peek();
+    let t = if matches!(peek.typ, TT::LiteralString | TT::Invalid)
+      && self.str(peek.loc).starts_with(|c| c == '"' || c == '\'')
+    {
+      self.consume()
+    } else {
+      self.require(TT::LiteralString)?
+    };
+    let raw = self.bytes(t.loc);
+    let quote = raw
+      .chars()
+      .next()
+      .ok_or_else(|| t.error(SyntaxErrorType::UnexpectedEnd))?;
+    let has_closing = raw.ends_with(quote);
+    let body_start = t.loc.0 + quote.len_utf8();
+    let body_end = if has_closing {
+      t.loc.1.saturating_sub(quote.len_utf8())
+    } else {
+      t.loc.1
+    };
+    let body = self.bytes(Loc(body_start, body_end));
+    let decoded = decode_literal(body, false).map_err(|err| {
+      literal_error_to_syntax(
+        err,
+        body_start,
+        TT::LiteralString,
+        SyntaxErrorType::LineTerminatorInString,
+      )
+    })?;
+    if !has_closing {
+      return Err(
+        Loc(body_end, body_end).error(SyntaxErrorType::UnexpectedEnd, Some(TT::LiteralString)),
+      );
+    }
+    Ok(decoded)
   }
 
   pub fn lit_template(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<LitTemplateExpr>> {
@@ -513,14 +775,26 @@ impl<'a> Parser<'a> {
     let is_end = match t.typ {
       TT::LiteralTemplatePartString => false,
       TT::LiteralTemplatePartStringEnd => true,
-      _ => unreachable!(),
+      TT::Invalid => return Err(t.error(SyntaxErrorType::UnexpectedEnd)),
+      _ => return Err(t.error(SyntaxErrorType::ExpectedSyntax("template string part"))),
     };
 
     let mut parts = Vec::new();
-    // ES2018: Tagged templates allow invalid escapes
-    // TypeScript: All templates allow invalid escapes (permissive parsing)
-    let first_str = normalise_literal_string_or_template_inner(self.bytes(t.loc))
-      .unwrap_or_else(|| String::new());
+    let raw = self.bytes(t.loc);
+    let (content_offset, first_content) =
+      template_content(raw, is_end).ok_or_else(|| t.error(SyntaxErrorType::UnexpectedEnd))?;
+    let first_str = match decode_literal(first_content, true) {
+      Ok(val) => val,
+      Err(_err) if _tagged => String::new(),
+      Err(err) => {
+        return Err(literal_error_to_syntax(
+          err,
+          t.loc.0 + content_offset,
+          t.typ,
+          SyntaxErrorType::InvalidCharacterEscape,
+        ))
+      }
+    };
     parts.push(LitTemplatePart::String(first_str));
     if !is_end {
       loop {
@@ -528,18 +802,36 @@ impl<'a> Parser<'a> {
         self.require(TT::BraceClose)?;
         parts.push(LitTemplatePart::Substitution(substitution));
         let string = self.consume_with_mode(LexMode::TemplateStrContinue);
-        if !matches!(
-          string.typ,
-          TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
-        ) {
-          return Err(string.error(SyntaxErrorType::ExpectedSyntax("template string part")));
+        let string_is_end = match string.typ {
+          TT::LiteralTemplatePartString => false,
+          TT::LiteralTemplatePartStringEnd => true,
+          TT::Invalid => {
+            return Err(Loc(string.loc.1, string.loc.1).error(
+              SyntaxErrorType::UnexpectedEnd,
+              Some(TT::LiteralTemplatePartString),
+            ))
+          }
+          _ => {
+            return Err(string.error(SyntaxErrorType::ExpectedSyntax("template string part")));
+          }
         };
-        // ES2018: Tagged templates allow invalid escapes
-        // TypeScript: All templates allow invalid escapes (permissive parsing)
-        let part_str = normalise_literal_string_or_template_inner(self.bytes(string.loc))
-          .unwrap_or_else(|| String::new());
+        let raw = self.bytes(string.loc);
+        let (offset, content) = template_content(raw, string_is_end)
+          .ok_or_else(|| string.error(SyntaxErrorType::UnexpectedEnd))?;
+        let part_str = match decode_literal(content, true) {
+          Ok(val) => val,
+          Err(_err) if _tagged => String::new(),
+          Err(err) => {
+            return Err(literal_error_to_syntax(
+              err,
+              string.loc.0 + offset,
+              string.typ,
+              SyntaxErrorType::InvalidCharacterEscape,
+            ))
+          }
+        };
         parts.push(LitTemplatePart::String(part_str));
-        if string.typ == TT::LiteralTemplatePartStringEnd {
+        if string_is_end {
           break;
         };
       }

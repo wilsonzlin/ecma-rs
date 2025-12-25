@@ -10,6 +10,10 @@ mod export_assignment_asi;
 mod import_meta;
 #[path = "regressions/jsx_tsx_disambiguation.rs"]
 mod jsx_tsx_disambiguation;
+#[path = "regressions/literal_validation.rs"]
+mod literal_validation;
+#[path = "regressions/module_item_positions.rs"]
+mod module_item_positions;
 #[path = "regressions/private_index_signature.rs"]
 mod private_index_signature;
 #[path = "regressions/tuple_labels.rs"]

@@ -805,12 +805,15 @@ impl<'a> Parser<'a> {
         let name = p.consume_as_string();
         Ok(IdExpr { name })
       })?.into_wrapped(),
-      // TypeScript: Allow Invalid tokens for error recovery (malformed input, unterminated strings, etc.)
-      // Parser continues with synthetic identifier to enable further parsing
-      TT::Invalid => self.with_loc(|p| {
-        p.consume();
-        Ok(IdExpr { name: String::from("") })
-      })?.into_wrapped(),
+      TT::Invalid => {
+        let raw = self.bytes(t0.loc);
+        match raw.chars().next() {
+          Some('"') | Some('\'') => self.lit_str()?.into_wrapped(),
+          Some('`') => self.lit_template(ctx)?.into_wrapped(),
+          Some('/') => self.lit_regex()?.into_wrapped(),
+          _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand"))),
+        }
+      }
       _ => return Err(t0.error(SyntaxErrorType::ExpectedSyntax("expression operand"))),
     };
     Ok(expr)

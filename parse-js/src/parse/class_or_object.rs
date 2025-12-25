@@ -207,7 +207,7 @@ impl<'a> Parser<'a> {
             p.consume(); // consume 'static'
             let block = p.with_loc(|p| {
               p.require(TT::BraceOpen)?;
-              let body = p.stmts(ctx, TT::BraceClose)?;
+              let body = p.stmts(ctx.non_top_level(), TT::BraceClose)?;
               p.require(TT::BraceClose)?;
               Ok(crate::ast::class_or_object::ClassStaticBlock { body })
             })?;

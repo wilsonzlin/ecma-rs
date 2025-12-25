@@ -19,6 +19,7 @@ fn parse_stmt_and_serialize(input: String) -> Value {
       await_allowed: true,
       yield_allowed: true,
     },
+    top_level: true,
   };
   let node = parser.stmt(ctx).unwrap();
   serde_json::to_value(&node).unwrap()

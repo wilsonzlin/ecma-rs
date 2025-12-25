@@ -129,7 +129,7 @@ impl<'a> Parser<'a> {
 
   pub fn parse_func_block_body(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<Node<Stmt>>> {
     self.require(TT::BraceOpen)?;
-    let body = self.stmts(ctx, TT::BraceClose)?;
+    let body = self.stmts(ctx.non_top_level(), TT::BraceClose)?;
     self.require(TT::BraceClose)?;
     Ok(body)
   }

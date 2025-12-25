@@ -192,8 +192,19 @@ fn preview(input: &str) -> String {
   preview
 }
 
+#[test]
+fn invalid_literals_report_errors() {
+  let opts = ParseOptions {
+    dialect: Dialect::Ts,
+    source_type: SourceType::Module,
+  };
+  for case in ["\"\\u{110000}\"", "`\\u{110000}`", "/a/gg"] {
+    let result = parse_with_options(case, opts);
+    assert!(result.is_err(), "expected error for {case:?}");
+  }
+}
+
 fn run_under_budget(input: String, dialect: Dialect) {
-  let input_len = input.len();
   let input_preview = preview(&input);
   let (tx, rx) = mpsc::channel();
   let handle = thread::spawn(move || {

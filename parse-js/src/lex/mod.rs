@@ -862,7 +862,6 @@ fn lex_private_member(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   Ok(TT::PrivateMember)
 }
 
-// TODO Validate regex.
 fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   // Consume slash.
   lexer.consume(lexer.n(1)?);
@@ -896,7 +895,6 @@ fn lex_regex(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   Ok(TT::LiteralRegex)
 }
 
-// TODO Validate string.
 fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let quote = lexer.consume_next()?;
   let mut invalid = false;
@@ -1007,7 +1005,6 @@ pub(crate) fn lex_template_string_continue(lexer: &mut Lexer<'_>) -> LexResult<T
   Ok(typ)
 }
 
-// TODO Validate template.
 fn lex_template(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   // Consume backtick.
   lexer.skip_expect(1);
