@@ -406,12 +406,18 @@ impl<'a> Parser<'a> {
       TT::KeywordSuper  // TypeScript: Error recovery - allow 'super' in type positions
       => self.type_reference(ctx),
 
-      // this type
+      // this type or qualified this reference: this.foo
       TT::KeywordThis => {
-        let loc = self.peek().loc;
-        self.consume();
-        let inner = Node::new(loc, TypeThis {});
-        Ok(Node::new(loc, TypeExpr::ThisType(inner)))
+        let [_, next] = self.peek_n::<2>();
+        if next.typ == TT::Dot {
+          // Treat `this` as an identifier in a qualified name (this.foo)
+          self.type_reference(ctx)
+        } else {
+          let loc = self.peek().loc;
+          self.consume();
+          let inner = Node::new(loc, TypeThis {});
+          Ok(Node::new(loc, TypeExpr::ThisType(inner)))
+        }
       }
 
       // typeof type query
@@ -576,6 +582,7 @@ impl<'a> Parser<'a> {
     let t = self.consume();
     match t.typ {
       TT::Identifier |
+      TT::KeywordThis |
       TT::KeywordAwait | TT::KeywordYield | TT::KeywordAsync |
       TT::KeywordAs | TT::KeywordFrom | TT::KeywordOf | TT::KeywordGet | TT::KeywordSet | TT::KeywordConstructor |
       TT::KeywordAbstract | TT::KeywordAsserts | TT::KeywordDeclare | TT::KeywordImplements |
@@ -584,7 +591,7 @@ impl<'a> Parser<'a> {
       TT::KeywordReadonly | TT::KeywordSatisfies | TT::KeywordStatic |
       TT::KeywordUsing | TT::KeywordOut | TT::KeywordLet |
       // Allow type keywords as identifiers in typeof queries like: typeof undefined, typeof this
-      TT::KeywordUndefinedType | TT::KeywordThis |
+      TT::KeywordUndefinedType |
       TT::KeywordSuper |  // TypeScript: Error recovery - allow 'super' as type identifier
       // TypeScript: Error recovery - allow reserved keywords in qualified type names
       // Examples: `x.void`, `typeof Controller.prototype.delete`, `typeof foo.var`
