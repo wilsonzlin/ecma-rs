@@ -275,21 +275,6 @@ impl Emitter {
     self.write_punct(";");
   }
 
-  /// Emits a newline and clears boundary tracking.
-  pub fn write_newline(&mut self) {
-    self.write_byte(b'\n');
-  }
-
-  /// Emits a comma, respecting token boundaries.
-  pub fn write_comma(&mut self) {
-    self.write_punct(",");
-  }
-
-  /// Emits a semicolon, respecting token boundaries.
-  pub fn write_semicolon(&mut self) {
-    self.write_punct(";");
-  }
-
   /// Emits a list of items separated by `separator` and optionally including a
   /// trailing separator.
   pub fn emit_punctuated_list<T>(
