@@ -1985,14 +1985,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "types-ts"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "tracing",
-]
-
-[[package]]
 name = "types-ts-interned"
 version = "0.1.0"
 dependencies = [

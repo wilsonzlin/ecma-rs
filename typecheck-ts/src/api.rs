@@ -799,43 +799,6 @@ impl ProgramState {
           ));
         }
       }
-
-          }
-          match parsed {
-            Ok(ast) => {
-              let bind_span = QuerySpan::enter(
-                query_span!(
-                  "typecheck_ts.bind",
-                  Some(file.0),
-                  Option::<u32>::None,
-                  Option::<u32>::None,
-                  false
-                ),
-                None,
-              );
-              self.bind_file(file, ast, host, &mut queue);
-              if let Some(span) = bind_span {
-                span.finish(None);
-              }
-            }
-            Err(err) => {
-              let span = loc_to_span(file, err.loc);
-              self.diagnostics.push(Diagnostic::error_with_code(
-                "PARSE0001",
-                err.to_string(),
-                Some(span),
-              ));
-            }
-          }
-        }
-        Err(err) => {
-          self.diagnostics.push(Diagnostic::error(
-            "HOST0001",
-            err.to_string(),
-            Span::new(file, TextRange::new(0, 0)),
-          ));
-        }
-      }
     }
     self.recompute_global_bindings();
     self.analyzed = true;
