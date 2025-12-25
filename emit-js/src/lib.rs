@@ -19,7 +19,7 @@ pub use escape::emit_template_raw_segment;
 pub use expr::{emit_expr, ExprEmitter};
 pub use jsx::{emit_jsx_elem, emit_jsx_expr_container};
 pub use pat::{emit_param_decl, emit_pat, emit_pat_decl};
-pub use stmt_start::{emit_expr_stmt, expr_stmt_needs_parens};
+pub use stmt_start::{emit_expr_stmt, emit_expr_stmt_with, expr_stmt_needs_parens};
 pub use ts_stmt::{emit_top_level, emit_ts_stmt};
 pub use ts_type::{
   emit_interface_decl,

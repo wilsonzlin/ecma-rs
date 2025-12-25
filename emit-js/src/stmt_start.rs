@@ -29,6 +29,7 @@ pub(crate) enum Keyword {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TokenKind {
+  At,
   BraceOpen,
   BracketOpen,
   ParenthesisOpen,
@@ -58,6 +59,7 @@ pub fn expr_stmt_needs_parens(expr: &Node<Expr>) -> bool {
   let second = expr_second_token_hint(expr);
 
   match first {
+    TokenKind::At => true,
     TokenKind::BraceOpen => true,
     TokenKind::Keyword(Keyword::Function | Keyword::Class) => true,
     TokenKind::Keyword(Keyword::Async) => {
@@ -85,20 +87,29 @@ pub fn expr_stmt_needs_parens(expr: &Node<Expr>) -> bool {
   }
 }
 
-pub fn emit_expr_stmt<W, F>(out: &mut W, expr: &Node<Expr>, mut emit_type: F) -> EmitResult
-where
-  W: fmt::Write,
-  F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
-{
+pub fn emit_expr_stmt_with<W: fmt::Write>(
+  out: &mut W,
+  expr: &Node<Expr>,
+  mut emit_expr_fn: impl FnMut(&mut W, &Node<Expr>) -> EmitResult,
+) -> EmitResult {
   let needs_parens = expr_stmt_needs_parens(expr);
   if needs_parens {
     write!(out, "(")?;
   }
-  emit_expr(out, expr, &mut emit_type)?;
+  emit_expr_fn(out, expr)?;
   if needs_parens {
     write!(out, ")")?;
   }
   Ok(())
+}
+
+pub fn emit_expr_stmt<W, F>(out: &mut W, expr: &Node<Expr>, emit_type: F) -> EmitResult
+where
+  W: fmt::Write,
+  F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
+{
+  let mut emit_type = emit_type;
+  emit_expr_stmt_with(out, expr, |out, expr| emit_expr(out, expr, &mut emit_type))
 }
 
 fn expr_tokens(expr: &Node<Expr>) -> TokenPrefix {
@@ -117,7 +128,13 @@ fn expr_tokens(expr: &Node<Expr>) -> TokenPrefix {
         prefix(TokenKind::Keyword(Keyword::Function), None)
       }
     }
-    Expr::Class(_) => prefix(TokenKind::Keyword(Keyword::Class), None),
+    Expr::Class(class) => {
+      if class.stx.decorators.is_empty() {
+        prefix(TokenKind::Keyword(Keyword::Class), None)
+      } else {
+        prefix(TokenKind::At, Some(TokenKind::Keyword(Keyword::Class)))
+      }
+    }
     Expr::ImportMeta(_) => prefix(TokenKind::Keyword(Keyword::Import), Some(TokenKind::Other)),
     Expr::Import(_) => prefix(
       TokenKind::Keyword(Keyword::Import),
