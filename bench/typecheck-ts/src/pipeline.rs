@@ -15,7 +15,7 @@ use parse_js::error::SyntaxResult;
 use parse_js::parse;
 use semantic_js::ts::{
   bind_ts_program, Decl, DeclKind, Export, ExportAll, Exported, HirFile, Import, ImportDefault,
-  ImportNamed, ImportNamespace, NamedExport, Resolver,
+  ImportNamed, ImportNamespace, NamedExport, Resolver, TextRange,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -272,6 +272,7 @@ fn sample_types() -> (TypeStore, SampleTypes) {
     }],
     ret: wide_union,
     is_method: false,
+    this_param: None,
   }));
 
   let fn_contravariant = store.intern(TypeKind::Function(FunctionType {
@@ -283,6 +284,7 @@ fn sample_types() -> (TypeStore, SampleTypes) {
     }],
     ret: narrow_union,
     is_method: false,
+    this_param: None,
   }));
 
   let number_ty = store.number();
@@ -534,6 +536,7 @@ fn lower_semantic_hir(file: semantic_js::ts::FileId, ast: &Node<TopLevel>) -> Hi
           kind: DeclKind::Var,
           is_ambient: false,
           exported: Exported::Default,
+          span: TextRange::new(0, 0),
         });
         next_def += 1;
       }
@@ -548,11 +551,17 @@ fn lower_semantic_hir(file: semantic_js::ts::FileId, ast: &Node<TopLevel>) -> Hi
           hir.exports.push(Export::All(ExportAll {
             specifier,
             is_type_only: export_list.stx.type_only,
+            specifier_span: TextRange::new(0, 0),
           }));
         }
         parse_js::ast::import_export::ExportNames::Specific(list) => {
           let mut named = NamedExport {
             specifier: export_list.stx.from.clone(),
+            specifier_span: export_list
+              .stx
+              .from
+              .as_ref()
+              .map(|_| TextRange::new(0, 0)),
             items: Vec::new(),
             is_type_only: export_list.stx.type_only,
           };
@@ -561,6 +570,8 @@ fn lower_semantic_hir(file: semantic_js::ts::FileId, ast: &Node<TopLevel>) -> Hi
             named.items.push(semantic_js::ts::ExportSpecifier {
               local: export_name.stx.exportable.as_str().to_string(),
               exported: Some(exported),
+              local_span: TextRange::new(0, 0),
+              exported_span: Some(TextRange::new(0, 0)),
             });
           }
           hir.exports.push(Export::Named(named));
@@ -588,6 +599,7 @@ fn lower_var_decl(hir: &mut HirFile, next_def: &mut u32, var: &VarDecl) {
         kind: DeclKind::Var,
         is_ambient: false,
         exported: exported.clone(),
+        span: TextRange::new(0, 0),
       });
       *next_def += 1;
     }
@@ -614,6 +626,7 @@ fn lower_function_decl(hir: &mut HirFile, next_def: &mut u32, func: &FuncDecl) {
     kind: DeclKind::Function,
     is_ambient: false,
     exported,
+    span: TextRange::new(0, 0),
   });
   *next_def += 1;
 }
@@ -659,6 +672,7 @@ fn collect_pat_names_inner(pat: &Node<AstPat>, out: &mut Vec<String>) {
 fn lower_import(import_stmt: &parse_js::ast::stmt::ImportStmt) -> Import {
   let mut imp = Import {
     specifier: import_stmt.module.clone(),
+    specifier_span: TextRange::new(0, 0),
     default: None,
     namespace: None,
     named: Vec::new(),
@@ -672,6 +686,7 @@ fn lower_import(import_stmt: &parse_js::ast::stmt::ImportStmt) -> Import {
       .unwrap_or_else(|| "default".to_string());
     imp.default = Some(ImportDefault {
       local,
+      local_span: TextRange::new(0, 0),
       is_type_only: import_stmt.type_only,
     });
   }
@@ -685,6 +700,7 @@ fn lower_import(import_stmt: &parse_js::ast::stmt::ImportStmt) -> Import {
           .unwrap_or_else(|| "*".to_string());
         imp.namespace = Some(ImportNamespace {
           local,
+          local_span: TextRange::new(0, 0),
           is_type_only: import_stmt.type_only,
         });
       }
@@ -698,6 +714,8 @@ fn lower_import(import_stmt: &parse_js::ast::stmt::ImportStmt) -> Import {
             imported: item.stx.importable.as_str().to_string(),
             local,
             is_type_only: item.stx.type_only || import_stmt.type_only,
+            imported_span: TextRange::new(0, 0),
+            local_span: TextRange::new(0, 0),
           });
         }
       }
