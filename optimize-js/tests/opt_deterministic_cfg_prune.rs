@@ -22,7 +22,7 @@ fn canonical_cfg_json(cfg: &Cfg) -> String {
 fn compile_cfg(source: &str) -> String {
   let mut node = parse(source).expect("parse source");
   compute_symbols(&mut node, TopLevelMode::Module);
-  let program = Program::compile(node, false).expect("compile source");
+  let program = Program::compile(node, TopLevelMode::Module, false).expect("compile source");
   canonical_cfg_json(&program.top_level.body)
 }
 
