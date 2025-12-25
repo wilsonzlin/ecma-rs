@@ -82,7 +82,7 @@ impl NameInterner {
 
     let id = Self::hash_name(&name);
     if let Some(existing) = self.by_id.get(&id) {
-      debug_assert_eq!(
+      assert_eq!(
         existing, &name,
         "NameId collision between `{existing}` and `{name}`"
       );
