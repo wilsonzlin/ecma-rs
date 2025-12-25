@@ -1,5 +1,4 @@
 use crate::ids::NameId;
-use crate::ids::SignatureId;
 use crate::ids::TypeId;
 use crate::ids::TypeParamId;
 use serde::Deserialize;
@@ -29,23 +28,5 @@ impl Signature {
       type_params: Vec::new(),
       this_param: None,
     }
-  }
-}
-
-#[derive(Default, Debug)]
-pub(crate) struct SignatureInterner {
-  pub items: Vec<Signature>,
-  pub map: ahash::AHashMap<Signature, SignatureId>,
-}
-
-impl SignatureInterner {
-  pub fn intern(&mut self, sig: Signature) -> SignatureId {
-    if let Some(id) = self.map.get(&sig) {
-      return *id;
-    }
-    let id = SignatureId(self.items.len() as u32);
-    self.items.push(sig.clone());
-    self.map.insert(sig, id);
-    id
   }
 }

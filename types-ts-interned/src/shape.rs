@@ -1,5 +1,4 @@
 use crate::ids::NameId;
-use crate::ids::ObjectId;
 use crate::ids::ShapeId;
 use crate::ids::SignatureId;
 use crate::ids::TypeId;
@@ -98,40 +97,4 @@ impl Shape {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ObjectType {
   pub shape: ShapeId,
-}
-
-#[derive(Default, Debug)]
-pub(crate) struct ShapeInterner {
-  pub items: Vec<Shape>,
-  pub map: ahash::AHashMap<Shape, ShapeId>,
-}
-
-impl ShapeInterner {
-  pub fn intern(&mut self, shape: Shape) -> ShapeId {
-    if let Some(id) = self.map.get(&shape) {
-      return *id;
-    }
-    let id = ShapeId(self.items.len() as u32);
-    self.items.push(shape.clone());
-    self.map.insert(shape, id);
-    id
-  }
-}
-
-#[derive(Default, Debug)]
-pub(crate) struct ObjectInterner {
-  pub items: Vec<ObjectType>,
-  pub map: ahash::AHashMap<ObjectType, ObjectId>,
-}
-
-impl ObjectInterner {
-  pub fn intern(&mut self, object: ObjectType) -> ObjectId {
-    if let Some(id) = self.map.get(&object) {
-      return *id;
-    }
-    let id = ObjectId(self.items.len() as u32);
-    self.items.push(object.clone());
-    self.map.insert(object, id);
-    id
-  }
 }

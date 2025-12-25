@@ -7,6 +7,7 @@ description = "Interned TypeScript type representation (imported from worker-10)
 [dependencies]
 hir-js = { path = "../hir-js", features = ["serde"] }
 ahash = "0.8"
+dashmap = "5"
 bitflags = "2"
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }

@@ -2,38 +2,24 @@ use serde::Deserialize;
 use serde::Serialize;
 
 macro_rules! id_newtype {
-  ($name:ident) => {
+  ($name:ident, $inner:ty) => {
     #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Debug)]
-    pub struct $name(pub u32);
+    pub struct $name(pub $inner);
 
-    impl From<u32> for $name {
-      fn from(value: u32) -> Self {
+    impl From<$inner> for $name {
+      fn from(value: $inner) -> Self {
         Self(value)
-      }
-    }
-
-    impl $name {
-      pub fn index(self) -> usize {
-        self.0 as usize
       }
     }
   };
 }
 
-id_newtype!(TypeId);
-id_newtype!(ObjectId);
-id_newtype!(ShapeId);
-id_newtype!(TypeParamId);
-id_newtype!(SignatureId);
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Debug)]
-pub struct NameId(pub u64);
-
-impl From<u64> for NameId {
-  fn from(value: u64) -> Self {
-    Self(value)
-  }
-}
+id_newtype!(TypeId, u128);
+id_newtype!(ObjectId, u128);
+id_newtype!(ShapeId, u128);
+id_newtype!(TypeParamId, u32);
+id_newtype!(SignatureId, u128);
+id_newtype!(NameId, u64);
 
 // `DefId` is shared with `hir-js` to ensure a single canonical definition identity
 // throughout the pipeline. It is re-exported here for convenience.

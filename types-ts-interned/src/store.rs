@@ -1,45 +1,51 @@
 use crate::display::TypeDisplay;
-use crate::ids::NameId;
-use crate::ids::ObjectId;
-use crate::ids::ShapeId;
-use crate::ids::SignatureId;
-use crate::ids::TypeId;
-use crate::ids::TypeParamId;
-use crate::kind::CompositeKind;
-use crate::kind::TypeKind;
+use crate::ids::{NameId, ObjectId, ShapeId, SignatureId, TypeId, TypeParamId};
+use crate::kind::{CompositeKind, TypeKind};
 use crate::options::TypeOptions;
-use crate::shape::Indexer;
-use crate::shape::ObjectInterner;
-use crate::shape::ObjectType;
-use crate::shape::Property;
-use crate::shape::Shape;
-use crate::shape::ShapeInterner;
-use crate::signature::Param;
-use crate::signature::Signature;
-use crate::signature::SignatureInterner;
+use crate::shape::{Indexer, ObjectType, Property, Shape};
+use crate::signature::{Param, Signature};
 use ahash::RandomState;
+use dashmap::mapref::entry::Entry;
+use dashmap::DashMap;
 use parking_lot::RwLock;
 use std::cmp::Ordering;
-use std::hash::BuildHasher;
-use std::hash::Hasher;
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
 
-#[derive(Default, Debug)]
-struct TypeInterner {
-  items: Vec<TypeKind>,
-  map: ahash::AHashMap<TypeKind, TypeId>,
+const HASH_KEY1: u64 = 0x9e37_79b9_7f4a_7c15;
+const HASH_KEY2: u64 = 0xc2b2_ae3d_27d4_eb4f;
+const HASH_KEY3: u64 = 0x1656_67b1_9e37_79f9;
+const HASH_KEY4: u64 = 0x85eb_ca6b_c8f6_9b07;
+
+const TYPE_DOMAIN: u64 = 0x7479_7065;
+const SIGNATURE_DOMAIN: u64 = 0x7369_676e;
+const SHAPE_DOMAIN: u64 = 0x7368_6170;
+const OBJECT_DOMAIN: u64 = 0x6f62_6a65;
+const NAME_DOMAIN: u64 = 0x6e61_6d65;
+
+fn stable_state(domain: u64) -> RandomState {
+  RandomState::with_seeds(
+    HASH_KEY1 ^ domain,
+    HASH_KEY2.wrapping_add(domain),
+    HASH_KEY3 ^ (domain << 1),
+    HASH_KEY4.wrapping_sub(domain),
+  )
 }
 
-impl TypeInterner {
-  fn intern(&mut self, kind: TypeKind) -> TypeId {
-    if let Some(id) = self.map.get(&kind) {
-      return *id;
-    }
-    let id = TypeId(self.items.len() as u32);
-    self.items.push(kind.clone());
-    self.map.insert(kind, id);
-    id
-  }
+fn stable_hash64<T: Hash>(value: &T, domain: u64, salt: u64) -> u64 {
+  let mut hasher = stable_state(domain).build_hasher();
+  hasher.write_u64(salt);
+  value.hash(&mut hasher);
+  hasher.finish()
+}
+
+/// Produce a 128-bit fingerprint for a value using domain-separated, stable
+/// hashing. Two hashes are mixed to virtually eliminate collisions without
+/// relying on insertion order.
+fn fingerprint<T: Hash>(value: &T, domain: u64) -> u128 {
+  let primary = stable_hash64(value, domain, 0);
+  let secondary = stable_hash64(value, domain, 1);
+  ((primary as u128) << 64) | secondary as u128
 }
 
 #[derive(Default, Debug)]
@@ -49,40 +55,8 @@ struct NameInterner {
 }
 
 impl NameInterner {
-  fn hash_with_seeds(name: &str, seeds: (u64, u64, u64, u64), salt: u64) -> u64 {
-    let mut hasher = RandomState::with_seeds(seeds.0, seeds.1, seeds.2, seeds.3).build_hasher();
-    hasher.write_u64(salt);
-    hasher.write(name.as_bytes());
-    hasher.finish()
-  }
-
   fn hash_name(name: &str, salt: u64) -> NameId {
-    const NAME_HASH_KEY1: u64 = 0x9e37_79b9_7f4a_7c15;
-    const NAME_HASH_KEY2: u64 = 0xc2b2_ae3d_27d4_eb4f;
-    const NAME_HASH_KEY3: u64 = 0x1656_67b1_9e37_79f9;
-    const NAME_HASH_KEY4: u64 = 0x85eb_ca6b_c8f6_9b07;
-
-    let primary = Self::hash_with_seeds(
-      name,
-      (
-        NAME_HASH_KEY1,
-        NAME_HASH_KEY2,
-        NAME_HASH_KEY3,
-        NAME_HASH_KEY4,
-      ),
-      salt,
-    );
-    let secondary = Self::hash_with_seeds(
-      name,
-      (
-        NAME_HASH_KEY4 ^ 0xa076_1d64_78bd_642f,
-        NAME_HASH_KEY3 ^ 0xe703_7ed1_a0b4_28db,
-        NAME_HASH_KEY2 ^ 0x8ebc_6af0_6737_7ee8,
-        NAME_HASH_KEY1 ^ 0x5888_5cdd_54d4_641f,
-      ),
-      salt,
-    );
-    NameId(primary.rotate_left(5) ^ secondary)
+    NameId(stable_hash64(&name, NAME_DOMAIN, salt))
   }
 
   fn intern(&mut self, name: impl Into<String>) -> NameId {
@@ -136,48 +110,126 @@ pub struct PrimitiveIds {
   pub unique_symbol: TypeId,
 }
 
+/// Thread-safe, deterministic interner for canonicalized types, shapes, objects,
+/// names, and signatures. IDs are derived from stable hashes of canonical data
+/// to ensure that interning order does not affect results, even when requests
+/// arrive from multiple threads.
 #[derive(Debug)]
 pub struct TypeStore {
-  types: RwLock<TypeInterner>,
-  shapes: RwLock<ShapeInterner>,
-  objects: RwLock<ObjectInterner>,
+  types: DashMap<TypeId, TypeKind, RandomState>,
+  shapes: DashMap<ShapeId, Shape, RandomState>,
+  objects: DashMap<ObjectId, ObjectType, RandomState>,
   names: RwLock<NameInterner>,
-  signatures: RwLock<SignatureInterner>,
+  signatures: DashMap<SignatureId, Signature, RandomState>,
   options: TypeOptions,
   primitives: PrimitiveIds,
 }
 
 impl TypeStore {
+  fn new_dashmap<K: Eq + Hash, V>(domain: u64) -> DashMap<K, V, RandomState> {
+    DashMap::with_hasher(stable_state(domain))
+  }
+
   pub fn new() -> Arc<Self> {
     Self::with_options(TypeOptions::default())
   }
 
   pub fn with_options(options: TypeOptions) -> Arc<Self> {
-    let mut types = TypeInterner::default();
-    let primitives = PrimitiveIds {
-      any: types.intern(TypeKind::Any),
-      unknown: types.intern(TypeKind::Unknown),
-      never: types.intern(TypeKind::Never),
-      void: types.intern(TypeKind::Void),
-      null: types.intern(TypeKind::Null),
-      undefined: types.intern(TypeKind::Undefined),
-      boolean: types.intern(TypeKind::Boolean),
-      number: types.intern(TypeKind::Number),
-      string: types.intern(TypeKind::String),
-      bigint: types.intern(TypeKind::BigInt),
-      symbol: types.intern(TypeKind::Symbol),
-      unique_symbol: types.intern(TypeKind::UniqueSymbol),
+    let mut store = Self {
+      types: Self::new_dashmap(TYPE_DOMAIN),
+      shapes: Self::new_dashmap(SHAPE_DOMAIN),
+      objects: Self::new_dashmap(OBJECT_DOMAIN),
+      names: Default::default(),
+      signatures: Self::new_dashmap(SIGNATURE_DOMAIN),
+      options,
+      primitives: PrimitiveIds {
+        any: TypeId(0),
+        unknown: TypeId(0),
+        never: TypeId(0),
+        void: TypeId(0),
+        null: TypeId(0),
+        undefined: TypeId(0),
+        boolean: TypeId(0),
+        number: TypeId(0),
+        string: TypeId(0),
+        bigint: TypeId(0),
+        symbol: TypeId(0),
+        unique_symbol: TypeId(0),
+      },
     };
 
-    Arc::new(Self {
-      types: RwLock::new(types),
-      shapes: Default::default(),
-      objects: Default::default(),
-      names: Default::default(),
-      signatures: Default::default(),
-      options,
-      primitives,
-    })
+    let primitives = PrimitiveIds {
+      any: store.insert_type_direct(TypeKind::Any),
+      unknown: store.insert_type_direct(TypeKind::Unknown),
+      never: store.insert_type_direct(TypeKind::Never),
+      void: store.insert_type_direct(TypeKind::Void),
+      null: store.insert_type_direct(TypeKind::Null),
+      undefined: store.insert_type_direct(TypeKind::Undefined),
+      boolean: store.insert_type_direct(TypeKind::Boolean),
+      number: store.insert_type_direct(TypeKind::Number),
+      string: store.insert_type_direct(TypeKind::String),
+      bigint: store.insert_type_direct(TypeKind::BigInt),
+      symbol: store.insert_type_direct(TypeKind::Symbol),
+      unique_symbol: store.insert_type_direct(TypeKind::UniqueSymbol),
+    };
+    store.primitives = primitives;
+    Arc::new(store)
+  }
+
+  fn make_type_id(kind: &TypeKind) -> TypeId {
+    TypeId(fingerprint(kind, TYPE_DOMAIN))
+  }
+
+  fn make_signature_id(sig: &Signature) -> SignatureId {
+    SignatureId(fingerprint(sig, SIGNATURE_DOMAIN))
+  }
+
+  fn make_shape_id(shape: &Shape) -> ShapeId {
+    ShapeId(fingerprint(shape, SHAPE_DOMAIN))
+  }
+
+  fn make_object_id(object: &ObjectType) -> ObjectId {
+    ObjectId(fingerprint(object, OBJECT_DOMAIN))
+  }
+
+  fn insert_with_id<T: Clone + Eq, Id: Copy + Eq + Hash + std::fmt::Debug>(
+    map: &DashMap<Id, T, RandomState>,
+    id: Id,
+    value: T,
+    kind: &str,
+  ) -> Id {
+    match map.entry(id) {
+      Entry::Occupied(entry) => {
+        if entry.get() != &value {
+          panic!("{kind} ID collision for {id:?}");
+        }
+        id
+      }
+      Entry::Vacant(entry) => {
+        entry.insert(value);
+        id
+      }
+    }
+  }
+
+  fn insert_type_direct(&self, kind: TypeKind) -> TypeId {
+    let id = Self::make_type_id(&kind);
+    Self::insert_with_id(&self.types, id, kind, "type")
+  }
+
+  fn insert_signature_direct(&self, sig: Signature) -> SignatureId {
+    let id = Self::make_signature_id(&sig);
+    Self::insert_with_id(&self.signatures, id, sig, "signature")
+  }
+
+  fn insert_shape_direct(&self, shape: Shape) -> ShapeId {
+    let id = Self::make_shape_id(&shape);
+    Self::insert_with_id(&self.shapes, id, shape, "shape")
+  }
+
+  fn insert_object_direct(&self, object: ObjectType) -> ObjectId {
+    let id = Self::make_object_id(&object);
+    Self::insert_with_id(&self.objects, id, object, "object")
   }
 
   pub fn options(&self) -> TypeOptions {
@@ -198,8 +250,11 @@ impl TypeStore {
   }
 
   pub fn signature(&self, id: SignatureId) -> Signature {
-    let guard = self.signatures.read();
-    guard.items[id.index()].clone()
+    self
+      .signatures
+      .get(&id)
+      .map(|entry| entry.value().clone())
+      .expect("SignatureId not interned")
   }
 
   pub fn intern_signature(&self, signature: Signature) -> SignatureId {
@@ -211,23 +266,31 @@ impl TypeStore {
     if let Some(this) = signature.this_param.as_mut() {
       *this = self.canon(*this);
     }
-    let mut guard = self.signatures.write();
-    guard.intern(signature)
+    self.insert_signature_direct(signature)
   }
 
   pub fn shape(&self, id: ShapeId) -> Shape {
-    let guard = self.shapes.read();
-    guard.items[id.index()].clone()
+    self
+      .shapes
+      .get(&id)
+      .map(|entry| entry.value().clone())
+      .expect("ShapeId not interned")
   }
 
   pub fn object(&self, id: ObjectId) -> ObjectType {
-    let guard = self.objects.read();
-    guard.items[id.index()].clone()
+    self
+      .objects
+      .get(&id)
+      .map(|entry| entry.value().clone())
+      .expect("ObjectId not interned")
   }
 
   pub fn type_kind(&self, id: TypeId) -> TypeKind {
-    let guard = self.types.read();
-    guard.items[id.index()].clone()
+    self
+      .types
+      .get(&id)
+      .map(|entry| entry.value().clone())
+      .expect("TypeId not interned")
   }
 
   pub fn intern_shape(&self, mut shape: Shape) -> ShapeId {
@@ -287,13 +350,11 @@ impl TypeStore {
         other => other,
       });
 
-    let mut guard = self.shapes.write();
-    guard.intern(shape)
+    self.insert_shape_direct(shape)
   }
 
   pub fn intern_object(&self, object: ObjectType) -> ObjectId {
-    let mut guard = self.objects.write();
-    guard.intern(object)
+    self.insert_object_direct(object)
   }
 
   pub fn intern_type(&self, kind: TypeKind) -> TypeId {
@@ -301,10 +362,7 @@ impl TypeStore {
     match kind {
       TypeKind::Union(members) => self.union(members),
       TypeKind::Intersection(members) => self.intersection(members),
-      other => {
-        let mut guard = self.types.write();
-        guard.intern(other)
-      }
+      other => self.insert_type_direct(other),
     }
   }
 
@@ -430,8 +488,7 @@ impl TypeStore {
       return flat[0];
     }
 
-    let mut guard = self.types.write();
-    guard.intern(TypeKind::Union(flat))
+    self.insert_type_direct(TypeKind::Union(flat))
   }
 
   pub fn intersection(&self, members: Vec<TypeId>) -> TypeId {
@@ -489,8 +546,7 @@ impl TypeStore {
       return flat[0];
     }
 
-    let mut guard = self.types.write();
-    guard.intern(TypeKind::Intersection(flat))
+    self.insert_type_direct(TypeKind::Intersection(flat))
   }
 
   fn sort_and_dedup(&self, members: &mut Vec<TypeId>) {
@@ -893,34 +949,34 @@ impl TypeStore {
       TypeKind::StringLiteral(id) => json!({ "kind": "str_lit", "value": self.name(id) }),
       TypeKind::BigIntLiteral(v) => json!({ "kind": "bigint_lit", "value": v.to_string() }),
       TypeKind::Union(members) => {
-        json!({ "kind": "union", "members": members.iter().map(|m| m.0).collect::<Vec<_>>() })
+        json!({ "kind": "union", "members": members.iter().map(|m| m.0.to_string()).collect::<Vec<_>>() })
       }
       TypeKind::Intersection(members) => {
-        json!({ "kind": "intersection", "members": members.iter().map(|m| m.0).collect::<Vec<_>>() })
+        json!({ "kind": "intersection", "members": members.iter().map(|m| m.0.to_string()).collect::<Vec<_>>() })
       }
       TypeKind::Object(obj) => {
         let shape = self.object(obj).shape;
-        json!({ "kind": "object", "shape": shape.0 })
+        json!({ "kind": "object", "shape": shape.0.to_string() })
       }
       TypeKind::Callable { overloads } => {
-        json!({ "kind": "callable", "overloads": overloads.iter().map(|o| o.0).collect::<Vec<_>>() })
+        json!({ "kind": "callable", "overloads": overloads.iter().map(|o| o.0.to_string()).collect::<Vec<_>>() })
       }
       TypeKind::Ref { def, args } => {
-        json!({ "kind": "ref", "def": def.0, "args": args.iter().map(|a| a.0).collect::<Vec<_>>() })
+        json!({ "kind": "ref", "def": def.0, "args": args.iter().map(|a| a.0.to_string()).collect::<Vec<_>>() })
       }
       TypeKind::This => json!({ "kind": "this" }),
       TypeKind::Infer(param) => json!({ "kind": "infer", "param": param.0 }),
       TypeKind::Tuple(elems) => json!({
         "kind": "tuple",
         "elems": elems.iter().map(|e| json!({
-          "ty": e.ty.0,
+          "ty": e.ty.0.to_string(),
           "optional": e.optional,
           "rest": e.rest,
           "readonly": e.readonly,
         })).collect::<Vec<_>>(),
       }),
       TypeKind::Array { ty, readonly } => {
-        json!({ "kind": "array", "ty": ty.0, "readonly": readonly })
+        json!({ "kind": "array", "ty": ty.0.to_string(), "readonly": readonly })
       }
       TypeKind::TypeParam(id) => json!({ "kind": "type_param", "id": id.0 }),
       TypeKind::Conditional {
@@ -931,31 +987,31 @@ impl TypeStore {
         distributive,
       } => json!({
         "kind": "conditional",
-        "check": check.0,
-        "extends": extends.0,
-        "true": true_ty.0,
-        "false": false_ty.0,
+        "check": check.0.to_string(),
+        "extends": extends.0.to_string(),
+        "true": true_ty.0.to_string(),
+        "false": false_ty.0.to_string(),
         "distributive": distributive,
       }),
       TypeKind::Mapped(mapped) => json!({
         "kind": "mapped",
         "param": mapped.param.0,
-        "source": mapped.source.0,
-        "value": mapped.value.0,
+        "source": mapped.source.0.to_string(),
+        "value": mapped.value.0.to_string(),
         "readonly": format!("{:?}", mapped.readonly),
         "optional": format!("{:?}", mapped.optional),
-        "name_type": mapped.name_type.map(|t| t.0),
-        "as_type": mapped.as_type.map(|t| t.0),
+        "name_type": mapped.name_type.map(|t| t.0.to_string()),
+        "as_type": mapped.as_type.map(|t| t.0.to_string()),
       }),
       TypeKind::TemplateLiteral(tpl) => json!({
         "kind": "template",
         "head": tpl.head,
-        "spans": tpl.spans.iter().map(|s| json!({"literal": s.literal, "ty": s.ty.0})).collect::<Vec<_>>()
+        "spans": tpl.spans.iter().map(|s| json!({"literal": s.literal, "ty": s.ty.0.to_string()})).collect::<Vec<_>>()
       }),
       TypeKind::IndexedAccess { obj, index } => {
-        json!({ "kind": "indexed", "obj": obj.0, "index": index.0 })
+        json!({ "kind": "indexed", "obj": obj.0.to_string(), "index": index.0.to_string() })
       }
-      TypeKind::KeyOf(inner) => json!({ "kind": "keyof", "ty": inner.0 }),
+      TypeKind::KeyOf(inner) => json!({ "kind": "keyof", "ty": inner.0.to_string() }),
     }
   }
 }

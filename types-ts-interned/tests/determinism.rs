@@ -352,3 +352,58 @@ fn deterministic_ids_under_parallel_interning() {
     }
   }
 }
+
+fn snapshot_displays(store: &TypeStore, snapshot: &ResolvedSnapshot) -> Vec<String> {
+  vec![
+    store.display(snapshot.callable).to_string(),
+    store.display(snapshot.object_type).to_string(),
+    store.display(snapshot.union).to_string(),
+    store.display(snapshot.intersection).to_string(),
+    store.display(snapshot.indexed_access).to_string(),
+    store.display(snapshot.template).to_string(),
+  ]
+}
+
+#[test]
+fn deterministic_across_parallel_runs() {
+  const THREADS: usize = 8;
+  const RUNS: usize = 5;
+
+  let mut baseline: Option<(ResolvedSnapshot, Vec<String>)> = None;
+
+  for run in 0..RUNS {
+    let store = TypeStore::new();
+    let mut handles = Vec::new();
+
+    for thread_idx in 0..THREADS {
+      let store = Arc::clone(&store);
+      let seed = (run as u64).wrapping_mul(0x2bde_a5b9_c0f2_1a83)
+        ^ (thread_idx as u64 + 1).wrapping_mul(0x517c_c1b7_2722_0a95);
+      handles.push(thread::spawn(move || run_thread(store, seed)));
+    }
+
+    let snapshots: Vec<ResolvedSnapshot> = handles
+      .into_iter()
+      .map(|handle| handle.join().expect("thread panicked"))
+      .collect();
+
+    let reference = snapshots.first().expect("no snapshots produced").clone();
+    for snapshot in snapshots.iter().skip(1) {
+      assert_eq!(snapshot, &reference, "snapshots diverged within run {run}");
+    }
+
+    let displays = snapshot_displays(&store, &reference);
+    if let Some((expected_snapshot, expected_displays)) = &baseline {
+      assert_eq!(
+        &reference, expected_snapshot,
+        "snapshots diverged between runs {run}"
+      );
+      assert_eq!(
+        &displays, expected_displays,
+        "displays diverged between runs {run}"
+      );
+    } else {
+      baseline = Some((reference, displays));
+    }
+  }
+}
