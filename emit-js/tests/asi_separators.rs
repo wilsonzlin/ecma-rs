@@ -7,11 +7,13 @@ use parse_js::ast::expr::lit::{
   LitTemplateExpr,
   LitTemplatePart,
 };
+use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{Expr, IdExpr, UnaryExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::{
   BlockStmt,
   EmptyStmt,
+  ExportDefaultExprStmt,
   ExprStmt,
   ForBody,
   ForTripleStmt,
@@ -21,6 +23,7 @@ use parse_js::ast::stmt::{
   Stmt,
   WhileStmt,
 };
+use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 
@@ -98,6 +101,27 @@ fn while_stmt(condition: Node<Expr>, body: Node<Stmt>) -> Node<Stmt> {
   node(Stmt::While(node(WhileStmt { condition, body })))
 }
 
+fn var_decl_stmt(name: &str, initializer: Option<Node<Expr>>) -> Node<Stmt> {
+  let pat = node(Pat::Id(node(IdPat {
+    name: name.to_string(),
+  })));
+  let declarator = VarDeclarator {
+    pattern: node(PatDecl { pat }),
+    definite_assignment: false,
+    type_annotation: None,
+    initializer,
+  };
+  node(Stmt::VarDecl(node(VarDecl {
+    export: false,
+    mode: VarDeclMode::Var,
+    declarators: vec![declarator],
+  })))
+}
+
+fn export_default_expr_stmt(expr: Node<Expr>) -> Node<Stmt> {
+  node(Stmt::ExportDefaultExpr(node(ExportDefaultExprStmt { expression: expr })))
+}
+
 #[test]
 fn expr_stmt_then_regex_requires_semicolon() {
   let prev = expr_stmt(id("a"));
@@ -173,4 +197,25 @@ fn wrapped_leaf_statement_non_expression_tail_is_not_hazardous() {
   let prev = if_stmt(block_stmt(vec![]));
   let next = expr_stmt(object_expr());
   assert_ne!(separator_between(Some(&prev), &next), Separator::Semicolon);
+}
+
+#[test]
+fn initialized_var_decl_before_bracket_hazard_requires_semicolon() {
+  let prev = var_decl_stmt("a", Some(id("x")));
+  let next = expr_stmt(array_expr());
+  assert_eq!(separator_between(Some(&prev), &next), Separator::Semicolon);
+}
+
+#[test]
+fn export_default_expression_requires_semicolon_before_paren_hazard() {
+  let prev = export_default_expr_stmt(id("a"));
+  let next = expr_stmt(object_expr());
+  assert_eq!(separator_between(Some(&prev), &next), Separator::Semicolon);
+}
+
+#[test]
+fn uninitialized_var_decl_allows_newline_before_bracket_hazard() {
+  let prev = var_decl_stmt("a", None);
+  let next = expr_stmt(array_expr());
+  assert_eq!(separator_between(Some(&prev), &next), Separator::Newline);
 }
