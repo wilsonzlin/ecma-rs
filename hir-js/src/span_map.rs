@@ -1,5 +1,8 @@
 use crate::ids::DefId;
+use crate::ids::ExportSpecifierId;
 use crate::ids::ExprId;
+use crate::ids::ImportSpecifierId;
+use crate::ids::PatId;
 use crate::ids::TypeExprId;
 use diagnostics::TextRange;
 use std::cmp::Ordering;
@@ -13,6 +16,9 @@ pub struct SpanMap {
   exprs: SpanIndex<ExprId>,
   defs: SpanIndex<DefId>,
   type_exprs: SpanIndex<TypeExprId>,
+  pats: SpanIndex<PatId>,
+  import_specifiers: SpanIndex<ImportSpecifierId>,
+  export_specifiers: SpanIndex<ExportSpecifierId>,
 }
 
 impl SpanMap {
@@ -32,11 +38,26 @@ impl SpanMap {
     self.type_exprs.add(range, id);
   }
 
+  pub fn add_pat(&mut self, range: TextRange, id: PatId) {
+    self.pats.add(range, id);
+  }
+
+  pub fn add_import_specifier(&mut self, range: TextRange, id: ImportSpecifierId) {
+    self.import_specifiers.add(range, id);
+  }
+
+  pub fn add_export_specifier(&mut self, range: TextRange, id: ExportSpecifierId) {
+    self.export_specifiers.add(range, id);
+  }
+
   /// Sorts all spans and builds interval indexes for deterministic lookup.
   pub fn finalize(&mut self) {
     self.exprs.finalize();
     self.defs.finalize();
     self.type_exprs.finalize();
+    self.pats.finalize();
+    self.import_specifiers.finalize();
+    self.export_specifiers.finalize();
   }
 
   /// Returns the innermost expression that contains the offset, preferring the
@@ -47,6 +68,18 @@ impl SpanMap {
 
   pub fn type_expr_at_offset(&self, offset: u32) -> Option<TypeExprId> {
     self.type_exprs.query(offset)
+  }
+
+  pub fn pat_at_offset(&self, offset: u32) -> Option<PatId> {
+    self.pats.query(offset)
+  }
+
+  pub fn import_specifier_at_offset(&self, offset: u32) -> Option<ImportSpecifierId> {
+    self.import_specifiers.query(offset)
+  }
+
+  pub fn export_specifier_at_offset(&self, offset: u32) -> Option<ExportSpecifierId> {
+    self.export_specifiers.query(offset)
   }
 
   /// Returns the innermost definition that contains the offset, preferring the
@@ -252,7 +285,10 @@ fn push_segment<T: Copy + Ord>(
 mod tests {
   use super::SpanMap;
   use crate::ids::DefId;
+  use crate::ids::ExportSpecifierId;
   use crate::ids::ExprId;
+  use crate::ids::ImportSpecifierId;
+  use crate::ids::PatId;
   use crate::ids::TypeExprId;
   use diagnostics::TextRange;
   use std::time::Instant;
@@ -313,5 +349,18 @@ mod tests {
     map.finalize();
 
     assert_eq!(map.type_expr_at_offset(3), Some(TypeExprId(1)));
+  }
+
+  #[test]
+  fn pat_and_import_export_lookup_work() {
+    let mut map = SpanMap::new();
+    map.add_pat(TextRange::new(0, 2), PatId(1));
+    map.add_import_specifier(TextRange::new(4, 6), ImportSpecifierId(2));
+    map.add_export_specifier(TextRange::new(8, 10), ExportSpecifierId(3));
+    map.finalize();
+
+    assert_eq!(map.pat_at_offset(1), Some(PatId(1)));
+    assert_eq!(map.import_specifier_at_offset(5), Some(ImportSpecifierId(2)));
+    assert_eq!(map.export_specifier_at_offset(9), Some(ExportSpecifierId(3)));
   }
 }

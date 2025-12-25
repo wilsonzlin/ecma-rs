@@ -651,6 +651,7 @@ name = "hir-js"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "derive-visitor",
  "diagnostics",
  "parse-js",
  "pretty_assertions",

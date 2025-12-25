@@ -1,7 +1,11 @@
 use crate::ids::BodyId;
+use crate::ids::ExportId;
+use crate::ids::ExportSpecifierId;
 use crate::ids::DefId;
 use crate::ids::DefPath;
 use crate::ids::ExprId;
+use crate::ids::ImportId;
+use crate::ids::ImportSpecifierId;
 use crate::ids::NameId;
 use crate::ids::PatId;
 use crate::ids::StmtId;
@@ -17,7 +21,10 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileKind {
+  Js,
+  Jsx,
   Ts,
+  Tsx,
   Dts,
 }
 
@@ -28,7 +35,128 @@ pub struct HirFile {
   pub items: Vec<DefId>,
   pub bodies: Vec<BodyId>,
   pub def_paths: BTreeMap<DefPath, DefId>,
+  pub imports: Vec<Import>,
+  pub exports: Vec<Export>,
   pub span_map: SpanMap,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModuleSpecifier {
+  pub value: String,
+  pub span: TextRange,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Import {
+  pub id: ImportId,
+  pub span: TextRange,
+  pub kind: ImportKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportKind {
+  Es(ImportEs),
+  ImportEquals(ImportEquals),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportEs {
+  pub specifier: ModuleSpecifier,
+  pub is_type_only: bool,
+  pub default: Option<ImportBinding>,
+  pub namespace: Option<ImportBinding>,
+  pub named: Vec<ImportNamed>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportBinding {
+  pub local: NameId,
+  pub local_def: Option<DefId>,
+  pub span: TextRange,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportNamed {
+  pub id: ImportSpecifierId,
+  pub imported: NameId,
+  pub local: NameId,
+  pub local_def: Option<DefId>,
+  pub is_type_only: bool,
+  pub span: TextRange,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImportEquals {
+  pub local: ImportBinding,
+  pub target: ImportEqualsTarget,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ImportEqualsTarget {
+  Module(ModuleSpecifier),
+  Path(Vec<NameId>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Export {
+  pub id: ExportId,
+  pub span: TextRange,
+  pub kind: ExportKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExportKind {
+  Named(ExportNamed),
+  ExportAll(ExportAll),
+  Default(ExportDefault),
+  Assignment(ExportAssignment),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportNamed {
+  pub source: Option<ModuleSpecifier>,
+  pub specifiers: Vec<ExportSpecifier>,
+  pub is_type_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportSpecifier {
+  pub id: ExportSpecifierId,
+  pub local: NameId,
+  pub exported: NameId,
+  pub local_def: Option<DefId>,
+  pub is_type_only: bool,
+  pub span: TextRange,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportAll {
+  pub source: ModuleSpecifier,
+  pub alias: Option<ExportAlias>,
+  pub is_type_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportAlias {
+  pub exported: NameId,
+  pub span: TextRange,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportDefault {
+  pub value: ExportDefaultValue,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExportDefaultValue {
+  Expr(ExprId),
+  Class { def: DefId, body: BodyId, name: Option<NameId> },
+  Function { def: DefId, body: BodyId, name: Option<NameId> },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportAssignment {
+  pub expr: ExprId,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -39,6 +167,8 @@ pub struct DefData {
   pub span: TextRange,
   pub is_ambient: bool,
   pub in_global: bool,
+  pub is_exported: bool,
+  pub is_default_export: bool,
   pub body: Option<BodyId>,
   pub type_info: Option<DefTypeInfo>,
 }
@@ -358,45 +488,196 @@ pub struct Expr {
 pub enum ExprKind {
   Missing,
   Ident(NameId),
-  Literal,
-  Binary {
-    left: ExprId,
-    right: ExprId,
-  },
-  Call {
-    callee: ExprId,
-    args: Vec<ExprId>,
-    optional: bool,
-  },
-  Member {
-    object: ExprId,
-    property: NameId,
-    optional: bool,
-  },
-  Conditional {
-    test: ExprId,
-    consequent: ExprId,
-    alternate: ExprId,
-  },
-  Assignment {
-    target: PatId,
-    value: ExprId,
-  },
+  This,
+  Super,
+  Literal(Literal),
+  Unary { op: UnaryOp, expr: ExprId },
+  Update { op: UpdateOp, expr: ExprId, prefix: bool },
+  Binary { op: BinaryOp, left: ExprId, right: ExprId },
+  Assignment { op: AssignOp, target: PatId, value: ExprId },
+  Call(CallExpr),
+  Member(MemberExpr),
+  Conditional { test: ExprId, consequent: ExprId, alternate: ExprId },
+  Array(ArrayLiteral),
+  Object(ObjectLiteral),
   FunctionExpr {
+    def: DefId,
     body: BodyId,
+    name: Option<NameId>,
+    is_arrow: bool,
   },
   ClassExpr {
+    def: DefId,
     body: BodyId,
     name: Option<NameId>,
   },
-  This,
-  Super,
-  Await {
-    expr: ExprId,
+  Template(TemplateLiteral),
+  TaggedTemplate { tag: ExprId, template: TemplateLiteral },
+  Await { expr: ExprId },
+  Yield { expr: Option<ExprId>, delegate: bool },
+  TypeAssertion { expr: ExprId },
+  NonNull { expr: ExprId },
+  Satisfies { expr: ExprId },
+  ImportCall { argument: ExprId, attributes: Option<ExprId> },
+  ImportMeta,
+  NewTarget,
+  Jsx(JsxElement),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Literal {
+  Number(String),
+  String(String),
+  Boolean(bool),
+  Null,
+  Undefined,
+  BigInt(String),
+  Regex(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+  Not,
+  BitNot,
+  Plus,
+  Minus,
+  Typeof,
+  Void,
+  Delete,
+  Await,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateOp {
+  Increment,
+  Decrement,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BinaryOp {
+  Add,
+  Subtract,
+  Multiply,
+  Divide,
+  Remainder,
+  Exponent,
+  ShiftLeft,
+  ShiftRight,
+  ShiftRightUnsigned,
+  BitOr,
+  BitAnd,
+  BitXor,
+  LogicalOr,
+  LogicalAnd,
+  NullishCoalescing,
+  Equality,
+  Inequality,
+  StrictEquality,
+  StrictInequality,
+  LessThan,
+  LessEqual,
+  GreaterThan,
+  GreaterEqual,
+  In,
+  Instanceof,
+  Comma,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssignOp {
+  Assign,
+  AddAssign,
+  SubAssign,
+  MulAssign,
+  DivAssign,
+  RemAssign,
+  ShiftLeftAssign,
+  ShiftRightAssign,
+  ShiftRightUnsignedAssign,
+  BitOrAssign,
+  BitAndAssign,
+  BitXorAssign,
+  LogicalAndAssign,
+  LogicalOrAssign,
+  NullishAssign,
+  ExponentAssign,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallArg {
+  pub expr: ExprId,
+  pub spread: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallExpr {
+  pub callee: ExprId,
+  pub args: Vec<CallArg>,
+  pub optional: bool,
+  pub is_new: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObjectKey {
+  Ident(NameId),
+  String(String),
+  Number(String),
+  Computed(ExprId),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemberExpr {
+  pub object: ExprId,
+  pub property: ObjectKey,
+  pub optional: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayLiteral {
+  pub elements: Vec<ArrayElement>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArrayElement {
+  Expr(ExprId),
+  Spread(ExprId),
+  Empty,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectLiteral {
+  pub properties: Vec<ObjectProperty>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ObjectProperty {
+  KeyValue {
+    key: ObjectKey,
+    value: ExprId,
+    method: bool,
+    shorthand: bool,
   },
-  Object,
-  Array,
-  Other,
+  Getter {
+    key: ObjectKey,
+    body: BodyId,
+  },
+  Setter {
+    key: ObjectKey,
+    body: BodyId,
+  },
+  Spread(ExprId),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateLiteral {
+  pub head: String,
+  pub spans: Vec<TemplateLiteralSpan>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TemplateLiteralSpan {
+  pub expr: ExprId,
+  pub literal: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -408,10 +689,40 @@ pub struct Pat {
 #[derive(Debug, Clone, PartialEq)]
 pub enum PatKind {
   Ident(NameId),
+  Array(ArrayPat),
+  Object(ObjectPat),
   Rest(Box<PatId>),
-  Destructure(Vec<PatId>),
+  Assign {
+    target: PatId,
+    default_value: ExprId,
+  },
   AssignTarget(ExprId),
-  Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayPat {
+  pub elements: Vec<Option<ArrayPatElement>>,
+  pub rest: Option<PatId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArrayPatElement {
+  pub pat: PatId,
+  pub default_value: Option<ExprId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectPat {
+  pub props: Vec<ObjectPatProp>,
+  pub rest: Option<PatId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObjectPatProp {
+  pub key: ObjectKey,
+  pub value: PatId,
+  pub shorthand: bool,
+  pub default_value: Option<ExprId>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -426,8 +737,113 @@ pub enum StmtKind {
   Decl(DefId),
   Return(Option<ExprId>),
   Block(Vec<StmtId>),
+  If {
+    test: ExprId,
+    consequent: StmtId,
+    alternate: Option<StmtId>,
+  },
+  While {
+    test: ExprId,
+    body: StmtId,
+  },
+  DoWhile {
+    test: ExprId,
+    body: StmtId,
+  },
+  For {
+    init: Option<ForInit>,
+    test: Option<ExprId>,
+    update: Option<ExprId>,
+    body: StmtId,
+  },
+  ForIn {
+    left: ForHead,
+    right: ExprId,
+    body: StmtId,
+    is_for_of: bool,
+    await_: bool,
+  },
+  Switch {
+    discriminant: ExprId,
+    cases: Vec<SwitchCase>,
+  },
+  Try {
+    block: StmtId,
+    catch: Option<CatchClause>,
+    finally_block: Option<StmtId>,
+  },
+  Throw(ExprId),
+  Break(Option<NameId>),
+  Continue(Option<NameId>),
+  Var(VarDecl),
+  Labeled {
+    label: NameId,
+    body: StmtId,
+  },
+  With {
+    object: ExprId,
+    body: StmtId,
+  },
   Empty,
-  Other,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VarDecl {
+  pub kind: VarDeclKind,
+  pub declarators: Vec<VarDeclarator>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VarDeclKind {
+  Var,
+  Let,
+  Const,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VarDeclarator {
+  pub pat: PatId,
+  pub init: Option<ExprId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct CatchClause {
+  pub param: Option<PatId>,
+  pub body: StmtId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCase {
+  pub test: Option<ExprId>,
+  pub consequent: Vec<StmtId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForInit {
+  Expr(ExprId),
+  Var(VarDecl),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ForHead {
+  Pat(PatId),
+  Var(VarDecl),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsxElement {
+  pub kind: JsxElementKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsxElementKind {
+  Element(NameId),
+  Member(Vec<NameId>),
+  Fragment,
+  Text(String),
+  Expr(ExprId),
+  Spread(ExprId),
+  Name(NameId),
 }
 
 impl HirFile {
@@ -437,6 +853,8 @@ impl HirFile {
     items: Vec<DefId>,
     bodies: Vec<BodyId>,
     def_paths: BTreeMap<DefPath, DefId>,
+    imports: Vec<Import>,
+    exports: Vec<Export>,
     span_map: SpanMap,
   ) -> Self {
     Self {
@@ -445,6 +863,8 @@ impl HirFile {
       items,
       bodies,
       def_paths,
+      imports,
+      exports,
       span_map,
     }
   }

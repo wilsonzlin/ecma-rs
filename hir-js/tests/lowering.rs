@@ -1,10 +1,17 @@
 use diagnostics::FileId;
 use hir_js::lower_file;
 use hir_js::lower_file_with_diagnostics;
-use hir_js::DefKind;
+use hir_js::lower_from_source_with_kind;
+use hir_js::ExportDefaultValue;
+use hir_js::ExportKind;
 use hir_js::ExprId;
 use hir_js::ExprKind;
 use hir_js::FileKind;
+use hir_js::ImportKind;
+use hir_js::ObjectKey;
+use hir_js::ObjectProperty;
+use hir_js::StmtKind;
+use hir_js::DefKind;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
@@ -20,7 +27,7 @@ fn def_ids_are_sorted_and_stable() {
   let names: Vec<_> = result
     .defs
     .iter()
-    .map(|def| def.path.name.clone())
+    .map(|def| result.names.resolve(def.path.name).unwrap().to_string())
     .collect();
   let kinds: Vec<_> = result.defs.iter().map(|def| def.path.kind).collect();
 
@@ -34,7 +41,13 @@ fn def_ids_are_sorted_and_stable() {
   let names_again: Vec<_> = result_again
     .defs
     .iter()
-    .map(|def| def.path.name.clone())
+    .map(|def| {
+      result_again
+        .names
+        .resolve(def.path.name)
+        .unwrap()
+        .to_string()
+    })
     .collect();
   assert_eq!(names, names_again);
 }
@@ -110,7 +123,7 @@ fn expr_at_offset_prefers_inner_expression() {
     .iter()
     .enumerate()
     .find_map(|(idx, expr)| match expr.kind {
-      ExprKind::Binary { left, right: _ } => {
+      ExprKind::Binary { left, .. } => {
         Some((ExprId(idx as u32), body.exprs[left.0 as usize].span))
       }
       _ => None,
@@ -171,7 +184,7 @@ declare global {
   let foo = result
     .defs
     .iter()
-    .find(|d| d.path.name == "Foo")
+    .find(|d| result.names.resolve(d.path.name) == Some("Foo"))
     .expect("Foo interface present");
   assert!(foo.is_ambient, "global declarations should be ambient");
   assert!(foo.in_global, "declare global declarations are tracked");
@@ -221,11 +234,236 @@ fn saturates_overflowing_spans() {
 }
 
 #[test]
-fn reports_unsupported_computed_keys() {
-  let ast = parse("const obj = { [foo]: 1 };").expect("parse");
-  let (_, diagnostics) = lower_file_with_diagnostics(FileId(5), FileKind::Ts, &ast);
+fn lowers_computed_object_keys() {
+  let ast = parse("const obj = { [foo]: 1, regular: 2, [bar()]: baz };").expect("parse");
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(5), FileKind::Ts, &ast);
 
-  assert!(diagnostics.iter().any(|d| d.code == "LOWER0002"));
+  assert!(diagnostics.is_empty());
+
+  let def = result
+    .defs
+    .iter()
+    .find(|d| result.names.resolve(d.path.name) == Some("obj"))
+    .expect("obj definition");
+  let body = result.bodies[def.body.unwrap().0 as usize].as_ref();
+  let object_expr = body
+    .exprs
+    .iter()
+    .find(|expr| matches!(expr.kind, ExprKind::Object(_)))
+    .expect("object literal");
+
+  if let ExprKind::Object(obj) = &object_expr.kind {
+    let computed_keys: Vec<_> = obj
+      .properties
+      .iter()
+      .filter_map(|prop| match prop {
+        ObjectProperty::KeyValue {
+          key: ObjectKey::Computed(expr),
+          ..
+        } => Some(*expr),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(computed_keys.len(), 2, "expected both computed keys to be lowered");
+  } else {
+    panic!("expected object literal");
+  }
+}
+
+#[test]
+fn lowers_imports_and_exports() {
+  let source = r#"
+    import defaultName, { foo as bar, type Baz } from "mod";
+    import * as ns from "lib";
+    import type { Qux } from "types";
+    export { bar, type Baz } from "mod";
+    export * as nsAll from "lib";
+    export interface Api {}
+    export type Alias = string;
+    export enum Mode { On }
+    export default function qux() {}
+    export = defaultName;
+  "#;
+  let ast = parse(source).expect("parse");
+  let result = lower_file(FileId(6), FileKind::Ts, &ast);
+
+  let imports = &result.hir.imports;
+  assert_eq!(imports.len(), 3);
+  let names = &result.names;
+
+  let first = match &imports[0].kind {
+    ImportKind::Es(es) => es,
+    _ => panic!("expected es import"),
+  };
+  assert_eq!(first.specifier.value, "mod");
+  assert_eq!(
+    names.resolve(first.default.as_ref().unwrap().local),
+    Some("defaultName")
+  );
+  assert!(first.named.iter().any(|n| names.resolve(n.local) == Some("bar")));
+  assert!(first
+    .named
+    .iter()
+    .any(|n| n.is_type_only && names.resolve(n.local) == Some("Baz")));
+
+  let second = match &imports[1].kind {
+    ImportKind::Es(es) => es,
+    _ => panic!("expected namespace import"),
+  };
+  assert_eq!(
+    names.resolve(second.namespace.as_ref().unwrap().local),
+    Some("ns")
+  );
+
+  let third = match &imports[2].kind {
+    ImportKind::Es(es) => es,
+    _ => panic!("expected type-only import"),
+  };
+  assert!(third.is_type_only);
+  assert!(third.named.iter().all(|n| n.is_type_only));
+
+  let exports = &result.hir.exports;
+  assert_eq!(exports.len(), 7);
+
+  let reexport = exports
+    .iter()
+    .find_map(|e| match &e.kind {
+      ExportKind::Named(named) if named.source.as_ref().map(|s| s.value.as_str()) == Some("mod") => {
+        Some(named)
+      }
+      _ => None,
+    })
+    .expect("re-export with source present");
+  assert!(reexport
+    .specifiers
+    .iter()
+    .any(|s| names.resolve(s.exported) == Some("bar")));
+  assert!(reexport
+    .specifiers
+    .iter()
+    .any(|s| s.is_type_only && names.resolve(s.exported) == Some("Baz")));
+
+  let export_all = exports
+    .iter()
+    .find_map(|e| match &e.kind {
+      ExportKind::ExportAll(all) => Some(all),
+      _ => None,
+    })
+    .expect("export * as nsAll");
+  assert_eq!(names.resolve(export_all.alias.as_ref().unwrap().exported), Some("nsAll"));
+
+  let named_exports: Vec<_> = exports
+    .iter()
+    .filter_map(|e| match &e.kind {
+      ExportKind::Named(named) if named.source.is_none() => Some(named),
+      _ => None,
+    })
+    .collect();
+  assert!(named_exports
+    .iter()
+    .any(|named| named.is_type_only && named.specifiers.iter().any(|s| names.resolve(s.exported) == Some("Api"))));
+  assert!(named_exports
+    .iter()
+    .any(|named| named.is_type_only && named.specifiers.iter().any(|s| names.resolve(s.exported) == Some("Alias"))));
+  assert!(named_exports
+    .iter()
+    .any(|named| !named.is_type_only && named.specifiers.iter().any(|s| names.resolve(s.exported) == Some("Mode"))));
+
+  let default_export = exports
+    .iter()
+    .find_map(|e| match &e.kind {
+      ExportKind::Default(default) => Some(default),
+      _ => None,
+    })
+    .expect("default export present");
+  assert!(matches!(
+    default_export.value,
+    ExportDefaultValue::Function { .. }
+  ));
+
+  assert!(
+    exports
+      .iter()
+      .any(|e| matches!(e.kind, ExportKind::Assignment(_))),
+    "export assignment should be captured"
+  );
+}
+
+#[test]
+fn lowers_control_flow_statements() {
+  let source = r#"
+    function demo(items) {
+      if (items.length) { return 1; } else { return 2; }
+      for (let i = 0; i < items.length; i++) { continue; }
+      do { break; } while (false);
+      switch (items) { case 1: break; default: throw items; }
+      try { items(); } catch (e) { throw e; } finally { items(); }
+    }
+  "#;
+  let ast = parse(source).expect("parse");
+  let result = lower_file(FileId(7), FileKind::Ts, &ast);
+
+  let func = result
+    .defs
+    .iter()
+    .find(|d| result.names.resolve(d.path.name) == Some("demo"))
+    .expect("demo function");
+  let body = result.bodies[func.body.unwrap().0 as usize].as_ref();
+  let kinds: Vec<_> = body.stmts.iter().map(|s| &s.kind).collect();
+
+  assert!(kinds.iter().any(|k| matches!(k, StmtKind::If { .. })));
+  assert!(kinds.iter().any(|k| matches!(k, StmtKind::For { .. })));
+  assert!(kinds.iter().any(|k| matches!(k, StmtKind::DoWhile { .. })));
+  assert!(kinds.iter().any(|k| matches!(k, StmtKind::Switch { .. })));
+  assert!(kinds.iter().any(|k| matches!(k, StmtKind::Try { .. })));
+}
+
+#[test]
+fn parses_jsx_and_tsx_file_kinds() {
+  let tsx = lower_from_source_with_kind(FileKind::Tsx, "const el = <div>{value}</div>;")
+    .expect("tsx should parse");
+  assert_eq!(tsx.hir.file_kind, FileKind::Tsx);
+  let tsx_body = tsx
+    .defs
+    .iter()
+    .find(|d| tsx.names.resolve(d.path.name) == Some("el"))
+    .and_then(|def| def.body)
+    .map(|body_id| tsx.bodies[body_id.0 as usize].as_ref())
+    .expect("el body");
+  assert!(tsx_body.exprs.iter().any(|e| matches!(e.kind, ExprKind::Jsx(_))));
+
+  let jsx = lower_from_source_with_kind(FileKind::Jsx, "const node = <span/>;").expect("jsx should parse");
+  assert_eq!(jsx.hir.file_kind, FileKind::Jsx);
+  let jsx_body = jsx
+    .defs
+    .iter()
+    .find(|d| jsx.names.resolve(d.path.name) == Some("node"))
+    .and_then(|def| def.body)
+    .map(|body_id| jsx.bodies[body_id.0 as usize].as_ref())
+    .expect("node body");
+  assert!(jsx_body.exprs.iter().any(|e| matches!(e.kind, ExprKind::Jsx(_))));
+}
+
+#[test]
+fn lowers_new_expressions() {
+  let ast = parse("const instance = new Foo(1);").expect("parse");
+  let result = lower_file(FileId(8), FileKind::Ts, &ast);
+  let def = result
+    .defs
+    .iter()
+    .find(|d| result.names.resolve(d.path.name) == Some("instance"))
+    .expect("instance def");
+  let body = result.bodies[def.body.unwrap().0 as usize].as_ref();
+  let call = body
+    .exprs
+    .iter()
+    .find_map(|expr| match &expr.kind {
+      ExprKind::Call(call) => Some(call),
+      _ => None,
+    })
+    .expect("call expression");
+  assert!(call.is_new);
+  assert_eq!(call.args.len(), 1);
 }
 
 proptest! {

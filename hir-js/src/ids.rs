@@ -35,6 +35,22 @@ pub struct TypeParamId(pub u32);
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TypeMemberId(pub u32);
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ImportId(pub u32);
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ImportSpecifierId(pub u32);
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ExportId(pub u32);
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ExportSpecifierId(pub u32);
+
 /// Content-addressed identifier for an interned name.
 ///
 /// Unlike sequential indices, this value is derived from the name text (see
@@ -66,20 +82,20 @@ pub enum DefKind {
   Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DefPath {
   pub module: FileId,
   pub kind: DefKind,
-  pub name: String,
+  pub name: NameId,
   pub disambiguator: u32,
 }
 
 impl DefPath {
-  pub fn new(module: FileId, kind: DefKind, name: impl Into<String>, disambiguator: u32) -> Self {
+  pub fn new(module: FileId, kind: DefKind, name: NameId, disambiguator: u32) -> Self {
     Self {
       module,
       kind,
-      name: name.into(),
+      name,
       disambiguator,
     }
   }
@@ -89,8 +105,17 @@ impl DefPath {
     hasher.write_u64(self.module.0 as u64);
     hasher.write_u64(self.kind as u64);
     hasher.write_u64(self.disambiguator as u64);
-    hasher.write_str(&self.name);
+    hasher.write_u64(self.name.0);
     hasher.finish()
+  }
+
+  pub fn stable_hash_u32(&self) -> u32 {
+    let mut hasher = StableHasher::new();
+    hasher.write_u64(self.module.0 as u64);
+    hasher.write_u64(self.kind as u64);
+    hasher.write_u64(self.disambiguator as u64);
+    hasher.write_u64(self.name.0);
+    hasher.finish_u32()
   }
 }
 
