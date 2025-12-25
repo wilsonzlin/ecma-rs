@@ -1,6 +1,6 @@
 use crate::cfg::cfg::Cfg;
+use crate::cfg::cfg::CfgGraph;
 use ahash::HashMap;
-use ahash::HashMapExt;
 use ahash::HashSet;
 use itertools::Itertools;
 
@@ -21,6 +21,168 @@ impl DominatedByGraph {
 }
 
 pub type PostDom = Dom<true>;
+
+fn find_virtual_exit_label(labels: &[u32]) -> u32 {
+  let label_set: HashSet<u32> = HashSet::from_iter(labels.iter().copied());
+  let mut exit = u32::MAX;
+  while label_set.contains(&exit) {
+    exit = exit.checked_sub(1).expect("unable to find unused virtual exit label");
+  }
+  exit
+}
+
+fn calculate_sink_sccs(graph: &CfgGraph) -> Vec<Vec<u32>> {
+  fn strongconnect(
+    v: u32,
+    graph: &CfgGraph,
+    index: &mut u32,
+    stack: &mut Vec<u32>,
+    on_stack: &mut HashSet<u32>,
+    indices: &mut HashMap<u32, u32>,
+    lowlink: &mut HashMap<u32, u32>,
+    components: &mut Vec<Vec<u32>>,
+  ) {
+    indices.insert(v, *index);
+    lowlink.insert(v, *index);
+    *index += 1;
+    stack.push(v);
+    on_stack.insert(v);
+
+    let mut neighbors = graph.children(v).collect_vec();
+    neighbors.sort_unstable();
+    for w in neighbors {
+      if !indices.contains_key(&w) {
+        strongconnect(
+          w, graph, index, stack, on_stack, indices, lowlink, components,
+        );
+        let low_v = lowlink[&v];
+        let low_w = lowlink[&w];
+        lowlink.insert(v, low_v.min(low_w));
+      } else if on_stack.contains(&w) {
+        let low_v = lowlink[&v];
+        let idx_w = indices[&w];
+        lowlink.insert(v, low_v.min(idx_w));
+      }
+    }
+
+    if indices[&v] == lowlink[&v] {
+      let mut component = Vec::new();
+      loop {
+        let w = stack.pop().unwrap();
+        on_stack.remove(&w);
+        component.push(w);
+        if w == v {
+          break;
+        }
+      }
+      component.sort_unstable();
+      components.push(component);
+    }
+  }
+
+  let mut index = 0u32;
+  let mut stack = Vec::new();
+  let mut on_stack = HashSet::default();
+  let mut indices = HashMap::default();
+  let mut lowlink = HashMap::default();
+  let mut components = Vec::new();
+
+  let mut nodes: Vec<u32> = graph.labels().collect();
+  nodes.sort_unstable();
+  for n in nodes {
+    if !indices.contains_key(&n) {
+      strongconnect(
+        n,
+        graph,
+        &mut index,
+        &mut stack,
+        &mut on_stack,
+        &mut indices,
+        &mut lowlink,
+        &mut components,
+      );
+    }
+  }
+
+  let mut node_to_component = HashMap::<u32, usize>::default();
+  for (idx, comp) in components.iter().enumerate() {
+    for &n in comp {
+      node_to_component.insert(n, idx);
+    }
+  }
+
+  let mut is_sink = vec![true; components.len()];
+  for (idx, comp) in components.iter().enumerate() {
+    for &n in comp {
+      let mut children: Vec<u32> = graph.children(n).collect();
+      children.sort_unstable();
+      for child in children {
+        if let Some(&child_comp) = node_to_component.get(&child) {
+          if child_comp != idx {
+            is_sink[idx] = false;
+            break;
+          }
+        }
+      }
+      if !is_sink[idx] {
+        break;
+      }
+    }
+  }
+
+  let mut sink_components: Vec<Vec<u32>> = components
+    .into_iter()
+    .enumerate()
+    .filter_map(|(idx, mut comp)| {
+      if is_sink[idx] {
+        comp.sort_unstable();
+        Some(comp)
+      } else {
+        None
+      }
+    })
+    .collect();
+  sink_components.sort_by_key(|comp| comp[0]);
+  sink_components
+}
+
+fn augment_cfg_for_postdom(cfg: &Cfg) -> (CfgGraph, u32) {
+  let mut graph = CfgGraph::from_graph(cfg.graph.clone_graph());
+
+  let mut labels: Vec<u32> = graph.labels().collect();
+  labels.sort_unstable();
+  let exit = find_virtual_exit_label(&labels);
+
+  let sink_sccs = calculate_sink_sccs(&graph);
+
+  let mut to_exit = HashSet::from_iter(labels.iter().copied().filter(|label| graph.children(*label).next().is_none()));
+  for component in sink_sccs {
+    to_exit.extend(component);
+  }
+  let mut to_exit: Vec<u32> = to_exit.into_iter().collect();
+  to_exit.sort_unstable();
+  for node in to_exit {
+    graph.connect(node, exit);
+  }
+
+  #[cfg(debug_assertions)]
+  {
+    let mut seen = HashSet::from_iter([exit]);
+    let mut stack = vec![exit];
+    while let Some(node) = stack.pop() {
+      let mut parents: Vec<u32> = graph.parents(node).collect();
+      parents.sort_unstable();
+      for parent in parents {
+        if seen.insert(parent) {
+          stack.push(parent);
+        }
+      }
+    }
+    debug_assert!(labels.iter().all(|l| seen.contains(l)));
+  }
+
+  (graph, exit)
+}
 
 /// If `POST`, calculates postdominance instead of dominance.
 pub struct Dom<const POST: bool = false> {
@@ -45,20 +207,20 @@ impl<const POST: bool> Dom<POST> {
   // - https://github.com/sampsyo/bril/blob/34133101a68bb50ae0fc8083857a3e3bd6bae260/bril-llvm/dom.py#L47
   // To calculate the post dominators, reverse the edges and run any dominator algorithm. This is what we do when `POST` is true.
   pub fn calculate(cfg: &Cfg) -> Self {
-    let entry = if POST {
-      // TODO This does not exist.
-      u32::MAX
+    let (post_graph, entry, postorder, label_to_postorder) = if POST {
+      let (graph, entry) = augment_cfg_for_postdom(cfg);
+      let (postorder, label_to_postorder) = graph.calculate_reversed_graph_postorder(entry);
+      (Some(graph), entry, postorder, label_to_postorder)
     } else {
-      0
-    };
-    let (postorder, label_to_postorder) = if POST {
-      cfg.graph.calculate_reversed_graph_postorder(entry)
-    } else {
-      cfg.graph.calculate_postorder(entry)
+      let entry = 0;
+      let (postorder, label_to_postorder) = cfg.graph.calculate_postorder(entry);
+      (None, entry, postorder, label_to_postorder)
     };
 
-    let mut idom_by = HashMap::<u32, u32>::new();
-    let mut domtree = HashMap::<u32, HashSet<u32>>::new();
+    let graph = post_graph.as_ref().unwrap_or(&cfg.graph);
+
+    let mut idom_by = HashMap::<u32, u32>::default();
+    let mut domtree = HashMap::<u32, HashSet<u32>>::default();
     {
       macro_rules! intersect {
         ($b1:expr, $b2:expr) => {{
@@ -80,12 +242,8 @@ impl<const POST: bool> Dom<POST> {
       loop {
         let mut changed = false;
         for &b in postorder.iter().rev().filter(|b| **b != entry) {
-          let parents = if POST {
-            cfg.graph.children(b)
-          } else {
-            cfg.graph.parents(b)
-          }
-          .collect_vec();
+          let mut parents = if POST { graph.children(b) } else { graph.parents(b) }.collect_vec();
+          parents.sort_unstable();
           let Some(mut new_idom) = parents.iter().find(|n| idom_by.contains_key(n)).cloned() else {
             continue;
           };
@@ -120,7 +278,7 @@ impl<const POST: bool> Dom<POST> {
   // Node => nodes that dominate it (are its dominator). Also called the dominator graph.
   // https://www.cs.tufts.edu/comp/150FP/archive/keith-cooper/dom14.pdf
   pub fn dominated_by_graph(&self) -> DominatedByGraph {
-    let mut dom = HashMap::<u32, HashSet<u32>>::new();
+    let mut dom = HashMap::<u32, HashSet<u32>>::default();
     for label in self.idom_by.keys().cloned() {
       let e = dom.entry(label).or_default();
       let mut n = label;
@@ -139,7 +297,7 @@ impl<const POST: bool> Dom<POST> {
   /// The inverse of `dominated_bys`.
   pub fn dominates_graph(&self) -> DominatesGraph {
     let dom_bys = self.dominated_by_graph();
-    let mut doms = HashMap::<u32, HashSet<u32>>::new();
+    let mut doms = HashMap::<u32, HashSet<u32>>::default();
     for (child, dominated_by) in dom_bys.0 {
       for parent in dominated_by {
         doms.entry(parent).or_default().insert(child);
@@ -155,7 +313,7 @@ impl<const POST: bool> Dom<POST> {
   // Other implementations: https://github.com/sampsyo/bril/blob/34133101a68bb50ae0fc8083857a3e3bd6bae260/bril-llvm/dom.py#L69
   // It'd be nice to store `cfg` on `Dom`, but that'd keep it borrowed, and usually we want to mutate the CFG using dominance information (and not recalculate every time).
   pub fn dominance_frontiers(&self, cfg: &Cfg) -> HashMap<u32, HashSet<u32>> {
-    let mut domfront = HashMap::<u32, HashSet<u32>>::new();
+    let mut domfront = HashMap::<u32, HashSet<u32>>::default();
     for &b in self.postorder.iter().rev() {
       let mut parents = cfg.graph.parents(b).collect_vec();
       parents.sort_unstable();
@@ -186,6 +344,18 @@ impl<const POST: bool> Dom<POST> {
       .into_iter()
       .flatten()
   }
+
+  pub fn idom(&self, node: u32) -> Option<u32> {
+    self.idom_by.get(&node).copied()
+  }
+
+  pub fn entry(&self) -> u32 {
+    self.entry
+  }
+
+  pub fn postorder(&self) -> &[u32] {
+    &self.postorder
+  }
 }
 
 #[cfg(test)]
@@ -193,58 +363,13 @@ mod tests {
   use crate::cfg::cfg::Cfg;
   use crate::cfg::cfg::CfgGraph;
   use crate::dom::Dom;
+  use crate::dom::PostDom;
 
-  /*
-    ```mermaid
-      graph TD
-        0[Block 0: Entry] --> 1[Block 1: First Loop Header]
-        1 --> 2[Block 2: Nested Loop Header]
-        2 --> 3[Block 3: Conditional]
-        3 --> 4[Block 4: Continue Path]
-        4 --> 2
-        3 --> 5[Block 5: Break Handler]
-        5 --> 1
-        1 --> 6[Block 6: Post-Loop Block]
-        6 --> 7[Block 7: Final Block]
-        7 --> MAX[Block MAX: Exit Path]
-        7 --> 2
-
-        style 1 fill:#f9f,stroke:#333
-        style 2 fill:#f9f,stroke:#333
-        style 3 fill:#bbf,stroke:#333
-    ```
-  */
-  fn create_complex_cfg() -> Cfg {
+  fn cfg_from_edges(edges: &[(u32, u32)]) -> Cfg {
     let mut graph = CfgGraph::default();
-    // First loop header
-    graph.connect(0, 1);
-
-    // Nested loop header
-    graph.connect(1, 2);
-
-    // Some conditional
-    graph.connect(2, 3);
-
-    // Continue path back to nested loop
-    graph.connect(3, 4);
-    graph.connect(4, 2);
-
-    // Break from nested loop to next step
-    graph.connect(3, 5);
-
-    // Outer loop continue
-    graph.connect(5, 1);
-
-    // Exit first loop
-    graph.connect(1, 6);
-
-    // Another block after loops
-    graph.connect(6, 7);
-
-    // A final conditional branch
-    graph.connect(7, u32::MAX);
-    graph.connect(7, 2); // Jump back to nested loop (labeled break scenario)
-
+    for &(parent, child) in edges {
+      graph.connect(parent, child);
+    }
     Cfg {
       bblocks: Default::default(),
       graph,
@@ -252,17 +377,59 @@ mod tests {
   }
 
   #[test]
-  fn test_dom() {
-    let cfg = create_complex_cfg();
-
+  fn dominance_basic() {
+    let cfg = cfg_from_edges(&[(0, 1), (0, 2), (1, 3), (2, 3)]);
     let dom = Dom::<false>::calculate(&cfg);
-    let postdom = Dom::<true>::calculate(&cfg);
+    assert!(dom.dominates_graph().dominates(0, 3));
+    assert!(dom.dominated_by_graph().dominated_by(3, 0));
+  }
 
-    let dominates = dom.dominates_graph();
-    let postdominates = postdom.dominates_graph();
+  #[test]
+  fn postdom_diamond() {
+    let cfg = cfg_from_edges(&[(0, 1), (0, 2), (1, 3), (2, 3)]);
+    let postdom = PostDom::calculate(&cfg);
+    let exit = postdom.entry();
+    assert_eq!(postdom.idom(1), Some(3));
+    assert_eq!(postdom.idom(2), Some(3));
+    assert_eq!(postdom.idom(0), Some(3));
+    assert_eq!(postdom.idom(3), Some(exit));
+  }
 
-    assert!(dominates.dominates(0, 1));
-    assert!(dominates.dominates(2, 4));
-    assert!(postdominates.dominates(6, 5));
+  #[test]
+  fn postdom_loop_follow_block() {
+    let cfg = cfg_from_edges(&[(0, 1), (1, 1), (1, 2)]);
+    let postdom = PostDom::calculate(&cfg);
+    let exit = postdom.entry();
+    assert_eq!(postdom.idom(0), Some(1));
+    assert_eq!(postdom.idom(1), Some(2));
+    assert_eq!(postdom.idom(2), Some(exit));
+  }
+
+  #[test]
+  fn postdom_infinite_loop_sink_scc() {
+    let cfg = cfg_from_edges(&[(0, 0)]);
+    let postdom = PostDom::calculate(&cfg);
+    let exit = postdom.entry();
+    assert_eq!(postdom.idom(0), Some(exit));
+    assert!(postdom.postorder().contains(&0));
+    assert!(postdom.postorder().contains(&exit));
+  }
+
+  #[test]
+  fn postdom_multiple_exits() {
+    let cfg = cfg_from_edges(&[(0, 1), (0, 2)]);
+    let postdom = PostDom::calculate(&cfg);
+    let exit = postdom.entry();
+    assert_eq!(postdom.idom(1), Some(exit));
+    assert_eq!(postdom.idom(2), Some(exit));
+    assert_eq!(postdom.idom(0), Some(exit));
+  }
+
+  #[test]
+  fn postdom_virtual_exit_collision() {
+    let cfg = cfg_from_edges(&[(0, u32::MAX)]);
+    let postdom = PostDom::calculate(&cfg);
+    assert_ne!(postdom.entry(), u32::MAX);
+    assert_eq!(postdom.idom(u32::MAX), Some(postdom.entry()));
   }
 }

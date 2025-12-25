@@ -20,6 +20,14 @@ impl CfgGraph {
     self.0.nodes().cloned()
   }
 
+  pub fn clone_graph(&self) -> Graph<u32> {
+    self.0.clone()
+  }
+
+  pub fn from_graph(graph: Graph<u32>) -> Self {
+    Self(graph)
+  }
+
   pub fn parents(&self, bblock: u32) -> iter::Cloned<GraphRelatedNodesIter<'_, u32>> {
     self.0.parents(&bblock).cloned()
   }
