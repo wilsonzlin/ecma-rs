@@ -50,6 +50,10 @@ pub struct BodyId(pub u32);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct ExprId(pub u32);
 
+/// Identifier for a pattern inside a specific [`BodyId`].
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
+pub struct PatId(pub u32);
+
 /// Interned type handle.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
 pub struct TypeId(pub u32);
@@ -120,13 +124,15 @@ pub struct ExportEntry {
 /// Mapping from export names to entries.
 pub type ExportMap = BTreeMap<String, ExportEntry>;
 
-/// Per-body typing result. Expression IDs are local to the body.
+/// Per-body typing result. Expression and pattern IDs are local to the body.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct BodyCheckResult {
   body: BodyId,
   expr_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
+  pat_types: Vec<TypeId>,
+  pat_spans: Vec<TextRange>,
   diagnostics: Vec<Diagnostic>,
   return_types: Vec<TypeId>,
 }
@@ -142,9 +148,19 @@ impl BodyCheckResult {
     self.expr_types.get(expr.0 as usize).copied()
   }
 
+  /// Type for a specific pattern, if known.
+  pub fn pat_type(&self, pat: PatId) -> Option<TypeId> {
+    self.pat_types.get(pat.0 as usize).copied()
+  }
+
   /// Span for a specific expression.
   pub fn expr_span(&self, expr: ExprId) -> Option<TextRange> {
     self.expr_spans.get(expr.0 as usize).copied()
+  }
+
+  /// Span for a specific pattern.
+  pub fn pat_span(&self, pat: PatId) -> Option<TextRange> {
+    self.pat_spans.get(pat.0 as usize).copied()
   }
 
   /// Find the innermost expression covering the given offset.
@@ -430,6 +446,8 @@ impl Program {
           body,
           expr_types: Vec::new(),
           expr_spans: Vec::new(),
+          pat_types: Vec::new(),
+          pat_spans: Vec::new(),
           diagnostics,
           return_types: Vec::new(),
         })
@@ -683,6 +701,7 @@ struct ParamData {
   name: String,
   typ: Option<TypeId>,
   symbol: semantic_js::SymbolId,
+  pat: Option<PatId>,
 }
 
 #[derive(Clone, Debug)]
@@ -786,6 +805,7 @@ struct BodyData {
   owner: Option<DefId>,
   stmts: Vec<HirStmt>,
   expr_spans: Vec<TextRange>,
+  pat_spans: Vec<TextRange>,
 }
 
 #[allow(dead_code)]
@@ -798,6 +818,7 @@ enum HirStmt {
     span: TextRange,
     symbol: semantic_js::SymbolId,
     def: Option<DefId>,
+    pat: Option<PatId>,
   },
   Return {
     expr: Option<HirExpr>,
@@ -1379,6 +1400,7 @@ impl ProgramState {
           let def_id = self.alloc_def();
           let expr = top_body.lower_expr(node.stx.expression, self);
           let expr_id = expr.id;
+          let pat_id = Some(top_body.new_pat(span.range));
           let hir_stmt = HirStmt::Var {
             name: "default".to_string(),
             typ: None,
@@ -1386,6 +1408,7 @@ impl ProgramState {
             span: span.range,
             symbol,
             def: Some(def_id),
+            pat: pat_id,
           };
           top_body.stmts.push(hir_stmt);
           self.def_data.insert(
@@ -1738,6 +1761,7 @@ impl ProgramState {
         .initializer
         .map(|expr| builder.lower_expr(expr, self));
       let init_id = init_expr.as_ref().map(|e| e.id);
+      let pat_id = Some(builder.new_pat(loc_to_span(file, pat.loc).range));
       stmts.push(HirStmt::Var {
         name: name.clone(),
         typ: type_ann,
@@ -1745,6 +1769,7 @@ impl ProgramState {
         span,
         symbol,
         def: Some(def_id),
+        pat: pat_id,
       });
       self.def_data.insert(
         def_id,
@@ -1846,9 +1871,11 @@ impl ProgramState {
   }
 
   fn lower_function(&mut self, file: FileId, func: Func, def: DefId) -> FuncData {
+    let body_id = func.body.as_ref().map(|_| self.alloc_body(file, Some(def)));
+    let mut builder_opt = body_id.map(|id| BodyBuilder::new(id, file));
     let mut params = Vec::new();
     for param in func.parameters.iter() {
-      if let Some(data) = self.lower_param(file, param) {
+      if let Some(data) = self.lower_param(file, param, builder_opt.as_mut()) {
         params.push(data);
       }
     }
@@ -1856,27 +1883,26 @@ impl ProgramState {
       .return_type
       .as_ref()
       .map(|t| self.type_from_type_expr(t));
-    let body_id = func.body.as_ref().map(|_| self.alloc_body(file, Some(def)));
     if let Some(body) = body_id {
-      match func.body.unwrap() {
-        FuncBody::Block(stmts) => {
-          let mut builder = BodyBuilder::new(body, file);
-          for stmt in stmts {
-            builder.lower_stmt(stmt, self);
+      if let Some(mut builder) = builder_opt.take() {
+        match func.body.unwrap() {
+          FuncBody::Block(stmts) => {
+            for stmt in stmts {
+              builder.lower_stmt(stmt, self);
+            }
+            let data = builder.finish(Some(def));
+            self.body_data.insert(body, data);
           }
-          let data = builder.finish(Some(def));
-          self.body_data.insert(body, data);
-        }
-        FuncBody::Expression(expr) => {
-          let mut builder = BodyBuilder::new(body, file);
-          let expr = builder.lower_expr(expr, self);
-          let span = expr.span;
-          builder.stmts.push(HirStmt::Return {
-            expr: Some(expr),
-            span,
-          });
-          let data = builder.finish(Some(def));
-          self.body_data.insert(body, data);
+          FuncBody::Expression(expr) => {
+            let expr = builder.lower_expr(expr, self);
+            let span = expr.span;
+            builder.stmts.push(HirStmt::Return {
+              expr: Some(expr),
+              span,
+            });
+            let data = builder.finish(Some(def));
+            self.body_data.insert(body, data);
+          }
         }
       }
     }
@@ -1887,7 +1913,12 @@ impl ProgramState {
     }
   }
 
-  fn lower_param(&mut self, file: FileId, param: &Node<ParamDecl>) -> Option<ParamData> {
+  fn lower_param(
+    &mut self,
+    file: FileId,
+    param: &Node<ParamDecl>,
+    mut builder: Option<&mut BodyBuilder>,
+  ) -> Option<ParamData> {
     let name = match param.stx.pattern.stx.pat.stx.as_ref() {
       Pat::Id(id) => id.stx.name.clone(),
       _ => {
@@ -1899,6 +1930,9 @@ impl ProgramState {
         return None;
       }
     };
+    let pat_id = builder
+      .as_mut()
+      .map(|b| b.new_pat(loc_to_span(file, param.loc).range));
     let typ = param
       .stx
       .type_annotation
@@ -1906,7 +1940,12 @@ impl ProgramState {
       .map(|t| self.type_from_type_expr(t));
     let symbol = self.alloc_symbol();
     self.record_symbol(file, loc_to_span(file, param.loc).range, symbol);
-    Some(ParamData { name, typ, symbol })
+    Some(ParamData {
+      name,
+      typ,
+      symbol,
+      pat: pat_id,
+    })
   }
 
   fn check_body(&mut self, body_id: BodyId) -> Arc<BodyCheckResult> {
@@ -1935,6 +1974,8 @@ impl ProgramState {
           body: body_id,
           expr_types: Vec::new(),
           expr_spans: Vec::new(),
+          pat_types: Vec::new(),
+          pat_spans: Vec::new(),
           diagnostics: vec![Diagnostic::error(
             CODE_MISSING_BODY,
             "missing body",
@@ -1961,9 +2002,24 @@ impl ProgramState {
       body: body.id,
       expr_types: vec![self.builtin.unknown; body.expr_spans.len()],
       expr_spans: body.expr_spans.clone(),
+      pat_types: vec![self.builtin.unknown; body.pat_spans.len()],
+      pat_spans: body.pat_spans.clone(),
       diagnostics: Vec::new(),
       return_types: Vec::new(),
     };
+
+    if let Some(owner) = body.owner {
+      if let Some(DefKind::Function(func)) = self.def_data.get(&owner).map(|d| &d.kind) {
+        for param in func.params.iter() {
+          if let Some(pat_id) = param.pat {
+            let ty = param.typ.unwrap_or(self.builtin.unknown);
+            if let Some(slot) = result.pat_types.get_mut(pat_id.0 as usize) {
+              *slot = ty;
+            }
+          }
+        }
+      }
+    }
 
     for stmt in body.stmts.iter() {
       self.check_stmt(stmt, &mut env, &mut result, body.file, return_context);
@@ -1993,6 +2049,7 @@ impl ProgramState {
         span,
         symbol,
         def,
+        pat,
       } => {
         let init_checked = init
           .as_ref()
@@ -2023,6 +2080,11 @@ impl ProgramState {
           },
         );
         self.record_symbol(file, *span, *symbol);
+        if let Some(pat_id) = pat {
+          if let Some(slot) = result.pat_types.get_mut(pat_id.0 as usize) {
+            *slot = declared;
+          }
+        }
       }
       HirStmt::Return { expr, .. } => {
         let ty = expr
@@ -2995,6 +3057,7 @@ impl ProgramState {
           owner,
           stmts: Vec::new(),
           expr_spans: Vec::new(),
+          pat_spans: Vec::new(),
         },
       );
     }
@@ -3025,6 +3088,7 @@ struct BodyBuilder {
   file: FileId,
   stmts: Vec<HirStmt>,
   expr_spans: Vec<TextRange>,
+  pat_spans: Vec<TextRange>,
 }
 
 impl BodyBuilder {
@@ -3034,6 +3098,7 @@ impl BodyBuilder {
       file,
       stmts: Vec::new(),
       expr_spans: Vec::new(),
+      pat_spans: Vec::new(),
     }
   }
 
@@ -3041,6 +3106,12 @@ impl BodyBuilder {
     let id = ExprId(self.expr_spans.len() as u32);
     self.expr_spans.push(span);
     HirExpr { id, span, kind }
+  }
+
+  fn new_pat(&mut self, span: TextRange) -> PatId {
+    let id = PatId(self.pat_spans.len() as u32);
+    self.pat_spans.push(span);
+    id
   }
 
   fn lower_stmt_into(
@@ -3069,6 +3140,7 @@ impl BodyBuilder {
             .type_annotation
             .as_ref()
             .map(|t| state.type_from_type_expr(t));
+          let pat_id = Some(self.new_pat(loc_to_span(self.file, pat.loc).range));
           let init = declarator
             .initializer
             .map(|expr| self.lower_expr(expr, state));
@@ -3081,6 +3153,7 @@ impl BodyBuilder {
             span: stmt_span,
             symbol,
             def: None,
+            pat: pat_id,
           });
         }
       }
@@ -3254,6 +3327,7 @@ impl BodyBuilder {
       owner,
       stmts: self.stmts.drain(..).collect(),
       expr_spans: self.expr_spans,
+      pat_spans: self.pat_spans,
     }
   }
 }
