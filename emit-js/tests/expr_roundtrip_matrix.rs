@@ -88,3 +88,18 @@ fn ts_operator_grouping_is_respected() {
   assert_roundtrip("(a+b)!", Some("(a + b)!"));
   assert_roundtrip("a satisfies T", Some("a satisfies T"));
 }
+
+#[test]
+fn parenthesizes_new_over_optional_chaining_member() {
+  assert_roundtrip("new a?.b", Some("new (a?.b)"));
+}
+
+#[test]
+fn parenthesizes_new_over_optional_chaining_call() {
+  assert_roundtrip("new a?.()", Some("new (a?.())"));
+}
+
+#[test]
+fn parenthesizes_new_over_optional_chaining_computed_member() {
+  assert_roundtrip("new a?.[b]", Some("new (a?.[b])"));
+}
