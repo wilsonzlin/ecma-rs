@@ -23,9 +23,17 @@ macro_rules! id_newtype {
 id_newtype!(TypeId);
 id_newtype!(ObjectId);
 id_newtype!(ShapeId);
-id_newtype!(NameId);
 id_newtype!(TypeParamId);
 id_newtype!(SignatureId);
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, Debug)]
+pub struct NameId(pub u64);
+
+impl From<u64> for NameId {
+  fn from(value: u64) -> Self {
+    Self(value)
+  }
+}
 
 // `DefId` is shared with `hir-js` to ensure a single canonical definition identity
 // throughout the pipeline. It is re-exported here for convenience.

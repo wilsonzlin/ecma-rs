@@ -17,8 +17,11 @@ use crate::shape::ShapeInterner;
 use crate::signature::Param;
 use crate::signature::Signature;
 use crate::signature::SignatureInterner;
+use ahash::RandomState;
 use parking_lot::RwLock;
 use std::cmp::Ordering;
+use std::hash::BuildHasher;
+use std::hash::Hasher;
 use std::sync::Arc;
 
 #[derive(Default, Debug)]
@@ -41,20 +44,61 @@ impl TypeInterner {
 
 #[derive(Default, Debug)]
 struct NameInterner {
-  items: Vec<String>,
-  map: ahash::AHashMap<String, NameId>,
+  by_name: ahash::AHashMap<String, NameId>,
+  by_id: ahash::AHashMap<NameId, String>,
 }
 
 impl NameInterner {
+  fn hash_with_seeds(name: &str, seeds: (u64, u64, u64, u64)) -> u64 {
+    let mut hasher = RandomState::with_seeds(seeds.0, seeds.1, seeds.2, seeds.3).build_hasher();
+    hasher.write(name.as_bytes());
+    hasher.finish()
+  }
+
+  fn hash_name(name: &str) -> NameId {
+    const NAME_HASH_KEY1: u64 = 0x9e37_79b9_7f4a_7c15;
+    const NAME_HASH_KEY2: u64 = 0xc2b2_ae3d_27d4_eb4f;
+    const NAME_HASH_KEY3: u64 = 0x1656_67b1_9e37_79f9;
+    const NAME_HASH_KEY4: u64 = 0x85eb_ca6b_c8f6_9b07;
+
+    let primary = Self::hash_with_seeds(name, (NAME_HASH_KEY1, NAME_HASH_KEY2, NAME_HASH_KEY3, NAME_HASH_KEY4));
+    let secondary = Self::hash_with_seeds(
+      name,
+      (
+        NAME_HASH_KEY4 ^ 0xa076_1d64_78bd_642f,
+        NAME_HASH_KEY3 ^ 0xe703_7ed1_a0b4_28db,
+        NAME_HASH_KEY2 ^ 0x8ebc_6af0_6737_7ee8,
+        NAME_HASH_KEY1 ^ 0x5888_5cdd_54d4_641f,
+      ),
+    );
+    NameId(primary.rotate_left(5) ^ secondary)
+  }
+
   fn intern(&mut self, name: impl Into<String>) -> NameId {
     let name = name.into();
-    if let Some(id) = self.map.get(&name) {
+    if let Some(id) = self.by_name.get(&name) {
       return *id;
     }
-    let id = NameId(self.items.len() as u32);
-    self.items.push(name.clone());
-    self.map.insert(name, id);
+
+    let id = Self::hash_name(&name);
+    if let Some(existing) = self.by_id.get(&id) {
+      debug_assert_eq!(
+        existing, &name,
+        "NameId collision between `{existing}` and `{name}`"
+      );
+    }
+
+    self.by_name.insert(name.clone(), id);
+    self.by_id.insert(id, name);
     id
+  }
+
+  fn name(&self, id: NameId) -> &str {
+    self
+      .by_id
+      .get(&id)
+      .map(|s| s.as_str())
+      .expect("NameId not interned")
   }
 }
 
@@ -128,7 +172,7 @@ impl TypeStore {
 
   pub fn name(&self, id: NameId) -> String {
     let guard = self.names.read();
-    guard.items[id.index()].clone()
+    guard.name(id).to_owned()
   }
 
   pub fn intern_name(&self, name: impl Into<String>) -> NameId {
@@ -181,7 +225,7 @@ impl TypeStore {
       let names = self.names.read();
       shape.properties.sort_by(|a, b| {
         a.key
-          .cmp_with(&b.key, &|id| names.items[id.index()].clone())
+          .cmp_with(&b.key, &|id| names.name(id).to_owned())
       });
     }
     // Merge duplicate property keys deterministically by intersecting their
@@ -717,7 +761,7 @@ impl TypeStore {
     let names = self.names.read();
     let ord = a
       .key
-      .cmp_with(&b.key, &|id| names.items[id.index()].clone());
+      .cmp_with(&b.key, &|id| names.name(id).to_owned());
     if ord != Ordering::Equal {
       return ord;
     }
