@@ -10,7 +10,7 @@ use symbol_js::compute_symbols;
 fn compile(source: &str, mode: TopLevelMode) -> Program {
   let mut top_level = parse(source).expect("parse source");
   compute_symbols(&mut top_level, mode);
-  Program::compile(top_level, false).expect("compile program")
+  Program::compile(top_level, mode, false).expect("compile program")
 }
 
 fn var_decl_names(stmt: &Node<Stmt>) -> Vec<String> {
