@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod cfg;
+pub mod decompile;
 pub mod dom;
 pub mod eval;
 pub mod graph;
