@@ -98,6 +98,8 @@ pub struct ClassType {
   pub instance_ref: TypeRefId,
   pub origin: u32,
   pub this_type: TypeId,
+  pub super_instance: Option<TypeId>,
+  pub super_static: Option<TypeId>,
 }
 
 /// Environment for constructing class types and relating them with nominal
@@ -185,6 +187,8 @@ impl ClassEnv {
     let mut instance_indexes: Vec<IndexSignature> = Vec::new();
     let mut static_indexes: Vec<IndexSignature> = Vec::new();
 
+    let super_instance = decl.extends.as_ref().map(|b| b.instance);
+    let super_static = decl.extends.as_ref().map(|b| b.static_type);
     if let Some(base) = &decl.extends {
       if let TypeKind::Object(obj) = self.store.get(base.instance) {
         instance_props.extend(obj.properties.clone());
@@ -296,6 +300,8 @@ impl ClassEnv {
       instance_ref,
       origin,
       this_type,
+      super_instance,
+      super_static,
     }
   }
 }

@@ -67,6 +67,8 @@ fn protected_members_allow_inheritance_compatibility() {
     methods: Vec::new(),
     constructor: None,
   });
+  assert_eq!(derived.super_instance, Some(base.instance));
+  assert_eq!(derived.super_static, Some(base.static_type));
   let sibling = env.build_class(ClassDecl {
     name: "Sibling".into(),
     extends: Some(base.clone()),
