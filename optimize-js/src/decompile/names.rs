@@ -14,7 +14,6 @@ pub struct NameMangler {
   fresh_counters: HashMap<String, usize>,
   reg_names: HashMap<u32, String>,
   foreign_names: HashMap<u32, String>,
-  short_name_counter: usize,
   /// Whether register/foreign locals should be minified (`a`, `b`, ...). When
   /// disabled, names are generated using readable prefixes like `r0`.
   pub minify_locals: bool,
@@ -32,7 +31,6 @@ impl NameMangler {
       fresh_counters: HashMap::default(),
       reg_names: HashMap::default(),
       foreign_names: HashMap::default(),
-      short_name_counter: 0,
       minify_locals: false,
     }
   }
@@ -64,11 +62,10 @@ impl NameMangler {
       return name.clone();
     }
 
-    let base = if self.minify_locals {
-      self.next_short_name()
-    } else {
-      sanitize_identifier(&format!("r{reg}"))
-    };
+    let base = self
+      .minify_locals
+      .then(|| encode_short_identifier(reg as usize))
+      .unwrap_or_else(|| sanitize_identifier(&format!("r{reg}")));
     let name = self.ensure_unique(base);
     self.reg_names.insert(reg, name.clone());
     name
@@ -81,11 +78,10 @@ impl NameMangler {
       return name.clone();
     }
 
-    let base = if self.minify_locals {
-      self.next_short_name()
-    } else {
-      sanitize_identifier(&format!("__f{idx}"))
-    };
+    let base = self
+      .minify_locals
+      .then(|| encode_short_identifier(idx as usize))
+      .unwrap_or_else(|| sanitize_identifier(&format!("__f{idx}")));
     let name = self.ensure_unique(base);
     self.foreign_names.insert(idx, name.clone());
     name
@@ -108,16 +104,6 @@ impl NameMangler {
 
   fn is_taken(&self, name: &str) -> bool {
     self.used.contains(name)
-  }
-
-  fn next_short_name(&mut self) -> String {
-    loop {
-      let candidate = encode_short_identifier(self.short_name_counter);
-      self.short_name_counter += 1;
-      if !self.is_taken(&candidate) {
-        return candidate;
-      }
-    }
   }
 }
 
