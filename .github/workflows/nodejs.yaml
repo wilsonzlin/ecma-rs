@@ -13,24 +13,24 @@ jobs:
       matrix:
         os: [macos-12, macos-14, ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
 
       - name: Get version
         id: version
         shell: bash
-        run: echo ::set-output name=VERSION::"$([[ "$GITHUB_REF" == refs/tags/v* ]] && echo ${GITHUB_REF#refs/tags/v} || echo '0.0.0')"
+        run: |
+          VERSION="$([[ "$GITHUB_REF" == refs/tags/v* ]] && echo "${GITHUB_REF#refs/tags/v}" || echo '0.0.0')"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18.x
+          cache: npm
+          cache-dependency-path: minify-js-nodejs/package-lock.json
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          default: true
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build native module
         working-directory: ./minify-js-nodejs
@@ -39,9 +39,20 @@ jobs:
         run: |
           npm install
           npm run build-release
-          echo ::set-output name=BINARY_NAME::"$(node -e 'console.log([process.platform, process.arch].join("__"))')"
+          BINARY_NAME="$(node -e 'process.stdout.write([process.platform, process.arch].join("__"))')"
+          echo "BINARY_NAME=$BINARY_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Verify native module artifact
+        working-directory: ./minify-js-nodejs
+        shell: bash
+        run: |
+          if [[ ! -f index.node ]]; then
+            echo "Expected minify-js-nodejs/index.node to exist after build, but it was not found." >&2
+            exit 1
+          fi
 
       - name: Upload to B2
+        if: steps.version.outputs.VERSION != '0.0.0'
         uses: wilsonzlin/b2-upload-action@v1.0.0
         with:
           bucket: ${{ secrets.B2_BUCKET_NAME }}
@@ -54,15 +65,19 @@ jobs:
     runs-on: ubuntu-latest
     needs: build
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
       - name: Get version
         id: version
         shell: bash
-        run: echo ::set-output name=VERSION::"$([[ "$GITHUB_REF" == refs/tags/v* ]] && echo ${GITHUB_REF#refs/tags/v} || echo '0.0.0')"
+        run: |
+          VERSION="$([[ "$GITHUB_REF" == refs/tags/v* ]] && echo "${GITHUB_REF#refs/tags/v}" || echo '0.0.0')"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 18.x
+          cache: npm
+          cache-dependency-path: minify-js-nodejs/package-lock.json
       - name: Pack and publish package
         working-directory: ./minify-js-nodejs
         run: |
