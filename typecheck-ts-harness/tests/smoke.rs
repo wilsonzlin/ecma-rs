@@ -7,9 +7,9 @@ use typecheck_ts_harness::build_filter;
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
+use typecheck_ts_harness::FailOn;
 use typecheck_ts_harness::JsonReport;
 use typecheck_ts_harness::TestOutcome;
-use typecheck_ts_harness::FailOn;
 
 fn write_fixtures() -> (tempfile::TempDir, PathBuf) {
   let dir = tempdir().expect("tempdir");

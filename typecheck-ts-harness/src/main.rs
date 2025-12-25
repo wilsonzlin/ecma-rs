@@ -10,6 +10,7 @@ use typecheck_ts_harness::difftsc::{self};
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
+use typecheck_ts_harness::FailOn;
 use typecheck_ts_harness::Shard;
 
 const DEFAULT_ROOT: &str = "parse-js/tests/TypeScript/tests/cases/conformance";

@@ -3,7 +3,7 @@ use crate::diagnostic_norm::{
   within_tolerance, NormalizedDiagnostic,
 };
 use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS};
-use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
+use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::tsc::{TscDiagnostic, TscDiagnostics};
 use crate::{FailOn, Result, VirtualFile};
@@ -91,7 +91,7 @@ impl OutcomeCounts {
     }
   }
 
-  fn mismatches(&self) -> usize {
+  pub fn mismatches(&self) -> usize {
     self.rust_extra_diagnostics
       + self.rust_missing_diagnostics
       + self.span_mismatch
