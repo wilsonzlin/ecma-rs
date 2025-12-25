@@ -90,6 +90,7 @@ fn disambiguates_minusminus_followed_by_minus() {
 fn auto_classifies_raw_str_fragments() {
   let mut emitter = Emitter::new(EmitOptions {
     mode: EmitMode::Minified,
+    ..EmitOptions::default()
   });
   emitter.write_keyword("return");
   emitter.write_str("result");
@@ -119,6 +120,7 @@ fn write_byte_tracks_boundaries() {
 fn canonical_mode_still_inserts_required_spaces() {
   let mut emitter = Emitter::new(EmitOptions {
     mode: EmitMode::Canonical,
+    ..EmitOptions::default()
   });
   emitter.write_keyword("return");
   emitter.write_identifier("value");

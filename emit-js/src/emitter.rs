@@ -25,16 +25,32 @@ pub enum EmitMode {
   Canonical,
 }
 
+/// Controls how statements are separated in JavaScript output.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StmtSepStyle {
+  /// Always separate statements with semicolons (classic minifier style).
+  Semicolons,
+  /// Prefer newlines and rely on automatic semicolon insertion, only inserting
+  /// explicit semicolons for hazards.
+  AsiNewlines,
+}
+
 /// Options for configuring output.
+///
+/// The default favors classic semicolon-separated minified output. To produce
+/// a no-semicolons style bundle, keep [`EmitMode::Minified`] and set
+/// [`StmtSepStyle::AsiNewlines`].
 #[derive(Clone, Copy, Debug)]
 pub struct EmitOptions {
   pub mode: EmitMode,
+  pub stmt_sep_style: StmtSepStyle,
 }
 
 impl Default for EmitOptions {
   fn default() -> Self {
     EmitOptions {
       mode: EmitMode::Minified,
+      stmt_sep_style: StmtSepStyle::Semicolons,
     }
   }
 }
@@ -205,6 +221,10 @@ impl Emitter {
   /// Consumes the emitter, returning the underlying buffer.
   pub fn into_bytes(self) -> Vec<u8> {
     self.out
+  }
+
+  pub fn opts(&self) -> &EmitOptions {
+    &self.opts
   }
 
   /// Clears the buffer and resets token-boundary state.

@@ -1,27 +1,42 @@
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{VarDecl, VarDeclMode};
-use parse_js::ast::stmt::BlockStmt;
-use parse_js::ast::stmt::BreakStmt;
-use parse_js::ast::stmt::ExprStmt;
-use parse_js::ast::stmt::ForBody;
-use parse_js::ast::stmt::ForTripleStmt;
-use parse_js::ast::stmt::ForTripleStmtInit;
-use parse_js::ast::stmt::IfStmt;
-use parse_js::ast::stmt::Stmt;
-use parse_js::ast::stmt::WhileStmt;
+use parse_js::ast::stmt::{
+  BlockStmt, BreakStmt, ExprStmt, ForBody, ForTripleStmt, ForTripleStmtInit, IfStmt, Stmt,
+  WhileStmt,
+};
 use parse_js::ast::stx::TopLevel;
 
+use crate::asi::separator_between;
+use crate::asi::Separator;
 use crate::js_expr::{emit_js_expr, JsEmitError, JsEmitResult};
 use crate::js_pat::emit_js_pat_decl;
-use crate::Emitter;
+use crate::{Emitter, StmtSepStyle};
 
 pub fn emit_js_top_level(out: &mut Emitter, top: &TopLevel) -> JsEmitResult {
-  for stmt in &top.body {
+  emit_js_stmt_list(out, &top.body)
+}
+
+pub fn emit_js_stmt_list(out: &mut Emitter, stmts: &[Node<Stmt>]) -> JsEmitResult {
+  let style = out.options().stmt_sep_style;
+  let mut prev: Option<&Node<Stmt>> = None;
+
+  for stmt in stmts {
     if matches!(stmt.stx.as_ref(), Stmt::Empty(_)) {
       continue;
     }
+
+    if style == StmtSepStyle::AsiNewlines {
+      match separator_between(prev, stmt) {
+        Separator::None => {}
+        Separator::Newline => out.write_newline(),
+        Separator::Semicolon => out.write_semicolon(),
+      }
+    }
+
     emit_js_stmt(out, stmt)?;
+    prev = Some(stmt);
   }
+
   Ok(())
 }
 
@@ -32,7 +47,7 @@ pub fn emit_js_stmt(out: &mut Emitter, stmt: &Node<Stmt>) -> JsEmitResult {
     Stmt::Expr(expr) => emit_expr_stmt(out, expr),
     Stmt::ForTriple(for_stmt) => emit_for_triple(out, for_stmt),
     Stmt::If(if_stmt) => emit_if(out, if_stmt),
-    Stmt::VarDecl(var_decl) => emit_var_decl(out, var_decl, true, true),
+    Stmt::VarDecl(var_decl) => emit_var_decl(out, var_decl),
     Stmt::While(while_stmt) => emit_while(out, while_stmt),
     Stmt::Empty(_) => Ok(()),
     _ => Err(JsEmitError::Unsupported("statement kind not supported")),
@@ -41,12 +56,7 @@ pub fn emit_js_stmt(out: &mut Emitter, stmt: &Node<Stmt>) -> JsEmitResult {
 
 fn emit_block(out: &mut Emitter, block: &Node<BlockStmt>) -> JsEmitResult {
   out.write_punct("{");
-  for stmt in &block.stx.body {
-    if matches!(stmt.stx.as_ref(), Stmt::Empty(_)) {
-      continue;
-    }
-    emit_js_stmt(out, stmt)?;
-  }
+  emit_js_stmt_list(out, &block.stx.body)?;
   out.write_punct("}");
   Ok(())
 }
@@ -56,13 +66,17 @@ fn emit_break(out: &mut Emitter, break_stmt: &Node<BreakStmt>) -> JsEmitResult {
   if let Some(label) = &break_stmt.stx.label {
     out.write_identifier(label);
   }
-  out.write_punct(";");
+  if out.options().stmt_sep_style == StmtSepStyle::Semicolons {
+    out.write_semicolon();
+  }
   Ok(())
 }
 
 fn emit_expr_stmt(out: &mut Emitter, expr_stmt: &Node<ExprStmt>) -> JsEmitResult {
   emit_js_expr(out, &expr_stmt.stx.expr)?;
-  out.write_punct(";");
+  if out.options().stmt_sep_style == StmtSepStyle::Semicolons {
+    out.write_semicolon();
+  }
   Ok(())
 }
 
@@ -119,23 +133,23 @@ fn emit_for_triple_init(out: &mut Emitter, init: &ForTripleStmtInit) -> JsEmitRe
   match init {
     ForTripleStmtInit::None => Ok(()),
     ForTripleStmtInit::Expr(expr) => emit_js_expr(out, expr),
-    ForTripleStmtInit::Decl(decl) => emit_var_decl(out, decl, false, false),
+    ForTripleStmtInit::Decl(decl) => emit_var_decl_inner(out, decl, false, false),
   }
 }
 
 fn emit_for_body(out: &mut Emitter, body: &Node<ForBody>) -> JsEmitResult {
   out.write_punct("{");
-  for stmt in &body.stx.body {
-    if matches!(stmt.stx.as_ref(), Stmt::Empty(_)) {
-      continue;
-    }
-    emit_js_stmt(out, stmt)?;
-  }
+  emit_js_stmt_list(out, &body.stx.body)?;
   out.write_punct("}");
   Ok(())
 }
 
-fn emit_var_decl(
+fn emit_var_decl(out: &mut Emitter, decl: &Node<VarDecl>) -> JsEmitResult {
+  let trailing_semi = out.options().stmt_sep_style == StmtSepStyle::Semicolons;
+  emit_var_decl_inner(out, decl, trailing_semi, true)
+}
+
+fn emit_var_decl_inner(
   out: &mut Emitter,
   decl: &Node<VarDecl>,
   trailing_semi: bool,
@@ -169,7 +183,7 @@ fn emit_var_decl(
   }
 
   if trailing_semi {
-    out.write_punct(";");
+    out.write_semicolon();
   }
 
   Ok(())

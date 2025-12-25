@@ -21,7 +21,9 @@ pub use asi::{
   separator_after_last, separator_between, stmt_leaf_end, stmt_start_token,
   stmt_tail_is_expression_like, ListEnd, Separator, StmtLeafEnd, StmtStartToken,
 };
-pub use emitter::{EmitError, EmitErrorKind, EmitMode, EmitOptions, EmitResult, Emitter};
+pub use emitter::{
+  EmitError, EmitErrorKind, EmitMode, EmitOptions, EmitResult, Emitter, StmtSepStyle,
+};
 pub use escape::cooked_template_segment;
 pub use escape::emit_string_literal_double_quoted;
 pub use escape::emit_template_literal_segment;
@@ -29,7 +31,7 @@ pub use escape::emit_template_raw_segment;
 pub use expr::{emit_expr, ExprEmitter};
 pub use js_expr::{emit_js_expr, JsEmitError, JsEmitResult};
 pub use js_pat::{emit_js_param_decl, emit_js_pat, emit_js_pat_decl};
-pub use js_stmt::{emit_js_stmt, emit_js_top_level};
+pub use js_stmt::{emit_js_stmt, emit_js_stmt_list, emit_js_top_level};
 pub use jsx::{emit_jsx_elem, emit_jsx_expr_container};
 pub use pat::{emit_param_decl, emit_pat, emit_pat_decl};
 pub use stmt_start::{emit_expr_stmt, emit_expr_stmt_with, expr_stmt_needs_parens};
@@ -95,3 +97,4 @@ fn diagnostic_from_emit_error(file: FileId, err: EmitError) -> Diagnostic {
   }
   diagnostic
 }
+
