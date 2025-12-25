@@ -12,6 +12,7 @@ use parse_js::ast::expr::{Expr, IdExpr, UnaryExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::{
   BlockStmt,
+  DoWhileStmt,
   EmptyStmt,
   ExportDefaultExprStmt,
   ExprStmt,
@@ -99,6 +100,10 @@ fn empty_stmt() -> Node<Stmt> {
 
 fn while_stmt(condition: Node<Expr>, body: Node<Stmt>) -> Node<Stmt> {
   node(Stmt::While(node(WhileStmt { condition, body })))
+}
+
+fn do_while_stmt(condition: Node<Expr>, body: Node<Stmt>) -> Node<Stmt> {
+  node(Stmt::DoWhile(node(DoWhileStmt { condition, body })))
 }
 
 fn var_decl_stmt(name: &str, initializer: Option<Node<Expr>>) -> Node<Stmt> {
@@ -211,6 +216,20 @@ fn export_default_expression_requires_semicolon_before_paren_hazard() {
   let prev = export_default_expr_stmt(id("a"));
   let next = expr_stmt(object_expr());
   assert_eq!(separator_between(Some(&prev), &next), Separator::Semicolon);
+}
+
+#[test]
+fn do_while_needs_newline_before_following_statement() {
+  let prev = do_while_stmt(id("a"), block_stmt(vec![]));
+  let next = expr_stmt(object_expr());
+  assert_eq!(separator_between(Some(&prev), &next), Separator::Newline);
+}
+
+#[test]
+fn do_while_before_regex_allows_newline_separator() {
+  let prev = do_while_stmt(id("a"), block_stmt(vec![]));
+  let next = expr_stmt(regex("/x/"));
+  assert_eq!(separator_between(Some(&prev), &next), Separator::Newline);
 }
 
 #[test]
