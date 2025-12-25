@@ -217,6 +217,7 @@ pub fn lhs_expr_to_assign_target(
     // Allow import.meta as an assignment target for error recovery.
     // While it's not a valid target, TypeScript still parses it to produce semantic errors.
     | Expr::ImportMeta(_) => Ok(lhs),
+    Expr::Binary(binary) if binary.stx.operator.is_assignment() => Ok(lhs),
     _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),
   }
 }
