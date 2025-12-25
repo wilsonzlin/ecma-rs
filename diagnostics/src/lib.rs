@@ -33,6 +33,7 @@ pub use files::SimpleFiles;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::fmt::Display;
 use std::fmt::Formatter;
 
@@ -89,6 +90,7 @@ impl Span {
 
 /// Diagnostic severity.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub enum Severity {
   Error,
@@ -287,12 +289,14 @@ impl Diagnostic {
 
   /// Canonical deterministic ordering for diagnostics: severity, code, primary
   /// span, then message.
-  pub fn sort_key(&self) -> (Severity, &DiagnosticCode, Span, &str) {
+  pub fn sort_key(&self) -> (Severity, &DiagnosticCode, Span, &str, &Vec<Label>, &Vec<String>) {
     (
       self.severity,
       &self.code,
       self.primary,
       self.message.as_str(),
+      &self.labels,
+      &self.notes,
     )
   }
 }
@@ -333,6 +337,84 @@ pub fn host_error(primary: Option<Span>, message: impl Into<String>) -> Diagnost
   diagnostic
 }
 
+pub fn diagnostic_cmp(a: &Diagnostic, b: &Diagnostic) -> Ordering {
+  a.primary
+    .file
+    .cmp(&b.primary.file)
+    .then(a.primary.range.start.cmp(&b.primary.range.start))
+    .then(a.primary.range.end.cmp(&b.primary.range.end))
+    .then(a.code.cmp(&b.code))
+    .then(severity_rank(a.severity).cmp(&severity_rank(b.severity)))
+    .then(a.message.cmp(&b.message))
+    .then(compare_labels(&a.labels, &b.labels))
+    .then(compare_notes(&a.notes, &b.notes))
+}
+
+pub fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
+  diagnostics.sort_by(diagnostic_cmp);
+}
+
+pub fn sort_labels(labels: &mut [Label]) {
+  labels.sort_by(label_cmp);
+}
+
+fn compare_labels(a: &[Label], b: &[Label]) -> Ordering {
+  let mut a_sorted = a.to_vec();
+  let mut b_sorted = b.to_vec();
+  a_sorted.sort_by(label_cmp);
+  b_sorted.sort_by(label_cmp);
+
+  a_sorted.len().cmp(&b_sorted.len()).then_with(|| {
+    for (lhs, rhs) in a_sorted.iter().zip(b_sorted.iter()) {
+      let ord = label_cmp(lhs, rhs);
+      if ord != Ordering::Equal {
+        return ord;
+      }
+    }
+    Ordering::Equal
+  })
+}
+
+fn compare_notes(a: &[String], b: &[String]) -> Ordering {
+  let mut a_sorted = a.to_vec();
+  let mut b_sorted = b.to_vec();
+  a_sorted.sort();
+  b_sorted.sort();
+
+  a_sorted
+    .len()
+    .cmp(&b_sorted.len())
+    .then_with(|| a_sorted.cmp(&b_sorted))
+}
+
+fn label_cmp(a: &Label, b: &Label) -> Ordering {
+  b.is_primary
+    .cmp(&a.is_primary)
+    .then(a.span.file.cmp(&b.span.file))
+    .then(a.span.range.start.cmp(&b.span.range.start))
+    .then(a.span.range.end.cmp(&b.span.range.end))
+    .then(a.message.cmp(&b.message))
+}
+
+fn severity_rank(severity: Severity) -> u8 {
+  match severity {
+    Severity::Error => 0,
+    Severity::Warning => 1,
+    Severity::Note => 2,
+    Severity::Help => 3,
+  }
+}
+
+#[cfg(feature = "parse-js")]
+pub trait ParseJsError {
+  fn to_diagnostic(&self, file: FileId) -> Diagnostic;
+}
+
+#[cfg(feature = "parse-js")]
+pub fn diagnostic_from_syntax_error(err_file: FileId, err: &impl ParseJsError) -> Diagnostic {
+  err.to_diagnostic(err_file)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -370,6 +452,32 @@ mod tests {
     fn file_text(&self, file: FileId) -> Option<&str> {
       self.texts.get(file.0 as usize).map(|text| text.as_str())
     }
+  }
+
+  #[test]
+  fn sorts_diagnostics_by_span_then_code() {
+    let mut diagnostics = vec![
+      Diagnostic::error(
+        "CODE2",
+        "later",
+        Span {
+          file: FileId(0),
+          range: TextRange::new(2, 3),
+        },
+      ),
+      Diagnostic::error(
+        "CODE1",
+        "earlier",
+        Span {
+          file: FileId(0),
+          range: TextRange::new(0, 1),
+        },
+      ),
+    ];
+
+    sort_diagnostics(&mut diagnostics);
+    assert_eq!(diagnostics[0].code.as_str(), "CODE1");
+    assert_eq!(diagnostics[1].code.as_str(), "CODE2");
   }
 
   #[test]

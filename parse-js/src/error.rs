@@ -4,7 +4,7 @@ use core::fmt;
 use core::fmt::Debug;
 use core::fmt::Formatter;
 #[cfg(feature = "diagnostics")]
-use diagnostics::{Diagnostic, FileId, Span};
+use diagnostics::{Diagnostic, FileId, ParseJsError, Span};
 use std::error::Error;
 use std::fmt::Display;
 
@@ -82,6 +82,13 @@ impl SyntaxError {
     }
 
     diagnostic
+  }
+}
+
+#[cfg(feature = "diagnostics")]
+impl ParseJsError for SyntaxError {
+  fn to_diagnostic(&self, file: FileId) -> Diagnostic {
+    SyntaxError::to_diagnostic(self, file)
   }
 }
 

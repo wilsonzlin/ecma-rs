@@ -23,7 +23,7 @@ serde_json = { version = "1" }
 rayon = { version = "1.8", optional = true }
 smallvec = "1.15.1"
 unicode-ident = "1.0"
-diagnostics = { path = "../diagnostics", optional = true }
+diagnostics = { path = "../diagnostics", features = ["parse-js"], optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.7.0", features = ["html_reports"] }
@@ -31,7 +31,7 @@ rayon = "1.8"
 similar = "2.1.0"
 
 [features]
-conformance-runner = ["rayon"]
+conformance-runner = ["rayon", "diagnostics"]
 diagnostics = ["dep:diagnostics"]
 serde-loc = []
 
