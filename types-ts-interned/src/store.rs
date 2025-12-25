@@ -49,19 +49,24 @@ struct NameInterner {
 }
 
 impl NameInterner {
-  fn hash_with_seeds(name: &str, seeds: (u64, u64, u64, u64)) -> u64 {
+  fn hash_with_seeds(name: &str, seeds: (u64, u64, u64, u64), salt: u64) -> u64 {
     let mut hasher = RandomState::with_seeds(seeds.0, seeds.1, seeds.2, seeds.3).build_hasher();
+    hasher.write_u64(salt);
     hasher.write(name.as_bytes());
     hasher.finish()
   }
 
-  fn hash_name(name: &str) -> NameId {
+  fn hash_name(name: &str, salt: u64) -> NameId {
     const NAME_HASH_KEY1: u64 = 0x9e37_79b9_7f4a_7c15;
     const NAME_HASH_KEY2: u64 = 0xc2b2_ae3d_27d4_eb4f;
     const NAME_HASH_KEY3: u64 = 0x1656_67b1_9e37_79f9;
     const NAME_HASH_KEY4: u64 = 0x85eb_ca6b_c8f6_9b07;
 
-    let primary = Self::hash_with_seeds(name, (NAME_HASH_KEY1, NAME_HASH_KEY2, NAME_HASH_KEY3, NAME_HASH_KEY4));
+    let primary = Self::hash_with_seeds(
+      name,
+      (NAME_HASH_KEY1, NAME_HASH_KEY2, NAME_HASH_KEY3, NAME_HASH_KEY4),
+      salt,
+    );
     let secondary = Self::hash_with_seeds(
       name,
       (
@@ -70,6 +75,7 @@ impl NameInterner {
         NAME_HASH_KEY2 ^ 0x8ebc_6af0_6737_7ee8,
         NAME_HASH_KEY1 ^ 0x5888_5cdd_54d4_641f,
       ),
+      salt,
     );
     NameId(primary.rotate_left(5) ^ secondary)
   }
@@ -80,17 +86,24 @@ impl NameInterner {
       return *id;
     }
 
-    let id = Self::hash_name(&name);
-    if let Some(existing) = self.by_id.get(&id) {
-      assert_eq!(
-        existing, &name,
-        "NameId collision between `{existing}` and `{name}`"
-      );
+    let mut salt = 0u64;
+    loop {
+      let id = Self::hash_name(&name, salt);
+      match self.by_id.get(&id) {
+        None => {
+          self.by_name.insert(name.clone(), id);
+          self.by_id.insert(id, name);
+          return id;
+        }
+        Some(existing) if existing == &name => {
+          self.by_name.insert(name.clone(), id);
+          return id;
+        }
+        Some(_) => {
+          salt = salt.wrapping_add(1);
+        }
+      }
     }
-
-    self.by_name.insert(name.clone(), id);
-    self.by_id.insert(id, name);
-    id
   }
 
   fn name(&self, id: NameId) -> &str {
