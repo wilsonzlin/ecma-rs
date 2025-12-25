@@ -1,5 +1,5 @@
-use crate::assoc::js::{declared_symbol, resolved_symbol};
-use crate::js::{bind_js, declare, JsSemantics, SymbolId, TopLevelMode};
+use crate::assoc::js::{declared_symbol, resolved_symbol, resolved_symbol_info, ResolvedSymbol};
+use crate::js::{bind_js, declare, JsSemantics, ScopeKind, SymbolId, TopLevelMode};
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
 use parse_js::ast::expr::pat::IdPat;
@@ -35,6 +35,30 @@ impl Collect {
   }
 }
 
+#[derive(Default, VisitorMut)]
+#[visitor(IdExprNode(enter), IdPatNode(enter))]
+struct CollectWithInfo {
+  id_exprs: Vec<(String, Option<ResolvedSymbol>)>,
+  id_pats: Vec<(String, Option<ResolvedSymbol>, bool)>,
+}
+
+impl CollectWithInfo {
+  fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+    self
+      .id_exprs
+      .push((node.stx.name.clone(), resolved_symbol_info(&node.assoc)));
+  }
+
+  fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+    let declared = declared_symbol(&node.assoc);
+    self.id_pats.push((
+      node.stx.name.clone(),
+      resolved_symbol_info(&node.assoc),
+      declared.is_some(),
+    ));
+  }
+}
+
 fn snapshot(sem: &JsSemantics) -> Vec<u8> {
   let mut out = String::new();
   writeln!(&mut out, "names {:?}", sem.names).unwrap();
@@ -49,6 +73,14 @@ fn snapshot(sem: &JsSemantics) -> Vec<u8> {
     .unwrap();
     let children: Vec<_> = scope.children.iter().map(|child| child.index()).collect();
     writeln!(&mut out, "  children {children:?}").unwrap();
+    writeln!(
+      &mut out,
+      "  dynamic {} direct_eval {}",
+      scope.is_dynamic, scope.has_direct_eval
+    )
+    .unwrap();
+    let tdz: Vec<_> = scope.tdz_bindings.iter().map(|sym| sym.index()).collect();
+    writeln!(&mut out, "  tdz_bindings {tdz:?}").unwrap();
     let symbols: Vec<_> = scope
       .iter_symbols_sorted()
       .map(|(name, symbol)| (name.index(), symbol.index()))
@@ -126,6 +158,75 @@ fn destructuring_assignment_resolves_existing_symbol() {
     .and_then(|(_, resolved, _)| *resolved);
 
   assert_eq!(assignment_use, Some(decl_symbol));
+}
+
+#[test]
+fn hoists_var_and_function_declarations() {
+  let mut ast = parse(
+    "function wrap() { use_before; { var use_before = 1; } fn_call(); function fn_call() {} }",
+  )
+  .unwrap();
+  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+
+  let var_decl = collect
+    .id_pats
+    .iter()
+    .find(|(name, _, is_decl)| name == "use_before" && *is_decl)
+    .and_then(|(_, resolved, _)| resolved.as_ref().and_then(|r| r.symbol))
+    .expect("var declaration");
+  let use_before = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "use_before")
+    .and_then(|(_, resolved)| resolved.as_ref())
+    .expect("use_before reference");
+
+  assert_eq!(use_before.symbol, Some(var_decl));
+  assert!(!use_before.in_tdz);
+
+  let fn_call = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "fn_call")
+    .and_then(|(_, resolved)| resolved.as_ref())
+    .expect("fn_call reference");
+  assert!(fn_call.symbol.is_some());
+  assert!(!fn_call.in_tdz);
+}
+
+#[test]
+fn marks_lexical_uses_in_tdz() {
+  let mut ast = parse("let outer = 0; { outer; let outer = 1; outer; }").unwrap();
+  let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+
+  let block_scope = *sem
+    .scope(sem.top_scope())
+    .children
+    .iter()
+    .find(|&&scope| sem.scope(scope).kind == ScopeKind::Block)
+    .expect("block scope");
+  let name_id = sem.name_id("outer").unwrap();
+  let inner_symbol = sem.scope(block_scope).get(name_id).expect("inner symbol");
+
+  let uses: Vec<_> = collect
+    .id_exprs
+    .iter()
+    .filter(|(name, _)| name == "outer")
+    .collect();
+  assert_eq!(uses.len(), 2);
+  let first = uses[0].1.as_ref().unwrap();
+  let second = uses[1].1.as_ref().unwrap();
+
+  assert_eq!(first.symbol, Some(inner_symbol));
+  assert_eq!(second.symbol, Some(inner_symbol));
+  assert!(first.in_tdz);
+  assert!(!second.in_tdz);
 }
 
 #[test]
@@ -207,4 +308,52 @@ fn semantics_are_deterministic_between_runs() {
   };
 
   assert_eq!(first, second);
+}
+
+#[test]
+fn marks_dynamic_scopes_for_with_and_eval() {
+  let mut ast = parse(
+    r#"
+    with (obj) { shadow; }
+    function wrap() { eval("shadow"); }
+    function shadowed(eval) { eval("shadow"); }
+  "#,
+  )
+  .unwrap();
+  let sem = declare(&mut ast, TopLevelMode::Module);
+
+  let top_scope = sem.top_scope();
+  assert!(sem.scope(top_scope).is_dynamic);
+
+  let dynamic_blocks: Vec<_> = sem
+    .scope(top_scope)
+    .children
+    .iter()
+    .copied()
+    .filter(|scope| sem.scope(*scope).kind == ScopeKind::Block && sem.scope(*scope).is_dynamic)
+    .collect();
+  assert!(!dynamic_blocks.is_empty());
+
+  let function_scopes: Vec<_> = sem
+    .scope(top_scope)
+    .children
+    .iter()
+    .copied()
+    .filter(|scope| sem.scope(*scope).kind == ScopeKind::NonArrowFunction)
+    .collect();
+  assert_eq!(function_scopes.len(), 2);
+
+  let eval_scope = function_scopes
+    .iter()
+    .find(|&&scope| sem.scope(scope).has_direct_eval)
+    .copied()
+    .expect("direct eval scope");
+  assert!(sem.scope(eval_scope).is_dynamic);
+
+  let shadowed_eval_scope = function_scopes
+    .iter()
+    .find(|&&scope| scope != eval_scope)
+    .copied()
+    .unwrap();
+  assert!(!sem.scope(shadowed_eval_scope).is_dynamic);
 }

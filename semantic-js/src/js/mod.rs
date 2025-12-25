@@ -39,10 +39,14 @@
 //! - Identifier expressions and non-decl patterns receive
 //!   [`crate::assoc::js::ResolvedSymbol`] pointing to the nearest lexically
 //!   visible declaration.
-//! - The pass operates purely syntactically: it does not attempt to model
-//!   hoisting, TDZ errors, `with`/`eval` semantics, or re-declaration
-//!   diagnostics. `var` simply targets the nearest closure, and top-level
-//!   bindings can be skipped entirely via [`TopLevelMode::Global`].
+//! - Hoisting: `var` and function declarations bind to the nearest closure and
+//!   are visible throughout that scope regardless of source order.
+//! - Temporal dead zones (TDZ): `let`/`const`/class declarations are recorded as
+//!   TDZ bindings in their block scope; resolution marks uses as `in_tdz` until
+//!   the binding is initialized.
+//! - Dynamic scope hazards: scopes containing `with (...) { ... }` or direct
+//!   calls to `eval(...)` are marked as dynamic so downstream consumers can
+//!   avoid unsafe optimizations or renames.
 //!
 //! ## Determinism caveats
 //!
@@ -134,6 +138,14 @@ pub struct ScopeData {
   pub kind: ScopeKind,
   pub children: Vec<ScopeId>,
   pub symbols: BTreeMap<NameId, SymbolId>,
+  /// Whether lookups in this scope may be affected by `with` or direct `eval`.
+  pub is_dynamic: bool,
+  /// True if a direct `eval(...)` call was found within this scope or its
+  /// non-closure ancestors.
+  pub has_direct_eval: bool,
+  /// [`SymbolId`]s for lexical bindings that are in TDZ from the start of the
+  /// scope until initialized.
+  pub tdz_bindings: Vec<SymbolId>,
 }
 
 impl ScopeData {

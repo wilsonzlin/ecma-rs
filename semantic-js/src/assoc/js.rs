@@ -12,7 +12,10 @@ pub struct DeclaredSymbol(pub SymbolId);
 
 /// Resolved symbol attached by the JS resolver.
 #[derive(Clone, Copy, Debug)]
-pub struct ResolvedSymbol(pub Option<SymbolId>);
+pub struct ResolvedSymbol {
+  pub symbol: Option<SymbolId>,
+  pub in_tdz: bool,
+}
 
 /// Scope containing the node, if attached.
 pub fn scope_id(assoc: &NodeAssocData) -> Option<ScopeId> {
@@ -26,5 +29,12 @@ pub fn declared_symbol(assoc: &NodeAssocData) -> Option<SymbolId> {
 
 /// Resolved symbol attached to the node, if any.
 pub fn resolved_symbol(assoc: &NodeAssocData) -> Option<SymbolId> {
-  assoc.get::<ResolvedSymbol>().and_then(|r| r.0)
+  assoc
+    .get::<ResolvedSymbol>()
+    .and_then(|ResolvedSymbol { symbol, .. }| *symbol)
+}
+
+/// Resolved symbol data attached to the node, if any.
+pub fn resolved_symbol_info(assoc: &NodeAssocData) -> Option<ResolvedSymbol> {
+  assoc.get::<ResolvedSymbol>().copied()
 }

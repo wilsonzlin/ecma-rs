@@ -6,12 +6,14 @@ use super::ScopeKind;
 use super::SymbolData;
 use super::SymbolId;
 use super::TopLevelMode;
-use crate::assoc::js::DeclaredSymbol;
+use crate::assoc::js::{scope_id, DeclaredSymbol};
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
+use parse_js::ast::expr::CallExpr;
 use parse_js::ast::expr::ClassExpr;
+use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::FuncExpr;
 use parse_js::ast::func::Func;
 use parse_js::ast::node::Node;
@@ -26,10 +28,13 @@ use parse_js::ast::stmt::CatchBlock;
 use parse_js::ast::stmt::ForBody;
 use parse_js::ast::stmt::ForInOfLhs;
 use parse_js::ast::stmt::ImportStmt;
+use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
 use std::collections::BTreeMap;
 
 type BlockStmtNode = Node<BlockStmt>;
+type CallExprNode = Node<CallExpr>;
 type CatchBlockNode = Node<CatchBlock>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassExprNode = Node<ClassExpr>;
@@ -40,12 +45,15 @@ type ForBodyNode = Node<ForBody>;
 type IdPatNode = Node<IdPat>;
 type ImportStmtNode = Node<ImportStmt>;
 type PatDeclNode = Node<PatDecl>;
+type WithStmtNode = Node<WithStmt>;
 type VarDeclNode = Node<VarDecl>;
 
 pub fn declare(top_level: &mut Node<TopLevel>, mode: TopLevelMode) -> JsSemantics {
   let mut visitor = DeclareVisitor::new(mode);
   top_level.drive_mut(&mut visitor);
-  visitor.finish()
+  let mut sem = visitor.finish();
+  mark_dynamic_scopes(top_level, &mut sem);
+  sem
 }
 
 struct SemanticsBuilder {
@@ -68,6 +76,9 @@ impl SemanticsBuilder {
       kind,
       children: Vec::new(),
       symbols: BTreeMap::new(),
+      is_dynamic: false,
+      has_direct_eval: false,
+      tdz_bindings: Vec::new(),
     });
     Self {
       names: Vec::new(),
@@ -89,6 +100,9 @@ impl SemanticsBuilder {
       kind,
       children: Vec::new(),
       symbols: BTreeMap::new(),
+      is_dynamic: false,
+      has_direct_eval: false,
+      tdz_bindings: Vec::new(),
     });
     self.scopes[parent.index()].children.push(id);
     id
@@ -119,6 +133,13 @@ impl SemanticsBuilder {
     id
   }
 
+  fn mark_tdz_binding(&mut self, scope: ScopeId, symbol: SymbolId) {
+    let bindings = &mut self.scopes[scope.index()].tdz_bindings;
+    if !bindings.contains(&symbol) {
+      bindings.push(symbol);
+    }
+  }
+
   fn finish(self) -> JsSemantics {
     JsSemantics {
       names: self.names,
@@ -134,6 +155,12 @@ impl SemanticsBuilder {
 enum DeclTarget {
   IfNotGlobal,
   NearestClosure,
+}
+
+#[derive(Clone, Copy)]
+struct DeclContext {
+  target: DeclTarget,
+  in_tdz: bool,
 }
 
 #[derive(VisitorMut)]
@@ -156,7 +183,7 @@ enum DeclTarget {
 struct DeclareVisitor {
   builder: SemanticsBuilder,
   scope_stack: Vec<ScopeId>,
-  decl_target_stack: Vec<DeclTarget>,
+  decl_target_stack: Vec<DeclContext>,
   in_pattern_decl: Vec<bool>,
 }
 
@@ -191,7 +218,14 @@ impl DeclareVisitor {
   }
 
   fn push_decl_target(&mut self, target: DeclTarget) {
-    self.decl_target_stack.push(target);
+    self.decl_target_stack.push(DeclContext {
+      target,
+      in_tdz: false,
+    });
+  }
+
+  fn push_decl_context(&mut self, target: DeclTarget, in_tdz: bool) {
+    self.decl_target_stack.push(DeclContext { target, in_tdz });
   }
 
   fn pop_decl_target(&mut self) {
@@ -219,25 +253,29 @@ impl DeclareVisitor {
       .find(|id| self.builder.scope_kind(*id).is_closure())
   }
 
-  fn declare_with_target(&mut self, name: &str, target: DeclTarget) -> Option<SymbolId> {
-    match target {
+  fn declare_with_target(&mut self, name: &str, ctx: DeclContext) -> Option<(SymbolId, ScopeId)> {
+    let (symbol, scope) = match ctx.target {
       DeclTarget::IfNotGlobal => {
         let scope = self.current_scope();
         if self.builder.scope_kind(scope) == ScopeKind::Global {
           None
         } else {
-          Some(self.builder.declare_in_scope(scope, name))
+          Some((self.builder.declare_in_scope(scope, name), scope))
         }
       }
       DeclTarget::NearestClosure => {
         let scope = self.nearest_closure()?;
-        Some(self.builder.declare_in_scope(scope, name))
+        Some((self.builder.declare_in_scope(scope, name), scope))
       }
+    }?;
+    if ctx.in_tdz {
+      self.builder.mark_tdz_binding(scope, symbol);
     }
+    Some((symbol, scope))
   }
 
-  fn declare_class_or_func_name(&mut self, node: &mut Node<ClassOrFuncName>, target: DeclTarget) {
-    if let Some(symbol) = self.declare_with_target(&node.stx.name, target) {
+  fn declare_class_or_func_name(&mut self, node: &mut Node<ClassOrFuncName>, ctx: DeclContext) {
+    if let Some((symbol, _)) = self.declare_with_target(&node.stx.name, ctx) {
       node.assoc.set(DeclaredSymbol(symbol));
     }
   }
@@ -268,7 +306,13 @@ impl DeclareVisitor {
 
   fn enter_class_decl_node(&mut self, node: &mut ClassDeclNode) {
     if let Some(name) = &mut node.stx.name {
-      self.declare_class_or_func_name(name, DeclTarget::IfNotGlobal);
+      self.declare_class_or_func_name(
+        name,
+        DeclContext {
+          target: DeclTarget::IfNotGlobal,
+          in_tdz: true,
+        },
+      );
     }
     self.push_scope(ScopeKind::Class);
   }
@@ -280,7 +324,13 @@ impl DeclareVisitor {
   fn enter_class_expr_node(&mut self, node: &mut ClassExprNode) {
     self.push_scope(ScopeKind::Class);
     if let Some(name) = &mut node.stx.name {
-      self.declare_class_or_func_name(name, DeclTarget::IfNotGlobal);
+      self.declare_class_or_func_name(
+        name,
+        DeclContext {
+          target: DeclTarget::IfNotGlobal,
+          in_tdz: false,
+        },
+      );
     }
   }
 
@@ -304,7 +354,11 @@ impl DeclareVisitor {
         }
         VarDeclMode::Var => DeclTarget::NearestClosure,
       };
-      self.push_decl_target(target);
+      let in_tdz = matches!(
+        mode,
+        VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+      );
+      self.push_decl_context(target, in_tdz);
     }
   }
 
@@ -316,14 +370,26 @@ impl DeclareVisitor {
 
   fn enter_func_decl_node(&mut self, node: &mut FuncDeclNode) {
     if let Some(name) = &mut node.stx.name {
-      self.declare_class_or_func_name(name, DeclTarget::NearestClosure);
+      self.declare_class_or_func_name(
+        name,
+        DeclContext {
+          target: DeclTarget::NearestClosure,
+          in_tdz: false,
+        },
+      );
     }
   }
 
   fn enter_func_expr_node(&mut self, node: &mut FuncExprNode) {
     self.push_scope(ScopeKind::FunctionExpressionName);
     if let Some(name) = &mut node.stx.name {
-      self.declare_class_or_func_name(name, DeclTarget::IfNotGlobal);
+      self.declare_class_or_func_name(
+        name,
+        DeclContext {
+          target: DeclTarget::IfNotGlobal,
+          in_tdz: false,
+        },
+      );
     }
   }
 
@@ -348,8 +414,8 @@ impl DeclareVisitor {
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
     if self.in_pattern_decl() {
-      if let Some(target) = self.decl_target_stack.last().copied() {
-        if let Some(symbol) = self.declare_with_target(&node.stx.name, target) {
+      if let Some(ctx) = self.decl_target_stack.last().copied() {
+        if let Some((symbol, _)) = self.declare_with_target(&node.stx.name, ctx) {
           node.assoc.set(DeclaredSymbol(symbol));
         }
       }
@@ -357,7 +423,7 @@ impl DeclareVisitor {
   }
 
   fn enter_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
-    self.push_decl_target(DeclTarget::IfNotGlobal);
+    self.push_decl_context(DeclTarget::IfNotGlobal, false);
   }
 
   fn exit_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
@@ -379,12 +445,70 @@ impl DeclareVisitor {
       }
       VarDeclMode::Var => DeclTarget::NearestClosure,
     };
-    self.push_decl_target(target);
+    let in_tdz = matches!(
+      node.stx.mode,
+      VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+    );
+    self.push_decl_context(target, in_tdz);
   }
 
   fn exit_var_decl_node(&mut self, _node: &mut VarDeclNode) {
     self.pop_decl_target();
   }
+}
+
+#[derive(VisitorMut)]
+#[visitor(CallExprNode(exit), WithStmtNode(enter))]
+struct DynamicScopeVisitor<'a> {
+  sem: &'a mut JsSemantics,
+}
+
+impl DynamicScopeVisitor<'_> {
+  fn mark_dynamic(&mut self, scope: ScopeId, direct_eval: bool) {
+    let mut current = Some(scope);
+    while let Some(scope_id) = current {
+      let data = &mut self.sem.scopes[scope_id.index()];
+      data.is_dynamic = true;
+      if direct_eval {
+        data.has_direct_eval = true;
+      }
+      if data.kind.is_closure() {
+        break;
+      }
+      current = data.parent;
+    }
+  }
+
+  fn enter_with_stmt_node(&mut self, node: &mut WithStmtNode) {
+    if let Some(scope) = scope_id(&node.assoc) {
+      self.mark_dynamic(scope, false);
+    }
+    if let Stmt::Block(block) = node.stx.body.stx.as_ref() {
+      if let Some(body_scope) = scope_id(&block.assoc) {
+        self.mark_dynamic(body_scope, false);
+      }
+    }
+  }
+
+  fn exit_call_expr_node(&mut self, node: &mut CallExprNode) {
+    if node.stx.optional_chaining {
+      return;
+    }
+    if let Expr::Id(callee) = node.stx.callee.stx.as_ref() {
+      if callee.stx.name == "eval" {
+        if let Some(scope) = scope_id(&node.assoc) {
+          if self.sem.resolve_name_in_scope(scope, "eval").is_none() {
+            self.mark_dynamic(scope, true);
+          }
+        }
+      }
+    }
+  }
+}
+
+fn mark_dynamic_scopes(top_level: &mut Node<TopLevel>, sem: &mut JsSemantics) {
+  let mut visitor = DynamicScopeVisitor { sem };
+  top_level.drive_mut(&mut visitor);
 }
 
 #[cfg(test)]
