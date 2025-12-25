@@ -65,9 +65,17 @@ impl ArityInfo {
 
 #[derive(Debug)]
 enum CandidateRejection {
-  Arity { min: usize, max: Option<usize>, actual: usize },
+  Arity {
+    min: usize,
+    max: Option<usize>,
+    actual: usize,
+  },
   Inference(Vec<String>),
-  ArgumentType { index: usize, arg: TypeId, param: TypeId },
+  ArgumentType {
+    index: usize,
+    arg: TypeId,
+    param: TypeId,
+  },
 }
 
 #[derive(Debug)]
@@ -132,8 +140,12 @@ pub fn resolve_overloads(
     }
 
     let inference = infer_type_arguments_for_call(store, &original_sig, type_params, args, None);
-    outcome.unknown_inferred =
-      count_unknown(store.as_ref(), &inference.substitutions, primitives.any, primitives.unknown);
+    outcome.unknown_inferred = count_unknown(
+      store.as_ref(),
+      &inference.substitutions,
+      primitives.any,
+      primitives.unknown,
+    );
     if !inference.diagnostics.is_empty() {
       outcome.rejection = Some(CandidateRejection::Inference(
         inference
@@ -171,7 +183,8 @@ pub fn resolve_overloads(
     continue;
   }
 
-  let mut applicable: Vec<&CandidateOutcome> = outcomes.iter().filter(|c| c.rejection.is_none()).collect();
+  let mut applicable: Vec<&CandidateOutcome> =
+    outcomes.iter().filter(|c| c.rejection.is_none()).collect();
   if applicable.is_empty() {
     let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes);
     return CallResolution {

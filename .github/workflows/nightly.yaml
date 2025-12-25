@@ -35,10 +35,49 @@ jobs:
       - name: cargo test --workspace (full suite)
         run: cargo test --workspace --locked
 
-      # Optional: run the TypeScript conformance runner when the submodule is
-      # available. This is intentionally scheduled-only because it is very
-      # expensive and requires the vendored corpus.
-      - name: TypeScript conformance runner
-        if: ${{ always() && hashFiles('parse-js/tests/TypeScript/README.md') != '' }}
-        run: cargo test -p parse-js --features conformance-runner --bin conformance_runner --locked
-        timeout-minutes: 120
+  ts-conformance:
+    runs-on: ubuntu-latest
+    needs: full
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    steps:
+      - name: Checkout repository (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install TypeScript
+        run: npm install --prefix typecheck-ts-harness --no-save --no-package-lock typescript
+
+      - name: TypeScript conformance shard
+        run: |
+          mkdir -p reports
+          cargo run -p typecheck-ts-harness --release --locked -- \
+            conformance \
+            --root parse-js/tests/TypeScript/tests/cases/conformance \
+            --shard ${{ matrix.shard }}/16 \
+            --compare tsc \
+            --timeout-secs 20 \
+            --fail-on none \
+            --json \
+            > reports/conformance-${{ matrix.shard }}.json
+
+      - name: Upload shard report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ts-conformance-shard-${{ matrix.shard }}
+          path: reports/conformance-${{ matrix.shard }}.json

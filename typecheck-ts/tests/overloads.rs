@@ -39,7 +39,10 @@ fn selects_literal_overload() {
   });
 
   let literal_sig = Signature {
-    params: vec![param("type", click, &store), param("handler", handler, &store)],
+    params: vec![
+      param("type", click, &store),
+      param("handler", handler, &store),
+    ],
     ret: dom_ret,
     type_params: Vec::new(),
     this_param: None,
@@ -47,7 +50,10 @@ fn selects_literal_overload() {
   let literal_id = store.intern_signature(literal_sig);
 
   let wide_sig = Signature {
-    params: vec![param("type", primitives.string, &store), param("handler", handler, &store)],
+    params: vec![
+      param("type", primitives.string, &store),
+      param("handler", handler, &store),
+    ],
     ret: fallback_ret,
     type_params: Vec::new(),
     this_param: None,
@@ -58,14 +64,7 @@ fn selects_literal_overload() {
     overloads: vec![literal_id, wide_id],
   });
 
-  let resolution = resolve_call(
-    &store,
-    &relate,
-    callable,
-    &[click, handler],
-    &[],
-    span(),
-  );
+  let resolution = resolve_call(&store, &relate, callable, &[click, handler], &[], span());
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(literal_id));
@@ -123,14 +122,7 @@ fn reports_no_matching_overload_with_reasons() {
     overloads: vec![sig_id],
   });
 
-  let resolution = resolve_call(
-    &store,
-    &relate,
-    callable,
-    &[primitives.string],
-    &[],
-    span(),
-  );
+  let resolution = resolve_call(&store, &relate, callable, &[primitives.string], &[], span());
 
   assert!(resolution.signature.is_none());
   assert_eq!(resolution.return_type, primitives.unknown);
@@ -170,14 +162,7 @@ fn reports_ambiguous_call() {
     overloads: vec![sig_a_id, sig_b_id],
   });
 
-  let resolution = resolve_call(
-    &store,
-    &relate,
-    callable,
-    &[primitives.string],
-    &[],
-    span(),
-  );
+  let resolution = resolve_call(&store, &relate, callable, &[primitives.string], &[], span());
 
   assert!(resolution.signature.is_none());
   assert_eq!(resolution.return_type, primitives.unknown);
@@ -253,7 +238,10 @@ fn prefers_fixed_arity_over_rest() {
   let sig_rest_id = store.intern_signature(sig_rest);
 
   let sig_fixed = Signature {
-    params: vec![param("first", primitives.string, &store), param("second", primitives.string, &store)],
+    params: vec![
+      param("first", primitives.string, &store),
+      param("second", primitives.string, &store),
+    ],
     ret: primitives.number,
     type_params: Vec::new(),
     this_param: None,
@@ -264,8 +252,14 @@ fn prefers_fixed_arity_over_rest() {
     overloads: vec![sig_rest_id, sig_fixed_id],
   });
 
-  let resolution =
-    resolve_call(&store, &relate, callable, &[primitives.string, primitives.string], &[], span());
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    callable,
+    &[primitives.string, primitives.string],
+    &[],
+    span(),
+  );
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(sig_fixed_id));
@@ -302,8 +296,7 @@ fn prefers_non_generic_when_inference_is_unknown() {
   });
 
   let decls = vec![TypeParamDecl::new(t_param)];
-  let resolution =
-    resolve_call(&store, &relate, callable, &[primitives.any], &decls, span());
+  let resolution = resolve_call(&store, &relate, callable, &[primitives.any], &decls, span());
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(sig_any_id));

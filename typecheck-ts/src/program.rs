@@ -780,6 +780,8 @@ impl SemHirBuilder {
       decls: self.decls,
       imports: self.imports,
       exports: self.exports,
+      export_as_namespace: Vec::new(),
+      ambient_modules: Vec::new(),
     }
   }
 }

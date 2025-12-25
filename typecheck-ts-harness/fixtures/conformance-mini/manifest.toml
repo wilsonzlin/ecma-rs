@@ -1,0 +1,4 @@
+[[expectations]]
+id = "mismatch/type_error.ts"
+status = "xfail"
+reason = "Rust checker spans do not yet align with tsc for this fixture"

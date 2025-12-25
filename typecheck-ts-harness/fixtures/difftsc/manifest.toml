@@ -1,0 +1,9 @@
+[[expectations]]
+id = "difftsc/assignability"
+status = "xfail"
+reason = "Rust checker reports a different diagnostic span/code than tsc for this case"
+
+[[expectations]]
+id = "difftsc/multi"
+status = "xfail"
+reason = "Rust checker misses the multi-file error covered by the baseline"

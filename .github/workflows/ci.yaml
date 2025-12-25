@@ -46,3 +46,64 @@ jobs:
 
       - name: cargo test (workspace)
         run: cargo test --workspace --locked
+
+  typecheck-ts-harness:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Run conformance mini suite (snapshots)
+        run: >
+          cargo run -p typecheck-ts-harness --release --locked --
+          conformance
+          --root typecheck-ts-harness/fixtures/conformance-mini
+          --compare snapshot
+          --manifest typecheck-ts-harness/fixtures/conformance-mini/manifest.toml
+          --json
+          > typecheck-conformance-mini.json
+
+      - name: Upload conformance report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-conformance-mini
+          path: typecheck-conformance-mini.json
+
+  difftsc:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Run difftsc against baselines
+        run: >
+          cargo run -p typecheck-ts-harness --release --locked --
+          difftsc
+          --suite typecheck-ts-harness/fixtures/difftsc
+          --compare-rust
+          --use-baselines
+          --manifest typecheck-ts-harness/fixtures/difftsc/manifest.toml
+          --json
+          > difftsc-report.json
+
+      - name: Upload difftsc report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: difftsc-report
+          path: difftsc-report.json

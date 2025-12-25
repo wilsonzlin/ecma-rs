@@ -2,8 +2,8 @@
 
 pub(super) mod assign;
 pub(super) mod cfg;
-pub(super) mod flow;
 pub(crate) mod expr;
+pub(super) mod flow;
 pub(crate) mod infer;
 pub(crate) mod instantiate;
 pub(super) mod modules;
