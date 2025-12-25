@@ -10,6 +10,9 @@ use typecheck_ts_harness::ConformanceOptions;
 use typecheck_ts_harness::FailOn;
 use typecheck_ts_harness::JsonReport;
 use typecheck_ts_harness::TestOutcome;
+use typecheck_ts_harness::DEFAULT_EXTENSIONS;
+
+const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
 
 fn write_fixtures() -> (tempfile::TempDir, PathBuf) {
   let dir = tempdir().expect("tempdir");
@@ -26,6 +29,29 @@ fn write_fixtures() -> (tempfile::TempDir, PathBuf) {
   fs::write(root.join("multi/multi.ts"), multi).unwrap();
 
   (dir, root)
+}
+
+struct EnvGuard {
+  key: &'static str,
+  previous: Option<String>,
+}
+
+impl EnvGuard {
+  fn set(key: &'static str, value: &str) -> Self {
+    let previous = std::env::var(key).ok();
+    std::env::set_var(key, value);
+    EnvGuard { key, previous }
+  }
+}
+
+impl Drop for EnvGuard {
+  fn drop(&mut self) {
+    if let Some(prev) = self.previous.take() {
+      std::env::set_var(self.key, prev);
+    } else {
+      std::env::remove_var(self.key);
+    }
+  }
 }
 
 #[test]
@@ -48,10 +74,7 @@ fn smoke_runs_on_small_fixtures() {
     manifest: None,
     fail_on: FailOn::New,
     allow_mismatches: true,
-    extensions: typecheck_ts_harness::DEFAULT_EXTENSIONS
-      .iter()
-      .map(|s| s.to_string())
-      .collect(),
+    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
     allow_empty: false,
     profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
     jobs: 1,
@@ -121,10 +144,7 @@ fn fail_on_new_ignores_manifested_expectations() {
     manifest: Some(manifest),
     fail_on: FailOn::New,
     allow_mismatches: true,
-    extensions: typecheck_ts_harness::DEFAULT_EXTENSIONS
-      .iter()
-      .map(|s| s.to_string())
-      .collect(),
+    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
     allow_empty: false,
     profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
     jobs: 1,
@@ -178,4 +198,44 @@ fn conformance_enforces_timeouts_per_test() {
     .results
     .iter()
     .any(|r| r.id.ends_with("slow.ts") && r.outcome == TestOutcome::Timeout));
+}
+
+#[test]
+fn json_results_are_stably_ordered_with_parallel_execution() {
+  let (_dir, root) = write_fixtures();
+  let _guard = EnvGuard::set(HARNESS_SLEEP_ENV, "parse_error=50,multi=25");
+
+  let jobs = std::cmp::max(2, num_cpus::get());
+  let options = ConformanceOptions {
+    root: root.clone(),
+    filter: build_filter(None).unwrap(),
+    filter_pattern: None,
+    shard: None,
+    json: true,
+    update_snapshots: false,
+    compare: CompareMode::None,
+    node_path: "node".into(),
+    span_tolerance: 0,
+    timeout: Duration::from_secs(5),
+    trace: false,
+    profile: false,
+    manifest: None,
+    fail_on: FailOn::New,
+    allow_mismatches: true,
+    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
+    allow_empty: false,
+    profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
+    jobs,
+  };
+
+  let first = run_conformance(options.clone()).expect("run_conformance first");
+  let second = run_conformance(options).expect("run_conformance second");
+
+  let ids: Vec<_> = first.results.iter().map(|r| r.id.clone()).collect();
+  let mut sorted_ids = ids.clone();
+  sorted_ids.sort();
+  assert_eq!(ids, sorted_ids);
+
+  let ids_second: Vec<_> = second.results.iter().map(|r| r.id.clone()).collect();
+  assert_eq!(ids, ids_second);
 }

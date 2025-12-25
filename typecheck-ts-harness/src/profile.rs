@@ -37,6 +37,7 @@ pub struct ProfileOptions {
   pub trace: bool,
   pub profile: bool,
   pub profile_out: String,
+  pub jobs: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -182,6 +183,7 @@ impl ProfileOptions {
       trace: opts.trace,
       profile: opts.profile,
       profile_out: opts.profile_out.display().to_string(),
+      jobs: opts.jobs,
     }
   }
 }

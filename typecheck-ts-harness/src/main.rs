@@ -1,6 +1,7 @@
 use clap::Parser;
 use clap::Subcommand;
 use clap::ValueEnum;
+use num_cpus;
 use std::process::ExitCode;
 use std::time::Duration;
 use typecheck_ts_harness::build_filter;
@@ -93,6 +94,10 @@ enum Commands {
     /// When to fail the run on mismatches
     #[arg(long, value_enum, default_value_t = FailOn::New)]
     fail_on: FailOn,
+
+    /// Number of worker threads to use (defaults to CPU count)
+    #[arg(long, default_value_t = num_cpus::get())]
+    jobs: usize,
   },
 }
 
@@ -142,7 +147,9 @@ fn main() -> ExitCode {
       allow_empty,
       manifest,
       fail_on,
+      jobs,
     } => {
+      let filter_pattern = filter.clone();
       let filter = match build_filter(filter.as_deref()) {
         Ok(filter) => filter,
         Err(err) => return print_error(err),
@@ -170,7 +177,7 @@ fn main() -> ExitCode {
       let options = ConformanceOptions {
         root: root.unwrap_or_else(|| DEFAULT_ROOT.into()),
         filter,
-        filter_pattern: None,
+        filter_pattern,
         shard,
         json,
         update_snapshots,
@@ -186,7 +193,7 @@ fn main() -> ExitCode {
         fail_on,
         extensions,
         allow_empty,
-        jobs: 1,
+        jobs,
       };
 
       match run_conformance(options) {

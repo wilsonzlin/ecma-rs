@@ -3,11 +3,12 @@ use crate::diagnostic_norm::{
   within_tolerance, NormalizedDiagnostic,
 };
 use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS};
-use crate::expectations::{ExpectationKind, Expectations};
+use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::profile::ProfileBuilder;
 use crate::tsc::{TscDiagnostic, TscDiagnostics, TscMetadata, TSC_BASELINE_SCHEMA_VERSION};
 use crate::{FailOn, Result, VirtualFile};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
@@ -281,6 +282,12 @@ pub(crate) struct HarnessFileSet {
   name_to_id: HashMap<String, FileId>,
 }
 
+#[derive(Clone)]
+struct PlannedCase {
+  case: TestCase,
+  expectation: AppliedExpectation,
+}
+
 impl HarnessFileSet {
   pub(crate) fn new(files: &[VirtualFile]) -> Self {
     let mut normalized_names = Vec::with_capacity(files.len());
@@ -380,67 +387,53 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
       .collect();
   }
 
+  let planned_cases: Vec<PlannedCase> = cases
+    .into_iter()
+    .map(|case| PlannedCase {
+      expectation: expectations.lookup(&case.id),
+      case,
+    })
+    .collect();
+
   let tsc_runner = TscRunner::new(opts.node_path.clone());
   let tsc_available = tsc_runner.available();
   let snapshot_store = SnapshotStore::new(&opts.root);
   let compare_mode = resolve_compare_mode(opts.compare, tsc_available, &snapshot_store);
 
-  let mut results = Vec::new();
-  for case in cases.into_iter() {
-    let expectation = expectations.lookup(&case.id);
-    if expectation.expectation.kind == ExpectationKind::Skip {
-      let result = TestResult {
-        id: case.id,
-        path: case.path.display().to_string(),
-        outcome: TestOutcome::Match,
-        duration_ms: 0,
-        rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
-        tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
-        query_stats: None,
-        notes: case.notes,
-        detail: None,
-        expectation: Some(ExpectationOutcome {
-          expectation: ExpectationKind::Skip,
-          expected: true,
-          from_manifest: expectation.from_manifest,
-          reason: expectation.expectation.reason.clone(),
-          tracking_issue: expectation.expectation.tracking_issue.clone(),
-        }),
-        mismatched: false,
-      };
-      if let Some(builder) = profile_builder.as_mut() {
-        builder.record_test(&result);
-      }
-      results.push(result);
-      continue;
-    }
+  let job_count = opts.jobs.max(1);
+  let pool = rayon::ThreadPoolBuilder::new()
+    .num_threads(job_count)
+    .build()
+    .map_err(|err| crate::HarnessError::Typecheck(format!("create thread pool: {err}")))?;
 
-    let mut result = run_single_case(
-      case,
-      compare_mode,
-      &tsc_runner,
-      tsc_available,
-      &snapshot_store,
-      &opts,
-    );
-    let mismatched = result.outcome != TestOutcome::Match;
-    let expected = expectation.matches(mismatched);
-    let expectation_outcome = ExpectationOutcome {
-      expectation: expectation.expectation.kind,
-      expected,
-      from_manifest: expectation.from_manifest,
-      reason: expectation.expectation.reason.clone(),
-      tracking_issue: expectation.expectation.tracking_issue.clone(),
-    };
-    result = TestResult {
-      mismatched,
-      expectation: Some(expectation_outcome),
-      ..result
-    };
-    if let Some(builder) = profile_builder.as_mut() {
-      builder.record_test(&result);
+  let mut results: Vec<TestResult> = pool.install(|| {
+    planned_cases
+      .par_iter()
+      .map(|planned| {
+        let base_result = if planned.expectation.expectation.kind == ExpectationKind::Skip {
+          build_skipped_result(&planned.case)
+        } else {
+          run_single_case(
+            planned.case.clone(),
+            compare_mode,
+            &tsc_runner,
+            tsc_available,
+            &snapshot_store,
+            &opts,
+          )
+        };
+        apply_expectation(base_result, &planned.expectation)
+      })
+      .collect()
+  });
+
+  // Ensure deterministic output ordering regardless of parallel execution timing.
+  results.sort_by(|a, b| a.id.cmp(&b.id));
+
+  if let Some(builder) = profile_builder.as_mut() {
+    for result in &results {
+      builder.record_test(result);
     }
-    results.push(result);
   }
 
   let mut summary = summarize(&results);
@@ -481,6 +474,38 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     compare_mode,
     results,
   })
+}
+
+fn build_skipped_result(case: &TestCase) -> TestResult {
+  TestResult {
+    id: case.id.clone(),
+    path: case.path.display().to_string(),
+    outcome: TestOutcome::Match,
+    duration_ms: 0,
+    rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
+    tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
+    query_stats: None,
+    notes: case.notes.clone(),
+    detail: None,
+    expectation: None,
+    mismatched: false,
+  }
+}
+
+fn apply_expectation(result: TestResult, expectation: &AppliedExpectation) -> TestResult {
+  let mismatched = result.outcome != TestOutcome::Match;
+  let expected = expectation.matches(mismatched);
+  TestResult {
+    mismatched,
+    expectation: Some(ExpectationOutcome {
+      expectation: expectation.expectation.kind,
+      expected,
+      from_manifest: expectation.from_manifest,
+      reason: expectation.expectation.reason.clone(),
+      tracking_issue: expectation.expectation.tracking_issue.clone(),
+    }),
+    ..result
+  }
 }
 
 fn resolve_compare_mode(

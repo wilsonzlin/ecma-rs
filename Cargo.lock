@@ -1976,6 +1976,7 @@ dependencies = [
  "clap",
  "globset",
  "num_cpus",
+ "rayon",
  "regex",
  "serde",
  "serde_json",
