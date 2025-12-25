@@ -5,19 +5,28 @@ use parse_js::lex::Lexer;
 use parse_js::parse::expr::pat::ParsePatternRules;
 use parse_js::parse::{ParseCtx, Parser};
 use parse_js::token::TT;
+use parse_js::{Dialect, ParseOptions, SourceType};
 use serde_json::Value;
 
 fn parse_expr(source: &str) -> Node<Expr> {
-  let mut parser = Parser::new(Lexer::new(source));
+  let opts = ParseOptions {
+    dialect: Dialect::Js,
+    source_type: SourceType::Module,
+  };
+  let mut parser = Parser::new(Lexer::new(source), opts);
   let ctx = ParseCtx {
     rules: ParsePatternRules {
       await_allowed: true,
       yield_allowed: true,
     },
   };
-  parser
+  let expr = parser
     .expr(ctx, [TT::EOF])
-    .unwrap_or_else(|err| panic!("failed to parse {source:?}: {err:?}"))
+    .unwrap_or_else(|err| panic!("failed to parse {source:?}: {err:?}"));
+  parser
+    .require(TT::EOF)
+    .unwrap_or_else(|err| panic!("failed to exhaust input {source:?}: {err:?}"));
+  expr
 }
 
 fn emit_expr_to_string(expr: &Node<Expr>) -> String {
