@@ -163,9 +163,6 @@ pub mod check {
   pub mod hir_body {
     pub use crate::program::check::body::*;
   }
-
-  pub mod class;
-  pub mod relate_hooks;
 }
 
 pub mod queries;
