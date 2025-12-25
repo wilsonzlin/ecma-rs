@@ -14,7 +14,6 @@ use analysis::defs::calculate_defs;
 use cfg::bblock::convert_insts_to_bblocks;
 use cfg::cfg::Cfg;
 use dashmap::DashMap;
-use diagnostics::diagnostic_from_syntax_error;
 use dom::Dom;
 use opt::optpass_cfg_prune::optpass_cfg_prune;
 use opt::optpass_dvn::optpass_dvn;
@@ -48,15 +47,8 @@ const SOURCE_FILE: FileId = FileId(0);
 pub type OptimizeResult<T> = Result<T, Vec<Diagnostic>>;
 
 fn diagnostic_with_span(code: &'static str, message: impl Into<String>, loc: Loc) -> Diagnostic {
-  let (range, note) = TextRange::from_loc_with_overflow_note(loc);
-  let mut diagnostic = Diagnostic::error(
-    code,
-    message,
-    Span {
-      file: SOURCE_FILE,
-      range,
-    },
-  );
+  let (range, note) = loc.to_diagnostics_range();
+  let mut diagnostic = Diagnostic::error(code, message, Span::new(SOURCE_FILE, range));
   if let Some(note) = note {
     diagnostic = diagnostic.with_note(note);
   }
@@ -216,8 +208,7 @@ pub struct Program {
 
 /// Parse, symbolize, and compile source text in one step.
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
-  let mut top_level_node =
-    parse(source).map_err(|err| vec![diagnostic_from_syntax_error(SOURCE_FILE, &err)])?;
+  let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
   compute_symbols(&mut top_level_node, mode);
   Program::compile(top_level_node, debug)
 }

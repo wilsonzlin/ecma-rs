@@ -11,8 +11,8 @@ derive-visitor = "0.4.0"
 itertools = "0.12.0"
 num-bigint = { version = "0.4.6", features = ["serde"] }
 once_cell = "1.20.2"
-diagnostics = { path = "../diagnostics", features = ["parse-js", "serde"] }
-parse-js = { version = "0.24.1", path = "../parse-js" }
+diagnostics = { path = "../diagnostics", features = ["serde"] }
+parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
 rayon = "1.10.0"
 serde = { version = "1.0.216", features = ["derive"] }
 symbol-js = { version = "0.2.0", path = "../symbol-js" }
