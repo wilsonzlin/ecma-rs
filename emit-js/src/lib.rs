@@ -19,9 +19,7 @@ pub use jsx::{emit_jsx_elem, emit_jsx_expr_container};
 pub use pat::{emit_param_decl, emit_pat, emit_pat_decl};
 pub use ts_stmt::{
   emit_top_level,
-  emit_top_level_to_emitter,
   emit_ts_stmt,
-  emit_ts_stmt_to_emitter,
 };
 pub use ts_type::{
   emit_interface_decl,
@@ -39,12 +37,9 @@ pub fn emit_top_level_diagnostic(
   ast: &Node<TopLevel>,
   options: EmitOptions,
 ) -> Result<String, Diagnostic> {
-  let mut out = String::new();
-  // TODO: plumb options through emitters when formatting modes are supported.
-  let _ = options;
-
-  match emit_top_level(&mut out, ast.stx.as_ref()) {
-    Ok(()) => Ok(out),
+  let mut emitter = Emitter::new(options);
+  match emit_top_level(&mut emitter, ast.stx.as_ref()) {
+    Ok(()) => Ok(String::from_utf8(emitter.into_bytes()).expect("Emitter output is UTF-8")),
     Err(err) => Err(diagnostic_from_emit_error(file, err)),
   }
 }
