@@ -1,4 +1,4 @@
-use emit_js::{emit_js_top_level, EmitMode, EmitOptions, Emitter};
+use emit_js::{emit_js_top_level, EmitMode, EmitOptions, Emitter, StmtSepStyle};
 use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::BinaryExpr;
 use parse_js::ast::expr::Expr;
@@ -82,6 +82,7 @@ fn emit_top_level(stmts: Vec<Node<Stmt>>) -> String {
   let top = TopLevel { body: stmts };
   let mut emitter = Emitter::new(EmitOptions {
     mode: EmitMode::Minified,
+    stmt_sep_style: StmtSepStyle::Semicolons,
   });
   emit_js_top_level(&mut emitter, &top).unwrap();
   String::from_utf8(emitter.into_bytes()).unwrap()

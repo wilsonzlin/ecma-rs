@@ -8,7 +8,10 @@ fn compile_and_emit(src: &str, mode: TopLevelMode) -> Vec<u8> {
   program_to_js(
     &program,
     &DecompileOptions::default(),
-    EmitOptions { mode: EmitMode::Minified },
+    EmitOptions {
+      mode: EmitMode::Minified,
+      ..EmitOptions::default()
+    },
   )
   .expect("decompile program to JS")
 }

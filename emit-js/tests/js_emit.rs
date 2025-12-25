@@ -1,4 +1,4 @@
-use emit_js::{emit_js_expr, emit_js_stmt, EmitMode, EmitOptions, Emitter};
+use emit_js::{emit_js_expr, emit_js_stmt, EmitMode, EmitOptions, Emitter, StmtSepStyle};
 use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
@@ -19,6 +19,7 @@ fn node<T: derive_visitor::Drive + derive_visitor::DriveMut>(stx: T) -> Node<T> 
 fn emit_to_string(f: impl FnOnce(&mut Emitter)) -> String {
   let mut emitter = Emitter::new(EmitOptions {
     mode: EmitMode::Minified,
+    stmt_sep_style: StmtSepStyle::Semicolons,
   });
   f(&mut emitter);
   String::from_utf8(emitter.into_bytes()).expect("emitter output is UTF-8")

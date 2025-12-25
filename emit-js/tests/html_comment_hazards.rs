@@ -8,6 +8,7 @@ fn text(emitter: Emitter) -> String {
 fn avoids_open_html_comment_after_newline() {
   let mut emitter = Emitter::new(EmitOptions {
     mode: EmitMode::Canonical,
+    ..EmitOptions::default()
   });
   emitter.write_identifier("foo");
   emitter.write_byte(b'\n');
@@ -29,6 +30,7 @@ fn avoids_open_html_comment_after_newline() {
 fn avoids_close_html_comment_after_newline() {
   let mut emitter = Emitter::new(EmitOptions {
     mode: EmitMode::Canonical,
+    ..EmitOptions::default()
   });
   emitter.write_str("/*");
   emitter.write_byte(b'\n');

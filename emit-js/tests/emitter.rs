@@ -101,6 +101,7 @@ fn auto_classifies_raw_str_fragments() {
 fn exposes_mode_and_options() {
   let opts = EmitOptions {
     mode: EmitMode::Canonical,
+    ..EmitOptions::default()
   };
   let emitter = Emitter::new(opts);
 

@@ -1,4 +1,4 @@
-use crate::{emit_string_literal_double_quoted, EmitMode, EmitOptions, EmitResult, Emitter};
+use crate::{emit_string_literal_double_quoted, EmitMode, EmitOptions, EmitResult, Emitter, StmtSepStyle};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::ImportExpr;
 use parse_js::ast::node::Node;
@@ -25,7 +25,10 @@ pub fn emit_ts_type(em: &mut Emitter, expr: &Node<TypeExpr>) -> EmitResult {
 
 /// Convenience helper returning the emitted representation as a [`String`].
 pub fn ts_type_to_string(expr: &Node<TypeExpr>, mode: EmitMode) -> String {
-  let mut em = Emitter::new(EmitOptions { mode });
+  let mut em = Emitter::new(EmitOptions {
+    mode,
+    stmt_sep_style: StmtSepStyle::Semicolons,
+  });
   emit_ts_type(&mut em, expr).expect("type emission should not fail");
   String::from_utf8(em.into_bytes()).expect("Emitter output is UTF-8")
 }
@@ -50,6 +53,7 @@ pub fn emit_interface_decl<W: fmt::Write>(out: &mut W, decl: &InterfaceDecl) -> 
 pub(crate) fn emit_type_parameters(out: &mut String, params: Option<&[Node<TypeParameter>]>) {
   let mut emitter = Emitter::new(EmitOptions {
     mode: EmitMode::Canonical,
+    stmt_sep_style: StmtSepStyle::Semicolons,
   });
   {
     let mut ty_emitter = TypeEmitter::new(&mut emitter);
@@ -65,7 +69,10 @@ fn write_with_emitter<W: fmt::Write>(
   mode: EmitMode,
   mut f: impl FnMut(&mut TypeEmitter<'_>) -> EmitResult,
 ) -> fmt::Result {
-  let mut emitter = Emitter::new(EmitOptions { mode });
+  let mut emitter = Emitter::new(EmitOptions {
+    mode,
+    stmt_sep_style: StmtSepStyle::Semicolons,
+  });
   {
     let mut ty_emitter = TypeEmitter::new(&mut emitter);
     f(&mut ty_emitter).map_err(|_| fmt::Error)?;

@@ -47,7 +47,10 @@ fn template_signature(expr: &Expr) -> Vec<TemplatePartSignature> {
 }
 
 fn emit_expr_in_mode(expr: &Node<Expr>, mode: EmitMode) -> String {
-  let mut emitter = Emitter::new(EmitOptions { mode });
+  let mut emitter = Emitter::new(EmitOptions {
+    mode,
+    ..EmitOptions::default()
+  });
   emit_expr(&mut emitter, expr, |_, _| {
     unreachable!("no types in expression")
   })

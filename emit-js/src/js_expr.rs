@@ -1,5 +1,5 @@
 use parse_js::ast::expr::{
-  lit::{LitBoolExpr, LitNumExpr, LitStrExpr},
+  lit::{LitBoolExpr, LitNumExpr, LitRegexExpr, LitStrExpr},
   ArrowFuncExpr, BinaryExpr, CallExpr, ComputedMemberExpr, CondExpr, Expr, IdExpr, MemberExpr,
   UnaryExpr, UnaryPostfixExpr,
 };
@@ -56,6 +56,7 @@ impl<'a> JsExprEmitter<'a> {
       Expr::Id(id) => self.emit_id(id),
       Expr::LitBool(lit) => self.emit_lit_bool(lit),
       Expr::LitNum(lit) => self.emit_lit_num(lit),
+      Expr::LitRegex(lit) => self.emit_lit_regex(lit),
       Expr::LitStr(lit) => self.emit_lit_str(lit),
       Expr::Member(member) => self.emit_member(member),
       Expr::Unary(unary) => self.emit_unary(unary),
@@ -251,6 +252,11 @@ impl<'a> JsExprEmitter<'a> {
     Ok(())
   }
 
+  fn emit_lit_regex(&mut self, lit: &Node<LitRegexExpr>) -> JsEmitResult {
+    self.out.write_str(&lit.stx.value);
+    Ok(())
+  }
+
   fn emit_lit_str(&mut self, lit: &Node<LitStrExpr>) -> JsEmitResult {
     let mut buf = Vec::new();
     emit_string_literal_double_quoted(&mut buf, &lit.stx.value);
@@ -299,6 +305,7 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, JsEmitError> {
     Expr::Id(_)
     | Expr::LitBool(_)
     | Expr::LitNum(_)
+    | Expr::LitRegex(_)
     | Expr::LitStr(_)
     | Expr::LitNull(_)
     | Expr::This(_)

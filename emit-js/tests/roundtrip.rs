@@ -10,7 +10,10 @@ struct Case {
 
 // Placeholder until the full JS emitter is wired in.
 fn emit_program(_program: &Node<TopLevel>, _mode: EmitMode) -> Result<String, String> {
-  let _emitter = Emitter::new(EmitOptions { mode: _mode });
+  let _emitter = Emitter::new(EmitOptions {
+    mode: _mode,
+    ..EmitOptions::default()
+  });
   Err("full JS emitter is not available yet".into())
 }
 

@@ -232,6 +232,7 @@ where
   ) -> EmitResult {
     let mut emitter = Emitter::new(crate::emitter::EmitOptions {
       mode: crate::emitter::EmitMode::Canonical,
+      stmt_sep_style: crate::emitter::StmtSepStyle::Semicolons,
     });
     f(&mut emitter)?;
     let rendered =
