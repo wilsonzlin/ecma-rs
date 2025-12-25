@@ -577,8 +577,8 @@ fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
 }
 
 fn read_baseline(path: &Path) -> Result<TscDiagnostics> {
-  let data = fs::read_to_string(path)
-    .with_context(|| format!("read baseline {}", path.display()))?;
+  let data =
+    fs::read_to_string(path).with_context(|| format!("read baseline {}", path.display()))?;
   let parsed = serde_json::from_str(&data).context("parse baseline JSON")?;
   Ok(parsed)
 }

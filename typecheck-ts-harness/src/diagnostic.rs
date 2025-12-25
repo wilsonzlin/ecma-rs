@@ -67,23 +67,17 @@ pub fn normalize_rust_diagnostics(
   diags
     .iter()
     .map(|d| {
-      let (file, start, end) = match d.span {
-        Some(span) => {
-          let file_name = file_names
-            .get(span.file.0 as usize)
-            .cloned()
-            .unwrap_or_else(|| format!("file{}", span.file.0));
-          (Some(file_name), span.range.start, span.range.end)
-        }
-        None => (None, 0, 0),
-      };
+      let file_name = file_names
+        .get(d.primary.file.0 as usize)
+        .cloned()
+        .unwrap_or_else(|| format!("file{}", d.primary.file.0));
 
       NormalizedDiagnostic {
-        code: d.code.clone(),
+        code: Some(d.code.as_str().to_string()),
         category: Some(severity_to_str(d.severity).to_string()),
-        file: file.as_deref().map(normalize_name),
-        start,
-        end,
+        file: Some(normalize_name(&file_name)),
+        start: d.primary.range.start,
+        end: d.primary.range.end,
         message: Some(d.message.clone()),
       }
     })
