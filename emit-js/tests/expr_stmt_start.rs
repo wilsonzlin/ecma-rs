@@ -99,3 +99,19 @@ fn interface_and_type_identifiers_require_parens() {
   let type_emitted = assert_needs_parens("((type))");
   assert_eq!(type_emitted, "(type)");
 }
+
+#[test]
+fn declare_tagged_template_does_not_need_parens() {
+  with_expr_from_program("declare`tag`;", |expr| {
+    assert!(
+      !expr_stmt_needs_parens(expr),
+      "declare tagged template should stay unparenthesized"
+    );
+  });
+}
+
+#[test]
+fn declare_identifier_requires_parens() {
+  let emitted = assert_needs_parens("((declare))");
+  assert_eq!(emitted, "(declare)");
+}

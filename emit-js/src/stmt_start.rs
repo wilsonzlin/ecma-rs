@@ -24,6 +24,7 @@ pub(crate) enum Keyword {
   Namespace,
   Type,
   Using,
+  Abstract,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +62,9 @@ pub fn expr_stmt_needs_parens(expr: &Node<Expr>) -> bool {
     TokenKind::Keyword(Keyword::Function | Keyword::Class) => true,
     TokenKind::Keyword(Keyword::Async) => {
       matches!(second, Some(TokenKind::Keyword(Keyword::Function)))
+    }
+    TokenKind::Keyword(Keyword::Abstract) => {
+      matches!(second, Some(TokenKind::Keyword(Keyword::Class)))
     }
     TokenKind::Keyword(Keyword::Let | Keyword::Using) => match second {
       Some(TokenKind::BraceOpen | TokenKind::BracketOpen) => true,
@@ -186,6 +190,7 @@ fn token_from_identifier(name: &str) -> TokenKind {
     "let" => TokenKind::Keyword(Keyword::Let),
     "using" => TokenKind::Keyword(Keyword::Using),
     "await" => TokenKind::Keyword(Keyword::Await),
+    "abstract" => TokenKind::Keyword(Keyword::Abstract),
     "import" => TokenKind::Keyword(Keyword::Import),
     "interface" => TokenKind::Keyword(Keyword::Interface),
     "type" => TokenKind::Keyword(Keyword::Type),
