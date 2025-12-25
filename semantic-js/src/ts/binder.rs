@@ -227,6 +227,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       &hir.imports,
       &hir.exports,
       &hir.decls,
+      &hir.export_as_namespace,
+      &hir.ambient_modules,
     );
 
     self.bind_module_items(
@@ -538,6 +540,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     imports: &[Import],
     exports: &[Export],
     decls: &[Decl],
+    export_as_namespace: &[ExportAsNamespace],
+    ambient_modules: &[AmbientModule],
   ) -> bool {
     match module_kind {
       ModuleKind::Script => true,
@@ -545,6 +549,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         matches!(file_kind, FileKind::Dts)
           && imports.is_empty()
           && exports.is_empty()
+          && export_as_namespace.is_empty()
+          && ambient_modules.is_empty()
           && decls
             .iter()
             .all(|decl| matches!(decl.exported, Exported::No))

@@ -908,3 +908,70 @@ fn export_assignment_reports_span() {
   assert_eq!(diag.primary.file, file);
   assert_eq!(diag.primary.range, span(10));
 }
+
+#[test]
+fn export_as_namespace_reports_diagnostic() {
+  let file = FileId(95);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+  hir.export_as_namespace.push(ExportAsNamespace {
+    name: "Foo".to_string(),
+    span: span(20),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1003");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(20));
+}
+
+#[test]
+fn ambient_module_fragments_merge_exports() {
+  let file = FileId(96);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+
+  let mut part1 = AmbientModule {
+    name: "pkg".to_string(),
+    name_span: span(0),
+    decls: Vec::new(),
+    imports: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  };
+  let mut func = mk_decl(0, "Aug", DeclKind::Function, Exported::No);
+  func.is_ambient = true;
+  part1.decls.push(func);
+
+  let mut part2 = part1.clone();
+  part2.decls.clear();
+  part2
+    .decls
+    .push(mk_decl(1, "Aug", DeclKind::Namespace, Exported::No));
+
+  hir.ambient_modules.push(part1);
+  hir.ambient_modules.push(part2);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports = semantics
+    .exports_of_ambient_module("pkg")
+    .expect("ambient module exports present");
+  let symbols = semantics.symbols();
+  let group = exports.get("Aug").expect("merged symbol present");
+  let mask = group.namespaces(symbols);
+  assert!(mask.contains(Namespace::VALUE));
+  assert!(mask.contains(Namespace::NAMESPACE));
+  let value = group.symbol_for(Namespace::VALUE, symbols).unwrap();
+  let ns = group.symbol_for(Namespace::NAMESPACE, symbols).unwrap();
+  assert_eq!(value, ns);
+}
