@@ -30,3 +30,16 @@ pub fn allocate_registers(intgraph: &HashMap<u32, HashSet<u32>>) -> HashMap<u32,
   }
   allocated
 }
+
+#[cfg(test)]
+mod tests {
+  use super::allocate_registers;
+  use ahash::{HashMap, HashMapExt, HashSet};
+
+  #[test]
+  fn empty_graph_allocates_no_registers() {
+    let intgraph: HashMap<u32, HashSet<u32>> = HashMap::new();
+    let allocated = allocate_registers(&intgraph);
+    assert!(allocated.is_empty());
+  }
+}
