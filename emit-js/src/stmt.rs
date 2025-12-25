@@ -1,7 +1,7 @@
 use crate::escape::emit_string_literal_double_quoted;
 use crate::expr_js::{emit_expr, ExprCtx};
-use crate::ts_type::{emit_type_expr_to_string, emit_type_parameters};
-use crate::{EmitError, EmitResult, Emitter};
+use crate::ts_type::{emit_type_parameters, emit_ts_type};
+use crate::{EmitError, EmitMode, EmitResult, Emitter};
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal};
 use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat};
 use parse_js::ast::expr::{Decorator, Expr};
@@ -66,7 +66,7 @@ pub fn emit_stmt(em: &mut Emitter, stmt: &Node<Stmt>) -> EmitResult {
     | Stmt::ImportTypeDecl(_)
     | Stmt::ExportTypeDecl(_)
     | Stmt::ImportEqualsDecl(_)
-    | Stmt::ExportAssignmentDecl(_) => Err(EmitError::Unsupported("TS-only statement")),
+    | Stmt::ExportAssignmentDecl(_) => Err(EmitError::unsupported("TS-only statement")),
   }
 }
 
@@ -380,7 +380,7 @@ fn emit_function(
   allow_anonymous: bool,
 ) -> EmitResult {
   if func.arrow {
-    return Err(EmitError::Unsupported("arrow function in declaration"));
+    return Err(EmitError::unsupported("arrow function in declaration"));
   }
   if func.async_ {
     em.write_keyword("async");
@@ -392,7 +392,7 @@ fn emit_function(
   if let Some(name) = name {
     em.write_identifier(&name.stx.name);
   } else if !allow_anonymous {
-    return Err(EmitError::Unsupported("named function required"));
+    return Err(EmitError::unsupported("named function required"));
   }
 
   emit_type_params(em, func.type_parameters.as_deref());
@@ -409,7 +409,7 @@ fn emit_function(
   }
   match &func.body {
     Some(body) => emit_func_body(em, body),
-    None => Err(EmitError::Unsupported("function body missing")),
+    None => Err(EmitError::unsupported("function body missing")),
   }
 }
 
@@ -423,7 +423,7 @@ fn emit_func_body(em: &mut Emitter, body: &FuncBody) -> EmitResult {
       em.write_punct("}");
       Ok(())
     }
-    FuncBody::Expression(_) => Err(EmitError::Unsupported("expression-bodied function")),
+    FuncBody::Expression(_) => Err(EmitError::unsupported("expression-bodied function")),
   }
 }
 
@@ -445,7 +445,7 @@ fn emit_class_decl(em: &mut Emitter, decl: &ClassDecl) -> EmitResult {
   if let Some(name) = &decl.name {
     em.write_identifier(&name.stx.name);
   } else if !decl.export_default {
-    return Err(EmitError::Unsupported("class declaration missing name"));
+    return Err(EmitError::unsupported("class declaration missing name"));
   }
   emit_type_params(em, decl.type_parameters.as_deref());
   if let Some(extends) = &decl.extends {
@@ -552,7 +552,7 @@ fn emit_class_member(em: &mut Emitter, member: &Node<ClassMember>) -> EmitResult
       em.write_punct(";");
       Ok(())
     }
-    ClassOrObjVal::IndexSignature(_) => Err(EmitError::Unsupported("class index signature")),
+    ClassOrObjVal::IndexSignature(_) => Err(EmitError::unsupported("class index signature")),
   }
 }
 
@@ -564,7 +564,7 @@ fn emit_method_like(
   type_annotation: Option<&Node<TypeExpr>>,
 ) -> EmitResult {
   if func.stx.arrow {
-    return Err(EmitError::Unsupported("arrow function used as method"));
+    return Err(EmitError::unsupported("arrow function used as method"));
   }
   if optional {
     em.write_punct("?");
@@ -737,11 +737,16 @@ fn emit_module_export_import_name(em: &mut Emitter, name: &ModuleExportImportNam
   }
 }
 
+fn space_if_canonical(em: &mut Emitter) {
+  if em.mode() == EmitMode::Canonical {
+    em.write_space();
+  }
+}
+
 fn emit_type_annotation(em: &mut Emitter, ty: &Node<TypeExpr>) -> EmitResult {
   em.write_punct(":");
-  let rendered = emit_type_expr_to_string(ty);
-  em.write_str(&rendered);
-  Ok(())
+  space_if_canonical(em);
+  emit_ts_type(em, ty)
 }
 
 fn emit_pat_decl(em: &mut Emitter, decl: &Node<PatDecl>) -> EmitResult {

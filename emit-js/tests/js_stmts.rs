@@ -1,4 +1,4 @@
-use emit_js::{emit_top_level, Emitter};
+use emit_js::{emit_stmt_top_level, Emitter};
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use serde_json::Value;
@@ -6,7 +6,7 @@ use serde_json::Value;
 fn emit(source: &str) -> String {
   let parsed = parse_js::parse(source).expect("parse failure");
   let mut emitter = Emitter::default();
-  emit_top_level(&mut emitter, &parsed).expect("emit failure");
+  emit_stmt_top_level(&mut emitter, &parsed).expect("emit failure");
   String::from_utf8(emitter.into_bytes()).expect("utf-8")
 }
 

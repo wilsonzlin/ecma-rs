@@ -1,6 +1,5 @@
-use crate::emitter::Emitter;
+use crate::emitter::{EmitError, EmitErrorKind, EmitResult, Emitter};
 use crate::escape::{emit_string_literal_double_quoted, emit_template_raw_segment};
-use crate::expr::{EmitError, EmitResult};
 use crate::ts_type::emit_type_expr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -30,7 +29,10 @@ pub enum ExprCtx {
 
 pub fn emit_expr(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> EmitResult {
   match emit_expr_with_min_prec(em, expr, 1, ctx) {
-    Err(EmitError::Unsupported(_)) => emit_expr_via_fmt(em, expr),
+    Err(EmitError {
+      kind: EmitErrorKind::Unsupported(_),
+      ..
+    }) => emit_expr_via_fmt(em, expr),
     other => other,
   }
 }
@@ -70,25 +72,25 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
       OPERATORS
         .get(&binary.stx.operator)
         .map(|op| op.precedence)
-        .ok_or(EmitError::Unsupported("unknown operator"))?,
+        .ok_or_else(|| EmitError::unsupported("unknown operator"))?,
     ),
     Expr::Cond(_) => Ok(
       OPERATORS
         .get(&OperatorName::Conditional)
         .map(|op| op.precedence)
-        .ok_or(EmitError::Unsupported("unknown operator"))?,
+        .ok_or_else(|| EmitError::unsupported("unknown operator"))?,
     ),
     Expr::Unary(unary) => Ok(
       OPERATORS
         .get(&unary.stx.operator)
         .map(|op| op.precedence)
-        .ok_or(EmitError::Unsupported("unknown operator"))?,
+        .ok_or_else(|| EmitError::unsupported("unknown operator"))?,
     ),
     Expr::UnaryPostfix(postfix) => Ok(
       OPERATORS
         .get(&postfix.stx.operator)
         .map(|op| op.precedence)
-        .ok_or(EmitError::Unsupported("unknown operator"))?,
+        .ok_or_else(|| EmitError::unsupported("unknown operator"))?,
     ),
     Expr::NonNullAssertion(_) => Ok(CALL_MEMBER_PRECEDENCE),
     Expr::TypeAssertion(_) => Ok(CALL_MEMBER_PRECEDENCE),
@@ -97,7 +99,7 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
     Expr::Func(_) | Expr::Class(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::Import(_) => Ok(CALL_MEMBER_PRECEDENCE),
     Expr::TaggedTemplate(_) => Ok(CALL_MEMBER_PRECEDENCE),
-    _ => Err(EmitError::Unsupported("expression kind not supported")),
+    _ => Err(EmitError::unsupported("expression kind not supported")),
   }
 }
 
@@ -136,7 +138,7 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
     Expr::Class(_) => emit_expr_via_fmt(em, expr)?,
     Expr::Import(import) => emit_import_expr(em, import, ctx)?,
     Expr::TaggedTemplate(tagged) => emit_tagged_template(em, tagged, ctx)?,
-    _ => return Err(EmitError::Unsupported("expression kind not supported")),
+    _ => return Err(EmitError::unsupported("expression kind not supported")),
   }
   Ok(())
 }
@@ -144,7 +146,7 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
 fn emit_binary(em: &mut Emitter, binary: &Node<BinaryExpr>, ctx: ExprCtx) -> EmitResult {
   let op = OPERATORS
     .get(&binary.stx.operator)
-    .ok_or(EmitError::Unsupported("unknown operator"))?;
+    .ok_or_else(|| EmitError::unsupported("unknown operator"))?;
   let op_txt = binary_operator_text(binary.stx.operator)?;
   let prec = op.precedence;
 
@@ -192,7 +194,7 @@ fn emit_binary(em: &mut Emitter, binary: &Node<BinaryExpr>, ctx: ExprCtx) -> Emi
     | OperatorName::AssignmentLogicalAnd
     | OperatorName::AssignmentLogicalOr
     | OperatorName::AssignmentNullishCoalescing => em.write_punct(op_txt),
-    _ => return Err(EmitError::Unsupported("operator not supported")),
+    _ => return Err(EmitError::unsupported("operator not supported")),
   }
 
   let right_prec = prec + (op.associativity == Associativity::Left) as u8;
@@ -202,7 +204,7 @@ fn emit_binary(em: &mut Emitter, binary: &Node<BinaryExpr>, ctx: ExprCtx) -> Emi
 fn emit_conditional(em: &mut Emitter, cond: &Node<CondExpr>, ctx: ExprCtx) -> EmitResult {
   let prec = OPERATORS
     .get(&OperatorName::Conditional)
-    .ok_or(EmitError::Unsupported("unknown operator"))?
+    .ok_or_else(|| EmitError::unsupported("unknown operator"))?
     .precedence;
   emit_expr_with_min_prec(em, &cond.stx.test, prec, ctx)?;
   em.write_punct("?");
@@ -279,11 +281,11 @@ fn emit_unary(em: &mut Emitter, unary: &Node<UnaryExpr>, ctx: ExprCtx) -> EmitRe
     | OperatorName::UnaryNegation
     | OperatorName::PrefixIncrement
     | OperatorName::PrefixDecrement => em.write_punct(op),
-    _ => return Err(EmitError::Unsupported("unary operator not supported")),
+    _ => return Err(EmitError::unsupported("unary operator not supported")),
   }
   let prec = OPERATORS
     .get(&unary.stx.operator)
-    .ok_or(EmitError::Unsupported("unknown operator"))?
+    .ok_or_else(|| EmitError::unsupported("unknown operator"))?
     .precedence;
   emit_expr_with_min_prec(em, &unary.stx.argument, prec, ctx)
 }
@@ -293,7 +295,7 @@ fn emit_postfix(em: &mut Emitter, postfix: &Node<UnaryPostfixExpr>, ctx: ExprCtx
   let op = match postfix.stx.operator {
     OperatorName::PostfixIncrement => "++",
     OperatorName::PostfixDecrement => "--",
-    _ => return Err(EmitError::Unsupported("postfix operator not supported")),
+    _ => return Err(EmitError::unsupported("postfix operator not supported")),
   };
   em.write_punct(op);
   Ok(())
@@ -386,7 +388,7 @@ fn emit_obj_valued_member(
       emit_function_params_and_body(em, &method.stx.func, ExprCtx::Default)
     }
     ClassOrObjVal::IndexSignature(_) | ClassOrObjVal::StaticBlock(_) => {
-      Err(EmitError::Unsupported("object member kind not supported"))
+      Err(EmitError::unsupported("object member kind not supported"))
     }
   }
 }
@@ -410,7 +412,7 @@ fn emit_type_assertion(em: &mut Emitter, assertion: &Node<TypeAssertionExpr>, ct
   emit_expr_with_min_prec(
     em,
     &assertion.stx.expression,
-    crate::expr_ts::TYPE_ASSERTION_PRECEDENCE,
+    crate::precedence::TYPE_ASSERTION_PRECEDENCE.value(),
     ctx,
   )?;
   em.write_keyword("as");
@@ -425,7 +427,7 @@ fn emit_type_assertion(em: &mut Emitter, assertion: &Node<TypeAssertionExpr>, ct
       em.write_str(&buf);
       Ok(())
     }
-    None => Err(EmitError::MissingTypeAnnotation),
+    None => Err(EmitError::missing_type_annotation()),
   }
 }
 
@@ -433,7 +435,7 @@ fn emit_satisfies_expr(em: &mut Emitter, satisfies: &Node<SatisfiesExpr>, ctx: E
   emit_expr_with_min_prec(
     em,
     &satisfies.stx.expression,
-    crate::expr_ts::TYPE_ASSERTION_PRECEDENCE,
+    crate::precedence::TYPE_ASSERTION_PRECEDENCE.value(),
     ctx,
   )?;
   em.write_keyword("satisfies");
@@ -457,7 +459,7 @@ fn emit_arrow_function(em: &mut Emitter, func: &Node<ArrowFuncExpr>, ctx: ExprCt
       em.write_punct("}");
       Ok(())
     }
-    None => Err(EmitError::Unsupported("arrow function missing body")),
+    None => Err(EmitError::unsupported("arrow function missing body")),
   }
 }
 
@@ -486,9 +488,7 @@ fn emit_param_pattern(em: &mut Emitter, param: &Node<parse_js::ast::stmt::decl::
   match pat.stx.pat.stx.as_ref() {
     parse_js::ast::expr::pat::Pat::Id(id) => em.write_identifier(&id.stx.name),
     _ => {
-      let mut buf = String::new();
-      crate::pat::emit_pat_decl(&mut buf, pat).map_err(EmitError::from)?;
-      em.write_str(&buf);
+      crate::pat::emit_pat_decl(em, pat)?;
     }
   }
   if let Some(default) = &param.stx.default_value {
@@ -509,7 +509,7 @@ fn emit_func_body(em: &mut Emitter, body: &Option<FuncBody>, ctx: ExprCtx) -> Em
       Ok(())
     }
     Some(FuncBody::Expression(expr)) => emit_expr(em, expr, ctx),
-    None => Err(EmitError::Unsupported("function missing body")),
+    None => Err(EmitError::unsupported("function missing body")),
   }
 }
 
@@ -627,7 +627,7 @@ fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
     OperatorName::AssignmentNullishCoalescing => Ok("??="),
     OperatorName::AssignmentRemainder => Ok("%="),
     OperatorName::AssignmentSubtraction => Ok("-="),
-    _ => Err(EmitError::Unsupported("operator not supported in binary emitter")),
+    _ => Err(EmitError::unsupported("operator not supported in binary emitter")),
   }
 }
 
@@ -643,7 +643,7 @@ fn unary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
     OperatorName::Void => Ok("void"),
     OperatorName::Delete => Ok("delete"),
     OperatorName::Await => Ok("await"),
-    _ => Err(EmitError::Unsupported("unsupported unary operator")),
+    _ => Err(EmitError::unsupported("unsupported unary operator")),
   }
 }
 

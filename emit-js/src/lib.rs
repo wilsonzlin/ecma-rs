@@ -12,7 +12,6 @@ mod pat;
 mod precedence;
 mod stmt_start;
 mod stmt;
-mod stmt_start;
 mod ts_stmt;
 mod ts_type;
 
