@@ -17,6 +17,10 @@ use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::{TypeExpr, TypeParameter};
 use parse_js::ast::func::{Func, FuncBody};
 
+pub fn emit_program(em: &mut Emitter, top: &TopLevel) -> EmitResult {
+  emit_stmt_list(em, &top.body)
+}
+
 pub fn emit_top_level(em: &mut Emitter, top: &Node<TopLevel>) -> EmitResult {
   emit_stmt_list(em, &top.stx.body)
 }
