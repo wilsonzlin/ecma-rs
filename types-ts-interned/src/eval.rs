@@ -199,6 +199,17 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     self.evaluate_with_subst(ty, &Substitution::empty(), 0)
   }
 
+  pub fn evaluate_with_bindings<I>(&mut self, ty: TypeId, bindings: I) -> TypeId
+  where
+    I: IntoIterator<Item = (TypeParamId, TypeId)>,
+  {
+    let mut pairs: Vec<(TypeParamId, TypeId)> = bindings.into_iter().collect();
+    pairs.sort_by_key(|(param, _)| param.0);
+    pairs.dedup_by_key(|(param, _)| param.0);
+    let subst = Substitution { bindings: pairs };
+    self.evaluate_with_subst(ty, &subst, 0)
+  }
+
   fn evaluate_with_subst(&mut self, ty: TypeId, subst: &Substitution, depth: usize) -> TypeId {
     if depth >= self.depth_limit {
       return ty;

@@ -6,8 +6,9 @@ use parse_js::ast::ts_stmt::TypeAliasDecl;
 use parse_js::parse;
 use typecheck_ts::check::type_expr::TypeLowerer;
 use types_ts_interned::{
-  MappedModifier, MappedType, ObjectType, PropData, PropKey, Property, Shape, TemplateChunk,
-  TemplateLiteralType, TypeEvaluator, TypeKind, TypeParamId, TypeStore,
+  DefId, ExpandedType, MappedModifier, MappedType, ObjectType, PropData, PropKey, Property, Shape,
+  TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamId,
+  TypeStore,
 };
 
 fn parse_type_alias(source: &str) -> Node<TypeAliasDecl> {
@@ -76,6 +77,8 @@ fn eval_mapped_type_over_keyof() {
       optional: false,
       readonly: false,
       accessibility: None,
+      is_method: false,
+      declared_on: None,
     },
   });
   let obj_shape = store.intern_shape(shape);
@@ -140,6 +143,8 @@ fn mapped_type_from_lib_snippet_instantiates() {
       optional: false,
       readonly: false,
       accessibility: None,
+      is_method: false,
+      declared_on: None,
     },
   });
   let shape_id = store.intern_shape(shape);
@@ -149,8 +154,19 @@ fn mapped_type_from_lib_snippet_instantiates() {
 
   let mut env = AHashMap::new();
   env.insert(t_param, obj);
-  let mut evaluator = TypeEvaluator::new(store.as_ref());
-  let evaluated = evaluator.eval_with_env(ty, &mut env);
+
+  #[derive(Default)]
+  struct NoopExpander;
+
+  impl TypeExpander for NoopExpander {
+    fn expand(&self, _store: &TypeStore, _def: DefId, _args: &[TypeId]) -> Option<ExpandedType> {
+      None
+    }
+  }
+
+  let expander = NoopExpander::default();
+  let mut evaluator = TypeEvaluator::new(store.clone(), &expander);
+  let evaluated = evaluator.evaluate_with_bindings(ty, env.iter().map(|(k, v)| (*k, *v)));
   assert_eq!(
     store.display(evaluated).to_string(),
     "{ readonly value: number }"
