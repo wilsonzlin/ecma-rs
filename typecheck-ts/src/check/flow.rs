@@ -40,12 +40,12 @@ impl Env {
     }
   }
 
-  pub fn merge(&mut self, other: &Env, store: &mut TypeStore, builtin: &BuiltinTypes) {
+  pub fn merge(&mut self, other: &Env, store: &TypeStore, _builtin: &BuiltinTypes) {
     for (name, ty) in other.vars.iter() {
       self
         .vars
         .entry(name.clone())
-        .and_modify(|existing| *existing = store.union(vec![*existing, *ty], builtin))
+        .and_modify(|existing| *existing = store.union(vec![*existing, *ty]))
         .or_insert(*ty);
     }
   }

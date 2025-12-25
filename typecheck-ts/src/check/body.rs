@@ -143,73 +143,21 @@ impl<'a> BodyChecker<'a> {
           self.check_stmt(*alt, scope);
         }
       }
-      StmtKind::While { test, body } | StmtKind::DoWhile { test, body } => {
+      StmtKind::While { test, body } => {
         let _ = self.check_expr(*test, scope);
         self.check_stmt(*body, scope);
       }
-      StmtKind::For { init, test, update, body } => {
-        if let Some(init) = init {
-          match init {
-            hir_js::ForInit::Expr(expr) => {
-              let _ = self.check_expr(*expr, scope);
-            }
-            hir_js::ForInit::Var(var) => self.bind_var_decl(var, scope),
-          }
-        }
-        if let Some(test) = test {
-          let _ = self.check_expr(*test, scope);
-        }
-        if let Some(update) = update {
-          let _ = self.check_expr(*update, scope);
-        }
-        self.check_stmt(*body, scope);
-      }
-      StmtKind::ForIn { left, right, body, .. } => {
-        match left {
-          hir_js::ForHead::Pat(pat) => {
-            let value_ty = self.check_expr(*right, scope);
-            self.bind_pat(*pat, value_ty, scope);
-          }
-          hir_js::ForHead::Var(var) => {
-            let value_ty = self.check_expr(*right, scope);
-            self.bind_var_decl_with_value(var, value_ty, scope);
-          }
-        }
-        self.check_stmt(*body, scope);
-      }
-      StmtKind::Switch { discriminant, cases } => {
-        let _ = self.check_expr(*discriminant, scope);
-        for case in cases {
-          if let Some(test) = case.test {
-            let _ = self.check_expr(test, scope);
-          }
-          for stmt in &case.consequent {
-            self.check_stmt(*stmt, scope);
-          }
+      StmtKind::Var(var) => {
+        let prim = self.store.primitive_ids();
+        for decl in var.declarators.iter() {
+          let init_ty = decl
+            .init
+            .map(|expr| self.check_expr(expr, scope))
+            .unwrap_or(prim.unknown);
+          self.bind_pat(decl.pat, init_ty, scope);
         }
       }
-      StmtKind::Try {
-        block,
-        catch,
-        finally_block,
-      } => {
-        self.check_stmt(*block, scope);
-        if let Some(catch) = catch {
-          if let Some(param) = catch.param {
-            self.bind_pat(param, self.store.primitive_ids().unknown, scope);
-          }
-          self.check_stmt(catch.body, scope);
-        }
-        if let Some(finally_block) = finally_block {
-          self.check_stmt(*finally_block, scope);
-        }
-      }
-      StmtKind::Throw(expr) => {
-        let _ = self.check_expr(*expr, scope);
-      }
-      StmtKind::Var(var) => self.bind_var_decl(var, scope),
-      StmtKind::Decl(_) | StmtKind::Break(_) | StmtKind::Continue(_) | StmtKind::Empty => {}
-      StmtKind::Labeled { body, .. } | StmtKind::With { body, .. } => self.check_stmt(*body, scope),
+      _ => {}
     }
   }
 
@@ -244,6 +192,7 @@ impl<'a> BodyChecker<'a> {
       ExprKind::Call(call) => self.check_call(expr, call, scope),
       ExprKind::Member(member) => {
         let _ = self.check_expr(member.object, scope);
+        // Without full object typing, treat member access as unknown.
         let _ = &member.property;
         prim.unknown
       }
@@ -267,15 +216,20 @@ impl<'a> BodyChecker<'a> {
         prim.unknown
       }
       ExprKind::Array(arr) => {
+        let mut tys = Vec::new();
         for el in arr.elements.iter() {
           match el {
             hir_js::ArrayElement::Expr(e) | hir_js::ArrayElement::Spread(e) => {
-              let _ = self.check_expr(*e, scope);
+              tys.push(self.check_expr(*e, scope));
             }
             hir_js::ArrayElement::Empty => {}
           }
         }
-        prim.unknown
+        if tys.is_empty() {
+          prim.unknown
+        } else {
+          self.store.union(tys)
+        }
       }
       ExprKind::Object(obj) => {
         for prop in obj.properties.iter() {
@@ -292,6 +246,9 @@ impl<'a> BodyChecker<'a> {
         }
         prim.unknown
       }
+      ExprKind::TypeAssertion { expr }
+      | ExprKind::NonNull { expr }
+      | ExprKind::Satisfies { expr } => self.check_expr(*expr, scope),
       _ => prim.unknown,
     };
     if let Some(slot) = self.expr_types.get_mut(id.0 as usize) {
@@ -456,26 +413,6 @@ impl<'a> BodyChecker<'a> {
         sig.ret
       }
       _ => prim.unknown,
-    }
-  }
-
-  fn bind_var_decl(&mut self, var: &hir_js::VarDecl, scope: &mut Scope) {
-    for decl in &var.declarators {
-      let value_ty = decl
-        .init
-        .map(|init| self.check_expr(init, scope))
-        .unwrap_or(self.store.primitive_ids().unknown);
-      self.bind_pat(decl.pat, value_ty, scope);
-    }
-  }
-
-  fn bind_var_decl_with_value(&mut self, var: &hir_js::VarDecl, value: TypeId, scope: &mut Scope) {
-    for decl in &var.declarators {
-      let value_ty = decl
-        .init
-        .map(|init| self.check_expr(init, scope))
-        .unwrap_or(value);
-      self.bind_pat(decl.pat, value_ty, scope);
     }
   }
 

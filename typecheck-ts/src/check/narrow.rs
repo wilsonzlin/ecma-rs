@@ -24,26 +24,26 @@ pub struct Facts {
 
 impl Facts {
   /// Merge another set of facts into this one, joining types with union.
-  pub fn merge(&mut self, other: Facts, store: &mut TypeStore, builtin: &BuiltinTypes) {
+  pub fn merge(&mut self, other: Facts, store: &TypeStore, _builtin: &BuiltinTypes) {
     for (k, v) in other.truthy {
       self
         .truthy
         .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v], builtin))
+        .and_modify(|existing| *existing = store.union(vec![*existing, v]))
         .or_insert(v);
     }
     for (k, v) in other.falsy {
       self
         .falsy
         .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v], builtin))
+        .and_modify(|existing| *existing = store.union(vec![*existing, v]))
         .or_insert(v);
     }
     for (k, v) in other.assertions {
       self
         .assertions
         .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v], builtin))
+        .and_modify(|existing| *existing = store.union(vec![*existing, v]))
         .or_insert(v);
     }
   }
@@ -52,10 +52,10 @@ impl Facts {
 /// Compute the truthy and falsy types for a given variable type.
 pub fn truthy_falsy_types(
   ty: TypeId,
-  store: &mut TypeStore,
+  store: &TypeStore,
   builtin: &BuiltinTypes,
 ) -> (TypeId, TypeId) {
-  let kind = store.kind(ty).clone();
+  let kind = store.type_kind(ty);
   match kind {
     TypeKind::Union(members) => {
       let mut truthy = Vec::new();
@@ -69,12 +69,12 @@ pub fn truthy_falsy_types(
           falsy.push(f);
         }
       }
-      (store.union(truthy, builtin), store.union(falsy, builtin))
+      (store.union(truthy), store.union(falsy))
     }
     TypeKind::Null | TypeKind::Undefined => (builtin.never, ty),
-    TypeKind::LiteralBoolean(false) => (builtin.never, ty),
-    TypeKind::LiteralNumber(n) if n == "0" => (builtin.never, ty),
-    TypeKind::LiteralString(s) if s.is_empty() => (builtin.never, ty),
+    TypeKind::BooleanLiteral(false) => (builtin.never, ty),
+    TypeKind::NumberLiteral(n) if n.0 == 0.0 => (builtin.never, ty),
+    TypeKind::StringLiteral(s) if store.name(s).is_empty() => (builtin.never, ty),
     _ => (ty, builtin.never),
   }
 }
@@ -83,32 +83,32 @@ pub fn truthy_falsy_types(
 pub fn narrow_by_typeof(
   ty: TypeId,
   target: &str,
-  store: &mut TypeStore,
+  store: &TypeStore,
   builtin: &BuiltinTypes,
 ) -> (TypeId, TypeId) {
   let matches = |k: &TypeKind| match k {
-    TypeKind::String | TypeKind::LiteralString(_) => target == "string",
-    TypeKind::Number | TypeKind::LiteralNumber(_) => target == "number",
-    TypeKind::Boolean | TypeKind::LiteralBoolean(_) => target == "boolean",
+    TypeKind::String | TypeKind::StringLiteral(_) => target == "string",
+    TypeKind::Number | TypeKind::NumberLiteral(_) => target == "number",
+    TypeKind::Boolean | TypeKind::BooleanLiteral(_) => target == "boolean",
     TypeKind::Undefined => target == "undefined",
     TypeKind::Null => target == "object",
     TypeKind::Object(_) => target == "object",
     _ => false,
   };
 
-  let kind = store.kind(ty).clone();
+  let kind = store.type_kind(ty);
   match kind {
     TypeKind::Union(members) => {
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        if matches(store.kind(member)) {
+        if matches(&store.type_kind(member)) {
           yes.push(member);
         } else {
           no.push(member);
         }
       }
-      (store.union(yes, builtin), store.union(no, builtin))
+      (store.union(yes), store.union(no))
     }
     _ => {
       if matches(&kind) {
@@ -125,12 +125,12 @@ pub fn narrow_by_discriminant(
   ty: TypeId,
   prop: &str,
   value: &str,
-  store: &mut TypeStore,
+  store: &TypeStore,
   builtin: &BuiltinTypes,
 ) -> (TypeId, TypeId) {
   let mut yes = Vec::new();
   let mut no = Vec::new();
-  match store.kind(ty).clone() {
+  match store.type_kind(ty) {
     TypeKind::Union(members) => {
       for member in members {
         let (t, f) = narrow_by_discriminant(member, prop, value, store, builtin);
@@ -142,10 +142,11 @@ pub fn narrow_by_discriminant(
         }
       }
     }
-    TypeKind::Object(obj) => {
-      if let Some(prop_data) = obj.props.get(prop) {
-        let matches = match store.kind(prop_data.typ) {
-          TypeKind::LiteralString(s) => s == value,
+    TypeKind::Object(_) => match super::super::lookup_property_type(store, ty, prop) {
+      Some(prop_ty) => {
+        let prop_kind = store.type_kind(prop_ty);
+        let matches = match prop_kind {
+          TypeKind::StringLiteral(name) => store.name(name) == value,
           TypeKind::String => true,
           _ => false,
         };
@@ -154,26 +155,25 @@ pub fn narrow_by_discriminant(
         } else {
           no.push(ty);
         }
-      } else {
-        no.push(ty);
       }
-    }
+      None => no.push(ty),
+    },
     _ => no.push(ty),
   }
 
-  (store.union(yes, builtin), store.union(no, builtin))
+  (store.union(yes), store.union(no))
 }
 
 /// Narrow by an `in` check (`"prop" in x`).
 pub fn narrow_by_in_check(
   ty: TypeId,
   prop: &str,
-  store: &mut TypeStore,
+  store: &TypeStore,
   builtin: &BuiltinTypes,
 ) -> (TypeId, TypeId) {
   let mut yes = Vec::new();
   let mut no = Vec::new();
-  match store.kind(ty).clone() {
+  match store.type_kind(ty) {
     TypeKind::Union(members) => {
       for member in members {
         let (t, f) = narrow_by_in_check(member, prop, store, builtin);
@@ -185,17 +185,8 @@ pub fn narrow_by_in_check(
         }
       }
     }
-    TypeKind::Object(obj) => {
-      let has_prop = if obj.props.contains_key(prop) {
-        true
-      } else if obj.string_index.is_some() {
-        true
-      } else if prop.parse::<usize>().is_ok() {
-        obj.number_index.is_some()
-      } else {
-        false
-      };
-      if has_prop {
+    TypeKind::Object(_) => {
+      if super::super::lookup_property_type(store, ty, prop).is_some() {
         yes.push(ty);
       } else {
         no.push(ty);
@@ -203,15 +194,15 @@ pub fn narrow_by_in_check(
     }
     _ => no.push(ty),
   }
-  (store.union(yes, builtin), store.union(no, builtin))
+  (store.union(yes), store.union(no))
 }
 
 /// Merge two variable environments using union to join types.
 pub fn merge_envs(
   left: &HashMap<String, TypeId>,
   right: &HashMap<String, TypeId>,
-  store: &mut TypeStore,
-  builtin: &BuiltinTypes,
+  store: &TypeStore,
+  _builtin: &BuiltinTypes,
 ) -> HashMap<String, TypeId> {
   let mut out = HashMap::new();
   for (k, v) in left {
@@ -220,7 +211,7 @@ pub fn merge_envs(
   for (k, v) in right {
     out
       .entry(k.clone())
-      .and_modify(|existing| *existing = store.union(vec![*existing, *v], builtin))
+      .and_modify(|existing| *existing = store.union(vec![*existing, *v]))
       .or_insert(*v);
   }
   out

@@ -1,5 +1,5 @@
 use typecheck_ts::check::class::*;
-use types_ts_interned::{PropKey, TypeKind, TypeOptions};
+use types_ts_interned::{Accessibility, PropKey, TypeKind};
 
 fn number_type(env: &ClassEnv) -> types_ts_interned::TypeId {
   env.store().primitive_ids().number
@@ -14,7 +14,7 @@ fn private_classes_are_nominal() {
     ty: num.into(),
     optional: false,
     readonly: false,
-    visibility: MemberVisibility::Private,
+    visibility: Accessibility::Private,
     is_static: false,
   };
 
@@ -33,7 +33,7 @@ fn private_classes_are_nominal() {
     constructor: None,
   });
 
-  let ctx = env.relate_ctx(TypeOptions::default());
+  let ctx = env.relate_ctx(types_ts_interned::TypeOptions::default());
   assert!(!ctx.is_assignable(class_a.instance, class_b.instance));
   assert!(!ctx.is_assignable(class_b.instance, class_a.instance));
 }
@@ -47,7 +47,7 @@ fn protected_members_allow_inheritance_compatibility() {
     ty: num.into(),
     optional: false,
     readonly: false,
-    visibility: MemberVisibility::Protected,
+    visibility: Accessibility::Protected,
     is_static: false,
   };
 
@@ -75,7 +75,7 @@ fn protected_members_allow_inheritance_compatibility() {
     constructor: None,
   });
 
-  let ctx = env.relate_ctx(TypeOptions::default());
+  let ctx = env.relate_ctx(types_ts_interned::TypeOptions::default());
 
   assert!(ctx.is_assignable(derived.instance, base.instance));
   assert!(ctx.is_assignable(base.instance, derived.instance));
@@ -91,7 +91,7 @@ fn methods_capture_implicit_this_type() {
     params: Vec::new(),
     ret: TypeExpr::This,
     this_type: None,
-    visibility: MemberVisibility::Public,
+    visibility: Accessibility::Public,
     is_static: false,
   };
 
@@ -106,13 +106,11 @@ fn methods_capture_implicit_this_type() {
   let store = env.store();
   let method_ty = match store.type_kind(class.instance) {
     TypeKind::Object(obj) => {
-      let object = store.object(obj);
-      let shape = store.shape(object.shape);
-      let key = PropKey::String(store.intern_name("self"));
+      let shape = store.shape(store.object(obj).shape);
       let prop = shape
         .properties
         .iter()
-        .find(|p| p.key == key)
+        .find(|p| matches!(p.key, PropKey::String(id) if store.name(id) == "self"))
         .expect("method present");
       store.type_kind(prop.data.ty)
     }
@@ -121,11 +119,10 @@ fn methods_capture_implicit_this_type() {
 
   match method_ty {
     TypeKind::Callable { overloads } => {
-      assert_eq!(overloads.len(), 1);
-      let sig = store.signature(overloads[0]);
+      let sig = store.signature(*overloads.first().expect("signature present"));
       assert_eq!(sig.this_param, Some(class.this_type));
       assert_eq!(sig.ret, class.this_type);
     }
-    other => panic!("expected callable type, got {other:?}"),
+    other => panic!("expected function type, got {other:?}"),
   }
 }
