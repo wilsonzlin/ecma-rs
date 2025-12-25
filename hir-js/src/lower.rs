@@ -62,7 +62,7 @@ impl LoweringContext {
   }
 
   fn to_range(&mut self, loc: Loc) -> TextRange {
-    let (range, note) = TextRange::from_loc_with_overflow_note(loc);
+    let (range, note) = loc.to_diagnostics_range_with_note();
     if let Some(note) = note {
       self.diagnostics.push(
         Diagnostic::warning(

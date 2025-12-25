@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 ahash = "0.8.7"
-diagnostics = { path = "../diagnostics", features = ["parse-js"] }
-parse-js = { path = "../parse-js" }
+diagnostics = { path = "../diagnostics" }
+parse-js = { path = "../parse-js", features = ["diagnostics"] }
 serde = { version = "1", features = ["derive"], optional = true }
 thiserror = "1"
 
