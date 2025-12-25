@@ -1,4 +1,6 @@
+use super::foreign::ForeignBindings;
 use crate::il::inst::{Arg, BinOp, Const, Inst, InstTyp, UnOp};
+use crate::{Program, ProgramFunction};
 use derive_visitor::{Drive, DriveMut};
 use parse_js::ast::expr::lit::{LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitStrExpr};
 use parse_js::ast::expr::pat::{IdPat, Pat};
@@ -446,5 +448,204 @@ pub fn lower_effect_inst<V: VarNamer, F: FnEmitter>(
     InstTyp::UnknownStore => lower_unknown_store_inst(var_namer, fn_emitter, inst),
     InstTyp::Call => lower_call_inst(var_namer, fn_emitter, inst, None, None, None, init),
     _ => None,
+  }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredArg {
+  Builtin(String),
+  Const(Const),
+  Fn(usize),
+  Ident(String),
+  Var(u32),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoweredInst {
+  Bin {
+    tgt: u32,
+    left: LoweredArg,
+    op: BinOp,
+    right: LoweredArg,
+  },
+  Call {
+    tgt: Option<u32>,
+    callee: LoweredArg,
+    this_: LoweredArg,
+    args: Vec<LoweredArg>,
+    spreads: Vec<usize>,
+  },
+  CondGoto {
+    cond: LoweredArg,
+    t_label: u32,
+    f_label: u32,
+  },
+  Goto {
+    label: u32,
+  },
+  IdentLoad {
+    tgt: u32,
+    name: String,
+  },
+  IdentStore {
+    name: String,
+    value: LoweredArg,
+  },
+  Label {
+    label: u32,
+  },
+  Phi {
+    tgt: u32,
+    labels: Vec<u32>,
+    args: Vec<LoweredArg>,
+  },
+  PropAssign {
+    obj: LoweredArg,
+    prop: LoweredArg,
+    value: LoweredArg,
+  },
+  Un {
+    tgt: u32,
+    op: UnOp,
+    arg: LoweredArg,
+  },
+  VarAssign {
+    tgt: u32,
+    value: LoweredArg,
+  },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredBlock {
+  pub label: u32,
+  pub insts: Vec<LoweredInst>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredFunction {
+  pub bblocks: Vec<LoweredBlock>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredProgram {
+  pub foreign_bindings: ForeignBindings,
+  pub top_level: LoweredFunction,
+  pub functions: Vec<LoweredFunction>,
+}
+
+fn lowered_arg(arg: &Arg) -> LoweredArg {
+  match arg {
+    Arg::Builtin(v) => LoweredArg::Builtin(v.clone()),
+    Arg::Const(v) => LoweredArg::Const(v.clone()),
+    Arg::Fn(v) => LoweredArg::Fn(*v),
+    Arg::Var(v) => LoweredArg::Var(*v),
+  }
+}
+
+fn lower_inst(inst: &Inst, bindings: &ForeignBindings) -> LoweredInst {
+  match inst.t {
+    InstTyp::Bin => LoweredInst::Bin {
+      tgt: inst.tgts[0],
+      left: lowered_arg(&inst.args[0]),
+      op: inst.bin_op,
+      right: lowered_arg(&inst.args[1]),
+    },
+    InstTyp::Un => LoweredInst::Un {
+      tgt: inst.tgts[0],
+      op: inst.un_op,
+      arg: lowered_arg(&inst.args[0]),
+    },
+    InstTyp::VarAssign => LoweredInst::VarAssign {
+      tgt: inst.tgts[0],
+      value: lowered_arg(&inst.args[0]),
+    },
+    InstTyp::PropAssign => LoweredInst::PropAssign {
+      obj: lowered_arg(&inst.args[0]),
+      prop: lowered_arg(&inst.args[1]),
+      value: lowered_arg(&inst.args[2]),
+    },
+    InstTyp::CondGoto => LoweredInst::CondGoto {
+      cond: lowered_arg(&inst.args[0]),
+      t_label: inst.labels[0],
+      f_label: inst.labels[1],
+    },
+    InstTyp::Call => LoweredInst::Call {
+      tgt: inst.tgts.get(0).copied(),
+      callee: lowered_arg(&inst.args[0]),
+      this_: lowered_arg(&inst.args[1]),
+      args: inst.args[2..].iter().map(lowered_arg).collect(),
+      spreads: inst.spreads.clone(),
+    },
+    InstTyp::ForeignLoad => LoweredInst::IdentLoad {
+      tgt: inst.tgts[0],
+      name: bindings
+        .name_for(inst.foreign)
+        .expect("missing foreign binding")
+        .to_string(),
+    },
+    InstTyp::ForeignStore => LoweredInst::IdentStore {
+      name: bindings
+        .name_for(inst.foreign)
+        .expect("missing foreign binding")
+        .to_string(),
+      value: lowered_arg(&inst.args[0]),
+    },
+    InstTyp::UnknownLoad => LoweredInst::IdentLoad {
+      tgt: inst.tgts[0],
+      name: inst.unknown.clone(),
+    },
+    InstTyp::UnknownStore => LoweredInst::IdentStore {
+      name: inst.unknown.clone(),
+      value: lowered_arg(&inst.args[0]),
+    },
+    InstTyp::Phi => LoweredInst::Phi {
+      tgt: inst.tgts[0],
+      labels: inst.labels.clone(),
+      args: inst.args.iter().map(lowered_arg).collect(),
+    },
+    InstTyp::_Label => LoweredInst::Label {
+      label: inst.labels[0],
+    },
+    InstTyp::_Goto => LoweredInst::Goto {
+      label: inst.labels[0],
+    },
+    InstTyp::_Dummy => unreachable!("cannot lower dummy inst"),
+  }
+}
+
+fn lower_function_inner(func: &ProgramFunction, bindings: &ForeignBindings) -> LoweredFunction {
+  let mut bblocks: Vec<_> = func.body.bblocks.all().collect();
+  bblocks.sort_by_key(|(label, _)| *label);
+
+  let mut lowered_blocks = Vec::with_capacity(bblocks.len());
+  for (label, insts) in bblocks.into_iter() {
+    lowered_blocks.push(LoweredBlock {
+      label,
+      insts: insts.iter().map(|i| lower_inst(i, bindings)).collect(),
+    });
+  }
+
+  LoweredFunction {
+    bblocks: lowered_blocks,
+  }
+}
+
+pub fn lower_function(func: &ProgramFunction, bindings: &ForeignBindings) -> LoweredFunction {
+  lower_function_inner(func, bindings)
+}
+
+pub fn lower_program(program: &Program) -> LoweredProgram {
+  let foreign_bindings = super::foreign::collect_foreign_bindings(program);
+  let top_level = lower_function_inner(&program.top_level, &foreign_bindings);
+  let functions = program
+    .functions
+    .iter()
+    .map(|f| lower_function_inner(f, &foreign_bindings))
+    .collect();
+
+  LoweredProgram {
+    foreign_bindings,
+    top_level,
+    functions,
   }
 }
