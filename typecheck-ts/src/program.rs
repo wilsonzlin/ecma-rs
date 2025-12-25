@@ -1,4 +1,4 @@
-use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange, TypeId};
+use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange};
 use semantic_js::ts as sem_ts;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
-use types_ts_interned as tti;
+use types_ts_interned::{self as tti, TypeId};
 
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 use crate::{FatalError, HostError, Ice, IceContext};
@@ -385,17 +385,12 @@ impl Program {
   /// Query tracking is not yet implemented for the lightweight checker, so this
   /// currently returns an empty set of stats.
   pub fn query_stats(&self) -> QueryStats {
-    QueryStats::default()
+    self.query_stats.snapshot()
   }
 
   /// Request cancellation of ongoing work.
   pub fn cancel(&self) {
     self.cancelled.store(true, Ordering::Relaxed);
-  }
-
-  /// Snapshot of aggregate query statistics collected so far.
-  pub fn query_stats(&self) -> QueryStats {
-    self.query_stats.snapshot()
   }
 
   fn ensure_not_cancelled(&self) -> Result<(), FatalError> {

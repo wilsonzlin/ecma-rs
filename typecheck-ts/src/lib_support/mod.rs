@@ -8,7 +8,7 @@ mod compiler_options;
 mod host;
 pub mod lib_env;
 
-pub use compiler_options::{CompilerOptions, LibName, LibSet, ScriptTarget};
+pub use compiler_options::{CompilerOptions, JsxMode, LibName, LibSet, ScriptTarget};
 #[allow(deprecated)]
 pub use host::LibCheckHost;
 pub use lib_env::{LibManager, LoadedLibs};

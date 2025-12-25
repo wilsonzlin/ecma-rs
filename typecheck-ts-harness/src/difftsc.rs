@@ -4,7 +4,6 @@ use crate::diagnostic_norm::{
   diagnostic_code_display, normalize_path_for_compare, normalize_tsc_diagnostics_with_options,
   sort_diagnostics, NormalizationOptions, NormalizedDiagnostic,
 };
-use crate::diagnostic_norm::DiagnosticCode as NormDiagnosticCode;
 use crate::directives::HarnessOptions;
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;

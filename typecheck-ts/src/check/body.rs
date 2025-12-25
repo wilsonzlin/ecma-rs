@@ -129,9 +129,7 @@ impl<'a> BodyChecker<'a> {
           self.check_stmt(*stmt_id, &mut inner);
         }
       }
-      StmtKind::Decl(_)
-      | StmtKind::Empty
-      | StmtKind::Other => {}
+      StmtKind::Decl(_) | StmtKind::Empty | StmtKind::Other => {}
     }
   }
 
@@ -144,7 +142,10 @@ impl<'a> BodyChecker<'a> {
         None => {
           self.diagnostics.push(Diagnostic::error(
             CODE_UNKNOWN_IDENTIFIER,
-            format!("unknown identifier `{}`", self.names.resolve(*name).unwrap_or("<unknown>")),
+            format!(
+              "unknown identifier `{}`",
+              self.names.resolve(*name).unwrap_or("<unknown>")
+            ),
             Span {
               file: self.file,
               range: expr.span,
@@ -160,7 +161,9 @@ impl<'a> BodyChecker<'a> {
         self.infer_binary(expr, l, r)
       }
       ExprKind::Call { callee, args, .. } => self.check_call(expr, *callee, args, scope),
-      ExprKind::Member { object, property, .. } => {
+      ExprKind::Member {
+        object, property, ..
+      } => {
         let _ = self.check_expr(*object, scope);
         // Without full object typing, treat member access as unknown.
         let _ = property;
@@ -242,7 +245,9 @@ impl<'a> BodyChecker<'a> {
       let text = &self.source[span.start as usize..span.end as usize];
       let trimmed = text.trim();
       if trimmed.starts_with('"') || trimmed.starts_with('\'') || trimmed.starts_with('`') {
-        let name = self.store.intern_name(trimmed.trim_matches(&['"', '\'', '`'][..]));
+        let name = self
+          .store
+          .intern_name(trimmed.trim_matches(&['"', '\'', '`'][..]));
         return self.store.intern_type(TypeKind::StringLiteral(name));
       }
       if trimmed == "true" {
@@ -302,12 +307,14 @@ impl<'a> BodyChecker<'a> {
         }
         let sig = self.store.signature(overloads[0]);
         if args.len() != sig.params.len() {
-          self
-            .diagnostics
-            .push(Diagnostic::error(CODE_ARGUMENT_COUNT_MISMATCH, "argument count mismatch", Span {
+          self.diagnostics.push(Diagnostic::error(
+            CODE_ARGUMENT_COUNT_MISMATCH,
+            "argument count mismatch",
+            Span {
               file: self.file,
               range: expr.span,
-            }));
+            },
+          ));
         }
         for (idx, arg) in args.iter().enumerate() {
           let arg_ty = self.check_expr(*arg, scope);

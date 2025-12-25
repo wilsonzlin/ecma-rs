@@ -99,41 +99,6 @@ fn is_assignable(state: &mut ProgramState, source_ty: TypeId, target_ty: TypeId)
     },
     TypeKind::Array(target_elem) => match &source_kind {
       TypeKind::Array(source_elem) => is_assignable(state, *source_elem, target_elem),
-      TypeKind::ReadonlyArray(_) => false,
-      TypeKind::Tuple(elems, readonly) => {
-        if *readonly {
-          return false;
-        }
-        elems
-          .iter()
-          .copied()
-          .all(|elem| is_assignable(state, elem, target_elem))
-      }
-      _ => false,
-    },
-    TypeKind::ReadonlyArray(target_elem) => match &source_kind {
-      TypeKind::Array(source_elem) | TypeKind::ReadonlyArray(source_elem) => {
-        is_assignable(state, *source_elem, target_elem)
-      }
-      TypeKind::Tuple(elems, _) => elems
-        .iter()
-        .copied()
-        .all(|elem| is_assignable(state, elem, target_elem)),
-      _ => false,
-    },
-    TypeKind::Tuple(target_elems, target_readonly) => match &source_kind {
-      TypeKind::Tuple(source_elems, source_readonly) => {
-        if !target_readonly && *source_readonly {
-          return false;
-        }
-        if source_elems.len() != target_elems.len() {
-          return false;
-        }
-        source_elems
-          .iter()
-          .zip(target_elems.iter())
-          .all(|(s, t)| is_assignable(state, *s, *t))
-      }
       _ => false,
     },
     _ => false,
@@ -148,9 +113,6 @@ fn is_assignable_object(
   for (name, target_prop) in target.props.iter() {
     match source.props.get(name) {
       Some(source_prop) => {
-        if !target_prop.readonly && source_prop.readonly {
-          return false;
-        }
         if !is_assignable(state, source_prop.typ, target_prop.typ) {
           return false;
         }

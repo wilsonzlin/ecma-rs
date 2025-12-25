@@ -119,6 +119,7 @@ fn arbitrary_type(store: Arc<TypeStore>) -> BoxedStrategy<TypeId> {
                 readonly,
                 accessibility: None,
                 is_method,
+                origin: None,
                 declared_on: None,
               },
             });
