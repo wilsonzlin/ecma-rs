@@ -299,7 +299,8 @@ impl Inst {
     args: Vec<Arg>,
     spreads: Vec<usize>,
   ) -> Self {
-    assert!(spreads.iter().all(|&i| i >= 2 && i < args.len()));
+    let total_args_len = args.len() + 2;
+    assert!(spreads.iter().all(|&i| i >= 2 && i < total_args_len));
     Self {
       t: InstTyp::Call,
       tgts: tgt.into().into_iter().collect(),

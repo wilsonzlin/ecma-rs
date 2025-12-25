@@ -582,9 +582,12 @@ impl<'p> SourceToInst<'p> {
     let mut spreads = Vec::new();
     for a in arguments.into_iter() {
       let CallArg { spread, value } = *a.stx;
-      args.push(self.compile_expr(value)?);
+      let arg = self.compile_expr(value)?;
+      let arg_idx = args.len();
+      args.push(arg);
       if spread {
-        spreads.push(args.len());
+        // spread indices are relative to Inst.args, which are prefixed with [callee, this]
+        spreads.push(arg_idx + 2);
       }
     }
     // Make the call, collecting the result to `res_tmp_var`.
