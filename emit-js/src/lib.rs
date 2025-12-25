@@ -1,3 +1,4 @@
+pub mod asi;
 mod emitter;
 mod escape;
 mod expr;
@@ -15,6 +16,10 @@ use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 
+pub use asi::{
+  separator_after_last, separator_between, stmt_leaf_end, stmt_start_token,
+  stmt_tail_is_expression_like, ListEnd, Separator, StmtLeafEnd, StmtStartToken,
+};
 pub use emitter::{EmitError, EmitErrorKind, EmitMode, EmitOptions, EmitResult, Emitter};
 pub use escape::cooked_template_segment;
 pub use escape::emit_string_literal_double_quoted;
