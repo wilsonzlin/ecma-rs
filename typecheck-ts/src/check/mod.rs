@@ -7,6 +7,7 @@ pub(crate) mod expr;
 pub(crate) mod infer;
 pub(crate) mod instantiate;
 pub(super) mod modules;
+pub(crate) mod body;
 pub(super) mod narrow;
 pub(super) mod object_literal;
 pub(crate) mod overload;

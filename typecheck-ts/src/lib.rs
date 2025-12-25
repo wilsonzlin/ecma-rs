@@ -160,6 +160,10 @@ pub mod check {
     pub use crate::program::check::expr::*;
   }
 
+  pub mod hir_body {
+    pub use crate::program::check::body::*;
+  }
+
   pub mod class;
   pub mod relate_hooks;
 }
