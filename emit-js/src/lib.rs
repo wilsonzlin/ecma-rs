@@ -49,6 +49,40 @@ pub use ts_type::{
   ts_type_to_string,
 };
 
+/// Emit a full top-level AST, including both JavaScript statements and
+/// TypeScript-only declarations.
+pub fn emit_top_level_stmt(em: &mut Emitter, top: &TopLevel) -> EmitResult {
+  use parse_js::ast::stmt::Stmt;
+
+  let mut first = true;
+  for stmt in &top.body {
+    if matches!(stmt.stx.as_ref(), Stmt::Empty(_)) {
+      continue;
+    }
+    if !first {
+      em.write_byte(b'\n');
+    }
+    match stmt.stx.as_ref() {
+      Stmt::InterfaceDecl(_)
+      | Stmt::TypeAliasDecl(_)
+      | Stmt::EnumDecl(_)
+      | Stmt::NamespaceDecl(_)
+      | Stmt::ModuleDecl(_)
+      | Stmt::GlobalDecl(_)
+      | Stmt::AmbientVarDecl(_)
+      | Stmt::AmbientFunctionDecl(_)
+      | Stmt::AmbientClassDecl(_)
+      | Stmt::ImportTypeDecl(_)
+      | Stmt::ExportTypeDecl(_)
+      | Stmt::ImportEqualsDecl(_)
+      | Stmt::ExportAssignmentDecl(_) => ts_stmt::emit_ts_stmt(em, stmt)?,
+      _ => stmt::emit_stmt(em, stmt)?,
+    }
+    first = false;
+  }
+  Ok(())
+}
+
 /// Emit a top-level AST into JavaScript/TypeScript, returning a diagnostic on
 /// failure with a best-effort span describing where emission failed.
 pub fn emit_top_level_diagnostic(

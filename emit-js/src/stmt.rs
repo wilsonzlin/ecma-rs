@@ -423,7 +423,10 @@ fn emit_function(
   }
   match &func.body {
     Some(body) => emit_func_body(em, body),
-    None => Err(EmitError::unsupported("function body missing")),
+    None => {
+      em.write_punct(";");
+      Ok(())
+    }
   }
 }
 
