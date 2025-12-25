@@ -49,6 +49,17 @@ fn is_assignable(state: &mut ProgramState, source_ty: TypeId, target_ty: TypeId)
     _ => {}
   }
 
+  match &source_kind {
+    TypeKind::Never => return true,
+    TypeKind::Union(members) => {
+      return members
+        .iter()
+        .copied()
+        .all(|member| is_assignable(state, member, target_ty));
+    }
+    _ => {}
+  }
+
   let target_kind = state.type_store.kind(target_ty).clone();
 
   match (&source_kind, &target_kind) {
@@ -70,8 +81,12 @@ fn is_assignable(state: &mut ProgramState, source_ty: TypeId, target_ty: TypeId)
     TypeKind::Union(types) => types
       .into_iter()
       .any(|member| is_assignable(state, source_ty, member)),
-    TypeKind::Object(target_obj) => match source_kind {
-      TypeKind::Object(source_obj) => is_assignable_object(state, &source_obj, &target_obj),
+    TypeKind::Object(target_obj) => match &source_kind {
+      TypeKind::Object(source_obj) => is_assignable_object(state, source_obj, &target_obj),
+      _ => false,
+    },
+    TypeKind::Array(target_elem) => match &source_kind {
+      TypeKind::Array(source_elem) => is_assignable(state, *source_elem, target_elem),
       _ => false,
     },
     _ => false,

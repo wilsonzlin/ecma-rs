@@ -149,20 +149,27 @@ impl BodyCheckResult {
 
   /// Find the innermost expression covering the given offset.
   pub fn expr_at(&self, offset: u32) -> Option<(ExprId, TypeId)> {
-    let mut best: Option<(ExprId, TypeId, u32)> = None;
+    let mut best_containing: Option<(ExprId, TypeId, u32)> = None;
+    let mut best_empty: Option<(ExprId, TypeId, u32)> = None;
     for (idx, span) in self.expr_spans.iter().enumerate() {
-      let in_span =
-        (span.start <= offset && offset < span.end) || (span.start == span.end && offset == span.start);
-      if in_span {
-        let width = span.end.saturating_sub(span.start);
+      let width = span.end.saturating_sub(span.start);
+      if span.start <= offset && offset < span.end {
         let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
-        best = match best {
-          Some((_, _, existing)) if existing <= width => best,
+        best_containing = match best_containing {
+          Some((_, _, existing)) if existing <= width => best_containing,
+          _ => Some(entry),
+        };
+      } else if span.start == span.end && offset == span.start {
+        let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
+        best_empty = match best_empty {
+          Some((_, _, existing)) if existing <= width => best_empty,
           _ => Some(entry),
         };
       }
     }
-    best.map(|(id, ty, _)| (id, ty))
+    best_containing
+      .or(best_empty)
+      .map(|(id, ty, _)| (id, ty))
   }
 
   /// Spans for all expressions in this body.
@@ -1585,9 +1592,9 @@ impl ProgramState {
   ) -> (TypeId, Facts) {
     let mut facts = Facts::default();
     let ty = match &expr.kind {
-      HirExprKind::NumberLiteral(n) => self.type_store.literal_number(n.clone()),
-      HirExprKind::StringLiteral(s) => self.type_store.literal_string(s.clone()),
-      HirExprKind::BooleanLiteral(b) => self.type_store.literal_boolean(*b),
+      HirExprKind::NumberLiteral(_) => self.builtin.number,
+      HirExprKind::StringLiteral(_) => self.builtin.string,
+      HirExprKind::BooleanLiteral(_) => self.builtin.boolean,
       HirExprKind::Null => self.builtin.null,
       HirExprKind::Ident(name) => {
         let mut ty = self.builtin.unknown;
@@ -2481,13 +2488,20 @@ impl BodyBuilder {
   }
 
   fn lower_expr(&mut self, expr: Node<Expr>, state: &mut ProgramState) -> HirExpr {
-    let span = loc_to_span(self.file, expr.loc).range;
+    let mut span = loc_to_span(self.file, expr.loc).range;
     let kind = match *expr.stx {
       Expr::LitNum(num) => HirExprKind::NumberLiteral(num.stx.value.to_string()),
       Expr::LitStr(s) => HirExprKind::StringLiteral(s.stx.value),
       Expr::LitBool(b) => HirExprKind::BooleanLiteral(b.stx.value),
       Expr::LitNull(_) => HirExprKind::Null,
-      Expr::Id(id) => HirExprKind::Ident(id.stx.name.clone()),
+      Expr::Id(id) => {
+        let name = id.stx.name.clone();
+        let expected_end = span.start.saturating_add(name.len().min(u32::MAX as usize) as u32);
+        if expected_end <= span.end {
+          span.end = expected_end;
+        }
+        HirExprKind::Ident(name)
+      }
       Expr::Member(mem) => {
         let object = self.lower_expr(mem.stx.left, state);
         HirExprKind::Member {
