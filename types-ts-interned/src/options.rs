@@ -17,6 +17,9 @@ pub struct TypeOptions {
   /// (`false`, the default) or are treated as "exact" without an added
   /// `undefined` (`true`).
   pub exact_optional_property_types: bool,
+  /// Whether indexed access types implicitly include `undefined`, mirroring
+  /// TypeScript's `noUncheckedIndexedAccess`.
+  pub no_unchecked_indexed_access: bool,
 }
 
 impl Default for TypeOptions {
@@ -25,6 +28,7 @@ impl Default for TypeOptions {
       strict_null_checks: true,
       strict_function_types: true,
       exact_optional_property_types: false,
+      no_unchecked_indexed_access: false,
     }
   }
 }

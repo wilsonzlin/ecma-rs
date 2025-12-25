@@ -1,3 +1,6 @@
+use crate::eval::ExpandedType;
+use crate::eval::TypeEvaluator;
+use crate::eval::TypeExpander as EvalTypeExpander;
 use crate::shape::Indexer;
 use crate::shape::Property;
 use crate::shape::Shape;
@@ -17,6 +20,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelationKind {
@@ -47,6 +51,22 @@ pub struct ReasonNode {
   pub outcome: bool,
   pub note: Option<String>,
   pub children: Vec<ReasonNode>,
+}
+
+const MAX_REASON_DEPTH: usize = 12;
+const MAX_REASON_NODES: usize = 256;
+
+#[derive(Default, Debug)]
+struct ReasonBudget {
+  nodes: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum OptionalFlavor {
+  Property,
+  Parameter,
+  TupleElement,
+  IndexerValue,
 }
 
 pub struct RelateHooks<'a> {
@@ -90,12 +110,29 @@ pub trait RelateTypeExpander {
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId>;
 }
 
+struct RelateExpanderAdapter<'a> {
+  hook: Option<&'a dyn RelateTypeExpander>,
+}
+
+impl<'a> EvalTypeExpander for RelateExpanderAdapter<'a> {
+  fn expand(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<ExpandedType> {
+    self
+      .hook
+      .and_then(|expander| expander.expand_ref(store, def, args))
+      .map(|ty| ExpandedType {
+        params: Vec::new(),
+        ty,
+      })
+  }
+}
+
 pub struct RelateCtx<'a> {
-  store: &'a TypeStore,
+  store: Arc<TypeStore>,
   pub options: TypeOptions,
   hooks: RelateHooks<'a>,
   cache: RefCell<HashMap<RelationKey, bool>>,
   in_progress: RefCell<HashSet<RelationKey>>,
+  reason_budget: RefCell<ReasonBudget>,
 }
 
 impl<'a> fmt::Debug for RelateCtx<'a> {
@@ -107,21 +144,22 @@ impl<'a> fmt::Debug for RelateCtx<'a> {
 }
 
 impl<'a> RelateCtx<'a> {
-  pub fn new(store: &'a TypeStore, options: TypeOptions) -> Self {
+  pub fn new(store: Arc<TypeStore>, options: TypeOptions) -> Self {
     Self::with_options(store, options)
   }
 
-  pub fn with_options(store: &'a TypeStore, options: TypeOptions) -> Self {
+  pub fn with_options(store: Arc<TypeStore>, options: TypeOptions) -> Self {
     Self::with_hooks(store, options, RelateHooks::default())
   }
 
-  pub fn with_hooks(store: &'a TypeStore, options: TypeOptions, hooks: RelateHooks<'a>) -> Self {
+  pub fn with_hooks(store: Arc<TypeStore>, options: TypeOptions, hooks: RelateHooks<'a>) -> Self {
     Self {
       store,
       options,
       hooks,
       cache: RefCell::new(HashMap::new()),
       in_progress: RefCell::new(HashSet::new()),
+      reason_budget: RefCell::new(ReasonBudget::default()),
     }
   }
 
@@ -133,17 +171,26 @@ impl<'a> RelateCtx<'a> {
         RelationKind::Assignable,
         RelationMode::NONE,
         false,
+        0,
       )
       .result
   }
 
   pub fn explain_assignable(&self, src: TypeId, dst: TypeId) -> RelationResult {
-    self.relate_internal(src, dst, RelationKind::Assignable, RelationMode::NONE, true)
+    self.reset_reason_budget();
+    self.relate_internal(
+      src,
+      dst,
+      RelationKind::Assignable,
+      RelationMode::NONE,
+      true,
+      0,
+    )
   }
 
   pub fn is_comparable(&self, a: TypeId, b: TypeId) -> bool {
     self
-      .relate_internal(a, b, RelationKind::Comparable, RelationMode::NONE, false)
+      .relate_internal(a, b, RelationKind::Comparable, RelationMode::NONE, false, 0)
       .result
   }
 
@@ -155,6 +202,7 @@ impl<'a> RelateCtx<'a> {
         RelationKind::StrictSubtype,
         RelationMode::NONE,
         false,
+        0,
       )
       .result
   }
@@ -166,6 +214,7 @@ impl<'a> RelateCtx<'a> {
     kind: RelationKind,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let key = RelationKey {
       src,
@@ -176,7 +225,9 @@ impl<'a> RelateCtx<'a> {
     if let Some(hit) = self.cache.borrow().get(&key).copied() {
       return RelationResult {
         result: hit,
-        reason: record.then(|| self.cached_reason(key, hit)),
+        reason: record
+          .then(|| self.cached_reason(key, hit, depth))
+          .flatten(),
       };
     }
     if self.in_progress.borrow().contains(&key) {
@@ -184,20 +235,20 @@ impl<'a> RelateCtx<'a> {
       // infinite recursion. We mirror that here.
       return RelationResult {
         result: true,
-        reason: record.then(|| self.cycle_reason(key)),
+        reason: record.then(|| self.cycle_reason(key, depth)).flatten(),
       };
     }
 
     self.in_progress.borrow_mut().insert(key);
 
     let outcome = match kind {
-      RelationKind::Assignable => self.assignable(src, dst, mode, record),
+      RelationKind::Assignable => self.assignable(src, dst, mode, record, depth),
       RelationKind::Comparable => {
-        let forward = self.assignable(src, dst, mode, record);
+        let forward = self.assignable(src, dst, mode, record, depth + 1);
         if !forward.result {
           forward
         } else {
-          let backward = self.assignable(dst, src, mode, record);
+          let backward = self.assignable(dst, src, mode, record, depth + 1);
           RelationResult {
             result: backward.result,
             reason: self.join_reasons(
@@ -206,16 +257,17 @@ impl<'a> RelateCtx<'a> {
               vec![forward.reason, backward.reason],
               backward.result,
               Some("comparable".into()),
+              depth,
             ),
           }
         }
       }
       RelationKind::StrictSubtype => {
-        let forward = self.assignable(src, dst, mode, record);
+        let forward = self.assignable(src, dst, mode, record, depth + 1);
         if !forward.result {
           forward
         } else {
-          let backward = self.assignable(dst, src, mode, record);
+          let backward = self.assignable(dst, src, mode, record, depth + 1);
           let res = forward.result && !backward.result;
           RelationResult {
             result: res,
@@ -225,6 +277,7 @@ impl<'a> RelateCtx<'a> {
               vec![forward.reason, backward.reason],
               res,
               Some("strict subtype".into()),
+              depth,
             ),
           }
         }
@@ -236,26 +289,12 @@ impl<'a> RelateCtx<'a> {
     outcome
   }
 
-  fn cached_reason(&self, key: RelationKey, result: bool) -> ReasonNode {
-    ReasonNode {
-      src: key.src,
-      dst: key.dst,
-      relation: key.kind,
-      outcome: result,
-      note: Some("cached".into()),
-      children: Vec::new(),
-    }
+  fn cached_reason(&self, key: RelationKey, result: bool, depth: usize) -> Option<ReasonNode> {
+    self.join_reasons(true, key, Vec::new(), result, Some("cached".into()), depth)
   }
 
-  fn cycle_reason(&self, key: RelationKey) -> ReasonNode {
-    ReasonNode {
-      src: key.src,
-      dst: key.dst,
-      relation: key.kind,
-      outcome: true,
-      note: Some("cycle".into()),
-      children: Vec::new(),
-    }
+  fn cycle_reason(&self, key: RelationKey, depth: usize) -> Option<ReasonNode> {
+    self.join_reasons(true, key, Vec::new(), true, Some("cycle".into()), depth)
   }
 
   fn join_reasons(
@@ -265,15 +304,39 @@ impl<'a> RelateCtx<'a> {
     children: Vec<Option<ReasonNode>>,
     outcome: bool,
     note: Option<String>,
+    depth: usize,
   ) -> Option<ReasonNode> {
-    record.then(|| ReasonNode {
+    if !record || !self.take_reason_slot() {
+      return None;
+    }
+    let mut note = note;
+    let child_nodes = if depth >= MAX_REASON_DEPTH {
+      note.get_or_insert_with(|| "max depth".into());
+      Vec::new()
+    } else {
+      children.into_iter().flatten().collect()
+    };
+    Some(ReasonNode {
       src: key.src,
       dst: key.dst,
       relation: key.kind,
       outcome,
       note,
-      children: children.into_iter().flatten().collect(),
+      children: child_nodes,
     })
+  }
+
+  fn reset_reason_budget(&self) {
+    *self.reason_budget.borrow_mut() = ReasonBudget::default();
+  }
+
+  fn take_reason_slot(&self) -> bool {
+    let mut budget = self.reason_budget.borrow_mut();
+    if budget.nodes >= MAX_REASON_NODES {
+      return false;
+    }
+    budget.nodes += 1;
+    true
   }
 
   fn assignable(
@@ -282,6 +345,7 @@ impl<'a> RelateCtx<'a> {
     dst: TypeId,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let key = RelationKey {
       src,
@@ -293,7 +357,38 @@ impl<'a> RelateCtx<'a> {
     if src == dst {
       return RelationResult {
         result: true,
-        reason: self.join_reasons(record, key, Vec::new(), true, Some("identical".into())),
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          true,
+          Some("identical".into()),
+          depth,
+        ),
+      };
+    }
+
+    let normalized_src = self.normalize_type(src);
+    let normalized_dst = self.normalize_type(dst);
+    if normalized_src != src || normalized_dst != dst {
+      let related = self.relate_internal(
+        normalized_src,
+        normalized_dst,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
+      return RelationResult {
+        result: related.result,
+        reason: self.join_reasons(
+          record,
+          key,
+          vec![related.reason],
+          related.result,
+          Some("normalized".into()),
+          depth,
+        ),
       };
     }
 
@@ -303,13 +398,20 @@ impl<'a> RelateCtx<'a> {
     if let Some(res) = self.assignable_special(&src_kind, &dst_kind) {
       return RelationResult {
         result: res,
-        reason: self.join_reasons(record, key, Vec::new(), res, Some("special".into())),
+        reason: self.join_reasons(record, key, Vec::new(), res, Some("special".into()), depth),
       };
     }
 
     if let TypeKind::Ref { def, args } = &src_kind {
       if let Some(expanded) = self.expand_ref(*def, args) {
-        let related = self.relate_internal(expanded, dst, RelationKind::Assignable, mode, record);
+        let related = self.relate_internal(
+          expanded,
+          dst,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         return RelationResult {
           result: related.result,
           reason: self.join_reasons(
@@ -318,13 +420,21 @@ impl<'a> RelateCtx<'a> {
             vec![related.reason],
             related.result,
             Some("expand src".into()),
+            depth,
           ),
         };
       }
     }
     if let TypeKind::Ref { def, args } = &dst_kind {
       if let Some(expanded) = self.expand_ref(*def, args) {
-        let related = self.relate_internal(src, expanded, RelationKind::Assignable, mode, record);
+        let related = self.relate_internal(
+          src,
+          expanded,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         return RelationResult {
           result: related.result,
           reason: self.join_reasons(
@@ -333,6 +443,7 @@ impl<'a> RelateCtx<'a> {
             vec![related.reason],
             related.result,
             Some("expand dst".into()),
+            depth,
           ),
         };
       }
@@ -342,26 +453,54 @@ impl<'a> RelateCtx<'a> {
     if let TypeKind::Union(srcs) = &src_kind {
       let mut children = Vec::new();
       for member in srcs {
-        let related = self.relate_internal(*member, dst, RelationKind::Assignable, mode, record);
+        let related = self.relate_internal(
+          *member,
+          dst,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         if record {
           children.push(related.reason);
         }
         if !related.result {
           return RelationResult {
             result: false,
-            reason: self.join_reasons(record, key, children, false, Some("union source".into())),
+            reason: self.join_reasons(
+              record,
+              key,
+              children,
+              false,
+              Some("union source".into()),
+              depth,
+            ),
           };
         }
       }
       return RelationResult {
         result: true,
-        reason: self.join_reasons(record, key, children, true, Some("union source".into())),
+        reason: self.join_reasons(
+          record,
+          key,
+          children,
+          true,
+          Some("union source".into()),
+          depth,
+        ),
       };
     }
     if let TypeKind::Union(dsts) = &dst_kind {
       let mut attempts = Vec::new();
       for member in dsts {
-        let related = self.relate_internal(src, *member, RelationKind::Assignable, mode, record);
+        let related = self.relate_internal(
+          src,
+          *member,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         let reason = related.reason;
         if record {
           attempts.push(reason.clone());
@@ -369,13 +508,27 @@ impl<'a> RelateCtx<'a> {
         if related.result {
           return RelationResult {
             result: true,
-            reason: self.join_reasons(record, key, vec![reason], true, Some("union target".into())),
+            reason: self.join_reasons(
+              record,
+              key,
+              vec![reason],
+              true,
+              Some("union target".into()),
+              depth,
+            ),
           };
         }
       }
       return RelationResult {
         result: false,
-        reason: self.join_reasons(record, key, attempts, false, Some("union target".into())),
+        reason: self.join_reasons(
+          record,
+          key,
+          attempts,
+          false,
+          Some("union target".into()),
+          depth,
+        ),
       };
     }
 
@@ -383,7 +536,14 @@ impl<'a> RelateCtx<'a> {
     if let TypeKind::Intersection(dsts) = &dst_kind {
       let mut children = Vec::new();
       for member in dsts {
-        let related = self.relate_internal(src, *member, RelationKind::Assignable, mode, record);
+        let related = self.relate_internal(
+          src,
+          *member,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         if record {
           children.push(related.reason);
         }
@@ -396,6 +556,7 @@ impl<'a> RelateCtx<'a> {
               children,
               false,
               Some("intersection target".into()),
+              depth,
             ),
           };
         }
@@ -408,6 +569,7 @@ impl<'a> RelateCtx<'a> {
           children,
           true,
           Some("intersection target".into()),
+          depth,
         ),
       };
     }
@@ -415,7 +577,7 @@ impl<'a> RelateCtx<'a> {
     if let TypeKind::Intersection(srcs) = &src_kind {
       if let TypeKind::Object(dst_obj) = &dst_kind {
         if let Some(merged) = self.merge_intersection(srcs) {
-          let related = self.relate_object(src, dst, merged, *dst_obj, mode, record);
+          let related = self.relate_object(src, dst, merged, *dst_obj, mode, record, depth + 1);
           return RelationResult {
             result: related.result,
             reason: self.join_reasons(
@@ -424,6 +586,7 @@ impl<'a> RelateCtx<'a> {
               vec![related.reason],
               related.result,
               Some("intersection merge".into()),
+              depth,
             ),
           };
         }
@@ -431,7 +594,14 @@ impl<'a> RelateCtx<'a> {
 
       let mut children = Vec::new();
       for member in srcs {
-        let related = self.relate_internal(*member, dst, RelationKind::Assignable, mode, record);
+        let related = self.relate_internal(
+          *member,
+          dst,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         if related.result {
           return RelationResult {
             result: true,
@@ -441,6 +611,7 @@ impl<'a> RelateCtx<'a> {
               vec![related.reason],
               true,
               Some("intersection source".into()),
+              depth,
             ),
           };
         }
@@ -456,6 +627,7 @@ impl<'a> RelateCtx<'a> {
           children,
           false,
           Some("intersection source".into()),
+          depth,
         ),
       };
     }
@@ -465,28 +637,28 @@ impl<'a> RelateCtx<'a> {
         let res = a == b;
         RelationResult {
           result: res,
-          reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into())),
+          reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into()), depth),
         }
       }
       (TypeKind::NumberLiteral(a), TypeKind::NumberLiteral(b)) => {
         let res = a == b;
         RelationResult {
           result: res,
-          reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into())),
+          reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into()), depth),
         }
       }
       (TypeKind::StringLiteral(a), TypeKind::StringLiteral(b)) => {
         let res = a == b;
         RelationResult {
           result: res,
-          reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into())),
+          reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into()), depth),
         }
       }
       (TypeKind::BigIntLiteral(a), TypeKind::BigIntLiteral(b)) => {
         let res = a == b;
         RelationResult {
           result: res,
-          reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into())),
+          reason: self.join_reasons(record, key, Vec::new(), res, Some("literal".into()), depth),
         }
       }
       (
@@ -498,31 +670,47 @@ impl<'a> RelateCtx<'a> {
           ty: dst_elem,
           readonly: dst_ro,
         },
-      ) => self.relate_array(*src_elem, *dst_elem, *src_ro, *dst_ro, key, mode, record),
+      ) => self.relate_array(
+        *src_elem,
+        *dst_elem,
+        *src_ro,
+        *dst_ro,
+        key,
+        mode,
+        record,
+        depth + 1,
+      ),
       (TypeKind::Tuple(src_elems), TypeKind::Tuple(dst_elems)) => {
-        self.relate_tuple(src_elems, dst_elems, key, mode, record)
+        self.relate_tuple(src_elems, dst_elems, key, mode, record, depth + 1)
       }
       (TypeKind::Array { ty, .. }, TypeKind::Tuple(dst_elems)) => {
-        self.relate_array_to_tuple(*ty, dst_elems, key, mode, record)
+        self.relate_array_to_tuple(*ty, dst_elems, key, mode, record, depth + 1)
       }
       (TypeKind::Tuple(src_elems), TypeKind::Array { ty, readonly }) => {
-        self.relate_tuple_to_array(src_elems, *ty, *readonly, key, mode, record)
+        self.relate_tuple_to_array(src_elems, *ty, *readonly, key, mode, record, depth + 1)
       }
       (TypeKind::Callable { overloads: s }, TypeKind::Callable { overloads: d }) => {
-        self.relate_callable(src, dst, s, d, mode, record)
+        self.relate_callable(src, dst, s, d, mode, record, depth + 1)
       }
       (TypeKind::Callable { overloads }, TypeKind::Object(obj)) => {
-        self.relate_callable_to_object(src, dst, overloads, *obj, key, mode, record)
+        self.relate_callable_to_object(src, dst, overloads, *obj, key, mode, record, depth + 1)
       }
       (TypeKind::Object(obj), TypeKind::Callable { overloads }) => {
-        self.relate_object_to_callable(src, dst, *obj, overloads, key, mode, record)
+        self.relate_object_to_callable(src, dst, *obj, overloads, key, mode, record, depth + 1)
       }
       (TypeKind::Object(src_obj), TypeKind::Object(dst_obj)) => {
-        self.relate_object(src, dst, *src_obj, *dst_obj, mode, record)
+        self.relate_object(src, dst, *src_obj, *dst_obj, mode, record, depth + 1)
       }
       _ => RelationResult {
         result: false,
-        reason: self.join_reasons(record, key, Vec::new(), false, Some("structural".into())),
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          false,
+          Some("structural".into()),
+          depth,
+        ),
       },
     }
   }
@@ -575,6 +763,7 @@ impl<'a> RelateCtx<'a> {
     key: RelationKey,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     if !dst_readonly && src_readonly {
       return RelationResult {
@@ -585,10 +774,18 @@ impl<'a> RelateCtx<'a> {
           Vec::new(),
           false,
           Some("readonly array".into()),
+          depth,
         ),
       };
     }
-    let related = self.relate_internal(src_elem, dst_elem, RelationKind::Assignable, mode, record);
+    let related = self.relate_internal(
+      src_elem,
+      dst_elem,
+      RelationKind::Assignable,
+      mode,
+      record,
+      depth + 1,
+    );
     RelationResult {
       result: related.result,
       reason: self.join_reasons(
@@ -597,6 +794,7 @@ impl<'a> RelateCtx<'a> {
         vec![related.reason],
         related.result,
         Some("array element".into()),
+        depth,
       ),
     }
   }
@@ -608,24 +806,46 @@ impl<'a> RelateCtx<'a> {
     key: RelationKey,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let mut children = Vec::new();
     for dst_elem in dst_elems {
-      let dst_ty = self.optional_type(dst_elem.ty, dst_elem.optional);
-      let related = self.relate_internal(src_elem, dst_ty, RelationKind::Assignable, mode, record);
+      let dst_ty = self.optional_type(dst_elem.ty, dst_elem.optional, OptionalFlavor::TupleElement);
+      let related = self.relate_internal(
+        src_elem,
+        dst_ty,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
       if record {
         children.push(related.reason);
       }
       if !related.result {
         return RelationResult {
           result: false,
-          reason: self.join_reasons(record, key, children, false, Some("array to tuple".into())),
+          reason: self.join_reasons(
+            record,
+            key,
+            children,
+            false,
+            Some("array to tuple".into()),
+            depth,
+          ),
         };
       }
     }
     RelationResult {
       result: true,
-      reason: self.join_reasons(record, key, children, true, Some("array to tuple".into())),
+      reason: self.join_reasons(
+        record,
+        key,
+        children,
+        true,
+        Some("array to tuple".into()),
+        depth,
+      ),
     }
   }
 
@@ -637,6 +857,7 @@ impl<'a> RelateCtx<'a> {
     key: RelationKey,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     if !dst_readonly && src_elems.iter().any(|e| e.readonly) {
       return RelationResult {
@@ -647,26 +868,48 @@ impl<'a> RelateCtx<'a> {
           Vec::new(),
           false,
           Some("tuple readonly element".into()),
+          depth,
         ),
       };
     }
     let mut children = Vec::new();
     for src_elem in src_elems {
-      let src_ty = self.optional_type(src_elem.ty, src_elem.optional);
-      let related = self.relate_internal(src_ty, dst_elem, RelationKind::Assignable, mode, record);
+      let src_ty = self.optional_type(src_elem.ty, src_elem.optional, OptionalFlavor::TupleElement);
+      let related = self.relate_internal(
+        src_ty,
+        dst_elem,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
       if record {
         children.push(related.reason);
       }
       if !related.result {
         return RelationResult {
           result: false,
-          reason: self.join_reasons(record, key, children, false, Some("tuple to array".into())),
+          reason: self.join_reasons(
+            record,
+            key,
+            children,
+            false,
+            Some("tuple to array".into()),
+            depth,
+          ),
         };
       }
     }
     RelationResult {
       result: true,
-      reason: self.join_reasons(record, key, children, true, Some("tuple to array".into())),
+      reason: self.join_reasons(
+        record,
+        key,
+        children,
+        true,
+        Some("tuple to array".into()),
+        depth,
+      ),
     }
   }
 
@@ -677,6 +920,7 @@ impl<'a> RelateCtx<'a> {
     key: RelationKey,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let mut children = Vec::new();
     let src_required = src_elems.iter().filter(|e| !e.optional && !e.rest).count();
@@ -688,7 +932,14 @@ impl<'a> RelateCtx<'a> {
     {
       return RelationResult {
         result: false,
-        reason: self.join_reasons(record, key, Vec::new(), false, Some("tuple arity".into())),
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          false,
+          Some("tuple arity".into()),
+          depth,
+        ),
       };
     }
 
@@ -701,6 +952,7 @@ impl<'a> RelateCtx<'a> {
           Vec::new(),
           false,
           Some("tuple required elements".into()),
+          depth,
         ),
       };
     }
@@ -718,14 +970,29 @@ impl<'a> RelateCtx<'a> {
           }
           return RelationResult {
             result: false,
-            reason: self.join_reasons(record, key, children, false, Some("tuple length".into())),
+            reason: self.join_reasons(
+              record,
+              key,
+              children,
+              false,
+              Some("tuple length".into()),
+              depth,
+            ),
           };
         }
         Some(src_elem) => {
           if dst_elem.rest {
             for rem in src_elems.iter().skip(s_idx) {
-              let src_ty = self.optional_type(rem.ty, rem.optional || rem.rest);
-              let dst_ty = self.optional_type(dst_elem.ty, dst_elem.optional || dst_elem.rest);
+              let src_ty = self.optional_type(
+                rem.ty,
+                rem.optional || rem.rest,
+                OptionalFlavor::TupleElement,
+              );
+              let dst_ty = self.optional_type(
+                dst_elem.ty,
+                dst_elem.optional || dst_elem.rest,
+                OptionalFlavor::TupleElement,
+              );
               if !dst_elem.readonly && rem.readonly {
                 return RelationResult {
                   result: false,
@@ -735,11 +1002,18 @@ impl<'a> RelateCtx<'a> {
                     children,
                     false,
                     Some("tuple readonly".into()),
+                    depth,
                   ),
                 };
               }
-              let related =
-                self.relate_internal(src_ty, dst_ty, RelationKind::Assignable, mode, record);
+              let related = self.relate_internal(
+                src_ty,
+                dst_ty,
+                RelationKind::Assignable,
+                mode,
+                record,
+                depth + 1,
+              );
               if record {
                 children.push(related.reason);
               }
@@ -752,18 +1026,30 @@ impl<'a> RelateCtx<'a> {
                     children,
                     false,
                     Some("tuple rest".into()),
+                    depth,
                   ),
                 };
               }
             }
             return RelationResult {
               result: true,
-              reason: self.join_reasons(record, key, children, true, Some("tuple rest".into())),
+              reason: self.join_reasons(
+                record,
+                key,
+                children,
+                true,
+                Some("tuple rest".into()),
+                depth,
+              ),
             };
           }
 
           if src_elem.rest {
-            let src_ty = self.optional_type(src_elem.ty, src_elem.optional || src_elem.rest);
+            let src_ty = self.optional_type(
+              src_elem.ty,
+              src_elem.optional || src_elem.rest,
+              OptionalFlavor::TupleElement,
+            );
             for d in dst_elems.iter().skip(d_idx) {
               if !d.readonly && src_elem.readonly {
                 return RelationResult {
@@ -774,12 +1060,20 @@ impl<'a> RelateCtx<'a> {
                     children,
                     false,
                     Some("tuple rest readonly".into()),
+                    depth,
                   ),
                 };
               }
-              let dst_ty = self.optional_type(d.ty, d.optional || d.rest);
-              let related =
-                self.relate_internal(src_ty, dst_ty, RelationKind::Assignable, mode, record);
+              let dst_ty =
+                self.optional_type(d.ty, d.optional || d.rest, OptionalFlavor::TupleElement);
+              let related = self.relate_internal(
+                src_ty,
+                dst_ty,
+                RelationKind::Assignable,
+                mode,
+                record,
+                depth + 1,
+              );
               if record {
                 children.push(related.reason);
               }
@@ -792,6 +1086,7 @@ impl<'a> RelateCtx<'a> {
                     children,
                     false,
                     Some("tuple rest spread".into()),
+                    depth,
                   ),
                 };
               }
@@ -804,6 +1099,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 true,
                 Some("tuple rest spread".into()),
+                depth,
               ),
             };
           }
@@ -817,6 +1113,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("tuple optional".into()),
+                depth,
               ),
             };
           }
@@ -829,20 +1126,36 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("tuple readonly".into()),
+                depth,
               ),
             };
           }
-          let src_ty = self.optional_type(src_elem.ty, src_elem.optional);
-          let dst_ty = self.optional_type(dst_elem.ty, dst_elem.optional);
-          let related =
-            self.relate_internal(src_ty, dst_ty, RelationKind::Assignable, mode, record);
+          let src_ty =
+            self.optional_type(src_elem.ty, src_elem.optional, OptionalFlavor::TupleElement);
+          let dst_ty =
+            self.optional_type(dst_elem.ty, dst_elem.optional, OptionalFlavor::TupleElement);
+          let related = self.relate_internal(
+            src_ty,
+            dst_ty,
+            RelationKind::Assignable,
+            mode,
+            record,
+            depth + 1,
+          );
           if record {
             children.push(related.reason);
           }
           if !related.result {
             return RelationResult {
               result: false,
-              reason: self.join_reasons(record, key, children, false, Some("tuple element".into())),
+              reason: self.join_reasons(
+                record,
+                key,
+                children,
+                false,
+                Some("tuple element".into()),
+                depth,
+              ),
             };
           }
         }
@@ -854,7 +1167,7 @@ impl<'a> RelateCtx<'a> {
 
     RelationResult {
       result: true,
-      reason: self.join_reasons(record, key, children, true, Some("tuple".into())),
+      reason: self.join_reasons(record, key, children, true, Some("tuple".into()), depth),
     }
   }
 
@@ -866,6 +1179,7 @@ impl<'a> RelateCtx<'a> {
     dst_overloads: &[SignatureId],
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let key = RelationKey {
       src: src_id,
@@ -886,6 +1200,7 @@ impl<'a> RelateCtx<'a> {
           &dst_sig_data,
           mode,
           record,
+          depth + 1,
         );
         if related.result {
           matched = Some(related.reason);
@@ -898,7 +1213,14 @@ impl<'a> RelateCtx<'a> {
       if matched.is_none() {
         return RelationResult {
           result: false,
-          reason: self.join_reasons(record, key, children, false, Some("call signature".into())),
+          reason: self.join_reasons(
+            record,
+            key,
+            children,
+            false,
+            Some("call signature".into()),
+            depth,
+          ),
         };
       } else if record {
         children.push(matched.flatten());
@@ -906,7 +1228,7 @@ impl<'a> RelateCtx<'a> {
     }
     RelationResult {
       result: true,
-      reason: self.join_reasons(record, key, children, true, Some("callable".into())),
+      reason: self.join_reasons(record, key, children, true, Some("callable".into()), depth),
     }
   }
 
@@ -919,6 +1241,7 @@ impl<'a> RelateCtx<'a> {
     key: RelationKey,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let dst_shape = self.store.shape(self.store.object(dst_obj).shape);
     if !dst_shape.properties.is_empty()
@@ -933,6 +1256,7 @@ impl<'a> RelateCtx<'a> {
           Vec::new(),
           false,
           Some("callable to object".into()),
+          depth,
         ),
       };
     }
@@ -943,6 +1267,7 @@ impl<'a> RelateCtx<'a> {
       &dst_shape.call_signatures,
       mode | RelationMode::BIVARIANT_PARAMS,
       record,
+      depth + 1,
     )
   }
 
@@ -955,6 +1280,7 @@ impl<'a> RelateCtx<'a> {
     key: RelationKey,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let src_shape = self.store.shape(self.store.object(src_obj).shape);
     if !src_shape.properties.is_empty()
@@ -969,6 +1295,7 @@ impl<'a> RelateCtx<'a> {
           Vec::new(),
           false,
           Some("object to callable".into()),
+          depth,
         ),
       };
     }
@@ -979,6 +1306,7 @@ impl<'a> RelateCtx<'a> {
       overloads,
       mode | RelationMode::BIVARIANT_PARAMS,
       record,
+      depth + 1,
     )
   }
 
@@ -990,6 +1318,7 @@ impl<'a> RelateCtx<'a> {
     dst: &Signature,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let key = RelationKey {
       src: TypeId(src_id.0),
@@ -1010,27 +1339,43 @@ impl<'a> RelateCtx<'a> {
           Vec::new(),
           false,
           Some("type parameters".into()),
+          depth,
         ),
       };
     }
 
     match (&src.this_param, &dst.this_param) {
       (Some(s), Some(d)) => {
-        let related = self.relate_internal(*d, *s, RelationKind::Assignable, mode, record);
+        let related =
+          self.relate_internal(*d, *s, RelationKind::Assignable, mode, record, depth + 1);
         if record {
           children.push(related.reason);
         }
         if !related.result {
           return RelationResult {
             result: false,
-            reason: self.join_reasons(record, key, children, false, Some("this parameter".into())),
+            reason: self.join_reasons(
+              record,
+              key,
+              children,
+              false,
+              Some("this parameter".into()),
+              depth,
+            ),
           };
         }
       }
       (None, Some(_)) => {
         return RelationResult {
           result: false,
-          reason: self.join_reasons(record, key, Vec::new(), false, Some("missing this".into())),
+          reason: self.join_reasons(
+            record,
+            key,
+            Vec::new(),
+            false,
+            Some("missing this".into()),
+            depth,
+          ),
         }
       }
       _ => {}
@@ -1047,6 +1392,7 @@ impl<'a> RelateCtx<'a> {
           Vec::new(),
           false,
           Some("parameter count".into()),
+          depth,
         ),
       };
     }
@@ -1062,20 +1408,42 @@ impl<'a> RelateCtx<'a> {
             children,
             false,
             Some("optional parameter".into()),
+            depth,
           ),
         };
       }
-      let s_ty = self.optional_type(s_param.ty, s_param.optional);
-      let d_ty = self.optional_type(d_param.ty, d_param.optional);
+      let s_ty = self.optional_type(s_param.ty, s_param.optional, OptionalFlavor::Parameter);
+      let d_ty = self.optional_type(d_param.ty, d_param.optional, OptionalFlavor::Parameter);
       let related = if allow_bivariance {
-        let forward = self.relate_internal(s_ty, d_ty, RelationKind::Assignable, mode, record);
+        let forward = self.relate_internal(
+          s_ty,
+          d_ty,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        );
         if forward.result {
           forward
         } else {
-          self.relate_internal(d_ty, s_ty, RelationKind::Assignable, mode, record)
+          self.relate_internal(
+            d_ty,
+            s_ty,
+            RelationKind::Assignable,
+            mode,
+            record,
+            depth + 1,
+          )
         }
       } else {
-        self.relate_internal(d_ty, s_ty, RelationKind::Assignable, mode, record)
+        self.relate_internal(
+          d_ty,
+          s_ty,
+          RelationKind::Assignable,
+          mode,
+          record,
+          depth + 1,
+        )
       };
       if record {
         children.push(related.reason);
@@ -1083,32 +1451,66 @@ impl<'a> RelateCtx<'a> {
       if !related.result {
         return RelationResult {
           result: false,
-          reason: self.join_reasons(record, key, children, false, Some("parameter".into())),
+          reason: self.join_reasons(
+            record,
+            key,
+            children,
+            false,
+            Some("parameter".into()),
+            depth,
+          ),
         };
       }
     }
 
     if dst.params.len() > src.params.len() {
       if let Some(rest) = src.params.iter().find(|p| p.rest) {
-        let rest_ty = self.optional_type(rest.ty, rest.optional);
+        let rest_ty = self.optional_type(rest.ty, rest.optional, OptionalFlavor::Parameter);
         for extra in dst.params.iter().skip(src.params.len()) {
           if !extra.optional && !rest.rest {
             return RelationResult {
               result: false,
-              reason: self.join_reasons(record, key, children, false, Some("rest coverage".into())),
+              reason: self.join_reasons(
+                record,
+                key,
+                children,
+                false,
+                Some("rest coverage".into()),
+                depth,
+              ),
             };
           }
-          let extra_ty = self.optional_type(extra.ty, extra.optional);
+          let extra_ty = self.optional_type(extra.ty, extra.optional, OptionalFlavor::Parameter);
           let related = if allow_bivariance {
-            let forward =
-              self.relate_internal(rest_ty, extra_ty, RelationKind::Assignable, mode, record);
+            let forward = self.relate_internal(
+              rest_ty,
+              extra_ty,
+              RelationKind::Assignable,
+              mode,
+              record,
+              depth + 1,
+            );
             if forward.result {
               forward
             } else {
-              self.relate_internal(extra_ty, rest_ty, RelationKind::Assignable, mode, record)
+              self.relate_internal(
+                extra_ty,
+                rest_ty,
+                RelationKind::Assignable,
+                mode,
+                record,
+                depth + 1,
+              )
             }
           } else {
-            self.relate_internal(extra_ty, rest_ty, RelationKind::Assignable, mode, record)
+            self.relate_internal(
+              extra_ty,
+              rest_ty,
+              RelationKind::Assignable,
+              mode,
+              record,
+              depth + 1,
+            )
           };
           if record {
             children.push(related.reason);
@@ -1122,6 +1524,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("rest parameter".into()),
+                depth,
               ),
             };
           }
@@ -1137,6 +1540,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("parameter count".into()),
+                depth,
               ),
             };
           }
@@ -1144,21 +1548,27 @@ impl<'a> RelateCtx<'a> {
       }
     }
 
-    let ret_related =
-      self.relate_internal(src.ret, dst.ret, RelationKind::Assignable, mode, record);
+    let ret_related = self.relate_internal(
+      src.ret,
+      dst.ret,
+      RelationKind::Assignable,
+      mode,
+      record,
+      depth + 1,
+    );
     if record {
       children.push(ret_related.reason);
     }
     if !ret_related.result {
       return RelationResult {
         result: false,
-        reason: self.join_reasons(record, key, children, false, Some("return".into())),
+        reason: self.join_reasons(record, key, children, false, Some("return".into()), depth),
       };
     }
 
     RelationResult {
       result: true,
-      reason: self.join_reasons(record, key, children, true, Some("signature".into())),
+      reason: self.join_reasons(record, key, children, true, Some("signature".into()), depth),
     }
   }
 
@@ -1189,8 +1599,18 @@ impl<'a> RelateCtx<'a> {
     )
   }
 
-  fn optional_type(&self, ty: TypeId, optional: bool) -> TypeId {
-    if optional && !self.options.exact_optional_property_types {
+  fn optional_type(&self, ty: TypeId, optional: bool, flavor: OptionalFlavor) -> TypeId {
+    if !optional && !matches!(flavor, OptionalFlavor::IndexerValue) {
+      return ty;
+    }
+
+    let include_undefined = match flavor {
+      OptionalFlavor::Property => !self.options.exact_optional_property_types && optional,
+      OptionalFlavor::Parameter | OptionalFlavor::TupleElement => optional,
+      OptionalFlavor::IndexerValue => optional || self.options.no_unchecked_indexed_access,
+    };
+
+    if include_undefined {
       self
         .store
         .union(vec![ty, self.store.primitive_ids().undefined])
@@ -1199,8 +1619,16 @@ impl<'a> RelateCtx<'a> {
     }
   }
 
+  fn normalize_type(&self, ty: TypeId) -> TypeId {
+    let adapter = RelateExpanderAdapter {
+      hook: self.hooks.expander,
+    };
+    let mut evaluator = TypeEvaluator::new(self.store.clone(), &adapter);
+    evaluator.evaluate(ty)
+  }
+
   fn is_method_like(&self, data: &PropData) -> bool {
-    data.is_method || matches!(self.store.type_kind(data.ty), TypeKind::Callable { .. })
+    data.is_method
   }
 
   fn relate_object(
@@ -1211,6 +1639,7 @@ impl<'a> RelateCtx<'a> {
     dst_obj: ObjectId,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> RelationResult {
     let key = RelationKey {
       src: src_id,
@@ -1235,6 +1664,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("private/protected property".into()),
+                depth,
               ),
             };
           }
@@ -1247,6 +1677,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("readonly property".into()),
+                depth,
               ),
             };
           }
@@ -1260,6 +1691,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("missing required property".into()),
+                depth,
               ),
             };
           }
@@ -1270,17 +1702,38 @@ impl<'a> RelateCtx<'a> {
             } else {
               mode
             };
-          let src_ty = self.optional_type(src_prop.data.ty, src_prop.data.optional);
-          let dst_ty = self.optional_type(dst_prop.data.ty, dst_prop.data.optional);
-          let related =
-            self.relate_internal(src_ty, dst_ty, RelationKind::Assignable, next_mode, record);
+          let src_ty = self.optional_type(
+            src_prop.data.ty,
+            src_prop.data.optional,
+            OptionalFlavor::Property,
+          );
+          let dst_ty = self.optional_type(
+            dst_prop.data.ty,
+            dst_prop.data.optional,
+            OptionalFlavor::Property,
+          );
+          let related = self.relate_internal(
+            src_ty,
+            dst_ty,
+            RelationKind::Assignable,
+            next_mode,
+            record,
+            depth + 1,
+          );
           if record {
             children.push(related.reason);
           }
           if !related.result {
             return RelationResult {
               result: false,
-              reason: self.join_reasons(record, key, children, false, Some("property type".into())),
+              reason: self.join_reasons(
+                record,
+                key,
+                children,
+                false,
+                Some("property type".into()),
+                depth,
+              ),
             };
           }
         }
@@ -1298,15 +1751,21 @@ impl<'a> RelateCtx<'a> {
                   children,
                   false,
                   Some("indexer readonly".into()),
+                  depth,
                 ),
               };
             }
             let related = self.relate_internal(
-              self.optional_type(index.value_type, false),
-              self.optional_type(dst_prop.data.ty, dst_prop.data.optional),
+              self.optional_type(index.value_type, false, OptionalFlavor::IndexerValue),
+              self.optional_type(
+                dst_prop.data.ty,
+                dst_prop.data.optional,
+                OptionalFlavor::Property,
+              ),
               RelationKind::Assignable,
               mode,
               record,
+              depth + 1,
             );
             if record {
               children.push(related.reason);
@@ -1320,6 +1779,7 @@ impl<'a> RelateCtx<'a> {
                   children,
                   false,
                   Some("indexer property".into()),
+                  depth,
                 ),
               };
             }
@@ -1332,6 +1792,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("missing property".into()),
+                depth,
               ),
             };
           }
@@ -1340,7 +1801,9 @@ impl<'a> RelateCtx<'a> {
     }
 
     for dst_index in &dst_shape.indexers {
-      if let Some(src_idx) = self.find_matching_indexer(&src_shape, dst_index, mode, record) {
+      if let Some(src_idx) =
+        self.find_matching_indexer(&src_shape, dst_index, mode, record, depth + 1)
+      {
         if !dst_index.readonly && src_idx.readonly {
           return RelationResult {
             result: false,
@@ -1350,15 +1813,17 @@ impl<'a> RelateCtx<'a> {
               children,
               false,
               Some("readonly indexer".into()),
+              depth,
             ),
           };
         }
         let related = self.relate_internal(
-          src_idx.value_type,
-          dst_index.value_type,
+          self.optional_type(src_idx.value_type, false, OptionalFlavor::IndexerValue),
+          self.optional_type(dst_index.value_type, false, OptionalFlavor::IndexerValue),
           RelationKind::Assignable,
           mode,
           record,
+          depth + 1,
         );
         if record {
           children.push(related.reason);
@@ -1366,7 +1831,7 @@ impl<'a> RelateCtx<'a> {
         if !related.result {
           return RelationResult {
             result: false,
-            reason: self.join_reasons(record, key, children, false, Some("indexer".into())),
+            reason: self.join_reasons(record, key, children, false, Some("indexer".into()), depth),
           };
         }
       } else {
@@ -1375,11 +1840,12 @@ impl<'a> RelateCtx<'a> {
             continue;
           }
           let related = self.relate_internal(
-            self.optional_type(prop.data.ty, prop.data.optional),
-            dst_index.value_type,
+            self.optional_type(prop.data.ty, prop.data.optional, OptionalFlavor::Property),
+            self.optional_type(dst_index.value_type, false, OptionalFlavor::IndexerValue),
             RelationKind::Assignable,
             mode,
             record,
+            depth + 1,
           );
           if record {
             children.push(related.reason);
@@ -1393,6 +1859,7 @@ impl<'a> RelateCtx<'a> {
                 children,
                 false,
                 Some("property vs indexer".into()),
+                depth,
               ),
             };
           }
@@ -1412,6 +1879,7 @@ impl<'a> RelateCtx<'a> {
           &dst_sig_data,
           mode | RelationMode::BIVARIANT_PARAMS,
           record,
+          depth + 1,
         );
         if related.result {
           matched = Some(related.reason);
@@ -1424,7 +1892,14 @@ impl<'a> RelateCtx<'a> {
       if matched.is_none() {
         return RelationResult {
           result: false,
-          reason: self.join_reasons(record, key, children, false, Some("call signature".into())),
+          reason: self.join_reasons(
+            record,
+            key,
+            children,
+            false,
+            Some("call signature".into()),
+            depth,
+          ),
         };
       } else if record {
         children.push(matched.flatten());
@@ -1443,6 +1918,7 @@ impl<'a> RelateCtx<'a> {
           &dst_sig_data,
           mode | RelationMode::BIVARIANT_PARAMS,
           record,
+          depth + 1,
         );
         if related.result {
           matched = Some(related.reason);
@@ -1461,6 +1937,7 @@ impl<'a> RelateCtx<'a> {
             children,
             false,
             Some("construct signature".into()),
+            depth,
           ),
         };
       } else if record {
@@ -1470,7 +1947,7 @@ impl<'a> RelateCtx<'a> {
 
     RelationResult {
       result: true,
-      reason: self.join_reasons(record, key, children, true, Some("object".into())),
+      reason: self.join_reasons(record, key, children, true, Some("object".into()), depth),
     }
   }
 
@@ -1490,6 +1967,7 @@ impl<'a> RelateCtx<'a> {
     match (src_access, dst_access) {
       (Accessibility::Public, Accessibility::Public) => true,
       (Accessibility::Public, _) | (_, Accessibility::Public) => false,
+      (a, b) if a != b => false,
       _ => self
         .hooks
         .is_same_origin_private_member
@@ -1517,6 +1995,7 @@ impl<'a> RelateCtx<'a> {
     dst: &Indexer,
     mode: RelationMode,
     record: bool,
+    depth: usize,
   ) -> Option<&'b Indexer> {
     shape.indexers.iter().find(|src_idx| {
       let key_related = self.relate_internal(
@@ -1525,6 +2004,7 @@ impl<'a> RelateCtx<'a> {
         RelationKind::Assignable,
         mode,
         record,
+        depth + 1,
       );
       key_related.result
     })
@@ -1551,6 +2031,6 @@ impl<'a> RelateCtx<'a> {
     self
       .hooks
       .expander
-      .and_then(|expander| expander.expand_ref(self.store, def, args))
+      .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, args))
   }
 }
