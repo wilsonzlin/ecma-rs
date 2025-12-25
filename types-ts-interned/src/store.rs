@@ -788,6 +788,29 @@ impl TypeStore {
     TypeDisplay::new(self, ty)
   }
 
+  /// Evaluate complex type operators into concrete types.
+  ///
+  /// This uses a no-op [`crate::TypeExpander`], meaning `TypeKind::Ref` nodes
+  /// are left unexpanded.
+  pub fn evaluate(self: &Arc<Self>, ty: TypeId) -> TypeId {
+    struct NoopExpander;
+
+    impl crate::TypeExpander for NoopExpander {
+      fn expand(
+        &self,
+        _store: &TypeStore,
+        _def: crate::DefId,
+        _args: &[TypeId],
+      ) -> Option<crate::ExpandedType> {
+        None
+      }
+    }
+
+    let expander = NoopExpander;
+    let mut evaluator = crate::TypeEvaluator::new(Arc::clone(self), &expander);
+    evaluator.evaluate(ty)
+  }
+
   /// Export a stable JSON representation of a type. This is intentionally
   /// shallow (referencing nested types by ID) to avoid infinite recursion
   /// while still providing a deterministic shape for comparisons.
