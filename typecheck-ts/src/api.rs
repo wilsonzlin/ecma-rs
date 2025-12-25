@@ -15,6 +15,7 @@ use parse_js::ast::type_expr::{
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
+use ::semantic_js::ts as sem_ts;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::sync::Arc;
@@ -104,6 +105,18 @@ pub mod semantic_js {
   /// Opaque symbol identifier.
   #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
   pub struct SymbolId(pub u32);
+
+  impl From<::semantic_js::ts::SymbolId> for SymbolId {
+    fn from(id: ::semantic_js::ts::SymbolId) -> Self {
+      SymbolId(id.0)
+    }
+  }
+
+  impl From<SymbolId> for ::semantic_js::ts::SymbolId {
+    fn from(id: SymbolId) -> Self {
+      ::semantic_js::ts::SymbolId(id.0)
+    }
+  }
 }
 
 /// Export entry for [`ExportMap`].
@@ -448,6 +461,19 @@ struct FileState {
   top_body: Option<BodyId>,
 }
 
+struct HostResolver {
+  host: Arc<dyn Host>,
+}
+
+impl sem_ts::Resolver for HostResolver {
+  fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
+    self
+      .host
+      .resolve(FileId(from.0), specifier)
+      .map(|f| sem_ts::FileId(f.0))
+  }
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct DefData {
@@ -491,6 +517,83 @@ struct VarData {
 struct ImportData {
   from: FileId,
   original: String,
+}
+
+#[derive(Clone, Debug)]
+struct SemHirBuilder {
+  file: FileId,
+  decls: Vec<sem_ts::Decl>,
+  imports: Vec<sem_ts::Import>,
+  exports: Vec<sem_ts::Export>,
+}
+
+impl SemHirBuilder {
+  fn new(file: FileId) -> Self {
+    SemHirBuilder {
+      file,
+      decls: Vec::new(),
+      imports: Vec::new(),
+      exports: Vec::new(),
+    }
+  }
+
+  fn add_decl(
+    &mut self,
+    def: DefId,
+    name: String,
+    kind: sem_ts::DeclKind,
+    exported: sem_ts::Exported,
+    span: TextRange,
+  ) {
+    self.decls.push(sem_ts::Decl {
+      def_id: sem_ts::DefId(def.0),
+      name,
+      kind,
+      is_ambient: false,
+      exported,
+      span,
+    });
+  }
+
+  fn add_import(&mut self, import: sem_ts::Import) {
+    self.imports.push(import);
+  }
+
+  fn add_named_export(
+    &mut self,
+    specifier: Option<String>,
+    specifier_span: Option<TextRange>,
+    items: Vec<sem_ts::ExportSpecifier>,
+    is_type_only: bool,
+  ) {
+    if items.is_empty() {
+      return;
+    }
+    self
+      .exports
+      .push(sem_ts::Export::Named(sem_ts::NamedExport {
+        specifier,
+        specifier_span,
+        items,
+        is_type_only,
+      }));
+  }
+
+  fn add_export_all(&mut self, specifier: String, specifier_span: TextRange, is_type_only: bool) {
+    self
+      .exports
+      .push(sem_ts::Export::All(sem_ts::ExportAll { specifier, is_type_only, specifier_span }));
+  }
+
+  fn finish(self) -> sem_ts::HirFile {
+    sem_ts::HirFile {
+      file_id: sem_ts::FileId(self.file.0),
+      module_kind: sem_ts::ModuleKind::Module,
+      decls: self.decls,
+      imports: self.imports,
+      exports: self.exports,
+    }
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -808,6 +911,8 @@ struct ProgramState {
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_data: HashMap<BodyId, BodyData>,
+  sem_hir: HashMap<FileId, sem_ts::HirFile>,
+  semantics: Option<sem_ts::TsProgramSemantics>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
@@ -834,6 +939,8 @@ impl ProgramState {
       files: HashMap::new(),
       def_data: HashMap::new(),
       body_data: HashMap::new(),
+      sem_hir: HashMap::new(),
+      semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
       symbol_occurrences: HashMap::new(),
@@ -923,6 +1030,9 @@ impl ProgramState {
       }
     }
     self.recompute_global_bindings();
+    if !self.sem_hir.is_empty() {
+      self.compute_semantics(host, roots);
+    }
     self.analyzed = true;
   }
 
@@ -979,6 +1089,23 @@ impl ProgramState {
     self.global_bindings = globals;
   }
 
+  fn compute_semantics(&mut self, host: &Arc<dyn Host>, roots: &[FileId]) {
+    let resolver = HostResolver {
+      host: Arc::clone(host),
+    };
+    let sem_roots: Vec<sem_ts::FileId> = roots.iter().map(|f| sem_ts::FileId(f.0)).collect();
+    let (semantics, _diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file| {
+      let id = FileId(file.0);
+      self
+        .sem_hir
+        .get(&id)
+        .cloned()
+        .map(Arc::new)
+        .unwrap_or_else(|| Arc::new(sem_ts::HirFile::module(file)))
+    });
+    self.semantics = Some(semantics);
+  }
+
   fn bind_file(
     &mut self,
     file: FileId,
@@ -988,6 +1115,7 @@ impl ProgramState {
   ) {
     let top_body_id = self.alloc_body(file, None);
     let mut top_body = BodyBuilder::new(top_body_id, file);
+    let mut sem_builder = SemHirBuilder::new(file);
     let mut defs = Vec::new();
     let mut exports: ExportMap = BTreeMap::new();
     let mut bindings: HashMap<String, SymbolBinding> = HashMap::new();
@@ -1003,7 +1131,7 @@ impl ProgramState {
         Stmt::VarDecl(var) => {
           let var_span = loc_to_span(file, stmt.loc);
           let (new_defs, stmts) =
-            self.handle_var_decl(file, var_span.range, *var.stx, &mut top_body);
+            self.handle_var_decl(file, var_span.range, *var.stx, &mut top_body, &mut sem_builder);
           for (def_id, binding, export_name) in new_defs {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -1024,7 +1152,7 @@ impl ProgramState {
         Stmt::FunctionDecl(func) => {
           let span = loc_to_span(file, stmt.loc);
           if let Some((def_id, binding, export_name)) =
-            self.handle_function_decl(file, span.range, *func.stx)
+            self.handle_function_decl(file, span.range, *func.stx, &mut sem_builder)
           {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -1073,6 +1201,13 @@ impl ProgramState {
           );
           self.record_def_symbol(def_id, symbol);
           defs.push(def_id);
+          sem_builder.add_decl(
+            def_id,
+            "default".to_string(),
+            sem_ts::DeclKind::Var,
+            sem_ts::Exported::Default,
+            span.range,
+          );
           bindings.insert(
             "default".to_string(),
             SymbolBinding {
@@ -1102,26 +1237,61 @@ impl ProgramState {
               ));
             }
           }
-          if let ExportNames::Specific(names) = &export_list.stx.names {
-            for name in names {
-              let exportable = name.stx.exportable.as_str();
-              let alias = name.stx.alias.stx.name.clone();
-              let mapped = bindings.get(exportable);
-              if let Some(binding) = mapped {
-                exports.insert(
-                  alias.clone(),
-                  ExportEntry {
-                    symbol: binding.symbol,
-                    def: binding.def,
-                    type_id: binding.type_id,
-                  },
+          match &export_list.stx.names {
+            ExportNames::Specific(names) => {
+              for name in names {
+                let exportable = name.stx.exportable.as_str().to_string();
+                let alias = name.stx.alias.stx.name.clone();
+                let exported_as = if alias == exportable { None } else { Some(alias.clone()) };
+                let is_type_only = export_list.stx.type_only || name.stx.type_only;
+                sem_builder.add_named_export(
+                  export_list.stx.from.clone(),
+                  export_list
+                    .stx
+                    .from
+                    .as_ref()
+                    .map(|_| loc_to_span(file, stmt.loc).range),
+                  vec![sem_ts::ExportSpecifier {
+                    local: exportable.clone(),
+                    exported: exported_as.clone(),
+                    local_span: loc_to_span(file, name.loc).range,
+                    exported_span: exported_as
+                      .as_ref()
+                      .map(|_| loc_to_span(file, name.stx.alias.loc).range),
+                  }],
+                  is_type_only,
                 );
-              } else {
+
+                if export_list.stx.from.is_none() && !is_type_only {
+                  let mapped = bindings.get(&exportable);
+                  if let Some(binding) = mapped {
+                    exports.insert(
+                      alias.clone(),
+                      ExportEntry {
+                        symbol: binding.symbol,
+                        def: binding.def,
+                        type_id: binding.type_id,
+                      },
+                    );
+                  } else {
+                    self.diagnostics.push(Diagnostic::error(
+                      CODE_UNKNOWN_EXPORT,
+                      format!("unknown export {exportable}"),
+                      loc_to_span(file, name.loc),
+                    ));
+                  }
+                }
+              }
+            }
+            ExportNames::All(alias) => {
+              if alias.is_some() {
                 self.diagnostics.push(Diagnostic::error(
                   CODE_UNKNOWN_EXPORT,
-                  format!("unknown export {exportable}"),
-                  loc_to_span(file, name.loc),
+                  "unsupported export * as alias",
+                  loc_to_span(file, stmt.loc),
                 ));
+              } else if let Some(spec) = export_list.stx.from.clone() {
+                sem_builder.add_export_all(spec, loc_to_span(file, stmt.loc).range, export_list.stx.type_only);
               }
             }
           }
@@ -1137,6 +1307,53 @@ impl ProgramState {
               format!("unresolved module {module}"),
               loc_to_span(file, stmt.loc),
             ));
+          }
+          let mut import_default = None;
+          let mut import_namespace = None;
+          let mut import_named = Vec::new();
+          if let Some(default_pat) = import_stmt.stx.default.as_ref() {
+            let alias_name = match &default_pat.stx.pat.stx.as_ref() {
+              Pat::Id(id) => id.stx.name.clone(),
+              _ => {
+                self.diagnostics.push(Diagnostic::error(
+                  CODE_UNSUPPORTED_IMPORT_PATTERN,
+                  "unsupported import pattern",
+                  loc_to_span(file, default_pat.loc),
+                ));
+                continue;
+              }
+            };
+            import_default = Some(sem_ts::ImportDefault {
+              local: alias_name.clone(),
+              local_span: loc_to_span(file, default_pat.loc).range,
+              is_type_only: import_stmt.stx.type_only,
+            });
+            let symbol = self.alloc_symbol();
+            let def_id = self.alloc_def();
+            self.def_data.insert(
+              def_id,
+              DefData {
+                name: alias_name.clone(),
+                file,
+                span: loc_to_span(file, default_pat.loc).range,
+                symbol,
+                export: false,
+                kind: DefKind::Import(ImportData {
+                  from: resolved.unwrap_or(file),
+                  original: "default".to_string(),
+                }),
+              },
+            );
+            defs.push(def_id);
+            bindings.insert(
+              alias_name.clone(),
+              SymbolBinding {
+                symbol,
+                def: Some(def_id),
+                type_id: None,
+              },
+            );
+            self.record_symbol(file, loc_to_span(file, default_pat.loc).range, symbol);
           }
           match import_stmt.stx.names {
             Some(ImportNames::Specific(ref list)) => {
@@ -1154,6 +1371,14 @@ impl ProgramState {
                     continue;
                   }
                 };
+                let is_type_only = import_stmt.stx.type_only || entry.stx.type_only;
+                import_named.push(sem_ts::ImportNamed {
+                  imported: name.clone(),
+                  local: alias_name.clone(),
+                  is_type_only,
+                  imported_span: loc_to_span(file, entry.loc).range,
+                  local_span: loc_to_span(file, alias_pat.loc).range,
+                });
                 let symbol = self.alloc_symbol();
                 let def_id = self.alloc_def();
                 self.def_data.insert(
@@ -1195,6 +1420,11 @@ impl ProgramState {
                   continue;
                 }
               };
+              import_namespace = Some(sem_ts::ImportNamespace {
+                local: alias_name.clone(),
+                local_span: loc_to_span(file, pat.loc).range,
+                is_type_only: import_stmt.stx.type_only,
+              });
               let symbol = self.alloc_symbol();
               let def_id = self.alloc_def();
               self.def_data.insert(
@@ -1225,6 +1455,14 @@ impl ProgramState {
             }
             None => {}
           }
+          sem_builder.add_import(sem_ts::Import {
+            specifier: module,
+            specifier_span: loc_to_span(file, stmt.loc).range,
+            default: import_default,
+            namespace: import_namespace,
+            named: import_named,
+            is_type_only: import_stmt.stx.type_only,
+          });
         }
         Stmt::Expr(expr_stmt) => {
           let expr = top_body.lower_expr(expr_stmt.stx.expr, self);
@@ -1239,6 +1477,7 @@ impl ProgramState {
 
     let body_data = top_body.finish(None);
     self.body_data.insert(top_body_id, body_data);
+    self.sem_hir.insert(file, sem_builder.finish());
     self.files.insert(
       file,
       FileState {
@@ -1256,6 +1495,7 @@ impl ProgramState {
     span: TextRange,
     var: VarDecl,
     builder: &mut BodyBuilder,
+    sem_builder: &mut SemHirBuilder,
   ) -> (
     Vec<(DefId, (String, SymbolBinding), Option<String>)>,
     Vec<HirStmt>,
@@ -1320,8 +1560,19 @@ impl ProgramState {
             type_id: type_ann,
           },
         ),
-        if var.export { Some(name) } else { None },
+        if var.export { Some(name.clone()) } else { None },
       ));
+      sem_builder.add_decl(
+        def_id,
+        name.clone(),
+        sem_ts::DeclKind::Var,
+        if var.export {
+          sem_ts::Exported::Named
+        } else {
+          sem_ts::Exported::No
+        },
+        loc_to_span(file, pat.loc).range,
+      );
     }
     (defs, stmts)
   }
@@ -1331,6 +1582,7 @@ impl ProgramState {
     file: FileId,
     span: TextRange,
     func: FuncDecl,
+    sem_builder: &mut SemHirBuilder,
   ) -> Option<(DefId, (String, SymbolBinding), Option<String>)> {
     let name_node = func.name?;
     let name = name_node.stx.name.clone();
@@ -1350,6 +1602,19 @@ impl ProgramState {
       },
     );
     self.record_def_symbol(def_id, symbol);
+    sem_builder.add_decl(
+      def_id,
+      name.clone(),
+      sem_ts::DeclKind::Function,
+      if func.export_default {
+        sem_ts::Exported::Default
+      } else if func.export {
+        sem_ts::Exported::Named
+      } else {
+        sem_ts::Exported::No
+      },
+      loc_to_span(file, name_node.loc).range,
+    );
     let binding = (
       name.clone(),
       SymbolBinding {
@@ -2187,6 +2452,50 @@ impl ProgramState {
   }
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
+    if let Some(semantics) = self.semantics.clone() {
+      let mut map = ExportMap::new();
+      let sem_file = sem_ts::FileId(file.0);
+      let exports = semantics.exports_of(sem_file).clone();
+      for (name, group) in exports.iter() {
+        let symbol_id = {
+          let symbols = semantics.symbols();
+          group.symbol_for(sem_ts::Namespace::VALUE, symbols)
+        };
+        if let Some(symbol_id) = symbol_id {
+          let (local_def, any_def) = {
+            let symbols = semantics.symbols();
+            let symbol = symbols.symbol(symbol_id);
+            let mut local_def = None;
+            let mut any_def = None;
+            for decl_id in symbol.decls_for(sem_ts::Namespace::VALUE).iter() {
+              let decl = symbols.decl(*decl_id);
+              let def = DefId(decl.def_id.0);
+              if any_def.is_none() {
+                any_def = Some(def);
+              }
+              if decl.file == sem_file && local_def.is_none() {
+                local_def = Some(def);
+              }
+            }
+            (local_def, any_def)
+          };
+          let symbol = any_def
+            .or(local_def)
+            .and_then(|def| self.def_data.get(&def).map(|data| data.symbol))
+            .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
+          let type_id = any_def.or(local_def).map(|d| self.type_of_def(d));
+          map.insert(
+            name.clone(),
+            ExportEntry {
+              symbol,
+              def: local_def,
+              type_id,
+            },
+          );
+        }
+      }
+      return map;
+    }
     let Some(state) = self.files.get(&file).cloned() else {
       return ExportMap::new();
     };

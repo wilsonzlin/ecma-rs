@@ -1947,6 +1947,7 @@ dependencies = [
  "num-bigint",
  "ordered-float",
  "parse-js",
+ "semantic-js",
  "serde",
  "serde_json",
  "thiserror",
