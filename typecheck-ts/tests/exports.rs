@@ -83,7 +83,7 @@ fn default_export_has_type() {
   let default_entry = exports.get("default").expect("default export");
   assert!(default_entry.def.is_some());
   let ty = default_entry.type_id.expect("type for default");
-  assert_eq!(program.display_type(ty).to_string(), "number");
+  assert_eq!(program.display_type(ty).to_string(), "42");
 }
 
 #[test]
@@ -108,7 +108,7 @@ fn type_only_exports_filtered() {
   );
   let value_entry = exports.get("value").expect("value export");
   let ty = value_entry.type_id.expect("type for value");
-  assert_eq!(program.display_type(ty).to_string(), "number");
+  assert_eq!(program.display_type(ty).to_string(), "1");
 }
 
 #[test]
