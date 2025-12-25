@@ -336,7 +336,8 @@ impl Program {
   pub fn check(&self) -> Vec<Diagnostic> {
     let mut state = self.state.lock().unwrap();
     state.ensure_analyzed(&self.host, &self.roots);
-    let body_ids: Vec<BodyId> = state.body_data.keys().copied().collect();
+    let mut body_ids: Vec<BodyId> = state.body_data.keys().copied().collect();
+    body_ids.sort_by_key(|id| id.0);
     let mut diagnostics = state.diagnostics.clone();
     for body in body_ids {
       let res = state.check_body(body);
