@@ -161,7 +161,7 @@ impl ClassEnv {
   /// private/protected nominal compatibility.
   pub fn relate_ctx(&self, options: TypeOptions) -> RelateCtx<'_> {
     let hooks = relate_hooks::class_hooks(self);
-    RelateCtx::with_hooks(self.store.as_ref(), options, hooks)
+    RelateCtx::with_hooks(self.store_arc(), options, hooks)
   }
 
   fn alloc_def(&mut self) -> DefId {
