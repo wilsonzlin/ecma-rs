@@ -975,3 +975,51 @@ fn ambient_module_fragments_merge_exports() {
   let ns = group.symbol_for(Namespace::NAMESPACE, symbols).unwrap();
   assert_eq!(value, ns);
 }
+
+#[test]
+fn ambient_module_interfaces_merge_deterministically() {
+  let file = FileId(97);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+
+  let mut part1 = AmbientModule {
+    name: "lib".to_string(),
+    name_span: span(0),
+    decls: Vec::new(),
+    imports: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  };
+  let mut part2 = part1.clone();
+
+  let mut iface_a = mk_decl(0, "Merged", DeclKind::Interface, Exported::No);
+  iface_a.is_ambient = true;
+  let mut iface_b = mk_decl(1, "Merged", DeclKind::Interface, Exported::No);
+  iface_b.is_ambient = true;
+  part1.decls.push(iface_a);
+  part2.decls.push(iface_b);
+
+  hir.ambient_modules.push(part1);
+  hir.ambient_modules.push(part2);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports = semantics
+    .exports_of_ambient_module("lib")
+    .expect("ambient module exports present");
+  let symbols = semantics.symbols();
+  let merged_symbol = exports
+    .get("Merged")
+    .expect("interface exported")
+    .symbol_for(Namespace::TYPE, symbols)
+    .expect("type namespace present");
+  let decls = semantics.symbol_decls(merged_symbol, Namespace::TYPE);
+  assert_eq!(decls.len(), 2);
+  assert!(decls
+    .windows(2)
+    .all(|w| symbols.decl(w[0]).order < symbols.decl(w[1]).order));
+}
