@@ -2603,10 +2603,9 @@ impl BodyBuilder {
           span.end = expected_end;
         }
         if span.len() == 0 {
-          let name_len = name.len().min(u32::MAX as usize) as u32;
-          let widen = name_len.max(1);
-          span.start = span.start.saturating_sub(name_len);
-          span.end = span.end.saturating_add(widen);
+          span.start = span
+            .start
+            .saturating_sub(name.len().min(u32::MAX as usize) as u32);
         }
         HirExprKind::Ident(name)
       }
@@ -2692,10 +2691,6 @@ impl BodyBuilder {
       }
       _ => HirExprKind::Unknown,
     };
-
-    if span.len() == 0 {
-      span = TextRange::new(span.start.saturating_sub(1), span.end.saturating_add(1));
-    }
 
     let id = ExprId(self.expr_spans.len() as u32);
     self.expr_spans.push(span);
