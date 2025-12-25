@@ -209,11 +209,12 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           SymbolOrigin::Local,
         );
       } else if decl.is_global && hir.file_kind != FileKind::Dts {
-        self.diagnostics.push(Diagnostic {
-          code: "BIND2001",
-          message: "global augmentations in non-.d.ts modules are not supported yet".to_string(),
-          file: Some(hir.file_id),
-        });
+        let span = Span::new(hir.file_id, decl.span);
+        self.diagnostics.push(Diagnostic::error(
+          "BIND2001",
+          "global augmentations in non-.d.ts modules are not supported yet",
+          span,
+        ));
       }
       match decl.exported {
         Exported::No => {}

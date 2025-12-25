@@ -550,6 +550,7 @@ impl SemHirBuilder {
       name,
       kind,
       is_ambient: false,
+      is_global: false,
       exported,
       span,
     });
@@ -589,6 +590,7 @@ impl SemHirBuilder {
     sem_ts::HirFile {
       file_id: sem_ts::FileId(self.file.0),
       module_kind: sem_ts::ModuleKind::Module,
+      file_kind: sem_ts::FileKind::Ts,
       decls: self.decls,
       imports: self.imports,
       exports: self.exports,

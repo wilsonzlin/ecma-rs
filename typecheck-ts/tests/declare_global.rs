@@ -41,6 +41,7 @@ fn declare_global_from_dts_is_available_globally() {
     is_ambient: foo_def.is_ambient,
     is_global: foo_def.in_global,
     exported: Exported::No,
+    span: foo_def.span,
   };
 
   hir.decls.push(decl);
