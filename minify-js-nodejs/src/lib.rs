@@ -1,8 +1,10 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
+use diagnostics::Diagnostic;
 use diagnostics::FileId;
 use minify_js::TopLevelMode;
 use neon::prelude::*;
 use neon::types::buffer::TypedArray;
+use serde_json::Value;
 
 fn parse_top_level_mode(value: &str) -> Option<TopLevelMode> {
   match value {
@@ -24,6 +26,42 @@ impl<'a> SourceProvider for SingleFileSource<'a> {
 
   fn file_text(&self, _file: FileId) -> Option<&str> {
     Some(self.text)
+  }
+}
+
+fn diagnostics_to_js_value<'a>(
+  cx: &mut FunctionContext<'a>,
+  diagnostics: &[Diagnostic],
+) -> JsResult<'a, JsValue> {
+  let value = match serde_json::to_value(diagnostics) {
+    Ok(value) => value,
+    Err(err) => return cx.throw_error(format!("failed to serialize diagnostics to JSON: {err}")),
+  };
+  json_to_js_value(cx, &value)
+}
+
+fn json_to_js_value<'a>(cx: &mut FunctionContext<'a>, value: &Value) -> JsResult<'a, JsValue> {
+  match value {
+    Value::Null => Ok(cx.null().upcast()),
+    Value::Bool(v) => Ok(cx.boolean(*v).upcast()),
+    Value::Number(v) => Ok(cx.number(v.as_f64().unwrap_or(0.0)).upcast()),
+    Value::String(v) => Ok(cx.string(v.as_str()).upcast()),
+    Value::Array(values) => {
+      let js_array = JsArray::new(cx, values.len() as u32);
+      for (idx, child) in values.iter().enumerate() {
+        let js_value = json_to_js_value(cx, child)?;
+        js_array.set(cx, idx as u32, js_value)?;
+      }
+      Ok(js_array.upcast())
+    }
+    Value::Object(map) => {
+      let js_object = JsObject::new(cx);
+      for (key, value) in map {
+        let js_value = json_to_js_value(cx, value)?;
+        js_object.set(cx, key.as_str(), js_value)?;
+      }
+      Ok(js_object.upcast())
+    }
   }
 }
 
@@ -62,7 +100,11 @@ fn minify(mut cx: FunctionContext) -> JsResult<JsBuffer> {
         }
         rendered.push_str(&render_diagnostic(&provider, diagnostic));
       }
-      cx.throw_error(rendered)
+
+      let diagnostics_value = diagnostics_to_js_value(&mut cx, &diagnostics)?;
+      let error = cx.error(rendered)?;
+      error.set(&mut cx, "diagnostics", diagnostics_value)?;
+      cx.throw(error)
     }
   }
 }

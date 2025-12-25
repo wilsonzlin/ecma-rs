@@ -936,6 +936,7 @@ dependencies = [
  "diagnostics",
  "minify-js",
  "neon",
+ "serde_json",
 ]
 
 [[package]]

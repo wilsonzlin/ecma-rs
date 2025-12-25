@@ -10,8 +10,9 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-diagnostics = { path = "../diagnostics" }
+diagnostics = { path = "../diagnostics", features = ["serde"] }
 minify-js = { version = "0.6.0", path = "../minify-js" }
+serde_json = "1"
 
 [dependencies.neon]
 version = "0.10"
