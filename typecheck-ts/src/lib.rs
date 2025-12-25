@@ -122,9 +122,11 @@
 //! [`Program`] returns opaque IDs and `Arc` handles so downstream consumers can
 //! cache and share results without relying on implementation details.
 
-mod api;
+mod error;
+mod program;
 
-pub use api::*;
+pub use error::*;
+pub use program::*;
 
 /// Generic type checking helpers (instantiation and inference).
 ///
@@ -132,15 +134,15 @@ pub use api::*;
 /// checker implementation so callers can experiment with standalone inference.
 pub mod check {
   pub mod infer {
-    pub use crate::api::check::infer::*;
+    pub use crate::program::check::infer::*;
   }
 
   pub mod instantiate {
-    pub use crate::api::check::instantiate::*;
+    pub use crate::program::check::instantiate::*;
   }
 
   pub mod type_expr {
-    pub use crate::api::check::type_expr::*;
+    pub use crate::program::check::type_expr::*;
   }
 
   pub mod relate_hooks;

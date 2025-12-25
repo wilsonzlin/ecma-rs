@@ -18,10 +18,13 @@ use parse_js::parse;
 use ::semantic_js::ts as sem_ts;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
-use thiserror::Error;
 use tracing::debug_span;
+
+use crate::{FatalError, HostError, Ice, IceContext};
 
 #[path = "check/mod.rs"]
 pub(crate) mod check;
@@ -58,22 +61,6 @@ const CODE_UNSUPPORTED_PATTERN: &str = "TC1004";
 const CODE_UNSUPPORTED_PARAM_PATTERN: &str = "TC1005";
 const CODE_MISSING_BODY: &str = "ICE0002";
 const CODE_ARGUMENT_COUNT_MISMATCH: &str = "TC1006";
-
-/// Error returned by a [`Host`].
-#[derive(Debug, Error, Serialize, Deserialize, Clone)]
-#[error("{message}")]
-pub struct HostError {
-  message: String,
-}
-
-impl HostError {
-  /// Create a new host error with the given message.
-  pub fn new(message: impl Into<String>) -> HostError {
-    HostError {
-      message: message.into(),
-    }
-  }
-}
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
@@ -204,8 +191,12 @@ pub struct TypeDisplay<'a> {
 
 impl<'a> std::fmt::Display for TypeDisplay<'a> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let mut state = self.program.state.lock().unwrap();
-    state.ensure_analyzed(&self.program.host, &self.program.roots);
+    let mut state = self.program.lock_state();
+    state.ensure_analyzed(
+      &self.program.host,
+      &self.program.roots,
+      &self.program.cancelled,
+    );
     let TypeDisplay { program: _, ty } = *self;
     let kind = state.type_store.kind(ty).clone();
     drop(state);
@@ -310,6 +301,7 @@ fn format_type(
 pub struct Program {
   host: Arc<dyn Host>,
   roots: Vec<FileId>,
+  cancelled: AtomicBool,
   state: std::sync::Mutex<ProgramState>,
 }
 
@@ -328,75 +320,223 @@ impl Program {
     Program {
       host: Arc::new(host),
       roots,
+      cancelled: AtomicBool::new(false),
       state: std::sync::Mutex::new(ProgramState::new(lib_manager)),
     }
   }
 
   /// Parse, bind, and type-check all known files, returning accumulated diagnostics.
   pub fn check(&self) -> Vec<Diagnostic> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    let mut body_ids: Vec<BodyId> = state.body_data.keys().copied().collect();
-    body_ids.sort_by_key(|id| id.0);
-    let mut diagnostics = state.diagnostics.clone();
-    for body in body_ids {
-      let res = state.check_body(body);
-      diagnostics.extend(res.diagnostics.iter().cloned());
+    match self.check_fallible() {
+      Ok(diags) => diags,
+      Err(fatal) => self.fatal_to_diagnostics(fatal),
     }
-    diagnostics
+  }
+
+  /// Fallible entry point that surfaces unrecoverable failures to the host.
+  pub fn check_fallible(&self) -> Result<Vec<Diagnostic>, FatalError> {
+    self.catch_fatal(|| {
+      self.ensure_not_cancelled()?;
+      let mut state = self.lock_state();
+      state.ensure_analyzed_result(&self.host, &self.roots, &self.cancelled)?;
+      let mut body_ids: Vec<BodyId> = state.body_data.keys().copied().collect();
+      body_ids.sort_by_key(|id| id.0);
+      let mut diagnostics = state.diagnostics.clone();
+      for body in body_ids {
+        self.ensure_not_cancelled()?;
+        let res = state.check_body(body);
+        diagnostics.extend(res.diagnostics.iter().cloned());
+      }
+      Ok(diagnostics)
+    })
+  }
+
+  /// Request cancellation of ongoing work.
+  pub fn cancel(&self) {
+    self.cancelled.store(true, Ordering::Relaxed);
+  }
+
+  fn ensure_not_cancelled(&self) -> Result<(), FatalError> {
+    if self.cancelled.load(Ordering::Relaxed) {
+      Err(FatalError::Cancelled)
+    } else {
+      Ok(())
+    }
+  }
+
+  fn catch_fatal<R>(&self, f: impl FnOnce() -> Result<R, FatalError>) -> Result<R, FatalError> {
+    match panic::catch_unwind(AssertUnwindSafe(f)) {
+      Ok(res) => res,
+      Err(payload) => Err(FatalError::Ice(Ice::from_panic(payload))),
+    }
+  }
+
+  fn lock_state(&self) -> std::sync::MutexGuard<'_, ProgramState> {
+    self.state.lock().unwrap_or_else(|err| err.into_inner())
+  }
+
+  fn with_analyzed_state<R>(
+    &self,
+    f: impl FnOnce(&mut ProgramState) -> Result<R, FatalError>,
+  ) -> Result<R, FatalError> {
+    self.catch_fatal(|| {
+      self.ensure_not_cancelled()?;
+      let mut state = self.lock_state();
+      state.ensure_analyzed_result(&self.host, &self.roots, &self.cancelled)?;
+      f(&mut state)
+    })
+  }
+
+  fn record_fatal(&self, fatal: FatalError) {
+    let diag = fatal_to_diagnostic(fatal);
+    let mut state = self.lock_state();
+    state.diagnostics.push(diag);
+  }
+
+  fn fatal_to_diagnostics(&self, fatal: FatalError) -> Vec<Diagnostic> {
+    let diag = fatal_to_diagnostic(fatal);
+    {
+      let mut state = self.lock_state();
+      state.diagnostics.push(diag.clone());
+    }
+    vec![diag]
+  }
+
+  fn builtin_unknown(&self) -> TypeId {
+    let state = self.lock_state();
+    state.builtin.unknown
   }
 
   /// Type for a definition.
   pub fn type_of_def(&self, def: DefId) -> TypeId {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state.type_of_def(def)
+    match self.type_of_def_fallible(def) {
+      Ok(ty) => ty,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        self.builtin_unknown()
+      }
+    }
+  }
+
+  pub fn type_of_def_fallible(&self, def: DefId) -> Result<TypeId, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.type_of_def(def)))
   }
 
   /// Check a body, returning the cached result.
   pub fn check_body(&self, body: BodyId) -> Arc<BodyCheckResult> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state.check_body(body)
+    match self.check_body_fallible(body) {
+      Ok(res) => res,
+      Err(fatal) => {
+        let diagnostics = self.fatal_to_diagnostics(fatal);
+        Arc::new(BodyCheckResult {
+          body,
+          expr_types: Vec::new(),
+          expr_spans: Vec::new(),
+          diagnostics,
+          return_types: Vec::new(),
+        })
+      }
+    }
+  }
+
+  pub fn check_body_fallible(&self, body: BodyId) -> Result<Arc<BodyCheckResult>, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.check_body(body)))
   }
 
   /// Type of a specific expression in a body.
   pub fn type_of_expr(&self, body: BodyId, expr: ExprId) -> TypeId {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    let result = state.check_body(body);
-    result.expr_type(expr).unwrap_or(state.builtin.unknown)
+    match self.type_of_expr_fallible(body, expr) {
+      Ok(ty) => ty,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        self.builtin_unknown()
+      }
+    }
+  }
+
+  pub fn type_of_expr_fallible(&self, body: BodyId, expr: ExprId) -> Result<TypeId, FatalError> {
+    self.with_analyzed_state(|state| {
+      let result = state.check_body(body);
+      Ok(result.expr_type(expr).unwrap_or(state.builtin.unknown))
+    })
   }
 
   /// Return symbol at a given file offset, if any.
   pub fn symbol_at(&self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state.ensure_symbols_for_file(file);
-    state.symbol_at(file, offset)
+    match self.symbol_at_fallible(file, offset) {
+      Ok(symbol) => symbol,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn symbol_at_fallible(
+    &self,
+    file: FileId,
+    offset: u32,
+  ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
+    self.with_analyzed_state(|state| {
+      state.ensure_symbols_for_file(file);
+      Ok(state.symbol_at(file, offset))
+    })
   }
 
   /// Innermost expression covering an offset within a file.
   pub fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state.expr_at(file, offset)
+    match self.expr_at_fallible(file, offset) {
+      Ok(expr) => expr,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn expr_at_fallible(
+    &self,
+    file: FileId,
+    offset: u32,
+  ) -> Result<Option<(BodyId, ExprId)>, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.expr_at(file, offset)))
   }
 
   /// Type of the innermost expression covering an offset within a file.
   pub fn type_at(&self, file: FileId, offset: u32) -> Option<TypeId> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    let (body, expr) = state.expr_at(file, offset)?;
-    let result = state.check_body(body);
-    Some(result.expr_type(expr).unwrap_or(state.builtin.unknown))
+    match self.type_at_fallible(file, offset) {
+      Ok(ty) => ty,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn type_at_fallible(&self, file: FileId, offset: u32) -> Result<Option<TypeId>, FatalError> {
+    self.with_analyzed_state(|state| {
+      let (body, expr) = match state.expr_at(file, offset) {
+        Some(res) => res,
+        None => return Ok(None),
+      };
+      let result = state.check_body(body);
+      Ok(Some(result.expr_type(expr).unwrap_or(state.builtin.unknown)))
+    })
   }
 
   /// Export map for a file.
   pub fn exports_of(&self, file: FileId) -> ExportMap {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state.exports_of_file(file)
+    match self.exports_of_fallible(file) {
+      Ok(exports) => exports,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        ExportMap::new()
+      }
+    }
+  }
+
+  pub fn exports_of_fallible(&self, file: FileId) -> Result<ExportMap, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.exports_of_file(file)))
   }
 
   /// Helper to render a type as displayable string.
@@ -406,38 +546,76 @@ impl Program {
 
   /// Definitions declared in a file.
   pub fn definitions_in_file(&self, file: FileId) -> Vec<DefId> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state
-      .files
-      .get(&file)
-      .map(|f| f.defs.clone())
-      .unwrap_or_default()
+    match self.definitions_in_file_fallible(file) {
+      Ok(defs) => defs,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
+    }
+  }
+
+  pub fn definitions_in_file_fallible(&self, file: FileId) -> Result<Vec<DefId>, FatalError> {
+    self.with_analyzed_state(|state| {
+      Ok(
+        state
+          .files
+          .get(&file)
+          .map(|f| f.defs.clone())
+          .unwrap_or_default(),
+      )
+    })
   }
 
   /// Friendly name for a definition.
   pub fn def_name(&self, def: DefId) -> Option<String> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state.def_data.get(&def).map(|d| d.name.clone())
+    match self.def_name_fallible(def) {
+      Ok(name) => name,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn def_name_fallible(&self, def: DefId) -> Result<Option<String>, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.def_data.get(&def).map(|d| d.name.clone())))
   }
 
   /// Body attached to a definition, if any.
   pub fn body_of_def(&self, def: DefId) -> Option<BodyId> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state.def_data.get(&def).and_then(|d| match &d.kind {
-      DefKind::Function(func) => func.body,
-      DefKind::Var(var) => Some(var.body),
-      DefKind::Import(_) => None,
+    match self.body_of_def_fallible(def) {
+      Ok(body) => body,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn body_of_def_fallible(&self, def: DefId) -> Result<Option<BodyId>, FatalError> {
+    self.with_analyzed_state(|state| {
+      Ok(state.def_data.get(&def).and_then(|d| match &d.kind {
+        DefKind::Function(func) => func.body,
+        DefKind::Var(var) => Some(var.body),
+        DefKind::Import(_) => None,
+      }))
     })
   }
 
   /// Implicit top-level body for a file, if any.
   pub fn file_body(&self, file: FileId) -> Option<BodyId> {
-    let mut state = self.state.lock().unwrap();
-    state.ensure_analyzed(&self.host, &self.roots);
-    state.files.get(&file).and_then(|f| f.top_body)
+    match self.file_body_fallible(file) {
+      Ok(body) => body,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn file_body_fallible(&self, file: FileId) -> Result<Option<BodyId>, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.files.get(&file).and_then(|f| f.top_body)))
   }
 }
 
@@ -961,9 +1139,20 @@ impl ProgramState {
     }
   }
 
-  fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileId]) {
+  fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileId], cancelled: &AtomicBool) {
+    if let Err(fatal) = self.ensure_analyzed_result(host, roots, cancelled) {
+      self.diagnostics.push(fatal_to_diagnostic(fatal));
+    }
+  }
+
+  fn ensure_analyzed_result(
+    &mut self,
+    host: &Arc<dyn Host>,
+    roots: &[FileId],
+    cancelled: &AtomicBool,
+  ) -> Result<(), FatalError> {
     if self.analyzed {
-      return;
+      return Ok(());
     }
     let libs = self.collect_libraries(host.as_ref());
     let mut queue: VecDeque<FileId> = libs.iter().map(|l| l.id).collect();
@@ -978,6 +1167,9 @@ impl ProgramState {
       queue.push_back(*root);
     }
     while let Some(file) = queue.pop_front() {
+      if cancelled.load(Ordering::Relaxed) {
+        return Err(FatalError::Cancelled);
+      }
       if self.files.contains_key(&file) {
         continue;
       }
@@ -985,11 +1177,26 @@ impl ProgramState {
         .file_kinds
         .entry(file)
         .or_insert_with(|| host.file_kind(file));
-      match self.load_text(file, host) {
-        Ok(text) => {
-          let parse_span = QuerySpan::enter(
+      let text = self.load_text(file, host)?;
+      let parse_span = QuerySpan::enter(
+        query_span!(
+          "typecheck_ts.parse",
+          Some(file.0),
+          Option::<u32>::None,
+          Option::<u32>::None,
+          false
+        ),
+        None,
+      );
+      let parsed = parse(&text);
+      if let Some(span) = parse_span {
+        span.finish(None);
+      }
+      match parsed {
+        Ok(ast) => {
+          let bind_span = QuerySpan::enter(
             query_span!(
-              "typecheck_ts.parse",
+              "typecheck_ts.bind",
               Some(file.0),
               Option::<u32>::None,
               Option::<u32>::None,
@@ -997,38 +1204,13 @@ impl ProgramState {
             ),
             None,
           );
-          let parsed = parse(&text);
-          if let Some(span) = parse_span {
+          self.bind_file(file, ast, host, &mut queue);
+          if let Some(span) = bind_span {
             span.finish(None);
-          }
-          match parsed {
-            Ok(ast) => {
-              let bind_span = QuerySpan::enter(
-                query_span!(
-                  "typecheck_ts.bind",
-                  Some(file.0),
-                  Option::<u32>::None,
-                  Option::<u32>::None,
-                  false
-                ),
-                None,
-              );
-              self.bind_file(file, ast, host, &mut queue);
-              if let Some(span) = bind_span {
-                span.finish(None);
-              }
-            }
-            Err(err) => {
-              self.diagnostics.push(err.to_diagnostic(file));
-            }
           }
         }
         Err(err) => {
-          self.diagnostics.push(Diagnostic::error(
-            "HOST0001",
-            err.to_string(),
-            Span::new(file, TextRange::new(0, 0)),
-          ));
+          self.diagnostics.push(err.to_diagnostic(file));
         }
       }
     }
@@ -1037,6 +1219,7 @@ impl ProgramState {
       self.compute_semantics(host, roots);
     }
     self.analyzed = true;
+    Ok(())
   }
 
   fn collect_libraries(&mut self, host: &dyn Host) -> Vec<LibFile> {
@@ -3076,6 +3259,37 @@ fn type_member_name(key: &TypePropertyKey) -> Option<String> {
     TypePropertyKey::Number(name) => Some(name.clone()),
     TypePropertyKey::Computed(_) => None,
   }
+}
+
+fn fatal_to_diagnostic(fatal: FatalError) -> Diagnostic {
+  let placeholder = Span::new(FileId(0), TextRange::new(0, 0));
+  match fatal {
+    FatalError::Host(err) => diagnostics::host_error(None, err.to_string()),
+    FatalError::Cancelled => {
+      Diagnostic::error("CANCEL0001", "operation cancelled", placeholder)
+        .with_note("operation was cancelled by the host")
+    }
+    FatalError::Ice(ice) => {
+      let span = span_from_context(&ice.context, placeholder);
+      let mut diagnostic =
+        diagnostics::ice(span, format!("internal compiler error: {}", ice.message));
+      if let Some(backtrace) = ice.backtrace {
+        diagnostic.push_note(backtrace);
+      }
+      diagnostic
+    }
+    FatalError::OutOfMemory => {
+      Diagnostic::error("OOM0001", "out of memory", placeholder)
+        .with_note("the checker ran out of memory while processing this program")
+    }
+  }
+}
+
+fn span_from_context(ctx: &IceContext, placeholder: Span) -> Span {
+  ctx
+    .file
+    .map(|file| Span::new(file, TextRange::new(0, 0)))
+    .unwrap_or(placeholder)
 }
 
 fn loc_to_span(file: FileId, loc: Loc) -> Span {

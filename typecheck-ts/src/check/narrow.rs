@@ -7,9 +7,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::TypeKind;
-use crate::api::TypeStore;
-use crate::api::{BuiltinTypes, TypeId};
+use crate::{BuiltinTypes, TypeId, TypeKind, TypeStore};
 
 /// Narrowing facts produced by evaluating an expression in a boolean context.
 ///

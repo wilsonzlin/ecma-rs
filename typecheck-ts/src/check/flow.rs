@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use crate::api::{BuiltinTypes, TypeId, TypeStore};
+use crate::{BuiltinTypes, TypeId, TypeStore};
 use super::narrow::Facts;
 
 /// Per-point variable environment used during flow-sensitive checks.
