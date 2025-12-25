@@ -1947,12 +1947,13 @@ dependencies = [
  "num-bigint",
  "ordered-float",
  "parse-js",
- "serde",
- "serde_json",
- "thiserror",
- "tracing",
- "tracing-subscriber",
- "types-ts-interned",
+  "serde",
+  "serde_json",
+  "thiserror",
+  "tracing",
+  "tracing-subscriber",
+  "types-ts-interned",
+  "types-ts",
 ]
 
 [[package]]

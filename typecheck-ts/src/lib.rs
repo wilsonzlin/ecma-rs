@@ -142,6 +142,9 @@ pub mod check {
   pub mod type_expr {
     pub use crate::api::check::type_expr::*;
   }
+
+  pub mod relate_hooks;
+  pub mod class;
 }
 
 pub mod queries;
