@@ -97,11 +97,13 @@ fn function_variance_and_methods() {
     params: vec![param_num.clone()],
     ret: num,
     is_method: false,
+    this_param: None,
   });
   let f_num_or_str = store.function(FunctionType {
     params: vec![param_num_or_str.clone()],
     ret: num,
     is_method: false,
+    this_param: None,
   });
 
   // method exception even when strict
@@ -109,11 +111,13 @@ fn function_variance_and_methods() {
     params: vec![param_num],
     ret: num,
     is_method: true,
+    this_param: None,
   });
   let method_num_or_str = store.function(FunctionType {
     params: vec![param_num_or_str],
     ret: num,
     is_method: true,
+    this_param: None,
   });
   let prop_method_n = Property {
     name: "m".into(),

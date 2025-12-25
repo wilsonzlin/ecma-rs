@@ -94,6 +94,7 @@ pub struct FunctionType {
   pub params: Vec<FnParam>,
   pub ret: TypeId,
   pub is_method: bool,
+  pub this_param: Option<TypeId>,
 }
 
 impl FunctionType {

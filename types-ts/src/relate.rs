@@ -838,6 +838,49 @@ impl<'a> RelateCtx<'a> {
       || dst.is_method
       || mode.contains(RelationMode::BIVARIANT_PARAMS);
 
+    if let Some(dst_this) = dst.this_param {
+      let src_this = src.this_param.unwrap_or_else(|| self.store.any());
+      let this_related = if allow_bivariance {
+        let forward = self.relate_internal(
+          src_this,
+          dst_this,
+          RelationKind::Assignable,
+          mode,
+          record,
+        );
+        if forward.result {
+          forward
+        } else {
+          self.relate_internal(
+            dst_this,
+            src_this,
+            RelationKind::Assignable,
+            mode,
+            record,
+          )
+        }
+      } else {
+        self.relate_internal(
+          dst_this,
+          src_this,
+          RelationKind::Assignable,
+          mode,
+          record,
+        )
+      };
+
+      if record {
+        children.push(this_related.reason);
+      }
+
+      if !this_related.result {
+        return RelationResult {
+          result: false,
+          reason: self.join_reasons(record, key, children, false, Some("this".into())),
+        };
+      }
+    }
+
     let src_required = src.required_params();
     let dst_required = dst.required_params();
     if src_required > dst_required {
