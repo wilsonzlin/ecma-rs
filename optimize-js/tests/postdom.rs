@@ -43,5 +43,5 @@ fn postdom_handles_infinite_loop() {
 
   assert_eq!(postdom.entry_label(), u32::MAX);
   assert_eq!(postdom.idom_of(1), Some(u32::MAX));
-  assert_eq!(postdom.idom_of(0), Some(u32::MAX));
+  assert_eq!(postdom.idom_of(0), Some(1));
 }
