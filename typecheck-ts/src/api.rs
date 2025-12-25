@@ -2042,6 +2042,20 @@ impl ProgramState {
     })
   }
 
+  fn is_assignable(&self, src: TypeId, dst: TypeId) -> bool {
+    if src == dst || dst == self.builtin.any || src == self.builtin.never {
+      return true;
+    }
+    match (self.type_store.kind(src), self.type_store.kind(dst)) {
+      (TypeKind::LiteralNumber(_), TypeKind::Number) => true,
+      (TypeKind::LiteralString(_), TypeKind::String) => true,
+      (TypeKind::LiteralBoolean(_), TypeKind::Boolean) => true,
+      (TypeKind::Union(members), _) => members.iter().all(|m| self.is_assignable(*m, dst)),
+      (_, TypeKind::Union(members)) => members.iter().any(|m| self.is_assignable(src, *m)),
+      _ => false,
+    }
+  }
+
   fn initial_env(&self, owner: Option<DefId>, file: FileId) -> HashMap<String, SymbolBinding> {
     let mut env = self.global_bindings.clone();
     if let Some(file_env) = self.files.get(&file).map(|f| f.bindings.clone()) {

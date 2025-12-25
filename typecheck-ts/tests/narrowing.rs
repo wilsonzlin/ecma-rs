@@ -140,3 +140,57 @@ function useIt(val: string | number) {
   let ty = program.display_type(res.return_types()[0]).to_string();
   assert_eq!(ty, "string");
 }
+
+#[test]
+fn doc_example_smoke() {
+  let mut host = MemoryHost::default();
+  host.insert(
+    FileId(0),
+    "export function add(a: number, b: number) { return a + b; }",
+  );
+  let program = Program::new(host, vec![FileId(0)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn doc_example_imports() {
+  let mut host = MemoryHost::default();
+  host.insert(
+    FileId(0),
+    "import { add } from \"./math\";\nexport const total = add(1, 2);",
+  );
+  host.insert(
+    FileId(1),
+    "export function add(a: number, b: number): number { return a + b; }",
+  );
+  host.insert(
+    FileId(2),
+    "export const math = 1;",
+  );
+  struct DocHost {
+    inner: MemoryHost,
+  }
+  impl Host for DocHost {
+    fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+      self.inner.file_text(file)
+    }
+
+    fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
+      match (from, specifier) {
+        (FileId(0), "./math") => Some(FileId(1)),
+        _ => None,
+      }
+    }
+  }
+  let host = DocHost { inner: host };
+  let program = Program::new(host, vec![FileId(0)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics, got {diagnostics:?}"
+  );
+}
