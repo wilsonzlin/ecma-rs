@@ -1,9 +1,11 @@
+use crate::{EmitMode, EmitOptions, Emitter};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::ImportExpr;
 use parse_js::ast::node::Node;
 use parse_js::ast::ts_stmt::InterfaceDecl;
 use parse_js::ast::ts_stmt::TypeAliasDecl;
 use parse_js::ast::type_expr::*;
+use std::fmt;
 use std::fmt::Write;
 
 /// Precedence levels for TypeScript type expressions. Higher variants bind more tightly.
@@ -15,6 +17,19 @@ enum TypePrec {
   Unary,
   Postfix,
   Primary,
+}
+
+fn emit_via_emitter<W, F>(out: &mut W, emit: F) -> fmt::Result
+where
+  W: fmt::Write,
+  F: FnOnce(&mut Emitter) -> fmt::Result,
+{
+  let mut emitter = Emitter::new(EmitOptions {
+    mode: EmitMode::Canonical,
+  });
+  emit(&mut emitter)?;
+  let output = std::str::from_utf8(emitter.as_bytes()).expect("emitter output is valid UTF-8");
+  out.write_str(output)
 }
 
 /// Emit a TypeScript type expression into the provided buffer.
@@ -33,36 +48,75 @@ pub fn ts_type_to_string(expr: &Node<TypeExpr>) -> String {
   emit_type_expr_to_string(expr)
 }
 
-pub fn emit_type_expr<W: std::fmt::Write>(out: &mut W, expr: &Node<TypeExpr>) -> std::fmt::Result {
-  out.write_str(&emit_type_expr_to_string(expr))
+pub fn emit_type_expr_to_emitter(out: &mut Emitter, expr: &Node<TypeExpr>) -> fmt::Result {
+  out.write_str(&emit_type_expr_to_string(expr));
+  Ok(())
 }
 
-pub fn emit_type_alias_decl<W: std::fmt::Write>(
+#[deprecated(note = "use Emitter-based APIs")]
+pub fn emit_type_expr<W: fmt::Write>(out: &mut W, expr: &Node<TypeExpr>) -> fmt::Result {
+  emit_via_emitter(out, |emitter| emit_type_expr_to_emitter(emitter, expr))
+}
+
+pub fn emit_type_alias_decl_to_emitter(out: &mut Emitter, decl: &TypeAliasDecl) -> fmt::Result {
+  out.write_str(&type_alias_decl_to_string(decl));
+  Ok(())
+}
+
+#[deprecated(note = "use Emitter-based APIs")]
+pub fn emit_type_alias_decl<W: fmt::Write>(
   out: &mut W,
   decl: &TypeAliasDecl,
-) -> std::fmt::Result {
-  if decl.export {
-    out.write_str("export ")?;
-  }
-  if decl.declare {
-    out.write_str("declare ")?;
-  }
-  out.write_str("type ")?;
-  out.write_str(&decl.name)?;
-
-  let mut type_parameters = String::new();
-  emit_type_parameters(&mut type_parameters, decl.type_parameters.as_deref());
-  out.write_str(&type_parameters)?;
-
-  out.write_str(" = ")?;
-  emit_type_expr(out, &decl.type_expr)?;
-  out.write_char(';')
+) -> fmt::Result {
+  emit_via_emitter(out, |emitter| emit_type_alias_decl_to_emitter(emitter, decl))
 }
 
-pub fn emit_type_members<W: std::fmt::Write>(
+pub fn emit_type_members_to_emitter(out: &mut Emitter, members: &[Node<TypeMember>]) -> fmt::Result {
+  out.write_str(&type_members_to_string(members));
+  Ok(())
+}
+
+#[deprecated(note = "use Emitter-based APIs")]
+pub fn emit_type_members<W: fmt::Write>(
   out: &mut W,
   members: &[Node<TypeMember>],
-) -> std::fmt::Result {
+) -> fmt::Result {
+  emit_via_emitter(out, |emitter| emit_type_members_to_emitter(emitter, members))
+}
+
+pub fn emit_interface_decl_to_emitter(out: &mut Emitter, decl: &InterfaceDecl) -> fmt::Result {
+  out.write_str(&interface_decl_to_string(decl));
+  Ok(())
+}
+
+#[deprecated(note = "use Emitter-based APIs")]
+pub fn emit_interface_decl<W: fmt::Write>(
+  out: &mut W,
+  decl: &InterfaceDecl,
+) -> fmt::Result {
+  emit_via_emitter(out, |emitter| emit_interface_decl_to_emitter(emitter, decl))
+}
+
+fn type_alias_decl_to_string(decl: &TypeAliasDecl) -> String {
+  let mut out = String::new();
+  if decl.export {
+    out.push_str("export ");
+  }
+  if decl.declare {
+    out.push_str("declare ");
+  }
+  out.push_str("type ");
+  out.push_str(&decl.name);
+
+  emit_type_parameters(&mut out, decl.type_parameters.as_deref());
+
+  out.push_str(" = ");
+  out.push_str(&emit_type_expr_to_string(&decl.type_expr));
+  out.push(';');
+  out
+}
+
+fn type_members_to_string(members: &[Node<TypeMember>]) -> String {
   let mut buf = String::new();
   for (i, member) in members.iter().enumerate() {
     if i > 0 {
@@ -71,14 +125,7 @@ pub fn emit_type_members<W: std::fmt::Write>(
     emit_type_member(&mut buf, member);
     buf.push(';');
   }
-  out.write_str(&buf)
-}
-
-pub fn emit_interface_decl<W: std::fmt::Write>(
-  out: &mut W,
-  decl: &InterfaceDecl,
-) -> std::fmt::Result {
-  out.write_str(&interface_decl_to_string(decl))
+  buf
 }
 
 fn interface_decl_to_string(decl: &InterfaceDecl) -> String {
