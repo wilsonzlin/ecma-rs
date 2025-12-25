@@ -1,0 +1,216 @@
+use std::fmt;
+
+use parse_js::ast::expr::{Expr, UnaryExpr};
+use parse_js::ast::node::Node;
+use parse_js::ast::type_expr::TypeExpr;
+use parse_js::operator::OperatorName;
+use parse_js::token::UNRESERVED_KEYWORD_STRS;
+
+use crate::emitter::EmitResult;
+use crate::expr::emit_expr;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Keyword {
+  Async,
+  Await,
+  Class,
+  Declare,
+  Enum,
+  Function,
+  Import,
+  Interface,
+  Let,
+  Module,
+  Namespace,
+  Type,
+  Using,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TokenKind {
+  BraceOpen,
+  BracketOpen,
+  ParenthesisOpen,
+  TemplateStart,
+  StringLiteral,
+  Keyword(Keyword),
+  Identifier(String),
+  Other,
+}
+
+#[derive(Clone, Debug)]
+struct TokenPrefix {
+  first: TokenKind,
+  second: Option<TokenKind>,
+}
+
+pub(crate) fn expr_leading_token(expr: &Node<Expr>) -> TokenKind {
+  expr_tokens(expr).first
+}
+
+pub(crate) fn expr_second_token_hint(expr: &Node<Expr>) -> Option<TokenKind> {
+  expr_tokens(expr).second
+}
+
+pub fn expr_stmt_needs_parens(expr: &Node<Expr>) -> bool {
+  let first = expr_leading_token(expr);
+  let second = expr_second_token_hint(expr);
+
+  match first {
+    TokenKind::BraceOpen => true,
+    TokenKind::Keyword(Keyword::Function | Keyword::Class) => true,
+    TokenKind::Keyword(Keyword::Async) => {
+      matches!(second, Some(TokenKind::Keyword(Keyword::Function)))
+    }
+    TokenKind::Keyword(Keyword::Let | Keyword::Using) => match second {
+      Some(TokenKind::BraceOpen | TokenKind::BracketOpen) => true,
+      Some(TokenKind::Identifier(name)) if is_pattern_identifier_start(&name) => true,
+      _ => false,
+    },
+    TokenKind::Keyword(Keyword::Await) => {
+      matches!(second, Some(TokenKind::Keyword(Keyword::Using)))
+    }
+    TokenKind::Keyword(Keyword::Import) => !matches!(second, Some(TokenKind::ParenthesisOpen)),
+    TokenKind::Keyword(Keyword::Interface | Keyword::Type | Keyword::Enum) => true,
+    TokenKind::Keyword(Keyword::Namespace | Keyword::Module) => matches!(
+      second,
+      Some(TokenKind::Identifier(_) | TokenKind::StringLiteral)
+    ),
+    TokenKind::Keyword(Keyword::Declare) => !matches!(second, Some(TokenKind::TemplateStart)),
+    _ => false,
+  }
+}
+
+pub fn emit_expr_stmt<W, F>(out: &mut W, expr: &Node<Expr>, mut emit_type: F) -> EmitResult
+where
+  W: fmt::Write,
+  F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
+{
+  let needs_parens = expr_stmt_needs_parens(expr);
+  if needs_parens {
+    write!(out, "(")?;
+  }
+  emit_expr(out, expr, &mut emit_type)?;
+  if needs_parens {
+    write!(out, ")")?;
+  }
+  Ok(())
+}
+
+fn expr_tokens(expr: &Node<Expr>) -> TokenPrefix {
+  match expr.stx.as_ref() {
+    Expr::Id(id) => prefix(token_from_identifier(&id.stx.name), None),
+    Expr::LitStr(_) => prefix(TokenKind::StringLiteral, None),
+    Expr::LitObj(_) | Expr::ObjPat(_) => prefix(TokenKind::BraceOpen, None),
+    Expr::LitArr(_) | Expr::ArrPat(_) => prefix(TokenKind::BracketOpen, None),
+    Expr::Func(func) => {
+      if func.stx.func.stx.async_ {
+        prefix(
+          TokenKind::Keyword(Keyword::Async),
+          Some(TokenKind::Keyword(Keyword::Function)),
+        )
+      } else {
+        prefix(TokenKind::Keyword(Keyword::Function), None)
+      }
+    }
+    Expr::Class(_) => prefix(TokenKind::Keyword(Keyword::Class), None),
+    Expr::ImportMeta(_) => prefix(TokenKind::Keyword(Keyword::Import), Some(TokenKind::Other)),
+    Expr::Import(_) => prefix(
+      TokenKind::Keyword(Keyword::Import),
+      Some(TokenKind::ParenthesisOpen),
+    ),
+    Expr::Member(member) => prefix_with_fallback(&member.stx.left, TokenKind::Other),
+    Expr::ComputedMember(member) => prefix_with_fallback(
+      &member.stx.object,
+      if member.stx.optional_chaining {
+        TokenKind::Other
+      } else {
+        TokenKind::BracketOpen
+      },
+    ),
+    Expr::Call(call) => prefix_with_fallback(
+      &call.stx.callee,
+      if call.stx.optional_chaining {
+        TokenKind::Other
+      } else {
+        TokenKind::ParenthesisOpen
+      },
+    ),
+    Expr::Binary(binary) => prefix_with_fallback(&binary.stx.left, TokenKind::Other),
+    Expr::Cond(cond) => prefix_with_fallback(&cond.stx.test, TokenKind::Other),
+    Expr::TaggedTemplate(tagged) => {
+      prefix_with_fallback(&tagged.stx.function, TokenKind::TemplateStart)
+    }
+    Expr::TypeAssertion(assertion) => expr_tokens(&assertion.stx.expression),
+    Expr::NonNullAssertion(non_null) => expr_tokens(&non_null.stx.expression),
+    Expr::SatisfiesExpr(satisfies) => expr_tokens(&satisfies.stx.expression),
+    Expr::Unary(unary) => unary_tokens(unary),
+    Expr::UnaryPostfix(postfix) => prefix_with_fallback(&postfix.stx.argument, TokenKind::Other),
+    Expr::ArrowFunc(_) => prefix(TokenKind::ParenthesisOpen, None),
+    Expr::LitTemplate(_) => prefix(TokenKind::TemplateStart, None),
+    _ => prefix(TokenKind::Other, None),
+  }
+}
+
+fn unary_tokens(unary: &Node<UnaryExpr>) -> TokenPrefix {
+  match unary.stx.operator {
+    OperatorName::Await => {
+      let arg_prefix = expr_tokens(&unary.stx.argument);
+      prefix(TokenKind::Keyword(Keyword::Await), Some(arg_prefix.first))
+    }
+    _ => prefix(
+      TokenKind::Other,
+      Some(expr_tokens(&unary.stx.argument).first),
+    ),
+  }
+}
+
+fn prefix(first: TokenKind, second: Option<TokenKind>) -> TokenPrefix {
+  TokenPrefix { first, second }
+}
+
+fn prefix_with_fallback(expr: &Node<Expr>, fallback: TokenKind) -> TokenPrefix {
+  let prefix = expr_tokens(expr);
+  if prefix.second.is_some() {
+    prefix
+  } else {
+    TokenPrefix {
+      first: prefix.first,
+      second: Some(fallback),
+    }
+  }
+}
+
+fn token_from_identifier(name: &str) -> TokenKind {
+  match name {
+    "let" => TokenKind::Keyword(Keyword::Let),
+    "using" => TokenKind::Keyword(Keyword::Using),
+    "await" => TokenKind::Keyword(Keyword::Await),
+    "import" => TokenKind::Keyword(Keyword::Import),
+    "interface" => TokenKind::Keyword(Keyword::Interface),
+    "type" => TokenKind::Keyword(Keyword::Type),
+    "enum" => TokenKind::Keyword(Keyword::Enum),
+    "namespace" => TokenKind::Keyword(Keyword::Namespace),
+    "module" => TokenKind::Keyword(Keyword::Module),
+    "declare" => TokenKind::Keyword(Keyword::Declare),
+    "class" => TokenKind::Keyword(Keyword::Class),
+    "function" => TokenKind::Keyword(Keyword::Function),
+    _ => TokenKind::Identifier(name.to_string()),
+  }
+}
+
+fn is_pattern_identifier_start(name: &str) -> bool {
+  if name.is_empty() {
+    return false;
+  }
+  if name == "await" || name == "yield" {
+    return true;
+  }
+  UNRESERVED_KEYWORD_STRS.contains(name) || is_valid_identifier_like(name)
+}
+
+fn is_valid_identifier_like(_name: &str) -> bool {
+  // The parser has already validated identifier tokens; accept the remaining
+  // strings as valid identifier-like values for pattern lookahead.
+  true
+}
