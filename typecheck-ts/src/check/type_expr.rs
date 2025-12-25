@@ -1,36 +1,127 @@
 use ahash::AHashMap;
+use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::{
   MappedTypeModifier, TypeArray, TypeConditional, TypeConstructor, TypeEntityName, TypeExpr,
-  TypeFunction, TypeFunctionParameter, TypeIndexedAccess, TypeIntersection, TypeKeyOf, TypeLiteral,
-  TypeMapped, TypeMember, TypeMethodSignature, TypeObjectLiteral, TypeParameter, TypePropertyKey,
-  TypePropertySignature, TypeTemplateLiteral, TypeTuple, TypeTupleElement, TypeUnion,
+  TypeFunction, TypeFunctionParameter, TypeIndexedAccess, TypeInfer, TypeIntersection, TypeKeyOf,
+  TypeLiteral, TypeMapped, TypeMember, TypeMethodSignature, TypeObjectLiteral, TypeParameter,
+  TypePredicate, TypePropertyKey, TypePropertySignature, TypeTemplateLiteral, TypeTuple,
+  TypeTupleElement, TypeUnion,
 };
+use parse_js::loc::Loc;
+use std::fmt;
+use std::sync::Arc;
 use types_ts_interned::{
-  MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property, Shape, Signature,
-  TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
+  DefId, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property, Shape,
+  Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamId,
+  TypeStore,
 };
 
+const CODE_UNRESOLVED_TYPE_REF: &str = "TC2008";
+const CODE_UNSUPPORTED_QUALIFIED_NAME: &str = "TC2009";
+const CODE_UNRESOLVED_IMPORT_TYPE: &str = "TC2010";
+const CODE_UNRESOLVED_TYPE_QUERY: &str = "TC2011";
+
+/// Resolves entity names in type positions to canonical [`DefId`]s.
+pub trait TypeResolver: Send + Sync {
+  /// Resolve a type name (e.g. `["Promise"]` or `["ns", "Type"]`) to a
+  /// definition identifier.
+  fn resolve_type_name(&self, path: &[String]) -> Option<DefId>;
+
+  /// Resolve a `typeof` query. By default this delegates to [`resolve_type_name`].
+  fn resolve_typeof(&self, path: &[String]) -> Option<DefId> {
+    self.resolve_type_name(path)
+  }
+
+  /// Resolve an `import()` type with an optional qualifier path inside the
+  /// imported module namespace.
+  fn resolve_import_type(&self, _module: &str, _qualifier: Option<&[String]>) -> Option<DefId> {
+    None
+  }
+}
+
+/// Captured lowering information for a type predicate. The lowered type for the
+/// predicate itself is `boolean`, but the richer predicate is preserved for
+/// downstream narrowing.
+#[derive(Debug, Clone)]
+pub struct LoweredPredicate {
+  pub span: Span,
+  pub asserts: bool,
+  pub parameter: String,
+  pub ty: Option<TypeId>,
+}
+
 /// Lowers `parse-js` [`TypeExpr`] nodes into interned type representations.
-#[derive(Debug)]
 pub struct TypeLowerer {
-  store: std::sync::Arc<TypeStore>,
+  store: Arc<TypeStore>,
   type_params: AHashMap<String, TypeParamId>,
   next_type_param: u32,
+  resolver: Option<Arc<dyn TypeResolver>>,
+  file: Option<FileId>,
+  diagnostics: Vec<Diagnostic>,
+  predicates: Vec<LoweredPredicate>,
+}
+
+impl fmt::Debug for TypeLowerer {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("TypeLowerer")
+      .field("type_params", &self.type_params)
+      .field("next_type_param", &self.next_type_param)
+      .field("diagnostics", &self.diagnostics)
+      .field("predicates", &self.predicates)
+      .finish()
+  }
 }
 
 impl TypeLowerer {
-  pub fn new(store: std::sync::Arc<TypeStore>) -> Self {
+  pub fn new(store: Arc<TypeStore>) -> Self {
     Self {
       store,
       type_params: AHashMap::new(),
       next_type_param: 0,
+      resolver: None,
+      file: None,
+      diagnostics: Vec::new(),
+      predicates: Vec::new(),
     }
   }
 
-  pub fn store(&self) -> std::sync::Arc<TypeStore> {
+  /// Create a new lowerer configured with a resolver for type references.
+  pub fn with_resolver(store: Arc<TypeStore>, resolver: Arc<dyn TypeResolver>) -> Self {
+    let mut lowerer = Self::new(store);
+    lowerer.resolver = Some(resolver);
+    lowerer
+  }
+
+  /// Associate a file id with this lowerer for diagnostics and predicate spans.
+  pub fn set_file(&mut self, file: FileId) {
+    self.file = Some(file);
+  }
+
+  /// Set or clear the resolver used to resolve named type references.
+  pub fn set_resolver(&mut self, resolver: Option<Arc<dyn TypeResolver>>) {
+    self.resolver = resolver;
+  }
+
+  /// Diagnostics emitted while lowering. These capture unsupported or unresolved
+  /// constructs that could not be represented precisely.
+  pub fn diagnostics(&self) -> &[Diagnostic] {
+    &self.diagnostics
+  }
+
+  /// Take ownership of accumulated diagnostics.
+  pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
+    std::mem::take(&mut self.diagnostics)
+  }
+
+  /// Captured type predicates lowered so far.
+  pub fn predicates(&self) -> &[LoweredPredicate] {
+    &self.predicates
+  }
+
+  pub fn store(&self) -> Arc<TypeStore> {
     self.store.clone()
   }
 
@@ -67,21 +158,13 @@ impl TypeLowerer {
       TypeExpr::BigInt(_) => self.store.primitive_ids().bigint,
       TypeExpr::Symbol(_) => self.store.primitive_ids().symbol,
       TypeExpr::UniqueSymbol(_) => self.store.primitive_ids().unique_symbol,
+      TypeExpr::ThisType(_) => self.store.intern_type(TypeKind::This),
       TypeExpr::Object(_) => {
         let shape = self.store.intern_shape(Shape::new());
         let obj = self.store.intern_object(ObjectType { shape });
         self.store.intern_type(TypeKind::Object(obj))
       }
-      TypeExpr::TypeReference(reference) => match &reference.stx.name {
-        TypeEntityName::Identifier(name) => {
-          if let Some(id) = self.type_params.get(name) {
-            self.store.intern_type(TypeKind::TypeParam(*id))
-          } else {
-            self.store.primitive_ids().unknown
-          }
-        }
-        _ => self.store.primitive_ids().unknown,
-      },
+      TypeExpr::TypeReference(reference) => self.lower_type_reference(reference),
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {
         TypeLiteral::String(value) => {
           let name = self.store.intern_name(value.clone());
@@ -148,11 +231,10 @@ impl TypeLowerer {
       TypeExpr::ConditionalType(cond) => self.lower_conditional_type(cond),
       TypeExpr::MappedType(mapped) => self.lower_mapped_type(mapped),
       TypeExpr::TemplateLiteralType(tpl) => self.lower_template_literal(tpl),
-      TypeExpr::TypePredicate(_)
-      | TypeExpr::TypeQuery(_)
-      | TypeExpr::ThisType(_)
-      | TypeExpr::ImportType(_)
-      | TypeExpr::InferType(_) => self.store.primitive_ids().unknown,
+      TypeExpr::TypePredicate(pred) => self.lower_type_predicate(pred),
+      TypeExpr::TypeQuery(query) => self.lower_type_query(query),
+      TypeExpr::ImportType(import) => self.lower_import_type(import),
+      TypeExpr::InferType(infer) => self.lower_infer_type(infer),
     }
   }
 
@@ -376,12 +458,15 @@ impl TypeLowerer {
       false_type,
     } = cond.stx.as_ref();
 
+    let prev_params = self.type_params.clone();
+    let prev_next_param = self.next_type_param;
     let distributive = self.is_naked_type_param(check_type);
     let check = self.lower_type_expr(check_type);
     let extends = self.lower_type_expr(extends_type);
     let true_ty = self.lower_type_expr(true_type);
     let false_ty = self.lower_type_expr(false_type);
-
+    self.type_params = prev_params;
+    self.next_type_param = prev_next_param;
     self.store.intern_type(TypeKind::Conditional {
       check,
       extends,
@@ -427,7 +512,7 @@ impl TypeLowerer {
       readonly: map_mapped_modifier(readonly_modifier),
       optional: map_mapped_modifier(optional_modifier),
       name_type: remap,
-      as_type: None,
+      as_type: remap,
     }));
 
     self.type_params = prev;
@@ -452,6 +537,183 @@ impl TypeLowerer {
         spans,
       }))
   }
+
+  fn lower_type_reference(
+    &mut self,
+    reference: &Node<parse_js::ast::type_expr::TypeReference>,
+  ) -> TypeId {
+    let type_args = self.lower_type_arguments(&reference.stx.type_arguments);
+    match &reference.stx.name {
+      TypeEntityName::Identifier(name) => {
+        if let Some(id) = self.type_params.get(name).copied() {
+          if !type_args.is_empty() {
+            self.push_diag(
+              reference.loc,
+              CODE_UNRESOLVED_TYPE_REF,
+              format!("type parameter '{}' cannot accept type arguments", name),
+            );
+          }
+          return self.store.intern_type(TypeKind::TypeParam(id));
+        }
+        let path = vec![name.clone()];
+        if let Some(resolved) = self.resolve_to_ref(&path, type_args.clone(), false) {
+          return resolved;
+        }
+        self.push_diag(
+          reference.loc,
+          CODE_UNRESOLVED_TYPE_REF,
+          format!("unresolved type '{}'", name),
+        );
+        self.store.primitive_ids().unknown
+      }
+      TypeEntityName::Qualified(_) => {
+        let Some(path) = entity_name_segments(&reference.stx.name) else {
+          self.push_diag(
+            reference.loc,
+            CODE_UNSUPPORTED_QUALIFIED_NAME,
+            "unsupported qualified type reference",
+          );
+          return self.store.primitive_ids().unknown;
+        };
+        if let Some(resolved) = self.resolve_to_ref(&path, type_args, false) {
+          return resolved;
+        }
+        self.push_diag(
+          reference.loc,
+          CODE_UNSUPPORTED_QUALIFIED_NAME,
+          format!("unresolved qualified type '{}'", path.join(".")),
+        );
+        self.store.primitive_ids().unknown
+      }
+      TypeEntityName::Import(_) => {
+        self.push_diag(
+          reference.loc,
+          CODE_UNRESOLVED_TYPE_REF,
+          "import expressions in type references are not supported",
+        );
+        self.store.primitive_ids().unknown
+      }
+    }
+  }
+
+  fn lower_type_query(&mut self, query: &Node<parse_js::ast::type_expr::TypeQuery>) -> TypeId {
+    let Some(path) = entity_name_segments(&query.stx.expr_name) else {
+      self.push_diag(
+        query.loc,
+        CODE_UNRESOLVED_TYPE_QUERY,
+        "unsupported typeof query target",
+      );
+      return self.store.primitive_ids().unknown;
+    };
+    if let Some(resolved) = self.resolve_to_ref(&path, Vec::new(), true) {
+      return resolved;
+    }
+    self.push_diag(
+      query.loc,
+      CODE_UNRESOLVED_TYPE_QUERY,
+      format!("cannot resolve typeof {}", path.join(".")),
+    );
+    self.store.primitive_ids().unknown
+  }
+
+  fn lower_import_type(&mut self, import: &Node<parse_js::ast::type_expr::TypeImport>) -> TypeId {
+    let qualifier = import
+      .stx
+      .qualifier
+      .as_ref()
+      .and_then(|name| entity_name_segments(name));
+    let type_args = self.lower_type_arguments(&import.stx.type_arguments);
+    if let Some(resolver) = &self.resolver {
+      if let Some(def) =
+        resolver.resolve_import_type(&import.stx.module_specifier, qualifier.as_deref())
+      {
+        return self.store.intern_type(TypeKind::Ref {
+          def,
+          args: type_args,
+        });
+      }
+    }
+    let mut message = format!(
+      "unable to resolve import(\"{}\") type",
+      import.stx.module_specifier
+    );
+    if let Some(path) = qualifier.as_ref() {
+      message.push_str(&format!(" for {}", path.join(".")));
+    }
+    self.push_diag(import.loc, CODE_UNRESOLVED_IMPORT_TYPE, message);
+    self.store.primitive_ids().unknown
+  }
+
+  fn lower_infer_type(&mut self, infer: &Node<TypeInfer>) -> TypeId {
+    let id = match self.type_params.get(&infer.stx.type_parameter) {
+      Some(id) => *id,
+      None => self.alloc_type_param(infer.stx.type_parameter.clone()),
+    };
+    // TODO: Track infer constraints once the type representation supports it.
+    self.store.intern_type(TypeKind::Infer(id))
+  }
+
+  fn lower_type_predicate(&mut self, pred: &Node<TypePredicate>) -> TypeId {
+    let ty = pred
+      .stx
+      .type_annotation
+      .as_ref()
+      .map(|t| self.lower_type_expr(t));
+    let span = self.span_for(pred.loc);
+    self.predicates.push(LoweredPredicate {
+      span,
+      asserts: pred.stx.asserts,
+      parameter: pred.stx.parameter_name.clone(),
+      ty,
+    });
+    self.store.primitive_ids().boolean
+  }
+
+  fn lower_type_arguments(&mut self, args: &Option<Vec<Node<TypeExpr>>>) -> Vec<TypeId> {
+    args
+      .as_ref()
+      .map(|args| args.iter().map(|arg| self.lower_type_expr(arg)).collect())
+      .unwrap_or_default()
+  }
+
+  fn resolve_to_ref(
+    &mut self,
+    path: &[String],
+    args: Vec<TypeId>,
+    for_typeof: bool,
+  ) -> Option<TypeId> {
+    let Some(resolver) = &self.resolver else {
+      return None;
+    };
+    let resolved = if for_typeof {
+      resolver.resolve_typeof(path)
+    } else {
+      resolver.resolve_type_name(path)
+    };
+    resolved.map(|def| {
+      self.store.intern_type(TypeKind::Ref {
+        def,
+        args: args.clone(),
+      })
+    })
+  }
+
+  fn span_for(&self, loc: Loc) -> Span {
+    let file = self.file.unwrap_or(FileId(0));
+    let start = loc.0.min(u32::MAX as usize) as u32;
+    let end = loc.1.min(u32::MAX as usize) as u32;
+    Span {
+      file,
+      range: TextRange::new(start, end),
+    }
+  }
+
+  fn push_diag(&mut self, loc: Loc, code: &'static str, message: impl Into<String>) {
+    let span = self.span_for(loc);
+    self
+      .diagnostics
+      .push(Diagnostic::error(code, message, span));
+  }
 }
 
 fn map_mapped_modifier(modifier: &Option<MappedTypeModifier>) -> MappedModifier {
@@ -459,5 +721,17 @@ fn map_mapped_modifier(modifier: &Option<MappedTypeModifier>) -> MappedModifier 
     Some(MappedTypeModifier::Plus) | Some(MappedTypeModifier::None) => MappedModifier::Add,
     Some(MappedTypeModifier::Minus) => MappedModifier::Remove,
     None => MappedModifier::Preserve,
+  }
+}
+
+fn entity_name_segments(name: &TypeEntityName) -> Option<Vec<String>> {
+  match name {
+    TypeEntityName::Identifier(id) => Some(vec![id.clone()]),
+    TypeEntityName::Qualified(qualified) => {
+      let mut parts = entity_name_segments(&qualified.left)?;
+      parts.push(qualified.right.clone());
+      Some(parts)
+    }
+    TypeEntityName::Import(_) => None,
   }
 }
