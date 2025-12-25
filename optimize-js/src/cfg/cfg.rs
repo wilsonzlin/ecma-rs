@@ -113,6 +113,10 @@ impl CfgBBlocks {
     self.0.get(&label).unwrap()
   }
 
+  pub fn maybe_get(&self, label: u32) -> Option<&Vec<Inst>> {
+    self.0.get(&label)
+  }
+
   pub fn get_mut(&mut self, label: u32) -> &mut Vec<Inst> {
     self.0.get_mut(&label).unwrap()
   }

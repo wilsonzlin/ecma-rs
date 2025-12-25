@@ -428,6 +428,10 @@ impl<const POST: bool> Dom<POST> {
     self.idom_by.get(&node).copied()
   }
 
+  pub fn immediate_dominator(&self, node: u32) -> Option<u32> {
+    self.idom(node)
+  }
+
   pub fn entry(&self) -> u32 {
     self.entry
   }
