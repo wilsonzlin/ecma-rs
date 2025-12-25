@@ -22,13 +22,13 @@ fn syntax_value(node: &Node<TopLevel>) -> Value {
   serde_json::to_value(&node.stx).expect("serialize syntax")
 }
 
-fn roundtrip_case(case: &Case, mode: EmitMode) {
+fn roundtrip_case(case: &Case, mode: EmitMode) -> bool {
   let parsed = parse(case.source);
   let emitted = match emit_program(&parsed, mode) {
     Ok(code) => code,
     Err(reason) => {
       eprintln!("SKIP {mode:?} {name}: {reason}", name = case.name);
-      return;
+      return false;
     }
   };
 
@@ -44,6 +44,7 @@ fn roundtrip_case(case: &Case, mode: EmitMode) {
     emitted,
     name = case.name
   );
+  true
 }
 
 fn cases() -> Vec<Case> {
@@ -193,14 +194,54 @@ fn cases() -> Vec<Case> {
 
 #[test]
 fn roundtrip_canonical_mode() {
-  for case in cases() {
-    roundtrip_case(&case, EmitMode::Canonical);
+  let cases = cases();
+  assert!(
+    cases.len() >= 30,
+    "roundtrip corpus should stay large enough to catch regressions"
+  );
+  let mut ran = 0;
+  let mut skipped = 0;
+  for case in cases {
+    if roundtrip_case(&case, EmitMode::Canonical) {
+      ran += 1;
+    } else {
+      skipped += 1;
+    }
+  }
+  if ran == 0 {
+    eprintln!(
+      "All Canonical roundtrip cases skipped; wire emit_program to the JS emitter to enable"
+    );
+  } else if skipped > 0 {
+    eprintln!(
+      "Canonical roundtrip skipped {skipped} cases (ran {ran}); implement remaining emit coverage"
+    );
   }
 }
 
 #[test]
 fn roundtrip_minified_mode() {
-  for case in cases() {
-    roundtrip_case(&case, EmitMode::Minified);
+  let cases = cases();
+  assert!(
+    cases.len() >= 30,
+    "roundtrip corpus should stay large enough to catch regressions"
+  );
+  let mut ran = 0;
+  let mut skipped = 0;
+  for case in cases {
+    if roundtrip_case(&case, EmitMode::Minified) {
+      ran += 1;
+    } else {
+      skipped += 1;
+    }
+  }
+  if ran == 0 {
+    eprintln!(
+      "All Minified roundtrip cases skipped; wire emit_program to the JS emitter to enable"
+    );
+  } else if skipped > 0 {
+    eprintln!(
+      "Minified roundtrip skipped {skipped} cases (ran {ran}); implement remaining emit coverage"
+    );
   }
 }
