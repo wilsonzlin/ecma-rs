@@ -331,7 +331,7 @@ impl<'a> Parser<'a> {
         .with_loc(|p| {
           p.require(TT::KeywordExport)?;
           p.require(TT::Equals)?;
-          let expression = p.expr(ctx, [TT::Semicolon])?;
+          let expression = p.expr_with_asi(ctx, [TT::Semicolon], &mut super::expr::Asi::can())?;
           // Allow ASI
           let t = p.peek();
           if t.typ != TT::EOF && !t.preceded_by_line_terminator {

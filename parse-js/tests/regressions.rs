@@ -2,6 +2,8 @@
 mod class_heritage;
 #[path = "regressions/class_method_overload.rs"]
 mod class_method_overload;
+#[path = "regressions/export_assignment_asi.rs"]
+mod export_assignment_asi;
 #[path = "regressions/import_meta.rs"]
 mod import_meta;
 #[path = "regressions/jsx_tsx_disambiguation.rs"]
