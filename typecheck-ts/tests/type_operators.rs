@@ -364,9 +364,7 @@ fn hir_alias_reference_expands_through_evaluator() {
   let box_def = lowered
     .defs
     .iter()
-    .find(|def| {
-      def.path.kind == DefKind::TypeAlias && lowered.names.resolve(def.path.name).unwrap() == "Box"
-    })
+    .find(|def| def.path.kind == DefKind::TypeAlias && def.path.name == "Box")
     .unwrap()
     .id;
 

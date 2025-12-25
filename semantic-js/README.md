@@ -47,7 +47,10 @@ and avoid mutating the underlying collections after construction.
 
 - JS mode requires a mutable `parse-js` AST so it can write attachments to
   `NodeAssocData`. Use `js::bind_js` (or `declare`/`resolve` separately) and then
-  query the IDs via helper accessors such as `scope_id`/`declared_symbol`.
+  query the IDs via helper accessors such as `scope_id`/`declared_symbol` or
+  iterate deterministically with [`js::JsSemantics::scope_symbols`]. A complete
+  example lives in `examples/semantic-js/README.md` and is mirrored as a
+  doctest in `semantic-js`'s crate docs.
 - TS mode expects one `HirFile` per source file, typically produced by a future
   `hir-js` lowering step. The caller supplies a `Resolver` to turn module
   specifiers into `FileId`s; the binder does not implement Node/TS resolution
@@ -58,9 +61,12 @@ and avoid mutating the underlying collections after construction.
 `symbol-js` provided scope information for optimizers but used mutable,
 lock-backed scopes and opaque, non-deterministic IDs. `semantic-js` is the
 intended replacement: deterministic IDs, immutable arenas, and a TS-aware
-export model. JS mode already covers the same surface (scope IDs + resolution)
-without global locks; downstream crates should migrate to it as new API
-surfaces (e.g. deterministic iteration) become available.
+export model. Replace calls to `symbol_js::compute_symbols` with
+`semantic_js::js::bind_js` and read back `ScopeId`/`SymbolId` attachments via
+`semantic_js::assoc::js`. JS mode already covers the same surface (scope IDs +
+resolution) without global locks; deterministic iteration via
+[`js::JsSemantics::scope_symbols`] is available for consumers that relied on
+`symbol-js`'s map ordering.
 
 ## Known gaps
 

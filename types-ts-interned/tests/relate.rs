@@ -85,6 +85,7 @@ fn strict_null_checks_propagate_through_objects() {
           readonly: false,
           accessibility: None,
           is_method: false,
+          origin: None,
           declared_on: None,
         },
       }],
@@ -104,6 +105,7 @@ fn strict_null_checks_propagate_through_objects() {
           readonly: false,
           accessibility: None,
           is_method: false,
+          origin: None,
           declared_on: None,
         },
       }],
@@ -319,6 +321,7 @@ fn function_properties_respect_strict_function_types() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   };
@@ -330,6 +333,7 @@ fn function_properties_respect_strict_function_types() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   };
@@ -416,6 +420,7 @@ fn no_unchecked_indexed_access_makes_indexers_optional() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   };
@@ -522,6 +527,7 @@ fn protected_members_require_same_origin() {
       readonly: false,
       accessibility: Some(Accessibility::Protected),
       is_method: false,
+      origin: Some(1),
       declared_on: Some(DefId(1)),
     },
   };
@@ -533,6 +539,7 @@ fn protected_members_require_same_origin() {
       readonly: false,
       accessibility: Some(Accessibility::Protected),
       is_method: false,
+      origin: Some(2),
       declared_on: Some(DefId(2)),
     },
   };
@@ -575,6 +582,7 @@ fn derived_types_are_normalized_during_relation() {
           readonly: false,
           accessibility: None,
           is_method: false,
+          origin: None,
           declared_on: None,
         },
       }],
@@ -617,6 +625,7 @@ fn derived_types_are_normalized_during_relation() {
           readonly: false,
           accessibility: None,
           is_method: false,
+          origin: None,
           declared_on: None,
         },
       }],

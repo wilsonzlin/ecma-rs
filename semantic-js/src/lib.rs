@@ -23,6 +23,95 @@
 //! repeatable for the same inputs; there is no support yet for cross-run
 //! stability guarantees beyond deterministic traversal of the provided HIR/AST.
 //!
+//! ## JS mode quickstart
+//!
+//! Bind and resolve a `parse-js` AST, then read scope/symbol IDs via the helper
+//! accessors:
+//!
+//! ```
+//! use std::collections::HashMap;
+//!
+//! use derive_visitor::{DriveMut, VisitorMut};
+//! use parse_js::{
+//!   ast::{
+//!     expr::{pat::IdPat, IdExpr},
+//!     node::Node,
+//!   },
+//!   parse,
+//! };
+//! use semantic_js::{
+//!   assoc::js::{declared_symbol, resolved_symbol, scope_id},
+//!   js::{bind_js, ScopeId, SymbolId, TopLevelMode},
+//! };
+//!
+//! type IdExprNode = Node<IdExpr>;
+//! type IdPatNode = Node<IdPat>;
+//!
+//! #[derive(Default, VisitorMut)]
+//! #[visitor(IdPatNode(enter), IdExprNode(enter))]
+//! struct Collect {
+//!   decls: HashMap<String, (ScopeId, SymbolId)>,
+//!   uses: Vec<(String, ScopeId, Option<SymbolId>)>,
+//! }
+//!
+//! impl Collect {
+//!   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+//!     let scope = scope_id(&node.assoc).expect("scope attached");
+//!     if let Some(symbol) = declared_symbol(&node.assoc) {
+//!       self.decls.insert(node.stx.name.clone(), (scope, symbol));
+//!     }
+//!   }
+//!
+//!   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+//!     let scope = scope_id(&node.assoc).expect("scope attached");
+//!     self
+//!       .uses
+//!       .push((node.stx.name.clone(), scope, resolved_symbol(&node.assoc)));
+//!   }
+//! }
+//!
+//! let mut ast = parse(
+//!   r#"
+//!     const top = 1;
+//!     const make = () => {
+//!       let inner = top;
+//!       return inner;
+//!     };
+//!     make();
+//!   "#,
+//! )
+//! .unwrap();
+//!
+//! let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+//!
+//! let mut collect = Collect::default();
+//! ast.drive_mut(&mut collect);
+//!
+//! // Every identifier expression resolves back to its declaration symbol.
+//! for (name, _, resolved) in &collect.uses {
+//!   let (decl_scope, decl_symbol) = collect.decls.get(name).expect("declaration exists");
+//!   assert_eq!(resolved, &Some(*decl_symbol));
+//!   assert_eq!(sem.symbol(resolved.unwrap()).decl_scope, *decl_scope);
+//! }
+//!
+//! let top_scope = sem.top_scope();
+//! assert_eq!(collect.decls["top"].0, top_scope);
+//! assert_ne!(collect.decls["inner"].0, top_scope);
+//!
+//! // Scope iteration is deterministic (ordered by NameId).
+//! let top_symbols: Vec<_> = sem
+//!   .scope_symbols(top_scope)
+//!   .map(|(name, symbol)| (sem.name(name).to_string(), symbol.index()))
+//!   .collect();
+//! assert_eq!(
+//!   top_symbols,
+//!   vec![
+//!     ("top".to_string(), collect.decls["top"].1.index()),
+//!     ("make".to_string(), collect.decls["make"].1.index())
+//!   ]
+//! );
+//! ```
+//!
 //! ## Determinism and integration notes
 //!
 //! - JS mode writes attachments into [`parse_js::ast::node::NodeAssocData`];
