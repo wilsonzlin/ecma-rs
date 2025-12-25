@@ -38,17 +38,7 @@ pub(crate) const CODE_NON_DTS_LIB: &str = "TC0004";
 pub(crate) const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
 pub(crate) const CODE_EXCESS_PROPERTY: &str = "TC0006";
 pub(crate) const CODE_TYPE_MISMATCH: &str = "TC0007";
-/// Identifier for a definition (function/variable/import).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct DefId(pub u32);
-
-/// Identifier for an executable body (top-level or function body).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct BodyId(pub u32);
-
-/// Identifier for an expression inside a specific [`BodyId`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct ExprId(pub u32);
+pub use hir_js::{BodyId, DefId, ExprId};
 
 /// Interned type handle.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
