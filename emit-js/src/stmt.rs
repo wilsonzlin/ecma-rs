@@ -35,10 +35,7 @@ pub fn emit_stmt_list(em: &mut Emitter, stmts: &[Node<Stmt>]) -> EmitResult {
 pub fn emit_stmt(em: &mut Emitter, stmt: &Node<Stmt>) -> EmitResult {
   match stmt.stx.as_ref() {
     Stmt::Block(block) => emit_block(em, block),
-    Stmt::Empty(_) => {
-      em.write_punct(";");
-      Ok(())
-    }
+    Stmt::Empty(_) => Ok(()),
     Stmt::Expr(expr) => emit_expr_stmt(em, &expr.stx.expr),
     Stmt::If(if_stmt) => emit_if(em, if_stmt),
     Stmt::ForTriple(for_stmt) => emit_for_triple(em, for_stmt),
@@ -107,16 +104,26 @@ fn expr_needs_paren_in_stmt(expr: &Node<Expr>) -> bool {
   )
 }
 
+fn emit_stmt_as_body(em: &mut Emitter, stmt: &Node<Stmt>) -> EmitResult {
+  match stmt.stx.as_ref() {
+    Stmt::Empty(_) => {
+      em.write_punct(";");
+      Ok(())
+    }
+    _ => emit_stmt(em, stmt),
+  }
+}
+
 fn emit_if(em: &mut Emitter, if_stmt: &Node<IfStmt>) -> EmitResult {
   let if_stmt = if_stmt.stx.as_ref();
   em.write_keyword("if");
   em.write_punct("(");
   emit_expr(em, &if_stmt.test, ExprCtx::Default)?;
   em.write_punct(")");
-  emit_stmt(em, &if_stmt.consequent)?;
+  emit_stmt_as_body(em, &if_stmt.consequent)?;
   if let Some(alt) = &if_stmt.alternate {
     em.write_keyword("else");
-    emit_stmt(em, alt)?;
+    emit_stmt_as_body(em, alt)?;
   }
   Ok(())
 }
@@ -180,7 +187,7 @@ fn emit_for_in_of_lhs(em: &mut Emitter, lhs: &ForInOfLhs) -> EmitResult {
 fn emit_for_body(em: &mut Emitter, body: &Node<ForBody>) -> EmitResult {
   let stmts = &body.stx.body;
   if stmts.len() == 1 {
-    emit_stmt(em, &stmts[0])
+    emit_stmt_as_body(em, &stmts[0])
   } else {
     em.write_punct("{");
     emit_stmt_list(em, stmts)?;
@@ -195,13 +202,13 @@ fn emit_while(em: &mut Emitter, while_stmt: &Node<WhileStmt>) -> EmitResult {
   em.write_punct("(");
   emit_expr(em, &while_stmt.condition, ExprCtx::Default)?;
   em.write_punct(")");
-  emit_stmt(em, &while_stmt.body)
+  emit_stmt_as_body(em, &while_stmt.body)
 }
 
 fn emit_do_while(em: &mut Emitter, do_stmt: &Node<DoWhileStmt>) -> EmitResult {
   let do_stmt = do_stmt.stx.as_ref();
   em.write_keyword("do");
-  emit_stmt(em, &do_stmt.body)?;
+  emit_stmt_as_body(em, &do_stmt.body)?;
   em.write_keyword("while");
   em.write_punct("(");
   emit_expr(em, &do_stmt.condition, ExprCtx::Default)?;
@@ -311,13 +318,13 @@ fn emit_with(em: &mut Emitter, with_stmt: &Node<WithStmt>) -> EmitResult {
   em.write_punct("(");
   emit_expr(em, &with_stmt.stx.object, ExprCtx::Default)?;
   em.write_punct(")");
-  emit_stmt(em, &with_stmt.stx.body)
+  emit_stmt_as_body(em, &with_stmt.stx.body)
 }
 
 fn emit_label(em: &mut Emitter, label_stmt: &Node<LabelStmt>) -> EmitResult {
   em.write_identifier(&label_stmt.stx.name);
   em.write_punct(":");
-  emit_stmt(em, &label_stmt.stx.statement)
+  emit_stmt_as_body(em, &label_stmt.stx.statement)
 }
 
 fn emit_var_decl(em: &mut Emitter, decl: &VarDecl, trailing_semicolon: bool) -> EmitResult {

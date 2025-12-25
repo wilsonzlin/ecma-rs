@@ -1,5 +1,9 @@
 use crate::emitter::{EmitError, EmitErrorKind, EmitResult, Emitter};
-use crate::escape::{emit_string_literal_double_quoted, emit_template_raw_segment};
+use crate::escape::{
+  cooked_template_segment,
+  emit_string_literal_double_quoted,
+  emit_template_literal_segment,
+};
 use crate::ts_type::emit_type_expr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -550,22 +554,27 @@ fn emit_template_literal(em: &mut Emitter, template: &Node<LitTemplateExpr>) -> 
 }
 
 fn emit_template_parts(em: &mut Emitter, parts: &[LitTemplatePart]) -> EmitResult {
-  em.write_punct("`");
-  for part in parts {
+  em.write_raw_byte(b'`');
+  for (idx, part) in parts.iter().enumerate() {
     match part {
       LitTemplatePart::String(raw) => {
+        let is_first = idx == 0;
+        let is_last = idx + 1 == parts.len();
+        let cooked = cooked_template_segment(raw, is_first, is_last);
         let mut buf = Vec::new();
-        emit_template_raw_segment(&mut buf, raw);
-        em.write_str(std::str::from_utf8(&buf).expect("template raw segment is UTF-8"));
+        emit_template_literal_segment(&mut buf, cooked);
+        em.write_raw_str(
+          std::str::from_utf8(&buf).expect("template literal segment is UTF-8"),
+        );
       }
       LitTemplatePart::Substitution(expr) => {
-        em.write_str("${");
+        em.write_raw_str("${");
         emit_expr(em, expr, ExprCtx::Default)?;
-        em.write_punct("}");
+        em.write_raw_byte(b'}');
       }
     }
   }
-  em.write_punct("`");
+  em.write_raw_byte(b'`');
   Ok(())
 }
 

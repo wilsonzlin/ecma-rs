@@ -1,8 +1,13 @@
 use emit_js::{emit_program, EmitMode, EmitOptions, Emitter};
+use parse_js::{Dialect, ParseOptions, SourceType};
 use serde_json::to_value;
 
 fn assert_roundtrip(src: &str) {
-  let parsed = parse_js::parse(src).expect("parse");
+  let opts = ParseOptions {
+    dialect: Dialect::Tsx,
+    source_type: SourceType::Module,
+  };
+  let parsed = parse_js::parse_with_options(src, opts).expect("parse");
   let mut em = Emitter::new(EmitOptions {
     mode: EmitMode::Minified,
     ..EmitOptions::default()
@@ -10,7 +15,7 @@ fn assert_roundtrip(src: &str) {
   emit_program(&mut em, parsed.stx.as_ref())
     .unwrap_or_else(|err| panic!("emit failed for {src:?}: {err:?}"));
   let emitted = String::from_utf8(em.into_bytes()).expect("utf-8");
-  let reparsed = parse_js::parse(&emitted).expect("reparse");
+  let reparsed = parse_js::parse_with_options(&emitted, opts).expect("reparse");
   assert_eq!(
     to_value(&parsed).unwrap(),
     to_value(&reparsed).unwrap(),
