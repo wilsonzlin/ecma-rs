@@ -58,7 +58,7 @@ fn assert_needs_parens(source: &str) -> String {
 #[test]
 fn object_literal_statement_keeps_parens() {
   let emitted = assert_needs_parens("({a:1});");
-  assert_eq!(emitted, "({a:1})");
+  assert_eq!(emitted, "({a: 1})");
 }
 
 #[test]

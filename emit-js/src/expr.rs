@@ -20,6 +20,7 @@ use parse_js::ast::expr::{
   ClassExpr,
   ComputedMemberExpr,
   CondExpr,
+  ArrowFuncExpr,
   Expr,
   FuncExpr,
   IdExpr,
@@ -108,6 +109,7 @@ where
       Expr::Func(func) => self.emit_func_expr(func),
       Expr::Class(class) => self.emit_class_expr(class),
       Expr::Import(import_expr) => self.emit_import_expr(import_expr),
+      Expr::ArrowFunc(arrow) => self.emit_arrow_func(arrow),
       Expr::ArrPat(arr) => self.emit_array_pattern(arr),
       Expr::IdPat(id) => self.emit_id_pattern(id),
       Expr::ObjPat(obj) => self.emit_object_pattern(obj),
@@ -293,7 +295,7 @@ where
     match val {
       ClassOrObjVal::Prop(Some(expr)) => {
         self.emit_pattern_fragment(|em| crate::pat::emit_class_or_object_key(em, key))?;
-        self.out.write_char(':')?;
+        self.out.write_str(": ")?;
         self.emit_expr_with_min_prec(expr, Prec::new(1))
       }
       ClassOrObjVal::Prop(None) => Err(EmitError::unsupported("object property missing value")),
@@ -410,6 +412,51 @@ where
       }
       self.out.write_char(')')?;
       Ok(())
+    })
+  }
+
+  fn emit_arrow_func(&mut self, arrow: &Node<ArrowFuncExpr>) -> EmitResult {
+    with_node_context(arrow.loc, || {
+      let func = arrow.stx.func.stx.as_ref();
+      if !func.arrow {
+        return Err(EmitError::unsupported("non-arrow function in arrow expression"));
+      }
+      if func.generator {
+        return Err(EmitError::unsupported("generator arrow function not supported"));
+      }
+
+      if func.async_ {
+        self.out.write_str("async ")?;
+      }
+
+      self.emit_func_signature(&arrow.stx.func)?;
+
+      self.out.write_str(" => ")?;
+      match func.body.as_ref() {
+        Some(FuncBody::Expression(expr)) => {
+          let needs_parens =
+            is_comma_expression(expr.stx.as_ref()) || expr_starts_with_brace(expr);
+          if needs_parens {
+            self.out.write_char('(')?;
+          }
+          self.emit_expr_with_min_prec(expr, Prec::new(1))?;
+          if needs_parens {
+            self.out.write_char(')')?;
+          }
+          Ok(())
+        }
+        Some(FuncBody::Block(stmts)) => {
+          self.out.write_char('{')?;
+          if !stmts.is_empty() {
+            return Err(EmitError::unsupported(
+              "arrow function block body emission not supported",
+            ));
+          }
+          self.out.write_char('}')?;
+          Ok(())
+        }
+        None => Err(EmitError::unsupported("arrow function missing body")),
+      }
     })
   }
 
@@ -719,6 +766,27 @@ fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
     | OperatorName::PostfixIncrement => Err(EmitError::unsupported(
       "operator not supported in binary emitter",
     )),
+  }
+}
+
+fn is_comma_expression(expr: &Expr) -> bool {
+  matches!(expr, Expr::Binary(binary) if binary.stx.operator == OperatorName::Comma)
+}
+
+fn expr_starts_with_brace(expr: &Node<Expr>) -> bool {
+  match expr.stx.as_ref() {
+    Expr::LitObj(_) | Expr::ObjPat(_) => true,
+    Expr::Binary(binary) => expr_starts_with_brace(&binary.stx.left),
+    Expr::Call(call) => expr_starts_with_brace(&call.stx.callee),
+    Expr::Member(member) => expr_starts_with_brace(&member.stx.left),
+    Expr::ComputedMember(member) => expr_starts_with_brace(&member.stx.object),
+    Expr::TaggedTemplate(tagged) => expr_starts_with_brace(&tagged.stx.function),
+    Expr::NonNullAssertion(expr) => expr_starts_with_brace(&expr.stx.expression),
+    Expr::TypeAssertion(assertion) => expr_starts_with_brace(&assertion.stx.expression),
+    Expr::SatisfiesExpr(satisfies) => expr_starts_with_brace(&satisfies.stx.expression),
+    Expr::UnaryPostfix(unary) => expr_starts_with_brace(&unary.stx.argument),
+    Expr::Cond(cond) => expr_starts_with_brace(&cond.stx.test),
+    _ => false,
   }
 }
 
