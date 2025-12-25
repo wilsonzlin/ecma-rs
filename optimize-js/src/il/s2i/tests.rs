@@ -122,6 +122,7 @@ fn direct_eval_is_unsupported() {
 fn shadowed_eval_is_allowed() {
   let source = r#"const f = (eval) => { let x = 1; eval("x"); };"#;
   compile_source(source, TopLevelMode::Module, false).expect("shadowed eval should compile");
+}
 
 #[test]
 fn spread_call_indices_include_callee_and_this() {
