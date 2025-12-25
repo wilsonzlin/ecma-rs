@@ -4,7 +4,10 @@ pub mod regalloc;
 pub mod structurer;
 pub mod top_level;
 
-use crate::Program;
+mod options;
+
+use crate::il::inst::Arg;
+use crate::{Program, ProgramFunction};
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
@@ -14,27 +17,9 @@ pub use il::{
   lower_function, lower_program, LoweredArg, LoweredBlock, LoweredFunction, LoweredInst,
   LoweredProgram,
 };
+pub use options::{DecompileOptions, ResolvedTempDeclStyle, TempDeclScope, TempDeclStyle};
 pub use structurer::{structure_cfg, BreakTarget, ControlTree, LoopLabel};
 pub use top_level::{build_top_level, foreign_var_decl, prepend_foreign_decls};
-
-/// Controls how an optimized [`Program`] is decompiled back into syntax.
-#[derive(Clone, Copy, Debug)]
-pub struct DecompileOptions {
-  /// Whether to insert explicit declarations for SSA registers before they are used.
-  pub declare_registers: bool,
-  /// Whether to emit bindings for captured/foreign variables so the output is runnable
-  /// without providing an external environment.
-  pub emit_foreign_bindings: bool,
-}
-
-impl Default for DecompileOptions {
-  fn default() -> Self {
-    Self {
-      declare_registers: false,
-      emit_foreign_bindings: true,
-    }
-  }
-}
 
 /// Converts an optimized [`Program`] into a `parse-js` [`TopLevel`] AST.
 ///
@@ -66,4 +51,80 @@ pub fn program_to_js(
   let mut emitter = emit_js::Emitter::new(emit);
   emit_js::emit_top_level(&mut emitter, ast.stx.as_ref())?;
   Ok(emitter.into_bytes())
+}
+
+fn collect_temps(func: &ProgramFunction) -> Vec<u32> {
+  let mut temps = Vec::new();
+  for (_, insts) in func.body.bblocks.all() {
+    for inst in insts {
+      temps.extend(inst.tgts.iter().copied());
+      for arg in &inst.args {
+        if let Arg::Var(var) = arg {
+          temps.push(*var);
+        }
+      }
+    }
+  }
+  temps.sort_unstable();
+  temps.dedup();
+  temps
+}
+
+fn format_temp_decls(temps: &[u32], style: ResolvedTempDeclStyle) -> Option<String> {
+  if temps.is_empty() {
+    return None;
+  }
+
+  let mut out = String::new();
+  match style {
+    ResolvedTempDeclStyle::Var => out.push_str("var "),
+    ResolvedTempDeclStyle::LetWithVoidInit => out.push_str("let "),
+  }
+
+  for (idx, temp) in temps.iter().enumerate() {
+    if idx > 0 {
+      out.push_str(", ");
+    }
+    out.push('r');
+    out.push_str(&temp.to_string());
+    if matches!(style, ResolvedTempDeclStyle::LetWithVoidInit) {
+      out.push_str("=void 0");
+    }
+  }
+  out.push(';');
+  Some(out)
+}
+
+/// Emits a declaration statement for the temporaries used inside `func`.
+///
+/// The declaration style is resolved using the provided `scope`; callers should
+/// pass [`TempDeclScope::TopLevel`] for program-level code so `Auto` can take
+/// [`crate::TopLevelMode`] into account.
+pub fn temp_decls_for_function(
+  func: &ProgramFunction,
+  scope: TempDeclScope,
+  options: &DecompileOptions,
+) -> Option<String> {
+  let temps = collect_temps(func);
+  let style = options.resolve_temp_decl_style(scope);
+  format_temp_decls(&temps, style)
+}
+
+/// Convenience wrapper for the program top-level that uses [`Program::top_level_mode`]
+/// when resolving the declaration style.
+pub fn temp_decls_for_top_level(program: &Program, options: &DecompileOptions) -> Option<String> {
+  temp_decls_for_function(
+    &program.top_level,
+    TempDeclScope::TopLevel(program.top_level_mode),
+    options,
+  )
+}
+
+/// Emits a `var`-style declaration for nested functions unless overridden by
+/// options.
+pub fn temp_decls_for_nested_function(
+  func: &ProgramFunction,
+  options: &DecompileOptions,
+) -> Option<String> {
+  temp_decls_for_function(func, TempDeclScope::Function, options)
 }
