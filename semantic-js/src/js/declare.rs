@@ -452,8 +452,8 @@ mod tests {
     let root_scope = semantics.scope(root);
     let x = semantics.name_id("x").unwrap();
     let z = semantics.name_id("z").unwrap();
-    assert!(root_scope.symbols.get(&x).is_some());
-    assert!(root_scope.symbols.get(&z).is_some());
+    assert!(root_scope.symbols.contains_key(&x));
+    assert!(root_scope.symbols.contains_key(&z));
   }
 
   #[test]
@@ -473,8 +473,8 @@ mod tests {
     let c = semantics.name_id("c").unwrap();
     let d = semantics.name_id("d").unwrap();
     let func_scope = semantics.scope(func_scope);
-    assert!(func_scope.symbols.get(&c).is_some());
-    assert!(func_scope.symbols.get(&d).is_some());
+    assert!(func_scope.symbols.contains_key(&c));
+    assert!(func_scope.symbols.contains_key(&d));
   }
 
   #[test]

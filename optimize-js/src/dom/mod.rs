@@ -91,7 +91,7 @@ impl<const POST: bool> Dom<POST> {
           };
           let to_skip = new_idom;
           for p in parents.iter().filter(|&&p| p != to_skip) {
-            if idom_by.get(&p).is_some() {
+            if idom_by.contains_key(&p) {
               new_idom = intersect!(p, new_idom);
             };
           }

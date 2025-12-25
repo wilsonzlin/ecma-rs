@@ -141,10 +141,7 @@ impl ScopeData {
       .unwrap()
   }
 
-  pub fn get_or_insert_assoc<T: Any + Send + Sync>(&mut self) -> &mut T
-  where
-    T: Default,
-  {
+  pub fn get_or_insert_assoc<T: Any + Send + Sync + Default>(&mut self) -> &mut T {
     self.get_or_insert_assoc_with(|| Default::default())
   }
 

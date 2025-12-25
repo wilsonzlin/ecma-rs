@@ -21,7 +21,6 @@ use std::str::FromStr;
  * - Checking if either is null or undefined. A builtin could be null or undefined. Accessing an unknown property on a builtin object results in undefined *today* but may not in the future.
  * - Even `void (Builtin)` is not safe because the builtin path may not exist and we could be suppressing an error.
  */
-
 // TODO Verify num_bigint::BigInt::from_str matches ECMAScript spec.
 pub fn parse_bigint(raw: &str) -> Option<num_bigint::BigInt> {
   num_bigint::BigInt::from_str(raw).ok()

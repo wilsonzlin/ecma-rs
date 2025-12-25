@@ -1012,10 +1012,7 @@ impl<'a> Parser<'a> {
               // e.g., foo<T>() or obj.method<T>()
               if self.peek().typ == TT::ParenthesisOpen {
                 self.consume(); // (
-                let arguments = match self.call_args(ctx) {
-                  Ok(args) => args,
-                  Err(_) => Vec::new(), // Error recovery
-                };
+                let arguments = self.call_args(ctx).unwrap_or_default();
                 if let Ok(end) = self.require(TT::ParenthesisClose) {
                   left = Node::new(
                     left.loc + end.loc,

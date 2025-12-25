@@ -8,7 +8,7 @@ use std::fmt::Display;
 use std::fmt::Formatter;
 
 // This provides Eq for f64.
-#[derive(Copy, Clone, PartialOrd, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct JsNumber(pub f64);
 
 impl Display for JsNumber {
@@ -32,6 +32,12 @@ impl Ord for JsNumber {
   fn cmp(&self, other: &Self) -> Ordering {
     // Only NaNs cannot be compared, and we treat them as equal.
     self.0.partial_cmp(&other.0).unwrap_or(Ordering::Equal)
+  }
+}
+
+impl PartialOrd for JsNumber {
+  fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+    Some(self.cmp(other))
   }
 }
 

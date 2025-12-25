@@ -5,7 +5,6 @@ use itertools::Itertools;
 /**
  * WARNING: Read comment in cfg.rs.
  */
-
 fn can_prune_bblock(
   parents: &[u32],
   children: &[u32],

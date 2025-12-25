@@ -20,7 +20,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       # Cargo.lock is ignored in this repository. Generate it on the fly so we
       # can use --locked for reproducible dependency resolution in CI.
@@ -29,6 +29,17 @@ jobs:
 
       - name: cargo fmt
         run: cargo fmt --all --check
+
+      - name: cargo clippy (workspace)
+        run: >
+          cargo clippy --workspace --all-targets --all-features --locked --
+          -A clippy::style
+          -A clippy::complexity
+          -A clippy::perf
+          -A clippy::nursery
+          -A clippy::pedantic
+          -D clippy::correctness
+          -D clippy::suspicious
 
       - name: cargo check (workspace)
         run: cargo check --workspace --all-targets --locked
