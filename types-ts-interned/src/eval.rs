@@ -459,6 +459,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             optional,
             readonly,
             accessibility: None,
+            is_method: false,
+            declared_on: None,
           },
         });
       }

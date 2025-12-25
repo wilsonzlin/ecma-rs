@@ -48,7 +48,7 @@ pub struct ReasonNode {
 }
 
 pub struct RelateHooks<'a> {
-  pub expander: Option<&'a dyn TypeExpander>,
+  pub expander: Option<&'a dyn RelateTypeExpander>,
   pub is_same_origin_private_member: Option<&'a dyn Fn(&Property, &Property) -> bool>,
 }
 
@@ -64,7 +64,10 @@ impl Default for RelateHooks<'_> {
 impl std::fmt::Debug for RelateHooks<'_> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("RelateHooks")
-      .field("expander", &self.expander.as_ref().map(|_| "TypeExpander"))
+      .field(
+        "expander",
+        &self.expander.as_ref().map(|_| "RelateTypeExpander"),
+      )
       .field(
         "is_same_origin_private_member",
         &self.is_same_origin_private_member.as_ref().map(|_| "Fn"),
@@ -81,7 +84,7 @@ struct RelationKey {
   mode: RelationMode,
 }
 
-pub trait TypeExpander {
+pub trait RelateTypeExpander {
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId>;
 }
 

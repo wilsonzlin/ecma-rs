@@ -259,7 +259,7 @@ fn cyclic_reference_terminates() {
   struct Expand {
     ty: TypeId,
   }
-  impl TypeExpander for Expand {
+  impl RelateTypeExpander for Expand {
     fn expand_ref(&self, _store: &TypeStore, _def: DefId, _args: &[TypeId]) -> Option<TypeId> {
       Some(self.ty)
     }
