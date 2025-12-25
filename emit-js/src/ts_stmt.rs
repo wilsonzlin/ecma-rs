@@ -2,7 +2,7 @@ use crate::emit_interface_decl;
 use crate::emit_type_alias_decl;
 use crate::emit_type_expr;
 use crate::emit_type_members;
-use crate::emitter::{with_node_context, EmitError, EmitResult};
+use crate::emitter::{with_node_context, EmitError, EmitResult, Emitter};
 use crate::ts_type::emit_type_parameters;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
@@ -24,6 +24,13 @@ pub fn emit_top_level<W: fmt::Write>(out: &mut W, top: &TopLevel) -> EmitResult 
     emit_ts_stmt(out, stmt)?;
     first = false;
   }
+  Ok(())
+}
+
+pub fn emit_top_level_to_emitter(out: &mut Emitter, top: &TopLevel) -> EmitResult {
+  let mut buf = String::new();
+  emit_top_level(&mut buf, top)?;
+  out.write_str(&buf);
   Ok(())
 }
 
@@ -83,6 +90,13 @@ pub fn emit_ts_stmt<W: fmt::Write>(out: &mut W, stmt: &Node<Stmt>) -> EmitResult
     }
     _ => Err(EmitError::unsupported("statement kind not supported")),
   })
+}
+
+pub fn emit_ts_stmt_to_emitter(out: &mut Emitter, stmt: &Node<Stmt>) -> EmitResult {
+  let mut buf = String::new();
+  emit_ts_stmt(&mut buf, stmt)?;
+  out.write_str(&buf);
+  Ok(())
 }
 
 fn emit_enum_decl<W: fmt::Write>(out: &mut W, decl: &EnumDecl) -> fmt::Result {
