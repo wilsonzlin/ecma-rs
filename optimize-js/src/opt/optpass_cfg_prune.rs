@@ -120,36 +120,44 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
 
     // Now that we've found all empty leaves, replace all CondGoto labels that go to any of them with one bblock label.
     if empty_leaves.len() > 1 {
-      for (label, bblocks) in cfg.bblocks.all_mut() {
-        let Some(inst) = bblocks.last_mut() else {
-          continue;
-        };
-        if inst.t != InstTyp::CondGoto {
-          continue;
-        }
-        let mut all_children_empty = true;
-        for child in inst.labels.iter_mut() {
-          if empty_leaves.contains(child) {
-            let new_child = empty_leaves[0];
-            cfg.graph.disconnect(label, *child);
-            cfg.graph.connect(label, new_child);
-            *child = new_child;
-          } else {
-            all_children_empty = false;
+      empty_leaves.sort_unstable();
+      empty_leaves.dedup();
+      let mut existing_labels = cfg.graph.labels().collect_vec();
+      existing_labels.sort_unstable();
+      existing_labels.dedup();
+      empty_leaves.retain(|label| existing_labels.binary_search(label).is_ok());
+      if empty_leaves.len() > 1 {
+        for (label, bblocks) in cfg.bblocks.all_mut() {
+          let Some(inst) = bblocks.last_mut() else {
+            continue;
+          };
+          if inst.t != InstTyp::CondGoto {
+            continue;
+          }
+          let mut all_children_empty = true;
+          for child in inst.labels.iter_mut() {
+            if empty_leaves.contains(child) {
+              let new_child = empty_leaves[0];
+              cfg.graph.disconnect(label, *child);
+              cfg.graph.connect(label, new_child);
+              *child = new_child;
+            } else {
+              all_children_empty = false;
+            };
+          }
+          if all_children_empty {
+            // Drop the CondGoto.
+            bblocks.pop().unwrap();
           };
         }
-        if all_children_empty {
-          // Drop the CondGoto.
-          bblocks.pop().unwrap();
-        };
-      }
-      // For all other empty leaves, remove them. They should be unreachable.
-      for label in empty_leaves.into_iter().skip(1) {
-        if cfg.bblocks.maybe_get(label).is_some() {
-          cfg.pop(label);
+        // For all other empty leaves, remove them. They should be unreachable.
+        for label in empty_leaves.into_iter().skip(1) {
+          if cfg.bblocks.maybe_get(label).is_some() {
+            cfg.pop(label);
+          }
         }
+        *changed = true;
       }
-      *changed = true;
     }
 
     if converged {
