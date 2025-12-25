@@ -359,15 +359,23 @@ impl Program {
     let mut state = self.state.lock().unwrap();
     state.ensure_analyzed(&self.host, &self.roots);
     state.ensure_symbols_for_file(file);
-    state
-      .symbol_occurrences
-      .get(&file)
-      .and_then(|occurs| {
-        occurs
-          .iter()
-          .find(|o| o.range.start <= offset && offset < o.range.end)
-      })
-      .map(|o| o.symbol)
+    state.symbol_at(file, offset)
+  }
+
+  /// Innermost expression covering an offset within a file.
+  pub fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
+    let mut state = self.state.lock().unwrap();
+    state.ensure_analyzed(&self.host, &self.roots);
+    state.expr_at(file, offset)
+  }
+
+  /// Type of the innermost expression covering an offset within a file.
+  pub fn type_at(&self, file: FileId, offset: u32) -> Option<TypeId> {
+    let mut state = self.state.lock().unwrap();
+    state.ensure_analyzed(&self.host, &self.roots);
+    let (body, expr) = state.expr_at(file, offset)?;
+    let result = state.check_body(body);
+    Some(result.expr_type(expr).unwrap_or(state.builtin.unknown))
   }
 
   /// Export map for a file.
@@ -803,6 +811,7 @@ struct ProgramState {
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
+  symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
   file_kinds: HashMap<FileId, FileKind>,
   lib_texts: HashMap<FileId, Arc<str>>,
   global_bindings: HashMap<String, SymbolBinding>,
@@ -828,6 +837,7 @@ impl ProgramState {
       def_types: HashMap::new(),
       body_results: HashMap::new(),
       symbol_occurrences: HashMap::new(),
+      symbol_to_def: HashMap::new(),
       file_kinds: HashMap::new(),
       lib_texts: HashMap::new(),
       global_bindings: HashMap::new(),
@@ -1061,6 +1071,7 @@ impl ProgramState {
               }),
             },
           );
+          self.record_def_symbol(def_id, symbol);
           defs.push(def_id);
           bindings.insert(
             "default".to_string(),
@@ -1159,6 +1170,7 @@ impl ProgramState {
                     }),
                   },
                 );
+                self.record_def_symbol(def_id, symbol);
                 defs.push(def_id);
                 bindings.insert(
                   alias_name.clone(),
@@ -1199,6 +1211,7 @@ impl ProgramState {
                   }),
                 },
               );
+              self.record_def_symbol(def_id, symbol);
               defs.push(def_id);
               bindings.insert(
                 alias_name.clone(),
@@ -1296,6 +1309,7 @@ impl ProgramState {
           }),
         },
       );
+      self.record_def_symbol(def_id, symbol);
       defs.push((
         def_id,
         (
@@ -1335,6 +1349,7 @@ impl ProgramState {
         kind: DefKind::Function(func_data),
       },
     );
+    self.record_def_symbol(def_id, symbol);
     let binding = (
       name.clone(),
       SymbolBinding {
@@ -2199,6 +2214,89 @@ impl ProgramState {
     }
   }
 
+  fn symbol_at(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
+    let occurrences = self.symbol_occurrences.get(&file)?;
+    let mut best_containing: Option<(u32, u32, semantic_js::SymbolId)> = None;
+    let mut best_empty: Option<(u32, u32, semantic_js::SymbolId)> = None;
+
+    for occurrence in occurrences.iter() {
+      let range = occurrence.range;
+      let len = range.len();
+      let key = (len, range.start, occurrence.symbol);
+      if range.start <= offset && offset < range.end {
+        let replace = best_containing.map(|best| key < best).unwrap_or(true);
+        if replace {
+          best_containing = Some(key);
+        }
+      } else if range.start == range.end && offset == range.start {
+        let replace = best_empty.map(|best| key < best).unwrap_or(true);
+        if replace {
+          best_empty = Some(key);
+        }
+      }
+    }
+
+    let symbol = best_containing
+      .or(best_empty)
+      .map(|(_, _, symbol)| symbol)?;
+    Some(self.resolve_symbol(symbol))
+  }
+
+  fn resolve_symbol(&mut self, symbol: semantic_js::SymbolId) -> semantic_js::SymbolId {
+    let import = self
+      .symbol_to_def
+      .get(&symbol)
+      .and_then(|def| self.def_data.get(def))
+      .and_then(|d| match &d.kind {
+        DefKind::Import(import) => Some(import.clone()),
+        _ => None,
+      });
+
+    if let Some(import) = import {
+      if let Some(resolved) = self.resolve_import_symbol(&import) {
+        return resolved;
+      }
+    }
+
+    symbol
+  }
+
+  fn resolve_import_symbol(&mut self, import: &ImportData) -> Option<semantic_js::SymbolId> {
+    let exports = self.exports_of_file(import.from);
+    exports.get(&import.original).map(|entry| entry.symbol)
+  }
+
+  fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
+    let mut best_containing: Option<(u32, u32, BodyId, ExprId)> = None;
+    let mut best_empty: Option<(u32, u32, BodyId, ExprId)> = None;
+
+    for body in self.body_data.values() {
+      if body.file != file {
+        continue;
+      }
+      for (idx, span) in body.expr_spans.iter().enumerate() {
+        let expr_id = ExprId(idx as u32);
+        let len = span.len();
+        let key = (len, span.start, body.id, expr_id);
+        if span.start <= offset && offset < span.end {
+          let replace = best_containing.map(|best| key < best).unwrap_or(true);
+          if replace {
+            best_containing = Some(key);
+          }
+        } else if span.start == span.end && offset == span.start {
+          let replace = best_empty.map(|best| key < best).unwrap_or(true);
+          if replace {
+            best_empty = Some(key);
+          }
+        }
+      }
+    }
+
+    best_containing
+      .or(best_empty)
+      .map(|(_, _, body, expr)| (body, expr))
+  }
+
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {
     self.def_data.get(&def).and_then(|d| match &d.kind {
       DefKind::Function(func) => func.body,
@@ -2361,6 +2459,10 @@ impl ProgramState {
     id
   }
 
+  fn record_def_symbol(&mut self, def: DefId, symbol: semantic_js::SymbolId) {
+    self.symbol_to_def.insert(symbol, def);
+  }
+
   fn record_symbol(&mut self, file: FileId, range: TextRange, symbol: semantic_js::SymbolId) {
     self
       .symbol_occurrences
@@ -2500,6 +2602,12 @@ impl BodyBuilder {
         if expected_end <= span.end {
           span.end = expected_end;
         }
+        if span.len() == 0 {
+          let name_len = name.len().min(u32::MAX as usize) as u32;
+          let widen = name_len.max(1);
+          span.start = span.start.saturating_sub(name_len);
+          span.end = span.end.saturating_add(widen);
+        }
         HirExprKind::Ident(name)
       }
       Expr::Member(mem) => {
@@ -2584,6 +2692,11 @@ impl BodyBuilder {
       }
       _ => HirExprKind::Unknown,
     };
+
+    if span.len() == 0 {
+      span = TextRange::new(span.start.saturating_sub(1), span.end.saturating_add(1));
+    }
+
     let id = ExprId(self.expr_spans.len() as u32);
     self.expr_spans.push(span);
     HirExpr { id, span, kind }
