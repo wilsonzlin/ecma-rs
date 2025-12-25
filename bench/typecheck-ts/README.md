@@ -28,7 +28,7 @@ stable:
   generics-heavy fixtures without re-checking the whole file.
 - `typecheck/*` and `typecheck/module_graph/*`: end-to-end checking for single
   files and a small multi-file project.
-- `relations/*`: assignability micro-bench (`types-ts`) with cold vs warmed
+- `relations/*`: assignability micro-bench (`types-ts-interned`) with cold vs warmed
   caches.
 
 ### Incremental scenario

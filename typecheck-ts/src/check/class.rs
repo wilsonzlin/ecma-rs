@@ -276,9 +276,9 @@ impl ClassEnv {
         this_param,
       };
       let sig_id = self.store.intern_signature(sig);
-      let fn_type = self
-        .store
-        .intern_type(TypeKind::Callable { overloads: vec![sig_id] });
+      let fn_type = self.store.intern_type(TypeKind::Callable {
+        overloads: vec![sig_id],
+      });
       let prop = Property {
         key: PropKey::String(self.store.intern_name(method.name)),
         data: PropData {
@@ -315,16 +315,16 @@ impl ClassEnv {
       static_shape.construct_signatures.push(sig_id);
     }
 
-    let instance_ty = self.store.intern_type(TypeKind::Object(self.store.intern_object(
-      ObjectType {
+    let instance_ty = self
+      .store
+      .intern_type(TypeKind::Object(self.store.intern_object(ObjectType {
         shape: self.store.intern_shape(instance_shape),
-      },
-    )));
-    let static_ty = self.store.intern_type(TypeKind::Object(self.store.intern_object(
-      ObjectType {
+      })));
+    let static_ty = self
+      .store
+      .intern_type(TypeKind::Object(self.store.intern_object(ObjectType {
         shape: self.store.intern_shape(static_shape),
-      },
-    )));
+      })));
 
     self.register_ref(def_id, instance_ty);
 
@@ -349,14 +349,10 @@ impl RelateTypeExpander for ClassEnv {
 
 impl TypeExpander for ClassEnv {
   fn expand(&self, _store: &TypeStore, def: DefId, _args: &[TypeId]) -> Option<ExpandedType> {
-    self
-      .ref_map
-      .get(&def)
-      .copied()
-      .map(|ty| ExpandedType {
-        params: Vec::new(),
-        ty,
-      })
+    self.ref_map.get(&def).copied().map(|ty| ExpandedType {
+      params: Vec::new(),
+      ty,
+    })
   }
 }
 

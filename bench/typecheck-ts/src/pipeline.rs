@@ -5,6 +5,7 @@ use diagnostics::FileId as HirFileId;
 use hir_js::lower_file;
 use hir_js::FileKind as HirFileKind;
 use hir_js::LowerResult;
+use ordered_float::OrderedFloat;
 use parse_js::ast::expr::pat::Pat as AstPat;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::node::Node;
@@ -27,9 +28,9 @@ use typecheck_ts::FileId as TcFileId;
 use typecheck_ts::Host;
 use typecheck_ts::HostError;
 use typecheck_ts::Program;
-use types_ts::{
-  FnParam, FunctionType, IndexKind, IndexSignature, MemberVisibility, ObjectType, Property,
-  RelateCtx, TypeKind, TypeOptions, TypeStore,
+use types_ts_interned::{
+  Indexer, ObjectType, Param, PropData, PropKey, Property, RelateCtx, Shape, Signature, TypeId,
+  TypeKind, TypeOptions, TypeStore,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -281,14 +282,14 @@ fn entries_from_graph(graph: &ModuleGraphFixture) -> Vec<(String, Arc<str>)> {
 pub fn assignability_micro(iterations: usize, warm_cache: bool) -> RelationStats {
   if warm_cache {
     let (store, sample) = sample_types();
-    let ctx = RelateCtx::new(&store, TypeOptions::default());
+    let ctx = RelateCtx::new(store.clone(), TypeOptions::default());
     run_assignability(&ctx, iterations, &sample)
   } else {
     let mut checks = 0;
     let mut successes = 0;
     for _ in 0..iterations {
       let (store, sample) = sample_types();
-      let ctx = RelateCtx::new(&store, TypeOptions::default());
+      let ctx = RelateCtx::new(store.clone(), TypeOptions::default());
       let stats = run_assignability(&ctx, 1, &sample);
       checks += stats.checks;
       successes += stats.successes;
@@ -337,128 +338,138 @@ fn run_assignability(
   RelationStats { checks, successes }
 }
 
-fn sample_types() -> (TypeStore, SampleTypes) {
-  let mut store = TypeStore::new();
+fn object_type(store: &TypeStore, shape: Shape) -> TypeId {
+  let shape_id = store.intern_shape(shape);
+  let obj = store.intern_object(ObjectType { shape: shape_id });
+  store.intern_type(TypeKind::Object(obj))
+}
 
-  let numbers: Vec<_> = (0..12).map(|n| store.literal_number(n as i64)).collect();
-  let wide_union = store.intern(TypeKind::Union(numbers.clone()));
-  let narrow_union = store.intern(TypeKind::Union(numbers.iter().take(3).copied().collect()));
+fn callable(store: &TypeStore, params: Vec<Param>, ret: TypeId) -> TypeId {
+  let sig = store.intern_signature(Signature::new(params, ret));
+  store.intern_type(TypeKind::Callable {
+    overloads: vec![sig],
+  })
+}
 
-  let string_tag = store.literal_string("tag");
-  let literal_zero = store.literal_number(0);
-  let optional_number = store.intern(TypeKind::Union(vec![store.number(), literal_zero]));
+fn sample_types() -> (Arc<TypeStore>, SampleTypes) {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
 
-  let tagged_object = store.intern(TypeKind::Object(ObjectType::new(
-    vec![
-      Property {
-        name: "kind".into(),
-        ty: string_tag,
-        optional: false,
-        readonly: true,
-        is_method: false,
-        visibility: MemberVisibility::Public,
-        origin_id: None,
-      },
-      Property {
-        name: "value".into(),
-        ty: wide_union,
-        optional: false,
+  let numbers: Vec<_> = (0..12)
+    .map(|n| store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(n as f64))))
+    .collect();
+  let wide_union = store.union(numbers.clone());
+  let narrow_union = store.union(numbers.iter().take(3).copied().collect());
+
+  let string_tag = store.intern_type(TypeKind::StringLiteral(store.intern_name("tag")));
+  let literal_zero = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(0.0)));
+  let optional_number = store.union(vec![primitives.number, literal_zero]);
+
+  let tagged_object = object_type(
+    &store,
+    Shape {
+      properties: vec![
+        Property {
+          key: PropKey::String(store.intern_name("kind")),
+          data: PropData {
+            ty: string_tag,
+            optional: false,
+            readonly: true,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+        Property {
+          key: PropKey::String(store.intern_name("value")),
+          data: PropData {
+            ty: wide_union,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+      ],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+
+  let object_with_optional = object_type(
+    &store,
+    Shape {
+      properties: vec![
+        Property {
+          key: PropKey::String(store.intern_name("kind")),
+          data: PropData {
+            ty: string_tag,
+            optional: false,
+            readonly: true,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+        Property {
+          key: PropKey::String(store.intern_name("value")),
+          data: PropData {
+            ty: optional_number,
+            optional: true,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+      ],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![Indexer {
+        key_type: primitives.string,
+        value_type: wide_union,
         readonly: false,
-        is_method: false,
-        visibility: MemberVisibility::Public,
-        origin_id: None,
-      },
-    ],
-    vec![],
-  )));
+      }],
+    },
+  );
 
-  let object_with_optional = store.intern(TypeKind::Object(ObjectType::new(
-    vec![
-      Property {
-        name: "kind".into(),
-        ty: string_tag,
-        optional: false,
-        readonly: true,
-        is_method: false,
-        visibility: MemberVisibility::Public,
-        origin_id: None,
-      },
-      Property {
-        name: "value".into(),
-        ty: optional_number,
-        optional: true,
-        readonly: false,
-        is_method: false,
-        visibility: MemberVisibility::Public,
-        origin_id: None,
-      },
-    ],
-    vec![IndexSignature {
-      kind: IndexKind::String,
-      ty: wide_union,
-      readonly: false,
-    }],
-  )));
-
-  let fn_covariant = store.intern(TypeKind::Function(FunctionType {
-    params: vec![FnParam {
-      name: Some("arg".into()),
+  let fn_covariant = callable(
+    &store,
+    vec![Param {
+      name: Some(store.intern_name("arg")),
       ty: narrow_union,
       optional: false,
       rest: false,
     }],
-    ret: wide_union,
-    is_method: false,
-    this_param: None,
-  }));
+    wide_union,
+  );
 
-  let fn_contravariant = store.intern(TypeKind::Function(FunctionType {
-    params: vec![FnParam {
-      name: Some("arg".into()),
+  let fn_contravariant = callable(
+    &store,
+    vec![Param {
+      name: Some(store.intern_name("arg")),
       ty: wide_union,
       optional: false,
       rest: false,
     }],
-    ret: narrow_union,
-    is_method: false,
-    this_param: None,
-  }));
+    narrow_union,
+  );
 
-  let number_ty = store.number();
+  let array_of_union = store.intern_type(TypeKind::Array {
+    ty: wide_union,
+    readonly: false,
+  });
 
-  let array_of_union = store.intern(TypeKind::Object(ObjectType::new(
-    vec![Property {
-      name: "length".into(),
-      ty: number_ty,
-      optional: false,
-      readonly: false,
-      is_method: false,
-      visibility: MemberVisibility::Public,
-      origin_id: None,
-    }],
-    vec![IndexSignature {
-      kind: IndexKind::Number,
-      ty: wide_union,
-      readonly: false,
-    }],
-  )));
-
-  let array_of_numbers = store.intern(TypeKind::Object(ObjectType::new(
-    vec![Property {
-      name: "length".into(),
-      ty: number_ty,
-      optional: false,
-      readonly: false,
-      is_method: false,
-      visibility: MemberVisibility::Public,
-      origin_id: None,
-    }],
-    vec![IndexSignature {
-      kind: IndexKind::Number,
-      ty: number_ty,
-      readonly: false,
-    }],
-  )));
+  let array_of_numbers = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
 
   (
     store,
@@ -476,14 +487,14 @@ fn sample_types() -> (TypeStore, SampleTypes) {
 }
 
 struct SampleTypes {
-  wide_union: types_ts::TypeId,
-  narrow_union: types_ts::TypeId,
-  tagged_object: types_ts::TypeId,
-  object_with_optional: types_ts::TypeId,
-  fn_covariant: types_ts::TypeId,
-  fn_contravariant: types_ts::TypeId,
-  array_of_union: types_ts::TypeId,
-  array_of_numbers: types_ts::TypeId,
+  wide_union: TypeId,
+  narrow_union: TypeId,
+  tagged_object: TypeId,
+  object_with_optional: TypeId,
+  fn_covariant: TypeId,
+  fn_contravariant: TypeId,
+  array_of_union: TypeId,
+  array_of_numbers: TypeId,
 }
 
 fn run_typecheck(host: BenchHost, roots: Vec<TcFileId>) -> TypecheckSummary {

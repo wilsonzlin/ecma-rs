@@ -88,8 +88,8 @@ ecma-rs/
 ├── minify-js/                 # existing
 ├── emit-js/                   # new: deterministic JS emitter/printer (HIR/IR -> JS), shared by minify/opt tooling
 ├── hir-js/                    # new: lowering from parse-js AST → HIR (DefId/BodyId/ExprId)
-├── types-ts/                  # new: pure type representation + interner + relations (no AST refs)
-├── typecheck-ts/              # new: checker + diagnostics + public API surface (uses hir-js + semantic-js + types-ts)
+├── types-ts-interned/         # new: pure type representation + interner + relations (no AST refs)
+├── typecheck-ts/              # new: checker + diagnostics + public API surface (uses hir-js + semantic-js + types-ts-interned)
 ├── typecheck-ts-harness/      # new: conformance + differential testing vs tsc (CLI/binary + lib helpers)
 ├── diagnostics/               # new: shared Diagnostic model + rendering + utilities (used repo-wide)
 └── Cargo.toml
@@ -308,7 +308,7 @@ End-state design:
 
 ---
 
-## Type representation (`types-ts`)
+## Type representation (`types-ts-interned`)
 
 ### Core constraints
 
@@ -782,7 +782,7 @@ Assume a “one-shot” rebuild with unlimited resources. The phases below are *
   - resolver-driven module graph
 - Migrate `optimize-js` and `minify-js` to consume `hir-js` + `semantic-js` (JS mode).
 
-### Phase C — Type system core (`types-ts`)
+### Phase C — Type system core (`types-ts-interned`)
 - Implement `TypeStore` + canonicalization + object shapes + refs
 - Implement assignability/relations engine with memoization + recursion guards
 - Implement type formatting + debug tooling (human + JSON)
@@ -818,10 +818,9 @@ Assume a “one-shot” rebuild with unlimited resources. The phases below are *
 
 - **No global `RefCell`** or non-`Sync` state in anything that must run in parallel.
 - Prefer `Arc`, immutable snapshots, and sharded caches (`DashMap`, `parking_lot` with sharding) where necessary.
-- Keep “pure” logic in `types-ts` (no AST references).
+- Keep “pure” logic in `types-ts-interned` (no AST references).
 - Every recursive algorithm must have:
   - depth limit or visited set
   - memoization
   - a termination story documented in code comments
 - Tests are first-class: every bug fix should come with a regression test.
-

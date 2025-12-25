@@ -1959,12 +1959,13 @@ version = "0.0.1"
 dependencies = [
  "diagnostics",
  "hir-js",
+ "ordered-float",
  "parse-js",
  "semantic-js",
  "serde",
  "serde_json",
  "typecheck-ts",
- "types-ts",
+ "types-ts-interned",
 ]
 
 [[package]]
@@ -1987,14 +1988,6 @@ dependencies = [
  "tracing-subscriber",
  "typecheck-ts",
  "walkdir",
-]
-
-[[package]]
-name = "types-ts"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "tracing",
 ]
 
 [[package]]
