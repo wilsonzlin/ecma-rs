@@ -8,7 +8,6 @@ use parse_js::ast::expr::{
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{ExprStmt, Stmt};
-use parse_js::char::{ID_CONTINUE, ID_START};
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
@@ -123,10 +122,10 @@ fn is_valid_identifier(name: &str) -> bool {
   let Some(first) = chars.next() else {
     return false;
   };
-  if !ID_START.has(first) {
+  if !(first == '$' || first == '_' || first.is_ascii_alphabetic() || first.is_alphabetic()) {
     return false;
   }
-  chars.all(|c| ID_CONTINUE.has(c))
+  chars.all(|c| c == '$' || c == '_' || c.is_ascii_alphanumeric() || c.is_alphanumeric())
 }
 
 pub fn lower_arg<V: VarNamer, F: FnEmitter>(
