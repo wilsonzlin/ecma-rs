@@ -2452,47 +2452,50 @@ impl ProgramState {
   }
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
-    if let Some(semantics) = self.semantics.clone() {
-      let mut map = ExportMap::new();
+    if self.file_kinds.get(&file) != Some(&FileKind::Dts) && self.semantics.is_some() {
       let sem_file = sem_ts::FileId(file.0);
-      let exports = semantics.exports_of(sem_file).clone();
-      for (name, group) in exports.iter() {
-        let symbol_id = {
-          let symbols = semantics.symbols();
-          group.symbol_for(sem_ts::Namespace::VALUE, symbols)
-        };
-        if let Some(symbol_id) = symbol_id {
-          let (local_def, any_def) = {
-            let symbols = semantics.symbols();
-            let symbol = symbols.symbol(symbol_id);
-            let mut local_def = None;
-            let mut any_def = None;
-            for decl_id in symbol.decls_for(sem_ts::Namespace::VALUE).iter() {
-              let decl = symbols.decl(*decl_id);
-              let def = DefId(decl.def_id.0);
-              if any_def.is_none() {
-                any_def = Some(def);
-              }
-              if decl.file == sem_file && local_def.is_none() {
-                local_def = Some(def);
-              }
-            }
-            (local_def, any_def)
+      let pending: Vec<(String, sem_ts::SymbolId, Option<DefId>, Option<DefId>)> = {
+        let semantics = self.semantics.as_ref().expect("checked above");
+        let exports = semantics.exports_of(sem_file);
+        let symbols = semantics.symbols();
+        let mut pending = Vec::new();
+        for (name, group) in exports.iter() {
+          let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) else {
+            continue;
           };
-          let symbol = any_def
-            .or(local_def)
-            .and_then(|def| self.def_data.get(&def).map(|data| data.symbol))
-            .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
-          let type_id = any_def.or(local_def).map(|d| self.type_of_def(d));
-          map.insert(
-            name.clone(),
-            ExportEntry {
-              symbol,
-              def: local_def,
-              type_id,
-            },
-          );
+          let symbol = symbols.symbol(symbol_id);
+          let mut local_def = None;
+          let mut any_def = None;
+          for decl_id in symbol.decls_for(sem_ts::Namespace::VALUE).iter() {
+            let decl = symbols.decl(*decl_id);
+            let def = DefId(decl.def_id.0);
+            if any_def.is_none() {
+              any_def = Some(def);
+            }
+            if decl.file == sem_file && local_def.is_none() {
+              local_def = Some(def);
+            }
+          }
+          pending.push((name.clone(), symbol_id, local_def, any_def));
         }
+        pending
+      };
+
+      let mut map = ExportMap::new();
+      for (name, symbol_id, local_def, any_def) in pending {
+        let symbol = any_def
+          .or(local_def)
+          .and_then(|def| self.def_data.get(&def).map(|data| data.symbol))
+          .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
+        let type_id = any_def.or(local_def).map(|def| self.type_of_def(def));
+        map.insert(
+          name,
+          ExportEntry {
+            symbol,
+            def: local_def,
+            type_id,
+          },
+        );
       }
       return map;
     }
