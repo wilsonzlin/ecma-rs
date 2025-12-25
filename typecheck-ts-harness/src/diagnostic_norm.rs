@@ -1,4 +1,4 @@
-use crate::difftsc::TscDiagnostic;
+use crate::tsc::TscDiagnostic;
 use serde::{Deserialize, Serialize};
 use typecheck_ts::{Diagnostic, FileId, Severity};
 
@@ -37,21 +37,21 @@ pub fn normalize_rust_diagnostics(
   diags
     .iter()
     .map(|diag| {
-      let (file, start, end) = diag
-        .span
-        .map(|span| (file_name(span.file), span.range.start, span.range.end))
-        .unwrap_or((None, 0, 0));
+      let file = file_name(diag.primary.file);
+      let start = diag.primary.range.start;
+      let end = diag.primary.range.end;
 
       NormalizedDiagnostic {
         engine: DiagnosticEngine::Rust,
-        code: diag.code.as_ref().map(|c| DiagnosticCode::Rust(c.clone())),
+        code: Some(DiagnosticCode::Rust(diag.code.as_str().to_string())),
         file,
         start,
         end,
         severity: Some(match diag.severity {
           Severity::Error => "error".to_string(),
           Severity::Warning => "warning".to_string(),
-          Severity::Info => "info".to_string(),
+          Severity::Note => "note".to_string(),
+          Severity::Help => "help".to_string(),
         }),
         message: Some(diag.message.clone()),
       }

@@ -11,8 +11,8 @@ fn reports_unsupported_statement_as_diagnostic() {
   let diagnostic = emit_top_level_diagnostic(FileId(0), &ast, EmitOptions::default())
     .expect_err("emission should fail for unsupported statements");
 
-  assert!(diagnostic.code.starts_with("EMIT"));
-  assert_eq!(diagnostic.code, "EMIT0001");
+  assert!(diagnostic.code.as_str().starts_with("EMIT"));
+  assert_eq!(diagnostic.code.as_str(), "EMIT0001");
   assert!(
     diagnostic.primary.range.len() > 0,
     "primary span should be non-empty"

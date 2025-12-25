@@ -1,12 +1,12 @@
 #![cfg_attr(not(feature = "with-node"), allow(dead_code, unused_imports))]
 
 use crate::diagnostic::{
-  diff_diagnostics, normalize_rust_diagnostics, normalize_tsc_diagnostics, DiagnosticDiff,
-  NormalizedDiagnostic,
+  diff_diagnostics, normalize_tsc_diagnostics, DiagnosticDiff, NormalizedDiagnostic,
 };
+use crate::diagnostic_norm::DiagnosticCode as NormDiagnosticCode;
 use crate::multifile::normalize_name;
-use crate::runner::run_rust;
-use crate::tsc::{node_available, TscDiagnostic, TscDiagnostics, TscRequest, TscRunner};
+use crate::runner::{run_rust, EngineStatus, HarnessFileSet};
+use crate::tsc::{node_available, TscDiagnostics, TscRequest, TscRunner};
 use crate::VirtualFile;
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -391,9 +391,36 @@ fn run_single_test(
     }
   };
 
-  let (rust_diags, file_names) = run_rust(&test.files);
+  let file_set = HarnessFileSet::new(&test.files);
+  let rust = run_rust(&file_set);
   let expected = normalize_tsc_diagnostics(&tsc_diags.diagnostics);
-  let actual = normalize_rust_diagnostics(&rust_diags, &file_names);
+  if rust.status != EngineStatus::Ok {
+    return CaseReport {
+      name: test.name.clone(),
+      status: CaseStatus::RustFailed,
+      expected: Some(expected),
+      actual: None,
+      diff: None,
+      notes: rust.error.into_iter().collect(),
+    };
+  }
+
+  let actual: Vec<NormalizedDiagnostic> = rust
+    .diagnostics
+    .iter()
+    .filter_map(|diag| match &diag.code {
+      Some(NormDiagnosticCode::Rust(code)) => Some(NormalizedDiagnostic {
+        code: Some(code.clone()),
+        category: diag.severity.clone(),
+        file: diag.file.clone(),
+        start: diag.start,
+        end: diag.end,
+        message: diag.message.clone(),
+      }),
+      _ => None,
+    })
+    .collect();
+
   let diff = diff_diagnostics(&expected, &actual, args.span_tolerance);
   let status = if diff.is_some() {
     CaseStatus::Mismatch

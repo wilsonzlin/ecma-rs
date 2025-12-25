@@ -1,6 +1,6 @@
 use crate::discover::Filter;
 use crate::runner::Summary;
-use crate::{ConformanceOptions, HarnessError, TestResult, TestStatus};
+use crate::{ConformanceOptions, HarnessError, TestOutcome, TestResult};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -56,7 +56,7 @@ pub struct Percentiles {
 #[derive(Debug, Serialize)]
 pub struct TestEntry {
   pub id: String,
-  pub status: TestStatus,
+  pub status: TestOutcome,
   pub durations: TestDurations,
 }
 
@@ -90,7 +90,7 @@ impl ProfileBuilder {
   pub fn record_test(&mut self, result: &TestResult) {
     self.tests.push(TestEntry {
       id: result.id.clone(),
-      status: result.status.clone(),
+      status: result.outcome,
       durations: TestDurations {
         rust_ms: Some(result.duration_ms),
         tsc_ms: None,
@@ -140,9 +140,11 @@ impl ProfileBuilder {
       tests: std::mem::take(&mut self.tests),
       summary: ProfileSummary {
         total: summary.total,
-        passed: summary.passed,
-        failed: summary.failed,
-        timed_out: summary.timed_out,
+        passed: summary.outcomes.match_,
+        failed: summary
+          .total
+          .saturating_sub(summary.outcomes.match_ + summary.outcomes.timeout),
+        timed_out: summary.outcomes.timeout,
         wall_time_ms: wall_time.as_millis(),
         percentiles_ms,
       },

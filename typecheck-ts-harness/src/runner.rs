@@ -2,11 +2,9 @@ use crate::diagnostic_norm::{
   describe, normalize_rust_diagnostics, normalize_tsc_diagnostics, sort_diagnostics,
   within_tolerance, NormalizedDiagnostic,
 };
-use crate::difftsc::{TscDiagnostic, TscDiagnostics};
-use crate::discover::{
-  discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS,
-};
+use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS};
 use crate::multifile::normalize_name;
+use crate::tsc::{TscDiagnostic, TscDiagnostics};
 use crate::{Result, VirtualFile};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{info, info_span, warn};
+use tracing::info_span;
 use typecheck_ts::{FileId, Host, HostError, Program};
 use walkdir::WalkDir;
 
@@ -205,7 +203,7 @@ pub struct HarnessOptions {
 impl HarnessOptions {
   fn from_test_case(case: &TestCase) -> Self {
     HarnessOptions {
-      module: case.module_directive.clone(),
+      module: case.options.module.clone(),
     }
   }
 
@@ -225,13 +223,13 @@ struct HarnessFile {
 }
 
 #[derive(Clone)]
-struct HarnessFileSet {
+pub(crate) struct HarnessFileSet {
   files: Vec<HarnessFile>,
   name_to_id: HashMap<String, FileId>,
 }
 
 impl HarnessFileSet {
-  fn new(files: &[VirtualFile]) -> Self {
+  pub(crate) fn new(files: &[VirtualFile]) -> Self {
     let mut normalized_names = Vec::with_capacity(files.len());
     for file in files {
       normalized_names.push(normalize_name(&file.name));
@@ -379,6 +377,7 @@ fn run_single_case(
   let (tx, rx) = mpsc::channel();
   let span = info_span!("test_case", test_id = %case.id);
   let _enter = span.enter();
+  let span_for_thread = span.clone();
   let cloned_runner = tsc_runner.clone();
   let cloned_snapshots = snapshots.clone();
   let timeout_id = case.id.clone();
@@ -388,7 +387,7 @@ fn run_single_case(
   let span_tolerance = opts.span_tolerance;
   let update_snapshots = opts.update_snapshots;
   std::thread::spawn(move || {
-    let _entered = span.enter();
+    let _entered = span_for_thread.enter();
     let result = execute_case(
       case,
       compare_mode,
@@ -489,7 +488,7 @@ fn execute_case(
   }
 }
 
-fn run_rust(file_set: &HarnessFileSet) -> EngineDiagnostics {
+pub(crate) fn run_rust(file_set: &HarnessFileSet) -> EngineDiagnostics {
   let host = HarnessHost::new(file_set.clone());
   let roots = file_set.root_files();
   let result = std::panic::catch_unwind(|| Program::new(host, roots).check());
@@ -863,6 +862,7 @@ impl SnapshotStore {
 
     let payload = TscDiagnostics {
       diagnostics: diagnostics.to_vec(),
+      crash: None,
     };
     let json = serde_json::to_string_pretty(&payload)?;
     std::fs::write(path, format!("{json}\n"))

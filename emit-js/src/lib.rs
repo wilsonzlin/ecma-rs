@@ -43,7 +43,7 @@ pub fn emit_top_level_diagnostic(
 fn diagnostic_from_emit_error(file: FileId, err: EmitError) -> Diagnostic {
   let (mut range, mut notes) = err
     .loc
-    .map(TextRange::from_loc_with_overflow_note)
+    .map(|loc| loc.to_diagnostics_range_with_note())
     .unwrap_or((TextRange::new(0, 1), None));
   if range.is_empty() {
     range.end = range.start.saturating_add(1);
