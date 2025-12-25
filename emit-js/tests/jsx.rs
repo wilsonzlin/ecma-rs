@@ -431,3 +431,17 @@ fn emitter_does_not_insert_spaces_between_adjacent_text_children() {
   );
   assert_eq!(emit_elem_with_emitter_to_string(&elem), "<div>ab</div>");
 }
+
+#[test]
+fn emits_adjacent_text_children_without_spaces() {
+  let adjacent_text = jsx_elem_from(
+    Some(div_elem_name()),
+    vec![],
+    vec![
+      JsxElemChild::Text(jsx_text("a")),
+      JsxElemChild::Text(jsx_text("b")),
+    ],
+  );
+
+  assert_eq!(emit_elem_to_string(&adjacent_text), "<div>ab</div>");
+}
