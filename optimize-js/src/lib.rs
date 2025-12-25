@@ -39,6 +39,9 @@ use symbol_js::compute_symbols;
 use symbol_js::symbol::Scope;
 use symbol_js::symbol::Symbol;
 pub use symbol_js::TopLevelMode;
+pub use crate::decompile::{program_to_ast, DecompileOptions};
+#[cfg(feature = "emit")]
+pub use crate::decompile::program_to_js;
 use util::debug::OptimizerDebug;
 
 pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
