@@ -145,6 +145,14 @@ pub mod check {
     pub use crate::program::check::type_expr::*;
   }
 
+  pub mod overload {
+    pub use crate::program::check::overload::*;
+  }
+
+  pub mod expr {
+    pub use crate::program::check::expr::*;
+  }
+
   pub mod class;
   pub mod relate_hooks;
 }

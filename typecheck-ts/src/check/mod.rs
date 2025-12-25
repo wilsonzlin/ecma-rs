@@ -3,9 +3,11 @@
 pub(super) mod assign;
 pub(super) mod cfg;
 pub(super) mod flow;
+pub(crate) mod expr;
 pub(crate) mod infer;
 pub(crate) mod instantiate;
 pub(super) mod modules;
 pub(super) mod narrow;
 pub(super) mod object_literal;
+pub(crate) mod overload;
 pub(crate) mod type_expr;
