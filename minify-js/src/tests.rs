@@ -84,9 +84,6 @@ fn test_direct_eval_disables_renaming() {
 
 #[test]
 fn test_shadowed_eval_allows_renaming() {
-  let result = minified(
-    TopLevelMode::Global,
-    "function f(eval){let x;eval(\"x\");}",
-  );
+  let result = minified(TopLevelMode::Global, "function f(eval){let x;eval(\"x\");}");
   assert_eq!(result, "function f(a){let b;a(\"x\");}");
 }

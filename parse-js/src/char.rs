@@ -61,10 +61,10 @@ impl CharFilter {
 pub const ECMASCRIPT_LINE_TERMINATORS: [char; 4] = ['\n', '\r', '\u{2028}', '\u{2029}'];
 
 pub const ECMASCRIPT_WHITESPACE: [char; 21] = [
-  '\x09', // Horizontal tab
-  '\x0b', // Vertical tab
-  '\x0c', // Form feed
-  '\x20', // Space
+  '\x09',     // Horizontal tab
+  '\x0b',     // Vertical tab
+  '\x0c',     // Form feed
+  '\x20',     // Space
   '\u{00A0}', // NO-BREAK SPACE
   '\u{1680}', // OGHAM SPACE MARK
   '\u{2000}', // EN QUAD

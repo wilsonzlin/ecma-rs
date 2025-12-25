@@ -179,9 +179,8 @@ pub enum TT {
 }
 
 /// Map of keyword strings to their corresponding token type.
-pub static KEYWORDS_BY_STR: Lazy<HashMap<&'static str, TT>> = Lazy::new(|| {
-  HashMap::from_iter(KEYWORDS_MAPPING.iter().map(|(&tt, &name)| (name, tt)))
-});
+pub static KEYWORDS_BY_STR: Lazy<HashMap<&'static str, TT>> =
+  Lazy::new(|| HashMap::from_iter(KEYWORDS_MAPPING.iter().map(|(&tt, &name)| (name, tt))));
 
 // These can be used as parameter and variable names.
 pub static UNRESERVED_KEYWORDS: Lazy<HashSet<TT>> = Lazy::new(|| {

@@ -1,12 +1,12 @@
 use ahash::{HashMap, HashSet};
 use derive_visitor::{DriveMut, VisitorMut};
-use parse_js::ast::expr::{CallExpr, Expr};
 use parse_js::ast::expr::pat::{ClassOrFuncName, IdPat};
 use parse_js::ast::expr::IdExpr;
+use parse_js::ast::expr::{CallExpr, Expr};
 use parse_js::ast::import_export::{ExportName, ModuleExportImportName};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
+use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol, scope_id};

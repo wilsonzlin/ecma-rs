@@ -1,3 +1,4 @@
+use crate::char::is_line_terminator;
 use crate::char::CharFilter;
 use crate::char::DIGIT;
 use crate::char::DIGIT_BIN;
@@ -5,7 +6,6 @@ use crate::char::DIGIT_HEX;
 use crate::char::DIGIT_OCT;
 use crate::char::ECMASCRIPT_LINE_TERMINATORS;
 use crate::char::ECMASCRIPT_WHITESPACE;
-use crate::char::is_line_terminator;
 use crate::loc::Loc;
 use crate::token::keyword_from_str;
 use crate::token::Token;

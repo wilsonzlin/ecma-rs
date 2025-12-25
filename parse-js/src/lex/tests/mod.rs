@@ -134,7 +134,10 @@ fn test_multiline_comment_sets_line_terminator_flag_for_unicode_separator() {
 
 #[test]
 fn test_html_close_comment_only_at_line_start() {
-  check("a-->b", [Identifier, HyphenHyphen, ChevronRight, Identifier]);
+  check(
+    "a-->b",
+    [Identifier, HyphenHyphen, ChevronRight, Identifier],
+  );
 }
 
 #[test]

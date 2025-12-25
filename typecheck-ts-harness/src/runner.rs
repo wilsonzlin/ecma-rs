@@ -97,8 +97,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
     let span = info_span!("discover_tests", root = %opts.root.display());
     let _enter = span.enter();
     info!(phase = "discover_start", root = %opts.root.display());
-    let discovered =
-      discover_conformance_tests(&opts.root, &opts.filter, &opts.extensions)?;
+    let discovered = discover_conformance_tests(&opts.root, &opts.filter, &opts.extensions)?;
     info!(phase = "discover_complete", count = discovered.len());
     discovered
   };
