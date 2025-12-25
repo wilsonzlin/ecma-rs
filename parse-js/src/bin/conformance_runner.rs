@@ -105,6 +105,9 @@ impl SimpleFiles {
   fn insert(&mut self, name: String, text: String) -> FileId {
     let normalized = normalize_virtual_path(&name);
     if let Some(id) = self.ids.get(&normalized) {
+      if let Some(file) = self.files.get_mut(id.0 as usize) {
+        file.text = text;
+      }
       return *id;
     }
     let id = FileId(self.files.len() as u32);
@@ -126,12 +129,18 @@ impl SimpleFiles {
 }
 
 impl SourceProvider for SimpleFiles {
-  fn file_name(&self, file: FileId) -> &str {
-    &self.files[file.0 as usize].name
+  fn file_name(&self, file: FileId) -> Option<&str> {
+    self
+      .files
+      .get(file.0 as usize)
+      .map(|file| file.name.as_str())
   }
 
-  fn file_text(&self, file: FileId) -> &str {
-    &self.files[file.0 as usize].text
+  fn file_text(&self, file: FileId) -> Option<&str> {
+    self
+      .files
+      .get(file.0 as usize)
+      .map(|file| file.text.as_str())
   }
 }
 
