@@ -1,4 +1,4 @@
-use crate::emitter::{with_node_context, EmitError, EmitMode, EmitResult, Emitter};
+use crate::emitter::{with_node_context, EmitError, EmitErrorKind, EmitMode, EmitResult, Emitter};
 use crate::ts_type::emit_type_parameters;
 use crate::{emit_interface_decl, emit_type_alias_decl, emit_type_expr, emit_type_members};
 use parse_js::ast::expr::Expr;
@@ -372,7 +372,14 @@ fn emit_block_like_body(em: &mut Emitter, stmts: &[Node<Stmt>]) -> EmitResult {
         if idx > 0 {
           em.write_space();
         }
-        emit_ts_stmt(em, stmt)?;
+        match emit_ts_stmt(em, stmt) {
+          Ok(()) => {}
+          Err(EmitError {
+            kind: EmitErrorKind::Unsupported(_),
+            ..
+          }) => crate::stmt::emit_stmt(em, stmt)?,
+          Err(other) => return Err(other),
+        }
       }
       em.write_space();
     }
@@ -383,7 +390,14 @@ fn emit_block_like_body(em: &mut Emitter, stmts: &[Node<Stmt>]) -> EmitResult {
       if idx > 0 {
         em.write_space();
       }
-      emit_ts_stmt(em, stmt)?;
+      match emit_ts_stmt(em, stmt) {
+        Ok(()) => {}
+        Err(EmitError {
+          kind: EmitErrorKind::Unsupported(_),
+          ..
+        }) => crate::stmt::emit_stmt(em, stmt)?,
+        Err(other) => return Err(other),
+      }
     }
     em.write_punct("}");
   }
@@ -391,17 +405,13 @@ fn emit_block_like_body(em: &mut Emitter, stmts: &[Node<Stmt>]) -> EmitResult {
 }
 
 fn emit_string_literal(em: &mut Emitter, value: &str) -> EmitResult {
-  let mut buf = Vec::new();
-  crate::emit_string_literal_double_quoted(&mut buf, value);
-  let rendered =
-    std::str::from_utf8(&buf).map_err(|_| EmitError::unsupported("invalid string literal"))?;
-  em.write_str(rendered);
+  em.write_string_literal(value);
   Ok(())
 }
 
 fn emit_ts_expr(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
   let mut emit_type = |out: &mut Emitter, ty: &Node<TypeExpr>| emit_type_expr(out, ty);
-  match crate::expr::emit_expr(em, expr, &mut emit_type) {
+  match crate::expr::emit_expr_with_options(em, expr, &mut emit_type, em.options()) {
     Ok(()) => Ok(()),
     Err(_) => emit_ts_expr_minimal(em, expr),
   }

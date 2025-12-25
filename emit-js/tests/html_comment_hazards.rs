@@ -1,4 +1,4 @@
-use emit_js::{EmitMode, EmitOptions, Emitter};
+use emit_js::{EmitOptions, Emitter};
 
 fn text(emitter: Emitter) -> String {
   String::from_utf8(emitter.into_bytes()).expect("emitter output should be UTF-8")
@@ -6,10 +6,7 @@ fn text(emitter: Emitter) -> String {
 
 #[test]
 fn avoids_open_html_comment_after_newline() {
-  let mut emitter = Emitter::new(EmitOptions {
-    mode: EmitMode::Canonical,
-    ..EmitOptions::default()
-  });
+  let mut emitter = Emitter::new(EmitOptions::canonical());
   emitter.write_identifier("foo");
   emitter.write_byte(b'\n');
   emitter.write_punct("<");
@@ -28,10 +25,7 @@ fn avoids_open_html_comment_after_newline() {
 
 #[test]
 fn avoids_close_html_comment_after_newline() {
-  let mut emitter = Emitter::new(EmitOptions {
-    mode: EmitMode::Canonical,
-    ..EmitOptions::default()
-  });
+  let mut emitter = Emitter::new(EmitOptions::canonical());
   emitter.write_str("/*");
   emitter.write_byte(b'\n');
   emitter.write_punct("--");

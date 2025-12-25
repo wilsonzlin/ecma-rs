@@ -1,4 +1,3 @@
-use crate::escape::emit_string_literal_double_quoted;
 use crate::expr_js::{emit_expr, ExprCtx};
 use crate::ts_type::{emit_ts_type, emit_type_parameters};
 use crate::{EmitError, EmitMode, EmitResult, Emitter};
@@ -464,6 +463,44 @@ fn emit_func_body(em: &mut Emitter, body: &FuncBody) -> EmitResult {
   }
 }
 
+pub(crate) fn emit_class_like<T>(
+  em: &mut Emitter,
+  name: Option<&Node<ClassOrFuncName>>,
+  type_parameters: Option<&[Node<TypeParameter>]>,
+  extends: Option<&Node<Expr>>,
+  implements: &[T],
+  mut emit_implements: impl FnMut(&mut Emitter, &T) -> EmitResult,
+  members: &[Node<ClassMember>],
+  allow_anonymous: bool,
+) -> EmitResult {
+  em.write_keyword("class");
+  if let Some(name) = name {
+    em.write_identifier(&name.stx.name);
+  } else if !allow_anonymous {
+    return Err(EmitError::unsupported("class declaration missing name"));
+  }
+  emit_type_params(em, type_parameters);
+  if let Some(extends) = extends {
+    em.write_keyword("extends");
+    emit_expr(em, extends, ExprCtx::Default)?;
+  }
+  if !implements.is_empty() {
+    em.write_keyword("implements");
+    for (idx, ty) in implements.iter().enumerate() {
+      if idx > 0 {
+        em.write_punct(",");
+      }
+      emit_implements(em, ty)?;
+    }
+  }
+  em.write_punct("{");
+  for member in members {
+    emit_class_member(em, member)?;
+  }
+  em.write_punct("}");
+  Ok(())
+}
+
 pub fn emit_class_decl(em: &mut Emitter, decl: &Node<ClassDecl>) -> EmitResult {
   let decl = decl.stx.as_ref();
   emit_decorators(em, &decl.decorators)?;
@@ -479,27 +516,16 @@ pub fn emit_class_decl(em: &mut Emitter, decl: &Node<ClassDecl>) -> EmitResult {
   if decl.abstract_ {
     em.write_keyword("abstract");
   }
-  em.write_keyword("class");
-  if let Some(name) = &decl.name {
-    em.write_identifier(&name.stx.name);
-  } else if !decl.export_default {
-    return Err(EmitError::unsupported("class declaration missing name"));
-  }
-  emit_type_params(em, decl.type_parameters.as_deref());
-  if let Some(extends) = &decl.extends {
-    em.write_keyword("extends");
-    emit_expr(em, extends, ExprCtx::Default)?;
-  }
-  if !decl.implements.is_empty() {
-    em.write_keyword("implements");
-    emit_comma_separated_exprs(em, &decl.implements)?;
-  }
-  em.write_punct("{");
-  for member in &decl.members {
-    emit_class_member(em, member)?;
-  }
-  em.write_punct("}");
-  Ok(())
+  emit_class_like(
+    em,
+    decl.name.as_ref(),
+    decl.type_parameters.as_deref(),
+    decl.extends.as_ref(),
+    &decl.implements,
+    |em, ty| emit_expr(em, ty, ExprCtx::Default),
+    &decl.members,
+    decl.export_default,
+  )
 }
 
 fn emit_class_member(em: &mut Emitter, member: &Node<ClassMember>) -> EmitResult {
@@ -922,7 +948,7 @@ fn emit_param_decl(em: &mut Emitter, param: &Node<ParamDecl>) -> EmitResult {
   Ok(())
 }
 
-fn emit_decorators(em: &mut Emitter, decorators: &[Node<Decorator>]) -> EmitResult {
+pub(crate) fn emit_decorators(em: &mut Emitter, decorators: &[Node<Decorator>]) -> EmitResult {
   for deco in decorators {
     em.write_punct("@");
     emit_expr(em, &deco.stx.expression, ExprCtx::Default)?;
@@ -961,7 +987,5 @@ fn emit_comma_separated_exprs(em: &mut Emitter, exprs: &[Node<Expr>]) -> EmitRes
 }
 
 fn emit_string_literal(em: &mut Emitter, value: &str) {
-  let mut buf = Vec::new();
-  emit_string_literal_double_quoted(&mut buf, value);
-  em.write_str(std::str::from_utf8(&buf).expect("string literal is UTF-8"));
+  em.write_string_literal(value);
 }

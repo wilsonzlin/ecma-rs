@@ -71,7 +71,7 @@ pub struct NamespaceDecl {
 
 /// Namespace body - either a block of statements or nested namespace
 #[derive(Debug, Drive, DriveMut, Serialize)]
-#[serde(tag = "$t")]
+#[serde(tag = "$t", content = "v")]
 pub enum NamespaceBody {
   Block(Vec<Node<Stmt>>),
   Namespace(Box<Node<NamespaceDecl>>),

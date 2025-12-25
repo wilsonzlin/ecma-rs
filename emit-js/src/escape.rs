@@ -1,15 +1,55 @@
+use crate::emitter::QuoteStyle;
+
+/// Emit a JavaScript/TypeScript string literal using the provided quoting
+/// strategy, escaping characters that would otherwise terminate or change the
+/// meaning of the literal. Non-ASCII characters are preserved as UTF-8 except
+/// for the Unicode line separators U+2028/U+2029, which must always be
+/// escaped.
+pub fn emit_string_literal(out: &mut Vec<u8>, value: &str, quote_style: QuoteStyle, minify: bool) {
+  let emit_with_quote = |quote: u8| {
+    let mut escaped = Vec::new();
+    escape_string_into(&mut escaped, value, quote);
+    (quote, escaped)
+  };
+
+  let (quote, escaped) = match quote_style {
+    QuoteStyle::Double => emit_with_quote(b'"'),
+    QuoteStyle::Single => emit_with_quote(b'\''),
+    QuoteStyle::Auto => {
+      let (double_quote, double_escaped) = emit_with_quote(b'"');
+      let (single_quote, single_escaped) = emit_with_quote(b'\'');
+      let double_len = double_escaped.len() + 2;
+      let single_len = single_escaped.len() + 2;
+      if minify && single_len < double_len {
+        (single_quote, single_escaped)
+      } else {
+        (double_quote, double_escaped)
+      }
+    }
+  };
+
+  out.push(quote);
+  out.extend_from_slice(&escaped);
+  out.push(quote);
+}
+
 /// Emit a JavaScript/TypeScript string literal delimited by double quotes,
 /// escaping characters that would otherwise terminate or change the meaning of
 /// the literal. Non-ASCII characters are preserved as UTF-8 except for the
 /// Unicode line separators U+2028/U+2029, which must always be escaped.
 pub fn emit_string_literal_double_quoted(out: &mut Vec<u8>, value: &str) {
-  out.push(b'"');
+  emit_string_literal(out, value, QuoteStyle::Double, false);
+}
+
+fn escape_string_into(out: &mut Vec<u8>, value: &str, quote: u8) {
+  out.clear();
 
   let mut chars = value.chars().peekable();
   while let Some(ch) = chars.next() {
     match ch {
       '\\' => out.extend_from_slice(b"\\\\"),
-      '"' => out.extend_from_slice(b"\\\""),
+      '"' if quote == b'"' => out.extend_from_slice(b"\\\""),
+      '\'' if quote == b'\'' => out.extend_from_slice(b"\\'"),
       '\n' => out.extend_from_slice(b"\\n"),
       '\r' => out.extend_from_slice(b"\\r"),
       '\t' => out.extend_from_slice(b"\\t"),
@@ -35,8 +75,6 @@ pub fn emit_string_literal_double_quoted(out: &mut Vec<u8>, value: &str) {
       }
     }
   }
-
-  out.push(b'"');
 }
 
 /// Emit a JavaScript template literal segment (head or span literal),

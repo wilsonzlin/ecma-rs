@@ -88,25 +88,30 @@ fn disambiguates_minusminus_followed_by_minus() {
 
 #[test]
 fn auto_classifies_raw_str_fragments() {
-  let mut emitter = Emitter::new(EmitOptions {
-    mode: EmitMode::Minified,
-    ..EmitOptions::default()
-  });
+  let mut emitter = Emitter::new(EmitOptions::minified());
   emitter.write_keyword("return");
   emitter.write_str("result");
   assert_eq!(text(&emitter), "return result");
 }
 
 #[test]
+fn picks_shorter_quote_style_in_minified_mode() {
+  let mut emitter = Emitter::new(EmitOptions::minified());
+  emitter.write_string_literal("\"");
+  assert_eq!(text(&emitter), "'\"'");
+
+  emitter.clear();
+  emitter.write_string_literal("has'a");
+  assert_eq!(text(&emitter), "\"has'a\"");
+}
+
+#[test]
 fn exposes_mode_and_options() {
-  let opts = EmitOptions {
-    mode: EmitMode::Canonical,
-    ..EmitOptions::default()
-  };
+  let opts = EmitOptions::canonical();
   let emitter = Emitter::new(opts);
 
   assert_eq!(emitter.mode(), EmitMode::Canonical);
-  assert_eq!(emitter.options().mode, EmitMode::Canonical);
+  assert!(!emitter.options().minify);
 }
 
 #[test]
@@ -119,10 +124,7 @@ fn write_byte_tracks_boundaries() {
 
 #[test]
 fn canonical_mode_still_inserts_required_spaces() {
-  let mut emitter = Emitter::new(EmitOptions {
-    mode: EmitMode::Canonical,
-    ..EmitOptions::default()
-  });
+  let mut emitter = Emitter::new(EmitOptions::canonical());
   emitter.write_keyword("return");
   emitter.write_identifier("value");
   assert_eq!(text(&emitter), "return value");

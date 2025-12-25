@@ -7,7 +7,6 @@ use parse_js::ast::func::FuncBody;
 use parse_js::ast::node::Node;
 use parse_js::operator::{Associativity, OperatorName, OPERATORS};
 
-use crate::escape::emit_string_literal_double_quoted;
 use crate::js_pat;
 use crate::Emitter;
 
@@ -258,10 +257,7 @@ impl<'a> JsExprEmitter<'a> {
   }
 
   fn emit_lit_str(&mut self, lit: &Node<LitStrExpr>) -> JsEmitResult {
-    let mut buf = Vec::new();
-    emit_string_literal_double_quoted(&mut buf, &lit.stx.value);
-    let escaped = std::str::from_utf8(&buf).expect("string literal escape output is UTF-8");
-    self.out.write_str(escaped);
+    self.out.write_string_literal(&lit.stx.value);
     Ok(())
   }
 }

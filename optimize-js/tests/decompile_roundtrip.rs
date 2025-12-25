@@ -1,6 +1,6 @@
 #![cfg(all(feature = "emit", feature = "decompile"))]
 
-use emit_js::{EmitMode, EmitOptions};
+use emit_js::EmitOptions;
 use optimize_js::{compile_source, decompile::program_to_js, DecompileOptions, TopLevelMode};
 
 fn compile_and_emit(src: &str, mode: TopLevelMode) -> Vec<u8> {
@@ -8,10 +8,7 @@ fn compile_and_emit(src: &str, mode: TopLevelMode) -> Vec<u8> {
   program_to_js(
     &program,
     &DecompileOptions::default(),
-    EmitOptions {
-      mode: EmitMode::Minified,
-      ..EmitOptions::default()
-    },
+    EmitOptions::minified(),
   )
   .expect("decompile program to JS")
 }

@@ -15,7 +15,8 @@ use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::operator::{OperatorName, OPERATORS};
 
-use crate::emitter::{with_node_context, EmitError, EmitResult};
+use crate::emitter::{with_node_context, EmitError, EmitOptions, EmitResult};
+use crate::escape::emit_string_literal;
 use crate::precedence::{
   child_min_prec_for_binary, expr_prec, needs_parens, starts_with_optional_chaining, Prec, Side,
   CALL_MEMBER_PRECEDENCE,
@@ -29,6 +30,7 @@ where
 {
   pub(crate) out: &'a mut W,
   pub(crate) emit_type: F,
+  pub(crate) opts: EmitOptions,
 }
 
 impl<'a, W, F> ExprEmitter<'a, W, F>
@@ -36,14 +38,26 @@ where
   W: fmt::Write,
   F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
 {
-  pub fn new(out: &'a mut W, emit_type: F) -> Self {
-    Self { out, emit_type }
+  pub fn new(out: &'a mut W, emit_type: F, opts: EmitOptions) -> Self {
+    Self {
+      out,
+      emit_type,
+      opts,
+    }
   }
 
   pub fn emit_expr(&mut self, expr: &Node<Expr>) -> EmitResult {
     with_node_context(expr.loc, || {
       self.emit_expr_with_min_prec(expr, Prec::new(1))
     })
+  }
+
+  fn sep(&self) -> &'static str {
+    if self.opts.minify {
+      ""
+    } else {
+      " "
+    }
   }
 
   pub(crate) fn emit_expr_with_min_prec(
@@ -181,7 +195,12 @@ where
   fn emit_lit_str(&mut self, lit: &Node<LitStrExpr>) -> EmitResult {
     with_node_context(lit.loc, || {
       let mut buf = Vec::new();
-      crate::emit_string_literal_double_quoted(&mut buf, &lit.stx.value);
+      emit_string_literal(
+        &mut buf,
+        &lit.stx.value,
+        self.opts.quote_style,
+        self.opts.minify,
+      );
       self
         .out
         .write_str(std::str::from_utf8(&buf).expect("string literal escape output is UTF-8"))?;
@@ -207,10 +226,7 @@ where
   }
 
   fn emit_pattern_fragment(&mut self, f: impl FnOnce(&mut Emitter) -> EmitResult) -> EmitResult {
-    let mut emitter = Emitter::new(crate::emitter::EmitOptions {
-      mode: crate::emitter::EmitMode::Canonical,
-      stmt_sep_style: crate::emitter::StmtSepStyle::Semicolons,
-    });
+    let mut emitter = Emitter::new(self.opts);
     f(&mut emitter)?;
     let rendered =
       std::str::from_utf8(emitter.as_bytes()).expect("pattern emitter output is UTF-8");
@@ -262,7 +278,8 @@ where
       self.out.write_char('{')?;
       for (idx, member) in obj.stx.members.iter().enumerate() {
         if idx > 0 {
-          self.out.write_str(", ")?;
+          self.out.write_char(',')?;
+          self.out.write_str(self.sep())?;
         }
         self.emit_obj_member(member)?;
       }
@@ -289,7 +306,8 @@ where
     match val {
       ClassOrObjVal::Prop(Some(expr)) => {
         self.emit_pattern_fragment(|em| crate::pat::emit_class_or_object_key(em, key))?;
-        self.out.write_str(": ")?;
+        self.out.write_char(':')?;
+        self.out.write_str(self.sep())?;
         self.emit_expr_with_min_prec(expr, Prec::new(1))
       }
       ClassOrObjVal::Prop(None) => Err(EmitError::unsupported("object property missing value")),
@@ -302,14 +320,18 @@ where
       let func = func.stx.as_ref();
       let details = func.func.stx.as_ref();
       if details.async_ {
-        self.out.write_str("async ")?;
+        self.out.write_str("async")?;
+        self.out.write_str(self.sep())?;
       }
       self.out.write_str("function")?;
       if details.generator {
         self.out.write_char('*')?;
       }
       if let Some(name) = &func.name {
-        write!(self.out, " {}", name.stx.name)?;
+        if !self.opts.minify {
+          self.out.write_str(" ")?;
+        }
+        self.out.write_str(&name.stx.name)?;
       }
       self.emit_func_signature(&func.func)?;
       self.emit_func_body(&func.func)
@@ -326,14 +348,16 @@ where
       self.out.write_char('(')?;
       for (idx, param) in func.parameters.iter().enumerate() {
         if idx > 0 {
-          self.out.write_str(", ")?;
+          self.out.write_char(',')?;
+          self.out.write_str(self.sep())?;
         }
         self.emit_pattern_fragment(|em| crate::pat::emit_param_decl(em, param))?;
       }
       self.out.write_char(')')?;
 
       if let Some(return_type) = &func.return_type {
-        self.out.write_str(": ")?;
+        self.out.write_char(':')?;
+        self.out.write_str(self.sep())?;
         self.emit_type(return_type)?;
       }
 
@@ -403,7 +427,8 @@ where
       self.out.write_str("import(")?;
       self.emit_expr_with_min_prec(&import.stx.module, Prec::new(1))?;
       if let Some(attrs) = &import.stx.attributes {
-        self.out.write_str(", ")?;
+        self.out.write_char(',')?;
+        self.out.write_str(self.sep())?;
         self.emit_expr_with_min_prec(attrs, Prec::new(1))?;
       }
       self.out.write_char(')')?;
@@ -426,12 +451,17 @@ where
       }
 
       if func.async_ {
-        self.out.write_str("async ")?;
+        self.out.write_str("async")?;
+        self.out.write_str(self.sep())?;
       }
 
       self.emit_func_signature(&arrow.stx.func)?;
 
-      self.out.write_str(" => ")?;
+      if self.opts.minify {
+        self.out.write_str("=>")?;
+      } else {
+        self.out.write_str(" => ")?;
+      }
       match func.body.as_ref() {
         Some(FuncBody::Expression(expr)) => {
           let needs_parens = is_comma_expression(expr.stx.as_ref()) || expr_starts_with_brace(expr);
@@ -513,7 +543,8 @@ where
 
         for (idx, arg) in call.stx.arguments.iter().enumerate() {
           if idx > 0 {
-            write!(self.out, ", ")?;
+            self.out.write_char(',')?;
+            self.out.write_str(self.sep())?;
           }
           let CallArg { spread, value } = arg.stx.as_ref();
           if *spread {
@@ -584,9 +615,14 @@ where
         self.emit_expr_with_min_prec(&binary.stx.left, left_min_prec)?;
       }
       if binary.stx.operator == OperatorName::Comma {
-        write!(self.out, ", ")?;
+        self.out.write_char(',')?;
+        self.out.write_str(self.sep())?;
       } else {
-        write!(self.out, " {} ", op_txt)?;
+        if self.opts.minify {
+          self.out.write_str(op_txt)?;
+        } else {
+          write!(self.out, " {} ", op_txt)?;
+        }
       }
       if force_right_parens {
         self.emit_wrapped(&binary.stx.right, Prec::LOWEST)
@@ -600,9 +636,17 @@ where
     with_node_context(cond.loc, || {
       let prec = Prec::new(OPERATORS[&OperatorName::Conditional].precedence);
       self.emit_expr_with_min_prec(&cond.stx.test, prec.tighter())?;
-      write!(self.out, " ? ")?;
+      if self.opts.minify {
+        self.out.write_char('?')?;
+      } else {
+        write!(self.out, " ? ")?;
+      }
       self.emit_expr_with_min_prec(&cond.stx.consequent, prec)?;
-      write!(self.out, " : ")?;
+      if self.opts.minify {
+        self.out.write_char(':')?;
+      } else {
+        write!(self.out, " : ")?;
+      }
       self.emit_expr_with_min_prec(&cond.stx.alternate, prec)
     })
   }
@@ -617,7 +661,8 @@ where
       }
       for (i, arg) in call.stx.arguments.iter().enumerate() {
         if i > 0 {
-          write!(self.out, ", ")?;
+          self.out.write_char(',')?;
+          self.out.write_str(self.sep())?;
         }
         let CallArg { spread, value } = arg.stx.as_ref();
         if *spread {
@@ -713,13 +758,26 @@ where
   }
 }
 
+pub fn emit_expr_with_options<W, F>(
+  out: &mut W,
+  expr: &Node<Expr>,
+  emit_type: F,
+  opts: EmitOptions,
+) -> EmitResult
+where
+  W: fmt::Write,
+  F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
+{
+  let mut emitter = ExprEmitter::new(out, emit_type, opts);
+  emitter.emit_expr(expr)
+}
+
 pub fn emit_expr<W, F>(out: &mut W, expr: &Node<Expr>, emit_type: F) -> EmitResult
 where
   W: fmt::Write,
   F: FnMut(&mut W, &Node<TypeExpr>) -> fmt::Result,
 {
-  let mut emitter = ExprEmitter::new(out, emit_type);
-  emitter.emit_expr(expr)
+  emit_expr_with_options(out, expr, emit_type, EmitOptions::canonical())
 }
 
 pub fn emit_expr_with_emitter(out: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
@@ -741,10 +799,11 @@ pub fn emit_expr_with_emitter(out: &mut Emitter, expr: &Node<Expr>) -> EmitResul
     }
   }
 
+  let opts = out.options();
   let mut adapter = EmitterWriteAdapter { emitter: out };
   let mut emit_type =
     |out: &mut EmitterWriteAdapter<'_>, ty: &Node<TypeExpr>| crate::emit_type_expr(out, ty);
-  emit_expr(&mut adapter, expr, &mut emit_type)
+  emit_expr_with_options(&mut adapter, expr, &mut emit_type, opts)
 }
 
 fn unary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {

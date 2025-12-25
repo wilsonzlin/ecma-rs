@@ -10,6 +10,7 @@
 //! [`Emitter::write_str`] for a single lexical token or whitespace-only
 //! fragments (e.g. indentation, newlines).
 
+use crate::escape::emit_string_literal;
 use parse_js::loc::Loc;
 use std::fmt;
 
@@ -35,6 +36,18 @@ pub enum StmtSepStyle {
   AsiNewlines,
 }
 
+/// Controls how string literals are quoted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuoteStyle {
+  /// Choose between single and double quotes based on the shortest escaped
+  /// output. Ties are broken in favour of double quotes for stability.
+  Auto,
+  /// Always emit double-quoted string literals.
+  Double,
+  /// Always emit single-quoted string literals.
+  Single,
+}
+
 /// Options for configuring output.
 ///
 /// The default favors classic semicolon-separated minified output. To produce
@@ -42,16 +55,53 @@ pub enum StmtSepStyle {
 /// [`StmtSepStyle::AsiNewlines`].
 #[derive(Clone, Copy, Debug)]
 pub struct EmitOptions {
-  pub mode: EmitMode,
+  /// Whether to emit with minified whitespace and quoting. When `false`,
+  /// emitters may choose more readable spacing.
+  pub minify: bool,
   pub stmt_sep_style: StmtSepStyle,
+  pub quote_style: QuoteStyle,
 }
 
 impl Default for EmitOptions {
   fn default() -> Self {
     EmitOptions {
-      mode: EmitMode::Minified,
+      minify: true,
       stmt_sep_style: StmtSepStyle::Semicolons,
+      quote_style: QuoteStyle::Auto,
     }
+  }
+}
+
+impl From<EmitMode> for EmitOptions {
+  fn from(value: EmitMode) -> Self {
+    match value {
+      EmitMode::Minified => EmitOptions::default(),
+      EmitMode::Canonical => EmitOptions {
+        minify: false,
+        stmt_sep_style: StmtSepStyle::Semicolons,
+        quote_style: QuoteStyle::Double,
+      },
+    }
+  }
+}
+
+impl EmitOptions {
+  pub fn minified() -> Self {
+    EmitOptions::default()
+  }
+
+  pub fn canonical() -> Self {
+    EmitOptions::from(EmitMode::Canonical)
+  }
+
+  pub fn with_stmt_sep_style(mut self, style: StmtSepStyle) -> Self {
+    self.stmt_sep_style = style;
+    self
+  }
+
+  pub fn with_quote_style(mut self, style: QuoteStyle) -> Self {
+    self.quote_style = style;
+    self
   }
 }
 
@@ -206,7 +256,16 @@ impl Emitter {
 
   /// Returns the configured emit mode.
   pub fn mode(&self) -> EmitMode {
-    self.opts.mode
+    if self.opts.minify {
+      EmitMode::Minified
+    } else {
+      EmitMode::Canonical
+    }
+  }
+
+  /// Returns whether the emitter is configured for minified output.
+  pub fn minify(&self) -> bool {
+    self.opts.minify
   }
 
   /// Returns the configured options.
@@ -269,6 +328,14 @@ impl Emitter {
   /// Emits an identifier.
   pub fn write_identifier(&mut self, identifier: &str) {
     self.write_with_kind(identifier, TokenKind::Word);
+  }
+
+  /// Emits a string literal using the configured quoting style.
+  pub fn write_string_literal(&mut self, value: &str) {
+    let mut buf = Vec::new();
+    emit_string_literal(&mut buf, value, self.opts.quote_style, self.opts.minify);
+    let rendered = std::str::from_utf8(&buf).expect("string literal escape output is UTF-8");
+    self.write_str(rendered);
   }
 
   /// Emits a numeric literal.
@@ -361,10 +428,7 @@ impl Emitter {
       return;
     }
 
-    let needs_space = match self.opts.mode {
-      EmitMode::Minified => needs_space(self.state.trailing, next),
-      EmitMode::Canonical => needs_space(self.state.trailing, next),
-    };
+    let needs_space = needs_space(self.state.trailing, next);
 
     if needs_space {
       self.push_bytes(&[b' ']);

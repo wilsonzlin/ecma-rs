@@ -1,8 +1,8 @@
 use crate::emitter::{EmitError, EmitErrorKind, EmitResult, Emitter};
-use crate::escape::{
-  cooked_template_segment, emit_string_literal_double_quoted, emit_template_literal_segment,
-};
-use crate::ts_type::emit_type_expr;
+use crate::escape::{cooked_template_segment, emit_template_literal_segment};
+use crate::pat::emit_class_or_object_key;
+use crate::stmt::{emit_class_like, emit_decorators};
+use crate::ts_type::{emit_ts_type, emit_type_expr};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{
   LitArrElem, LitArrExpr, LitObjExpr, LitTemplateExpr, LitTemplatePart,
@@ -142,7 +142,7 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
     Expr::SatisfiesExpr(satisfies) => emit_satisfies_expr(em, satisfies, ctx)?,
     Expr::ArrowFunc(func) => emit_arrow_function(em, func, ctx)?,
     Expr::Func(func) => emit_function_expr(em, func, ctx)?,
-    Expr::Class(_) => emit_expr_via_fmt(em, expr)?,
+    Expr::Class(class) => emit_class_expression(em, class)?,
     Expr::Import(import) => emit_import_expr(em, import, ctx)?,
     Expr::TaggedTemplate(tagged) => emit_tagged_template(em, tagged, ctx)?,
     _ => return Err(EmitError::unsupported("expression kind not supported")),
@@ -400,21 +400,6 @@ fn emit_obj_valued_member(
   }
 }
 
-fn emit_class_or_object_key(em: &mut Emitter, key: &ClassOrObjKey) -> EmitResult {
-  match key {
-    ClassOrObjKey::Direct(name) => {
-      em.write_str(&name.stx.key);
-      Ok(())
-    }
-    ClassOrObjKey::Computed(expr) => {
-      em.write_punct("[");
-      emit_expr(em, expr, ExprCtx::Default)?;
-      em.write_punct("]");
-      Ok(())
-    }
-  }
-}
-
 fn emit_type_assertion(
   em: &mut Emitter,
   assertion: &Node<TypeAssertionExpr>,
@@ -549,6 +534,21 @@ fn emit_function_expr(em: &mut Emitter, func: &Node<FuncExpr>, ctx: ExprCtx) -> 
   emit_function_params_and_body(em, &func.func, ctx)
 }
 
+fn emit_class_expression(em: &mut Emitter, class: &Node<ClassExpr>) -> EmitResult {
+  let class = class.stx.as_ref();
+  emit_decorators(em, &class.decorators)?;
+  emit_class_like(
+    em,
+    class.name.as_ref(),
+    class.type_parameters.as_deref(),
+    class.extends.as_ref(),
+    &class.implements,
+    |em, ty| emit_ts_type(em, ty),
+    &class.members,
+    true,
+  )
+}
+
 fn emit_import_expr(em: &mut Emitter, import: &Node<ImportExpr>, ctx: ExprCtx) -> EmitResult {
   em.write_keyword("import");
   em.write_punct("(");
@@ -600,15 +600,13 @@ fn emit_template_parts(em: &mut Emitter, parts: &[LitTemplatePart]) -> EmitResul
 fn emit_expr_via_fmt(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
   let mut buf = String::new();
   let mut emit_type = |out: &mut String, ty: &Node<TypeExpr>| emit_type_expr(out, ty);
-  crate::expr::emit_expr(&mut buf, expr, &mut emit_type)?;
+  crate::expr::emit_expr_with_options(&mut buf, expr, &mut emit_type, em.options())?;
   em.write_str(&buf);
   Ok(())
 }
 
 fn emit_string_literal(em: &mut Emitter, value: &str) {
-  let mut buf = Vec::new();
-  emit_string_literal_double_quoted(&mut buf, value);
-  em.write_str(std::str::from_utf8(&buf).expect("string literal escape output is UTF-8"));
+  em.write_string_literal(value);
 }
 
 fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {

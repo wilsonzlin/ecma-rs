@@ -24,13 +24,14 @@ pub use asi::{
   stmt_tail_is_expression_like, ListEnd, Separator, StmtLeafEnd, StmtStartToken,
 };
 pub use emitter::{
-  EmitError, EmitErrorKind, EmitMode, EmitOptions, EmitResult, Emitter, StmtSepStyle,
+  EmitError, EmitErrorKind, EmitMode, EmitOptions, EmitResult, Emitter, QuoteStyle, StmtSepStyle,
 };
 pub use escape::cooked_template_segment;
+pub use escape::emit_string_literal;
 pub use escape::emit_string_literal_double_quoted;
 pub use escape::emit_template_literal_segment;
 pub use escape::emit_template_raw_segment;
-pub use expr::{emit_expr, ExprEmitter};
+pub use expr::{emit_expr, emit_expr_with_options, ExprEmitter};
 pub use expr_js::{emit_expr as emit_expr_js, ExprCtx};
 pub use js_expr::{emit_js_expr, JsEmitError, JsEmitResult};
 pub use js_pat::{emit_js_param_decl, emit_js_pat, emit_js_pat_decl};
@@ -89,7 +90,7 @@ pub fn emit_top_level_diagnostic(
   options: EmitOptions,
 ) -> Result<String, Diagnostic> {
   let mut emitter = Emitter::new(options);
-  match emit_top_level(&mut emitter, ast.stx.as_ref()) {
+  match emit_top_level_stmt(&mut emitter, ast.stx.as_ref()) {
     Ok(()) => Ok(String::from_utf8(emitter.into_bytes()).expect("Emitter output is UTF-8")),
     Err(err) => Err(diagnostic_from_emit_error(file, err)),
   }

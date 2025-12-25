@@ -5,7 +5,6 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{Accessibility, ParamDecl, PatDecl};
 use parse_js::token::TT;
 
-use crate::emit_string_literal_double_quoted;
 use crate::emitter::EmitResult;
 use crate::expr::emit_expr_with_emitter;
 use crate::Emitter;
@@ -131,11 +130,7 @@ pub(crate) fn emit_class_or_object_key(out: &mut Emitter, key: &ClassOrObjKey) -
   match key {
     ClassOrObjKey::Direct(name) => {
       match name.stx.tt {
-        TT::LiteralString => {
-          let mut buf = Vec::new();
-          emit_string_literal_double_quoted(&mut buf, &name.stx.key);
-          out.write_str(std::str::from_utf8(&buf).expect("string literal escape output is UTF-8"));
-        }
+        TT::LiteralString => out.write_string_literal(&name.stx.key),
         TT::LiteralNumber | TT::LiteralNumberBin | TT::LiteralNumberHex | TT::LiteralNumberOct => {
           out.write_number(&name.stx.key)
         }

@@ -1,5 +1,5 @@
 use derive_visitor::{Drive, DriveMut};
-use emit_js::{emit_js_top_level, EmitMode, EmitOptions, Emitter, StmtSepStyle};
+use emit_js::{emit_js_top_level, EmitOptions, Emitter};
 use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::BinaryExpr;
@@ -81,10 +81,7 @@ fn var_decl_stmt(name: &str, init: Node<Expr>) -> Node<Stmt> {
 
 fn emit_top_level(stmts: Vec<Node<Stmt>>) -> String {
   let top = TopLevel { body: stmts };
-  let mut emitter = Emitter::new(EmitOptions {
-    mode: EmitMode::Minified,
-    stmt_sep_style: StmtSepStyle::Semicolons,
-  });
+  let mut emitter = Emitter::new(EmitOptions::minified());
   emit_js_top_level(&mut emitter, &top).unwrap();
   String::from_utf8(emitter.into_bytes()).unwrap()
 }

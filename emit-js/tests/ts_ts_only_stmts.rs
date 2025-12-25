@@ -35,10 +35,7 @@ fn emits_ts_only_statements() {
     parse_ts(&canonical);
   }
 
-  let mut all_emitter = Emitter::new(EmitOptions {
-    mode: EmitMode::Canonical,
-    ..EmitOptions::default()
-  });
+  let mut all_emitter = Emitter::new(EmitOptions::canonical());
   emit_top_level(&mut all_emitter, parsed.stx.as_ref()).expect("full emit");
   let all = String::from_utf8(all_emitter.into_bytes()).expect("utf8");
   assert_eq!(all, expected.join("\n"));
@@ -59,10 +56,7 @@ fn emits_ts_only_statements() {
 }
 
 fn emit_with_mode(stmt: &parse_js::ast::node::Node<Stmt>, mode: EmitMode) -> String {
-  let mut emitter = Emitter::new(EmitOptions {
-    mode,
-    ..EmitOptions::default()
-  });
+  let mut emitter = Emitter::new(EmitOptions::from(mode));
   emit_ts_stmt(&mut emitter, stmt).expect("emit succeeded");
   String::from_utf8(emitter.into_bytes()).expect("utf8")
 }

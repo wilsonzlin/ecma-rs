@@ -1,4 +1,6 @@
 pub use diagnostics::{Diagnostic, FileId, Severity, Span, TextRange};
+#[cfg(feature = "emit-minify")]
+use emit_js::{emit_top_level_diagnostic, EmitOptions};
 use parse_js::parse;
 use rename::{apply_renames, assign_names, collect_usages, rewrite_source};
 use semantic_js::js::bind_js;
@@ -39,6 +41,14 @@ pub fn minify(
   let usage = collect_usages(&mut top_level_node, &sem, top_level_mode);
   let renames = assign_names(&sem, &usage);
   let mut replacements = apply_renames(&mut top_level_node, &renames);
+  #[cfg(feature = "emit-minify")]
+  {
+    let emitted = emit_top_level_diagnostic(FileId(0), &top_level_node, EmitOptions::minified())
+      .map_err(|diag| vec![diag])?;
+    output.clear();
+    output.extend_from_slice(emitted.as_bytes());
+    return Ok(());
+  }
   let result = rewrite_source(source, &mut replacements);
   output.clear();
   output.extend_from_slice(result.as_bytes());

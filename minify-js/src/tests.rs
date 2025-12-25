@@ -10,9 +10,11 @@ fn minified(mode: TopLevelMode, src: &str) -> String {
 
 #[test]
 fn test_shadow_safety() {
-  let src = "let x=1;(()=>{let y=x;let x=2;return y})();";
-  let result = minified(TopLevelMode::Global, src);
-  assert_eq!(result, "let x=1;(()=>{let a=b;let b=2;return a})();");
+  let result = minified(
+    TopLevelMode::Global,
+    "let x=1;(()=>{let y=x;let x=2;return y})();",
+  );
+  assert_eq!(result, "let x=1;(()=>{let a=b;let b=2;return a;})();");
 }
 
 #[test]
@@ -26,9 +28,8 @@ fn test_unknown_globals_not_shadowed() {
 
 #[test]
 fn test_module_export_bindings_preserved() {
-  let src = "export const x=1; const y=2;";
-  let result = minified(TopLevelMode::Module, src);
-  assert_eq!(result, "export const x=1; const a=2;");
+  let result = minified(TopLevelMode::Module, "export const x=1; const y=2;");
+  assert_eq!(result, "export const x=1;const a=2;");
 }
 
 #[test]

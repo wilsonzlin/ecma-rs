@@ -1,4 +1,4 @@
-use emit_js::{emit_js_stmt_list, EmitMode, EmitOptions, Emitter, StmtSepStyle};
+use emit_js::{emit_js_stmt_list, EmitOptions, Emitter, StmtSepStyle};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
@@ -16,10 +16,7 @@ fn emit_with_style(style: StmtSepStyle) -> String {
       x + 1
     "#,
   );
-  let mut emitter = Emitter::new(EmitOptions {
-    mode: EmitMode::Minified,
-    stmt_sep_style: style,
-  });
+  let mut emitter = Emitter::new(EmitOptions::minified().with_stmt_sep_style(style));
   emit_js_stmt_list(&mut emitter, &stmts).expect("emit should succeed");
   String::from_utf8(emitter.into_bytes()).expect("output is utf-8")
 }
