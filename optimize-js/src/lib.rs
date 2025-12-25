@@ -208,6 +208,10 @@ pub struct Program {
 }
 
 /// Parse, symbolize, and compile source text in one step.
+///
+/// The provided source must be valid UTF-8; identifier handling and span math
+/// operate on UTF-8 byte offsets. Validate and convert any raw byte buffers at
+/// the I/O boundary before calling this helper.
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
   let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
   Program::compile(top_level_node, mode, debug)

@@ -428,8 +428,11 @@ impl TypeExpander for GraphExpander {
 /// Fuzz entry point that deserializes random `TypeKind` graphs and ensures core
 /// operations terminate without panicking. Use `--features types-ts-interned/fuzzing`
 /// when wiring this up to `cargo fuzz`.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
 pub fn fuzz_type_graph(data: &[u8]) {
-  let Ok(graph) = serde_json::from_slice::<SerializedTypeGraph>(data) else {
+  let source = String::from_utf8_lossy(data);
+  let Ok(graph) = serde_json::from_str::<SerializedTypeGraph>(&source) else {
     return;
   };
   let store = TypeStore::new();

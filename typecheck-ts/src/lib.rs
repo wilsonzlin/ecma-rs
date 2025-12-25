@@ -8,6 +8,9 @@
 //! file, while [`Program::check_body`] produces per-body side tables that can be
 //! queried without leaking internal arenas or caches.
 //!
+//! All source text is treated as UTF-8. Hosts should validate/convert any raw
+//! byte inputs before returning them as `Arc<str>` from [`Host::file_text`].
+//!
 //! # Example: single-file function typing
 //!
 //! ```rust

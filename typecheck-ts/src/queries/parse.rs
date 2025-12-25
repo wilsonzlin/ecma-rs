@@ -26,7 +26,8 @@ impl ParseResult {
 /// On success, returns the AST with an empty diagnostics list. On failure, the
 /// AST is `None` and a single [`Diagnostic`] describing the syntax error is
 /// returned. Spans are converted from parse-js [`parse_js::loc::Loc`] into
-/// [`Span`] with the provided [`FileId`] and [`TextRange`].
+/// [`Span`] with the provided [`FileId`] and [`TextRange`]. `source` must be
+/// valid UTF-8 because spans are expressed in UTF-8 byte offsets.
 pub fn parse(file: FileId, source: &str) -> ParseResult {
   match parse_js::parse(source) {
     Ok(ast) => ParseResult::ok(ast),

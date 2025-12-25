@@ -1,27 +1,23 @@
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
 #[test]
-fn public_api_source_text_is_utf8() {
-  let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+fn public_source_apis_use_utf8() {
+  let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .parent()
-    .expect("workspace root");
-  let script = repo_root.join("scripts").join("check_utf8_apis.sh");
-
-  assert!(
-    script.is_file(),
-    "UTF-8 API guard script is missing at {}",
-    script.display()
-  );
-
-  let output = Command::new(&script)
+    .expect("workspace root")
+    .to_path_buf();
+  let script = repo_root.join("scripts/check_utf8_apis.sh");
+  let output = Command::new("bash")
+    .arg(&script)
     .output()
-    .unwrap_or_else(|err| panic!("failed to run {}: {err}", script.display()));
-
-  assert!(
-    output.status.success(),
-    "UTF-8 API check failed.\nstdout:\n{}\nstderr:\n{}",
-    String::from_utf8_lossy(&output.stdout),
-    String::from_utf8_lossy(&output.stderr)
-  );
+    .expect("failed to run UTF-8 API guard script");
+  if !output.status.success() {
+    panic!(
+      "UTF-8 API guard failed: {}\nstdout:\n{}\nstderr:\n{}",
+      output.status,
+      String::from_utf8_lossy(&output.stdout),
+      String::from_utf8_lossy(&output.stderr)
+    );
+  }
 }

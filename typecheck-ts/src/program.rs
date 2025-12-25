@@ -68,6 +68,10 @@ const CODE_ARGUMENT_COUNT_MISMATCH: &str = "TC1006";
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
   /// Return the full text for a file.
+  ///
+  /// Source text must be valid UTF-8; spans and identifier handling are defined
+  /// over UTF-8 byte offsets. Validate and convert raw bytes at the boundary
+  /// before returning from this hook.
   fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError>;
   /// Resolve a module specifier relative to `from`.
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId>;
