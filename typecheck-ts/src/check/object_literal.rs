@@ -55,7 +55,11 @@ fn excess_keys(
         .filter(|key| !target_obj.props.contains_key(*key))
         .cloned()
         .collect();
-      if extras.is_empty() { None } else { Some(extras) }
+      if extras.is_empty() {
+        None
+      } else {
+        Some(extras)
+      }
     }
     TypeKind::Union(types) => {
       let mut best: Option<Vec<String>> = None;
