@@ -1,5 +1,5 @@
 use emit_js::{emit_js_expr, emit_js_stmt, EmitMode, EmitOptions, Emitter, StmtSepStyle};
-use parse_js::ast::expr::lit::LitNumExpr;
+use parse_js::ast::expr::lit::{LitNumExpr, LitRegexExpr};
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
   BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, CondExpr, Expr, IdExpr, MemberExpr, UnaryExpr,
@@ -34,6 +34,12 @@ fn id_expr(name: &str) -> Node<Expr> {
 fn lit_num_expr(value: f64) -> Node<Expr> {
   node(Expr::LitNum(node(LitNumExpr {
     value: JsNumber(value),
+  })))
+}
+
+fn lit_regex_expr(value: &str) -> Node<Expr> {
+  node(Expr::LitRegex(node(LitRegexExpr {
+    value: value.to_string(),
   })))
 }
 
@@ -287,4 +293,16 @@ fn numeric_literal_member_access() {
 #[test]
 fn emits_void_for_undefined_identifier() {
   assert_emit_expr(id_expr("undefined"), "void 0");
+}
+
+#[test]
+fn division_followed_by_regex_literal_inserts_spacing() {
+  let expr = binary_expr(OperatorName::Division, id_expr("a"), lit_regex_expr("/re/"));
+  assert_emit_expr(expr, "a/ /re/");
+}
+
+#[test]
+fn regex_literal_followed_by_division_inserts_spacing() {
+  let expr = binary_expr(OperatorName::Division, lit_regex_expr("/re/"), id_expr("b"));
+  assert_emit_expr(expr, "/re/ /b");
 }

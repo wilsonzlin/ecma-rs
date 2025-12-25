@@ -237,6 +237,15 @@ fn avoids_forming_line_comment_from_adjacent_slashes() {
 }
 
 #[test]
+fn separates_division_from_regex_literal_fragment() {
+  let mut emitter = Emitter::new(EmitOptions::default());
+  emitter.write_identifier("a");
+  emitter.write_punct("/");
+  emitter.write_str("/re/");
+  assert_eq!(text(&emitter), "a/ /re/");
+}
+
+#[test]
 fn separates_regex_literal_from_following_division() {
   let mut emitter = Emitter::new(EmitOptions::default());
   emitter.write_str("/a/");
