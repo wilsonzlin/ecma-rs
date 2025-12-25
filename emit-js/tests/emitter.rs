@@ -157,6 +157,7 @@ fn emits_punctuated_lists() {
   assert_eq!(text(&emitter), "1;2;3;");
 }
 
+#[test]
 fn writes_newlines_and_punctuation_with_helpers() {
   let mut emitter = Emitter::new(EmitOptions::default());
   emitter.write_identifier("foo");
@@ -181,6 +182,31 @@ fn writes_newlines_and_punctuation_with_helpers() {
   emitter.write_semicolon();
   emitter.write_keyword("return");
   assert_eq!(text(&emitter), "a;return");
+}
+
+#[test]
+fn fmt_write_bridge_inserts_required_spaces() {
+  use std::fmt::Write;
+
+  let mut emitter = Emitter::new(EmitOptions::default());
+  let value = String::from("value");
+  write!(&mut emitter, "return{}", value).unwrap();
+  emitter.write_semicolon();
+  Write::write_str(&mut emitter, "return").unwrap();
+  write!(&mut emitter, "{}", "next").unwrap();
+  assert_eq!(text(&emitter), "return value;return next");
+}
+
+#[test]
+fn write_newline_resets_boundaries() {
+  let mut emitter = Emitter::new(EmitOptions::default());
+  emitter.write_keyword("return");
+  emitter.write_identifier("value");
+  emitter.write_semicolon();
+  emitter.write_newline();
+  emitter.write_keyword("return");
+  emitter.write_number("1");
+  assert_eq!(text(&emitter), "return value;\nreturn 1");
 }
 
 #[test]
