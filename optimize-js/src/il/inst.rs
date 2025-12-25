@@ -1,10 +1,10 @@
+use crate::symbol::semantics::SymbolId;
 use num_bigint::BigInt;
 use parse_js::num::JsNumber;
 use serde::Serialize;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::fmt::{self};
-use symbol_js::symbol::Symbol;
 
 // PartialOrd and Ord are for some arbitrary canonical order, even if semantics of ordering is opaque.
 #[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
@@ -170,8 +170,12 @@ fn is_dummy_unop(op: &UnOp) -> bool {
   matches!(op, UnOp::_Dummy)
 }
 
-fn is_dummy_symbol(sym: &Symbol) -> bool {
-  sym.raw_id() == u64::MAX
+fn is_dummy_symbol(sym: &SymbolId) -> bool {
+  sym.raw_id() == u32::MAX as u64
+}
+
+fn dummy_symbol() -> SymbolId {
+  SymbolId(u32::MAX)
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize)]
@@ -189,11 +193,8 @@ pub struct Inst {
   pub bin_op: BinOp,
   #[serde(default = "UnOp::_Unreachable", skip_serializing_if = "is_dummy_unop")]
   pub un_op: UnOp,
-  #[serde(
-    default = "Symbol::from_raw_id_max",
-    skip_serializing_if = "is_dummy_symbol"
-  )]
-  pub foreign: Symbol,
+  #[serde(default = "dummy_symbol", skip_serializing_if = "is_dummy_symbol")]
+  pub foreign: SymbolId,
   #[serde(default, skip_serializing_if = "String::is_empty")]
   pub unknown: String,
 }
@@ -230,7 +231,7 @@ impl Default for Inst {
       labels: Default::default(),
       bin_op: BinOp::_Dummy,
       un_op: UnOp::_Dummy,
-      foreign: Symbol::from_raw_id(u64::MAX),
+      foreign: dummy_symbol(),
       unknown: Default::default(),
     }
   }
@@ -310,7 +311,7 @@ impl Inst {
     }
   }
 
-  pub fn foreign_load(tgt: u32, foreign: Symbol) -> Self {
+  pub fn foreign_load(tgt: u32, foreign: SymbolId) -> Self {
     Self {
       t: InstTyp::ForeignLoad,
       tgts: vec![tgt],
@@ -319,7 +320,7 @@ impl Inst {
     }
   }
 
-  pub fn foreign_store(foreign: Symbol, arg: Arg) -> Self {
+  pub fn foreign_store(foreign: SymbolId, arg: Arg) -> Self {
     Self {
       t: InstTyp::ForeignStore,
       args: vec![arg],
@@ -402,12 +403,12 @@ impl Inst {
     )
   }
 
-  pub fn as_foreign_load(&self) -> (u32, Symbol) {
+  pub fn as_foreign_load(&self) -> (u32, SymbolId) {
     assert_eq!(self.t, InstTyp::ForeignLoad);
     (self.tgts[0], self.foreign)
   }
 
-  pub fn as_foreign_store(&self) -> (Symbol, &Arg) {
+  pub fn as_foreign_store(&self) -> (SymbolId, &Arg) {
     assert_eq!(self.t, InstTyp::ForeignStore);
     (self.foreign, &self.args[0])
   }

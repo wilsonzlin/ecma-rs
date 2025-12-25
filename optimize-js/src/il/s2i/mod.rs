@@ -6,6 +6,7 @@ mod tests;
 
 use super::inst::Inst;
 use crate::eval::builtin::BUILTINS;
+use crate::symbol::semantics::{assoc_resolved_symbol, SymbolId};
 use crate::util::counter::Counter;
 use crate::OptimizeResult;
 use crate::ProgramCompiler;
@@ -14,8 +15,6 @@ use ahash::HashMapExt;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::Stmt;
-use symbol_js::symbol::ResolvedSymbol;
-use symbol_js::symbol::Symbol;
 
 // CondGoto fallthrough placeholder label.
 pub const DUMMY_LABEL: u32 = u32::MAX;
@@ -33,21 +32,21 @@ struct SourceToInst<'p> {
   out: Vec<Inst>,
   c_temp: Counter,
   c_label: Counter,
-  symbol_to_temp: HashMap<Symbol, u32>,
+  symbol_to_temp: HashMap<SymbolId, u32>,
   // Upon `break`, generate Inst::Goto to the label at the top of this stack.
   break_stack: Vec<u32>,
 }
 
 enum VarType {
-  Local(Symbol),
-  Foreign(Symbol),
+  Local(SymbolId),
+  Foreign(SymbolId),
   Unknown(String),
   Builtin(String),
 }
 
 impl<'p> SourceToInst<'p> {
   fn var_type(&self, node_assoc: NodeAssocData, name: String) -> VarType {
-    match node_assoc.get::<ResolvedSymbol>().copied().flatten() {
+    match assoc_resolved_symbol(&node_assoc) {
       Some(sym) => {
         if self.program.foreign_vars.contains(&sym) {
           VarType::Foreign(sym)
@@ -62,7 +61,7 @@ impl<'p> SourceToInst<'p> {
     }
   }
 
-  fn symbol_to_temp(&mut self, sym: Symbol) -> u32 {
+  fn symbol_to_temp(&mut self, sym: SymbolId) -> u32 {
     *self
       .symbol_to_temp
       .entry(sym)

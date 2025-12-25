@@ -3,9 +3,9 @@ use optimize_js::decompile::il::{
   lower_arg, lower_call_inst, lower_prop_assign_inst, node, FnEmitter, VarInit, VarNamer,
 };
 use optimize_js::il::inst::{Arg, Const, Inst};
+use optimize_js::symbol::semantics::SymbolId;
 use parse_js::num::JsNumber;
 use serde_json::{json, to_value};
-use symbol_js::symbol::Symbol;
 
 struct TestNamer;
 
@@ -14,7 +14,7 @@ impl VarNamer for TestNamer {
     format!("t{var}")
   }
 
-  fn name_foreign(&self, symbol: Symbol) -> String {
+  fn name_foreign(&self, symbol: SymbolId) -> String {
     format!("f{}", symbol.raw_id())
   }
 

@@ -1,3 +1,7 @@
+use crate::symbol::semantics::{
+  assoc_declared_symbol, assoc_resolved_symbol, assoc_scope_id, JsSymbols, ScopeId, ScopeKind,
+  SymbolId,
+};
 use ahash::HashMap;
 use ahash::HashSet;
 use derive_visitor::DriveMut;
@@ -6,200 +10,180 @@ use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::PatDecl;
+use parse_js::ast::node::NodeAssocData;
+use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
-use symbol_js::symbol::Scope;
-use symbol_js::symbol::ScopeType;
-use symbol_js::symbol::Symbol;
 
-type PatDeclNode = Node<PatDecl>;
 type IdExprNode = Node<IdExpr>;
 type ClassOrFuncNameNode = Node<ClassOrFuncName>;
 type IdPatNode = Node<IdPat>;
+type WithStmtNode = Node<WithStmt>;
 
 // Four tasks (fill out each field as appropriate).
-#[derive(Debug, Default, VisitorMut)]
+#[derive(Debug, VisitorMut)]
 #[visitor(
-  PatDeclNode,
   IdExprNode(enter),
   ClassOrFuncNameNode(enter),
-  IdPatNode(enter)
+  IdPatNode(enter),
+  WithStmtNode(enter)
 )]
-struct VarVisitor {
-  declared: HashSet<Symbol>,
-  foreign: HashSet<Symbol>,
+struct VarVisitor<'a> {
+  symbols: &'a JsSymbols,
+  declared: HashSet<SymbolId>,
+  foreign: HashSet<SymbolId>,
   unknown: HashSet<String>,
-  use_before_decl: HashMap<Symbol, (String, Loc)>,
-
-  in_pat_decl_stack: Vec<bool>,
+  use_before_decl: HashMap<SymbolId, (String, Loc)>,
+  dynamic_scope: Option<Loc>,
 }
 
 // The lifted scope is the nearest self-or-ancestor scope that is not a block, or the self-or-ancestor scope just below the global scope.
 // This is useful as we don't want a usage in an inner block to count as "foreign".
-fn lifted_scope(scope: &Scope) -> Scope {
-  if scope.data().typ() != ScopeType::Block {
-    return scope.clone();
+fn lifted_scope(symbols: &JsSymbols, scope: ScopeId) -> ScopeId {
+  if symbols.scope_kind(scope) != ScopeKind::Block {
+    return scope;
+  }
+  let Some(parent) = symbols.parent_scope(scope) else {
+    return scope;
   };
-  let scope_data = scope.data();
-  let parent = scope_data.parent().unwrap();
-  if parent.data().typ() == ScopeType::Global {
-    return scope.clone();
-  };
-  lifted_scope(parent)
+  if symbols.scope_kind(parent) == ScopeKind::Global {
+    return scope;
+  }
+  lifted_scope(symbols, parent)
 }
 
-impl VarVisitor {
-  pub fn enter_pat_decl_node(&mut self, _node: &mut Node<PatDecl>) {
-    self.in_pat_decl_stack.push(true);
+impl<'a> VarVisitor<'a> {
+  fn mark_declared(&mut self, symbol: SymbolId) {
+    self.declared.insert(symbol);
   }
 
-  pub fn exit_pat_decl_node(&mut self, _node: &mut Node<PatDecl>) {
-    self.in_pat_decl_stack.pop();
-  }
-
-  pub fn enter_id_expr_node(&mut self, node: &mut Node<IdExpr>) {
-    let name = &node.stx.name;
-    let usage_scope = node.assoc.get::<Scope>().unwrap();
-    let usage_ls = lifted_scope(usage_scope);
-    match usage_scope.find_symbol_up_to_with_scope(name.clone(), |_| false) {
+  fn note_use(&mut self, name: &str, assoc: &NodeAssocData, loc: Loc) {
+    let Some(usage_scope) = assoc_scope_id(assoc) else {
+      self.unknown.insert(name.to_string());
+      return;
+    };
+    match assoc_resolved_symbol(assoc) {
       None => {
-        // Unknown.
-        self.unknown.insert(name.clone());
+        self.unknown.insert(name.to_string());
       }
-      Some((decl_scope, symbol)) => {
-        let decl_ls = lifted_scope(&decl_scope);
+      Some(symbol) => {
+        let usage_ls = lifted_scope(&self.symbols, usage_scope);
+        let decl_scope = self.symbols.symbol_decl_scope(symbol);
+        let decl_ls = lifted_scope(&self.symbols, decl_scope);
         if usage_ls != decl_ls {
           self.foreign.insert(symbol);
         } else if !self.declared.contains(&symbol) {
-          let start = node.loc.0.saturating_sub(name.len());
+          let start = loc.0.saturating_sub(name.len());
           let end = start + name.len();
-          // Check for use before declaration to ensure strict SSA.
-          // NOTE: This doesn't check across closures, as that is mostly a runtime determination (see symbol-js/examples/let.js), but we don't care as those are foreign vars and don't affect strict SSA (i.e. correctness).
           self
             .use_before_decl
-            .insert(symbol, (name.clone(), Loc(start, end)));
+            .insert(symbol, (name.to_string(), Loc(start, end)));
         }
       }
-    };
+    }
+  }
+
+  pub fn enter_id_expr_node(&mut self, node: &mut Node<IdExpr>) {
+    self.note_use(&node.stx.name, &node.assoc, node.loc);
   }
 
   pub fn enter_class_or_func_name_node(&mut self, node: &mut Node<ClassOrFuncName>) {
-    let scope = node.assoc.get::<Scope>().unwrap();
-    // It won't exist if it's a global declaration.
-    // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
-    if let Some(symbol) = scope.find_symbol(node.stx.name.clone()) {
-      self.declared.insert(symbol);
+    if let Some(symbol) = assoc_declared_symbol(&node.assoc) {
+      self.mark_declared(symbol);
     };
   }
 
   pub fn enter_id_pat_node(&mut self, node: &mut Node<IdPat>) {
-    // An identifier pattern doesn't always mean declaration e.g. simple assignment.
-    let scope = node.assoc.get::<Scope>().unwrap();
-    if *self.in_pat_decl_stack.last().unwrap_or(&false) {
-      // It won't exist if it's a global declaration.
-      // TODO Is this the only time it won't exist (i.e. is it always safe to ignore None)?
-      if let Some(symbol) = scope.find_symbol(node.stx.name.clone()) {
-        self.declared.insert(symbol);
-      };
-      return;
-    };
+    if let Some(symbol) = assoc_declared_symbol(&node.assoc) {
+      self.mark_declared(symbol);
+    } else {
+      self.note_use(&node.stx.name, &node.assoc, node.loc);
+    }
+  }
 
-    let name = &node.stx.name;
-    let usage_scope = scope;
-    let usage_ls = lifted_scope(usage_scope);
-    match usage_scope.find_symbol_up_to_with_scope(name.clone(), |_| false) {
-      None => {
-        // Unknown.
-        self.unknown.insert(name.clone());
-      }
-      Some((decl_scope, symbol)) => {
-        let decl_ls = lifted_scope(&decl_scope);
-        if usage_ls != decl_ls {
-          self.foreign.insert(symbol);
-        } else if !self.declared.contains(&symbol) {
-          let start = node.loc.0.saturating_sub(name.len());
-          let end = start + name.len();
-          // Check for use before declaration to ensure strict SSA.
-          // NOTE: This doesn't check across closures, as that is mostly a runtime determination (see symbol-js/examples/let.js), but we don't care as those are foreign vars and don't affect strict SSA (i.e. correctness).
-          self
-            .use_before_decl
-            .insert(symbol, (name.clone(), Loc(start, end)));
-        }
-      }
-    };
+  pub fn enter_with_stmt_node(&mut self, node: &mut WithStmtNode) {
+    self.dynamic_scope.get_or_insert(node.loc);
   }
 }
 
 #[derive(Default)]
 pub struct VarAnalysis {
-  pub declared: HashSet<Symbol>,
-  pub foreign: HashSet<Symbol>,
+  pub declared: HashSet<SymbolId>,
+  pub foreign: HashSet<SymbolId>,
   pub unknown: HashSet<String>,
-  pub use_before_decl: HashMap<Symbol, (String, Loc)>,
+  pub use_before_decl: HashMap<SymbolId, (String, Loc)>,
+  pub dynamic_scope: Option<Loc>,
 }
 
 impl VarAnalysis {
-  pub fn analyze(top_level_node: &mut Node<TopLevel>) -> Self {
-    let mut var_visitor = VarVisitor::default();
+  pub fn analyze(top_level_node: &mut Node<TopLevel>, symbols: &JsSymbols) -> Self {
+    let mut var_visitor = VarVisitor {
+      symbols,
+      declared: HashSet::default(),
+      foreign: HashSet::default(),
+      unknown: HashSet::default(),
+      use_before_decl: HashMap::default(),
+      dynamic_scope: None,
+    };
     top_level_node.drive_mut(&mut var_visitor);
     Self {
       declared: var_visitor.declared,
       foreign: var_visitor.foreign,
       unknown: var_visitor.unknown,
       use_before_decl: var_visitor.use_before_decl,
+      dynamic_scope: var_visitor.dynamic_scope,
     }
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use super::VarVisitor;
+  use super::VarAnalysis;
   use ahash::HashMap;
-  use ahash::HashMapExt;
   use ahash::HashSet;
-  use derive_visitor::DriveMut;
   use parse_js::parse;
-  use symbol_js::compute_symbols;
-  use symbol_js::symbol::Scope;
-  use symbol_js::symbol::ScopeType;
-  use symbol_js::symbol::Symbol;
-  use symbol_js::TopLevelMode;
+  use semantic_js::js::TopLevelMode;
 
-  fn parse_and_visit(source: &str) -> (Scope, VarVisitor) {
+  use crate::symbol::semantics::{JsSymbols, ScopeId, ScopeKind, SymbolId};
+
+  fn parse_and_visit(source: &str) -> (VarAnalysis, JsSymbols) {
     let mut parsed = parse(source).unwrap();
-    let top_level_scope = compute_symbols(&mut parsed, TopLevelMode::Global);
-    let mut var_visitor = VarVisitor::default();
-    parsed.drive_mut(&mut var_visitor);
-    (top_level_scope, var_visitor)
+    let (symbols, _) = JsSymbols::bind(&mut parsed, TopLevelMode::Global);
+    let analysis = VarAnalysis::analyze(&mut parsed, &symbols);
+    (analysis, symbols)
   }
 
   struct T {
-    typ: ScopeType,
-    // Record the symbol ID of .0 into the returned map at entry with key .1.
-    syms: Vec<(&'static str, &'static str)>,
+    typ: ScopeKind,
+    syms: Vec<(&'static str, &'static str)>, // (name, key)
     children: Vec<T>,
   }
 
-  fn test_scope_tree(out: &mut HashMap<&'static str, Symbol>, s: &Scope, m: &T) {
-    let sd = s.data();
-    assert_eq!(sd.typ(), m.typ);
-    assert_eq!(sd.symbol_count(), m.syms.len());
-    for (s, k) in m.syms.iter() {
-      let Some(sym) = sd.get_symbol(s) else {
-        panic!("did not find the declaration for {s}")
-      };
-      assert!(out.insert(k, sym).is_none());
+  fn collect_scope_tree(
+    out: &mut HashMap<&'static str, SymbolId>,
+    symbols: &JsSymbols,
+    scope: ScopeId,
+    m: &T,
+  ) {
+    assert_eq!(symbols.scope_kind(scope), m.typ);
+    let mut in_scope = symbols.symbols_in_scope(scope);
+    in_scope.sort_by(|a, b| a.1.cmp(&b.1));
+    assert_eq!(in_scope.len(), m.syms.len());
+    for ((sym, name), (expected_name, key)) in in_scope.into_iter().zip(m.syms.iter()) {
+      assert_eq!(&name, expected_name);
+      assert!(out.insert(key, sym).is_none());
     }
-    assert_eq!(sd.children().len(), m.children.len());
-    for (i, c) in sd.children().iter().enumerate() {
-      test_scope_tree(out, c, &m.children[i]);
+    let mut children: Vec<_> = symbols.children(scope).collect();
+    children.sort_by_key(|s| s.raw_id());
+    assert_eq!(children.len(), m.children.len());
+    for (i, child) in children.into_iter().enumerate() {
+      collect_scope_tree(out, symbols, child, &m.children[i]);
     }
   }
 
   #[test]
   fn test_var_visitor() {
-    let (s, v) = parse_and_visit(
+    let (v, symbols) = parse_and_visit(
       r#"
         (() => {
           let a, b;
@@ -224,31 +208,30 @@ mod tests {
       "#,
     );
 
-    // Verify the entire scope tree from the top.
-    let mut syms = HashMap::new();
+    let mut syms = HashMap::default();
     #[rustfmt::skip]
-    test_scope_tree(&mut syms, &s, &T {
-      typ: ScopeType::Global,
+    collect_scope_tree(&mut syms, &symbols, symbols.top_scope(), &T {
+      typ: ScopeKind::Global,
       syms: vec![],
       children: vec![
         T {
-          typ: ScopeType::ArrowFunction,
+          typ: ScopeKind::ArrowFunction,
           syms: vec![("a", "a"), ("b", "b1")],
           children: vec![
             T {
-              typ: ScopeType::ArrowFunction,
+              typ: ScopeKind::ArrowFunction,
               syms: vec![("c", "c")],
               children: vec![
                 T {
-                  typ: ScopeType::ArrowFunction,
+                  typ: ScopeKind::ArrowFunction,
                   syms: vec![("b", "b2")],
                   children: vec![
                     T {
-                      typ: ScopeType::Block,
+                      typ: ScopeKind::Block,
                       syms: vec![("d", "d")],
                       children: vec![
                         T {
-                          typ: ScopeType::Block,
+                          typ: ScopeKind::Block,
                           syms: vec![("e", "e")],
                           children: vec![],
                         },
@@ -309,25 +292,24 @@ mod tests {
         }
       }
     "#;
-    let (s, v) = parse_and_visit(source);
+    let (v, symbols) = parse_and_visit(source);
 
-    // Verify the entire scope tree from the top.
-    let mut syms = HashMap::new();
+    let mut syms = HashMap::default();
     #[rustfmt::skip]
-    test_scope_tree(&mut syms, &s, &T {
-      typ: ScopeType::Global,
+    collect_scope_tree(&mut syms, &symbols, symbols.top_scope(), &T {
+      typ: ScopeKind::Global,
       syms: vec![],
       children: vec![
         T {
-          typ: ScopeType::Block,
+          typ: ScopeKind::Block,
           syms: vec![("a", "a")],
           children: vec![
             T {
-              typ: ScopeType::Block,
+              typ: ScopeKind::Block,
               syms: vec![("b", "b1"), ("c", "c")],
               children: vec![
                 T {
-                  typ: ScopeType::Block,
+                  typ: ScopeKind::Block,
                   syms: vec![("b", "b2"), ("d", "d")],
                   children: vec![],
                 },
@@ -364,7 +346,7 @@ mod tests {
 
   #[test]
   fn test_var_visitor_function_params() {
-    let (s, v) = parse_and_visit(
+    let (v, symbols) = parse_and_visit(
       r#"
         (() => {
           function f(x, { y }) {
@@ -376,18 +358,18 @@ mod tests {
       "#,
     );
 
-    let mut syms = HashMap::new();
+    let mut syms = HashMap::default();
     #[rustfmt::skip]
-    test_scope_tree(&mut syms, &s, &T {
-      typ: ScopeType::Global,
+    collect_scope_tree(&mut syms, &symbols, symbols.top_scope(), &T {
+      typ: ScopeKind::Global,
       syms: vec![],
       children: vec![
         T {
-          typ: ScopeType::ArrowFunction,
+          typ: ScopeKind::ArrowFunction,
           syms: vec![("f", "f")],
           children: vec![
             T {
-              typ: ScopeType::NonArrowFunction,
+              typ: ScopeKind::NonArrowFunction,
               syms: vec![("x", "x"), ("y", "y")],
               children: vec![],
             },

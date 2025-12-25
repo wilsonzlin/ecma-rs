@@ -702,9 +702,9 @@ mod tests {
       tree.to_debug_string(),
       r#"Seq[
   Block 0:
-    Inst { t: VarAssign, tgts: [0], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [0], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
   Block 1:
-    Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
 ]
 "#
     );
@@ -727,12 +727,12 @@ mod tests {
   If 0 cond %0 join 2:
     then:
       Block 1:
-        Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+        Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
     else:
       Seq[
       ]
   Block 2:
-    Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
 ]
 "#
     );
@@ -756,12 +756,12 @@ mod tests {
   If 0 cond %0 join 3:
     then:
       Block 1:
-        Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+        Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
     else:
       Block 2:
-        Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+        Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
   Block 3:
-    Inst { t: VarAssign, tgts: [3], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [3], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
 ]
 "#
     );
@@ -787,14 +787,14 @@ mod tests {
         then:
           Seq[
             Block 1:
-              Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+              Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
             Continue LoopLabel(0)
           ]
         else:
           Break Loop(LoopLabel(0))
     ]
   Block 2:
-    Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
 ]
 "#
     );
@@ -823,14 +823,14 @@ mod tests {
         then:
           Seq[
             Block 1:
-              Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+              Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
             Loop LoopLabel(1) header 2 follow Some(0):
               Seq[
                 If 2 cond %2 join 0:
                   then:
                     Seq[
                       Block 3:
-                        Inst { t: VarAssign, tgts: [3], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+                        Inst { t: VarAssign, tgts: [3], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
                       Continue LoopLabel(1)
                     ]
                   else:
@@ -842,7 +842,7 @@ mod tests {
           Break Loop(LoopLabel(0))
     ]
   Block 4:
-    Inst { t: VarAssign, tgts: [4], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [4], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
 ]
 "#
     );
@@ -857,7 +857,7 @@ mod tests {
       r#"Loop LoopLabel(0) header 0 follow None:
   Seq[
     Block 0:
-      Inst { t: VarAssign, tgts: [0], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+      Inst { t: VarAssign, tgts: [0], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
     Continue LoopLabel(0)
   ]
 "#
@@ -884,7 +884,7 @@ mod tests {
       If 1 cond %1 join 3:
         then:
           Block 2:
-            Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+            Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
         else:
           Seq[
           ]
@@ -892,7 +892,7 @@ mod tests {
       Seq[
       ]
   Block 3:
-    Inst { t: VarAssign, tgts: [3], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [3], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
 ]
 "#
     );
@@ -915,10 +915,10 @@ mod tests {
   state 0:
     term CondGoto { cond: %0, t: 1, f: 2 }
   state 1:
-    Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [1], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
     term Goto(2)
   state 2:
-    Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: Symbol(18446744073709551615), unknown: "" }
+    Inst { t: VarAssign, tgts: [2], args: [false], spreads: [], labels: [], bin_op: _DUMMY, un_op: _DUMMY, foreign: SymbolId(4294967295), unknown: "" }
     term Goto(1)
 "#
     );

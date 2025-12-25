@@ -1,5 +1,6 @@
 use super::foreign::ForeignBindings;
 use crate::il::inst::{Arg, BinOp, Const, Inst, InstTyp, UnOp};
+use crate::symbol::semantics::SymbolId;
 use crate::{Program, ProgramFunction};
 use derive_visitor::{Drive, DriveMut};
 use num_bigint::BigInt;
@@ -16,7 +17,6 @@ use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
 use std::collections::{BTreeMap, BTreeSet};
-use symbol_js::symbol::Symbol;
 
 const DEFAULT_LOC: Loc = Loc(0, 0);
 
@@ -30,7 +30,7 @@ where
 
 pub trait VarNamer {
   fn name_var(&self, var: u32) -> String;
-  fn name_foreign(&self, symbol: Symbol) -> String;
+  fn name_foreign(&self, symbol: SymbolId) -> String;
   fn name_unknown(&self, name: &str) -> String;
 }
 

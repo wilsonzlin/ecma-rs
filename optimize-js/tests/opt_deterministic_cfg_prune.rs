@@ -1,9 +1,6 @@
 use optimize_js::cfg::cfg::Cfg;
-use optimize_js::Program;
-use parse_js::parse;
+use optimize_js::{compile_source, TopLevelMode};
 use serde_json::to_string;
-use symbol_js::compute_symbols;
-use symbol_js::TopLevelMode;
 
 fn canonical_cfg_json(cfg: &Cfg) -> String {
   let mut labels: Vec<_> = cfg.graph.labels().collect();
@@ -20,9 +17,7 @@ fn canonical_cfg_json(cfg: &Cfg) -> String {
 }
 
 fn compile_cfg(source: &str) -> String {
-  let mut node = parse(source).expect("parse source");
-  compute_symbols(&mut node, TopLevelMode::Module);
-  let program = Program::compile(node, TopLevelMode::Module, false).expect("compile source");
+  let program = compile_source(source, TopLevelMode::Module, false).expect("compile source");
   canonical_cfg_json(&program.top_level.body)
 }
 

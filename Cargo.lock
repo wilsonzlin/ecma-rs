@@ -1050,7 +1050,6 @@ dependencies = [
  "semantic-js",
  "serde",
  "serde_json",
- "symbol-js",
 ]
 
 [[package]]

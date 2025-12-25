@@ -29,6 +29,7 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::parse;
+pub use semantic_js::js::TopLevelMode;
 use serde::Serialize;
 use ssa::ssa_deconstruct::deconstruct_ssa;
 use ssa::ssa_insert_phis::insert_phis_for_ssa_construction;
@@ -37,11 +38,8 @@ use std::ops::Deref;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use symbol::semantics::{JsSymbols, ScopeId, SymbolId};
 use symbol::var_analysis::VarAnalysis;
-use symbol_js::compute_symbols;
-use symbol_js::symbol::Scope;
-use symbol_js::symbol::Symbol;
-pub use symbol_js::TopLevelMode;
 use util::debug::OptimizerDebug;
 
 pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
@@ -90,12 +88,9 @@ pub struct ProgramFunction {
   pub body: Cfg,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub struct ScopeId(pub u32);
-
 #[derive(Debug, Serialize)]
 pub struct ProgramSymbol {
-  pub id: Symbol,
+  pub id: SymbolId,
   pub name: String,
   pub scope: ScopeId,
   pub captured: bool,
@@ -103,8 +98,8 @@ pub struct ProgramSymbol {
 
 #[derive(Debug, Serialize)]
 pub struct ProgramFreeSymbols {
-  pub top_level: Vec<Symbol>,
-  pub functions: Vec<Vec<Symbol>>, // Index aligned with Program::functions.
+  pub top_level: Vec<SymbolId>,
+  pub functions: Vec<Vec<SymbolId>>, // Index aligned with Program::functions.
 }
 
 #[derive(Debug, Serialize)]
@@ -185,7 +180,7 @@ pub use decompile::structurer::{structure_cfg, BreakTarget, ControlTree, LoopLab
 #[derive(Debug)]
 pub struct ProgramCompilerInner {
   // Precomputed via VarAnalysis.
-  pub foreign_vars: HashSet<Symbol>,
+  pub foreign_vars: HashSet<SymbolId>,
   pub functions: DashMap<FnId, ProgramFunction>,
   pub next_fn_id: AtomicUsize,
   pub debug: bool,
@@ -215,55 +210,42 @@ pub struct Program {
 
 /// Parse, symbolize, and compile source text in one step.
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
-  let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
-  compute_symbols(&mut top_level_node, mode);
+  let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
   Program::compile(top_level_node, mode, debug)
 }
 
-fn collect_symbol_table(root: &Scope, captured: &HashSet<Symbol>) -> ProgramSymbols {
+fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> ProgramSymbols {
   fn collect_scope_symbols(
-    scope: &Scope,
-    scope_id: &mut u32,
-    captured: &HashSet<Symbol>,
+    symbols: &JsSymbols,
+    scope: ScopeId,
+    captured: &HashSet<SymbolId>,
     out: &mut Vec<ProgramSymbol>,
   ) {
-    let this_scope_id = ScopeId(*scope_id);
-    *scope_id += 1;
-
-    let (symbols, children) = {
-      let data = scope.data();
-      let symbols = data
-        .symbol_names()
-        .iter()
-        .map(|name| (name.clone(), data.get_symbol(name).unwrap()))
-        .collect::<Vec<_>>();
-      let children = data.children().clone();
-      (symbols, children)
-    };
-
-    for (name, id) in symbols {
+    for (id, name) in symbols.symbols_in_scope(scope) {
       out.push(ProgramSymbol {
         id,
         name,
-        scope: this_scope_id,
+        scope,
         captured: captured.contains(&id),
       });
     }
 
+    let mut children: Vec<_> = symbols.children(scope).collect();
+    children.sort_by_key(|scope| scope.raw_id());
     for child in children {
-      collect_scope_symbols(&child, scope_id, captured, out);
+      collect_scope_symbols(symbols, child, captured, out);
     }
   }
 
-  let mut symbols = Vec::new();
-  collect_scope_symbols(root, &mut 0, captured, &mut symbols);
+  let mut out_symbols = Vec::new();
+  collect_scope_symbols(symbols, symbols.top_scope(), captured, &mut out_symbols);
   ProgramSymbols {
-    symbols,
+    symbols: out_symbols,
     free_symbols: None,
   }
 }
 
-fn collect_free_symbols(func: &ProgramFunction) -> Vec<Symbol> {
+fn collect_free_symbols(func: &ProgramFunction) -> Vec<SymbolId> {
   let mut free = HashSet::default();
   for (_, insts) in func.body.bblocks.all() {
     for inst in insts {
@@ -281,17 +263,24 @@ fn collect_free_symbols(func: &ProgramFunction) -> Vec<Symbol> {
 }
 
 impl Program {
-  // The AST must already have symbol analysis done by compute_symbols.
   pub fn compile(
     mut top_level_node: Node<TopLevel>,
     top_level_mode: TopLevelMode,
     debug: bool,
   ) -> OptimizeResult<Self> {
+    let (semantics, _) = JsSymbols::bind(&mut top_level_node, top_level_mode);
     let VarAnalysis {
       foreign,
       use_before_decl,
+      dynamic_scope,
       ..
-    } = VarAnalysis::analyze(&mut top_level_node);
+    } = VarAnalysis::analyze(&mut top_level_node, &semantics);
+    if let Some(loc) = dynamic_scope {
+      return Err(unsupported_syntax(
+        loc,
+        "with statements introduce dynamic scope and are not supported",
+      ));
+    }
     // SSA requires no use before declaration.
     if !use_before_decl.is_empty() {
       let mut diagnostics: Vec<_> = use_before_decl
@@ -301,14 +290,11 @@ impl Program {
       sort_diagnostics(&mut diagnostics);
       return Err(diagnostics);
     };
-    let symbol_table = top_level_node
-      .assoc
-      .get::<Scope>()
-      .map(|scope| collect_symbol_table(scope, &foreign));
+    let mut symbol_table = collect_symbol_table(&semantics, &foreign);
 
     let TopLevel { body } = *top_level_node.stx;
     let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
-      foreign_vars: foreign,
+      foreign_vars: foreign.clone(),
       functions: DashMap::new(),
       next_fn_id: AtomicUsize::new(0),
       debug,
@@ -324,33 +310,27 @@ impl Program {
       .map(|i| functions.remove(&i).unwrap().1)
       .collect();
 
-    let free_symbols = symbol_table.as_ref().map(|_| ProgramFreeSymbols {
+    let free_symbols = ProgramFreeSymbols {
       top_level: collect_free_symbols(&top_level),
       functions: functions.iter().map(collect_free_symbols).collect(),
-    });
+    };
 
-    if let (Some(sym), Some(free)) = (symbol_table.as_ref(), free_symbols.as_ref()) {
-      if sym.symbols.is_empty()
-        && free.top_level.is_empty()
-        && free.functions.iter().all(|f| f.is_empty())
-      {
-        return Ok(Self {
-          functions,
-          top_level,
-          top_level_mode,
-          symbols: None,
-        });
-      }
-    }
+    let has_any_symbols = !symbol_table.symbols.is_empty()
+      || !free_symbols.top_level.is_empty()
+      || free_symbols.functions.iter().any(|f| !f.is_empty());
+
+    let symbols = if has_any_symbols {
+      symbol_table.free_symbols = Some(free_symbols);
+      Some(symbol_table)
+    } else {
+      None
+    };
 
     Ok(Self {
       functions,
       top_level,
       top_level_mode,
-      symbols: symbol_table.map(|mut table| {
-        table.free_symbols = free_symbols;
-        table
-      }),
+      symbols,
     })
   }
 }
@@ -361,17 +341,16 @@ mod tests {
   use crate::compile_source;
   use crate::il::inst::Inst;
   use crate::il::inst::InstTyp;
+  use crate::symbol::semantics::JsSymbols;
   use crate::symbol::var_analysis::VarAnalysis;
   use crate::Program;
+  use crate::TopLevelMode;
   use parse_js::parse;
   use serde_json::to_string;
   use std::collections::HashSet;
-  use symbol_js::compute_symbols;
-  use symbol_js::TopLevelMode;
 
   fn compile_with_debug_json(source: &str) -> String {
-    let mut top_level_node = parse(source).expect("parse input");
-    compute_symbols(&mut top_level_node, TopLevelMode::Module);
+    let top_level_node = parse(source).expect("parse input");
     let Program { top_level, .. } =
       Program::compile(top_level_node, TopLevelMode::Module, true).expect("compile");
     let debug = top_level.debug.expect("debug enabled");
@@ -397,8 +376,7 @@ mod tests {
   }
 
   fn compile_with_mode(source: &str, mode: TopLevelMode) -> Program {
-    let mut top_level_node = parse(source).expect("parse input");
-    compute_symbols(&mut top_level_node, mode);
+    let top_level_node = parse(source).expect("parse input");
     Program::compile(top_level_node, mode, false).expect("compile input")
   }
 
@@ -427,8 +405,7 @@ mod tests {
         f(x);
       })();
     "#;
-    let mut top_level_node = parse(source).expect("parse input");
-    compute_symbols(&mut top_level_node, TopLevelMode::Module);
+    let top_level_node = parse(source).expect("parse input");
     let _bblocks = Program::compile(top_level_node, TopLevelMode::Module, false)
       .expect("compile")
       .top_level;
@@ -437,8 +414,7 @@ mod tests {
   #[test]
   fn test_use_before_declaration_error() {
     let source = "function demo(){ a; let a = 1; }";
-    let mut top_level_node = parse(source).expect("parse input");
-    compute_symbols(&mut top_level_node, TopLevelMode::Module);
+    let top_level_node = parse(source).expect("parse input");
     let err = Program::compile(top_level_node, TopLevelMode::Module, false)
       .expect_err("expected use-before-decl error");
     assert_eq!(err.len(), 1);
@@ -520,8 +496,8 @@ mod tests {
     "#;
 
     let mut top_level_node = parse(source).expect("parse input");
-    compute_symbols(&mut top_level_node, TopLevelMode::Module);
-    let analysis = VarAnalysis::analyze(&mut top_level_node);
+    let (symbols, _) = JsSymbols::bind(&mut top_level_node, TopLevelMode::Module);
+    let analysis = VarAnalysis::analyze(&mut top_level_node, &symbols);
     assert_eq!(analysis.declared.len(), 1);
     assert!(analysis.unknown.contains("obj"));
     assert!(analysis.unknown.contains("call_me"));
@@ -557,8 +533,7 @@ mod tests {
   #[test]
   fn optional_chaining_assignment_target_is_rejected() {
     let source = "a?.b = 1;";
-    let mut top_level_node = parse(source).expect("parse input");
-    compute_symbols(&mut top_level_node, TopLevelMode::Module);
+    let top_level_node = parse(source).expect("parse input");
     let err =
       Program::compile(top_level_node, TopLevelMode::Module, false).expect_err("expected error");
     assert_eq!(err.len(), 1);

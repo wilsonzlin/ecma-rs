@@ -1,39 +1,36 @@
 use optimize_js::il::inst::InstTyp;
+use optimize_js::symbol::semantics::{JsSymbols, ScopeId, SymbolId};
 use optimize_js::symbol::var_analysis::VarAnalysis;
 use optimize_js::Program;
 use optimize_js::ProgramFunction;
+use optimize_js::TopLevelMode;
 use parse_js::parse;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::VecDeque;
-use symbol_js::compute_symbols;
-use symbol_js::symbol::Scope;
-use symbol_js::symbol::Symbol;
-use symbol_js::TopLevelMode;
 
-fn collect_symbol_names(scope: &Scope) -> HashMap<Symbol, String> {
-  let mut map = HashMap::new();
-  let mut queue = VecDeque::from([scope.clone()]);
-  while let Some(scope) = queue.pop_front() {
-    let data = scope.data();
-    for name in data.symbol_names() {
-      if let Some(sym) = data.get_symbol(name) {
-        map.insert(sym, name.clone());
-      }
+fn collect_symbol_names(symbols: &JsSymbols) -> HashMap<SymbolId, String> {
+  fn walk(map: &mut HashMap<SymbolId, String>, symbols: &JsSymbols, scope: ScopeId) {
+    for (id, name) in symbols.symbols_in_scope(scope) {
+      map.insert(id, name);
     }
-    queue.extend(data.children().iter().cloned());
+    for child in symbols.children(scope) {
+      walk(map, symbols, child);
+    }
   }
+
+  let mut map = HashMap::new();
+  walk(&mut map, symbols, symbols.top_scope());
   map
 }
 
 fn compile_with_symbols(
   source: &str,
   mode: TopLevelMode,
-) -> (Program, VarAnalysis, HashMap<Symbol, String>) {
+) -> (Program, VarAnalysis, HashMap<SymbolId, String>) {
   let mut node = parse(source).expect("parse source");
-  let scope = compute_symbols(&mut node, mode);
-  let names = collect_symbol_names(&scope);
-  let analysis = VarAnalysis::analyze(&mut node);
+  let (symbols, _) = JsSymbols::bind(&mut node, mode);
+  let names = collect_symbol_names(&symbols);
+  let analysis = VarAnalysis::analyze(&mut node, &symbols);
   let program = Program::compile(node, mode, false).expect("compile");
   (program, analysis, names)
 }
@@ -47,7 +44,7 @@ fn flatten_insts(func: &ProgramFunction) -> Vec<&optimize_js::il::inst::Inst> {
     .collect()
 }
 
-fn foreign_names(func: &ProgramFunction, names: &HashMap<Symbol, String>) -> Vec<String> {
+fn foreign_names(func: &ProgramFunction, names: &HashMap<SymbolId, String>) -> Vec<String> {
   flatten_insts(func)
     .into_iter()
     .filter(|inst| matches!(inst.t, InstTyp::ForeignLoad | InstTyp::ForeignStore))
@@ -68,7 +65,7 @@ fn unknown_names(func: &ProgramFunction) -> Vec<String> {
     .collect()
 }
 
-fn find_symbol<'a>(names: &'a HashMap<Symbol, String>, target: &str) -> Symbol {
+fn find_symbol<'a>(names: &'a HashMap<SymbolId, String>, target: &str) -> SymbolId {
   *names
     .iter()
     .find(|(_, name)| name.as_str() == target)

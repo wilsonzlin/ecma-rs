@@ -9,6 +9,7 @@ use crate::il::inst::Const;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::il::inst::UnOp;
+use crate::symbol::semantics::{assoc_declared_symbol, assoc_resolved_symbol};
 use crate::unsupported_syntax;
 use crate::OptimizeResult;
 use parse_js::ast::expr::pat::IdPat;
@@ -30,16 +31,10 @@ use parse_js::ast::node::NodeAssocData;
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
-use semantic_js::assoc::js as semantic_js_assoc;
 use std::sync::atomic::Ordering;
-use symbol_js::symbol::ResolvedSymbol;
 
 fn assoc_has_resolved_symbol(assoc: &NodeAssocData) -> bool {
-  if semantic_js_assoc::resolved_symbol(assoc).is_some() {
-    return true;
-  }
-
-  assoc.get::<ResolvedSymbol>().copied().flatten().is_some()
+  assoc_resolved_symbol(assoc).is_some() || assoc_declared_symbol(assoc).is_some()
 }
 
 pub struct CompiledMemberExpr {

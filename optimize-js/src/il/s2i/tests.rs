@@ -2,14 +2,10 @@ use super::super::inst::InstTyp;
 use crate::compile_source;
 use crate::Program;
 use crate::ProgramFunction;
-use parse_js::parse;
-use symbol_js::compute_symbols;
-use symbol_js::TopLevelMode;
+use crate::TopLevelMode;
 
 fn compile(source: &str) -> Program {
-  let mut top_level = parse(source).expect("parse input");
-  compute_symbols(&mut top_level, TopLevelMode::Module);
-  Program::compile(top_level, TopLevelMode::Module, false).expect("compile input")
+  compile_source(source, TopLevelMode::Module, false).expect("compile input")
 }
 
 fn inst_types(func: &ProgramFunction) -> Vec<InstTyp> {
@@ -122,6 +118,19 @@ fn direct_eval_is_unsupported() {
 fn shadowed_eval_is_allowed() {
   let source = r#"const f = (eval) => { let x = 1; eval("x"); };"#;
   compile_source(source, TopLevelMode::Module, false).expect("shadowed eval should compile");
+}
+
+#[test]
+fn with_statement_is_rejected() {
+  let source = r#"with (obj) { answer = 42; }"#;
+  let err = compile_source(source, TopLevelMode::Module, false)
+    .expect_err("with statements are unsupported");
+  assert!(
+    err
+      .iter()
+      .any(|diag| diag.code == "OPT0002" && diag.message.contains("with statements")),
+    "expected OPT0002 about with statement, got {err:?}"
+  );
 }
 
 #[test]

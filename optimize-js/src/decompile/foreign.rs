@@ -1,18 +1,18 @@
 use crate::il::inst::{Arg, Inst, InstTyp};
+use crate::symbol::semantics::SymbolId;
 use crate::Program;
 use ahash::{HashMap, HashSet};
-use symbol_js::symbol::Symbol;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForeignBinding {
-  pub symbol: Symbol,
+  pub symbol: SymbolId,
   pub ident: String,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ForeignBindings {
   bindings: Vec<ForeignBinding>,
-  map: HashMap<Symbol, String>,
+  map: HashMap<SymbolId, String>,
 }
 
 impl ForeignBindings {
@@ -28,7 +28,7 @@ impl ForeignBindings {
     self.bindings.iter()
   }
 
-  pub fn name_for(&self, symbol: Symbol) -> Option<&str> {
+  pub fn name_for(&self, symbol: SymbolId) -> Option<&str> {
     self.map.get(&symbol).map(|s| s.as_str())
   }
 }
@@ -68,7 +68,7 @@ fn collect_reserved_names(program: &Program) -> HashSet<String> {
   reserved
 }
 
-fn collect_foreign_symbols(program: &Program) -> Vec<Symbol> {
+fn collect_foreign_symbols(program: &Program) -> Vec<SymbolId> {
   let mut symbols = HashSet::default();
   visit_insts(program, |inst| match inst.t {
     InstTyp::ForeignLoad | InstTyp::ForeignStore => {
