@@ -1,6 +1,6 @@
 pub mod usage;
 
-use optimize_js::analysis::find_conds::find_conds;
+use optimize_js::analysis::find_conds::{find_conds, CondRegion};
 use optimize_js::analysis::find_loops::find_loops;
 use optimize_js::analysis::interference::calculate_interference_graph;
 use optimize_js::analysis::liveness::calculate_live_ins;
@@ -13,6 +13,7 @@ use optimize_js::il::inst::Arg;
 use optimize_js::il::inst::Const;
 use optimize_js::Program;
 use optimize_js::ProgramFunction;
+use std::collections::HashMap;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
 
@@ -26,7 +27,7 @@ fn reconstruct_fn(f: ProgramFunction) -> Node {
   let dom = Dom::calculate(&cfg);
   let postdom = PostDom::calculate(&cfg);
   let loops = find_loops(&cfg, &dom);
-  let conds = find_conds(&cfg, &dom, &postdom);
+  let _conds: HashMap<u32, CondRegion> = find_conds(&cfg, &dom, &postdom);
   todo!()
 }
 
