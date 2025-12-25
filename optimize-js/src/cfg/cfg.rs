@@ -1,5 +1,6 @@
 use crate::graph::Graph;
 use crate::graph::GraphRelatedNodesIter;
+use crate::il::inst::Arg;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::il::s2i::DUMMY_LABEL;
@@ -10,6 +11,18 @@ use serde::Serialize;
 use std::collections::VecDeque;
 use std::iter;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub enum Terminator {
+  /// No outgoing edges from this block.
+  Stop,
+  /// Exactly one outgoing edge.
+  Goto(u32),
+  /// Conditional branch represented explicitly by `InstTyp::CondGoto`.
+  CondGoto { cond: Arg, t: u32, f: u32 },
+  /// Multi-way branch not representable as a simple conditional.
+  Multi { targets: Vec<u32> },
+}
+
 /// Wrapper over a Graph<u32> that provides owned types and better method names,
 /// as well as domain-specific methods.
 #[derive(Debug, Default, Serialize)]
@@ -18,6 +31,12 @@ pub struct CfgGraph(Graph<u32>);
 impl CfgGraph {
   pub fn labels(&self) -> impl Iterator<Item = u32> + '_ {
     self.0.nodes().cloned()
+  }
+
+  pub fn sorted_labels(&self) -> Vec<u32> {
+    let mut labels = self.labels().collect::<Vec<_>>();
+    labels.sort_unstable();
+    labels
   }
 
   pub fn clone_graph(&self) -> Graph<u32> {
@@ -32,8 +51,20 @@ impl CfgGraph {
     self.0.parents(&bblock).cloned()
   }
 
+  pub fn sorted_parents(&self, bblock: u32) -> Vec<u32> {
+    let mut parents = self.parents(bblock).collect::<Vec<_>>();
+    parents.sort_unstable();
+    parents
+  }
+
   pub fn children(&self, bblock: u32) -> iter::Cloned<GraphRelatedNodesIter<'_, u32>> {
     self.0.children(&bblock).cloned()
+  }
+
+  pub fn sorted_children(&self, bblock: u32) -> Vec<u32> {
+    let mut children = self.children(bblock).collect::<Vec<_>>();
+    children.sort_unstable();
+    children
   }
 
   pub fn connect(&mut self, parent: u32, child: u32) {
@@ -213,5 +244,134 @@ impl Cfg {
       graph: CfgGraph(graph),
       bblocks: CfgBBlocks(bblocks),
     }
+  }
+
+  pub fn reverse_postorder(&self, entry: u32) -> Vec<u32> {
+    let (postorder, _) = self.graph.calculate_postorder(entry);
+    postorder.into_iter().rev().collect()
+  }
+
+  pub fn terminator(&self, label: u32) -> Terminator {
+    if let Some(inst) = self.bblocks.get(label).last() {
+      if inst.t == InstTyp::CondGoto {
+        let (cond, t, f) = inst.as_cond_goto();
+        return Terminator::CondGoto {
+          cond: cond.clone(),
+          t,
+          f,
+        };
+      }
+    }
+
+    let children = self.graph.sorted_children(label);
+    match children.len() {
+      0 => Terminator::Stop,
+      1 => Terminator::Goto(children[0]),
+      _ => Terminator::Multi { targets: children },
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::il::inst::Arg;
+
+  fn make_cfg(graph: CfgGraph, bblocks: CfgBBlocks) -> Cfg {
+    Cfg { graph, bblocks }
+  }
+
+  #[test]
+  fn terminator_implicit_fallthrough() {
+    let mut graph = CfgGraph::default();
+    graph.connect(0, 1);
+
+    let mut bblocks = CfgBBlocks::default();
+    bblocks.add(0, vec![Inst::var_assign(0, Arg::Var(1))]);
+    bblocks.add(1, vec![]);
+
+    let cfg = make_cfg(graph, bblocks);
+    assert_eq!(cfg.terminator(0), Terminator::Goto(1));
+  }
+
+  #[test]
+  fn terminator_conditional_branch() {
+    let mut graph = CfgGraph::default();
+    graph.connect(0, 2);
+    graph.connect(0, 1);
+
+    let mut bblocks = CfgBBlocks::default();
+    bblocks.add(0, vec![Inst::cond_goto(Arg::Var(0), 1, 2)]);
+    bblocks.add(1, vec![]);
+    bblocks.add(2, vec![]);
+
+    let cfg = make_cfg(graph, bblocks);
+    assert_eq!(
+      cfg.terminator(0),
+      Terminator::CondGoto {
+        cond: Arg::Var(0),
+        t: 1,
+        f: 2
+      }
+    );
+  }
+
+  #[test]
+  fn terminator_leaf_block() {
+    let graph = CfgGraph::default();
+    let mut bblocks = CfgBBlocks::default();
+    bblocks.add(0, vec![]);
+
+    let cfg = make_cfg(graph, bblocks);
+    assert_eq!(cfg.terminator(0), Terminator::Stop);
+  }
+
+  #[test]
+  fn terminator_self_loop_block() {
+    let mut graph = CfgGraph::default();
+    graph.connect(0, 0);
+
+    let mut bblocks = CfgBBlocks::default();
+    bblocks.add(0, vec![Inst::var_assign(0, Arg::Var(1))]);
+
+    let cfg = make_cfg(graph, bblocks);
+    assert_eq!(cfg.terminator(0), Terminator::Goto(0));
+  }
+
+  #[test]
+  fn terminator_multi_branch_is_sorted() {
+    let mut graph = CfgGraph::default();
+    graph.connect(0, 3);
+    graph.connect(0, 1);
+    graph.connect(0, 2);
+
+    let mut bblocks = CfgBBlocks::default();
+    bblocks.add(0, vec![Inst::var_assign(0, Arg::Var(1))]);
+    bblocks.add(1, vec![]);
+    bblocks.add(2, vec![]);
+    bblocks.add(3, vec![]);
+
+    let cfg = make_cfg(graph, bblocks);
+    assert_eq!(
+      cfg.terminator(0),
+      Terminator::Multi {
+        targets: vec![1, 2, 3]
+      }
+    );
+  }
+
+  #[test]
+  fn reverse_postorder_uses_sorted_traversal() {
+    let mut graph = CfgGraph::default();
+    graph.connect(0, 2);
+    graph.connect(0, 1);
+
+    let mut bblocks = CfgBBlocks::default();
+    bblocks.add(0, vec![]);
+    bblocks.add(1, vec![]);
+    bblocks.add(2, vec![]);
+
+    let cfg = make_cfg(graph, bblocks);
+    assert_eq!(cfg.reverse_postorder(0), vec![0, 2, 1]);
   }
 }
