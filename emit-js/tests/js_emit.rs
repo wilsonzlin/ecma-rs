@@ -7,7 +7,9 @@ use parse_js::ast::expr::{
 };
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
-use parse_js::ast::stmt::{BreakStmt, ExprStmt, ForBody, ForTripleStmt, ForTripleStmtInit, IfStmt, Stmt, WhileStmt};
+use parse_js::ast::stmt::{
+  BreakStmt, ExprStmt, ForBody, ForTripleStmt, ForTripleStmtInit, IfStmt, Stmt, WhileStmt,
+};
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
@@ -49,7 +51,12 @@ fn call_expr(callee: Node<Expr>, args: Vec<Node<Expr>>) -> Node<Expr> {
     callee,
     arguments: args
       .into_iter()
-      .map(|value| node(CallArg { spread: false, value }))
+      .map(|value| {
+        node(CallArg {
+          spread: false,
+          value,
+        })
+      })
       .collect(),
   })))
 }
@@ -62,7 +69,11 @@ fn member_expr(left: Node<Expr>, right: &str, optional_chaining: bool) -> Node<E
   })))
 }
 
-fn computed_member_expr(object: Node<Expr>, member: Node<Expr>, optional_chaining: bool) -> Node<Expr> {
+fn computed_member_expr(
+  object: Node<Expr>,
+  member: Node<Expr>,
+  optional_chaining: bool,
+) -> Node<Expr> {
   node(Expr::ComputedMember(node(ComputedMemberExpr {
     optional_chaining,
     object,
@@ -75,7 +86,10 @@ fn unary_expr(operator: OperatorName, argument: Node<Expr>) -> Node<Expr> {
 }
 
 fn unary_postfix_expr(operator: OperatorName, argument: Node<Expr>) -> Node<Expr> {
-  node(Expr::UnaryPostfix(node(UnaryPostfixExpr { operator, argument })))
+  node(Expr::UnaryPostfix(node(UnaryPostfixExpr {
+    operator,
+    argument,
+  })))
 }
 
 fn binary_expr(operator: OperatorName, left: Node<Expr>, right: Node<Expr>) -> Node<Expr> {
@@ -273,11 +287,7 @@ fn exponentiation_and_unary_parentheses() {
 
   let expr = unary_expr(
     OperatorName::UnaryNegation,
-    binary_expr(
-      OperatorName::Exponentiation,
-      id_expr("a"),
-      id_expr("b"),
-    ),
+    binary_expr(OperatorName::Exponentiation, id_expr("a"), id_expr("b")),
   );
   assert_emit_expr(expr, "-(a**b)");
 }

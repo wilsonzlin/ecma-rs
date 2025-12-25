@@ -1,11 +1,11 @@
 use emit_js::emit_top_level_stmt;
 use emit_js::emit_type_alias_decl;
 use emit_js::EmitOptions;
+use emit_js::Emitter;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::TypeAliasDecl;
-use emit_js::Emitter;
 
 fn parse_type_alias(src: &str) -> Node<TypeAliasDecl> {
   let top = parse_js::parse(src).expect("parse failed");

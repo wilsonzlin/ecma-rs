@@ -905,11 +905,11 @@ impl<'a> Parser<'a> {
   // It's strictly one of these:
   // - <key> [ '=' <expr> ]? [ <asi> | ';' ]
   // - async? '*'? <key> '(' ...
-    // - [ get | set ] <key> '(' ...
-    // where <key> = <ident> | <keyword> | <str> | <num> | '[' <expr> ']'
-    pub fn class_or_obj_member(
-      &mut self,
-      ctx: ParseCtx,
+  // - [ get | set ] <key> '(' ...
+  // where <key> = <ident> | <keyword> | <str> | <num> | '[' <expr> ']'
+  pub fn class_or_obj_member(
+    &mut self,
+    ctx: ParseCtx,
     value_delimiter: TT,
     statement_delimiter: TT,
     property_initialiser_asi: &mut Asi,
@@ -920,8 +920,10 @@ impl<'a> Parser<'a> {
     // TypeScript: index signatures in object literals (or with misplaced accessibility modifiers)
     // Accept patterns like `[key: Type]: Type` and `private [key: Type]: Type` for error recovery.
     let is_index_sig = (a.typ == TT::BracketOpen && b.typ == TT::Identifier && c.typ == TT::Colon)
-      || (matches!(a.typ, TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected)
-        && b.typ == TT::BracketOpen
+      || (matches!(
+        a.typ,
+        TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected
+      ) && b.typ == TT::BracketOpen
         && c.typ == TT::Identifier
         && d.typ == TT::Colon);
     if is_index_sig {

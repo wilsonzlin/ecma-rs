@@ -14,9 +14,12 @@ pub fn foreign_var_decl(bindings: &ForeignBindings) -> Option<Node<Stmt>> {
   let declarators = bindings
     .iter()
     .map(|binding| {
-      let pat = Pat::Id(Node::new(Loc(0, 0), IdPat {
-        name: binding.ident.clone(),
-      }));
+      let pat = Pat::Id(Node::new(
+        Loc(0, 0),
+        IdPat {
+          name: binding.ident.clone(),
+        },
+      ));
       let pat_decl = PatDecl {
         pat: Node::new(Loc(0, 0), pat),
       };

@@ -41,9 +41,7 @@ impl LoopInfo {
     let dominates = dom.dominates_graph();
 
     let mut loop_entries = loops_map.into_iter().collect::<Vec<_>>();
-    loop_entries.sort_by(|(h1, n1), (h2, n2)| {
-      h1.cmp(h2).then_with(|| n2.len().cmp(&n1.len()))
-    });
+    loop_entries.sort_by(|(h1, n1), (h2, n2)| h1.cmp(h2).then_with(|| n2.len().cmp(&n1.len())));
 
     let mut loops = Vec::<Loop>::new();
     let mut header_to_loop = HashMap::new();
@@ -92,8 +90,7 @@ impl LoopInfo {
           let replace = parents[i].map_or(true, |cur| {
             let cur_nodes = &loops[cur].nodes;
             parent_nodes.len() < cur_nodes.len()
-              || (parent_nodes.len() == cur_nodes.len()
-                && loops[j].header < loops[cur].header)
+              || (parent_nodes.len() == cur_nodes.len() && loops[j].header < loops[cur].header)
           });
           if replace {
             parents[i] = Some(j);
@@ -126,8 +123,7 @@ impl LoopInfo {
 
     let header_by_id = loops.iter().map(|l| l.header).collect::<Vec<_>>();
     for l in loops.iter_mut() {
-      l
-        .children
+      l.children
         .sort_by_key(|child| header_by_id[child.0 as usize]);
     }
 

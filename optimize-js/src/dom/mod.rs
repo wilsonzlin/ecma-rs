@@ -94,7 +94,9 @@ fn find_virtual_exit_label(labels: &[u32]) -> u32 {
   let label_set: HashSet<u32> = HashSet::from_iter(labels.iter().copied());
   let mut exit = u32::MAX;
   while label_set.contains(&exit) {
-    exit = exit.checked_sub(1).expect("unable to find unused virtual exit label");
+    exit = exit
+      .checked_sub(1)
+      .expect("unable to find unused virtual exit label");
   }
   exit
 }
@@ -223,7 +225,12 @@ fn augment_cfg_for_postdom(cfg: &Cfg) -> (CfgGraph, u32) {
 
   let sink_sccs = calculate_sink_sccs(&graph);
 
-  let mut to_exit = HashSet::from_iter(labels.iter().copied().filter(|label| graph.children(*label).next().is_none()));
+  let mut to_exit = HashSet::from_iter(
+    labels
+      .iter()
+      .copied()
+      .filter(|label| graph.children(*label).next().is_none()),
+  );
   for component in sink_sccs {
     to_exit.extend(component);
   }

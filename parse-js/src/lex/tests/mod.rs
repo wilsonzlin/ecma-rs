@@ -33,12 +33,24 @@ fn test_lex_literal_numbers() {
   check(".929", [LiteralNumber], Dialect::Tsx);
   check(". 929", [Dot, LiteralNumber], Dialect::Tsx);
   check(". 929.2.", [Dot, LiteralNumber, Dot], Dialect::Tsx);
-  check(".929.2..", [LiteralNumber, LiteralNumber, Dot, Dot], Dialect::Tsx);
-  check(".929. 2..", [LiteralNumber, Dot, LiteralNumber, Dot], Dialect::Tsx);
+  check(
+    ".929.2..",
+    [LiteralNumber, LiteralNumber, Dot, Dot],
+    Dialect::Tsx,
+  );
+  check(
+    ".929. 2..",
+    [LiteralNumber, Dot, LiteralNumber, Dot],
+    Dialect::Tsx,
+  );
   check("?.929", [Question, LiteralNumber], Dialect::Tsx);
   check("?..929", [QuestionDot, LiteralNumber], Dialect::Tsx);
   check("?...929", [QuestionDot, Dot, LiteralNumber], Dialect::Tsx);
-  check("?...929.", [QuestionDot, Dot, LiteralNumber, Dot], Dialect::Tsx);
+  check(
+    "?...929.",
+    [QuestionDot, Dot, LiteralNumber, Dot],
+    Dialect::Tsx,
+  );
 }
 
 #[test]

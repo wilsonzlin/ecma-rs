@@ -10,8 +10,8 @@ mod js_stmt;
 mod jsx;
 mod pat;
 mod precedence;
-mod stmt_start;
 mod stmt;
+mod stmt_start;
 mod ts_stmt;
 mod ts_type;
 
@@ -43,11 +43,7 @@ pub use stmt::{
 pub use stmt_start::{emit_expr_stmt, emit_expr_stmt_with, expr_stmt_needs_parens};
 pub use ts_stmt::{emit_top_level, emit_ts_stmt};
 pub use ts_type::{
-  emit_interface_decl,
-  emit_ts_type,
-  emit_type_alias_decl,
-  emit_type_expr,
-  emit_type_members,
+  emit_interface_decl, emit_ts_type, emit_type_alias_decl, emit_type_expr, emit_type_members,
   ts_type_to_string,
 };
 

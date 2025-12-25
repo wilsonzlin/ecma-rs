@@ -238,12 +238,7 @@ impl InferenceContext {
     }
   }
 
-  fn constrain_signature(
-    &mut self,
-    expected: &Signature,
-    actual: &Signature,
-    variance: Variance,
-  ) {
+  fn constrain_signature(&mut self, expected: &Signature, actual: &Signature, variance: Variance) {
     let param_variance = variance.flip();
     for (param, arg) in expected.params.iter().zip(actual.params.iter()) {
       self.constrain(param.ty, arg.ty, param_variance);
@@ -407,7 +402,16 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
         return is_signature_assignable(store, &src_sig, &dst_sig);
       }
     }
-    (TypeKind::Ref { def: a_def, args: a_args }, TypeKind::Ref { def: b_def, args: b_args }) => {
+    (
+      TypeKind::Ref {
+        def: a_def,
+        args: a_args,
+      },
+      TypeKind::Ref {
+        def: b_def,
+        args: b_args,
+      },
+    ) => {
       if a_def == b_def && a_args.len() == b_args.len() {
         return a_args
           .iter()

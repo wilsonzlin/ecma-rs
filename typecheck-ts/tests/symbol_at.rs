@@ -101,9 +101,7 @@ fn symbol_at_resolves_imports() {
   let import_offset = source_b.find("{ foo }").unwrap() as u32 + 2;
   let use_offset = source_b.find("foo()").unwrap() as u32;
 
-  let decl_symbol = program
-    .symbol_at(file_a, decl_offset)
-    .expect("decl symbol");
+  let decl_symbol = program.symbol_at(file_a, decl_offset).expect("decl symbol");
   let import_symbol = program
     .symbol_at(file_b, import_offset)
     .expect("import symbol");

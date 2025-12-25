@@ -63,4 +63,3 @@ fn emits_undefined_as_void_0() {
   })));
   assert_eq!(emit(expr), "void 0");
 }
-

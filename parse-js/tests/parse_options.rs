@@ -2,7 +2,10 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 
 fn opts(dialect: Dialect, source_type: SourceType) -> ParseOptions {
-  ParseOptions { dialect, source_type }
+  ParseOptions {
+    dialect,
+    source_type,
+  }
 }
 
 #[test]

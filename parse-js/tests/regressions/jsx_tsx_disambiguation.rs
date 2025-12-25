@@ -1,17 +1,14 @@
 use parse_js::ast::expr::Expr;
 use parse_js::error::SyntaxResult;
-use parse_js::Dialect;
 use parse_js::lex::Lexer;
 use parse_js::operator::OperatorName;
 use parse_js::parse::expr::pat::ParsePatternRules;
 use parse_js::parse::{ParseCtx, Parser};
 use parse_js::token::TT;
+use parse_js::Dialect;
 use parse_js::{ParseOptions, SourceType};
 
-fn parse_expr(
-  source: &str,
-  dialect: Dialect,
-) -> SyntaxResult<parse_js::ast::node::Node<Expr>> {
+fn parse_expr(source: &str, dialect: Dialect) -> SyntaxResult<parse_js::ast::node::Node<Expr>> {
   let mut parser = Parser::new(
     Lexer::new(source),
     ParseOptions {
@@ -32,8 +29,7 @@ fn parse_expr(
 
 #[test]
 fn ts_allows_angle_bracket_assertion_tsx_does_not() {
-  let expr = parse_expr("(<T>(x))", Dialect::Ts)
-    .expect("ts should allow angle bracket assertion");
+  let expr = parse_expr("(<T>(x))", Dialect::Ts).expect("ts should allow angle bracket assertion");
   assert!(matches!(*expr.stx, Expr::TypeAssertion(_)));
 
   assert!(
@@ -50,8 +46,7 @@ fn tsx_parses_jsx_element() {
 
 #[test]
 fn comparisons_not_treated_as_type_arguments() {
-  let expr = parse_expr("a < b, c > d", Dialect::Ts)
-    .expect("should parse comparison expression");
+  let expr = parse_expr("a < b, c > d", Dialect::Ts).expect("should parse comparison expression");
 
   match expr.stx.as_ref() {
     Expr::Binary(root) => {
@@ -74,8 +69,7 @@ fn nested_generic_calls_split_tokens() {
   let simple_call = parse_expr("foo<T>()", Dialect::Ts).expect("should parse generic call");
   assert!(matches!(*simple_call.stx, Expr::Call(_)));
 
-  let call = parse_expr("Foo<Bar<Baz>>()", Dialect::Ts)
-    .expect("should parse nested generic call");
+  let call = parse_expr("Foo<Bar<Baz>>()", Dialect::Ts).expect("should parse nested generic call");
   assert!(matches!(*call.stx, Expr::Call(_)));
 
   let new_expr = parse_expr("new Foo<Bar<Baz>>()", Dialect::Ts)

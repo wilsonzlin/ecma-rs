@@ -39,8 +39,7 @@ fn body_of(program: &Program, file: FileId, name: &str) -> BodyId {
 
 #[test]
 fn narrows_truthiness() {
-  let src =
-    "function f(x: string | null) { if (x) { return x; } else { return x; } return x; }";
+  let src = "function f(x: string | null) { if (x) { return x; } else { return x; } return x; }";
   let mut host = MemoryHost::default();
   host.insert(FileId(0), src);
   let program = Program::new(host, vec![FileId(0)]);
@@ -167,10 +166,7 @@ fn doc_example_imports() {
     FileId(1),
     "export function add(a: number, b: number): number { return a + b; }",
   );
-  host.insert(
-    FileId(2),
-    "export const math = 1;",
-  );
+  host.insert(FileId(2), "export const math = 1;");
   struct DocHost {
     inner: MemoryHost,
   }

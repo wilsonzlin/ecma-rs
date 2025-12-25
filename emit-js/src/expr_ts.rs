@@ -7,9 +7,7 @@ use parse_js::ast::type_expr::TypeExpr;
 use crate::emitter::{with_node_context, EmitError, EmitResult};
 use crate::expr::ExprEmitter;
 use crate::precedence::{
-  NON_NULL_ASSERTION_PRECEDENCE,
-  SATISFIES_PRECEDENCE,
-  TYPE_ASSERTION_PRECEDENCE,
+  NON_NULL_ASSERTION_PRECEDENCE, SATISFIES_PRECEDENCE, TYPE_ASSERTION_PRECEDENCE,
 };
 
 impl<'a, W, F> ExprEmitter<'a, W, F>

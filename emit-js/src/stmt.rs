@@ -1,12 +1,13 @@
 use crate::escape::emit_string_literal_double_quoted;
 use crate::expr_js::{emit_expr, ExprCtx};
-use crate::ts_type::{emit_type_parameters, emit_ts_type};
+use crate::ts_type::{emit_ts_type, emit_type_parameters};
 use crate::{EmitError, EmitMode, EmitResult, Emitter};
 use parse_js::ast::class_or_object::{
   ClassIndexSignature, ClassMember, ClassOrObjKey, ClassOrObjVal,
 };
 use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat};
 use parse_js::ast::expr::{Decorator, Expr};
+use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::import_export::{
   ExportName, ExportNames, ImportName, ImportNames, ModuleExportImportName,
 };
@@ -17,7 +18,6 @@ use parse_js::ast::stmt::decl::{
 use parse_js::ast::stmt::*;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::{TypeExpr, TypeParameter};
-use parse_js::ast::func::{Func, FuncBody};
 use parse_js::token::TT;
 
 pub fn emit_program(em: &mut Emitter, top: &TopLevel) -> EmitResult {
@@ -879,10 +879,9 @@ fn emit_class_or_object_key(em: &mut Emitter, key: &ClassOrObjKey) -> EmitResult
     ClassOrObjKey::Direct(name) => {
       match name.stx.tt {
         TT::LiteralString => emit_string_literal(em, &name.stx.key),
-        TT::LiteralNumber
-        | TT::LiteralNumberBin
-        | TT::LiteralNumberHex
-        | TT::LiteralNumberOct => em.write_number(&name.stx.key),
+        TT::LiteralNumber | TT::LiteralNumberBin | TT::LiteralNumberHex | TT::LiteralNumberOct => {
+          em.write_number(&name.stx.key)
+        }
         tt if tt == TT::Identifier || tt.is_keyword() => em.write_identifier(&name.stx.key),
         _ => em.write_str(&name.stx.key),
       }

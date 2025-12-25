@@ -841,32 +841,15 @@ impl<'a> RelateCtx<'a> {
     if let Some(dst_this) = dst.this_param {
       let src_this = src.this_param.unwrap_or_else(|| self.store.any());
       let this_related = if allow_bivariance {
-        let forward = self.relate_internal(
-          src_this,
-          dst_this,
-          RelationKind::Assignable,
-          mode,
-          record,
-        );
+        let forward =
+          self.relate_internal(src_this, dst_this, RelationKind::Assignable, mode, record);
         if forward.result {
           forward
         } else {
-          self.relate_internal(
-            dst_this,
-            src_this,
-            RelationKind::Assignable,
-            mode,
-            record,
-          )
+          self.relate_internal(dst_this, src_this, RelationKind::Assignable, mode, record)
         }
       } else {
-        self.relate_internal(
-          dst_this,
-          src_this,
-          RelationKind::Assignable,
-          mode,
-          record,
-        )
+        self.relate_internal(dst_this, src_this, RelationKind::Assignable, mode, record)
       };
 
       if record {

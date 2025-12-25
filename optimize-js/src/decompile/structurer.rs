@@ -347,7 +347,11 @@ impl<'a> StructCtx<'a> {
     let Ok(tree) = self.structure_seq(0, None, &allowed, None) else {
       return None;
     };
-    if self.consumed == self.reachable { Some(tree) } else { None }
+    if self.consumed == self.reachable {
+      Some(tree)
+    } else {
+      None
+    }
   }
 
   fn structure_seq(

@@ -28,7 +28,8 @@ fn def_ids_are_sorted_and_stable() {
   assert_eq!(kinds, vec![DefKind::Function, DefKind::Var, DefKind::Var]);
 
   let ast_again = parse(source).expect("parse");
-  let (result_again, diagnostics_again) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast_again);
+  let (result_again, diagnostics_again) =
+    lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast_again);
   assert!(diagnostics_again.is_empty());
   let names_again: Vec<_> = result_again
     .defs

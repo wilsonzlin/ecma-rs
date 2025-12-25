@@ -9,9 +9,6 @@ fn parses_private_index_signature_in_object_literal_for_recovery() {
 
   for source in sources {
     let parsed = parse_js::parse(source);
-    assert!(
-      parsed.is_ok(),
-      "failed to parse {source:?}: {parsed:?}"
-    );
+    assert!(parsed.is_ok(), "failed to parse {source:?}: {parsed:?}");
   }
 }

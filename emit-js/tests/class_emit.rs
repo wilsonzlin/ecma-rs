@@ -223,4 +223,3 @@ fn emits_definite_assignment_properties_with_types() {
   let re_emitted = emit_class_to_string(&reparsed);
   assert_eq!(emitted, re_emitted);
 }
-

@@ -383,20 +383,20 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     decl.is_global && matches!(hir.file_kind, FileKind::Dts)
   }
 
-	  fn is_effective_script(&self, hir: &HirFile) -> bool {
-	    match hir.module_kind {
-	      ModuleKind::Script => true,
-	      ModuleKind::Module => {
-	        matches!(hir.file_kind, FileKind::Dts)
-	          && hir.imports.is_empty()
-	          && hir.exports.is_empty()
-	          && hir
-	            .decls
-	            .iter()
-	            .all(|decl| matches!(decl.exported, Exported::No))
-	      }
-	    }
-	  }
+  fn is_effective_script(&self, hir: &HirFile) -> bool {
+    match hir.module_kind {
+      ModuleKind::Script => true,
+      ModuleKind::Module => {
+        matches!(hir.file_kind, FileKind::Dts)
+          && hir.imports.is_empty()
+          && hir.exports.is_empty()
+          && hir
+            .decls
+            .iter()
+            .all(|decl| matches!(decl.exported, Exported::No))
+      }
+    }
+  }
 
   fn add_import_binding(&mut self, state: &mut ModuleState, file: FileId, entry: &ImportEntry) {
     state.imports.insert(entry.local.clone(), entry.clone());

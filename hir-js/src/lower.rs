@@ -783,7 +783,14 @@ fn collect_stmt<'a>(
         in_global,
         DefSource::Function(func),
       ));
-      collect_func_params(&func.stx.function, descriptors, names, decl_ambient, in_global, ctx);
+      collect_func_params(
+        &func.stx.function,
+        descriptors,
+        names,
+        decl_ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::ClassDecl(class_decl) => {
       let (name_id, name_text) = name_from_optional(&class_decl.stx.name, names);
@@ -801,11 +808,27 @@ fn collect_stmt<'a>(
       ));
     }
     AstStmt::VarDecl(var_decl) => {
-      collect_var_decl(var_decl, descriptors, names, is_item, ambient, in_global, ctx);
+      collect_var_decl(
+        var_decl,
+        descriptors,
+        names,
+        is_item,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::NamespaceDecl(ns) => {
       let decl_ambient = ambient || ns.stx.declare;
-      collect_namespace(ns, descriptors, names, is_item, decl_ambient, in_global, ctx)
+      collect_namespace(
+        ns,
+        descriptors,
+        names,
+        is_item,
+        decl_ambient,
+        in_global,
+        ctx,
+      )
     }
     AstStmt::ModuleDecl(module) => {
       let name_text = match &module.stx.name {
@@ -1057,7 +1080,14 @@ fn collect_stmt<'a>(
         }
       }
       collect_expr(&for_in.stx.rhs, descriptors, names, ambient, in_global, ctx);
-      collect_for_body(&for_in.stx.body, descriptors, names, ambient, in_global, ctx);
+      collect_for_body(
+        &for_in.stx.body,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::ForOf(for_of) => {
       match &for_of.stx.lhs {
@@ -1080,7 +1110,14 @@ fn collect_stmt<'a>(
         }
       }
       collect_expr(&for_of.stx.rhs, descriptors, names, ambient, in_global, ctx);
-      collect_for_body(&for_of.stx.body, descriptors, names, ambient, in_global, ctx);
+      collect_for_body(
+        &for_of.stx.body,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     _ => {
       // Walk expressions and nested statements to ensure nested definitions are collected.
@@ -1172,14 +1209,28 @@ fn walk_stmt_children<'a>(
   ctx: &mut LoweringContext,
 ) {
   match &*stmt.stx {
-    AstStmt::Expr(expr_stmt) => collect_expr(&expr_stmt.stx.expr, descriptors, names, ambient, in_global, ctx),
+    AstStmt::Expr(expr_stmt) => collect_expr(
+      &expr_stmt.stx.expr,
+      descriptors,
+      names,
+      ambient,
+      in_global,
+      ctx,
+    ),
     AstStmt::Return(ret) => {
       if let Some(v) = &ret.stx.value {
         collect_expr(v, descriptors, names, ambient, in_global, ctx);
       }
     }
     AstStmt::If(if_stmt) => {
-      collect_expr(&if_stmt.stx.test, descriptors, names, ambient, in_global, ctx);
+      collect_expr(
+        &if_stmt.stx.test,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       collect_stmt(
         &if_stmt.stx.consequent,
         descriptors,
@@ -1199,17 +1250,49 @@ fn walk_stmt_children<'a>(
       }
     }
     AstStmt::While(wh) => {
-      collect_expr(&wh.stx.condition, descriptors, names, ambient, in_global, ctx);
-      collect_stmt(&wh.stx.body, descriptors, names, false, ambient, in_global, ctx);
+      collect_expr(
+        &wh.stx.condition,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_stmt(
+        &wh.stx.body,
+        descriptors,
+        names,
+        false,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::DoWhile(dw) => {
-      collect_expr(&dw.stx.condition, descriptors, names, ambient, in_global, ctx);
-      collect_stmt(&dw.stx.body, descriptors, names, false, ambient, in_global, ctx);
+      collect_expr(
+        &dw.stx.condition,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_stmt(
+        &dw.stx.body,
+        descriptors,
+        names,
+        false,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::ForTriple(for_stmt) => {
       match &for_stmt.stx.init {
         ForTripleStmtInit::Expr(e) => collect_expr(e, descriptors, names, ambient, in_global, ctx),
-        ForTripleStmtInit::Decl(d) => collect_var_decl(d, descriptors, names, false, ambient, in_global, ctx),
+        ForTripleStmtInit::Decl(d) => {
+          collect_var_decl(d, descriptors, names, false, ambient, in_global, ctx)
+        }
         ForTripleStmtInit::None => {}
       }
       if let Some(cond) = &for_stmt.stx.cond {
@@ -1218,7 +1301,14 @@ fn walk_stmt_children<'a>(
       if let Some(post) = &for_stmt.stx.post {
         collect_expr(post, descriptors, names, ambient, in_global, ctx);
       }
-      collect_for_body(&for_stmt.stx.body, descriptors, names, ambient, in_global, ctx);
+      collect_for_body(
+        &for_stmt.stx.body,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::ForIn(for_in) => {
       match &for_in.stx.lhs {
@@ -1230,7 +1320,14 @@ fn walk_stmt_children<'a>(
         }
       }
       collect_expr(&for_in.stx.rhs, descriptors, names, ambient, in_global, ctx);
-      collect_for_body(&for_in.stx.body, descriptors, names, ambient, in_global, ctx);
+      collect_for_body(
+        &for_in.stx.body,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::ForOf(for_of) => {
       match &for_of.stx.lhs {
@@ -1242,7 +1339,14 @@ fn walk_stmt_children<'a>(
         }
       }
       collect_expr(&for_of.stx.rhs, descriptors, names, ambient, in_global, ctx);
-      collect_for_body(&for_of.stx.body, descriptors, names, ambient, in_global, ctx);
+      collect_for_body(
+        &for_of.stx.body,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::Switch(sw) => {
       collect_expr(&sw.stx.test, descriptors, names, ambient, in_global, ctx);
@@ -1271,7 +1375,15 @@ fn walk_stmt_children<'a>(
     }
     AstStmt::With(w) => {
       collect_expr(&w.stx.object, descriptors, names, ambient, in_global, ctx);
-      collect_stmt(&w.stx.body, descriptors, names, false, ambient, in_global, ctx);
+      collect_stmt(
+        &w.stx.body,
+        descriptors,
+        names,
+        false,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     _ => {}
   }
@@ -1355,15 +1467,36 @@ fn collect_expr<'a>(
     }
     AstExpr::Cond(cond) => {
       collect_expr(&cond.stx.test, descriptors, names, ambient, in_global, ctx);
-      collect_expr(&cond.stx.consequent, descriptors, names, ambient, in_global, ctx);
-      collect_expr(&cond.stx.alternate, descriptors, names, ambient, in_global, ctx);
+      collect_expr(
+        &cond.stx.consequent,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_expr(
+        &cond.stx.alternate,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstExpr::Binary(bin) => {
       collect_expr(&bin.stx.left, descriptors, names, ambient, in_global, ctx);
       collect_expr(&bin.stx.right, descriptors, names, ambient, in_global, ctx);
     }
     AstExpr::Call(call) => {
-      collect_expr(&call.stx.callee, descriptors, names, ambient, in_global, ctx);
+      collect_expr(
+        &call.stx.callee,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       for arg in call.stx.arguments.iter() {
         collect_expr(&arg.stx.value, descriptors, names, ambient, in_global, ctx);
       }
@@ -1376,7 +1509,14 @@ fn collect_expr<'a>(
       collect_expr(&mem.stx.member, descriptors, names, ambient, in_global, ctx);
     }
     AstExpr::TaggedTemplate(tag) => {
-      collect_expr(&tag.stx.function, descriptors, names, ambient, in_global, ctx);
+      collect_expr(
+        &tag.stx.function,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       for part in tag.stx.parts.iter() {
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
           collect_expr(expr, descriptors, names, ambient, in_global, ctx);
@@ -1405,7 +1545,9 @@ fn collect_expr<'a>(
             }
             _ => {}
           },
-          ObjMemberType::Rest { val } => collect_expr(val, descriptors, names, ambient, in_global, ctx),
+          ObjMemberType::Rest { val } => {
+            collect_expr(val, descriptors, names, ambient, in_global, ctx)
+          }
           ObjMemberType::Shorthand { .. } => {}
         }
       }
@@ -1430,7 +1572,14 @@ fn collect_expr<'a>(
     }
     AstExpr::ObjPat(obj) => {
       for prop in obj.stx.properties.iter() {
-        collect_exprs_from_pat(&prop.stx.target, descriptors, names, ambient, in_global, ctx);
+        collect_exprs_from_pat(
+          &prop.stx.target,
+          descriptors,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
         if let Some(default) = &prop.stx.default_value {
           collect_expr(default, descriptors, names, ambient, in_global, ctx);
         }
@@ -1440,13 +1589,34 @@ fn collect_expr<'a>(
       }
     }
     AstExpr::TypeAssertion(assert) => {
-      collect_expr(&assert.stx.expression, descriptors, names, ambient, in_global, ctx);
+      collect_expr(
+        &assert.stx.expression,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstExpr::NonNullAssertion(nn) => {
-      collect_expr(&nn.stx.expression, descriptors, names, ambient, in_global, ctx);
+      collect_expr(
+        &nn.stx.expression,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstExpr::SatisfiesExpr(sat) => {
-      collect_expr(&sat.stx.expression, descriptors, names, ambient, in_global, ctx);
+      collect_expr(
+        &sat.stx.expression,
+        descriptors,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     _ => {}
   }
@@ -1474,7 +1644,14 @@ fn collect_exprs_from_pat<'a>(
     }
     AstPat::Obj(obj) => {
       for prop in obj.stx.properties.iter() {
-        collect_exprs_from_pat(&prop.stx.target, descriptors, names, ambient, in_global, ctx);
+        collect_exprs_from_pat(
+          &prop.stx.target,
+          descriptors,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
         if let Some(default) = &prop.stx.default_value {
           collect_expr(default, descriptors, names, ambient, in_global, ctx);
         }

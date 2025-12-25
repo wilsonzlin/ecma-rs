@@ -3,8 +3,8 @@ use crate::fixtures::FixtureKind;
 use crate::fixtures::ModuleGraphFixture;
 use diagnostics::FileId as HirFileId;
 use hir_js::lower_file;
-use hir_js::LowerResult;
 use hir_js::FileKind as HirFileKind;
+use hir_js::LowerResult;
 use parse_js::ast::expr::pat::Pat as AstPat;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::node::Node;
@@ -559,11 +559,7 @@ fn lower_semantic_hir(file: semantic_js::ts::FileId, ast: &Node<TopLevel>) -> Hi
         parse_js::ast::import_export::ExportNames::Specific(list) => {
           let mut named = NamedExport {
             specifier: export_list.stx.from.clone(),
-            specifier_span: export_list
-              .stx
-              .from
-              .as_ref()
-              .map(|_| TextRange::new(0, 0)),
+            specifier_span: export_list.stx.from.as_ref().map(|_| TextRange::new(0, 0)),
             items: Vec::new(),
             is_type_only: export_list.stx.type_only,
           };

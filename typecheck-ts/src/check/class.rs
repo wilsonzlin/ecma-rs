@@ -288,10 +288,14 @@ impl ClassEnv {
       upsert_property(&mut static_props, prop);
     }
 
-    let instance_ty = self.store.object(ObjectType::new(instance_props, instance_indexes));
+    let instance_ty = self
+      .store
+      .object(ObjectType::new(instance_props, instance_indexes));
     let this_type = self.store.type_ref(instance_ref);
     self.register_ref(instance_ref, instance_ty);
-    let static_ty = self.store.object(ObjectType::new(static_props, static_indexes));
+    let static_ty = self
+      .store
+      .object(ObjectType::new(static_props, static_indexes));
 
     ClassType {
       name: decl.name,

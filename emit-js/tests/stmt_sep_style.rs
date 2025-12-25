@@ -35,7 +35,10 @@ fn semicolon_style_has_no_newlines() {
 fn asi_style_inserts_newlines_and_hazard_semicolons() {
   let emitted = emit_with_style(StmtSepStyle::AsiNewlines);
   assert!(emitted.contains('\n'));
-  assert!(emitted.contains(";/re/.test(x)"), "regex hazard should be prefixed by ';'");
+  assert!(
+    emitted.contains(";/re/.test(x)"),
+    "regex hazard should be prefixed by ';'"
+  );
   assert!(
     emitted.contains("/re/.test(x)\n"),
     "regex statement should be followed by a newline separator"

@@ -64,7 +64,12 @@ impl NameInterner {
 
     let primary = Self::hash_with_seeds(
       name,
-      (NAME_HASH_KEY1, NAME_HASH_KEY2, NAME_HASH_KEY3, NAME_HASH_KEY4),
+      (
+        NAME_HASH_KEY1,
+        NAME_HASH_KEY2,
+        NAME_HASH_KEY3,
+        NAME_HASH_KEY4,
+      ),
       salt,
     );
     let secondary = Self::hash_with_seeds(
@@ -236,10 +241,9 @@ impl TypeStore {
 
     {
       let names = self.names.read();
-      shape.properties.sort_by(|a, b| {
-        a.key
-          .cmp_with(&b.key, &|id| names.name(id).to_owned())
-      });
+      shape
+        .properties
+        .sort_by(|a, b| a.key.cmp_with(&b.key, &|id| names.name(id).to_owned()));
     }
     // Merge duplicate property keys deterministically by intersecting their
     // types, requiring presence if any declaration is required, propagating
@@ -772,9 +776,7 @@ impl TypeStore {
 
   fn compare_props(&self, a: &Property, b: &Property) -> Ordering {
     let names = self.names.read();
-    let ord = a
-      .key
-      .cmp_with(&b.key, &|id| names.name(id).to_owned());
+    let ord = a.key.cmp_with(&b.key, &|id| names.name(id).to_owned());
     if ord != Ordering::Equal {
       return ord;
     }

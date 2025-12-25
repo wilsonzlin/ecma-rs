@@ -10,7 +10,10 @@ fn assert_single_export_default_expr(top: &Node<TopLevel>) {
     .iter()
     .filter(|stmt| !matches!(stmt.stx.as_ref(), Stmt::Empty(_)));
   let first = iter.next().expect("expected at least one statement");
-  assert!(iter.next().is_none(), "expected a single non-empty statement");
+  assert!(
+    iter.next().is_none(),
+    "expected a single non-empty statement"
+  );
   assert!(
     matches!(first.stx.as_ref(), Stmt::ExportDefaultExpr(_)),
     "expected export default expression, got {:?}",
@@ -44,4 +47,3 @@ fn export_default_class_expr_roundtrips() {
 fn export_default_async_function_expr_roundtrips() {
   roundtrip("export default (async function() {})");
 }
-

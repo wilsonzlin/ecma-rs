@@ -4,31 +4,11 @@ use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, Ob
 use parse_js::ast::expr::jsx::JsxElem;
 use parse_js::ast::expr::{
   lit::{
-    LitArrElem,
-    LitArrExpr,
-    LitBigIntExpr,
-    LitBoolExpr,
-    LitNumExpr,
-    LitObjExpr,
-    LitRegexExpr,
-    LitStrExpr,
-    LitTemplatePart,
+    LitArrElem, LitArrExpr, LitBigIntExpr, LitBoolExpr, LitNumExpr, LitObjExpr, LitRegexExpr,
+    LitStrExpr, LitTemplatePart,
   },
-  BinaryExpr,
-  CallArg,
-  CallExpr,
-  ClassExpr,
-  ComputedMemberExpr,
-  CondExpr,
-  ArrowFuncExpr,
-  Expr,
-  FuncExpr,
-  IdExpr,
-  ImportExpr,
-  MemberExpr,
-  TaggedTemplateExpr,
-  UnaryExpr,
-  UnaryPostfixExpr,
+  ArrowFuncExpr, BinaryExpr, CallArg, CallExpr, ClassExpr, ComputedMemberExpr, CondExpr, Expr,
+  FuncExpr, IdExpr, ImportExpr, MemberExpr, TaggedTemplateExpr, UnaryExpr, UnaryPostfixExpr,
 };
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
@@ -37,12 +17,7 @@ use parse_js::operator::{OperatorName, OPERATORS};
 
 use crate::emitter::{with_node_context, EmitError, EmitResult};
 use crate::precedence::{
-  child_min_prec_for_binary,
-  expr_prec,
-  starts_with_optional_chaining,
-  needs_parens,
-  Prec,
-  Side,
+  child_min_prec_for_binary, expr_prec, needs_parens, starts_with_optional_chaining, Prec, Side,
   CALL_MEMBER_PRECEDENCE,
 };
 use crate::Emitter;
@@ -66,7 +41,9 @@ where
   }
 
   pub fn emit_expr(&mut self, expr: &Node<Expr>) -> EmitResult {
-    with_node_context(expr.loc, || self.emit_expr_with_min_prec(expr, Prec::new(1)))
+    with_node_context(expr.loc, || {
+      self.emit_expr_with_min_prec(expr, Prec::new(1))
+    })
   }
 
   pub(crate) fn emit_expr_with_min_prec(
@@ -223,17 +200,13 @@ where
     with_node_context(elem.loc, || {
       let mut emitter = Emitter::default();
       crate::jsx::emit_jsx_elem(&mut emitter, elem)?;
-      let rendered =
-        std::str::from_utf8(emitter.as_bytes()).expect("JSX emitter output is UTF-8");
+      let rendered = std::str::from_utf8(emitter.as_bytes()).expect("JSX emitter output is UTF-8");
       self.out.write_str(rendered).map_err(EmitError::from)?;
       Ok(())
     })
   }
 
-  fn emit_pattern_fragment(
-    &mut self,
-    f: impl FnOnce(&mut Emitter) -> EmitResult,
-  ) -> EmitResult {
+  fn emit_pattern_fragment(&mut self, f: impl FnOnce(&mut Emitter) -> EmitResult) -> EmitResult {
     let mut emitter = Emitter::new(crate::emitter::EmitOptions {
       mode: crate::emitter::EmitMode::Canonical,
       stmt_sep_style: crate::emitter::StmtSepStyle::Semicolons,
@@ -373,7 +346,9 @@ where
       Some(FuncBody::Block(stmts)) => {
         self.out.write_char('{')?;
         if !stmts.is_empty() {
-          return Err(EmitError::unsupported("function body statements not supported"));
+          return Err(EmitError::unsupported(
+            "function body statements not supported",
+          ));
         }
         self.out.write_char('}')?;
         Ok(())
@@ -440,10 +415,14 @@ where
     with_node_context(arrow.loc, || {
       let func = arrow.stx.func.stx.as_ref();
       if !func.arrow {
-        return Err(EmitError::unsupported("non-arrow function in arrow expression"));
+        return Err(EmitError::unsupported(
+          "non-arrow function in arrow expression",
+        ));
       }
       if func.generator {
-        return Err(EmitError::unsupported("generator arrow function not supported"));
+        return Err(EmitError::unsupported(
+          "generator arrow function not supported",
+        ));
       }
 
       if func.async_ {
@@ -455,8 +434,7 @@ where
       self.out.write_str(" => ")?;
       match func.body.as_ref() {
         Some(FuncBody::Expression(expr)) => {
-          let needs_parens =
-            is_comma_expression(expr.stx.as_ref()) || expr_starts_with_brace(expr);
+          let needs_parens = is_comma_expression(expr.stx.as_ref()) || expr_starts_with_brace(expr);
           if needs_parens {
             self.out.write_char('(')?;
           }
@@ -588,7 +566,8 @@ where
         && matches!(binary.stx.left.stx.as_ref(), Expr::Unary(_));
 
       let force_left_parens = force_left_parens
-        || (binary.stx.operator == OperatorName::NullishCoalescing && is_logical_and_or(&binary.stx.left))
+        || (binary.stx.operator == OperatorName::NullishCoalescing
+          && is_logical_and_or(&binary.stx.left))
         || ((binary.stx.operator == OperatorName::LogicalAnd
           || binary.stx.operator == OperatorName::LogicalOr)
           && is_nullish(&binary.stx.left));
@@ -783,7 +762,9 @@ fn unary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
     OperatorName::Void => Ok("void "),
     OperatorName::Yield => Ok("yield "),
     OperatorName::YieldDelegated => Ok("yield* "),
-    _ => Err(EmitError::unsupported("operator not supported in unary emitter")),
+    _ => Err(EmitError::unsupported(
+      "operator not supported in unary emitter",
+    )),
   }
 }
 

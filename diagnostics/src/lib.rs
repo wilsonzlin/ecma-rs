@@ -289,7 +289,16 @@ impl Diagnostic {
 
   /// Canonical deterministic ordering for diagnostics: severity, code, primary
   /// span, then message.
-  pub fn sort_key(&self) -> (Severity, &DiagnosticCode, Span, &str, &Vec<Label>, &Vec<String>) {
+  pub fn sort_key(
+    &self,
+  ) -> (
+    Severity,
+    &DiagnosticCode,
+    Span,
+    &str,
+    &Vec<Label>,
+    &Vec<String>,
+  ) {
     (
       self.severity,
       &self.code,

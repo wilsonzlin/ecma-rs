@@ -26,7 +26,8 @@ impl Facts {
   /// Merge another set of facts into this one, joining types with union.
   pub fn merge(&mut self, other: Facts, store: &mut TypeStore, builtin: &BuiltinTypes) {
     for (k, v) in other.truthy {
-      self.truthy
+      self
+        .truthy
         .entry(k)
         .and_modify(|existing| *existing = store.union(vec![*existing, v], builtin))
         .or_insert(v);
@@ -68,10 +69,7 @@ pub fn truthy_falsy_types(
           falsy.push(f);
         }
       }
-      (
-        store.union(truthy, builtin),
-        store.union(falsy, builtin),
-      )
+      (store.union(truthy, builtin), store.union(falsy, builtin))
     }
     TypeKind::Null | TypeKind::Undefined => (builtin.never, ty),
     TypeKind::LiteralBoolean(false) => (builtin.never, ty),
@@ -110,10 +108,7 @@ pub fn narrow_by_typeof(
           no.push(member);
         }
       }
-      (
-        store.union(yes, builtin),
-        store.union(no, builtin),
-      )
+      (store.union(yes, builtin), store.union(no, builtin))
     }
     _ => {
       if matches(&kind) {
@@ -166,10 +161,7 @@ pub fn narrow_by_discriminant(
     _ => no.push(ty),
   }
 
-  (
-    store.union(yes, builtin),
-    store.union(no, builtin),
-  )
+  (store.union(yes, builtin), store.union(no, builtin))
 }
 
 /// Narrow by an `in` check (`"prop" in x`).
@@ -211,10 +203,7 @@ pub fn narrow_by_in_check(
     }
     _ => no.push(ty),
   }
-  (
-    store.union(yes, builtin),
-    store.union(no, builtin),
-  )
+  (store.union(yes, builtin), store.union(no, builtin))
 }
 
 /// Merge two variable environments using union to join types.

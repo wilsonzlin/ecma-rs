@@ -1,3 +1,4 @@
+use ::semantic_js::ts as sem_ts;
 pub use diagnostics::{Diagnostic, FileId, Label, Severity, Span, TextRange};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};
@@ -15,7 +16,6 @@ use parse_js::ast::type_expr::{
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
-use ::semantic_js::ts as sem_ts;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
@@ -167,9 +167,7 @@ impl BodyCheckResult {
         };
       }
     }
-    best_containing
-      .or(best_empty)
-      .map(|(id, ty, _)| (id, ty))
+    best_containing.or(best_empty).map(|(id, ty, _)| (id, ty))
   }
 
   /// Spans for all expressions in this body.
@@ -520,7 +518,9 @@ impl Program {
         None => return Ok(None),
       };
       let result = state.check_body(body);
-      Ok(Some(result.expr_type(expr).unwrap_or(state.builtin.unknown)))
+      Ok(Some(
+        result.expr_type(expr).unwrap_or(state.builtin.unknown),
+      ))
     })
   }
 
@@ -760,9 +760,11 @@ impl SemHirBuilder {
   }
 
   fn add_export_all(&mut self, specifier: String, specifier_span: TextRange, is_type_only: bool) {
-    self
-      .exports
-      .push(sem_ts::Export::All(sem_ts::ExportAll { specifier, is_type_only, specifier_span }));
+    self.exports.push(sem_ts::Export::All(sem_ts::ExportAll {
+      specifier,
+      is_type_only,
+      specifier_span,
+    }));
   }
 
   fn finish(self) -> sem_ts::HirFile {
@@ -910,7 +912,10 @@ pub(crate) enum TypeKind {
   LiteralBoolean(bool),
   Array(TypeId),
   Union(Vec<TypeId>),
-  Function { params: Vec<TypeId>, ret: TypeId },
+  Function {
+    params: Vec<TypeId>,
+    ret: TypeId,
+  },
   Predicate {
     parameter: String,
     asserted: Option<TypeId>,
@@ -1316,8 +1321,13 @@ impl ProgramState {
       match *stmt.stx {
         Stmt::VarDecl(var) => {
           let var_span = loc_to_span(file, stmt.loc);
-          let (new_defs, stmts) =
-            self.handle_var_decl(file, var_span.range, *var.stx, &mut top_body, &mut sem_builder);
+          let (new_defs, stmts) = self.handle_var_decl(
+            file,
+            var_span.range,
+            *var.stx,
+            &mut top_body,
+            &mut sem_builder,
+          );
           for (def_id, binding, export_name) in new_defs {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -1428,7 +1438,11 @@ impl ProgramState {
               for name in names {
                 let exportable = name.stx.exportable.as_str().to_string();
                 let alias = name.stx.alias.stx.name.clone();
-                let exported_as = if alias == exportable { None } else { Some(alias.clone()) };
+                let exported_as = if alias == exportable {
+                  None
+                } else {
+                  Some(alias.clone())
+                };
                 let is_type_only = export_list.stx.type_only || name.stx.type_only;
                 sem_builder.add_named_export(
                   export_list.stx.from.clone(),
@@ -1477,7 +1491,11 @@ impl ProgramState {
                   loc_to_span(file, stmt.loc),
                 ));
               } else if let Some(spec) = export_list.stx.from.clone() {
-                sem_builder.add_export_all(spec, loc_to_span(file, stmt.loc).range, export_list.stx.type_only);
+                sem_builder.add_export_all(
+                  spec,
+                  loc_to_span(file, stmt.loc).range,
+                  export_list.stx.type_only,
+                );
               }
             }
           }
@@ -2280,12 +2298,7 @@ impl ProgramState {
           let (rt, rf) = self.check_expr(right, env, result, file);
           if let HirExprKind::StringLiteral(prop) = &left.kind {
             if let HirExprKind::Ident(name) = &right.kind {
-              let (yes, no) = narrow_by_in_check(
-                rt,
-                prop,
-                &mut self.type_store,
-                &self.builtin,
-              );
+              let (yes, no) = narrow_by_in_check(rt, prop, &mut self.type_store, &self.builtin);
               if yes != self.builtin.never {
                 facts.truthy.insert(name.clone(), yes);
               }
@@ -3096,7 +3109,9 @@ impl BodyBuilder {
       Expr::LitNull(_) => HirExprKind::Null,
       Expr::Id(id) => {
         let name = id.stx.name.clone();
-        let expected_end = span.start.saturating_add(name.len().min(u32::MAX as usize) as u32);
+        let expected_end = span
+          .start
+          .saturating_add(name.len().min(u32::MAX as usize) as u32);
         if expected_end <= span.end {
           span.end = expected_end;
         }
@@ -3265,10 +3280,8 @@ fn fatal_to_diagnostic(fatal: FatalError) -> Diagnostic {
   let placeholder = Span::new(FileId(0), TextRange::new(0, 0));
   match fatal {
     FatalError::Host(err) => diagnostics::host_error(None, err.to_string()),
-    FatalError::Cancelled => {
-      Diagnostic::error("CANCEL0001", "operation cancelled", placeholder)
-        .with_note("operation was cancelled by the host")
-    }
+    FatalError::Cancelled => Diagnostic::error("CANCEL0001", "operation cancelled", placeholder)
+      .with_note("operation was cancelled by the host"),
     FatalError::Ice(ice) => {
       let span = span_from_context(&ice.context, placeholder);
       let mut diagnostic =
@@ -3278,10 +3291,8 @@ fn fatal_to_diagnostic(fatal: FatalError) -> Diagnostic {
       }
       diagnostic
     }
-    FatalError::OutOfMemory => {
-      Diagnostic::error("OOM0001", "out of memory", placeholder)
-        .with_note("the checker ran out of memory while processing this program")
-    }
+    FatalError::OutOfMemory => Diagnostic::error("OOM0001", "out of memory", placeholder)
+      .with_note("the checker ran out of memory while processing this program"),
   }
 }
 

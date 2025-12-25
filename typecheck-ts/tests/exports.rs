@@ -43,7 +43,10 @@ fn exports_follow_reexport_chain() {
 
   let program = Program::new(host, vec![FileId(2)]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let exports_b = program.exports_of(FileId(1));
   let bar_entry_b = exports_b.get("bar").expect("bar export in module b");
@@ -71,7 +74,10 @@ fn default_export_has_type() {
 
   let program = Program::new(host, vec![FileId(10)]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let exports = program.exports_of(FileId(10));
   let default_entry = exports.get("default").expect("default export");
@@ -90,10 +96,16 @@ fn type_only_exports_filtered() {
 
   let program = Program::new(host, vec![FileId(20)]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let exports = program.exports_of(FileId(20));
-  assert!(exports.get("Foo").is_none(), "type-only export should be filtered");
+  assert!(
+    exports.get("Foo").is_none(),
+    "type-only export should be filtered"
+  );
   let value_entry = exports.get("value").expect("value export");
   let ty = value_entry.type_id.expect("type for value");
   assert_eq!(program.display_type(ty).to_string(), "number");

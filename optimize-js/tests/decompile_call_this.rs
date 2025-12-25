@@ -59,4 +59,3 @@ fn explicit_call_preserved() {
     other => panic!("expected obj as first arg, got {other:?}"),
   }
 }
-

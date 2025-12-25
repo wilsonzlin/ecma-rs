@@ -1,16 +1,14 @@
 use crate::emitter::{EmitError, EmitErrorKind, EmitResult, Emitter};
 use crate::escape::{
-  cooked_template_segment,
-  emit_string_literal_double_quoted,
-  emit_template_literal_segment,
+  cooked_template_segment, emit_string_literal_double_quoted, emit_template_literal_segment,
 };
 use crate::ts_type::emit_type_expr;
-use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{
   LitArrElem, LitArrExpr, LitObjExpr, LitTemplateExpr, LitTemplatePart,
 };
 use parse_js::ast::expr::*;
+use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::operator::{Associativity, OperatorName, OPERATORS};
@@ -66,10 +64,15 @@ fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
     Expr::Id(_) | Expr::This(_) | Expr::Super(_) | Expr::NewTarget(_) | Expr::ImportMeta(_) => {
       Ok(PRIMARY_PRECEDENCE)
     }
-    Expr::LitNum(_) | Expr::LitBool(_) | Expr::LitNull(_) | Expr::LitBigInt(_) | Expr::LitStr(_)
-    | Expr::LitRegex(_) | Expr::LitArr(_) | Expr::LitObj(_) | Expr::LitTemplate(_) => {
-      Ok(PRIMARY_PRECEDENCE)
-    }
+    Expr::LitNum(_)
+    | Expr::LitBool(_)
+    | Expr::LitNull(_)
+    | Expr::LitBigInt(_)
+    | Expr::LitStr(_)
+    | Expr::LitRegex(_)
+    | Expr::LitArr(_)
+    | Expr::LitObj(_)
+    | Expr::LitTemplate(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::JsxElem(_) => Ok(PRIMARY_PRECEDENCE),
     Expr::Call(_) | Expr::Member(_) | Expr::ComputedMember(_) => Ok(CALL_MEMBER_PRECEDENCE),
     Expr::Binary(binary) => Ok(
@@ -412,7 +415,11 @@ fn emit_class_or_object_key(em: &mut Emitter, key: &ClassOrObjKey) -> EmitResult
   }
 }
 
-fn emit_type_assertion(em: &mut Emitter, assertion: &Node<TypeAssertionExpr>, ctx: ExprCtx) -> EmitResult {
+fn emit_type_assertion(
+  em: &mut Emitter,
+  assertion: &Node<TypeAssertionExpr>,
+  ctx: ExprCtx,
+) -> EmitResult {
   emit_expr_with_min_prec(
     em,
     &assertion.stx.expression,
@@ -435,7 +442,11 @@ fn emit_type_assertion(em: &mut Emitter, assertion: &Node<TypeAssertionExpr>, ct
   }
 }
 
-fn emit_satisfies_expr(em: &mut Emitter, satisfies: &Node<SatisfiesExpr>, ctx: ExprCtx) -> EmitResult {
+fn emit_satisfies_expr(
+  em: &mut Emitter,
+  satisfies: &Node<SatisfiesExpr>,
+  ctx: ExprCtx,
+) -> EmitResult {
   emit_expr_with_min_prec(
     em,
     &satisfies.stx.expression,
@@ -467,7 +478,10 @@ fn emit_arrow_function(em: &mut Emitter, func: &Node<ArrowFuncExpr>, ctx: ExprCt
   }
 }
 
-fn emit_function_params(em: &mut Emitter, params: &[Node<parse_js::ast::stmt::decl::ParamDecl>]) -> EmitResult {
+fn emit_function_params(
+  em: &mut Emitter,
+  params: &[Node<parse_js::ast::stmt::decl::ParamDecl>],
+) -> EmitResult {
   em.write_punct("(");
   for (idx, param) in params.iter().enumerate() {
     if idx > 0 {
@@ -484,7 +498,10 @@ fn emit_function_params_and_body(em: &mut Emitter, func: &Node<Func>, ctx: ExprC
   emit_func_body(em, &func.stx.body, ctx)
 }
 
-fn emit_param_pattern(em: &mut Emitter, param: &Node<parse_js::ast::stmt::decl::ParamDecl>) -> EmitResult {
+fn emit_param_pattern(
+  em: &mut Emitter,
+  param: &Node<parse_js::ast::stmt::decl::ParamDecl>,
+) -> EmitResult {
   let pat = &param.stx.pattern;
   if param.stx.rest {
     em.write_punct("...");
@@ -544,7 +561,11 @@ fn emit_import_expr(em: &mut Emitter, import: &Node<ImportExpr>, ctx: ExprCtx) -
   Ok(())
 }
 
-fn emit_tagged_template(em: &mut Emitter, tagged: &Node<TaggedTemplateExpr>, ctx: ExprCtx) -> EmitResult {
+fn emit_tagged_template(
+  em: &mut Emitter,
+  tagged: &Node<TaggedTemplateExpr>,
+  ctx: ExprCtx,
+) -> EmitResult {
   emit_expr_with_min_prec(em, &tagged.stx.function, CALL_MEMBER_PRECEDENCE, ctx)?;
   emit_template_parts(em, &tagged.stx.parts)
 }
@@ -563,9 +584,7 @@ fn emit_template_parts(em: &mut Emitter, parts: &[LitTemplatePart]) -> EmitResul
         let cooked = cooked_template_segment(raw, is_first, is_last);
         let mut buf = Vec::new();
         emit_template_literal_segment(&mut buf, cooked);
-        em.write_raw_str(
-          std::str::from_utf8(&buf).expect("template literal segment is UTF-8"),
-        );
+        em.write_raw_str(std::str::from_utf8(&buf).expect("template literal segment is UTF-8"));
       }
       LitTemplatePart::Substitution(expr) => {
         em.write_raw_str("${");
@@ -636,7 +655,9 @@ fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
     OperatorName::AssignmentNullishCoalescing => Ok("??="),
     OperatorName::AssignmentRemainder => Ok("%="),
     OperatorName::AssignmentSubtraction => Ok("-="),
-    _ => Err(EmitError::unsupported("operator not supported in binary emitter")),
+    _ => Err(EmitError::unsupported(
+      "operator not supported in binary emitter",
+    )),
   }
 }
 

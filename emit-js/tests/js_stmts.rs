@@ -28,8 +28,10 @@ fn emits_control_flow_statements() {
 
 #[test]
 fn emits_loops() {
-  let src = "for (let i = 0;;) break; for (const k in obj) continue; for await (const v of values) break;";
-  let expected = "for(let i=0;;)break;for(const k in obj)continue;for await(const v of values)break;";
+  let src =
+    "for (let i = 0;;) break; for (const k in obj) continue; for await (const v of values) break;";
+  let expected =
+    "for(let i=0;;)break;for(const k in obj)continue;for await(const v of values)break;";
   assert_eq!(emit(src), expected);
 }
 

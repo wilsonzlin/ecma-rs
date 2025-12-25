@@ -81,10 +81,7 @@ fn collect_foreign_symbols(program: &Program) -> Vec<Symbol> {
   symbols
 }
 
-fn generate_names(
-  count: usize,
-  reserved: &HashSet<String>,
-) -> (String, Vec<String>) {
+fn generate_names(count: usize, reserved: &HashSet<String>) -> (String, Vec<String>) {
   if count == 0 {
     return ("".to_string(), Vec::new());
   }

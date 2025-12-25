@@ -62,13 +62,8 @@ fn infers_union_from_multiple_arguments() {
   };
 
   let args = [primitives.string, primitives.number];
-  let result = infer_type_arguments_for_call(
-    &store,
-    &sig,
-    &[TypeParamDecl::new(t_param)],
-    &args,
-    None,
-  );
+  let result =
+    infer_type_arguments_for_call(&store, &sig, &[TypeParamDecl::new(t_param)], &args, None);
   assert!(result.diagnostics.is_empty());
   let expected_union = store.union(vec![primitives.string, primitives.number]);
   assert_eq!(result.substitutions.get(&t_param), Some(&expected_union));
@@ -123,8 +118,7 @@ fn reports_constraint_violation() {
     default: None,
   };
 
-  let result =
-    infer_type_arguments_for_call(&store, &sig, &[decl], &[primitives.string], None);
+  let result = infer_type_arguments_for_call(&store, &sig, &[decl], &[primitives.string], None);
   assert_eq!(result.diagnostics.len(), 1);
   let diag = &result.diagnostics[0];
   assert_eq!(diag.param, t_param);
@@ -165,7 +159,10 @@ fn infers_from_function_argument_structure() {
   });
 
   let generic_sig = Signature {
-    params: vec![param("items", item_array, &store), param("mapper", expected_callback, &store)],
+    params: vec![
+      param("items", item_array, &store),
+      param("mapper", expected_callback, &store),
+    ],
     ret: return_array,
     type_params: vec![t_param, u_param],
     this_param: None,

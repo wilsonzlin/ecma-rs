@@ -145,8 +145,8 @@ pub mod check {
     pub use crate::program::check::type_expr::*;
   }
 
-  pub mod relate_hooks;
   pub mod class;
+  pub mod relate_hooks;
 }
 
 pub mod queries;

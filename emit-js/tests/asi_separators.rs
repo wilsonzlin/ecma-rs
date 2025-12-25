@@ -1,30 +1,16 @@
 use derive_visitor::{Drive, DriveMut};
 use emit_js::asi::{separator_after_last, separator_between, ListEnd, Separator};
 use parse_js::ast::expr::lit::{
-  LitArrExpr,
-  LitObjExpr,
-  LitRegexExpr,
-  LitTemplateExpr,
-  LitTemplatePart,
+  LitArrExpr, LitObjExpr, LitRegexExpr, LitTemplateExpr, LitTemplatePart,
 };
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{Expr, IdExpr, UnaryExpr};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::{
-  BlockStmt,
-  DoWhileStmt,
-  EmptyStmt,
-  ExportDefaultExprStmt,
-  ExprStmt,
-  ForBody,
-  ForTripleStmt,
-  ForTripleStmtInit,
-  IfStmt,
-  LabelStmt,
-  Stmt,
-  WhileStmt,
-};
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
+use parse_js::ast::stmt::{
+  BlockStmt, DoWhileStmt, EmptyStmt, ExportDefaultExprStmt, ExprStmt, ForBody, ForTripleStmt,
+  ForTripleStmtInit, IfStmt, LabelStmt, Stmt, WhileStmt,
+};
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 
@@ -124,7 +110,9 @@ fn var_decl_stmt(name: &str, initializer: Option<Node<Expr>>) -> Node<Stmt> {
 }
 
 fn export_default_expr_stmt(expr: Node<Expr>) -> Node<Stmt> {
-  node(Stmt::ExportDefaultExpr(node(ExportDefaultExprStmt { expression: expr })))
+  node(Stmt::ExportDefaultExpr(node(ExportDefaultExprStmt {
+    expression: expr,
+  })))
 }
 
 #[test]

@@ -1,6 +1,4 @@
-use optimize_js::decompile::{
-  collect_foreign_bindings, prepend_foreign_decls, ForeignBindings,
-};
+use optimize_js::decompile::{collect_foreign_bindings, prepend_foreign_decls, ForeignBindings};
 use optimize_js::{Program, TopLevelMode};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;

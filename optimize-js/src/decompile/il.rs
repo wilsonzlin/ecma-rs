@@ -578,13 +578,13 @@ fn to_ast_expr(expr: &FlatExpr) -> Node<Expr> {
       left: to_ast_expr(object),
       right: property.clone(),
     }))),
-    FlatExpr::ComputedMember { object, property } => node(Expr::ComputedMember(node(
-      ComputedMemberExpr {
+    FlatExpr::ComputedMember { object, property } => {
+      node(Expr::ComputedMember(node(ComputedMemberExpr {
         optional_chaining: false,
         object: to_ast_expr(object),
         member: to_ast_expr(property),
-      },
-    ))),
+      })))
+    }
     FlatExpr::Call { callee, args } => {
       let arguments = args
         .iter()
@@ -674,10 +674,9 @@ fn handle_call(inst: &Inst, env: &BTreeMap<u32, VarValue>) -> (FlatExpr, Option<
   };
 
   let (call_callee, call_args) = match callee_origin {
-    Some(ValueOrigin::GetProp { object, prop }) if this_arg == &object => (
-      member_from_prop(&this_expr, &prop, env),
-      args_exprs,
-    ),
+    Some(ValueOrigin::GetProp { object, prop }) if this_arg == &object => {
+      (member_from_prop(&this_expr, &prop, env), args_exprs)
+    }
     _ => {
       let mut call_args = Vec::with_capacity(args_exprs.len() + 1);
       call_args.push(FlatCallArg {

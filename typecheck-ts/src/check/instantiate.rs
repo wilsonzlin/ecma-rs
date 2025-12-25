@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use types_ts_interned::{DefId, ShapeId};
 use types_ts_interned::{
   ObjectType, Shape, Signature, SignatureId, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
 };
-use types_ts_interned::{DefId, ShapeId};
 
 /// Performs type parameter substitution over [`TypeKind`] trees.
 ///
@@ -83,9 +83,10 @@ impl Substituter {
       }
       TypeKind::Array { ty, readonly } => {
         let inner = self.substitute_type(ty);
-        self
-          .store
-          .intern_type(TypeKind::Array { ty: inner, readonly })
+        self.store.intern_type(TypeKind::Array {
+          ty: inner,
+          readonly,
+        })
       }
       TypeKind::Tuple(elems) => {
         let mapped: Vec<TupleElem> = elems
@@ -104,16 +105,19 @@ impl Substituter {
           .into_iter()
           .map(|id| self.substitute_signature_id(id))
           .collect();
-        self.store.intern_type(TypeKind::Callable { overloads: mapped })
+        self
+          .store
+          .intern_type(TypeKind::Callable { overloads: mapped })
       }
       TypeKind::Ref { def, args } => {
         let mapped_args = args
           .into_iter()
           .map(|arg| self.substitute_type(arg))
           .collect();
-        self
-          .store
-          .intern_type(TypeKind::Ref { def, args: mapped_args })
+        self.store.intern_type(TypeKind::Ref {
+          def,
+          args: mapped_args,
+        })
       }
       TypeKind::Object(obj_id) => {
         let mapped = self.substitute_object(obj_id);
@@ -225,7 +229,12 @@ impl InstantiationCache {
     let key_args: Vec<TypeId> = sig
       .type_params
       .iter()
-      .map(|tp| subst.get(tp).copied().unwrap_or(store.primitive_ids().unknown))
+      .map(|tp| {
+        subst
+          .get(tp)
+          .copied()
+          .unwrap_or(store.primitive_ids().unknown)
+      })
       .collect();
     if let Some(hit) = self.signature_cache.get(&(def, key_args.clone())) {
       return *hit;

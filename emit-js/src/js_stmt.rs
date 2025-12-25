@@ -174,7 +174,11 @@ fn emit_var_decl_inner(
     VarDeclMode::Var => "var",
     VarDeclMode::Let => "let",
     VarDeclMode::Const => "const",
-    _ => return Err(JsEmitError::Unsupported("unsupported variable declaration mode")),
+    _ => {
+      return Err(JsEmitError::Unsupported(
+        "unsupported variable declaration mode",
+      ))
+    }
   };
   out.write_keyword(keyword);
   for (idx, declarator) in decl.stx.declarators.iter().enumerate() {

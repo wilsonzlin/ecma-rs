@@ -275,7 +275,10 @@ fn emits_attributes() {
           name: "a".into(),
         },
       ),
-      value: Some(JsxAttrVal::Expression(jsx_container(empty_attr_placeholder_expr(), false))),
+      value: Some(JsxAttrVal::Expression(jsx_container(
+        empty_attr_placeholder_expr(),
+        false,
+      ))),
     }],
     vec![],
   );
@@ -321,10 +324,7 @@ fn emits_attributes() {
     }],
     vec![],
   );
-  assert_eq!(
-    emit_elem_to_string(&lt_after_text),
-    "<div title=\"a<b\"/>"
-  );
+  assert_eq!(emit_elem_to_string(&lt_after_text), "<div title=\"a<b\"/>");
 }
 
 #[test]

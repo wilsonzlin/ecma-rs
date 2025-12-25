@@ -121,7 +121,9 @@ pub fn starts_with_optional_chaining(expr: &Node<Expr>) -> bool {
     Expr::ComputedMember(member) => {
       member.stx.optional_chaining || starts_with_optional_chaining(&member.stx.object)
     }
-    Expr::Call(call) => call.stx.optional_chaining || starts_with_optional_chaining(&call.stx.callee),
+    Expr::Call(call) => {
+      call.stx.optional_chaining || starts_with_optional_chaining(&call.stx.callee)
+    }
     _ => false,
   }
 }

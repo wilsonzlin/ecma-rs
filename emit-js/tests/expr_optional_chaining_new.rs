@@ -48,4 +48,3 @@ fn parenthesizes_new_optional_chain_with_args() {
 fn parenthesizes_new_optional_chain_with_unary_plus() {
   assert_roundtrip("+new abc?.def();", "+new (abc?.def)()");
 }
-

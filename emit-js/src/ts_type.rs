@@ -1,4 +1,6 @@
-use crate::{emit_string_literal_double_quoted, EmitMode, EmitOptions, EmitResult, Emitter, StmtSepStyle};
+use crate::{
+  emit_string_literal_double_quoted, EmitMode, EmitOptions, EmitResult, Emitter, StmtSepStyle,
+};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::ImportExpr;
 use parse_js::ast::node::Node;

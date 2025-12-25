@@ -1,19 +1,20 @@
+use derive_visitor::{Drive, DriveMut};
 use emit_js::{emit_js_top_level, EmitMode, EmitOptions, Emitter, StmtSepStyle};
 use parse_js::ast::expr::lit::LitNumExpr;
+use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::BinaryExpr;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{
-  BreakStmt, EmptyStmt, ExprStmt, ForBody, ForTripleStmt, ForTripleStmtInit, IfStmt, Stmt, WhileStmt,
+  BreakStmt, EmptyStmt, ExprStmt, ForBody, ForTripleStmt, ForTripleStmtInit, IfStmt, Stmt,
+  WhileStmt,
 };
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
-use derive_visitor::{Drive, DriveMut};
 
 fn node<T: Drive + DriveMut>(stx: T) -> Node<T> {
   Node::new(Loc(0, 0), stx)
