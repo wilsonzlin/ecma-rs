@@ -479,6 +479,10 @@ where
 
   fn emit_unary(&mut self, unary: &Node<UnaryExpr>) -> EmitResult {
     with_node_context(unary.loc, || {
+      if unary.stx.operator == OperatorName::New {
+        return self.emit_new_expr(&unary.stx.argument);
+      }
+
       let op_txt = unary_operator_text(unary.stx.operator)?;
       self.out.write_str(op_txt)?;
       let prec = Prec::new(
@@ -490,8 +494,7 @@ where
       let needs_parens = matches!(
         unary.stx.argument.stx.as_ref(),
         Expr::Binary(binary) if binary.stx.operator == OperatorName::Exponentiation
-      ) || (unary.stx.operator == OperatorName::New
-        && starts_with_optional_chaining(&unary.stx.argument));
+      );
       if needs_parens {
         write!(self.out, "(")?;
         self.emit_expr_with_min_prec(&unary.stx.argument, Prec::LOWEST)?;
@@ -501,6 +504,56 @@ where
         self.emit_expr_with_min_prec(&unary.stx.argument, prec)
       }
     })
+  }
+
+  fn emit_new_expr(&mut self, argument: &Node<Expr>) -> EmitResult {
+    write!(self.out, "new ")?;
+
+    match argument.stx.as_ref() {
+      Expr::Call(call) => {
+        if call.stx.optional_chaining {
+          write!(self.out, "(")?;
+          self.emit_call(call)?;
+          write!(self.out, ")")?;
+          return Ok(());
+        }
+
+        let callee = &call.stx.callee;
+        if starts_with_optional_chaining(callee) {
+          write!(self.out, "(")?;
+          self.emit_memberish_receiver(callee)?;
+          write!(self.out, ")")?;
+        } else {
+          self.emit_memberish_receiver(callee)?;
+        }
+
+        write!(self.out, "(")?;
+
+        for (idx, arg) in call.stx.arguments.iter().enumerate() {
+          if idx > 0 {
+            write!(self.out, ", ")?;
+          }
+          let CallArg { spread, value } = arg.stx.as_ref();
+          if *spread {
+            write!(self.out, "...")?;
+          }
+          self.emit_expr_with_min_prec(value, Prec::new(1))?;
+        }
+
+        write!(self.out, ")")?;
+        Ok(())
+      }
+      _ => {
+        if starts_with_optional_chaining(argument) {
+          write!(self.out, "(")?;
+          self.emit_expr_with_min_prec(argument, CALL_MEMBER_PRECEDENCE)?;
+          write!(self.out, ")")?;
+        } else {
+          self.emit_expr_with_min_prec(argument, CALL_MEMBER_PRECEDENCE)?;
+        }
+        Ok(())
+      }
+    }
   }
 
   fn emit_unary_postfix(&mut self, unary: &Node<UnaryPostfixExpr>) -> EmitResult {
