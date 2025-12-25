@@ -266,3 +266,4 @@ mod tests {
     let conds = find_conds(&cfg, &dom, &postdom);
     assert_region(&conds, 2, 3, 4, 4, &[3], &[]);
   }
+}

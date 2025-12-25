@@ -1,7 +1,9 @@
 use crate::analysis::find_conds::{find_conds, CondRegion};
 use crate::analysis::find_loops::find_loops;
 use crate::cfg::cfg::Cfg;
+#[cfg(test)]
 use crate::cfg::cfg::CfgBBlocks;
+#[cfg(test)]
 use crate::cfg::cfg::CfgGraph;
 use crate::dom::{Dom, PostDom};
 use crate::il::inst::{Arg, Const, Inst, InstTyp};
@@ -160,8 +162,6 @@ pub fn structure_cfg(cfg: &Cfg) -> ControlTree {
   let reachable = reachable_from_entry(cfg);
   let mut ctx = StructCtx {
     cfg,
-    dom,
-    postdom,
     conds,
     loops,
     consumed: HashSet::new(),
@@ -327,8 +327,6 @@ fn reachable_from_entry(cfg: &Cfg) -> HashSet<u32> {
 
 struct StructCtx<'a> {
   cfg: &'a Cfg,
-  dom: Dom,
-  postdom: PostDom,
   conds: HashMap<u32, CondRegion>,
   loops: LoopForest,
   consumed: HashSet<u32>,
