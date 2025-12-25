@@ -2,6 +2,7 @@ use super::expr::pat::ParsePatternRules;
 use super::expr::Asi;
 use super::ParseCtx;
 use super::Parser;
+use crate::ast::class_or_object::ClassIndexSignature;
 use crate::ast::class_or_object::ClassMember;
 use crate::ast::class_or_object::ClassOrObjGetter;
 use crate::ast::class_or_object::ClassOrObjKey;
@@ -21,6 +22,24 @@ use crate::lex::KEYWORDS_MAPPING;
 use crate::token::TT;
 
 impl<'a> Parser<'a> {
+  /// Parse a TypeScript index signature: `[key: T]: U`
+  fn parse_index_signature(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ClassIndexSignature>> {
+    self.with_loc(|p| {
+      p.require(TT::BracketOpen)?;
+      let parameter_name = p.require_identifier()?;
+      p.require(TT::Colon)?;
+      let parameter_type = p.type_expr(ctx)?;
+      p.require(TT::BracketClose)?;
+      p.require(TT::Colon)?;
+      let type_annotation = p.type_expr(ctx)?;
+      Ok(ClassIndexSignature {
+        parameter_name,
+        parameter_type,
+        type_annotation,
+      })
+    })
+  }
+
   fn probable_class_member_start(tt: TT) -> bool {
     matches!(
       tt,
@@ -254,21 +273,7 @@ impl<'a> Parser<'a> {
 
             if looks_like_index_sig {
               // Parse index signature
-              let index_sig = p.with_loc(|p| {
-                p.require(TT::BracketOpen)?;
-                let parameter_name = p.require_identifier()?;
-                p.require(TT::Colon)?;
-                let parameter_type = p.type_expr(ctx)?;
-                p.require(TT::BracketClose)?;
-                p.require(TT::Colon)?;
-                let type_annotation = p.type_expr(ctx)?;
-                use crate::ast::class_or_object::ClassIndexSignature;
-                Ok(ClassIndexSignature {
-                  parameter_name,
-                  parameter_type,
-                  type_annotation,
-                })
-              })?;
+              let index_sig = p.parse_index_signature(ctx)?;
               // Fabricate a key (unused for index signatures) and wrap in IndexSignature variant
               use crate::ast::class_or_object::ClassOrObjVal;
               let dummy_key = p.create_synthetic_class_key();
@@ -900,17 +905,37 @@ impl<'a> Parser<'a> {
   // It's strictly one of these:
   // - <key> [ '=' <expr> ]? [ <asi> | ';' ]
   // - async? '*'? <key> '(' ...
-  // - [ get | set ] <key> '(' ...
-  // where <key> = <ident> | <keyword> | <str> | <num> | '[' <expr> ']'
-  pub fn class_or_obj_member(
-    &mut self,
-    ctx: ParseCtx,
+    // - [ get | set ] <key> '(' ...
+    // where <key> = <ident> | <keyword> | <str> | <num> | '[' <expr> ']'
+    pub fn class_or_obj_member(
+      &mut self,
+      ctx: ParseCtx,
     value_delimiter: TT,
     statement_delimiter: TT,
     property_initialiser_asi: &mut Asi,
     abstract_: bool,
   ) -> SyntaxResult<(ClassOrObjKey, ClassOrObjVal)> {
     let [a, b, c, d] = self.peek_n();
+
+    // TypeScript: index signatures in object literals (or with misplaced accessibility modifiers)
+    // Accept patterns like `[key: Type]: Type` and `private [key: Type]: Type` for error recovery.
+    let is_index_sig = (a.typ == TT::BracketOpen && b.typ == TT::Identifier && c.typ == TT::Colon)
+      || (matches!(a.typ, TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected)
+        && b.typ == TT::BracketOpen
+        && c.typ == TT::Identifier
+        && d.typ == TT::Colon);
+    if is_index_sig {
+      // Consume optional accessibility modifier for error recovery
+      if matches!(
+        a.typ,
+        TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected
+      ) {
+        self.consume();
+      }
+      let index_sig = self.parse_index_signature(ctx)?;
+      let dummy_key = self.create_synthetic_class_key();
+      return Ok((dummy_key, ClassOrObjVal::IndexSignature(index_sig)));
+    }
 
     // Error recovery: Handle generator method without a name: *{ }
     if a.typ == TT::Asterisk && b.typ == TT::BraceOpen {

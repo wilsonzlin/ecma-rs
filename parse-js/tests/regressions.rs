@@ -8,5 +8,7 @@ mod export_assignment_asi;
 mod import_meta;
 #[path = "regressions/jsx_tsx_disambiguation.rs"]
 mod jsx_tsx_disambiguation;
+#[path = "regressions/private_index_signature.rs"]
+mod private_index_signature;
 #[path = "regressions/tuple_labels.rs"]
 mod tuple_labels;
