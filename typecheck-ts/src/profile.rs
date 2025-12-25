@@ -2,7 +2,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use types_ts::{RelationProfileEvent, RelationProfiler};
 
 /// Named query boundaries used for tracing and profiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -79,12 +78,6 @@ impl QueryStatsCollector {
       );
     }
     QueryStats { queries }
-  }
-}
-
-impl RelationProfiler for QueryStatsCollector {
-  fn record(&self, event: RelationProfileEvent) {
-    self.record(QueryKind::Relation, event.cache_hit, event.duration);
   }
 }
 

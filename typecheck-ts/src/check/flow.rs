@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use super::narrow::Facts;
-use crate::{BuiltinTypes, TypeId, TypeStore};
+use crate::program::{BuiltinTypes, TypeId, TypeStore};
 
 /// Per-point variable environment used during flow-sensitive checks.
 #[derive(Clone, Debug, Default)]

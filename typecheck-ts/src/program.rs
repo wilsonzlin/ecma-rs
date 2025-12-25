@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
 
-use crate::{FatalError, HostError, Ice, IceContext};
+use crate::{FatalError, HostError, Ice, IceContext, QueryStats};
 
 #[path = "check/mod.rs"]
 pub(crate) mod check;
@@ -352,6 +352,14 @@ impl Program {
       }
       Ok(diagnostics)
     })
+  }
+
+  /// Return collected query statistics for this program.
+  ///
+  /// Query tracking is not yet implemented for the lightweight checker, so this
+  /// currently returns an empty set of stats.
+  pub fn query_stats(&self) -> QueryStats {
+    QueryStats::default()
   }
 
   /// Request cancellation of ongoing work.

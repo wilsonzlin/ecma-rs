@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
 
 use super::super::{
-  BodyCheckResult, Diagnostic, FileId, HirExpr, HirExprKind, HirObjectProperty, ObjectType,
-  ProgramState, Span, TypeId, TypeKind, CODE_EXCESS_PROPERTY,
+  BodyCheckResult, Diagnostic, FileId, HirExpr, HirExprKind, ObjectType, ProgramState, Span, TypeId,
+  TypeKind, CODE_EXCESS_PROPERTY,
 };
 
 pub(crate) fn is_fresh_object_literal(expr: &HirExpr) -> bool {
@@ -66,10 +66,10 @@ pub(crate) fn check_excess_properties(
   for prop in excess.extras {
     let mut diagnostic = Diagnostic::error(
       CODE_EXCESS_PROPERTY,
-      format!("excess property '{}' in object literal", prop.name),
+      format!("excess property '{}' in object literal", prop.0),
       Span {
         file,
-        range: prop.span,
+        range: prop.1.span,
       },
     );
     if let Some(note) = &note {
@@ -91,14 +91,14 @@ fn property_type_from_object(obj: &ObjectType, name: &str) -> Option<TypeId> {
 }
 
 struct ExcessResult<'a> {
-  extras: Vec<&'a HirObjectProperty>,
+  extras: Vec<&'a (String, HirExpr)>,
   allowed: Vec<String>,
 }
 
 fn find_excess_properties<'a>(
   state: &mut ProgramState,
   target_type: TypeId,
-  props: &'a [HirObjectProperty],
+  props: &'a [(String, HirExpr)],
 ) -> Option<ExcessResult<'a>> {
   match state.type_store.kind(target_type).clone() {
     TypeKind::Any | TypeKind::Unknown => None,
@@ -131,17 +131,17 @@ fn find_excess_properties<'a>(
 
 fn excess_against_object<'a>(
   target: &ObjectType,
-  props: &'a [HirObjectProperty],
+  props: &'a [(String, HirExpr)],
 ) -> Option<ExcessResult<'a>> {
   if target.has_index_signature() || target.props.is_empty() {
     return None;
   }
   let mut extras = Vec::new();
   for prop in props.iter() {
-    if prop.is_spread {
+    if prop.0 == "..." {
       continue;
     }
-    if !property_allowed(target, &prop.name) {
+    if !property_allowed(target, &prop.0) {
       extras.push(prop);
     }
   }
