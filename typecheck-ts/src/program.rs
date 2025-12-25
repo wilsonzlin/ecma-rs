@@ -826,6 +826,14 @@ struct HirExpr {
 }
 
 #[derive(Clone, Debug)]
+struct HirObjectProperty {
+  name: String,
+  value: HirExpr,
+  span: TextRange,
+  is_spread: bool,
+}
+
+#[derive(Clone, Debug)]
 enum HirExprKind {
   NumberLiteral(String),
   StringLiteral(String),
@@ -854,7 +862,7 @@ enum HirExprKind {
     consequent: Box<HirExpr>,
     alternate: Box<HirExpr>,
   },
-  Object(Vec<(String, HirExpr)>),
+  Object(Vec<HirObjectProperty>),
   TypeAssertion {
     expr: Box<HirExpr>,
     typ: Option<TypeId>,
@@ -1942,6 +1950,13 @@ impl ProgramState {
       }
     };
     let mut env = self.initial_env(body.owner, body.file);
+    let return_context = body
+      .owner
+      .and_then(|def| self.def_data.get(&def))
+      .and_then(|def| match &def.kind {
+        DefKind::Function(func) => func.return_ann,
+        _ => None,
+      });
     let mut result = BodyCheckResult {
       body: body.id,
       expr_types: vec![self.builtin.unknown; body.expr_spans.len()],
@@ -1951,7 +1966,7 @@ impl ProgramState {
     };
 
     for stmt in body.stmts.iter() {
-      self.check_stmt(stmt, &mut env, &mut result, body.file);
+      self.check_stmt(stmt, &mut env, &mut result, body.file, return_context);
     }
 
     let res = Arc::new(result);
@@ -1968,6 +1983,7 @@ impl ProgramState {
     env: &mut HashMap<String, SymbolBinding>,
     result: &mut BodyCheckResult,
     file: FileId,
+    return_context: Option<TypeId>,
   ) {
     match stmt {
       HirStmt::Var {
@@ -1978,7 +1994,9 @@ impl ProgramState {
         symbol,
         def,
       } => {
-        let init_checked = init.as_ref().map(|e| self.check_expr(e, env, result, file));
+        let init_checked = init
+          .as_ref()
+          .map(|e| self.check_expr(e, env, result, file, *typ));
         let init_ty = init_checked.map(|(ty, facts)| {
           self.apply_fact_map(env, &facts.assertions);
           ty
@@ -2009,12 +2027,17 @@ impl ProgramState {
       HirStmt::Return { expr, .. } => {
         let ty = expr
           .as_ref()
-          .map(|e| self.check_expr(e, env, result, file).0)
+          .map(|e| self.check_expr(e, env, result, file, return_context).0)
           .unwrap_or(self.builtin.undefined);
+        if let Some(expected) = return_context {
+          if let Some(expr) = expr {
+            check::assign::check_assignment(self, Some(expr), ty, expected, result, file);
+          }
+        }
         result.return_types.push(ty);
       }
       HirStmt::Expr(expr) => {
-        let (_, facts) = self.check_expr(expr, env, result, file);
+        let (_, facts) = self.check_expr(expr, env, result, file, None);
         self.apply_fact_map(env, &facts.assertions);
       }
       HirStmt::If {
@@ -2023,7 +2046,7 @@ impl ProgramState {
         alternate,
         ..
       } => {
-        let (_, cond_facts) = self.check_expr(test, env, result, file);
+        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
         let mut then_env = env.clone();
         self.apply_fact_map(&mut then_env, &cond_facts.truthy);
         self.apply_fact_map(&mut then_env, &cond_facts.assertions);
@@ -2032,10 +2055,10 @@ impl ProgramState {
         self.apply_fact_map(&mut else_env, &cond_facts.assertions);
 
         for stmt in consequent {
-          self.check_stmt(stmt, &mut then_env, result, file);
+          self.check_stmt(stmt, &mut then_env, result, file, return_context);
         }
         for stmt in alternate {
-          self.check_stmt(stmt, &mut else_env, result, file);
+          self.check_stmt(stmt, &mut else_env, result, file, return_context);
         }
 
         let then_returns = self.branch_returns(consequent);
@@ -2049,16 +2072,16 @@ impl ProgramState {
       }
       HirStmt::Block(stmts) => {
         for stmt in stmts {
-          self.check_stmt(stmt, env, result, file);
+          self.check_stmt(stmt, env, result, file, return_context);
         }
       }
       HirStmt::While { test, body, .. } => {
-        let (_, cond_facts) = self.check_expr(test, env, result, file);
+        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
         let mut body_env = env.clone();
         self.apply_fact_map(&mut body_env, &cond_facts.truthy);
         self.apply_fact_map(&mut body_env, &cond_facts.assertions);
         for stmt in body {
-          self.check_stmt(stmt, &mut body_env, result, file);
+          self.check_stmt(stmt, &mut body_env, result, file, return_context);
         }
         let mut merged = self.merge_envs(env, &body_env);
         self.apply_fact_map(&mut merged, &cond_facts.falsy);
@@ -2073,6 +2096,7 @@ impl ProgramState {
     env: &mut HashMap<String, SymbolBinding>,
     result: &mut BodyCheckResult,
     file: FileId,
+    context: Option<TypeId>,
   ) -> (TypeId, Facts) {
     let mut facts = Facts::default();
     let ty = match &expr.kind {
@@ -2112,7 +2136,7 @@ impl ProgramState {
         ty
       }
       HirExprKind::Member { object, property } => {
-        let (obj_ty, _) = self.check_expr(object, env, result, file);
+        let (obj_ty, _) = self.check_expr(object, env, result, file, None);
         let lookup_prop = |obj: &ObjectType| {
           if let Some(prop) = obj.props.get(property) {
             Some(prop.typ)
@@ -2145,7 +2169,7 @@ impl ProgramState {
       }
       HirExprKind::Unary { op, expr: inner } => match op {
         OperatorName::LogicalNot => {
-          let (_inner_ty, inner_facts) = self.check_expr(inner, env, result, file);
+          let (_inner_ty, inner_facts) = self.check_expr(inner, env, result, file, None);
           facts.truthy = inner_facts.falsy;
           facts.falsy = inner_facts.truthy;
           facts.assertions = inner_facts.assertions;
@@ -2153,17 +2177,17 @@ impl ProgramState {
         }
         OperatorName::Typeof => self.type_store.literal_string("string".to_string()),
         _ => {
-          let _ = self.check_expr(inner, env, result, file);
+          let _ = self.check_expr(inner, env, result, file, None);
           self.builtin.unknown
         }
       },
       HirExprKind::Binary { op, left, right } => match op {
         OperatorName::LogicalAnd => {
-          let (lt, lf) = self.check_expr(left, env, result, file);
+          let (lt, lf) = self.check_expr(left, env, result, file, None);
           let mut right_env = env.clone();
           self.apply_fact_map(&mut right_env, &lf.truthy);
           self.apply_fact_map(&mut right_env, &lf.assertions);
-          let (rt, rf) = self.check_expr(right, &mut right_env, result, file);
+          let (rt, rf) = self.check_expr(right, &mut right_env, result, file, None);
 
           let rf_truthy = rf.truthy;
           let rf_falsy = rf.falsy;
@@ -2185,11 +2209,11 @@ impl ProgramState {
           self.type_store.union(vec![lt, rt], &self.builtin)
         }
         OperatorName::LogicalOr => {
-          let (lt, lf) = self.check_expr(left, env, result, file);
+          let (lt, lf) = self.check_expr(left, env, result, file, None);
           let mut right_env = env.clone();
           self.apply_fact_map(&mut right_env, &lf.falsy);
           self.apply_fact_map(&mut right_env, &lf.assertions);
-          let (rt, rf) = self.check_expr(right, &mut right_env, result, file);
+          let (rt, rf) = self.check_expr(right, &mut right_env, result, file, None);
 
           facts.truthy = lf.truthy;
           facts.merge(
@@ -2214,8 +2238,8 @@ impl ProgramState {
           self.type_store.union(vec![lt, rt], &self.builtin)
         }
         OperatorName::Equality | OperatorName::StrictEquality => {
-          let (_lt, lfacts) = self.check_expr(left, env, result, file);
-          let (_rt, rfacts) = self.check_expr(right, env, result, file);
+          let (_lt, lfacts) = self.check_expr(left, env, result, file, None);
+          let (_rt, rfacts) = self.check_expr(right, env, result, file, None);
           // typeof x === "string"
           if let HirExprKind::Unary {
             op: OperatorName::Typeof,
@@ -2223,7 +2247,7 @@ impl ProgramState {
           } = &left.kind
           {
             if let HirExprKind::StringLiteral(value) = &right.kind {
-              let (inner_ty, _) = self.check_expr(inner, env, result, file);
+              let (inner_ty, _) = self.check_expr(inner, env, result, file, None);
               if let HirExprKind::Ident(name) = &inner.kind {
                 let (yes, no) = narrow_by_typeof(
                   inner_ty,
@@ -2243,7 +2267,7 @@ impl ProgramState {
           // discriminant check x.kind === "foo"
           if let HirExprKind::Member { object, property } = &left.kind {
             if let HirExprKind::StringLiteral(value) = &right.kind {
-              let (obj_ty, _) = self.check_expr(object, env, result, file);
+              let (obj_ty, _) = self.check_expr(object, env, result, file, None);
               if let HirExprKind::Ident(obj_name) = &object.kind {
                 let (yes, no) = narrow_by_discriminant(
                   obj_ty,
@@ -2264,7 +2288,7 @@ impl ProgramState {
           // symmetric case
           if let HirExprKind::Member { object, property } = &right.kind {
             if let HirExprKind::StringLiteral(value) = &left.kind {
-              let (obj_ty, _) = self.check_expr(object, env, result, file);
+              let (obj_ty, _) = self.check_expr(object, env, result, file, None);
               if let HirExprKind::Ident(obj_name) = &object.kind {
                 let (yes, no) = narrow_by_discriminant(
                   obj_ty,
@@ -2287,15 +2311,15 @@ impl ProgramState {
           self.builtin.boolean
         }
         OperatorName::Instanceof => {
-          let (_lt, lf) = self.check_expr(left, env, result, file);
-          let (_rt, rf) = self.check_expr(right, env, result, file);
+          let (_lt, lf) = self.check_expr(left, env, result, file, None);
+          let (_rt, rf) = self.check_expr(right, env, result, file, None);
           facts.merge(lf, &mut self.type_store, &self.builtin);
           facts.merge(rf, &mut self.type_store, &self.builtin);
           self.builtin.boolean
         }
         OperatorName::In => {
-          let (_lt, lf) = self.check_expr(left, env, result, file);
-          let (rt, rf) = self.check_expr(right, env, result, file);
+          let (_lt, lf) = self.check_expr(left, env, result, file, None);
+          let (rt, rf) = self.check_expr(right, env, result, file, None);
           if let HirExprKind::StringLiteral(prop) = &left.kind {
             if let HirExprKind::Ident(name) = &right.kind {
               let (yes, no) = narrow_by_in_check(rt, prop, &mut self.type_store, &self.builtin);
@@ -2312,8 +2336,8 @@ impl ProgramState {
           self.builtin.boolean
         }
         _ => {
-          let (left_ty, lfacts) = self.check_expr(left, env, result, file);
-          let (right_ty, rfacts) = self.check_expr(right, env, result, file);
+          let (left_ty, lfacts) = self.check_expr(left, env, result, file, None);
+          let (right_ty, rfacts) = self.check_expr(right, env, result, file, None);
           facts.merge(lfacts, &mut self.type_store, &self.builtin);
           facts.merge(rfacts, &mut self.type_store, &self.builtin);
           match op {
@@ -2358,7 +2382,7 @@ impl ProgramState {
         }
       },
       HirExprKind::Call { callee, args } => {
-        let (callee_ty, _) = self.check_expr(callee, env, result, file);
+        let (callee_ty, _) = self.check_expr(callee, env, result, file, None);
         if let TypeKind::Function { params, ret } = self.type_store.kind(callee_ty).clone() {
           if params.len() != args.len() {
             result.diagnostics.push(Diagnostic::error(
@@ -2372,10 +2396,11 @@ impl ProgramState {
           }
           let mut arg_types = Vec::new();
           for (idx, arg) in args.iter().enumerate() {
-            let (arg_ty, _) = self.check_expr(arg, env, result, file);
+            let expected = params.get(idx).copied();
+            let (arg_ty, _) = self.check_expr(arg, env, result, file, expected);
             arg_types.push(arg_ty);
-            if let Some(expected) = params.get(idx) {
-              check::assign::check_assignment(self, Some(arg), arg_ty, *expected, result, file);
+            if let Some(expected) = expected {
+              check::assign::check_assignment(self, Some(arg), arg_ty, expected, result, file);
             }
           }
           match self.type_store.kind(ret).clone() {
@@ -2430,28 +2455,40 @@ impl ProgramState {
         consequent,
         alternate,
       } => {
-        let (_, cond_facts) = self.check_expr(test, env, result, file);
+        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
         let mut then_env = env.clone();
         self.apply_fact_map(&mut then_env, &cond_facts.truthy);
         self.apply_fact_map(&mut then_env, &cond_facts.assertions);
         let mut else_env = env.clone();
         self.apply_fact_map(&mut else_env, &cond_facts.falsy);
         self.apply_fact_map(&mut else_env, &cond_facts.assertions);
-        let (cons_ty, cons_facts) = self.check_expr(consequent, &mut then_env, result, file);
-        let (alt_ty, alt_facts) = self.check_expr(alternate, &mut else_env, result, file);
+        let (cons_ty, cons_facts) =
+          self.check_expr(consequent, &mut then_env, result, file, context);
+        let (alt_ty, alt_facts) = self.check_expr(alternate, &mut else_env, result, file, context);
         facts.merge(cons_facts, &mut self.type_store, &self.builtin);
         facts.merge(alt_facts, &mut self.type_store, &self.builtin);
         self.type_store.union(vec![cons_ty, alt_ty], &self.builtin)
       }
       HirExprKind::Object(props) => {
         let mut obj = ObjectType::empty();
-        for (k, v) in props.iter() {
-          if k == "..." {
+        for prop in props.iter() {
+          if prop.is_spread {
             continue;
           }
-          let (ty, _) = self.check_expr(v, env, result, file);
+          let expected = context
+            .and_then(|ctx| check::object_literal::contextual_property_type(self, ctx, &prop.name));
+          let (ty, _) = self.check_expr(&prop.value, env, result, file, expected);
+          if let Some(expected) = expected {
+            check::object_literal::check_excess_properties(
+              self,
+              &prop.value,
+              expected,
+              result,
+              file,
+            );
+          }
           obj.props.insert(
-            k.clone(),
+            prop.name.clone(),
             ObjectProperty {
               typ: ty,
               optional: false,
@@ -2463,13 +2500,13 @@ impl ProgramState {
       HirExprKind::Array(values) => {
         let mut tys = Vec::new();
         for v in values {
-          tys.push(self.check_expr(v, env, result, file).0);
+          tys.push(self.check_expr(v, env, result, file, None).0);
         }
         let elem = self.type_store.union(tys, &self.builtin);
         self.type_store.array(elem)
       }
       HirExprKind::TypeAssertion { expr, typ, .. } => {
-        let (inner_ty, inner_facts) = self.check_expr(expr, env, result, file);
+        let (inner_ty, inner_facts) = self.check_expr(expr, env, result, file, None);
         facts = inner_facts;
         (*typ).unwrap_or(inner_ty)
       }
@@ -3226,10 +3263,10 @@ fn lower_object_literal(
   obj: LitObjExpr,
   state: &mut ProgramState,
   builder: &mut BodyBuilder,
-) -> Vec<(String, HirExpr)> {
+) -> Vec<HirObjectProperty> {
   let mut props = Vec::new();
   for member in obj.members.into_iter() {
-    let _member_span = loc_to_span(file, member.loc).range;
+    let member_span = loc_to_span(file, member.loc).range;
     match *member.stx {
       ObjMember {
         typ: ObjMemberType::Valued { key, val },
@@ -3243,7 +3280,12 @@ fn lower_object_literal(
         };
         if let ClassOrObjVal::Prop(Some(expr)) = val {
           let value = builder.lower_expr(expr, state);
-          props.push((key_name, value));
+          props.push(HirObjectProperty {
+            name: key_name,
+            value,
+            span: member_span,
+            is_spread: false,
+          });
         }
       }
       ObjMember {
@@ -3254,13 +3296,23 @@ fn lower_object_literal(
           loc_to_span(file, id.loc).range,
           HirExprKind::Ident(name.clone()),
         );
-        props.push((name, expr));
+        props.push(HirObjectProperty {
+          name,
+          value: expr,
+          span: member_span,
+          is_spread: false,
+        });
       }
       ObjMember {
         typ: ObjMemberType::Rest { val },
       } => {
         let expr = builder.lower_expr(val, state);
-        props.push(("...".to_string(), expr));
+        props.push(HirObjectProperty {
+          name: "...".to_string(),
+          value: expr,
+          span: member_span,
+          is_spread: true,
+        });
       }
     }
   }
