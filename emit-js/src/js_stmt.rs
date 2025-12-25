@@ -1,3 +1,10 @@
+//! JavaScript statement emitter for the `emit_js_*` helpers.
+//!
+//! When `EmitOptions.stmt_sep_style` is `StmtSepStyle::AsiNewlines`, statement
+//! lists use newlines and rely on automatic semicolon insertion, only emitting
+//! explicit semicolons for hazards (e.g. statements starting with `/`, `[`, or
+//! `(` after an expression-like statement).
+
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{VarDecl, VarDeclMode};
 use parse_js::ast::stmt::{
