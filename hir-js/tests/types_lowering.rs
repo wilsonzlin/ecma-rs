@@ -10,7 +10,7 @@ fn type_alias<'a>(
   let def = result
     .defs
     .iter()
-    .find(|def| result.names.resolve(def.path.name).unwrap() == name)
+    .find(|def| result.names.resolve(def.name).unwrap() == name)
     .expect("type alias definition");
   match def.type_info.as_ref().expect("type info present") {
     DefTypeInfo::TypeAlias {

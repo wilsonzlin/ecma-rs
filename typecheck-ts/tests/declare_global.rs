@@ -28,7 +28,7 @@ fn declare_global_from_dts_is_available_globally() {
   let foo_def = lowered
     .defs
     .iter()
-    .find(|d| lowered.names.resolve(d.path.name) == Some("Foo"))
+    .find(|d| lowered.names.resolve(d.name) == Some("Foo"))
     .expect("Foo lowered from declare global");
 
   let decl = Decl {

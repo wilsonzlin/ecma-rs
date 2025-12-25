@@ -12,6 +12,7 @@ use crate::intern::NameInterner;
 use crate::span_map::SpanMap;
 use diagnostics::FileId;
 use diagnostics::TextRange;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,12 +27,14 @@ pub struct HirFile {
   pub file_kind: FileKind,
   pub items: Vec<DefId>,
   pub bodies: Vec<BodyId>,
+  pub def_paths: BTreeMap<DefPath, DefId>,
   pub span_map: SpanMap,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DefData {
   pub id: DefId,
+  pub name: NameId,
   pub path: DefPath,
   pub span: TextRange,
   pub is_ambient: bool,
@@ -44,9 +47,11 @@ pub struct DefData {
 pub struct LowerResult {
   pub hir: Arc<HirFile>,
   pub defs: Vec<DefData>,
-  pub bodies: Vec<Arc<Body>>, // BodyId indexes into this vec.
+  pub bodies: Vec<Arc<Body>>,
   pub types: TypeArenas,
   pub names: Arc<NameInterner>,
+  pub def_index: BTreeMap<DefId, usize>,
+  pub body_index: BTreeMap<BodyId, usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -334,7 +339,7 @@ pub struct Body {
   pub expr_types: Option<Vec<()>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BodyKind {
   TopLevel,
   Function,
@@ -431,6 +436,7 @@ impl HirFile {
     file_kind: FileKind,
     items: Vec<DefId>,
     bodies: Vec<BodyId>,
+    def_paths: BTreeMap<DefPath, DefId>,
     span_map: SpanMap,
   ) -> Self {
     Self {
@@ -438,7 +444,26 @@ impl HirFile {
       file_kind,
       items,
       bodies,
+      def_paths,
       span_map,
     }
+  }
+}
+
+impl LowerResult {
+  pub fn def(&self, id: DefId) -> Option<&DefData> {
+    self.def_index.get(&id).and_then(|idx| self.defs.get(*idx))
+  }
+
+  pub fn body(&self, id: BodyId) -> Option<&Body> {
+    self
+      .body_index
+      .get(&id)
+      .and_then(|idx| self.bodies.get(*idx))
+      .map(Arc::as_ref)
+  }
+
+  pub fn def_id_for_path(&self, path: &DefPath) -> Option<DefId> {
+    self.hir.def_paths.get(path).copied()
   }
 }

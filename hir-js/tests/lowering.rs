@@ -20,7 +20,7 @@ fn def_ids_are_sorted_and_stable() {
   let names: Vec<_> = result
     .defs
     .iter()
-    .map(|def| result.names.resolve(def.path.name).unwrap().to_string())
+    .map(|def| def.path.name.clone())
     .collect();
   let kinds: Vec<_> = result.defs.iter().map(|def| def.path.kind).collect();
 
@@ -34,15 +34,30 @@ fn def_ids_are_sorted_and_stable() {
   let names_again: Vec<_> = result_again
     .defs
     .iter()
-    .map(|def| {
-      result_again
-        .names
-        .resolve(def.path.name)
-        .unwrap()
-        .to_string()
-    })
+    .map(|def| def.path.name.clone())
     .collect();
   assert_eq!(names, names_again);
+}
+
+#[test]
+fn def_ids_survive_unrelated_insertions() {
+  let base = "function keep() {}\nconst value = 1;";
+  let with_extra = "function keep() {}\nconst extra = 0;\nconst value = 1;";
+
+  let base_ast = parse(base).expect("parse base");
+  let base_result = lower_file(FileId(0), FileKind::Ts, &base_ast);
+
+  let extra_ast = parse(with_extra).expect("parse variant");
+  let extra_result = lower_file(FileId(0), FileKind::Ts, &extra_ast);
+
+  for (path, id) in base_result.hir.def_paths.iter() {
+    let other = extra_result
+      .hir
+      .def_paths
+      .get(path)
+      .expect("path should exist in variant");
+    assert_eq!(id, other, "def id changed for path {:?}", path);
+  }
 }
 
 #[test]
@@ -57,7 +72,7 @@ fn expr_at_offset_prefers_inner_expression() {
     .find(|d| d.path.kind == DefKind::Var)
     .expect("var def");
   let body_id = def.body.expect("var has initializer body");
-  let body = result.bodies[body_id.0 as usize].as_ref();
+  let body = result.body(body_id).expect("body");
   let map = &result.hir.span_map;
 
   let (binary_id, left_span) = body
@@ -126,7 +141,7 @@ declare global {
   let foo = result
     .defs
     .iter()
-    .find(|d| result.names.resolve(d.path.name) == Some("Foo"))
+    .find(|d| d.path.name == "Foo")
     .expect("Foo interface present");
   assert!(foo.is_ambient, "global declarations should be ambient");
   assert!(foo.in_global, "declare global declarations are tracked");
@@ -165,7 +180,7 @@ fn saturates_overflowing_spans() {
   assert_eq!(def.span.end, u32::MAX);
 
   let body_id = def.body.expect("initializer");
-  let body = result.bodies[body_id.0 as usize].as_ref();
+  let body = result.body(body_id).expect("initializer body");
   let stmt_span = body.stmts.first().expect("stmt").span;
   assert_eq!(stmt_span.start, u32::MAX);
   assert_eq!(stmt_span.end, u32::MAX);

@@ -17,6 +17,7 @@ use crate::ids::DefPath;
 use crate::ids::ExprId;
 use crate::ids::NameId;
 use crate::ids::PatId;
+use crate::ids::StableHasher;
 use crate::ids::StmtId;
 use crate::intern::NameInterner;
 use crate::lower_types::TypeLowerer;
@@ -47,7 +48,7 @@ use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::*;
 use parse_js::loc::Loc;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 struct LoweringContext {
@@ -94,6 +95,68 @@ impl LoweringContext {
 
   fn into_diagnostics(self) -> Vec<Diagnostic> {
     self.diagnostics
+  }
+}
+
+#[derive(Debug, Default)]
+struct IdAllocator {
+  def_paths: BTreeMap<DefPath, DefId>,
+  body_ids: BTreeMap<BodyKey, BodyId>,
+  used_defs: BTreeSet<DefId>,
+  used_bodies: BTreeSet<BodyId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct BodyKey {
+  owner: DefId,
+  kind: BodyKind,
+}
+
+impl IdAllocator {
+  fn alloc_def(&mut self, path: DefPath) -> DefId {
+    if let Some(id) = self.def_paths.get(&path) {
+      return *id;
+    }
+    let id = self.next_def_id(path.stable_hash());
+    self.def_paths.insert(path, id);
+    id
+  }
+
+  fn alloc_body(&mut self, owner: DefId, kind: BodyKind) -> BodyId {
+    let key = BodyKey { owner, kind };
+    if let Some(id) = self.body_ids.get(&key) {
+      return *id;
+    }
+
+    let mut hasher = StableHasher::new();
+    hasher.write_u64(owner.0 as u64);
+    hasher.write_u64(kind as u64);
+    let seed = hasher.finish();
+    let id = self.next_body_id(seed);
+    self.body_ids.insert(key, id);
+    id
+  }
+
+  fn next_def_id(&mut self, seed: u64) -> DefId {
+    Self::next(seed, &mut self.used_defs, |raw| DefId(raw))
+  }
+
+  fn next_body_id(&mut self, seed: u64) -> BodyId {
+    Self::next(seed, &mut self.used_bodies, |raw| BodyId(raw))
+  }
+
+  fn next<T: Copy + Ord>(seed: u64, used: &mut BTreeSet<T>, wrap: impl Fn(u32) -> T) -> T {
+    let mut salt = 0u64;
+    loop {
+      let mut hasher = StableHasher::new();
+      hasher.write_u64(seed);
+      hasher.write_u64(salt);
+      let candidate = wrap(hasher.finish_u32());
+      if used.insert(candidate) {
+        return candidate;
+      }
+      salt = salt.wrapping_add(1);
+    }
   }
 }
 
@@ -171,22 +234,28 @@ pub fn lower_file_with_diagnostics(
   let mut body_ids = Vec::new();
   let mut items = Vec::new();
   let mut pending_types = Vec::new();
-  let mut disambiguators: BTreeMap<(DefKind, NameId), u32> = BTreeMap::new();
+  let mut disambiguators: BTreeMap<(DefKind, String), u32> = BTreeMap::new();
+  let mut id_allocator = IdAllocator::default();
+  let mut def_index = BTreeMap::new();
+  let mut body_index = BTreeMap::new();
 
-  for (idx, desc) in descriptors.into_iter().enumerate() {
-    let def_id = DefId(idx as u32);
+  for desc in descriptors.into_iter() {
+    let dis = disambiguators
+      .entry((desc.kind, desc.name_text.clone()))
+      .or_insert(0);
+    let def_path = DefPath::new(file, desc.kind, desc.name_text.clone(), *dis);
+    *dis += 1;
+
+    let def_id = id_allocator.alloc_def(def_path.clone());
     if desc.is_item {
       items.push(def_id);
     }
-
-    let dis = disambiguators.entry((desc.kind, desc.name)).or_insert(0);
-    let def_path = DefPath::new(file, desc.kind, desc.name, *dis);
-    *dis += 1;
 
     span_map.add_def(desc.span, def_id);
 
     let mut def_data = DefData {
       id: def_id,
+      name: desc.name,
       path: def_path,
       span: desc.span,
       is_ambient: desc.is_ambient,
@@ -198,9 +267,10 @@ pub fn lower_file_with_diagnostics(
     if let Some(body) =
       lower_body_from_source(def_id, &desc.source, &mut names, &mut span_map, &mut ctx)
     {
-      let body_id = BodyId(bodies.len() as u32);
+      let body_id = id_allocator.alloc_body(def_id, body.kind);
       def_data.body = Some(body_id);
       body_ids.push(body_id);
+      body_index.insert(body_id, bodies.len());
       bodies.push(Arc::new(body));
     }
 
@@ -208,9 +278,11 @@ pub fn lower_file_with_diagnostics(
       pending_types.push((def_id, type_source));
     }
 
+    def_index.insert(def_id, defs.len());
     defs.push(def_data);
   }
 
+  let def_paths = id_allocator.def_paths.clone();
   let types = {
     let mut type_lowerer = TypeLowerer::new(&mut names, &mut span_map);
     for (def_id, source) in pending_types {
@@ -219,8 +291,10 @@ pub fn lower_file_with_diagnostics(
         TypeSource::Interface(intf) => Some(type_lowerer.lower_interface(intf)),
       };
       if let Some(info) = type_info {
-        if let Some(def) = defs.get_mut(def_id.0 as usize) {
-          def.type_info = Some(info);
+        if let Some(idx) = def_index.get(&def_id) {
+          if let Some(def) = defs.get_mut(*idx) {
+            def.type_info = Some(info);
+          }
         }
       }
     }
@@ -231,11 +305,15 @@ pub fn lower_file_with_diagnostics(
 
   (
     LowerResult {
-      hir: Arc::new(HirFile::new(file, file_kind, items, body_ids, span_map)),
+      hir: Arc::new(HirFile::new(
+        file, file_kind, items, body_ids, def_paths, span_map,
+      )),
       defs,
       bodies,
       types,
       names: Arc::new(names),
+      def_index,
+      body_index,
     },
     ctx.into_diagnostics(),
   )
