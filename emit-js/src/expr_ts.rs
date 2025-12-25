@@ -6,10 +6,11 @@ use parse_js::ast::type_expr::TypeExpr;
 
 use crate::emitter::{with_node_context, EmitError, EmitResult};
 use crate::expr::ExprEmitter;
-
-pub(crate) const TYPE_ASSERTION_PRECEDENCE: u8 = 15;
-pub(crate) const SATISFIES_PRECEDENCE: u8 = TYPE_ASSERTION_PRECEDENCE;
-pub(crate) const NON_NULL_ASSERTION_PRECEDENCE: u8 = 18;
+use crate::precedence::{
+  NON_NULL_ASSERTION_PRECEDENCE,
+  SATISFIES_PRECEDENCE,
+  TYPE_ASSERTION_PRECEDENCE,
+};
 
 impl<'a, W, F> ExprEmitter<'a, W, F>
 where
@@ -46,7 +47,7 @@ where
 
   pub(crate) fn emit_satisfies_expr(&mut self, satisfies: &Node<SatisfiesExpr>) -> EmitResult {
     with_node_context(satisfies.loc, || {
-      self.emit_expr_with_min_prec(&satisfies.stx.expression, TYPE_ASSERTION_PRECEDENCE)?;
+      self.emit_expr_with_min_prec(&satisfies.stx.expression, SATISFIES_PRECEDENCE)?;
       write!(self.out, " satisfies ")?;
       self.emit_type(&satisfies.stx.type_annotation)
     })

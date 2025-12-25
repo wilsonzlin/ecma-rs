@@ -2,21 +2,33 @@ use std::fmt;
 
 use parse_js::ast::expr::jsx::JsxElem;
 use parse_js::ast::expr::{
-  lit::{LitBigIntExpr, LitBoolExpr, LitNumExpr, LitRegexExpr, LitStrExpr},
-  BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr,
+  lit::{LitBigIntExpr, LitBoolExpr, LitNumExpr, LitRegexExpr, LitStrExpr, LitTemplatePart},
+  BinaryExpr,
+  CallArg,
+  CallExpr,
+  ComputedMemberExpr,
+  CondExpr,
+  Expr,
+  IdExpr,
+  MemberExpr,
+  TaggedTemplateExpr,
+  UnaryExpr,
+  UnaryPostfixExpr,
 };
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
-use parse_js::operator::{Associativity, OperatorName, OPERATORS};
+use parse_js::operator::{OperatorName, OPERATORS};
 
 use crate::emitter::{with_node_context, EmitError, EmitResult};
-use crate::expr_ts::{
-  NON_NULL_ASSERTION_PRECEDENCE, SATISFIES_PRECEDENCE, TYPE_ASSERTION_PRECEDENCE,
+use crate::precedence::{
+  child_min_prec_for_binary,
+  expr_prec,
+  needs_parens,
+  Prec,
+  Side,
+  CALL_MEMBER_PRECEDENCE,
 };
 use crate::Emitter;
-
-const PRIMARY_PRECEDENCE: u8 = 19;
-const CALL_MEMBER_PRECEDENCE: u8 = 18; // Matches OperatorName::Call/MemberAccess precedence.
 
 pub struct ExprEmitter<'a, W, F>
 where
@@ -37,19 +49,23 @@ where
   }
 
   pub fn emit_expr(&mut self, expr: &Node<Expr>) -> EmitResult {
-    with_node_context(expr.loc, || self.emit_expr_with_min_prec(expr, 1))
+    with_node_context(expr.loc, || self.emit_expr_with_min_prec(expr, Prec::new(1)))
   }
 
-  pub(crate) fn emit_expr_with_min_prec(&mut self, expr: &Node<Expr>, min_prec: u8) -> EmitResult {
+  pub(crate) fn emit_expr_with_min_prec(
+    &mut self,
+    expr: &Node<Expr>,
+    min_prec: Prec,
+  ) -> EmitResult {
     with_node_context(expr.loc, || {
-      let prec = expr_precedence(expr)?;
-      let needs_parens = prec < min_prec;
+      let prec = expr_prec(expr);
+      let wrap = needs_parens(prec, min_prec);
 
-      if needs_parens {
+      if wrap {
         write!(self.out, "(")?;
       }
       self.emit_expr_no_parens(expr)?;
-      if needs_parens {
+      if wrap {
         write!(self.out, ")")?;
       }
 
@@ -70,11 +86,19 @@ where
       Expr::LitBigInt(lit) => self.emit_lit_big_int(lit),
       Expr::LitStr(lit) => self.emit_lit_str(lit),
       Expr::LitRegex(lit) => self.emit_lit_regex(lit),
+      Expr::LitTemplate(lit) => self.emit_template_literal(&lit.stx.parts),
       Expr::JsxElem(elem) => self.emit_jsx_elem(elem),
+      Expr::ArrPat(arr) => self.emit_array_pattern(arr),
+      Expr::IdPat(id) => self.emit_id_pattern(id),
+      Expr::ObjPat(obj) => self.emit_object_pattern(obj),
+      Expr::Unary(unary) => self.emit_unary(unary),
+      Expr::UnaryPostfix(unary) => self.emit_unary_postfix(unary),
       Expr::Binary(binary) => self.emit_binary(binary),
+      Expr::Cond(cond) => self.emit_cond(cond),
       Expr::Call(call) => self.emit_call(call),
       Expr::Member(member) => self.emit_member(member),
       Expr::ComputedMember(member) => self.emit_computed_member(member),
+      Expr::TaggedTemplate(tagged) => self.emit_tagged_template(tagged),
       Expr::NonNullAssertion(non_null) => self.emit_non_null_assertion(non_null),
       Expr::TypeAssertion(assertion) => self.emit_type_assertion(assertion),
       Expr::SatisfiesExpr(satisfies) => self.emit_satisfies_expr(satisfies),
@@ -166,22 +190,113 @@ where
     })
   }
 
+  fn emit_pattern_fragment(
+    &mut self,
+    f: impl FnOnce(&mut Emitter) -> EmitResult,
+  ) -> EmitResult {
+    let mut emitter = Emitter::default();
+    f(&mut emitter)?;
+    let rendered =
+      std::str::from_utf8(emitter.as_bytes()).expect("pattern emitter output is UTF-8");
+    self.out.write_str(rendered).map_err(EmitError::from)?;
+    Ok(())
+  }
+
+  fn emit_array_pattern(&mut self, arr: &Node<parse_js::ast::expr::pat::ArrPat>) -> EmitResult {
+    with_node_context(arr.loc, || {
+      self.emit_pattern_fragment(|em| crate::pat::emit_array_pattern(em, arr))
+    })
+  }
+
+  fn emit_id_pattern(&mut self, id: &Node<parse_js::ast::expr::pat::IdPat>) -> EmitResult {
+    with_node_context(id.loc, || self.emit_pattern_fragment(|em| crate::pat::emit_id_pattern(em, id)))
+  }
+
+  fn emit_object_pattern(&mut self, obj: &Node<parse_js::ast::expr::pat::ObjPat>) -> EmitResult {
+    with_node_context(obj.loc, || {
+      self.emit_pattern_fragment(|em| crate::pat::emit_object_pattern(em, obj))
+    })
+  }
+
+  fn emit_unary(&mut self, unary: &Node<UnaryExpr>) -> EmitResult {
+    with_node_context(unary.loc, || {
+      let op_txt = unary_operator_text(unary.stx.operator)?;
+      self.out.write_str(op_txt)?;
+      let prec = Prec::new(
+        OPERATORS
+          .get(&unary.stx.operator)
+          .ok_or(EmitError::unsupported("unknown operator"))?
+          .precedence,
+      );
+      self.emit_expr_with_min_prec(&unary.stx.argument, prec)
+    })
+  }
+
+  fn emit_unary_postfix(&mut self, unary: &Node<UnaryPostfixExpr>) -> EmitResult {
+    with_node_context(unary.loc, || {
+      let prec = Prec::new(
+        OPERATORS
+          .get(&unary.stx.operator)
+          .ok_or(EmitError::unsupported("unknown operator"))?
+          .precedence,
+      );
+      self.emit_expr_with_min_prec(&unary.stx.argument, prec)?;
+      match unary.stx.operator {
+        OperatorName::PostfixIncrement => write!(self.out, "++")?,
+        OperatorName::PostfixDecrement => write!(self.out, "--")?,
+        _ => return Err(EmitError::unsupported("unknown postfix operator")),
+      }
+      Ok(())
+    })
+  }
+
   fn emit_binary(&mut self, binary: &Node<BinaryExpr>) -> EmitResult {
     with_node_context(binary.loc, || {
-      let op = OPERATORS
-        .get(&binary.stx.operator)
-        .ok_or(EmitError::unsupported("unknown operator"))?;
       let op_txt = binary_operator_text(binary.stx.operator)?;
-      let prec = op.precedence;
+      let left_min_prec = child_min_prec_for_binary(binary.stx.operator, Side::Left);
+      let right_min_prec = child_min_prec_for_binary(binary.stx.operator, Side::Right);
 
-      self.emit_expr_with_min_prec(&binary.stx.left, prec)?;
+      let force_left_parens = binary.stx.operator == OperatorName::Exponentiation
+        && matches!(binary.stx.left.stx.as_ref(), Expr::Unary(_));
+
+      let force_left_parens = force_left_parens
+        || (binary.stx.operator == OperatorName::NullishCoalescing && is_logical_and_or(&binary.stx.left))
+        || ((binary.stx.operator == OperatorName::LogicalAnd
+          || binary.stx.operator == OperatorName::LogicalOr)
+          && is_nullish(&binary.stx.left));
+
+      let force_right_parens = (binary.stx.operator == OperatorName::NullishCoalescing
+        && is_logical_and_or(&binary.stx.right))
+        || ((binary.stx.operator == OperatorName::LogicalAnd
+          || binary.stx.operator == OperatorName::LogicalOr)
+          && is_nullish(&binary.stx.right));
+
+      if force_left_parens {
+        self.emit_wrapped(&binary.stx.left, Prec::LOWEST)?;
+      } else {
+        self.emit_expr_with_min_prec(&binary.stx.left, left_min_prec)?;
+      }
       if binary.stx.operator == OperatorName::Comma {
         write!(self.out, ", ")?;
       } else {
         write!(self.out, " {} ", op_txt)?;
       }
-      let right_prec = prec + (op.associativity == Associativity::Left) as u8;
-      self.emit_expr_with_min_prec(&binary.stx.right, right_prec)
+      if force_right_parens {
+        self.emit_wrapped(&binary.stx.right, Prec::LOWEST)
+      } else {
+        self.emit_expr_with_min_prec(&binary.stx.right, right_min_prec)
+      }
+    })
+  }
+
+  fn emit_cond(&mut self, cond: &Node<CondExpr>) -> EmitResult {
+    with_node_context(cond.loc, || {
+      let prec = Prec::new(OPERATORS[&OperatorName::Conditional].precedence);
+      self.emit_expr_with_min_prec(&cond.stx.test, prec.tighter())?;
+      write!(self.out, " ? ")?;
+      self.emit_expr_with_min_prec(&cond.stx.consequent, prec)?;
+      write!(self.out, " : ")?;
+      self.emit_expr_with_min_prec(&cond.stx.alternate, prec)
     })
   }
 
@@ -201,7 +316,7 @@ where
         if *spread {
           write!(self.out, "...")?;
         }
-        self.emit_expr_with_min_prec(value, 1)?;
+        self.emit_expr_with_min_prec(value, Prec::new(1))?;
       }
       write!(self.out, ")")?;
       Ok(())
@@ -237,16 +352,52 @@ where
       } else {
         write!(self.out, "[")?;
       }
-      self.emit_expr_with_min_prec(&member.stx.member, 1)?;
+      self.emit_expr_with_min_prec(&member.stx.member, Prec::new(1))?;
       write!(self.out, "]")?;
       Ok(())
     })
+  }
+
+  fn emit_tagged_template(&mut self, tagged: &Node<TaggedTemplateExpr>) -> EmitResult {
+    with_node_context(tagged.loc, || {
+      self.emit_expr_with_min_prec(&tagged.stx.function, CALL_MEMBER_PRECEDENCE)?;
+      self.emit_template_literal(&tagged.stx.parts)
+    })
+  }
+
+  fn emit_template_literal(&mut self, parts: &[LitTemplatePart]) -> EmitResult {
+    write!(self.out, "`")?;
+    for part in parts {
+      match part {
+        LitTemplatePart::String(raw) => {
+          let mut buf = Vec::new();
+          crate::emit_template_raw_segment(&mut buf, raw);
+          self.out.write_str(
+            std::str::from_utf8(&buf).expect("template literal escape output is UTF-8"),
+          )?;
+        }
+        LitTemplatePart::Substitution(expr) => {
+          write!(self.out, "${{")?;
+          self.emit_expr_with_min_prec(expr, Prec::LOWEST)?;
+          write!(self.out, "}}")?;
+        }
+      }
+    }
+    write!(self.out, "`")?;
+    Ok(())
   }
 
   pub(crate) fn emit_type(&mut self, ty: &Node<TypeExpr>) -> EmitResult {
     with_node_context(ty.loc, || {
       (self.emit_type)(&mut self.out, ty).map_err(EmitError::from)
     })
+  }
+
+  fn emit_wrapped(&mut self, expr: &Node<Expr>, min_prec: Prec) -> EmitResult {
+    write!(self.out, "(")?;
+    self.emit_expr_with_min_prec(expr, min_prec)?;
+    write!(self.out, ")")?;
+    Ok(())
   }
 }
 
@@ -279,38 +430,28 @@ pub fn emit_expr_with_emitter(out: &mut Emitter, expr: &Node<Expr>) -> EmitResul
   }
 
   let mut adapter = EmitterWriteAdapter { emitter: out };
-  let mut emit_type = |out: &mut EmitterWriteAdapter<'_>, ty: &Node<TypeExpr>| crate::emit_type_expr(out, ty);
+  let mut emit_type =
+    |out: &mut EmitterWriteAdapter<'_>, ty: &Node<TypeExpr>| crate::emit_type_expr(out, ty);
   emit_expr(&mut adapter, expr, &mut emit_type)
 }
 
-fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
-  with_node_context(expr.loc, || match expr.stx.as_ref() {
-    Expr::Id(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::This(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::Super(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::NewTarget(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::ImportMeta(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::LitNum(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::LitBool(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::LitNull(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::LitBigInt(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::LitStr(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::LitRegex(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::JsxElem(_) => Ok(PRIMARY_PRECEDENCE),
-    Expr::Binary(binary) => Ok(
-      OPERATORS
-        .get(&binary.stx.operator)
-        .map(|op| op.precedence)
-        .ok_or(EmitError::unsupported("unknown operator"))?,
-    ),
-    Expr::Call(_) => Ok(CALL_MEMBER_PRECEDENCE),
-    Expr::Member(_) => Ok(CALL_MEMBER_PRECEDENCE),
-    Expr::ComputedMember(_) => Ok(CALL_MEMBER_PRECEDENCE),
-    Expr::NonNullAssertion(_) => Ok(NON_NULL_ASSERTION_PRECEDENCE),
-    Expr::TypeAssertion(_) => Ok(TYPE_ASSERTION_PRECEDENCE),
-    Expr::SatisfiesExpr(_) => Ok(SATISFIES_PRECEDENCE),
-    _ => Err(EmitError::unsupported("expression kind not supported")),
-  })
+fn unary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
+  match op {
+    OperatorName::Await => Ok("await "),
+    OperatorName::BitwiseNot => Ok("~"),
+    OperatorName::Delete => Ok("delete "),
+    OperatorName::LogicalNot => Ok("!"),
+    OperatorName::New => Ok("new "),
+    OperatorName::PrefixDecrement => Ok("--"),
+    OperatorName::PrefixIncrement => Ok("++"),
+    OperatorName::Typeof => Ok("typeof "),
+    OperatorName::UnaryNegation => Ok("-"),
+    OperatorName::UnaryPlus => Ok("+"),
+    OperatorName::Void => Ok("void "),
+    OperatorName::Yield => Ok("yield "),
+    OperatorName::YieldDelegated => Ok("yield* "),
+    _ => Err(EmitError::unsupported("operator not supported in unary emitter")),
+  }
 }
 
 fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
@@ -384,6 +525,22 @@ fn binary_operator_text(op: OperatorName) -> Result<&'static str, EmitError> {
       "operator not supported in binary emitter",
     )),
   }
+}
+
+fn is_nullish(expr: &Node<Expr>) -> bool {
+  matches!(
+    expr.stx.as_ref(),
+    Expr::Binary(binary) if binary.stx.operator == OperatorName::NullishCoalescing
+  )
+}
+
+fn is_logical_and_or(expr: &Node<Expr>) -> bool {
+  matches!(
+    expr.stx.as_ref(),
+    Expr::Binary(binary)
+      if binary.stx.operator == OperatorName::LogicalAnd
+        || binary.stx.operator == OperatorName::LogicalOr
+  )
 }
 
 fn requires_trailing_dot(rendered: &str) -> bool {
