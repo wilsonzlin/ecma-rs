@@ -1,4 +1,4 @@
-use emit_js::{emit_param_decl, emit_pat, emit_pat_decl};
+use emit_js::{emit_param_decl, emit_pat, emit_pat_decl, Emitter};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey};
 use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::pat::{ArrPat, ArrPatElem, IdPat, ObjPat, ObjPatProp, Pat};
@@ -39,20 +39,30 @@ fn num_expr(value: f64) -> Node<Expr> {
   )
 }
 
-fn direct_key(name: &str) -> ClassOrObjKey {
+fn emit_to_string(f: impl FnOnce(&mut Emitter)) -> String {
+  let mut emitter = Emitter::default();
+  f(&mut emitter);
+  String::from_utf8(emitter.into_bytes()).unwrap()
+}
+
+fn direct_key_with_tt(name: &str, tt: TT) -> ClassOrObjKey {
   ClassOrObjKey::Direct(Node::new(
     dummy_loc(),
     ClassOrObjMemberDirectKey {
       key: name.into(),
-      tt: TT::Identifier,
+      tt,
     },
   ))
 }
 
+fn direct_key(name: &str) -> ClassOrObjKey {
+  direct_key_with_tt(name, TT::Identifier)
+}
+
 fn emit_pat_to_string(pat: &Node<Pat>) -> String {
-  let mut out = String::new();
-  emit_pat(&mut out, pat).unwrap();
-  out
+  emit_to_string(|emitter| {
+    emit_pat(emitter, pat).unwrap();
+  })
 }
 
 #[test]
@@ -179,9 +189,8 @@ fn emits_nested_patterns_with_defaults() {
 #[test]
 fn emits_pat_decl_wrapper() {
   let decl = Node::new(dummy_loc(), PatDecl { pat: id_pat("x") });
-  let mut out = String::new();
-  emit_pat_decl(&mut out, &decl).unwrap();
-  assert_eq!(out, "x");
+  let emitted = emit_to_string(|emitter| emit_pat_decl(emitter, &decl).unwrap());
+  assert_eq!(emitted, "x");
 }
 
 #[test]
@@ -204,13 +213,87 @@ fn emits_param_decl_with_rest() {
       default_value: None,
     },
   );
-  let mut out = String::new();
-  emit_param_decl(&mut out, &param).unwrap();
-  assert_eq!(out, "...args");
+  let emitted = emit_to_string(|emitter| emit_param_decl(emitter, &param).unwrap());
+  assert_eq!(emitted, "...args");
 }
 
 #[test]
 fn emits_assignment_target_pattern() {
   let pat = Node::new(dummy_loc(), Pat::AssignTarget(id_expr("value")));
   assert_eq!(emit_pat_to_string(&pat), "value");
+}
+
+#[test]
+fn emits_object_pattern_with_string_key() {
+  let prop = Node::new(
+    dummy_loc(),
+    ObjPatProp {
+      key: direct_key_with_tt("x", TT::LiteralString),
+      target: id_pat("a"),
+      shorthand: false,
+      default_value: None,
+    },
+  );
+  let pattern = Node::new(
+    dummy_loc(),
+    Pat::Obj(Node::new(
+      dummy_loc(),
+      ObjPat {
+        properties: vec![prop],
+        rest: None,
+      },
+    )),
+  );
+
+  assert_eq!(emit_pat_to_string(&pattern), "{\"x\":a}");
+}
+
+#[test]
+fn emits_object_pattern_with_numeric_key() {
+  let prop = Node::new(
+    dummy_loc(),
+    ObjPatProp {
+      key: direct_key_with_tt("1", TT::LiteralNumber),
+      target: id_pat("a"),
+      shorthand: false,
+      default_value: None,
+    },
+  );
+  let pattern = Node::new(
+    dummy_loc(),
+    Pat::Obj(Node::new(
+      dummy_loc(),
+      ObjPat {
+        properties: vec![prop],
+        rest: None,
+      },
+    )),
+  );
+
+  assert_eq!(emit_pat_to_string(&pattern), "{1:a}");
+}
+
+#[test]
+fn emits_object_pattern_with_unhandled_direct_key_raw() {
+  let prop = Node::new(
+    dummy_loc(),
+    ObjPatProp {
+      key: direct_key_with_tt("@", TT::At),
+      target: id_pat("a"),
+      shorthand: false,
+      default_value: None,
+    },
+  );
+  let pattern = Node::new(
+    dummy_loc(),
+    Pat::Obj(Node::new(
+      dummy_loc(),
+      ObjPat {
+        properties: vec![prop],
+        rest: None,
+      },
+    )),
+  );
+
+  assert_eq!(emit_pat_to_string(&pattern), "{@:a}");
 }
