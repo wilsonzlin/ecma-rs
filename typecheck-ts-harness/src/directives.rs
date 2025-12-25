@@ -2,7 +2,7 @@ use crate::tsc::apply_default_tsc_options;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Map, Value};
-use typecheck_ts::lib_support::{CompilerOptions, JsxMode, LibName, ScriptTarget};
+use typecheck_ts::lib_support::{CompilerOptions, JsxMode, LibName, ModuleKind, ScriptTarget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -178,6 +178,14 @@ impl HarnessOptions {
       opts.target = target;
     }
 
+    if let Some(module) = self
+      .module
+      .as_deref()
+      .and_then(|raw| parse_module_kind(raw))
+    {
+      opts.module = Some(module);
+    }
+
     if let Some(strict) = self.strict {
       opts.strict_null_checks = strict;
       opts.no_implicit_any = strict;
@@ -233,7 +241,7 @@ impl HarnessOptions {
     }
   }
 
-  fn to_tsc_options_map(&self) -> Map<String, Value> {
+  pub(crate) fn to_tsc_options_map(&self) -> Map<String, Value> {
     let mut map = Map::new();
     apply_default_tsc_options(&mut map);
 
@@ -271,7 +279,12 @@ impl HarnessOptions {
       map.insert("strict".to_string(), Value::Bool(strict));
     }
 
-    if let Some(module) = &self.module {
+    if let Some(module) = compiler.module {
+      map.insert(
+        "module".to_string(),
+        Value::String(module.option_name().to_string()),
+      );
+    } else if let Some(module) = &self.module {
       map.insert("module".to_string(), Value::String(module.clone()));
     }
     if let Some(mode) = compiler.jsx {
@@ -322,7 +335,6 @@ impl HarnessOptions {
 
     map
   }
-
 }
 
 fn parse_bool(raw: Option<&str>) -> Option<bool> {
@@ -397,6 +409,23 @@ fn jsx_mode_str(mode: JsxMode) -> &'static str {
     JsxMode::React => "react",
     JsxMode::ReactJsx => "react-jsx",
     JsxMode::ReactJsxdev => "react-jsxdev",
+  }
+}
+
+fn parse_module_kind(raw: &str) -> Option<ModuleKind> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "none" => Some(ModuleKind::None),
+    "commonjs" => Some(ModuleKind::CommonJs),
+    "amd" => Some(ModuleKind::Amd),
+    "system" => Some(ModuleKind::System),
+    "umd" => Some(ModuleKind::Umd),
+    "es6" | "es2015" => Some(ModuleKind::Es2015),
+    "es2020" => Some(ModuleKind::Es2020),
+    "es2022" => Some(ModuleKind::Es2022),
+    "esnext" => Some(ModuleKind::EsNext),
+    "node16" => Some(ModuleKind::Node16),
+    "nodenext" => Some(ModuleKind::NodeNext),
+    _ => None,
   }
 }
 
@@ -486,13 +515,14 @@ mod tests {
       dir("jsx", Some("react-jsx")),
       dir("strict", Some("true")),
       dir("noimplicitany", Some("false")),
+      dir("module", Some("nodenext")),
       dir("lib", Some("dom es2015")),
     ];
 
     let options = HarnessOptions::from_directives(&directives);
     let tsc = options.to_tsc_options_map();
 
-    assert_eq!(tsc.get("target"), Some(&Value::String("ES2015".to_string())));
+    assert_eq!(tsc.get("target"), Some(&Value::String("ES5".to_string())));
     assert_eq!(
       tsc.get("jsx"),
       Some(&Value::String("react-jsx".to_string()))
@@ -501,7 +531,12 @@ mod tests {
     assert_eq!(tsc.get("noImplicitAny"), Some(&Value::Bool(false)));
     assert_eq!(tsc.get("strictNullChecks"), Some(&Value::Bool(true)));
     assert_eq!(
-      tsc.get("lib")
+      tsc.get("module"),
+      Some(&Value::String("NodeNext".to_string()))
+    );
+    assert_eq!(
+      tsc
+        .get("lib")
         .and_then(|v| v.as_array())
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()),
       Some(vec!["dom", "es2015"])
@@ -510,6 +545,7 @@ mod tests {
     let compiler = options.to_compiler_options();
     assert_eq!(compiler.target, ScriptTarget::Es5);
     assert_eq!(compiler.jsx, Some(JsxMode::ReactJsx));
+    assert_eq!(compiler.module, Some(ModuleKind::NodeNext));
     assert!(compiler.strict_function_types);
     assert!(!compiler.no_implicit_any);
     assert!(compiler.strict_null_checks);
@@ -524,7 +560,10 @@ mod tests {
     assert_eq!(tsc.get("noEmit"), Some(&Value::Bool(true)));
     assert_eq!(tsc.get("skipLibCheck"), Some(&Value::Bool(true)));
     assert_eq!(tsc.get("pretty"), Some(&Value::Bool(false)));
-    assert_eq!(tsc.get("target"), Some(&Value::String("ES2015".to_string())));
+    assert_eq!(
+      tsc.get("target"),
+      Some(&Value::String("ES2015".to_string()))
+    );
   }
 
   #[test]

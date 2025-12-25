@@ -1,10 +1,8 @@
 use ::semantic_js::ts as sem_ts;
-use semantic_js::ts::from_hir_js::lower_to_ts_hir;
+use ::semantic_js::ts::from_hir_js::lower_to_ts_hir;
 pub use diagnostics::{Diagnostic, FileId, Label, Severity, Span, TextRange};
 use hir_js::{
-  lower_file_with_diagnostics,
-  DefTypeInfo as HirDefTypeInfo,
-  FileKind as HirFileKind,
+  lower_file_with_diagnostics, DefTypeInfo as HirDefTypeInfo, FileKind as HirFileKind,
   LowerResult as HirLower,
 };
 use ordered_float::OrderedFloat;
@@ -32,6 +30,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
 
+use crate::profile::QueryStats;
 use crate::{FatalError, HostError, Ice, IceContext};
 use types_ts_interned::{
   Indexer, ObjectType as InternedObjectType, Param, PropData, PropKey, Property, Shape, Signature,
@@ -377,6 +376,18 @@ impl Program {
       Ok(diags) => diags,
       Err(fatal) => self.fatal_to_diagnostics(fatal),
     }
+  }
+
+  /// Snapshot aggregated query statistics collected during checking.
+  pub fn query_stats(&self) -> QueryStats {
+    QueryStats::default()
+  }
+
+  /// Compiler options provided by the host for this program.
+  pub fn compiler_options(&self) -> CompilerOptions {
+    let mut state = self.lock_state();
+    state.ensure_analyzed(&self.host, &self.roots, &self.cancelled);
+    state.compiler_options.clone()
   }
 
   /// Fallible entry point that surfaces unrecoverable failures to the host.
@@ -784,6 +795,7 @@ struct ImportData {
   original: String,
 }
 
+#[derive(Clone, Debug)]
 struct BodyData {
   id: BodyId,
   file: FileId,
@@ -1408,12 +1420,8 @@ impl ProgramState {
       match *stmt.stx {
         Stmt::VarDecl(var) => {
           let var_span = loc_to_span(file, stmt.loc);
-          let (new_defs, stmts) = self.handle_var_decl(
-            file,
-            var_span.range,
-            *var.stx,
-            &mut top_body,
-          );
+          let (new_defs, stmts) =
+            self.handle_var_decl(file, var_span.range, *var.stx, &mut top_body);
           for (def_id, binding, export_name) in new_defs {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -1468,17 +1476,6 @@ impl ProgramState {
           );
           self.record_def_symbol(def_id, symbol);
           defs.push(def_id);
-          sem_builder.add_decl(
-            def_id,
-            alias.stx.name.clone(),
-            sem_ts::DeclKind::TypeAlias,
-            if alias.stx.export {
-              sem_ts::Exported::Named
-            } else {
-              sem_ts::Exported::No
-            },
-            span.range,
-          );
         }
         Stmt::InterfaceDecl(intf) => {
           let span = loc_to_span(file, stmt.loc);
@@ -1497,17 +1494,6 @@ impl ProgramState {
           );
           self.record_def_symbol(def_id, symbol);
           defs.push(def_id);
-          sem_builder.add_decl(
-            def_id,
-            intf.stx.name.clone(),
-            sem_ts::DeclKind::Interface,
-            if intf.stx.export {
-              sem_ts::Exported::Named
-            } else {
-              sem_ts::Exported::No
-            },
-            span.range,
-          );
         }
         Stmt::ExportDefaultExpr(node) => {
           let span = loc_to_span(file, node.loc);
@@ -1790,14 +1776,6 @@ impl ProgramState {
             }
             None => {}
           }
-          sem_builder.add_import(sem_ts::Import {
-            specifier: module,
-            specifier_span: loc_to_span(file, stmt.loc).range,
-            default: import_default,
-            namespace: import_namespace,
-            named: import_named,
-            is_type_only: import_stmt.stx.type_only,
-          });
         }
         Stmt::Expr(expr_stmt) => {
           let expr = top_body.lower_expr(expr_stmt.stx.expr, self);
@@ -1924,19 +1902,6 @@ impl ProgramState {
       },
     );
     self.record_def_symbol(def_id, symbol);
-    sem_builder.add_decl(
-      def_id,
-      name.clone(),
-      sem_ts::DeclKind::Function,
-      if func.export_default {
-        sem_ts::Exported::Default
-      } else if func.export {
-        sem_ts::Exported::Named
-      } else {
-        sem_ts::Exported::No
-      },
-      loc_to_span(file, name_node.loc).range,
-    );
     let binding = (
       name.clone(),
       SymbolBinding {
@@ -2906,7 +2871,9 @@ impl ProgramState {
             readonly,
           })
           .collect();
-        self.interned_store.intern_type(InternedTypeKind::Tuple(elems))
+        self
+          .interned_store
+          .intern_type(InternedTypeKind::Tuple(elems))
       }
       TypeKind::Union(types) => {
         let members = types
@@ -3027,9 +2994,7 @@ impl ProgramState {
     let mut seen: BTreeSet<DefId> = BTreeSet::from([def]);
 
     if let Some(sem) = semantics {
-      if let Some(symbol) =
-        sem.resolve_in_module(data.file, &data.name, sem_ts::Namespace::TYPE)
-      {
+      if let Some(symbol) = sem.resolve_in_module(data.file, &data.name, sem_ts::Namespace::TYPE) {
         for decl in sem.symbol_decls(symbol, sem_ts::Namespace::TYPE).iter() {
           let decl = sem.symbols().decl(*decl);
           let other = DefId(decl.def_id.0);
@@ -3085,9 +3050,9 @@ impl ProgramState {
       this_param: None,
     };
     let sig_id = self.interned_store.intern_signature(sig);
-    let ty = self
-      .interned_store
-      .intern_type(InternedTypeKind::Callable { overloads: vec![sig_id] });
+    let ty = self.interned_store.intern_type(InternedTypeKind::Callable {
+      overloads: vec![sig_id],
+    });
     ty
   }
 
@@ -3106,12 +3071,10 @@ impl ProgramState {
 
   fn import_type(&mut self, import: &ImportData) -> InternedTypeId {
     if let Some(target_def) = self.resolve_import_def(import) {
-      return self
-        .interned_store
-        .intern_type(InternedTypeKind::Ref {
-          def: hir_js::DefId(target_def.0),
-          args: Vec::new(),
-        });
+      return self.interned_store.intern_type(InternedTypeKind::Ref {
+        def: hir_js::DefId(target_def.0),
+        args: Vec::new(),
+      });
     }
     self.interned_store.primitive_ids().unknown
   }
@@ -3146,12 +3109,10 @@ impl ProgramState {
           self.def_data.get(&import_def).map(|d| d.kind.clone())
         {
           if let Some(target) = self.resolve_import_def(&import) {
-            return self
-              .interned_store
-              .intern_type(InternedTypeKind::Ref {
-                def: hir_js::DefId(target.0),
-                args: args.clone(),
-              });
+            return self.interned_store.intern_type(InternedTypeKind::Ref {
+              def: hir_js::DefId(target.0),
+              args: args.clone(),
+            });
           }
         }
         ty

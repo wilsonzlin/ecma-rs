@@ -25,6 +25,40 @@ pub enum JsxMode {
   ReactJsxdev,
 }
 
+/// Module system to emit/parse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ModuleKind {
+  None,
+  CommonJs,
+  Es2015,
+  Es2020,
+  Es2022,
+  EsNext,
+  Umd,
+  Amd,
+  System,
+  Node16,
+  NodeNext,
+}
+
+impl ModuleKind {
+  pub fn option_name(&self) -> &'static str {
+    match self {
+      ModuleKind::None => "None",
+      ModuleKind::CommonJs => "CommonJS",
+      ModuleKind::Es2015 => "ES2015",
+      ModuleKind::Es2020 => "ES2020",
+      ModuleKind::Es2022 => "ES2022",
+      ModuleKind::EsNext => "ESNext",
+      ModuleKind::Umd => "UMD",
+      ModuleKind::Amd => "AMD",
+      ModuleKind::System => "System",
+      ModuleKind::Node16 => "Node16",
+      ModuleKind::NodeNext => "NodeNext",
+    }
+  }
+}
+
 impl Default for ScriptTarget {
   fn default() -> Self {
     ScriptTarget::Es2015
@@ -35,6 +69,7 @@ impl Default for ScriptTarget {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CompilerOptions {
   pub target: ScriptTarget,
+  pub module: Option<ModuleKind>,
   /// Whether DOM libs should be included in addition to the ES lib set.
   pub include_dom: bool,
   /// If true, do not automatically include default libs.
@@ -54,6 +89,7 @@ impl Default for CompilerOptions {
   fn default() -> Self {
     CompilerOptions {
       target: ScriptTarget::default(),
+      module: None,
       include_dom: true,
       no_default_lib: false,
       libs: Vec::new(),

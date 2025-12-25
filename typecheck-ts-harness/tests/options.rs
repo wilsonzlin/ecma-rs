@@ -7,26 +7,19 @@ use typecheck_ts_harness::{
   DEFAULT_PROFILE_OUT,
 };
 
-#[test]
-fn strict_null_checks_directive_reaches_tsc() {
-  #[cfg(not(feature = "with-node"))]
-  {
-    eprintln!("skipping strict null checks test: built without node");
-    return;
-  }
-
+fn conformance_options(compare: CompareMode) -> ConformanceOptions {
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("fixtures")
     .join("conformance-mini");
 
-  let options = ConformanceOptions {
+  ConformanceOptions {
     root,
     filter: build_filter(None).unwrap(),
     filter_pattern: None,
     shard: None,
     json: false,
     update_snapshots: false,
-    compare: CompareMode::Tsc,
+    compare,
     node_path: "node".into(),
     span_tolerance: 0,
     timeout: Duration::from_secs(5),
@@ -39,8 +32,18 @@ fn strict_null_checks_directive_reaches_tsc() {
     jobs: 1,
     manifest: None,
     fail_on: FailOn::New,
-  };
+  }
+}
 
+#[test]
+fn strict_null_checks_directive_reaches_tsc() {
+  #[cfg(not(feature = "with-node"))]
+  {
+    eprintln!("skipping strict null checks test: built without node");
+    return;
+  }
+
+  let options = conformance_options(CompareMode::Tsc);
   let report = run_conformance(options).expect("run conformance");
   let enabled = report
     .results
@@ -65,5 +68,33 @@ fn strict_null_checks_directive_reaches_tsc() {
   assert!(
     disabled.tsc.diagnostics.is_empty(),
     "expected no diagnostics when strictNullChecks is disabled"
+  );
+}
+
+#[test]
+fn strict_null_checks_directive_reaches_rust_checker() {
+  let options = conformance_options(CompareMode::None);
+  let report = run_conformance(options).expect("run conformance");
+
+  let enabled = report
+    .results
+    .iter()
+    .find(|r| r.id.ends_with("strict_null_checks_enabled.ts"))
+    .expect("enabled strictNullChecks fixture");
+  let disabled = report
+    .results
+    .iter()
+    .find(|r| r.id.ends_with("strict_null_checks_disabled.ts"))
+    .expect("disabled strictNullChecks fixture");
+
+  assert_eq!(enabled.rust.status, EngineStatus::Ok);
+  assert_eq!(disabled.rust.status, EngineStatus::Ok);
+  assert!(
+    !enabled.rust.diagnostics.is_empty(),
+    "expected diagnostics when strictNullChecks is enabled for Rust checker"
+  );
+  assert!(
+    disabled.rust.diagnostics.is_empty(),
+    "expected no diagnostics when strictNullChecks is disabled for Rust checker"
   );
 }

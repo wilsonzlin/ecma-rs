@@ -920,10 +920,6 @@ impl Host for HarnessHost {
 
     None
   }
-
-  fn compiler_options(&self) -> typecheck_ts::lib_support::CompilerOptions {
-    self.options.to_compiler_options()
-  }
 }
 
 fn has_known_extension(name: &str) -> bool {

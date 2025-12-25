@@ -2050,6 +2050,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "types-ts"
+version = "0.0.0"
+
+[[package]]
 name = "types-ts-interned"
 version = "0.1.0"
 dependencies = [
