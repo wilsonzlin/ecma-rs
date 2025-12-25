@@ -27,6 +27,7 @@ fn mk_decl(def: u32, name: &str, kind: DeclKind, exported: Exported) -> Decl {
     name: name.to_string(),
     kind,
     is_ambient: false,
+    is_global: false,
     exported,
     span: span(def),
   }
@@ -514,6 +515,25 @@ fn unresolved_import_reports_specifier_span() {
 }
 
 #[test]
+fn declare_global_from_dts_module_merges_into_globals() {
+  let file = FileId(50);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+  let mut decl = mk_decl(0, "Foo", DeclKind::Interface, Exported::No);
+  decl.is_ambient = true;
+  decl.is_global = true;
+  hir.decls.push(decl);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+  assert!(semantics.global_symbols().contains_key("Foo"));
+  assert!(semantics.exports_of(file).get("Foo").is_none());
+}
+
+#[test]
 fn type_only_imports_skip_value_namespace() {
   let file_a = FileId(60);
   let file_b = FileId(61);
@@ -618,18 +638,18 @@ fn resolve_export_handles_export_star_cycles() {
 #[test]
 fn global_symbol_groups_are_deterministic() {
   let file_a = FileId(60);
-  let mut a = HirFile::module(file_a);
+  let mut a = HirFile::script(file_a);
   a.decls
-    .push(mk_decl(0, "alpha", DeclKind::Var, Exported::Named));
+    .push(mk_decl(0, "alpha", DeclKind::Var, Exported::No));
   a.decls
-    .push(mk_decl(1, "zeta", DeclKind::Var, Exported::Named));
+    .push(mk_decl(1, "zeta", DeclKind::Var, Exported::No));
 
   let file_b = FileId(61);
-  let mut b = HirFile::module(file_b);
+  let mut b = HirFile::script(file_b);
   b.decls
-    .push(mk_decl(2, "alpha", DeclKind::Interface, Exported::Named));
+    .push(mk_decl(2, "alpha", DeclKind::Interface, Exported::No));
   b.decls
-    .push(mk_decl(3, "beta", DeclKind::Interface, Exported::Named));
+    .push(mk_decl(3, "beta", DeclKind::Interface, Exported::No));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
     file_a => Arc::new(a),
@@ -709,4 +729,38 @@ fn duplicate_export_has_two_labels() {
   assert_eq!(diag.labels[0].span.file, file_b);
   assert_eq!(diag.labels[0].span.range, span(1));
   assert!(!diag.labels[0].is_primary);
+}
+
+#[test]
+fn dts_script_decls_participate_in_globals() {
+  let file = FileId(51);
+  let mut hir = HirFile::script(file);
+  hir.file_kind = FileKind::Dts;
+  let mut decl = mk_decl(0, "Baz", DeclKind::Var, Exported::No);
+  decl.is_ambient = true;
+  hir.decls.push(decl);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+  assert!(semantics.global_symbols().contains_key("Baz"));
+}
+
+#[test]
+fn non_dts_global_augments_emit_diagnostic() {
+  let file = FileId(52);
+  let mut hir = HirFile::module(file);
+  let mut decl = mk_decl(0, "Aug", DeclKind::Interface, Exported::No);
+  decl.is_global = true;
+  hir.decls.push(decl);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert!(
+    diags.iter().any(|d| d.code == "BIND2001"),
+    "expected unsupported augmentation diagnostic"
+  );
 }

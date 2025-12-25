@@ -124,6 +124,12 @@ pub enum ModuleKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileKind {
+  Ts,
+  Dts,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Exported {
   No,
   Named,
@@ -136,6 +142,7 @@ pub struct Decl {
   pub name: String,
   pub kind: DeclKind,
   pub is_ambient: bool,
+  pub is_global: bool,
   pub exported: Exported,
   pub span: TextRange,
 }
@@ -212,6 +219,7 @@ pub enum Export {
 pub struct HirFile {
   pub file_id: FileId,
   pub module_kind: ModuleKind,
+  pub file_kind: FileKind,
   pub decls: Vec<Decl>,
   pub imports: Vec<Import>,
   pub exports: Vec<Export>,
@@ -222,6 +230,18 @@ impl HirFile {
     HirFile {
       file_id,
       module_kind: ModuleKind::Module,
+      file_kind: FileKind::Ts,
+      decls: Vec::new(),
+      imports: Vec::new(),
+      exports: Vec::new(),
+    }
+  }
+
+  pub fn script(file_id: FileId) -> Self {
+    HirFile {
+      file_id,
+      module_kind: ModuleKind::Script,
+      file_kind: FileKind::Ts,
       decls: Vec::new(),
       imports: Vec::new(),
       exports: Vec::new(),
@@ -238,6 +258,7 @@ pub struct DeclData {
   pub kind: DeclKind,
   pub namespaces: Namespace,
   pub is_ambient: bool,
+  pub is_global: bool,
   pub order: u32,
 }
 
@@ -402,6 +423,7 @@ impl SymbolTable {
     kind: DeclKind,
     namespaces: Namespace,
     is_ambient: bool,
+    is_global: bool,
     order: u32,
     def_id: Option<DefId>,
   ) -> DeclId {
@@ -422,6 +444,7 @@ impl SymbolTable {
       kind,
       namespaces,
       is_ambient,
+      is_global,
       order,
     });
     id

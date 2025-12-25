@@ -105,6 +105,7 @@ pub fn bind_ts_program(
     hir_provider: &hir_provider,
     modules: BTreeMap::new(),
     symbols: SymbolTable::new(),
+    global_symbols: BTreeMap::new(),
     diagnostics: Vec::new(),
     export_cache: HashMap::new(),
     next_decl_order: 0,
@@ -117,6 +118,7 @@ struct Binder<'a, HP: Fn(FileId) -> Arc<HirFile>> {
   hir_provider: &'a HP,
   modules: BTreeMap<FileId, ModuleState>,
   symbols: SymbolTable,
+  global_symbols: SymbolGroups,
   diagnostics: Vec<Diagnostic>,
   export_cache: HashMap<FileId, ExportStatus>,
   next_decl_order: u32,
@@ -155,17 +157,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       .map(|(id, m)| (*id, m.symbols.clone()))
       .collect();
 
-    let mut global_symbols: BTreeMap<String, SymbolGroup> = BTreeMap::new();
-    for module in self.modules.values() {
-      for (name, group) in module.symbols.iter() {
-        let entry = global_symbols.remove(name);
-        let merged = match entry {
-          None => group.clone(),
-          Some(existing) => merge_groups(existing, group.clone(), &mut self.symbols),
-        };
-        global_symbols.insert(name.clone(), merged);
-      }
-    }
+    let global_symbols = self.global_symbols.clone();
 
     (
       TsProgramSemantics {
@@ -194,16 +186,34 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         decl.kind.clone(),
         namespaces,
         decl.is_ambient,
+        decl.is_global,
         order,
         Some(decl.def_id),
       );
-      let symbol_id = self.add_decl_to_symbols(
+      let symbol_id = add_decl_to_groups(
         &mut state.symbols,
         &decl.name,
         decl_id,
         namespaces,
+        &mut self.symbols,
         SymbolOrigin::Local,
       );
+      if self.decl_participates_in_global(&hir, decl) {
+        add_decl_to_groups(
+          &mut self.global_symbols,
+          &decl.name,
+          decl_id,
+          namespaces,
+          &mut self.symbols,
+          SymbolOrigin::Local,
+        );
+      } else if decl.is_global && hir.file_kind != FileKind::Dts {
+        self.diagnostics.push(Diagnostic {
+          code: "BIND2001",
+          message: "global augmentations in non-.d.ts modules are not supported yet".to_string(),
+          file: Some(hir.file_id),
+        });
+      }
       match decl.exported {
         Exported::No => {}
         Exported::Named => {
@@ -364,6 +374,13 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     deps
   }
 
+  fn decl_participates_in_global(&self, hir: &HirFile, decl: &Decl) -> bool {
+    match hir.module_kind {
+      ModuleKind::Script => true,
+      ModuleKind::Module => decl.is_global && matches!(hir.file_kind, FileKind::Dts),
+    }
+  }
+
   fn add_import_binding(&mut self, state: &mut ModuleState, file: FileId, entry: &ImportEntry) {
     state.imports.insert(entry.local.clone(), entry.clone());
     let namespaces = if entry.type_only {
@@ -381,14 +398,16 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       DeclKind::ImportBinding,
       namespaces,
       false,
+      false,
       order,
       None,
     );
-    self.add_decl_to_symbols(
+    add_decl_to_groups(
       &mut state.symbols,
       &entry.local,
       decl_id,
       namespaces,
+      &mut self.symbols,
       SymbolOrigin::Import {
         from: entry.from,
         imported: match &entry.imported {
@@ -419,21 +438,6 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         .push(Diagnostic::error("BIND1002", message, span));
     }
     resolved
-  }
-
-  fn add_decl_to_symbols(
-    &mut self,
-    symbols: &mut SymbolGroups,
-    name: &str,
-    decl: DeclId,
-    namespaces: Namespace,
-    origin: SymbolOrigin,
-  ) -> SymbolId {
-    let group = symbols.remove(name).unwrap_or_else(SymbolGroup::empty);
-    let (group, symbol_id) =
-      merge_decl_into_group(group, name, decl, namespaces, &mut self.symbols, origin);
-    symbols.insert(name.to_string(), group);
-    symbol_id
   }
 
   fn exports_for(&mut self, file: FileId) -> ExportMap {
@@ -690,6 +694,20 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     self.next_decl_order += 1;
     order
   }
+}
+
+fn add_decl_to_groups(
+  symbols: &mut SymbolGroups,
+  name: &str,
+  decl: DeclId,
+  namespaces: Namespace,
+  table: &mut SymbolTable,
+  origin: SymbolOrigin,
+) -> SymbolId {
+  let group = symbols.remove(name).unwrap_or_else(SymbolGroup::empty);
+  let (group, symbol_id) = merge_decl_into_group(group, name, decl, namespaces, table, origin);
+  symbols.insert(name.to_string(), group);
+  symbol_id
 }
 
 fn filter_group(group: SymbolGroup, mask: Namespace, symbols: &SymbolTable) -> Option<SymbolGroup> {
