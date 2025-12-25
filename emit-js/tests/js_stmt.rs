@@ -105,7 +105,7 @@ fn if_wraps_non_block_bodies() {
     alternate: Some(expr_stmt(assign(id("b"), lit_num(2.0)))),
   })));
   let output = emit_single_stmt(if_stmt);
-  assert_eq!(output, "if(cond){a = 1;}else{b = 2;}");
+  assert_eq!(output, "if(cond){a=1;}else{b=2;}");
 }
 
 #[test]
@@ -136,7 +136,7 @@ fn for_triple_emits_all_parts_and_body_block() {
   })));
 
   let output = emit_single_stmt(for_stmt);
-  assert_eq!(output, "for(var i=0;i < n;i += 1){i;}");
+  assert_eq!(output, "for(var i=0;i<n;i+=1){i;}");
 }
 
 #[test]
