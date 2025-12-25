@@ -1,9 +1,10 @@
-use emit_js::{emit_expr, emit_jsx_elem, Emitter};
+use emit_js::{emit_expr, emit_jsx_elem, EmitOptions, Emitter};
 use parse_js::ast::expr::jsx::*;
 use parse_js::ast::expr::{Expr, IdExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::loc::Loc;
+use std::fmt;
 
 fn id_expr(name: &str) -> Node<IdExpr> {
   let len = name.len();
@@ -42,6 +43,28 @@ fn jsx_elem_from(
 fn emit_elem_to_string(elem: &Node<JsxElem>) -> String {
   let mut emitter = Emitter::default();
   emit_jsx_elem(&mut emitter, elem).unwrap();
+  String::from_utf8(emitter.into_bytes()).unwrap()
+}
+
+struct EmitterWriter<'a> {
+  emitter: &'a mut Emitter,
+}
+
+impl fmt::Write for EmitterWriter<'_> {
+  fn write_str(&mut self, s: &str) -> fmt::Result {
+    self.emitter.write_str(s);
+    Ok(())
+  }
+}
+
+fn emit_elem_with_emitter_to_string(elem: &Node<JsxElem>) -> String {
+  let mut emitter = Emitter::new(EmitOptions::default());
+  {
+    let mut writer = EmitterWriter {
+      emitter: &mut emitter,
+    };
+    emit_jsx_elem(&mut writer, elem).unwrap();
+  }
   String::from_utf8(emitter.into_bytes()).unwrap()
 }
 
@@ -305,6 +328,28 @@ fn emits_attributes() {
 }
 
 #[test]
+fn emitter_does_not_insert_spaces_in_text_attributes() {
+  let string_attr = jsx_elem_from(
+    Some(div_elem_name()),
+    vec![JsxAttr::Named {
+      name: Node::new(
+        Loc(0, 0),
+        JsxName {
+          namespace: None,
+          name: "title".into(),
+        },
+      ),
+      value: Some(JsxAttrVal::Text(jsx_text("ab"))),
+    }],
+    vec![],
+  );
+  assert_eq!(
+    emit_elem_with_emitter_to_string(&string_attr),
+    "<div title=\"ab\"/>"
+  );
+}
+
+#[test]
 fn emits_children() {
   let text_child = jsx_elem_from(
     Some(div_elem_name()),
@@ -372,4 +417,17 @@ fn emits_unicode_text_and_attributes() {
     emit_elem_to_string(&unicode),
     "<div title=\"你好\">你好</div>"
   );
+}
+
+#[test]
+fn emitter_does_not_insert_spaces_between_adjacent_text_children() {
+  let elem = jsx_elem_from(
+    Some(div_elem_name()),
+    vec![],
+    vec![
+      JsxElemChild::Text(jsx_text("a")),
+      JsxElemChild::Text(jsx_text("b")),
+    ],
+  );
+  assert_eq!(emit_elem_with_emitter_to_string(&elem), "<div>ab</div>");
 }
