@@ -9,7 +9,7 @@ use symbol_js::TopLevelMode;
 fn compile(source: &str) -> Program {
   let mut top_level = parse(source).expect("parse input");
   compute_symbols(&mut top_level, TopLevelMode::Module);
-  Program::compile(top_level, false).expect("compile input")
+  Program::compile(top_level, TopLevelMode::Module, false).expect("compile input")
 }
 
 fn inst_types(func: &ProgramFunction) -> Vec<InstTyp> {

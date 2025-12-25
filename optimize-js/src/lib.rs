@@ -209,6 +209,7 @@ impl Deref for ProgramCompiler {
 pub struct Program {
   pub functions: Vec<ProgramFunction>,
   pub top_level: ProgramFunction,
+  pub top_level_mode: TopLevelMode,
   pub symbols: Option<ProgramSymbols>,
 }
 
@@ -216,7 +217,7 @@ pub struct Program {
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
   let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
   compute_symbols(&mut top_level_node, mode);
-  Program::compile(top_level_node, debug)
+  Program::compile(top_level_node, mode, debug)
 }
 
 fn collect_symbol_table(root: &Scope, captured: &HashSet<Symbol>) -> ProgramSymbols {
@@ -281,7 +282,11 @@ fn collect_free_symbols(func: &ProgramFunction) -> Vec<Symbol> {
 
 impl Program {
   // The AST must already have symbol analysis done by compute_symbols.
-  pub fn compile(mut top_level_node: Node<TopLevel>, debug: bool) -> OptimizeResult<Self> {
+  pub fn compile(
+    mut top_level_node: Node<TopLevel>,
+    top_level_mode: TopLevelMode,
+    debug: bool,
+  ) -> OptimizeResult<Self> {
     let VarAnalysis {
       foreign,
       use_before_decl,
@@ -332,6 +337,7 @@ impl Program {
         return Ok(Self {
           functions,
           top_level,
+          top_level_mode,
           symbols: None,
         });
       }
@@ -340,6 +346,7 @@ impl Program {
     Ok(Self {
       functions,
       top_level,
+      top_level_mode,
       symbols: symbol_table.map(|mut table| {
         table.free_symbols = free_symbols;
         table
@@ -351,6 +358,7 @@ impl Program {
 #[cfg(test)]
 mod tests {
   use crate::cfg::cfg::Cfg;
+  use crate::compile_source;
   use crate::il::inst::Inst;
   use crate::il::inst::InstTyp;
   use crate::symbol::var_analysis::VarAnalysis;
@@ -364,7 +372,8 @@ mod tests {
   fn compile_with_debug_json(source: &str) -> String {
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
-    let Program { top_level, .. } = Program::compile(top_level_node, true).expect("compile");
+    let Program { top_level, .. } =
+      Program::compile(top_level_node, TopLevelMode::Module, true).expect("compile");
     let debug = top_level.debug.expect("debug enabled");
     to_string(&debug).expect("serialize debug output")
   }
@@ -390,7 +399,13 @@ mod tests {
   fn compile_with_mode(source: &str, mode: TopLevelMode) -> Program {
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, mode);
-    Program::compile(top_level_node, false).expect("compile input")
+    Program::compile(top_level_node, mode, false).expect("compile input")
+  }
+
+  #[test]
+  fn program_records_top_level_mode() {
+    let program = compile_source("var x = 1;", TopLevelMode::Global, false).expect("compile");
+    assert_eq!(program.top_level_mode, TopLevelMode::Global);
   }
 
   #[test]
@@ -414,7 +429,7 @@ mod tests {
     "#;
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
-    let _bblocks = Program::compile(top_level_node, false)
+    let _bblocks = Program::compile(top_level_node, TopLevelMode::Module, false)
       .expect("compile")
       .top_level;
   }
@@ -424,7 +439,8 @@ mod tests {
     let source = "function demo(){ a; let a = 1; }";
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
-    let err = Program::compile(top_level_node, false).expect_err("expected use-before-decl error");
+    let err = Program::compile(top_level_node, TopLevelMode::Module, false)
+      .expect_err("expected use-before-decl error");
     assert_eq!(err.len(), 1);
     let diagnostic = &err[0];
     assert_eq!(diagnostic.code, "OPT0001");
@@ -511,7 +527,8 @@ mod tests {
     assert!(analysis.unknown.contains("call_me"));
     assert!(!analysis.unknown.contains("a"));
 
-    let program = Program::compile(top_level_node, false).expect("compile input");
+    let program =
+      Program::compile(top_level_node, TopLevelMode::Module, false).expect("compile input");
     let insts = collect_all_insts(&program);
 
     assert!(insts.iter().all(|i| i.t != InstTyp::UnknownStore));
@@ -542,7 +559,8 @@ mod tests {
     let source = "a?.b = 1;";
     let mut top_level_node = parse(source).expect("parse input");
     compute_symbols(&mut top_level_node, TopLevelMode::Module);
-    let err = Program::compile(top_level_node, false).expect_err("expected error");
+    let err =
+      Program::compile(top_level_node, TopLevelMode::Module, false).expect_err("expected error");
     assert_eq!(err.len(), 1);
     assert_eq!(err[0].code, "OPT0002");
     assert!(err[0]

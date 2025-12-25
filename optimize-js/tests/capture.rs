@@ -34,7 +34,7 @@ fn compile_with_symbols(
   let scope = compute_symbols(&mut node, mode);
   let names = collect_symbol_names(&scope);
   let analysis = VarAnalysis::analyze(&mut node);
-  let program = Program::compile(node, false).expect("compile");
+  let program = Program::compile(node, mode, false).expect("compile");
   (program, analysis, names)
 }
 
