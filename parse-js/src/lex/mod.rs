@@ -759,6 +759,11 @@ fn lex_bigint_or_number(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   consume_digits_with_separators(lexer, &DIGIT);
   let end_pos = lexer.next();
   if !lexer.consume(lexer.if_char('n')).is_empty() {
+    // Decimal BigInt literals do not allow leading zeros (other than `0n`).
+    let integer_part = &lexer[Loc(start_pos, end_pos)];
+    if first_char == '0' && integer_part.len() > 1 {
+      return Ok(TT::Invalid);
+    }
     return Ok(TT::LiteralBigInt);
   }
   // Check if this is a legacy octal: starts with 0, has more digits, and all digits are 0-7

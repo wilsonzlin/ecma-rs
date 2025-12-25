@@ -43,9 +43,13 @@ fn test_lex_literal_numbers() {
 
 #[test]
 fn test_lex_literal_bigints() {
+  check("0n", [LiteralBigInt], Dialect::Tsx);
   check("1n", [LiteralBigInt], Dialect::Tsx);
   check("929n", [LiteralBigInt], Dialect::Tsx);
   check("10000n", [LiteralBigInt], Dialect::Tsx);
+  check("01n", [Invalid], Dialect::Tsx);
+  check("00n", [Invalid], Dialect::Tsx);
+  check("0_0n", [Invalid], Dialect::Tsx);
   check("0x800faceb00cn", [LiteralBigInt], Dialect::Tsx);
   check("0b110101010n", [LiteralBigInt], Dialect::Tsx);
   check("0o12077n", [LiteralBigInt], Dialect::Tsx);
