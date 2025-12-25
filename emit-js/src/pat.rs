@@ -6,8 +6,8 @@ use parse_js::ast::stmt::decl::{ParamDecl, PatDecl};
 use parse_js::token::TT;
 
 use crate::emit_string_literal_double_quoted;
-use crate::expr::EmitResult;
 use crate::expr::emit_expr_with_emitter;
+use crate::emitter::EmitResult;
 use crate::Emitter;
 
 fn emit_expr(out: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
