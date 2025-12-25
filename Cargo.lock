@@ -1947,13 +1947,13 @@ dependencies = [
  "num-bigint",
  "ordered-float",
  "parse-js",
-  "serde",
-  "serde_json",
-  "thiserror",
-  "tracing",
-  "tracing-subscriber",
-  "types-ts-interned",
-  "types-ts",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+ "types-ts",
+ "types-ts-interned",
 ]
 
 [[package]]
@@ -1987,6 +1987,14 @@ dependencies = [
  "tracing-subscriber",
  "typecheck-ts",
  "walkdir",
+]
+
+[[package]]
+name = "types-ts"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "tracing",
 ]
 
 [[package]]
