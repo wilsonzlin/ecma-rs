@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use diagnostics::{Diagnostic, FileId, Span, TextRange};
-use hir_js::{Body, Expr, ExprId, ExprKind, NameInterner, PatId, PatKind, StmtId, StmtKind};
+use diagnostics::{Diagnostic, FileId, Span};
+use hir_js::{
+  Body, CallExpr, Expr, ExprId, ExprKind, Literal, NameInterner, PatId, PatKind, StmtId, StmtKind,
+};
+use ordered_float::OrderedFloat;
 use types_ts_interned::{TypeId, TypeKind, TypeStore};
 
 const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
@@ -129,14 +132,25 @@ impl<'a> BodyChecker<'a> {
           self.check_stmt(*stmt_id, &mut inner);
         }
       }
-      StmtKind::Decl(_) | StmtKind::Empty | StmtKind::Other => {}
+      StmtKind::Var(var) => {
+        let prim = self.store.primitive_ids();
+        for decl in var.declarators.iter() {
+          let init_ty = decl
+            .init
+            .map(|expr| self.check_expr(expr, scope))
+            .unwrap_or(prim.unknown);
+          self.bind_pat(decl.pat, init_ty, scope);
+        }
+      }
+      _ => {}
     }
   }
 
   fn check_expr(&mut self, id: ExprId, scope: &mut Scope) -> TypeId {
     let expr = &self.body.exprs[id.0 as usize];
+    let prim = self.store.primitive_ids();
     let ty = match &expr.kind {
-      ExprKind::Missing => self.store.primitive_ids().unknown,
+      ExprKind::Missing => prim.unknown,
       ExprKind::Ident(name) => match scope.get(*name) {
         Some(ty) => ty,
         None => {
@@ -151,23 +165,21 @@ impl<'a> BodyChecker<'a> {
               range: expr.span,
             },
           ));
-          self.store.primitive_ids().unknown
+          prim.unknown
         }
       },
-      ExprKind::Literal => self.infer_literal(expr.span),
-      ExprKind::Binary { left, right } => {
+      ExprKind::Literal(lit) => self.infer_literal_value(lit),
+      ExprKind::Binary { left, right, .. } => {
         let l = self.check_expr(*left, scope);
         let r = self.check_expr(*right, scope);
         self.infer_binary(expr, l, r)
       }
-      ExprKind::Call { callee, args, .. } => self.check_call(expr, *callee, args, scope),
-      ExprKind::Member {
-        object, property, ..
-      } => {
-        let _ = self.check_expr(*object, scope);
+      ExprKind::Call(call) => self.check_call(expr, call, scope),
+      ExprKind::Member(member) => {
+        let _ = self.check_expr(member.object, scope);
         // Without full object typing, treat member access as unknown.
-        let _ = property;
-        self.store.primitive_ids().unknown
+        let _ = &member.property;
+        prim.unknown
       }
       ExprKind::Conditional {
         test,
@@ -179,19 +191,42 @@ impl<'a> BodyChecker<'a> {
         let alt = self.check_expr(*alternate, scope);
         self.store.union(vec![cons, alt])
       }
-      ExprKind::Assignment { target, value } => {
+      ExprKind::Assignment { target, value, .. } => {
         let value_ty = self.check_expr(*value, scope);
         self.bind_pat(*target, value_ty, scope);
         value_ty
       }
-      ExprKind::FunctionExpr { .. }
-      | ExprKind::ClassExpr { .. }
-      | ExprKind::This
-      | ExprKind::Super
-      | ExprKind::Await { .. }
-      | ExprKind::Object
-      | ExprKind::Array
-      | ExprKind::Other => self.store.primitive_ids().unknown,
+      ExprKind::Await { expr, .. } => {
+        let _ = self.check_expr(*expr, scope);
+        prim.unknown
+      }
+      ExprKind::Array(arr) => {
+        for el in arr.elements.iter() {
+          match el {
+            hir_js::ArrayElement::Expr(e) | hir_js::ArrayElement::Spread(e) => {
+              let _ = self.check_expr(*e, scope);
+            }
+            hir_js::ArrayElement::Empty => {}
+          }
+        }
+        prim.unknown
+      }
+      ExprKind::Object(obj) => {
+        for prop in obj.properties.iter() {
+          match prop {
+            hir_js::ObjectProperty::KeyValue { value, .. } => {
+              let _ = self.check_expr(*value, scope);
+            }
+            hir_js::ObjectProperty::Getter { .. }
+            | hir_js::ObjectProperty::Setter { .. } => {}
+            hir_js::ObjectProperty::Spread(expr) => {
+              let _ = self.check_expr(*expr, scope);
+            }
+          }
+        }
+        prim.unknown
+      }
+      _ => prim.unknown,
     };
     if let Some(slot) = self.expr_types.get_mut(id.0 as usize) {
       *slot = ty;
@@ -208,9 +243,29 @@ impl<'a> BodyChecker<'a> {
           *slot = value;
         }
       }
-      PatKind::Destructure(children) => {
-        for child in children {
-          self.bind_pat(*child, self.store.primitive_ids().unknown, scope);
+      PatKind::Array(array) => {
+        for elem in array.elements.iter().flatten() {
+          self.bind_pat(elem.pat, self.store.primitive_ids().unknown, scope);
+          if let Some(default) = elem.default_value {
+            let _ = self.check_expr(default, scope);
+          }
+        }
+        if let Some(rest) = &array.rest {
+          self.bind_pat(*rest, value, scope);
+        }
+        if let Some(slot) = self.pat_types.get_mut(pat_id.0 as usize) {
+          *slot = value;
+        }
+      }
+      PatKind::Object(obj) => {
+        for prop in obj.props.iter() {
+          self.bind_pat(prop.value, self.store.primitive_ids().unknown, scope);
+          if let Some(default) = prop.default_value {
+            let _ = self.check_expr(default, scope);
+          }
+        }
+        if let Some(rest) = &obj.rest {
+          self.bind_pat(*rest, value, scope);
         }
         if let Some(slot) = self.pat_types.get_mut(pat_id.0 as usize) {
           *slot = value;
@@ -218,6 +273,16 @@ impl<'a> BodyChecker<'a> {
       }
       PatKind::Rest(inner) => {
         self.bind_pat(**inner, value, scope);
+        if let Some(slot) = self.pat_types.get_mut(pat_id.0 as usize) {
+          *slot = value;
+        }
+      }
+      PatKind::Assign {
+        target,
+        default_value,
+      } => {
+        let _ = self.check_expr(*default_value, scope);
+        self.bind_pat(*target, value, scope);
         if let Some(slot) = self.pat_types.get_mut(pat_id.0 as usize) {
           *slot = value;
         }
@@ -235,38 +300,30 @@ impl<'a> BodyChecker<'a> {
           ));
         }
       }
-      PatKind::Unknown => {}
     }
   }
 
-  fn infer_literal(&self, span: TextRange) -> TypeId {
-    let prim = self.store.primitive_ids();
-    if span.end as usize <= self.source.len() && span.start as usize <= self.source.len() {
-      let text = &self.source[span.start as usize..span.end as usize];
-      let trimmed = text.trim();
-      if trimmed.starts_with('"') || trimmed.starts_with('\'') || trimmed.starts_with('`') {
-        let name = self
-          .store
-          .intern_name(trimmed.trim_matches(&['"', '\'', '`'][..]));
-        return self.store.intern_type(TypeKind::StringLiteral(name));
+  fn infer_literal_value(&self, lit: &Literal) -> TypeId {
+    match lit {
+      Literal::String(s) => {
+        let name = self.store.intern_name(s.clone());
+        self.store.intern_type(TypeKind::StringLiteral(name))
       }
-      if trimmed == "true" {
-        return self.store.intern_type(TypeKind::BooleanLiteral(true));
+      Literal::Number(n) => {
+        if let Ok(parsed) = n.parse::<f64>() {
+          self
+            .store
+            .intern_type(TypeKind::NumberLiteral(OrderedFloat::from(parsed)))
+        } else {
+          self.store.primitive_ids().number
+        }
       }
-      if trimmed == "false" {
-        return self.store.intern_type(TypeKind::BooleanLiteral(false));
-      }
-      if trimmed == "null" {
-        return prim.null;
-      }
-      if trimmed == "undefined" {
-        return prim.undefined;
-      }
-      if trimmed.parse::<f64>().is_ok() {
-        return prim.number;
-      }
+      Literal::Boolean(b) => self.store.intern_type(TypeKind::BooleanLiteral(*b)),
+      Literal::Null => self.store.primitive_ids().null,
+      Literal::Undefined => self.store.primitive_ids().undefined,
+      Literal::BigInt(_) => self.store.primitive_ids().bigint,
+      Literal::Regex(_) => self.store.primitive_ids().unknown,
     }
-    prim.unknown
   }
 
   fn infer_binary(&self, expr: &Expr, left: TypeId, right: TypeId) -> TypeId {
@@ -294,11 +351,10 @@ impl<'a> BodyChecker<'a> {
   fn check_call(
     &mut self,
     expr: &Expr,
-    callee: ExprId,
-    args: &[ExprId],
+    call: &CallExpr,
     scope: &mut Scope,
   ) -> TypeId {
-    let callee_ty = self.check_expr(callee, scope);
+    let callee_ty = self.check_expr(call.callee, scope);
     let prim = self.store.primitive_ids();
     match self.store.type_kind(callee_ty) {
       TypeKind::Callable { overloads } => {
@@ -306,7 +362,7 @@ impl<'a> BodyChecker<'a> {
           return prim.unknown;
         }
         let sig = self.store.signature(overloads[0]);
-        if args.len() != sig.params.len() {
+        if call.args.len() != sig.params.len() {
           self.diagnostics.push(Diagnostic::error(
             CODE_ARGUMENT_COUNT_MISMATCH,
             "argument count mismatch",
@@ -316,8 +372,8 @@ impl<'a> BodyChecker<'a> {
             },
           ));
         }
-        for (idx, arg) in args.iter().enumerate() {
-          let arg_ty = self.check_expr(*arg, scope);
+        for (idx, arg) in call.args.iter().enumerate() {
+          let arg_ty = self.check_expr(arg.expr, scope);
           if let Some(param) = sig.params.get(idx) {
             if !self.assignable(arg_ty, param.ty) {
               self.diagnostics.push(Diagnostic::error(
@@ -325,7 +381,7 @@ impl<'a> BodyChecker<'a> {
                 "argument type mismatch",
                 Span {
                   file: self.file,
-                  range: self.body.exprs[arg.0 as usize].span,
+                  range: self.body.exprs[arg.expr.0 as usize].span,
                 },
               ));
             }

@@ -12,9 +12,9 @@ serde = ["dep:serde", "diagnostics/serde", "hir-js/serde"]
 
 [dependencies]
 diagnostics = { path = "../diagnostics" }
+hir-js = { path = "../hir-js" }
 parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
 semantic-js = { path = "../semantic-js" }
-hir-js = { path = "../hir-js" }
 serde = { version = "1.0", features = ["derive"], optional = true }
 thiserror = "1.0"
 tracing = "0.1"

@@ -3024,17 +3024,19 @@ fn lower_module_items(
                 });
                 next_export += 1;
               } else {
-                let name_id = defs[def.0 as usize].path.name;
-                push_named_export(
-                  &mut exports,
-                  span_map,
-                  &mut next_export,
-                  &mut next_export_spec,
-                  decl.span,
-                  name_id,
-                  Some(def),
-                  decl.type_only,
-                );
+                if let Some(def_data) = defs.get(def.0 as usize) {
+                  let name_id = def_data.path.name;
+                  push_named_export(
+                    &mut exports,
+                    span_map,
+                    &mut next_export,
+                    &mut next_export_spec,
+                    decl.span,
+                    name_id,
+                    Some(def),
+                    decl.type_only,
+                  );
+                }
               }
             }
           }

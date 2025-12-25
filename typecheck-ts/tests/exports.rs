@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use typecheck_ts::{FileId, Host, HostError, Program};
+use types_ts_interned::TypeKind as InternedTypeKind;
 
 #[derive(Default)]
 struct MemoryHost {
@@ -153,7 +154,7 @@ fn type_only_reexports_filtered() {
   );
   let value = exports.get("value").expect("value export present");
   let ty = value.type_id.expect("type for value");
-  assert_eq!(program.display_type(ty).to_string(), "number");
+  assert_eq!(program.display_type(ty).to_string(), "1");
 }
 
 #[test]
@@ -171,4 +172,51 @@ fn export_namespace_all_reports_diagnostic() {
     "expected unsupported pattern diagnostic"
   );
   assert_eq!(diagnostics[0].code.as_str(), "TC1004");
+}
+
+#[test]
+fn interned_type_for_exported_function() {
+  let mut host = MemoryHost::default();
+  host.insert(
+    FileId(30),
+    "export function add(a: number, b: number): number { return a + b; }",
+  );
+
+  let program = Program::new(host, vec![FileId(30)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let def = program
+    .definitions_in_file(FileId(30))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("add"))
+    .expect("add definition");
+  let ty = program.type_of_def_interned(def);
+  assert_eq!(
+    program.display_interned_type(ty).to_string(),
+    "(number, number) => number"
+  );
+}
+
+#[test]
+fn recursive_type_alias_produces_ref() {
+  let mut host = MemoryHost::default();
+  host.insert(FileId(40), "type Node = Node;");
+
+  let program = Program::new(host, vec![FileId(40)]);
+  let _ = program.check();
+
+  let def = program
+    .definitions_in_file(FileId(40))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Node"))
+    .expect("Node alias");
+  let ty = program.type_of_def_interned(def);
+  match program.interned_type_kind(ty) {
+    InternedTypeKind::Ref { def: target, .. } => assert_eq!(target.0, def.0),
+    other => panic!("expected ref, got {:?}", other),
+  }
 }

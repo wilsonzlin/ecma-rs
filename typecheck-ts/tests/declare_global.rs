@@ -7,11 +7,37 @@ use parse_js::parse;
 use semantic_js::ts::{
   bind_ts_program, Decl, DeclKind, Exported, FileId, FileKind, HirFile, ModuleKind, Resolver,
 };
+use typecheck_ts::{FileId as TcFileId, Host, HostError, Program};
 
 struct NoResolve;
 
 impl Resolver for NoResolve {
   fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
+    None
+  }
+}
+
+#[derive(Default)]
+struct MemoryHost {
+  files: HashMap<TcFileId, Arc<str>>,
+}
+
+impl MemoryHost {
+  fn insert(&mut self, id: TcFileId, source: &str) {
+    self.files.insert(id, Arc::from(source.to_string()));
+  }
+}
+
+impl Host for MemoryHost {
+  fn file_text(&self, file: TcFileId) -> Result<Arc<str>, HostError> {
+    self
+      .files
+      .get(&file)
+      .cloned()
+      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+  }
+
+  fn resolve(&self, _from: TcFileId, _spec: &str) -> Option<TcFileId> {
     None
   }
 }
@@ -59,5 +85,33 @@ fn declare_global_from_dts_is_available_globally() {
   assert_eq!(
     ModuleKind::Script,
     files.get(&FileId(0)).unwrap().module_kind
+  );
+}
+
+#[test]
+fn interfaces_merge_members_for_interned_types() {
+  let mut host = MemoryHost::default();
+  host.insert(
+    TcFileId(1),
+    "interface Foo { a: string; }\ninterface Foo { b: number; }",
+  );
+
+  let program = Program::new(host, vec![TcFileId(1)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let def = program
+    .definitions_in_file(TcFileId(1))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Foo"))
+    .expect("Foo definition");
+  let ty = program.type_of_def_interned(def);
+  let rendered = program.display_interned_type(ty).to_string();
+  assert!(
+    rendered.contains("a: string") && rendered.contains("b: number"),
+    "merged interface should expose all members, got {rendered}"
   );
 }

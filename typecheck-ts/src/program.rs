@@ -1,5 +1,6 @@
-use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
+pub use diagnostics::{Diagnostic, FileId, Label, Severity, Span, TextRange};
+use hir_js::{lower_file_with_diagnostics, DefTypeInfo as HirDefTypeInfo, LowerResult as HirLower};
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};
@@ -17,21 +18,25 @@ use parse_js::ast::type_expr::{
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
-use types_ts_interned::{self as tti, TypeId};
 
-use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 use crate::{FatalError, HostError, Ice, IceContext};
-use diagnostics::sort_diagnostics;
+use types_ts_interned::{
+  Indexer, ObjectType as InternedObjectType, Param, PropData, PropKey, Property, Shape, Signature,
+  TypeDisplay as InternedTypeDisplay, TypeId as InternedTypeId, TypeKind as InternedTypeKind,
+  TypeStore as InternedTypeStore,
+};
 
 #[path = "check/mod.rs"]
 pub(crate) mod check;
 
+use self::check::decls::HirDeclLowerer;
 use check::narrow::{
   narrow_by_discriminant, narrow_by_in_check, narrow_by_typeof, truthy_falsy_types, Facts,
 };
@@ -41,6 +46,11 @@ pub(crate) const CODE_NON_DTS_LIB: &str = "TC0004";
 pub(crate) const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
 pub(crate) const CODE_EXCESS_PROPERTY: &str = "TC0006";
 pub(crate) const CODE_TYPE_MISMATCH: &str = "TC0007";
+pub use hir_js::{BodyId, DefId, ExprId};
+
+/// Interned type handle.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
+pub struct TypeId(pub u32);
 
 const CODE_UNRESOLVED_MODULE: &str = "TC1001";
 const CODE_UNKNOWN_EXPORT: &str = "TC1002";
@@ -75,9 +85,10 @@ pub trait Host: Send + Sync + 'static {
 
 /// Public symbol identifier exposed through [`Program::symbol_at`].
 pub mod semantic_js {
+  use serde::{Deserialize, Serialize};
+
   /// Opaque symbol identifier.
-  #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-  #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
+  #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
   pub struct SymbolId(pub u32);
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
@@ -94,8 +105,7 @@ pub mod semantic_js {
 }
 
 /// Export entry for [`ExportMap`].
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ExportEntry {
   /// Symbol backing the export.
   pub symbol: semantic_js::SymbolId,
@@ -108,25 +118,19 @@ pub struct ExportEntry {
 /// Mapping from export names to entries.
 pub type ExportMap = BTreeMap<String, ExportEntry>;
 
-/// Per-body typing result. Expression and pattern IDs are local to the body.
+/// Per-body typing result. Expression IDs are local to the body.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct BodyCheckResult {
   body: BodyId,
   expr_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
-  pat_types: Vec<TypeId>,
-  pat_spans: Vec<TextRange>,
   diagnostics: Vec<Diagnostic>,
   return_types: Vec<TypeId>,
+  pat_types: Vec<TypeId>,
 }
 
 impl BodyCheckResult {
-  /// Body identifier this result corresponds to.
-  pub fn body(&self) -> BodyId {
-    self.body
-  }
-
   /// Diagnostics produced while checking this body.
   pub fn diagnostics(&self) -> &[Diagnostic] {
     &self.diagnostics
@@ -137,19 +141,9 @@ impl BodyCheckResult {
     self.expr_types.get(expr.0 as usize).copied()
   }
 
-  /// Type for a specific pattern, if known.
-  pub fn pat_type(&self, pat: PatId) -> Option<TypeId> {
-    self.pat_types.get(pat.0 as usize).copied()
-  }
-
   /// Span for a specific expression.
   pub fn expr_span(&self, expr: ExprId) -> Option<TextRange> {
     self.expr_spans.get(expr.0 as usize).copied()
-  }
-
-  /// Span for a specific pattern.
-  pub fn pat_span(&self, pat: PatId) -> Option<TextRange> {
-    self.pat_spans.get(pat.0 as usize).copied()
   }
 
   /// Find the innermost expression covering the given offset.
@@ -184,160 +178,163 @@ impl BodyCheckResult {
   pub fn return_types(&self) -> &[TypeId] {
     &self.return_types
   }
+
+  /// Type recorded for a pattern, if available.
+  pub fn pat_type(&self, pat: hir_js::PatId) -> Option<TypeId> {
+    self.pat_types.get(pat.0 as usize).copied()
+  }
+}
+
+/// Owned helper for displaying interned types without holding program locks.
+pub struct InternedTypeDisplayOwned {
+  store: Arc<InternedTypeStore>,
+  ty: InternedTypeId,
+}
+
+impl std::fmt::Display for InternedTypeDisplayOwned {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let display = InternedTypeDisplay::new(self.store.as_ref(), self.ty);
+    write!(f, "{}", display)
+  }
 }
 
 /// Helper returned from [`Program::display_type`].
-///
-/// When the optional `serde` feature is enabled this serializes to the rendered
-/// string form for easy inclusion in JSON outputs.
-#[derive(Clone)]
-pub struct TypeDisplay {
-  store: Arc<tti::TypeStore>,
-  ty: tti::TypeId,
-}
-
-impl std::fmt::Display for TypeDisplay {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    tti::TypeDisplay::new(&self.store, self.ty).fmt(f)
-  }
-}
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for TypeDisplay {
-  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&self.to_string())
-  }
-}
-
-fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeStore>, tti::TypeId) {
-  let store = tti::TypeStore::new();
-  let mut cache = HashMap::new();
-  let interned = convert_type_for_display(ty, state, &store, &mut cache);
-  (store, interned)
-}
-
-fn convert_type_for_display(
+pub struct TypeDisplay<'a> {
+  program: &'a Program,
   ty: TypeId,
-  state: &ProgramState,
-  store: &Arc<tti::TypeStore>,
-  cache: &mut HashMap<TypeId, tti::TypeId>,
-) -> tti::TypeId {
-  if let Some(mapped) = cache.get(&ty) {
-    return *mapped;
+}
+
+impl<'a> std::fmt::Display for TypeDisplay<'a> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    let mut state = self.program.lock_state();
+    state.ensure_analyzed(
+      &self.program.host,
+      &self.program.roots,
+      &self.program.cancelled,
+    );
+    let TypeDisplay { program: _, ty } = *self;
+    let kind = state.type_store.kind(ty).clone();
+    drop(state);
+    format_type(kind, self.program, f)
   }
-  let primitives = store.primitive_ids();
-  cache.insert(ty, primitives.unknown);
-  let mapped = match state.type_store.kind(ty).clone() {
-    TypeKind::Any => primitives.any,
-    TypeKind::Unknown => primitives.unknown,
-    TypeKind::Never => primitives.never,
-    TypeKind::Void => primitives.void,
-    TypeKind::Number => primitives.number,
-    TypeKind::String => primitives.string,
-    TypeKind::Boolean => primitives.boolean,
-    TypeKind::Null => primitives.null,
-    TypeKind::Undefined => primitives.undefined,
-    TypeKind::LiteralString(name) => {
-      let name = store.intern_name(name);
-      store.intern_type(tti::TypeKind::StringLiteral(name))
-    }
-    TypeKind::LiteralNumber(value) => match value.parse::<f64>() {
-      Ok(num) => store.intern_type(tti::TypeKind::NumberLiteral(OrderedFloat(num))),
-      Err(_) => primitives.number,
-    },
-    TypeKind::LiteralBoolean(value) => store.intern_type(tti::TypeKind::BooleanLiteral(value)),
+}
+
+fn format_type(
+  kind: TypeKind,
+  program: &Program,
+  f: &mut std::fmt::Formatter<'_>,
+) -> std::fmt::Result {
+  match kind {
+    TypeKind::Any => write!(f, "any"),
+    TypeKind::Unknown => write!(f, "unknown"),
+    TypeKind::Number => write!(f, "number"),
+    TypeKind::String => write!(f, "string"),
+    TypeKind::Boolean => write!(f, "boolean"),
+    TypeKind::Null => write!(f, "null"),
+    TypeKind::Undefined => write!(f, "undefined"),
+    TypeKind::LiteralString(s) => write!(f, "\"{}\"", s),
+    TypeKind::LiteralNumber(n) => write!(f, "{}", n),
+    TypeKind::LiteralBoolean(b) => write!(f, "{}", b),
+    TypeKind::Void => write!(f, "void"),
+    TypeKind::Never => write!(f, "never"),
     TypeKind::Array(inner) => {
-      let inner = convert_type_for_display(inner, state, store, cache);
-      store.intern_type(tti::TypeKind::Array {
-        ty: inner,
-        readonly: false,
-      })
+      let needs_parens = {
+        let state = program.lock_state();
+        matches!(state.type_store.kind(inner), TypeKind::Union(_))
+      };
+      if needs_parens {
+        write!(f, "({})[]", program.display_type(inner))
+      } else {
+        write!(f, "{}[]", program.display_type(inner))
+      }
     }
     TypeKind::ReadonlyArray(inner) => {
-      let inner = convert_type_for_display(inner, state, store, cache);
-      store.intern_type(tti::TypeKind::Array {
-        ty: inner,
-        readonly: true,
-      })
+      let needs_parens = {
+        let state = program.lock_state();
+        matches!(state.type_store.kind(inner), TypeKind::Union(_))
+      };
+      if needs_parens {
+        write!(f, "readonly ({})[]", program.display_type(inner))
+      } else {
+        write!(f, "readonly {}[]", program.display_type(inner))
+      }
     }
-    TypeKind::Tuple(types, readonly) => {
-      let elements = types
-        .into_iter()
-        .map(|t| {
-          let ty = convert_type_for_display(t, state, store, cache);
-          tti::TupleElem {
-            ty,
-            optional: false,
-            rest: false,
-            readonly,
-          }
-        })
-        .collect();
-      store.intern_type(tti::TypeKind::Tuple(elements))
+    TypeKind::Tuple(elements, readonly) => {
+      if readonly {
+        write!(f, "readonly ")?;
+      }
+      write!(f, "[")?;
+      for (idx, el) in elements.iter().enumerate() {
+        if idx > 0 {
+          write!(f, ", ")?;
+        }
+        write!(f, "{}", program.display_type(*el))?;
+      }
+      write!(f, "]")
     }
     TypeKind::Union(types) => {
-      let members: Vec<_> = types
-        .into_iter()
-        .map(|t| convert_type_for_display(t, state, store, cache))
-        .collect();
-      store.union(members)
+      let mut first = true;
+      for ty in types {
+        if !first {
+          write!(f, " | ")?;
+        }
+        first = false;
+        write!(f, "{}", program.display_type(ty))?;
+      }
+      Ok(())
     }
     TypeKind::Function { params, ret } => {
-      let params: Vec<_> = params
-        .into_iter()
-        .map(|param| tti::Param {
-          name: None,
-          ty: convert_type_for_display(param, state, store, cache),
-          optional: false,
-          rest: false,
-        })
-        .collect();
-      let sig = tti::Signature::new(params, convert_type_for_display(ret, state, store, cache));
-      let sig_id = store.intern_signature(sig);
-      store.intern_type(tti::TypeKind::Callable {
-        overloads: vec![sig_id],
-      })
+      write!(f, "(")?;
+      for (idx, p) in params.iter().enumerate() {
+        if idx > 0 {
+          write!(f, ", ")?;
+        }
+        write!(f, "{}", program.display_type(*p))?;
+      }
+      write!(f, ") => {}", program.display_type(ret))
     }
-    TypeKind::Predicate { asserted, .. } => match asserted {
-      Some(ty) => convert_type_for_display(ty, state, store, cache),
-      None => primitives.boolean,
-    },
     TypeKind::Object(obj) => {
-      let mut shape = tti::Shape::new();
-      for (name, prop) in obj.props {
-        let key = tti::PropKey::String(store.intern_name(name));
-        let data = tti::PropData {
-          ty: convert_type_for_display(prop.typ, state, store, cache),
-          optional: prop.optional,
-          readonly: false,
-          accessibility: None,
-          is_method: false,
-          origin: None,
-          declared_on: None,
-        };
-        shape.properties.push(tti::Property { key, data });
+      let mut entries: Vec<String> = Vec::new();
+      for (k, v) in obj.props.iter() {
+        entries.push(format!(
+          "{}{}{}: {}",
+          if v.readonly { "readonly " } else { "" },
+          k,
+          if v.optional { "?" } else { "" },
+          program.display_type(v.typ)
+        ));
       }
-      if let Some(value_type) = obj.string_index {
-        shape.indexers.push(tti::Indexer {
-          key_type: primitives.string,
-          value_type: convert_type_for_display(value_type, state, store, cache),
-          readonly: false,
-        });
+      if let Some(ty) = obj.string_index {
+        entries.push(format!("[key: string]: {}", program.display_type(ty)));
       }
-      if let Some(value_type) = obj.number_index {
-        shape.indexers.push(tti::Indexer {
-          key_type: primitives.number,
-          value_type: convert_type_for_display(value_type, state, store, cache),
-          readonly: false,
-        });
+      if let Some(ty) = obj.number_index {
+        entries.push(format!("[index: number]: {}", program.display_type(ty)));
       }
-      let shape_id = store.intern_shape(shape);
-      let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
-      store.intern_type(tti::TypeKind::Object(obj_id))
+      match entries.len() {
+        0 => write!(f, "{{}}"),
+        _ => write!(f, "{{ {} }}", entries.join("; ")),
+      }
     }
-  };
-  cache.insert(ty, mapped);
-  mapped
+    TypeKind::Predicate {
+      parameter,
+      asserted,
+      asserts,
+    } => {
+      if asserts {
+        write!(f, "asserts {}", parameter)?;
+      } else {
+        write!(f, "{}", parameter)?;
+      }
+      if let Some(ty) = asserted {
+        if asserts {
+          write!(f, " is {}", program.display_type(ty))?;
+        } else {
+          write!(f, " is {}", program.display_type(ty))?;
+        }
+      }
+      Ok(())
+    }
+  }
 }
 
 /// Primary entry point for parsing and type checking.
@@ -346,14 +343,7 @@ pub struct Program {
   roots: Vec<FileId>,
   cancelled: AtomicBool,
   state: std::sync::Mutex<ProgramState>,
-  query_stats: QueryStatsCollector,
 }
-
-// Ensure the primary API surface is usable across threads.
-const _: fn() = || {
-  fn assert_send_sync<T: Send + Sync>() {}
-  assert_send_sync::<Program>();
-};
 
 impl Program {
   /// Create a new program from a host and root file list.
@@ -367,13 +357,11 @@ impl Program {
     roots: Vec<FileId>,
     lib_manager: Arc<LibManager>,
   ) -> Program {
-    let query_stats = QueryStatsCollector::default();
     Program {
       host: Arc::new(host),
       roots,
       cancelled: AtomicBool::new(false),
-      state: std::sync::Mutex::new(ProgramState::new(lib_manager, query_stats.clone())),
-      query_stats,
+      state: std::sync::Mutex::new(ProgramState::new(lib_manager)),
     }
   }
 
@@ -399,7 +387,6 @@ impl Program {
         let res = state.check_body(body);
         diagnostics.extend(res.diagnostics.iter().cloned());
       }
-      sort_diagnostics(&mut diagnostics);
       Ok(diagnostics)
     })
   }
@@ -407,11 +394,6 @@ impl Program {
   /// Request cancellation of ongoing work.
   pub fn cancel(&self) {
     self.cancelled.store(true, Ordering::Relaxed);
-  }
-
-  /// Snapshot of aggregate query statistics collected so far.
-  pub fn query_stats(&self) -> QueryStats {
-    self.query_stats.snapshot()
   }
 
   fn ensure_not_cancelled(&self) -> Result<(), FatalError> {
@@ -465,6 +447,21 @@ impl Program {
     state.builtin.unknown
   }
 
+  /// Interned TypeScript type for a definition.
+  pub fn type_of_def_interned(&self, def: DefId) -> InternedTypeId {
+    match self.type_of_def_interned_fallible(def) {
+      Ok(ty) => ty,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        self.lock_state().interned_store.primitive_ids().unknown
+      }
+    }
+  }
+
+  pub fn type_of_def_interned_fallible(&self, def: DefId) -> Result<InternedTypeId, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.type_of_def_interned(def)))
+  }
+
   /// Type for a definition.
   pub fn type_of_def(&self, def: DefId) -> TypeId {
     match self.type_of_def_fallible(def) {
@@ -490,10 +487,9 @@ impl Program {
           body,
           expr_types: Vec::new(),
           expr_spans: Vec::new(),
-          pat_types: Vec::new(),
-          pat_spans: Vec::new(),
           diagnostics,
           return_types: Vec::new(),
+          pat_types: Vec::new(),
         })
       }
     }
@@ -602,13 +598,20 @@ impl Program {
   }
 
   /// Helper to render a type as displayable string.
-  pub fn display_type(&self, ty: TypeId) -> TypeDisplay {
-    let (store, ty) = {
-      let mut state = self.lock_state();
-      state.ensure_analyzed(&self.host, &self.roots, &self.cancelled);
-      display_type_from_state(&state, ty)
-    };
-    TypeDisplay { store, ty }
+  pub fn display_type(&self, ty: TypeId) -> TypeDisplay<'_> {
+    TypeDisplay { program: self, ty }
+  }
+
+  pub fn display_interned_type(&self, ty: InternedTypeId) -> InternedTypeDisplayOwned {
+    let state = self.lock_state();
+    let store = state.interned_store.clone();
+    drop(state);
+    InternedTypeDisplayOwned { store, ty }
+  }
+
+  pub fn interned_type_kind(&self, ty: InternedTypeId) -> InternedTypeKind {
+    let state = self.lock_state();
+    state.interned_store.type_kind(ty)
   }
 
   /// Definitions declared in a file.
@@ -665,7 +668,7 @@ impl Program {
       Ok(state.def_data.get(&def).and_then(|d| match &d.kind {
         DefKind::Function(func) => func.body,
         DefKind::Var(var) => Some(var.body),
-        DefKind::Import(_) => None,
+        _ => None,
       }))
     })
   }
@@ -699,12 +702,19 @@ struct SymbolBinding {
   type_id: Option<TypeId>,
 }
 
+#[derive(Clone, Debug)]
+struct PendingReexport {
+  source: FileId,
+  target: FileId,
+  name: String,
+  span: TextRange,
+}
+
 #[derive(Clone)]
 struct FileState {
   defs: Vec<DefId>,
   exports: ExportMap,
-  /// Bindings kept in name order to ensure deterministic global merges.
-  bindings: BTreeMap<String, SymbolBinding>,
+  bindings: HashMap<String, SymbolBinding>,
   top_body: Option<BodyId>,
 }
 
@@ -718,13 +728,6 @@ impl sem_ts::Resolver for HostResolver {
       .host
       .resolve(FileId(from.0), specifier)
       .map(|f| sem_ts::FileId(f.0))
-  }
-}
-
-fn sem_file_kind(kind: FileKind) -> sem_ts::FileKind {
-  match kind {
-    FileKind::Dts => sem_ts::FileKind::Dts,
-    _ => sem_ts::FileKind::Ts,
   }
 }
 
@@ -744,6 +747,8 @@ enum DefKind {
   Function(FuncData),
   Var(VarData),
   Import(ImportData),
+  TypeAlias,
+  Interface,
 }
 
 #[derive(Clone, Debug)]
@@ -758,7 +763,6 @@ struct ParamData {
   name: String,
   typ: Option<TypeId>,
   symbol: semantic_js::SymbolId,
-  pat: Option<PatId>,
 }
 
 #[derive(Clone, Debug)]
@@ -777,17 +781,15 @@ struct ImportData {
 #[derive(Clone, Debug)]
 struct SemHirBuilder {
   file: FileId,
-  file_kind: sem_ts::FileKind,
   decls: Vec<sem_ts::Decl>,
   imports: Vec<sem_ts::Import>,
   exports: Vec<sem_ts::Export>,
 }
 
 impl SemHirBuilder {
-  fn new(file: FileId, file_kind: sem_ts::FileKind) -> Self {
+  fn new(file: FileId) -> Self {
     SemHirBuilder {
       file,
-      file_kind,
       decls: Vec::new(),
       imports: Vec::new(),
       exports: Vec::new(),
@@ -849,7 +851,7 @@ impl SemHirBuilder {
     sem_ts::HirFile {
       file_id: sem_ts::FileId(self.file.0),
       module_kind: sem_ts::ModuleKind::Module,
-      file_kind: self.file_kind,
+      file_kind: sem_ts::FileKind::Ts,
       decls: self.decls,
       imports: self.imports,
       exports: self.exports,
@@ -866,7 +868,6 @@ struct BodyData {
   owner: Option<DefId>,
   stmts: Vec<HirStmt>,
   expr_spans: Vec<TextRange>,
-  pat_spans: Vec<TextRange>,
 }
 
 #[allow(dead_code)]
@@ -879,7 +880,6 @@ enum HirStmt {
     span: TextRange,
     symbol: semantic_js::SymbolId,
     def: Option<DefId>,
-    pat: Option<PatId>,
     mode: VarDeclMode,
   },
   Return {
@@ -951,8 +951,33 @@ enum HirExprKind {
     typ: Option<TypeId>,
     _const_assertion: bool,
   },
+  Satisfies {
+    expr: Box<HirExpr>,
+    typ: TypeId,
+  },
   Array(Vec<HirExpr>),
   Unknown,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ExprContext {
+  no_widen: bool,
+  const_assertion: bool,
+  contextual_type: Option<TypeId>,
+}
+
+impl ExprContext {
+  fn prefer_literals(&self) -> bool {
+    self.no_widen || self.const_assertion || self.contextual_type.is_some()
+  }
+
+  fn for_child(&self, contextual_type: Option<TypeId>) -> ExprContext {
+    ExprContext {
+      no_widen: self.const_assertion || contextual_type.is_some(),
+      const_assertion: self.const_assertion,
+      contextual_type,
+    }
+  }
 }
 
 #[derive(Clone, Debug)]
@@ -1065,9 +1090,9 @@ impl TypeStore {
 
   fn alloc(&mut self, kind: TypeKind) -> TypeId {
     if let Some((idx, _)) = self.kinds.iter().enumerate().find(|(_, k)| **k == kind) {
-      return TypeId((idx as u128).into());
+      return TypeId(idx as u32);
     }
-    let id = TypeId((self.kinds.len() as u128).into());
+    let id = TypeId(self.kinds.len() as u32);
     self.kinds.push(kind);
     id
   }
@@ -1099,23 +1124,15 @@ impl TypeStore {
   }
 
   pub(crate) fn array(&mut self, element: TypeId) -> TypeId {
-    self.array_with_readonly(element, false)
+    self.alloc(TypeKind::Array(element))
   }
 
   pub(crate) fn readonly_array(&mut self, element: TypeId) -> TypeId {
-    self.array_with_readonly(element, true)
+    self.alloc(TypeKind::ReadonlyArray(element))
   }
 
-  pub(crate) fn tuple(&mut self, elems: Vec<TypeId>, readonly: bool) -> TypeId {
-    self.alloc(TypeKind::Tuple(elems, readonly))
-  }
-
-  fn array_with_readonly(&mut self, element: TypeId, readonly: bool) -> TypeId {
-    if readonly {
-      self.alloc(TypeKind::ReadonlyArray(element))
-    } else {
-      self.alloc(TypeKind::Array(element))
-    }
+  pub(crate) fn tuple(&mut self, elements: Vec<TypeId>, readonly: bool) -> TypeId {
+    self.alloc(TypeKind::Tuple(elements, readonly))
   }
 
   pub(crate) fn function(&mut self, params: Vec<TypeId>, ret: TypeId) -> TypeId {
@@ -1172,54 +1189,31 @@ macro_rules! query_span {
 struct QuerySpan {
   span: tracing::Span,
   start: Instant,
-  kind: QueryKind,
-  cache_hit: bool,
-  span_enabled: bool,
-  query_stats: Option<QueryStatsCollector>,
 }
 
 impl QuerySpan {
-  fn enter(
-    kind: QueryKind,
-    span: tracing::Span,
-    type_id: Option<TypeId>,
-    cache_hit: bool,
-    query_stats: Option<QueryStatsCollector>,
-  ) -> Option<QuerySpan> {
-    let span_enabled = !span.is_disabled();
-    if !span_enabled && query_stats.is_none() {
+  fn enter(span: tracing::Span, type_id: Option<TypeId>) -> Option<QuerySpan> {
+    if span.is_disabled() {
       return None;
     }
-    if span_enabled {
-      if let Some(ty) = type_id {
-        span.record("type_id", ty.0);
-      }
-      let _guard = span.enter();
-      drop(_guard);
+    if let Some(ty) = type_id {
+      span.record("type_id", ty.0);
     }
+    let _guard = span.enter();
+    drop(_guard);
     Some(QuerySpan {
       span,
       start: Instant::now(),
-      kind,
-      cache_hit,
-      span_enabled,
-      query_stats,
     })
   }
 
   fn finish(self, type_id: Option<TypeId>) {
-    let duration = self.start.elapsed();
-    if let Some(stats) = &self.query_stats {
-      stats.record(self.kind, self.cache_hit, duration);
+    if let Some(ty) = type_id {
+      self.span.record("type_id", ty.0);
     }
-    if self.span_enabled {
-      if let Some(ty) = type_id {
-        self.span.record("type_id", ty.0);
-      }
-      self
-        .span
-        .record("duration_ms", duration.as_secs_f64() * 1000.0);
-    }
+    self
+      .span
+      .record("duration_ms", self.start.elapsed().as_secs_f64() * 1000.0);
   }
 }
 
@@ -1227,55 +1221,64 @@ struct ProgramState {
   analyzed: bool,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
-  files: BTreeMap<FileId, FileState>,
+  files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_data: HashMap<BodyId, BodyData>,
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
   semantics: Option<sem_ts::TsProgramSemantics>,
+  hir_lowerings: HashMap<FileId, HirLower>,
+  interned_store: Arc<InternedTypeStore>,
+  decl_types: HashMap<DefId, InternedTypeId>,
+  decl_type_stack: Vec<DefId>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
   file_kinds: HashMap<FileId, FileKind>,
   lib_texts: HashMap<FileId, Arc<str>>,
-  global_bindings: BTreeMap<String, SymbolBinding>,
+  global_bindings: HashMap<String, SymbolBinding>,
   diagnostics: Vec<Diagnostic>,
   type_store: TypeStore,
   builtin: BuiltinTypes,
-  query_stats: QueryStatsCollector,
   next_def: u32,
   next_body: u32,
   next_symbol: u32,
   type_stack: Vec<DefId>,
+  pending_reexports: Vec<PendingReexport>,
 }
 
 impl ProgramState {
-  fn new(lib_manager: Arc<LibManager>, query_stats: QueryStatsCollector) -> ProgramState {
+  fn new(lib_manager: Arc<LibManager>) -> ProgramState {
     let (type_store, builtin) = TypeStore::new();
+    let interned_store = InternedTypeStore::new();
     ProgramState {
       analyzed: false,
       lib_manager,
       compiler_options: CompilerOptions::default(),
-      files: BTreeMap::new(),
+      files: HashMap::new(),
       def_data: HashMap::new(),
       body_data: HashMap::new(),
       sem_hir: HashMap::new(),
       semantics: None,
+      hir_lowerings: HashMap::new(),
+      interned_store,
+      decl_types: HashMap::new(),
+      decl_type_stack: Vec::new(),
       def_types: HashMap::new(),
       body_results: HashMap::new(),
       symbol_occurrences: HashMap::new(),
       symbol_to_def: HashMap::new(),
       file_kinds: HashMap::new(),
       lib_texts: HashMap::new(),
-      global_bindings: BTreeMap::new(),
+      global_bindings: HashMap::new(),
       diagnostics: Vec::new(),
       type_store,
       builtin,
-      query_stats,
       next_def: 0,
       next_body: 0,
       next_symbol: 0,
       type_stack: Vec::new(),
+      pending_reexports: Vec::new(),
     }
   }
 
@@ -1319,7 +1322,6 @@ impl ProgramState {
         .or_insert_with(|| host.file_kind(file));
       let text = self.load_text(file, host)?;
       let parse_span = QuerySpan::enter(
-        QueryKind::Parse,
         query_span!(
           "typecheck_ts.parse",
           Some(file.0),
@@ -1328,8 +1330,6 @@ impl ProgramState {
           false
         ),
         None,
-        false,
-        Some(self.query_stats.clone()),
       );
       let parsed = parse(&text);
       if let Some(span) = parse_span {
@@ -1337,21 +1337,25 @@ impl ProgramState {
       }
       match parsed {
         Ok(ast) => {
-          let lower_span = QuerySpan::enter(
-            QueryKind::LowerHir,
+          let hir_kind = match self.file_kinds.get(&file) {
+            Some(FileKind::Dts) => hir_js::FileKind::Dts,
+            _ => hir_js::FileKind::Ts,
+          };
+          let (lowered, mut lower_diags) = lower_file_with_diagnostics(file, hir_kind, &ast);
+          self.hir_lowerings.insert(file, lowered);
+          self.diagnostics.append(&mut lower_diags);
+          let bind_span = QuerySpan::enter(
             query_span!(
-              "typecheck_ts.lower_hir",
+              "typecheck_ts.bind",
               Some(file.0),
               Option::<u32>::None,
               Option::<u32>::None,
               false
             ),
             None,
-            false,
-            Some(self.query_stats.clone()),
           );
           self.bind_file(file, ast, host, &mut queue);
-          if let Some(span) = lower_span {
+          if let Some(span) = bind_span {
             span.finish(None);
           }
         }
@@ -1360,27 +1364,21 @@ impl ProgramState {
         }
       }
     }
-    self.recompute_global_bindings();
-    if !self.sem_hir.is_empty() {
-      let bind_span = QuerySpan::enter(
-        QueryKind::Bind,
-        query_span!(
-          "typecheck_ts.bind",
-          Option::<u32>::None,
-          Option::<u32>::None,
-          Option::<u32>::None,
-          false
-        ),
-        None,
-        false,
-        Some(self.query_stats.clone()),
-      );
-      self.compute_semantics(host, roots);
-      if let Some(span) = bind_span {
-        span.finish(None);
+    let pending = std::mem::take(&mut self.pending_reexports);
+    for pending in pending {
+      let exports = self.exports_of_file(pending.target);
+      if !exports.contains_key(&pending.name) {
+        self.diagnostics.push(Diagnostic::error(
+          CODE_UNKNOWN_EXPORT,
+          format!("unknown export {}", pending.name),
+          Span::new(pending.source, pending.span),
+        ));
       }
     }
-    sort_diagnostics(&mut self.diagnostics);
+    self.recompute_global_bindings();
+    if !self.sem_hir.is_empty() {
+      self.compute_semantics(host, roots);
+    }
     self.analyzed = true;
     Ok(())
   }
@@ -1393,7 +1391,6 @@ impl ProgramState {
       let bundled = self.lib_manager.bundled_libs(&options);
       libs.extend(bundled.files);
     }
-    libs.sort_by_key(|lib| lib.id);
 
     for lib in libs.iter() {
       self.file_kinds.insert(lib.id, lib.kind);
@@ -1420,7 +1417,7 @@ impl ProgramState {
   }
 
   fn recompute_global_bindings(&mut self) {
-    let mut globals = BTreeMap::new();
+    let mut globals = HashMap::new();
     for (file, state) in self.files.iter() {
       if self.file_kinds.get(file) != Some(&FileKind::Dts) {
         continue;
@@ -1444,7 +1441,7 @@ impl ProgramState {
       host: Arc::clone(host),
     };
     let sem_roots: Vec<sem_ts::FileId> = roots.iter().map(|f| sem_ts::FileId(f.0)).collect();
-    let (semantics, diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file| {
+    let (semantics, _diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file| {
       let id = FileId(file.0);
       self
         .sem_hir
@@ -1453,29 +1450,7 @@ impl ProgramState {
         .map(Arc::new)
         .unwrap_or_else(|| Arc::new(sem_ts::HirFile::module(file)))
     });
-    self.push_semantic_diagnostics(diags);
     self.semantics = Some(semantics);
-  }
-
-  fn push_semantic_diagnostics(&mut self, diags: Vec<Diagnostic>) {
-    for mut diag in diags {
-      if diag.code == "BIND1002" {
-        if diag.message.contains("unresolved") {
-          diag.code = CODE_UNRESOLVED_MODULE.into();
-        } else {
-          diag.code = CODE_UNKNOWN_EXPORT.into();
-        }
-      }
-      let duplicate = self.diagnostics.iter().any(|existing| {
-        existing.code == diag.code
-          && existing.primary == diag.primary
-          && existing.message == diag.message
-      });
-      if duplicate {
-        continue;
-      }
-      self.diagnostics.push(diag);
-    }
   }
 
   fn bind_file(
@@ -1487,11 +1462,10 @@ impl ProgramState {
   ) {
     let top_body_id = self.alloc_body(file, None);
     let mut top_body = BodyBuilder::new(top_body_id, file);
-    let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
-    let mut sem_builder = SemHirBuilder::new(file, sem_file_kind(file_kind));
+    let mut sem_builder = SemHirBuilder::new(file);
     let mut defs = Vec::new();
     let mut exports: ExportMap = BTreeMap::new();
-    let mut bindings: BTreeMap<String, SymbolBinding> = BTreeMap::new();
+    let mut bindings: HashMap<String, SymbolBinding> = HashMap::new();
 
     for stmt in ast.stx.body.into_iter() {
       match stmt.stx.as_ref() {
@@ -1547,13 +1521,70 @@ impl ProgramState {
             }
           }
         }
+        Stmt::TypeAliasDecl(alias) => {
+          let span = loc_to_span(file, stmt.loc);
+          let symbol = self.alloc_symbol();
+          let def_id = self.alloc_def();
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: alias.stx.name.clone(),
+              file,
+              span: span.range,
+              symbol,
+              export: alias.stx.export,
+              kind: DefKind::TypeAlias,
+            },
+          );
+          self.record_def_symbol(def_id, symbol);
+          defs.push(def_id);
+          sem_builder.add_decl(
+            def_id,
+            alias.stx.name.clone(),
+            sem_ts::DeclKind::TypeAlias,
+            if alias.stx.export {
+              sem_ts::Exported::Named
+            } else {
+              sem_ts::Exported::No
+            },
+            span.range,
+          );
+        }
+        Stmt::InterfaceDecl(intf) => {
+          let span = loc_to_span(file, stmt.loc);
+          let symbol = self.alloc_symbol();
+          let def_id = self.alloc_def();
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: intf.stx.name.clone(),
+              file,
+              span: span.range,
+              symbol,
+              export: intf.stx.export,
+              kind: DefKind::Interface,
+            },
+          );
+          self.record_def_symbol(def_id, symbol);
+          defs.push(def_id);
+          sem_builder.add_decl(
+            def_id,
+            intf.stx.name.clone(),
+            sem_ts::DeclKind::Interface,
+            if intf.stx.export {
+              sem_ts::Exported::Named
+            } else {
+              sem_ts::Exported::No
+            },
+            span.range,
+          );
+        }
         Stmt::ExportDefaultExpr(node) => {
           let span = loc_to_span(file, node.loc);
           let symbol = self.alloc_symbol();
           let def_id = self.alloc_def();
           let expr = top_body.lower_expr(node.stx.expression, self);
           let expr_id = expr.id;
-          let pat_id = Some(top_body.new_pat(span.range));
           let hir_stmt = HirStmt::Var {
             name: "default".to_string(),
             typ: None,
@@ -1561,7 +1592,6 @@ impl ProgramState {
             span: span.range,
             symbol,
             def: Some(def_id),
-            pat: pat_id,
             mode: VarDeclMode::Const,
           };
           top_body.stmts.push(hir_stmt);
@@ -1607,9 +1637,20 @@ impl ProgramState {
           );
         }
         Stmt::ExportList(export_list) => {
+          let resolved_target = export_list
+            .stx
+            .from
+            .as_ref()
+            .and_then(|module| host.resolve(file, module));
           if let Some(module) = export_list.stx.from.clone() {
-            if let Some(target) = host.resolve(file, &module) {
+            if let Some(target) = resolved_target {
               queue.push_back(target);
+            } else {
+              self.diagnostics.push(Diagnostic::error(
+                CODE_UNRESOLVED_MODULE,
+                format!("unresolved module {module}"),
+                loc_to_span(file, stmt.loc),
+              ));
             }
           }
           match &export_list.stx.names {
@@ -1641,7 +1682,18 @@ impl ProgramState {
                   is_type_only,
                 );
 
-                if export_list.stx.from.is_none() && !is_type_only {
+                if export_list.stx.from.is_some() {
+                  if !is_type_only {
+                    if let Some(target) = resolved_target {
+                      self.pending_reexports.push(PendingReexport {
+                        source: file,
+                        target,
+                        name: exportable.clone(),
+                        span: loc_to_span(file, name.loc).range,
+                      });
+                    }
+                  }
+                } else if !is_type_only {
                   let mapped = bindings.get(&exportable);
                   if let Some(binding) = mapped {
                     exports.insert(
@@ -1684,6 +1736,12 @@ impl ProgramState {
           let resolved = host.resolve(file, &module);
           if let Some(target) = resolved {
             queue.push_back(target);
+          } else {
+            self.diagnostics.push(Diagnostic::error(
+              CODE_UNRESOLVED_MODULE,
+              format!("unresolved module {module}"),
+              loc_to_span(file, stmt.loc),
+            ));
           }
           let mut import_default = None;
           let mut import_namespace = None;
@@ -1903,7 +1961,6 @@ impl ProgramState {
         .initializer
         .map(|expr| builder.lower_expr(expr, self));
       let init_id = init_expr.as_ref().map(|e| e.id);
-      let pat_id = Some(builder.new_pat(loc_to_span(file, pat.loc).range));
       stmts.push(HirStmt::Var {
         name: name.clone(),
         typ: type_ann,
@@ -1911,7 +1968,6 @@ impl ProgramState {
         span,
         symbol,
         def: Some(def_id),
-        pat: pat_id,
         mode: var.mode,
       });
       self.def_data.insert(
@@ -2014,11 +2070,9 @@ impl ProgramState {
   }
 
   fn lower_function(&mut self, file: FileId, func: Func, def: DefId) -> FuncData {
-    let body_id = func.body.as_ref().map(|_| self.alloc_body(file, Some(def)));
-    let mut builder_opt = body_id.map(|id| BodyBuilder::new(id, file));
     let mut params = Vec::new();
     for param in func.parameters.iter() {
-      if let Some(data) = self.lower_param(file, param, builder_opt.as_mut()) {
+      if let Some(data) = self.lower_param(file, param) {
         params.push(data);
       }
     }
@@ -2026,26 +2080,27 @@ impl ProgramState {
       .return_type
       .as_ref()
       .map(|t| self.type_from_type_expr(t));
+    let body_id = func.body.as_ref().map(|_| self.alloc_body(file, Some(def)));
     if let Some(body) = body_id {
-      if let Some(mut builder) = builder_opt.take() {
-        match func.body.unwrap() {
-          FuncBody::Block(stmts) => {
-            for stmt in stmts {
-              builder.lower_stmt(stmt, self);
-            }
-            let data = builder.finish(Some(def));
-            self.body_data.insert(body, data);
+      match func.body.unwrap() {
+        FuncBody::Block(stmts) => {
+          let mut builder = BodyBuilder::new(body, file);
+          for stmt in stmts {
+            builder.lower_stmt(stmt, self);
           }
-          FuncBody::Expression(expr) => {
-            let expr = builder.lower_expr(expr, self);
-            let span = expr.span;
-            builder.stmts.push(HirStmt::Return {
-              expr: Some(expr),
-              span,
-            });
-            let data = builder.finish(Some(def));
-            self.body_data.insert(body, data);
-          }
+          let data = builder.finish(Some(def));
+          self.body_data.insert(body, data);
+        }
+        FuncBody::Expression(expr) => {
+          let mut builder = BodyBuilder::new(body, file);
+          let expr = builder.lower_expr(expr, self);
+          let span = expr.span;
+          builder.stmts.push(HirStmt::Return {
+            expr: Some(expr),
+            span,
+          });
+          let data = builder.finish(Some(def));
+          self.body_data.insert(body, data);
         }
       }
     }
@@ -2056,12 +2111,7 @@ impl ProgramState {
     }
   }
 
-  fn lower_param(
-    &mut self,
-    file: FileId,
-    param: &Node<ParamDecl>,
-    mut builder: Option<&mut BodyBuilder>,
-  ) -> Option<ParamData> {
+  fn lower_param(&mut self, file: FileId, param: &Node<ParamDecl>) -> Option<ParamData> {
     let name = match param.stx.pattern.stx.pat.stx.as_ref() {
       Pat::Id(id) => id.stx.name.clone(),
       _ => {
@@ -2073,9 +2123,6 @@ impl ProgramState {
         return None;
       }
     };
-    let pat_id = builder
-      .as_mut()
-      .map(|b| b.new_pat(loc_to_span(file, param.loc).range));
     let typ = param
       .stx
       .type_annotation
@@ -2083,19 +2130,13 @@ impl ProgramState {
       .map(|t| self.type_from_type_expr(t));
     let symbol = self.alloc_symbol();
     self.record_symbol(file, loc_to_span(file, param.loc).range, symbol);
-    Some(ParamData {
-      name,
-      typ,
-      symbol,
-      pat: pat_id,
-    })
+    Some(ParamData { name, typ, symbol })
   }
 
   fn check_body(&mut self, body_id: BodyId) -> Arc<BodyCheckResult> {
     let cache_hit = self.body_results.contains_key(&body_id);
     let body_meta = self.body_data.get(&body_id).cloned();
     let mut span = QuerySpan::enter(
-      QueryKind::CheckBody,
       query_span!(
         "typecheck_ts.check_body",
         body_meta.as_ref().map(|b| b.file.0),
@@ -2104,8 +2145,6 @@ impl ProgramState {
         cache_hit
       ),
       None,
-      cache_hit,
-      Some(self.query_stats.clone()),
     );
     if let Some(existing) = self.body_results.get(&body_id) {
       if let Some(span) = span.take() {
@@ -2120,14 +2159,13 @@ impl ProgramState {
           body: body_id,
           expr_types: Vec::new(),
           expr_spans: Vec::new(),
-          pat_types: Vec::new(),
-          pat_spans: Vec::new(),
           diagnostics: vec![Diagnostic::error(
             CODE_MISSING_BODY,
             "missing body",
             Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
           )],
           return_types: Vec::new(),
+          pat_types: Vec::new(),
         });
         self.body_results.insert(body_id, res.clone());
         if let Some(span) = span.take() {
@@ -2137,41 +2175,27 @@ impl ProgramState {
       }
     };
     let mut env = self.initial_env(body.owner, body.file);
-    let return_context = body
-      .owner
-      .and_then(|def| self.def_data.get(&def))
-      .and_then(|def| match &def.kind {
-        DefKind::Function(func) => func.return_ann,
-        _ => None,
-      });
+    let mut pat_types = Vec::new();
+    if let Some(owner) = body.owner {
+      if let Some(DefKind::Function(func)) = self.def_data.get(&owner).map(|d| &d.kind) {
+        for param in func.params.iter() {
+          pat_types.push(param.typ.unwrap_or(self.builtin.unknown));
+        }
+      }
+    }
     let mut result = BodyCheckResult {
       body: body.id,
       expr_types: vec![self.builtin.unknown; body.expr_spans.len()],
       expr_spans: body.expr_spans.clone(),
-      pat_types: vec![self.builtin.unknown; body.pat_spans.len()],
-      pat_spans: body.pat_spans.clone(),
       diagnostics: Vec::new(),
       return_types: Vec::new(),
+      pat_types,
     };
 
-    if let Some(owner) = body.owner {
-      if let Some(DefKind::Function(func)) = self.def_data.get(&owner).map(|d| &d.kind) {
-        for param in func.params.iter() {
-          if let Some(pat_id) = param.pat {
-            let ty = param.typ.unwrap_or(self.builtin.unknown);
-            if let Some(slot) = result.pat_types.get_mut(pat_id.0 as usize) {
-              *slot = ty;
-            }
-          }
-        }
-      }
-    }
-
     for stmt in body.stmts.iter() {
-      self.check_stmt(stmt, &mut env, &mut result, body.file, return_context);
+      self.check_stmt(stmt, &mut env, &mut result, body.file);
     }
 
-    sort_diagnostics(&mut result.diagnostics);
     let res = Arc::new(result);
     self.body_results.insert(body_id, res.clone());
     if let Some(span) = span.take() {
@@ -2186,7 +2210,6 @@ impl ProgramState {
     env: &mut HashMap<String, SymbolBinding>,
     result: &mut BodyCheckResult,
     file: FileId,
-    return_context: Option<TypeId>,
   ) {
     match stmt {
       HirStmt::Var {
@@ -2196,24 +2219,19 @@ impl ProgramState {
         span,
         symbol,
         def,
-        pat,
         mode,
       } => {
+        let expr_ctx = ExprContext {
+          no_widen: matches!(mode, VarDeclMode::Const),
+          const_assertion: false,
+          contextual_type: *typ,
+        };
         let init_checked = init
           .as_ref()
-          .map(|e| self.check_expr(e, env, result, file, *typ));
+          .map(|e| self.check_expr_with_context(e, env, result, file, expr_ctx));
         let init_ty = init_checked.map(|(ty, facts)| {
           self.apply_fact_map(env, &facts.assertions);
-          if matches!(mode, VarDeclMode::Const) {
-            ty
-          } else {
-            match self.type_store.kind(ty) {
-              TypeKind::LiteralNumber(_) => self.builtin.number,
-              TypeKind::LiteralString(_) => self.builtin.string,
-              TypeKind::LiteralBoolean(_) => self.builtin.boolean,
-              _ => ty,
-            }
-          }
+          ty
         });
         let declared = if let Some(annotated) = *typ {
           if let (Some(expr), Some(source_ty)) = (init.as_ref(), init_ty) {
@@ -2228,6 +2246,7 @@ impl ProgramState {
         if let Some(def_id) = def {
           self.def_types.insert(*def_id, declared);
         }
+        result.pat_types.push(declared);
         env.insert(
           name.clone(),
           SymbolBinding {
@@ -2237,26 +2256,35 @@ impl ProgramState {
           },
         );
         self.record_symbol(file, *span, *symbol);
-        if let Some(pat_id) = pat {
-          if let Some(slot) = result.pat_types.get_mut(pat_id.0 as usize) {
-            *slot = declared;
-          }
-        }
       }
       HirStmt::Return { expr, .. } => {
-        let ty = expr
-          .as_ref()
-          .map(|e| self.check_expr(e, env, result, file, return_context).0)
-          .unwrap_or(self.builtin.undefined);
-        if let Some(expected) = return_context {
-          if let Some(expr) = expr {
-            check::assign::check_assignment(self, Some(expr), ty, expected, result, file);
+        let mut expected = None;
+        if let Some(body_meta) = self.body_data.get(&result.body) {
+          if let Some(owner) = body_meta.owner {
+            if let Some(DefKind::Function(func)) = self.def_data.get(&owner).map(|d| &d.kind) {
+              expected = func.return_ann;
+            }
           }
         }
+        let ty = expr
+          .as_ref()
+          .map(|e| {
+            let ctx = ExprContext {
+              no_widen: false,
+              const_assertion: false,
+              contextual_type: expected,
+            };
+            let (checked, _) = self.check_expr_with_context(e, env, result, file, ctx);
+            if let Some(expected_ty) = expected {
+              check::assign::check_assignment(self, Some(e), checked, expected_ty, result, file);
+            }
+            checked
+          })
+          .unwrap_or(self.builtin.undefined);
         result.return_types.push(ty);
       }
       HirStmt::Expr(expr) => {
-        let (_, facts) = self.check_expr(expr, env, result, file, None);
+        let (_, facts) = self.check_expr(expr, env, result, file);
         self.apply_fact_map(env, &facts.assertions);
       }
       HirStmt::If {
@@ -2265,7 +2293,7 @@ impl ProgramState {
         alternate,
         ..
       } => {
-        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
+        let (_, cond_facts) = self.check_expr(test, env, result, file);
         let mut then_env = env.clone();
         self.apply_fact_map(&mut then_env, &cond_facts.truthy);
         self.apply_fact_map(&mut then_env, &cond_facts.assertions);
@@ -2274,10 +2302,10 @@ impl ProgramState {
         self.apply_fact_map(&mut else_env, &cond_facts.assertions);
 
         for stmt in consequent {
-          self.check_stmt(stmt, &mut then_env, result, file, return_context);
+          self.check_stmt(stmt, &mut then_env, result, file);
         }
         for stmt in alternate {
-          self.check_stmt(stmt, &mut else_env, result, file, return_context);
+          self.check_stmt(stmt, &mut else_env, result, file);
         }
 
         let then_returns = self.branch_returns(consequent);
@@ -2291,16 +2319,16 @@ impl ProgramState {
       }
       HirStmt::Block(stmts) => {
         for stmt in stmts {
-          self.check_stmt(stmt, env, result, file, return_context);
+          self.check_stmt(stmt, env, result, file);
         }
       }
       HirStmt::While { test, body, .. } => {
-        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
+        let (_, cond_facts) = self.check_expr(test, env, result, file);
         let mut body_env = env.clone();
         self.apply_fact_map(&mut body_env, &cond_facts.truthy);
         self.apply_fact_map(&mut body_env, &cond_facts.assertions);
         for stmt in body {
-          self.check_stmt(stmt, &mut body_env, result, file, return_context);
+          self.check_stmt(stmt, &mut body_env, result, file);
         }
         let mut merged = self.merge_envs(env, &body_env);
         self.apply_fact_map(&mut merged, &cond_facts.falsy);
@@ -2315,25 +2343,42 @@ impl ProgramState {
     env: &mut HashMap<String, SymbolBinding>,
     result: &mut BodyCheckResult,
     file: FileId,
-    context: Option<TypeId>,
   ) -> (TypeId, Facts) {
-    self.check_expr_with_options(expr, env, result, file, context, false)
+    self.check_expr_with_context(expr, env, result, file, ExprContext::default())
   }
 
-  fn check_expr_with_options(
+  fn check_expr_with_context(
     &mut self,
     expr: &HirExpr,
     env: &mut HashMap<String, SymbolBinding>,
     result: &mut BodyCheckResult,
     file: FileId,
-    context: Option<TypeId>,
-    preserve_literals: bool,
+    ctx: ExprContext,
   ) -> (TypeId, Facts) {
     let mut facts = Facts::default();
+    let preserve_literals = ctx.prefer_literals();
     let ty = match &expr.kind {
-      HirExprKind::NumberLiteral(value) => self.type_store.literal_number(value.clone()),
-      HirExprKind::StringLiteral(value) => self.type_store.literal_string(value.clone()),
-      HirExprKind::BooleanLiteral(value) => self.type_store.literal_boolean(*value),
+      HirExprKind::NumberLiteral(value) => {
+        if preserve_literals {
+          self.type_store.literal_number(value.clone())
+        } else {
+          self.builtin.number
+        }
+      }
+      HirExprKind::StringLiteral(value) => {
+        if preserve_literals {
+          self.type_store.literal_string(value.clone())
+        } else {
+          self.builtin.string
+        }
+      }
+      HirExprKind::BooleanLiteral(value) => {
+        if preserve_literals {
+          self.type_store.literal_boolean(*value)
+        } else {
+          self.builtin.boolean
+        }
+      }
       HirExprKind::Null => self.builtin.null,
       HirExprKind::Ident(name) => {
         let mut ty = self.builtin.unknown;
@@ -2367,7 +2412,8 @@ impl ProgramState {
         ty
       }
       HirExprKind::Member { object, property } => {
-        let (obj_ty, _) = self.check_expr(object, env, result, file, None);
+        let (obj_ty, _) =
+          self.check_expr_with_context(object, env, result, file, ctx.for_child(None));
         let lookup_prop = |obj: &ObjectType| {
           if let Some(prop) = obj.props.get(property) {
             Some(prop.typ)
@@ -2400,7 +2446,8 @@ impl ProgramState {
       }
       HirExprKind::Unary { op, expr: inner } => match op {
         OperatorName::LogicalNot => {
-          let (_inner_ty, inner_facts) = self.check_expr(inner, env, result, file, None);
+          let (_inner_ty, inner_facts) =
+            self.check_expr_with_context(inner, env, result, file, ctx.for_child(None));
           facts.truthy = inner_facts.falsy;
           facts.falsy = inner_facts.truthy;
           facts.assertions = inner_facts.assertions;
@@ -2408,17 +2455,18 @@ impl ProgramState {
         }
         OperatorName::Typeof => self.type_store.literal_string("string".to_string()),
         _ => {
-          let _ = self.check_expr(inner, env, result, file, None);
+          let _ = self.check_expr_with_context(inner, env, result, file, ctx.for_child(None));
           self.builtin.unknown
         }
       },
       HirExprKind::Binary { op, left, right } => match op {
         OperatorName::LogicalAnd => {
-          let (lt, lf) = self.check_expr(left, env, result, file, None);
+          let (lt, lf) = self.check_expr_with_context(left, env, result, file, ctx.for_child(None));
           let mut right_env = env.clone();
           self.apply_fact_map(&mut right_env, &lf.truthy);
           self.apply_fact_map(&mut right_env, &lf.assertions);
-          let (rt, rf) = self.check_expr(right, &mut right_env, result, file, None);
+          let (rt, rf) =
+            self.check_expr_with_context(right, &mut right_env, result, file, ctx.for_child(None));
 
           let rf_truthy = rf.truthy;
           let rf_falsy = rf.falsy;
@@ -2440,11 +2488,12 @@ impl ProgramState {
           self.type_store.union(vec![lt, rt], &self.builtin)
         }
         OperatorName::LogicalOr => {
-          let (lt, lf) = self.check_expr(left, env, result, file, None);
+          let (lt, lf) = self.check_expr_with_context(left, env, result, file, ctx.for_child(None));
           let mut right_env = env.clone();
           self.apply_fact_map(&mut right_env, &lf.falsy);
           self.apply_fact_map(&mut right_env, &lf.assertions);
-          let (rt, rf) = self.check_expr(right, &mut right_env, result, file, None);
+          let (rt, rf) =
+            self.check_expr_with_context(right, &mut right_env, result, file, ctx.for_child(None));
 
           facts.truthy = lf.truthy;
           facts.merge(
@@ -2469,8 +2518,10 @@ impl ProgramState {
           self.type_store.union(vec![lt, rt], &self.builtin)
         }
         OperatorName::Equality | OperatorName::StrictEquality => {
-          let (_lt, lfacts) = self.check_expr(left, env, result, file, None);
-          let (_rt, rfacts) = self.check_expr(right, env, result, file, None);
+          let (_lt, lfacts) =
+            self.check_expr_with_context(left, env, result, file, ctx.for_child(None));
+          let (_rt, rfacts) =
+            self.check_expr_with_context(right, env, result, file, ctx.for_child(None));
           // typeof x === "string"
           if let HirExprKind::Unary {
             op: OperatorName::Typeof,
@@ -2478,7 +2529,8 @@ impl ProgramState {
           } = &left.kind
           {
             if let HirExprKind::StringLiteral(value) = &right.kind {
-              let (inner_ty, _) = self.check_expr(inner, env, result, file, None);
+              let (inner_ty, _) =
+                self.check_expr_with_context(inner, env, result, file, ctx.for_child(None));
               if let HirExprKind::Ident(name) = &inner.kind {
                 let (yes, no) = narrow_by_typeof(
                   inner_ty,
@@ -2498,7 +2550,8 @@ impl ProgramState {
           // discriminant check x.kind === "foo"
           if let HirExprKind::Member { object, property } = &left.kind {
             if let HirExprKind::StringLiteral(value) = &right.kind {
-              let (obj_ty, _) = self.check_expr(object, env, result, file, None);
+              let (obj_ty, _) =
+                self.check_expr_with_context(object, env, result, file, ctx.for_child(None));
               if let HirExprKind::Ident(obj_name) = &object.kind {
                 let (yes, no) = narrow_by_discriminant(
                   obj_ty,
@@ -2519,7 +2572,8 @@ impl ProgramState {
           // symmetric case
           if let HirExprKind::Member { object, property } = &right.kind {
             if let HirExprKind::StringLiteral(value) = &left.kind {
-              let (obj_ty, _) = self.check_expr(object, env, result, file, None);
+              let (obj_ty, _) =
+                self.check_expr_with_context(object, env, result, file, ctx.for_child(None));
               if let HirExprKind::Ident(obj_name) = &object.kind {
                 let (yes, no) = narrow_by_discriminant(
                   obj_ty,
@@ -2542,15 +2596,19 @@ impl ProgramState {
           self.builtin.boolean
         }
         OperatorName::Instanceof => {
-          let (_lt, lf) = self.check_expr(left, env, result, file, None);
-          let (_rt, rf) = self.check_expr(right, env, result, file, None);
+          let (_lt, lf) =
+            self.check_expr_with_context(left, env, result, file, ctx.for_child(None));
+          let (_rt, rf) =
+            self.check_expr_with_context(right, env, result, file, ctx.for_child(None));
           facts.merge(lf, &mut self.type_store, &self.builtin);
           facts.merge(rf, &mut self.type_store, &self.builtin);
           self.builtin.boolean
         }
         OperatorName::In => {
-          let (_lt, lf) = self.check_expr(left, env, result, file, None);
-          let (rt, rf) = self.check_expr(right, env, result, file, None);
+          let (_lt, lf) =
+            self.check_expr_with_context(left, env, result, file, ctx.for_child(None));
+          let (rt, rf) =
+            self.check_expr_with_context(right, env, result, file, ctx.for_child(None));
           if let HirExprKind::StringLiteral(prop) = &left.kind {
             if let HirExprKind::Ident(name) = &right.kind {
               let (yes, no) = narrow_by_in_check(rt, prop, &mut self.type_store, &self.builtin);
@@ -2567,8 +2625,10 @@ impl ProgramState {
           self.builtin.boolean
         }
         _ => {
-          let (left_ty, lfacts) = self.check_expr(left, env, result, file, None);
-          let (right_ty, rfacts) = self.check_expr(right, env, result, file, None);
+          let (left_ty, lfacts) =
+            self.check_expr_with_context(left, env, result, file, ctx.for_child(None));
+          let (right_ty, rfacts) =
+            self.check_expr_with_context(right, env, result, file, ctx.for_child(None));
           facts.merge(lfacts, &mut self.type_store, &self.builtin);
           facts.merge(rfacts, &mut self.type_store, &self.builtin);
           match op {
@@ -2613,7 +2673,8 @@ impl ProgramState {
         }
       },
       HirExprKind::Call { callee, args } => {
-        let (callee_ty, _) = self.check_expr(callee, env, result, file, None);
+        let (callee_ty, _) =
+          self.check_expr_with_context(callee, env, result, file, ctx.for_child(None));
         if let TypeKind::Function { params, ret } = self.type_store.kind(callee_ty).clone() {
           if params.len() != args.len() {
             result.diagnostics.push(Diagnostic::error(
@@ -2627,11 +2688,11 @@ impl ProgramState {
           }
           let mut arg_types = Vec::new();
           for (idx, arg) in args.iter().enumerate() {
-            let expected = params.get(idx).copied();
-            let (arg_ty, _) = self.check_expr(arg, env, result, file, expected);
+            let arg_ctx = ctx.for_child(params.get(idx).copied());
+            let (arg_ty, _) = self.check_expr_with_context(arg, env, result, file, arg_ctx);
             arg_types.push(arg_ty);
-            if let Some(expected) = expected {
-              check::assign::check_assignment(self, Some(arg), arg_ty, expected, result, file);
+            if let Some(expected) = params.get(idx) {
+              check::assign::check_assignment(self, Some(arg), arg_ty, *expected, result, file);
             }
           }
           match self.type_store.kind(ret).clone() {
@@ -2686,70 +2747,137 @@ impl ProgramState {
         consequent,
         alternate,
       } => {
-        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
+        let (_, cond_facts) =
+          self.check_expr_with_context(test, env, result, file, ctx.for_child(None));
         let mut then_env = env.clone();
         self.apply_fact_map(&mut then_env, &cond_facts.truthy);
         self.apply_fact_map(&mut then_env, &cond_facts.assertions);
         let mut else_env = env.clone();
         self.apply_fact_map(&mut else_env, &cond_facts.falsy);
         self.apply_fact_map(&mut else_env, &cond_facts.assertions);
+        let branch_ctx = ctx.for_child(ctx.contextual_type);
         let (cons_ty, cons_facts) =
-          self.check_expr(consequent, &mut then_env, result, file, context);
-        let (alt_ty, alt_facts) = self.check_expr(alternate, &mut else_env, result, file, context);
+          self.check_expr_with_context(consequent, &mut then_env, result, file, branch_ctx);
+        let (alt_ty, alt_facts) =
+          self.check_expr_with_context(alternate, &mut else_env, result, file, branch_ctx);
         facts.merge(cons_facts, &mut self.type_store, &self.builtin);
         facts.merge(alt_facts, &mut self.type_store, &self.builtin);
         self.type_store.union(vec![cons_ty, alt_ty], &self.builtin)
       }
       HirExprKind::Object(props) => {
+        let contextual_object = ctx
+          .contextual_type
+          .and_then(|ty| self.expect_object_type(ty));
         let mut obj = ObjectType::empty();
         for prop in props.iter() {
           if prop.is_spread {
             continue;
           }
-          let expected = context
-            .and_then(|ctx| check::object_literal::contextual_property_type(self, ctx, &prop.name));
-          let (ty, _) = self.check_expr(&prop.value, env, result, file, expected);
-          if let Some(expected) = expected {
-            check::object_literal::check_excess_properties(
+          let expected_prop = contextual_object
+            .as_ref()
+            .and_then(|obj| obj.props.get(&prop.name));
+          let child_ctx = ctx.for_child(expected_prop.map(|p| p.typ));
+          let (ty, _) = self.check_expr_with_context(&prop.value, env, result, file, child_ctx);
+          if let Some(expected) = expected_prop {
+            check::assign::check_assignment(
               self,
-              &prop.value,
-              expected,
+              Some(&prop.value),
+              ty,
+              expected.typ,
               result,
               file,
             );
           }
+          let readonly = ctx.const_assertion || expected_prop.map(|p| p.readonly).unwrap_or(false);
           obj.props.insert(
             prop.name.clone(),
             ObjectProperty {
               typ: ty,
               optional: false,
-              readonly: false,
+              readonly,
             },
           );
         }
         self.type_store.object(obj)
       }
       HirExprKind::Array(values) => {
-        let mut tys = Vec::new();
-        for v in values {
-          tys.push(self.check_expr(v, env, result, file, None).0);
+        let contextual_kind = ctx
+          .contextual_type
+          .map(|ty| self.type_store.kind(ty).clone());
+        let mut expected_tuple: Option<(Vec<TypeId>, bool)> = None;
+        let mut expected_array: Option<(TypeId, bool)> = None;
+        if let Some(kind) = contextual_kind {
+          match kind {
+            TypeKind::Tuple(elements, readonly) => {
+              expected_tuple = Some((elements, readonly));
+            }
+            TypeKind::ReadonlyArray(elem) => {
+              expected_array = Some((elem, true));
+            }
+            TypeKind::Array(elem) => {
+              expected_array = Some((elem, false));
+            }
+            _ => {}
+          }
         }
-        let widened: Vec<_> = tys
-          .into_iter()
-          .map(|ty| match self.type_store.kind(ty) {
-            TypeKind::LiteralNumber(_) => self.builtin.number,
-            TypeKind::LiteralString(_) => self.builtin.string,
-            TypeKind::LiteralBoolean(_) => self.builtin.boolean,
-            _ => ty,
-          })
-          .collect();
-        let elem = self.type_store.union(widened, &self.builtin);
-        self.type_store.array(elem)
+        let mut elem_types = Vec::new();
+        for (idx, v) in values.iter().enumerate() {
+          let expected_elem = expected_tuple
+            .as_ref()
+            .and_then(|(elements, _)| elements.get(idx).copied())
+            .or_else(|| expected_array.map(|(elem, _)| elem));
+          let child_ctx = ctx.for_child(expected_elem);
+          let (elem_ty, _) = self.check_expr_with_context(v, env, result, file, child_ctx);
+          elem_types.push(elem_ty);
+        }
+        if ctx.const_assertion || expected_tuple.is_some() {
+          let readonly = ctx.const_assertion
+            || expected_tuple
+              .as_ref()
+              .map(|(_, readonly)| *readonly)
+              .unwrap_or(false);
+          self.type_store.tuple(elem_types, readonly)
+        } else {
+          let elem = self.type_store.union(elem_types, &self.builtin);
+          if let Some((_, true)) = expected_array {
+            self.type_store.readonly_array(elem)
+          } else {
+            self.type_store.array(elem)
+          }
+        }
       }
-      HirExprKind::TypeAssertion { expr, typ, .. } => {
-        let (inner_ty, inner_facts) = self.check_expr(expr, env, result, file, None);
+      HirExprKind::Satisfies { expr, typ } => {
+        let (inner_ty, inner_facts) =
+          self.check_expr_with_context(expr, env, result, file, ctx.for_child(Some(*typ)));
         facts = inner_facts;
-        (*typ).unwrap_or(inner_ty)
+        check::assign::check_assignment(self, Some(expr.as_ref()), inner_ty, *typ, result, file);
+        inner_ty
+      }
+      HirExprKind::TypeAssertion {
+        expr,
+        typ,
+        _const_assertion,
+      } => {
+        if *_const_assertion {
+          let (inner_ty, inner_facts) = self.check_expr_with_context(
+            expr,
+            env,
+            result,
+            file,
+            ExprContext {
+              no_widen: true,
+              const_assertion: true,
+              contextual_type: None,
+            },
+          );
+          facts = inner_facts;
+          inner_ty
+        } else {
+          let (inner_ty, inner_facts) =
+            self.check_expr_with_context(expr, env, result, file, ctx.for_child(*typ));
+          facts = inner_facts;
+          (*typ).unwrap_or(inner_ty)
+        }
       }
       HirExprKind::Unknown => self.builtin.unknown,
     };
@@ -2757,6 +2885,21 @@ impl ProgramState {
       *slot = ty;
     }
     (ty, facts)
+  }
+
+  fn expect_object_type(&self, ty: TypeId) -> Option<ObjectType> {
+    match self.type_store.kind(ty) {
+      TypeKind::Object(obj) => Some(obj.clone()),
+      TypeKind::Union(members) => {
+        members
+          .iter()
+          .find_map(|member| match self.type_store.kind(*member) {
+            TypeKind::Object(obj) => Some(obj.clone()),
+            _ => None,
+          })
+      }
+      _ => None,
+    }
   }
 
   fn apply_fact_map(
@@ -2793,6 +2936,344 @@ impl ProgramState {
     merged
   }
 
+  fn type_of_def_interned(&mut self, def: DefId) -> InternedTypeId {
+    if let Some(existing) = self.decl_types.get(&def) {
+      return *existing;
+    }
+    if self.decl_type_stack.contains(&def) {
+      let ref_ty = self.interned_store.intern_type(InternedTypeKind::Ref {
+        def: hir_js::DefId(def.0),
+        args: Vec::new(),
+      });
+      self.decl_types.insert(def, ref_ty);
+      return ref_ty;
+    }
+    self.decl_type_stack.push(def);
+    let ty = match self.def_data.get(&def).map(|d| d.kind.clone()) {
+      Some(DefKind::TypeAlias) | Some(DefKind::Interface) => self.hir_decl_type(def),
+      Some(DefKind::Import(import)) => self.import_type(&import),
+      Some(DefKind::Function(func)) => self.function_type_interned(def, func),
+      Some(DefKind::Var(var)) => self.var_type_interned(var),
+      _ => self.interned_store.primitive_ids().unknown,
+    };
+    self.decl_type_stack.pop();
+    let ty = self.collapse_import_ref(ty);
+    self.decl_types.insert(def, ty);
+    ty
+  }
+
+  fn hir_def_for(&self, def: DefId) -> Option<(&HirLower, &hir_js::DefData)> {
+    let data = self.def_data.get(&def)?;
+    let lower = self.hir_lowerings.get(&data.file)?;
+    let hir_def_id = lower.hir.span_map.def_at_offset(data.span.start)?;
+    let hir_def = lower.defs.iter().find(|d| d.id == hir_def_id)?;
+    Some((lower, hir_def))
+  }
+
+  fn convert_legacy_to_interned(&mut self, ty: TypeId) -> InternedTypeId {
+    match self.type_store.kind(ty).clone() {
+      TypeKind::Any => self.interned_store.primitive_ids().any,
+      TypeKind::Unknown => self.interned_store.primitive_ids().unknown,
+      TypeKind::Never => self.interned_store.primitive_ids().never,
+      TypeKind::Void => self.interned_store.primitive_ids().void,
+      TypeKind::Number => self.interned_store.primitive_ids().number,
+      TypeKind::String => self.interned_store.primitive_ids().string,
+      TypeKind::Boolean => self.interned_store.primitive_ids().boolean,
+      TypeKind::Null => self.interned_store.primitive_ids().null,
+      TypeKind::Undefined => self.interned_store.primitive_ids().undefined,
+      TypeKind::LiteralString(s) => {
+        let name = self.interned_store.intern_name(s);
+        self
+          .interned_store
+          .intern_type(InternedTypeKind::StringLiteral(name))
+      }
+      TypeKind::LiteralNumber(n) => {
+        let parsed = n.parse::<f64>().unwrap_or(0.0);
+        self
+          .interned_store
+          .intern_type(InternedTypeKind::NumberLiteral(OrderedFloat::from(parsed)))
+      }
+      TypeKind::LiteralBoolean(b) => self
+        .interned_store
+        .intern_type(InternedTypeKind::BooleanLiteral(b)),
+      TypeKind::Array(elem) => {
+        let inner = self.convert_legacy_to_interned(elem);
+        self.interned_store.intern_type(InternedTypeKind::Array {
+          ty: inner,
+          readonly: false,
+        })
+      }
+      TypeKind::ReadonlyArray(elem) => {
+        let inner = self.convert_legacy_to_interned(elem);
+        self.interned_store.intern_type(InternedTypeKind::Array {
+          ty: inner,
+          readonly: true,
+        })
+      }
+      TypeKind::Tuple(elements, readonly) => {
+        let elems: Vec<_> = elements
+          .into_iter()
+          .map(|el| types_ts_interned::TupleElem {
+            ty: self.convert_legacy_to_interned(el),
+            optional: false,
+            rest: false,
+            readonly,
+          })
+          .collect();
+        self.interned_store.intern_type(InternedTypeKind::Tuple(elems))
+      }
+      TypeKind::Union(types) => {
+        let members = types
+          .into_iter()
+          .map(|t| self.convert_legacy_to_interned(t))
+          .collect();
+        self.interned_store.union(members)
+      }
+      TypeKind::Function { params, ret } => {
+        let sig = Signature {
+          params: params
+            .into_iter()
+            .map(|p| Param {
+              name: None,
+              ty: self.convert_legacy_to_interned(p),
+              optional: false,
+              rest: false,
+            })
+            .collect(),
+          ret: self.convert_legacy_to_interned(ret),
+          type_params: Vec::new(),
+          this_param: None,
+        };
+        let sig_id = self.interned_store.intern_signature(sig);
+        self.interned_store.intern_type(InternedTypeKind::Callable {
+          overloads: vec![sig_id],
+        })
+      }
+      TypeKind::Object(obj) => {
+        let mut shape = Shape::new();
+        for (name, prop) in obj.props.iter() {
+          let key = PropKey::String(self.interned_store.intern_name(name.clone()));
+          shape.properties.push(Property {
+            key,
+            data: PropData {
+              ty: self.convert_legacy_to_interned(prop.typ),
+              optional: prop.optional,
+              readonly: false,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+        if let Some(ty) = obj.string_index {
+          shape.indexers.push(Indexer {
+            key_type: self.interned_store.primitive_ids().string,
+            value_type: self.convert_legacy_to_interned(ty),
+            readonly: false,
+          });
+        }
+        if let Some(ty) = obj.number_index {
+          shape.indexers.push(Indexer {
+            key_type: self.interned_store.primitive_ids().number,
+            value_type: self.convert_legacy_to_interned(ty),
+            readonly: false,
+          });
+        }
+        let shape_id = self.interned_store.intern_shape(shape);
+        let obj_id = self
+          .interned_store
+          .intern_object(InternedObjectType { shape: shape_id });
+        self
+          .interned_store
+          .intern_type(InternedTypeKind::Object(obj_id))
+      }
+      TypeKind::Predicate { .. } => self.interned_store.primitive_ids().boolean,
+    }
+  }
+
+  fn hir_decl_type(&mut self, def: DefId) -> InternedTypeId {
+    let Some((file_id, type_info, arenas, names)) =
+      self.hir_def_for(def).and_then(|(lower, hir_def)| {
+        hir_def.type_info.clone().map(|info| {
+          (
+            lower.hir.file,
+            info,
+            lower.types.clone(),
+            lower.names.clone(),
+          )
+        })
+      })
+    else {
+      return self.interned_store.primitive_ids().unknown;
+    };
+
+    let semantics = self.semantics.clone();
+    let mut diags = Vec::new();
+    let mut lowerer = HirDeclLowerer::new(
+      self.interned_store.clone(),
+      &arenas,
+      semantics.as_ref(),
+      file_id,
+      &mut diags,
+    );
+    let mut ty = lowerer.lower_type_info(&type_info, &names);
+    self.diagnostics.append(&mut diags);
+
+    if matches!(type_info, HirDefTypeInfo::Interface { .. }) {
+      ty = self.merge_interface_type(def, ty, semantics.as_ref());
+    }
+
+    ty
+  }
+
+  fn merge_interface_type(
+    &mut self,
+    def: DefId,
+    base: InternedTypeId,
+    semantics: Option<&sem_ts::TsProgramSemantics>,
+  ) -> InternedTypeId {
+    let Some(data) = self.def_data.get(&def) else {
+      return base;
+    };
+
+    let mut merged: Vec<InternedTypeId> = vec![base];
+    let mut seen: BTreeSet<DefId> = BTreeSet::from([def]);
+
+    if let Some(sem) = semantics {
+      if let Some(symbol) =
+        sem.resolve_in_module(data.file, &data.name, sem_ts::Namespace::TYPE)
+      {
+        for decl in sem.symbol_decls(symbol, sem_ts::Namespace::TYPE).iter() {
+          let decl = sem.symbols().decl(*decl);
+          let other = DefId(decl.def_id.0);
+          if seen.insert(other) {
+            merged.push(self.type_of_def_interned(other));
+          }
+        }
+      }
+    }
+
+    if merged.len() == 1 {
+      base
+    } else {
+      self.interned_store.intersection(merged)
+    }
+  }
+
+  fn function_type_interned(&mut self, _def: DefId, func: FuncData) -> InternedTypeId {
+    let params: Vec<Param> = func
+      .params
+      .iter()
+      .map(|p| Param {
+        name: None,
+        ty: p
+          .typ
+          .map(|t| self.convert_legacy_to_interned(t))
+          .unwrap_or(self.interned_store.primitive_ids().any),
+        optional: false,
+        rest: false,
+      })
+      .collect();
+
+    let ret = if let Some(ret) = func.return_ann {
+      self.convert_legacy_to_interned(ret)
+    } else if let Some(body) = func.body {
+      let res = self.check_body(body);
+      if res.return_types.is_empty() {
+        self.interned_store.primitive_ids().void
+      } else {
+        let legacy = self
+          .type_store
+          .union(res.return_types.clone(), &self.builtin);
+        self.convert_legacy_to_interned(legacy)
+      }
+    } else {
+      self.interned_store.primitive_ids().unknown
+    };
+
+    let sig = Signature {
+      params,
+      ret,
+      type_params: Vec::new(),
+      this_param: None,
+    };
+    let sig_id = self.interned_store.intern_signature(sig);
+    let ty = self
+      .interned_store
+      .intern_type(InternedTypeKind::Callable { overloads: vec![sig_id] });
+    ty
+  }
+
+  fn var_type_interned(&mut self, var: VarData) -> InternedTypeId {
+    if let Some(t) = var.typ {
+      return self.convert_legacy_to_interned(t);
+    }
+    if let Some(init) = var.init {
+      let res = self.check_body(var.body);
+      if let Some(ty) = res.expr_type(init) {
+        return self.convert_legacy_to_interned(ty);
+      }
+    }
+    self.interned_store.primitive_ids().unknown
+  }
+
+  fn import_type(&mut self, import: &ImportData) -> InternedTypeId {
+    if let Some(target_def) = self.resolve_import_def(import) {
+      return self
+        .interned_store
+        .intern_type(InternedTypeKind::Ref {
+          def: hir_js::DefId(target_def.0),
+          args: Vec::new(),
+        });
+    }
+    self.interned_store.primitive_ids().unknown
+  }
+
+  fn resolve_import_def(&mut self, import: &ImportData) -> Option<DefId> {
+    if let Some(sem) = self.semantics.as_ref() {
+      if let Some(symbol) = sem.resolve_in_module(
+        sem_ts::FileId(import.from.0),
+        &import.original,
+        sem_ts::Namespace::TYPE,
+      ) {
+        if let Some(decl) = sem
+          .symbol_decls(symbol, sem_ts::Namespace::TYPE)
+          .first()
+          .copied()
+        {
+          let decl = sem.symbols().decl(decl);
+          return Some(DefId(decl.def_id.0));
+        }
+      }
+    }
+
+    let exports = self.exports_of_file(import.from);
+    exports.get(&import.original).and_then(|entry| entry.def)
+  }
+
+  fn collapse_import_ref(&mut self, ty: InternedTypeId) -> InternedTypeId {
+    match self.interned_store.type_kind(ty) {
+      InternedTypeKind::Ref { def, args } => {
+        let import_def = DefId(def.0);
+        if let Some(DefKind::Import(import)) =
+          self.def_data.get(&import_def).map(|d| d.kind.clone())
+        {
+          if let Some(target) = self.resolve_import_def(&import) {
+            return self
+              .interned_store
+              .intern_type(InternedTypeKind::Ref {
+                def: hir_js::DefId(target.0),
+                args: args.clone(),
+              });
+          }
+        }
+        ty
+      }
+      _ => ty,
+    }
+  }
+
   fn branch_returns(&self, stmts: &[HirStmt]) -> bool {
     stmts.iter().any(|stmt| match stmt {
       HirStmt::Return { .. } => true,
@@ -2816,16 +3297,49 @@ impl ProgramState {
       (TypeKind::LiteralBoolean(_), TypeKind::Boolean) => true,
       (TypeKind::Union(members), _) => members.iter().all(|m| self.is_assignable(*m, dst)),
       (_, TypeKind::Union(members)) => members.iter().any(|m| self.is_assignable(src, *m)),
+      (TypeKind::Array(source_elem), TypeKind::Array(target_elem)) => {
+        self.is_assignable(*source_elem, *target_elem)
+      }
+      (TypeKind::Array(source_elem), TypeKind::ReadonlyArray(target_elem)) => {
+        self.is_assignable(*source_elem, *target_elem)
+      }
+      (TypeKind::ReadonlyArray(source_elem), TypeKind::ReadonlyArray(target_elem)) => {
+        self.is_assignable(*source_elem, *target_elem)
+      }
+      (TypeKind::Tuple(source_elems, source_readonly), TypeKind::Array(target_elem)) => {
+        if *source_readonly {
+          return false;
+        }
+        source_elems
+          .iter()
+          .copied()
+          .all(|elem| self.is_assignable(elem, *target_elem))
+      }
+      (TypeKind::Tuple(source_elems, _), TypeKind::ReadonlyArray(target_elem)) => source_elems
+        .iter()
+        .copied()
+        .all(|elem| self.is_assignable(elem, *target_elem)),
+      (
+        TypeKind::Tuple(source_elems, source_readonly),
+        TypeKind::Tuple(target_elems, target_readonly),
+      ) => {
+        if !*target_readonly && *source_readonly {
+          return false;
+        }
+        if source_elems.len() != target_elems.len() {
+          return false;
+        }
+        source_elems
+          .iter()
+          .zip(target_elems.iter())
+          .all(|(s, t)| self.is_assignable(*s, *t))
+      }
       _ => false,
     }
   }
 
   fn initial_env(&self, owner: Option<DefId>, file: FileId) -> HashMap<String, SymbolBinding> {
-    let mut env: HashMap<_, _> = self
-      .global_bindings
-      .iter()
-      .map(|(name, binding)| (name.clone(), binding.clone()))
-      .collect();
+    let mut env = self.global_bindings.clone();
     if let Some(file_env) = self.files.get(&file).map(|f| f.bindings.clone()) {
       env.extend(file_env);
     }
@@ -2849,7 +3363,6 @@ impl ProgramState {
   fn type_of_def(&mut self, def: DefId) -> TypeId {
     let cache_hit = self.def_types.contains_key(&def);
     let mut span = QuerySpan::enter(
-      QueryKind::TypeOfDef,
       query_span!(
         "typecheck_ts.type_of_def",
         self.def_data.get(&def).map(|d| d.file.0),
@@ -2858,8 +3371,6 @@ impl ProgramState {
         cache_hit
       ),
       self.def_types.get(&def).copied(),
-      cache_hit,
-      Some(self.query_stats.clone()),
     );
     if let Some(existing) = self.def_types.get(&def) {
       if let Some(span) = span.take() {
@@ -2900,7 +3411,7 @@ impl ProgramState {
           self.builtin.unknown
         }
       }
-      None => self.builtin.unknown,
+      _ => self.builtin.unknown,
     };
     self.type_stack.pop();
     self.def_types.insert(def, ty);
@@ -2936,8 +3447,52 @@ impl ProgramState {
   }
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
-    if let Some(semantics) = self.semantics.clone() {
-      return check::modules::exports_from_semantics(self, &semantics, file);
+    if self.file_kinds.get(&file) != Some(&FileKind::Dts) && self.semantics.is_some() {
+      let sem_file = sem_ts::FileId(file.0);
+      let pending: Vec<(String, sem_ts::SymbolId, Option<DefId>, Option<DefId>)> = {
+        let semantics = self.semantics.as_ref().expect("checked above");
+        let exports = semantics.exports_of(sem_file);
+        let symbols = semantics.symbols();
+        let mut pending = Vec::new();
+        for (name, group) in exports.iter() {
+          let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) else {
+            continue;
+          };
+          let symbol = symbols.symbol(symbol_id);
+          let mut local_def = None;
+          let mut any_def = None;
+          for decl_id in symbol.decls_for(sem_ts::Namespace::VALUE).iter() {
+            let decl = symbols.decl(*decl_id);
+            let def = DefId(decl.def_id.0);
+            if any_def.is_none() {
+              any_def = Some(def);
+            }
+            if decl.file == sem_file && local_def.is_none() {
+              local_def = Some(def);
+            }
+          }
+          pending.push((name.clone(), symbol_id, local_def, any_def));
+        }
+        pending
+      };
+
+      let mut map = ExportMap::new();
+      for (name, symbol_id, local_def, any_def) in pending {
+        let symbol = any_def
+          .or(local_def)
+          .and_then(|def| self.def_data.get(&def).map(|data| data.symbol))
+          .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
+        let type_id = any_def.or(local_def).map(|def| self.type_of_def(def));
+        map.insert(
+          name,
+          ExportEntry {
+            symbol,
+            def: local_def,
+            type_id,
+          },
+        );
+      }
+      return map;
     }
     let Some(state) = self.files.get(&file).cloned() else {
       return ExportMap::new();
@@ -3053,7 +3608,7 @@ impl ProgramState {
     self.def_data.get(&def).and_then(|d| match &d.kind {
       DefKind::Function(func) => func.body,
       DefKind::Var(var) => Some(var.body),
-      DefKind::Import(_) => None,
+      _ => None,
     })
   }
 
@@ -3075,25 +3630,20 @@ impl ProgramState {
         self.type_store.union(members, &self.builtin)
       }
       TypeExpr::ArrayType(arr) => {
-        let TypeArray {
-          element_type,
-          readonly,
-        } = arr.stx.as_ref();
+        let TypeArray { element_type, .. } = arr.stx.as_ref();
         let elem = self.type_from_type_expr(element_type);
-        if *readonly {
+        if arr.stx.readonly {
           self.type_store.readonly_array(elem)
         } else {
           self.type_store.array(elem)
         }
       }
       TypeExpr::TupleType(tuple) => {
-        let elems = tuple
-          .stx
-          .elements
-          .iter()
-          .map(|elem| self.type_from_type_expr(&elem.stx.type_expr))
-          .collect();
-        self.type_store.tuple(elems, tuple.stx.readonly)
+        let mut elements = Vec::new();
+        for el in tuple.stx.elements.iter() {
+          elements.push(self.type_from_type_expr(&el.stx.type_expr));
+        }
+        self.type_store.tuple(elements, tuple.stx.readonly)
       }
       TypeExpr::FunctionType(func) => {
         let params = func
@@ -3217,7 +3767,6 @@ impl ProgramState {
           owner,
           stmts: Vec::new(),
           expr_spans: Vec::new(),
-          pat_spans: Vec::new(),
         },
       );
     }
@@ -3248,7 +3797,6 @@ struct BodyBuilder {
   file: FileId,
   stmts: Vec<HirStmt>,
   expr_spans: Vec<TextRange>,
-  pat_spans: Vec<TextRange>,
 }
 
 impl BodyBuilder {
@@ -3258,7 +3806,6 @@ impl BodyBuilder {
       file,
       stmts: Vec::new(),
       expr_spans: Vec::new(),
-      pat_spans: Vec::new(),
     }
   }
 
@@ -3266,12 +3813,6 @@ impl BodyBuilder {
     let id = ExprId(self.expr_spans.len() as u32);
     self.expr_spans.push(span);
     HirExpr { id, span, kind }
-  }
-
-  fn new_pat(&mut self, span: TextRange) -> PatId {
-    let id = PatId(self.pat_spans.len() as u32);
-    self.pat_spans.push(span);
-    id
   }
 
   fn lower_stmt_into(
@@ -3300,7 +3841,6 @@ impl BodyBuilder {
             .type_annotation
             .as_ref()
             .map(|t| state.type_from_type_expr(t));
-          let pat_id = Some(self.new_pat(loc_to_span(self.file, pat.loc).range));
           let init = declarator
             .initializer
             .map(|expr| self.lower_expr(expr, state));
@@ -3313,7 +3853,6 @@ impl BodyBuilder {
             span: stmt_span,
             symbol,
             def: None,
-            pat: pat_id,
             mode: var.stx.mode,
           });
         }
@@ -3473,6 +4012,14 @@ impl BodyBuilder {
           _const_assertion: assert.stx.const_assertion,
         }
       }
+      Expr::SatisfiesExpr(satisfies) => {
+        let expr = self.lower_expr(*satisfies.stx.expression, state);
+        let typ = state.type_from_type_expr(&satisfies.stx.type_annotation);
+        HirExprKind::Satisfies {
+          expr: Box::new(expr),
+          typ,
+        }
+      }
       _ => HirExprKind::Unknown,
     };
 
@@ -3488,7 +4035,6 @@ impl BodyBuilder {
       owner,
       stmts: self.stmts.drain(..).collect(),
       expr_spans: self.expr_spans,
-      pat_spans: self.pat_spans,
     }
   }
 }

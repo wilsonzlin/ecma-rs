@@ -11,10 +11,10 @@ let widenedStr = "hi";
 // expect-def-type: widenedStr = string
 
 const obj = { value: 1 };
-// expect-def-type: obj = {value: number}
+// expect-def-type: obj = { value: number }
 
 const objConst = { value: 1 } as const;
-// expect-def-type: objConst = {readonly value: 1}
+// expect-def-type: objConst = { readonly value: 1 }
 
 let contextual: { literal: 1 } = { literal: 1 };
 
@@ -25,4 +25,4 @@ const tupleConst = [1, 2] as const;
 // expect-def-type: tupleConst = readonly [1, 2]
 
 const satisfies = { tag: "a" } satisfies { tag: "a" | "b" };
-// expect-def-type: satisfies = {tag: "a"}
+// expect-def-type: satisfies = { tag: "a" }

@@ -9,6 +9,7 @@ struct TestHost {
   files: HashMap<FileId, Arc<str>>,
   options: CompilerOptions,
   libs: Vec<LibFile>,
+  edges: HashMap<(FileId, String), FileId>,
 }
 
 impl TestHost {
@@ -17,6 +18,7 @@ impl TestHost {
       files: HashMap::new(),
       options,
       libs: Vec::new(),
+      edges: HashMap::new(),
     }
   }
 
@@ -27,6 +29,11 @@ impl TestHost {
 
   fn with_lib(mut self, lib: LibFile) -> Self {
     self.libs.push(lib);
+    self
+  }
+
+  fn link(mut self, from: FileId, spec: &str, to: FileId) -> Self {
+    self.edges.insert((from, spec.to_string()), to);
     self
   }
 }
@@ -41,7 +48,7 @@ impl Host for TestHost {
   }
 
   fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
-    None
+    self.edges.get(&(_from, _specifier.to_string())).copied()
   }
 
   fn compiler_options(&self) -> CompilerOptions {
@@ -108,4 +115,40 @@ fn host_provided_libs_are_loaded() {
     diagnostics.is_empty(),
     "expected host libs to satisfy globals: {diagnostics:?}"
   );
+}
+
+#[test]
+fn imported_type_alias_resolves_interned_type() {
+  let host = TestHost::new(CompilerOptions::default())
+    .with_file(FileId(1), "export type Foo = number;")
+    .with_file(
+      FileId(0),
+      "import type { Foo } from \"./types\"; type Bar = Foo;",
+    )
+    .link(FileId(0), "./types", FileId(1));
+
+  let program = Program::new(host, vec![FileId(0)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Bar"))
+    .expect("Bar type alias");
+  let ty = program.type_of_def_interned(def);
+  let foo_def = program
+    .definitions_in_file(FileId(1))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Foo"))
+    .expect("Foo export");
+  match program.interned_type_kind(ty) {
+    types_ts_interned::TypeKind::Ref { def: target, .. } => {
+      assert_eq!(target.0, foo_def.0, "import should resolve to Foo def");
+    }
+    other => panic!("expected ref to Foo, got {:?}", other),
+  }
 }
