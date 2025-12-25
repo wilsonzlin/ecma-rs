@@ -196,6 +196,56 @@ fn infers_from_function_argument_structure() {
 }
 
 #[test]
+fn infers_from_contravariant_function_parameter() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let t_param = TypeParamId(0);
+  let t_type = store.intern_type(TypeKind::TypeParam(t_param));
+
+  let callback_sig = Signature {
+    params: vec![param("value", t_type, &store)],
+    ret: primitives.void,
+    type_params: Vec::new(),
+    this_param: None,
+  };
+  let callback_type = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(callback_sig)],
+  });
+
+  let generic_sig = Signature {
+    params: vec![param("cb", callback_type, &store)],
+    ret: t_type,
+    type_params: vec![t_param],
+    this_param: None,
+  };
+
+  let actual_cb_sig = Signature {
+    params: vec![param("value", primitives.number, &store)],
+    ret: primitives.void,
+    type_params: Vec::new(),
+    this_param: None,
+  };
+  let actual_cb = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(actual_cb_sig)],
+  });
+
+  let result = infer_type_arguments_for_call(
+    &store,
+    &generic_sig,
+    &[TypeParamDecl::new(t_param)],
+    &[actual_cb],
+    None,
+  );
+  assert!(result.diagnostics.is_empty());
+  assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
+
+  let mut substituter = Substituter::new(Arc::clone(&store), result.substitutions);
+  let instantiated = substituter.substitute_signature(&generic_sig);
+  let resolved = store.signature(instantiated);
+  assert_eq!(resolved.ret, primitives.number);
+}
+
+#[test]
 fn caches_instantiations_for_same_def() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
