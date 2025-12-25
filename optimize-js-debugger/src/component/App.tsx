@@ -37,6 +37,8 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import "./App.css";
 import { decode, encode } from "@msgpack/msgpack";
 
+type Id = number | string;
+
 class VObjectMapAsMap<K, V> extends Validator<Map<K, V>> {
   constructor(private readonly key: Validator<K>, private readonly value: Validator<V>) {
     super(new Map());
@@ -49,6 +51,8 @@ class VObjectMapAsMap<K, V> extends Validator<Map<K, V>> {
     return new Map(Object.entries(raw).map(([k, v]) => [this.key.parse(theValue.andThen(k), k), this.value.parse(theValue.andThen(k), v)]));
   }
 }
+
+const vId = new VUnion(new VInteger(), new VString());
 
 enum InstTyp {
   Bin = "Bin",
@@ -126,35 +130,33 @@ const vArg = new VStruct({
 
 type Arg = Valid<typeof vArg>;
 
-const vInst = new VStruct({
-  t: new VStringEnum(InstTyp),
-  tgts: new VArray(new VInteger()),
-  args: new VArray(vArg),
-  spreads: new VArray(new VInteger()),
-  labels: new VArray(new VInteger()),
-  bin_op: new VOptional(new VStringEnum(BinOp)),
-  un_op: new VOptional(new VStringEnum(UnOp)),
-  foreign: new VOptional(new VInteger()),
-  unknown: new VOptional(new VString()),
+const vProgramSymbol = new VStruct({
+  id: vId,
+  name: new VOptional(new VString()),
+  name_id: new VOptional(vId),
+  nameId: new VOptional(vId),
+  scope: new VOptional(vId),
+  captured: new VOptional(new VBoolean()),
 });
 
-type Inst = Valid<typeof vInst>;
-
-const vProgramSymbol = new VStruct({
-  id: new VInteger(),
-  name: new VString(),
-  scope: new VInteger(),
-  captured: new VBoolean(),
+const vScope = new VStruct({
+  id: new VOptional(vId),
+  parent: new VOptional(vId),
+  kind: new VOptional(new VString()),
+  symbols: new VOptional(new VArray(vId)),
+  children: new VOptional(new VArray(vId)),
 });
 
 const vProgramSymbols = new VStruct({
   symbols: new VArray(vProgramSymbol),
   free_symbols: new VOptional(
     new VStruct({
-      top_level: new VArray(new VInteger()),
-      functions: new VArray(new VArray(new VInteger())),
+      top_level: new VArray(vId),
+      functions: new VArray(new VArray(vId)),
     }),
   ),
+  names: new VOptional(new VArray(new VString())),
+  scopes: new VOptional(new VArray(vScope)),
 });
 
 enum Severity {
@@ -193,6 +195,21 @@ const vCompileError = new VStruct({
   ok: new VBoolean(),
   diagnostics: new VArray(vDiagnostic),
 });
+
+const vInst = new VStruct({
+  t: new VStringEnum(InstTyp),
+  tgts: new VArray(new VInteger()),
+  args: new VArray(vArg),
+  spreads: new VArray(new VInteger()),
+  labels: new VArray(new VInteger()),
+  bin_op: new VOptional(new VStringEnum(BinOp)),
+  un_op: new VOptional(new VStringEnum(UnOp)),
+  foreign: new VOptional(vId),
+  unknown: new VOptional(new VString()),
+  span: new VOptional(vSpan),
+});
+
+type Inst = Valid<typeof vInst>;
 
 const vDebugStep = new VStruct({
   name: new VString(),
@@ -253,7 +270,7 @@ const ConstElement = ({ value }: { value: Const }) => {
   throw new UnreachableError();
 };
 
-const VarElement = ({ id }: { id: number }) => (
+const VarElement = ({ id }: { id: Id }) => (
   <span className="var">%{id}</span>
 );
 
@@ -273,13 +290,16 @@ const ArgElement = ({ arg }: { arg: Arg }) => {
   throw new UnreachableError();
 };
 
-const InstElement = ({ inst, symbolNames }: { inst: Inst, symbolNames?: Map<number, string> }) => {
-  const foreignLabel = (id: number | undefined) => {
+const toIdKey = (id: Id | undefined) => (id == undefined ? undefined : typeof id === "string" ? id : id.toString());
+
+const InstElement = ({ inst, symbolNames }: { inst: Inst, symbolNames?: Map<string, string> }) => {
+  const foreignLabel = (id: Id | undefined) => {
     if (id == undefined) {
       return "foreign";
     }
-    const name = symbolNames?.get(id);
-    return name ? `foreign ${id} (${name})` : `foreign ${id}`;
+    const key = toIdKey(id)!;
+    const name = symbolNames?.get(key);
+    return name ? `foreign ${key} (${name})` : `foreign ${key}`;
   };
 
   switch (inst.t) {
@@ -485,7 +505,7 @@ const BBlockElement = ({
   symbolNames,
 }: {
   data: BBlockNode["data"];
-  symbolNames?: Map<number, string>;
+  symbolNames?: Map<string, string>;
 }) => {
   // Due to the way our layout is calculated, loops will sometimes have edges in a straight line that overlap with each other and obscures the flow, so we use the left as the target instead of the top.
   return (
@@ -547,7 +567,7 @@ const Graph = ({
 }: {
   stepNames: Array<string>;
   step: DebugStep;
-  symbolNames?: Map<number, string>;
+  symbolNames?: Map<string, string>;
 }) => {
   const initNodes = useMemo(
     () =>
@@ -664,7 +684,7 @@ const BBlocksExplorer = ({
   symbolNames,
 }: {
   data: Debug;
-  symbolNames?: Map<number, string>;
+  symbolNames?: Map<string, string>;
 }) => {
   const [stepIdx, setStepIdx] = useState(0);
   const actualStepIdx = Math.min(stepIdx, data.steps.length - 1);
@@ -739,7 +759,26 @@ export const App = ({}: {}) => {
     if (!symbols) {
       return undefined;
     }
-    return new Map<number, string>(symbols.map(({ id, name }) => [id, name]));
+    const namesTable = data?.symbols?.names;
+    const map = new Map<string, string>();
+    for (const symbol of symbols) {
+      const key = toIdKey(symbol.id);
+      if (!key) {
+        continue;
+      }
+      const nameId = symbol.name_id ?? symbol.nameId;
+      const nameFromTable =
+        typeof nameId === "number"
+          ? namesTable?.[nameId]
+          : typeof nameId === "string" && !Number.isNaN(Number(nameId))
+            ? namesTable?.[Number(nameId)]
+            : undefined;
+      const fallbackName =
+        nameId != undefined ? (typeof nameId === "string" ? nameId : nameId.toString()) : undefined;
+      const name = symbol.name ?? nameFromTable ?? fallbackName ?? key;
+      map.set(key, name);
+    }
+    return map;
   }, [data]);
   const curFn = data?.functions[curFnId!] ?? data?.top_level;
 
