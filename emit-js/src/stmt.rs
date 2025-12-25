@@ -134,7 +134,15 @@ fn emit_for_triple(em: &mut Emitter, for_stmt: &Node<ForTripleStmt>) -> EmitResu
   em.write_punct("(");
   match &for_stmt.init {
     ForTripleStmtInit::None => {}
-    ForTripleStmtInit::Expr(expr) => emit_expr(em, expr, ExprCtx::Default)?,
+    ForTripleStmtInit::Expr(expr) => {
+      if crate::stmt_start::for_init_expr_needs_parens(expr) {
+        em.write_punct("(");
+        emit_expr(em, expr, ExprCtx::Default)?;
+        em.write_punct(")");
+      } else {
+        emit_expr(em, expr, ExprCtx::Default)?;
+      }
+    }
     ForTripleStmtInit::Decl(decl) => emit_var_decl(em, decl.stx.as_ref(), false)?,
   }
   em.write_punct(";");
@@ -176,7 +184,16 @@ fn emit_for_of(em: &mut Emitter, for_stmt: &Node<ForOfStmt>) -> EmitResult {
 
 fn emit_for_in_of_lhs(em: &mut Emitter, lhs: &ForInOfLhs) -> EmitResult {
   match lhs {
-    ForInOfLhs::Assign(pat) => emit_pat(em, pat),
+    ForInOfLhs::Assign(pat) => {
+      if crate::stmt_start::for_inof_assign_needs_parens(pat) {
+        em.write_punct("(");
+        emit_pat(em, pat)?;
+        em.write_punct(")");
+        Ok(())
+      } else {
+        emit_pat(em, pat)
+      }
+    }
     ForInOfLhs::Decl((mode, decl)) => {
       emit_var_decl_mode(em, *mode);
       emit_pat_decl(em, decl)

@@ -1,5 +1,6 @@
 use std::fmt;
 
+use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::{Expr, UnaryExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
@@ -235,4 +236,153 @@ fn is_valid_identifier_like(_name: &str) -> bool {
   // The parser has already validated identifier tokens; accept the remaining
   // strings as valid identifier-like values for pattern lookahead.
   true
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContextualKeyword {
+  Let,
+  Using,
+  AwaitUsing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
+enum NextTokenAfterKeyword {
+  None,
+  Brace,
+  Bracket,
+  IdentLike,
+  In,
+  Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ContextualKeywordStart {
+  kind: ContextualKeyword,
+  next: NextTokenAfterKeyword,
+}
+
+fn contextual_keyword_from_name(name: &str) -> Option<ContextualKeyword> {
+  match name {
+    "let" => Some(ContextualKeyword::Let),
+    "using" => Some(ContextualKeyword::Using),
+    _ => None,
+  }
+}
+
+fn contextual_keyword_start_from_expr(expr: &Expr) -> Option<ContextualKeywordStart> {
+  match expr {
+    Expr::Id(id) => contextual_keyword_from_name(&id.stx.name).map(|kind| ContextualKeywordStart {
+      kind,
+      next: NextTokenAfterKeyword::None,
+    }),
+    Expr::IdPat(id) => {
+      contextual_keyword_from_name(&id.stx.name).map(|kind| ContextualKeywordStart {
+        kind,
+        next: NextTokenAfterKeyword::None,
+      })
+    }
+    Expr::Unary(unary) if unary.stx.operator == OperatorName::Await => {
+      let child = unary.stx.argument.stx.as_ref();
+      if let Some(child_start) = contextual_keyword_start_from_expr(child) {
+        if child_start.kind == ContextualKeyword::Using {
+          Some(ContextualKeywordStart {
+            kind: ContextualKeyword::AwaitUsing,
+            next: child_start.next,
+          })
+        } else {
+          None
+        }
+      } else {
+        None
+      }
+    }
+    Expr::Member(member) => {
+      propagate_keyword_start(member.stx.left.stx.as_ref(), NextTokenAfterKeyword::Other)
+    }
+    Expr::ComputedMember(member) => propagate_keyword_start(
+      member.stx.object.stx.as_ref(),
+      if member.stx.optional_chaining {
+        NextTokenAfterKeyword::Other
+      } else {
+        NextTokenAfterKeyword::Bracket
+      },
+    ),
+    Expr::Call(call) => {
+      propagate_keyword_start(call.stx.callee.stx.as_ref(), NextTokenAfterKeyword::Other)
+    }
+    Expr::Binary(binary) => propagate_keyword_start(
+      binary.stx.left.stx.as_ref(),
+      if binary.stx.operator == OperatorName::In {
+        NextTokenAfterKeyword::In
+      } else {
+        NextTokenAfterKeyword::Other
+      },
+    ),
+    Expr::Cond(cond) => {
+      propagate_keyword_start(cond.stx.test.stx.as_ref(), NextTokenAfterKeyword::Other)
+    }
+    Expr::NonNullAssertion(non_null) => propagate_keyword_start(
+      non_null.stx.expression.stx.as_ref(),
+      NextTokenAfterKeyword::Other,
+    ),
+    Expr::TypeAssertion(assertion) => propagate_keyword_start(
+      assertion.stx.expression.stx.as_ref(),
+      NextTokenAfterKeyword::Other,
+    ),
+    Expr::SatisfiesExpr(satisfies) => propagate_keyword_start(
+      satisfies.stx.expression.stx.as_ref(),
+      NextTokenAfterKeyword::Other,
+    ),
+    _ => None,
+  }
+}
+
+fn propagate_keyword_start(
+  expr: &Expr,
+  fallback_next: NextTokenAfterKeyword,
+) -> Option<ContextualKeywordStart> {
+  contextual_keyword_start_from_expr(expr).map(|mut start| {
+    if start.next == NextTokenAfterKeyword::None {
+      start.next = fallback_next;
+    }
+    start
+  })
+}
+
+fn contextual_keyword_start_from_pat(pat: &Pat) -> Option<ContextualKeywordStart> {
+  match pat {
+    Pat::Id(id) => contextual_keyword_from_name(&id.stx.name).map(|kind| ContextualKeywordStart {
+      kind,
+      next: NextTokenAfterKeyword::None,
+    }),
+    Pat::AssignTarget(expr) => contextual_keyword_start_from_expr(expr.stx.as_ref()),
+    Pat::Arr(_) | Pat::Obj(_) => None,
+  }
+}
+
+pub(crate) fn for_init_expr_needs_parens(expr: &Node<Expr>) -> bool {
+  contextual_keyword_start_from_expr(expr.stx.as_ref()).map_or(false, |start| match start.kind {
+    ContextualKeyword::AwaitUsing => true,
+    ContextualKeyword::Let | ContextualKeyword::Using => matches!(
+      start.next,
+      NextTokenAfterKeyword::Brace
+        | NextTokenAfterKeyword::Bracket
+        | NextTokenAfterKeyword::IdentLike
+    ),
+  })
+}
+
+pub(crate) fn for_inof_assign_needs_parens(pat: &Node<Pat>) -> bool {
+  contextual_keyword_start_from_pat(pat.stx.as_ref()).map_or(false, |start| match start.kind {
+    ContextualKeyword::AwaitUsing => true,
+    ContextualKeyword::Let | ContextualKeyword::Using => matches!(
+      start.next,
+      NextTokenAfterKeyword::Brace
+        | NextTokenAfterKeyword::Bracket
+        | NextTokenAfterKeyword::IdentLike
+        | NextTokenAfterKeyword::In
+        | NextTokenAfterKeyword::None
+    ),
+  })
 }
