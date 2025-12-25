@@ -18,7 +18,11 @@ use parse_js::ast::type_expr::{TypeExpr, TypeParameter};
 use parse_js::ast::func::{Func, FuncBody};
 
 pub fn emit_top_level(em: &mut Emitter, top: &Node<TopLevel>) -> EmitResult {
-  for stmt in &top.stx.body {
+  emit_stmt_list(em, &top.stx.body)
+}
+
+pub fn emit_stmt_list(em: &mut Emitter, stmts: &[Node<Stmt>]) -> EmitResult {
+  for stmt in stmts {
     emit_stmt(em, stmt)?;
   }
   Ok(())
@@ -27,7 +31,10 @@ pub fn emit_top_level(em: &mut Emitter, top: &Node<TopLevel>) -> EmitResult {
 pub fn emit_stmt(em: &mut Emitter, stmt: &Node<Stmt>) -> EmitResult {
   match stmt.stx.as_ref() {
     Stmt::Block(block) => emit_block(em, block),
-    Stmt::Empty(_) => Ok(()),
+    Stmt::Empty(_) => {
+      em.write_punct(";");
+      Ok(())
+    }
     Stmt::Expr(expr) => emit_expr_stmt(em, &expr.stx.expr),
     Stmt::If(if_stmt) => emit_if(em, if_stmt),
     Stmt::ForTriple(for_stmt) => emit_for_triple(em, for_stmt),
@@ -72,9 +79,7 @@ pub fn emit_stmt(em: &mut Emitter, stmt: &Node<Stmt>) -> EmitResult {
 
 fn emit_block(em: &mut Emitter, block: &Node<BlockStmt>) -> EmitResult {
   em.write_punct("{");
-  for stmt in &block.stx.body {
-    emit_stmt(em, stmt)?;
-  }
+  emit_stmt_list(em, &block.stx.body)?;
   em.write_punct("}");
   Ok(())
 }
@@ -170,13 +175,11 @@ fn emit_for_in_of_lhs(em: &mut Emitter, lhs: &ForInOfLhs) -> EmitResult {
 
 fn emit_for_body(em: &mut Emitter, body: &Node<ForBody>) -> EmitResult {
   let stmts = &body.stx.body;
-  if stmts.len() == 1 && !matches!(stmts.first().unwrap().stx.as_ref(), Stmt::Empty(_)) {
+  if stmts.len() == 1 {
     emit_stmt(em, &stmts[0])
   } else {
     em.write_punct("{");
-    for stmt in stmts {
-      emit_stmt(em, stmt)?;
-    }
+    emit_stmt_list(em, stmts)?;
     em.write_punct("}");
     Ok(())
   }

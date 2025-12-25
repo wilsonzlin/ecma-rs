@@ -1,0 +1,45 @@
+use emit_js::{emit_stmt_list, EmitMode, EmitOptions, Emitter};
+use serde_json::to_value;
+
+fn assert_roundtrip(src: &str) {
+  let parsed = parse_js::parse(src).expect("parse");
+  let mut em = Emitter::new(EmitOptions {
+    mode: EmitMode::Minified,
+    ..EmitOptions::default()
+  });
+  emit_stmt_list(&mut em, &parsed.stx.body)
+    .unwrap_or_else(|err| panic!("emit failed for {src:?}: {err:?}"));
+  let emitted = String::from_utf8(em.into_bytes()).expect("utf-8");
+  let reparsed = parse_js::parse(&emitted).expect("reparse");
+  assert_eq!(
+    to_value(&parsed).unwrap(),
+    to_value(&reparsed).unwrap(),
+    "emitted source: {emitted}"
+  );
+}
+
+#[test]
+fn asi_hazards_are_separated() {
+  let cases = [
+    "a\n(b)",
+    "a\n[0]",
+    "a;/+/.test(b)",
+    "a\n`${b}`",
+    "a;<div/>",
+    "a\nclass Foo {}",
+    "a\nfunction foo() {}",
+    "a\nasync function foo() {}",
+    "function f(){ return\n(b) }",
+  ];
+
+  for case in cases {
+    println!("roundtrip: {case}");
+    assert_roundtrip(case);
+  }
+}
+
+#[test]
+fn switch_branch_boundaries() {
+  let program = "switch(x){case 0: a\n(b) case 1: c}";
+  assert_roundtrip(program);
+}
