@@ -276,7 +276,7 @@ fn prefers_fixed_arity_over_rest() {
 fn prefers_non_generic_when_inference_is_unknown() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
-  let relate = RelateCtx::new(&store, TypeOptions::default());
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
 
   let t_param = types_ts_interned::TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
