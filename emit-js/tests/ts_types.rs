@@ -1,4 +1,4 @@
-use emit_js::emit_type_expr;
+use emit_js::{ts_type_to_string, EmitMode};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
@@ -16,9 +16,11 @@ fn parse_type_expr(src_type: &str) -> Node<TypeExpr> {
 }
 
 fn emit_type_expr_to_string(node: &Node<TypeExpr>) -> String {
-  let mut out = String::new();
-  emit_type_expr(&mut out, node).expect("emit should succeed");
-  out
+  ts_type_to_string(node, EmitMode::Canonical)
+}
+
+fn emit_type_expr_minified(node: &Node<TypeExpr>) -> String {
+  ts_type_to_string(node, EmitMode::Minified)
 }
 
 fn roundtrip_type_expr(src_type: &str) {
@@ -58,5 +60,20 @@ fn precedence_parentheses_and_unions() {
     let printed = emit_type_expr_to_string(&parsed);
     assert_eq!(printed, expected, "case `{}`", input);
     roundtrip_type_expr(input);
+  }
+}
+
+#[test]
+fn minified_output_omits_optional_spaces() {
+  let cases = [
+    ("T | U", "T|U"),
+    ("(A | B)[]", "(A|B)[]"),
+    ("keyof (A | B)", "keyof(A|B)"),
+  ];
+
+  for (input, expected) in cases {
+    let parsed = parse_type_expr(input);
+    let printed = emit_type_expr_minified(&parsed);
+    assert_eq!(printed, expected, "case `{}`", input);
   }
 }

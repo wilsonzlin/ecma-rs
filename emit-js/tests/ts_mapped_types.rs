@@ -1,4 +1,4 @@
-use emit_js::{emit_interface_decl, emit_type_expr};
+use emit_js::{emit_interface_decl, ts_type_to_string, EmitMode};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
@@ -41,9 +41,7 @@ fn parse_interface(src: &str) -> Node<InterfaceDecl> {
 }
 
 fn emit_type_expr_to_string(node: &Node<TypeExpr>) -> String {
-  let mut out = String::new();
-  emit_type_expr(&mut out, node).expect("emit type");
-  out
+  ts_type_to_string(node, EmitMode::Canonical)
 }
 
 fn assert_emit_type(src: &str, expected: &str) {

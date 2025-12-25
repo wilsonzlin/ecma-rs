@@ -1,4 +1,4 @@
-use emit_js::{emit_interface_decl, emit_type_expr};
+use emit_js::{emit_interface_decl, ts_type_to_string, EmitMode};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
@@ -100,8 +100,7 @@ fn check_object_case(src: &str, expected: &str, assert_key: impl Fn(&TypePropert
   let parsed = parse_type_expr(src);
   assert_key(object_member_key(&parsed));
 
-  let mut out = String::new();
-  emit_type_expr(&mut out, &parsed).expect("emit type expression");
+  let out = ts_type_to_string(&parsed, EmitMode::Canonical);
   assert_eq!(out, expected);
 
   let reparsed = parse_type_expr(&out);

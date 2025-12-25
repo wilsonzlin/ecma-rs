@@ -1,13 +1,11 @@
-use emit_js::emit_type_expr;
+use emit_js::{ts_type_to_string, EmitMode};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::{TypeEntityName, TypeExpr, TypeReference, TypeTemplateLiteral};
 
 fn emit_type_expr_to_string(expr: &Node<TypeExpr>) -> String {
-  let mut out = String::new();
-  emit_type_expr(&mut out, expr).expect("emit type expr");
-  out
+  ts_type_to_string(expr, EmitMode::Canonical)
 }
 
 fn parse_template_type_expr(source: &str) -> Node<TypeExpr> {

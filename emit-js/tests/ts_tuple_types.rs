@@ -1,4 +1,4 @@
-use emit_js::emit_type_expr;
+use emit_js::{ts_type_to_string, EmitMode};
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::lex::Lexer;
@@ -28,9 +28,7 @@ fn parse_type_expr(src: &str) -> Node<TypeExpr> {
 }
 
 fn emit_type_expr_to_string(expr: &Node<TypeExpr>) -> String {
-  let mut out = String::new();
-  emit_type_expr(&mut out, expr).expect("emit type expression");
-  out
+  ts_type_to_string(expr, EmitMode::Canonical)
 }
 
 fn assert_roundtrip(input: &str, expected: &str) {
