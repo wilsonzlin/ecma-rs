@@ -1,6 +1,5 @@
 use super::super::inst::InstTyp;
 use crate::compile_source;
-use crate::OptimizeError;
 use crate::Program;
 use crate::ProgramFunction;
 use parse_js::parse;
@@ -111,15 +110,12 @@ fn direct_eval_is_unsupported() {
   let err = compile_source(source, TopLevelMode::Module, false)
     .expect_err("direct eval should be rejected");
 
-  match err {
-    OptimizeError::UnsupportedSyntax { kind, .. } => {
-      assert!(
-        kind.contains("direct eval"),
-        "expected direct eval messaging, got {kind}"
-      );
-    }
-    other => panic!("expected unsupported syntax for direct eval, got {other:?}"),
-  }
+  assert!(
+    err
+      .iter()
+      .any(|diag| diag.code == "OPT0002" && diag.message.contains("direct eval")),
+    "expected OPT0002 diagnostic mentioning direct eval, got {err:?}"
+  );
 }
 
 #[test]

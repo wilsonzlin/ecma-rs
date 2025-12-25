@@ -537,7 +537,7 @@ impl<'p> SourceToInst<'p> {
 
   pub fn compile_call_expr(
     &mut self,
-    span: Span,
+    span: Loc,
     CallExpr {
       optional_chaining,
       callee,
@@ -547,10 +547,7 @@ impl<'p> SourceToInst<'p> {
   ) -> OptimizeResult<Arg> {
     if let Expr::Id(id_expr) = callee.stx.as_ref() {
       if id_expr.stx.name == "eval" && !assoc_has_resolved_symbol(&id_expr.assoc) {
-        return Err(OptimizeError::unsupported(
-          span,
-          "direct eval is not supported",
-        ));
+        return Err(unsupported_syntax(span, "direct eval is not supported"));
       }
     }
 
