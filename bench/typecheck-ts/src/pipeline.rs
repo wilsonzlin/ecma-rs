@@ -6,18 +6,15 @@ use hir_js::lower_file;
 use hir_js::FileKind as HirFileKind;
 use hir_js::LowerResult;
 use ordered_float::OrderedFloat;
-use parse_js::ast::expr::pat::Pat as AstPat;
-use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::FuncDecl;
-use parse_js::ast::stmt::decl::VarDecl;
-use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::error::SyntaxResult;
 use parse_js::{parse_with_options, Dialect, ParseOptions};
 use semantic_js::ts::{
-  bind_ts_program, Decl, DeclKind, Export, ExportAll, Exported, HirFile, Import, ImportDefault,
-  ImportNamed, ImportNamespace, NamedExport, Resolver, TextRange,
+  bind_ts_program,
+  from_hir_js::lower_to_ts_hir,
+  HirFile,
+  Resolver,
 };
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -131,8 +128,9 @@ pub fn bind_module_graph(graph: &ModuleGraphFixture) -> BindSummary {
     let file_id = semantic_js::ts::FileId(idx as u32);
     resolver.insert(file_id, fixture.name.to_string());
     let parsed = parse_only(fixture).expect("fixture should parse for binding");
-    let hir = lower_semantic_hir(file_id, &parsed);
-    files.insert(file_id, Arc::new(hir));
+    let lowered = lower_to_hir(file_id, &parsed);
+    let sem_hir = lower_to_ts_hir(&parsed, &lowered);
+    files.insert(file_id, Arc::new(sem_hir));
   }
 
   let roots = vec![semantic_js::ts::FileId(0)];
@@ -701,214 +699,4 @@ fn push_candidates(path: &Path, candidates: &mut Vec<String>) {
 
 fn normalize(path: &Path) -> String {
   path.to_string_lossy().replace('\\', "/")
-}
-
-fn lower_semantic_hir(file: semantic_js::ts::FileId, ast: &Node<TopLevel>) -> HirFile {
-  let mut hir = HirFile::module(file);
-  let mut next_def = 0u32;
-
-  for stmt in ast.stx.body.iter() {
-    match &*stmt.stx {
-      Stmt::VarDecl(var) => {
-        lower_var_decl(&mut hir, &mut next_def, &var.stx);
-      }
-      Stmt::FunctionDecl(func) => {
-        lower_function_decl(&mut hir, &mut next_def, &func.stx);
-      }
-      Stmt::Import(import_stmt) => {
-        hir.imports.push(lower_import(&import_stmt.stx));
-      }
-      Stmt::ExportDefaultExpr(_) => {
-        hir.decls.push(Decl {
-          def_id: semantic_js::ts::DefId(next_def),
-          name: "default".to_string(),
-          kind: DeclKind::Var,
-          is_ambient: false,
-          is_global: false,
-          exported: Exported::Default,
-          span: TextRange::new(0, 0),
-        });
-        next_def += 1;
-      }
-      Stmt::ExportList(export_list) => match &export_list.stx.names {
-        parse_js::ast::import_export::ExportNames::All(_) => {
-          let specifier = export_list
-            .stx
-            .from
-            .as_ref()
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-          hir.exports.push(Export::All(ExportAll {
-            specifier,
-            is_type_only: export_list.stx.type_only,
-            specifier_span: TextRange::new(0, 0),
-          }));
-        }
-        parse_js::ast::import_export::ExportNames::Specific(list) => {
-          let mut named = NamedExport {
-            specifier: export_list.stx.from.clone(),
-            specifier_span: export_list.stx.from.as_ref().map(|_| TextRange::new(0, 0)),
-            items: Vec::new(),
-            is_type_only: export_list.stx.type_only,
-          };
-          for export_name in list.iter() {
-            let exported = export_name.stx.alias.stx.name.to_string();
-            named.items.push(semantic_js::ts::ExportSpecifier {
-              local: export_name.stx.exportable.as_str().to_string(),
-              exported: Some(exported),
-              local_span: TextRange::new(0, 0),
-              exported_span: Some(TextRange::new(0, 0)),
-            });
-          }
-          hir.exports.push(Export::Named(named));
-        }
-      },
-      _ => {}
-    }
-  }
-
-  hir
-}
-
-fn lower_var_decl(hir: &mut HirFile, next_def: &mut u32, var: &VarDecl) {
-  let exported = if var.export {
-    Exported::Named
-  } else {
-    Exported::No
-  };
-
-  for declarator in var.declarators.iter() {
-    for name in collect_pat_names(&declarator.pattern) {
-      hir.decls.push(Decl {
-        def_id: semantic_js::ts::DefId(*next_def),
-        name,
-        kind: DeclKind::Var,
-        is_ambient: false,
-        is_global: false,
-        exported: exported.clone(),
-        span: TextRange::new(0, 0),
-      });
-      *next_def += 1;
-    }
-  }
-}
-
-fn lower_function_decl(hir: &mut HirFile, next_def: &mut u32, func: &FuncDecl) {
-  let name = func
-    .name
-    .as_ref()
-    .map(|n| n.stx.name.clone())
-    .unwrap_or_else(|| "default".to_string());
-  let exported = if func.export_default {
-    Exported::Default
-  } else if func.export {
-    Exported::Named
-  } else {
-    Exported::No
-  };
-
-  hir.decls.push(Decl {
-    def_id: semantic_js::ts::DefId(*next_def),
-    name,
-    kind: DeclKind::Function,
-    is_ambient: false,
-    is_global: false,
-    exported,
-    span: TextRange::new(0, 0),
-  });
-  *next_def += 1;
-}
-
-fn collect_pat_names(pat: &Node<parse_js::ast::stmt::decl::PatDecl>) -> Vec<String> {
-  let mut names = Vec::new();
-  collect_pat_names_inner(&pat.stx.pat, &mut names);
-  names
-}
-
-fn collect_pat_names_inner(pat: &Node<AstPat>, out: &mut Vec<String>) {
-  match &*pat.stx {
-    AstPat::Id(id) => out.push(id.stx.name.clone()),
-    AstPat::Obj(obj) => {
-      for prop in obj.stx.properties.iter() {
-        collect_pat_names_inner(&prop.stx.target, out);
-      }
-      if let Some(rest) = &obj.stx.rest {
-        collect_pat_names_inner(rest, out);
-      }
-    }
-    AstPat::Arr(arr) => {
-      for elem in arr.stx.elements.iter().flatten() {
-        collect_pat_names_inner(&elem.target, out);
-        if let Some(default) = &elem.default_value {
-          if let AstExpr::Id(id) = &*default.stx {
-            out.push(id.stx.name.clone());
-          }
-        }
-      }
-      if let Some(rest) = &arr.stx.rest {
-        collect_pat_names_inner(rest, out);
-      }
-    }
-    AstPat::AssignTarget(expr) => {
-      if let AstExpr::Id(id) = &*expr.stx {
-        out.push(id.stx.name.clone());
-      }
-    }
-  }
-}
-
-fn lower_import(import_stmt: &parse_js::ast::stmt::ImportStmt) -> Import {
-  let mut imp = Import {
-    specifier: import_stmt.module.clone(),
-    specifier_span: TextRange::new(0, 0),
-    default: None,
-    namespace: None,
-    named: Vec::new(),
-    is_type_only: import_stmt.type_only,
-  };
-
-  if let Some(default) = &import_stmt.default {
-    let local = collect_pat_names(default)
-      .into_iter()
-      .next()
-      .unwrap_or_else(|| "default".to_string());
-    imp.default = Some(ImportDefault {
-      local,
-      local_span: TextRange::new(0, 0),
-      is_type_only: import_stmt.type_only,
-    });
-  }
-
-  if let Some(names) = &import_stmt.names {
-    match names {
-      parse_js::ast::import_export::ImportNames::All(pat) => {
-        let local = collect_pat_names(pat)
-          .into_iter()
-          .next()
-          .unwrap_or_else(|| "*".to_string());
-        imp.namespace = Some(ImportNamespace {
-          local,
-          local_span: TextRange::new(0, 0),
-          is_type_only: import_stmt.type_only,
-        });
-      }
-      parse_js::ast::import_export::ImportNames::Specific(list) => {
-        for item in list.iter() {
-          let local = collect_pat_names(&item.stx.alias)
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| item.stx.importable.as_str().to_string());
-          imp.named.push(ImportNamed {
-            imported: item.stx.importable.as_str().to_string(),
-            local,
-            is_type_only: item.stx.type_only || import_stmt.type_only,
-            imported_span: TextRange::new(0, 0),
-            local_span: TextRange::new(0, 0),
-          });
-        }
-      }
-    }
-  }
-
-  imp
 }

@@ -3024,19 +3024,17 @@ fn lower_module_items(
                 });
                 next_export += 1;
               } else {
-                if let Some(def_data) = defs.get(def.0 as usize) {
-                  let name_id = def_data.path.name;
-                  push_named_export(
-                    &mut exports,
-                    span_map,
-                    &mut next_export,
-                    &mut next_export_spec,
-                    decl.span,
-                    name_id,
-                    Some(def),
-                    decl.type_only,
-                  );
-                }
+                let name_id = name_for_def(defs, def);
+                push_named_export(
+                  &mut exports,
+                  span_map,
+                  &mut next_export,
+                  &mut next_export_spec,
+                  decl.span,
+                  name_id,
+                  Some(def),
+                  decl.type_only,
+                );
               }
             }
           }
@@ -3061,7 +3059,7 @@ fn lower_module_items(
                 });
                 next_export += 1;
               } else {
-                let name_id = defs[def.0 as usize].path.name;
+                let name_id = name_for_def(defs, def);
                 push_named_export(
                   &mut exports,
                   span_map,
@@ -3259,4 +3257,12 @@ fn lower_module_items(
 
 fn find_def<'a>(defs: &'a [DefData], kind: DefKind, span: TextRange) -> Option<&'a DefData> {
   defs.iter().find(|d| d.path.kind == kind && d.span == span)
+}
+
+fn name_for_def(defs: &[DefData], def: DefId) -> NameId {
+  defs
+    .iter()
+    .find(|d| d.id == def)
+    .map(|d| d.path.name)
+    .unwrap_or_else(|| panic!("missing def data for {:?}", def))
 }

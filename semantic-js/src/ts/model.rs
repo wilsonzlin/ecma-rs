@@ -598,6 +598,7 @@ pub(crate) struct ImportEntry {
   pub from: Option<FileId>,
   pub imported: ImportItem,
   pub type_only: bool,
+  pub def_id: Option<DefId>,
 }
 
 #[derive(Clone, Debug)]

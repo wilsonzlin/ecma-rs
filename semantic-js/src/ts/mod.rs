@@ -14,6 +14,7 @@
 //! See [`SymbolTable`] and related types for the in-memory representation and
 //! determinism constraints.
 mod binder;
+pub mod from_hir_js;
 pub mod locals;
 mod model;
 

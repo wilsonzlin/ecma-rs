@@ -304,8 +304,15 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   ) {
     let mut has_exports = false;
     let mut first_export_span: Option<Span> = None;
+    let mut import_def_ids = HashMap::new();
 
     for decl in decls {
+      if matches!(decl.kind, DeclKind::ImportBinding) {
+        import_def_ids
+          .entry(decl.name.clone())
+          .or_insert(decl.def_id);
+        continue;
+      }
       let namespaces = decl.kind.namespaces();
       let order = self.bump_order();
       let decl_id = self.symbols.alloc_decl(
@@ -402,6 +409,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           from: target,
           imported: ImportItem::Default,
           type_only: import.is_type_only || default.is_type_only,
+          def_id: import_def_ids.get(&default.local).copied(),
         };
         self.add_import_binding(state, file_id, &entry);
       }
@@ -411,6 +419,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           from: target,
           imported: ImportItem::Namespace,
           type_only: import.is_type_only || ns.is_type_only,
+          def_id: import_def_ids.get(&ns.local).copied(),
         };
         self.add_import_binding(state, file_id, &entry);
       }
@@ -420,6 +429,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           from: target,
           imported: ImportItem::Named(named.imported.clone()),
           type_only: import.is_type_only || named.is_type_only,
+          def_id: import_def_ids.get(&named.local).copied(),
         };
         self.add_import_binding(state, file_id, &entry);
       }
@@ -578,7 +588,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       false,
       false,
       order,
-      None,
+      entry.def_id,
     );
     add_decl_to_groups(
       &mut state.symbols,

@@ -1,6 +1,12 @@
 use ::semantic_js::ts as sem_ts;
+use semantic_js::ts::from_hir_js::lower_to_ts_hir;
 pub use diagnostics::{Diagnostic, FileId, Label, Severity, Span, TextRange};
-use hir_js::{lower_file_with_diagnostics, DefTypeInfo as HirDefTypeInfo, LowerResult as HirLower};
+use hir_js::{
+  lower_file_with_diagnostics,
+  DefTypeInfo as HirDefTypeInfo,
+  FileKind as HirFileKind,
+  LowerResult as HirLower,
+};
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};
@@ -778,90 +784,6 @@ struct ImportData {
   original: String,
 }
 
-#[derive(Clone, Debug)]
-struct SemHirBuilder {
-  file: FileId,
-  decls: Vec<sem_ts::Decl>,
-  imports: Vec<sem_ts::Import>,
-  exports: Vec<sem_ts::Export>,
-}
-
-impl SemHirBuilder {
-  fn new(file: FileId) -> Self {
-    SemHirBuilder {
-      file,
-      decls: Vec::new(),
-      imports: Vec::new(),
-      exports: Vec::new(),
-    }
-  }
-
-  fn add_decl(
-    &mut self,
-    def: DefId,
-    name: String,
-    kind: sem_ts::DeclKind,
-    exported: sem_ts::Exported,
-    span: TextRange,
-  ) {
-    self.decls.push(sem_ts::Decl {
-      def_id: sem_ts::DefId(def.0),
-      name,
-      kind,
-      is_ambient: false,
-      is_global: false,
-      exported,
-      span,
-    });
-  }
-
-  fn add_import(&mut self, import: sem_ts::Import) {
-    self.imports.push(import);
-  }
-
-  fn add_named_export(
-    &mut self,
-    specifier: Option<String>,
-    specifier_span: Option<TextRange>,
-    items: Vec<sem_ts::ExportSpecifier>,
-    is_type_only: bool,
-  ) {
-    if items.is_empty() {
-      return;
-    }
-    self
-      .exports
-      .push(sem_ts::Export::Named(sem_ts::NamedExport {
-        specifier,
-        specifier_span,
-        items,
-        is_type_only,
-      }));
-  }
-
-  fn add_export_all(&mut self, specifier: String, specifier_span: TextRange, is_type_only: bool) {
-    self.exports.push(sem_ts::Export::All(sem_ts::ExportAll {
-      specifier,
-      is_type_only,
-      specifier_span,
-    }));
-  }
-
-  fn finish(self) -> sem_ts::HirFile {
-    sem_ts::HirFile {
-      file_id: sem_ts::FileId(self.file.0),
-      module_kind: sem_ts::ModuleKind::Module,
-      file_kind: sem_ts::FileKind::Ts,
-      decls: self.decls,
-      imports: self.imports,
-      exports: self.exports,
-      export_as_namespace: Vec::new(),
-      ambient_modules: Vec::new(),
-    }
-  }
-}
-
-#[derive(Clone, Debug)]
 struct BodyData {
   id: BodyId,
   file: FileId,
@@ -1460,9 +1382,18 @@ impl ProgramState {
     host: &Arc<dyn Host>,
     queue: &mut VecDeque<FileId>,
   ) {
+    let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
+    let hir_kind = match file_kind {
+      FileKind::Dts => HirFileKind::Dts,
+      _ => HirFileKind::Ts,
+    };
+    let (lower, lower_diags) = hir_js::lower_file_with_diagnostics(file, hir_kind, &ast);
+    self.diagnostics.extend(lower_diags);
+    let sem_hir = lower_to_ts_hir(&ast, &lower);
+    self.sem_hir.insert(file, sem_hir);
+
     let top_body_id = self.alloc_body(file, None);
     let mut top_body = BodyBuilder::new(top_body_id, file);
-    let mut sem_builder = SemHirBuilder::new(file);
     let mut defs = Vec::new();
     let mut exports: ExportMap = BTreeMap::new();
     let mut bindings: HashMap<String, SymbolBinding> = HashMap::new();
@@ -1482,7 +1413,6 @@ impl ProgramState {
             var_span.range,
             *var.stx,
             &mut top_body,
-            &mut sem_builder,
           );
           for (def_id, binding, export_name) in new_defs {
             defs.push(def_id);
@@ -1504,7 +1434,7 @@ impl ProgramState {
         Stmt::FunctionDecl(func) => {
           let span = loc_to_span(file, stmt.loc);
           if let Some((def_id, binding, export_name)) =
-            self.handle_function_decl(file, span.range, *func.stx, &mut sem_builder)
+            self.handle_function_decl(file, span.range, *func.stx)
           {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -1612,13 +1542,6 @@ impl ProgramState {
           );
           self.record_def_symbol(def_id, symbol);
           defs.push(def_id);
-          sem_builder.add_decl(
-            def_id,
-            "default".to_string(),
-            sem_ts::DeclKind::Var,
-            sem_ts::Exported::Default,
-            span.range,
-          );
           bindings.insert(
             "default".to_string(),
             SymbolBinding {
@@ -1664,23 +1587,6 @@ impl ProgramState {
                   Some(alias.clone())
                 };
                 let is_type_only = export_list.stx.type_only || name.stx.type_only;
-                sem_builder.add_named_export(
-                  export_list.stx.from.clone(),
-                  export_list
-                    .stx
-                    .from
-                    .as_ref()
-                    .map(|_| loc_to_span(file, stmt.loc).range),
-                  vec![sem_ts::ExportSpecifier {
-                    local: exportable.clone(),
-                    exported: exported_as.clone(),
-                    local_span: loc_to_span(file, name.loc).range,
-                    exported_span: exported_as
-                      .as_ref()
-                      .map(|_| loc_to_span(file, name.stx.alias.loc).range),
-                  }],
-                  is_type_only,
-                );
 
                 if export_list.stx.from.is_some() {
                   if !is_type_only {
@@ -1721,12 +1627,6 @@ impl ProgramState {
                   "unsupported export * as alias",
                   loc_to_span(file, stmt.loc),
                 ));
-              } else if let Some(spec) = export_list.stx.from.clone() {
-                sem_builder.add_export_all(
-                  spec,
-                  loc_to_span(file, stmt.loc).range,
-                  export_list.stx.type_only,
-                );
               }
             }
           }
@@ -1912,7 +1812,6 @@ impl ProgramState {
 
     let body_data = top_body.finish(None);
     self.body_data.insert(top_body_id, body_data);
-    self.sem_hir.insert(file, sem_builder.finish());
     self.files.insert(
       file,
       FileState {
@@ -1930,7 +1829,6 @@ impl ProgramState {
     span: TextRange,
     var: VarDecl,
     builder: &mut BodyBuilder,
-    sem_builder: &mut SemHirBuilder,
   ) -> (
     Vec<(DefId, (String, SymbolBinding), Option<String>)>,
     Vec<HirStmt>,
@@ -1998,17 +1896,6 @@ impl ProgramState {
         ),
         if var.export { Some(name.clone()) } else { None },
       ));
-      sem_builder.add_decl(
-        def_id,
-        name.clone(),
-        sem_ts::DeclKind::Var,
-        if var.export {
-          sem_ts::Exported::Named
-        } else {
-          sem_ts::Exported::No
-        },
-        loc_to_span(file, pat.loc).range,
-      );
     }
     (defs, stmts)
   }
@@ -2018,7 +1905,6 @@ impl ProgramState {
     file: FileId,
     span: TextRange,
     func: FuncDecl,
-    sem_builder: &mut SemHirBuilder,
   ) -> Option<(DefId, (String, SymbolBinding), Option<String>)> {
     let name_node = func.name?;
     let name = name_node.stx.name.clone();

@@ -1,8 +1,12 @@
 use super::*;
 use crate::assoc::{js, ts};
-use crate::ts::locals::SymbolId as LocalSymbolId;
+use crate::ts::locals::{bind_ts_locals, SymbolId as LocalSymbolId};
 use diagnostics::sort_diagnostics;
+use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
+use hir_js::ids::{DefKind, ExprId, TypeExprId};
+use hir_js::lower_file;
 use parse_js::ast::node::NodeAssocData;
+use parse_js::parse;
 use serde_json::json;
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap};
@@ -1139,7 +1143,6 @@ fn binding_is_deterministic_across_runs() {
   assert_eq!(first_sem, second_sem);
   assert_eq!(first_diags, second_diags);
 }
-
 fn snapshot_semantics(semantics: &TsProgramSemantics) -> serde_json::Value {
   let symbols = semantics.symbols();
   let module_exports: BTreeMap<_, _> = semantics
@@ -1210,4 +1213,379 @@ fn namespace_name(ns: Namespace) -> &'static str {
     Namespace::NAMESPACE => "namespace",
     _ => "unknown",
   }
+}
+
+fn lower_and_bind(
+  files: &[(FileId, &str)],
+  resolver_map: HashMap<String, FileId>,
+) -> (TsProgramSemantics, Vec<Diagnostic>) {
+  let mut hir_files = HashMap::new();
+  for (file_id, source) in files.iter() {
+    let ast = parse(source).expect("parse");
+    let lower = lower_file(*file_id, HirFileKind::Ts, &ast);
+    let sem_hir = crate::ts::from_hir_js::lower_to_ts_hir(&ast, &lower);
+    hir_files.insert(*file_id, Arc::new(sem_hir));
+  }
+  let resolver = StaticResolver::new(resolver_map);
+  bind_ts_program(
+    &files.iter().map(|(f, _)| *f).collect::<Vec<_>>(),
+    &resolver,
+    |file| hir_files.get(&file).unwrap().clone(),
+  )
+}
+
+#[test]
+fn hir_js_adapter_preserves_def_ids_for_exports() {
+  let file = FileId(200);
+  let source = "export function foo() {}";
+  let ast = parse(source).unwrap();
+  let (lower, diags) = hir_js::lower_file_with_diagnostics(file, HirFileKind::Ts, &ast);
+  assert!(diags.is_empty());
+  let expected_def = lower
+    .hir
+    .items
+    .iter()
+    .copied()
+    .find(|id| {
+      let idx = lower.def_index.get(id).copied().unwrap();
+      let def = &lower.defs[idx];
+      lower.names.resolve(def.name) == Some("foo")
+    })
+    .expect("foo def id");
+  let sem_hir = crate::ts::from_hir_js::lower_to_ts_hir(&ast, &lower);
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(sem_hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports = semantics.exports_of(file);
+  let symbols = semantics.symbols();
+  let foo_symbol = exports
+    .get("foo")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .unwrap();
+  let decl = symbols.decl(symbols.symbol(foo_symbol).decls_for(Namespace::VALUE)[0]);
+  assert_eq!(decl.def_id, expected_def);
+}
+
+#[test]
+fn hir_js_adapter_handles_type_only_reexports() {
+  let file_a = FileId(210);
+  let file_b = FileId(211);
+  let sources = &[
+    (file_a, "export interface Foo { bar: string; }"),
+    (file_b, "import type { Foo } from \"./a\";\nexport { Foo };"),
+  ];
+  let (semantics, diags) =
+    lower_and_bind(sources, maplit::hashmap! { "./a".to_string() => file_a });
+  assert!(diags.is_empty());
+
+  let symbols = semantics.symbols();
+  let foo_type = semantics
+    .exports_of(file_b)
+    .get("Foo")
+    .expect("exported Foo")
+    .symbol_for(Namespace::TYPE, symbols)
+    .expect("type-only export keeps type namespace");
+  assert!(semantics
+    .exports_of(file_b)
+    .get("Foo")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .is_none());
+
+  let original = semantics
+    .exports_of(file_a)
+    .get("Foo")
+    .unwrap()
+    .symbol_for(Namespace::TYPE, symbols)
+    .unwrap();
+  assert_eq!(foo_type, original);
+}
+
+#[test]
+fn hir_js_adapter_binds_real_exports() {
+  let file = FileId(220);
+  let source = r#"
+    const local = 1;
+    export const foo = 2;
+    export { local as renamed };
+    export default function qux() {}
+  "#;
+  let ast = parse(source).unwrap();
+  let (lower, diags) = hir_js::lower_file_with_diagnostics(file, HirFileKind::Ts, &ast);
+  assert!(diags.is_empty());
+  let sem_hir = crate::ts::from_hir_js::lower_to_ts_hir(&ast, &lower);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(sem_hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let symbols = semantics.symbols();
+  let exports = semantics.exports_of(file);
+  let foo = exports
+    .get("foo")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .unwrap();
+  let renamed = exports
+    .get("renamed")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .unwrap();
+  assert_ne!(foo, renamed);
+  assert_eq!(
+    renamed,
+    semantics
+      .resolve_in_module(file, "local", Namespace::VALUE)
+      .expect("local binding present")
+  );
+  let default_export = exports
+    .get("default")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .unwrap();
+  assert!(!semantics
+    .symbol_decls(default_export, Namespace::VALUE)
+    .is_empty());
+}
+
+#[test]
+fn import_bindings_keep_hir_def_ids() {
+  let file_a = FileId(230);
+  let ast_a = parse("export const foo = 1;").unwrap();
+  let (lower_a, diags_a) = hir_js::lower_file_with_diagnostics(file_a, HirFileKind::Ts, &ast_a);
+  assert!(diags_a.is_empty());
+  let sem_a = crate::ts::from_hir_js::lower_to_ts_hir(&ast_a, &lower_a);
+
+  let file_b = FileId(231);
+  let ast_b = parse("import { foo as bar } from \"./a\"; export { bar };").unwrap();
+  let (lower_b, diags_b) = hir_js::lower_file_with_diagnostics(file_b, HirFileKind::Ts, &ast_b);
+  assert!(diags_b.is_empty());
+  let import_def_id = lower_b
+    .hir
+    .items
+    .iter()
+    .copied()
+    .find(|id| {
+      let idx = lower_b.def_index.get(id).copied().unwrap();
+      let def = &lower_b.defs[idx];
+      def.path.kind == hir_js::DefKind::ImportBinding
+        && lower_b.names.resolve(def.name) == Some("bar")
+    })
+    .expect("import binding def");
+  let sem_b = crate::ts::from_hir_js::lower_to_ts_hir(&ast_b, &lower_b);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(sem_a),
+    file_b => Arc::new(sem_b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! { "./a".to_string() => file_a });
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let module_symbol = semantics
+    .resolve_in_module(file_b, "bar", Namespace::VALUE)
+    .expect("import binding present");
+  let decls = semantics.symbol_decls(module_symbol, Namespace::VALUE);
+  assert!(!decls.is_empty());
+  let decl_def_id = semantics.symbols().decl(decls[0]).def_id;
+  assert_eq!(decl_def_id, import_def_id);
+  assert!(matches!(
+    semantics.symbols().symbol(module_symbol).origin,
+    SymbolOrigin::Import { .. }
+  ));
+
+  let exported_bar = semantics
+    .resolve_export(file_b, "bar", Namespace::VALUE)
+    .expect("re-exported bar");
+  let foo = semantics
+    .resolve_export(file_a, "foo", Namespace::VALUE)
+    .expect("foo export");
+  assert_eq!(exported_bar, foo);
+}
+
+fn body_by_name<'a>(
+  lowered: &'a hir_js::hir::LowerResult,
+  name: &str,
+  kind: DefKind,
+) -> &'a hir_js::hir::Body {
+  let def = lowered
+    .defs
+    .iter()
+    .find(|d| d.path.kind == kind && lowered.names.resolve(d.path.name) == Some(name))
+    .expect("definition present");
+  if let Some(body_id) = def.body {
+    if let Some(body) = lowered.bodies.get(body_id.0 as usize) {
+      return body.as_ref();
+    }
+  }
+  lowered
+    .bodies
+    .iter()
+    .find(|b| b.owner == def.id)
+    .or_else(|| lowered.bodies.first())
+    .map(|b| b.as_ref())
+    .unwrap_or_else(|| panic!("body available for {}", name))
+}
+
+#[test]
+fn locals_resolve_block_shadowing() {
+  let mut ast = parse(
+    r#"
+    function f() {
+      var x = 1;
+      {
+        let x = 2;
+        x;
+      }
+      x;
+    }
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, true);
+  let lowered = lower_file(FileId(90), HirFileKind::Ts, &ast);
+  let body = body_by_name(&lowered, "f", DefKind::Function);
+
+  let mut id_uses: Vec<_> = body
+    .exprs
+    .iter()
+    .enumerate()
+    .filter_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some((ExprId(idx as u32), expr.span)),
+      _ => None,
+    })
+    .collect();
+  id_uses.sort_by_key(|(_, span)| span.start);
+  assert_eq!(id_uses.len(), 2);
+
+  let inner = locals
+    .resolve_expr(body, id_uses[0].0)
+    .expect("inner use resolves");
+  let outer = locals
+    .resolve_expr(body, id_uses[1].0)
+    .expect("outer use resolves");
+  assert_ne!(inner, outer);
+}
+
+#[test]
+fn locals_hoist_var_declarations() {
+  let mut ast = parse(
+    r#"
+    function g() {
+      x;
+      var x = 1;
+    }
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, true);
+  let lowered = lower_file(FileId(91), HirFileKind::Ts, &ast);
+  let body = body_by_name(&lowered, "g", DefKind::Function);
+
+  let first_ident = body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("identifier present");
+  assert!(locals.resolve_expr(body, first_ident).is_some());
+}
+
+#[test]
+fn locals_separate_value_and_type_namespaces() {
+  let mut ast = parse(
+    r#"
+    type Foo = number;
+    const Foo = 1;
+    type Bar = Foo;
+    const baz = Foo;
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, true);
+  let lowered = lower_file(FileId(92), HirFileKind::Ts, &ast);
+
+  let type_ref = lowered
+    .types
+    .type_exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      TypeExprKind::TypeRef(_) => Some(TypeExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("type reference present");
+  let type_sym = locals
+    .resolve_type_name(&lowered.types.type_exprs, type_ref)
+    .expect("type Foo resolves");
+
+  let baz_body = body_by_name(&lowered, "baz", DefKind::Var);
+  let value_ident = baz_body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("value use present");
+  let value_sym = locals
+    .resolve_expr(baz_body, value_ident)
+    .expect("value Foo resolves");
+
+  assert_ne!(type_sym, value_sym);
+}
+
+#[test]
+fn type_only_imports_skip_value_resolution() {
+  let mut ast = parse(
+    r#"
+    import type { Foo } from "mod";
+    type Bar = Foo;
+    const value = Foo;
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, true);
+  let lowered = lower_file(FileId(93), HirFileKind::Ts, &ast);
+
+  let type_ref = lowered
+    .types
+    .type_exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      TypeExprKind::TypeRef(_) => Some(TypeExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("type ref present");
+  assert!(
+    locals
+      .resolve_type_name(&lowered.types.type_exprs, type_ref)
+      .is_some(),
+    "type import remains available"
+  );
+
+  let value_body = body_by_name(&lowered, "value", DefKind::Var);
+  let id = value_body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("value identifier present");
+  assert!(
+    locals.resolve_expr(value_body, id).is_none(),
+    "type-only import should not resolve in value namespace"
+  );
 }
