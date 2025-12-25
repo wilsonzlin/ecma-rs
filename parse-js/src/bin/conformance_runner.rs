@@ -1,6 +1,10 @@
 // TypeScript Conformance Test Runner
 // Runs all TypeScript conformance tests in parallel with timeouts
 
+use diagnostics::render::{render_diagnostic, SourceProvider};
+use diagnostics::{
+  diagnostic_from_syntax_error, sort_diagnostics, sort_labels, Diagnostic, FileId, Span, TextRange,
+};
 use parse_js;
 use parse_js::lex::{lex_next, LexMode, Lexer};
 use parse_js::Dialect;
@@ -10,7 +14,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -38,38 +42,41 @@ struct VirtualFile {
   kind: FileKind,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 struct VirtualFileResult {
+  file_id: FileId,
   name: String,
   module: bool,
   kind: FileKind,
   directives: Vec<HarnessDirective>,
   skipped: bool,
-  error: Option<String>,
+  diagnostics: Vec<Diagnostic>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 struct TestResult {
   path: PathBuf,
   directives: Vec<HarnessDirective>,
   files: Vec<VirtualFileResult>,
-  #[serde(skip_serializing)]
   duration: Duration,
   duration_ms: u128,
-  error: Option<String>,
+  diagnostics: Vec<Diagnostic>,
   timed_out: bool,
+  files_store: SimpleFiles,
 }
 
 impl TestResult {
   fn passed(&self) -> bool {
-    !self.timed_out && self.error.is_none() && self.files.iter().all(|f| f.error.is_none())
+    !self.timed_out
+      && self.diagnostics.is_empty()
+      && self.files.iter().all(|f| f.diagnostics.is_empty())
   }
 
   fn failed_files(&self) -> Vec<&VirtualFileResult> {
     self
       .files
       .iter()
-      .filter(|f| f.error.is_some())
+      .filter(|f| !f.diagnostics.is_empty())
       .collect::<Vec<_>>()
   }
 }
@@ -82,8 +89,71 @@ struct RunnerOptions {
   timeout_secs: u64,
 }
 
+#[derive(Debug, Clone)]
+struct SimpleFile {
+  name: String,
+  text: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SimpleFiles {
+  files: Vec<SimpleFile>,
+  ids: BTreeMap<String, FileId>,
+}
+
+impl SimpleFiles {
+  fn insert(&mut self, name: String, text: String) -> FileId {
+    let normalized = normalize_virtual_path(&name);
+    if let Some(id) = self.ids.get(&normalized) {
+      return *id;
+    }
+    let id = FileId(self.files.len() as u32);
+    self.files.push(SimpleFile {
+      name: normalized.clone(),
+      text,
+    });
+    self.ids.insert(normalized, id);
+    id
+  }
+
+  fn iter(&self) -> impl Iterator<Item = (FileId, &SimpleFile)> {
+    self
+      .files
+      .iter()
+      .enumerate()
+      .map(|(idx, file)| (FileId(idx as u32), file))
+  }
+}
+
+impl SourceProvider for SimpleFiles {
+  fn file_name(&self, file: FileId) -> &str {
+    &self.files[file.0 as usize].name
+  }
+
+  fn file_text(&self, file: FileId) -> &str {
+    &self.files[file.0 as usize].text
+  }
+}
+
+fn empty_test_result(path: &Path) -> TestResult {
+  TestResult {
+    path: path.to_path_buf(),
+    directives: Vec::new(),
+    files: Vec::new(),
+    duration: Duration::from_millis(0),
+    duration_ms: 0,
+    diagnostics: Vec::new(),
+    timed_out: false,
+    files_store: SimpleFiles::default(),
+  }
+}
+
 fn normalize_path(path: &Path) -> String {
   path.to_string_lossy().replace('\\', "/")
+}
+
+fn normalize_virtual_path(path: &str) -> String {
+  path.replace('\\', "/")
 }
 
 fn parse_directive(line: &str) -> Option<HarnessDirective> {
@@ -239,48 +309,65 @@ fn load_failure_paths(path: &Path) -> HashSet<String> {
 
 fn run_test(path: &Path) -> TestResult {
   let start = Instant::now();
-  let mut base_result = TestResult {
-    path: path.to_path_buf(),
-    directives: Vec::new(),
-    files: Vec::new(),
-    duration: Duration::from_millis(0),
-    duration_ms: 0,
-    error: None,
-    timed_out: false,
-  };
+  let mut base_result = empty_test_result(path);
 
   let source = match fs::read_to_string(path) {
     Ok(s) => s,
     Err(e) => {
-      base_result.error = Some(format!("Failed to read file: {}", e));
+      let file_id = base_result
+        .files_store
+        .insert(normalize_path(path), String::new());
+      base_result.diagnostics.push(Diagnostic::error(
+        "CONF0001",
+        format!("failed to read file: {}", e),
+        Span {
+          file: file_id,
+          range: TextRange::new(0, 0),
+        },
+      ));
+      sort_diagnostics(&mut base_result.diagnostics);
       base_result.duration = start.elapsed();
       base_result.duration_ms = base_result.duration.as_millis();
       return base_result;
     }
   };
 
-  let (virtual_files, directives) = split_virtual_files(path, &source);
+  let (mut virtual_files, directives) = split_virtual_files(path, &source);
   base_result.directives = directives;
+  virtual_files
+    .sort_by(|a, b| normalize_virtual_path(&a.name).cmp(&normalize_virtual_path(&b.name)));
 
   for vf in virtual_files {
     let should_parse = should_parse(&vf.kind);
-    let mut vf_result = VirtualFileResult {
-      name: vf.name,
+    let normalized_name = normalize_virtual_path(&vf.name);
+    let file_id = base_result
+      .files_store
+      .insert(normalized_name.clone(), vf.content.clone());
+    let mut diagnostics = Vec::new();
+
+    if should_parse {
+      if let Err(err) = parse_js::parse(&vf.content) {
+        diagnostics.push(diagnostic_from_syntax_error(file_id, &err));
+      }
+    }
+
+    sort_diagnostics(&mut diagnostics);
+
+    base_result.files.push(VirtualFileResult {
+      file_id,
+      name: normalized_name,
       module: vf.module,
       kind: vf.kind,
       directives: vf.directives.clone(),
       skipped: !should_parse,
-      error: None,
-    };
+      diagnostics,
+    });
+  }
 
-    if should_parse {
-      match parse_js::parse(&vf.content) {
-        Ok(_) => {}
-        Err(err) => vf_result.error = Some(format!("{:?}", err)),
-      }
+  if base_result.passed() {
+    for file in &mut base_result.files_store.files {
+      file.text.clear();
     }
-
-    base_result.files.push(vf_result);
   }
 
   base_result.duration = start.elapsed();
@@ -305,25 +392,44 @@ fn run_test_with_timeout(path: &Path, timeout_secs: u64) -> TestResult {
         r.duration_ms = r.duration.as_millis();
         r
       }
-      Err(panic_err) => TestResult {
-        path: path.to_path_buf(),
-        directives: Vec::new(),
-        files: Vec::new(),
-        duration: start.elapsed(),
-        duration_ms: start.elapsed().as_millis(),
-        error: Some(format!("PANIC: {:?}", panic_err)),
-        timed_out: false,
-      },
+      Err(panic_err) => {
+        let mut result = empty_test_result(path);
+        let file_id = result
+          .files_store
+          .insert(normalize_path(path), String::new());
+        result.diagnostics.push(Diagnostic::error(
+          "CONF0002",
+          format!("runner panicked: {:?}", panic_err),
+          Span {
+            file: file_id,
+            range: TextRange::new(0, 0),
+          },
+        ));
+        sort_diagnostics(&mut result.diagnostics);
+        result.duration = start.elapsed();
+        result.duration_ms = result.duration.as_millis();
+        result
+      }
     },
-    Err(_) => TestResult {
-      path: path.to_path_buf(),
-      directives: Vec::new(),
-      files: Vec::new(),
-      duration: Duration::from_secs(timeout_secs),
-      duration_ms: Duration::from_secs(timeout_secs).as_millis(),
-      error: Some(format!("TIMEOUT after {} seconds", timeout_secs)),
-      timed_out: true,
-    },
+    Err(_) => {
+      let mut result = empty_test_result(path);
+      let file_id = result
+        .files_store
+        .insert(normalize_path(path), String::new());
+      result.diagnostics.push(Diagnostic::error(
+        "CONF0003",
+        format!("timeout after {} seconds", timeout_secs),
+        Span {
+          file: file_id,
+          range: TextRange::new(0, 0),
+        },
+      ));
+      sort_diagnostics(&mut result.diagnostics);
+      result.duration = Duration::from_secs(timeout_secs);
+      result.duration_ms = result.duration.as_millis();
+      result.timed_out = true;
+      result
+    }
   }
 }
 
@@ -378,6 +484,171 @@ fn parse_args() -> RunnerOptions {
   options
 }
 
+fn rendered_diagnostics(provider: &SimpleFiles, diagnostics: &[Diagnostic]) -> Vec<String> {
+  diagnostics
+    .iter()
+    .map(|diag| render_diagnostic(provider, diag))
+    .collect()
+}
+
+fn print_rendered_diagnostics(prefix: &str, provider: &SimpleFiles, diagnostics: &[Diagnostic]) {
+  for rendered in rendered_diagnostics(provider, diagnostics) {
+    for line in rendered.lines() {
+      println!("{}{}", prefix, line);
+    }
+  }
+}
+
+fn append_rendered_diagnostics(
+  output: &mut String,
+  indent: &str,
+  provider: &SimpleFiles,
+  diagnostics: &[Diagnostic],
+) {
+  for rendered in rendered_diagnostics(provider, diagnostics) {
+    for line in rendered.lines() {
+      output.push_str(indent);
+      output.push_str(line);
+      output.push('\n');
+    }
+  }
+}
+
+#[derive(Serialize)]
+struct SerializableSpan {
+  file: u32,
+  start: u32,
+  end: u32,
+}
+
+#[derive(Serialize)]
+struct SerializableLabel {
+  span: SerializableSpan,
+  message: String,
+  is_primary: bool,
+}
+
+#[derive(Serialize)]
+struct SerializableDiagnostic {
+  code: String,
+  severity: String,
+  message: String,
+  primary: SerializableSpan,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  labels: Vec<SerializableLabel>,
+  #[serde(skip_serializing_if = "Vec::is_empty")]
+  notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SerializableVirtualFile {
+  file_id: u32,
+  name: String,
+  module: bool,
+  kind: FileKind,
+  directives: Vec<HarnessDirective>,
+  skipped: bool,
+  diagnostics: Vec<SerializableDiagnostic>,
+}
+
+#[derive(Serialize)]
+struct SerializableTestResult {
+  path: String,
+  directives: Vec<HarnessDirective>,
+  files: Vec<SerializableVirtualFile>,
+  duration_ms: u128,
+  diagnostics: Vec<SerializableDiagnostic>,
+  timed_out: bool,
+}
+
+fn serialize_results(results: &[TestResult]) -> Vec<SerializableTestResult> {
+  results.iter().map(serialize_test_result).collect()
+}
+
+fn serialize_test_result(result: &TestResult) -> SerializableTestResult {
+  let mut file_lookup = BTreeMap::new();
+  for file in &result.files {
+    file_lookup.insert(file.file_id, file);
+  }
+
+  let mut files: Vec<SerializableVirtualFile> = result
+    .files_store
+    .iter()
+    .map(|(file_id, file)| {
+      if let Some(vf) = file_lookup.get(&file_id) {
+        SerializableVirtualFile {
+          file_id: file_id.0,
+          name: file.name.clone(),
+          module: vf.module,
+          kind: vf.kind.clone(),
+          directives: vf.directives.clone(),
+          skipped: vf.skipped,
+          diagnostics: serialize_diagnostics(&vf.diagnostics),
+        }
+      } else {
+        SerializableVirtualFile {
+          file_id: file_id.0,
+          name: file.name.clone(),
+          module: false,
+          kind: FileKind::Other,
+          directives: Vec::new(),
+          skipped: true,
+          diagnostics: Vec::new(),
+        }
+      }
+    })
+    .collect();
+
+  files.sort_by(|a, b| a.name.cmp(&b.name));
+
+  SerializableTestResult {
+    path: normalize_path(result.path.as_path()),
+    directives: result.directives.clone(),
+    files,
+    duration_ms: result.duration_ms,
+    diagnostics: serialize_diagnostics(&result.diagnostics),
+    timed_out: result.timed_out,
+  }
+}
+
+fn serialize_diagnostics(diagnostics: &[Diagnostic]) -> Vec<SerializableDiagnostic> {
+  let mut sorted = diagnostics.to_vec();
+  sort_diagnostics(&mut sorted);
+
+  sorted
+    .into_iter()
+    .map(|diag| {
+      let mut labels = diag.labels;
+      sort_labels(&mut labels);
+      let mut notes = diag.notes;
+      notes.sort();
+      SerializableDiagnostic {
+        code: diag.code.to_string(),
+        severity: diag.severity.as_str().to_string(),
+        message: diag.message,
+        primary: SerializableSpan {
+          file: diag.primary.file.0,
+          start: diag.primary.range.start,
+          end: diag.primary.range.end,
+        },
+        labels: labels
+          .into_iter()
+          .map(|label| SerializableLabel {
+            span: SerializableSpan {
+              file: label.span.file.0,
+              start: label.span.range.start,
+              end: label.span.range.end,
+            },
+            message: label.message,
+            is_primary: label.is_primary,
+          })
+          .collect(),
+        notes,
+      }
+    })
+    .collect()
+}
+
 fn main() {
   let options = parse_args();
   let test_dir = Path::new("tests/TypeScript/tests/cases/conformance");
@@ -408,7 +679,7 @@ fn main() {
   let processed_clone = Arc::clone(&processed);
   let progress_handle = std::thread::spawn(move || loop {
     std::thread::sleep(Duration::from_secs(5));
-    let current = processed_clone.load(Ordering::Relaxed);
+    let current = processed_clone.load(AtomicOrdering::Relaxed);
     if current >= total {
       break;
     }
@@ -425,15 +696,15 @@ fn main() {
     .map(|test_path| {
       let result = run_test_with_timeout(test_path, options.timeout_secs);
 
-      let current = processed.fetch_add(1, Ordering::Relaxed) + 1;
+      let current = processed.fetch_add(1, AtomicOrdering::Relaxed) + 1;
       if current % 100 == 0 {
         eprintln!("[{}/{}] {}", current, total, test_path.display());
       }
 
       if result.passed() {
-        passed.fetch_add(1, Ordering::Relaxed);
+        passed.fetch_add(1, AtomicOrdering::Relaxed);
       } else {
-        failed.fetch_add(1, Ordering::Relaxed);
+        failed.fetch_add(1, AtomicOrdering::Relaxed);
         if result.timed_out {
           eprintln!("⏱️  TIMEOUT: {}", test_path.display());
         }
@@ -448,15 +719,15 @@ fn main() {
   let mut results = results;
   results.sort_by(|a, b| a.path.cmp(&b.path));
 
-  let passed_count = passed.load(Ordering::Relaxed);
-  let failed_count = failed.load(Ordering::Relaxed);
+  let passed_count = passed.load(AtomicOrdering::Relaxed);
+  let failed_count = failed.load(AtomicOrdering::Relaxed);
   let pass_rate = if total == 0 {
     100.0
   } else {
     (passed_count as f64 / total as f64) * 100.0
   };
 
-  let mut failures_by_category: BTreeMap<String, Vec<TestResult>> = BTreeMap::new();
+  let mut failures_by_category: BTreeMap<String, usize> = BTreeMap::new();
   for result in &results {
     if !result.passed() {
       if let Some(parent) = result.path.parent() {
@@ -467,8 +738,8 @@ fn main() {
           .to_string();
         failures_by_category
           .entry(category)
-          .or_insert_with(Vec::new)
-          .push(result.clone());
+          .and_modify(|count| *count += 1)
+          .or_insert(1);
       }
     }
   }
@@ -496,17 +767,10 @@ fn main() {
     println!("{}", separator);
 
     let mut categories: Vec<_> = failures_by_category.iter().collect();
-    categories.sort_by(|(a_cat, a), (b_cat, b)| {
-      let len_cmp = b.len().cmp(&a.len());
-      if len_cmp == std::cmp::Ordering::Equal {
-        a_cat.cmp(b_cat)
-      } else {
-        len_cmp
-      }
-    });
+    categories.sort_by(|(a_cat, a), (b_cat, b)| b.cmp(a).then_with(|| a_cat.cmp(b_cat)));
 
     for (category, failures) in categories.iter().take(20) {
-      println!("{}: {} failures", category, failures.len());
+      println!("{}: {} failures", category, failures);
     }
 
     println!("\n🔍 SAMPLE FAILURES (first 50):");
@@ -520,22 +784,22 @@ fn main() {
         result.path.display(),
         result.duration
       );
-      if let Some(err) = &result.error {
-        let err_str = err.lines().take(3).collect::<Vec<_>>().join("\n");
-        println!("   Error: {}", err_str);
+      if !result.diagnostics.is_empty() {
+        print_rendered_diagnostics("   ", &result.files_store, &result.diagnostics);
       }
       for file in result.failed_files() {
-        println!(
-          "   {} -> {}",
-          file.name,
-          file.error.as_deref().unwrap_or("")
-        );
+        println!("   File: {}", file.name);
+        print_rendered_diagnostics("     ", &result.files_store, &file.diagnostics);
       }
     }
   }
 
   if let Some(json_path) = options.json_output.as_ref() {
-    if let Err(err) = fs::write(json_path, serde_json::to_string_pretty(&results).unwrap()) {
+    let serializable = serialize_results(&results);
+    if let Err(err) = fs::write(
+      json_path,
+      serde_json::to_string_pretty(&serializable).unwrap(),
+    ) {
       eprintln!("Failed to write JSON output: {}", err);
     } else {
       println!("🧾 JSON results written to {}", json_path.display());
@@ -558,15 +822,15 @@ fn main() {
       report.push_str(&format!("\n{}\n", "=".repeat(80)));
       report.push_str(&format!("File: {}\n", result.path.display()));
       report.push_str(&format!("Duration: {:?}\n", result.duration));
-      if let Some(err) = &result.error {
-        report.push_str(&format!("Error: {}\n", err));
+      if !result.diagnostics.is_empty() {
+        append_rendered_diagnostics(&mut report, "", &result.files_store, &result.diagnostics);
       }
 
       for file in result.failed_files() {
-        if let Some(err) = &file.error {
-          report.push_str(&format!("  Virtual file: {}\n", file.name));
-          report.push_str(&format!("  Module mode: {}\n", file.module));
-          report.push_str(&format!("  Error: {}\n", err));
+        report.push_str(&format!("  Virtual file: {}\n", file.name));
+        report.push_str(&format!("  Module mode: {}\n", file.module));
+        if !file.diagnostics.is_empty() {
+          append_rendered_diagnostics(&mut report, "    ", &result.files_store, &file.diagnostics);
         }
       }
     }
