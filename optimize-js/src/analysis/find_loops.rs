@@ -43,6 +43,9 @@ pub fn find_loops(cfg: &Cfg, dom: &Dom) -> HashMap<u32, HashSet<u32>> {
       while let Some(n) = queue.pop_front() {
         // We have reducible CFGs, so all parents must be part of the loop; they can't magically enter from outside the loop.
         for p in cfg.graph.parents(n) {
+          if !dominates.dominates(header, p) {
+            continue;
+          }
           if !l.insert(p) {
             // Already visited.
             continue;

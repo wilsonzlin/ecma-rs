@@ -86,6 +86,7 @@ fn collect_branch_region(
 /// Returns a map from the condition node to the region it controls.
 pub fn find_conds(cfg: &Cfg, dom: &Dom, postdom: &PostDom) -> HashMap<u32, CondRegion> {
   let dominates = dom.dominates_graph();
+  let post_dominates = postdom.dominates_graph();
   let mut conds = HashMap::new();
   let mut labels = cfg.graph.labels().collect::<Vec<_>>();
   labels.sort_unstable();
@@ -106,7 +107,13 @@ pub fn find_conds(cfg: &Cfg, dom: &Dom, postdom: &PostDom) -> HashMap<u32, CondR
     let Some((then_entry, else_entry)) = succ else {
       continue;
     };
+    if !dominates.dominates(label, then_entry) && !dominates.dominates(label, else_entry) {
+      continue;
+    }
     let join = nearest_common_postdom(postdom, then_entry, else_entry);
+    if !post_dominates.dominates(join, label) {
+      continue;
+    }
     let then_nodes = collect_branch_region(cfg, &dominates, label, join, then_entry);
     let else_nodes = collect_branch_region(cfg, &dominates, label, join, else_entry);
     conds.insert(
@@ -259,4 +266,3 @@ mod tests {
     let conds = find_conds(&cfg, &dom, &postdom);
     assert_region(&conds, 2, 3, 4, 4, &[3], &[]);
   }
-}

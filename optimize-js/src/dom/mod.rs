@@ -355,6 +355,7 @@ impl<const POST: bool> Dom<POST> {
   // https://www.cs.tufts.edu/comp/150FP/archive/keith-cooper/dom14.pdf
   pub fn dominated_by_graph(&self) -> DominatedByGraph {
     let mut dom = HashMap::<u32, HashSet<u32>>::default();
+    dom.entry(self.entry).or_default().insert(self.entry);
     for label in self.idom_by.keys().cloned() {
       let e = dom.entry(label).or_default();
       let mut n = label;
@@ -430,6 +431,43 @@ impl<const POST: bool> Dom<POST> {
 
   pub fn immediate_dominator(&self, node: u32) -> Option<u32> {
     self.idom(node)
+  }
+
+  pub fn lca(&self, a: u32, b: u32) -> Option<u32> {
+    if a == b {
+      return Some(a);
+    }
+
+    let mut ancestors = HashSet::default();
+    let mut current = a;
+    loop {
+      ancestors.insert(current);
+      if current == self.entry {
+        break;
+      }
+      current = *self.idom_by.get(&current)?;
+    }
+
+    let mut current = b;
+    loop {
+      if ancestors.contains(&current) {
+        return Some(current);
+      }
+      if current == self.entry {
+        break;
+      }
+      current = *self.idom_by.get(&current)?;
+    }
+    None
+  }
+
+  pub fn lca_all(&self, nodes: impl IntoIterator<Item = u32>) -> Option<u32> {
+    let mut iter = nodes.into_iter();
+    let mut acc = iter.next()?;
+    for n in iter {
+      acc = self.lca(acc, n)?;
+    }
+    Some(acc)
   }
 
   pub fn entry(&self) -> u32 {

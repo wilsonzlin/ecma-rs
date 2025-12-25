@@ -177,6 +177,8 @@ pub fn compile_js_statements(
 
 pub type FnId = usize;
 
+pub use decompile::structurer::{structure_cfg, BreakTarget, ControlTree, LoopLabel};
+
 #[derive(Debug)]
 pub struct ProgramCompilerInner {
   // Precomputed via VarAnalysis.
