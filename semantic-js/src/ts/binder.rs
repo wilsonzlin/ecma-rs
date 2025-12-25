@@ -176,6 +176,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
 
     let mut has_exports = false;
     let mut first_export_span: Option<Span> = None;
+    let is_script = self.is_effective_script(&hir);
 
     for decl in &hir.decls {
       let namespaces = decl.kind.namespaces();
@@ -198,7 +199,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         &mut self.symbols,
         SymbolOrigin::Local,
       );
-      if self.decl_participates_in_global(&hir, decl) {
+      if self.decl_participates_in_global(&hir, decl, is_script) {
         add_decl_to_groups(
           &mut self.global_symbols,
           &decl.name,
@@ -361,7 +362,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       }
     }
 
-    if matches!(hir.module_kind, ModuleKind::Script) && has_exports {
+    if is_script && has_exports {
       let span = first_export_span.unwrap_or_else(|| Span::new(hir.file_id, TextRange::new(0, 0)));
       self.diagnostics.push(Diagnostic::error(
         "BIND1003",
@@ -374,12 +375,27 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     deps
   }
 
-  fn decl_participates_in_global(&self, hir: &HirFile, decl: &Decl) -> bool {
-    match hir.module_kind {
-      ModuleKind::Script => true,
-      ModuleKind::Module => decl.is_global && matches!(hir.file_kind, FileKind::Dts),
+  fn decl_participates_in_global(&self, hir: &HirFile, decl: &Decl, is_script: bool) -> bool {
+    if is_script {
+      return true;
     }
+    decl.is_global && matches!(hir.file_kind, FileKind::Dts)
   }
+
+	  fn is_effective_script(&self, hir: &HirFile) -> bool {
+	    match hir.module_kind {
+	      ModuleKind::Script => true,
+	      ModuleKind::Module => {
+	        matches!(hir.file_kind, FileKind::Dts)
+	          && hir.imports.is_empty()
+	          && hir.exports.is_empty()
+	          && hir
+	            .decls
+	            .iter()
+	            .all(|decl| matches!(decl.exported, Exported::No))
+	      }
+	    }
+	  }
 
   fn add_import_binding(&mut self, state: &mut ModuleState, file: FileId, entry: &ImportEntry) {
     state.imports.insert(entry.local.clone(), entry.clone());
