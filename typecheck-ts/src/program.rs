@@ -1309,7 +1309,7 @@ impl ProgramState {
     let options = host.compiler_options();
     self.compiler_options = options.clone();
     let mut libs = host.lib_files();
-    if !options.no_default_lib {
+    if !options.no_default_lib || !options.libs.is_empty() {
       let bundled = self.lib_manager.bundled_libs(&options);
       libs.extend(bundled.files);
     }

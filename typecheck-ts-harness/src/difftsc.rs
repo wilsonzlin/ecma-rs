@@ -9,7 +9,8 @@ use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{run_rust, EngineStatus, HarnessFileSet};
 use crate::tsc::{
-  node_available, TscDiagnostics, TscRequest, TscRunner, TSC_BASELINE_SCHEMA_VERSION,
+  apply_default_tsc_options, node_available, TscDiagnostics, TscRequest, TscRunner,
+  TSC_BASELINE_SCHEMA_VERSION,
 };
 use crate::{FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
@@ -397,6 +398,8 @@ fn run_single_test(
 ) -> CaseReport {
   let baseline_path = baselines_root.join(format!("{}.json", test.name));
   let notes = Vec::new();
+  let harness_options = HarnessOptions::default();
+  let tsc_options = harness_options.to_tsc_options_map();
 
   let live_tsc = if needs_live_tsc(args) {
     let Some(runner) = runner else {
@@ -411,7 +414,7 @@ fn run_single_test(
       };
     };
 
-    match run_tsc_on_test(test, runner) {
+    match run_tsc_on_test(test, runner, &tsc_options) {
       Ok(diags) => Some(diags),
       Err(err) => {
         return CaseReport {
@@ -520,7 +523,7 @@ fn run_single_test(
   };
 
   let file_set = HarnessFileSet::new(&test.files);
-  let rust = run_rust(&file_set, &HarnessOptions::default());
+  let rust = run_rust(&file_set, &harness_options);
   let expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
   if rust.status != EngineStatus::Ok {
     return CaseReport {
@@ -1025,7 +1028,7 @@ fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(feature = "with-node")]
-fn build_request(test: &TestCase) -> TscRequest {
+fn build_request(test: &TestCase, base_options: &Map<String, Value>) -> TscRequest {
   let mut files = HashMap::new();
   let mut root_names = Vec::new();
 
@@ -1038,10 +1041,8 @@ fn build_request(test: &TestCase) -> TscRequest {
   root_names.sort();
   root_names.dedup();
 
-  let mut options = Map::new();
-  options.insert("noEmit".into(), Value::Bool(true));
-  options.insert("skipLibCheck".into(), Value::Bool(true));
-  options.insert("pretty".into(), Value::Bool(false));
+  let mut options = base_options.clone();
+  apply_default_tsc_options(&mut options);
 
   TscRequest {
     root_names,
@@ -1051,8 +1052,12 @@ fn build_request(test: &TestCase) -> TscRequest {
 }
 
 #[cfg(feature = "with-node")]
-fn run_tsc_on_test(test: &TestCase, runner: &mut TscRunner) -> Result<TscDiagnostics> {
-  let request = build_request(test);
+fn run_tsc_on_test(
+  test: &TestCase,
+  runner: &mut TscRunner,
+  options: &Map<String, Value>,
+) -> Result<TscDiagnostics> {
+  let request = build_request(test, options);
   runner
     .check(request)
     .with_context(|| format!("run tsc for test {}", test.name))

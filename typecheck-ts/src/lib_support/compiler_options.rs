@@ -32,7 +32,7 @@ impl Default for ScriptTarget {
 }
 
 /// Compiler configuration that materially affects lib selection and typing.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CompilerOptions {
   pub target: ScriptTarget,
   /// Whether DOM libs should be included in addition to the ES lib set.
@@ -54,7 +54,7 @@ impl Default for CompilerOptions {
   fn default() -> Self {
     CompilerOptions {
       target: ScriptTarget::default(),
-      include_dom: false,
+      include_dom: true,
       no_default_lib: false,
       libs: Vec::new(),
       strict_null_checks: true,
@@ -98,6 +98,22 @@ impl LibName {
       LibName::Es2022 => "lib.es2022.d.ts",
       LibName::EsNext => "lib.esnext.d.ts",
       LibName::Dom => "lib.dom.d.ts",
+    }
+  }
+
+  pub fn option_name(&self) -> &'static str {
+    match self {
+      LibName::Es5 => "es5",
+      LibName::Es2015 => "es2015",
+      LibName::Es2016 => "es2016",
+      LibName::Es2017 => "es2017",
+      LibName::Es2018 => "es2018",
+      LibName::Es2019 => "es2019",
+      LibName::Es2020 => "es2020",
+      LibName::Es2021 => "es2021",
+      LibName::Es2022 => "es2022",
+      LibName::EsNext => "esnext",
+      LibName::Dom => "dom",
     }
   }
 }

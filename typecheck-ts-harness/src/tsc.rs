@@ -30,6 +30,18 @@ pub struct TscRequest {
 }
 
 pub const TSC_BASELINE_SCHEMA_VERSION: u32 = 1;
+/// Merge default tsc options used by the harness with a provided options map.
+pub fn apply_default_tsc_options(options: &mut Map<String, Value>) {
+  options
+    .entry("noEmit".to_string())
+    .or_insert(Value::Bool(true));
+  options
+    .entry("skipLibCheck".to_string())
+    .or_insert(Value::Bool(true));
+  options
+    .entry("pretty".to_string())
+    .or_insert(Value::Bool(false));
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TscDiagnostics {

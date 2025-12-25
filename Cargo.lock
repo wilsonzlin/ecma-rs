@@ -2008,6 +2008,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
+ "types-ts",
  "types-ts-interned",
 ]
 

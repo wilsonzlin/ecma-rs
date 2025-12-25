@@ -1,3 +1,4 @@
+use crate::tsc::apply_default_tsc_options;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -212,10 +213,10 @@ impl HarnessOptions {
       }
     }
     if !libs.is_empty() {
+      opts.include_dom = libs.iter().any(|l| matches!(l, LibName::Dom));
       opts.libs = libs.clone();
       opts.no_default_lib = true;
-      opts.include_dom |= libs.iter().any(|l| matches!(l, LibName::Dom));
-    } else if self.include_dom_requested() {
+    } else {
       opts.include_dom = true;
     }
 
@@ -234,24 +235,46 @@ impl HarnessOptions {
 
   fn to_tsc_options_map(&self) -> Map<String, Value> {
     let mut map = Map::new();
+    apply_default_tsc_options(&mut map);
 
-    if let Some(target) = self
-      .target
-      .as_deref()
-      .and_then(|raw| parse_script_target(raw))
-    {
-      map.insert(
-        "target".to_string(),
-        Value::String(script_target_str(target).to_string()),
-      );
-    } else if let Some(raw) = &self.target {
-      map.insert("target".to_string(), Value::String(raw.clone()));
+    let compiler = self.to_compiler_options();
+    map.insert(
+      "target".to_string(),
+      Value::String(script_target_str(compiler.target).to_string()),
+    );
+    map.insert(
+      "noImplicitAny".to_string(),
+      Value::Bool(compiler.no_implicit_any),
+    );
+    map.insert(
+      "strictNullChecks".to_string(),
+      Value::Bool(compiler.strict_null_checks),
+    );
+    map.insert(
+      "strictFunctionTypes".to_string(),
+      Value::Bool(compiler.strict_function_types),
+    );
+    map.insert(
+      "exactOptionalPropertyTypes".to_string(),
+      Value::Bool(compiler.exact_optional_property_types),
+    );
+    map.insert(
+      "noUncheckedIndexedAccess".to_string(),
+      Value::Bool(compiler.no_unchecked_indexed_access),
+    );
+    map.insert(
+      "useDefineForClassFields".to_string(),
+      Value::Bool(compiler.use_define_for_class_fields),
+    );
+
+    if let Some(strict) = self.strict {
+      map.insert("strict".to_string(), Value::Bool(strict));
     }
 
     if let Some(module) = &self.module {
       map.insert("module".to_string(), Value::String(module.clone()));
     }
-    if let Some(mode) = self.jsx.as_deref().and_then(parse_jsx_mode) {
+    if let Some(mode) = compiler.jsx {
       map.insert(
         "jsx".to_string(),
         Value::String(jsx_mode_str(mode).to_string()),
@@ -260,37 +283,26 @@ impl HarnessOptions {
       map.insert("jsx".to_string(), Value::String(raw.clone()));
     }
 
-    if let Some(strict) = self.strict {
-      map.insert("strict".to_string(), Value::Bool(strict));
-    }
-    if let Some(value) = self.no_implicit_any {
-      map.insert("noImplicitAny".to_string(), Value::Bool(value));
-    }
-    if let Some(value) = self.strict_null_checks {
-      map.insert("strictNullChecks".to_string(), Value::Bool(value));
-    }
-    if let Some(value) = self.strict_function_types {
-      map.insert("strictFunctionTypes".to_string(), Value::Bool(value));
-    }
-    if let Some(value) = self.exact_optional_property_types {
-      map.insert("exactOptionalPropertyTypes".to_string(), Value::Bool(value));
-    }
-    if let Some(value) = self.no_unchecked_indexed_access {
-      map.insert("noUncheckedIndexedAccess".to_string(), Value::Bool(value));
-    }
-
     if !self.lib.is_empty() {
-      let libs: Vec<Value> = self.lib.iter().cloned().map(Value::String).collect();
-      map.insert("lib".to_string(), Value::Array(libs));
+      let libs: Vec<String> = if compiler.libs.is_empty() {
+        self.lib.clone()
+      } else {
+        compiler
+          .libs
+          .iter()
+          .map(|lib| lib.option_name().to_string())
+          .collect()
+      };
+      map.insert(
+        "lib".to_string(),
+        Value::Array(libs.into_iter().map(Value::String).collect()),
+      );
     }
     if let Some(value) = self.skip_lib_check {
       map.insert("skipLibCheck".to_string(), Value::Bool(value));
     }
     if let Some(value) = self.no_emit {
       map.insert("noEmit".to_string(), Value::Bool(value));
-    }
-    if let Some(value) = self.use_define_for_class_fields {
-      map.insert("useDefineForClassFields".to_string(), Value::Bool(value));
     }
     if let Some(value) = self.no_emit_on_error {
       map.insert("noEmitOnError".to_string(), Value::Bool(value));
@@ -311,9 +323,6 @@ impl HarnessOptions {
     map
   }
 
-  fn include_dom_requested(&self) -> bool {
-    self.lib.iter().any(|l| l.eq_ignore_ascii_case("dom"))
-  }
 }
 
 fn parse_bool(raw: Option<&str>) -> Option<bool> {
@@ -468,6 +477,54 @@ mod tests {
     let directives = vec![dir("module", Some("commonjs")), dir("module", Some("amd"))];
     let options = HarnessOptions::from_directives(&directives);
     assert_eq!(options.module.as_deref(), Some("amd"));
+  }
+
+  #[test]
+  fn maps_directives_to_tsc_and_compiler_options() {
+    let directives = vec![
+      dir("target", Some("ES5")),
+      dir("jsx", Some("react-jsx")),
+      dir("strict", Some("true")),
+      dir("noimplicitany", Some("false")),
+      dir("lib", Some("dom es2015")),
+    ];
+
+    let options = HarnessOptions::from_directives(&directives);
+    let tsc = options.to_tsc_options_map();
+
+    assert_eq!(tsc.get("target"), Some(&Value::String("ES2015".to_string())));
+    assert_eq!(
+      tsc.get("jsx"),
+      Some(&Value::String("react-jsx".to_string()))
+    );
+    assert_eq!(tsc.get("strict"), Some(&Value::Bool(true)));
+    assert_eq!(tsc.get("noImplicitAny"), Some(&Value::Bool(false)));
+    assert_eq!(tsc.get("strictNullChecks"), Some(&Value::Bool(true)));
+    assert_eq!(
+      tsc.get("lib")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()),
+      Some(vec!["dom", "es2015"])
+    );
+
+    let compiler = options.to_compiler_options();
+    assert_eq!(compiler.target, ScriptTarget::Es5);
+    assert_eq!(compiler.jsx, Some(JsxMode::ReactJsx));
+    assert!(compiler.strict_function_types);
+    assert!(!compiler.no_implicit_any);
+    assert!(compiler.strict_null_checks);
+    assert!(compiler.no_default_lib);
+    assert_eq!(compiler.libs, vec![LibName::Dom, LibName::Es2015]);
+  }
+
+  #[test]
+  fn builds_default_tsc_options() {
+    let options = HarnessOptions::default();
+    let tsc = options.to_tsc_options_map();
+    assert_eq!(tsc.get("noEmit"), Some(&Value::Bool(true)));
+    assert_eq!(tsc.get("skipLibCheck"), Some(&Value::Bool(true)));
+    assert_eq!(tsc.get("pretty"), Some(&Value::Bool(false)));
+    assert_eq!(tsc.get("target"), Some(&Value::String("ES2015".to_string())));
   }
 
   #[test]

@@ -11,6 +11,7 @@ use crate::tsc::{TscDiagnostic, TscDiagnostics, TscMetadata, TSC_BASELINE_SCHEMA
 use crate::{FailOn, Result, VirtualFile};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info_span, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
+use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileId, Host, HostError, Program, QueryStats};
 use walkdir::WalkDir;
 
@@ -588,13 +590,14 @@ fn execute_case(
   let harness_options = case.options.clone();
 
   let (rust, query_stats) = run_rust_with_profile(&file_set, &harness_options, collect_query_stats);
+  let tsc_options = harness_options.to_tsc_options_map();
 
   let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
   let tsc = match compare_mode {
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
     CompareMode::Tsc => {
       if tsc_available {
-        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &harness_options, &tsc_limiter);
+        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
         tsc_raw = raw;
         diag
       } else {
@@ -604,8 +607,7 @@ fn execute_case(
     CompareMode::Snapshot => {
       if update_snapshots {
         if tsc_available {
-          let (diag, raw) =
-            run_tsc_with_raw(&tsc_runner, &file_set, &harness_options, &tsc_limiter);
+          let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
           tsc_raw = raw;
           diag
         } else {
@@ -656,7 +658,8 @@ fn run_rust_with_profile(
   options: &HarnessOptions,
   collect_profile: bool,
 ) -> (EngineDiagnostics, Option<QueryStats>) {
-  let host = HarnessHost::new(file_set.clone(), options.clone());
+  let compiler_options = options.to_compiler_options();
+  let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
   let roots = file_set.root_files();
   let program = Program::new(host, roots);
   let result = std::panic::catch_unwind(AssertUnwindSafe(|| program.check()));
@@ -708,7 +711,7 @@ fn harness_sleep_for_case(id: &str) -> Option<Duration> {
 fn run_tsc_with_raw(
   runner: &TscRunner,
   file_set: &HarnessFileSet,
-  options: &HarnessOptions,
+  options: &Map<String, Value>,
   limiter: &ConcurrencyLimiter,
 ) -> (EngineDiagnostics, Option<Vec<TscDiagnostic>>) {
   let _permit = limiter.acquire();
@@ -842,12 +845,15 @@ fn summarize(results: &[TestResult]) -> Summary {
 
 struct HarnessHost {
   files: HarnessFileSet,
-  options: HarnessOptions,
+  compiler_options: CompilerOptions,
 }
 
 impl HarnessHost {
-  fn new(files: HarnessFileSet, options: HarnessOptions) -> Self {
-    Self { files, options }
+  fn new(files: HarnessFileSet, compiler_options: CompilerOptions) -> Self {
+    Self {
+      files,
+      compiler_options,
+    }
   }
 }
 
@@ -860,6 +866,10 @@ impl Host for HarnessHost {
       .get(idx)
       .map(|f| f.content.clone())
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+  }
+
+  fn compiler_options(&self) -> CompilerOptions {
+    self.compiler_options.clone()
   }
 
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
@@ -953,7 +963,7 @@ impl TscRunner {
   fn run(
     &self,
     files: &HarnessFileSet,
-    options: &HarnessOptions,
+    options: &Map<String, Value>,
   ) -> std::result::Result<Vec<TscDiagnostic>, String> {
     #[cfg(not(feature = "with-node"))]
     {
@@ -974,7 +984,9 @@ impl TscRunner {
       let mut cmd = std::process::Command::new(&self.node_path);
       cmd.current_dir(temp_dir.path());
       cmd.arg(wrapper);
-      if let Some(env) = options.to_env_json() {
+      if !options.is_empty() {
+        let env = serde_json::to_string(options)
+          .map_err(|err| format!("serialize harness options: {err}"))?;
         cmd.env("HARNESS_OPTIONS", env);
       }
       for file in files.iter() {
@@ -1189,7 +1201,7 @@ mod tests {
     ];
 
     let file_set = HarnessFileSet::new(&files);
-    let host = HarnessHost::new(file_set.clone(), HarnessOptions::default());
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
     let roots = file_set.root_files();
 
     assert_eq!(roots.len(), 2);
@@ -1198,5 +1210,22 @@ mod tests {
     let a_id = host.resolve(from, "a.ts").expect("a.ts should resolve");
     assert!(roots.contains(&a_id));
     assert_eq!(&*host.file_text(a_id).unwrap(), "second version");
+  }
+
+  #[test]
+  fn harness_host_carries_compiler_options() {
+    let files = vec![VirtualFile {
+      name: "a.ts".to_string(),
+      content: "const value: string = null;".to_string(),
+    }];
+
+    let mut harness_options = HarnessOptions::default();
+    harness_options.strict_null_checks = Some(true);
+    let compiler_options = harness_options.to_compiler_options();
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
+    let program = Program::new(host, file_set.root_files());
+
+    assert_eq!(program.compiler_options(), compiler_options);
   }
 }
