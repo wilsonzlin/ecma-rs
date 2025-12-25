@@ -2,7 +2,9 @@ use crate::escape::emit_string_literal_double_quoted;
 use crate::expr_js::{emit_expr, ExprCtx};
 use crate::ts_type::{emit_type_parameters, emit_ts_type};
 use crate::{EmitError, EmitMode, EmitResult, Emitter};
-use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal};
+use parse_js::ast::class_or_object::{
+  ClassIndexSignature, ClassMember, ClassOrObjKey, ClassOrObjVal,
+};
 use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat};
 use parse_js::ast::expr::{Decorator, Expr};
 use parse_js::ast::import_export::{
@@ -16,6 +18,7 @@ use parse_js::ast::stmt::*;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::{TypeExpr, TypeParameter};
 use parse_js::ast::func::{Func, FuncBody};
+use parse_js::token::TT;
 
 pub fn emit_program(em: &mut Emitter, top: &TopLevel) -> EmitResult {
   emit_stmt_list(em, &top.body)
@@ -58,7 +61,7 @@ pub fn emit_stmt(em: &mut Emitter, stmt: &Node<Stmt>) -> EmitResult {
     Stmt::Label(label_stmt) => emit_label(em, label_stmt),
     Stmt::VarDecl(decl) => emit_var_decl(em, decl.stx.as_ref(), true),
     Stmt::FunctionDecl(decl) => emit_function_decl(em, decl.stx.as_ref()),
-    Stmt::ClassDecl(decl) => emit_class_decl(em, decl.stx.as_ref()),
+    Stmt::ClassDecl(decl) => emit_class_decl(em, decl),
     Stmt::Import(import_stmt) => emit_import_stmt(em, import_stmt.stx.as_ref()),
     Stmt::ExportList(export_stmt) => emit_export_list_stmt(em, export_stmt.stx.as_ref()),
     Stmt::ExportDefaultExpr(expr) => emit_export_default_expr(em, expr),
@@ -461,7 +464,8 @@ fn emit_func_body(em: &mut Emitter, body: &FuncBody) -> EmitResult {
   }
 }
 
-fn emit_class_decl(em: &mut Emitter, decl: &ClassDecl) -> EmitResult {
+pub fn emit_class_decl(em: &mut Emitter, decl: &Node<ClassDecl>) -> EmitResult {
+  let decl = decl.stx.as_ref();
   emit_decorators(em, &decl.decorators)?;
   if decl.export {
     em.write_keyword("export");
@@ -586,8 +590,20 @@ fn emit_class_member(em: &mut Emitter, member: &Node<ClassMember>) -> EmitResult
       em.write_punct(";");
       Ok(())
     }
-    ClassOrObjVal::IndexSignature(_) => Err(EmitError::unsupported("class index signature")),
+    ClassOrObjVal::IndexSignature(sig) => emit_class_index_signature(em, sig),
   }
+}
+
+fn emit_class_index_signature(em: &mut Emitter, sig: &Node<ClassIndexSignature>) -> EmitResult {
+  em.write_punct("[");
+  em.write_identifier(&sig.stx.parameter_name);
+  em.write_punct(":");
+  space_if_canonical(em);
+  emit_ts_type(em, &sig.stx.parameter_type)?;
+  em.write_punct("]");
+  emit_type_annotation(em, &sig.stx.type_annotation)?;
+  em.write_punct(";");
+  Ok(())
 }
 
 fn emit_method_like(
@@ -861,7 +877,15 @@ fn emit_obj_pat_prop(em: &mut Emitter, prop: &Node<ObjPatProp>) -> EmitResult {
 fn emit_class_or_object_key(em: &mut Emitter, key: &ClassOrObjKey) -> EmitResult {
   match key {
     ClassOrObjKey::Direct(name) => {
-      em.write_str(&name.stx.key);
+      match name.stx.tt {
+        TT::LiteralString => emit_string_literal(em, &name.stx.key),
+        TT::LiteralNumber
+        | TT::LiteralNumberBin
+        | TT::LiteralNumberHex
+        | TT::LiteralNumberOct => em.write_number(&name.stx.key),
+        tt if tt == TT::Identifier || tt.is_keyword() => em.write_identifier(&name.stx.key),
+        _ => em.write_str(&name.stx.key),
+      }
       Ok(())
     }
     ClassOrObjKey::Computed(expr) => {
