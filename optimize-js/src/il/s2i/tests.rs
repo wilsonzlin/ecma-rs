@@ -122,4 +122,44 @@ fn direct_eval_is_unsupported() {
 fn shadowed_eval_is_allowed() {
   let source = r#"const f = (eval) => { let x = 1; eval("x"); };"#;
   compile_source(source, TopLevelMode::Module, false).expect("shadowed eval should compile");
+
+#[test]
+fn spread_call_indices_include_callee_and_this() {
+  let program = compile(
+    r#"
+      let f;
+      let obj;
+      let xs;
+      let ys;
+      f(...xs);
+      obj.m(...ys);
+    "#,
+  );
+
+  let spread_calls: Vec<_> = program
+    .top_level
+    .body
+    .bblocks
+    .all()
+    .flat_map(|(_, b)| b.iter())
+    .filter(|inst| matches!(inst.t, InstTyp::Call) && !inst.spreads.is_empty())
+    .map(|inst| (inst.spreads.clone(), inst.args.len()))
+    .collect();
+
+  assert_eq!(
+    spread_calls.len(),
+    2,
+    "expected spread calls for both statements, got {spread_calls:?}"
+  );
+  for (spreads, args_len) in spread_calls {
+    assert_eq!(
+      spreads,
+      vec![2],
+      "spread indices should account for callee and this prefix"
+    );
+    assert!(
+      spreads.iter().all(|&i| i < args_len),
+      "spread indices must be in bounds of args (len={args_len})"
+    );
+  }
 }
