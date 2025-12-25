@@ -7,3 +7,6 @@ pub mod interference;
 pub mod liveness;
 pub mod registers;
 pub mod single_use_insts;
+
+#[cfg(test)]
+mod tests;
