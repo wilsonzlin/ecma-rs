@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Interned TypeScript type representation (imported from worker-10)"
 
+[features]
+default = []
+fuzzing = []
+
 [dependencies]
 hir-js = { path = "../hir-js", features = ["serde"] }
 ahash = "0.8"
@@ -19,3 +23,4 @@ unicode-ident = "1.0"
 [dev-dependencies]
 pretty_assertions = "1"
 rand = "0.8"
+proptest = "1"

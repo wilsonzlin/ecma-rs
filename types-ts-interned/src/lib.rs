@@ -2,6 +2,8 @@
 
 mod display;
 mod eval;
+#[cfg(feature = "fuzzing")]
+mod fuzz;
 mod ids;
 mod kind;
 mod options;
@@ -14,6 +16,8 @@ pub use display::TypeDisplay;
 pub use eval::ExpandedType;
 pub use eval::TypeEvaluator;
 pub use eval::TypeExpander;
+#[cfg(feature = "fuzzing")]
+pub use fuzz::fuzz_type_graph;
 pub use ids::DefId;
 pub use ids::NameId;
 pub use ids::ObjectId;

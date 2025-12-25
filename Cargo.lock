@@ -2008,6 +2008,7 @@ dependencies = [
  "ordered-float",
  "parking_lot",
  "pretty_assertions",
+ "proptest",
  "rand 0.8.5",
  "serde",
  "serde_json",
