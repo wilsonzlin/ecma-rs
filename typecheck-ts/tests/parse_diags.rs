@@ -1,5 +1,5 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
-use diagnostics::{diagnostic_from_syntax_error, FileId, TextRange};
+use diagnostics::{FileId, TextRange};
 use typecheck_ts::queries::parse;
 
 struct SingleFile<'a> {
@@ -8,12 +8,12 @@ struct SingleFile<'a> {
 }
 
 impl<'a> SourceProvider for SingleFile<'a> {
-  fn file_name(&self, _file: FileId) -> &str {
-    self.name
+  fn file_name(&self, _file: FileId) -> Option<&str> {
+    Some(self.name)
   }
 
-  fn file_text(&self, _file: FileId) -> &str {
-    self.text
+  fn file_text(&self, _file: FileId) -> Option<&str> {
+    Some(self.text)
   }
 }
 
@@ -29,7 +29,7 @@ fn reports_diagnostic_with_span_for_invalid_syntax() {
 
   let diagnostic = &result.diagnostics[0];
   let syntax_error = parse_js::parse(source).unwrap_err();
-  let expected = diagnostic_from_syntax_error(file, &syntax_error);
+  let expected = syntax_error.to_diagnostic(file);
 
   assert_eq!(*diagnostic, expected);
   assert_eq!(diagnostic.primary.file, file);
