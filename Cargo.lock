@@ -1960,12 +1960,14 @@ dependencies = [
 name = "typecheck-ts-bench"
 version = "0.0.1"
 dependencies = [
- "ahash",
- "derive-visitor",
+ "diagnostics",
+ "hir-js",
  "parse-js",
+ "semantic-js",
  "serde",
  "serde_json",
- "symbol-js",
+ "typecheck-ts",
+ "types-ts",
 ]
 
 [[package]]

@@ -1,34 +1,24 @@
+use diagnostics::FileId as HirFileId;
 use serde::Serialize;
 use std::env;
 use std::hint::black_box;
 use std::time::Duration;
 use std::time::Instant;
-use symbol_js::TopLevelMode;
 use typecheck_ts_bench::fixtures::all_fixtures;
 use typecheck_ts_bench::fixtures::module_graph_fixtures;
-use typecheck_ts_bench::mini_types::assignability_stress;
-use typecheck_ts_bench::mini_types::control_flow_body;
-use typecheck_ts_bench::mini_types::generic_overload_body;
-use typecheck_ts_bench::mini_types::union_intersection_body;
+use typecheck_ts_bench::pipeline::assignability_micro;
 use typecheck_ts_bench::pipeline::bind_module_graph;
-use typecheck_ts_bench::pipeline::bind_single_file;
 use typecheck_ts_bench::pipeline::lower_to_hir;
 use typecheck_ts_bench::pipeline::parse_only;
+use typecheck_ts_bench::pipeline::summarize_hir;
+use typecheck_ts_bench::pipeline::typecheck_fixture;
+use typecheck_ts_bench::pipeline::typecheck_module_graph;
 
 const PARSE_ITERS: u64 = 50;
 const LOWER_ITERS: u64 = 120;
 const BIND_ITERS: u64 = 40;
-const CHECK_BODY_ITERS: u64 = 60;
+const TYPECHECK_ITERS: u64 = 40;
 const RELATIONS_ITERS: u64 = 80;
-
-// To emit JSON alongside the human summary without tripping libtest argument
-// parsing, set `TYPECHECK_TS_BENCH_JSON=1` in the environment. The `--json`
-// flag is also accepted by this harness but will be forwarded to all test
-// binaries by `cargo bench`.
-
-const CONTROL_BODY_DEPTH: usize = 6;
-const UNION_BODY_DEPTH: usize = 4;
-const GENERIC_BODY_DEPTH: usize = 5;
 const RELATION_DEPTH: usize = 6;
 
 #[derive(Serialize)]
@@ -71,7 +61,9 @@ fn main() {
   let args = BenchArgs::from_env();
   let mut results = Vec::new();
 
-  for fixture in all_fixtures() {
+  let fixtures = all_fixtures();
+
+  for fixture in fixtures {
     results.push(measure(
       format!("parse/{}", fixture.name),
       PARSE_ITERS,
@@ -82,25 +74,16 @@ fn main() {
     ));
   }
 
-  for fixture in all_fixtures() {
+  for (idx, fixture) in fixtures.iter().enumerate() {
     let parsed = parse_only(fixture).expect("fixtures must parse");
+    let file_id = HirFileId(idx as u32);
     results.push(measure(
       format!("lower/{}", fixture.name),
       LOWER_ITERS,
       || {
-        let summary = lower_to_hir(&parsed);
-        black_box(summary.node_count);
-      },
-    ));
-  }
-
-  for fixture in all_fixtures() {
-    results.push(measure(
-      format!("bind/{}", fixture.name),
-      BIND_ITERS,
-      || {
-        let total = bind_single_file(fixture.source, TopLevelMode::Module);
-        black_box(total);
+        let lowered = lower_to_hir(file_id, &parsed);
+        let summary = summarize_hir(&lowered);
+        black_box((summary.defs, summary.bodies, summary.exprs, summary.stmts));
       },
     ));
   }
@@ -110,35 +93,42 @@ fn main() {
       format!("bind/module_graph/{}", graph.name),
       BIND_ITERS,
       || {
-        let total = bind_module_graph(graph);
-        black_box(total);
+        let summary = bind_module_graph(graph);
+        black_box((summary.exports, summary.globals, summary.diagnostics));
       },
     ));
   }
 
-  results.push(measure("check/control_flow", CHECK_BODY_ITERS, || {
-    let stats = control_flow_body(CONTROL_BODY_DEPTH);
-    black_box((stats.steps, stats.successes));
-  }));
+  for fixture in fixtures {
+    results.push(measure(
+      format!("typecheck/{}", fixture.name),
+      TYPECHECK_ITERS,
+      || {
+        let summary = typecheck_fixture(fixture);
+        black_box((summary.bodies, summary.diagnostics));
+      },
+    ));
+  }
 
-  results.push(measure("check/unions", CHECK_BODY_ITERS, || {
-    let stats = union_intersection_body(UNION_BODY_DEPTH);
-    black_box((stats.steps, stats.successes));
-  }));
-
-  results.push(measure("check/generics", CHECK_BODY_ITERS, || {
-    let stats = generic_overload_body(GENERIC_BODY_DEPTH);
-    black_box((stats.steps, stats.successes));
-  }));
+  for graph in module_graph_fixtures() {
+    results.push(measure(
+      format!("typecheck/module_graph/{}", graph.name),
+      TYPECHECK_ITERS,
+      || {
+        let summary = typecheck_module_graph(graph);
+        black_box((summary.bodies, summary.diagnostics));
+      },
+    ));
+  }
 
   results.push(measure("relations/cold", RELATIONS_ITERS, || {
-    let stats = assignability_stress(RELATION_DEPTH, false);
-    black_box((stats.steps, stats.successes));
+    let stats = assignability_micro(RELATION_DEPTH, false);
+    black_box((stats.checks, stats.successes));
   }));
 
   results.push(measure("relations/warm", RELATIONS_ITERS, || {
-    let stats = assignability_stress(RELATION_DEPTH, true);
-    black_box((stats.steps, stats.successes));
+    let stats = assignability_micro(RELATION_DEPTH, true);
+    black_box((stats.checks, stats.successes));
   }));
 
   print_summary(&results);

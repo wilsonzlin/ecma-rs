@@ -5,12 +5,14 @@ edition = "2021"
 publish = false
 
 [dependencies]
-ahash = "0.8"
-derive-visitor = "0.4.0"
+diagnostics = { path = "../../diagnostics" }
+hir-js = { path = "../../hir-js" }
 parse-js = { path = "../../parse-js" }
+semantic-js = { path = "../../semantic-js" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-symbol-js = { path = "../../symbol-js" }
+typecheck-ts = { path = "../../typecheck-ts" }
+types-ts = { path = "../../types-ts" }
 
 [[bench]]
 name = "pipeline"

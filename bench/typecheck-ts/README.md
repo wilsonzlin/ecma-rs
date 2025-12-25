@@ -17,11 +17,11 @@ harnesses.
 ## Coverage
 
 - Parse only for representative TS/TSX snippets.
-- HIR-style traversal counts (placeholder until real lowering hooks exist).
-- Binding via `symbol-js` in module/global modes, including a tiny module graph.
-- Type body simulations for control-flow heavy, union/intersection heavy, and
-  generic/overload resolution patterns using a small toy type engine.
-- Relations micro-bench: assignability with cold vs warmed caches.
+- Lowering into real `hir-js` HIR with summary stats.
+- Binding a tiny module graph via `semantic-js` (TS mode).
+- Type checking representative fixtures through `typecheck-ts::Program`.
+- Relations micro-bench: assignability with cold vs warmed caches using the
+  `types-ts` relation engine.
 
 All inputs live under `fixtures/` and are intentionally small to keep runs fast
 and stable.
