@@ -13,6 +13,7 @@ pub use hir::DefData;
 pub use hir::DefTypeInfo;
 pub use hir::Expr;
 pub use hir::ExprKind;
+pub use hir::FileKind;
 pub use hir::HirFile;
 pub use hir::LowerResult;
 pub use hir::Pat;
@@ -75,7 +76,7 @@ pub enum LowerError {
 /// [`lower_file`] if diagnostics are not needed).
 pub fn lower_from_source(source: &str) -> Result<LowerResult, LowerError> {
   let parsed = parse(source)?;
-  Ok(lower_file(FileId(0), &parsed))
+  Ok(lower_file(FileId(0), FileKind::Ts, &parsed))
 }
 
 /// Fuzzing entry point to exercise parsing + lowering without panicking.

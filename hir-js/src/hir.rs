@@ -14,9 +14,16 @@ use diagnostics::FileId;
 use diagnostics::TextRange;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileKind {
+  Ts,
+  Dts,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HirFile {
   pub file: FileId,
+  pub file_kind: FileKind,
   pub items: Vec<DefId>,
   pub bodies: Vec<BodyId>,
   pub span_map: SpanMap,
@@ -27,6 +34,8 @@ pub struct DefData {
   pub id: DefId,
   pub path: DefPath,
   pub span: TextRange,
+  pub is_ambient: bool,
+  pub in_global: bool,
   pub body: Option<BodyId>,
   pub type_info: Option<DefTypeInfo>,
 }
@@ -417,9 +426,16 @@ pub enum StmtKind {
 }
 
 impl HirFile {
-  pub fn new(file: FileId, items: Vec<DefId>, bodies: Vec<BodyId>, span_map: SpanMap) -> Self {
+  pub fn new(
+    file: FileId,
+    file_kind: FileKind,
+    items: Vec<DefId>,
+    bodies: Vec<BodyId>,
+    span_map: SpanMap,
+  ) -> Self {
     Self {
       file,
+      file_kind,
       items,
       bodies,
       span_map,

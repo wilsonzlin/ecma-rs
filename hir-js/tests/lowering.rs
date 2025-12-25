@@ -4,6 +4,7 @@ use hir_js::lower_file_with_diagnostics;
 use hir_js::DefKind;
 use hir_js::ExprId;
 use hir_js::ExprKind;
+use hir_js::FileKind;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
@@ -13,7 +14,7 @@ use proptest::prelude::*;
 fn def_ids_are_sorted_and_stable() {
   let source = "function f() {}\nconst b = 2;\nconst a = 1;";
   let ast = parse(source).expect("parse");
-  let (result, diagnostics) = lower_file_with_diagnostics(FileId(0), &ast);
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast);
   assert!(diagnostics.is_empty());
 
   let names: Vec<_> = result
@@ -27,7 +28,7 @@ fn def_ids_are_sorted_and_stable() {
   assert_eq!(kinds, vec![DefKind::Function, DefKind::Var, DefKind::Var]);
 
   let ast_again = parse(source).expect("parse");
-  let (result_again, diagnostics_again) = lower_file_with_diagnostics(FileId(0), &ast_again);
+  let (result_again, diagnostics_again) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast_again);
   assert!(diagnostics_again.is_empty());
   let names_again: Vec<_> = result_again
     .defs
@@ -47,7 +48,7 @@ fn def_ids_are_sorted_and_stable() {
 fn expr_at_offset_prefers_inner_expression() {
   let source = "const a = 1 + 2;";
   let ast = parse(source).expect("parse");
-  let result = lower_file(FileId(1), &ast);
+  let result = lower_file(FileId(1), FileKind::Ts, &ast);
 
   let def = result
     .defs
@@ -99,13 +100,35 @@ enum Color { Red }
 namespace NS { export const x = 1; }
 "#;
   let ast = parse(source).expect("parse");
-  let result = lower_file(FileId(2), &ast);
+  let result = lower_file(FileId(2), FileKind::Ts, &ast);
   let kinds: Vec<_> = result.defs.iter().map(|d| d.path.kind).collect();
 
   assert!(kinds.contains(&DefKind::Interface));
   assert!(kinds.contains(&DefKind::TypeAlias));
   assert!(kinds.contains(&DefKind::Enum));
   assert!(kinds.contains(&DefKind::Namespace));
+}
+
+#[test]
+fn marks_declare_global_ambient() {
+  let source = r#"
+declare global {
+  interface Foo {
+    bar: string;
+  }
+}
+"#;
+  let ast = parse(source).expect("parse");
+  let result = lower_file(FileId(3), FileKind::Dts, &ast);
+
+  assert_eq!(result.hir.file_kind, FileKind::Dts);
+  let foo = result
+    .defs
+    .iter()
+    .find(|d| result.names.resolve(d.path.name) == Some("Foo"))
+    .expect("Foo interface present");
+  assert!(foo.is_ambient, "global declarations should be ambient");
+  assert!(foo.in_global, "declare global declarations are tracked");
 }
 
 #[test]
@@ -130,7 +153,7 @@ fn saturates_overflowing_spans() {
     other => panic!("expected var decl, got {:?}", other),
   }
 
-  let (result, diagnostics) = lower_file_with_diagnostics(FileId(3), &ast);
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(4), FileKind::Ts, &ast);
   assert!(
     diagnostics.iter().any(|d| d.code == "LOWER0001"),
     "expected overflow diagnostic",
@@ -154,7 +177,7 @@ fn saturates_overflowing_spans() {
 #[test]
 fn reports_unsupported_computed_keys() {
   let ast = parse("const obj = { [foo]: 1 };").expect("parse");
-  let (_, diagnostics) = lower_file_with_diagnostics(FileId(4), &ast);
+  let (_, diagnostics) = lower_file_with_diagnostics(FileId(5), FileKind::Ts, &ast);
 
   assert!(diagnostics.iter().any(|d| d.code == "LOWER0002"));
 }
@@ -169,8 +192,8 @@ proptest! {
     let ast1 = parse(sample).expect("parse");
     let ast2 = parse(sample).expect("parse");
 
-    let res1 = lower_file(FileId(9), &ast1);
-    let res2 = lower_file(FileId(9), &ast2);
+    let res1 = lower_file(FileId(9), FileKind::Ts, &ast1);
+    let res2 = lower_file(FileId(9), FileKind::Ts, &ast2);
 
     prop_assert_eq!(res1.defs, res2.defs);
     prop_assert_eq!(res1.hir, res2.hir);
