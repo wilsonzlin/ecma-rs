@@ -13,23 +13,23 @@ enum ExportStatus {
 
 #[derive(Clone, Debug)]
 struct ModuleState {
-  _file_id: FileId,
   symbols: SymbolGroups,
   imports: HashMap<String, ImportEntry>,
   export_specs: Vec<ExportSpec>,
   exports: ExportMap,
   export_spans: BTreeMap<String, ExportNamespaceSpans>,
+  export_as_namespace: Vec<ExportAsNamespaceEntry>,
 }
 
 impl ModuleState {
-  fn new(file_id: FileId) -> Self {
+  fn new(_file_id: FileId) -> Self {
     Self {
-      _file_id: file_id,
       symbols: BTreeMap::new(),
       imports: HashMap::new(),
       export_specs: Vec::new(),
       exports: ExportMap::new(),
       export_spans: BTreeMap::new(),
+      export_as_namespace: Vec::new(),
     }
   }
 }
@@ -54,6 +54,12 @@ enum ExportSpec {
     type_only: bool,
     span: Span,
   },
+}
+
+#[derive(Clone, Debug)]
+struct ExportAsNamespaceEntry {
+  name: String,
+  span: Span,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -104,10 +110,12 @@ pub fn bind_ts_program(
     resolver,
     hir_provider: &hir_provider,
     modules: BTreeMap::new(),
+    ambient_modules: BTreeMap::new(),
     symbols: SymbolTable::new(),
     global_symbols: BTreeMap::new(),
     diagnostics: Vec::new(),
     export_cache: HashMap::new(),
+    ambient_export_cache: HashMap::new(),
     next_decl_order: 0,
   };
   binder.run(roots)
@@ -117,10 +125,12 @@ struct Binder<'a, HP: Fn(FileId) -> Arc<HirFile>> {
   resolver: &'a dyn Resolver,
   hir_provider: &'a HP,
   modules: BTreeMap<FileId, ModuleState>,
+  ambient_modules: BTreeMap<String, ModuleState>,
   symbols: SymbolTable,
   global_symbols: SymbolGroups,
   diagnostics: Vec<Diagnostic>,
   export_cache: HashMap<FileId, ExportStatus>,
+  ambient_export_cache: HashMap<String, ExportStatus>,
   next_decl_order: u32,
 }
 
@@ -146,6 +156,12 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       self.exports_for(file);
     }
 
+    // Compute exports for ambient modules.
+    let ambient_specs: Vec<String> = self.ambient_modules.keys().cloned().collect();
+    for spec in ambient_specs {
+      self.exports_for_ambient(&spec);
+    }
+
     let module_exports = self
       .modules
       .iter()
@@ -156,6 +172,36 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       .iter()
       .map(|(id, m)| (*id, m.symbols.clone()))
       .collect();
+    let ambient_module_symbols = self
+      .ambient_modules
+      .iter()
+      .map(|(name, m)| (name.clone(), m.symbols.clone()))
+      .collect();
+    let ambient_module_exports = self
+      .ambient_modules
+      .iter()
+      .map(|(name, m)| (name.clone(), m.exports.clone()))
+      .collect();
+
+    for state in self.modules.values() {
+      for export in &state.export_as_namespace {
+        self.diagnostics.push(Diagnostic::error(
+          "BIND1003",
+          "export as namespace is not supported yet",
+          export.span,
+        ));
+      }
+    }
+
+    for state in self.ambient_modules.values() {
+      for export in &state.export_as_namespace {
+        self.diagnostics.push(Diagnostic::error(
+          "BIND1003",
+          "export as namespace is not supported yet",
+          export.span,
+        ));
+      }
+    }
 
     let global_symbols = self.global_symbols.clone();
 
@@ -165,6 +211,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         module_symbols,
         module_exports,
         global_symbols,
+        ambient_module_symbols,
+        ambient_module_exports,
       },
       self.diagnostics.clone(),
     )
@@ -173,16 +221,92 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   fn bind_file(&mut self, hir: Arc<HirFile>) -> Vec<FileId> {
     let mut state = ModuleState::new(hir.file_id);
     let mut deps = Vec::new();
+    let is_script = self.is_effective_script(
+      hir.module_kind,
+      hir.file_kind,
+      &hir.imports,
+      &hir.exports,
+      &hir.decls,
+    );
 
+    self.bind_module_items(
+      &mut state,
+      hir.file_id,
+      hir.file_kind,
+      hir.module_kind,
+      is_script,
+      false,
+      &hir.decls,
+      &hir.imports,
+      &hir.exports,
+      &hir.export_as_namespace,
+      &mut deps,
+    );
+
+    for ambient in &hir.ambient_modules {
+      deps.extend(self.bind_ambient_module(hir.file_id, hir.file_kind, ambient));
+    }
+
+    self.modules.insert(hir.file_id, state);
+    deps
+  }
+
+  fn bind_ambient_module(
+    &mut self,
+    file_id: FileId,
+    file_kind: FileKind,
+    module: &AmbientModule,
+  ) -> Vec<FileId> {
+    let mut deps = Vec::new();
+    let mut state = self
+      .ambient_modules
+      .remove(&module.name)
+      .unwrap_or_else(|| ModuleState::new(file_id));
+
+    self.bind_module_items(
+      &mut state,
+      file_id,
+      file_kind,
+      ModuleKind::Module,
+      false,
+      true,
+      &module.decls,
+      &module.imports,
+      &module.exports,
+      &module.export_as_namespace,
+      &mut deps,
+    );
+
+    for nested in &module.ambient_modules {
+      deps.extend(self.bind_ambient_module(file_id, file_kind, nested));
+    }
+
+    self.ambient_modules.insert(module.name.clone(), state);
+    deps
+  }
+
+  fn bind_module_items(
+    &mut self,
+    state: &mut ModuleState,
+    file_id: FileId,
+    file_kind: FileKind,
+    _module_kind: ModuleKind,
+    is_script: bool,
+    implicit_export: bool,
+    decls: &[Decl],
+    imports: &[Import],
+    exports: &[Export],
+    export_as_namespace: &[ExportAsNamespace],
+    deps: &mut Vec<FileId>,
+  ) {
     let mut has_exports = false;
     let mut first_export_span: Option<Span> = None;
-    let is_script = self.is_effective_script(&hir);
 
-    for decl in &hir.decls {
+    for decl in decls {
       let namespaces = decl.kind.namespaces();
       let order = self.bump_order();
       let decl_id = self.symbols.alloc_decl(
-        hir.file_id,
+        file_id,
         decl.name.clone(),
         decl.kind.clone(),
         namespaces,
@@ -199,7 +323,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         &mut self.symbols,
         SymbolOrigin::Local,
       );
-      if self.decl_participates_in_global(&hir, decl, is_script) {
+      if self.decl_participates_in_global_kind(file_kind, decl, is_script) {
         add_decl_to_groups(
           &mut self.global_symbols,
           &decl.name,
@@ -208,8 +332,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           &mut self.symbols,
           SymbolOrigin::Local,
         );
-      } else if decl.is_global && hir.file_kind != FileKind::Dts {
-        let span = Span::new(hir.file_id, decl.span);
+      } else if decl.is_global && file_kind != FileKind::Dts {
+        let span = Span::new(file_id, decl.span);
         self.diagnostics.push(Diagnostic::error(
           "BIND2001",
           "global augmentations in non-.d.ts modules are not supported yet",
@@ -217,10 +341,22 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         ));
       }
       match decl.exported {
-        Exported::No => {}
+        Exported::No => {
+          if implicit_export {
+            has_exports = true;
+            let span = Span::new(file_id, decl.span);
+            first_export_span.get_or_insert(span);
+            state.export_specs.push(ExportSpec::Local {
+              name: decl.name.clone(),
+              exported_as: decl.name.clone(),
+              type_only: false,
+              span,
+            })
+          }
+        }
         Exported::Named => {
           has_exports = true;
-          let span = Span::new(hir.file_id, decl.span);
+          let span = Span::new(file_id, decl.span);
           first_export_span.get_or_insert(span);
           state.export_specs.push(ExportSpec::Local {
             name: decl.name.clone(),
@@ -231,7 +367,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         }
         Exported::Default => {
           has_exports = true;
-          let span = Span::new(hir.file_id, decl.span);
+          let span = Span::new(file_id, decl.span);
           first_export_span.get_or_insert(span);
           state.export_specs.push(ExportSpec::Local {
             name: decl.name.clone(),
@@ -247,11 +383,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       sym.namespaces |= namespaces;
     }
 
-    for import in &hir.imports {
+    for import in imports {
       let target = self.resolve_spec(
-        hir.file_id,
+        file_id,
         &import.specifier,
-        Span::new(hir.file_id, import.specifier_span),
+        Span::new(file_id, import.specifier_span),
         true,
       );
       if let Some(t) = target {
@@ -264,7 +400,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           imported: ImportItem::Default,
           type_only: import.is_type_only || default.is_type_only,
         };
-        self.add_import_binding(&mut state, hir.file_id, &entry);
+        self.add_import_binding(state, file_id, &entry);
       }
       if let Some(ns) = &import.namespace {
         let entry = ImportEntry {
@@ -273,7 +409,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           imported: ImportItem::Namespace,
           type_only: import.is_type_only || ns.is_type_only,
         };
-        self.add_import_binding(&mut state, hir.file_id, &entry);
+        self.add_import_binding(state, file_id, &entry);
       }
       for named in &import.named {
         let entry = ImportEntry {
@@ -282,29 +418,21 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           imported: ImportItem::Named(named.imported.clone()),
           type_only: import.is_type_only || named.is_type_only,
         };
-        self.add_import_binding(&mut state, hir.file_id, &entry);
+        self.add_import_binding(state, file_id, &entry);
       }
     }
 
-    for export in &hir.exports {
+    for export in exports {
       match export {
         Export::Named(named) => {
-          let target = match (named.specifier.as_ref(), named.specifier_span) {
+          let span_range = named
+            .specifier_span
+            .or_else(|| named.items.first().and_then(|i| i.exported_span))
+            .or_else(|| named.items.first().map(|i| i.local_span))
+            .unwrap_or_else(|| TextRange::new(0, 0));
+          let target = match (named.specifier.as_ref(), Some(span_range)) {
             (Some(spec), Some(span)) => {
-              let resolved =
-                self.resolve_spec(hir.file_id, spec, Span::new(hir.file_id, span), false);
-              if let Some(t) = resolved {
-                deps.push(t);
-              }
-              Some(resolved)
-            }
-            (Some(spec), None) => {
-              let resolved = self.resolve_spec(
-                hir.file_id,
-                spec,
-                Span::new(hir.file_id, TextRange::new(0, 0)),
-                false,
-              );
+              let resolved = self.resolve_spec(file_id, spec, Span::new(file_id, span), false);
               if let Some(t) = resolved {
                 deps.push(t);
               }
@@ -314,7 +442,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           };
           for item in &named.items {
             if named.specifier.is_none() {
-              let span = Span::new(hir.file_id, item.exported_span.unwrap_or(item.local_span));
+              let span = Span::new(file_id, item.exported_span.unwrap_or(item.local_span));
               first_export_span.get_or_insert(span);
               state.export_specs.push(ExportSpec::Local {
                 name: item.local.clone(),
@@ -323,7 +451,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
                 span,
               });
             } else {
-              let span = Span::new(hir.file_id, item.exported_span.unwrap_or(item.local_span));
+              let span = Span::new(file_id, item.exported_span.unwrap_or(item.local_span));
               first_export_span.get_or_insert(span);
               state.export_specs.push(ExportSpec::ReExport {
                 from: target.flatten(),
@@ -337,9 +465,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           has_exports |= !named.items.is_empty();
         }
         Export::All(all) => {
-          let spec_span = Span::new(hir.file_id, all.specifier_span);
+          let spec_span = Span::new(file_id, all.specifier_span);
           first_export_span.get_or_insert(spec_span);
-          let target = self.resolve_spec(hir.file_id, &all.specifier, spec_span, false);
+          let target = self.resolve_spec(file_id, &all.specifier, spec_span, false);
           if let Some(t) = target {
             deps.push(t);
           }
@@ -351,11 +479,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           has_exports = true;
         }
         Export::ExportAssignment { span, .. } => {
-          let span = Span::new(hir.file_id, *span);
+          let span = Span::new(file_id, *span);
           first_export_span.get_or_insert(span);
           self.diagnostics.push(Diagnostic::error(
             "BIND1003",
-            "export assignments are not supported in this module kind",
+            "export assignments are not supported yet",
             span,
           ));
           has_exports = true;
@@ -363,35 +491,59 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       }
     }
 
+    for export in export_as_namespace {
+      let span = Span::new(file_id, export.span);
+      first_export_span.get_or_insert(span);
+      if !state
+        .export_as_namespace
+        .iter()
+        .any(|existing| existing.name == export.name && existing.span == span)
+      {
+        state.export_as_namespace.push(ExportAsNamespaceEntry {
+          name: export.name.clone(),
+          span,
+        });
+      }
+      has_exports = true;
+    }
+
     if is_script && has_exports {
-      let span = first_export_span.unwrap_or_else(|| Span::new(hir.file_id, TextRange::new(0, 0)));
+      let span = first_export_span.unwrap_or_else(|| Span::new(file_id, TextRange::new(0, 0)));
       self.diagnostics.push(Diagnostic::error(
         "BIND1003",
         "exports are not allowed in script modules",
         span,
       ));
     }
-
-    self.modules.insert(hir.file_id, state);
-    deps
   }
 
-  fn decl_participates_in_global(&self, hir: &HirFile, decl: &Decl, is_script: bool) -> bool {
+  fn decl_participates_in_global_kind(
+    &self,
+    file_kind: FileKind,
+    decl: &Decl,
+    is_script: bool,
+  ) -> bool {
     if is_script {
       return true;
     }
-    decl.is_global && matches!(hir.file_kind, FileKind::Dts)
+    decl.is_global && matches!(file_kind, FileKind::Dts)
   }
 
-  fn is_effective_script(&self, hir: &HirFile) -> bool {
-    match hir.module_kind {
+  fn is_effective_script(
+    &self,
+    module_kind: ModuleKind,
+    file_kind: FileKind,
+    imports: &[Import],
+    exports: &[Export],
+    decls: &[Decl],
+  ) -> bool {
+    match module_kind {
       ModuleKind::Script => true,
       ModuleKind::Module => {
-        matches!(hir.file_kind, FileKind::Dts)
-          && hir.imports.is_empty()
-          && hir.exports.is_empty()
-          && hir
-            .decls
+        matches!(file_kind, FileKind::Dts)
+          && imports.is_empty()
+          && exports.is_empty()
+          && decls
             .iter()
             .all(|decl| matches!(decl.exported, Exported::No))
       }
@@ -533,6 +685,87 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       .export_cache
       .insert(file, ExportStatus::Done(map.clone()));
     if let Some(module) = self.modules.get_mut(&file) {
+      module.exports = map.clone();
+    }
+    map
+  }
+
+  fn exports_for_ambient(&mut self, name: &str) -> ExportMap {
+    if let Some(status) = self.ambient_export_cache.get(name) {
+      return match status {
+        ExportStatus::InProgress(m) | ExportStatus::Done(m) => m.clone(),
+      };
+    }
+    self
+      .ambient_export_cache
+      .insert(name.to_string(), ExportStatus::InProgress(ExportMap::new()));
+    let mut map = ExportMap::new();
+    if let Some(module) = self.ambient_modules.get(name).cloned() {
+      let mut export_spans = module.export_spans.clone();
+      for spec in &module.export_specs {
+        match spec {
+          ExportSpec::Local {
+            name,
+            exported_as,
+            type_only,
+            span,
+          } => {
+            self.add_local_export(
+              &module,
+              name,
+              exported_as,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+          ExportSpec::ReExport {
+            from,
+            name,
+            exported_as,
+            type_only,
+            span,
+          } => {
+            self.add_reexport(
+              &module,
+              *from,
+              name,
+              exported_as,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+          ExportSpec::ExportAll {
+            from,
+            type_only,
+            span,
+          } => {
+            self.add_export_all(
+              &module,
+              *from,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+        }
+        self
+          .ambient_export_cache
+          .insert(name.to_string(), ExportStatus::InProgress(map.clone()));
+      }
+      if let Some(module) = self.ambient_modules.get_mut(name) {
+        module.export_spans = export_spans.clone();
+      }
+    }
+
+    self
+      .ambient_export_cache
+      .insert(name.to_string(), ExportStatus::Done(map.clone()));
+    if let Some(module) = self.ambient_modules.get_mut(name) {
       module.exports = map.clone();
     }
     map

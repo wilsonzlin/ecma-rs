@@ -764,3 +764,108 @@ fn non_dts_global_augments_emit_diagnostic() {
     "expected unsupported augmentation diagnostic"
   );
 }
+
+#[test]
+fn declare_global_interfaces_merge_in_globals() {
+  let file = FileId(90);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+
+  let mut first = mk_decl(0, "MergedGlobal", DeclKind::Interface, Exported::No);
+  first.is_ambient = true;
+  first.is_global = true;
+  let mut second = mk_decl(1, "MergedGlobal", DeclKind::Interface, Exported::No);
+  second.is_ambient = true;
+  second.is_global = true;
+  hir.decls.push(first);
+  hir.decls.push(second);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let symbols = semantics.symbols();
+  let group = semantics
+    .global_symbols()
+    .get("MergedGlobal")
+    .expect("global interface merged");
+  let sym = group
+    .symbol_for(Namespace::TYPE, symbols)
+    .expect("type symbol present");
+  let decls = symbols.symbol(sym).decls_for(Namespace::TYPE);
+  assert_eq!(decls.len(), 2);
+  assert!(decls
+    .windows(2)
+    .all(|w| symbols.decl(w[0]).order < symbols.decl(w[1]).order));
+}
+
+#[test]
+fn global_value_namespace_merge() {
+  let file = FileId(91);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+
+  let mut func = mk_decl(0, "ComboGlobal", DeclKind::Function, Exported::No);
+  func.is_ambient = true;
+  func.is_global = true;
+  let mut ns = mk_decl(1, "ComboGlobal", DeclKind::Namespace, Exported::No);
+  ns.is_ambient = true;
+  ns.is_global = true;
+  hir.decls.push(func);
+  hir.decls.push(ns);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let symbols = semantics.symbols();
+  let group = semantics
+    .global_symbols()
+    .get("ComboGlobal")
+    .expect("global merge present");
+  let mask = group.namespaces(symbols);
+  assert!(mask.contains(Namespace::VALUE));
+  assert!(mask.contains(Namespace::NAMESPACE));
+  let value_sym = group.symbol_for(Namespace::VALUE, symbols).unwrap();
+  let namespace_sym = group.symbol_for(Namespace::NAMESPACE, symbols).unwrap();
+  assert_eq!(value_sym, namespace_sym);
+}
+
+#[test]
+fn ambient_modules_collect_exports() {
+  let file = FileId(92);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+
+  let mut decl = mk_decl(0, "AmbientValue", DeclKind::Function, Exported::No);
+  decl.is_ambient = true;
+  let ambient = AmbientModule {
+    name: "pkg".to_string(),
+    name_span: span(100),
+    decls: vec![decl],
+    imports: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  };
+  hir.ambient_modules.push(ambient);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports = semantics
+    .exports_of_ambient_module("pkg")
+    .expect("ambient module exports available");
+  let symbols = semantics.symbols();
+  let symbol = exports
+    .get("AmbientValue")
+    .expect("ambient value exported")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("value symbol available");
+  let decls = symbols.symbol(symbol).decls_for(Namespace::VALUE);
+  assert_eq!(decls.len(), 1);
+}

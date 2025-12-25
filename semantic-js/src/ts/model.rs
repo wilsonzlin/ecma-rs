@@ -19,6 +19,7 @@
 //! - per-file [`ExportMap`]s keyed by name in sorted order,
 //! - a map of merged global symbol groups for consumers that want a holistic
 //!   view.
+//! - ambient module export/symbol maps addressable by module specifier strings.
 //!
 //! The binder currently focuses on module graph semantics and declaration
 //! merging. It does not model statement-level scopes, contextual type-only
@@ -26,6 +27,9 @@
 //! (which are reported as diagnostics). Cross-file ambient augmentations are
 //! only represented through re-exports/imports rather than global name
 //! injection.
+//! Ambient module declarations (`declare module "foo" { }`) are bound into
+//! their own export/symbol maps; unimplemented features such as `export as
+//! namespace` and `export =` are reported deterministically via diagnostics.
 //!
 //! Binder diagnostics use the shared [`diagnostics`] crate with stable codes:
 //! - `BIND1001`: duplicate export
@@ -117,13 +121,13 @@ impl DeclKind {
   }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleKind {
   Module,
   Script,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileKind {
   Ts,
   Dts,
@@ -215,6 +219,25 @@ pub enum Export {
   },
 }
 
+/// `export as namespace Foo;`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportAsNamespace {
+  pub name: String,
+  pub span: TextRange,
+}
+
+/// `declare module "specifier" { ... }`
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AmbientModule {
+  pub name: String,
+  pub name_span: TextRange,
+  pub decls: Vec<Decl>,
+  pub imports: Vec<Import>,
+  pub exports: Vec<Export>,
+  pub export_as_namespace: Vec<ExportAsNamespace>,
+  pub ambient_modules: Vec<AmbientModule>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HirFile {
   pub file_id: FileId,
@@ -223,6 +246,8 @@ pub struct HirFile {
   pub decls: Vec<Decl>,
   pub imports: Vec<Import>,
   pub exports: Vec<Export>,
+  pub export_as_namespace: Vec<ExportAsNamespace>,
+  pub ambient_modules: Vec<AmbientModule>,
 }
 
 impl HirFile {
@@ -234,6 +259,8 @@ impl HirFile {
       decls: Vec::new(),
       imports: Vec::new(),
       exports: Vec::new(),
+      export_as_namespace: Vec::new(),
+      ambient_modules: Vec::new(),
     }
   }
 
@@ -245,6 +272,8 @@ impl HirFile {
       decls: Vec::new(),
       imports: Vec::new(),
       exports: Vec::new(),
+      export_as_namespace: Vec::new(),
+      ambient_modules: Vec::new(),
     }
   }
 }
@@ -502,6 +531,8 @@ pub struct TsProgramSemantics {
   pub(crate) module_symbols: BTreeMap<FileId, SymbolGroups>,
   pub(crate) module_exports: BTreeMap<FileId, ExportMap>,
   pub(crate) global_symbols: BTreeMap<String, SymbolGroup>,
+  pub(crate) ambient_module_symbols: BTreeMap<String, SymbolGroups>,
+  pub(crate) ambient_module_exports: BTreeMap<String, ExportMap>,
 }
 
 impl TsProgramSemantics {
@@ -544,6 +575,18 @@ impl TsProgramSemantics {
 
   pub fn global_symbols(&self) -> &BTreeMap<String, SymbolGroup> {
     &self.global_symbols
+  }
+
+  pub fn ambient_module_symbols(&self) -> &BTreeMap<String, SymbolGroups> {
+    &self.ambient_module_symbols
+  }
+
+  pub fn ambient_module_exports(&self) -> &BTreeMap<String, ExportMap> {
+    &self.ambient_module_exports
+  }
+
+  pub fn exports_of_ambient_module(&self, specifier: &str) -> Option<&ExportMap> {
+    self.ambient_module_exports.get(specifier)
   }
 }
 
