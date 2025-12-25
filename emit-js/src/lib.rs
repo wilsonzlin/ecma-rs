@@ -2,6 +2,7 @@ pub mod asi;
 mod emitter;
 mod escape;
 mod expr;
+mod expr_js;
 mod expr_ts;
 mod js_expr;
 mod js_pat;
@@ -9,6 +10,8 @@ mod js_stmt;
 mod jsx;
 mod pat;
 mod precedence;
+mod stmt_start;
+mod stmt;
 mod stmt_start;
 mod ts_stmt;
 mod ts_type;
@@ -29,11 +32,13 @@ pub use escape::emit_string_literal_double_quoted;
 pub use escape::emit_template_literal_segment;
 pub use escape::emit_template_raw_segment;
 pub use expr::{emit_expr, ExprEmitter};
+pub use expr_js::{emit_expr as emit_expr_js, ExprCtx};
 pub use js_expr::{emit_js_expr, JsEmitError, JsEmitResult};
 pub use js_pat::{emit_js_param_decl, emit_js_pat, emit_js_pat_decl};
 pub use js_stmt::{emit_js_stmt, emit_js_stmt_list, emit_js_top_level};
 pub use jsx::{emit_jsx_elem, emit_jsx_expr_container};
 pub use pat::{emit_param_decl, emit_pat, emit_pat_decl};
+pub use stmt::{emit_stmt, emit_top_level as emit_stmt_top_level};
 pub use stmt_start::{emit_expr_stmt, emit_expr_stmt_with, expr_stmt_needs_parens};
 pub use ts_stmt::{emit_top_level, emit_ts_stmt};
 pub use ts_type::{
@@ -97,4 +102,3 @@ fn diagnostic_from_emit_error(file: FileId, err: EmitError) -> Diagnostic {
   }
   diagnostic
 }
-
