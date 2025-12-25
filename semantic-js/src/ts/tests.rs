@@ -1,6 +1,11 @@
 use super::*;
 use crate::assoc::{js, ts};
+use crate::ts::locals::{bind_ts_locals, SymbolId as LocalSymbolId};
+use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
+use hir_js::ids::{DefKind, ExprId, TypeExprId};
+use hir_js::lower_file;
 use parse_js::ast::node::NodeAssocData;
+use parse_js::parse;
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,8 +45,8 @@ fn span(start: u32) -> TextRange {
 #[test]
 fn ts_assoc_helpers_round_trip() {
   let mut assoc = NodeAssocData::default();
-  let declared = ts::DeclaredSymbol(SymbolId(123));
-  let resolved = SymbolId(456);
+  let declared = ts::DeclaredSymbol(LocalSymbolId(123));
+  let resolved = LocalSymbolId(456);
 
   assoc.set(declared);
   assoc.set(ts::ResolvedSymbol(Some(resolved)));
@@ -53,13 +58,13 @@ fn ts_assoc_helpers_round_trip() {
 #[test]
 fn ts_assoc_keys_do_not_overlap_js_accessors() {
   let mut assoc = NodeAssocData::default();
-  assoc.set(ts::DeclaredSymbol(SymbolId(7)));
-  assoc.set(ts::ResolvedSymbol(Some(SymbolId(9))));
+  assoc.set(ts::DeclaredSymbol(LocalSymbolId(7)));
+  assoc.set(ts::ResolvedSymbol(Some(LocalSymbolId(9))));
 
   assert_eq!(js::declared_symbol(&assoc), None);
   assert_eq!(js::resolved_symbol(&assoc), None);
-  assert_eq!(ts::declared_symbol(&assoc), Some(SymbolId(7)));
-  assert_eq!(ts::resolved_symbol(&assoc), Some(SymbolId(9)));
+  assert_eq!(ts::declared_symbol(&assoc), Some(LocalSymbolId(7)));
+  assert_eq!(ts::resolved_symbol(&assoc), Some(LocalSymbolId(9)));
 
   assert_ne!(
     TypeId::of::<ts::DeclaredSymbol>(),
@@ -72,8 +77,8 @@ fn ts_assoc_keys_do_not_overlap_js_accessors() {
 
   // Explicit type annotations ensure the accessors expose TS symbol IDs and
   // cannot be mistaken for JS ones at compile time.
-  let _: Option<SymbolId> = ts::declared_symbol(&assoc);
-  let _: Option<SymbolId> = ts::resolved_symbol(&assoc);
+  let _: Option<LocalSymbolId> = ts::declared_symbol(&assoc);
+  let _: Option<LocalSymbolId> = ts::resolved_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::declared_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::resolved_symbol(&assoc);
 }
@@ -1022,4 +1027,187 @@ fn ambient_module_interfaces_merge_deterministically() {
   assert!(decls
     .windows(2)
     .all(|w| symbols.decl(w[0]).order < symbols.decl(w[1]).order));
+
+}
+
+fn body_by_name<'a>(
+  lowered: &'a hir_js::hir::LowerResult,
+  name: &str,
+  kind: DefKind,
+) -> &'a hir_js::hir::Body {
+  let def = lowered
+    .defs
+    .iter()
+    .find(|d| d.path.kind == kind && d.path.name == name)
+    .expect("definition present");
+  if let Some(body_id) = def.body {
+    if let Some(body) = lowered.bodies.get(body_id.0 as usize) {
+      return body.as_ref();
+    }
+  }
+  lowered
+    .bodies
+    .iter()
+    .find(|b| b.owner == def.id)
+    .or_else(|| lowered.bodies.first())
+    .map(|b| b.as_ref())
+    .unwrap_or_else(|| panic!("body available for {}", name))
+}
+
+#[test]
+fn locals_resolve_block_shadowing() {
+  let mut ast = parse(
+    r#"
+    function f() {
+      var x = 1;
+      {
+        let x = 2;
+        x;
+      }
+      x;
+    }
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, true);
+  let lowered = lower_file(FileId(90), HirFileKind::Ts, &ast);
+  let body = body_by_name(&lowered, "f", DefKind::Function);
+
+  let mut id_uses: Vec<_> = body
+    .exprs
+    .iter()
+    .enumerate()
+    .filter_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some((ExprId(idx as u32), expr.span)),
+      _ => None,
+    })
+    .collect();
+  id_uses.sort_by_key(|(_, span)| span.start);
+  assert_eq!(id_uses.len(), 2);
+
+  let inner = locals
+    .resolve_expr(body, id_uses[0].0)
+    .expect("inner use resolves");
+  let outer = locals
+    .resolve_expr(body, id_uses[1].0)
+    .expect("outer use resolves");
+  assert_ne!(inner, outer);
+}
+
+#[test]
+fn locals_hoist_var_declarations() {
+  let mut ast = parse(
+    r#"
+    function g() {
+      x;
+      var x = 1;
+    }
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, true);
+  let lowered = lower_file(FileId(91), HirFileKind::Ts, &ast);
+  let body = body_by_name(&lowered, "g", DefKind::Function);
+
+  let first_ident = body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("identifier present");
+  assert!(locals.resolve_expr(body, first_ident).is_some());
+}
+
+#[test]
+fn locals_separate_value_and_type_namespaces() {
+  let mut ast = parse(
+    r#"
+    type Foo = number;
+    const Foo = 1;
+    type Bar = Foo;
+    const baz = Foo;
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, true);
+  let lowered = lower_file(FileId(92), HirFileKind::Ts, &ast);
+
+  let type_ref = lowered
+    .types
+    .type_exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      TypeExprKind::TypeRef(_) => Some(TypeExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("type reference present");
+  let type_sym = locals
+    .resolve_type_name(&lowered.types.type_exprs, type_ref)
+    .expect("type Foo resolves");
+
+  let baz_body = body_by_name(&lowered, "baz", DefKind::Var);
+  let value_ident = baz_body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("value use present");
+  let value_sym = locals
+    .resolve_expr(baz_body, value_ident)
+    .expect("value Foo resolves");
+
+  assert_ne!(type_sym, value_sym);
+}
+
+#[test]
+fn type_only_imports_skip_value_resolution() {
+  let mut ast = parse(
+    r#"
+    import type { Foo } from "mod";
+    type Bar = Foo;
+    const value = Foo;
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, true);
+  let lowered = lower_file(FileId(93), HirFileKind::Ts, &ast);
+
+  let type_ref = lowered
+    .types
+    .type_exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      TypeExprKind::TypeRef(_) => Some(TypeExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("type ref present");
+  assert!(
+    locals
+      .resolve_type_name(&lowered.types.type_exprs, type_ref)
+      .is_some(),
+    "type import remains available"
+  );
+
+  let value_body = body_by_name(&lowered, "value", DefKind::Var);
+  let id = value_body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("value identifier present");
+  assert!(
+    locals.resolve_expr(value_body, id).is_none(),
+    "type-only import should not resolve in value namespace"
+  );
 }

@@ -14,6 +14,7 @@
 //! See [`SymbolTable`] and related types for the in-memory representation and
 //! determinism constraints.
 mod binder;
+pub mod locals;
 mod model;
 
 pub use binder::bind_ts_program;
