@@ -1,5 +1,6 @@
 pub mod foreign;
 pub mod il;
+pub mod regalloc;
 pub mod structurer;
 pub mod top_level;
 
