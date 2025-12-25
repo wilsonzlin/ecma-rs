@@ -1,20 +1,35 @@
 use std::fmt;
 
+use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::jsx::JsxElem;
 use parse_js::ast::expr::{
-  lit::{LitBigIntExpr, LitBoolExpr, LitNumExpr, LitRegexExpr, LitStrExpr, LitTemplatePart},
+  lit::{
+    LitArrElem,
+    LitArrExpr,
+    LitBigIntExpr,
+    LitBoolExpr,
+    LitNumExpr,
+    LitObjExpr,
+    LitRegexExpr,
+    LitStrExpr,
+    LitTemplatePart,
+  },
   BinaryExpr,
   CallArg,
   CallExpr,
+  ClassExpr,
   ComputedMemberExpr,
   CondExpr,
   Expr,
+  FuncExpr,
   IdExpr,
+  ImportExpr,
   MemberExpr,
   TaggedTemplateExpr,
   UnaryExpr,
   UnaryPostfixExpr,
 };
+use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::operator::{OperatorName, OPERATORS};
@@ -87,7 +102,12 @@ where
       Expr::LitStr(lit) => self.emit_lit_str(lit),
       Expr::LitRegex(lit) => self.emit_lit_regex(lit),
       Expr::LitTemplate(lit) => self.emit_template_literal(&lit.stx.parts),
+      Expr::LitArr(arr) => self.emit_lit_arr(arr),
+      Expr::LitObj(obj) => self.emit_lit_obj(obj),
       Expr::JsxElem(elem) => self.emit_jsx_elem(elem),
+      Expr::Func(func) => self.emit_func_expr(func),
+      Expr::Class(class) => self.emit_class_expr(class),
+      Expr::Import(import_expr) => self.emit_import_expr(import_expr),
       Expr::ArrPat(arr) => self.emit_array_pattern(arr),
       Expr::IdPat(id) => self.emit_id_pattern(id),
       Expr::ObjPat(obj) => self.emit_object_pattern(obj),
@@ -209,12 +229,187 @@ where
   }
 
   fn emit_id_pattern(&mut self, id: &Node<parse_js::ast::expr::pat::IdPat>) -> EmitResult {
-    with_node_context(id.loc, || self.emit_pattern_fragment(|em| crate::pat::emit_id_pattern(em, id)))
+    with_node_context(id.loc, || {
+      self.emit_pattern_fragment(|em| crate::pat::emit_id_pattern(em, id))
+    })
   }
 
   fn emit_object_pattern(&mut self, obj: &Node<parse_js::ast::expr::pat::ObjPat>) -> EmitResult {
     with_node_context(obj.loc, || {
       self.emit_pattern_fragment(|em| crate::pat::emit_object_pattern(em, obj))
+    })
+  }
+
+  fn emit_lit_arr(&mut self, arr: &Node<LitArrExpr>) -> EmitResult {
+    with_node_context(arr.loc, || {
+      self.out.write_char('[')?;
+      for (idx, elem) in arr.stx.elements.iter().enumerate() {
+        if idx > 0 {
+          self.out.write_char(',')?;
+        }
+        match elem {
+          LitArrElem::Single(expr) => self.emit_expr_with_min_prec(expr, Prec::new(1))?,
+          LitArrElem::Rest(expr) => {
+            self.out.write_str("...")?;
+            self.emit_expr_with_min_prec(expr, Prec::new(1))?;
+          }
+          LitArrElem::Empty => {}
+        }
+      }
+      self.out.write_char(']')?;
+      Ok(())
+    })
+  }
+
+  fn emit_lit_obj(&mut self, obj: &Node<LitObjExpr>) -> EmitResult {
+    with_node_context(obj.loc, || {
+      self.out.write_char('{')?;
+      for (idx, member) in obj.stx.members.iter().enumerate() {
+        if idx > 0 {
+          self.out.write_str(", ")?;
+        }
+        self.emit_obj_member(member)?;
+      }
+      self.out.write_char('}')?;
+      Ok(())
+    })
+  }
+
+  fn emit_obj_member(&mut self, member: &Node<ObjMember>) -> EmitResult {
+    with_node_context(member.loc, || match &member.stx.typ {
+      ObjMemberType::Valued { key, val } => self.emit_obj_valued_member(key, val),
+      ObjMemberType::Shorthand { id } => {
+        self.out.write_str(&id.stx.name)?;
+        Ok(())
+      }
+      ObjMemberType::Rest { val } => {
+        self.out.write_str("...")?;
+        self.emit_expr_with_min_prec(val, Prec::new(1))
+      }
+    })
+  }
+
+  fn emit_obj_valued_member(&mut self, key: &ClassOrObjKey, val: &ClassOrObjVal) -> EmitResult {
+    match val {
+      ClassOrObjVal::Prop(Some(expr)) => {
+        self.emit_pattern_fragment(|em| crate::pat::emit_class_or_object_key(em, key))?;
+        self.out.write_char(':')?;
+        self.emit_expr_with_min_prec(expr, Prec::new(1))
+      }
+      ClassOrObjVal::Prop(None) => Err(EmitError::unsupported("object property missing value")),
+      _ => Err(EmitError::unsupported("object member kind not supported")),
+    }
+  }
+
+  fn emit_func_expr(&mut self, func: &Node<FuncExpr>) -> EmitResult {
+    with_node_context(func.loc, || {
+      let func = func.stx.as_ref();
+      let details = func.func.stx.as_ref();
+      if details.async_ {
+        self.out.write_str("async ")?;
+      }
+      self.out.write_str("function")?;
+      if details.generator {
+        self.out.write_char('*')?;
+      }
+      if let Some(name) = &func.name {
+        write!(self.out, " {}", name.stx.name)?;
+      }
+      self.emit_func_signature(&func.func)?;
+      self.emit_func_body(&func.func)
+    })
+  }
+
+  fn emit_func_signature(&mut self, func: &Node<Func>) -> EmitResult {
+    with_node_context(func.loc, || {
+      let func = func.stx.as_ref();
+      let mut type_params = String::new();
+      crate::ts_type::emit_type_parameters(&mut type_params, func.type_parameters.as_deref());
+      self.out.write_str(&type_params)?;
+
+      self.out.write_char('(')?;
+      for (idx, param) in func.parameters.iter().enumerate() {
+        if idx > 0 {
+          self.out.write_str(", ")?;
+        }
+        self.emit_pattern_fragment(|em| crate::pat::emit_param_decl(em, param))?;
+      }
+      self.out.write_char(')')?;
+
+      if let Some(return_type) = &func.return_type {
+        self.out.write_str(": ")?;
+        self.emit_type(return_type)?;
+      }
+
+      Ok(())
+    })
+  }
+
+  fn emit_func_body(&mut self, func: &Node<Func>) -> EmitResult {
+    with_node_context(func.loc, || match &func.stx.body {
+      Some(FuncBody::Block(stmts)) => {
+        self.out.write_char('{')?;
+        if !stmts.is_empty() {
+          return Err(EmitError::unsupported("function body statements not supported"));
+        }
+        self.out.write_char('}')?;
+        Ok(())
+      }
+      Some(FuncBody::Expression(_)) => Err(EmitError::unsupported(
+        "expression bodies not supported in function expressions",
+      )),
+      None => Err(EmitError::unsupported("function body missing")),
+    })
+  }
+
+  fn emit_class_expr(&mut self, class: &Node<ClassExpr>) -> EmitResult {
+    with_node_context(class.loc, || {
+      let class = class.stx.as_ref();
+      if !class.decorators.is_empty() {
+        return Err(EmitError::unsupported("class decorators not supported"));
+      }
+      self.out.write_str("class")?;
+      if let Some(name) = &class.name {
+        write!(self.out, " {}", name.stx.name)?;
+      }
+
+      let mut type_params = String::new();
+      crate::ts_type::emit_type_parameters(&mut type_params, class.type_parameters.as_deref());
+      self.out.write_str(&type_params)?;
+
+      if let Some(extends) = &class.extends {
+        self.out.write_str(" extends ")?;
+        self.emit_expr_with_min_prec(extends, Prec::new(1))?;
+      }
+      if !class.implements.is_empty() {
+        self.out.write_str(" implements ")?;
+        for (idx, ty) in class.implements.iter().enumerate() {
+          if idx > 0 {
+            self.out.write_str(", ")?;
+          }
+          self.emit_type(ty)?;
+        }
+      }
+
+      self.out.write_str(" {")?;
+      if !class.members.is_empty() {
+        return Err(EmitError::unsupported("class members not supported"));
+      }
+      self.out.write_str("}")?;
+      Ok(())
+    })
+  }
+
+  fn emit_import_expr(&mut self, import: &Node<ImportExpr>) -> EmitResult {
+    with_node_context(import.loc, || {
+      self.out.write_str("import(")?;
+      self.emit_expr_with_min_prec(&import.stx.module, Prec::new(1))?;
+      if let Some(attrs) = &import.stx.attributes {
+        self.out.write_str(", ")?;
+        self.emit_expr_with_min_prec(attrs, Prec::new(1))?;
+      }
+      self.out.write_char(')')?;
+      Ok(())
     })
   }
 
