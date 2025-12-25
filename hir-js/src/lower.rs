@@ -1,25 +1,26 @@
 use crate::hir::{
   ArrayElement, ArrayLiteral, ArrayPat, ArrayPatElement, AssignOp, BinaryOp, Body, BodyKind,
-  CallArg, CallExpr, CatchClause, DefData, Expr, ExprKind, Export, ExportAlias, ExportAll,
-  ExportAssignment, ExportDefault, ExportDefaultValue, ExportKind, ExportNamed, ExportSpecifier,
+  CallArg, CallExpr, CatchClause, DefData, Export, ExportAlias, ExportAll, ExportAssignment,
+  ExportDefault, ExportDefaultValue, ExportKind, ExportNamed, ExportSpecifier, Expr, ExprKind,
   FileKind, ForHead, ForInit, HirFile, Import, ImportBinding, ImportEquals, ImportEqualsTarget,
   ImportEs, ImportKind, ImportNamed, JsxElement, JsxElementKind, Literal, LowerResult, MemberExpr,
-  ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Pat, PatKind,
-  Stmt, StmtKind, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl,
-  VarDeclKind, VarDeclarator,
+  ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Pat,
+  PatKind, Stmt, StmtKind, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp,
+  VarDecl, VarDeclKind, VarDeclarator,
 };
 use crate::ids::{
-  BodyId, DefId, DefKind, DefPath, ExprId, ExportId, ExportSpecifierId, ImportId, ImportSpecifierId,
-  NameId, PatId, StmtId,
+  BodyId, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
+  ImportSpecifierId, NameId, PatId, StmtId,
 };
 use crate::intern::NameInterner;
 use crate::lower_types::TypeLowerer;
 use crate::span_map::SpanMap;
+use derive_visitor::{Drive, DriveMut};
 use diagnostics::Diagnostic;
 use diagnostics::FileId;
 use diagnostics::Span;
 use diagnostics::TextRange;
-use derive_visitor::{Drive, DriveMut};
+use parse_js::ast::expr::jsx;
 use parse_js::ast::expr::pat::ArrPat;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::ObjPat;
@@ -27,7 +28,6 @@ use parse_js::ast::expr::pat::Pat as AstPat;
 use parse_js::ast::expr::ArrowFuncExpr;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::expr::FuncExpr;
-use parse_js::ast::expr::jsx;
 use parse_js::ast::func::Func;
 use parse_js::ast::func::FuncBody;
 use parse_js::ast::import_export::*;
@@ -103,8 +103,8 @@ struct DefDescriptor<'a> {
   is_item: bool,
   is_ambient: bool,
   in_global: bool,
-   is_exported: bool,
-   is_default_export: bool,
+  is_exported: bool,
+  is_default_export: bool,
   source: DefSource<'a>,
   type_source: Option<TypeSource<'a>>,
 }
@@ -253,7 +253,14 @@ pub fn lower_file_with_diagnostics(
   let mut names = NameInterner::default();
   let mut descriptors = Vec::new();
   let mut module_items = Vec::new();
-  collect_top_level(ast, file_kind, &mut descriptors, &mut module_items, &mut names, &mut ctx);
+  collect_top_level(
+    ast,
+    file_kind,
+    &mut descriptors,
+    &mut module_items,
+    &mut names,
+    &mut ctx,
+  );
 
   descriptors.sort_by(|a, b| {
     (a.kind, a.name_text.as_str(), a.span.start).cmp(&(b.kind, b.name_text.as_str(), b.span.start))
@@ -358,14 +365,16 @@ pub fn lower_file_with_diagnostics(
   let bodies: Vec<Arc<Body>> = bodies
     .into_iter()
     .map(|body| {
-      body.unwrap_or_else(|| Arc::new(Body {
-        owner: DefId(u32::MAX),
-        kind: BodyKind::Unknown,
-        exprs: Vec::new(),
-        stmts: Vec::new(),
-        pats: Vec::new(),
-        expr_types: None,
-      }))
+      body.unwrap_or_else(|| {
+        Arc::new(Body {
+          owner: DefId(u32::MAX),
+          kind: BodyKind::Unknown,
+          exprs: Vec::new(),
+          stmts: Vec::new(),
+          pats: Vec::new(),
+          expr_types: None,
+        })
+      })
     })
     .collect();
 
@@ -391,14 +400,7 @@ pub fn lower_file_with_diagnostics(
   (
     LowerResult {
       hir: Arc::new(HirFile::new(
-        file,
-        file_kind,
-        items,
-        body_ids,
-        def_paths,
-        imports,
-        exports,
-        span_map,
+        file, file_kind, items, body_ids, def_paths, imports, exports, span_map,
       )),
       defs,
       bodies,
@@ -429,15 +431,33 @@ fn lower_body_from_source(
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
   match source {
-    DefSource::Function(decl) => {
-      lower_function_body(owner, body_id, &decl.stx.function, def_lookup, names, span_map, ctx)
-    }
-    DefSource::ArrowFunction(func) => {
-      lower_function_body(owner, body_id, &func.stx.func, def_lookup, names, span_map, ctx)
-    }
-    DefSource::FuncExpr(func) => {
-      lower_function_body(owner, body_id, &func.stx.func, def_lookup, names, span_map, ctx)
-    }
+    DefSource::Function(decl) => lower_function_body(
+      owner,
+      body_id,
+      &decl.stx.function,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    ),
+    DefSource::ArrowFunction(func) => lower_function_body(
+      owner,
+      body_id,
+      &func.stx.func,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    ),
+    DefSource::FuncExpr(func) => lower_function_body(
+      owner,
+      body_id,
+      &func.stx.func,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    ),
     DefSource::Var(decl) => lower_var_body(owner, decl, def_lookup, names, span_map, ctx),
     DefSource::ExportDefaultExpr(expr) => {
       let mut builder = BodyBuilder::new(owner, BodyKind::TopLevel, def_lookup, names, span_map);
@@ -561,11 +581,21 @@ fn lower_stmt(
     AstStmt::ForTriple(for_stmt) => {
       let init = match &for_stmt.stx.init {
         ForTripleStmtInit::Expr(e) => Some(ForInit::Expr(lower_expr(e, builder, ctx))),
-        ForTripleStmtInit::Decl(decl) => Some(ForInit::Var(lower_var_decl_stmt(decl, builder, ctx))),
+        ForTripleStmtInit::Decl(decl) => {
+          Some(ForInit::Var(lower_var_decl_stmt(decl, builder, ctx)))
+        }
         ForTripleStmtInit::None => None,
       };
-      let cond = for_stmt.stx.cond.as_ref().map(|c| lower_expr(c, builder, ctx));
-      let post = for_stmt.stx.post.as_ref().map(|p| lower_expr(p, builder, ctx));
+      let cond = for_stmt
+        .stx
+        .cond
+        .as_ref()
+        .map(|c| lower_expr(c, builder, ctx));
+      let post = for_stmt
+        .stx
+        .post
+        .as_ref()
+        .map(|p| lower_expr(p, builder, ctx));
       let body = lower_for_body(&for_stmt.stx.body, builder, ctx);
       StmtKind::For {
         init,
@@ -602,7 +632,11 @@ fn lower_stmt(
       let discriminant = lower_expr(&sw.stx.test, builder, ctx);
       let mut cases = Vec::new();
       for branch in sw.stx.branches.iter() {
-        let test = branch.stx.case.as_ref().map(|c| lower_expr(c, builder, ctx));
+        let test = branch
+          .stx
+          .case
+          .as_ref()
+          .map(|c| lower_expr(c, builder, ctx));
         let mut stmts = Vec::new();
         for stmt in branch.stx.body.iter() {
           stmts.push(lower_stmt(stmt, builder, ctx));
@@ -714,7 +748,11 @@ fn lower_var_decl_stmt(
   VarDecl { kind, declarators }
 }
 
-fn lower_for_head(lhs: &ForInOfLhs, builder: &mut BodyBuilder<'_>, ctx: &mut LoweringContext) -> ForHead {
+fn lower_for_head(
+  lhs: &ForInOfLhs,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> ForHead {
   match lhs {
     ForInOfLhs::Assign(pat) => ForHead::Pat(lower_pat(pat, builder, ctx)),
     ForInOfLhs::Decl((mode, pat_decl)) => {
@@ -726,13 +764,20 @@ fn lower_for_head(lhs: &ForInOfLhs, builder: &mut BodyBuilder<'_>, ctx: &mut Low
       let pat_id = lower_pat(&pat_decl.stx.pat, builder, ctx);
       ForHead::Var(VarDecl {
         kind,
-        declarators: vec![VarDeclarator { pat: pat_id, init: None }],
+        declarators: vec![VarDeclarator {
+          pat: pat_id,
+          init: None,
+        }],
       })
     }
   }
 }
 
-fn lower_for_body(body: &Node<ForBody>, builder: &mut BodyBuilder<'_>, ctx: &mut LoweringContext) -> StmtId {
+fn lower_for_body(
+  body: &Node<ForBody>,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> StmtId {
   let mut stmts = Vec::new();
   for stmt in body.stx.body.iter() {
     stmts.push(lower_stmt(stmt, builder, ctx));
@@ -792,9 +837,7 @@ fn lower_expr(
         }
       }
     }
-    AstExpr::Call(call) => {
-      lower_call_expr(call, builder, ctx, false)
-    }
+    AstExpr::Call(call) => lower_call_expr(call, builder, ctx, false),
     AstExpr::Member(mem) => {
       let object = lower_expr(&mem.stx.left, builder, ctx);
       let property = ObjectKey::Ident(builder.intern_name(&mem.stx.right));
@@ -867,49 +910,50 @@ fn lower_expr(
         ExprKind::Missing
       }
     }
-    AstExpr::Unary(unary) => {
-      match unary.stx.operator {
-        OperatorName::Await => ExprKind::Await {
-          expr: lower_expr(&unary.stx.argument, builder, ctx),
-        },
-        OperatorName::Yield => ExprKind::Yield {
-          expr: Some(lower_expr(&unary.stx.argument, builder, ctx)),
-          delegate: false,
-        },
-        OperatorName::YieldDelegated => ExprKind::Yield {
-          expr: Some(lower_expr(&unary.stx.argument, builder, ctx)),
-          delegate: true,
-        },
-        OperatorName::PrefixIncrement => ExprKind::Update {
-          op: UpdateOp::Increment,
-          expr: lower_expr(&unary.stx.argument, builder, ctx),
-          prefix: true,
-        },
-        OperatorName::PrefixDecrement => ExprKind::Update {
-          op: UpdateOp::Decrement,
-          expr: lower_expr(&unary.stx.argument, builder, ctx),
-          prefix: true,
-        },
-        OperatorName::New => {
-          if let AstExpr::Call(call) = unary.stx.argument.stx.as_ref() {
-            lower_call_expr(call, builder, ctx, true)
-          } else {
-            let callee = lower_expr(&unary.stx.argument, builder, ctx);
-            ExprKind::Call(CallExpr {
-              callee,
-              args: Vec::new(),
-              optional: false,
-              is_new: true,
-            })
-          }
-        }
-        op => {
-          let mapped = map_unary_op(op).unwrap_or(UnaryOp::Plus);
-          let arg = lower_expr(&unary.stx.argument, builder, ctx);
-          ExprKind::Unary { op: mapped, expr: arg }
+    AstExpr::Unary(unary) => match unary.stx.operator {
+      OperatorName::Await => ExprKind::Await {
+        expr: lower_expr(&unary.stx.argument, builder, ctx),
+      },
+      OperatorName::Yield => ExprKind::Yield {
+        expr: Some(lower_expr(&unary.stx.argument, builder, ctx)),
+        delegate: false,
+      },
+      OperatorName::YieldDelegated => ExprKind::Yield {
+        expr: Some(lower_expr(&unary.stx.argument, builder, ctx)),
+        delegate: true,
+      },
+      OperatorName::PrefixIncrement => ExprKind::Update {
+        op: UpdateOp::Increment,
+        expr: lower_expr(&unary.stx.argument, builder, ctx),
+        prefix: true,
+      },
+      OperatorName::PrefixDecrement => ExprKind::Update {
+        op: UpdateOp::Decrement,
+        expr: lower_expr(&unary.stx.argument, builder, ctx),
+        prefix: true,
+      },
+      OperatorName::New => {
+        if let AstExpr::Call(call) = unary.stx.argument.stx.as_ref() {
+          lower_call_expr(call, builder, ctx, true)
+        } else {
+          let callee = lower_expr(&unary.stx.argument, builder, ctx);
+          ExprKind::Call(CallExpr {
+            callee,
+            args: Vec::new(),
+            optional: false,
+            is_new: true,
+          })
         }
       }
-    }
+      op => {
+        let mapped = map_unary_op(op).unwrap_or(UnaryOp::Plus);
+        let arg = lower_expr(&unary.stx.argument, builder, ctx);
+        ExprKind::Unary {
+          op: mapped,
+          expr: arg,
+        }
+      }
+    },
     AstExpr::UnaryPostfix(post) => {
       let op = match post.stx.operator {
         OperatorName::PostfixIncrement => UpdateOp::Increment,
@@ -946,7 +990,9 @@ fn lower_expr(
       ExprKind::Array(ArrayLiteral { elements })
     }
     AstExpr::LitObj(obj) => ExprKind::Object(lower_object_literal(obj, builder, ctx)),
-    AstExpr::LitTemplate(tmpl) => ExprKind::Template(lower_template_literal(&tmpl.stx.parts, builder, ctx)),
+    AstExpr::LitTemplate(tmpl) => {
+      ExprKind::Template(lower_template_literal(&tmpl.stx.parts, builder, ctx))
+    }
     AstExpr::TypeAssertion(assert) => ExprKind::TypeAssertion {
       expr: lower_expr(&assert.stx.expression, builder, ctx),
     },
@@ -1310,7 +1356,9 @@ fn lower_template_literal(
 fn lower_jsx_elem(elem: &Node<jsx::JsxElem>, builder: &mut BodyBuilder<'_>) -> JsxElement {
   let kind = match &elem.stx.name {
     Some(jsx::JsxElemName::Id(id)) => JsxElementKind::Element(builder.intern_name(&id.stx.name)),
-    Some(jsx::JsxElemName::Name(name)) => JsxElementKind::Element(builder.intern_name(&name.stx.name)),
+    Some(jsx::JsxElemName::Name(name)) => {
+      JsxElementKind::Element(builder.intern_name(&name.stx.name))
+    }
     Some(jsx::JsxElemName::Member(member)) => {
       let mut parts = Vec::new();
       parts.push(builder.intern_name(&member.stx.base.stx.name));
@@ -1592,7 +1640,16 @@ fn collect_stmt<'a>(
       }
       if let Some(body) = &module.stx.body {
         for st in body.iter() {
-          collect_stmt(st, descriptors, module_items, names, false, decl_ambient, in_global, ctx);
+          collect_stmt(
+            st,
+            descriptors,
+            module_items,
+            names,
+            false,
+            decl_ambient,
+            in_global,
+            ctx,
+          );
         }
       }
     }
@@ -1805,14 +1862,7 @@ fn collect_stmt<'a>(
         in_global,
         DefSource::None,
       ));
-      collect_func_params_from_parts(
-        &af.stx.parameters,
-        descriptors,
-        names,
-        true,
-        in_global,
-        ctx,
-      );
+      collect_func_params_from_parts(&af.stx.parameters, descriptors, names, true, in_global, ctx);
       if af.stx.export {
         module_items.push(ModuleItem {
           span,
@@ -1898,8 +1948,24 @@ fn collect_stmt<'a>(
       });
     }
     AstStmt::ForIn(for_in) => {
-      collect_for_lhs(&for_in.stx.lhs, descriptors, module_items, names, ambient, in_global, ctx);
-      collect_expr(&for_in.stx.rhs, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_for_lhs(
+        &for_in.stx.lhs,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_expr(
+        &for_in.stx.rhs,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       collect_for_body(
         &for_in.stx.body,
         descriptors,
@@ -1911,8 +1977,24 @@ fn collect_stmt<'a>(
       );
     }
     AstStmt::ForOf(for_of) => {
-      collect_for_lhs(&for_of.stx.lhs, descriptors, module_items, names, ambient, in_global, ctx);
-      collect_expr(&for_of.stx.rhs, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_for_lhs(
+        &for_of.stx.lhs,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_expr(
+        &for_of.stx.rhs,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       collect_for_body(
         &for_of.stx.body,
         descriptors,
@@ -1963,11 +2045,29 @@ fn collect_namespace<'a>(
   match &ns.stx.body {
     NamespaceBody::Block(stmts) => {
       for st in stmts.iter() {
-        collect_stmt(st, descriptors, module_items, names, false, ambient, in_global, ctx);
+        collect_stmt(
+          st,
+          descriptors,
+          module_items,
+          names,
+          false,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
     }
     NamespaceBody::Namespace(inner) => {
-      collect_namespace(inner, descriptors, module_items, names, false, ambient, in_global, ctx);
+      collect_namespace(
+        inner,
+        descriptors,
+        module_items,
+        names,
+        false,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
   }
 }
@@ -2091,7 +2191,16 @@ fn walk_stmt_children<'a>(
     }
     AstStmt::Block(block) => {
       for stmt in block.stx.body.iter() {
-        collect_stmt(stmt, descriptors, module_items, names, false, ambient, in_global, ctx);
+        collect_stmt(
+          stmt,
+          descriptors,
+          module_items,
+          names,
+          false,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
     }
     AstStmt::While(wh) => {
@@ -2154,10 +2263,26 @@ fn walk_stmt_children<'a>(
         ForTripleStmtInit::None => {}
       }
       if let Some(cond) = &for_stmt.stx.cond {
-        collect_expr(cond, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_expr(
+          cond,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
       if let Some(post) = &for_stmt.stx.post {
-        collect_expr(post, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_expr(
+          post,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
       collect_for_body(
         &for_stmt.stx.body,
@@ -2170,8 +2295,24 @@ fn walk_stmt_children<'a>(
       );
     }
     AstStmt::ForIn(for_in) => {
-      collect_for_lhs(&for_in.stx.lhs, descriptors, module_items, names, ambient, in_global, ctx);
-      collect_expr(&for_in.stx.rhs, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_for_lhs(
+        &for_in.stx.lhs,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_expr(
+        &for_in.stx.rhs,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       collect_for_body(
         &for_in.stx.body,
         descriptors,
@@ -2183,8 +2324,24 @@ fn walk_stmt_children<'a>(
       );
     }
     AstStmt::ForOf(for_of) => {
-      collect_for_lhs(&for_of.stx.lhs, descriptors, module_items, names, ambient, in_global, ctx);
-      collect_expr(&for_of.stx.rhs, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_for_lhs(
+        &for_of.stx.lhs,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_expr(
+        &for_of.stx.rhs,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       collect_for_body(
         &for_of.stx.body,
         descriptors,
@@ -2196,32 +2353,90 @@ fn walk_stmt_children<'a>(
       );
     }
     AstStmt::Switch(sw) => {
-      collect_expr(&sw.stx.test, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_expr(
+        &sw.stx.test,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       for branch in sw.stx.branches.iter() {
         if let Some(case) = &branch.stx.case {
-          collect_expr(case, descriptors, module_items, names, ambient, in_global, ctx);
+          collect_expr(
+            case,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
         for stmt in branch.stx.body.iter() {
-          collect_stmt(stmt, descriptors, module_items, names, false, ambient, in_global, ctx);
+          collect_stmt(
+            stmt,
+            descriptors,
+            module_items,
+            names,
+            false,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
       }
     }
     AstStmt::Try(tr) => {
-      collect_block(&tr.stx.wrapped, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_block(
+        &tr.stx.wrapped,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       if let Some(catch) = &tr.stx.catch {
         if let Some(param) = &catch.stx.parameter {
           let _ = collect_pat_names(&param.stx.pat, names, ctx);
         }
         for stmt in catch.stx.body.iter() {
-          collect_stmt(stmt, descriptors, module_items, names, false, ambient, in_global, ctx);
+          collect_stmt(
+            stmt,
+            descriptors,
+            module_items,
+            names,
+            false,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
       }
       if let Some(finally) = &tr.stx.finally {
-        collect_block(finally, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_block(
+          finally,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
     }
     AstStmt::With(w) => {
-      collect_expr(&w.stx.object, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_expr(
+        &w.stx.object,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       collect_stmt(
         &w.stx.body,
         descriptors,
@@ -2247,7 +2462,16 @@ fn collect_block<'a>(
   ctx: &mut LoweringContext,
 ) {
   for stmt in block.stx.body.iter() {
-    collect_stmt(stmt, descriptors, module_items, names, false, ambient, in_global, ctx);
+    collect_stmt(
+      stmt,
+      descriptors,
+      module_items,
+      names,
+      false,
+      ambient,
+      in_global,
+      ctx,
+    );
   }
 }
 
@@ -2261,7 +2485,16 @@ fn collect_for_body<'a>(
   ctx: &mut LoweringContext,
 ) {
   for stmt in body.stx.body.iter() {
-    collect_stmt(stmt, descriptors, module_items, names, false, ambient, in_global, ctx);
+    collect_stmt(
+      stmt,
+      descriptors,
+      module_items,
+      names,
+      false,
+      ambient,
+      in_global,
+      ctx,
+    );
   }
 }
 
@@ -2333,7 +2566,15 @@ fn collect_expr<'a>(
       ));
     }
     AstExpr::Cond(cond) => {
-      collect_expr(&cond.stx.test, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_expr(
+        &cond.stx.test,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
       collect_expr(
         &cond.stx.consequent,
         descriptors,
@@ -2354,8 +2595,24 @@ fn collect_expr<'a>(
       );
     }
     AstExpr::Binary(bin) => {
-      collect_expr(&bin.stx.left, descriptors, module_items, names, ambient, in_global, ctx);
-      collect_expr(&bin.stx.right, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_expr(
+        &bin.stx.left,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_expr(
+        &bin.stx.right,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstExpr::Call(call) => {
       collect_expr(
@@ -2368,15 +2625,47 @@ fn collect_expr<'a>(
         ctx,
       );
       for arg in call.stx.arguments.iter() {
-        collect_expr(&arg.stx.value, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_expr(
+          &arg.stx.value,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
     }
     AstExpr::Member(mem) => {
-      collect_expr(&mem.stx.left, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_expr(
+        &mem.stx.left,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstExpr::ComputedMember(mem) => {
-      collect_expr(&mem.stx.object, descriptors, module_items, names, ambient, in_global, ctx);
-      collect_expr(&mem.stx.member, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_expr(
+        &mem.stx.object,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
+      collect_expr(
+        &mem.stx.member,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstExpr::TaggedTemplate(tag) => {
       collect_expr(
@@ -2390,7 +2679,15 @@ fn collect_expr<'a>(
       );
       for part in tag.stx.parts.iter() {
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
-          collect_expr(expr, descriptors, module_items, names, ambient, in_global, ctx);
+          collect_expr(
+            expr,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
       }
     }
@@ -2399,7 +2696,15 @@ fn collect_expr<'a>(
         match el {
           parse_js::ast::expr::lit::LitArrElem::Single(expr)
           | parse_js::ast::expr::lit::LitArrElem::Rest(expr) => {
-            collect_expr(expr, descriptors, module_items, names, ambient, in_global, ctx);
+            collect_expr(
+              expr,
+              descriptors,
+              module_items,
+              names,
+              ambient,
+              in_global,
+              ctx,
+            );
           }
           parse_js::ast::expr::lit::LitArrElem::Empty => {}
         }
@@ -2412,13 +2717,25 @@ fn collect_expr<'a>(
         match &member.stx.typ {
           ObjMemberType::Valued { val, .. } => match val {
             ClassOrObjVal::Prop(Some(expr)) => collect_expr(
-              expr, descriptors, module_items, names, ambient, in_global, ctx,
+              expr,
+              descriptors,
+              module_items,
+              names,
+              ambient,
+              in_global,
+              ctx,
             ),
             _ => {}
           },
-          ObjMemberType::Rest { val } => {
-            collect_expr(val, descriptors, module_items, names, ambient, in_global, ctx)
-          }
+          ObjMemberType::Rest { val } => collect_expr(
+            val,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          ),
           ObjMemberType::Shorthand { .. } => {}
         }
       }
@@ -2426,7 +2743,15 @@ fn collect_expr<'a>(
     AstExpr::LitTemplate(tmpl) => {
       for part in tmpl.stx.parts.iter() {
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
-          collect_expr(expr, descriptors, module_items, names, ambient, in_global, ctx);
+          collect_expr(
+            expr,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
       }
     }
@@ -2442,11 +2767,27 @@ fn collect_expr<'a>(
           ctx,
         );
         if let Some(default) = &elem.default_value {
-          collect_expr(default, descriptors, module_items, names, ambient, in_global, ctx);
+          collect_expr(
+            default,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
       }
       if let Some(rest) = &arr.stx.rest {
-        collect_exprs_from_pat(rest, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_exprs_from_pat(
+          rest,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
     }
     AstExpr::ObjPat(obj) => {
@@ -2461,11 +2802,27 @@ fn collect_expr<'a>(
           ctx,
         );
         if let Some(default) = &prop.stx.default_value {
-          collect_expr(default, descriptors, module_items, names, ambient, in_global, ctx);
+          collect_expr(
+            default,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
       }
       if let Some(rest) = &obj.stx.rest {
-        collect_exprs_from_pat(rest, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_exprs_from_pat(
+          rest,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
     }
     AstExpr::TypeAssertion(assert) => {
@@ -2527,11 +2884,27 @@ fn collect_exprs_from_pat<'a>(
           ctx,
         );
         if let Some(default) = &elem.default_value {
-          collect_expr(default, descriptors, module_items, names, ambient, in_global, ctx);
+          collect_expr(
+            default,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
       }
       if let Some(rest) = &arr.stx.rest {
-        collect_exprs_from_pat(rest, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_exprs_from_pat(
+          rest,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
     }
     AstPat::Obj(obj) => {
@@ -2546,16 +2919,38 @@ fn collect_exprs_from_pat<'a>(
           ctx,
         );
         if let Some(default) = &prop.stx.default_value {
-          collect_expr(default, descriptors, module_items, names, ambient, in_global, ctx);
+          collect_expr(
+            default,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
         }
       }
       if let Some(rest) = &obj.stx.rest {
-        collect_exprs_from_pat(rest, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_exprs_from_pat(
+          rest,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
       }
     }
-    AstPat::AssignTarget(expr) => {
-      collect_expr(expr, descriptors, module_items, names, ambient, in_global, ctx)
-    }
+    AstPat::AssignTarget(expr) => collect_expr(
+      expr,
+      descriptors,
+      module_items,
+      names,
+      ambient,
+      in_global,
+      ctx,
+    ),
     AstPat::Id(_) => {}
   }
 }
@@ -2596,7 +2991,15 @@ fn collect_func_params<'a>(
       ctx,
     );
     if let Some(default) = &param.stx.default_value {
-      collect_expr(default, descriptors, module_items, names, ambient, in_global, ctx);
+      collect_expr(
+        default,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
   }
 }
@@ -2751,7 +3154,8 @@ fn lower_module_items(
         let mut default = None;
         let mut namespace = None;
         if let Some(def) = &import.stx.default {
-          if let Some((name_id, span)) = collect_pat_names(&def.stx.pat, names, ctx).first().cloned()
+          if let Some((name_id, span)) =
+            collect_pat_names(&def.stx.pat, names, ctx).first().cloned()
           {
             default = Some(ImportBinding {
               local: name_id,
@@ -3001,123 +3405,25 @@ fn lower_module_items(
           }
         }
       }
-      ModuleItemKind::ExportedDecl(decl) => {
-        match decl.kind {
-          ExportedDeclKind::Func(func) => {
-            if let Some(def) = def_lookup.def_for_node(func) {
-              let body = def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
-              if decl.default {
-                exports.push(Export {
-                  id: ExportId(next_export),
-                  span: decl.span,
-                  kind: ExportKind::Default(ExportDefault {
-                    value: ExportDefaultValue::Function {
-                      def,
-                      body,
-                      name: func
-                        .stx
-                        .name
-                        .as_ref()
-                        .map(|n| names.intern(&n.stx.name)),
-                    },
-                  }),
-                });
-                next_export += 1;
-              } else {
-                let name_id = name_for_def(defs, def);
-                push_named_export(
-                  &mut exports,
-                  span_map,
-                  &mut next_export,
-                  &mut next_export_spec,
-                  decl.span,
-                  name_id,
-                  Some(def),
-                  decl.type_only,
-                );
-              }
-            }
-          }
-          ExportedDeclKind::Class(class_decl) => {
-            if let Some(def) = def_lookup.def_for_node(class_decl) {
-              let body = def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
-              if decl.default {
-                exports.push(Export {
-                  id: ExportId(next_export),
-                  span: decl.span,
-                  kind: ExportKind::Default(ExportDefault {
-                    value: ExportDefaultValue::Class {
-                      def,
-                      body,
-                      name: class_decl
-                        .stx
-                        .name
-                        .as_ref()
-                        .map(|n| names.intern(&n.stx.name)),
-                    },
-                  }),
-                });
-                next_export += 1;
-              } else {
-                let name_id = name_for_def(defs, def);
-                push_named_export(
-                  &mut exports,
-                  span_map,
-                  &mut next_export,
-                  &mut next_export_spec,
-                  decl.span,
-                  name_id,
-                  Some(def),
-                  decl.type_only,
-                );
-              }
-            }
-          }
-          ExportedDeclKind::Var(var_decl) => {
-            let mut specifiers = Vec::new();
-            for declarator in var_decl.stx.declarators.iter() {
-              for (name_id, span) in collect_pat_names(&declarator.pattern.stx.pat, names, ctx) {
-                let spec_id = ExportSpecifierId(next_export_spec);
-                next_export_spec += 1;
-                span_map.add_export_specifier(span, spec_id);
-                specifiers.push(ExportSpecifier {
-                  id: spec_id,
-                  local: name_id,
-                  exported: name_id,
-                  local_def: find_def(defs, DefKind::Var, span).map(|d| d.id),
-                  is_type_only: decl.type_only,
-                  span,
-                });
-              }
-            }
-            if !specifiers.is_empty() {
+      ModuleItemKind::ExportedDecl(decl) => match decl.kind {
+        ExportedDeclKind::Func(func) => {
+          if let Some(def) = def_lookup.def_for_node(func) {
+            let body = def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+            if decl.default {
               exports.push(Export {
                 id: ExportId(next_export),
                 span: decl.span,
-                kind: ExportKind::Named(ExportNamed {
-                  source: None,
-                  specifiers,
-                  is_type_only: decl.type_only,
+                kind: ExportKind::Default(ExportDefault {
+                  value: ExportDefaultValue::Function {
+                    def,
+                    body,
+                    name: func.stx.name.as_ref().map(|n| names.intern(&n.stx.name)),
+                  },
                 }),
               });
               next_export += 1;
-            }
-          }
-          ExportedDeclKind::Interface(intf) => {
-            if let Some(def) = find_def(defs, DefKind::Interface, decl.span) {
-              let name_id = def.name;
-              push_named_export(
-                &mut exports,
-                span_map,
-                &mut next_export,
-                &mut next_export_spec,
-                decl.span,
-                name_id,
-                Some(def.id),
-                true,
-              );
             } else {
-              let name_id = names.intern(&intf.stx.name);
+              let name_id = defs[def.0 as usize].path.name;
               push_named_export(
                 &mut exports,
                 span_map,
@@ -3125,16 +3431,80 @@ fn lower_module_items(
                 &mut next_export_spec,
                 decl.span,
                 name_id,
-                None,
-                true,
+                Some(def),
+                decl.type_only,
               );
             }
           }
-          ExportedDeclKind::TypeAlias(alias) => {
-            let def = find_def(defs, DefKind::TypeAlias, decl.span);
-            let name_id = def
-              .map(|info| info.name)
-              .unwrap_or_else(|| names.intern(&alias.stx.name));
+        }
+        ExportedDeclKind::Class(class_decl) => {
+          if let Some(def) = def_lookup.def_for_node(class_decl) {
+            let body = def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
+            if decl.default {
+              exports.push(Export {
+                id: ExportId(next_export),
+                span: decl.span,
+                kind: ExportKind::Default(ExportDefault {
+                  value: ExportDefaultValue::Class {
+                    def,
+                    body,
+                    name: class_decl
+                      .stx
+                      .name
+                      .as_ref()
+                      .map(|n| names.intern(&n.stx.name)),
+                  },
+                }),
+              });
+              next_export += 1;
+            } else {
+              let name_id = defs[def.0 as usize].path.name;
+              push_named_export(
+                &mut exports,
+                span_map,
+                &mut next_export,
+                &mut next_export_spec,
+                decl.span,
+                name_id,
+                Some(def),
+                decl.type_only,
+              );
+            }
+          }
+        }
+        ExportedDeclKind::Var(var_decl) => {
+          let mut specifiers = Vec::new();
+          for declarator in var_decl.stx.declarators.iter() {
+            for (name_id, span) in collect_pat_names(&declarator.pattern.stx.pat, names, ctx) {
+              let spec_id = ExportSpecifierId(next_export_spec);
+              next_export_spec += 1;
+              span_map.add_export_specifier(span, spec_id);
+              specifiers.push(ExportSpecifier {
+                id: spec_id,
+                local: name_id,
+                exported: name_id,
+                local_def: find_def(defs, DefKind::Var, span).map(|d| d.id),
+                is_type_only: decl.type_only,
+                span,
+              });
+            }
+          }
+          if !specifiers.is_empty() {
+            exports.push(Export {
+              id: ExportId(next_export),
+              span: decl.span,
+              kind: ExportKind::Named(ExportNamed {
+                source: None,
+                specifiers,
+                is_type_only: decl.type_only,
+              }),
+            });
+            next_export += 1;
+          }
+        }
+        ExportedDeclKind::Interface(intf) => {
+          if let Some(def) = find_def(defs, DefKind::Interface, decl.span) {
+            let name_id = def.name;
             push_named_export(
               &mut exports,
               span_map,
@@ -3142,113 +3512,139 @@ fn lower_module_items(
               &mut next_export_spec,
               decl.span,
               name_id,
-              def.map(|d| d.id),
+              Some(def.id),
+              true,
+            );
+          } else {
+            let name_id = names.intern(&intf.stx.name);
+            push_named_export(
+              &mut exports,
+              span_map,
+              &mut next_export,
+              &mut next_export_spec,
+              decl.span,
+              name_id,
+              None,
               true,
             );
           }
-          ExportedDeclKind::Enum(en) => {
-            let def = find_def(defs, DefKind::Enum, decl.span);
-            let name_id = def
-              .map(|info| info.name)
-              .unwrap_or_else(|| names.intern(&en.stx.name));
-            push_named_export(
-              &mut exports,
-              span_map,
-              &mut next_export,
-              &mut next_export_spec,
-              decl.span,
-              name_id,
-              def.map(|d| d.id),
-              decl.type_only,
-            );
-          }
-          ExportedDeclKind::Namespace(ns) => {
-            let def = find_def(defs, DefKind::Namespace, decl.span);
-            let name_id = def
-              .map(|info| info.name)
-              .unwrap_or_else(|| names.intern(&ns.stx.name));
-            push_named_export(
-              &mut exports,
-              span_map,
-              &mut next_export,
-              &mut next_export_spec,
-              decl.span,
-              name_id,
-              def.map(|d| d.id),
-              decl.type_only,
-            );
-          }
-          ExportedDeclKind::Module(module) => {
-            let def = find_def(defs, DefKind::Module, decl.span);
-            let name_id = def
-              .map(|info| info.name)
-              .unwrap_or_else(|| {
-                names.intern(match &module.stx.name {
-                  parse_js::ast::ts_stmt::ModuleName::Identifier(name) => name,
-                  parse_js::ast::ts_stmt::ModuleName::String(name) => name,
-                })
-              });
-            push_named_export(
-              &mut exports,
-              span_map,
-              &mut next_export,
-              &mut next_export_spec,
-              decl.span,
-              name_id,
-              def.map(|d| d.id),
-              decl.type_only,
-            );
-          }
-          ExportedDeclKind::AmbientVar(av) => {
-            let def = find_def(defs, DefKind::Var, decl.span);
-            let name_id = def
-              .map(|info| info.name)
-              .unwrap_or_else(|| names.intern(&av.stx.name));
-            push_named_export(
-              &mut exports,
-              span_map,
-              &mut next_export,
-              &mut next_export_spec,
-              decl.span,
-              name_id,
-              def.map(|d| d.id),
-              decl.type_only,
-            );
-          }
-          ExportedDeclKind::AmbientFunction(af) => {
-            let def = find_def(defs, DefKind::Function, decl.span);
-            let name_id = def
-              .map(|info| info.name)
-              .unwrap_or_else(|| names.intern(&af.stx.name));
-            push_named_export(
-              &mut exports,
-              span_map,
-              &mut next_export,
-              &mut next_export_spec,
-              decl.span,
-              name_id,
-              def.map(|d| d.id),
-              decl.type_only,
-            );
-          }
-          ExportedDeclKind::AmbientClass(ac) => {
-            let def = find_def(defs, DefKind::Class, decl.span);
-            let name_id = def
-              .map(|info| info.name)
-              .unwrap_or_else(|| names.intern(&ac.stx.name));
-            push_named_export(
-              &mut exports,
-              span_map,
-              &mut next_export,
-              &mut next_export_spec,
-              decl.span,
-              name_id,
-              def.map(|d| d.id),
-              decl.type_only,
-            );
-          }
         }
-      }
+        ExportedDeclKind::TypeAlias(alias) => {
+          let def = find_def(defs, DefKind::TypeAlias, decl.span);
+          let name_id = def
+            .map(|info| info.name)
+            .unwrap_or_else(|| names.intern(&alias.stx.name));
+          push_named_export(
+            &mut exports,
+            span_map,
+            &mut next_export,
+            &mut next_export_spec,
+            decl.span,
+            name_id,
+            def.map(|d| d.id),
+            true,
+          );
+        }
+        ExportedDeclKind::Enum(en) => {
+          let def = find_def(defs, DefKind::Enum, decl.span);
+          let name_id = def
+            .map(|info| info.name)
+            .unwrap_or_else(|| names.intern(&en.stx.name));
+          push_named_export(
+            &mut exports,
+            span_map,
+            &mut next_export,
+            &mut next_export_spec,
+            decl.span,
+            name_id,
+            def.map(|d| d.id),
+            decl.type_only,
+          );
+        }
+        ExportedDeclKind::Namespace(ns) => {
+          let def = find_def(defs, DefKind::Namespace, decl.span);
+          let name_id = def
+            .map(|info| info.name)
+            .unwrap_or_else(|| names.intern(&ns.stx.name));
+          push_named_export(
+            &mut exports,
+            span_map,
+            &mut next_export,
+            &mut next_export_spec,
+            decl.span,
+            name_id,
+            def.map(|d| d.id),
+            decl.type_only,
+          );
+        }
+        ExportedDeclKind::Module(module) => {
+          let def = find_def(defs, DefKind::Module, decl.span);
+          let name_id = def.map(|info| info.name).unwrap_or_else(|| {
+            names.intern(match &module.stx.name {
+              parse_js::ast::ts_stmt::ModuleName::Identifier(name) => name,
+              parse_js::ast::ts_stmt::ModuleName::String(name) => name,
+            })
+          });
+          push_named_export(
+            &mut exports,
+            span_map,
+            &mut next_export,
+            &mut next_export_spec,
+            decl.span,
+            name_id,
+            def.map(|d| d.id),
+            decl.type_only,
+          );
+        }
+        ExportedDeclKind::AmbientVar(av) => {
+          let def = find_def(defs, DefKind::Var, decl.span);
+          let name_id = def
+            .map(|info| info.name)
+            .unwrap_or_else(|| names.intern(&av.stx.name));
+          push_named_export(
+            &mut exports,
+            span_map,
+            &mut next_export,
+            &mut next_export_spec,
+            decl.span,
+            name_id,
+            def.map(|d| d.id),
+            decl.type_only,
+          );
+        }
+        ExportedDeclKind::AmbientFunction(af) => {
+          let def = find_def(defs, DefKind::Function, decl.span);
+          let name_id = def
+            .map(|info| info.name)
+            .unwrap_or_else(|| names.intern(&af.stx.name));
+          push_named_export(
+            &mut exports,
+            span_map,
+            &mut next_export,
+            &mut next_export_spec,
+            decl.span,
+            name_id,
+            def.map(|d| d.id),
+            decl.type_only,
+          );
+        }
+        ExportedDeclKind::AmbientClass(ac) => {
+          let def = find_def(defs, DefKind::Class, decl.span);
+          let name_id = def
+            .map(|info| info.name)
+            .unwrap_or_else(|| names.intern(&ac.stx.name));
+          push_named_export(
+            &mut exports,
+            span_map,
+            &mut next_export,
+            &mut next_export_spec,
+            decl.span,
+            name_id,
+            def.map(|d| d.id),
+            decl.type_only,
+          );
+        }
+      },
     }
   }
 
@@ -3257,12 +3653,4 @@ fn lower_module_items(
 
 fn find_def<'a>(defs: &'a [DefData], kind: DefKind, span: TextRange) -> Option<&'a DefData> {
   defs.iter().find(|d| d.path.kind == kind && d.span == span)
-}
-
-fn name_for_def(defs: &[DefData], def: DefId) -> NameId {
-  defs
-    .iter()
-    .find(|d| d.id == def)
-    .map(|d| d.path.name)
-    .unwrap_or_else(|| panic!("missing def data for {:?}", def))
 }

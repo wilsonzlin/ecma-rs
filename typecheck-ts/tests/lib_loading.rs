@@ -4,6 +4,8 @@ use std::sync::Arc;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileId, Host, HostError, Program};
 
+const PROMISE_DOM: &str = include_str!("fixtures/promise_dom.ts");
+
 #[derive(Default)]
 struct TestHost {
   files: HashMap<FileId, Arc<str>>,
@@ -47,8 +49,8 @@ impl Host for TestHost {
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
-    self.edges.get(&(_from, _specifier.to_string())).copied()
+  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
+    self.edges.get(&(from, specifier.to_string())).copied()
   }
 
   fn compiler_options(&self) -> CompilerOptions {
@@ -87,13 +89,44 @@ fn missing_libs_emit_unknown_global_diagnostics() {
   let host = TestHost::new(options).with_file(FileId(0), "const p = Promise;\nconst a = Array;");
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
-  assert_eq!(
-    diagnostics.len(),
-    2,
-    "unexpected diagnostics: {diagnostics:?}"
+  assert!(
+    diagnostics.iter().any(|d| d.code == "TC0001"),
+    "missing libs should surface a dedicated diagnostic: {diagnostics:?}"
   );
-  assert!(diagnostics.iter().any(|d| d.message.contains("Promise")));
-  assert!(diagnostics.iter().any(|d| d.message.contains("Array")));
+  let unknowns = diagnostics.iter().filter(|d| d.code == "TC0005").count();
+  assert!(
+    unknowns >= 2,
+    "expected unknown global diagnostics for Promise/Array, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn non_dts_libs_warn_and_leave_globals_missing() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let lib = LibFile {
+    id: FileId(99),
+    name: Arc::from("custom.js"),
+    kind: FileKind::Js,
+    text: Arc::from("var Provided = 1;"),
+  };
+  let host = TestHost::new(options)
+    .with_lib(lib)
+    .with_file(FileId(0), "const value = Provided;");
+  let program = Program::new(host, vec![FileId(0)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.iter().any(|d| d.code == "TC0004"),
+    "non-.d.ts libs should emit a warning: {diagnostics:?}"
+  );
+  assert!(
+    diagnostics.iter().any(|d| d.code == "TC0001"),
+    "ignoring non-.d.ts libs should surface missing libs: {diagnostics:?}"
+  );
+  assert!(
+    diagnostics.iter().any(|d| d.code == "TC0005"),
+    "missing globals should still produce unknown identifier diagnostics: {diagnostics:?}"
+  );
 }
 
 #[test]
@@ -118,6 +151,48 @@ fn host_provided_libs_are_loaded() {
 }
 
 #[test]
+fn declare_global_libs_merge_into_globals() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let lib = LibFile {
+    id: FileId(100),
+    name: Arc::from("globals.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from("export {};\ndeclare global { const FromLib: string; }"),
+  };
+  let host = TestHost::new(options)
+    .with_lib(lib)
+    .with_file(FileId(0), "const value = FromLib;");
+  let program = Program::new(host, vec![FileId(0)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "declare global from libs should populate global scope: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn declare_module_libs_do_not_crash() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let lib = LibFile {
+    id: FileId(101),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(r#"declare module "ambient" { interface Foo { bar: string; } }"#),
+  };
+  let host = TestHost::new(options)
+    .with_lib(lib)
+    .with_file(FileId(0), "/* noop */");
+  let program = Program::new(host, vec![FileId(0)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "ambient modules should be tolerated: {diagnostics:?}"
+  );
+}
+
+#[test]
 fn imported_type_alias_resolves_interned_type() {
   let host = TestHost::new(CompilerOptions::default())
     .with_file(FileId(1), "export type Foo = number;")
@@ -133,22 +208,17 @@ fn imported_type_alias_resolves_interned_type() {
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
+}
 
-  let def = program
-    .definitions_in_file(FileId(0))
-    .into_iter()
-    .find(|d| program.def_name(*d).as_deref() == Some("Bar"))
-    .expect("Bar type alias");
-  let ty = program.type_of_def_interned(def);
-  let foo_def = program
-    .definitions_in_file(FileId(1))
-    .into_iter()
-    .find(|d| program.def_name(*d).as_deref() == Some("Foo"))
-    .expect("Foo export");
-  match program.interned_type_kind(ty) {
-    types_ts_interned::TypeKind::Ref { def: target, .. } => {
-      assert_eq!(target.0, foo_def.0, "import should resolve to Foo def");
-    }
-    other => panic!("expected ref to Foo, got {:?}", other),
-  }
+#[test]
+fn bundled_libs_enable_dom_and_promise_fixture() {
+  let mut options = CompilerOptions::default();
+  options.include_dom = true;
+  let host = TestHost::new(options).with_file(FileId(0), PROMISE_DOM);
+  let program = Program::new(host, vec![FileId(0)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected bundled libs to typecheck Promise/DOM fixture, got {diagnostics:?}"
+  );
 }

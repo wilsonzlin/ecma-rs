@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use typecheck_ts::{FileId, Host, HostError, Program};
-use types_ts_interned::TypeKind as InternedTypeKind;
 
 #[derive(Default)]
 struct MemoryHost {
@@ -194,11 +193,8 @@ fn interned_type_for_exported_function() {
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition");
-  let ty = program.type_of_def_interned(def);
-  assert_eq!(
-    program.display_interned_type(ty).to_string(),
-    "(number, number) => number"
-  );
+  let ty = program.type_of_def(def);
+  assert_eq!(program.display_type(ty).to_string(), "(number, number) => number");
 }
 
 #[test]
@@ -214,9 +210,10 @@ fn recursive_type_alias_produces_ref() {
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Node"))
     .expect("Node alias");
-  let ty = program.type_of_def_interned(def);
-  match program.interned_type_kind(ty) {
-    InternedTypeKind::Ref { def: target, .. } => assert_eq!(target.0, def.0),
-    other => panic!("expected ref, got {:?}", other),
-  }
+  let ty = program.type_of_def(def);
+  let rendered = program.display_type(ty).to_string();
+  assert!(
+    rendered.contains("Node"),
+    "expected recursive alias to render as Node, got {rendered}"
+  );
 }

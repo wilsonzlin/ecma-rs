@@ -3,8 +3,8 @@
 pub(super) mod assign;
 pub(crate) mod body;
 pub(super) mod cfg;
-pub(crate) mod expr;
 pub(crate) mod decls;
+pub(crate) mod expr;
 pub(super) mod flow;
 pub(crate) mod infer;
 pub(crate) mod instantiate;

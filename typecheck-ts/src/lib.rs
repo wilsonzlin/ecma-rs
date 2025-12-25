@@ -167,8 +167,5 @@ pub mod check {
 
 pub mod queries;
 
-/// Utilities for selecting bundled `.d.ts` libraries and the legacy lib checker.
-///
-/// The deprecated [`lib_support::LibCheckProgram`] is a string-scanning stub,
-/// not the real [`Program`] type checker.
+/// Utilities for selecting bundled `.d.ts` libraries and compiler options.
 pub mod lib_support;

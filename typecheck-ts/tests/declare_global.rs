@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use diagnostics::FileId as HirFileId;
-use hir_js::FileKind as HirFileKind;
 use hir_js::lower_file_with_diagnostics;
+use hir_js::FileKind as HirFileKind;
 use parse_js::parse;
 use semantic_js::ts::{
   bind_ts_program, from_hir_js::lower_to_ts_hir, FileId, ModuleKind, Resolver,
@@ -88,8 +88,8 @@ fn interfaces_merge_members_for_interned_types() {
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Foo"))
     .expect("Foo definition");
-  let ty = program.type_of_def_interned(def);
-  let rendered = program.display_interned_type(ty).to_string();
+  let ty = program.type_of_def(def);
+  let rendered = program.display_type(ty).to_string();
   assert!(
     rendered.contains("a: string") && rendered.contains("b: number"),
     "merged interface should expose all members, got {rendered}"

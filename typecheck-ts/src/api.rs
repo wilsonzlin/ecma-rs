@@ -13,3 +13,5 @@ pub use types_ts_interned::TypeId as InternedTypeId;
 
 /// Stable identifiers produced by lowering to HIR.
 pub use hir_js::{BodyId, DefId, ExprId, PatId};
+/// Interned type identifiers produced by the checker.
+pub use types_ts_interned::TypeId;

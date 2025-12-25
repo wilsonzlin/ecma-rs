@@ -10,12 +10,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use parse_js::error::SyntaxResult;
 use parse_js::{parse_with_options, Dialect, ParseOptions};
-use semantic_js::ts::{
-  bind_ts_program,
-  from_hir_js::lower_to_ts_hir,
-  HirFile,
-  Resolver,
-};
+use semantic_js::ts::{bind_ts_program, from_hir_js::lower_to_ts_hir, HirFile, Resolver};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

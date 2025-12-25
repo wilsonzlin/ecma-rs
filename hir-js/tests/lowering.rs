@@ -2,6 +2,7 @@ use diagnostics::FileId;
 use hir_js::lower_file;
 use hir_js::lower_file_with_diagnostics;
 use hir_js::lower_from_source_with_kind;
+use hir_js::DefKind;
 use hir_js::ExportDefaultValue;
 use hir_js::ExportKind;
 use hir_js::ExprId;
@@ -11,7 +12,6 @@ use hir_js::ImportKind;
 use hir_js::ObjectKey;
 use hir_js::ObjectProperty;
 use hir_js::StmtKind;
-use hir_js::DefKind;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
@@ -123,9 +123,7 @@ fn expr_at_offset_prefers_inner_expression() {
     .iter()
     .enumerate()
     .find_map(|(idx, expr)| match expr.kind {
-      ExprKind::Binary { left, .. } => {
-        Some((ExprId(idx as u32), body.exprs[left.0 as usize].span))
-      }
+      ExprKind::Binary { left, .. } => Some((ExprId(idx as u32), body.exprs[left.0 as usize].span)),
       _ => None,
     })
     .expect("binary expression present");
@@ -264,7 +262,11 @@ fn lowers_computed_object_keys() {
         _ => None,
       })
       .collect();
-    assert_eq!(computed_keys.len(), 2, "expected both computed keys to be lowered");
+    assert_eq!(
+      computed_keys.len(),
+      2,
+      "expected both computed keys to be lowered"
+    );
   } else {
     panic!("expected object literal");
   }
@@ -300,7 +302,10 @@ fn lowers_imports_and_exports() {
     names.resolve(first.default.as_ref().unwrap().local),
     Some("defaultName")
   );
-  assert!(first.named.iter().any(|n| names.resolve(n.local) == Some("bar")));
+  assert!(first
+    .named
+    .iter()
+    .any(|n| names.resolve(n.local) == Some("bar")));
   assert!(first
     .named
     .iter()
@@ -328,7 +333,9 @@ fn lowers_imports_and_exports() {
   let reexport = exports
     .iter()
     .find_map(|e| match &e.kind {
-      ExportKind::Named(named) if named.source.as_ref().map(|s| s.value.as_str()) == Some("mod") => {
+      ExportKind::Named(named)
+        if named.source.as_ref().map(|s| s.value.as_str()) == Some("mod") =>
+      {
         Some(named)
       }
       _ => None,
@@ -350,7 +357,10 @@ fn lowers_imports_and_exports() {
       _ => None,
     })
     .expect("export * as nsAll");
-  assert_eq!(names.resolve(export_all.alias.as_ref().unwrap().exported), Some("nsAll"));
+  assert_eq!(
+    names.resolve(export_all.alias.as_ref().unwrap().exported),
+    Some("nsAll")
+  );
 
   let named_exports: Vec<_> = exports
     .iter()
@@ -359,15 +369,21 @@ fn lowers_imports_and_exports() {
       _ => None,
     })
     .collect();
-  assert!(named_exports
-    .iter()
-    .any(|named| named.is_type_only && named.specifiers.iter().any(|s| names.resolve(s.exported) == Some("Api"))));
-  assert!(named_exports
-    .iter()
-    .any(|named| named.is_type_only && named.specifiers.iter().any(|s| names.resolve(s.exported) == Some("Alias"))));
-  assert!(named_exports
-    .iter()
-    .any(|named| !named.is_type_only && named.specifiers.iter().any(|s| names.resolve(s.exported) == Some("Mode"))));
+  assert!(named_exports.iter().any(|named| named.is_type_only
+    && named
+      .specifiers
+      .iter()
+      .any(|s| names.resolve(s.exported) == Some("Api"))));
+  assert!(named_exports.iter().any(|named| named.is_type_only
+    && named
+      .specifiers
+      .iter()
+      .any(|s| names.resolve(s.exported) == Some("Alias"))));
+  assert!(named_exports.iter().any(|named| !named.is_type_only
+    && named
+      .specifiers
+      .iter()
+      .any(|s| names.resolve(s.exported) == Some("Mode"))));
 
   let default_export = exports
     .iter()
@@ -430,9 +446,13 @@ fn parses_jsx_and_tsx_file_kinds() {
     .and_then(|def| def.body)
     .map(|body_id| tsx.bodies[body_id.0 as usize].as_ref())
     .expect("el body");
-  assert!(tsx_body.exprs.iter().any(|e| matches!(e.kind, ExprKind::Jsx(_))));
+  assert!(tsx_body
+    .exprs
+    .iter()
+    .any(|e| matches!(e.kind, ExprKind::Jsx(_))));
 
-  let jsx = lower_from_source_with_kind(FileKind::Jsx, "const node = <span/>;").expect("jsx should parse");
+  let jsx =
+    lower_from_source_with_kind(FileKind::Jsx, "const node = <span/>;").expect("jsx should parse");
   assert_eq!(jsx.hir.file_kind, FileKind::Jsx);
   let jsx_body = jsx
     .defs
@@ -441,7 +461,10 @@ fn parses_jsx_and_tsx_file_kinds() {
     .and_then(|def| def.body)
     .map(|body_id| jsx.bodies[body_id.0 as usize].as_ref())
     .expect("node body");
-  assert!(jsx_body.exprs.iter().any(|e| matches!(e.kind, ExprKind::Jsx(_))));
+  assert!(jsx_body
+    .exprs
+    .iter()
+    .any(|e| matches!(e.kind, ExprKind::Jsx(_))));
 }
 
 #[test]

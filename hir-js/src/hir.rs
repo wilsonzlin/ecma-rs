@@ -1,8 +1,8 @@
 use crate::ids::BodyId;
-use crate::ids::ExportId;
-use crate::ids::ExportSpecifierId;
 use crate::ids::DefId;
 use crate::ids::DefPath;
+use crate::ids::ExportId;
+use crate::ids::ExportSpecifierId;
 use crate::ids::ExprId;
 use crate::ids::ImportId;
 use crate::ids::ImportSpecifierId;
@@ -150,8 +150,16 @@ pub struct ExportDefault {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExportDefaultValue {
   Expr(ExprId),
-  Class { def: DefId, body: BodyId, name: Option<NameId> },
-  Function { def: DefId, body: BodyId, name: Option<NameId> },
+  Class {
+    def: DefId,
+    body: BodyId,
+    name: Option<NameId>,
+  },
+  Function {
+    def: DefId,
+    body: BodyId,
+    name: Option<NameId>,
+  },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -491,13 +499,32 @@ pub enum ExprKind {
   This,
   Super,
   Literal(Literal),
-  Unary { op: UnaryOp, expr: ExprId },
-  Update { op: UpdateOp, expr: ExprId, prefix: bool },
-  Binary { op: BinaryOp, left: ExprId, right: ExprId },
-  Assignment { op: AssignOp, target: PatId, value: ExprId },
+  Unary {
+    op: UnaryOp,
+    expr: ExprId,
+  },
+  Update {
+    op: UpdateOp,
+    expr: ExprId,
+    prefix: bool,
+  },
+  Binary {
+    op: BinaryOp,
+    left: ExprId,
+    right: ExprId,
+  },
+  Assignment {
+    op: AssignOp,
+    target: PatId,
+    value: ExprId,
+  },
   Call(CallExpr),
   Member(MemberExpr),
-  Conditional { test: ExprId, consequent: ExprId, alternate: ExprId },
+  Conditional {
+    test: ExprId,
+    consequent: ExprId,
+    alternate: ExprId,
+  },
   Array(ArrayLiteral),
   Object(ObjectLiteral),
   FunctionExpr {
@@ -512,13 +539,30 @@ pub enum ExprKind {
     name: Option<NameId>,
   },
   Template(TemplateLiteral),
-  TaggedTemplate { tag: ExprId, template: TemplateLiteral },
-  Await { expr: ExprId },
-  Yield { expr: Option<ExprId>, delegate: bool },
-  TypeAssertion { expr: ExprId },
-  NonNull { expr: ExprId },
-  Satisfies { expr: ExprId },
-  ImportCall { argument: ExprId, attributes: Option<ExprId> },
+  TaggedTemplate {
+    tag: ExprId,
+    template: TemplateLiteral,
+  },
+  Await {
+    expr: ExprId,
+  },
+  Yield {
+    expr: Option<ExprId>,
+    delegate: bool,
+  },
+  TypeAssertion {
+    expr: ExprId,
+  },
+  NonNull {
+    expr: ExprId,
+  },
+  Satisfies {
+    expr: ExprId,
+  },
+  ImportCall {
+    argument: ExprId,
+    attributes: Option<ExprId>,
+  },
   ImportMeta,
   NewTarget,
   Jsx(JsxElement),

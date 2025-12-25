@@ -360,7 +360,13 @@ mod tests {
     map.finalize();
 
     assert_eq!(map.pat_at_offset(1), Some(PatId(1)));
-    assert_eq!(map.import_specifier_at_offset(5), Some(ImportSpecifierId(2)));
-    assert_eq!(map.export_specifier_at_offset(9), Some(ExportSpecifierId(3)));
+    assert_eq!(
+      map.import_specifier_at_offset(5),
+      Some(ImportSpecifierId(2))
+    );
+    assert_eq!(
+      map.export_specifier_at_offset(9),
+      Some(ExportSpecifierId(3))
+    );
   }
 }
