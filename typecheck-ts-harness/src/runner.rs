@@ -418,6 +418,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     }
   }
 
+  results.sort_by(|a, b| a.id.cmp(&b.id));
   let mut summary = summarize(&results);
   let mut mismatch_summary = MismatchSummary::default();
   for result in results.iter() {

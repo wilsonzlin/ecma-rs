@@ -1,4 +1,5 @@
 use assert_cmd::Command;
+use serde_json::to_string;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -86,6 +87,50 @@ fn smoke_runs_on_small_fixtures() {
     .results
     .iter()
     .any(|r| !r.rust.diagnostics.is_empty()));
+}
+
+#[test]
+fn repeated_runs_produce_identical_reports() {
+  let (_dir, root) = write_fixtures();
+
+  let options = ConformanceOptions {
+    root: root.clone(),
+    filter: build_filter(None).unwrap(),
+    filter_pattern: None,
+    shard: None,
+    json: false,
+    update_snapshots: false,
+    compare: CompareMode::None,
+    node_path: "node".into(),
+    span_tolerance: 0,
+    timeout: Duration::from_secs(2),
+    trace: false,
+    profile: false,
+    manifest: None,
+    fail_on: FailOn::New,
+    allow_mismatches: true,
+    extensions: typecheck_ts_harness::DEFAULT_EXTENSIONS
+      .iter()
+      .map(|s| s.to_string())
+      .collect(),
+    allow_empty: false,
+    profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
+    jobs: 1,
+  };
+
+  let mut first = run_conformance(options.clone()).expect("run_conformance");
+  let mut second = run_conformance(options).expect("run_conformance");
+
+  for report in [&mut first, &mut second] {
+    for result in report.results.iter_mut() {
+      result.duration_ms = 0;
+    }
+  }
+
+  assert_eq!(
+    to_string(&first).expect("serialize first"),
+    to_string(&second).expect("serialize second")
+  );
 }
 
 #[test]

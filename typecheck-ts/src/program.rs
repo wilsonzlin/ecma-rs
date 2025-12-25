@@ -8,7 +8,7 @@ use parse_js::ast::expr::Expr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::import_export::{ExportNames, ImportNames};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl};
+use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::{
@@ -27,6 +27,7 @@ use types_ts_interned::{self as tti, TypeId};
 
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 use crate::{FatalError, HostError, Ice, IceContext};
+use diagnostics::sort_diagnostics;
 
 #[path = "check/mod.rs"]
 pub(crate) mod check;
@@ -376,21 +377,19 @@ impl Program {
         let res = state.check_body(body);
         diagnostics.extend(res.diagnostics.iter().cloned());
       }
+      sort_diagnostics(&mut diagnostics);
       Ok(diagnostics)
     })
-  }
-
-  /// Return collected query statistics for this program.
-  ///
-  /// Query tracking is not yet implemented for the lightweight checker, so this
-  /// currently returns an empty set of stats.
-  pub fn query_stats(&self) -> QueryStats {
-    self.query_stats.snapshot()
   }
 
   /// Request cancellation of ongoing work.
   pub fn cancel(&self) {
     self.cancelled.store(true, Ordering::Relaxed);
+  }
+
+  /// Snapshot of aggregate query statistics collected so far.
+  pub fn query_stats(&self) -> QueryStats {
+    self.query_stats.snapshot()
   }
 
   fn ensure_not_cancelled(&self) -> Result<(), FatalError> {
@@ -1185,7 +1184,7 @@ struct ProgramState {
   analyzed: bool,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
-  files: HashMap<FileId, FileState>,
+  files: BTreeMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_data: HashMap<BodyId, BodyData>,
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
@@ -1214,7 +1213,7 @@ impl ProgramState {
       analyzed: false,
       lib_manager,
       compiler_options: CompilerOptions::default(),
-      files: HashMap::new(),
+      files: BTreeMap::new(),
       def_data: HashMap::new(),
       body_data: HashMap::new(),
       sem_hir: HashMap::new(),
@@ -1338,6 +1337,7 @@ impl ProgramState {
         span.finish(None);
       }
     }
+    sort_diagnostics(&mut self.diagnostics);
     self.analyzed = true;
     Ok(())
   }
@@ -1350,6 +1350,7 @@ impl ProgramState {
       let bundled = self.lib_manager.bundled_libs(&options);
       libs.extend(bundled.files);
     }
+    libs.sort_by_key(|lib| lib.id);
 
     for lib in libs.iter() {
       self.file_kinds.insert(lib.id, lib.kind);
@@ -2125,6 +2126,7 @@ impl ProgramState {
       self.check_stmt(stmt, &mut env, &mut result, body.file, return_context);
     }
 
+    sort_diagnostics(&mut result.diagnostics);
     let res = Arc::new(result);
     self.body_results.insert(body_id, res.clone());
     if let Some(span) = span.take() {

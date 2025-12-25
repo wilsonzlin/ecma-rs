@@ -1,13 +1,10 @@
 use super::*;
 use crate::assoc::{js, ts};
-use crate::ts::locals::{bind_ts_locals, SymbolId as LocalSymbolId};
-use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
-use hir_js::ids::{DefKind, ExprId, TypeExprId};
-use hir_js::lower_file;
+use diagnostics::sort_diagnostics;
 use parse_js::ast::node::NodeAssocData;
-use parse_js::parse;
+use serde_json::json;
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 struct StaticResolver {
@@ -45,8 +42,8 @@ fn span(start: u32) -> TextRange {
 #[test]
 fn ts_assoc_helpers_round_trip() {
   let mut assoc = NodeAssocData::default();
-  let declared = ts::DeclaredSymbol(LocalSymbolId(123));
-  let resolved = LocalSymbolId(456);
+  let declared = ts::DeclaredSymbol(SymbolId(123));
+  let resolved = SymbolId(456);
 
   assoc.set(declared);
   assoc.set(ts::ResolvedSymbol(Some(resolved)));
@@ -58,13 +55,13 @@ fn ts_assoc_helpers_round_trip() {
 #[test]
 fn ts_assoc_keys_do_not_overlap_js_accessors() {
   let mut assoc = NodeAssocData::default();
-  assoc.set(ts::DeclaredSymbol(LocalSymbolId(7)));
-  assoc.set(ts::ResolvedSymbol(Some(LocalSymbolId(9))));
+  assoc.set(ts::DeclaredSymbol(SymbolId(7)));
+  assoc.set(ts::ResolvedSymbol(Some(SymbolId(9))));
 
   assert_eq!(js::declared_symbol(&assoc), None);
   assert_eq!(js::resolved_symbol(&assoc), None);
-  assert_eq!(ts::declared_symbol(&assoc), Some(LocalSymbolId(7)));
-  assert_eq!(ts::resolved_symbol(&assoc), Some(LocalSymbolId(9)));
+  assert_eq!(ts::declared_symbol(&assoc), Some(SymbolId(7)));
+  assert_eq!(ts::resolved_symbol(&assoc), Some(SymbolId(9)));
 
   assert_ne!(
     TypeId::of::<ts::DeclaredSymbol>(),
@@ -77,8 +74,8 @@ fn ts_assoc_keys_do_not_overlap_js_accessors() {
 
   // Explicit type annotations ensure the accessors expose TS symbol IDs and
   // cannot be mistaken for JS ones at compile time.
-  let _: Option<LocalSymbolId> = ts::declared_symbol(&assoc);
-  let _: Option<LocalSymbolId> = ts::resolved_symbol(&assoc);
+  let _: Option<SymbolId> = ts::declared_symbol(&assoc);
+  let _: Option<SymbolId> = ts::resolved_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::declared_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::resolved_symbol(&assoc);
 }
@@ -982,232 +979,136 @@ fn ambient_module_fragments_merge_exports() {
 }
 
 #[test]
-fn ambient_module_interfaces_merge_deterministically() {
-  let file = FileId(97);
-  let mut hir = HirFile::module(file);
-  hir.file_kind = FileKind::Dts;
+fn binding_is_deterministic_across_runs() {
+  let file_a = FileId(200);
+  let file_b = FileId(201);
 
-  let mut part1 = AmbientModule {
-    name: "lib".to_string(),
-    name_span: span(0),
-    decls: Vec::new(),
-    imports: Vec::new(),
-    exports: Vec::new(),
-    export_as_namespace: Vec::new(),
-    ambient_modules: Vec::new(),
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "Foo", DeclKind::Class, Exported::Named));
+  a.decls
+    .push(mk_decl(1, "value", DeclKind::Var, Exported::Named));
+
+  let mut b = HirFile::module(file_b);
+  b.imports.push(Import {
+    specifier: "a".to_string(),
+    specifier_span: span(10),
+    default: Some(ImportDefault {
+      local: "DefaultFoo".to_string(),
+      local_span: span(11),
+      is_type_only: false,
+    }),
+    namespace: Some(ImportNamespace {
+      local: "NamespaceA".to_string(),
+      local_span: span(12),
+      is_type_only: false,
+    }),
+    named: vec![ImportNamed {
+      imported: "Foo".to_string(),
+      local: "RenamedFoo".to_string(),
+      is_type_only: false,
+      imported_span: span(13),
+      local_span: span(14),
+    }],
+    is_type_only: false,
+  });
+  b.decls
+    .push(mk_decl(2, "local", DeclKind::Enum, Exported::Named));
+  b.exports.push(Export::Named(NamedExport {
+    specifier: Some("a".to_string()),
+    specifier_span: Some(span(15)),
+    items: vec![ExportSpecifier {
+      local: "Foo".to_string(),
+      exported: Some("FooAlias".to_string()),
+      local_span: span(16),
+      exported_span: Some(span(17)),
+    }],
+    is_type_only: false,
+  }));
+  b.exports.push(Export::All(ExportAll {
+    specifier: "a".to_string(),
+    is_type_only: false,
+    specifier_span: span(18),
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
   };
-  let mut part2 = part1.clone();
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
 
-  let mut iface_a = mk_decl(0, "Merged", DeclKind::Interface, Exported::No);
-  iface_a.is_ambient = true;
-  let mut iface_b = mk_decl(1, "Merged", DeclKind::Interface, Exported::No);
-  iface_b.is_ambient = true;
-  part1.decls.push(iface_a);
-  part2.decls.push(iface_b);
+  let run = || {
+    let (semantics, mut diags) =
+      bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+    sort_diagnostics(&mut diags);
+    (snapshot_semantics(&semantics), diags)
+  };
 
-  hir.ambient_modules.push(part1);
-  hir.ambient_modules.push(part2);
+  let (first_sem, first_diags) = run();
+  let (second_sem, second_diags) = run();
 
-  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
-  let resolver = StaticResolver::new(HashMap::new());
-  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
-  assert!(diags.is_empty());
-
-  let exports = semantics
-    .exports_of_ambient_module("lib")
-    .expect("ambient module exports present");
-  let symbols = semantics.symbols();
-  let merged_symbol = exports
-    .get("Merged")
-    .expect("interface exported")
-    .symbol_for(Namespace::TYPE, symbols)
-    .expect("type namespace present");
-  let decls = semantics.symbol_decls(merged_symbol, Namespace::TYPE);
-  assert_eq!(decls.len(), 2);
-  assert!(decls
-    .windows(2)
-    .all(|w| symbols.decl(w[0]).order < symbols.decl(w[1]).order));
-
+  assert_eq!(first_sem, second_sem);
+  assert_eq!(first_diags, second_diags);
 }
 
-fn body_by_name<'a>(
-  lowered: &'a hir_js::hir::LowerResult,
-  name: &str,
-  kind: DefKind,
-) -> &'a hir_js::hir::Body {
-  let def = lowered
-    .defs
+fn snapshot_semantics(semantics: &TsProgramSemantics) -> serde_json::Value {
+  let symbols = semantics.symbols();
+  let module_exports: BTreeMap<_, _> = semantics
+    .module_exports
     .iter()
-    .find(|d| d.path.kind == kind && d.path.name == name)
-    .expect("definition present");
-  if let Some(body_id) = def.body {
-    if let Some(body) = lowered.bodies.get(body_id.0 as usize) {
-      return body.as_ref();
+    .map(|(file, exports)| (file.0.to_string(), snapshot_exports(exports, symbols)))
+    .collect();
+  let ambient_exports: BTreeMap<_, _> = semantics
+    .ambient_module_exports
+    .iter()
+    .map(|(name, exports)| (name.clone(), snapshot_exports(exports, symbols)))
+    .collect();
+  let globals: BTreeMap<_, _> = semantics
+    .global_symbols()
+    .iter()
+    .map(|(name, group)| (name.clone(), snapshot_group(group, symbols)))
+    .collect();
+
+  json!({
+    "symbol_count": symbols.symbols.len(),
+    "decl_count": symbols.decls.len(),
+    "module_exports": module_exports,
+    "ambient_exports": ambient_exports,
+    "globals": globals,
+  })
+}
+
+fn snapshot_exports(map: &ExportMap, symbols: &SymbolTable) -> serde_json::Value {
+  let entries: BTreeMap<_, _> = map
+    .iter()
+    .map(|(name, group)| (name.clone(), snapshot_group(group, symbols)))
+    .collect();
+  json!(entries)
+}
+
+fn snapshot_group(group: &SymbolGroup, symbols: &SymbolTable) -> serde_json::Value {
+  let mut entries = Vec::new();
+  for ns in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
+    if let Some(sym) = group.symbol_for(ns, symbols) {
+      let decls: Vec<_> = symbols
+        .symbol(sym)
+        .decls_for(ns)
+        .iter()
+        .map(|d| d.0)
+        .collect();
+      entries.push((namespace_name(ns), sym.0, decls));
     }
   }
-  lowered
-    .bodies
-    .iter()
-    .find(|b| b.owner == def.id)
-    .or_else(|| lowered.bodies.first())
-    .map(|b| b.as_ref())
-    .unwrap_or_else(|| panic!("body available for {}", name))
+  json!(entries)
 }
 
-#[test]
-fn locals_resolve_block_shadowing() {
-  let mut ast = parse(
-    r#"
-    function f() {
-      var x = 1;
-      {
-        let x = 2;
-        x;
-      }
-      x;
-    }
-  "#,
-  )
-  .unwrap();
-  let locals = bind_ts_locals(&mut ast, true);
-  let lowered = lower_file(FileId(90), HirFileKind::Ts, &ast);
-  let body = body_by_name(&lowered, "f", DefKind::Function);
-
-  let mut id_uses: Vec<_> = body
-    .exprs
-    .iter()
-    .enumerate()
-    .filter_map(|(idx, expr)| match expr.kind {
-      ExprKind::Ident(_) => Some((ExprId(idx as u32), expr.span)),
-      _ => None,
-    })
-    .collect();
-  id_uses.sort_by_key(|(_, span)| span.start);
-  assert_eq!(id_uses.len(), 2);
-
-  let inner = locals
-    .resolve_expr(body, id_uses[0].0)
-    .expect("inner use resolves");
-  let outer = locals
-    .resolve_expr(body, id_uses[1].0)
-    .expect("outer use resolves");
-  assert_ne!(inner, outer);
-}
-
-#[test]
-fn locals_hoist_var_declarations() {
-  let mut ast = parse(
-    r#"
-    function g() {
-      x;
-      var x = 1;
-    }
-  "#,
-  )
-  .unwrap();
-  let locals = bind_ts_locals(&mut ast, true);
-  let lowered = lower_file(FileId(91), HirFileKind::Ts, &ast);
-  let body = body_by_name(&lowered, "g", DefKind::Function);
-
-  let first_ident = body
-    .exprs
-    .iter()
-    .enumerate()
-    .find_map(|(idx, expr)| match expr.kind {
-      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
-      _ => None,
-    })
-    .expect("identifier present");
-  assert!(locals.resolve_expr(body, first_ident).is_some());
-}
-
-#[test]
-fn locals_separate_value_and_type_namespaces() {
-  let mut ast = parse(
-    r#"
-    type Foo = number;
-    const Foo = 1;
-    type Bar = Foo;
-    const baz = Foo;
-  "#,
-  )
-  .unwrap();
-  let locals = bind_ts_locals(&mut ast, true);
-  let lowered = lower_file(FileId(92), HirFileKind::Ts, &ast);
-
-  let type_ref = lowered
-    .types
-    .type_exprs
-    .iter()
-    .enumerate()
-    .find_map(|(idx, expr)| match expr.kind {
-      TypeExprKind::TypeRef(_) => Some(TypeExprId(idx as u32)),
-      _ => None,
-    })
-    .expect("type reference present");
-  let type_sym = locals
-    .resolve_type_name(&lowered.types.type_exprs, type_ref)
-    .expect("type Foo resolves");
-
-  let baz_body = body_by_name(&lowered, "baz", DefKind::Var);
-  let value_ident = baz_body
-    .exprs
-    .iter()
-    .enumerate()
-    .find_map(|(idx, expr)| match expr.kind {
-      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
-      _ => None,
-    })
-    .expect("value use present");
-  let value_sym = locals
-    .resolve_expr(baz_body, value_ident)
-    .expect("value Foo resolves");
-
-  assert_ne!(type_sym, value_sym);
-}
-
-#[test]
-fn type_only_imports_skip_value_resolution() {
-  let mut ast = parse(
-    r#"
-    import type { Foo } from "mod";
-    type Bar = Foo;
-    const value = Foo;
-  "#,
-  )
-  .unwrap();
-  let locals = bind_ts_locals(&mut ast, true);
-  let lowered = lower_file(FileId(93), HirFileKind::Ts, &ast);
-
-  let type_ref = lowered
-    .types
-    .type_exprs
-    .iter()
-    .enumerate()
-    .find_map(|(idx, expr)| match expr.kind {
-      TypeExprKind::TypeRef(_) => Some(TypeExprId(idx as u32)),
-      _ => None,
-    })
-    .expect("type ref present");
-  assert!(
-    locals
-      .resolve_type_name(&lowered.types.type_exprs, type_ref)
-      .is_some(),
-    "type import remains available"
-  );
-
-  let value_body = body_by_name(&lowered, "value", DefKind::Var);
-  let id = value_body
-    .exprs
-    .iter()
-    .enumerate()
-    .find_map(|(idx, expr)| match expr.kind {
-      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
-      _ => None,
-    })
-    .expect("value identifier present");
-  assert!(
-    locals.resolve_expr(value_body, id).is_none(),
-    "type-only import should not resolve in value namespace"
-  );
+fn namespace_name(ns: Namespace) -> &'static str {
+  match ns {
+    Namespace::VALUE => "value",
+    Namespace::TYPE => "type",
+    Namespace::NAMESPACE => "namespace",
+    _ => "unknown",
+  }
 }

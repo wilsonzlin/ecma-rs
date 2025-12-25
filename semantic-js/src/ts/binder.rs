@@ -1,5 +1,5 @@
 use super::model::*;
-use diagnostics::{Diagnostic, Label, Span, TextRange};
+use diagnostics::{sort_diagnostics, Diagnostic, Label, Span, TextRange};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -14,7 +14,7 @@ enum ExportStatus {
 #[derive(Clone, Debug)]
 struct ModuleState {
   symbols: SymbolGroups,
-  imports: HashMap<String, ImportEntry>,
+  imports: BTreeMap<String, ImportEntry>,
   export_specs: Vec<ExportSpec>,
   exports: ExportMap,
   export_spans: BTreeMap<String, ExportNamespaceSpans>,
@@ -25,7 +25,7 @@ impl ModuleState {
   fn new(_file_id: FileId) -> Self {
     Self {
       symbols: BTreeMap::new(),
-      imports: HashMap::new(),
+      imports: BTreeMap::new(),
       export_specs: Vec::new(),
       exports: ExportMap::new(),
       export_spans: BTreeMap::new(),
@@ -205,6 +205,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
 
     let global_symbols = self.global_symbols.clone();
 
+    sort_diagnostics(&mut self.diagnostics);
     (
       TsProgramSemantics {
         symbols: self.symbols.clone(),

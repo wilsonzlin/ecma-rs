@@ -1493,6 +1493,7 @@ dependencies = [
  "hir-js",
  "maplit",
  "parse-js",
+ "serde_json",
 ]
 
 [[package]]
@@ -1951,6 +1952,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
+ "types-ts",
  "types-ts-interned",
 ]
 

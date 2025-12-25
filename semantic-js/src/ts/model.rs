@@ -45,6 +45,8 @@
 //! - `SymbolId`, `DeclId`, and `DefId` allocation is sequential and repeatable
 //!   for the same traversal order; consumers should not assume stability across
 //!   different root orders or resolver outputs.
+//! - Binder diagnostics are sorted before being returned to avoid any accidental
+//!   dependency on hash map iteration order.
 //! - Internal caches may use hash maps, but public APIs avoid exposing their
 //!   iteration order.
 //!

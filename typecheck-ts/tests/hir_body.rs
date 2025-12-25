@@ -15,13 +15,7 @@ fn infers_basic_literals_and_identifiers() {
     .find(|b| matches!(b.kind, hir_js::BodyKind::Function))
     .expect("function body");
   let store = TypeStore::new();
-  let result = check_body(
-    body,
-    &lowered.names,
-    FileId(0),
-    source,
-    Arc::clone(&store),
-  );
+  let result = check_body(body, &lowered.names, FileId(0), source, Arc::clone(&store));
 
   // parameter, const binding, return expression
   assert_eq!(result.expr_types.len(), body.exprs.len());
