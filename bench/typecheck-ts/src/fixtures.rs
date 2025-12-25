@@ -66,10 +66,33 @@ pub fn module_graph_fixtures() -> &'static [ModuleGraphFixture] {
     kind: FixtureKind::Ts,
   };
 
+  const PROJECT_INDEX: Fixture = Fixture {
+    name: "project_index.ts",
+    source: include_str!("../fixtures/project_index.ts"),
+    kind: FixtureKind::Ts,
+  };
+
+  const PROJECT_NUMBERS: Fixture = Fixture {
+    name: "project_numbers.ts",
+    source: include_str!("../fixtures/project_numbers.ts"),
+    kind: FixtureKind::Ts,
+  };
+
+  const PROJECT_TEXT: Fixture = Fixture {
+    name: "project_text.ts",
+    source: include_str!("../fixtures/project_text.ts"),
+    kind: FixtureKind::Ts,
+  };
+
   const SIMPLE_MODULE_GRAPH: ModuleGraphFixture = ModuleGraphFixture {
     name: "three_file_graph",
     files: &[MODULE_ENTRY, MODULE_A, MODULE_B],
   };
 
-  &[SIMPLE_MODULE_GRAPH]
+  const SMALL_PROJECT: ModuleGraphFixture = ModuleGraphFixture {
+    name: "small_project",
+    files: &[PROJECT_INDEX, PROJECT_NUMBERS, PROJECT_TEXT],
+  };
+
+  &[SIMPLE_MODULE_GRAPH, SMALL_PROJECT]
 }

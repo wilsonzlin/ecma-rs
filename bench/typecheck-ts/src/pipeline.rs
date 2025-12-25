@@ -13,7 +13,7 @@ use parse_js::ast::stmt::decl::VarDecl;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::error::SyntaxResult;
-use parse_js::parse;
+use parse_js::{parse_with_options, Dialect, ParseOptions};
 use semantic_js::ts::{
   bind_ts_program, Decl, DeclKind, Export, ExportAll, Exported, HirFile, Import, ImportDefault,
   ImportNamed, ImportNamespace, NamedExport, Resolver, TextRange,
@@ -21,6 +21,8 @@ use semantic_js::ts::{
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
+use typecheck_ts::lib_support::{FileKind as TcFileKind, LibManager};
 use typecheck_ts::FileId as TcFileId;
 use typecheck_ts::Host;
 use typecheck_ts::HostError;
@@ -51,18 +53,56 @@ pub struct TypecheckSummary {
   pub bodies: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct TypeOfDefSummary {
+  pub exports: usize,
+  pub rendered_types: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct BodyCheckSummary {
+  pub diagnostics: usize,
+  pub exprs: usize,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct RelationStats {
   pub checks: usize,
   pub successes: usize,
 }
 
+#[derive(Clone, Debug)]
+pub struct IncrementalTimings {
+  pub full: Duration,
+  pub edit: Duration,
+  pub full_diagnostics: usize,
+  pub edit_diagnostics: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct IncrementalEdit {
+  pub file: &'static str,
+  pub from: &'static str,
+  pub to: &'static str,
+}
+
 pub fn parse_only(fixture: &Fixture) -> SyntaxResult<Node<TopLevel>> {
-  parse(fixture.source)
+  let mut opts = ParseOptions::default();
+  if matches!(fixture.kind, FixtureKind::Tsx) {
+    opts.dialect = Dialect::Tsx;
+  }
+  parse_with_options(fixture.source, opts)
 }
 
 pub fn lower_to_hir(file_id: HirFileId, top_level: &Node<TopLevel>) -> LowerResult {
   lower_file(file_id, HirFileKind::Ts, top_level)
+}
+
+pub fn parse_and_lower(file_id: HirFileId, fixture: &Fixture) -> HirSummary {
+  let parsed = parse_only(fixture)
+    .unwrap_or_else(|err| panic!("fixtures must parse ({}): {err:?}", fixture.name));
+  let lowered = lower_to_hir(file_id, &parsed);
+  summarize_hir(&lowered)
 }
 
 pub fn summarize_hir(lowered: &LowerResult) -> HirSummary {
@@ -103,11 +143,7 @@ pub fn bind_module_graph(graph: &ModuleGraphFixture) -> BindSummary {
       .expect("all files should be available for binding")
   });
 
-  let mut exports_len = 0usize;
-  for idx in 0..graph.files.len() {
-    let file = semantic_js::ts::FileId(idx as u32);
-    exports_len += program.exports_of(file).len();
-  }
+  let exports_len: usize = files.values().map(|file| file.exports.len()).sum();
 
   BindSummary {
     exports: exports_len,
@@ -124,22 +160,122 @@ pub fn typecheck_fixture(fixture: &Fixture) -> TypecheckSummary {
       "export const FC: <T>(props: T) => any; export default {};",
     ));
   }
-  let host = BenchHost::new(entries);
+  let host = BenchHost::from_static(entries);
   let root = host.id_for(fixture.name).expect("root file id");
   run_typecheck(host, vec![root])
 }
 
 pub fn typecheck_module_graph(graph: &ModuleGraphFixture) -> TypecheckSummary {
-  let entries: Vec<_> = graph
-    .files
-    .iter()
-    .map(|f| (f.name.to_string(), f.source))
-    .collect();
+  let entries = entries_from_graph(graph);
   let host = BenchHost::new(entries);
   let root = host
     .id_for(graph.files[0].name)
     .expect("module graph root should exist");
   run_typecheck(host, vec![root])
+}
+
+pub fn type_of_exported_defs(graph: &ModuleGraphFixture) -> TypeOfDefSummary {
+  let entries = entries_from_graph(graph);
+  let host = BenchHost::new(entries);
+  let root = host
+    .id_for(graph.files[0].name)
+    .expect("module graph root should exist");
+  let program = Program::new(host, vec![root]);
+  let mut exports = 0usize;
+  let mut rendered_types = Vec::new();
+
+  for (idx, _) in graph.files.iter().enumerate() {
+    let file_id = TcFileId(idx as u32);
+    for def in program.definitions_in_file(file_id) {
+      exports += 1;
+      let ty = program.type_of_def(def);
+      rendered_types.push(program.display_type(ty).to_string());
+    }
+  }
+
+  TypeOfDefSummary {
+    exports,
+    rendered_types,
+  }
+}
+
+pub fn check_body_named(fixture: &Fixture, name: &str) -> BodyCheckSummary {
+  let host = BenchHost::from_static(vec![(fixture.name.to_string(), fixture.source)]);
+  let root = host.id_for(fixture.name).expect("fixture root file id");
+  let program = Program::new(host, vec![root]);
+  let def = program
+    .definitions_in_file(root)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some(name))
+    .unwrap_or_else(|| panic!("missing {name} definition in {}", fixture.name));
+  let body = program
+    .body_of_def(def)
+    .unwrap_or_else(|| panic!("missing body for {name} in {}", fixture.name));
+  let result = program.check_body(body);
+  BodyCheckSummary {
+    diagnostics: result.diagnostics().len(),
+    exprs: result.expr_spans().len(),
+  }
+}
+
+pub fn incremental_recheck(
+  graph: &ModuleGraphFixture,
+  edit: &IncrementalEdit,
+) -> IncrementalTimings {
+  let entries = entries_from_graph(graph);
+  let roots = vec![TcFileId(0)];
+  let manager = Arc::new(LibManager::new());
+
+  let (full_summary, full_duration) =
+    timed_typecheck(entries.clone(), roots.clone(), Arc::clone(&manager));
+
+  let mut edited_entries = entries;
+  apply_edit(&mut edited_entries, edit);
+
+  let (edit_summary, edit_duration) = timed_typecheck(edited_entries, roots, manager);
+
+  IncrementalTimings {
+    full: full_duration,
+    edit: edit_duration,
+    full_diagnostics: full_summary.diagnostics,
+    edit_diagnostics: edit_summary.diagnostics,
+  }
+}
+
+fn timed_typecheck(
+  entries: Vec<(String, Arc<str>)>,
+  roots: Vec<TcFileId>,
+  lib_manager: Arc<LibManager>,
+) -> (TypecheckSummary, Duration) {
+  let started = Instant::now();
+  let host = BenchHost::new(entries);
+  let summary = run_typecheck_with_manager(host, roots, Some(lib_manager));
+  (summary, started.elapsed())
+}
+
+fn apply_edit(entries: &mut Vec<(String, Arc<str>)>, edit: &IncrementalEdit) {
+  for (name, content) in entries.iter_mut() {
+    if name == edit.file {
+      let replaced = content.replacen(edit.from, edit.to, 1);
+      assert!(
+        replaced != content.as_ref(),
+        "edit text '{}' not found in {}",
+        edit.from,
+        edit.file
+      );
+      *content = Arc::from(replaced);
+      return;
+    }
+  }
+  panic!("edit target {} not found in module graph", edit.file);
+}
+
+fn entries_from_graph(graph: &ModuleGraphFixture) -> Vec<(String, Arc<str>)> {
+  graph
+    .files
+    .iter()
+    .map(|f| (f.name.to_string(), Arc::from(f.source)))
+    .collect()
 }
 
 pub fn assignability_micro(iterations: usize, warm_cache: bool) -> RelationStats {
@@ -351,8 +487,19 @@ struct SampleTypes {
 }
 
 fn run_typecheck(host: BenchHost, roots: Vec<TcFileId>) -> TypecheckSummary {
+  run_typecheck_with_manager(host, roots, None)
+}
+
+fn run_typecheck_with_manager(
+  host: BenchHost,
+  roots: Vec<TcFileId>,
+  lib_manager: Option<Arc<LibManager>>,
+) -> TypecheckSummary {
   let all_files = host.all_file_ids();
-  let program = Program::new(host, roots);
+  let program = match lib_manager {
+    Some(manager) => Program::with_lib_manager(host, roots, manager),
+    None => Program::new(host, roots),
+  };
   let diagnostics = program.check();
 
   let mut bodies = 0;
@@ -377,6 +524,7 @@ fn run_typecheck(host: BenchHost, roots: Vec<TcFileId>) -> TypecheckSummary {
 struct BenchFile {
   name: String,
   content: Arc<str>,
+  kind: TcFileKind,
 }
 
 #[derive(Clone)]
@@ -386,7 +534,7 @@ struct BenchHost {
 }
 
 impl BenchHost {
-  fn new(entries: Vec<(String, &'static str)>) -> Self {
+  fn new(entries: Vec<(String, Arc<str>)>) -> Self {
     let mut files = Vec::with_capacity(entries.len());
     let mut name_to_id = HashMap::new();
     for (idx, (name, content)) in entries.into_iter().enumerate() {
@@ -394,10 +542,19 @@ impl BenchHost {
       name_to_id.insert(normalize(&PathBuf::from(&name)), id);
       files.push(BenchFile {
         name: name.clone(),
-        content: Arc::from(content),
+        content,
+        kind: infer_kind(&name),
       });
     }
     BenchHost { files, name_to_id }
+  }
+
+  fn from_static(entries: Vec<(String, &'static str)>) -> Self {
+    let owned = entries
+      .into_iter()
+      .map(|(name, content)| (name, Arc::from(content)))
+      .collect();
+    BenchHost::new(owned)
   }
 
   fn id_for(&self, name: &str) -> Option<TcFileId> {
@@ -422,6 +579,14 @@ impl Host for BenchHost {
       .get(idx)
       .map(|f| f.content.clone())
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+  }
+
+  fn file_kind(&self, file: TcFileId) -> TcFileKind {
+    self
+      .files
+      .get(file.0 as usize)
+      .map(|f| f.kind)
+      .unwrap_or(TcFileKind::Ts)
   }
 
   fn resolve(&self, from: TcFileId, specifier: &str) -> Option<TcFileId> {
@@ -473,6 +638,18 @@ impl Resolver for SemanticResolver {
       }
     }
     None
+  }
+}
+
+fn infer_kind(name: &str) -> TcFileKind {
+  if name.ends_with(".d.ts") {
+    return TcFileKind::Dts;
+  }
+  match Path::new(name).extension().and_then(|ext| ext.to_str()) {
+    Some("tsx") => TcFileKind::Tsx,
+    Some("jsx") => TcFileKind::Jsx,
+    Some("js") => TcFileKind::Js,
+    _ => TcFileKind::Ts,
   }
 }
 
