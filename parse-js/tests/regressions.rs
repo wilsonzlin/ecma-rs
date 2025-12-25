@@ -12,3 +12,5 @@ mod jsx_tsx_disambiguation;
 mod private_index_signature;
 #[path = "regressions/tuple_labels.rs"]
 mod tuple_labels;
+#[path = "regressions/destructuring_type_params.rs"]
+mod destructuring_type_params;

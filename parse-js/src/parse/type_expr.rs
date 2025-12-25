@@ -1522,6 +1522,34 @@ impl<'a> Parser<'a> {
 
       let rest = p.consume_if(TT::DotDotDot).is_match();
 
+      // TypeScript: Allow destructuring patterns in type signatures (interface/ambient declarations)
+      // Consume the pattern for syntax recovery and synthesize an `any` type when no annotation is provided.
+      if matches!(p.peek().typ, TT::BraceOpen | TT::BracketOpen) {
+        let pattern = p.pat_decl(ctx)?;
+        let mut optional = p.consume_if(TT::Question).is_match();
+        let type_expr = if p.consume_if(TT::Colon).is_match() {
+          p.type_expr(ctx)?
+        } else {
+          // Default to `any` for unannotated destructured parameters
+          let loc = pattern.loc;
+          Node::new(loc, TypeExpr::Any(Node::new(loc, TypeAny {})))
+        };
+
+        // Allow default values in type signatures for error recovery
+        if p.consume_if(TT::Equals).is_match() {
+          let _ = p.expr(ctx, [TT::Comma, TT::ParenthesisClose]);
+          // Treat parameters with initializers as optional
+          optional = true;
+        }
+
+        return Ok(TypeFunctionParameter {
+          name: None,
+          optional,
+          rest,
+          type_expr,
+        });
+      }
+
       let name = if p.peek().typ == TT::Identifier {
         let checkpoint = p.checkpoint();
         let n = p.consume_as_string();
