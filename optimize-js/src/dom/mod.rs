@@ -264,10 +264,6 @@ pub struct Dom<const POST: bool = false> {
 }
 
 impl<const POST: bool> Dom<POST> {
-  pub fn idom_of(&self, node: u32) -> Option<u32> {
-    self.idom_by.get(&node).copied()
-  }
-
   // A dominates B if A will **always** execute some time at or before B. (All paths to B go through A.)
   // B is dominated by A if A also dominates **all** of B's parents. (Think about it.)
   // Dominance tree: edges represent only "immediate" dominations. A immediately dominates B iff A dominates B and doesn't strictly dominate any other node that strictly dominates B. (Strictly dominates means A dominates B and A != B.)
