@@ -14,7 +14,9 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 
 pub use emitter::{EmitError, EmitErrorKind, EmitMode, EmitOptions, EmitResult, Emitter};
+pub use escape::cooked_template_segment;
 pub use escape::emit_string_literal_double_quoted;
+pub use escape::emit_template_literal_segment;
 pub use escape::emit_template_raw_segment;
 pub use expr::{emit_expr, ExprEmitter};
 pub use jsx::{emit_jsx_elem, emit_jsx_expr_container};

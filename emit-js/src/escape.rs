@@ -39,6 +39,52 @@ pub fn emit_string_literal_double_quoted(out: &mut Vec<u8>, value: &str) {
   out.push(b'"');
 }
 
+/// Emit a JavaScript template literal segment (head or span literal),
+/// escaping characters so that the cooked value roundtrips when parsed.
+pub fn emit_template_literal_segment(out: &mut Vec<u8>, cooked: &str) {
+  for ch in cooked.chars() {
+    match ch {
+      '\\' => out.extend_from_slice(b"\\\\"),
+      '`' => out.extend_from_slice(b"\\`"),
+      '$' => out.extend_from_slice(b"\\$"),
+      '\n' => out.extend_from_slice(b"\\n"),
+      '\r' => out.extend_from_slice(b"\\r"),
+      '\u{2028}' => out.extend_from_slice(b"\\u2028"),
+      '\u{2029}' => out.extend_from_slice(b"\\u2029"),
+      ch if ch < '\u{20}' => {
+        out.extend_from_slice(format!("\\x{:02X}", ch as u32).as_bytes());
+      }
+      ch => {
+        let mut buf = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buf);
+        out.extend_from_slice(encoded.as_bytes());
+      }
+    }
+  }
+}
+
+/// Remove leading/trailing template delimiters from a raw template part as
+/// stored by the parser, yielding the cooked segment value.
+pub fn cooked_template_segment<'a>(raw: &'a str, is_first: bool, is_last: bool) -> &'a str {
+  let mut cooked = raw;
+
+  if is_first {
+    if let Some(stripped) = cooked.strip_prefix('`') {
+      cooked = stripped;
+    }
+  }
+
+  if is_last {
+    if let Some(stripped) = cooked.strip_suffix('`') {
+      cooked = stripped;
+    }
+  } else if cooked.ends_with("${") {
+    cooked = &cooked[..cooked.len() - 2];
+  }
+
+  cooked
+}
+
 /// Emit a raw template literal segment (head or span literal) for template
 /// literal *types*. We conservatively escape characters that could start
 /// placeholders or terminate the template.
@@ -94,5 +140,23 @@ mod tests {
     let mut out = Vec::new();
     emit_template_raw_segment(&mut out, "a`b$\\c");
     assert_eq!(String::from_utf8(out).unwrap(), "a\\`b\\$\\\\c");
+  }
+
+  #[test]
+  fn template_literal_segment_escapes() {
+    let mut out = Vec::new();
+    emit_template_literal_segment(&mut out, "a`b$\\c\n\r\u{2028}\u{2029}\u{0001}");
+    assert_eq!(
+      String::from_utf8(out).unwrap(),
+      "a\\`b\\$\\\\c\\n\\r\\u2028\\u2029\\x01"
+    );
+  }
+
+  #[test]
+  fn strips_template_delimiters() {
+    assert_eq!(cooked_template_segment("`a${", true, false), "a");
+    assert_eq!(cooked_template_segment("b${", false, false), "b");
+    assert_eq!(cooked_template_segment("c`", false, true), "c");
+    assert_eq!(cooked_template_segment("`only`", true, true), "only");
   }
 }
