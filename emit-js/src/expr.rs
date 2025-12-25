@@ -471,9 +471,12 @@ where
           .ok_or(EmitError::unsupported("unknown operator"))?
           .precedence,
       );
-      if unary.stx.operator == OperatorName::New
-        && starts_with_optional_chaining(&unary.stx.argument)
-      {
+      let needs_parens = matches!(
+        unary.stx.argument.stx.as_ref(),
+        Expr::Binary(binary) if binary.stx.operator == OperatorName::Exponentiation
+      ) || (unary.stx.operator == OperatorName::New
+        && starts_with_optional_chaining(&unary.stx.argument));
+      if needs_parens {
         write!(self.out, "(")?;
         self.emit_expr_with_min_prec(&unary.stx.argument, Prec::LOWEST)?;
         write!(self.out, ")")?;

@@ -69,6 +69,11 @@ fn exponentiation_and_unary_operands() {
 }
 
 #[test]
+fn parenthesizes_exponentiation_operand_in_unary() {
+  assert_roundtrip("-(a**b)", Some("-(a ** b)"));
+}
+
+#[test]
 fn conditional_nesting_roundtrips() {
   assert_roundtrip("a?b:c?d:e", Some("a ? b : c ? d : e"));
   assert_roundtrip("(a?b:c)?d:e", Some("(a ? b : c) ? d : e"));
