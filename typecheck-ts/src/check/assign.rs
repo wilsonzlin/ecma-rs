@@ -1,5 +1,6 @@
 use super::super::{
-  BodyCheckResult, Diagnostic, FileId, HirExpr, ProgramState, Span, TypeId, CODE_TYPE_MISMATCH,
+  BodyCheckResult, Diagnostic, FileId, HirExpr, ObjectType, ProgramState, Span, TypeId, TypeKind,
+  CODE_TYPE_MISMATCH,
 };
 use super::object_literal;
 
@@ -16,7 +17,7 @@ pub(crate) fn check_assignment(
   }
 
   if let Some(expr) = source_expr {
-    object_literal::check_excess_properties(state, expr, source_ty, target_ty, result, file);
+    object_literal::check_excess_properties(state, expr, target_ty, result, file);
   }
 
   if is_assignable(state, source_ty, target_ty) {
@@ -38,6 +39,91 @@ pub(crate) fn check_assignment(
 }
 
 fn is_assignable(state: &mut ProgramState, source_ty: TypeId, target_ty: TypeId) -> bool {
-  let ctx = state.relate_ctx();
-  ctx.is_assignable(source_ty, target_ty)
+  let opts = &state.compiler_options;
+  if target_ty == state.builtin.any || target_ty == state.builtin.unknown {
+    return true;
+  }
+
+  let source_kind = state.type_store.kind(source_ty).clone();
+  let target_kind = state.type_store.kind(target_ty).clone();
+
+  if !opts.strict_null_checks {
+    if matches!(source_kind, TypeKind::Null | TypeKind::Undefined) {
+      return true;
+    }
+    if matches!(target_kind, TypeKind::Null | TypeKind::Undefined) {
+      return true;
+    }
+  }
+
+  match source_kind {
+    TypeKind::Any | TypeKind::Unknown => return true,
+    _ => {}
+  }
+
+  match &source_kind {
+    TypeKind::Never => return true,
+    TypeKind::Union(members) => {
+      return members
+        .iter()
+        .copied()
+        .all(|member| is_assignable(state, member, target_ty));
+    }
+    _ => {}
+  }
+
+  let target_kind = target_kind;
+
+  match (&source_kind, &target_kind) {
+    (TypeKind::LiteralString(_), TypeKind::String)
+    | (TypeKind::LiteralNumber(_), TypeKind::Number)
+    | (TypeKind::LiteralBoolean(_), TypeKind::Boolean) => return true,
+    _ => {}
+  }
+
+  if matches!(target_kind, TypeKind::Void) && matches!(source_kind, TypeKind::Undefined) {
+    return true;
+  }
+
+  if source_ty == target_ty {
+    return true;
+  }
+
+  match target_kind {
+    TypeKind::Union(types) => types
+      .into_iter()
+      .any(|member| is_assignable(state, source_ty, member)),
+    TypeKind::Object(target_obj) => match &source_kind {
+      TypeKind::Object(source_obj) => is_assignable_object(state, source_obj, &target_obj),
+      _ => false,
+    },
+    TypeKind::Array(target_elem) => match &source_kind {
+      TypeKind::Array(source_elem) => is_assignable(state, *source_elem, target_elem),
+      _ => false,
+    },
+    _ => false,
+  }
+}
+
+fn is_assignable_object(
+  state: &mut ProgramState,
+  source: &ObjectType,
+  target: &ObjectType,
+) -> bool {
+  for (name, target_prop) in target.props.iter() {
+    match source.props.get(name) {
+      Some(source_prop) => {
+        if !is_assignable(state, source_prop.typ, target_prop.typ) {
+          return false;
+        }
+      }
+      None => {
+        if !target_prop.optional {
+          return false;
+        }
+      }
+    }
+  }
+
+  true
 }
