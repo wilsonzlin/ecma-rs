@@ -25,6 +25,6 @@ fn internal_failure_surfaces_as_ice() {
   let diagnostics = program.check();
   assert_eq!(diagnostics.len(), 1);
   let diag = &diagnostics[0];
-  assert_eq!(diag.code.as_deref(), Some("ICE0001"));
+  assert_eq!(diag.code.as_str(), "ICE0001");
   assert_eq!(diag.severity, Severity::Error);
 }

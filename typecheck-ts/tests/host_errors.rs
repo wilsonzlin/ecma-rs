@@ -24,5 +24,5 @@ fn missing_file_is_fatal_host_error() {
 
   let diagnostics = program.check();
   assert_eq!(diagnostics.len(), 1);
-  assert_eq!(diagnostics[0].code.as_deref(), Some("HOST0001"));
+  assert_eq!(diagnostics[0].code.as_str(), "HOST0001");
 }
