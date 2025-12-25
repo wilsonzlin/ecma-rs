@@ -297,7 +297,6 @@ impl Diagnostic {
   }
 }
 
-<<<<<<< HEAD
 impl PartialOrd for Diagnostic {
   fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
     Some(self.cmp(other))
@@ -334,8 +333,6 @@ pub fn host_error(primary: Option<Span>, message: impl Into<String>) -> Diagnost
   diagnostic
 }
 
-=======
->>>>>>> 9e88900 (Add diagnostics integration for parse-js errors)
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -726,7 +723,6 @@ mod tests {
     assert!(span.contains(5));
     assert!(!span.contains(6));
   }
-<<<<<<< HEAD
   #[test]
   fn ice_helper_sets_defaults() {
     let span = Span::new(FileId(1), TextRange::new(1, 2));
@@ -905,6 +901,4 @@ mod tests {
     assert_eq!(deserialized.notes, diagnostic.notes);
     assert_eq!(deserialized.primary, diagnostic.primary);
   }
-=======
->>>>>>> 9e88900 (Add diagnostics integration for parse-js errors)
 }

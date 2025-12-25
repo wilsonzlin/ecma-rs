@@ -2,7 +2,9 @@ use crate::error::SyntaxError;
 use crate::error::SyntaxErrorType;
 use crate::token::TT;
 #[cfg(feature = "diagnostics")]
-use diagnostics::{FileId as DiagnosticFileId, Span as DiagnosticSpan, TextRange as DiagnosticTextRange};
+use diagnostics::{
+  FileId as DiagnosticFileId, Span as DiagnosticSpan, TextRange as DiagnosticTextRange,
+};
 use std::cmp::{max, min};
 use std::ops::{Add, AddAssign};
 
@@ -188,13 +190,7 @@ impl Loc {
     file: DiagnosticFileId,
   ) -> (DiagnosticSpan, Option<String>) {
     let (range, note) = self.to_diagnostics_range_with_note();
-    (
-      DiagnosticSpan {
-        file,
-        range,
-      },
-      note,
-    )
+    (DiagnosticSpan { file, range }, note)
   }
 
   pub fn error(self, typ: SyntaxErrorType, actual_token: Option<TT>) -> SyntaxError {
