@@ -72,13 +72,19 @@ pub trait Host: Send + Sync + 'static {
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId>;
 
   /// Compiler options influencing lib selection and strictness.
-  fn compiler_options(&self) -> CompilerOptions { CompilerOptions::default() }
+  fn compiler_options(&self) -> CompilerOptions {
+    CompilerOptions::default()
+  }
 
   /// Additional library files to include alongside bundled libs.
-  fn lib_files(&self) -> Vec<LibFile> { Vec::new() }
+  fn lib_files(&self) -> Vec<LibFile> {
+    Vec::new()
+  }
 
   /// Kind of the file; defaults to TypeScript.
-  fn file_kind(&self, _file: FileId) -> FileKind { FileKind::Ts }
+  fn file_kind(&self, _file: FileId) -> FileKind {
+    FileKind::Ts
+  }
 }
 
 /// Public symbol identifier exposed through [`Program::symbol_at`].

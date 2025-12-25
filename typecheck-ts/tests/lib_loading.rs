@@ -63,10 +63,8 @@ impl Host for TestHost {
 
 #[test]
 fn bundled_libs_enable_global_promise_and_array() {
-  let host = TestHost::new(CompilerOptions::default()).with_file(
-    FileId(0),
-    "const p = Promise;\nconst a = Array;",
-  );
+  let host = TestHost::new(CompilerOptions::default())
+    .with_file(FileId(0), "const p = Promise;\nconst a = Array;");
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
   assert!(
@@ -79,13 +77,14 @@ fn bundled_libs_enable_global_promise_and_array() {
 fn missing_libs_emit_unknown_global_diagnostics() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
-  let host = TestHost::new(options).with_file(
-    FileId(0),
-    "const p = Promise;\nconst a = Array;",
-  );
+  let host = TestHost::new(options).with_file(FileId(0), "const p = Promise;\nconst a = Array;");
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
-  assert_eq!(diagnostics.len(), 2, "unexpected diagnostics: {diagnostics:?}");
+  assert_eq!(
+    diagnostics.len(),
+    2,
+    "unexpected diagnostics: {diagnostics:?}"
+  );
   assert!(diagnostics.iter().any(|d| d.message.contains("Promise")));
   assert!(diagnostics.iter().any(|d| d.message.contains("Array")));
 }
