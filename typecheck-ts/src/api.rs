@@ -25,6 +25,10 @@ use tracing::debug_span;
 #[path = "check/mod.rs"]
 pub(crate) mod check;
 
+use check::narrow::{
+  narrow_by_discriminant, narrow_by_in_check, narrow_by_typeof, truthy_falsy_types, Facts,
+};
+
 use crate::lib_support::{CompilerOptions, FileKind, LibFile, LibManager};
 pub(crate) const CODE_NON_DTS_LIB: &str = "TC0004";
 pub(crate) const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
@@ -147,8 +151,10 @@ impl BodyCheckResult {
   pub fn expr_at(&self, offset: u32) -> Option<(ExprId, TypeId)> {
     let mut best: Option<(ExprId, TypeId, u32)> = None;
     for (idx, span) in self.expr_spans.iter().enumerate() {
-      if span.start <= offset && offset < span.end {
-        let width = span.end - span.start;
+      let in_span =
+        (span.start <= offset && offset < span.end) || (span.start == span.end && offset == span.start);
+      if in_span {
+        let width = span.end.saturating_sub(span.start);
         let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
         best = match best {
           Some((_, _, existing)) if existing <= width => best,
@@ -157,6 +163,16 @@ impl BodyCheckResult {
       }
     }
     best.map(|(id, ty, _)| (id, ty))
+  }
+
+  /// Spans for all expressions in this body.
+  pub fn expr_spans(&self) -> &[TextRange] {
+    &self.expr_spans
+  }
+
+  /// Types of all explicit return statements seen while checking the body.
+  pub fn return_types(&self) -> &[TypeId] {
+    &self.return_types
   }
 }
 
@@ -190,6 +206,9 @@ fn format_type(
     TypeKind::Boolean => write!(f, "boolean"),
     TypeKind::Null => write!(f, "null"),
     TypeKind::Undefined => write!(f, "undefined"),
+    TypeKind::LiteralString(s) => write!(f, "\"{}\"", s),
+    TypeKind::LiteralNumber(n) => write!(f, "{}", n),
+    TypeKind::LiteralBoolean(b) => write!(f, "{}", b),
     TypeKind::Void => write!(f, "void"),
     TypeKind::Never => write!(f, "never"),
     TypeKind::Array(inner) => write!(f, "{}[]", program.display_type(inner)),
@@ -244,6 +263,25 @@ fn format_type(
         write!(f, "[index: number]: {}", program.display_type(ty))?;
       }
       write!(f, "}}")
+    }
+    TypeKind::Predicate {
+      parameter,
+      asserted,
+      asserts,
+    } => {
+      if asserts {
+        write!(f, "asserts {}", parameter)?;
+      } else {
+        write!(f, "{}", parameter)?;
+      }
+      if let Some(ty) = asserted {
+        if asserts {
+          write!(f, " is {}", program.display_type(ty))?;
+        } else {
+          write!(f, " is {}", program.display_type(ty))?;
+        }
+      }
+      Ok(())
     }
   }
 }
@@ -465,6 +503,18 @@ enum HirStmt {
     span: TextRange,
   },
   Expr(HirExpr),
+  If {
+    test: HirExpr,
+    consequent: Vec<HirStmt>,
+    alternate: Vec<HirStmt>,
+    span: TextRange,
+  },
+  Block(Vec<HirStmt>),
+  While {
+    test: HirExpr,
+    body: Vec<HirStmt>,
+    span: TextRange,
+  },
 }
 
 #[derive(Clone, Debug)]
@@ -476,11 +526,19 @@ struct HirExpr {
 
 #[derive(Clone, Debug)]
 enum HirExprKind {
-  Number,
-  String,
-  Boolean,
+  NumberLiteral(String),
+  StringLiteral(String),
+  BooleanLiteral(bool),
   Null,
   Ident(String),
+  Member {
+    object: Box<HirExpr>,
+    property: String,
+  },
+  Unary {
+    op: OperatorName,
+    expr: Box<HirExpr>,
+  },
   Binary {
     op: OperatorName,
     left: Box<HirExpr>,
@@ -489,6 +547,11 @@ enum HirExprKind {
   Call {
     callee: Box<HirExpr>,
     args: Vec<HirExpr>,
+  },
+  Conditional {
+    test: Box<HirExpr>,
+    consequent: Box<HirExpr>,
+    alternate: Box<HirExpr>,
   },
   Object(Vec<(String, HirExpr)>),
   TypeAssertion {
@@ -501,7 +564,7 @@ enum HirExprKind {
 }
 
 #[derive(Clone, Debug)]
-struct TypeStore {
+pub(crate) struct TypeStore {
   kinds: Vec<TypeKind>,
 }
 
@@ -533,7 +596,7 @@ impl ObjectType {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum TypeKind {
+pub(crate) enum TypeKind {
   Any,
   Unknown,
   Never,
@@ -543,25 +606,33 @@ enum TypeKind {
   Boolean,
   Null,
   Undefined,
+  LiteralString(String),
+  LiteralNumber(String),
+  LiteralBoolean(bool),
   Array(TypeId),
   Union(Vec<TypeId>),
   Function { params: Vec<TypeId>, ret: TypeId },
+  Predicate {
+    parameter: String,
+    asserted: Option<TypeId>,
+    asserts: bool,
+  },
   Object(ObjectType),
 }
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
-struct BuiltinTypes {
-  any: TypeId,
-  unknown: TypeId,
-  never: TypeId,
-  void: TypeId,
-  number: TypeId,
-  string: TypeId,
-  boolean: TypeId,
-  null: TypeId,
-  undefined: TypeId,
-  object: TypeId,
+pub(crate) struct BuiltinTypes {
+  pub(crate) any: TypeId,
+  pub(crate) unknown: TypeId,
+  pub(crate) never: TypeId,
+  pub(crate) void: TypeId,
+  pub(crate) number: TypeId,
+  pub(crate) string: TypeId,
+  pub(crate) boolean: TypeId,
+  pub(crate) null: TypeId,
+  pub(crate) undefined: TypeId,
+  pub(crate) object: TypeId,
 }
 
 impl TypeStore {
@@ -603,11 +674,20 @@ impl TypeStore {
     id
   }
 
-  fn kind(&self, id: TypeId) -> &TypeKind {
+  pub(crate) fn kind(&self, id: TypeId) -> &TypeKind {
     self.kinds.get(id.0 as usize).unwrap()
   }
 
-  fn union(&mut self, mut types: Vec<TypeId>, builtin: &BuiltinTypes) -> TypeId {
+  pub(crate) fn union(&mut self, mut types: Vec<TypeId>, builtin: &BuiltinTypes) -> TypeId {
+    let mut flat = Vec::new();
+    for ty in types.drain(..) {
+      match self.kind(ty) {
+        TypeKind::Union(members) => flat.extend(members.iter().copied()),
+        TypeKind::Never => {}
+        _ => flat.push(ty),
+      }
+    }
+    types = flat;
     if types.is_empty() {
       return builtin.never;
     }
@@ -620,16 +700,41 @@ impl TypeStore {
     self.alloc(TypeKind::Union(types))
   }
 
-  fn array(&mut self, element: TypeId) -> TypeId {
+  pub(crate) fn array(&mut self, element: TypeId) -> TypeId {
     self.alloc(TypeKind::Array(element))
   }
 
-  fn function(&mut self, params: Vec<TypeId>, ret: TypeId) -> TypeId {
+  pub(crate) fn function(&mut self, params: Vec<TypeId>, ret: TypeId) -> TypeId {
     self.alloc(TypeKind::Function { params, ret })
   }
 
   fn object(&mut self, obj: ObjectType) -> TypeId {
     self.alloc(TypeKind::Object(obj))
+  }
+
+  pub(crate) fn literal_string(&mut self, value: String) -> TypeId {
+    self.alloc(TypeKind::LiteralString(value))
+  }
+
+  pub(crate) fn literal_number(&mut self, value: String) -> TypeId {
+    self.alloc(TypeKind::LiteralNumber(value))
+  }
+
+  pub(crate) fn literal_boolean(&mut self, value: bool) -> TypeId {
+    self.alloc(TypeKind::LiteralBoolean(value))
+  }
+
+  pub(crate) fn predicate(
+    &mut self,
+    parameter: String,
+    asserted: Option<TypeId>,
+    asserts: bool,
+  ) -> TypeId {
+    self.alloc(TypeKind::Predicate {
+      parameter,
+      asserted,
+      asserts,
+    })
   }
 }
 
@@ -1105,6 +1210,9 @@ impl ProgramState {
           let expr = top_body.lower_expr(expr_stmt.stx.expr, self);
           top_body.stmts.push(HirStmt::Expr(expr));
         }
+        Stmt::If(_) | Stmt::Block(_) | Stmt::While(_) => {
+          top_body.lower_stmt(stmt, self);
+        }
         _ => {}
       }
     }
@@ -1379,7 +1487,11 @@ impl ProgramState {
         symbol,
         def,
       } => {
-        let init_ty = init.as_ref().map(|e| self.check_expr(e, env, result, file));
+        let init_checked = init.as_ref().map(|e| self.check_expr(e, env, result, file));
+        let init_ty = init_checked.map(|(ty, facts)| {
+          self.apply_fact_map(env, &facts.assertions);
+          ty
+        });
         let declared = if let Some(annotated) = *typ {
           if let (Some(expr), Some(source_ty)) = (init.as_ref(), init_ty) {
             check::assign::check_assignment(self, Some(expr), source_ty, annotated, result, file);
@@ -1406,12 +1518,60 @@ impl ProgramState {
       HirStmt::Return { expr, .. } => {
         let ty = expr
           .as_ref()
-          .map(|e| self.check_expr(e, env, result, file))
+          .map(|e| self.check_expr(e, env, result, file).0)
           .unwrap_or(self.builtin.undefined);
         result.return_types.push(ty);
       }
       HirStmt::Expr(expr) => {
-        self.check_expr(expr, env, result, file);
+        let (_, facts) = self.check_expr(expr, env, result, file);
+        self.apply_fact_map(env, &facts.assertions);
+      }
+      HirStmt::If {
+        test,
+        consequent,
+        alternate,
+        ..
+      } => {
+        let (_, cond_facts) = self.check_expr(test, env, result, file);
+        let mut then_env = env.clone();
+        self.apply_fact_map(&mut then_env, &cond_facts.truthy);
+        self.apply_fact_map(&mut then_env, &cond_facts.assertions);
+        let mut else_env = env.clone();
+        self.apply_fact_map(&mut else_env, &cond_facts.falsy);
+        self.apply_fact_map(&mut else_env, &cond_facts.assertions);
+
+        for stmt in consequent {
+          self.check_stmt(stmt, &mut then_env, result, file);
+        }
+        for stmt in alternate {
+          self.check_stmt(stmt, &mut else_env, result, file);
+        }
+
+        let then_returns = self.branch_returns(consequent);
+        let else_returns = self.branch_returns(alternate);
+        *env = match (then_returns, else_returns) {
+          (true, false) => else_env,
+          (false, true) => then_env,
+          (true, true) => env.clone(),
+          _ => self.merge_envs(&then_env, &else_env),
+        };
+      }
+      HirStmt::Block(stmts) => {
+        for stmt in stmts {
+          self.check_stmt(stmt, env, result, file);
+        }
+      }
+      HirStmt::While { test, body, .. } => {
+        let (_, cond_facts) = self.check_expr(test, env, result, file);
+        let mut body_env = env.clone();
+        self.apply_fact_map(&mut body_env, &cond_facts.truthy);
+        self.apply_fact_map(&mut body_env, &cond_facts.assertions);
+        for stmt in body {
+          self.check_stmt(stmt, &mut body_env, result, file);
+        }
+        let mut merged = self.merge_envs(env, &body_env);
+        self.apply_fact_map(&mut merged, &cond_facts.falsy);
+        *env = merged;
       }
     }
   }
@@ -1422,29 +1582,22 @@ impl ProgramState {
     env: &mut HashMap<String, SymbolBinding>,
     result: &mut BodyCheckResult,
     file: FileId,
-  ) -> TypeId {
+  ) -> (TypeId, Facts) {
+    let mut facts = Facts::default();
     let ty = match &expr.kind {
-      HirExprKind::Number => self.builtin.number,
-      HirExprKind::String => self.builtin.string,
-      HirExprKind::Boolean => self.builtin.boolean,
+      HirExprKind::NumberLiteral(n) => self.type_store.literal_number(n.clone()),
+      HirExprKind::StringLiteral(s) => self.type_store.literal_string(s.clone()),
+      HirExprKind::BooleanLiteral(b) => self.type_store.literal_boolean(*b),
       HirExprKind::Null => self.builtin.null,
       HirExprKind::Ident(name) => {
+        let mut ty = self.builtin.unknown;
         if let Some(binding) = env.get(name).cloned() {
           self.record_symbol(file, expr.span, binding.symbol);
-          if let Some(ty) = binding.type_id {
-            ty
+          if let Some(t) = binding.type_id {
+            ty = t;
           } else if let Some(def_id) = binding.def {
-            let ty = self.type_of_def(def_id);
-            env.insert(
-              name.clone(),
-              SymbolBinding {
-                type_id: Some(ty),
-                ..binding
-              },
-            );
-            ty
-          } else {
-            self.builtin.unknown
+            let resolved = self.type_of_def(def_id);
+            ty = resolved;
           }
         } else {
           result.diagnostics.push(Diagnostic::error(
@@ -1452,47 +1605,274 @@ impl ProgramState {
             format!("Cannot find name '{name}'."),
             Span::new(file, expr.span),
           ));
-          self.builtin.unknown
         }
+        if let Some(binding) = env.get_mut(name) {
+          if binding.type_id.is_none() {
+            binding.type_id = Some(ty);
+          }
+        }
+        let (truthy, falsy) = truthy_falsy_types(ty, &mut self.type_store, &self.builtin);
+        if truthy != self.builtin.never {
+          facts.truthy.insert(name.clone(), truthy);
+        }
+        if falsy != self.builtin.never {
+          facts.falsy.insert(name.clone(), falsy);
+        }
+        ty
       }
-      HirExprKind::Binary { op, left, right } => {
-        let left_ty = self.check_expr(left, env, result, file);
-        let right_ty = self.check_expr(right, env, result, file);
-        match op {
-          OperatorName::Addition => {
-            if left_ty == self.builtin.string || right_ty == self.builtin.string {
-              self.builtin.string
-            } else if left_ty == self.builtin.number && right_ty == self.builtin.number {
-              self.builtin.number
+      HirExprKind::Member { object, property } => {
+        let (obj_ty, _) = self.check_expr(object, env, result, file);
+        let lookup_prop = |obj: &ObjectType| {
+          if let Some(prop) = obj.props.get(property) {
+            Some(prop.typ)
+          } else if property.parse::<usize>().is_ok() {
+            obj.number_index.or(obj.string_index)
+          } else {
+            obj.string_index
+          }
+        };
+        match self.type_store.kind(obj_ty) {
+          TypeKind::Object(obj) => lookup_prop(obj).unwrap_or(self.builtin.unknown),
+          TypeKind::Union(members) => {
+            let members = members.clone();
+            let mut collected = Vec::new();
+            for member in members {
+              if let TypeKind::Object(obj) = self.type_store.kind(member) {
+                if let Some(t) = lookup_prop(obj) {
+                  collected.push(t);
+                }
+              }
+            }
+            if collected.is_empty() {
+              self.builtin.unknown
             } else {
-              self
-                .type_store
-                .union(vec![left_ty, right_ty], &self.builtin)
+              self.type_store.union(collected, &self.builtin)
             }
           }
-          OperatorName::Subtraction
-          | OperatorName::Multiplication
-          | OperatorName::Division
-          | OperatorName::Remainder
-          | OperatorName::BitwiseAnd
-          | OperatorName::BitwiseOr
-          | OperatorName::BitwiseXor
-          | OperatorName::BitwiseLeftShift
-          | OperatorName::BitwiseRightShift
-          | OperatorName::BitwiseUnsignedRightShift => self.builtin.number,
-          OperatorName::GreaterThan
-          | OperatorName::GreaterThanOrEqual
-          | OperatorName::LessThan
-          | OperatorName::LessThanOrEqual => self.builtin.boolean,
-          OperatorName::Equality
-          | OperatorName::Inequality
-          | OperatorName::StrictEquality
-          | OperatorName::StrictInequality => self.builtin.boolean,
           _ => self.builtin.unknown,
         }
       }
+      HirExprKind::Unary { op, expr: inner } => match op {
+        OperatorName::LogicalNot => {
+          let (_inner_ty, inner_facts) = self.check_expr(inner, env, result, file);
+          facts.truthy = inner_facts.falsy;
+          facts.falsy = inner_facts.truthy;
+          facts.assertions = inner_facts.assertions;
+          self.builtin.boolean
+        }
+        OperatorName::Typeof => self.type_store.literal_string("string".to_string()),
+        _ => {
+          let _ = self.check_expr(inner, env, result, file);
+          self.builtin.unknown
+        }
+      },
+      HirExprKind::Binary { op, left, right } => match op {
+        OperatorName::LogicalAnd => {
+          let (lt, lf) = self.check_expr(left, env, result, file);
+          let mut right_env = env.clone();
+          self.apply_fact_map(&mut right_env, &lf.truthy);
+          self.apply_fact_map(&mut right_env, &lf.assertions);
+          let (rt, rf) = self.check_expr(right, &mut right_env, result, file);
+
+          let rf_truthy = rf.truthy;
+          let rf_falsy = rf.falsy;
+          let rf_assertions = rf.assertions;
+
+          facts.truthy = rf_truthy;
+          facts.falsy = lf.falsy;
+          facts.assertions = lf.assertions;
+          facts.merge(
+            Facts {
+              falsy: rf_falsy,
+              assertions: rf_assertions,
+              ..Default::default()
+            },
+            &mut self.type_store,
+            &self.builtin,
+          );
+
+          self.type_store.union(vec![lt, rt], &self.builtin)
+        }
+        OperatorName::LogicalOr => {
+          let (lt, lf) = self.check_expr(left, env, result, file);
+          let mut right_env = env.clone();
+          self.apply_fact_map(&mut right_env, &lf.falsy);
+          self.apply_fact_map(&mut right_env, &lf.assertions);
+          let (rt, rf) = self.check_expr(right, &mut right_env, result, file);
+
+          facts.truthy = lf.truthy;
+          facts.merge(
+            Facts {
+              truthy: rf.truthy,
+              ..Default::default()
+            },
+            &mut self.type_store,
+            &self.builtin,
+          );
+          facts.falsy = rf.falsy;
+          facts.assertions = lf.assertions;
+          facts.merge(
+            Facts {
+              assertions: rf.assertions,
+              ..Default::default()
+            },
+            &mut self.type_store,
+            &self.builtin,
+          );
+
+          self.type_store.union(vec![lt, rt], &self.builtin)
+        }
+        OperatorName::Equality | OperatorName::StrictEquality => {
+          let (_lt, lfacts) = self.check_expr(left, env, result, file);
+          let (_rt, rfacts) = self.check_expr(right, env, result, file);
+          // typeof x === "string"
+          if let HirExprKind::Unary {
+            op: OperatorName::Typeof,
+            expr: inner,
+          } = &left.kind
+          {
+            if let HirExprKind::StringLiteral(value) = &right.kind {
+              let (inner_ty, _) = self.check_expr(inner, env, result, file);
+              if let HirExprKind::Ident(name) = &inner.kind {
+                let (yes, no) = narrow_by_typeof(
+                  inner_ty,
+                  value.as_str(),
+                  &mut self.type_store,
+                  &self.builtin,
+                );
+                if yes != self.builtin.never {
+                  facts.truthy.insert(name.clone(), yes);
+                }
+                if no != self.builtin.never {
+                  facts.falsy.insert(name.clone(), no);
+                }
+              }
+            }
+          }
+          // discriminant check x.kind === "foo"
+          if let HirExprKind::Member { object, property } = &left.kind {
+            if let HirExprKind::StringLiteral(value) = &right.kind {
+              let (obj_ty, _) = self.check_expr(object, env, result, file);
+              if let HirExprKind::Ident(obj_name) = &object.kind {
+                let (yes, no) = narrow_by_discriminant(
+                  obj_ty,
+                  property,
+                  value,
+                  &mut self.type_store,
+                  &self.builtin,
+                );
+                if yes != self.builtin.never {
+                  facts.truthy.insert(obj_name.clone(), yes);
+                }
+                if no != self.builtin.never {
+                  facts.falsy.insert(obj_name.clone(), no);
+                }
+              }
+            }
+          }
+          // symmetric case
+          if let HirExprKind::Member { object, property } = &right.kind {
+            if let HirExprKind::StringLiteral(value) = &left.kind {
+              let (obj_ty, _) = self.check_expr(object, env, result, file);
+              if let HirExprKind::Ident(obj_name) = &object.kind {
+                let (yes, no) = narrow_by_discriminant(
+                  obj_ty,
+                  property,
+                  value,
+                  &mut self.type_store,
+                  &self.builtin,
+                );
+                if yes != self.builtin.never {
+                  facts.truthy.insert(obj_name.clone(), yes);
+                }
+                if no != self.builtin.never {
+                  facts.falsy.insert(obj_name.clone(), no);
+                }
+              }
+            }
+          }
+          facts.merge(lfacts, &mut self.type_store, &self.builtin);
+          facts.merge(rfacts, &mut self.type_store, &self.builtin);
+          self.builtin.boolean
+        }
+        OperatorName::Instanceof => {
+          let (_lt, lf) = self.check_expr(left, env, result, file);
+          let (_rt, rf) = self.check_expr(right, env, result, file);
+          facts.merge(lf, &mut self.type_store, &self.builtin);
+          facts.merge(rf, &mut self.type_store, &self.builtin);
+          self.builtin.boolean
+        }
+        OperatorName::In => {
+          let (_lt, lf) = self.check_expr(left, env, result, file);
+          let (rt, rf) = self.check_expr(right, env, result, file);
+          if let HirExprKind::StringLiteral(prop) = &left.kind {
+            if let HirExprKind::Ident(name) = &right.kind {
+              let (yes, no) = narrow_by_in_check(
+                rt,
+                prop,
+                &mut self.type_store,
+                &self.builtin,
+              );
+              if yes != self.builtin.never {
+                facts.truthy.insert(name.clone(), yes);
+              }
+              if no != self.builtin.never {
+                facts.falsy.insert(name.clone(), no);
+              }
+            }
+          }
+          facts.merge(lf, &mut self.type_store, &self.builtin);
+          facts.merge(rf, &mut self.type_store, &self.builtin);
+          self.builtin.boolean
+        }
+        _ => {
+          let (left_ty, lfacts) = self.check_expr(left, env, result, file);
+          let (right_ty, rfacts) = self.check_expr(right, env, result, file);
+          facts.merge(lfacts, &mut self.type_store, &self.builtin);
+          facts.merge(rfacts, &mut self.type_store, &self.builtin);
+          match op {
+            OperatorName::Addition => {
+              let left_kind = self.type_store.kind(left_ty);
+              let right_kind = self.type_store.kind(right_ty);
+              let left_is_string =
+                matches!(left_kind, TypeKind::String | TypeKind::LiteralString(_));
+              let right_is_string =
+                matches!(right_kind, TypeKind::String | TypeKind::LiteralString(_));
+              let left_is_number =
+                matches!(left_kind, TypeKind::Number | TypeKind::LiteralNumber(_));
+              let right_is_number =
+                matches!(right_kind, TypeKind::Number | TypeKind::LiteralNumber(_));
+              if left_is_string || right_is_string {
+                self.builtin.string
+              } else if left_is_number && right_is_number {
+                self.builtin.number
+              } else {
+                self
+                  .type_store
+                  .union(vec![left_ty, right_ty], &self.builtin)
+              }
+            }
+            OperatorName::Subtraction
+            | OperatorName::Multiplication
+            | OperatorName::Division
+            | OperatorName::Remainder
+            | OperatorName::BitwiseAnd
+            | OperatorName::BitwiseOr
+            | OperatorName::BitwiseXor
+            | OperatorName::BitwiseLeftShift
+            | OperatorName::BitwiseRightShift
+            | OperatorName::BitwiseUnsignedRightShift => self.builtin.number,
+            OperatorName::GreaterThan
+            | OperatorName::GreaterThanOrEqual
+            | OperatorName::LessThan
+            | OperatorName::LessThanOrEqual => self.builtin.boolean,
+            OperatorName::Inequality | OperatorName::StrictInequality => self.builtin.boolean,
+            _ => self.builtin.unknown,
+          }
+        }
+      },
       HirExprKind::Call { callee, args } => {
-        let callee_ty = self.check_expr(callee, env, result, file);
+        let (callee_ty, _) = self.check_expr(callee, env, result, file);
         if let TypeKind::Function { params, ret } = self.type_store.kind(callee_ty).clone() {
           if params.len() != args.len() {
             result.diagnostics.push(Diagnostic::error(
@@ -1504,16 +1884,78 @@ impl ProgramState {
               },
             ));
           }
+          let mut arg_types = Vec::new();
           for (idx, arg) in args.iter().enumerate() {
-            let arg_ty = self.check_expr(arg, env, result, file);
+            let (arg_ty, _) = self.check_expr(arg, env, result, file);
+            arg_types.push(arg_ty);
             if let Some(expected) = params.get(idx) {
               check::assign::check_assignment(self, Some(arg), arg_ty, *expected, result, file);
             }
           }
-          ret
+          match self.type_store.kind(ret).clone() {
+            TypeKind::Predicate {
+              parameter: _parameter,
+              asserted,
+              asserts,
+            } => {
+              let arg_ty = arg_types.get(0).copied().unwrap_or(self.builtin.unknown);
+              if let Some(first_arg) = args.get(0) {
+                if let HirExprKind::Ident(name) = &first_arg.kind {
+                  if let Some(asserted_ty) = asserted {
+                    if asserts {
+                      facts.assertions.insert(name.clone(), asserted_ty);
+                    } else {
+                      facts.truthy.insert(name.clone(), asserted_ty);
+                      let complement = match self.type_store.kind(arg_ty).clone() {
+                        TypeKind::Union(members) => {
+                          let remaining: Vec<_> =
+                            members.into_iter().filter(|m| *m != asserted_ty).collect();
+                          self.type_store.union(remaining, &self.builtin)
+                        }
+                        _ => {
+                          if arg_ty == asserted_ty {
+                            self.builtin.never
+                          } else {
+                            arg_ty
+                          }
+                        }
+                      };
+                      if complement != self.builtin.never {
+                        facts.falsy.insert(name.clone(), complement);
+                      }
+                    }
+                  }
+                }
+              }
+              if asserts {
+                self.builtin.void
+              } else {
+                self.builtin.boolean
+              }
+            }
+            _ => ret,
+          }
         } else {
           self.builtin.unknown
         }
+      }
+      HirExprKind::Conditional {
+        test,
+        consequent,
+        alternate,
+      } => {
+        let (_, cond_facts) = self.check_expr(test, env, result, file);
+        let mut then_env = env.clone();
+        self.apply_fact_map(&mut then_env, &cond_facts.truthy);
+        self.apply_fact_map(&mut then_env, &cond_facts.assertions);
+        let mut else_env = env.clone();
+        self.apply_fact_map(&mut else_env, &cond_facts.falsy);
+        self.apply_fact_map(&mut else_env, &cond_facts.assertions);
+        let (cons_ty, cons_facts) = self.check_expr(consequent, &mut then_env, result, file);
+        let (alt_ty, alt_facts) = self.check_expr(alternate, &mut else_env, result, file);
+        facts.merge(cons_facts, &mut self.type_store, &self.builtin);
+        facts.merge(alt_facts, &mut self.type_store, &self.builtin);
+        self.type_store.union(vec![cons_ty, alt_ty], &self.builtin)
       }
       HirExprKind::Object(props) => {
         let mut obj = ObjectType::empty();
@@ -1521,7 +1963,7 @@ impl ProgramState {
           if k == "..." {
             continue;
           }
-          let ty = self.check_expr(v, env, result, file);
+          let (ty, _) = self.check_expr(v, env, result, file);
           obj.props.insert(
             k.clone(),
             ObjectProperty {
@@ -1535,21 +1977,69 @@ impl ProgramState {
       HirExprKind::Array(values) => {
         let mut tys = Vec::new();
         for v in values {
-          tys.push(self.check_expr(v, env, result, file));
+          tys.push(self.check_expr(v, env, result, file).0);
         }
         let elem = self.type_store.union(tys, &self.builtin);
         self.type_store.array(elem)
       }
       HirExprKind::TypeAssertion { expr, typ, .. } => {
-        let inner = self.check_expr(expr, env, result, file);
-        typ.unwrap_or(inner)
+        let (inner_ty, inner_facts) = self.check_expr(expr, env, result, file);
+        facts = inner_facts;
+        (*typ).unwrap_or(inner_ty)
       }
       HirExprKind::Unknown => self.builtin.unknown,
     };
     if let Some(slot) = result.expr_types.get_mut(expr.id.0 as usize) {
       *slot = ty;
     }
-    ty
+    (ty, facts)
+  }
+
+  fn apply_fact_map(
+    &mut self,
+    env: &mut HashMap<String, SymbolBinding>,
+    facts: &HashMap<String, TypeId>,
+  ) {
+    for (name, ty) in facts.iter() {
+      if let Some(binding) = env.get_mut(name) {
+        binding.type_id = Some(*ty);
+      }
+    }
+  }
+
+  fn merge_envs(
+    &mut self,
+    left: &HashMap<String, SymbolBinding>,
+    right: &HashMap<String, SymbolBinding>,
+  ) -> HashMap<String, SymbolBinding> {
+    let mut merged = left.clone();
+    for (name, binding) in right.iter() {
+      merged
+        .entry(name.clone())
+        .and_modify(|existing| {
+          existing.type_id = match (existing.type_id, binding.type_id) {
+            (Some(a), Some(b)) => Some(self.type_store.union(vec![a, b], &self.builtin)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+          };
+        })
+        .or_insert_with(|| binding.clone());
+    }
+    merged
+  }
+
+  fn branch_returns(&self, stmts: &[HirStmt]) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+      HirStmt::Return { .. } => true,
+      HirStmt::Block(inner) => self.branch_returns(inner),
+      HirStmt::If {
+        consequent,
+        alternate,
+        ..
+      } => self.branch_returns(consequent) && self.branch_returns(alternate),
+      _ => false,
+    })
   }
 
   fn initial_env(&self, owner: Option<DefId>, file: FileId) -> HashMap<String, SymbolBinding> {
@@ -1800,18 +2290,22 @@ impl ProgramState {
       }
       TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(&inner.stx.type_expr),
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {
-        TypeLiteral::Boolean(value) => {
-          if *value {
-            self.builtin.boolean
-          } else {
-            self.builtin.boolean
-          }
-        }
-        TypeLiteral::Number(_) => self.builtin.number,
-        TypeLiteral::String(_) => self.builtin.string,
+        TypeLiteral::Boolean(value) => self.type_store.literal_boolean(*value),
+        TypeLiteral::Number(n) => self.type_store.literal_number(n.clone()),
+        TypeLiteral::String(s) => self.type_store.literal_string(s.clone()),
         TypeLiteral::Null => self.builtin.null,
         _ => self.builtin.unknown,
       },
+      TypeExpr::TypePredicate(pred) => {
+        let asserted = pred
+          .stx
+          .type_annotation
+          .as_ref()
+          .map(|t| self.type_from_type_expr(t));
+        self
+          .type_store
+          .predicate(pred.stx.parameter_name.clone(), asserted, pred.stx.asserts)
+      }
       _ => self.builtin.unknown,
     }
   }
@@ -1878,7 +2372,12 @@ impl BodyBuilder {
     HirExpr { id, span, kind }
   }
 
-  fn lower_stmt(&mut self, stmt: Node<Stmt>, state: &mut ProgramState) {
+  fn lower_stmt_into(
+    &mut self,
+    stmt: Node<Stmt>,
+    state: &mut ProgramState,
+    out: &mut Vec<HirStmt>,
+  ) {
     match *stmt.stx {
       Stmt::VarDecl(var) => {
         let stmt_span = loc_to_span(self.file, stmt.loc).range;
@@ -1904,7 +2403,7 @@ impl BodyBuilder {
             .map(|expr| self.lower_expr(expr, state));
           let symbol = state.alloc_symbol();
           state.record_symbol(self.file, loc_to_span(self.file, pat.loc).range, symbol);
-          self.stmts.push(HirStmt::Var {
+          out.push(HirStmt::Var {
             name,
             typ,
             init,
@@ -1916,32 +2415,79 @@ impl BodyBuilder {
       }
       Stmt::Return(ret) => {
         let expr = ret.stx.value.map(|e| self.lower_expr(e, state));
-        self.stmts.push(HirStmt::Return {
+        out.push(HirStmt::Return {
           expr,
           span: loc_to_span(self.file, ret.loc).range,
         });
       }
       Stmt::Expr(expr_stmt) => {
         let expr = self.lower_expr(expr_stmt.stx.expr, state);
-        self.stmts.push(HirStmt::Expr(expr));
+        out.push(HirStmt::Expr(expr));
       }
       Stmt::Block(block) => {
+        let mut inner = Vec::new();
         for stmt in block.stx.body {
-          self.lower_stmt(stmt, state);
+          self.lower_stmt_into(stmt, state, &mut inner);
         }
+        out.push(HirStmt::Block(inner));
+      }
+      Stmt::If(if_stmt) => {
+        let test = self.lower_expr(if_stmt.stx.test, state);
+        let mut consequent = Vec::new();
+        self.lower_stmt_into(if_stmt.stx.consequent, state, &mut consequent);
+        let mut alternate_vec = Vec::new();
+        if let Some(alt) = if_stmt.stx.alternate {
+          self.lower_stmt_into(alt, state, &mut alternate_vec);
+        }
+        out.push(HirStmt::If {
+          test,
+          consequent,
+          alternate: alternate_vec,
+          span: loc_to_span(self.file, if_stmt.loc).range,
+        });
+      }
+      Stmt::While(wh) => {
+        let test = self.lower_expr(wh.stx.condition, state);
+        let mut body_stmts = Vec::new();
+        self.lower_stmt_into(wh.stx.body, state, &mut body_stmts);
+        out.push(HirStmt::While {
+          test,
+          body: body_stmts,
+          span: loc_to_span(self.file, wh.loc).range,
+        });
       }
       _ => {}
     }
   }
 
+  fn lower_stmt(&mut self, stmt: Node<Stmt>, state: &mut ProgramState) {
+    let mut out = Vec::new();
+    self.lower_stmt_into(stmt, state, &mut out);
+    self.stmts.extend(out);
+  }
+
   fn lower_expr(&mut self, expr: Node<Expr>, state: &mut ProgramState) -> HirExpr {
     let span = loc_to_span(self.file, expr.loc).range;
     let kind = match *expr.stx {
-      Expr::LitNum(_) => HirExprKind::Number,
-      Expr::LitStr(_) => HirExprKind::String,
-      Expr::LitBool(_) => HirExprKind::Boolean,
+      Expr::LitNum(num) => HirExprKind::NumberLiteral(num.stx.value.to_string()),
+      Expr::LitStr(s) => HirExprKind::StringLiteral(s.stx.value),
+      Expr::LitBool(b) => HirExprKind::BooleanLiteral(b.stx.value),
       Expr::LitNull(_) => HirExprKind::Null,
       Expr::Id(id) => HirExprKind::Ident(id.stx.name.clone()),
+      Expr::Member(mem) => {
+        let object = self.lower_expr(mem.stx.left, state);
+        HirExprKind::Member {
+          object: Box::new(object),
+          property: mem.stx.right,
+        }
+      }
+      Expr::Unary(unary) => {
+        let arg = self.lower_expr(unary.stx.argument, state);
+        HirExprKind::Unary {
+          op: unary.stx.operator,
+          expr: Box::new(arg),
+        }
+      }
       Expr::Binary(bin) => {
         let left = self.lower_expr(bin.stx.left, state);
         let right = self.lower_expr(bin.stx.right, state);
@@ -1962,6 +2508,16 @@ impl BodyBuilder {
           args,
         }
       }
+      Expr::Cond(cond) => {
+        let test = self.lower_expr(cond.stx.test, state);
+        let cons = self.lower_expr(cond.stx.consequent, state);
+        let alt = self.lower_expr(cond.stx.alternate, state);
+        HirExprKind::Conditional {
+          test: Box::new(test),
+          consequent: Box::new(cons),
+          alternate: Box::new(alt),
+        }
+      }
       Expr::LitArr(arr) => {
         let mut values = Vec::new();
         for el in arr.stx.elements.into_iter() {
@@ -1976,7 +2532,15 @@ impl BodyBuilder {
       Expr::LitObj(obj) => {
         HirExprKind::Object(lower_object_literal(self.file, *obj.stx, state, self))
       }
-      Expr::LitTemplate(_) => HirExprKind::String,
+      Expr::LitTemplate(tmpl) => {
+        let mut text = String::new();
+        for part in tmpl.stx.parts.iter() {
+          if let parse_js::ast::expr::lit::LitTemplatePart::String(s) = part {
+            text.push_str(s);
+          }
+        }
+        HirExprKind::StringLiteral(text)
+      }
       Expr::TypeAssertion(assert) => {
         let expr = self.lower_expr(*assert.stx.expression, state);
         let typ = assert

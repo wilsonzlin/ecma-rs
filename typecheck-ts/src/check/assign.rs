@@ -49,9 +49,16 @@ fn is_assignable(state: &mut ProgramState, source_ty: TypeId, target_ty: TypeId)
     _ => {}
   }
 
-  if matches!(state.type_store.kind(target_ty), TypeKind::Void)
-    && matches!(source_kind, TypeKind::Undefined)
-  {
+  let target_kind = state.type_store.kind(target_ty).clone();
+
+  match (&source_kind, &target_kind) {
+    (TypeKind::LiteralString(_), TypeKind::String)
+    | (TypeKind::LiteralNumber(_), TypeKind::Number)
+    | (TypeKind::LiteralBoolean(_), TypeKind::Boolean) => return true,
+    _ => {}
+  }
+
+  if matches!(target_kind, TypeKind::Void) && matches!(source_kind, TypeKind::Undefined) {
     return true;
   }
 
@@ -59,7 +66,7 @@ fn is_assignable(state: &mut ProgramState, source_ty: TypeId, target_ty: TypeId)
     return true;
   }
 
-  match state.type_store.kind(target_ty).clone() {
+  match target_kind {
     TypeKind::Union(types) => types
       .into_iter()
       .any(|member| is_assignable(state, source_ty, member)),

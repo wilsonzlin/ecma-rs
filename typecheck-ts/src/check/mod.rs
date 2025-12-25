@@ -5,3 +5,6 @@ pub(super) mod assign;
 pub(crate) mod infer;
 pub(crate) mod instantiate;
 pub(super) mod object_literal;
+pub(super) mod cfg;
+pub(super) mod flow;
+pub(super) mod narrow;
