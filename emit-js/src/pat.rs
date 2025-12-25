@@ -1,40 +1,17 @@
-use std::fmt;
-
 use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ParamDecl, PatDecl};
-use parse_js::ast::type_expr::TypeExpr;
 use parse_js::token::TT;
 
 use crate::emit_string_literal_double_quoted;
-use crate::emit_type_expr;
 use crate::expr::EmitResult;
+use crate::expr::emit_expr_with_emitter;
 use crate::Emitter;
 
-struct EmitterWriteAdapter<'a> {
-  emitter: &'a mut Emitter,
-}
-
-impl fmt::Write for EmitterWriteAdapter<'_> {
-  fn write_str(&mut self, s: &str) -> fmt::Result {
-    self.emitter.write_str(s);
-    Ok(())
-  }
-
-  fn write_char(&mut self, c: char) -> fmt::Result {
-    let mut buf = [0u8; 4];
-    let encoded = c.encode_utf8(&mut buf);
-    self.emitter.write_str(encoded);
-    Ok(())
-  }
-}
-
 fn emit_expr(out: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
-  let mut adapter = EmitterWriteAdapter { emitter: out };
-  let mut emit_type = |out: &mut EmitterWriteAdapter<'_>, ty: &Node<TypeExpr>| emit_type_expr(out, ty);
-  crate::expr::emit_expr(&mut adapter, expr, &mut emit_type)
+  emit_expr_with_emitter(out, expr)
 }
 
 pub fn emit_pat(out: &mut Emitter, pat: &Node<Pat>) -> EmitResult {

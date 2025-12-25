@@ -12,6 +12,7 @@ use crate::emitter::{with_node_context, EmitError, EmitResult};
 use crate::expr_ts::{
   NON_NULL_ASSERTION_PRECEDENCE, SATISFIES_PRECEDENCE, TYPE_ASSERTION_PRECEDENCE,
 };
+use crate::Emitter;
 
 const PRIMARY_PRECEDENCE: u8 = 19;
 const CALL_MEMBER_PRECEDENCE: u8 = 18; // Matches OperatorName::Call/MemberAccess precedence.
@@ -244,6 +245,30 @@ where
 {
   let mut emitter = ExprEmitter::new(out, emit_type);
   emitter.emit_expr(expr)
+}
+
+pub fn emit_expr_with_emitter(out: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
+  struct EmitterWriteAdapter<'a> {
+    emitter: &'a mut Emitter,
+  }
+
+  impl fmt::Write for EmitterWriteAdapter<'_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+      self.emitter.write_str(s);
+      Ok(())
+    }
+
+    fn write_char(&mut self, c: char) -> fmt::Result {
+      let mut buf = [0u8; 4];
+      let encoded = c.encode_utf8(&mut buf);
+      self.emitter.write_str(encoded);
+      Ok(())
+    }
+  }
+
+  let mut adapter = EmitterWriteAdapter { emitter: out };
+  let mut emit_type = |out: &mut EmitterWriteAdapter<'_>, ty: &Node<TypeExpr>| crate::emit_type_expr(out, ty);
+  emit_expr(&mut adapter, expr, &mut emit_type)
 }
 
 fn expr_precedence(expr: &Node<Expr>) -> Result<u8, EmitError> {
