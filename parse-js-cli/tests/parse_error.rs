@@ -7,7 +7,7 @@ fn prints_diagnostic_on_parse_error() {
   let assert = cmd.write_stdin("function {").assert().failure().code(1);
   let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
 
-  assert!(stderr.contains("error[PARSE"));
+  assert!(stderr.contains("error[PS"));
   assert!(stderr.contains("<stdin>:1:"));
   assert!(stderr.contains('^'));
 }

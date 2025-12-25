@@ -670,6 +670,7 @@ fn read_baseline(path: &Path) -> Result<TscDiagnostics> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use crate::tsc::TscDiagnostic;
 
   #[test]
   fn determines_test_name_for_d_ts() {

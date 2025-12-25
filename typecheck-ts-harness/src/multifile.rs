@@ -309,6 +309,6 @@ const second = 2;
     assert!(result
       .notes
       .iter()
-      .any(|n| n.contains("duplicate @filename entry for src/util.ts")));
+      .any(|n| n.contains("duplicate @filename entry for /src/util.ts")));
   }
 }
