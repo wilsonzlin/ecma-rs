@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info_span, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -401,6 +401,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   let compare_mode = resolve_compare_mode(opts.compare, tsc_available, &snapshot_store);
 
   let job_count = opts.jobs.max(1);
+  let tsc_limiter = Arc::new(ConcurrencyLimiter::new(job_count));
   let pool = rayon::ThreadPoolBuilder::new()
     .num_threads(job_count)
     .build()
@@ -419,6 +420,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
             &tsc_runner,
             tsc_available,
             &snapshot_store,
+            tsc_limiter.clone(),
             &opts,
           )
         };
@@ -535,6 +537,7 @@ fn run_single_case(
   tsc_runner: &TscRunner,
   tsc_available: bool,
   snapshots: &SnapshotStore,
+  tsc_limiter: Arc<ConcurrencyLimiter>,
   opts: &ConformanceOptions,
 ) -> TestResult {
   let (tx, rx) = mpsc::channel();
@@ -561,6 +564,7 @@ fn run_single_case(
       span_tolerance,
       update_snapshots,
       collect_query_stats,
+      tsc_limiter,
     );
     let _ = tx.send(result);
   });
@@ -592,6 +596,7 @@ fn execute_case(
   span_tolerance: u32,
   update_snapshots: bool,
   collect_query_stats: bool,
+  tsc_limiter: Arc<ConcurrencyLimiter>,
 ) -> TestResult {
   let start = Instant::now();
   if let Some(delay) = harness_sleep_for_case(&case.id) {
@@ -608,7 +613,7 @@ fn execute_case(
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
     CompareMode::Tsc => {
       if tsc_available {
-        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &harness_options);
+        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &harness_options, &tsc_limiter);
         tsc_raw = raw;
         diag
       } else {
@@ -618,7 +623,8 @@ fn execute_case(
     CompareMode::Snapshot => {
       if update_snapshots {
         if tsc_available {
-          let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &harness_options);
+          let (diag, raw) =
+            run_tsc_with_raw(&tsc_runner, &file_set, &harness_options, &tsc_limiter);
           tsc_raw = raw;
           diag
         } else {
@@ -721,7 +727,9 @@ fn run_tsc_with_raw(
   runner: &TscRunner,
   file_set: &HarnessFileSet,
   options: &HarnessOptions,
+  limiter: &ConcurrencyLimiter,
 ) -> (EngineDiagnostics, Option<Vec<TscDiagnostic>>) {
+  let _permit = limiter.acquire();
   match runner.run(file_set, options) {
     Ok(diags) => (
       EngineDiagnostics::ok(normalize_tsc_diagnostics(&diags)),
@@ -1016,6 +1024,55 @@ struct SnapshotStore {
   base: PathBuf,
 }
 
+#[derive(Clone, Debug)]
+struct ConcurrencyLimiter {
+  inner: Arc<LimiterInner>,
+}
+
+#[derive(Debug)]
+struct LimiterInner {
+  max: usize,
+  active: Mutex<usize>,
+  cv: Condvar,
+}
+
+impl ConcurrencyLimiter {
+  fn new(max: usize) -> Self {
+    let max = max.max(1);
+    ConcurrencyLimiter {
+      inner: Arc::new(LimiterInner {
+        max,
+        active: Mutex::new(0),
+        cv: Condvar::new(),
+      }),
+    }
+  }
+
+  fn acquire(&self) -> ConcurrencyPermit {
+    let mut guard = self.inner.active.lock().unwrap();
+    while *guard >= self.inner.max {
+      guard = self.inner.cv.wait(guard).unwrap();
+    }
+    *guard += 1;
+    ConcurrencyPermit {
+      inner: Arc::clone(&self.inner),
+    }
+  }
+}
+
+#[derive(Debug)]
+struct ConcurrencyPermit {
+  inner: Arc<LimiterInner>,
+}
+
+impl Drop for ConcurrencyPermit {
+  fn drop(&mut self) {
+    let mut guard = self.inner.active.lock().unwrap();
+    *guard = guard.saturating_sub(1);
+    self.inner.cv.notify_one();
+  }
+}
+
 impl SnapshotStore {
   fn new(root: &Path) -> Self {
     let suite_name = root
@@ -1068,12 +1125,43 @@ impl SnapshotStore {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::sync::Arc;
+  use std::time::Duration;
 
   #[test]
   fn shard_parse_rejects_invalid() {
     assert!(Shard::parse("bad").is_err());
     assert!(Shard::parse("1/0").is_err());
     assert!(Shard::parse("2/2").is_err());
+  }
+
+  #[test]
+  fn concurrency_limiter_caps_parallelism() {
+    let limiter = ConcurrencyLimiter::new(2);
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_seen = Arc::new(AtomicUsize::new(0));
+
+    let handles: Vec<_> = (0..6)
+      .map(|_| {
+        let limiter = limiter.clone();
+        let active = active.clone();
+        let max_seen = max_seen.clone();
+        std::thread::spawn(move || {
+          let _permit = limiter.acquire();
+          let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+          max_seen.fetch_max(current, Ordering::SeqCst);
+          std::thread::sleep(Duration::from_millis(10));
+          active.fetch_sub(1, Ordering::SeqCst);
+        })
+      })
+      .collect();
+
+    for handle in handles {
+      handle.join().unwrap();
+    }
+
+    assert!(max_seen.load(Ordering::SeqCst) <= 2);
   }
 
   #[test]
