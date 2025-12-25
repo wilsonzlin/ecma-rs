@@ -25,14 +25,10 @@ pub use ts_stmt::{
 };
 pub use ts_type::{
   emit_interface_decl,
-  emit_interface_decl_to_emitter,
   emit_ts_type,
   emit_type_alias_decl,
-  emit_type_alias_decl_to_emitter,
   emit_type_expr,
-  emit_type_expr_to_emitter,
   emit_type_members,
-  emit_type_members_to_emitter,
   ts_type_to_string,
 };
 

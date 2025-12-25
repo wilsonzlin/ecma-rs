@@ -190,10 +190,6 @@ impl Emitter {
     &self.out
   }
 
-  pub fn mode(&self) -> EmitMode {
-    self.opts.mode
-  }
-
   /// Consumes the emitter, returning the underlying buffer.
   pub fn into_bytes(self) -> Vec<u8> {
     self.out
