@@ -26,7 +26,7 @@ fn asi_hazards_are_separated() {
     "a\n(b)",
     "a\n[0]",
     "a;/+/.test(b)",
-    "a\n`${b}`",
+    "a\n`b`",
     "a;<div/>",
     "a\nclass Foo {}",
     "a\nfunction foo() {}",

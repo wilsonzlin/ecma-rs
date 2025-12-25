@@ -122,7 +122,11 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
     Expr::LitNull(_) => em.write_keyword("null"),
     Expr::LitBigInt(lit) => em.write_number(&lit.stx.value),
     Expr::LitStr(lit) => emit_string_literal(em, &lit.stx.value),
-    Expr::LitRegex(lit) => em.write_str(&lit.stx.value),
+    Expr::LitRegex(lit) => {
+      let mut buf = Vec::new();
+      crate::escape::emit_regex_literal(&mut buf, &lit.stx.value);
+      em.write_str(std::str::from_utf8(&buf).expect("regex literal escape output is UTF-8"));
+    }
     Expr::LitArr(arr) => emit_array_literal(em, arr)?,
     Expr::LitObj(obj) => emit_object_literal(em, obj)?,
     Expr::LitTemplate(template) => emit_template_literal(em, template)?,

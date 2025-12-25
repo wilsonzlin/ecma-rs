@@ -10,7 +10,6 @@ pub mod ssa;
 pub mod symbol;
 pub mod util;
 
-#[cfg(feature = "emit")]
 pub use crate::decompile::program_to_js;
 pub use crate::decompile::{program_to_ast, DecompileOptions};
 use ahash::HashSet;

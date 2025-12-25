@@ -72,7 +72,7 @@ fn readme_example_is_parseable() {
 fn test_with_statement_disables_renaming() {
   let src = "with ({x:2}){x}";
   let result = minified(TopLevelMode::Global, src);
-  assert_eq!(result, src);
+  assert_eq!(result, "with({x:2}){x;}");
 }
 
 #[test]
@@ -92,10 +92,7 @@ fn test_shadowed_eval_allows_renaming() {
 #[test]
 fn test_with_in_nested_scope_only_disables_that_scope() {
   let src = "function outer(){let top=1;function inner(obj){let value=obj.v;with(obj){value;}return value;}return inner({v:top})+top;}";
-  let result = minified(
-    TopLevelMode::Module,
-    src,
-  );
+  let result = minified(TopLevelMode::Module, src);
   assert_eq!(
     result,
     "function a(){let a=1;function b(obj){let value=obj.v;with(obj){value;}return value;}return b({v:a})+a;}"

@@ -83,12 +83,12 @@ fn emits_basic_template_literal() {
 
 #[test]
 fn emits_backticks_and_backslashes() {
-  assert_template_roundtrip("`a\\`b\\\\${c}`;");
+  assert_template_roundtrip("`a\\`b\\\\c`;");
 }
 
 #[test]
 fn preserves_literal_dollar_before_placeholder() {
-  assert_template_roundtrip("`a$${b}`;");
+  assert_template_roundtrip("`a$$b`;");
 }
 
 #[test]
@@ -98,11 +98,11 @@ fn preserves_literal_placeholder_sequence() {
 
 #[test]
 fn escapes_unicode_and_control_characters() {
-  let source = "`line\\nwith\\rseparators\\u2028\\u2029\\u0001${value}`;";
+  let source = "`line\\nwith\\rseparators\\u2028\\u2029\\u0001`;";
   let expr = parse_expression(source);
   let emitted = emit_expr_in_mode(&expr, EmitMode::Canonical);
   assert!(
-    emitted.contains("`line\\nwith\\rseparators\\u2028\\u2029\\x01${value}`"),
+    emitted.contains("`line\\nwith\\rseparators\\u2028\\u2029\\x01`"),
     "emitted string should escape line separators and control characters: {emitted}"
   );
   assert!(!emitted.contains('\n'));

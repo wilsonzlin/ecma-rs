@@ -41,9 +41,6 @@ pub fn program_to_ast(program: &Program, opts: &DecompileOptions) -> Node<TopLev
 }
 
 /// Converts the optimized [`Program`] into emitted JS bytes using `emit-js`.
-///
-/// Requires the `emit` Cargo feature.
-#[cfg(feature = "emit")]
 pub fn program_to_js(
   program: &Program,
   decompile: &DecompileOptions,

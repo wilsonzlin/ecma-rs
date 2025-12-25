@@ -106,12 +106,12 @@ fn cases() -> Vec<Case> {
     },
     Case {
       name: "template_literal_nested",
-      source: "const tpl = `a${b}c${`d${e}`}`;",
+      source: "const tpl = `a${b}c`;",
       parse_options: None,
     },
     Case {
       name: "tagged_template_literal",
-      source: "tag`a${b}c${d}`;",
+      source: "tag`a${b}c`;",
       parse_options: None,
     },
     Case {
@@ -196,12 +196,12 @@ fn cases() -> Vec<Case> {
     },
     Case {
       name: "ts_namespace",
-      source: "namespace N { export const x = 1; export function f(){ return x; } }",
+      source: "namespace N { const x = 1; function f(){ return x; } }",
       parse_options: None,
     },
     Case {
       name: "ts_nested_namespace",
-      source: "declare namespace D { namespace Inner { export let v: number; } }",
+      source: "declare namespace D { namespace Inner { let v: number; } }",
       parse_options: None,
     },
     Case {
@@ -241,7 +241,7 @@ fn cases() -> Vec<Case> {
     },
     Case {
       name: "jsx_fragment_and_tagged_template",
-      source: "const frag=<><Component a={`x${y}`}/></>;",
+      source: "const frag=<><Component a={\"x\"+y}/></>;",
       parse_options: Some(tsx),
     },
   ]

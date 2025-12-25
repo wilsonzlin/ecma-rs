@@ -25,6 +25,7 @@ pub struct ScopeHazards {
 #[derive(Clone, Copy)]
 struct ExportNameSymbol(SymbolId);
 
+#[cfg_attr(feature = "emit-minify", allow(dead_code))]
 #[derive(Clone, Debug)]
 pub struct Replacement {
   pub start: usize,
@@ -369,7 +370,15 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
 
     if disabled_scopes.contains(&scope) {
       for child in children {
-        assign_scope(child, sem, usage, reserved, disabled_scopes, pinned_symbols, renames);
+        assign_scope(
+          child,
+          sem,
+          usage,
+          reserved,
+          disabled_scopes,
+          pinned_symbols,
+          renames,
+        );
       }
       return;
     }
@@ -405,7 +414,15 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
     }
 
     for child in children {
-      assign_scope(child, sem, usage, reserved, disabled_scopes, pinned_symbols, renames);
+      assign_scope(
+        child,
+        sem,
+        usage,
+        reserved,
+        disabled_scopes,
+        pinned_symbols,
+        renames,
+      );
     }
   }
 
@@ -514,6 +531,7 @@ pub fn apply_renames(
   visitor.replacements
 }
 
+#[cfg_attr(feature = "emit-minify", allow(dead_code))]
 pub fn rewrite_source(source: &str, replacements: &mut Vec<Replacement>) -> String {
   replacements.sort_by_key(|r| r.start);
   let mut out = String::with_capacity(source.len());

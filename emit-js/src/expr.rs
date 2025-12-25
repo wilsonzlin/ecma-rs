@@ -210,7 +210,11 @@ where
 
   fn emit_lit_regex(&mut self, lit: &Node<LitRegexExpr>) -> EmitResult {
     with_node_context(lit.loc, || {
-      self.out.write_str(&lit.stx.value)?;
+      let mut buf = Vec::new();
+      crate::escape::emit_regex_literal(&mut buf, &lit.stx.value);
+      self
+        .out
+        .write_str(std::str::from_utf8(&buf).expect("regex literal escape output is UTF-8"))?;
       Ok(())
     })
   }

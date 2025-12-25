@@ -33,6 +33,24 @@ pub fn emit_string_literal(out: &mut Vec<u8>, value: &str, quote_style: QuoteSty
   out.push(quote);
 }
 
+/// Emit a JavaScript regex literal, escaping line terminators for stability.
+pub fn emit_regex_literal(out: &mut Vec<u8>, value: &str) {
+  out.clear();
+  for ch in value.chars() {
+    match ch {
+      '\n' => out.extend_from_slice(b"\\n"),
+      '\r' => out.extend_from_slice(b"\\r"),
+      '\u{2028}' => out.extend_from_slice(b"\\u2028"),
+      '\u{2029}' => out.extend_from_slice(b"\\u2029"),
+      ch => {
+        let mut buf = [0u8; 4];
+        let encoded = ch.encode_utf8(&mut buf);
+        out.extend_from_slice(encoded.as_bytes());
+      }
+    }
+  }
+}
+
 /// Emit a JavaScript/TypeScript string literal delimited by double quotes,
 /// escaping characters that would otherwise terminate or change the meaning of
 /// the literal. Non-ASCII characters are preserved as UTF-8 except for the
@@ -149,6 +167,13 @@ mod tests {
     let mut out = Vec::new();
     emit_string_literal_double_quoted(&mut out, value);
     String::from_utf8(out).unwrap()
+  }
+
+  #[test]
+  fn escapes_regex_line_terminators() {
+    let mut out = Vec::new();
+    emit_regex_literal(&mut out, "/a\nb\u{2028}c/");
+    assert_eq!(String::from_utf8(out).unwrap(), "/a\\nb\\u2028c/");
   }
 
   #[test]

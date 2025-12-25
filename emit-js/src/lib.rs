@@ -53,13 +53,25 @@ pub use ts_type::{
 pub fn emit_top_level_stmt(em: &mut Emitter, top: &TopLevel) -> EmitResult {
   use parse_js::ast::stmt::Stmt;
 
+  let stmt_sep_style = em.options().stmt_sep_style;
+  let mut prev: Option<&Node<Stmt>> = None;
   let mut first = true;
   for stmt in &top.body {
     if matches!(stmt.stx.as_ref(), Stmt::Empty(_)) {
       continue;
     }
-    if !first {
-      em.write_byte(b'\n');
+
+    match stmt_sep_style {
+      StmtSepStyle::Semicolons => {
+        if !first && !em.minify() {
+          em.write_newline();
+        }
+      }
+      StmtSepStyle::AsiNewlines => match crate::asi::separator_between(prev, stmt) {
+        crate::asi::Separator::None => {}
+        crate::asi::Separator::Newline => em.write_newline(),
+        crate::asi::Separator::Semicolon => em.write_semicolon(),
+      },
     }
     match stmt.stx.as_ref() {
       Stmt::InterfaceDecl(_)
@@ -78,6 +90,7 @@ pub fn emit_top_level_stmt(em: &mut Emitter, top: &TopLevel) -> EmitResult {
       _ => stmt::emit_stmt(em, stmt)?,
     }
     first = false;
+    prev = Some(stmt);
   }
   Ok(())
 }

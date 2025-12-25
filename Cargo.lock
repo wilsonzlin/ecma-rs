@@ -438,6 +438,19 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "dashmap"
+version = "5.5.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "978747c1d849a7d2ee5e8adc0159961c48fb7e5db2f06af6723b80123bb53856"
+dependencies = [
+ "cfg-if",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core",
+]
+
+[[package]]
+name = "dashmap"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
@@ -1076,7 +1089,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "crossbeam-utils",
- "dashmap",
+ "dashmap 6.1.0",
  "derive-visitor",
  "diagnostics",
  "emit-js",
@@ -1088,7 +1101,6 @@ dependencies = [
  "semantic-js",
  "serde",
  "serde_json",
- "symbol-js",
 ]
 
 [[package]]
@@ -1525,7 +1537,6 @@ checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
 name = "semantic-js"
 version = "0.1.0"
 dependencies = [
- "ahash",
  "bitflags",
  "derive-visitor",
  "diagnostics",
@@ -1951,6 +1962,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-serde"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "704b1aeb7be0d0a84fc9828cae51dab5970fee5088f83d1dd7ee6f6246fc6ff1"
+dependencies = [
+ "serde",
+ "tracing-core",
+]
+
+[[package]]
 name = "tracing-subscriber"
 version = "0.3.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1960,12 +1981,15 @@ dependencies = [
  "nu-ansi-term",
  "once_cell",
  "regex-automata",
+ "serde",
+ "serde_json",
  "sharded-slab",
  "smallvec",
  "thread_local",
  "tracing",
  "tracing-core",
  "tracing-log",
+ "tracing-serde",
 ]
 
 [[package]]
@@ -1984,7 +2008,6 @@ dependencies = [
  "thiserror",
  "tracing",
  "tracing-subscriber",
- "types-ts",
  "types-ts-interned",
 ]
 
@@ -1994,12 +2017,13 @@ version = "0.0.1"
 dependencies = [
  "diagnostics",
  "hir-js",
+ "ordered-float",
  "parse-js",
  "semantic-js",
  "serde",
  "serde_json",
  "typecheck-ts",
- "types-ts",
+ "types-ts-interned",
 ]
 
 [[package]]
@@ -2011,6 +2035,7 @@ dependencies = [
  "clap",
  "globset",
  "num_cpus",
+ "rayon",
  "regex",
  "serde",
  "serde_json",
@@ -2024,24 +2049,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "types-ts"
-version = "0.1.0"
-dependencies = [
- "bitflags",
- "tracing",
-]
-
-[[package]]
 name = "types-ts-interned"
 version = "0.1.0"
 dependencies = [
  "ahash",
  "bitflags",
+ "dashmap 5.5.3",
  "hir-js",
  "num-bigint",
  "ordered-float",
  "parking_lot",
  "pretty_assertions",
+ "proptest",
  "rand 0.8.5",
  "serde",
  "serde_json",
