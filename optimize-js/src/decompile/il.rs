@@ -2,6 +2,7 @@ use super::foreign::ForeignBindings;
 use crate::il::inst::{Arg, BinOp, Const, Inst, InstTyp, UnOp};
 use crate::{Program, ProgramFunction};
 use derive_visitor::{Drive, DriveMut};
+use num_bigint::BigInt;
 use parse_js::ast::expr::lit::{LitBigIntExpr, LitBoolExpr, LitNullExpr, LitNumExpr, LitStrExpr};
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{
@@ -13,6 +14,7 @@ use parse_js::ast::stmt::{ExprStmt, Stmt};
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
+use std::collections::{BTreeMap, BTreeSet};
 use symbol_js::symbol::Symbol;
 
 const DEFAULT_LOC: Loc = Loc(0, 0);
@@ -46,6 +48,13 @@ impl Default for VarInit {
     VarInit::Assign
   }
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecompileError {
+  Unsupported(String),
+}
+
+pub type DecompileResult<T> = Result<T, DecompileError>;
 
 fn identifier(name: String) -> Node<Expr> {
   node(Expr::Id(node(IdExpr { name })))
@@ -449,6 +458,413 @@ pub fn lower_effect_inst<V: VarNamer, F: FnEmitter>(
     InstTyp::Call => lower_call_inst(var_namer, fn_emitter, inst, None, None, None, init),
     _ => None,
   }
+}
+
+fn temp_name(id: u32) -> String {
+  format!("t{id}")
+}
+
+#[derive(Clone)]
+struct FlatCallArg {
+  expr: FlatExpr,
+  spread: bool,
+}
+
+#[derive(Clone)]
+enum FlatExpr {
+  Identifier(String),
+  Member {
+    object: Box<FlatExpr>,
+    property: String,
+  },
+  ComputedMember {
+    object: Box<FlatExpr>,
+    property: Box<FlatExpr>,
+  },
+  Call {
+    callee: Box<FlatExpr>,
+    args: Vec<FlatCallArg>,
+  },
+  Binary {
+    op: OperatorName,
+    left: Box<FlatExpr>,
+    right: Box<FlatExpr>,
+  },
+  Unary {
+    op: OperatorName,
+    arg: Box<FlatExpr>,
+  },
+  Bool(bool),
+  Num(JsNumber),
+  Str(String),
+  Null,
+  Undefined,
+  BigInt(BigInt),
+}
+
+#[derive(Clone)]
+enum ValueOrigin {
+  GetProp { object: Arg, prop: Arg },
+  Other,
+}
+
+#[derive(Clone)]
+struct VarValue {
+  expr: FlatExpr,
+  origin: ValueOrigin,
+}
+
+fn builtin_to_expr(path: &str) -> FlatExpr {
+  let mut parts = path.split('.');
+  let first = parts
+    .next()
+    .expect("builtin path should contain at least one segment");
+  let mut expr = FlatExpr::Identifier(first.to_string());
+  for part in parts {
+    expr = FlatExpr::Member {
+      object: Box::new(expr),
+      property: part.to_string(),
+    };
+  }
+  expr
+}
+
+fn expr_from_arg(arg: &Arg, env: &BTreeMap<u32, VarValue>) -> FlatExpr {
+  match arg {
+    Arg::Var(id) => env
+      .get(id)
+      .map(|value| value.expr.clone())
+      .unwrap_or_else(|| FlatExpr::Identifier(temp_name(*id))),
+    Arg::Const(Const::Bool(value)) => FlatExpr::Bool(*value),
+    Arg::Const(Const::Num(value)) => FlatExpr::Num(*value),
+    Arg::Const(Const::Str(value)) => FlatExpr::Str(value.clone()),
+    Arg::Const(Const::Null) => FlatExpr::Null,
+    Arg::Const(Const::Undefined) => FlatExpr::Undefined,
+    Arg::Const(Const::BigInt(value)) => FlatExpr::BigInt(value.clone()),
+    Arg::Builtin(path) => builtin_to_expr(path),
+    Arg::Fn(id) => FlatExpr::Identifier(format!("fn{id}")),
+  }
+}
+
+fn origin_from_arg(arg: &Arg, env: &BTreeMap<u32, VarValue>) -> ValueOrigin {
+  match arg {
+    Arg::Var(id) => env
+      .get(id)
+      .map(|value| value.origin.clone())
+      .unwrap_or(ValueOrigin::Other),
+    _ => ValueOrigin::Other,
+  }
+}
+
+fn member_from_prop(object: &FlatExpr, prop: &Arg, env: &BTreeMap<u32, VarValue>) -> FlatExpr {
+  match prop {
+    Arg::Const(Const::Str(key)) if is_valid_identifier(key) => FlatExpr::Member {
+      object: Box::new(object.clone()),
+      property: key.clone(),
+    },
+    _ => FlatExpr::ComputedMember {
+      object: Box::new(object.clone()),
+      property: Box::new(expr_from_arg(prop, env)),
+    },
+  }
+}
+
+fn to_ast_expr(expr: &FlatExpr) -> Node<Expr> {
+  match expr {
+    FlatExpr::Identifier(name) => identifier(name.clone()),
+    FlatExpr::Member { object, property } => node(Expr::Member(node(MemberExpr {
+      optional_chaining: false,
+      left: to_ast_expr(object),
+      right: property.clone(),
+    }))),
+    FlatExpr::ComputedMember { object, property } => node(Expr::ComputedMember(node(
+      ComputedMemberExpr {
+        optional_chaining: false,
+        object: to_ast_expr(object),
+        member: to_ast_expr(property),
+      },
+    ))),
+    FlatExpr::Call { callee, args } => {
+      let arguments = args
+        .iter()
+        .map(|arg| {
+          node(CallArg {
+            spread: arg.spread,
+            value: to_ast_expr(&arg.expr),
+          })
+        })
+        .collect();
+      node(Expr::Call(node(CallExpr {
+        optional_chaining: false,
+        callee: to_ast_expr(callee),
+        arguments,
+      })))
+    }
+    FlatExpr::Binary { op, left, right } => node(Expr::Binary(node(BinaryExpr {
+      operator: *op,
+      left: to_ast_expr(left),
+      right: to_ast_expr(right),
+    }))),
+    FlatExpr::Unary { op, arg } => node(Expr::Unary(node(UnaryExpr {
+      operator: *op,
+      argument: to_ast_expr(arg),
+    }))),
+    FlatExpr::Bool(value) => node(Expr::LitBool(node(LitBoolExpr { value: *value }))),
+    FlatExpr::Num(value) => node(Expr::LitNum(node(LitNumExpr { value: *value }))),
+    FlatExpr::Str(value) => node(Expr::LitStr(node(LitStrExpr {
+      value: value.clone(),
+    }))),
+    FlatExpr::Null => node(Expr::LitNull(node(LitNullExpr {}))),
+    FlatExpr::Undefined => node(Expr::Unary(node(UnaryExpr {
+      operator: OperatorName::Void,
+      argument: node(Expr::LitNum(node(LitNumExpr {
+        value: JsNumber(0.0),
+      }))),
+    }))),
+    FlatExpr::BigInt(value) => node(Expr::LitBigInt(node(LitBigIntExpr {
+      value: format!("{value}n"),
+    }))),
+  }
+}
+
+fn expr_stmt(expr: FlatExpr) -> Node<Stmt> {
+  node(Stmt::Expr(node(ExprStmt {
+    expr: to_ast_expr(&expr),
+  })))
+}
+
+fn assignment_stmt(lhs: FlatExpr, rhs: FlatExpr) -> Node<Stmt> {
+  node(Stmt::Expr(node(ExprStmt {
+    expr: node(Expr::Binary(node(BinaryExpr {
+      operator: OperatorName::Assignment,
+      left: to_ast_expr(&lhs),
+      right: to_ast_expr(&rhs),
+    }))),
+  })))
+}
+
+fn handle_call(inst: &Inst, env: &BTreeMap<u32, VarValue>) -> (FlatExpr, Option<u32>) {
+  let (tgt, callee, this_arg, args, spreads) = inst.as_call();
+  let callee_expr = expr_from_arg(callee, env);
+  let this_expr = expr_from_arg(this_arg, env);
+  let args_exprs: Vec<_> = args
+    .iter()
+    .enumerate()
+    .map(|(i, arg)| FlatCallArg {
+      expr: expr_from_arg(arg, env),
+      spread: spreads.contains(&(i + 2)),
+    })
+    .collect();
+
+  let this_is_undefined = matches!(this_arg, Arg::Const(Const::Undefined));
+  if this_is_undefined {
+    return (
+      FlatExpr::Call {
+        callee: Box::new(callee_expr),
+        args: args_exprs,
+      },
+      tgt,
+    );
+  }
+
+  let callee_origin = match callee {
+    Arg::Var(id) => env.get(id).map(|value| value.origin.clone()),
+    _ => None,
+  };
+
+  let (call_callee, call_args) = match callee_origin {
+    Some(ValueOrigin::GetProp { object, prop }) if this_arg == &object => (
+      member_from_prop(&this_expr, &prop, env),
+      args_exprs,
+    ),
+    _ => {
+      let mut call_args = Vec::with_capacity(args_exprs.len() + 1);
+      call_args.push(FlatCallArg {
+        expr: this_expr,
+        spread: false,
+      });
+      call_args.extend(args_exprs);
+      (
+        FlatExpr::Member {
+          object: Box::new(callee_expr),
+          property: "call".to_string(),
+        },
+        call_args,
+      )
+    }
+  };
+
+  (
+    FlatExpr::Call {
+      callee: Box::new(call_callee),
+      args: call_args,
+    },
+    tgt,
+  )
+}
+
+/// Decompiles IL into a flat list of JS statements.
+///
+/// This is intentionally limited today: it only supports straight-line control
+/// flow and emits statements in execution order. The output is useful for
+/// debugging and for validating individual lowering rules (for example, `this`
+/// handling in calls).
+pub fn decompile_function(func: &ProgramFunction) -> DecompileResult<Vec<Node<Stmt>>> {
+  let cfg = &func.body;
+  let all_labels = cfg.graph.sorted_labels();
+  if !all_labels.contains(&0) {
+    return Err(DecompileError::Unsupported(
+      "CFG missing entry block".to_string(),
+    ));
+  }
+
+  let mut env = BTreeMap::<u32, VarValue>::new();
+  let mut stmts = Vec::new();
+  let mut visited = BTreeSet::<u32>::new();
+
+  let mut label = 0u32;
+  loop {
+    if !visited.insert(label) {
+      return Err(DecompileError::Unsupported(
+        "cyclic control flow not supported".to_string(),
+      ));
+    }
+
+    for inst in cfg.bblocks.get(label) {
+      match inst.t {
+        InstTyp::UnknownLoad => {
+          let (tgt, name) = inst.as_unknown_load();
+          env.insert(
+            tgt,
+            VarValue {
+              expr: FlatExpr::Identifier(name.clone()),
+              origin: ValueOrigin::Other,
+            },
+          );
+        }
+        InstTyp::ForeignLoad => {
+          let (tgt, sym) = inst.as_foreign_load();
+          env.insert(
+            tgt,
+            VarValue {
+              expr: FlatExpr::Identifier(format!("f{}", sym.raw_id())),
+              origin: ValueOrigin::Other,
+            },
+          );
+        }
+        InstTyp::VarAssign => {
+          let (tgt, arg) = inst.as_var_assign();
+          let expr = expr_from_arg(arg, &env);
+          let origin = origin_from_arg(arg, &env);
+          env.insert(tgt, VarValue { expr, origin });
+        }
+        InstTyp::Bin => {
+          let (tgt, left, op, right) = inst.as_bin();
+          if op == BinOp::GetProp {
+            let object_expr = expr_from_arg(left, &env);
+            let expr = member_from_prop(&object_expr, right, &env);
+            env.insert(
+              tgt,
+              VarValue {
+                expr,
+                origin: ValueOrigin::GetProp {
+                  object: left.clone(),
+                  prop: right.clone(),
+                },
+              },
+            );
+          } else {
+            let expr = FlatExpr::Binary {
+              op: bin_operator(op),
+              left: Box::new(expr_from_arg(left, &env)),
+              right: Box::new(expr_from_arg(right, &env)),
+            };
+            env.insert(
+              tgt,
+              VarValue {
+                expr,
+                origin: ValueOrigin::Other,
+              },
+            );
+          }
+        }
+        InstTyp::Un => {
+          let (tgt, op, arg) = inst.as_un();
+          env.insert(
+            tgt,
+            VarValue {
+              expr: FlatExpr::Unary {
+                op: un_operator(op),
+                arg: Box::new(expr_from_arg(arg, &env)),
+              },
+              origin: ValueOrigin::Other,
+            },
+          );
+        }
+        InstTyp::Call => {
+          let (call_expr, tgt) = handle_call(inst, &env);
+          if let Some(tgt) = tgt {
+            let lhs = FlatExpr::Identifier(temp_name(tgt));
+            stmts.push(assignment_stmt(lhs.clone(), call_expr));
+            env.insert(
+              tgt,
+              VarValue {
+                expr: lhs,
+                origin: ValueOrigin::Other,
+              },
+            );
+          } else {
+            stmts.push(expr_stmt(call_expr));
+          }
+        }
+        InstTyp::PropAssign => {
+          let (obj, prop, value) = inst.as_prop_assign();
+          let object_expr = expr_from_arg(obj, &env);
+          let left = member_from_prop(&object_expr, prop, &env);
+          let right = expr_from_arg(value, &env);
+          stmts.push(assignment_stmt(left, right));
+        }
+        InstTyp::UnknownStore => {
+          let (name, value) = inst.as_unknown_store();
+          stmts.push(assignment_stmt(
+            FlatExpr::Identifier(name.clone()),
+            expr_from_arg(value, &env),
+          ));
+        }
+        InstTyp::ForeignStore => {
+          let (sym, value) = inst.as_foreign_store();
+          stmts.push(assignment_stmt(
+            FlatExpr::Identifier(format!("f{}", sym.raw_id())),
+            expr_from_arg(value, &env),
+          ));
+        }
+        InstTyp::_Dummy => {}
+        InstTyp::CondGoto | InstTyp::Phi | InstTyp::_Goto | InstTyp::_Label => {
+          return Err(DecompileError::Unsupported(
+            "control flow not supported".to_string(),
+          ));
+        }
+      }
+    }
+
+    match cfg.terminator(label) {
+      crate::cfg::cfg::Terminator::Stop => break,
+      crate::cfg::cfg::Terminator::Goto(next) => label = next,
+      crate::cfg::cfg::Terminator::CondGoto { .. } | crate::cfg::cfg::Terminator::Multi { .. } => {
+        return Err(DecompileError::Unsupported(
+          "control flow not supported".to_string(),
+        ));
+      }
+    }
+  }
+
+  if visited.len() != all_labels.len() {
+    return Err(DecompileError::Unsupported(
+      "non-linear control flow not supported".to_string(),
+    ));
+  }
+
+  Ok(stmts)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
