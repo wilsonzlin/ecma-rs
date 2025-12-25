@@ -1,10 +1,8 @@
 use typecheck_ts::check::class::*;
-use types_ts::MemberVisibility;
-use types_ts::TypeKind;
-use types_ts::TypeOptions;
+use types_ts_interned::{PropKey, TypeKind, TypeOptions};
 
-fn number_type(env: &ClassEnv) -> types_ts::TypeId {
-  env.store().number()
+fn number_type(env: &ClassEnv) -> types_ts_interned::TypeId {
+  env.store().primitive_ids().number
 }
 
 #[test]
@@ -106,19 +104,28 @@ fn methods_capture_implicit_this_type() {
   });
 
   let store = env.store();
-  let method_ty = match store.get(class.instance) {
+  let method_ty = match store.type_kind(class.instance) {
     TypeKind::Object(obj) => {
-      let prop = obj.find_property("self").expect("method present");
-      store.get(prop.ty).clone()
+      let object = store.object(obj);
+      let shape = store.shape(object.shape);
+      let key = PropKey::String(store.intern_name("self"));
+      let prop = shape
+        .properties
+        .iter()
+        .find(|p| p.key == key)
+        .expect("method present");
+      store.type_kind(prop.data.ty)
     }
     other => panic!("expected object type, got {other:?}"),
   };
 
   match method_ty {
-    TypeKind::Function(func) => {
-      assert_eq!(func.this_param, Some(class.this_type));
-      assert_eq!(func.ret, class.this_type);
+    TypeKind::Callable { overloads } => {
+      assert_eq!(overloads.len(), 1);
+      let sig = store.signature(overloads[0]);
+      assert_eq!(sig.this_param, Some(class.this_type));
+      assert_eq!(sig.ret, class.this_type);
     }
-    other => panic!("expected function type, got {other:?}"),
+    other => panic!("expected callable type, got {other:?}"),
   }
 }

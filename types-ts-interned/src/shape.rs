@@ -22,6 +22,9 @@ pub struct PropData {
   /// treated with bivariant parameter checking in strict function mode to match
   /// TypeScript's behavior.
   pub is_method: bool,
+  /// Optional nominal origin identifier attached to private/protected members.
+  /// When present, relation hooks can require the same origin for compatibility.
+  pub origin: Option<u32>,
   /// Optional identifier for the declaration that introduced this property.
   /// This can be used by relation hooks to decide if otherwise-incompatible
   /// private members share the same origin.

@@ -331,6 +331,7 @@ impl TypeLowerer {
                 readonly: false,
                 accessibility: None,
                 is_method: true,
+                origin: None,
                 declared_on: None,
               },
             });
@@ -409,6 +410,7 @@ impl TypeLowerer {
       readonly: prop.stx.readonly,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     };
     Some((key, data))

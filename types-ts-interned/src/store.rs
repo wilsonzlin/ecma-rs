@@ -323,6 +323,12 @@ impl TypeStore {
           if last.data.declared_on.is_none() {
             last.data.declared_on = prop.data.declared_on;
           }
+          match (last.data.origin, prop.data.origin) {
+            (Some(a), Some(b)) if a == b => {}
+            (Some(_), Some(_)) => last.data.origin = None,
+            (None, Some(b)) => last.data.origin = Some(b),
+            _ => {}
+          }
           let existing_access = last.data.accessibility.take();
           last.data.accessibility = match (existing_access, prop.data.accessibility) {
             (Some(a), Some(b)) => Some(std::cmp::max(a, b)),

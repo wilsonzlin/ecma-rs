@@ -149,6 +149,7 @@ impl Snapshot {
           readonly: true,
           accessibility: Some(Accessibility::Public),
           is_method: false,
+          origin: None,
           declared_on: None,
         },
       });
@@ -160,6 +161,7 @@ impl Snapshot {
           readonly: false,
           accessibility: Some(Accessibility::Private),
           is_method: false,
+          origin: None,
           declared_on: None,
         },
       });

@@ -1,19 +1,11 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::check::relate_hooks;
-use types_ts::FnParam;
-use types_ts::FunctionType;
-use types_ts::IndexSignature;
-use types_ts::MemberVisibility;
-use types_ts::ObjectType;
-use types_ts::Property;
-use types_ts::RelateCtx;
-use types_ts::TypeExpander;
-use types_ts::TypeId;
-use types_ts::TypeKind;
-use types_ts::TypeOptions;
-use types_ts::TypeRefId;
-use types_ts::TypeStore;
+use types_ts_interned::{
+  Accessibility, DefId, ExpandedType, ObjectType, Param, PropData, PropKey, Property, RelateCtx,
+  RelateTypeExpander, Shape, Signature, TypeExpander, TypeId, TypeKind, TypeOptions, TypeStore,
+};
 
 /// Placeholder type expression used when constructing class members.
 #[derive(Debug, Clone)]
@@ -27,6 +19,24 @@ pub enum TypeExpr {
 impl From<TypeId> for TypeExpr {
   fn from(value: TypeId) -> Self {
     TypeExpr::Type(value)
+  }
+}
+
+/// Visibility of a class member.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MemberVisibility {
+  Public,
+  Private,
+  Protected,
+}
+
+impl MemberVisibility {
+  fn accessibility(self) -> Option<Accessibility> {
+    match self {
+      MemberVisibility::Public => None,
+      MemberVisibility::Private => Some(Accessibility::Private),
+      MemberVisibility::Protected => Some(Accessibility::Protected),
+    }
   }
 }
 
@@ -95,7 +105,7 @@ pub struct ClassType {
   pub name: String,
   pub instance: TypeId,
   pub static_type: TypeId,
-  pub instance_ref: TypeRefId,
+  pub def_id: DefId,
   pub origin: u32,
   pub this_type: TypeId,
   pub super_instance: Option<TypeId>,
@@ -105,9 +115,9 @@ pub struct ClassType {
 /// Environment for constructing class types and relating them with nominal
 /// visibility rules.
 pub struct ClassEnv {
-  store: TypeStore,
-  ref_map: HashMap<TypeRefId, TypeId>,
-  next_ref: u32,
+  store: Arc<TypeStore>,
+  ref_map: HashMap<DefId, TypeId>,
+  next_def: u32,
   next_origin: u32,
 }
 
@@ -115,7 +125,7 @@ impl std::fmt::Debug for ClassEnv {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("ClassEnv")
       .field("ref_map_len", &self.ref_map.len())
-      .field("next_ref", &self.next_ref)
+      .field("next_def", &self.next_def)
       .field("next_origin", &self.next_origin)
       .finish()
   }
@@ -132,31 +142,31 @@ impl ClassEnv {
     Self {
       store: TypeStore::new(),
       ref_map: HashMap::new(),
-      next_ref: 0,
+      next_def: 0,
       next_origin: 1,
     }
   }
 
   /// Access the underlying type store.
   pub fn store(&self) -> &TypeStore {
-    &self.store
+    self.store.as_ref()
   }
 
-  /// Mutable access to the underlying type store.
-  pub fn store_mut(&mut self) -> &mut TypeStore {
-    &mut self.store
+  /// Shared handle to the underlying type store.
+  pub fn store_arc(&self) -> Arc<TypeStore> {
+    Arc::clone(&self.store)
   }
 
-  /// Build a relation context that understands class `TypeRefId` expansion and
+  /// Build a relation context that understands class `TypeKind::Ref` expansion and
   /// private/protected nominal compatibility.
   pub fn relate_ctx(&self, options: TypeOptions) -> RelateCtx<'_> {
     let hooks = relate_hooks::class_hooks(self);
-    RelateCtx::with_hooks(&self.store, options, hooks)
+    RelateCtx::with_hooks(self.store.as_ref(), options, hooks)
   }
 
-  fn alloc_ref(&mut self) -> TypeRefId {
-    let id = TypeRefId(self.next_ref);
-    self.next_ref += 1;
+  fn alloc_def(&mut self) -> DefId {
+    let id = DefId(self.next_def);
+    self.next_def += 1;
     id
   }
 
@@ -166,142 +176,163 @@ impl ClassEnv {
     id
   }
 
-  fn register_ref(&mut self, id: TypeRefId, ty: TypeId) {
+  fn register_ref(&mut self, id: DefId, ty: TypeId) {
     self.ref_map.insert(id, ty);
   }
 
-  fn resolve_type(&mut self, expr: &TypeExpr, this_ref: TypeRefId) -> TypeId {
+  fn resolve_type(&self, expr: &TypeExpr, this_ty: TypeId) -> TypeId {
     match expr {
       TypeExpr::Type(id) => *id,
-      TypeExpr::This => self.store.type_ref(this_ref),
+      TypeExpr::This => this_ty,
+    }
+  }
+
+  fn shape_from_type(&self, ty: TypeId) -> Shape {
+    match self.store.type_kind(ty) {
+      TypeKind::Object(obj) => {
+        let obj = self.store.object(obj);
+        self.store.shape(obj.shape)
+      }
+      _ => Shape::new(),
     }
   }
 
   /// Construct instance and static types for a class declaration, handling
   /// inheritance and implicit `this` typing.
   pub fn build_class(&mut self, decl: ClassDecl) -> ClassType {
-    let origin = self.alloc_origin();
-    let instance_ref = self.alloc_ref();
-    let mut instance_props: Vec<Property> = Vec::new();
-    let mut static_props: Vec<Property> = Vec::new();
-    let mut instance_indexes: Vec<IndexSignature> = Vec::new();
-    let mut static_indexes: Vec<IndexSignature> = Vec::new();
+    let origin = decl
+      .extends
+      .as_ref()
+      .map(|base| base.origin)
+      .unwrap_or_else(|| self.alloc_origin());
+    let def_id = self.alloc_def();
+    let this_type = self.store.intern_type(TypeKind::Ref {
+      def: def_id,
+      args: Vec::new(),
+    });
 
     let super_instance = decl.extends.as_ref().map(|b| b.instance);
     let super_static = decl.extends.as_ref().map(|b| b.static_type);
-    if let Some(base) = &decl.extends {
-      if let TypeKind::Object(obj) = self.store.get(base.instance) {
-        instance_props.extend(obj.properties.clone());
-        instance_indexes.extend(obj.index_signatures.clone());
-      }
-      if let TypeKind::Object(obj) = self.store.get(base.static_type) {
-        static_props.extend(obj.properties.clone());
-        static_indexes.extend(obj.index_signatures.clone());
-      }
-    }
+
+    let mut instance_shape = decl
+      .extends
+      .as_ref()
+      .map(|base| self.shape_from_type(base.instance))
+      .unwrap_or_else(Shape::new);
+    let mut static_shape = decl
+      .extends
+      .as_ref()
+      .map(|base| self.shape_from_type(base.static_type))
+      .unwrap_or_else(Shape::new);
 
     for field in decl.fields {
       let target = if field.is_static {
-        &mut static_props
+        &mut static_shape
       } else {
-        &mut instance_props
+        &mut instance_shape
       };
-      let ty = self.resolve_type(&field.ty, instance_ref);
+      let ty = self.resolve_type(&field.ty, this_type);
       let prop = Property {
-        name: field.name,
-        ty,
-        optional: field.optional,
-        readonly: field.readonly,
-        is_method: false,
-        visibility: field.visibility,
-        origin_id: member_origin(field.visibility, origin),
+        key: PropKey::String(self.store.intern_name(field.name)),
+        data: PropData {
+          ty,
+          optional: field.optional,
+          readonly: field.readonly,
+          accessibility: field.visibility.accessibility(),
+          is_method: false,
+          origin: member_origin(field.visibility, origin),
+          declared_on: None,
+        },
       };
-      upsert_property(target, prop);
+      upsert_property(&mut target.properties, prop);
     }
 
     for method in decl.methods {
       let target = if method.is_static {
-        &mut static_props
+        &mut static_shape
       } else {
-        &mut instance_props
+        &mut instance_shape
       };
-      let this_type = method
+      let this_param = method
         .this_type
         .or_else(|| (!method.is_static).then_some(TypeExpr::This))
-        .map(|ty| self.resolve_type(&ty, instance_ref));
-      let params: Vec<FnParam> = method
+        .map(|ty| self.resolve_type(&ty, this_type));
+      let this_for_resolution = this_param.unwrap_or(this_type);
+      let params: Vec<Param> = method
         .params
         .into_iter()
-        .map(|p| FnParam {
-          name: p.name,
-          ty: self.resolve_type(&p.ty, instance_ref),
+        .map(|p| Param {
+          name: p.name.map(|n| self.store.intern_name(n)),
+          ty: self.resolve_type(&p.ty, this_for_resolution),
           optional: p.optional,
           rest: p.rest,
         })
         .collect();
-      let ret = self.resolve_type(&method.ret, instance_ref);
-      let fn_type = self.store.function(FunctionType {
+      let ret = self.resolve_type(&method.ret, this_for_resolution);
+      let sig = Signature {
         params,
         ret,
-        is_method: !method.is_static,
-        this_param: this_type,
-      });
-      let prop = Property {
-        name: method.name,
-        ty: fn_type,
-        optional: false,
-        readonly: true,
-        is_method: true,
-        visibility: method.visibility,
-        origin_id: member_origin(method.visibility, origin),
+        type_params: Vec::new(),
+        this_param,
       };
-      upsert_property(target, prop);
+      let sig_id = self.store.intern_signature(sig);
+      let fn_type = self
+        .store
+        .intern_type(TypeKind::Callable { overloads: vec![sig_id] });
+      let prop = Property {
+        key: PropKey::String(self.store.intern_name(method.name)),
+        data: PropData {
+          ty: fn_type,
+          optional: false,
+          readonly: true,
+          accessibility: method.visibility.accessibility(),
+          is_method: true,
+          origin: member_origin(method.visibility, origin),
+          declared_on: None,
+        },
+      };
+      upsert_property(&mut target.properties, prop);
     }
 
     if let Some(cons) = decl.constructor {
-      let params: Vec<FnParam> = cons
+      let params: Vec<Param> = cons
         .params
         .into_iter()
-        .map(|p| FnParam {
-          name: p.name,
-          ty: self.resolve_type(&p.ty, instance_ref),
+        .map(|p| Param {
+          name: p.name.map(|n| self.store.intern_name(n)),
+          ty: self.resolve_type(&p.ty, this_type),
           optional: p.optional,
           rest: p.rest,
         })
         .collect();
-      let ctor_ret = self.store.type_ref(instance_ref);
-      let ctor = self.store.function(FunctionType {
+      let sig = Signature {
         params,
-        ret: ctor_ret,
-        is_method: false,
+        ret: this_type,
+        type_params: Vec::new(),
         this_param: None,
-      });
-      let prop = Property {
-        name: "constructor".to_string(),
-        ty: ctor,
-        optional: false,
-        readonly: true,
-        is_method: true,
-        visibility: MemberVisibility::Public,
-        origin_id: None,
       };
-      upsert_property(&mut static_props, prop);
+      let sig_id = self.store.intern_signature(sig);
+      static_shape.construct_signatures.push(sig_id);
     }
 
-    let instance_ty = self
-      .store
-      .object(ObjectType::new(instance_props, instance_indexes));
-    let this_type = self.store.type_ref(instance_ref);
-    self.register_ref(instance_ref, instance_ty);
-    let static_ty = self
-      .store
-      .object(ObjectType::new(static_props, static_indexes));
+    let instance_ty = self.store.intern_type(TypeKind::Object(self.store.intern_object(
+      ObjectType {
+        shape: self.store.intern_shape(instance_shape),
+      },
+    )));
+    let static_ty = self.store.intern_type(TypeKind::Object(self.store.intern_object(
+      ObjectType {
+        shape: self.store.intern_shape(static_shape),
+      },
+    )));
+
+    self.register_ref(def_id, instance_ty);
 
     ClassType {
       name: decl.name,
       instance: instance_ty,
       static_type: static_ty,
-      instance_ref,
+      def_id,
       origin,
       this_type,
       super_instance,
@@ -310,9 +341,22 @@ impl ClassEnv {
   }
 }
 
+impl RelateTypeExpander for ClassEnv {
+  fn expand_ref(&self, _store: &TypeStore, def: DefId, _args: &[TypeId]) -> Option<TypeId> {
+    self.ref_map.get(&def).copied()
+  }
+}
+
 impl TypeExpander for ClassEnv {
-  fn expand_ref(&self, _store: &TypeStore, reference: TypeRefId) -> Option<TypeId> {
-    self.ref_map.get(&reference).copied()
+  fn expand(&self, _store: &TypeStore, def: DefId, _args: &[TypeId]) -> Option<ExpandedType> {
+    self
+      .ref_map
+      .get(&def)
+      .copied()
+      .map(|ty| ExpandedType {
+        params: Vec::new(),
+        ty,
+      })
   }
 }
 
@@ -324,7 +368,7 @@ fn member_origin(visibility: MemberVisibility, origin: u32) -> Option<u32> {
 }
 
 fn upsert_property(target: &mut Vec<Property>, prop: Property) {
-  if let Some(idx) = target.iter().position(|p| p.name == prop.name) {
+  if let Some(idx) = target.iter().position(|p| p.key == prop.key) {
     target[idx] = prop;
   } else {
     target.push(prop);

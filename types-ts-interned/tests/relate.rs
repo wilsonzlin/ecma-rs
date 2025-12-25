@@ -146,6 +146,7 @@ fn unions_and_intersections() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   };
@@ -157,6 +158,7 @@ fn unions_and_intersections() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   };
@@ -232,6 +234,7 @@ fn function_variance_and_methods() {
       readonly: false,
       accessibility: None,
       is_method: true,
+      origin: None,
       declared_on: None,
     },
   };
@@ -243,6 +246,7 @@ fn function_variance_and_methods() {
       readonly: false,
       accessibility: None,
       is_method: true,
+      origin: None,
       declared_on: None,
     },
   };
@@ -367,6 +371,7 @@ fn index_signatures_cover_properties() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   };
@@ -459,6 +464,7 @@ fn private_member_hook() {
       readonly: false,
       accessibility: Some(Accessibility::Private),
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   };
@@ -470,6 +476,7 @@ fn private_member_hook() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   };

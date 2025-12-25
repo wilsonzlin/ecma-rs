@@ -238,6 +238,7 @@ fn eval_mapped_type_over_keyof() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   });
@@ -323,6 +324,7 @@ fn mapped_type_from_lib_snippet_instantiates() {
       readonly: false,
       accessibility: None,
       is_method: false,
+      origin: None,
       declared_on: None,
     },
   });
