@@ -110,3 +110,65 @@ fn type_only_exports_filtered() {
   let ty = value_entry.type_id.expect("type for value");
   assert_eq!(program.display_type(ty).to_string(), "number");
 }
+
+#[test]
+fn missing_reexport_emits_diagnostic() {
+  let mut host = MemoryHost::default();
+  host.insert(FileId(100), "export const foo = 1;");
+  host.insert(FileId(101), "export { bar } from \"./a\";");
+  host.link(FileId(101), "./a", FileId(100));
+
+  let program = Program::new(host, vec![FileId(101)]);
+  let diagnostics = program.check();
+  assert_eq!(diagnostics.len(), 1, "expected a single diagnostic");
+  assert_eq!(diagnostics[0].code.as_str(), "TC1002");
+  assert!(diagnostics[0].message.contains("bar"));
+
+  let exports = program.exports_of(FileId(101));
+  assert!(
+    exports.get("bar").is_none(),
+    "invalid re-export should be absent"
+  );
+}
+
+#[test]
+fn type_only_reexports_filtered() {
+  let mut host = MemoryHost::default();
+  host.insert(FileId(200), "export type Foo = { a: string };");
+  host.insert(
+    FileId(201),
+    "export { Foo } from \"./types\";\nexport const value = 1;",
+  );
+  host.link(FileId(201), "./types", FileId(200));
+
+  let program = Program::new(host, vec![FileId(201)]);
+  let diagnostics = program.check();
+  assert_eq!(diagnostics.len(), 1, "expected missing export diagnostic");
+  assert_eq!(diagnostics[0].code.as_str(), "TC1002");
+
+  let exports = program.exports_of(FileId(201));
+  assert!(
+    exports.get("Foo").is_none(),
+    "type-only re-export should be ignored"
+  );
+  let value = exports.get("value").expect("value export present");
+  let ty = value.type_id.expect("type for value");
+  assert_eq!(program.display_type(ty).to_string(), "number");
+}
+
+#[test]
+fn export_namespace_all_reports_diagnostic() {
+  let mut host = MemoryHost::default();
+  host.insert(FileId(300), "export const a = 1;");
+  host.insert(FileId(301), "export * as ns from \"./a\";");
+  host.link(FileId(301), "./a", FileId(300));
+
+  let program = Program::new(host, vec![FileId(301)]);
+  let diagnostics = program.check();
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected unsupported pattern diagnostic"
+  );
+  assert_eq!(diagnostics[0].code.as_str(), "TC1004");
+}

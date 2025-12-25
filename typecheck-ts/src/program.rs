@@ -671,6 +671,13 @@ impl sem_ts::Resolver for HostResolver {
   }
 }
 
+fn sem_file_kind(kind: FileKind) -> sem_ts::FileKind {
+  match kind {
+    FileKind::Dts => sem_ts::FileKind::Dts,
+    _ => sem_ts::FileKind::Ts,
+  }
+}
+
 #[allow(dead_code)]
 #[derive(Clone, Debug)]
 struct DefData {
@@ -720,15 +727,17 @@ struct ImportData {
 #[derive(Clone, Debug)]
 struct SemHirBuilder {
   file: FileId,
+  file_kind: sem_ts::FileKind,
   decls: Vec<sem_ts::Decl>,
   imports: Vec<sem_ts::Import>,
   exports: Vec<sem_ts::Export>,
 }
 
 impl SemHirBuilder {
-  fn new(file: FileId) -> Self {
+  fn new(file: FileId, file_kind: sem_ts::FileKind) -> Self {
     SemHirBuilder {
       file,
+      file_kind,
       decls: Vec::new(),
       imports: Vec::new(),
       exports: Vec::new(),
@@ -790,7 +799,7 @@ impl SemHirBuilder {
     sem_ts::HirFile {
       file_id: sem_ts::FileId(self.file.0),
       module_kind: sem_ts::ModuleKind::Module,
-      file_kind: sem_ts::FileKind::Ts,
+      file_kind: self.file_kind,
       decls: self.decls,
       imports: self.imports,
       exports: self.exports,
@@ -1314,7 +1323,7 @@ impl ProgramState {
       host: Arc::clone(host),
     };
     let sem_roots: Vec<sem_ts::FileId> = roots.iter().map(|f| sem_ts::FileId(f.0)).collect();
-    let (semantics, _diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file| {
+    let (semantics, diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file| {
       let id = FileId(file.0);
       self
         .sem_hir
@@ -1323,7 +1332,29 @@ impl ProgramState {
         .map(Arc::new)
         .unwrap_or_else(|| Arc::new(sem_ts::HirFile::module(file)))
     });
+    self.push_semantic_diagnostics(diags);
     self.semantics = Some(semantics);
+  }
+
+  fn push_semantic_diagnostics(&mut self, diags: Vec<Diagnostic>) {
+    for mut diag in diags {
+      if diag.code == "BIND1002" {
+        if diag.message.contains("unresolved") {
+          diag.code = CODE_UNRESOLVED_MODULE.into();
+        } else {
+          diag.code = CODE_UNKNOWN_EXPORT.into();
+        }
+      }
+      let duplicate = self.diagnostics.iter().any(|existing| {
+        existing.code == diag.code
+          && existing.primary == diag.primary
+          && existing.message == diag.message
+      });
+      if duplicate {
+        continue;
+      }
+      self.diagnostics.push(diag);
+    }
   }
 
   fn bind_file(
@@ -1335,7 +1366,8 @@ impl ProgramState {
   ) {
     let top_body_id = self.alloc_body(file, None);
     let mut top_body = BodyBuilder::new(top_body_id, file);
-    let mut sem_builder = SemHirBuilder::new(file);
+    let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
+    let mut sem_builder = SemHirBuilder::new(file, sem_file_kind(file_kind));
     let mut defs = Vec::new();
     let mut exports: ExportMap = BTreeMap::new();
     let mut bindings: HashMap<String, SymbolBinding> = HashMap::new();
@@ -1456,12 +1488,6 @@ impl ProgramState {
           if let Some(module) = export_list.stx.from.clone() {
             if let Some(target) = host.resolve(file, &module) {
               queue.push_back(target);
-            } else {
-              self.diagnostics.push(Diagnostic::error(
-                CODE_UNRESOLVED_MODULE,
-                format!("unresolved module {module}"),
-                loc_to_span(file, stmt.loc),
-              ));
             }
           }
           match &export_list.stx.names {
@@ -1517,7 +1543,7 @@ impl ProgramState {
             ExportNames::All(alias) => {
               if alias.is_some() {
                 self.diagnostics.push(Diagnostic::error(
-                  CODE_UNKNOWN_EXPORT,
+                  CODE_UNSUPPORTED_PATTERN,
                   "unsupported export * as alias",
                   loc_to_span(file, stmt.loc),
                 ));
@@ -1536,12 +1562,6 @@ impl ProgramState {
           let resolved = host.resolve(file, &module);
           if let Some(target) = resolved {
             queue.push_back(target);
-          } else {
-            self.diagnostics.push(Diagnostic::error(
-              CODE_UNRESOLVED_MODULE,
-              format!("unresolved module {module}"),
-              loc_to_span(file, stmt.loc),
-            ));
           }
           let mut import_default = None;
           let mut import_namespace = None;
@@ -2750,52 +2770,8 @@ impl ProgramState {
   }
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
-    if self.file_kinds.get(&file) != Some(&FileKind::Dts) && self.semantics.is_some() {
-      let sem_file = sem_ts::FileId(file.0);
-      let pending: Vec<(String, sem_ts::SymbolId, Option<DefId>, Option<DefId>)> = {
-        let semantics = self.semantics.as_ref().expect("checked above");
-        let exports = semantics.exports_of(sem_file);
-        let symbols = semantics.symbols();
-        let mut pending = Vec::new();
-        for (name, group) in exports.iter() {
-          let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) else {
-            continue;
-          };
-          let symbol = symbols.symbol(symbol_id);
-          let mut local_def = None;
-          let mut any_def = None;
-          for decl_id in symbol.decls_for(sem_ts::Namespace::VALUE).iter() {
-            let decl = symbols.decl(*decl_id);
-            let def = DefId(decl.def_id.0);
-            if any_def.is_none() {
-              any_def = Some(def);
-            }
-            if decl.file == sem_file && local_def.is_none() {
-              local_def = Some(def);
-            }
-          }
-          pending.push((name.clone(), symbol_id, local_def, any_def));
-        }
-        pending
-      };
-
-      let mut map = ExportMap::new();
-      for (name, symbol_id, local_def, any_def) in pending {
-        let symbol = any_def
-          .or(local_def)
-          .and_then(|def| self.def_data.get(&def).map(|data| data.symbol))
-          .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
-        let type_id = any_def.or(local_def).map(|def| self.type_of_def(def));
-        map.insert(
-          name,
-          ExportEntry {
-            symbol,
-            def: local_def,
-            type_id,
-          },
-        );
-      }
-      return map;
+    if let Some(semantics) = self.semantics.clone() {
+      return check::modules::exports_from_semantics(self, &semantics, file);
     }
     let Some(state) = self.files.get(&file).cloned() else {
       return ExportMap::new();
