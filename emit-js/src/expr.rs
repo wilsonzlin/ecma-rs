@@ -608,24 +608,29 @@ where
   }
 
   fn emit_template_literal(&mut self, parts: &[LitTemplatePart]) -> EmitResult {
-    write!(self.out, "`")?;
-    for part in parts {
+    let mut raw = String::new();
+    raw.push('`');
+    for (idx, part) in parts.iter().enumerate() {
       match part {
-        LitTemplatePart::String(raw) => {
+        LitTemplatePart::String(raw_part) => {
+          let is_first = idx == 0;
+          let is_last = idx == parts.len().saturating_sub(1);
+          let cooked = crate::cooked_template_segment(raw_part, is_first, is_last);
           let mut buf = Vec::new();
-          crate::emit_template_raw_segment(&mut buf, raw);
-          self.out.write_str(
-            std::str::from_utf8(&buf).expect("template literal escape output is UTF-8"),
-          )?;
+          crate::emit_template_literal_segment(&mut buf, cooked);
+          raw.push_str(std::str::from_utf8(&buf).expect("template literal escape output is UTF-8"));
         }
         LitTemplatePart::Substitution(expr) => {
-          write!(self.out, "${{")?;
+          raw.push_str("${");
+          self.out.write_str(&raw)?;
+          raw.clear();
           self.emit_expr_with_min_prec(expr, Prec::LOWEST)?;
-          write!(self.out, "}}")?;
+          raw.push('}');
         }
       }
     }
-    write!(self.out, "`")?;
+    raw.push('`');
+    self.out.write_str(&raw)?;
     Ok(())
   }
 
