@@ -6,14 +6,16 @@ description = "Lightweight TypeScript type checking facade for ecma-rs"
 license = "Apache-2.0"
 
 [features]
-default = ["bundled-libs"]
+default = ["bundled-libs", "serde"]
 bundled-libs = []
+serde = ["dep:serde", "diagnostics/serde", "hir-js/serde"]
 
 [dependencies]
-diagnostics = { path = "../diagnostics", features = ["serde"] }
+diagnostics = { path = "../diagnostics" }
 parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
 semantic-js = { path = "../semantic-js" }
-serde = { version = "1.0", features = ["derive"] }
+hir-js = { path = "../hir-js" }
+serde = { version = "1.0", features = ["derive"], optional = true }
 thiserror = "1.0"
 tracing = "0.1"
 types-ts-interned = { path = "../types-ts-interned" }

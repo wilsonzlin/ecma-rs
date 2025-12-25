@@ -1,12 +1,12 @@
 //! TypeScript type checking facade for the ecma-rs toolchain.
 //!
-//! The checker exposes a small, ergonomic API centred around [`Program`].
-//! A `Program` ties together a user-provided [`Host`] (for file contents and
-//! module resolution), parses all reachable files, binds top-level symbols,
-//! and type-checks bodies on demand. The architecture is intentionally
-//! two-level: global work (`parse`/`bind`/exports) is done once per file, while
-//! local work (`check_body`) produces per-body side tables that can be queried
-//! with [`type_of_expr`] without leaking any internal arenas.
+//! The checker exposes a small, ergonomic API centred around [`Program`] and a
+//! handful of stable identifiers (`FileId`, `DefId`, `BodyId`, `ExprId`,
+//! `TypeId`). A `Program` ties together a user-provided [`Host`] (for file
+//! contents and module resolution), parses all reachable files, binds top-level
+//! symbols, and type-checks bodies on demand. Global work is performed once per
+//! file, while [`Program::check_body`] produces per-body side tables that can be
+//! queried without leaking internal arenas or caches.
 //!
 //! # Example: single-file function typing
 //!
@@ -45,18 +45,16 @@
 //!   FileId(0),
 //!   "export function add(a: number, b: number) { return a + b; }",
 //! );
-//! let mut program = Program::new(host, vec![FileId(0)]);
+//! let program = Program::new(host, vec![FileId(0)]);
 //! let diagnostics = program.check();
 //! assert!(diagnostics.is_empty());
 //!
-//! let def = program
-//!   .definitions_in_file(FileId(0))
-//!   .into_iter()
-//!   .find(|d| program.def_name(*d).as_deref() == Some("add"))
-//!   .unwrap();
-//! let body = program.body_of_def(def).unwrap();
-//! let _body_result = program.check_body(body);
-//! let ty = program.type_of_expr(body, ExprId(0));
+//! let exports = program.exports_of(FileId(0));
+//! let add_def = exports.get("add").and_then(|e| e.def).unwrap();
+//! let add_body = program.body_of_def(add_def).unwrap();
+//! let result = program.check_body(add_body);
+//! let ty = program.type_of_expr(add_body, ExprId(0));
+//! assert!(result.diagnostics().is_empty());
 //! assert_eq!(program.display_type(ty).to_string(), "number");
 //! ```
 //!
@@ -108,7 +106,7 @@
 //! );
 //! host.link(FileId(0), "./math", FileId(1));
 //!
-//! let mut program = Program::new(host, vec![FileId(0)]);
+//! let program = Program::new(host, vec![FileId(0)]);
 //! let diagnostics = program.check();
 //! assert!(diagnostics.is_empty());
 //!
@@ -118,13 +116,20 @@
 //! assert_eq!(program.display_type(total_type).to_string(), "number");
 //! ```
 //!
+//! # Features
+//!
+//! - `serde` (default): enables serialization for identifiers, diagnostics, and
+//!   [`TypeDisplay`] (which renders to a string for JSON outputs).
+//!
 //! The public API intentionally hides internal storage (arenas, caches, ASTs).
 //! [`Program`] returns opaque IDs and `Arc` handles so downstream consumers can
 //! cache and share results without relying on implementation details.
 
+mod api;
 mod error;
 mod program;
 
+pub use api::*;
 pub use error::*;
 pub use program::*;
 

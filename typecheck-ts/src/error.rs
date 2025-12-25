@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{BodyId, DefId, FileId};
 
 /// Error returned by a [`Host`](crate::Host).
-#[derive(Debug, Error, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Error, Clone)]
 #[error("{message}")]
 pub struct HostError {
   pub(crate) message: String,

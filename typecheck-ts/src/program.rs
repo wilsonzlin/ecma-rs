@@ -1,5 +1,8 @@
+use crate::api::{
+  BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange, TypeId,
+};
 use ::semantic_js::ts as sem_ts;
-pub use diagnostics::{Diagnostic, FileId, Label, Severity, Span, TextRange};
+use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};
 use parse_js::ast::expr::pat::Pat;
@@ -16,13 +19,13 @@ use parse_js::ast::type_expr::{
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
-use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
+use types_ts_interned as tti;
 
 use crate::{FatalError, HostError, Ice, IceContext};
 
@@ -38,25 +41,6 @@ pub(crate) const CODE_NON_DTS_LIB: &str = "TC0004";
 pub(crate) const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
 pub(crate) const CODE_EXCESS_PROPERTY: &str = "TC0006";
 pub(crate) const CODE_TYPE_MISMATCH: &str = "TC0007";
-/// Identifier for a definition (function/variable/import).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct DefId(pub u32);
-
-/// Identifier for an executable body (top-level or function body).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct BodyId(pub u32);
-
-/// Identifier for an expression inside a specific [`BodyId`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct ExprId(pub u32);
-
-/// Identifier for a pattern inside a specific [`BodyId`].
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct PatId(pub u32);
-
-/// Interned type handle.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
-pub struct TypeId(pub u32);
 
 const CODE_UNRESOLVED_MODULE: &str = "TC1001";
 const CODE_UNKNOWN_EXPORT: &str = "TC1002";
@@ -91,10 +75,9 @@ pub trait Host: Send + Sync + 'static {
 
 /// Public symbol identifier exposed through [`Program::symbol_at`].
 pub mod semantic_js {
-  use serde::{Deserialize, Serialize};
-
   /// Opaque symbol identifier.
-  #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize, Ord, PartialOrd)]
+  #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+  #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
   pub struct SymbolId(pub u32);
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
@@ -111,7 +94,8 @@ pub mod semantic_js {
 }
 
 /// Export entry for [`ExportMap`].
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug)]
 pub struct ExportEntry {
   /// Symbol backing the export.
   pub symbol: semantic_js::SymbolId,
@@ -138,6 +122,11 @@ pub struct BodyCheckResult {
 }
 
 impl BodyCheckResult {
+  /// Body identifier this result corresponds to.
+  pub fn body(&self) -> BodyId {
+    self.body
+  }
+
   /// Diagnostics produced while checking this body.
   pub fn diagnostics(&self) -> &[Diagnostic] {
     &self.diagnostics
@@ -198,117 +187,134 @@ impl BodyCheckResult {
 }
 
 /// Helper returned from [`Program::display_type`].
-pub struct TypeDisplay<'a> {
-  program: &'a Program,
-  ty: TypeId,
+///
+/// When the optional `serde` feature is enabled this serializes to the rendered
+/// string form for easy inclusion in JSON outputs.
+#[derive(Clone)]
+pub struct TypeDisplay {
+  store: Arc<tti::TypeStore>,
+  ty: tti::TypeId,
 }
 
-impl<'a> std::fmt::Display for TypeDisplay<'a> {
+impl std::fmt::Display for TypeDisplay {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let mut state = self.program.lock_state();
-    state.ensure_analyzed(
-      &self.program.host,
-      &self.program.roots,
-      &self.program.cancelled,
-    );
-    let TypeDisplay { program: _, ty } = *self;
-    let kind = state.type_store.kind(ty).clone();
-    drop(state);
-    format_type(kind, self.program, f)
+    tti::TypeDisplay::new(&self.store, self.ty).fmt(f)
   }
 }
 
-fn format_type(
-  kind: TypeKind,
-  program: &Program,
-  f: &mut std::fmt::Formatter<'_>,
-) -> std::fmt::Result {
-  match kind {
-    TypeKind::Any => write!(f, "any"),
-    TypeKind::Unknown => write!(f, "unknown"),
-    TypeKind::Number => write!(f, "number"),
-    TypeKind::String => write!(f, "string"),
-    TypeKind::Boolean => write!(f, "boolean"),
-    TypeKind::Null => write!(f, "null"),
-    TypeKind::Undefined => write!(f, "undefined"),
-    TypeKind::LiteralString(s) => write!(f, "\"{}\"", s),
-    TypeKind::LiteralNumber(n) => write!(f, "{}", n),
-    TypeKind::LiteralBoolean(b) => write!(f, "{}", b),
-    TypeKind::Void => write!(f, "void"),
-    TypeKind::Never => write!(f, "never"),
-    TypeKind::Array(inner) => write!(f, "{}[]", program.display_type(inner)),
+#[cfg(feature = "serde")]
+impl serde::Serialize for TypeDisplay {
+  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&self.to_string())
+  }
+}
+
+fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeStore>, tti::TypeId) {
+  let store = tti::TypeStore::new();
+  let mut cache = HashMap::new();
+  let interned = convert_type_for_display(ty, state, &store, &mut cache);
+  (store, interned)
+}
+
+fn convert_type_for_display(
+  ty: TypeId,
+  state: &ProgramState,
+  store: &Arc<tti::TypeStore>,
+  cache: &mut HashMap<TypeId, tti::TypeId>,
+) -> tti::TypeId {
+  if let Some(mapped) = cache.get(&ty) {
+    return *mapped;
+  }
+  let primitives = store.primitive_ids();
+  cache.insert(ty, primitives.unknown);
+  let mapped = match state.type_store.kind(ty).clone() {
+    TypeKind::Any => primitives.any,
+    TypeKind::Unknown => primitives.unknown,
+    TypeKind::Never => primitives.never,
+    TypeKind::Void => primitives.void,
+    TypeKind::Number => primitives.number,
+    TypeKind::String => primitives.string,
+    TypeKind::Boolean => primitives.boolean,
+    TypeKind::Null => primitives.null,
+    TypeKind::Undefined => primitives.undefined,
+    TypeKind::LiteralString(name) => {
+      let name = store.intern_name(name);
+      store.intern_type(tti::TypeKind::StringLiteral(name))
+    }
+    TypeKind::LiteralNumber(value) => match value.parse::<f64>() {
+      Ok(num) => store.intern_type(tti::TypeKind::NumberLiteral(OrderedFloat(num))),
+      Err(_) => primitives.number,
+    },
+    TypeKind::LiteralBoolean(value) => store.intern_type(tti::TypeKind::BooleanLiteral(value)),
+    TypeKind::Array(inner) => {
+      let inner = convert_type_for_display(inner, state, store, cache);
+      store.intern_type(tti::TypeKind::Array {
+        ty: inner,
+        readonly: false,
+      })
+    }
     TypeKind::Union(types) => {
-      let mut first = true;
-      for ty in types {
-        if !first {
-          write!(f, " | ")?;
-        }
-        first = false;
-        write!(f, "{}", program.display_type(ty))?;
-      }
-      Ok(())
+      let members: Vec<_> = types
+        .into_iter()
+        .map(|t| convert_type_for_display(t, state, store, cache))
+        .collect();
+      store.union(members)
     }
     TypeKind::Function { params, ret } => {
-      write!(f, "(")?;
-      for (idx, p) in params.iter().enumerate() {
-        if idx > 0 {
-          write!(f, ", ")?;
-        }
-        write!(f, "{}", program.display_type(*p))?;
-      }
-      write!(f, ") -> {}", program.display_type(ret))
+      let params: Vec<_> = params
+        .into_iter()
+        .map(|param| tti::Param {
+          name: None,
+          ty: convert_type_for_display(param, state, store, cache),
+          optional: false,
+          rest: false,
+        })
+        .collect();
+      let sig = tti::Signature::new(params, convert_type_for_display(ret, state, store, cache));
+      let sig_id = store.intern_signature(sig);
+      store.intern_type(tti::TypeKind::Callable {
+        overloads: vec![sig_id],
+      })
     }
+    TypeKind::Predicate { asserted, .. } => match asserted {
+      Some(ty) => convert_type_for_display(ty, state, store, cache),
+      None => primitives.boolean,
+    },
     TypeKind::Object(obj) => {
-      write!(f, "{{")?;
-      let mut first = true;
-      for (k, v) in obj.props.iter() {
-        if !first {
-          write!(f, ", ")?;
-        }
-        first = false;
-        write!(
-          f,
-          "{}{}: {}",
-          k,
-          if v.optional { "?" } else { "" },
-          program.display_type(v.typ)
-        )?;
+      let mut shape = tti::Shape::new();
+      for (name, prop) in obj.props {
+        let key = tti::PropKey::String(store.intern_name(name));
+        let data = tti::PropData {
+          ty: convert_type_for_display(prop.typ, state, store, cache),
+          optional: prop.optional,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          declared_on: None,
+        };
+        shape.properties.push(tti::Property { key, data });
       }
-      if let Some(ty) = obj.string_index {
-        if !first {
-          write!(f, ", ")?;
-        }
-        first = false;
-        write!(f, "[key: string]: {}", program.display_type(ty))?;
+      if let Some(value_type) = obj.string_index {
+        shape.indexers.push(tti::Indexer {
+          key_type: primitives.string,
+          value_type: convert_type_for_display(value_type, state, store, cache),
+          readonly: false,
+        });
       }
-      if let Some(ty) = obj.number_index {
-        if !first {
-          write!(f, ", ")?;
-        }
-        write!(f, "[index: number]: {}", program.display_type(ty))?;
+      if let Some(value_type) = obj.number_index {
+        shape.indexers.push(tti::Indexer {
+          key_type: primitives.number,
+          value_type: convert_type_for_display(value_type, state, store, cache),
+          readonly: false,
+        });
       }
-      write!(f, "}}")
+      let shape_id = store.intern_shape(shape);
+      let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+      store.intern_type(tti::TypeKind::Object(obj_id))
     }
-    TypeKind::Predicate {
-      parameter,
-      asserted,
-      asserts,
-    } => {
-      if asserts {
-        write!(f, "asserts {}", parameter)?;
-      } else {
-        write!(f, "{}", parameter)?;
-      }
-      if let Some(ty) = asserted {
-        if asserts {
-          write!(f, " is {}", program.display_type(ty))?;
-        } else {
-          write!(f, " is {}", program.display_type(ty))?;
-        }
-      }
-      Ok(())
-    }
-  }
+  };
+  cache.insert(ty, mapped);
+  mapped
 }
 
 /// Primary entry point for parsing and type checking.
@@ -318,6 +324,12 @@ pub struct Program {
   cancelled: AtomicBool,
   state: std::sync::Mutex<ProgramState>,
 }
+
+// Ensure the primary API surface is usable across threads.
+const _: fn() = || {
+  fn assert_send_sync<T: Send + Sync>() {}
+  assert_send_sync::<Program>();
+};
 
 impl Program {
   /// Create a new program from a host and root file list.
@@ -558,8 +570,13 @@ impl Program {
   }
 
   /// Helper to render a type as displayable string.
-  pub fn display_type(&self, ty: TypeId) -> TypeDisplay<'_> {
-    TypeDisplay { program: self, ty }
+  pub fn display_type(&self, ty: TypeId) -> TypeDisplay {
+    let (store, ty) = {
+      let mut state = self.lock_state();
+      state.ensure_analyzed(&self.host, &self.roots, &self.cancelled);
+      display_type_from_state(&state, ty)
+    };
+    TypeDisplay { store, ty }
   }
 
   /// Definitions declared in a file.
@@ -803,6 +820,8 @@ impl SemHirBuilder {
       decls: self.decls,
       imports: self.imports,
       exports: self.exports,
+      export_as_namespace: Vec::new(),
+      ambient_modules: Vec::new(),
     }
   }
 }
@@ -1009,9 +1028,9 @@ impl TypeStore {
 
   fn alloc(&mut self, kind: TypeKind) -> TypeId {
     if let Some((idx, _)) = self.kinds.iter().enumerate().find(|(_, k)| **k == kind) {
-      return TypeId(idx as u32);
+      return TypeId((idx as u128).into());
     }
-    let id = TypeId(self.kinds.len() as u32);
+    let id = TypeId((self.kinds.len() as u128).into());
     self.kinds.push(kind);
     id
   }
