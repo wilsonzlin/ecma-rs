@@ -18,7 +18,7 @@ pub use il::{
   lower_function, lower_program, LoweredArg, LoweredBlock, LoweredFunction, LoweredInst,
   LoweredProgram,
 };
-pub use names::NameMangler;
+pub use names::{collect_reserved_from_cfg, collect_reserved_from_insts, NameMangler};
 pub use options::{DecompileOptions, ResolvedTempDeclStyle, TempDeclScope, TempDeclStyle};
 pub use structurer::{structure_cfg, BreakTarget, ControlTree, LoopLabel};
 pub use top_level::{build_top_level, foreign_var_decl, prepend_foreign_decls};

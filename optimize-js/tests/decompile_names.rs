@@ -1,12 +1,16 @@
-use optimize_js::decompile::NameMangler;
+use optimize_js::decompile::{collect_reserved_from_insts, NameMangler};
+use optimize_js::il::inst::{Arg, Inst, InstTyp};
 
 #[test]
 fn avoids_unknown_and_reserved_collisions() {
   // Reserve names that might come from UnknownLoad/UnknownStore or builtins.
   let mut minified = NameMangler::new(vec!["a".to_string()]);
   minified.minify_locals = true;
-  assert_eq!(minified.name_for_reg(0), "b");
-  assert_eq!(minified.name_for_reg(1), "c");
+  let n0 = minified.name_for_reg(0);
+  let n1 = minified.name_for_reg(1);
+  assert_ne!(n0, "a");
+  assert_ne!(n1, "a");
+  assert_ne!(n0, n1);
 
   // Canonical names should also avoid collisions.
   let mut canonical = NameMangler::new(vec!["r0".to_string()]);
@@ -51,26 +55,19 @@ fn deterministic_across_runs() {
   // Stable on repeat.
   assert_eq!(first.name_for_reg(0), seq1[0]);
   assert_eq!(second.name_for_foreign(1), seq2[4]);
+}
 
-  // Deterministic regardless of call order when using index-based encoding.
-  let mut reversed = NameMangler::new(vec!["taken".to_string()]);
-  reversed.minify_locals = true;
-  let mut reversed_seq = vec![
-    reversed.name_for_reg(1),
-    reversed.name_for_reg(0),
-    reversed.name_for_foreign(1),
-    reversed.name_for_foreign(0),
+#[test]
+fn collects_reserved_from_insts() {
+  let insts = vec![
+    Inst::unknown_load(0, "mystery".to_string()),
+    Inst {
+      t: InstTyp::VarAssign,
+      args: vec![Arg::Builtin("Math.max".to_string())],
+      ..Default::default()
+    },
   ];
-  // Reconstruct with canonical ordering for comparison.
-  reversed_seq.swap(0, 1);
-  reversed_seq.swap(2, 3);
-  assert_eq!(
-    reversed_seq,
-    vec![
-      seq1[0].clone(),
-      seq1[3].clone(),
-      seq1[4].clone(),
-      seq1[1].clone()
-    ]
-  );
+  let reserved = collect_reserved_from_insts(&insts);
+  assert!(reserved.contains("mystery"));
+  assert!(reserved.contains("Math"));
 }

@@ -1,6 +1,9 @@
 use ahash::{HashMap, HashSet};
 use parse_js::lex::KEYWORDS_MAPPING;
 
+use crate::cfg::cfg::Cfg;
+use crate::il::inst::{Arg, Inst, InstTyp};
+
 /// Deterministic name generator for decompiler-emitted locals.
 ///
 /// The constructor seeds the reserved set with ECMAScript keywords and allows
@@ -105,6 +108,37 @@ impl NameMangler {
   fn is_taken(&self, name: &str) -> bool {
     self.used.contains(name)
   }
+}
+
+/// Collects identifiers that must be reserved based on the contents of a CFG.
+///
+/// - Includes all `UnknownLoad`/`UnknownStore` names.
+/// - Includes the root segment of any `Arg::Builtin` path (split on `.`).
+pub fn collect_reserved_from_cfg(cfg: &Cfg) -> HashSet<String> {
+  collect_reserved_from_insts(cfg.bblocks.all().flat_map(|(_, block)| block.iter()))
+}
+
+/// Collects identifiers that must be reserved based on a set of instructions.
+///
+/// - Includes all `UnknownLoad`/`UnknownStore` names.
+/// - Includes the root segment of any `Arg::Builtin` path (split on `.`).
+pub fn collect_reserved_from_insts<'a>(
+  insts: impl IntoIterator<Item = &'a Inst>,
+) -> HashSet<String> {
+  let mut reserved = HashSet::default();
+  for inst in insts {
+    if matches!(inst.t, InstTyp::UnknownLoad | InstTyp::UnknownStore) && !inst.unknown.is_empty() {
+      reserved.insert(inst.unknown.clone());
+    }
+    for arg in &inst.args {
+      if let Arg::Builtin(path) = arg {
+        if let Some(root) = path.split('.').find(|s| !s.is_empty()) {
+          reserved.insert(root.to_string());
+        }
+      }
+    }
+  }
+  reserved
 }
 
 fn default_reserved_names() -> HashSet<String> {
