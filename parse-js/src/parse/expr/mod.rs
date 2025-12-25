@@ -109,13 +109,43 @@ impl<'a> Parser<'a> {
   }
 
   /// Parse expression with TypeScript type arguments support
-  /// Type arguments are now handled automatically in the main expression loop
+  /// Type arguments are permitted without a call suffix (e.g. `Base<T>`) in
+  /// contexts like class heritage clauses.
   pub fn expr_with_ts_type_args<const N: usize>(
     &mut self,
     ctx: ParseCtx,
     terminators: [TT; N],
   ) -> SyntaxResult<Node<Expr>> {
-    self.expr(ctx, terminators)
+    let prev = self.allow_bare_ts_type_args;
+    self.allow_bare_ts_type_args = true;
+    let out = self.expr(ctx, terminators);
+    self.allow_bare_ts_type_args = prev;
+    out
+  }
+
+  fn ts_type_arguments_after_chevron_left(&mut self, ctx: ParseCtx) -> SyntaxResult<()> {
+    loop {
+      if matches!(
+        self.peek().typ,
+        TT::ChevronRight
+          | TT::ChevronRightEquals
+          | TT::ChevronRightChevronRight
+          | TT::ChevronRightChevronRightEquals
+          | TT::ChevronRightChevronRightChevronRight
+          | TT::ChevronRightChevronRightChevronRightEquals
+      ) {
+        self.require_chevron_right()?;
+        break;
+      }
+
+      let _ = self.type_expr(ctx)?;
+      if self.consume_if(TT::Comma).is_match() {
+        continue;
+      }
+      self.require_chevron_right()?;
+      break;
+    }
+    Ok(())
   }
 
   /// Parses a parenthesised expression like `(a + b)`.
@@ -912,105 +942,24 @@ impl<'a> Parser<'a> {
         }
         // TypeScript: Skip type arguments after identifiers/member expressions/call expressions
         // e.g., Base<T> in extends clause or getBase()<T> in class extends
-        // Only treat < as type arguments if left is an identifier, member expression, or call expression
+        // Only treat < as type arguments if left is an identifier, member expression, or call expression.
         TT::ChevronLeft => {
-          // Check if left expression is an identifier, member expression, or call expression
-          let left_is_identifier_or_member = matches!(
-            *left.stx,
-            Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
-          );
+          if self.is_typescript()
+            && matches!(
+              *left.stx,
+              Expr::Id(_) | Expr::Member(_) | Expr::ComputedMember(_) | Expr::Call(_)
+            )
+          {
+            let after_lt = self.checkpoint();
+            if self.ts_type_arguments_after_chevron_left(ctx).is_ok() {
+              let next = self.peek();
+              let tagged_template = !next.preceded_by_line_terminator
+                && matches!(
+                  next.typ,
+                  TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd
+                );
 
-          if left_is_identifier_or_member {
-            // We've already consumed <, need to check if this is type arguments
-            // Peek ahead to disambiguate
-            let next = self.peek();
-            let looks_like_type_args = match next.typ {
-              TT::KeywordAny
-              | TT::KeywordUnknown
-              | TT::KeywordNever
-              | TT::KeywordVoid
-              | TT::KeywordStringType
-              | TT::KeywordNumberType
-              | TT::KeywordBooleanType
-              | TT::KeywordBigIntType
-              | TT::KeywordSymbolType
-              | TT::KeywordObjectType
-              | TT::BracketOpen
-              | TT::BraceOpen
-              | TT::KeywordTypeof
-              | TT::KeywordKeyof
-              | TT::KeywordInfer
-              | TT::ChevronRight => true,
-              // For parentheses, check if it looks like a function type
-              // e.g., <() => T> or <(x: T) => U>
-              // vs expression like < (c * d)
-              TT::ParenthesisOpen => {
-                let [_, t2] = self.peek_n::<2>();
-                matches!(
-                  t2.typ,
-                  // <()> is likely function type: () => T
-                  TT::ParenthesisClose |
-                  // <(readonly [...> or <(public [...> etc
-                  TT::KeywordReadonly | TT::KeywordPublic | TT::KeywordPrivate | TT::KeywordProtected |
-                  // <(new (...> constructor type
-                  TT::KeywordNew |
-                  // <(...rest> rest parameter
-                  TT::DotDotDot
-                ) || {
-                  // Check for parameter with type annotation: <(x: T)>
-                  // Look for pattern: ( identifier :
-                  if t2.typ == TT::Identifier {
-                    let [_, _, t3] = self.peek_n::<3>();
-                    matches!(t3.typ, TT::Colon | TT::Question)
-                  } else {
-                    false
-                  }
-                }
-              }
-              // For identifiers, need to check what comes after
-              TT::Identifier => {
-                let [_, t2] = self.peek_n::<2>();
-                matches!(
-                  t2.typ,
-                  TT::ChevronRight
-                    | TT::Comma
-                    | TT::KeywordExtends
-                    | TT::Equals
-                    | TT::Bar
-                    | TT::Ampersand
-                    | TT::Dot
-                    | TT::BracketOpen
-                )
-              }
-              _ => false,
-            };
-
-            if looks_like_type_args {
-              // Parse the rest of the type arguments (we already consumed <)
-              let mut _args = Vec::new();
-              while !self.consume_if(TT::ChevronRight).is_match() {
-                match self.type_expr(ctx) {
-                  Ok(arg) => {
-                    _args.push(arg);
-                    if !self.consume_if(TT::Comma).is_match() {
-                      if let Ok(_) = self.require_chevron_right() {
-                        break;
-                      } else {
-                        // Error recovery: couldn't find closing >
-                        break;
-                      }
-                    }
-                  }
-                  Err(_) => {
-                    // Error recovery: skip to closing > or give up
-                    break;
-                  }
-                }
-              }
-
-              // TypeScript: Check if this is a call expression with type arguments
-              // e.g., foo<T>() or obj.method<T>()
-              if self.peek().typ == TT::ParenthesisOpen {
+              if next.typ == TT::ParenthesisOpen {
                 self.consume(); // (
                 let arguments = self.call_args(ctx).unwrap_or_default();
                 if let Ok(end) = self.require(TT::ParenthesisClose) {
@@ -1024,10 +973,17 @@ impl<'a> Parser<'a> {
                   )
                   .into_wrapped();
                 }
+                continue;
               }
 
-              continue;
+              if tagged_template || self.allow_bare_ts_type_args {
+                continue;
+              }
             }
+
+            // Not actually type arguments in this context; discard any speculative
+            // lexing/splitting and treat `<` as a binary operator.
+            self.reset_to(after_lt.next_tok_i);
           }
           // Not type arguments, continue to binary operator handling
         }

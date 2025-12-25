@@ -93,6 +93,7 @@ pub struct Parser<'a> {
   buf: Vec<BufferedToken>,
   next_tok_i: usize,
   options: ParseOptions,
+  allow_bare_ts_type_args: bool,
 }
 
 // We extend this struct with added methods in the various submodules, instead of simply using free functions and passing `&mut Parser` around, for several reasons:
@@ -109,6 +110,7 @@ impl<'a> Parser<'a> {
       buf: Vec::new(),
       next_tok_i: 0,
       options,
+      allow_bare_ts_type_args: false,
     }
   }
 
