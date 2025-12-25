@@ -35,11 +35,17 @@ pub struct TypeParamId(pub u32);
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TypeMemberId(pub u32);
 
+/// Content-addressed identifier for an interned name.
+///
+/// Unlike sequential indices, this value is derived from the name text (see
+/// [`NameInterner`](crate::intern::NameInterner)) so it remains stable even if
+/// other identifiers are introduced earlier in the file.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub struct NameId(pub u32);
+pub struct NameId(pub u64);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(u8)]
 pub enum DefKind {
   Module,
   Namespace,

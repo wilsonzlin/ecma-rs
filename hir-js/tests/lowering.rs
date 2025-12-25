@@ -61,6 +61,36 @@ fn def_ids_survive_unrelated_insertions() {
 }
 
 #[test]
+fn name_ids_stay_stable_when_unrelated_names_are_introduced() {
+  let base = "function f() {}\nconst tail = 1;";
+  let with_extra = "const earlier = 0;\nfunction f() {}\nconst tail = 1;";
+
+  let base_ast = parse(base).expect("parse base");
+  let base_result = lower_file(FileId(6), FileKind::Ts, &base_ast);
+
+  let extra_ast = parse(with_extra).expect("parse variant");
+  let extra_result = lower_file(FileId(6), FileKind::Ts, &extra_ast);
+
+  let base_f = base_result
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Function && base_result.names.resolve(def.name) == Some("f")
+    })
+    .expect("function f in base");
+  let extra_f = extra_result
+    .defs
+    .iter()
+    .find(|def| {
+      def.path.kind == DefKind::Function && extra_result.names.resolve(def.name) == Some("f")
+    })
+    .expect("function f in variant");
+
+  assert_eq!(base_f.name, extra_f.name, "NameId for f should be stable");
+  assert_eq!(base_f.path, extra_f.path, "DefPath for f should be stable");
+}
+
+#[test]
 fn expr_at_offset_prefers_inner_expression() {
   let source = "const a = 1 + 2;";
   let ast = parse(source).expect("parse");
