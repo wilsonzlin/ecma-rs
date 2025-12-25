@@ -1,5 +1,5 @@
 use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
-use semantic_js::ts as sem_ts;
+use ::semantic_js::ts as sem_ts;
 
 /// Build an [`ExportMap`] for a file using `semantic-js` binder output. Only the
 /// value namespace participates so type-only exports/imports are filtered out.

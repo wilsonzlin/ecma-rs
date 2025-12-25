@@ -1,7 +1,7 @@
 use assert_cmd::Command;
 use serde_json::to_string;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::tempdir;
 use typecheck_ts_harness::build_filter;
@@ -52,6 +52,36 @@ impl Drop for EnvGuard {
     } else {
       std::env::remove_var(self.key);
     }
+  }
+}
+
+fn run_cli_json_report(root: &Path) -> JsonReport {
+  #[allow(deprecated)]
+  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd
+    .arg("conformance")
+    .arg("--root")
+    .arg(root)
+    .arg("--compare")
+    .arg("none")
+    .arg("--json")
+    .arg("--timeout-secs")
+    .arg("5")
+    .arg("--allow-mismatches");
+
+  let output = cmd.assert().success().get_output().stdout.clone();
+  let stdout = String::from_utf8_lossy(&output);
+
+  let start = stdout.find('{').expect("json output");
+  let json_blob = stdout[start..].trim();
+
+  serde_json::from_str(json_blob).expect("valid json")
+}
+
+fn normalize_report(report: &mut JsonReport) {
+  report.results.sort_by(|a, b| a.id.cmp(&b.id));
+  for result in report.results.iter_mut() {
+    result.duration_ms = 0;
   }
 }
 
@@ -130,6 +160,26 @@ fn repeated_runs_produce_identical_reports() {
   assert_eq!(
     to_string(&first).expect("serialize first"),
     to_string(&second).expect("serialize second")
+  );
+}
+
+#[test]
+fn cli_json_output_is_deterministic() {
+  let (_dir, root) = write_fixtures();
+  let mut first = run_cli_json_report(&root);
+  let mut second = run_cli_json_report(&root);
+
+  let is_sorted = |report: &JsonReport| report.results.windows(2).all(|w| w[0].id <= w[1].id);
+
+  assert!(is_sorted(&first));
+  assert!(is_sorted(&second));
+
+  normalize_report(&mut first);
+  normalize_report(&mut second);
+
+  assert_eq!(
+    serde_json::to_string(&first).expect("serialize first"),
+    serde_json::to_string(&second).expect("serialize second")
   );
 }
 

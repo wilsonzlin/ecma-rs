@@ -1,5 +1,5 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange};
-use semantic_js::ts as sem_ts;
+use ::semantic_js::ts as sem_ts;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};
@@ -252,6 +252,28 @@ fn convert_type_for_display(
         ty: inner,
         readonly: false,
       })
+    }
+    TypeKind::ReadonlyArray(inner) => {
+      let inner = convert_type_for_display(inner, state, store, cache);
+      store.intern_type(tti::TypeKind::Array {
+        ty: inner,
+        readonly: true,
+      })
+    }
+    TypeKind::Tuple(types, readonly) => {
+      let elements = types
+        .into_iter()
+        .map(|t| {
+          let ty = convert_type_for_display(t, state, store, cache);
+          tti::TupleElem {
+            ty,
+            optional: false,
+            rest: false,
+            readonly,
+          }
+        })
+        .collect();
+      store.intern_type(tti::TypeKind::Tuple(elements))
     }
     TypeKind::Union(types) => {
       let members: Vec<_> = types
@@ -681,7 +703,8 @@ struct SymbolBinding {
 struct FileState {
   defs: Vec<DefId>,
   exports: ExportMap,
-  bindings: HashMap<String, SymbolBinding>,
+  /// Bindings kept in name order to ensure deterministic global merges.
+  bindings: BTreeMap<String, SymbolBinding>,
   top_body: Option<BodyId>,
 }
 
@@ -857,6 +880,7 @@ enum HirStmt {
     symbol: semantic_js::SymbolId,
     def: Option<DefId>,
     pat: Option<PatId>,
+    mode: VarDeclMode,
   },
   Return {
     expr: Option<HirExpr>,
@@ -940,6 +964,7 @@ pub(crate) struct TypeStore {
 pub(crate) struct ObjectProperty {
   pub(crate) typ: TypeId,
   pub(crate) optional: bool,
+  pub(crate) readonly: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -978,6 +1003,8 @@ pub(crate) enum TypeKind {
   LiteralNumber(String),
   LiteralBoolean(bool),
   Array(TypeId),
+  ReadonlyArray(TypeId),
+  Tuple(Vec<TypeId>, bool),
   Union(Vec<TypeId>),
   Function {
     params: Vec<TypeId>,
@@ -1072,7 +1099,23 @@ impl TypeStore {
   }
 
   pub(crate) fn array(&mut self, element: TypeId) -> TypeId {
-    self.alloc(TypeKind::Array(element))
+    self.array_with_readonly(element, false)
+  }
+
+  pub(crate) fn readonly_array(&mut self, element: TypeId) -> TypeId {
+    self.array_with_readonly(element, true)
+  }
+
+  pub(crate) fn tuple(&mut self, elems: Vec<TypeId>, readonly: bool) -> TypeId {
+    self.alloc(TypeKind::Tuple(elems, readonly))
+  }
+
+  fn array_with_readonly(&mut self, element: TypeId, readonly: bool) -> TypeId {
+    if readonly {
+      self.alloc(TypeKind::ReadonlyArray(element))
+    } else {
+      self.alloc(TypeKind::Array(element))
+    }
   }
 
   pub(crate) fn function(&mut self, params: Vec<TypeId>, ret: TypeId) -> TypeId {
@@ -1195,7 +1238,7 @@ struct ProgramState {
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
   file_kinds: HashMap<FileId, FileKind>,
   lib_texts: HashMap<FileId, Arc<str>>,
-  global_bindings: HashMap<String, SymbolBinding>,
+  global_bindings: BTreeMap<String, SymbolBinding>,
   diagnostics: Vec<Diagnostic>,
   type_store: TypeStore,
   builtin: BuiltinTypes,
@@ -1224,7 +1267,7 @@ impl ProgramState {
       symbol_to_def: HashMap::new(),
       file_kinds: HashMap::new(),
       lib_texts: HashMap::new(),
-      global_bindings: HashMap::new(),
+      global_bindings: BTreeMap::new(),
       diagnostics: Vec::new(),
       type_store,
       builtin,
@@ -1377,7 +1420,7 @@ impl ProgramState {
   }
 
   fn recompute_global_bindings(&mut self) {
-    let mut globals = HashMap::new();
+    let mut globals = BTreeMap::new();
     for (file, state) in self.files.iter() {
       if self.file_kinds.get(file) != Some(&FileKind::Dts) {
         continue;
@@ -1448,7 +1491,7 @@ impl ProgramState {
     let mut sem_builder = SemHirBuilder::new(file, sem_file_kind(file_kind));
     let mut defs = Vec::new();
     let mut exports: ExportMap = BTreeMap::new();
-    let mut bindings: HashMap<String, SymbolBinding> = HashMap::new();
+    let mut bindings: BTreeMap<String, SymbolBinding> = BTreeMap::new();
 
     for stmt in ast.stx.body.into_iter() {
       match stmt.stx.as_ref() {
@@ -1519,6 +1562,7 @@ impl ProgramState {
             symbol,
             def: Some(def_id),
             pat: pat_id,
+            mode: VarDeclMode::Const,
           };
           top_body.stmts.push(hir_stmt);
           self.def_data.insert(
@@ -1868,6 +1912,7 @@ impl ProgramState {
         symbol,
         def: Some(def_id),
         pat: pat_id,
+        mode: var.mode,
       });
       self.def_data.insert(
         def_id,
@@ -2152,13 +2197,23 @@ impl ProgramState {
         symbol,
         def,
         pat,
+        mode,
       } => {
         let init_checked = init
           .as_ref()
           .map(|e| self.check_expr(e, env, result, file, *typ));
         let init_ty = init_checked.map(|(ty, facts)| {
           self.apply_fact_map(env, &facts.assertions);
-          ty
+          if matches!(mode, VarDeclMode::Const) {
+            ty
+          } else {
+            match self.type_store.kind(ty) {
+              TypeKind::LiteralNumber(_) => self.builtin.number,
+              TypeKind::LiteralString(_) => self.builtin.string,
+              TypeKind::LiteralBoolean(_) => self.builtin.boolean,
+              _ => ty,
+            }
+          }
         });
         let declared = if let Some(annotated) = *typ {
           if let (Some(expr), Some(source_ty)) = (init.as_ref(), init_ty) {
@@ -2262,11 +2317,23 @@ impl ProgramState {
     file: FileId,
     context: Option<TypeId>,
   ) -> (TypeId, Facts) {
+    self.check_expr_with_options(expr, env, result, file, context, false)
+  }
+
+  fn check_expr_with_options(
+    &mut self,
+    expr: &HirExpr,
+    env: &mut HashMap<String, SymbolBinding>,
+    result: &mut BodyCheckResult,
+    file: FileId,
+    context: Option<TypeId>,
+    preserve_literals: bool,
+  ) -> (TypeId, Facts) {
     let mut facts = Facts::default();
     let ty = match &expr.kind {
-      HirExprKind::NumberLiteral(_) => self.builtin.number,
-      HirExprKind::StringLiteral(_) => self.builtin.string,
-      HirExprKind::BooleanLiteral(_) => self.builtin.boolean,
+      HirExprKind::NumberLiteral(value) => self.type_store.literal_number(value.clone()),
+      HirExprKind::StringLiteral(value) => self.type_store.literal_string(value.clone()),
+      HirExprKind::BooleanLiteral(value) => self.type_store.literal_boolean(*value),
       HirExprKind::Null => self.builtin.null,
       HirExprKind::Ident(name) => {
         let mut ty = self.builtin.unknown;
@@ -2656,6 +2723,7 @@ impl ProgramState {
             ObjectProperty {
               typ: ty,
               optional: false,
+              readonly: false,
             },
           );
         }
@@ -2666,7 +2734,16 @@ impl ProgramState {
         for v in values {
           tys.push(self.check_expr(v, env, result, file, None).0);
         }
-        let elem = self.type_store.union(tys, &self.builtin);
+        let widened: Vec<_> = tys
+          .into_iter()
+          .map(|ty| match self.type_store.kind(ty) {
+            TypeKind::LiteralNumber(_) => self.builtin.number,
+            TypeKind::LiteralString(_) => self.builtin.string,
+            TypeKind::LiteralBoolean(_) => self.builtin.boolean,
+            _ => ty,
+          })
+          .collect();
+        let elem = self.type_store.union(widened, &self.builtin);
         self.type_store.array(elem)
       }
       HirExprKind::TypeAssertion { expr, typ, .. } => {
@@ -2744,7 +2821,11 @@ impl ProgramState {
   }
 
   fn initial_env(&self, owner: Option<DefId>, file: FileId) -> HashMap<String, SymbolBinding> {
-    let mut env = self.global_bindings.clone();
+    let mut env: HashMap<_, _> = self
+      .global_bindings
+      .iter()
+      .map(|(name, binding)| (name.clone(), binding.clone()))
+      .collect();
     if let Some(file_env) = self.files.get(&file).map(|f| f.bindings.clone()) {
       env.extend(file_env);
     }
@@ -2994,9 +3075,25 @@ impl ProgramState {
         self.type_store.union(members, &self.builtin)
       }
       TypeExpr::ArrayType(arr) => {
-        let TypeArray { element_type, .. } = arr.stx.as_ref();
+        let TypeArray {
+          element_type,
+          readonly,
+        } = arr.stx.as_ref();
         let elem = self.type_from_type_expr(element_type);
-        self.type_store.array(elem)
+        if *readonly {
+          self.type_store.readonly_array(elem)
+        } else {
+          self.type_store.array(elem)
+        }
+      }
+      TypeExpr::TupleType(tuple) => {
+        let elems = tuple
+          .stx
+          .elements
+          .iter()
+          .map(|elem| self.type_from_type_expr(&elem.stx.type_expr))
+          .collect();
+        self.type_store.tuple(elems, tuple.stx.readonly)
       }
       TypeExpr::FunctionType(func) => {
         let params = func
@@ -3035,6 +3132,7 @@ impl ProgramState {
                   ObjectProperty {
                     typ: ty,
                     optional: prop.stx.optional,
+                    readonly: prop.stx.readonly,
                   },
                 );
               }
@@ -3059,6 +3157,7 @@ impl ProgramState {
                   ObjectProperty {
                     typ: func_ty,
                     optional: method.stx.optional,
+                    readonly: false,
                   },
                 );
               }
@@ -3215,6 +3314,7 @@ impl BodyBuilder {
             symbol,
             def: None,
             pat: pat_id,
+            mode: var.stx.mode,
           });
         }
       }

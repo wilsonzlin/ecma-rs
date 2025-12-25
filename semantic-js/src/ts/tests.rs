@@ -1,5 +1,6 @@
 use super::*;
 use crate::assoc::{js, ts};
+use crate::ts::locals::SymbolId as LocalSymbolId;
 use diagnostics::sort_diagnostics;
 use parse_js::ast::node::NodeAssocData;
 use serde_json::json;
@@ -42,8 +43,8 @@ fn span(start: u32) -> TextRange {
 #[test]
 fn ts_assoc_helpers_round_trip() {
   let mut assoc = NodeAssocData::default();
-  let declared = ts::DeclaredSymbol(SymbolId(123));
-  let resolved = SymbolId(456);
+  let declared = ts::DeclaredSymbol(LocalSymbolId(123));
+  let resolved = LocalSymbolId(456);
 
   assoc.set(declared);
   assoc.set(ts::ResolvedSymbol(Some(resolved)));
@@ -55,13 +56,13 @@ fn ts_assoc_helpers_round_trip() {
 #[test]
 fn ts_assoc_keys_do_not_overlap_js_accessors() {
   let mut assoc = NodeAssocData::default();
-  assoc.set(ts::DeclaredSymbol(SymbolId(7)));
-  assoc.set(ts::ResolvedSymbol(Some(SymbolId(9))));
+  assoc.set(ts::DeclaredSymbol(LocalSymbolId(7)));
+  assoc.set(ts::ResolvedSymbol(Some(LocalSymbolId(9))));
 
   assert_eq!(js::declared_symbol(&assoc), None);
   assert_eq!(js::resolved_symbol(&assoc), None);
-  assert_eq!(ts::declared_symbol(&assoc), Some(SymbolId(7)));
-  assert_eq!(ts::resolved_symbol(&assoc), Some(SymbolId(9)));
+  assert_eq!(ts::declared_symbol(&assoc), Some(LocalSymbolId(7)));
+  assert_eq!(ts::resolved_symbol(&assoc), Some(LocalSymbolId(9)));
 
   assert_ne!(
     TypeId::of::<ts::DeclaredSymbol>(),
@@ -74,8 +75,8 @@ fn ts_assoc_keys_do_not_overlap_js_accessors() {
 
   // Explicit type annotations ensure the accessors expose TS symbol IDs and
   // cannot be mistaken for JS ones at compile time.
-  let _: Option<SymbolId> = ts::declared_symbol(&assoc);
-  let _: Option<SymbolId> = ts::resolved_symbol(&assoc);
+  let _: Option<LocalSymbolId> = ts::declared_symbol(&assoc);
+  let _: Option<LocalSymbolId> = ts::resolved_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::declared_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::resolved_symbol(&assoc);
 }
@@ -427,6 +428,92 @@ fn export_map_is_deterministic() {
     names,
     vec!["a".to_string(), "b".to_string(), "c".to_string()]
   );
+}
+
+#[test]
+fn binder_outputs_are_deterministic_across_runs() {
+  let file_dep = FileId(45);
+  let mut dep = HirFile::module(file_dep);
+  dep
+    .decls
+    .push(mk_decl(0, "Dep", DeclKind::Function, Exported::Named));
+  dep.exports.push(Export::Named(NamedExport {
+    specifier: None,
+    specifier_span: None,
+    items: vec![ExportSpecifier {
+      local: "Dep".to_string(),
+      exported: Some("RenamedDep".to_string()),
+      local_span: span(2),
+      exported_span: Some(span(3)),
+    }],
+    is_type_only: false,
+  }));
+  dep.ambient_modules.push(AmbientModule {
+    name: "ambient".to_string(),
+    name_span: span(90),
+    decls: vec![mk_decl(10, "Ambient", DeclKind::Interface, Exported::No)],
+    imports: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  });
+
+  let file_main = FileId(46);
+  let mut main = HirFile::module(file_main);
+  main.imports.push(Import {
+    specifier: "dep".to_string(),
+    specifier_span: span(5),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Dep".to_string(),
+      local: "LocalDep".to_string(),
+      is_type_only: false,
+      imported_span: span(6),
+      local_span: span(7),
+    }],
+    is_type_only: false,
+  });
+  main
+    .decls
+    .push(mk_decl(20, "Local", DeclKind::Enum, Exported::Named));
+  main.exports.push(Export::All(ExportAll {
+    specifier: "dep".to_string(),
+    is_type_only: false,
+    specifier_span: span(8),
+  }));
+  main.exports.push(Export::Named(NamedExport {
+    specifier: Some("dep".to_string()),
+    specifier_span: Some(span(9)),
+    items: vec![ExportSpecifier {
+      local: "LocalDep".to_string(),
+      exported: Some("FromDep".to_string()),
+      local_span: span(10),
+      exported_span: Some(span(11)),
+    }],
+    is_type_only: false,
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_dep => Arc::new(dep),
+    file_main => Arc::new(main),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "dep".to_string() => file_dep,
+  });
+
+  let runs: Vec<(serde_json::Value, Vec<Diagnostic>)> = (0..4)
+    .map(|_| {
+      let (semantics, mut diags) =
+        bind_ts_program(&[file_main], &resolver, |f| files.get(&f).unwrap().clone());
+      sort_diagnostics(&mut diags);
+      (snapshot_semantics(&semantics), diags)
+    })
+    .collect();
+
+  for pair in runs.windows(2) {
+    assert_eq!(pair[0], pair[1]);
+  }
 }
 
 #[test]
@@ -1060,10 +1147,20 @@ fn snapshot_semantics(semantics: &TsProgramSemantics) -> serde_json::Value {
     .iter()
     .map(|(file, exports)| (file.0.to_string(), snapshot_exports(exports, symbols)))
     .collect();
+  let module_symbols: BTreeMap<_, _> = semantics
+    .module_symbols
+    .iter()
+    .map(|(file, groups)| (file.0.to_string(), snapshot_exports(groups, symbols)))
+    .collect();
   let ambient_exports: BTreeMap<_, _> = semantics
     .ambient_module_exports
     .iter()
     .map(|(name, exports)| (name.clone(), snapshot_exports(exports, symbols)))
+    .collect();
+  let ambient_symbols: BTreeMap<_, _> = semantics
+    .ambient_module_symbols
+    .iter()
+    .map(|(name, groups)| (name.clone(), snapshot_exports(groups, symbols)))
     .collect();
   let globals: BTreeMap<_, _> = semantics
     .global_symbols()
@@ -1075,7 +1172,9 @@ fn snapshot_semantics(semantics: &TsProgramSemantics) -> serde_json::Value {
     "symbol_count": symbols.symbols.len(),
     "decl_count": symbols.decls.len(),
     "module_exports": module_exports,
+    "module_symbols": module_symbols,
     "ambient_exports": ambient_exports,
+    "ambient_symbols": ambient_symbols,
     "globals": globals,
   })
 }
