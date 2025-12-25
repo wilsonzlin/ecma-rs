@@ -122,8 +122,10 @@ impl CfgGraph {
         };
       }
     }
-    // Find unreachable bblocks.
-    self.0.nodes().filter(move |n| !seen.contains(n)).cloned()
+    // Find unreachable bblocks deterministically.
+    let mut unreachable = self.labels_sorted();
+    unreachable.retain(|n| !seen.contains(n));
+    unreachable.into_iter()
   }
 
   pub fn calculate_postorder(&self, entry: u32) -> (Vec<u32>, HashMap<u32, usize>) {
