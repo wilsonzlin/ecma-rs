@@ -1944,6 +1944,7 @@ version = "0.1.0"
 dependencies = [
  "ahash",
  "diagnostics",
+ "hir-js",
  "num-bigint",
  "ordered-float",
  "parse-js",
