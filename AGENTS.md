@@ -83,7 +83,7 @@ This project is not “just type checking”; it is a full JS/TS toolchain (pars
 ```
 ecma-rs/
 ├── parse-js/                  # existing: TS/JS parser + AST + Loc
-├── semantic-js/               # new: unified, deterministic semantics (scopes/symbols/modules/exports); only semantics layer (symbol-js retired)
+├── semantic-js/               # new: unified, deterministic semantics (scopes/symbols/modules/exports); only semantics layer (symbol-js removed)
 ├── optimize-js/               # existing
 ├── minify-js/                 # existing
 ├── emit-js/                   # new: deterministic JS emitter/printer (HIR/IR -> JS), shared by minify/opt tooling
@@ -103,7 +103,7 @@ Notes:
 ## Fit to this repo (integration boundaries)
 
 - **`parse-js`**: the canonical TS/TSX/JS parser + AST. The type checker consumes this AST; **no new syntax tree is required**.
-- **`semantic-js`**: the unified semantic foundation (scopes, symbols, module graph, merging, exports). It supersedes `symbol-js` (now removed) and is the sole semantics API used by all downstream crates.
+- **`semantic-js`**: the unified semantic foundation (scopes, symbols, module graph, merging, exports). It supersedes `symbol-js` (now removed from the workspace) and is the sole semantics API used by all downstream crates; straggling references should be migrated rather than reviving the legacy crate.
 - **`optimize-js` / `minify-js`**: today they require `compute_symbols()` and should continue to work without a TS type checker. Type checking must be **opt-in** and should not become a mandatory dependency edge for minification.
 - **Typed outputs**: for downstream AOT compilation, prefer producing a typed HIR/IR (and location→ID mappings) rather than mutating/annotating the AST in-place.
 

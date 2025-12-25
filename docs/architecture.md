@@ -71,7 +71,7 @@ other crates use this for structured errors and spans.
   - `bind_js` (or `declare` + `resolve`) walks a mutable AST, attaches `ScopeId`,
     `DeclaredSymbol`, and `ResolvedSymbol` to `NodeAssocData`, and returns a
     deterministic `JsSemantics` snapshot.
-  - Designed to replace `symbol-js` for optimizers/minifiers; iteration helpers
+  - Replaces the legacy `symbol-js` semantics for optimizers/minifiers; iteration helpers
     such as `ScopeData::iter_symbols_sorted` enforce stable ordering.
 - TS mode (`ts` module):
   - `bind_ts_program` consumes lowered `ts::HirFile`s, merges namespaces, and

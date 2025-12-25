@@ -18,18 +18,17 @@ graph TD
     parse_js["parse-js"]
     parse_js_cli["parse-js-cli"]
     semantic_js["semantic-js"]
-    symbol_js["symbol-js"]
     test262["test262"]
     typecheck_ts["typecheck-ts"]
     typecheck_ts_bench["typecheck-ts-bench"]
     typecheck_ts_harness["typecheck-ts-harness"]
-    types_ts["types-ts"]
     types_ts_interned["types-ts-interned"]
     emit_js --> diagnostics
     emit_js --> parse_js
     hir_js --> diagnostics
     hir_js --> parse_js
     minify_js --> diagnostics
+    minify_js --> emit_js
     minify_js --> parse_js
     minify_js --> semantic_js
     minify_js_bench --> diagnostics
@@ -50,7 +49,6 @@ graph TD
     semantic_js --> diagnostics
     semantic_js --> hir_js
     semantic_js --> parse_js
-    symbol_js --> parse_js
     test262 --> diagnostics
     test262 --> parse_js
     typecheck_ts --> diagnostics
@@ -63,7 +61,7 @@ graph TD
     typecheck_ts_bench --> parse_js
     typecheck_ts_bench --> semantic_js
     typecheck_ts_bench --> typecheck_ts
-    typecheck_ts_bench --> types_ts
+    typecheck_ts_bench --> types_ts_interned
     typecheck_ts_harness --> typecheck_ts
     types_ts_interned --> hir_js
 ```

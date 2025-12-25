@@ -4,7 +4,7 @@ Unified semantics layer for the ecma-rs toolchain. `semantic-js` is meant to be
 the single place where scopes, symbols, and exports are defined so downstream
 crates (optimizers, minifiers, and the future TypeScript checker) agree on the
 same model. It is the sole semantics layer in the workspace; the legacy
-`symbol-js` crate has been retired.
+`symbol-js` crate has been removed entirely.
 
 ## Modes at a glance
 

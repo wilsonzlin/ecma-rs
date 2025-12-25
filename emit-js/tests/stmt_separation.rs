@@ -14,10 +14,7 @@ fn assert_roundtrip(src: &str) -> bool {
       return false;
     }
   };
-  let mut em = Emitter::new(EmitOptions {
-    mode: EmitMode::Minified,
-    ..EmitOptions::default()
-  });
+  let mut em = Emitter::new(EmitOptions::from(EmitMode::Minified));
   emit_program(&mut em, parsed.stx.as_ref())
     .unwrap_or_else(|err| panic!("emit failed for {src:?}: {err:?}"));
   let emitted = String::from_utf8(em.into_bytes()).expect("utf-8");
