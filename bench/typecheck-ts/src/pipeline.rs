@@ -4,6 +4,7 @@ use crate::fixtures::ModuleGraphFixture;
 use diagnostics::FileId as HirFileId;
 use hir_js::lower_file;
 use hir_js::LowerResult;
+use hir_js::FileKind as HirFileKind;
 use parse_js::ast::expr::pat::Pat as AstPat;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::node::Node;
@@ -61,7 +62,7 @@ pub fn parse_only(fixture: &Fixture) -> SyntaxResult<Node<TopLevel>> {
 }
 
 pub fn lower_to_hir(file_id: HirFileId, top_level: &Node<TopLevel>) -> LowerResult {
-  lower_file(file_id, top_level)
+  lower_file(file_id, HirFileKind::Ts, top_level)
 }
 
 pub fn summarize_hir(lowered: &LowerResult) -> HirSummary {
@@ -535,6 +536,7 @@ fn lower_semantic_hir(file: semantic_js::ts::FileId, ast: &Node<TopLevel>) -> Hi
           name: "default".to_string(),
           kind: DeclKind::Var,
           is_ambient: false,
+          is_global: false,
           exported: Exported::Default,
           span: TextRange::new(0, 0),
         });
@@ -598,6 +600,7 @@ fn lower_var_decl(hir: &mut HirFile, next_def: &mut u32, var: &VarDecl) {
         name,
         kind: DeclKind::Var,
         is_ambient: false,
+        is_global: false,
         exported: exported.clone(),
         span: TextRange::new(0, 0),
       });
@@ -625,6 +628,7 @@ fn lower_function_decl(hir: &mut HirFile, next_def: &mut u32, func: &FuncDecl) {
     name,
     kind: DeclKind::Function,
     is_ambient: false,
+    is_global: false,
     exported,
     span: TextRange::new(0, 0),
   });
