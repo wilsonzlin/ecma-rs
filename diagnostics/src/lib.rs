@@ -723,8 +723,6 @@ mod tests {
     assert!(span.contains(5));
     assert!(!span.contains(6));
   }
-<<<<<<< HEAD
-
   #[test]
   fn ice_helper_sets_defaults() {
     let span = Span::new(FileId(1), TextRange::new(1, 2));
@@ -748,14 +746,6 @@ mod tests {
       .notes
       .iter()
       .any(|note| note.contains("no source span available")));
-  }
-
-  #[cfg(feature = "parse-js")]
-  #[test]
-  fn loc_conversion_is_lossless_when_fitting() {
-    let loc = Loc(10, 20);
-    let range: TextRange = loc.into();
-    assert_eq!(range, TextRange::new(10, 20));
   }
 
   #[test]

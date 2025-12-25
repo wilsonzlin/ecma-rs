@@ -49,7 +49,9 @@ fn main() {
     .map(|entry| {
       let file_name = entry.file_name().to_string_lossy().into_owned();
       let src = fs::read_to_string(entry.path()).unwrap();
-      let error = parse_js::parse(&src).err().map(|err| err.to_diagnostic(FileId(0)));
+      let error = parse_js::parse(&src)
+        .err()
+        .map(|err| err.to_diagnostic(FileId(0)));
       let source = error.as_ref().map(|_| src);
       TestResult {
         file_name,
