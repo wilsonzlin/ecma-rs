@@ -33,6 +33,10 @@ enum Commands {
     #[arg(long)]
     filter: Option<String>,
 
+    /// Comma-separated list of allowed extensions
+    #[arg(long)]
+    extensions: Option<String>,
+
     /// Run only a shard (zero-based): `i/n`
     #[arg(long)]
     shard: Option<String>,
@@ -76,6 +80,10 @@ enum Commands {
     /// Allow non-matching results without failing the process
     #[arg(long)]
     allow_mismatches: bool,
+
+    /// Allow empty test suites without erroring
+    #[arg(long)]
+    allow_empty: bool,
   },
 }
 
@@ -110,6 +118,7 @@ fn main() -> ExitCode {
     },
     Commands::Conformance {
       filter,
+      extensions,
       shard,
       json,
       update_snapshots,
@@ -121,6 +130,7 @@ fn main() -> ExitCode {
       profile,
       root,
       allow_mismatches,
+      allow_empty,
     } => {
       let filter = match build_filter(filter.as_deref()) {
         Ok(filter) => filter,
@@ -134,19 +144,36 @@ fn main() -> ExitCode {
         None => None,
       };
 
+      let extensions = match extensions {
+        Some(raw) => raw
+          .split(',')
+          .map(|s| s.trim().to_string())
+          .filter(|s| !s.is_empty())
+          .collect(),
+        None => typecheck_ts_harness::DEFAULT_EXTENSIONS
+          .iter()
+          .map(|s| s.to_string())
+          .collect(),
+      };
+
       let options = ConformanceOptions {
         root: root.unwrap_or_else(|| DEFAULT_ROOT.into()),
         filter,
+        filter_pattern: None,
         shard,
         json,
         update_snapshots,
         timeout: Duration::from_secs(timeout_secs),
         trace,
         profile,
+        profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
         compare: compare.into(),
         node_path: node,
         span_tolerance,
         allow_mismatches,
+        extensions,
+        allow_empty,
+        jobs: 1,
       };
 
       match run_conformance(options) {

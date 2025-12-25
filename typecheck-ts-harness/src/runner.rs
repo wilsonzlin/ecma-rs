@@ -3,7 +3,9 @@ use crate::diagnostic_norm::{
   within_tolerance, NormalizedDiagnostic,
 };
 use crate::difftsc::{TscDiagnostic, TscDiagnostics};
-use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase};
+use crate::discover::{
+  discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS,
+};
 use crate::multifile::normalize_name;
 use crate::{Result, VirtualFile};
 use serde::{Deserialize, Serialize};
@@ -12,8 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tracing::{info, info_span, warn};
 use typecheck_ts::{FileId, Host, HostError, Program};
 use walkdir::WalkDir;
+
+const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -41,16 +46,21 @@ pub enum TestOutcome {
 pub struct ConformanceOptions {
   pub root: PathBuf,
   pub filter: Filter,
+  pub filter_pattern: Option<String>,
   pub shard: Option<Shard>,
   pub json: bool,
   pub update_snapshots: bool,
   pub timeout: Duration,
   pub trace: bool,
   pub profile: bool,
+  pub profile_out: PathBuf,
+  pub extensions: Vec<String>,
+  pub allow_empty: bool,
   pub compare: CompareMode,
   pub node_path: PathBuf,
   pub span_tolerance: u32,
   pub allow_mismatches: bool,
+  pub jobs: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -286,7 +296,21 @@ impl HarnessFileSet {
 }
 
 pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
-  let mut cases = discover_conformance_tests(&opts.root, &opts.filter)?;
+  let extensions = if opts.extensions.is_empty() {
+    DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect()
+  } else {
+    opts.extensions.clone()
+  };
+
+  let mut cases = discover_conformance_tests(&opts.root, &opts.filter, &extensions)?;
+
+  if cases.is_empty() && !opts.allow_empty {
+    return Err(crate::HarnessError::Typecheck(format!(
+      "no conformance tests discovered under '{}' (extensions: {})",
+      opts.root.display(),
+      extensions.join(",")
+    )));
+  }
 
   if let Some(shard) = opts.shard {
     cases = cases
@@ -353,6 +377,8 @@ fn run_single_case(
   opts: &ConformanceOptions,
 ) -> TestResult {
   let (tx, rx) = mpsc::channel();
+  let span = info_span!("test_case", test_id = %case.id);
+  let _enter = span.enter();
   let cloned_runner = tsc_runner.clone();
   let cloned_snapshots = snapshots.clone();
   let timeout_id = case.id.clone();
@@ -362,6 +388,7 @@ fn run_single_case(
   let span_tolerance = opts.span_tolerance;
   let update_snapshots = opts.update_snapshots;
   std::thread::spawn(move || {
+    let _entered = span.enter();
     let result = execute_case(
       case,
       compare_mode,
@@ -399,8 +426,11 @@ fn execute_case(
   update_snapshots: bool,
 ) -> TestResult {
   let start = Instant::now();
+  if let Some(delay) = harness_sleep_for_case(&case.id) {
+    std::thread::sleep(delay);
+  }
   let notes = case.notes.clone();
-  let file_set = HarnessFileSet::new(&case.files);
+  let file_set = HarnessFileSet::new(&case.deduped_files);
   let harness_options = HarnessOptions::from_test_case(&case);
 
   let rust = run_rust(&file_set);
@@ -462,16 +492,36 @@ fn execute_case(
 fn run_rust(file_set: &HarnessFileSet) -> EngineDiagnostics {
   let host = HarnessHost::new(file_set.clone());
   let roots = file_set.root_files();
-  let result = std::panic::catch_unwind(|| {
-    let program = Program::new(host, roots);
-    program.check()
-  });
+  let result = std::panic::catch_unwind(|| Program::new(host, roots).check());
   match result {
     Ok(diags) => EngineDiagnostics::ok(normalize_rust_diagnostics(&diags, |id| {
       file_set.file_name(id)
     })),
     Err(_) => EngineDiagnostics::ice("typechecker panicked"),
   }
+}
+
+fn harness_sleep_for_case(id: &str) -> Option<Duration> {
+  let raw = std::env::var(HARNESS_SLEEP_ENV).ok()?;
+  if raw.is_empty() {
+    return None;
+  }
+
+  if let Ok(ms) = raw.parse::<u64>() {
+    return Some(Duration::from_millis(ms));
+  }
+
+  for part in raw.split(',') {
+    if let Some((pattern, ms_raw)) = part.split_once('=') {
+      if id.contains(pattern.trim()) {
+        if let Ok(ms) = ms_raw.trim().parse::<u64>() {
+          return Some(Duration::from_millis(ms));
+        }
+      }
+    }
+  }
+
+  None
 }
 
 fn run_tsc_with_raw(

@@ -34,6 +34,7 @@ fn smoke_runs_on_small_fixtures() {
   let options = ConformanceOptions {
     root: root.clone(),
     filter: build_filter(None).unwrap(),
+    filter_pattern: None,
     shard: None,
     json: false,
     update_snapshots: false,
@@ -44,6 +45,13 @@ fn smoke_runs_on_small_fixtures() {
     trace: false,
     profile: false,
     allow_mismatches: true,
+    extensions: typecheck_ts_harness::DEFAULT_EXTENSIONS
+      .iter()
+      .map(|s| s.to_string())
+      .collect(),
+    allow_empty: false,
+    profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
+    jobs: 1,
   };
 
   let report = run_conformance(options).expect("run_conformance");
