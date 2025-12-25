@@ -106,3 +106,16 @@ pub fn expr_prec(expr: &Node<Expr>) -> Prec {
     | Expr::ObjPat(_) => PRIMARY_PRECEDENCE,
   }
 }
+
+pub fn starts_with_optional_chaining(expr: &Node<Expr>) -> bool {
+  match expr.stx.as_ref() {
+    Expr::Member(member) => {
+      member.stx.optional_chaining || starts_with_optional_chaining(&member.stx.left)
+    }
+    Expr::ComputedMember(member) => {
+      member.stx.optional_chaining || starts_with_optional_chaining(&member.stx.object)
+    }
+    Expr::Call(call) => call.stx.optional_chaining || starts_with_optional_chaining(&call.stx.callee),
+    _ => false,
+  }
+}

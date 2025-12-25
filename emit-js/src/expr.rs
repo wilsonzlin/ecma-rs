@@ -39,6 +39,7 @@ use crate::emitter::{with_node_context, EmitError, EmitResult};
 use crate::precedence::{
   child_min_prec_for_binary,
   expr_prec,
+  starts_with_optional_chaining,
   needs_parens,
   Prec,
   Side,
@@ -470,7 +471,16 @@ where
           .ok_or(EmitError::unsupported("unknown operator"))?
           .precedence,
       );
-      self.emit_expr_with_min_prec(&unary.stx.argument, prec)
+      if unary.stx.operator == OperatorName::New
+        && starts_with_optional_chaining(&unary.stx.argument)
+      {
+        write!(self.out, "(")?;
+        self.emit_expr_with_min_prec(&unary.stx.argument, Prec::LOWEST)?;
+        write!(self.out, ")")?;
+        Ok(())
+      } else {
+        self.emit_expr_with_min_prec(&unary.stx.argument, prec)
+      }
     })
   }
 
