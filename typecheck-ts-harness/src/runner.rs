@@ -108,7 +108,6 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<JsonReport> {
       extensions: opts.extensions.join(","),
     });
   }
->>>>>>> cfe930a (Add tracing and profiling support to typecheck harness)
 
   if let Some(shard) = opts.shard {
     let before = cases.len();
@@ -213,18 +212,6 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
       });
       result
     }
-<<<<<<< HEAD
-    Err(_) => TestResult {
-      id: case.id,
-      path: case.path.display().to_string(),
-      status: TestStatus::Timeout,
-      duration_ms: timeout.as_millis(),
-      diagnostics: Vec::new(),
-      notes: case.notes,
-      directives: case.directives,
-      options: case.options,
-    },
-=======
     Err(_) => {
       warn!(phase = "timeout", timeout_ms = timeout.as_millis());
       TestResult {
@@ -234,9 +221,10 @@ fn run_single_case(case: TestCase, timeout: Duration) -> TestResult {
         duration_ms: timeout.as_millis(),
         diagnostics: Vec::new(),
         notes: case.notes,
+        directives: case.directives,
+        options: case.options,
       }
     }
->>>>>>> cfe930a (Add tracing and profiling support to typecheck harness)
   }
 }
 
@@ -271,23 +259,6 @@ fn execute_case(case: TestCase) -> TestResult {
         options,
       }
     }
-<<<<<<< HEAD
-    Err(_) => TestResult {
-      id: case.id,
-      path: case.path.display().to_string(),
-      status: TestStatus::Ice,
-      duration_ms,
-      diagnostics: vec![Diagnostic {
-        code: Some("ICE0001".to_string()),
-        message: "typechecker panicked".to_string(),
-        span: None,
-        severity: Severity::Error,
-      }],
-      notes,
-      directives,
-      options,
-    },
-=======
     Err(_) => {
       warn!(phase = "ice", duration_ms = duration_ms);
       TestResult {
@@ -302,9 +273,10 @@ fn execute_case(case: TestCase) -> TestResult {
           severity: Severity::Error,
         }],
         notes,
+        directives,
+        options,
       }
     }
->>>>>>> cfe930a (Add tracing and profiling support to typecheck harness)
   }
 }
 

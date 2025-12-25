@@ -102,6 +102,7 @@ fn errors_on_missing_root_unless_allowed() {
   let base_options = ConformanceOptions {
     root: missing_root.clone(),
     filter: build_filter(None).unwrap(),
+    filter_pattern: None,
     shard: None,
     json: false,
     update_snapshots: false,
