@@ -107,12 +107,14 @@ pub struct Emitter {
 #[derive(Debug, Clone, Copy)]
 struct State {
   trailing: Boundary,
+  html_start: HtmlStart,
 }
 
 impl Default for State {
   fn default() -> Self {
     State {
       trailing: Boundary::None,
+      html_start: HtmlStart::Start,
     }
   }
 }
@@ -156,6 +158,17 @@ enum TokenKind {
 struct FragmentBoundary {
   leading: Leading,
   trailing: Boundary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HtmlStart {
+  Start,
+  Lt,
+  LtBang,
+  LtBangDash,
+  Dash,
+  DashDash,
+  Other,
 }
 
 impl Emitter {
@@ -204,7 +217,8 @@ impl Emitter {
   pub fn write_byte(&mut self, byte: u8) {
     let boundary = classify_byte(byte);
     self.insert_boundary(boundary.leading);
-    self.out.push(byte);
+    self.insert_html_comment_break(&[byte]);
+    self.push_bytes(&[byte]);
     self.state.trailing = boundary.trailing;
   }
 
@@ -223,7 +237,8 @@ impl Emitter {
 
     let boundaries = classify_fragment(text.as_bytes());
     self.insert_boundary(boundaries.leading);
-    self.out.extend_from_slice(text.as_bytes());
+    self.insert_html_comment_break(text.as_bytes());
+    self.push_bytes(text.as_bytes());
     self.state.trailing = boundaries.trailing;
   }
 
@@ -255,7 +270,7 @@ impl Emitter {
 
   pub fn write_space(&mut self) {
     self.insert_boundary(Leading::None);
-    self.out.push(b' ');
+    self.push_bytes(&[b' ']);
     self.state.trailing = Boundary::None;
   }
 
@@ -316,7 +331,8 @@ impl Emitter {
 
     let boundaries = classify_fragment_with_kind(text.as_bytes(), kind);
     self.insert_boundary(boundaries.leading);
-    self.out.extend_from_slice(text.as_bytes());
+    self.insert_html_comment_break(text.as_bytes());
+    self.push_bytes(text.as_bytes());
     self.state.trailing = boundaries.trailing;
   }
 
@@ -331,9 +347,21 @@ impl Emitter {
     };
 
     if needs_space {
-      self.out.push(b' ');
+      self.push_bytes(&[b' ']);
       self.state.trailing = Boundary::None;
     }
+  }
+
+  fn insert_html_comment_break(&mut self, bytes: &[u8]) {
+    if would_start_html_comment(self.state.html_start, bytes) {
+      self.push_bytes(&[b' ']);
+      self.state.trailing = Boundary::None;
+    }
+  }
+
+  fn push_bytes(&mut self, bytes: &[u8]) {
+    self.out.extend_from_slice(bytes);
+    self.state.html_start = advance_html_start(self.state.html_start, bytes);
   }
 }
 
@@ -528,5 +556,54 @@ impl TokenKind {
       TokenKind::Number => Boundary::Number,
       TokenKind::Other => classify_trailing_char(bytes, trailing_idx),
     }
+  }
+}
+
+fn advance_html_start(mut state: HtmlStart, bytes: &[u8]) -> HtmlStart {
+  for &byte in bytes {
+    state = next_html_start(state, byte).0;
+  }
+  state
+}
+
+fn would_start_html_comment(mut state: HtmlStart, bytes: &[u8]) -> bool {
+  for &byte in bytes {
+    let (next, hazard) = next_html_start(state, byte);
+    if hazard {
+      return true;
+    }
+    state = next;
+  }
+  false
+}
+
+fn next_html_start(state: HtmlStart, byte: u8) -> (HtmlStart, bool) {
+  if matches!(byte, b'\n' | b'\r') {
+    return (HtmlStart::Start, false);
+  }
+
+  if byte.is_ascii_whitespace() {
+    return match state {
+      HtmlStart::Start => (HtmlStart::Start, false),
+      HtmlStart::Other => (HtmlStart::Other, false),
+      _ => (HtmlStart::Other, false),
+    };
+  }
+
+  match (state, byte) {
+    (HtmlStart::Start, b'<') => (HtmlStart::Lt, false),
+    (HtmlStart::Start, b'-') => (HtmlStart::Dash, false),
+    (HtmlStart::Start, _) => (HtmlStart::Other, false),
+    (HtmlStart::Lt, b'!') => (HtmlStart::LtBang, false),
+    (HtmlStart::Lt, _) => (HtmlStart::Other, false),
+    (HtmlStart::LtBang, b'-') => (HtmlStart::LtBangDash, false),
+    (HtmlStart::LtBang, _) => (HtmlStart::Other, false),
+    (HtmlStart::LtBangDash, b'-') => (HtmlStart::Other, true),
+    (HtmlStart::LtBangDash, _) => (HtmlStart::Other, false),
+    (HtmlStart::Dash, b'-') => (HtmlStart::DashDash, false),
+    (HtmlStart::Dash, _) => (HtmlStart::Other, false),
+    (HtmlStart::DashDash, b'>') => (HtmlStart::Other, true),
+    (HtmlStart::DashDash, _) => (HtmlStart::Other, false),
+    (HtmlStart::Other, _) => (HtmlStart::Other, false),
   }
 }
