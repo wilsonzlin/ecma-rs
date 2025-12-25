@@ -19,6 +19,10 @@ check:
 test:
   cargo test --workspace
 
+docs:
+  ./scripts/gen_deps_graph.sh
+
 lint: fmt clippy
 
-ci: fmt clippy check test
+ci: fmt clippy check test docs
+  git diff --exit-code docs/deps.md
