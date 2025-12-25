@@ -481,11 +481,13 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         Export::ExportAssignment { span, .. } => {
           let span = Span::new(file_id, *span);
           first_export_span.get_or_insert(span);
-          self.diagnostics.push(Diagnostic::error(
-            "BIND1003",
-            "export assignments are not supported yet",
-            span,
-          ));
+          if !is_script {
+            self.diagnostics.push(Diagnostic::error(
+              "BIND1003",
+              "export assignments are not supported yet",
+              span,
+            ));
+          }
           has_exports = true;
         }
       }

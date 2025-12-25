@@ -869,3 +869,42 @@ fn ambient_modules_collect_exports() {
   let decls = symbols.symbol(symbol).decls_for(Namespace::VALUE);
   assert_eq!(decls.len(), 1);
 }
+
+#[test]
+fn script_exports_report_single_diagnostic_with_span() {
+  let file = FileId(93);
+  let mut hir = HirFile::script(file);
+  hir
+    .decls
+    .push(mk_decl(0, "foo", DeclKind::Var, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1003");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(0));
+}
+
+#[test]
+fn export_assignment_reports_span() {
+  let file = FileId(94);
+  let mut hir = HirFile::module(file);
+  hir.exports.push(Export::ExportAssignment {
+    expr: "foo".to_string(),
+    span: span(10),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1003");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(10));
+}
