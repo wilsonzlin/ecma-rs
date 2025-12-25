@@ -1,9 +1,26 @@
 use derive_visitor::{Drive, DriveMut};
 use emit_js::asi::{separator_after_last, separator_between, ListEnd, Separator};
-use parse_js::ast::expr::lit::{LitArrExpr, LitRegexExpr, LitTemplateExpr, LitTemplatePart};
+use parse_js::ast::expr::lit::{
+  LitArrExpr,
+  LitObjExpr,
+  LitRegexExpr,
+  LitTemplateExpr,
+  LitTemplatePart,
+};
 use parse_js::ast::expr::{Expr, IdExpr, UnaryExpr};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::{BlockStmt, EmptyStmt, ExprStmt, Stmt, WhileStmt};
+use parse_js::ast::stmt::{
+  BlockStmt,
+  EmptyStmt,
+  ExprStmt,
+  ForBody,
+  ForTripleStmt,
+  ForTripleStmtInit,
+  IfStmt,
+  LabelStmt,
+  Stmt,
+  WhileStmt,
+};
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 
@@ -37,12 +54,40 @@ fn template_expr() -> Node<Expr> {
   })))
 }
 
+fn object_expr() -> Node<Expr> {
+  node(Expr::LitObj(node(LitObjExpr { members: vec![] })))
+}
+
 fn expr_stmt(expr: Node<Expr>) -> Node<Stmt> {
   node(Stmt::Expr(node(ExprStmt { expr })))
 }
 
 fn block_stmt(body: Vec<Node<Stmt>>) -> Node<Stmt> {
   node(Stmt::Block(node(BlockStmt { body })))
+}
+
+fn if_stmt(consequent: Node<Stmt>) -> Node<Stmt> {
+  node(Stmt::If(node(IfStmt {
+    test: id("x"),
+    consequent,
+    alternate: None,
+  })))
+}
+
+fn for_stmt(body: Node<Stmt>) -> Node<Stmt> {
+  node(Stmt::ForTriple(node(ForTripleStmt {
+    init: ForTripleStmtInit::None,
+    cond: None,
+    post: None,
+    body: node(ForBody { body: vec![body] }),
+  })))
+}
+
+fn label_stmt(statement: Node<Stmt>) -> Node<Stmt> {
+  node(Stmt::Label(node(LabelStmt {
+    name: "label".to_string(),
+    statement,
+  })))
 }
 
 fn empty_stmt() -> Node<Stmt> {
@@ -101,4 +146,31 @@ fn hazardous_starters_upgrade_separator() {
   for next in hazards {
     assert_eq!(separator_between(Some(&prev), &next), Separator::Semicolon);
   }
+}
+
+#[test]
+fn wrapped_leaf_statement_tails_trigger_hazards() {
+  let prev_if = if_stmt(expr_stmt(id("a")));
+  let prev_for = for_stmt(expr_stmt(id("a")));
+  let prev_label = label_stmt(expr_stmt(id("a")));
+
+  assert_eq!(
+    separator_between(Some(&prev_if), &expr_stmt(object_expr())),
+    Separator::Semicolon
+  );
+  assert_eq!(
+    separator_between(Some(&prev_for), &expr_stmt(array_expr())),
+    Separator::Semicolon
+  );
+  assert_eq!(
+    separator_between(Some(&prev_label), &expr_stmt(template_expr())),
+    Separator::Semicolon
+  );
+}
+
+#[test]
+fn wrapped_leaf_statement_non_expression_tail_is_not_hazardous() {
+  let prev = if_stmt(block_stmt(vec![]));
+  let next = expr_stmt(object_expr());
+  assert_ne!(separator_between(Some(&prev), &next), Separator::Semicolon);
 }
