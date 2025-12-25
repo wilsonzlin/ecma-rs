@@ -210,16 +210,16 @@ impl<'a> JsExprEmitter<'a> {
   fn emit_unary(&mut self, unary: &Node<UnaryExpr>) -> JsEmitResult {
     let op_prec = operator_precedence(unary.stx.operator)?;
     emit_unary_operator(self.out, unary.stx.operator)?;
-    let needs_exponent_paren = matches!(
+    if matches!(
       unary.stx.argument.stx.as_ref(),
       Expr::Binary(inner) if inner.stx.operator == OperatorName::Exponentiation
-    );
-    let min_prec = if needs_exponent_paren {
-      op_prec + 1
-    } else {
-      op_prec
-    };
-    self.emit_expr_with_min_prec(&unary.stx.argument, min_prec)
+    ) {
+      self.out.write_punct("(");
+      self.emit_expr_no_parens(&unary.stx.argument)?;
+      self.out.write_punct(")");
+      return Ok(());
+    }
+    self.emit_expr_with_min_prec(&unary.stx.argument, op_prec)
   }
 
   fn emit_unary_postfix(&mut self, unary: &Node<UnaryPostfixExpr>) -> JsEmitResult {
