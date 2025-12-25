@@ -14,6 +14,80 @@ use itertools::Itertools;
 use std::collections::hash_map::Entry;
 use std::mem::swap;
 
+fn is_valid_member_ident(name: &str) -> bool {
+  fn is_start_char(ch: char) -> bool {
+    matches!(ch, 'a'..='z' | 'A'..='Z' | '_' | '$')
+  }
+
+  fn is_continue_char(ch: char) -> bool {
+    matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '$')
+  }
+
+  fn is_reserved_word(word: &str) -> bool {
+    matches!(
+      word,
+      "await"
+        | "break"
+        | "case"
+        | "catch"
+        | "class"
+        | "const"
+        | "continue"
+        | "debugger"
+        | "default"
+        | "delete"
+        | "do"
+        | "else"
+        | "enum"
+        | "export"
+        | "extends"
+        | "false"
+        | "finally"
+        | "for"
+        | "function"
+        | "if"
+        | "import"
+        | "in"
+        | "instanceof"
+        | "new"
+        | "null"
+        | "return"
+        | "super"
+        | "switch"
+        | "this"
+        | "throw"
+        | "true"
+        | "try"
+        | "typeof"
+        | "var"
+        | "void"
+        | "while"
+        | "with"
+        | "yield"
+        | "let"
+        | "static"
+        | "implements"
+        | "interface"
+        | "package"
+        | "private"
+        | "protected"
+        | "public"
+    )
+  }
+
+  let mut chars = name.chars();
+  let Some(first) = chars.next() else {
+    return false;
+  };
+  if !is_start_char(first) {
+    return false;
+  }
+  if !chars.all(is_continue_char) {
+    return false;
+  }
+  !is_reserved_word(name)
+}
+
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 enum Val {
   Bin { left: Arg, op: BinOp, right: Arg },
@@ -86,7 +160,9 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
         };
         match (op, left, right) {
           (op, Arg::Const(l), Arg::Const(r)) => maybe_eval_const_bin_expr(op, l, r).map(Arg::Const),
-          (BinOp::GetProp, Arg::Builtin(o), Arg::Const(Const::Str(p))) => {
+          (BinOp::GetProp, Arg::Builtin(o), Arg::Const(Const::Str(p)))
+            if is_valid_member_ident(&p) =>
+          {
             Some(Arg::Builtin(format!("{o}.{p}")))
           }
           _ => None,
