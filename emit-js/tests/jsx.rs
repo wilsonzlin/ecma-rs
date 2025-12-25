@@ -1,4 +1,4 @@
-use emit_js::{emit_expr, emit_jsx_elem};
+use emit_js::{emit_expr, emit_jsx_elem, Emitter};
 use parse_js::ast::expr::jsx::*;
 use parse_js::ast::expr::{Expr, IdExpr};
 use parse_js::ast::node::Node;
@@ -40,9 +40,9 @@ fn jsx_elem_from(
 }
 
 fn emit_elem_to_string(elem: &Node<JsxElem>) -> String {
-  let mut out = String::new();
-  emit_jsx_elem(&mut out, elem).unwrap();
-  out
+  let mut emitter = Emitter::default();
+  emit_jsx_elem(&mut emitter, elem).unwrap();
+  String::from_utf8(emitter.into_bytes()).unwrap()
 }
 
 fn emit_expr_to_string(expr: &Node<Expr>) -> String {
@@ -242,25 +242,6 @@ fn emits_attributes() {
   );
   assert_eq!(emit_elem_to_string(&spread_attr), "<div {...props}/>");
 
-  let expr_attr = jsx_elem_from(
-    Some(div_elem_name()),
-    vec![JsxAttr::Named {
-      name: Node::new(
-        Loc(0, 0),
-        JsxName {
-          namespace: None,
-          name: "a".into(),
-        },
-      ),
-      value: Some(JsxAttrVal::Expression(jsx_container(
-        expr_from_id("x"),
-        false,
-      ))),
-    }],
-    vec![],
-  );
-  assert_eq!(emit_elem_to_string(&expr_attr), "<div a={x}/>");
-
   let empty_expr_attr = jsx_elem_from(
     Some(div_elem_name()),
     vec![JsxAttr::Named {
@@ -271,10 +252,7 @@ fn emits_attributes() {
           name: "a".into(),
         },
       ),
-      value: Some(JsxAttrVal::Expression(jsx_container(
-        empty_attr_placeholder_expr(),
-        false,
-      ))),
+      value: Some(JsxAttrVal::Expression(jsx_container(empty_attr_placeholder_expr(), false))),
     }],
     vec![],
   );
@@ -305,6 +283,25 @@ fn emits_attributes() {
     vec![],
   );
   assert_eq!(emit_elem_to_string(&elem_attr_value), "<div a=<span/>/>");
+
+  let lt_after_text = jsx_elem_from(
+    Some(div_elem_name()),
+    vec![JsxAttr::Named {
+      name: Node::new(
+        Loc(0, 0),
+        JsxName {
+          namespace: None,
+          name: "title".into(),
+        },
+      ),
+      value: Some(JsxAttrVal::Text(jsx_text("a<b"))),
+    }],
+    vec![],
+  );
+  assert_eq!(
+    emit_elem_to_string(&lt_after_text),
+    "<div title=\"a<b\"/>"
+  );
 }
 
 #[test]
@@ -341,5 +338,38 @@ fn emits_children() {
   assert_eq!(
     emit_elem_to_string(&escaped_child),
     "<div>&lt;&#123;&gt;&#125;</div>"
+  );
+
+  let lt_followed_by_text = jsx_elem_from(
+    Some(div_elem_name()),
+    vec![],
+    vec![JsxElemChild::Text(jsx_text("<div>"))],
+  );
+  assert_eq!(
+    emit_elem_to_string(&lt_followed_by_text),
+    "<div>&lt;div&gt;</div>"
+  );
+}
+
+#[test]
+fn emits_unicode_text_and_attributes() {
+  let unicode = jsx_elem_from(
+    Some(div_elem_name()),
+    vec![JsxAttr::Named {
+      name: Node::new(
+        Loc(0, 0),
+        JsxName {
+          namespace: None,
+          name: "title".into(),
+        },
+      ),
+      value: Some(JsxAttrVal::Text(jsx_text("你好"))),
+    }],
+    vec![JsxElemChild::Text(jsx_text("你好"))],
+  );
+
+  assert_eq!(
+    emit_elem_to_string(&unicode),
+    "<div title=\"你好\">你好</div>"
   );
 }

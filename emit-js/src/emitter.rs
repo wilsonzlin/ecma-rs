@@ -274,6 +274,19 @@ impl Emitter {
     self.write_punct(";");
   }
 
+  /// Writes bytes as-is without attempting to enforce token boundaries.
+  /// Resets trailing state to avoid affecting subsequent boundary decisions.
+  pub fn write_raw_str(&mut self, text: &str) {
+    self.out.extend_from_slice(text.as_bytes());
+    self.state.trailing = Boundary::None;
+  }
+
+  /// Writes a single byte without boundary handling.
+  pub fn write_raw_byte(&mut self, byte: u8) {
+    self.out.push(byte);
+    self.state.trailing = Boundary::None;
+  }
+
   /// Emits a list of items separated by `separator` and optionally including a
   /// trailing separator.
   pub fn emit_punctuated_list<T>(

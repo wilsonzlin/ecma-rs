@@ -1,5 +1,6 @@
 use std::fmt;
 
+use parse_js::ast::expr::jsx::JsxElem;
 use parse_js::ast::expr::{
   lit::{LitBigIntExpr, LitBoolExpr, LitNumExpr, LitRegexExpr, LitStrExpr},
   BinaryExpr, CallArg, CallExpr, ComputedMemberExpr, Expr, IdExpr, MemberExpr,
@@ -69,7 +70,7 @@ where
       Expr::LitBigInt(lit) => self.emit_lit_big_int(lit),
       Expr::LitStr(lit) => self.emit_lit_str(lit),
       Expr::LitRegex(lit) => self.emit_lit_regex(lit),
-      Expr::JsxElem(elem) => crate::jsx::emit_jsx_elem(self.out, elem),
+      Expr::JsxElem(elem) => self.emit_jsx_elem(elem),
       Expr::Binary(binary) => self.emit_binary(binary),
       Expr::Call(call) => self.emit_call(call),
       Expr::Member(member) => self.emit_member(member),
@@ -150,6 +151,17 @@ where
   fn emit_lit_regex(&mut self, lit: &Node<LitRegexExpr>) -> EmitResult {
     with_node_context(lit.loc, || {
       self.out.write_str(&lit.stx.value)?;
+      Ok(())
+    })
+  }
+
+  fn emit_jsx_elem(&mut self, elem: &Node<JsxElem>) -> EmitResult {
+    with_node_context(elem.loc, || {
+      let mut emitter = Emitter::default();
+      crate::jsx::emit_jsx_elem(&mut emitter, elem)?;
+      let rendered =
+        std::str::from_utf8(emitter.as_bytes()).expect("JSX emitter output is UTF-8");
+      self.out.write_str(rendered).map_err(EmitError::from)?;
       Ok(())
     })
   }
