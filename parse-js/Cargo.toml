@@ -34,8 +34,6 @@ similar = "2.1.0"
 conformance-runner = ["rayon"]
 diagnostics = ["dep:diagnostics"]
 serde-loc = []
-diagnostics = ["dep:diagnostics"]
-serde-loc = []
 
 [[bin]]
 name = "conformance_runner"
