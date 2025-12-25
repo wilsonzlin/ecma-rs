@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = []
 emit = ["emit-js"]
+decompile = []
 
 [dependencies]
 ahash = { version = "0.8.6", features = ["serde"] }

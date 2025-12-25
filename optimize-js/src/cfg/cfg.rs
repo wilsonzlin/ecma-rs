@@ -33,6 +33,10 @@ impl CfgGraph {
     self.0.nodes().cloned()
   }
 
+  pub fn contains(&self, label: u32) -> bool {
+    self.0.contains(&label)
+  }
+
   pub fn sorted_labels(&self) -> Vec<u32> {
     let mut labels = self.labels().collect::<Vec<_>>();
     labels.sort_unstable();
@@ -184,9 +188,11 @@ pub struct Cfg {
 /// Helper methods for operating on both Cfg graph and bblocks at once and therefore keep them in sync.
 impl Cfg {
   /// Removes a disconnected bblock from the graph and the bblocks.
-  /// Panics if still connected or doesn't exist.
+  /// Panics if still connected.
   pub fn pop(&mut self, label: u32) -> Vec<Inst> {
-    self.graph.pop(label);
+    if self.graph.contains(label) {
+      self.graph.pop(label);
+    }
     self.bblocks.remove(label)
   }
 

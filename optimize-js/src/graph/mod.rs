@@ -65,6 +65,10 @@ impl<K: Clone + Default + Hash + Eq> Graph<K> {
     }
   }
 
+  pub fn contains(&self, node: &K) -> bool {
+    self.nodes.contains_key(node)
+  }
+
   pub fn nodes(&self) -> impl Iterator<Item = &K> + '_ {
     self.nodes.keys()
   }

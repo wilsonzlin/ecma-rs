@@ -145,7 +145,9 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
       }
       // For all other empty leaves, remove them. They should be unreachable.
       for label in empty_leaves.into_iter().skip(1) {
-        cfg.pop(label);
+        if cfg.bblocks.maybe_get(label).is_some() {
+          cfg.pop(label);
+        }
       }
       *changed = true;
     }
