@@ -184,7 +184,6 @@ impl Emitter {
   pub fn options(&self) -> EmitOptions {
     self.opts
   }
-
   /// Returns a read-only view of the buffer.
   pub fn as_bytes(&self) -> &[u8] {
     &self.out
@@ -328,6 +327,20 @@ impl Emitter {
 impl Default for Emitter {
   fn default() -> Self {
     Emitter::new(EmitOptions::default())
+  }
+}
+
+impl std::fmt::Write for Emitter {
+  fn write_str(&mut self, s: &str) -> std::fmt::Result {
+    Emitter::write_str(self, s);
+    Ok(())
+  }
+
+  fn write_char(&mut self, c: char) -> std::fmt::Result {
+    let mut buf = [0u8; 4];
+    let encoded = c.encode_utf8(&mut buf);
+    Emitter::write_str(self, encoded);
+    Ok(())
   }
 }
 
