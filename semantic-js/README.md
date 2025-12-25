@@ -23,17 +23,16 @@ The binder and resolver must be repeatable: same inputs → same IDs and export
 maps.
 
 - JS mode allocates `ScopeId`, `SymbolId`, and `NameId` sequentially while
-  walking the AST. Resolution is deterministic, but scope member tables use
-  `ahash::HashMap`; callers should not expose raw iteration over those maps in
-  public APIs until they are replaced with ordered collections.
+  walking the AST. Scope symbols live in `BTreeMap<NameId, SymbolId>` for stable
+  iteration; use [`js::ScopeData::iter_symbols_sorted`] or
+  [`js::JsSemantics::scope_symbols`] to traverse them deterministically.
 - TS mode stores exports and merged globals in `BTreeMap` so iteration is
   stable. Declaration lists inside symbols are sorted by the order they were
   encountered in the input HIR. Overall ordering is therefore determined by the
   supplied roots, the order of declarations inside each `HirFile`, and the host
   `Resolver`.
-- No public API should rely on the iteration order of internal `HashMap`s or the
-  random hash state used by `ahash`. If ordered output is required, collect keys
-  into a deterministic structure before exposing it.
+- Names are interned in first-encounter order and scope symbol maps are stored
+  in `BTreeMap`s keyed by [`js::NameId`].
 
 ## Lock-free, immutable outputs
 
@@ -69,8 +68,6 @@ surfaces (e.g. deterministic iteration) become available.
   `with`/`eval`, or re-declaration diagnostics. `var` binds to the nearest
   closure (function or module), and top-level bindings are skipped entirely in
   `TopLevelMode::Global`.
-- Iterating over `ScopeData::symbols` is not deterministic because it is backed
-  by `ahash::HashMap`.
 - TS mode does not bind inside statement bodies, nor does it track locals or
   contextual type-only exports beyond the provided flags. `export =` is rejected
   with a diagnostic, and module augmentation/global merging are not modeled.

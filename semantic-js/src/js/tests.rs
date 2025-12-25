@@ -1,11 +1,12 @@
 use crate::assoc::js::{declared_symbol, resolved_symbol};
-use crate::js::{bind_js, declare, SymbolId, TopLevelMode};
+use crate::js::{bind_js, declare, JsSemantics, SymbolId, TopLevelMode};
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::node::Node;
 use parse_js::parse;
+use std::fmt::Write;
 
 #[derive(Default, VisitorMut)]
 #[visitor(IdExprNode(enter), IdPatNode(enter))]
@@ -32,6 +33,38 @@ impl Collect {
       declared.is_some(),
     ));
   }
+}
+
+fn snapshot(sem: &JsSemantics) -> Vec<u8> {
+  let mut out = String::new();
+  writeln!(&mut out, "names {:?}", sem.names).unwrap();
+  writeln!(&mut out, "name_lookup {:?}", sem.name_lookup).unwrap();
+  for (idx, scope) in sem.scopes.iter().enumerate() {
+    writeln!(
+      &mut out,
+      "scope {idx} {:?} parent {:?}",
+      scope.kind,
+      scope.parent.map(|p| p.index())
+    )
+    .unwrap();
+    let children: Vec<_> = scope.children.iter().map(|child| child.index()).collect();
+    writeln!(&mut out, "  children {children:?}").unwrap();
+    let symbols: Vec<_> = scope
+      .iter_symbols_sorted()
+      .map(|(name, symbol)| (name.index(), symbol.index()))
+      .collect();
+    writeln!(&mut out, "  symbols {symbols:?}").unwrap();
+  }
+  for (idx, symbol) in sem.symbols.iter().enumerate() {
+    writeln!(
+      &mut out,
+      "symbol {idx} name {} decl_scope {}",
+      symbol.name.index(),
+      symbol.decl_scope.index()
+    )
+    .unwrap();
+  }
+  out.into_bytes()
 }
 
 #[test]
@@ -126,4 +159,52 @@ fn public_resolve_unknown_name_returns_none() {
   let sem = declare(&mut ast, TopLevelMode::Module);
 
   assert_eq!(sem.resolve_name_in_scope(sem.top_scope(), "missing"), None);
+}
+
+#[test]
+fn scope_symbols_iteration_is_stable() {
+  let mut ast = parse("let b = 1; let a = 2;").unwrap();
+  let sem = declare(&mut ast, TopLevelMode::Module);
+
+  let first = sem
+    .scope_symbols(sem.top_scope())
+    .map(|(name, _)| sem.name(name).to_string())
+    .collect::<Vec<_>>();
+  let second = sem
+    .scope_symbols(sem.top_scope())
+    .map(|(name, _)| sem.name(name).to_string())
+    .collect::<Vec<_>>();
+
+  assert_eq!(first, vec!["b", "a"]);
+  assert_eq!(first, second);
+}
+
+#[test]
+fn semantics_are_deterministic_between_runs() {
+  let source = r#"
+    function outer(arg) {
+      const first = arg;
+      {
+        let block = first;
+        function inner() {
+          return arg + block;
+        }
+        const arrow = () => inner();
+      }
+      return { first };
+    }
+  "#;
+
+  let first = {
+    let mut ast = parse(source).unwrap();
+    let sem = declare(&mut ast, TopLevelMode::Module);
+    snapshot(&sem)
+  };
+  let second = {
+    let mut ast = parse(source).unwrap();
+    let sem = declare(&mut ast, TopLevelMode::Module);
+    snapshot(&sem)
+  };
+
+  assert_eq!(first, second);
 }

@@ -47,13 +47,13 @@
 //! ## Determinism caveats
 //!
 //! Scope and symbol IDs are allocated in traversal order and stored in `Vec`s.
-//! Lookups are deterministic, but [`ScopeData::symbols`] uses `ahash::HashMap`
-//! with a random state; iterating over it is not stable across runs. Downstream
-//! code should rely on lookups by [`NameId`] or provide its own deterministic
-//! ordering when exposing results publicly.
-use ahash::HashMap;
+//! Scope symbol tables use [`std::collections::BTreeMap`] keyed by [`NameId`]
+//! so iteration is stable; use [`ScopeData::iter_symbols_sorted`] or
+//! [`JsSemantics::scope_symbols`] to traverse symbols deterministically.
+//! Names are interned in first-encounter order using a deterministic lookup map.
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
+use std::collections::BTreeMap;
 use std::str::FromStr;
 
 pub mod declare;
@@ -99,7 +99,7 @@ impl SymbolId {
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NameId(u32);
 
 impl NameId {
@@ -128,32 +128,37 @@ impl ScopeKind {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopeData {
   pub parent: Option<ScopeId>,
   pub kind: ScopeKind,
   pub children: Vec<ScopeId>,
-  pub symbols: HashMap<NameId, SymbolId>,
+  pub symbols: BTreeMap<NameId, SymbolId>,
 }
 
 impl ScopeData {
   pub fn get(&self, name: NameId) -> Option<SymbolId> {
     self.symbols.get(&name).copied()
   }
+
+  /// Iterates over symbols in deterministic [`NameId`] order.
+  pub fn iter_symbols_sorted(&self) -> impl Iterator<Item = (NameId, SymbolId)> + '_ {
+    self.symbols.iter().map(|(name, symbol)| (*name, *symbol))
+  }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolData {
   pub name: NameId,
   pub decl_scope: ScopeId,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsSemantics {
   /// Interned identifier strings in order of first encounter.
   pub names: Vec<String>,
-  /// String → [`NameId`] lookup for O(1) resolution of raw names.
-  pub name_lookup: HashMap<String, NameId>,
+  /// String → [`NameId`] lookup for deterministic resolution of raw names.
+  pub name_lookup: BTreeMap<String, NameId>,
   pub scopes: Vec<ScopeData>,
   pub symbols: Vec<SymbolData>,
   pub top_scope: ScopeId,
@@ -200,6 +205,11 @@ impl JsSemantics {
       return None;
     };
     self.resolve_name_id_in_scope(scope, name_id)
+  }
+
+  /// Deterministically iterates over `(NameId, SymbolId)` pairs within a scope.
+  pub fn scope_symbols(&self, scope: ScopeId) -> impl Iterator<Item = (NameId, SymbolId)> + '_ {
+    self.scope(scope).iter_symbols_sorted()
   }
 }
 

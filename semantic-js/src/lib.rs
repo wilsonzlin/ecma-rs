@@ -26,8 +26,8 @@
 //! ## Determinism and integration notes
 //!
 //! - JS mode writes attachments into [`parse_js::ast::node::NodeAssocData`];
-//!   lookups are stable, but iteration over internal `HashMap` tables is not
-//!   guaranteed to be deterministic.
+//!   scope symbol iteration is deterministic via [`js::ScopeData::iter_symbols_sorted`]
+//!   or [`js::JsSemantics::scope_symbols`].
 //! - TS mode exposes only ordered structures (`BTreeMap`, sorted declaration
 //!   lists) in its public API; root ordering and resolver results still drive
 //!   the final ID allocation.

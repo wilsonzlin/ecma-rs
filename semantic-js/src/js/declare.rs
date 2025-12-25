@@ -7,7 +7,6 @@ use super::SymbolData;
 use super::SymbolId;
 use super::TopLevelMode;
 use crate::assoc::js::DeclaredSymbol;
-use ahash::HashMap;
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
 use parse_js::ast::expr::pat::ClassOrFuncName;
@@ -28,6 +27,7 @@ use parse_js::ast::stmt::ForBody;
 use parse_js::ast::stmt::ForInOfLhs;
 use parse_js::ast::stmt::ImportStmt;
 use parse_js::ast::stx::TopLevel;
+use std::collections::BTreeMap;
 
 type BlockStmtNode = Node<BlockStmt>;
 type CatchBlockNode = Node<CatchBlock>;
@@ -50,7 +50,7 @@ pub fn declare(top_level: &mut Node<TopLevel>, mode: TopLevelMode) -> JsSemantic
 
 struct SemanticsBuilder {
   names: Vec<String>,
-  name_lookup: HashMap<String, NameId>,
+  name_lookup: BTreeMap<String, NameId>,
   scopes: Vec<ScopeData>,
   symbols: Vec<SymbolData>,
   top_scope: ScopeId,
@@ -67,11 +67,11 @@ impl SemanticsBuilder {
       parent: None,
       kind,
       children: Vec::new(),
-      symbols: HashMap::default(),
+      symbols: BTreeMap::new(),
     });
     Self {
       names: Vec::new(),
-      name_lookup: HashMap::default(),
+      name_lookup: BTreeMap::new(),
       scopes,
       symbols: Vec::new(),
       top_scope: ScopeId(0),
@@ -88,7 +88,7 @@ impl SemanticsBuilder {
       parent: Some(parent),
       kind,
       children: Vec::new(),
-      symbols: HashMap::default(),
+      symbols: BTreeMap::new(),
     });
     self.scopes[parent.index()].children.push(id);
     id

@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-ahash = "0.8.7"
 bitflags = "2"
 diagnostics = { path = "../diagnostics" }
 hir-js = { path = "../hir-js" }
