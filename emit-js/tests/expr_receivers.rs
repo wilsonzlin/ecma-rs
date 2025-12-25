@@ -60,6 +60,16 @@ fn satisfies_call_receiver_is_parenthesized() {
 }
 
 #[test]
+fn satisfies_optional_member_receiver_is_parenthesized() {
+  assert_roundtrip("(x satisfies T)?.y", "(x satisfies T)?.y");
+}
+
+#[test]
+fn satisfies_optional_call_receiver_is_parenthesized() {
+  assert_roundtrip("(x satisfies T)?.()", "(x satisfies T)?.()");
+}
+
+#[test]
 fn type_assertion_computed_member_receiver_is_parenthesized() {
   assert_roundtrip("(x as any)[y]", "(x as any)[y]");
 }
