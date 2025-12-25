@@ -213,7 +213,10 @@ pub fn lhs_expr_to_assign_target(
     | Expr::Super(_)
     | Expr::TypeAssertion(_)
     | Expr::NonNullAssertion(_)
-    | Expr::SatisfiesExpr(_) => Ok(lhs),
+    | Expr::SatisfiesExpr(_)
+    // Allow import.meta as an assignment target for error recovery.
+    // While it's not a valid target, TypeScript still parses it to produce semantic errors.
+    | Expr::ImportMeta(_) => Ok(lhs),
     _ => Err(lhs.error(SyntaxErrorType::InvalidAssigmentTarget)),
   }
 }

@@ -76,7 +76,9 @@ impl<'a> Parser<'a> {
       TT::KeywordAsync if t1.typ == TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
       TT::KeywordFunction => self.func_decl(ctx)?.into_wrapped(),
       TT::KeywordIf => self.if_stmt(ctx)?.into_wrapped(),
-      TT::KeywordImport if t1.typ != TT::ParenthesisOpen => {
+      // `import` can start either an import declaration or an import expression (`import()`/`import.meta`)
+      // Treat it as a declaration only when the next token can't start `import.meta` or `import(...)`.
+      TT::KeywordImport if !matches!(t1.typ, TT::ParenthesisOpen | TT::Dot) => {
         if !self.is_module() {
           return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
             "import not allowed in scripts",
