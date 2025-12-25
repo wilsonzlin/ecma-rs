@@ -1,5 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::{Map, Value};
+use typecheck_ts::lib_support::{CompilerOptions, JsxMode, LibName, ScriptTarget};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +111,12 @@ pub struct HarnessOptions {
   pub no_implicit_any: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub strict_null_checks: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub strict_function_types: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub exact_optional_property_types: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub no_unchecked_indexed_access: Option<bool>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub lib: Vec<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,8 +145,11 @@ impl HarnessOptions {
         "module" => options.module = value.map(str::to_string),
         "jsx" => options.jsx = value.map(str::to_string),
         "strict" => options.strict = parse_bool(value),
+        "strictfunctiontypes" => options.strict_function_types = parse_bool(value),
         "noimplicitany" => options.no_implicit_any = parse_bool(value),
         "strictnullchecks" => options.strict_null_checks = parse_bool(value),
+        "exactoptionalpropertytypes" => options.exact_optional_property_types = parse_bool(value),
+        "noundcheckedindexedaccess" => options.no_unchecked_indexed_access = parse_bool(value),
         "lib" => options.lib = parse_list(value),
         "skiplibcheck" => options.skip_lib_check = parse_bool(value),
         "noemit" => options.no_emit = parse_bool(value),
@@ -152,6 +163,156 @@ impl HarnessOptions {
     }
 
     options
+  }
+
+  /// Convert parsed harness options to `typecheck-ts` compiler options.
+  pub fn to_compiler_options(&self) -> CompilerOptions {
+    let mut opts = CompilerOptions::default();
+
+    if let Some(target) = self
+      .target
+      .as_deref()
+      .and_then(|raw| parse_script_target(raw))
+    {
+      opts.target = target;
+    }
+
+    if let Some(strict) = self.strict {
+      opts.strict_null_checks = strict;
+      opts.no_implicit_any = strict;
+      opts.strict_function_types = strict;
+    }
+    if let Some(value) = self.no_implicit_any {
+      opts.no_implicit_any = value;
+    }
+    if let Some(value) = self.strict_null_checks {
+      opts.strict_null_checks = value;
+    }
+    if let Some(value) = self.strict_function_types {
+      opts.strict_function_types = value;
+    }
+    if let Some(value) = self.exact_optional_property_types {
+      opts.exact_optional_property_types = value;
+    }
+    if let Some(value) = self.no_unchecked_indexed_access {
+      opts.no_unchecked_indexed_access = value;
+    }
+    if let Some(value) = self.use_define_for_class_fields {
+      opts.use_define_for_class_fields = value;
+    }
+
+    if let Some(mode) = self.jsx.as_deref().and_then(parse_jsx_mode) {
+      opts.jsx = Some(mode);
+    }
+
+    let mut libs = Vec::new();
+    for lib in &self.lib {
+      if let Some(parsed) = parse_lib_name(lib) {
+        libs.push(parsed);
+      }
+    }
+    if !libs.is_empty() {
+      opts.libs = libs.clone();
+      opts.no_default_lib = true;
+      opts.include_dom |= libs.iter().any(|l| matches!(l, LibName::Dom));
+    } else if self.include_dom_requested() {
+      opts.include_dom = true;
+    }
+
+    opts
+  }
+
+  /// Serialize options for the Node-based `tsc` wrapper.
+  pub fn to_env_json(&self) -> Option<String> {
+    let map = self.to_tsc_options_map();
+    if map.is_empty() {
+      None
+    } else {
+      serde_json::to_string(&map).ok()
+    }
+  }
+
+  fn to_tsc_options_map(&self) -> Map<String, Value> {
+    let mut map = Map::new();
+
+    if let Some(target) = self
+      .target
+      .as_deref()
+      .and_then(|raw| parse_script_target(raw))
+    {
+      map.insert(
+        "target".to_string(),
+        Value::String(script_target_str(target).to_string()),
+      );
+    } else if let Some(raw) = &self.target {
+      map.insert("target".to_string(), Value::String(raw.clone()));
+    }
+
+    if let Some(module) = &self.module {
+      map.insert("module".to_string(), Value::String(module.clone()));
+    }
+    if let Some(mode) = self.jsx.as_deref().and_then(parse_jsx_mode) {
+      map.insert(
+        "jsx".to_string(),
+        Value::String(jsx_mode_str(mode).to_string()),
+      );
+    } else if let Some(raw) = &self.jsx {
+      map.insert("jsx".to_string(), Value::String(raw.clone()));
+    }
+
+    if let Some(strict) = self.strict {
+      map.insert("strict".to_string(), Value::Bool(strict));
+    }
+    if let Some(value) = self.no_implicit_any {
+      map.insert("noImplicitAny".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.strict_null_checks {
+      map.insert("strictNullChecks".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.strict_function_types {
+      map.insert("strictFunctionTypes".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.exact_optional_property_types {
+      map.insert("exactOptionalPropertyTypes".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.no_unchecked_indexed_access {
+      map.insert("noUncheckedIndexedAccess".to_string(), Value::Bool(value));
+    }
+
+    if !self.lib.is_empty() {
+      let libs: Vec<Value> = self.lib.iter().cloned().map(Value::String).collect();
+      map.insert("lib".to_string(), Value::Array(libs));
+    }
+    if let Some(value) = self.skip_lib_check {
+      map.insert("skipLibCheck".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.no_emit {
+      map.insert("noEmit".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.use_define_for_class_fields {
+      map.insert("useDefineForClassFields".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.no_emit_on_error {
+      map.insert("noEmitOnError".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.declaration {
+      map.insert("declaration".to_string(), Value::Bool(value));
+    }
+    if let Some(value) = self.module_resolution.as_ref() {
+      map.insert("moduleResolution".to_string(), Value::String(value.clone()));
+    }
+    if !self.types.is_empty() {
+      map.insert(
+        "types".to_string(),
+        Value::Array(self.types.iter().cloned().map(Value::String).collect()),
+      );
+    }
+
+    map
+  }
+
+  fn include_dom_requested(&self) -> bool {
+    self.lib.iter().any(|l| l.eq_ignore_ascii_case("dom"))
   }
 }
 
@@ -176,6 +337,75 @@ fn parse_list(raw: Option<&str>) -> Vec<String> {
     .filter(|s| !s.is_empty())
     .map(|s| s.to_string())
     .collect()
+}
+
+fn parse_script_target(raw: &str) -> Option<ScriptTarget> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "es3" => Some(ScriptTarget::Es3),
+    "es5" => Some(ScriptTarget::Es5),
+    "es2015" => Some(ScriptTarget::Es2015),
+    "es2016" => Some(ScriptTarget::Es2016),
+    "es2017" => Some(ScriptTarget::Es2017),
+    "es2018" => Some(ScriptTarget::Es2018),
+    "es2019" => Some(ScriptTarget::Es2019),
+    "es2020" => Some(ScriptTarget::Es2020),
+    "es2021" => Some(ScriptTarget::Es2021),
+    "es2022" => Some(ScriptTarget::Es2022),
+    "esnext" => Some(ScriptTarget::EsNext),
+    _ => None,
+  }
+}
+
+fn script_target_str(target: ScriptTarget) -> &'static str {
+  match target {
+    ScriptTarget::Es3 => "ES3",
+    ScriptTarget::Es5 => "ES5",
+    ScriptTarget::Es2015 => "ES2015",
+    ScriptTarget::Es2016 => "ES2016",
+    ScriptTarget::Es2017 => "ES2017",
+    ScriptTarget::Es2018 => "ES2018",
+    ScriptTarget::Es2019 => "ES2019",
+    ScriptTarget::Es2020 => "ES2020",
+    ScriptTarget::Es2021 => "ES2021",
+    ScriptTarget::Es2022 => "ES2022",
+    ScriptTarget::EsNext => "ESNext",
+  }
+}
+
+fn parse_jsx_mode(raw: &str) -> Option<JsxMode> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "preserve" => Some(JsxMode::Preserve),
+    "react" => Some(JsxMode::React),
+    "react-jsx" => Some(JsxMode::ReactJsx),
+    "react-jsxdev" => Some(JsxMode::ReactJsxdev),
+    _ => None,
+  }
+}
+
+fn jsx_mode_str(mode: JsxMode) -> &'static str {
+  match mode {
+    JsxMode::Preserve => "preserve",
+    JsxMode::React => "react",
+    JsxMode::ReactJsx => "react-jsx",
+    JsxMode::ReactJsxdev => "react-jsxdev",
+  }
+}
+
+fn parse_lib_name(raw: &str) -> Option<LibName> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "es5" => Some(LibName::Es5),
+    "es2015" => Some(LibName::Es2015),
+    "es2016" => Some(LibName::Es2016),
+    "es2017" => Some(LibName::Es2017),
+    "es2018" => Some(LibName::Es2018),
+    "es2019" => Some(LibName::Es2019),
+    "es2020" => Some(LibName::Es2020),
+    "es2021" => Some(LibName::Es2021),
+    "es2022" => Some(LibName::Es2022),
+    "esnext" => Some(LibName::EsNext),
+    "dom" => Some(LibName::Dom),
+    _ => None,
+  }
 }
 
 #[cfg(test)]
@@ -238,5 +468,16 @@ mod tests {
     let directives = vec![dir("module", Some("commonjs")), dir("module", Some("amd"))];
     let options = HarnessOptions::from_directives(&directives);
     assert_eq!(options.module.as_deref(), Some("amd"));
+  }
+
+  #[test]
+  fn compiler_options_apply_strict_overrides() {
+    let mut opts = HarnessOptions::default();
+    opts.strict = Some(true);
+    opts.strict_null_checks = Some(false);
+    let compiler = opts.to_compiler_options();
+    assert!(compiler.strict_function_types);
+    assert!(compiler.no_implicit_any);
+    assert!(!compiler.strict_null_checks);
   }
 }

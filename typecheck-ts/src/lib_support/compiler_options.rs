@@ -16,6 +16,15 @@ pub enum ScriptTarget {
   EsNext,
 }
 
+/// JSX transform mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum JsxMode {
+  Preserve,
+  React,
+  ReactJsx,
+  ReactJsxdev,
+}
+
 impl Default for ScriptTarget {
   fn default() -> Self {
     ScriptTarget::Es2015
@@ -30,6 +39,15 @@ pub struct CompilerOptions {
   pub include_dom: bool,
   /// If true, do not automatically include default libs.
   pub no_default_lib: bool,
+  /// Explicit lib overrides (when non-empty this replaces the default target-derived set).
+  pub libs: Vec<LibName>,
+  pub strict_null_checks: bool,
+  pub no_implicit_any: bool,
+  pub strict_function_types: bool,
+  pub exact_optional_property_types: bool,
+  pub no_unchecked_indexed_access: bool,
+  pub use_define_for_class_fields: bool,
+  pub jsx: Option<JsxMode>,
 }
 
 impl Default for CompilerOptions {
@@ -38,6 +56,14 @@ impl Default for CompilerOptions {
       target: ScriptTarget::default(),
       include_dom: false,
       no_default_lib: false,
+      libs: Vec::new(),
+      strict_null_checks: true,
+      no_implicit_any: false,
+      strict_function_types: true,
+      exact_optional_property_types: false,
+      no_unchecked_indexed_access: false,
+      use_define_for_class_fields: true,
+      jsx: None,
     }
   }
 }
@@ -90,11 +116,15 @@ impl LibSet {
   /// Compute the default lib set for a given compiler configuration.
   pub fn for_options(options: &CompilerOptions) -> Self {
     if options.no_default_lib {
-      return LibSet::empty();
+      return LibSet::from(options.libs.clone());
+    }
+
+    if !options.libs.is_empty() {
+      return LibSet::from(options.libs.clone());
     }
 
     let mut libs = vec![es_lib_for_target(options.target)];
-    if options.include_dom {
+    if options.include_dom && !libs.contains(&LibName::Dom) {
       libs.push(LibName::Dom);
     }
     LibSet { libs }
@@ -112,6 +142,12 @@ impl fmt::Display for LibSet {
   }
 }
 
+impl From<Vec<LibName>> for LibSet {
+  fn from(libs: Vec<LibName>) -> Self {
+    LibSet { libs }
+  }
+}
+
 fn es_lib_for_target(target: ScriptTarget) -> LibName {
   match target {
     ScriptTarget::Es3 | ScriptTarget::Es5 => LibName::Es5,
@@ -124,5 +160,16 @@ fn es_lib_for_target(target: ScriptTarget) -> LibName {
     ScriptTarget::Es2021 => LibName::Es2021,
     ScriptTarget::Es2022 => LibName::Es2022,
     ScriptTarget::EsNext => LibName::EsNext,
+  }
+}
+
+impl From<&CompilerOptions> for types_ts_interned::TypeOptions {
+  fn from(options: &CompilerOptions) -> Self {
+    types_ts_interned::TypeOptions {
+      strict_null_checks: options.strict_null_checks,
+      strict_function_types: options.strict_function_types,
+      exact_optional_property_types: options.exact_optional_property_types,
+      no_unchecked_indexed_access: options.no_unchecked_indexed_access,
+    }
   }
 }

@@ -2,6 +2,7 @@ use crate::diagnostic_norm::{
   describe, normalize_rust_diagnostics, normalize_tsc_diagnostics, sort_diagnostics,
   within_tolerance, NormalizedDiagnostic,
 };
+use crate::directives::HarnessOptions;
 use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS};
 use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
@@ -247,27 +248,6 @@ pub struct ExpectationOutcome {
 
 fn is_false(value: &bool) -> bool {
   !*value
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct HarnessOptions {
-  pub module: Option<String>,
-}
-
-impl HarnessOptions {
-  fn from_test_case(case: &TestCase) -> Self {
-    HarnessOptions {
-      module: case.options.module.clone(),
-    }
-  }
-
-  fn to_env_json(&self) -> Option<String> {
-    if self.module.is_none() {
-      return None;
-    }
-
-    serde_json::to_string(self).ok()
-  }
 }
 
 #[derive(Clone)]
@@ -604,9 +584,9 @@ fn execute_case(
   }
   let notes = case.notes.clone();
   let file_set = HarnessFileSet::new(&case.deduped_files);
-  let harness_options = HarnessOptions::from_test_case(&case);
+  let harness_options = case.options.clone();
 
-  let (rust, query_stats) = run_rust_with_profile(&file_set, collect_query_stats);
+  let (rust, query_stats) = run_rust_with_profile(&file_set, &harness_options, collect_query_stats);
 
   let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
   let tsc = match compare_mode {
@@ -666,15 +646,16 @@ fn execute_case(
   }
 }
 
-pub(crate) fn run_rust(file_set: &HarnessFileSet) -> EngineDiagnostics {
-  run_rust_with_profile(file_set, false).0
+pub(crate) fn run_rust(file_set: &HarnessFileSet, options: &HarnessOptions) -> EngineDiagnostics {
+  run_rust_with_profile(file_set, options, false).0
 }
 
 fn run_rust_with_profile(
   file_set: &HarnessFileSet,
+  options: &HarnessOptions,
   collect_profile: bool,
 ) -> (EngineDiagnostics, Option<QueryStats>) {
-  let host = HarnessHost::new(file_set.clone());
+  let host = HarnessHost::new(file_set.clone(), options.clone());
   let roots = file_set.root_files();
   let program = Program::new(host, roots);
   let result = std::panic::catch_unwind(AssertUnwindSafe(|| program.check()));
@@ -860,11 +841,12 @@ fn summarize(results: &[TestResult]) -> Summary {
 
 struct HarnessHost {
   files: HarnessFileSet,
+  options: HarnessOptions,
 }
 
 impl HarnessHost {
-  fn new(files: HarnessFileSet) -> Self {
-    Self { files }
+  fn new(files: HarnessFileSet, options: HarnessOptions) -> Self {
+    Self { files, options }
   }
 }
 
@@ -926,6 +908,10 @@ impl Host for HarnessHost {
     }
 
     None
+  }
+
+  fn compiler_options(&self) -> typecheck_ts::lib_support::CompilerOptions {
+    self.options.to_compiler_options()
   }
 }
 
@@ -1202,7 +1188,7 @@ mod tests {
     ];
 
     let file_set = HarnessFileSet::new(&files);
-    let host = HarnessHost::new(file_set.clone());
+    let host = HarnessHost::new(file_set.clone(), HarnessOptions::default());
     let roots = file_set.root_files();
 
     assert_eq!(roots.len(), 2);

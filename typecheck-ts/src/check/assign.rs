@@ -39,11 +39,23 @@ pub(crate) fn check_assignment(
 }
 
 fn is_assignable(state: &mut ProgramState, source_ty: TypeId, target_ty: TypeId) -> bool {
+  let opts = &state.compiler_options;
   if target_ty == state.builtin.any || target_ty == state.builtin.unknown {
     return true;
   }
 
   let source_kind = state.type_store.kind(source_ty).clone();
+  let target_kind = state.type_store.kind(target_ty).clone();
+
+  if !opts.strict_null_checks {
+    if matches!(source_kind, TypeKind::Null | TypeKind::Undefined) {
+      return true;
+    }
+    if matches!(target_kind, TypeKind::Null | TypeKind::Undefined) {
+      return true;
+    }
+  }
+
   match source_kind {
     TypeKind::Any | TypeKind::Unknown => return true,
     _ => {}
@@ -60,7 +72,7 @@ fn is_assignable(state: &mut ProgramState, source_ty: TypeId, target_ty: TypeId)
     _ => {}
   }
 
-  let target_kind = state.type_store.kind(target_ty).clone();
+  let target_kind = target_kind;
 
   match (&source_kind, &target_kind) {
     (TypeKind::LiteralString(_), TypeKind::String)

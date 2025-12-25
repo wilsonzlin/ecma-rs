@@ -632,6 +632,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     subst: &Substitution,
     depth: usize,
   ) -> TypeId {
+    let options = self.store.options();
     let obj_eval = self.evaluate_with_subst(obj, subst, depth + 1);
     let index_eval = self.evaluate_with_subst(index, subst, depth + 1);
 
@@ -651,14 +652,14 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       return self.store.union(results);
     }
 
-    match self.store.type_kind(obj_eval) {
+    let mut result = match self.store.type_kind(obj_eval) {
       TypeKind::Object(obj) => {
         let shape = self.store.shape(self.store.object(obj).shape);
         match self.keys_from_index_type(index_eval) {
           KeySet::Known(keys) => {
             let mut hits = Vec::new();
             for key in keys {
-              self.collect_property_type(&shape, &key, &mut hits);
+              self.collect_property_type(&shape, &key, &mut hits, options);
             }
             if hits.is_empty() {
               self.store.primitive_ids().never
@@ -680,7 +681,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           let idx = num.0 as usize;
           if let Some(elem) = elems.get(idx) {
             let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
-            if elem.optional {
+            if elem.optional && !options.exact_optional_property_types {
               ty = self
                 .store
                 .union(vec![ty, self.store.primitive_ids().undefined]);
@@ -694,7 +695,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
           let mut members = Vec::new();
           for elem in elems {
             let mut ty = self.evaluate_with_subst(elem.ty, subst, depth + 1);
-            if elem.optional {
+            if elem.optional && !options.exact_optional_property_types {
               ty = self
                 .store
                 .union(vec![ty, self.store.primitive_ids().undefined]);
@@ -705,7 +706,15 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
       },
       _ => self.store.primitive_ids().unknown,
+    };
+
+    if options.no_unchecked_indexed_access {
+      result = self
+        .store
+        .union(vec![result, self.store.primitive_ids().undefined]);
     }
+
+    result
   }
 
   fn evaluate_keyof(&mut self, inner: TypeId, subst: &Substitution, depth: usize) -> TypeId {
@@ -913,7 +922,13 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     }
   }
 
-  fn collect_property_type(&self, shape: &Shape, key: &Key, hits: &mut Vec<TypeId>) {
+  fn collect_property_type(
+    &self,
+    shape: &Shape,
+    key: &Key,
+    hits: &mut Vec<TypeId>,
+    options: crate::TypeOptions,
+  ) {
     for prop in shape.properties.iter() {
       if match (key, &prop.key) {
         (Key::Literal(a), b) => a == b,
@@ -923,7 +938,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         _ => false,
       } {
         let mut ty = prop.data.ty;
-        if prop.data.optional {
+        if prop.data.optional && !options.exact_optional_property_types {
           ty = self
             .store
             .union(vec![ty, self.store.primitive_ids().undefined]);

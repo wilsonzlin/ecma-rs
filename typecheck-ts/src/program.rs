@@ -1,5 +1,5 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange, TypeId};
-use ::semantic_js::ts as sem_ts;
+use semantic_js::ts as sem_ts;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
 use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};

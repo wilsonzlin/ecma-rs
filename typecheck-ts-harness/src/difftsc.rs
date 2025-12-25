@@ -4,6 +4,8 @@ use crate::diagnostic_norm::{
   diagnostic_code_display, normalize_path_for_compare, normalize_tsc_diagnostics_with_options,
   sort_diagnostics, NormalizationOptions, NormalizedDiagnostic,
 };
+use crate::diagnostic_norm::DiagnosticCode as NormDiagnosticCode;
+use crate::directives::HarnessOptions;
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{run_rust, EngineStatus, HarnessFileSet};
@@ -519,7 +521,7 @@ fn run_single_test(
   };
 
   let file_set = HarnessFileSet::new(&test.files);
-  let rust = run_rust(&file_set);
+  let rust = run_rust(&file_set, &HarnessOptions::default());
   let expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
   if rust.status != EngineStatus::Ok {
     return CaseReport {
