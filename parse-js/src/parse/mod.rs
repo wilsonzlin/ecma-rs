@@ -156,7 +156,17 @@ impl<'a> Parser<'a> {
   }
 
   pub fn bytes(&self, loc: Loc) -> &str {
-    &self.lexer[loc]
+    let limit = self.source_range().1;
+    if loc.0 > loc.1 {
+      return "";
+    }
+    let start = loc.0.min(limit);
+    let end = loc.1.min(limit);
+    if start >= end {
+      ""
+    } else {
+      &self.lexer[Loc(start, end)]
+    }
   }
 
   pub fn str(&self, loc: Loc) -> &str {

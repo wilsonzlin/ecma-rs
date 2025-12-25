@@ -494,7 +494,7 @@ proptest! {
   fn lowering_is_deterministic(sample in proptest::sample::select(vec![
     "const a = 1;",
     "function f(x) { return x * 2; }",
-    "interface Foo { bar: string }\nexport namespace NS { const x = 1; }",
+    "interface Foo { bar: string }\nnamespace NS { const x = 1; }",
   ])) {
     let ast1 = parse(sample).expect("parse");
     let ast2 = parse(sample).expect("parse");

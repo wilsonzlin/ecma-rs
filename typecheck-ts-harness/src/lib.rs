@@ -1,4 +1,5 @@
 use std::io;
+use std::path::Path;
 use thiserror::Error;
 
 pub mod diagnostic;
@@ -62,3 +63,15 @@ pub use runner::OutcomeCounts;
 pub use runner::Summary;
 pub use runner::TestOutcome;
 pub use runner::TestResult;
+
+/// Read a UTF-8 file from disk, returning a friendly error if the contents are
+/// not valid UTF-8.
+pub(crate) fn read_utf8_file(path: &Path) -> std::io::Result<String> {
+  let raw = std::fs::read(path)?;
+  String::from_utf8(raw).map_err(|err| {
+    io::Error::new(
+      io::ErrorKind::InvalidData,
+      format!("{} is not valid UTF-8: {err}", path.display()),
+    )
+  })
+}

@@ -1,6 +1,7 @@
 use crate::directives::HarnessDirective;
 use crate::directives::HarnessOptions;
 use crate::multifile::split_test_file;
+use crate::read_utf8_file;
 use crate::HarnessError;
 use crate::Result;
 use crate::VirtualFile;
@@ -8,7 +9,6 @@ use globset::Glob;
 use globset::GlobSet;
 use globset::GlobSetBuilder;
 use regex::Regex;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use walkdir::WalkDir;
@@ -127,7 +127,7 @@ pub fn discover_conformance_tests(
       continue;
     }
 
-    let content = fs::read_to_string(&path)?;
+    let content = read_utf8_file(&path)?;
     let split = split_test_file(&path, &content);
 
     cases.push(TestCase {
@@ -204,7 +204,7 @@ pub fn load_conformance_test(root: &Path, id: &str) -> Result<TestCase> {
     )));
   }
 
-  let content = fs::read_to_string(&canonical_path)?;
+  let content = read_utf8_file(&canonical_path)?;
   let split = split_test_file(&canonical_path, &content);
 
   let normalized_id = canonical_path

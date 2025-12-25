@@ -34,8 +34,8 @@ fn main() {
   let _args = Cli::parse();
   let file = FileId(0);
 
-  let mut source = String::new();
-  if let Err(err) = stdin().read_to_string(&mut source) {
+  let mut raw = Vec::new();
+  if let Err(err) = stdin().read_to_end(&mut raw) {
     let diagnostic = host_error(
       Some(Span::new(file, TextRange::new(0, 0))),
       format!("failed to read from stdin: {err}"),
@@ -45,6 +45,20 @@ fn main() {
     };
     exit_with_diagnostic(&provider, diagnostic);
   }
+
+  let source = match String::from_utf8(raw) {
+    Ok(text) => text,
+    Err(err) => {
+      let diagnostic = host_error(
+        Some(Span::new(file, TextRange::new(0, 0))),
+        format!("stdin is not valid UTF-8: {err}"),
+      );
+      let provider = StdinSource {
+        text: String::new(),
+      };
+      exit_with_diagnostic(&provider, diagnostic);
+    }
+  };
 
   let provider = StdinSource {
     text: source.clone(),

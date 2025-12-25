@@ -8,7 +8,7 @@ use crate::expectations::{AppliedExpectation, ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::profile::ProfileBuilder;
 use crate::tsc::{TscDiagnostic, TscDiagnostics, TscMetadata, TSC_BASELINE_SCHEMA_VERSION};
-use crate::{FailOn, Result, VirtualFile};
+use crate::{read_utf8_file, FailOn, Result, VirtualFile};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -1095,7 +1095,7 @@ impl SnapshotStore {
 
   fn load(&self, id: &str) -> std::io::Result<Vec<TscDiagnostic>> {
     let path = self.path_for(id);
-    let data = std::fs::read_to_string(path)?;
+    let data = read_utf8_file(&path)?;
     let parsed: TscDiagnostics = serde_json::from_str(&data)?;
     Ok(parsed.diagnostics)
   }

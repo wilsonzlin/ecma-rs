@@ -12,7 +12,7 @@ use crate::tsc::{
   apply_default_tsc_options, node_available, TscDiagnostics, TscRequest, TscRunner,
   TSC_BASELINE_SCHEMA_VERSION,
 };
-use crate::{FailOn, VirtualFile};
+use crate::{read_utf8_file, FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
@@ -1082,7 +1082,7 @@ fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {
     } else if is_source_file(&path) {
       let name = test_name_from_path(&path)?;
       let content =
-        fs::read_to_string(&path).with_context(|| format!("read test file {}", path.display()))?;
+        read_utf8_file(&path).with_context(|| format!("read test file {}", path.display()))?;
       tests.push(TestCase {
         name,
         files: vec![VirtualFile {
@@ -1116,7 +1116,7 @@ fn collect_files_recursively(dir: &Path) -> Result<Vec<VirtualFile>> {
       .to_string_lossy()
       .to_string();
     let content =
-      fs::read_to_string(path).with_context(|| format!("read test file {}", path.display()))?;
+      read_utf8_file(path).with_context(|| format!("read test file {}", path.display()))?;
     files.push(VirtualFile {
       name: relative_path,
       content,
@@ -1171,8 +1171,7 @@ fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
 }
 
 fn read_baseline(path: &Path) -> Result<TscDiagnostics> {
-  let data =
-    fs::read_to_string(path).with_context(|| format!("read baseline {}", path.display()))?;
+  let data = read_utf8_file(path).with_context(|| format!("read baseline {}", path.display()))?;
   let parsed: TscDiagnostics = serde_json::from_str(&data).context("parse baseline JSON")?;
   let version = parsed.schema_version.unwrap_or(0);
   if version != TSC_BASELINE_SCHEMA_VERSION {

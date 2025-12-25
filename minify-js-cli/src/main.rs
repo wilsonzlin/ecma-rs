@@ -2,7 +2,7 @@ use clap::builder::PossibleValuesParser;
 use clap::builder::TypedValueParser;
 use clap::Parser;
 use diagnostics::render::{render_diagnostic, SourceProvider};
-use diagnostics::{FileId, Severity};
+use diagnostics::{host_error, FileId, Severity, Span, TextRange};
 use minify_js::minify;
 use minify_js::TopLevelMode;
 use std::fs::File;
@@ -54,6 +54,19 @@ impl<'a> SourceProvider for SingleFileSource<'a> {
   }
 }
 
+fn exit_with_host_error(name: &str, text: &str, message: impl Into<String>) -> ! {
+  let diagnostic = host_error(
+    Some(Span::new(FileId(0), TextRange::new(0, 0))),
+    message.into(),
+  );
+  let provider = SingleFileSource {
+    name: name.to_string(),
+    text,
+  };
+  eprintln!("{}", render_diagnostic(&provider, &diagnostic));
+  process::exit(1);
+}
+
 fn main() {
   let args = Cli::parse();
   let input_name = args
@@ -66,33 +79,37 @@ fn main() {
     Some(p) => match File::open(p) {
       Ok(f) => Box::new(f),
       Err(err) => {
-        eprintln!("error: failed to open {}: {err}", p.display());
-        process::exit(1);
+        exit_with_host_error(
+          &input_name,
+          "",
+          format!("failed to open {}: {err}", p.display()),
+        );
       }
     },
     None => Box::new(stdin()),
   };
   if let Err(err) = input_file.read_to_end(&mut input) {
-    eprintln!("error: failed to read input: {err}");
-    process::exit(1);
+    exit_with_host_error(&input_name, "", format!("failed to read input: {err}"));
   }
   let source = match std::str::from_utf8(&input) {
     Ok(source) => source,
     Err(err) => {
-      eprintln!("error: input is not valid UTF-8: {err}");
-      process::exit(1);
+      exit_with_host_error(&input_name, "", format!("input is not valid UTF-8: {err}"));
     }
   };
   let mut output = Vec::new();
   match minify(args.mode, source, &mut output) {
     Ok(()) => {
       let write_result = match args.output.as_ref() {
-        Some(p) => File::create(p).and_then(|mut file| file.write_all(&output)),
-        None => stdout().write_all(&output),
+        Some(p) => File::create(p)
+          .and_then(|mut file| file.write_all(&output))
+          .map_err(|err| (p.display().to_string(), err)),
+        None => stdout()
+          .write_all(&output)
+          .map_err(|err| ("<stdout>".to_string(), err)),
       };
-      if let Err(err) = write_result {
-        eprintln!("error: failed to write output: {err}");
-        process::exit(1);
+      if let Err((dest, err)) = write_result {
+        exit_with_host_error(&dest, source, format!("failed to write output: {err}"));
       }
     }
     Err(diagnostics) => {

@@ -896,7 +896,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           if type_only {
             Namespace::TYPE
           } else {
-            Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+            Namespace::VALUE | Namespace::NAMESPACE
           },
           &self.symbols,
         ) {

@@ -120,7 +120,8 @@ pub enum LowerError {
 ///
 /// This is primarily a convenience for tests and fuzzing; callers that already
 /// have parsed ASTs should prefer [`lower_file_with_diagnostics`] (or
-/// [`lower_file`] if diagnostics are not needed).
+/// [`lower_file`] if diagnostics are not needed). Source must be valid UTF-8
+/// since spans and identifier handling are defined over UTF-8 byte offsets.
 pub fn lower_from_source(source: &str) -> Result<LowerResult, LowerError> {
   lower_from_source_with_kind(FileKind::Ts, source)
 }
@@ -147,6 +148,7 @@ pub fn lower_from_source_with_kind(
 
 /// Fuzzing entry point to exercise parsing + lowering without panicking.
 #[cfg(feature = "fuzzing")]
+#[doc(hidden)]
 pub fn fuzz_lower(data: &[u8]) {
   let source = String::from_utf8_lossy(data);
   let _ = lower_from_source(&source);

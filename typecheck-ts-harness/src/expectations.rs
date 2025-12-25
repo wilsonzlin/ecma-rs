@@ -1,9 +1,9 @@
+use crate::read_utf8_file;
 use crate::HarnessError;
 use clap::ValueEnum;
 use globset::Glob;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -81,7 +81,7 @@ impl Expectations {
   }
 
   pub fn from_path(path: &Path) -> Result<Self, HarnessError> {
-    let raw = fs::read_to_string(path)?;
+    let raw = read_utf8_file(path)?;
     Self::from_str(&raw).map_err(|err| match err {
       HarnessError::Manifest(msg) => HarnessError::Manifest(format!("{}: {msg}", path.display())),
       other => other,

@@ -14,6 +14,10 @@ mod tests;
 
 /// Minifies UTF-8 JavaScript code.
 ///
+/// The input must be valid UTF-8; spans, identifiers, and renaming decisions
+/// are computed over UTF-8 byte offsets. If you start from raw bytes, validate
+/// them at the boundary and convert to a `&str` before calling this function.
+///
 /// # Arguments
 ///
 /// * `top_level_mode` - How to parse the provided code.

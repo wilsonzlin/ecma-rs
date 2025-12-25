@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 875922e4a0200b2737723b51579249e45213e06254f11966b0b8660cba1890f3 # shrinks to sample = "interface Foo { bar: string }\nnamespace NS { export const x = 1; }"
