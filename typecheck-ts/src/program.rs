@@ -27,6 +27,7 @@ use std::time::Instant;
 use tracing::debug_span;
 use types_ts_interned as tti;
 
+use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 use crate::{FatalError, HostError, Ice, IceContext};
 
 #[path = "check/mod.rs"]
@@ -323,6 +324,7 @@ pub struct Program {
   roots: Vec<FileId>,
   cancelled: AtomicBool,
   state: std::sync::Mutex<ProgramState>,
+  query_stats: QueryStatsCollector,
 }
 
 // Ensure the primary API surface is usable across threads.
@@ -343,11 +345,13 @@ impl Program {
     roots: Vec<FileId>,
     lib_manager: Arc<LibManager>,
   ) -> Program {
+    let query_stats = QueryStatsCollector::default();
     Program {
       host: Arc::new(host),
       roots,
       cancelled: AtomicBool::new(false),
-      state: std::sync::Mutex::new(ProgramState::new(lib_manager)),
+      state: std::sync::Mutex::new(ProgramState::new(lib_manager, query_stats.clone())),
+      query_stats,
     }
   }
 
@@ -380,6 +384,11 @@ impl Program {
   /// Request cancellation of ongoing work.
   pub fn cancel(&self) {
     self.cancelled.store(true, Ordering::Relaxed);
+  }
+
+  /// Snapshot of aggregate query statistics collected so far.
+  pub fn query_stats(&self) -> QueryStats {
+    self.query_stats.snapshot()
   }
 
   fn ensure_not_cancelled(&self) -> Result<(), FatalError> {
@@ -1119,31 +1128,54 @@ macro_rules! query_span {
 struct QuerySpan {
   span: tracing::Span,
   start: Instant,
+  kind: QueryKind,
+  cache_hit: bool,
+  span_enabled: bool,
+  query_stats: Option<QueryStatsCollector>,
 }
 
 impl QuerySpan {
-  fn enter(span: tracing::Span, type_id: Option<TypeId>) -> Option<QuerySpan> {
-    if span.is_disabled() {
+  fn enter(
+    kind: QueryKind,
+    span: tracing::Span,
+    type_id: Option<TypeId>,
+    cache_hit: bool,
+    query_stats: Option<QueryStatsCollector>,
+  ) -> Option<QuerySpan> {
+    let span_enabled = !span.is_disabled();
+    if !span_enabled && query_stats.is_none() {
       return None;
     }
-    if let Some(ty) = type_id {
-      span.record("type_id", ty.0);
+    if span_enabled {
+      if let Some(ty) = type_id {
+        span.record("type_id", ty.0);
+      }
+      let _guard = span.enter();
+      drop(_guard);
     }
-    let _guard = span.enter();
-    drop(_guard);
     Some(QuerySpan {
       span,
       start: Instant::now(),
+      kind,
+      cache_hit,
+      span_enabled,
+      query_stats,
     })
   }
 
   fn finish(self, type_id: Option<TypeId>) {
-    if let Some(ty) = type_id {
-      self.span.record("type_id", ty.0);
+    let duration = self.start.elapsed();
+    if let Some(stats) = &self.query_stats {
+      stats.record(self.kind, self.cache_hit, duration);
     }
-    self
-      .span
-      .record("duration_ms", self.start.elapsed().as_secs_f64() * 1000.0);
+    if self.span_enabled {
+      if let Some(ty) = type_id {
+        self.span.record("type_id", ty.0);
+      }
+      self
+        .span
+        .record("duration_ms", duration.as_secs_f64() * 1000.0);
+    }
   }
 }
 
@@ -1166,6 +1198,7 @@ struct ProgramState {
   diagnostics: Vec<Diagnostic>,
   type_store: TypeStore,
   builtin: BuiltinTypes,
+  query_stats: QueryStatsCollector,
   next_def: u32,
   next_body: u32,
   next_symbol: u32,
@@ -1173,7 +1206,7 @@ struct ProgramState {
 }
 
 impl ProgramState {
-  fn new(lib_manager: Arc<LibManager>) -> ProgramState {
+  fn new(lib_manager: Arc<LibManager>, query_stats: QueryStatsCollector) -> ProgramState {
     let (type_store, builtin) = TypeStore::new();
     ProgramState {
       analyzed: false,
@@ -1194,6 +1227,7 @@ impl ProgramState {
       diagnostics: Vec::new(),
       type_store,
       builtin,
+      query_stats,
       next_def: 0,
       next_body: 0,
       next_symbol: 0,
@@ -1241,6 +1275,7 @@ impl ProgramState {
         .or_insert_with(|| host.file_kind(file));
       let text = self.load_text(file, host)?;
       let parse_span = QuerySpan::enter(
+        QueryKind::Parse,
         query_span!(
           "typecheck_ts.parse",
           Some(file.0),
@@ -1249,6 +1284,8 @@ impl ProgramState {
           false
         ),
         None,
+        false,
+        Some(self.query_stats.clone()),
       );
       let parsed = parse(&text);
       if let Some(span) = parse_span {
@@ -1256,18 +1293,21 @@ impl ProgramState {
       }
       match parsed {
         Ok(ast) => {
-          let bind_span = QuerySpan::enter(
+          let lower_span = QuerySpan::enter(
+            QueryKind::LowerHir,
             query_span!(
-              "typecheck_ts.bind",
+              "typecheck_ts.lower_hir",
               Some(file.0),
               Option::<u32>::None,
               Option::<u32>::None,
               false
             ),
             None,
+            false,
+            Some(self.query_stats.clone()),
           );
           self.bind_file(file, ast, host, &mut queue);
-          if let Some(span) = bind_span {
+          if let Some(span) = lower_span {
             span.finish(None);
           }
         }
@@ -1278,7 +1318,23 @@ impl ProgramState {
     }
     self.recompute_global_bindings();
     if !self.sem_hir.is_empty() {
+      let bind_span = QuerySpan::enter(
+        QueryKind::Bind,
+        query_span!(
+          "typecheck_ts.bind",
+          Option::<u32>::None,
+          Option::<u32>::None,
+          Option::<u32>::None,
+          false
+        ),
+        None,
+        false,
+        Some(self.query_stats.clone()),
+      );
       self.compute_semantics(host, roots);
+      if let Some(span) = bind_span {
+        span.finish(None);
+      }
     }
     self.analyzed = true;
     Ok(())
@@ -1991,6 +2047,7 @@ impl ProgramState {
     let cache_hit = self.body_results.contains_key(&body_id);
     let body_meta = self.body_data.get(&body_id).cloned();
     let mut span = QuerySpan::enter(
+      QueryKind::CheckBody,
       query_span!(
         "typecheck_ts.check_body",
         body_meta.as_ref().map(|b| b.file.0),
@@ -1999,6 +2056,8 @@ impl ProgramState {
         cache_hit
       ),
       None,
+      cache_hit,
+      Some(self.query_stats.clone()),
     );
     if let Some(existing) = self.body_results.get(&body_id) {
       if let Some(span) = span.take() {
@@ -2705,6 +2764,7 @@ impl ProgramState {
   fn type_of_def(&mut self, def: DefId) -> TypeId {
     let cache_hit = self.def_types.contains_key(&def);
     let mut span = QuerySpan::enter(
+      QueryKind::TypeOfDef,
       query_span!(
         "typecheck_ts.type_of_def",
         self.def_data.get(&def).map(|d| d.file.0),
@@ -2713,6 +2773,8 @@ impl ProgramState {
         cache_hit
       ),
       self.def_types.get(&def).copied(),
+      cache_hit,
+      Some(self.query_stats.clone()),
     );
     if let Some(existing) = self.def_types.get(&def) {
       if let Some(span) = span.take() {

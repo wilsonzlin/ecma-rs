@@ -21,7 +21,7 @@ thiserror = "1.0"
 typecheck-ts = { path = "../typecheck-ts" }
 walkdir = "2.5"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 num_cpus = "1.16"
 
 [dev-dependencies]

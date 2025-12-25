@@ -12,7 +12,7 @@ use bitflags::bitflags;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tracing::debug_span;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -28,6 +28,17 @@ bitflags! {
     const NONE = 0;
     const BIVARIANT_PARAMS = 1 << 0;
   }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RelationProfileEvent {
+  pub kind: RelationKind,
+  pub cache_hit: bool,
+  pub duration: Duration,
+}
+
+pub trait RelationProfiler: Send + Sync {
+  fn record(&self, event: RelationProfileEvent);
 }
 
 #[derive(Debug, Clone)]
@@ -68,13 +79,21 @@ struct RelationKey {
   mode: RelationMode,
 }
 
-struct RelationSpan {
+struct RelationSpan<'a> {
   span: tracing::Span,
   start: Instant,
+  cache_hit: bool,
+  kind: RelationKind,
+  span_enabled: bool,
+  profiler: Option<&'a dyn RelationProfiler>,
 }
 
-impl RelationSpan {
-  fn enter(key: RelationKey, cache_hit: bool) -> Option<RelationSpan> {
+impl<'a> RelationSpan<'a> {
+  fn enter(
+    key: RelationKey,
+    cache_hit: bool,
+    profiler: Option<&'a dyn RelationProfiler>,
+  ) -> Option<RelationSpan<'a>> {
     let span = debug_span!(
       "types_ts.relate",
       file = Option::<u32>::None,
@@ -87,22 +106,39 @@ impl RelationSpan {
       duration_ms = tracing::field::Empty,
       outcome = tracing::field::Empty,
     );
-    if span.is_disabled() {
+    let span_enabled = !span.is_disabled();
+    if !span_enabled && profiler.is_none() {
       return None;
     }
-    let _guard = span.enter();
-    drop(_guard);
+    if span_enabled {
+      let _guard = span.enter();
+      drop(_guard);
+    }
     Some(RelationSpan {
       span,
       start: Instant::now(),
+      cache_hit,
+      kind: key.kind,
+      span_enabled,
+      profiler,
     })
   }
 
   fn finish(self, outcome: bool) {
-    self.span.record("outcome", outcome);
-    self
-      .span
-      .record("duration_ms", self.start.elapsed().as_secs_f64() * 1000.0);
+    let duration = self.start.elapsed();
+    if let Some(profiler) = self.profiler {
+      profiler.record(RelationProfileEvent {
+        kind: self.kind,
+        cache_hit: self.cache_hit,
+        duration,
+      });
+    }
+    if self.span_enabled {
+      self.span.record("outcome", outcome);
+      self
+        .span
+        .record("duration_ms", duration.as_secs_f64() * 1000.0);
+    }
   }
 }
 
@@ -114,26 +150,39 @@ pub struct RelateCtx<'a> {
   store: &'a TypeStore,
   pub options: TypeOptions,
   hooks: RelateHooks<'a>,
+  profiler: Option<&'a dyn RelationProfiler>,
   cache: RefCell<HashMap<RelationKey, bool>>,
   in_progress: RefCell<HashSet<RelationKey>>,
 }
 
 impl<'a> RelateCtx<'a> {
   pub fn new(store: &'a TypeStore, options: TypeOptions) -> Self {
-    Self {
-      store,
-      options,
-      hooks: RelateHooks::default(),
-      cache: RefCell::new(HashMap::new()),
-      in_progress: RefCell::new(HashSet::new()),
-    }
+    Self::with_profiler(store, options, None)
+  }
+
+  pub fn with_profiler(
+    store: &'a TypeStore,
+    options: TypeOptions,
+    profiler: Option<&'a dyn RelationProfiler>,
+  ) -> Self {
+    Self::with_hooks_and_profiler(store, options, RelateHooks::default(), profiler)
   }
 
   pub fn with_hooks(store: &'a TypeStore, options: TypeOptions, hooks: RelateHooks<'a>) -> Self {
+    Self::with_hooks_and_profiler(store, options, hooks, None)
+  }
+
+  pub fn with_hooks_and_profiler(
+    store: &'a TypeStore,
+    options: TypeOptions,
+    hooks: RelateHooks<'a>,
+    profiler: Option<&'a dyn RelationProfiler>,
+  ) -> Self {
     Self {
       store,
       options,
       hooks,
+      profiler,
       cache: RefCell::new(HashMap::new()),
       in_progress: RefCell::new(HashSet::new()),
     }
@@ -170,7 +219,7 @@ impl<'a> RelateCtx<'a> {
       mode,
     };
     let cached = self.cache.borrow().get(&key).copied();
-    let mut span = RelationSpan::enter(key, cached.is_some());
+    let mut span = RelationSpan::enter(key, cached.is_some(), self.profiler);
     if let Some(hit) = cached {
       if let Some(span) = span.take() {
         span.finish(hit);

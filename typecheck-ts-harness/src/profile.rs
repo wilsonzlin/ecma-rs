@@ -6,12 +6,15 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use typecheck_ts::QueryStats;
 
 #[derive(Debug, Serialize)]
 pub struct ProfileReport {
   pub metadata: RunMetadata,
   pub tests: Vec<TestEntry>,
   pub summary: ProfileSummary,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub query_stats: Option<QueryStats>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -71,6 +74,7 @@ pub struct TestDurations {
 pub struct ProfileBuilder {
   metadata: RunMetadata,
   tests: Vec<TestEntry>,
+  query_stats: QueryStats,
 }
 
 impl ProfileBuilder {
@@ -84,10 +88,14 @@ impl ProfileBuilder {
         options: ProfileOptions::from_options(opts),
       },
       tests: Vec::new(),
+      query_stats: QueryStats::default(),
     }
   }
 
   pub fn record_test(&mut self, result: &TestResult) {
+    if let Some(stats) = &result.query_stats {
+      self.query_stats.merge(stats);
+    }
     self.tests.push(TestEntry {
       id: result.id.clone(),
       status: result.outcome,
@@ -148,6 +156,7 @@ impl ProfileBuilder {
         wall_time_ms: wall_time.as_millis(),
         percentiles_ms,
       },
+      query_stats: (!self.query_stats.is_empty()).then(|| self.query_stats.clone()),
     }
   }
 }

@@ -5,6 +5,8 @@ pub use relate::RelateCtx;
 pub use relate::RelateHooks;
 pub use relate::RelationKind;
 pub use relate::RelationMode;
+pub use relate::RelationProfileEvent;
+pub use relate::RelationProfiler;
 pub use relate::RelationResult;
 pub use relate::TypeExpander;
 pub use types::FnParam;

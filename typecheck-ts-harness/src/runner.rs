@@ -5,16 +5,19 @@ use crate::diagnostic_norm::{
 use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAULT_EXTENSIONS};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
+use crate::profile::ProfileBuilder;
 use crate::tsc::{TscDiagnostic, TscDiagnostics};
 use crate::{FailOn, Result, VirtualFile};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::info_span;
-use typecheck_ts::{FileId, Host, HostError, Program};
+use tracing::{info_span, Level};
+use tracing_subscriber::fmt::format::FmtSpan;
+use typecheck_ts::{FileId, Host, HostError, Program, QueryStats};
 use walkdir::WalkDir;
 
 const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
@@ -207,6 +210,8 @@ pub struct TestResult {
   pub duration_ms: u128,
   pub rust: EngineDiagnostics,
   pub tsc: EngineDiagnostics,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub query_stats: Option<QueryStats>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub notes: Vec<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -342,6 +347,9 @@ impl HarnessFileSet {
 }
 
 pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
+  init_tracing(opts.trace);
+  let wall_start = Instant::now();
+  let mut profile_builder = opts.profile.then(|| ProfileBuilder::new(&opts));
   let extensions = if opts.extensions.is_empty() {
     DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect()
   } else {
@@ -381,13 +389,14 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   for case in cases.into_iter() {
     let expectation = expectations.lookup(&case.id);
     if expectation.expectation.kind == ExpectationKind::Skip {
-      results.push(TestResult {
+      let result = TestResult {
         id: case.id,
         path: case.path.display().to_string(),
         outcome: TestOutcome::Match,
         duration_ms: 0,
         rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
         tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
+        query_stats: None,
         notes: case.notes,
         detail: None,
         expectation: Some(ExpectationOutcome {
@@ -398,11 +407,15 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
           tracking_issue: expectation.expectation.tracking_issue.clone(),
         }),
         mismatched: false,
-      });
+      };
+      if let Some(builder) = profile_builder.as_mut() {
+        builder.record_test(&result);
+      }
+      results.push(result);
       continue;
     }
 
-    let result = run_single_case(
+    let mut result = run_single_case(
       case,
       compare_mode,
       &tsc_runner,
@@ -419,11 +432,15 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
       reason: expectation.expectation.reason.clone(),
       tracking_issue: expectation.expectation.tracking_issue.clone(),
     };
-    results.push(TestResult {
+    result = TestResult {
       mismatched,
       expectation: Some(expectation_outcome),
       ..result
-    });
+    };
+    if let Some(builder) = profile_builder.as_mut() {
+      builder.record_test(&result);
+    }
+    results.push(result);
   }
 
   let mut summary = summarize(&results);
@@ -446,6 +463,11 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   }
   if mismatch_summary.total() > 0 {
     summary.mismatches = Some(mismatch_summary);
+  }
+
+  let wall_time = wall_start.elapsed();
+  if let Some(builder) = profile_builder {
+    builder.write(&summary, wall_time, &opts.profile_out)?;
   }
 
   if !opts.allow_mismatches && summary.should_fail(opts.fail_on, summary.outcomes.mismatches()) {
@@ -502,6 +524,7 @@ fn run_single_case(
   let timeout = opts.timeout;
   let span_tolerance = opts.span_tolerance;
   let update_snapshots = opts.update_snapshots;
+  let collect_query_stats = opts.profile;
   std::thread::spawn(move || {
     let _entered = span_for_thread.enter();
     let result = execute_case(
@@ -512,6 +535,7 @@ fn run_single_case(
       cloned_snapshots,
       span_tolerance,
       update_snapshots,
+      collect_query_stats,
     );
     let _ = tx.send(result);
   });
@@ -525,6 +549,7 @@ fn run_single_case(
       duration_ms: timeout.as_millis(),
       rust: EngineDiagnostics::skipped(None),
       tsc: EngineDiagnostics::skipped(None),
+      query_stats: None,
       notes: timeout_notes,
       detail: None,
       expectation: None,
@@ -541,6 +566,7 @@ fn execute_case(
   snapshots: SnapshotStore,
   span_tolerance: u32,
   update_snapshots: bool,
+  collect_query_stats: bool,
 ) -> TestResult {
   let start = Instant::now();
   if let Some(delay) = harness_sleep_for_case(&case.id) {
@@ -550,7 +576,7 @@ fn execute_case(
   let file_set = HarnessFileSet::new(&case.deduped_files);
   let harness_options = HarnessOptions::from_test_case(&case);
 
-  let rust = run_rust(&file_set);
+  let (rust, query_stats) = run_rust_with_profile(&file_set, collect_query_stats);
 
   let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
   let tsc = match compare_mode {
@@ -601,6 +627,7 @@ fn execute_case(
     duration_ms: start.elapsed().as_millis(),
     rust,
     tsc,
+    query_stats,
     notes,
     detail,
     expectation: None,
@@ -609,15 +636,37 @@ fn execute_case(
 }
 
 pub(crate) fn run_rust(file_set: &HarnessFileSet) -> EngineDiagnostics {
+  run_rust_with_profile(file_set, false).0
+}
+
+fn run_rust_with_profile(
+  file_set: &HarnessFileSet,
+  collect_profile: bool,
+) -> (EngineDiagnostics, Option<QueryStats>) {
   let host = HarnessHost::new(file_set.clone());
   let roots = file_set.root_files();
-  let result = std::panic::catch_unwind(|| Program::new(host, roots).check());
-  match result {
+  let program = Program::new(host, roots);
+  let result = std::panic::catch_unwind(AssertUnwindSafe(|| program.check()));
+  let stats = (collect_profile && result.is_ok()).then(|| program.query_stats());
+  let diagnostics = match result {
     Ok(diags) => EngineDiagnostics::ok(normalize_rust_diagnostics(&diags, |id| {
       file_set.file_name(id)
     })),
     Err(_) => EngineDiagnostics::ice("typechecker panicked"),
+  };
+  (diagnostics, stats)
+}
+
+fn init_tracing(enabled: bool) {
+  if !enabled {
+    return;
   }
+  let _ = tracing_subscriber::fmt()
+    .with_span_events(FmtSpan::CLOSE)
+    .with_max_level(Level::DEBUG)
+    .json()
+    .with_ansi(false)
+    .try_init();
 }
 
 fn harness_sleep_for_case(id: &str) -> Option<Duration> {
