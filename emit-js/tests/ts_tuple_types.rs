@@ -21,6 +21,7 @@ fn parse_type_expr(src: &str) -> Node<TypeExpr> {
       await_allowed: !matches!(opts.source_type, SourceType::Module),
       yield_allowed: true,
     },
+    top_level: true,
   };
   let expr = parser.type_expr(ctx).expect("parse type expression");
   parser.require(TT::EOF).expect("exhaust input");

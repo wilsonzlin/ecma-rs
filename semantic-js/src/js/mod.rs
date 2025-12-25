@@ -92,6 +92,14 @@ impl ScopeId {
   pub fn index(self) -> usize {
     self.0 as usize
   }
+
+  pub fn raw(self) -> u32 {
+    self.0
+  }
+
+  pub fn from_raw(raw: u32) -> Self {
+    ScopeId(raw)
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -101,6 +109,14 @@ impl SymbolId {
   pub fn index(self) -> usize {
     self.0 as usize
   }
+
+  pub fn raw(self) -> u32 {
+    self.0
+  }
+
+  pub fn from_raw(raw: u32) -> Self {
+    SymbolId(raw)
+  }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -109,6 +125,14 @@ pub struct NameId(u32);
 impl NameId {
   pub fn index(self) -> usize {
     self.0 as usize
+  }
+
+  pub fn raw(self) -> u32 {
+    self.0
+  }
+
+  pub fn from_raw(raw: u32) -> Self {
+    NameId(raw)
   }
 }
 

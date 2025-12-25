@@ -12,7 +12,6 @@ members = [
   "parse-js-cli",
   "parse-js",
   "emit-js",
-  "symbol-js",
   "types-ts-interned",
   "types-ts",
   "hir-js",

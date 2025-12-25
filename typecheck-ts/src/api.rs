@@ -8,11 +8,6 @@
 pub use diagnostics::FileId;
 /// Canonical diagnostic model used throughout parsing, binding, and checking.
 pub use diagnostics::{Diagnostic, Label, Severity, Span, TextRange};
-/// Interned `types-ts-interned` identifier for callers that need to construct or
-/// inspect standalone types without the legacy `Program` API.
-pub use types_ts_interned::TypeId as InternedTypeId;
 
 /// Stable identifiers produced by lowering to HIR.
 pub use hir_js::{BodyId, DefId, ExprId, PatId};
-/// Interned type identifiers produced by the checker.
-pub use types_ts_interned::TypeId;

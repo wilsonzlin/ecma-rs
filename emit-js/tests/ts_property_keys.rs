@@ -25,6 +25,7 @@ fn default_ctx(opts: &ParseOptions) -> ParseCtx {
       await_allowed: !matches!(opts.source_type, SourceType::Module),
       yield_allowed: true,
     },
+    top_level: true,
   }
 }
 

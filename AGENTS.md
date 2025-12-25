@@ -83,7 +83,7 @@ This project is not “just type checking”; it is a full JS/TS toolchain (pars
 ```
 ecma-rs/
 ├── parse-js/                  # existing: TS/JS parser + AST + Loc
-├── semantic-js/               # new: unified, deterministic semantics (scopes/symbols/modules/exports); replaces symbol-js
+├── semantic-js/               # new: unified, deterministic semantics (scopes/symbols/modules/exports); only semantics layer (symbol-js retired)
 ├── optimize-js/               # existing
 ├── minify-js/                 # existing
 ├── emit-js/                   # new: deterministic JS emitter/printer (HIR/IR -> JS), shared by minify/opt tooling
@@ -103,7 +103,7 @@ Notes:
 ## Fit to this repo (integration boundaries)
 
 - **`parse-js`**: the canonical TS/TSX/JS parser + AST. The type checker consumes this AST; **no new syntax tree is required**.
-- **`semantic-js`**: the unified semantic foundation (scopes, symbols, module graph, merging, exports). It supersedes `symbol-js` and becomes the semantics API used by all downstream crates.
+- **`semantic-js`**: the unified semantic foundation (scopes, symbols, module graph, merging, exports). It supersedes `symbol-js` (now removed) and is the sole semantics API used by all downstream crates.
 - **`optimize-js` / `minify-js`**: today they require `compute_symbols()` and should continue to work without a TS type checker. Type checking must be **opt-in** and should not become a mandatory dependency edge for minification.
 - **Typed outputs**: for downstream AOT compilation, prefer producing a typed HIR/IR (and location→ID mappings) rather than mutating/annotating the AST in-place.
 
@@ -149,7 +149,7 @@ Policy:
 - When introducing multi-file checking, wrap ranges as `Span { file: FileId, range: TextRange }`.
 
 Integration note:
-- `NodeAssocData` already supports attaching thread-safe per-node data (`Any + Send + Sync`) and is used today by `symbol-js` to associate scopes; in the end-state it should carry small IDs/handles produced by `semantic-js`/`hir-js` (not lock-backed scope objects).
+- `NodeAssocData` already supports attaching thread-safe per-node data (`Any + Send + Sync`) and was previously used by `symbol-js` to associate scopes; in the end-state it should carry small IDs/handles produced by `semantic-js`/`hir-js` (not lock-backed scope objects).
 - Prefer HIR IDs + side tables for bulk type data; only attach small handles (e.g., `ExprId`, `DefId`) when needed for mapping back to source nodes.
 
 ### HIR layer (semantic-friendly)
@@ -285,6 +285,8 @@ This keeps the type checker usable in:
 - in-memory virtual files
 
 ### Replacing `symbol-js` with `semantic-js` (one-shot end-state)
+
+`symbol-js` has been retired from the workspace; `semantic-js` now owns all scope/symbol binding. The historical comparison is kept here for clarity:
 
 `symbol-js` is valuable today for optimizers/minifiers, but its current shape is **not** an ideal semantic foundation for rigorous, parallel TS checking:
 - it stores scopes as `Arc<RwLock<...>>` and associates full scope objects per AST node

@@ -19,6 +19,7 @@ fn parse_expr(src: &str) -> Node<Expr> {
       await_allowed: true,
       yield_allowed: true,
     },
+    top_level: true,
   };
   let expr = parser.expr(ctx, [TT::EOF]).expect("parse expression");
   parser.require(TT::EOF).expect("exhaust input");

@@ -1,7 +1,7 @@
 # semantic-js: JS mode examples
 
-`semantic-js` replaces the old `symbol-js` APIs. Instead of calling
-`symbol_js::compute_symbols`, bind and resolve a `parse-js` AST with
+`semantic-js` replaces the old `symbol-js` APIs. Instead of calling the legacy
+`compute_symbols` helper, bind and resolve a `parse-js` AST with
 [`semantic_js::js::bind_js`], then read the attached IDs with the
 [`semantic_js::assoc::js`] helpers.
 

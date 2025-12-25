@@ -3,15 +3,15 @@
 Unified semantics layer for the ecma-rs toolchain. `semantic-js` is meant to be
 the single place where scopes, symbols, and exports are defined so downstream
 crates (optimizers, minifiers, and the future TypeScript checker) agree on the
-same model.
+same model. It is the sole semantics layer in the workspace; the legacy
+`symbol-js` crate has been retired.
 
 ## Modes at a glance
 
 - **JS mode**: `js::declare` + `js::resolve` walk a `parse-js` AST, build a
   lexical scope tree in the value namespace, and attach lightweight IDs
   (`ScopeId`, `DeclaredSymbol`, `ResolvedSymbol`) to `NodeAssocData`. This is the
-  migration target for current `symbol-js` users such as `minify-js` and
-  `optimize-js`.
+  mode used by `minify-js`, `optimize-js`, and any other JS-only tooling.
 - **TS mode**: `ts::bind_ts_program` consumes lowered `ts::HirFile` inputs,
   merges declarations across the value/type/namespace spaces, and produces
   deterministic symbol groups and export maps for a type checker or any
@@ -60,13 +60,12 @@ and avoid mutating the underlying collections after construction.
 
 `symbol-js` provided scope information for optimizers but used mutable,
 lock-backed scopes and opaque, non-deterministic IDs. `semantic-js` is the
-intended replacement: deterministic IDs, immutable arenas, and a TS-aware
-export model. Replace calls to `symbol_js::compute_symbols` with
-`semantic_js::js::bind_js` and read back `ScopeId`/`SymbolId` attachments via
-`semantic_js::assoc::js`. JS mode already covers the same surface (scope IDs +
-resolution) without global locks; deterministic iteration via
-[`js::JsSemantics::scope_symbols`] is available for consumers that relied on
-`symbol-js`'s map ordering.
+replacement: deterministic IDs, immutable arenas, and a TS-aware export model.
+Replace calls to the legacy `compute_symbols` helper with `semantic_js::js::bind_js`
+and read back `ScopeId`/`SymbolId` attachments via `semantic_js::assoc::js`. JS mode
+now covers the same surface (scope IDs + resolution) without global locks; deterministic
+iteration via [`js::JsSemantics::scope_symbols`] is available for consumers that relied
+on `symbol-js`'s map ordering, and downstream crates have been migrated to it.
 
 ## Known gaps
 

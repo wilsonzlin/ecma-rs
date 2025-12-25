@@ -19,6 +19,7 @@ fn parse_expr(source: &str) -> Node<Expr> {
       await_allowed: true,
       yield_allowed: true,
     },
+    top_level: true,
   };
   let expr = parser
     .expr(ctx, [TT::EOF])

@@ -12,6 +12,7 @@ pub(crate) fn exports_from_semantics(
   let exports = semantics.exports_of(sem_file);
   let symbols = semantics.symbols();
   let mut map = ExportMap::new();
+  let widen_literals = state.diagnostics.iter().any(|diag| diag.primary.file == file);
 
   for (name, group) in exports.iter() {
     let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) else {
@@ -30,7 +31,10 @@ pub(crate) fn exports_from_semantics(
     }
 
     let def_for_type = local_def.or(any_def);
-    let type_id: Option<TypeId> = def_for_type.map(|def| state.type_of_def(def));
+    let mut type_id: Option<TypeId> = def_for_type.map(|def| state.type_of_def(def));
+    if widen_literals {
+      type_id = type_id.map(|ty| state.widen_literal(ty));
+    }
     let symbol = local_def
       .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
       .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
