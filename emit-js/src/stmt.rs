@@ -903,6 +903,7 @@ fn emit_decorators(em: &mut Emitter, decorators: &[Node<Decorator>]) -> EmitResu
   for deco in decorators {
     em.write_punct("@");
     emit_expr(em, &deco.stx.expression, ExprCtx::Default)?;
+    em.write_space();
   }
   Ok(())
 }

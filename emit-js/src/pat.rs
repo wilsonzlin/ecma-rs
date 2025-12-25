@@ -1,8 +1,8 @@
 use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::expr::pat::{ArrPat, ClassOrFuncName, IdPat, ObjPat, ObjPatProp, Pat};
-use parse_js::ast::expr::Expr;
+use parse_js::ast::expr::{Decorator, Expr};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::{ParamDecl, PatDecl};
+use parse_js::ast::stmt::decl::{Accessibility, ParamDecl, PatDecl};
 use parse_js::token::TT;
 
 use crate::emit_string_literal_double_quoted;
@@ -12,6 +12,23 @@ use crate::Emitter;
 
 fn emit_expr(out: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
   emit_expr_with_emitter(out, expr)
+}
+
+fn emit_decorators(out: &mut Emitter, decorators: &[Node<Decorator>]) -> EmitResult {
+  for decorator in decorators {
+    out.write_punct("@");
+    emit_expr(out, &decorator.stx.expression)?;
+    out.write_space();
+  }
+  Ok(())
+}
+
+fn emit_accessibility(out: &mut Emitter, accessibility: Accessibility) {
+  match accessibility {
+    Accessibility::Public => out.write_keyword("public"),
+    Accessibility::Private => out.write_keyword("private"),
+    Accessibility::Protected => out.write_keyword("protected"),
+  }
 }
 
 pub fn emit_pat(out: &mut Emitter, pat: &Node<Pat>) -> EmitResult {
@@ -28,6 +45,13 @@ pub fn emit_pat_decl(out: &mut Emitter, decl: &Node<PatDecl>) -> EmitResult {
 }
 
 pub fn emit_param_decl(out: &mut Emitter, decl: &Node<ParamDecl>) -> EmitResult {
+  emit_decorators(out, &decl.stx.decorators)?;
+  if let Some(accessibility) = decl.stx.accessibility {
+    emit_accessibility(out, accessibility);
+  }
+  if decl.stx.readonly {
+    out.write_keyword("readonly");
+  }
   if decl.stx.rest {
     out.write_punct("...");
   }

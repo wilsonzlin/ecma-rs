@@ -2,9 +2,9 @@ use emit_js::{emit_param_decl, emit_pat, emit_pat_decl, Emitter};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjMemberDirectKey};
 use parse_js::ast::expr::lit::LitNumExpr;
 use parse_js::ast::expr::pat::{ArrPat, ArrPatElem, IdPat, ObjPat, ObjPatProp, Pat};
-use parse_js::ast::expr::{Expr, IdExpr};
+use parse_js::ast::expr::{Decorator, Expr, IdExpr};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::{ParamDecl, PatDecl};
+use parse_js::ast::stmt::decl::{Accessibility, ParamDecl, PatDecl};
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::token::TT;
@@ -215,6 +215,80 @@ fn emits_param_decl_with_rest() {
   );
   let emitted = emit_to_string(|emitter| emit_param_decl(emitter, &param).unwrap());
   assert_eq!(emitted, "...args");
+}
+
+#[test]
+fn emits_param_decl_decorators_before_array_pattern() {
+  let decorator = Node::new(
+    dummy_loc(),
+    Decorator {
+      expression: id_expr("dec"),
+    },
+  );
+
+  let pattern = Node::new(
+    dummy_loc(),
+    Pat::Arr(Node::new(
+      dummy_loc(),
+      ArrPat {
+        elements: vec![Some(ArrPatElem {
+          target: id_pat("a"),
+          default_value: None,
+        })],
+        rest: None,
+      },
+    )),
+  );
+
+  let param = Node::new(
+    dummy_loc(),
+    ParamDecl {
+      decorators: vec![decorator],
+      rest: false,
+      optional: false,
+      accessibility: None,
+      readonly: false,
+      pattern: Node::new(dummy_loc(), PatDecl { pat: pattern }),
+      type_annotation: None,
+      default_value: None,
+    },
+  );
+
+  let emitted = emit_to_string(|emitter| emit_param_decl(emitter, &param).unwrap());
+  assert_eq!(emitted, "@dec [a]");
+}
+
+#[test]
+fn emits_param_decl_with_multiple_decorators_and_modifiers() {
+  let deco_a = Node::new(
+    dummy_loc(),
+    Decorator {
+      expression: id_expr("a"),
+    },
+  );
+  let deco_b = Node::new(
+    dummy_loc(),
+    Decorator {
+      expression: id_expr("b"),
+    },
+  );
+
+  let param = Node::new(
+    dummy_loc(),
+    ParamDecl {
+      decorators: vec![deco_a, deco_b],
+      rest: false,
+      optional: false,
+      accessibility: Some(Accessibility::Public),
+      readonly: true,
+      pattern: Node::new(dummy_loc(), PatDecl { pat: id_pat("x") }),
+      type_annotation: None,
+      default_value: None,
+    },
+  );
+
+  let emitted = emit_to_string(|emitter| emit_param_decl(emitter, &param).unwrap());
+  assert_eq!(emitted, "@a @b public readonly x");
 }
 
 #[test]
