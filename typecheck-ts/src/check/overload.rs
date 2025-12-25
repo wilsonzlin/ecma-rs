@@ -319,20 +319,41 @@ fn combine_max(a: Option<usize>, b: Option<usize>) -> Option<usize> {
   }
 }
 
-fn expected_arg_type(sig: &Signature, arity: &ArityInfo, index: usize) -> Option<TypeId> {
+#[derive(Clone, Copy)]
+struct ExpectedParam {
+  ty: TypeId,
+  from_rest: bool,
+}
+
+fn expected_arg_type(sig: &Signature, arity: &ArityInfo, index: usize) -> Option<ExpectedParam> {
   if index < arity.fixed_len {
-    return sig.params.get(index).map(|p| p.ty);
+    return sig.params.get(index).map(|p| ExpectedParam {
+      ty: p.ty,
+      from_rest: false,
+    });
   }
   let rest = arity.rest.as_ref()?;
   let offset = index - rest.start;
   match &rest.style {
-    RestStyle::Array(elem) => Some(*elem),
-    RestStyle::Plain(ty) => Some(*ty),
+    RestStyle::Array(elem) => Some(ExpectedParam {
+      ty: *elem,
+      from_rest: true,
+    }),
+    RestStyle::Plain(ty) => Some(ExpectedParam {
+      ty: *ty,
+      from_rest: true,
+    }),
     RestStyle::Tuple { elems, rest } => {
       if let Some(elem) = elems.get(offset) {
-        Some(elem.ty)
+        Some(ExpectedParam {
+          ty: elem.ty,
+          from_rest: true,
+        })
       } else {
-        *rest
+        rest.map(|ty| ExpectedParam {
+          ty,
+          from_rest: true,
+        })
       }
     }
   }
@@ -348,7 +369,7 @@ fn check_arguments(
   let mut specificity = 0usize;
   for (idx, arg) in args.iter().enumerate() {
     let expected = match expected_arg_type(sig, arity, idx) {
-      Some(ty) => ty,
+      Some(param) => param,
       None => {
         return (
           false,
@@ -361,21 +382,25 @@ fn check_arguments(
         )
       }
     };
-    if !relate.is_assignable(*arg, expected) {
+    if expected.from_rest {
+      // Prefer fixed parameters over rest matches when both are applicable.
+      specificity += 1;
+    }
+    if !relate.is_assignable(*arg, expected.ty) {
       return (
         false,
         specificity,
         Some(CandidateRejection::ArgumentType {
           index: idx,
           arg: *arg,
-          param: expected,
+          param: expected.ty,
         }),
       );
     }
-    if !relate.is_assignable(expected, *arg) {
+    if !relate.is_assignable(expected.ty, *arg) {
       specificity += 1;
     }
-    match store.type_kind(expected) {
+    match store.type_kind(expected.ty) {
       TypeKind::Any | TypeKind::Unknown => {
         specificity += 2;
       }
