@@ -6,6 +6,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::*;
+use parse_js::ast::type_expr::TypeExpr;
 
 pub fn emit_top_level(em: &mut Emitter, top: &TopLevel) -> EmitResult {
   let mut first = true;
@@ -269,17 +270,13 @@ fn emit_ambient_class_decl(em: &mut Emitter, decl: &AmbientClassDecl) -> EmitRes
 fn emit_import_type_decl(em: &mut Emitter, decl: &ImportTypeDecl) -> EmitResult {
   em.write_keyword("import");
   em.write_keyword("type");
-  if em.mode() == EmitMode::Canonical {
-    em.write_space();
-  }
+  space_if_canonical(em);
   em.write_punct("{");
   if !decl.names.is_empty() {
     for (idx, name) in decl.names.iter().enumerate() {
       if idx > 0 {
         em.write_punct(",");
-        if em.mode() == EmitMode::Canonical {
-          em.write_space();
-        }
+        space_if_canonical(em);
       }
       em.write_identifier(&name.imported);
       if let Some(local) = &name.local {
@@ -289,9 +286,9 @@ fn emit_import_type_decl(em: &mut Emitter, decl: &ImportTypeDecl) -> EmitResult 
     }
   }
   em.write_punct("}");
-  em.write_space();
+  space_if_canonical(em);
   em.write_keyword("from");
-  em.write_space();
+  space_if_canonical(em);
   emit_string_literal(em, &decl.module)?;
   em.write_punct(";");
   Ok(())
@@ -300,17 +297,13 @@ fn emit_import_type_decl(em: &mut Emitter, decl: &ImportTypeDecl) -> EmitResult 
 fn emit_export_type_decl(em: &mut Emitter, decl: &ExportTypeDecl) -> EmitResult {
   em.write_keyword("export");
   em.write_keyword("type");
-  if em.mode() == EmitMode::Canonical {
-    em.write_space();
-  }
+  space_if_canonical(em);
   em.write_punct("{");
   if !decl.names.is_empty() {
     for (idx, name) in decl.names.iter().enumerate() {
       if idx > 0 {
         em.write_punct(",");
-        if em.mode() == EmitMode::Canonical {
-          em.write_space();
-        }
+        space_if_canonical(em);
       }
       em.write_identifier(&name.local);
       if let Some(exported) = &name.exported {
@@ -321,9 +314,9 @@ fn emit_export_type_decl(em: &mut Emitter, decl: &ExportTypeDecl) -> EmitResult 
   }
   em.write_punct("}");
   if let Some(module) = &decl.module {
-    em.write_space();
+    space_if_canonical(em);
     em.write_keyword("from");
-    em.write_space();
+    space_if_canonical(em);
     emit_string_literal(em, module)?;
   }
   em.write_punct(";");
@@ -407,6 +400,14 @@ fn emit_string_literal(em: &mut Emitter, value: &str) -> EmitResult {
 }
 
 fn emit_ts_expr(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
+  let mut emit_type = |out: &mut Emitter, ty: &Node<TypeExpr>| emit_type_expr(out, ty);
+  match crate::expr::emit_expr(em, expr, &mut emit_type) {
+    Ok(()) => Ok(()),
+    Err(_) => emit_ts_expr_minimal(em, expr),
+  }
+}
+
+fn emit_ts_expr_minimal(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
   match expr.stx.as_ref() {
     Expr::Id(id) => em.write_identifier(&id.stx.name),
     Expr::LitStr(lit) => emit_string_literal(em, &lit.stx.value)?,
@@ -417,7 +418,7 @@ fn emit_ts_expr(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
     Expr::This(_) => em.write_keyword("this"),
     Expr::Member(member) => {
       let member = member.stx.as_ref();
-      emit_ts_expr(em, &member.left)?;
+      emit_ts_expr_minimal(em, &member.left)?;
       if member.optional_chaining {
         em.write_punct("?.");
       } else {
@@ -427,12 +428,12 @@ fn emit_ts_expr(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
     }
     Expr::ComputedMember(member) => {
       let member = member.stx.as_ref();
-      emit_ts_expr(em, &member.object)?;
+      emit_ts_expr_minimal(em, &member.object)?;
       if member.optional_chaining {
         em.write_punct("?.");
       }
       em.write_punct("[");
-      emit_ts_expr(em, &member.member)?;
+      emit_ts_expr_minimal(em, &member.member)?;
       em.write_punct("]");
     }
     _ => em.write_keyword("undefined"),
