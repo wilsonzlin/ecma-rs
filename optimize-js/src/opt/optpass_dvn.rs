@@ -234,7 +234,7 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
     };
   }
 
-  for s in cfg.graph.children(label) {
+  for s in cfg.graph.children_sorted(label) {
     for inst in cfg.bblocks.get_mut(s).iter_mut() {
       if inst.t != InstTyp::Phi {
         // No more phi nodes.

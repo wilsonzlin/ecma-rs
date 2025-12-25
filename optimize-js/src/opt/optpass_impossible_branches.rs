@@ -11,7 +11,7 @@ use itertools::Itertools;
 // - We must clean up any usages of defs within G outside of G. Outside of G, these uses can only appear in Phi nodes.
 pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
   loop {
-    for label in cfg.graph.labels().collect_vec() {
+    for label in cfg.graph.labels_sorted() {
       let Some(inst) = cfg.bblocks.get_mut(label).last_mut() else {
         continue;
       };
@@ -53,11 +53,12 @@ pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
 
     // Detaching bblocks means that we may have removed entire subgraphs (i.e. its descendants). Therefore, we must recalculate again the accessible bblocks.
     // NOTE: We cannot delete now, as we need to access the children of these deleted nodes first. (They won't have children after deleting.)
-    let to_delete = cfg.graph.find_unreachable().collect_vec();
+    let mut to_delete = cfg.graph.find_unreachable().collect_vec();
+    to_delete.sort_unstable();
     // All defs in now-deleted bblocks must be cleared. Since we are in strict SSA, they should only ever appear outside of the deleted bblocks in Phi insts.
     for &n in to_delete.iter() {
       // Update Phi insts in children.
-      for c in cfg.graph.children(n) {
+      for c in cfg.graph.children_sorted(n) {
         for inst in cfg.bblocks.get_mut(c).iter_mut() {
           if inst.t != InstTyp::Phi {
             // No more Phi insts.

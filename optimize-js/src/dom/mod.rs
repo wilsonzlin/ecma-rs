@@ -310,8 +310,11 @@ impl<const POST: bool> Dom<POST> {
       loop {
         let mut changed = false;
         for &b in postorder.iter().rev().filter(|b| **b != entry) {
-          let mut parents = if POST { graph.children(b) } else { graph.parents(b) }.collect_vec();
-          parents.sort_unstable();
+          let parents = if POST {
+            graph.children_sorted(b)
+          } else {
+            graph.parents_sorted(b)
+          };
           let Some(mut new_idom) = parents.iter().find(|n| idom_by.contains_key(n)).cloned() else {
             continue;
           };
@@ -395,8 +398,7 @@ impl<const POST: bool> Dom<POST> {
       if !self.idom_by.contains_key(&b) {
         continue;
       }
-      let mut parents = cfg.graph.parents(b).collect_vec();
-      parents.sort_unstable();
+      let parents = cfg.graph.parents_sorted(b);
       if parents.len() < 2 {
         continue;
       };

@@ -34,17 +34,17 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
     let mut empty_leaves = Vec::new();
     // WARNING: We must update graph within this loop, instead of simply marking and then removing afterwards, as we possibly pop instructions which could make a non-empty bblock empty, but if we don't then immediately update the graph some invariants won't hold (e.g. empty bblocks have <= 1 children). This means we can't use common utility graph functions.
     let mut converged = true;
-    for cur in cfg.graph.labels().collect_vec() {
+    for cur in cfg.graph.labels_sorted() {
       // TODO Figure out how to delete node 0 (i.e. re-root).
       if cur == 0 {
         continue;
       };
 
-      let parents = cfg.graph.parents(cur).collect_vec();
-      let children = cfg.graph.children(cur).collect_vec();
+      let parents = cfg.graph.parents_sorted(cur);
+      let children = cfg.graph.children_sorted(cur);
       let is_only_child_of_all_parents = parents
         .iter()
-        .all(|&parent| cfg.graph.children(parent).count() == 1);
+        .all(|&parent| cfg.graph.children_sorted(parent).len() == 1);
       let is_empty = cfg.bblocks.get(cur).is_empty();
       let is_leaf = children.is_empty();
 

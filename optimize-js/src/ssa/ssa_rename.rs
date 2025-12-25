@@ -5,7 +5,6 @@ use crate::il::inst::InstTyp;
 use crate::util::counter::Counter;
 use ahash::HashMap;
 use ahash::HashMapExt;
-use itertools::Itertools;
 
 fn inner(
   rename_stacks: &mut HashMap<u32, Vec<u32>>,
@@ -39,9 +38,7 @@ fn inner(
     }
   }
 
-  let mut children = cfg.graph.children(label).collect_vec();
-  children.sort_unstable();
-  for s in children {
+  for s in cfg.graph.children_sorted(label) {
     for (inst_no, inst) in cfg.bblocks.get_mut(s).iter_mut().enumerate() {
       if inst.t != InstTyp::Phi {
         // No more phi nodes.

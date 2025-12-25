@@ -30,12 +30,9 @@ impl OptimizerDebug {
       bblocks: cfg.bblocks.all().map(|(k, v)| (k, v.clone())).collect(),
       cfg_children: cfg
         .graph
-        .labels()
-        .map(|k| {
-          let mut children: Vec<u32> = cfg.graph.children(k).collect();
-          children.sort_unstable();
-          (k, children)
-        })
+        .labels_sorted()
+        .into_iter()
+        .map(|k| (k, cfg.graph.children_sorted(k)))
         .collect(),
     });
   }

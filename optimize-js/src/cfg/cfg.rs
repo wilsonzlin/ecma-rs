@@ -37,10 +37,14 @@ impl CfgGraph {
     self.0.contains(&label)
   }
 
-  pub fn sorted_labels(&self) -> Vec<u32> {
-    let mut labels = self.labels().collect::<Vec<_>>();
+  pub fn labels_sorted(&self) -> Vec<u32> {
+    let mut labels = self.labels().collect_vec();
     labels.sort_unstable();
     labels
+  }
+
+  pub fn sorted_labels(&self) -> Vec<u32> {
+    self.labels_sorted()
   }
 
   pub fn clone_graph(&self) -> Graph<u32> {
@@ -55,20 +59,28 @@ impl CfgGraph {
     self.0.parents(&bblock).cloned()
   }
 
-  pub fn sorted_parents(&self, bblock: u32) -> Vec<u32> {
-    let mut parents = self.parents(bblock).collect::<Vec<_>>();
+  pub fn parents_sorted(&self, bblock: u32) -> Vec<u32> {
+    let mut parents = self.parents(bblock).collect_vec();
     parents.sort_unstable();
     parents
+  }
+
+  pub fn sorted_parents(&self, bblock: u32) -> Vec<u32> {
+    self.parents_sorted(bblock)
   }
 
   pub fn children(&self, bblock: u32) -> iter::Cloned<GraphRelatedNodesIter<'_, u32>> {
     self.0.children(&bblock).cloned()
   }
 
-  pub fn sorted_children(&self, bblock: u32) -> Vec<u32> {
-    let mut children = self.children(bblock).collect::<Vec<_>>();
+  pub fn children_sorted(&self, bblock: u32) -> Vec<u32> {
+    let mut children = self.children(bblock).collect_vec();
     children.sort_unstable();
     children
+  }
+
+  pub fn sorted_children(&self, bblock: u32) -> Vec<u32> {
+    self.children_sorted(bblock)
   }
 
   pub fn connect(&mut self, parent: u32, child: u32) {
@@ -103,7 +115,7 @@ impl CfgGraph {
     let mut seen = HashSet::from_iter([0]);
     let mut to_visit = VecDeque::from([0]);
     while let Some(n) = to_visit.pop_front() {
-      for &c in self.0.children(&n) {
+      for c in self.children_sorted(n) {
         if !seen.contains(&c) {
           seen.insert(c);
           to_visit.push_back(c);

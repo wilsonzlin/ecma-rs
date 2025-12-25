@@ -34,11 +34,12 @@ pub fn calculate_live_ins(
   let mut live_in_at = HashMap::<(u32, usize), HashSet<u32>>::new();
   // This is necessary as inst 0 may be inlined so won't exist in `live_in_at`.
   let mut live_in_at_top_of_bblock = HashMap::<u32, HashSet<u32>>::new();
-  let mut worklist = cfg.graph.labels().collect::<VecDeque<_>>();
+  let mut worklist = VecDeque::from(cfg.graph.labels_sorted());
   while let Some(label) = worklist.pop_front() {
     let mut cur = cfg
       .graph
-      .children(label)
+      .children_sorted(label)
+      .into_iter()
       .filter_map(|c| live_in_at_top_of_bblock.get(&c))
       .cloned()
       .reduce(|r, p| r.union(&p).cloned().collect::<HashSet<_>>())
@@ -72,7 +73,7 @@ pub fn calculate_live_ins(
     }
     live_in_at_top_of_bblock.insert(label, cur);
     if did_change {
-      for p in cfg.graph.parents(label) {
+      for p in cfg.graph.parents_sorted(label) {
         worklist.push_back(p);
       }
     };

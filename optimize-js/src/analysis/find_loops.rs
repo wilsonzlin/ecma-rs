@@ -29,8 +29,8 @@ pub fn find_loops(cfg: &Cfg, dom: &Dom) -> HashMap<u32, HashSet<u32>> {
   // Map from header -> nodes (including the header).
   let mut loops = HashMap::<u32, HashSet<u32>>::new();
   // Iterate all edges. We're looking for backedges, so we call an a->b edge tail->header (which isn't true until we check it is a backedge).
-  for tail in cfg.graph.labels() {
-    for header in cfg.graph.children(tail) {
+  for tail in cfg.graph.labels_sorted() {
+    for header in cfg.graph.children_sorted(tail) {
       // If `header` dominates `tail`, then tail->header is a backedge.
       if !dominates.dominates(header, tail) {
         continue;
@@ -42,7 +42,7 @@ pub fn find_loops(cfg: &Cfg, dom: &Dom) -> HashMap<u32, HashSet<u32>> {
       let mut queue = VecDeque::from([tail]);
       while let Some(n) = queue.pop_front() {
         // We have reducible CFGs, so all parents must be part of the loop; they can't magically enter from outside the loop.
-        for p in cfg.graph.parents(n) {
+        for p in cfg.graph.parents_sorted(n) {
           if !dominates.dominates(header, p) {
             continue;
           }

@@ -122,14 +122,14 @@ pub trait DataFlowAnalysis<T: Eq, const FORWARDS: bool> {
       if Some(label) == virtual_exit_label {
         virtual_exit_predecessors.clone().unwrap_or_default()
       } else {
-        sorted(cfg.graph.parents(label))
+        cfg.graph.parents_sorted(label)
       }
     };
     let children = |label: u32| -> Vec<u32> {
       if Some(label) == virtual_exit_label {
         Vec::new()
       } else {
-        let mut nodes = sorted(cfg.graph.children(label));
+        let mut nodes = cfg.graph.children_sorted(label);
         if let Some(preds) = &virtual_exit_predecessors {
           if preds.binary_search(&label).is_ok() {
             if let Some(exit) = virtual_exit_label {
@@ -185,12 +185,6 @@ pub trait DataFlowAnalysis<T: Eq, const FORWARDS: bool> {
 struct VirtualExit {
   label: u32,
   predecessors: Vec<u32>,
-}
-
-fn sorted(iter: impl Iterator<Item = u32>) -> Vec<u32> {
-  let mut v = iter.collect_vec();
-  v.sort_unstable();
-  v
 }
 
 fn calculate_virtual_exit(cfg: &Cfg) -> VirtualExit {
