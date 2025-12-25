@@ -135,6 +135,9 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 # Allow small span drift (bytes)
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --span-tolerance 2
 
+# Print raw tsc payloads for mismatches
+cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --print-tsc
+
 # Emit JSON (includes diff details) and continue even if mismatches are found
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --json --allow-mismatches
 ```
@@ -145,7 +148,7 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
   without Node.
 - Baselines are read from/written to `baselines/<suite>/<test>.json` (see below).
 - The wrapper uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
-  writes `{ diagnostics: [{ code, category, file, start, end, message }] }`.
+  writes `{ schemaVersion, metadata: { typescriptVersion, options }, diagnostics: [...] }`.
 
 ### Expectations manifests
 
@@ -180,6 +183,8 @@ the suite name (e.g. `difftsc/assignability`).
   - Multi-file tests are directories (all TS/JS files inside are included).
   - Test names come from the file stem or directory name.
 - Baselines live under `baselines/<suite>/<test>.json`.
+- Baselines carry a schema version plus the `typescript` version/options used to
+  generate them.
 - To add/update tests:
   1. Drop files under `fixtures/<suite>/...`
   2. Regenerate baselines: `cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/<suite> --update-baselines`

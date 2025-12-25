@@ -5,6 +5,7 @@ const readline = require("readline");
 const ts = require("typescript");
 
 const VIRTUAL_ROOT = "/";
+const SCHEMA_VERSION = 1;
 
 function normalizePath(fileName) {
   return path.posix.normalize(fileName.replace(/\\/g, "/"));
@@ -191,7 +192,14 @@ function runRequest(request) {
     ...optionErrors,
     ...ts.getPreEmitDiagnostics(program),
   ];
-  return { diagnostics: serializeDiagnostics(diagnostics) };
+  return {
+    schemaVersion: SCHEMA_VERSION,
+    metadata: {
+      typescriptVersion: ts.version,
+      options,
+    },
+    diagnostics: serializeDiagnostics(diagnostics),
+  };
 }
 
 function respond(payload) {

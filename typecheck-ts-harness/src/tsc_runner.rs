@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Context, Result};
+use crate::tsc::TSC_BASELINE_SCHEMA_VERSION;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -49,8 +51,11 @@ impl TscRunner {
       ));
     }
 
-    let parsed: TscDiagnostics =
+    let mut parsed: TscDiagnostics =
       serde_json::from_slice(&output.stdout).context("parse tsc JSON output")?;
+    if parsed.schema_version.is_none() {
+      parsed.schema_version = Some(TSC_BASELINE_SCHEMA_VERSION);
+    }
 
     Ok(parsed)
   }
@@ -58,7 +63,19 @@ impl TscRunner {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TscDiagnostics {
+  #[serde(default)]
+  pub schema_version: Option<u32>,
+  #[serde(default)]
+  pub metadata: TscMetadata,
   pub diagnostics: Vec<TscDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TscMetadata {
+  #[serde(default)]
+  pub typescript_version: Option<String>,
+  #[serde(default)]
+  pub options: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

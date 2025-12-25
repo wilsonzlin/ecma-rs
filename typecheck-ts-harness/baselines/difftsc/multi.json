@@ -1,4 +1,13 @@
 {
+  "schema_version": 1,
+  "metadata": {
+    "typescript_version": null,
+    "options": {
+      "noEmit": true,
+      "skipLibCheck": true,
+      "pretty": false
+    }
+  },
   "diagnostics": [
     {
       "code": 2322,

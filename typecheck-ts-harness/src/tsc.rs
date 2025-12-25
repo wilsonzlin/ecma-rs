@@ -29,11 +29,25 @@ pub struct TscRequest {
   pub options: Map<String, Value>,
 }
 
+pub const TSC_BASELINE_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TscDiagnostics {
-  pub diagnostics: Vec<TscDiagnostic>,
   #[serde(default)]
+  pub schema_version: Option<u32>,
+  #[serde(default)]
+  pub metadata: TscMetadata,
+  pub diagnostics: Vec<TscDiagnostic>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
   pub crash: Option<TscCrash>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TscMetadata {
+  #[serde(default)]
+  pub typescript_version: Option<String>,
+  #[serde(default)]
+  pub options: Map<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +181,10 @@ impl TscRunner {
 
     let parsed: TscDiagnostics =
       serde_json::from_str(response.trim_end()).context("parse tsc runner response")?;
+    let mut parsed = parsed;
+    if parsed.schema_version.is_none() {
+      parsed.schema_version = Some(TSC_BASELINE_SCHEMA_VERSION);
+    }
     if let Some(crash) = parsed.crash.clone() {
       let mut message = crash.message;
       if let Some(stack) = crash.stack {

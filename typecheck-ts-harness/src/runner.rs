@@ -6,7 +6,7 @@ use crate::discover::{discover_conformance_tests, Filter, Shard, TestCase, DEFAU
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::profile::ProfileBuilder;
-use crate::tsc::{TscDiagnostic, TscDiagnostics};
+use crate::tsc::{TscDiagnostic, TscDiagnostics, TscMetadata, TSC_BASELINE_SCHEMA_VERSION};
 use crate::{FailOn, Result, VirtualFile};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -1030,6 +1030,8 @@ impl SnapshotStore {
     }
 
     let payload = TscDiagnostics {
+      schema_version: Some(TSC_BASELINE_SCHEMA_VERSION),
+      metadata: TscMetadata::default(),
       diagnostics: diagnostics.to_vec(),
       crash: None,
     };
