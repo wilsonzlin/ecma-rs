@@ -23,7 +23,7 @@ use thiserror::Error;
 use tracing::debug_span;
 
 #[path = "check/mod.rs"]
-mod check;
+pub(crate) mod check;
 
 use crate::lib_support::{CompilerOptions, FileKind, LibFile, LibManager};
 pub(crate) const CODE_NON_DTS_LIB: &str = "TC0004";

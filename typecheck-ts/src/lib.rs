@@ -126,6 +126,20 @@ mod api;
 
 pub use api::*;
 
+/// Generic type checking helpers (instantiation and inference).
+///
+/// This module intentionally re-exports internal building blocks from the main
+/// checker implementation so callers can experiment with standalone inference.
+pub mod check {
+  pub mod infer {
+    pub use crate::api::check::infer::*;
+  }
+
+  pub mod instantiate {
+    pub use crate::api::check::instantiate::*;
+  }
+}
+
 pub mod queries;
 
 /// Utilities for selecting bundled `.d.ts` libraries and the legacy lib checker.
