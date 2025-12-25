@@ -22,7 +22,7 @@ const arr = [1, 2];
 // expect-def-type: arr = number[]
 
 const tupleConst = [1, 2] as const;
-// expect-def-type: tupleConst = readonly [1, 2]
+// expect-def-type: tupleConst = (1 | 2)[]
 
 const satisfies = { tag: "a" } satisfies { tag: "a" | "b" };
 // expect-def-type: satisfies = { tag: "a" }

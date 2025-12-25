@@ -1,5 +1,5 @@
 use ::semantic_js::ts as sem_ts;
-use ::semantic_js::ts::from_hir_js::lower_to_ts_hir;
+use sem_ts::from_hir_js::lower_to_ts_hir;
 pub use diagnostics::{Diagnostic, FileId, Label, Severity, Span, TextRange};
 use hir_js::{
   lower_file_with_diagnostics, DefTypeInfo as HirDefTypeInfo, FileKind as HirFileKind,
@@ -34,8 +34,8 @@ use crate::profile::QueryStats;
 use crate::{FatalError, HostError, Ice, IceContext};
 use types_ts_interned::{
   Indexer, ObjectType as InternedObjectType, Param, PropData, PropKey, Property, Shape, Signature,
-  TypeDisplay as InternedTypeDisplay, TypeId as InternedTypeId, TypeKind as InternedTypeKind,
-  TypeStore as InternedTypeStore,
+  TupleElem, TypeDisplay as InternedTypeDisplay, TypeId as InternedTypeId,
+  TypeKind as InternedTypeKind, TypeStore as InternedTypeStore,
 };
 
 #[path = "check/mod.rs"]
@@ -123,7 +123,23 @@ pub struct ExportEntry {
 /// Mapping from export names to entries.
 pub type ExportMap = BTreeMap<String, ExportEntry>;
 
-/// Per-body typing result. Expression IDs are local to the body.
+/// Summary for a resolved symbol.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct SymbolInfo {
+  /// Symbol identifier.
+  pub symbol: semantic_js::SymbolId,
+  /// Definition associated with the symbol, if any.
+  pub def: Option<DefId>,
+  /// Friendly name for the symbol/definition.
+  pub name: Option<String>,
+  /// File where the symbol is defined.
+  pub file: Option<FileId>,
+  /// Inferred or annotated type for the symbol, if available.
+  pub type_id: Option<TypeId>,
+}
+
+/// Per-body typing result. Expression and pattern IDs are local to the body.
 #[allow(dead_code)]
 #[derive(Debug)]
 pub struct BodyCheckResult {
@@ -204,142 +220,163 @@ impl std::fmt::Display for InternedTypeDisplayOwned {
 }
 
 /// Helper returned from [`Program::display_type`].
-pub struct TypeDisplay<'a> {
-  program: &'a Program,
-  ty: TypeId,
+///
+/// When the optional `serde` feature is enabled this serializes to the rendered
+/// string form for easy inclusion in JSON outputs.
+#[derive(Clone)]
+pub struct TypeDisplay {
+  store: Arc<InternedTypeStore>,
+  ty: InternedTypeId,
 }
 
-impl<'a> std::fmt::Display for TypeDisplay<'a> {
+impl std::fmt::Display for TypeDisplay {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let mut state = self.program.lock_state();
-    state.ensure_analyzed(
-      &self.program.host,
-      &self.program.roots,
-      &self.program.cancelled,
-    );
-    let TypeDisplay { program: _, ty } = *self;
-    let kind = state.type_store.kind(ty).clone();
-    drop(state);
-    format_type(kind, self.program, f)
+    InternedTypeDisplay::new(&self.store, self.ty).fmt(f)
   }
 }
 
-fn format_type(
-  kind: TypeKind,
-  program: &Program,
-  f: &mut std::fmt::Formatter<'_>,
-) -> std::fmt::Result {
-  match kind {
-    TypeKind::Any => write!(f, "any"),
-    TypeKind::Unknown => write!(f, "unknown"),
-    TypeKind::Number => write!(f, "number"),
-    TypeKind::String => write!(f, "string"),
-    TypeKind::Boolean => write!(f, "boolean"),
-    TypeKind::Null => write!(f, "null"),
-    TypeKind::Undefined => write!(f, "undefined"),
-    TypeKind::LiteralString(s) => write!(f, "\"{}\"", s),
-    TypeKind::LiteralNumber(n) => write!(f, "{}", n),
-    TypeKind::LiteralBoolean(b) => write!(f, "{}", b),
-    TypeKind::Void => write!(f, "void"),
-    TypeKind::Never => write!(f, "never"),
+#[cfg(feature = "serde")]
+impl serde::Serialize for TypeDisplay {
+  fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&self.to_string())
+  }
+}
+
+fn display_type_from_state(
+  state: &ProgramState,
+  ty: TypeId,
+) -> (Arc<InternedTypeStore>, InternedTypeId) {
+  let store = InternedTypeStore::new();
+  let mut cache = HashMap::new();
+  let interned = convert_type_for_display(ty, state, &store, &mut cache);
+  (store, interned)
+}
+
+fn convert_type_for_display(
+  ty: TypeId,
+  state: &ProgramState,
+  store: &Arc<InternedTypeStore>,
+  cache: &mut HashMap<TypeId, InternedTypeId>,
+) -> InternedTypeId {
+  if let Some(mapped) = cache.get(&ty) {
+    return *mapped;
+  }
+  let primitives = store.primitive_ids();
+  cache.insert(ty, primitives.unknown);
+  let mapped = match state.type_store.kind(ty).clone() {
+    TypeKind::Any => primitives.any,
+    TypeKind::Unknown => primitives.unknown,
+    TypeKind::Never => primitives.never,
+    TypeKind::Void => primitives.void,
+    TypeKind::Number => primitives.number,
+    TypeKind::String => primitives.string,
+    TypeKind::Boolean => primitives.boolean,
+    TypeKind::Null => primitives.null,
+    TypeKind::Undefined => primitives.undefined,
+    TypeKind::LiteralString(name) => {
+      let name = store.intern_name(name);
+      store.intern_type(InternedTypeKind::StringLiteral(name))
+    }
+    TypeKind::LiteralNumber(value) => match value.parse::<f64>() {
+      Ok(num) => store.intern_type(InternedTypeKind::NumberLiteral(OrderedFloat(num))),
+      Err(_) => primitives.number,
+    },
+    TypeKind::LiteralBoolean(value) => store.intern_type(InternedTypeKind::BooleanLiteral(value)),
     TypeKind::Array(inner) => {
-      let needs_parens = {
-        let state = program.lock_state();
-        matches!(state.type_store.kind(inner), TypeKind::Union(_))
-      };
-      if needs_parens {
-        write!(f, "({})[]", program.display_type(inner))
-      } else {
-        write!(f, "{}[]", program.display_type(inner))
-      }
+      let inner = convert_type_for_display(inner, state, store, cache);
+      store.intern_type(InternedTypeKind::Array {
+        ty: inner,
+        readonly: false,
+      })
     }
     TypeKind::ReadonlyArray(inner) => {
-      let needs_parens = {
-        let state = program.lock_state();
-        matches!(state.type_store.kind(inner), TypeKind::Union(_))
-      };
-      if needs_parens {
-        write!(f, "readonly ({})[]", program.display_type(inner))
-      } else {
-        write!(f, "readonly {}[]", program.display_type(inner))
-      }
+      let inner = convert_type_for_display(inner, state, store, cache);
+      store.intern_type(InternedTypeKind::Array {
+        ty: inner,
+        readonly: true,
+      })
     }
-    TypeKind::Tuple(elements, readonly) => {
-      if readonly {
-        write!(f, "readonly ")?;
-      }
-      write!(f, "[")?;
-      for (idx, el) in elements.iter().enumerate() {
-        if idx > 0 {
-          write!(f, ", ")?;
-        }
-        write!(f, "{}", program.display_type(*el))?;
-      }
-      write!(f, "]")
+    TypeKind::Tuple(types, readonly) => {
+      let elements = types
+        .into_iter()
+        .map(|t| {
+          let ty = convert_type_for_display(t, state, store, cache);
+          TupleElem {
+            ty,
+            optional: false,
+            rest: false,
+            readonly,
+          }
+        })
+        .collect();
+      store.intern_type(InternedTypeKind::Tuple(elements))
     }
     TypeKind::Union(types) => {
-      let mut first = true;
-      for ty in types {
-        if !first {
-          write!(f, " | ")?;
-        }
-        first = false;
-        write!(f, "{}", program.display_type(ty))?;
-      }
-      Ok(())
+      let members: Vec<_> = types
+        .into_iter()
+        .map(|t| convert_type_for_display(t, state, store, cache))
+        .collect();
+      store.union(members)
     }
     TypeKind::Function { params, ret } => {
-      write!(f, "(")?;
-      for (idx, p) in params.iter().enumerate() {
-        if idx > 0 {
-          write!(f, ", ")?;
-        }
-        write!(f, "{}", program.display_type(*p))?;
-      }
-      write!(f, ") => {}", program.display_type(ret))
+      let params: Vec<_> = params
+        .into_iter()
+        .map(|param| {
+          let ty = convert_type_for_display(param, state, store, cache);
+          Param {
+            name: None,
+            ty,
+            optional: false,
+            rest: false,
+          }
+        })
+        .collect();
+      let sig = Signature::new(params, convert_type_for_display(ret, state, store, cache));
+      let sig_id = store.intern_signature(sig);
+      store.intern_type(InternedTypeKind::Callable {
+        overloads: vec![sig_id],
+      })
     }
+    TypeKind::Predicate { asserted, .. } => match asserted {
+      Some(ty) => convert_type_for_display(ty, state, store, cache),
+      None => primitives.boolean,
+    },
     TypeKind::Object(obj) => {
-      let mut entries: Vec<String> = Vec::new();
-      for (k, v) in obj.props.iter() {
-        entries.push(format!(
-          "{}{}{}: {}",
-          if v.readonly { "readonly " } else { "" },
-          k,
-          if v.optional { "?" } else { "" },
-          program.display_type(v.typ)
-        ));
+      let mut shape = Shape::new();
+      for (name, prop) in obj.props {
+        let key = PropKey::String(store.intern_name(name));
+        let data = PropData {
+          ty: convert_type_for_display(prop.typ, state, store, cache),
+          optional: prop.optional,
+          readonly: prop.readonly,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        };
+        shape.properties.push(Property { key, data });
       }
-      if let Some(ty) = obj.string_index {
-        entries.push(format!("[key: string]: {}", program.display_type(ty)));
+      if let Some(value_type) = obj.string_index {
+        shape.indexers.push(Indexer {
+          key_type: primitives.string,
+          value_type: convert_type_for_display(value_type, state, store, cache),
+          readonly: false,
+        });
       }
-      if let Some(ty) = obj.number_index {
-        entries.push(format!("[index: number]: {}", program.display_type(ty)));
+      if let Some(value_type) = obj.number_index {
+        shape.indexers.push(Indexer {
+          key_type: primitives.number,
+          value_type: convert_type_for_display(value_type, state, store, cache),
+          readonly: false,
+        });
       }
-      match entries.len() {
-        0 => write!(f, "{{}}"),
-        _ => write!(f, "{{ {} }}", entries.join("; ")),
-      }
+      let shape_id = store.intern_shape(shape);
+      let obj_id = store.intern_object(InternedObjectType { shape: shape_id });
+      store.intern_type(InternedTypeKind::Object(obj_id))
     }
-    TypeKind::Predicate {
-      parameter,
-      asserted,
-      asserts,
-    } => {
-      if asserts {
-        write!(f, "asserts {}", parameter)?;
-      } else {
-        write!(f, "{}", parameter)?;
-      }
-      if let Some(ty) = asserted {
-        if asserts {
-          write!(f, " is {}", program.display_type(ty))?;
-        } else {
-          write!(f, " is {}", program.display_type(ty))?;
-        }
-      }
-      Ok(())
-    }
-  }
+  };
+  cache.insert(ty, mapped);
+  mapped
 }
 
 /// Primary entry point for parsing and type checking.
@@ -556,6 +593,41 @@ impl Program {
     })
   }
 
+  /// Details for a resolved symbol.
+  pub fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
+    match self.symbol_info_fallible(symbol) {
+      Ok(info) => info,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn symbol_info_fallible(
+    &self,
+    symbol: semantic_js::SymbolId,
+  ) -> Result<Option<SymbolInfo>, FatalError> {
+    self.with_analyzed_state(|state| {
+      let def = match state.symbol_to_def.get(&symbol).copied() {
+        Some(def) => def,
+        None => return Ok(None),
+      };
+      let (name, file) = match state.def_data.get(&def) {
+        Some(def_data) => (Some(def_data.name.clone()), Some(def_data.file)),
+        None => (None, None),
+      };
+      let type_id = state.def_types.get(&def).copied();
+      Ok(Some(SymbolInfo {
+        symbol,
+        def: Some(def),
+        name,
+        file,
+        type_id,
+      }))
+    })
+  }
+
   /// Innermost expression covering an offset within a file.
   pub fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
     match self.expr_at_fallible(file, offset) {
@@ -615,8 +687,13 @@ impl Program {
   }
 
   /// Helper to render a type as displayable string.
-  pub fn display_type(&self, ty: TypeId) -> TypeDisplay<'_> {
-    TypeDisplay { program: self, ty }
+  pub fn display_type(&self, ty: TypeId) -> TypeDisplay {
+    let (store, ty) = {
+      let mut state = self.lock_state();
+      state.ensure_analyzed(&self.host, &self.roots, &self.cancelled);
+      display_type_from_state(&state, ty)
+    };
+    TypeDisplay { store, ty }
   }
 
   pub fn display_interned_type(&self, ty: InternedTypeId) -> InternedTypeDisplayOwned {
@@ -787,6 +864,7 @@ struct VarData {
   typ: Option<TypeId>,
   init: Option<ExprId>,
   body: BodyId,
+  mode: VarDeclMode,
 }
 
 #[derive(Clone, Debug)]
@@ -1523,6 +1601,7 @@ impl ProgramState {
                 typ: None,
                 init: Some(expr_id),
                 body: top_body_id,
+                mode: VarDeclMode::Const,
               }),
             },
           );
@@ -1567,11 +1646,6 @@ impl ProgramState {
               for name in names {
                 let exportable = name.stx.exportable.as_str().to_string();
                 let alias = name.stx.alias.stx.name.clone();
-                let exported_as = if alias == exportable {
-                  None
-                } else {
-                  Some(alias.clone())
-                };
                 let is_type_only = export_list.stx.type_only || name.stx.type_only;
 
                 if export_list.stx.from.is_some() {
@@ -1629,8 +1703,8 @@ impl ProgramState {
               loc_to_span(file, stmt.loc),
             ));
           }
-          let mut import_default = None;
-          let mut import_namespace = None;
+          let mut _import_default = None;
+          let mut _import_namespace = None;
           let mut import_named = Vec::new();
           if let Some(default_pat) = import_stmt.stx.default.as_ref() {
             let alias_name = match &default_pat.stx.pat.stx.as_ref() {
@@ -1644,7 +1718,7 @@ impl ProgramState {
                 continue;
               }
             };
-            import_default = Some(sem_ts::ImportDefault {
+            _import_default = Some(sem_ts::ImportDefault {
               local: alias_name.clone(),
               local_span: loc_to_span(file, default_pat.loc).range,
               is_type_only: import_stmt.stx.type_only,
@@ -1741,7 +1815,7 @@ impl ProgramState {
                   continue;
                 }
               };
-              import_namespace = Some(sem_ts::ImportNamespace {
+              _import_namespace = Some(sem_ts::ImportNamespace {
                 local: alias_name.clone(),
                 local_span: loc_to_span(file, pat.loc).range,
                 is_type_only: import_stmt.stx.type_only,
@@ -1858,6 +1932,7 @@ impl ProgramState {
             typ: type_ann,
             init: init_id,
             body: builder.id,
+            mode: var.mode,
           }),
         },
       );
@@ -2084,7 +2159,7 @@ impl ProgramState {
           self.apply_fact_map(env, &facts.assertions);
           ty
         });
-        let declared = if let Some(annotated) = *typ {
+        let mut declared = if let Some(annotated) = *typ {
           if let (Some(expr), Some(source_ty)) = (init.as_ref(), init_ty) {
             check::assign::check_assignment(self, Some(expr), source_ty, annotated, result, file);
           }
@@ -2095,6 +2170,11 @@ impl ProgramState {
           self.builtin.unknown
         };
         if let Some(def_id) = def {
+          if let Some(DefKind::Var(var_data)) = self.def_data.get(def_id).map(|d| &d.kind) {
+            if var_data.typ.is_none() && var_data.mode != VarDeclMode::Const {
+              declared = self.widen_literal(declared);
+            }
+          }
           self.def_types.insert(*def_id, declared);
         }
         result.pat_types.push(declared);
@@ -3185,6 +3265,60 @@ impl ProgramState {
     }
   }
 
+  fn widen_literal(&mut self, ty: TypeId) -> TypeId {
+    match self.type_store.kind(ty).clone() {
+      TypeKind::LiteralNumber(_) => self.builtin.number,
+      TypeKind::LiteralString(_) => self.builtin.string,
+      TypeKind::LiteralBoolean(_) => self.builtin.boolean,
+      TypeKind::Union(members) => {
+        let widened: Vec<TypeId> = members
+          .into_iter()
+          .map(|member| self.widen_literal(member))
+          .collect();
+        self.type_store.union(widened, &self.builtin)
+      }
+      _ => ty,
+    }
+  }
+
+  fn const_assert_type(&mut self, ty: TypeId) -> TypeId {
+    match self.type_store.kind(ty).clone() {
+      TypeKind::Object(obj) => {
+        let mut readonly_obj = ObjectType::empty();
+        readonly_obj.string_index = obj
+          .string_index
+          .map(|inner| self.const_assert_type(inner));
+        readonly_obj.number_index = obj
+          .number_index
+          .map(|inner| self.const_assert_type(inner));
+        for (name, prop) in obj.props {
+          let typ = self.const_assert_type(prop.typ);
+          readonly_obj.props.insert(
+            name,
+            ObjectProperty {
+              typ,
+              optional: prop.optional,
+              readonly: true,
+            },
+          );
+        }
+        self.type_store.object(readonly_obj)
+      }
+      TypeKind::Array(elem) => {
+        let elem = self.const_assert_type(elem);
+        self.type_store.array(elem)
+      }
+      TypeKind::Union(members) => {
+        let mapped: Vec<TypeId> = members
+          .into_iter()
+          .map(|member| self.const_assert_type(member))
+          .collect();
+        self.type_store.union(mapped, &self.builtin)
+      }
+      _ => ty,
+    }
+  }
+
   fn initial_env(&self, owner: Option<DefId>, file: FileId) -> HashMap<String, SymbolBinding> {
     let mut env = self.global_bindings.clone();
     if let Some(file_env) = self.files.get(&file).map(|f| f.bindings.clone()) {
@@ -3235,14 +3369,18 @@ impl ProgramState {
     let ty = match self.def_data.get(&def).map(|d| d.kind.clone()) {
       Some(DefKind::Function(func)) => self.function_type(def, func),
       Some(DefKind::Var(var)) => {
-        if let Some(t) = var.typ {
+        let mut ty = if let Some(t) = var.typ {
           t
         } else if let Some(init) = var.init {
           let res = self.check_body(var.body);
           res.expr_type(init).unwrap_or(self.builtin.unknown)
         } else {
           self.builtin.unknown
+        };
+        if var.typ.is_none() && var.mode != VarDeclMode::Const {
+          ty = self.widen_literal(ty);
         }
+        ty
       }
       Some(DefKind::Import(import)) => {
         let exports = self.exports_of_file(import.from);
@@ -3281,9 +3419,13 @@ impl ProgramState {
       if res.return_types.is_empty() {
         self.builtin.void
       } else {
-        self
-          .type_store
-          .union(res.return_types.clone(), &self.builtin)
+        let widened: Vec<TypeId> = res
+          .return_types
+          .iter()
+          .copied()
+          .map(|ty| self.widen_literal(ty))
+          .collect();
+        self.type_store.union(widened, &self.builtin)
       }
     } else {
       self.builtin.unknown

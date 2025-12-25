@@ -20,6 +20,7 @@ members = [
   "test262",
   "typecheck-ts-harness",
   "semantic-js",
+  "typecheck-ts-cli",
 ]
 
 [profile.release]

@@ -6,7 +6,7 @@ use serde::Serialize;
 /// This is intentionally a minimal subset of a full `CompilerOptions` to avoid
 /// additional dependencies while still allowing callers to control core
 /// behaviors such as null/undefined handling or function parameter variance.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TypeOptions {
   /// Whether `null`/`undefined` are distinct from other types.
   pub strict_null_checks: bool,

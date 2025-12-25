@@ -12,6 +12,7 @@ pub use compiler_options::{CompilerOptions, JsxMode, LibName, LibSet, ModuleKind
 #[allow(deprecated)]
 pub use host::LibCheckHost;
 pub use lib_env::{LibManager, LoadedLibs};
+pub use types_ts_interned::TypeOptions;
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
