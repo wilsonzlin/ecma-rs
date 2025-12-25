@@ -6,9 +6,14 @@ use parse_js::lex::Lexer;
 use parse_js::parse::expr::pat::ParsePatternRules;
 use parse_js::parse::{ParseCtx, Parser};
 use parse_js::token::TT;
+use parse_js::{Dialect, ParseOptions, SourceType};
 
 fn parse_expr(src: &str) -> Node<Expr> {
-  let mut parser = Parser::new(Lexer::new(src));
+  let opts = ParseOptions {
+    dialect: Dialect::Ts,
+    source_type: SourceType::Module,
+  };
+  let mut parser = Parser::new(Lexer::new(src), opts);
   let ctx = ParseCtx {
     rules: ParsePatternRules {
       await_allowed: true,
