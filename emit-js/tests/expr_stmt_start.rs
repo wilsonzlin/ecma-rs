@@ -1,7 +1,7 @@
-use emit_js::{emit_expr_stmt, expr_stmt_needs_parens};
-use parse_js::ast::expr::Expr;
+use emit_js::{emit_expr, emit_expr_stmt, emit_expr_stmt_with, expr_stmt_needs_parens, EmitResult};
+use parse_js::ast::expr::{ClassExpr, Expr};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stmt::{ExprStmt, Stmt};
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::parse;
 
@@ -114,4 +114,70 @@ fn declare_tagged_template_does_not_need_parens() {
 fn declare_identifier_requires_parens() {
   let emitted = assert_needs_parens("((declare))");
   assert_eq!(emitted, "(declare)");
+}
+
+fn emit_class_expr(out: &mut String, class: &Node<ClassExpr>) -> EmitResult {
+  for (idx, decorator) in class.stx.decorators.iter().enumerate() {
+    if idx > 0 {
+      out.push(' ');
+    }
+    out.push('@');
+    let mut emit_type = |_out: &mut String, _ty: &Node<TypeExpr>| Ok(());
+    emit_expr(out, &decorator.stx.expression, &mut emit_type)?;
+    out.push(' ');
+  }
+
+  out.push_str("class");
+  if let Some(name) = &class.stx.name {
+    out.push(' ');
+    out.push_str(&name.stx.name);
+  }
+  out.push_str(" {}");
+
+  Ok(())
+}
+
+fn emit_expr_for_test(out: &mut String, expr: &Node<Expr>) -> EmitResult {
+  match expr.stx.as_ref() {
+    Expr::Class(class) => emit_class_expr(out, class),
+    _ => {
+      let mut emit_type = |_out: &mut String, _ty: &Node<TypeExpr>| Ok(());
+      emit_expr(out, expr, &mut emit_type)
+    }
+  }
+}
+
+fn extract_expr_stmt(program: &Node<parse_js::ast::stx::TopLevel>) -> &Node<ExprStmt> {
+  match program
+    .stx
+    .body
+    .first()
+    .expect("expected a statement")
+    .stx
+    .as_ref()
+  {
+    Stmt::Expr(stmt) => stmt,
+    other => panic!("expected expression statement, found {:?}", other),
+  }
+}
+
+#[test]
+fn decorated_class_expr_stmt_roundtrips_with_parens() {
+  let source = "(@dec class C {})";
+  let parsed = parse_js::parse(source).expect("parse should succeed");
+  let expr_stmt = extract_expr_stmt(&parsed);
+
+  assert!(
+    expr_stmt_needs_parens(&expr_stmt.stx.expr),
+    "decorated class expressions should trigger parentheses"
+  );
+
+  let mut out = String::new();
+  emit_expr_stmt_with(&mut out, &expr_stmt.stx.expr, emit_expr_for_test)
+    .expect("emit should succeed");
+
+  let reparsed = parse_js::parse(&out).expect("emitted code should parse");
+  let original_json = serde_json::to_value(&parsed.stx).expect("serialize original");
+  let reparsed_json = serde_json::to_value(&reparsed.stx).expect("serialize reparsed");
+  assert_eq!(original_json, reparsed_json, "AST should roundtrip");
 }
