@@ -10,10 +10,8 @@ fn minified(mode: TopLevelMode, src: &str) -> String {
 
 #[test]
 fn test_shadow_safety() {
-  let result = minified(
-    TopLevelMode::Global,
-    "let x=1;(()=>{let y=x;let x=2;return y})();",
-  );
+  let src = "let x=1;(()=>{let y=x;let x=2;return y})();";
+  let result = minified(TopLevelMode::Global, src);
   assert_eq!(result, "let x=1;(()=>{let a=b;let b=2;return a})();");
 }
 
@@ -28,7 +26,8 @@ fn test_unknown_globals_not_shadowed() {
 
 #[test]
 fn test_module_export_bindings_preserved() {
-  let result = minified(TopLevelMode::Module, "export const x=1; const y=2;");
+  let src = "export const x=1; const y=2;";
+  let result = minified(TopLevelMode::Module, src);
   assert_eq!(result, "export const x=1; const a=2;");
 }
 
@@ -84,6 +83,20 @@ fn test_direct_eval_disables_renaming() {
 
 #[test]
 fn test_shadowed_eval_allows_renaming() {
-  let result = minified(TopLevelMode::Global, "function f(eval){let x;eval(\"x\");}");
+  let src = "function f(eval){let x;eval(\"x\");}";
+  let result = minified(TopLevelMode::Global, src);
   assert_eq!(result, "function f(a){let b;a(\"x\");}");
+}
+
+#[test]
+fn test_with_in_nested_scope_only_disables_that_scope() {
+  let src = "function outer(){let top=1;function inner(obj){let value=obj.v;with(obj){value;}return value;}return inner({v:top})+top;}";
+  let result = minified(
+    TopLevelMode::Module,
+    src,
+  );
+  assert_eq!(
+    result,
+    "function a(){let a=1;function b(obj){let value=obj.v;with(obj){value;}return value;}return b({v:a})+a;}"
+  );
 }

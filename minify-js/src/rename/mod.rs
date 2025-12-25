@@ -16,6 +16,12 @@ pub struct ScopeUsages {
   pub unknown: HashSet<String>,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScopeHazards {
+  pub has_direct_eval: bool,
+  pub has_with: bool,
+}
+
 #[derive(Clone, Copy)]
 struct ExportNameSymbol(SymbolId);
 
@@ -32,18 +38,7 @@ pub struct UsageData {
   pub symbol_names: HashMap<SymbolId, String>,
   pub scope_symbol_order: HashMap<ScopeId, Vec<SymbolId>>,
   pub scope_usages: HashMap<ScopeId, ScopeUsages>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct RenameAnalysis {
-  pub has_direct_eval: bool,
-  pub has_with: bool,
-}
-
-impl RenameAnalysis {
-  pub fn should_disable_renaming(&self) -> bool {
-    self.has_direct_eval || self.has_with
-  }
+  pub scope_hazards: HashMap<ScopeId, ScopeHazards>,
 }
 
 struct SymbolCollector<'a> {
@@ -63,18 +58,6 @@ type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type TopLevelNode = Node<TopLevel>;
 type VarDeclNode = Node<VarDecl>;
-
-pub fn analyze_renaming(sem: &JsSemantics) -> RenameAnalysis {
-  let mut analysis = RenameAnalysis::default();
-  for scope in sem.scopes.iter() {
-    analysis.has_with |= scope.is_dynamic;
-    analysis.has_direct_eval |= scope.has_direct_eval;
-    if analysis.should_disable_renaming() {
-      break;
-    }
-  }
-  analysis
-}
 
 #[derive(VisitorMut)]
 #[visitor(
@@ -258,11 +241,18 @@ pub fn collect_usages(
 
   let mut symbol_names = HashMap::default();
   let mut scope_symbol_order: HashMap<ScopeId, Vec<SymbolId>> = HashMap::default();
+  let mut scope_hazards: HashMap<ScopeId, ScopeHazards> = HashMap::default();
   let mut queue = vec![sem.top_scope()];
   while let Some(scope_id) = queue.pop() {
     let scope_data = sem.scope(scope_id);
-    let mut symbols: Vec<SymbolId> = scope_data.symbols.values().copied().collect();
-    symbols.sort_by_key(|s| s.index());
+    let hazards = ScopeHazards {
+      has_direct_eval: scope_data.has_direct_eval,
+      has_with: scope_data.is_dynamic && !scope_data.has_direct_eval,
+    };
+    if hazards.has_direct_eval || hazards.has_with {
+      scope_hazards.insert(scope_id, hazards);
+    }
+    let symbols: Vec<SymbolId> = sem.scope_symbols(scope_id).map(|(_, sym)| sym).collect();
     for sym in symbols.iter().copied() {
       symbol_names
         .entry(sym)
@@ -280,6 +270,7 @@ pub fn collect_usages(
     symbol_names,
     scope_symbol_order,
     scope_usages,
+    scope_hazards,
   }
 }
 
@@ -325,6 +316,38 @@ fn reserved_names() -> HashSet<String> {
 
 pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, String> {
   let reserved = reserved_names();
+  // Dynamic scopes (direct `eval`/`with`) keep their original names; direct
+  // `eval` can also reach all lexical ancestors.
+  let disabled_scopes = {
+    let mut set = HashSet::default();
+    for (scope, hazards) in usage.scope_hazards.iter() {
+      if hazards.has_with || hazards.has_direct_eval {
+        set.insert(*scope);
+      }
+      if hazards.has_direct_eval {
+        let mut current = sem.scope(*scope).parent;
+        while let Some(scope_id) = current {
+          set.insert(scope_id);
+          current = sem.scope(scope_id).parent;
+        }
+      }
+    }
+    set
+  };
+  // Preserve any outer bindings referenced from a `with` scope since property
+  // lookups may depend on their names.
+  let pinned_symbols: HashSet<SymbolId> = usage
+    .scope_hazards
+    .iter()
+    .filter_map(|(scope, hazards)| {
+      if hazards.has_with {
+        usage.scope_usages.get(scope)
+      } else {
+        None
+      }
+    })
+    .flat_map(|usage| usage.foreign.iter().copied())
+    .collect();
   let mut renames = HashMap::default();
 
   fn assign_scope(
@@ -332,6 +355,8 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
     sem: &JsSemantics,
     usage: &UsageData,
     reserved: &HashSet<String>,
+    disabled_scopes: &HashSet<ScopeId>,
+    pinned_symbols: &HashSet<SymbolId>,
     renames: &mut HashMap<SymbolId, String>,
   ) {
     let symbol_order = usage
@@ -341,6 +366,13 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
       .unwrap_or_default();
     let usage_data = usage.scope_usages.get(&scope);
     let children = sem.scope(scope).children.clone();
+
+    if disabled_scopes.contains(&scope) {
+      for child in children {
+        assign_scope(child, sem, usage, reserved, disabled_scopes, pinned_symbols, renames);
+      }
+      return;
+    }
 
     let mut disallowed: HashSet<String> = reserved.clone();
     if let Some(u) = usage_data {
@@ -362,7 +394,7 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
       let Some(name) = usage.symbol_names.get(&sym) else {
         continue;
       };
-      if usage.exported.contains(&sym) {
+      if usage.exported.contains(&sym) || pinned_symbols.contains(&sym) {
         used.insert(name.clone());
         continue;
       }
@@ -373,11 +405,19 @@ pub fn assign_names(sem: &JsSemantics, usage: &UsageData) -> HashMap<SymbolId, S
     }
 
     for child in children {
-      assign_scope(child, sem, usage, reserved, renames);
+      assign_scope(child, sem, usage, reserved, disabled_scopes, pinned_symbols, renames);
     }
   }
 
-  assign_scope(usage.top_scope, sem, usage, &reserved, &mut renames);
+  assign_scope(
+    usage.top_scope,
+    sem,
+    usage,
+    &reserved,
+    &disabled_scopes,
+    &pinned_symbols,
+    &mut renames,
+  );
   renames
 }
 
@@ -402,9 +442,8 @@ impl<'a> ApplyVisitor<'a> {
     if &*name == new_name {
       return;
     }
-    let identifier_end = loc.0;
-    let start = identifier_end.saturating_sub(name.len());
-    let end = start + name.len();
+    let start = loc.0;
+    let end = loc.1;
     self.replacements.push(Replacement {
       start,
       end,
@@ -417,17 +456,26 @@ impl<'a> ApplyVisitor<'a> {
 impl<'a> ApplyVisitor<'a> {
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
     let sym = resolved_symbol(&node.assoc);
-    self.maybe_apply((node.loc.0, node.loc.1), sym, &mut node.stx.name);
+    let len = node.stx.name.len();
+    let start = node.loc.0.saturating_sub(len);
+    let end = start + len;
+    self.maybe_apply((start, end), sym, &mut node.stx.name);
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
     let sym = resolved_symbol(&node.assoc);
-    self.maybe_apply((node.loc.0, node.loc.1), sym, &mut node.stx.name);
+    let len = node.stx.name.len();
+    let start = node.loc.0.saturating_sub(len);
+    let end = start + len;
+    self.maybe_apply((start, end), sym, &mut node.stx.name);
   }
 
   fn enter_class_or_func_name_node(&mut self, node: &mut ClassOrFuncNameNode) {
     let sym = declared_symbol(&node.assoc);
-    self.maybe_apply((node.loc.0, node.loc.1), sym, &mut node.stx.name);
+    let len = node.stx.name.len();
+    let start = node.loc.0;
+    let end = start + len;
+    self.maybe_apply((start, end), sym, &mut node.stx.name);
   }
 
   fn enter_export_name_node(&mut self, node: &mut ExportNameNode) {

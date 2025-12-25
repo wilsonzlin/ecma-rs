@@ -1,6 +1,6 @@
 pub use diagnostics::{Diagnostic, FileId, Severity, Span, TextRange};
 use parse_js::parse;
-use rename::{analyze_renaming, apply_renames, assign_names, collect_usages, rewrite_source};
+use rename::{apply_renames, assign_names, collect_usages, rewrite_source};
 use semantic_js::js::bind_js;
 pub use semantic_js::js::TopLevelMode;
 
@@ -36,12 +36,6 @@ pub fn minify(
 ) -> Result<(), Vec<Diagnostic>> {
   let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(FileId(0))])?;
   let (sem, _) = bind_js(&mut top_level_node, top_level_mode);
-  let rename_analysis = analyze_renaming(&sem);
-  if rename_analysis.should_disable_renaming() {
-    output.clear();
-    output.extend_from_slice(source.as_bytes());
-    return Ok(());
-  }
   let usage = collect_usages(&mut top_level_node, &sem, top_level_mode);
   let renames = assign_names(&sem, &usage);
   let mut replacements = apply_renames(&mut top_level_node, &renames);
