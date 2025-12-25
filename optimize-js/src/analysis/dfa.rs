@@ -1,4 +1,5 @@
 use crate::cfg::cfg::Cfg;
+use crate::dom::virtual_exit_roots;
 use crate::il::inst::Inst;
 use ahash::HashMap;
 use ahash::HashMapExt;
@@ -68,27 +69,41 @@ pub trait DataFlowAnalysis<T: Eq, const FORWARDS: bool> {
   fn transfer(&mut self, block: &[Inst], in_: &T) -> T;
   fn join(&mut self, pred_outs: &[&T]) -> T;
   fn analyze(&mut self, cfg: &Cfg) {
-    let related = |successors: bool, label: u32| {
-      if successors || !FORWARDS {
-        cfg.graph.children(label)
-      } else {
-        cfg.graph.parents(label)
-      }
-    };
+    let (reachable, exit_nodes) = virtual_exit_roots(cfg);
     let mut outs = HashMap::<u32, T>::new();
-    // TODO u32::MAX does not exist.
-    let mut worklist = VecDeque::from([if FORWARDS { 0 } else { u32::MAX }]);
+    let mut worklist = VecDeque::new();
+    if FORWARDS {
+      worklist.push_back(0);
+    } else {
+      worklist.extend(exit_nodes.iter().copied());
+    }
     while let Some(label) = worklist.pop_front() {
+      if !reachable.contains(&label) {
+        continue;
+      }
+      let mut predecessors = if FORWARDS {
+        cfg.graph.parents(label).collect_vec()
+      } else {
+        cfg.graph.children(label).collect_vec()
+      };
+      predecessors.sort_unstable();
       let in_ = self.join(
-        &related(false, label)
-          .filter_map(|p| outs.get(&p))
+        &predecessors
+          .iter()
+          .filter_map(|p| outs.get(p))
           .collect_vec(),
       );
       let out = self.transfer(cfg.bblocks.get(label), &in_);
       let did_change = outs.get(&label).is_none_or(|ex| ex != &out);
       outs.insert(label, out);
       if did_change {
-        worklist.extend(related(true, label));
+        let mut successors = if FORWARDS {
+          cfg.graph.children(label).collect_vec()
+        } else {
+          cfg.graph.parents(label).collect_vec()
+        };
+        successors.sort_unstable();
+        worklist.extend(successors.into_iter().filter(|l| reachable.contains(l)));
       };
     }
   }
