@@ -143,7 +143,7 @@ fn lowers_common_ts_constructs() {
 interface Foo { bar: string }
 type Alias = Foo;
 enum Color { Red }
-namespace NS { export const x = 1; }
+export namespace NS { const x = 1; }
 "#;
   let ast = parse(source).expect("parse");
   let result = lower_file(FileId(2), FileKind::Ts, &ast);
@@ -233,7 +233,7 @@ proptest! {
   fn lowering_is_deterministic(sample in proptest::sample::select(vec![
     "const a = 1;",
     "function f(x) { return x * 2; }",
-    "interface Foo { bar: string }\nnamespace NS { export const x = 1; }",
+    "interface Foo { bar: string }\nexport namespace NS { const x = 1; }",
   ])) {
     let ast1 = parse(sample).expect("parse");
     let ast2 = parse(sample).expect("parse");
