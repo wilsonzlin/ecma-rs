@@ -11,6 +11,7 @@ use parse_js::ast::expr::{
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{ExprStmt, Stmt};
+use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
@@ -865,6 +866,11 @@ pub fn decompile_function(func: &ProgramFunction) -> DecompileResult<Vec<Node<St
   }
 
   Ok(stmts)
+}
+
+pub fn decompile_program(program: &Program) -> DecompileResult<Node<TopLevel>> {
+  let body = decompile_function(&program.top_level)?;
+  Ok(node(TopLevel { body }))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
