@@ -1,4 +1,4 @@
-use std::fmt::{self, Write as FmtWrite};
+use std::fmt;
 
 use parse_js::ast::expr::jsx::{
   JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxExprContainer, JsxMemberExpr,
