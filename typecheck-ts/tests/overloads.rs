@@ -22,7 +22,7 @@ fn param(name: &str, ty: TypeId, store: &Arc<TypeStore>) -> Param {
 fn selects_literal_overload() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
-  let relate = RelateCtx::new(&store, TypeOptions::default());
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
 
   let click = store.intern_type(TypeKind::StringLiteral(store.intern_name("click")));
   let dom_ret = store.intern_type(TypeKind::StringLiteral(store.intern_name("dom")));
@@ -76,7 +76,7 @@ fn selects_literal_overload() {
 fn infers_generic_return_type() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
-  let relate = RelateCtx::new(&store, TypeOptions::default());
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
 
   let t_param = types_ts_interned::TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
@@ -110,7 +110,7 @@ fn infers_generic_return_type() {
 fn reports_no_matching_overload_with_reasons() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
-  let relate = RelateCtx::new(&store, TypeOptions::default());
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
 
   let sig = Signature {
     params: vec![param("value", primitives.number, &store)],
@@ -149,7 +149,7 @@ fn reports_no_matching_overload_with_reasons() {
 fn reports_ambiguous_call() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
-  let relate = RelateCtx::new(&store, TypeOptions::default());
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
 
   let sig_a = Signature {
     params: vec![param("value", primitives.string, &store)],
@@ -191,7 +191,7 @@ fn reports_ambiguous_call() {
 fn prefers_union_compatible_overload() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
-  let relate = RelateCtx::new(&store, TypeOptions::default());
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
 
   let union = store.union(vec![primitives.string, primitives.number]);
 
@@ -234,7 +234,7 @@ fn prefers_union_compatible_overload() {
 fn prefers_fixed_arity_over_rest() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
-  let relate = RelateCtx::new(&store, TypeOptions::default());
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
 
   let sig_rest = Signature {
     params: vec![
