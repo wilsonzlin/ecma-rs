@@ -36,7 +36,7 @@ pub fn minify(
 ) -> Result<(), Vec<Diagnostic>> {
   let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(FileId(0))])?;
   let (sem, _) = bind_js(&mut top_level_node, top_level_mode);
-  let rename_analysis = analyze_renaming(&mut top_level_node);
+  let rename_analysis = analyze_renaming(&sem);
   if rename_analysis.should_disable_renaming() {
     output.clear();
     output.extend_from_slice(source.as_bytes());

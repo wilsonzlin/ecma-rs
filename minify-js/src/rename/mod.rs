@@ -2,11 +2,9 @@ use ahash::{HashMap, HashSet};
 use derive_visitor::{DriveMut, VisitorMut};
 use parse_js::ast::expr::pat::{ClassOrFuncName, IdPat};
 use parse_js::ast::expr::IdExpr;
-use parse_js::ast::expr::{CallExpr, Expr};
 use parse_js::ast::import_export::{ExportName, ModuleExportImportName};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ClassDecl, FuncDecl, VarDecl};
-use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::lex::KEYWORDS_MAPPING;
 use semantic_js::assoc::js::{declared_symbol, resolved_symbol, scope_id};
@@ -57,7 +55,6 @@ struct SymbolCollector<'a> {
   scope_usages: HashMap<ScopeId, ScopeUsages>,
 }
 
-type CallExprNode = Node<CallExpr>;
 type ClassDeclNode = Node<ClassDecl>;
 type ClassOrFuncNameNode = Node<ClassOrFuncName>;
 type ExportNameNode = Node<ExportName>;
@@ -65,41 +62,18 @@ type FuncDeclNode = Node<FuncDecl>;
 type IdExprNode = Node<IdExpr>;
 type IdPatNode = Node<IdPat>;
 type TopLevelNode = Node<TopLevel>;
-type WithStmtNode = Node<WithStmt>;
 type VarDeclNode = Node<VarDecl>;
 
-#[derive(VisitorMut)]
-#[visitor(CallExprNode(enter), WithStmtNode(enter))]
-struct RenameAnalysisVisitor {
-  analysis: RenameAnalysis,
-}
-
-impl RenameAnalysisVisitor {
-  fn enter_call_expr_node(&mut self, node: &mut CallExprNode) {
-    if self.analysis.has_direct_eval || node.stx.optional_chaining {
-      return;
-    }
-    if let Expr::Id(id_node) = node.stx.callee.stx.as_ref() {
-      if id_node.stx.name != "eval" {
-        return;
-      }
-      if resolved_symbol(&id_node.assoc).is_none() {
-        self.analysis.has_direct_eval = true;
-      }
+pub fn analyze_renaming(sem: &JsSemantics) -> RenameAnalysis {
+  let mut analysis = RenameAnalysis::default();
+  for scope in sem.scopes.iter() {
+    analysis.has_with |= scope.is_dynamic;
+    analysis.has_direct_eval |= scope.has_direct_eval;
+    if analysis.should_disable_renaming() {
+      break;
     }
   }
-
-  fn enter_with_stmt_node(&mut self, _node: &mut WithStmtNode) {
-    self.analysis.has_with = true;
-  }
-}
-
-pub fn analyze_renaming(top: &mut TopLevelNode) -> RenameAnalysis {
-  let mut visitor = RenameAnalysisVisitor {
-    analysis: RenameAnalysis::default(),
-  };
-  top.drive_mut(&mut visitor);
-  visitor.analysis
+  analysis
 }
 
 #[derive(VisitorMut)]
