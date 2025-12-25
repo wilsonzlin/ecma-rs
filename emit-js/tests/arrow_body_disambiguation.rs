@@ -56,3 +56,8 @@ fn parenthesizes_comma_bodies() {
 fn parenthesizes_arrow_in_member_chain() {
   assert_roundtrip("(x=>({a:1})).prop", "((x) => ({a: 1})).prop");
 }
+
+#[test]
+fn emits_typed_arrow_parameters() {
+  assert_roundtrip("(x:Foo)=>x", "(x: Foo) => x");
+}

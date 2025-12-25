@@ -35,6 +35,13 @@ pub fn emit_param_decl(out: &mut Emitter, decl: &Node<ParamDecl>) -> EmitResult 
   if decl.stx.optional {
     out.write_punct("?");
   }
+  if let Some(annotation) = &decl.stx.type_annotation {
+    out.write_punct(":");
+    if out.mode() == crate::EmitMode::Canonical {
+      out.write_space();
+    }
+    crate::emit_ts_type(out, annotation)?;
+  }
   if let Some(default) = &decl.stx.default_value {
     out.write_punct("=");
     emit_expr(out, default)?;

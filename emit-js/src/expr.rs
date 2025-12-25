@@ -217,7 +217,9 @@ where
     &mut self,
     f: impl FnOnce(&mut Emitter) -> EmitResult,
   ) -> EmitResult {
-    let mut emitter = Emitter::default();
+    let mut emitter = Emitter::new(crate::emitter::EmitOptions {
+      mode: crate::emitter::EmitMode::Canonical,
+    });
     f(&mut emitter)?;
     let rendered =
       std::str::from_utf8(emitter.as_bytes()).expect("pattern emitter output is UTF-8");
