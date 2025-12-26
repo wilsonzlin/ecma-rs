@@ -1,5 +1,8 @@
 use ::semantic_js::ts as sem_ts;
+use ::semantic_js::ts::from_hir_js::lower_to_ts_hir;
+use ::semantic_js::ts::locals as sem_locals;
 pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
+use hir_js::{lower_file, DefKind as HirDefKind, FileKind as HirFileKind, LowerResult};
 pub use hir_js::{BodyId, DefId, ExprId, PatId};
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -34,10 +37,10 @@ use types_ts_interned::{
   TypeDisplay as InternedTypeDisplay, TypeExpander,
 };
 
-use crate::{FatalError, HostError, Ice, IceContext};
 use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
 };
+use crate::{FatalError, HostError, Ice, IceContext};
 
 #[path = "check/mod.rs"]
 pub(crate) mod check;
@@ -59,6 +62,7 @@ const CODE_UNSUPPORTED_PATTERN: &str = "TC1004";
 const CODE_UNSUPPORTED_PARAM_PATTERN: &str = "TC1005";
 const CODE_MISSING_BODY: &str = "ICE0002";
 const CODE_ARGUMENT_COUNT_MISMATCH: &str = "TC1006";
+const LOCAL_SYMBOL_OFFSET: u32 = 1 << 31;
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
@@ -189,9 +193,7 @@ impl BodyCheckResult {
 pub struct TypeDisplay<'a> {
   store: Arc<TypeStore>,
   ty: TypeId,
-  ref_resolver: Option<
-    Arc<dyn Fn(types_ts_interned::DefId) -> Option<String> + Send + Sync + 'a>,
-  >,
+  ref_resolver: Option<Arc<dyn Fn(types_ts_interned::DefId) -> Option<String> + Send + Sync + 'a>>,
   _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -517,9 +519,11 @@ impl Program {
     file: FileId,
     offset: u32,
   ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
+    let host = Arc::clone(&self.host);
+    let roots = self.roots.clone();
     self.with_analyzed_state(|state| {
       state.ensure_symbols_for_file(file);
-      Ok(state.symbol_at(file, offset))
+      Ok(state.symbol_at(file, offset, &host, &roots))
     })
   }
 
@@ -1085,6 +1089,10 @@ struct ProgramState {
   body_data: HashMap<BodyId, BodyData>,
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
   semantics: Option<sem_ts::TsProgramSemantics>,
+  hir_lowered: HashMap<FileId, Arc<LowerResult>>,
+  hir_locals: HashMap<FileId, sem_locals::TsLocalSemantics>,
+  hir_semantics: Option<sem_ts::TsProgramSemantics>,
+  hir_sem_hir: HashMap<FileId, Arc<sem_ts::HirFile>>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
@@ -1187,9 +1195,10 @@ impl ProgramState {
         if widened_elem == elem {
           ty
         } else {
-          self
-            .type_store
-            .intern_type(TypeKind::Array { ty: widened_elem, readonly })
+          self.type_store.intern_type(TypeKind::Array {
+            ty: widened_elem,
+            readonly,
+          })
         }
       }
       TypeKind::Tuple(elems) => {
@@ -1253,11 +1262,9 @@ impl ProgramState {
             construct_signatures: shape.construct_signatures.clone(),
             indexers,
           });
-          self
-            .type_store
-            .intern_type(TypeKind::Object(self.type_store.intern_object(
-              InternedObjectType { shape },
-            )))
+          self.type_store.intern_type(TypeKind::Object(
+            self.type_store.intern_object(InternedObjectType { shape }),
+          ))
         } else {
           ty
         }
@@ -1349,6 +1356,10 @@ impl ProgramState {
       body_data: HashMap::new(),
       sem_hir: HashMap::new(),
       semantics: None,
+      hir_lowered: HashMap::new(),
+      hir_locals: HashMap::new(),
+      hir_semantics: None,
+      hir_sem_hir: HashMap::new(),
       def_types: HashMap::new(),
       body_results: HashMap::new(),
       symbol_occurrences: HashMap::new(),
@@ -1752,20 +1763,20 @@ impl ProgramState {
           top_body.stmts.push(hir_stmt);
           self.def_data.insert(
             def_id,
-              DefData {
-                name: "default".to_string(),
-                file,
-                span: span.range,
-                symbol,
-                export: true,
-                kind: DefKind::Var(VarData {
-                  typ: None,
-                  init: Some(expr_id),
-                  body: top_body_id,
-                  mode: VarDeclMode::Const,
-                }),
-              },
-            );
+            DefData {
+              name: "default".to_string(),
+              file,
+              span: span.range,
+              symbol,
+              export: true,
+              kind: DefKind::Var(VarData {
+                typ: None,
+                init: Some(expr_id),
+                body: top_body_id,
+                mode: VarDeclMode::Const,
+              }),
+            },
+          );
           self.record_def_symbol(def_id, symbol);
           defs.push(def_id);
           sem_builder.add_decl(
@@ -2122,20 +2133,20 @@ impl ProgramState {
       });
       self.def_data.insert(
         def_id,
-            DefData {
-              name: name.clone(),
-              file,
-              span,
-              symbol,
-              export: var.export,
-              kind: DefKind::Var(VarData {
-                typ: type_ann,
-                init: init_id,
-                body: builder.id,
-                mode: var.mode,
-              }),
-            },
-          );
+        DefData {
+          name: name.clone(),
+          file,
+          span,
+          symbol,
+          export: var.export,
+          kind: DefKind::Var(VarData {
+            typ: type_ann,
+            init: init_id,
+            body: builder.id,
+            mode: var.mode,
+          }),
+        },
+      );
       self.record_def_symbol(def_id, symbol);
       defs.push((
         def_id,
@@ -3048,7 +3059,9 @@ impl ProgramState {
     );
     let cached = self.def_types.get(&def).copied();
     let should_recompute = match (cached, self.def_data.get(&def)) {
-      (Some(existing), Some(data)) => matches!(&data.kind, DefKind::Type(type_data) if type_data.type_expr.is_some() && matches!(self.type_store.type_kind(existing), TypeKind::Unknown)),
+      (Some(existing), Some(data)) => {
+        matches!(&data.kind, DefKind::Type(type_data) if type_data.type_expr.is_some() && matches!(self.type_store.type_kind(existing), TypeKind::Unknown))
+      }
       _ => false,
     };
     if let (Some(existing), false) = (cached, should_recompute) {
@@ -3231,56 +3244,434 @@ impl ProgramState {
     }
   }
 
-  fn symbol_at(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
-    let occurrences = self.symbol_occurrences.get(&file)?;
-    let mut best_containing: Option<(u32, u32, semantic_js::SymbolId)> = None;
-    let mut best_empty: Option<(u32, u32, semantic_js::SymbolId)> = None;
+  fn symbol_at(
+    &mut self,
+    file: FileId,
+    offset: u32,
+    host: &Arc<dyn Host>,
+    roots: &[FileId],
+  ) -> Option<semantic_js::SymbolId> {
+    let lowered = self.ensure_lowered(file, host)?;
+    let semantics = self.ensure_hir_semantics(host, roots).cloned();
+    let locals = self.hir_locals.get(&file)?;
+    let mut candidates: Vec<(TextRange, semantic_js::SymbolId)> = Vec::new();
 
-    for occurrence in occurrences.iter() {
-      let range = occurrence.range;
-      let len = range.len();
-      let key = (len, range.start, occurrence.symbol);
-      if range.start <= offset && offset < range.end {
-        let replace = best_containing.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_containing = Some(key);
-        }
-      } else if range.start == range.end && offset == range.start {
-        let replace = best_empty.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_empty = Some(key);
+    if let Some((expr_id, span)) = lowered.hir.span_map.expr_span_at_offset(offset) {
+      if let Some(symbol) = self.resolve_expr_symbol(
+        &lowered,
+        expr_id,
+        span,
+        sem_ts::Namespace::VALUE,
+        locals,
+        semantics.as_ref(),
+      ) {
+        candidates.push((span, symbol));
+      }
+    }
+
+    if let Some((_, span)) = lowered.hir.span_map.pat_span_at_offset(offset) {
+      if let Some(sym) = locals.resolve_expr_span(span) {
+        let symbol = self.map_local_symbol(
+          sym,
+          sem_ts::Namespace::VALUE,
+          &lowered,
+          locals,
+          semantics.as_ref(),
+        );
+        candidates.push((span, symbol));
+      }
+    }
+
+    if let Some((_, span)) = lowered.hir.span_map.type_expr_span_at_offset(offset) {
+      if let Some(sym) = locals.resolve_type_span(span) {
+        let symbol = self.map_local_symbol(
+          sym,
+          sem_ts::Namespace::TYPE,
+          &lowered,
+          locals,
+          semantics.as_ref(),
+        );
+        candidates.push((span, symbol));
+      } else if let Some(def) = lowered.hir.span_map.def_at_offset(span.start) {
+        if let Some(symbol) = self.symbol_for_def(
+          def,
+          Some(sem_ts::Namespace::TYPE),
+          &lowered,
+          semantics.as_ref(),
+        ) {
+          candidates.push((span, symbol));
         }
       }
     }
 
-    let symbol = best_containing
-      .or(best_empty)
-      .map(|(_, _, symbol)| symbol)?;
-    Some(self.resolve_symbol(symbol))
-  }
-
-  fn resolve_symbol(&mut self, symbol: semantic_js::SymbolId) -> semantic_js::SymbolId {
-    let import = self
-      .symbol_to_def
-      .get(&symbol)
-      .and_then(|def| self.def_data.get(def))
-      .and_then(|d| match &d.kind {
-        DefKind::Import(import) => Some(import.clone()),
-        _ => None,
-      });
-
-    if let Some(import) = import {
-      if let Some(resolved) = self.resolve_import_symbol(&import) {
-        return resolved;
+    if let Some((spec_id, span)) = lowered.hir.span_map.import_specifier_span_at_offset(offset) {
+      if let Some((def, ns)) = Self::import_specifier_def(&lowered, spec_id) {
+        if let Some(symbol) = self.symbol_for_def(def, Some(ns), &lowered, semantics.as_ref()) {
+          candidates.push((span, symbol));
+        }
       }
     }
 
-    symbol
+    if let Some((spec_id, span)) = lowered.hir.span_map.export_specifier_span_at_offset(offset) {
+      if let Some((def, ns)) = Self::export_specifier_def(&lowered, spec_id) {
+        if let Some(symbol) = self.symbol_for_def(def, Some(ns), &lowered, semantics.as_ref()) {
+          candidates.push((span, symbol));
+        }
+      }
+    }
+
+    if let Some((def, span)) = lowered.hir.span_map.def_span_at_offset(offset) {
+      if let Some(symbol) = self.symbol_for_def(def, None, &lowered, semantics.as_ref()) {
+        candidates.push((span, symbol));
+      }
+    }
+
+    Self::pick_best_symbol(candidates)
   }
 
-  fn resolve_import_symbol(&mut self, import: &ImportData) -> Option<semantic_js::SymbolId> {
-    let exports = self.exports_of_file(import.from);
-    exports.get(&import.original).map(|entry| entry.symbol)
+  fn pick_best_symbol(
+    candidates: Vec<(TextRange, semantic_js::SymbolId)>,
+  ) -> Option<semantic_js::SymbolId> {
+    candidates
+      .into_iter()
+      .min_by_key(|(range, symbol)| (range.len(), range.start, symbol.0))
+      .map(|(_, symbol)| symbol)
+  }
+
+  fn ensure_lowered(&mut self, file: FileId, host: &Arc<dyn Host>) -> Option<Arc<LowerResult>> {
+    if !self.hir_lowered.contains_key(&file) {
+      let _ = self.parse_lower_file(file, host)?;
+    }
+    self.hir_lowered.get(&file).cloned()
+  }
+
+  fn parse_lower_file(&mut self, file: FileId, host: &Arc<dyn Host>) -> Option<Arc<LowerResult>> {
+    let text = self.load_text(file, host).ok()?;
+    let mut ast = parse(&text).ok()?;
+    let locals = sem_locals::bind_ts_locals(&mut ast, true);
+    let file_kind = *self
+      .file_kinds
+      .entry(file)
+      .or_insert_with(|| host.file_kind(file));
+    let hir_kind = Self::map_file_kind(file_kind);
+    let lowered = lower_file(file, hir_kind, &ast);
+    let sem_hir = lower_to_ts_hir(&ast, &lowered);
+    self.hir_locals.insert(file, locals);
+    let lowered = Arc::new(lowered);
+    self.hir_lowered.insert(file, Arc::clone(&lowered));
+    self.hir_sem_hir.insert(file, Arc::new(sem_hir));
+    self.hir_semantics = None;
+    Some(lowered)
+  }
+
+  fn ensure_hir_semantics(
+    &mut self,
+    host: &Arc<dyn Host>,
+    roots: &[FileId],
+  ) -> Option<&sem_ts::TsProgramSemantics> {
+    if self.hir_semantics.is_some() {
+      return self.hir_semantics.as_ref();
+    }
+    let files: Vec<FileId> = self
+      .files
+      .keys()
+      .copied()
+      .chain(self.lib_texts.keys().copied())
+      .chain(roots.iter().copied())
+      .collect();
+    for file in files {
+      let _ = self.ensure_lowered(file, host);
+    }
+    let resolver = HostResolver {
+      host: Arc::clone(host),
+    };
+    let sem_roots: Vec<sem_ts::FileId> = roots.iter().map(|f| sem_ts::FileId(f.0)).collect();
+    let files = self.hir_sem_hir.clone();
+    let (semantics, _diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file_id| {
+      files
+        .get(&FileId(file_id.0))
+        .cloned()
+        .unwrap_or_else(|| Arc::new(sem_ts::HirFile::module(file_id)))
+    });
+    self.hir_semantics = Some(semantics);
+    self.hir_semantics.as_ref()
+  }
+
+  fn map_local_symbol(
+    &self,
+    local_sym: sem_locals::SymbolId,
+    preferred_ns: sem_ts::Namespace,
+    lower: &LowerResult,
+    locals: &sem_locals::TsLocalSemantics,
+    semantics: Option<&sem_ts::TsProgramSemantics>,
+  ) -> semantic_js::SymbolId {
+    if let Some(symbol) = locals.symbols.get(local_sym.index()) {
+      if symbol.decl_scope.index() == 0 {
+        if let (Some(semantics), Some(name)) = (semantics, locals.names.get(symbol.name.index())) {
+          if let Some(resolved) =
+            semantics.resolve_in_module(sem_ts::FileId(lower.hir.file.0), name, preferred_ns)
+          {
+            let symbol = semantic_js::SymbolId::from(resolved);
+            return self.canonical_symbol(symbol, preferred_ns, Some(semantics));
+          }
+        }
+      }
+    }
+    if let Some(span) = Self::local_symbol_span(locals, local_sym) {
+      if let Some(def) = lower.hir.span_map.def_at_offset(span.start) {
+        if let Some(symbol) = self.symbol_for_def(def, Some(preferred_ns), lower, semantics) {
+          return symbol;
+        }
+        return self.synthetic_symbol_for_def(def);
+      }
+    }
+    let synthetic = semantic_js::SymbolId(LOCAL_SYMBOL_OFFSET | local_sym.0);
+    self.canonical_symbol(synthetic, preferred_ns, semantics)
+  }
+
+  fn local_symbol_span(
+    locals: &sem_locals::TsLocalSemantics,
+    symbol: sem_locals::SymbolId,
+  ) -> Option<TextRange> {
+    locals.symbols.get(symbol.index()).and_then(|s| s.span)
+  }
+
+  fn hir_def_kind(lower: &LowerResult, def: DefId) -> Option<HirDefKind> {
+    let idx = lower.def_index.get(&def).copied()?;
+    lower.defs.get(idx).map(|d| d.path.kind)
+  }
+
+  fn symbol_for_def(
+    &self,
+    def: DefId,
+    preferred_ns: Option<sem_ts::Namespace>,
+    lower: &LowerResult,
+    semantics: Option<&sem_ts::TsProgramSemantics>,
+  ) -> Option<semantic_js::SymbolId> {
+    let kind = Self::hir_def_kind(lower, def)?;
+    let namespaces = Self::def_kind_namespaces(kind);
+    let target = preferred_ns.unwrap_or_else(|| {
+      if namespaces.contains(sem_ts::Namespace::VALUE) {
+        sem_ts::Namespace::VALUE
+      } else if namespaces.contains(sem_ts::Namespace::TYPE) {
+        sem_ts::Namespace::TYPE
+      } else {
+        sem_ts::Namespace::NAMESPACE
+      }
+    });
+    if let Some(semantics) = semantics {
+      if let Some(symbol) = semantics.symbol_for_def(def, target) {
+        let symbol = semantic_js::SymbolId::from(symbol);
+        return Some(self.canonical_symbol(symbol, target, Some(semantics)));
+      }
+      for ns in [
+        sem_ts::Namespace::VALUE,
+        sem_ts::Namespace::TYPE,
+        sem_ts::Namespace::NAMESPACE,
+      ] {
+        if ns == target || !namespaces.contains(ns) {
+          continue;
+        }
+        if let Some(symbol) = semantics.symbol_for_def(def, ns) {
+          let symbol = semantic_js::SymbolId::from(symbol);
+          return Some(self.canonical_symbol(symbol, ns, Some(semantics)));
+        }
+      }
+    }
+    Some(self.canonical_symbol(self.synthetic_symbol_for_def(def), target, semantics))
+  }
+
+  fn canonical_symbol(
+    &self,
+    symbol: semantic_js::SymbolId,
+    ns: sem_ts::Namespace,
+    semantics: Option<&sem_ts::TsProgramSemantics>,
+  ) -> semantic_js::SymbolId {
+    if symbol.0 & LOCAL_SYMBOL_OFFSET != 0 {
+      return symbol;
+    }
+    let Some(semantics) = semantics else {
+      return symbol;
+    };
+
+    let mut current = ::semantic_js::ts::SymbolId::from(symbol);
+    let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    while seen.insert(current.0) {
+      let data = semantics.symbols().symbol(current);
+      if let sem_ts::SymbolOrigin::Import {
+        from: Some(file),
+        imported,
+      } = &data.origin
+      {
+        if let Some(resolved) = semantics.resolve_export(*file, imported, ns) {
+          current = resolved;
+          continue;
+        }
+      }
+      break;
+    }
+    semantic_js::SymbolId::from(current)
+  }
+
+  fn resolve_expr_symbol(
+    &self,
+    lower: &LowerResult,
+    expr: hir_js::ids::ExprId,
+    span: TextRange,
+    preferred_ns: sem_ts::Namespace,
+    locals: &sem_locals::TsLocalSemantics,
+    semantics: Option<&sem_ts::TsProgramSemantics>,
+  ) -> Option<semantic_js::SymbolId> {
+    if let Some(sym) = locals.resolve_expr_span(span) {
+      return Some(self.map_local_symbol(sym, preferred_ns, lower, locals, semantics));
+    }
+    self.resolve_hir_expr_symbol(lower, expr, Some(span), preferred_ns, locals, semantics)
+  }
+
+  fn resolve_hir_expr_symbol(
+    &self,
+    lower: &LowerResult,
+    expr: hir_js::ids::ExprId,
+    span_hint: Option<TextRange>,
+    preferred_ns: sem_ts::Namespace,
+    locals: &sem_locals::TsLocalSemantics,
+    semantics: Option<&sem_ts::TsProgramSemantics>,
+  ) -> Option<semantic_js::SymbolId> {
+    for body in lower.bodies.iter() {
+      if let Some(data) = body.exprs.get(expr.0 as usize) {
+        if let Some(hint) = span_hint {
+          if data.span != hint && !(data.span.is_empty() && hint.is_empty()) {
+            continue;
+          }
+        }
+        match &data.kind {
+          hir_js::hir::ExprKind::Ident(name_id) => {
+            if let Some(sym) = locals.resolve_expr_span(data.span) {
+              return Some(self.map_local_symbol(sym, preferred_ns, lower, locals, semantics));
+            }
+            if let Some(semantics) = semantics {
+              if let Some(name) = lower.names.resolve(*name_id) {
+                if let Some(resolved) =
+                  semantics.resolve_in_module(sem_ts::FileId(lower.hir.file.0), name, preferred_ns)
+                {
+                  let symbol = semantic_js::SymbolId::from(resolved);
+                  return Some(self.canonical_symbol(symbol, preferred_ns, Some(semantics)));
+                }
+              }
+            }
+          }
+          hir_js::hir::ExprKind::Call(call) => {
+            if let Some(symbol) = self.resolve_hir_expr_symbol(
+              lower,
+              call.callee,
+              None,
+              preferred_ns,
+              locals,
+              semantics,
+            ) {
+              return Some(symbol);
+            }
+          }
+          hir_js::hir::ExprKind::Member(member) => {
+            if let Some(symbol) = self.resolve_hir_expr_symbol(
+              lower,
+              member.object,
+              None,
+              preferred_ns,
+              locals,
+              semantics,
+            ) {
+              return Some(symbol);
+            }
+          }
+          _ => {}
+        }
+      }
+    }
+    None
+  }
+
+  fn synthetic_symbol_for_def(&self, def: DefId) -> semantic_js::SymbolId {
+    semantic_js::SymbolId(LOCAL_SYMBOL_OFFSET | def.0)
+  }
+
+  fn import_specifier_def(
+    lower: &LowerResult,
+    id: hir_js::ids::ImportSpecifierId,
+  ) -> Option<(DefId, sem_ts::Namespace)> {
+    for import in lower.hir.imports.iter() {
+      if let hir_js::ImportKind::Es(es) = &import.kind {
+        for named in es.named.iter() {
+          if named.id == id {
+            let ns = if named.is_type_only || es.is_type_only {
+              sem_ts::Namespace::TYPE
+            } else {
+              sem_ts::Namespace::VALUE
+            };
+            if let Some(def) = named.local_def {
+              return Some((def, ns));
+            }
+          }
+        }
+      }
+    }
+    None
+  }
+
+  fn export_specifier_def(
+    lower: &LowerResult,
+    id: hir_js::ids::ExportSpecifierId,
+  ) -> Option<(DefId, sem_ts::Namespace)> {
+    for export in lower.hir.exports.iter() {
+      if let hir_js::ExportKind::Named(named) = &export.kind {
+        for spec in named.specifiers.iter() {
+          if spec.id == id {
+            let ns = if spec.is_type_only || named.is_type_only {
+              sem_ts::Namespace::TYPE
+            } else {
+              sem_ts::Namespace::VALUE
+            };
+            if let Some(def) = spec.local_def {
+              return Some((def, ns));
+            }
+          }
+        }
+      }
+    }
+    None
+  }
+
+  fn def_kind_namespaces(kind: HirDefKind) -> sem_ts::Namespace {
+    match kind {
+      HirDefKind::Class => sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE,
+      HirDefKind::Constructor
+      | HirDefKind::Field
+      | HirDefKind::Function
+      | HirDefKind::Method
+      | HirDefKind::Var
+      | HirDefKind::Param => sem_ts::Namespace::VALUE,
+      HirDefKind::TypeAlias | HirDefKind::Interface | HirDefKind::TypeParam => {
+        sem_ts::Namespace::TYPE
+      }
+      HirDefKind::Enum => sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE,
+      HirDefKind::Namespace | HirDefKind::Module => {
+        sem_ts::Namespace::VALUE | sem_ts::Namespace::NAMESPACE
+      }
+      HirDefKind::ImportBinding | HirDefKind::ExportAlias => {
+        sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE | sem_ts::Namespace::NAMESPACE
+      }
+      _ => sem_ts::Namespace::VALUE,
+    }
+  }
+
+  fn map_file_kind(kind: FileKind) -> HirFileKind {
+    match kind {
+      FileKind::Js => HirFileKind::Js,
+      FileKind::Ts => HirFileKind::Ts,
+      FileKind::Tsx => HirFileKind::Tsx,
+      FileKind::Jsx => HirFileKind::Jsx,
+      FileKind::Dts => HirFileKind::Dts,
+    }
   }
 
   fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
@@ -3325,7 +3716,12 @@ impl ProgramState {
   fn type_members_to_parts(
     &mut self,
     members: &[Node<TypeMember>],
-  ) -> (Vec<TsProperty>, Vec<SignatureId>, Vec<SignatureId>, Vec<Indexer>) {
+  ) -> (
+    Vec<TsProperty>,
+    Vec<SignatureId>,
+    Vec<SignatureId>,
+    Vec<Indexer>,
+  ) {
     let mut properties = Vec::new();
     let mut call_signatures = Vec::new();
     let mut construct_signatures = Vec::new();
@@ -3384,13 +3780,11 @@ impl ProgramState {
           }
         }
         TypeMember::Constructor(cons) => {
-          let sig =
-            self.signature_from_member(&cons.stx.parameters, cons.stx.return_type.as_ref());
+          let sig = self.signature_from_member(&cons.stx.parameters, cons.stx.return_type.as_ref());
           construct_signatures.push(self.type_store.intern_signature(sig));
         }
         TypeMember::CallSignature(call) => {
-          let sig =
-            self.signature_from_member(&call.stx.parameters, call.stx.return_type.as_ref());
+          let sig = self.signature_from_member(&call.stx.parameters, call.stx.return_type.as_ref());
           call_signatures.push(self.type_store.intern_signature(sig));
         }
         TypeMember::IndexSignature(index) => {
@@ -3405,12 +3799,7 @@ impl ProgramState {
         _ => {}
       }
     }
-    (
-      properties,
-      call_signatures,
-      construct_signatures,
-      indexers,
-    )
+    (properties, call_signatures, construct_signatures, indexers)
   }
 
   fn signature_from_member(
@@ -3448,11 +3837,7 @@ impl ProgramState {
     }
   }
 
-  fn interface_type(
-    &mut self,
-    members: &[Node<TypeMember>],
-    extends: &[Node<TypeExpr>],
-  ) -> TypeId {
+  fn interface_type(&mut self, members: &[Node<TypeMember>], extends: &[Node<TypeExpr>]) -> TypeId {
     let (properties, call_signatures, construct_signatures, indexers) =
       self.type_members_to_parts(members);
     let mut types = Vec::new();
@@ -3468,9 +3853,7 @@ impl ProgramState {
         indexers,
       });
       types.push(self.type_store.intern_type(TypeKind::Object(
-        self
-          .type_store
-          .intern_object(InternedObjectType { shape }),
+        self.type_store.intern_object(InternedObjectType { shape }),
       )));
     }
     for base in extends {
@@ -3484,10 +3867,9 @@ impl ProgramState {
   }
 
   fn lookup_type_def(&self, name: &str) -> Option<DefId> {
-    self
-      .def_data
-      .iter()
-      .find_map(|(id, data)| (matches!(data.kind, DefKind::Type(_)) && data.name == name).then(|| *id))
+    self.def_data.iter().find_map(|(id, data)| {
+      (matches!(data.kind, DefKind::Type(_)) && data.name == name).then(|| *id)
+    })
   }
 
   fn type_from_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeId {
@@ -3512,12 +3894,15 @@ impl ProgramState {
         let args = reference
           .type_arguments
           .as_ref()
-          .map(|args| args.iter().map(|arg| self.type_from_type_expr(arg)).collect())
+          .map(|args| {
+            args
+              .iter()
+              .map(|arg| self.type_from_type_expr(arg))
+              .collect()
+          })
           .unwrap_or_default();
         match def {
-          Some(def) => self
-            .type_store
-            .intern_type(TypeKind::Ref { def, args }),
+          Some(def) => self.type_store.intern_type(TypeKind::Ref { def, args }),
           None => self.builtin.unknown,
         }
       }

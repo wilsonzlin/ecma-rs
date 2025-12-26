@@ -66,26 +66,74 @@ impl SpanMap {
     self.exprs.query(offset)
   }
 
+  pub fn expr_span_at_offset(&self, offset: u32) -> Option<(ExprId, TextRange)> {
+    self
+      .exprs
+      .query_span(offset)
+      .map(|span| (span.id, span.range))
+  }
+
   pub fn type_expr_at_offset(&self, offset: u32) -> Option<TypeExprId> {
     self.type_exprs.query(offset)
+  }
+
+  pub fn type_expr_span_at_offset(&self, offset: u32) -> Option<(TypeExprId, TextRange)> {
+    self
+      .type_exprs
+      .query_span(offset)
+      .map(|span| (span.id, span.range))
   }
 
   pub fn pat_at_offset(&self, offset: u32) -> Option<PatId> {
     self.pats.query(offset)
   }
 
+  pub fn pat_span_at_offset(&self, offset: u32) -> Option<(PatId, TextRange)> {
+    self
+      .pats
+      .query_span(offset)
+      .map(|span| (span.id, span.range))
+  }
+
   pub fn import_specifier_at_offset(&self, offset: u32) -> Option<ImportSpecifierId> {
     self.import_specifiers.query(offset)
+  }
+
+  pub fn import_specifier_span_at_offset(
+    &self,
+    offset: u32,
+  ) -> Option<(ImportSpecifierId, TextRange)> {
+    self
+      .import_specifiers
+      .query_span(offset)
+      .map(|span| (span.id, span.range))
   }
 
   pub fn export_specifier_at_offset(&self, offset: u32) -> Option<ExportSpecifierId> {
     self.export_specifiers.query(offset)
   }
 
+  pub fn export_specifier_span_at_offset(
+    &self,
+    offset: u32,
+  ) -> Option<(ExportSpecifierId, TextRange)> {
+    self
+      .export_specifiers
+      .query_span(offset)
+      .map(|span| (span.id, span.range))
+  }
+
   /// Returns the innermost definition that contains the offset, preferring the
   /// smallest range length and breaking ties by start offset then id.
   pub fn def_at_offset(&self, offset: u32) -> Option<DefId> {
     self.defs.query(offset)
+  }
+
+  pub fn def_span_at_offset(&self, offset: u32) -> Option<(DefId, TextRange)> {
+    self
+      .defs
+      .query_span(offset)
+      .map(|span| (span.id, span.range))
   }
 }
 
@@ -94,6 +142,7 @@ impl SpanMap {
 struct SpanIndex<T> {
   spans: Vec<SpanEntry<T>>,
   segments: Vec<Segment<T>>,
+  empties: Vec<ActiveSpan<T>>,
 }
 
 impl<T> SpanIndex<T> {
@@ -101,11 +150,20 @@ impl<T> SpanIndex<T> {
     Self {
       spans: Vec::new(),
       segments: Vec::new(),
+      empties: Vec::new(),
     }
   }
 
-  fn add(&mut self, range: TextRange, id: T) {
-    self.spans.push(SpanEntry { range, id });
+  fn add(&mut self, range: TextRange, id: T)
+  where
+    T: Copy,
+  {
+    let span = ActiveSpan { range, id };
+    if range.is_empty() {
+      self.empties.push(span);
+    } else {
+      self.spans.push(SpanEntry { range, id });
+    }
   }
 }
 
@@ -115,16 +173,36 @@ impl<T: Copy + Ord> SpanIndex<T> {
       .spans
       .sort_by(|a, b| (a.range.start, a.range.end, a.id).cmp(&(b.range.start, b.range.end, b.id)));
     self.segments = build_segments(&self.spans);
+    self.empties.sort();
   }
 
   fn query(&self, offset: u32) -> Option<T> {
+    self.query_span(offset).map(|span| span.id)
+  }
+
+  fn query_span(&self, offset: u32) -> Option<ActiveSpan<T>> {
     let idx = self.segments.partition_point(|seg| seg.end <= offset);
-    let seg = self.segments.get(idx)?;
-    if offset < seg.start {
-      None
-    } else {
-      Some(seg.best.id)
+    let seg = self.segments.get(idx);
+    if let Some(seg) = seg {
+      if offset >= seg.start {
+        return Some(seg.best);
+      }
     }
+
+    let start_idx = self
+      .empties
+      .partition_point(|span| span.range.start < offset);
+    let mut best_empty: Option<ActiveSpan<T>> = None;
+    for span in self.empties.iter().skip(start_idx) {
+      if span.range.start != offset {
+        break;
+      }
+      let replace = best_empty.map(|best| span < &best).unwrap_or(true);
+      if replace {
+        best_empty = Some(*span);
+      }
+    }
+    best_empty
   }
 }
 

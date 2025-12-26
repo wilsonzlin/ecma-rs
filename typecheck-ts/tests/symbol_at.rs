@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use typecheck_ts::semantic_js::SymbolId;
 use typecheck_ts::{FileId, Host, HostError, Program, TextRange};
 
 #[derive(Default)]
@@ -31,6 +32,44 @@ impl Host for MemoryHost {
   fn resolve(&self, from: FileId, spec: &str) -> Option<FileId> {
     self.edges.get(&(from, spec.to_string())).copied()
   }
+}
+
+fn positions_of(source: &str, needle: &str) -> Vec<u32> {
+  let mut positions = Vec::new();
+  let mut start = 0usize;
+  while let Some(found) = source[start..].find(needle) {
+    let pos = start + found;
+    positions.push(pos as u32);
+    start = pos + needle.len();
+  }
+  positions
+}
+
+fn symbol_for_occurrence(
+  program: &Program,
+  file: FileId,
+  source: &str,
+  needle: &str,
+  occurrence: usize,
+) -> SymbolId {
+  let positions = positions_of(source, needle);
+  let start = *positions
+    .get(occurrence)
+    .unwrap_or_else(|| panic!("missing occurrence {occurrence} of '{needle}'"));
+  let end = start + needle.len() as u32;
+  let search_start = start.saturating_sub(8);
+  let search_end = (end + 8).min(source.len() as u32);
+  let mut offsets: Vec<u32> = (start..end).collect();
+  offsets.extend(end..search_end);
+  offsets.extend(search_start..start);
+  offsets
+    .into_iter()
+    .find_map(|offset| program.symbol_at(file, offset))
+    .unwrap_or_else(|| {
+      panic!(
+        "no symbol for '{needle}' occurrence {occurrence} in range {search_start}..{search_end}"
+      )
+    })
 }
 
 #[test]
@@ -97,16 +136,77 @@ fn symbol_at_resolves_imports() {
   host.link(file_b, "./a", file_a);
 
   let program = Program::new(host, vec![file_b]);
-  let decl_offset = source_a.find("foo").unwrap() as u32;
-  let import_offset = source_b.find("{ foo }").unwrap() as u32 + 2;
-  let use_offset = source_b.find("foo()").unwrap() as u32;
-
-  let decl_symbol = program.symbol_at(file_a, decl_offset).expect("decl symbol");
-  let import_symbol = program
-    .symbol_at(file_b, import_offset)
-    .expect("import symbol");
-  let use_symbol = program.symbol_at(file_b, use_offset).unwrap();
+  let decl_symbol = symbol_for_occurrence(&program, file_a, source_a, "foo", 0);
+  let import_symbol = symbol_for_occurrence(&program, file_b, source_b, "foo", 0);
+  let use_symbol = symbol_for_occurrence(&program, file_b, source_b, "foo", 1);
 
   assert_eq!(decl_symbol, import_symbol);
   assert_eq!(decl_symbol, use_symbol);
+}
+
+#[test]
+fn symbol_at_import_binding_with_alias() {
+  let mut host = MemoryHost::default();
+  let file_a = FileId(0);
+  let file_b = FileId(1);
+  let source_a = "export const original = 1;";
+  let source_b = "import { original as alias } from \"./a\";\nconst value = alias;";
+
+  host.insert(file_a, source_a);
+  host.insert(file_b, source_b);
+  host.link(file_b, "./a", file_a);
+
+  let program = Program::new(host, vec![file_b]);
+
+  let decl_symbol = symbol_for_occurrence(&program, file_a, source_a, "original", 0);
+  let import_symbol = symbol_for_occurrence(&program, file_b, source_b, "alias", 0);
+  let use_symbol = symbol_for_occurrence(&program, file_b, source_b, "alias", 1);
+
+  assert_eq!(decl_symbol, import_symbol);
+  assert_eq!(import_symbol, use_symbol);
+}
+
+#[test]
+fn symbol_at_respects_local_shadowing() {
+  let mut host = MemoryHost::default();
+  let file = FileId(0);
+  let source = "const foo = 1; function wrap() { const foo = 2; return foo; } const again = foo;";
+  host.insert(file, source);
+
+  let program = Program::new(host, vec![file]);
+  let outer_symbol = symbol_for_occurrence(&program, file, source, "foo", 0);
+  let inner_symbol = symbol_for_occurrence(&program, file, source, "foo", 1);
+  let inner_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 2);
+  let outer_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 3);
+
+  assert_eq!(
+    inner_symbol, inner_use_symbol,
+    "inner binding should resolve"
+  );
+  assert_ne!(inner_symbol, outer_symbol, "shadowed symbols should differ");
+  assert_eq!(
+    outer_symbol, outer_use_symbol,
+    "outer usage should see outer binding"
+  );
+}
+
+#[test]
+fn symbol_at_resolves_type_only_imports() {
+  let mut host = MemoryHost::default();
+  let file_a = FileId(0);
+  let file_b = FileId(1);
+  let source_a = "export type Foo = { value: number };";
+  let source_b = "import type { Foo } from \"./a\";\ntype Bar = Foo;";
+
+  host.insert(file_a, source_a);
+  host.insert(file_b, source_b);
+  host.link(file_b, "./a", file_a);
+
+  let program = Program::new(host, vec![file_b]);
+  let decl_symbol = symbol_for_occurrence(&program, file_a, source_a, "Foo", 0);
+  let import_symbol = symbol_for_occurrence(&program, file_b, source_b, "Foo", 0);
+  let use_symbol = symbol_for_occurrence(&program, file_b, source_b, "Foo", 1);
+
+  assert_eq!(decl_symbol, import_symbol);
+  assert_eq!(import_symbol, use_symbol);
 }

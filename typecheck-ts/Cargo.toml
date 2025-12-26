@@ -18,6 +18,7 @@ semantic-js = { path = "../semantic-js" }
 serde = { version = "1.0", features = ["derive"], optional = true }
 thiserror = "1.0"
 tracing = "0.1"
+types-ts = { path = "../types-ts" }
 types-ts-interned = { path = "../types-ts-interned" }
 ahash = "0.8"
 ordered-float = "3"

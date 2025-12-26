@@ -129,6 +129,11 @@ impl TsLocalSemantics {
     self.expr_resolutions.get(&span).copied()
   }
 
+  /// Resolve an expression span without requiring a lowered body reference.
+  pub fn resolve_expr_span(&self, span: TextRange) -> Option<SymbolId> {
+    self.expr_resolutions.get(&span).copied()
+  }
+
   /// Resolve a type name in lowered HIR types.
   pub fn resolve_type_name(
     &self,
@@ -136,6 +141,11 @@ impl TsLocalSemantics {
     id: hir_js::ids::TypeExprId,
   ) -> Option<SymbolId> {
     let span = types[id.0 as usize].span;
+    self.type_resolutions.get(&span).copied()
+  }
+
+  /// Resolve a type reference by its span.
+  pub fn resolve_type_span(&self, span: TextRange) -> Option<SymbolId> {
     self.type_resolutions.get(&span).copied()
   }
 }

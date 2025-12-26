@@ -3423,7 +3423,9 @@ fn lower_module_items(
               });
               next_export += 1;
             } else {
-              let name_id = defs[def.0 as usize].path.name;
+              let Some(name_id) = defs.iter().find(|d| d.id == def).map(|d| d.path.name) else {
+                continue;
+              };
               push_named_export(
                 &mut exports,
                 span_map,
@@ -3458,7 +3460,9 @@ fn lower_module_items(
               });
               next_export += 1;
             } else {
-              let name_id = defs[def.0 as usize].path.name;
+              let Some(name_id) = defs.iter().find(|d| d.id == def).map(|d| d.path.name) else {
+                continue;
+              };
               push_named_export(
                 &mut exports,
                 span_map,

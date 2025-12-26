@@ -10,8 +10,8 @@ use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use semantic_js::ts::{Namespace, TsProgramSemantics};
 use types_ts_interned::{
-   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
-   Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
+  DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
+  Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 use crate::CODE_UNKNOWN_IDENTIFIER;
@@ -508,31 +508,28 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
 
     if let Some(name) = resolved {
       if let Some(sem) = self.semantics {
-          if let Some(symbol) = sem.resolve_in_module(self.file, &name, Namespace::TYPE) {
-            if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {
-              let decl_data = sem.symbols().decl(*decl);
-              let args: Vec<_> = reference
-                .type_args
-                .iter()
-                .map(|a| self.lower_type_expr(*a, names))
-                .collect();
-              let target = DefId(decl_data.def_id.0);
-              let mapped = self
-                .def_map
-                .and_then(|map| map.get(&target).copied())
-                .or_else(|| {
-                  self.def_by_name.and_then(|map| {
-                    map
-                      .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
-                      .copied()
-                  })
+        if let Some(symbol) = sem.resolve_in_module(self.file, &name, Namespace::TYPE) {
+          if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {
+            let decl_data = sem.symbols().decl(*decl);
+            let args: Vec<_> = reference
+              .type_args
+              .iter()
+              .map(|a| self.lower_type_expr(*a, names))
+              .collect();
+            let target = DefId(decl_data.def_id.0);
+            let mapped = self
+              .def_map
+              .and_then(|map| map.get(&target).copied())
+              .or_else(|| {
+                self.def_by_name.and_then(|map| {
+                  map
+                    .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
+                    .copied()
                 })
-                .unwrap_or(target);
-              return self.store.intern_type(TypeKind::Ref {
-                def: mapped,
-                args,
-              });
-            }
+              })
+              .unwrap_or(target);
+            return self.store.intern_type(TypeKind::Ref { def: mapped, args });
+          }
         }
       }
 

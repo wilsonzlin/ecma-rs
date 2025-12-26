@@ -431,6 +431,11 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
+  /// Number of symbols allocated in this table.
+  pub fn symbol_count(&self) -> u32 {
+    self.symbols.len() as u32
+  }
+
   pub fn new() -> Self {
     Self::default()
   }
@@ -445,6 +450,24 @@ impl SymbolTable {
 
   pub fn decl(&self, id: DeclId) -> &DeclData {
     &self.decls[id.0 as usize]
+  }
+
+  /// Find the symbol that owns a declaration for the given [`DefId`] in the
+  /// requested namespace.
+  pub fn symbol_for_def(&self, def: DefId, ns: Namespace) -> Option<SymbolId> {
+    for sym in self.symbols.iter() {
+      if !sym.namespaces.contains(ns) {
+        continue;
+      }
+      if sym
+        .decls_for(ns)
+        .iter()
+        .any(|decl_id| self.decl(*decl_id).def_id == def)
+      {
+        return Some(sym.id);
+      }
+    }
+    None
   }
 
   pub fn alloc_decl(
@@ -589,6 +612,11 @@ impl TsProgramSemantics {
 
   pub fn exports_of_ambient_module(&self, specifier: &str) -> Option<&ExportMap> {
     self.ambient_module_exports.get(specifier)
+  }
+
+  /// Look up the canonical symbol containing the provided HIR declaration.
+  pub fn symbol_for_def(&self, def: DefId, ns: Namespace) -> Option<SymbolId> {
+    self.symbols.symbol_for_def(def, ns)
   }
 }
 
