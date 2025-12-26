@@ -1,7 +1,7 @@
 TypeScript Conformance Test Failures Report
 
-Total: 211, Passed: 185, Failed: 26
-Pass Rate: 87.68%
+Total: 211, Passed: 187, Failed: 24
+Pass Rate: 88.63%
 
 ================================================================================
 
@@ -9,21 +9,8 @@ FAILURES:
 
 
 ================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/checkJsxNamespaceNamesQuestionableForms.tsx
-Duration: 540.432µs
-  Virtual file: checkJsxNamespaceNamesQuestionableForms.tsx
-  Module mode: false
-    error[PS0013]: expected token Identifier
-     --> checkJsxNamespaceNamesQuestionableForms.tsx:13:5
-      |
-    13 | <b:c.x></b:c.x>;
-       |     ^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: Dot
-
-================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxAndTypeAssertion.tsx
-Duration: 3.279311ms
+Duration: 561.575µs
   Virtual file: jsxAndTypeAssertion.tsx
   Module mode: false
     error[PS0002]: expected expression operator
@@ -35,21 +22,8 @@ Duration: 3.279311ms
     = note: found token: Colon
 
 ================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/jsxAttributeInitializer.ts
-Duration: 1.918847ms
-  Virtual file: a.tsx
-  Module mode: false
-    error[PS0013]: expected token LiteralString
-     --> a.tsx:7:16
-      |
-    7 |     <div attr= />
-      |                ^ expected token LiteralString
-    = note: expected token LiteralString
-    = note: found token: Slash
-
-================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxCheckJsxNoTypeArgumentsAllowed.tsx
-Duration: 2.029196ms
+Duration: 2.524874ms
   Virtual file: file.jsx
   Module mode: true
     error[PS0013]: expected token Identifier
@@ -62,7 +36,7 @@ Duration: 2.029196ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxInvalidEsprimaTestSuite.tsx
-Duration: 43.811487ms
+Duration: 28.743146ms
   Virtual file: 1.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -299,19 +273,10 @@ Duration: 43.811487ms
     1 | <a:b></b>;
       |      ^^ JSX closing tag does not match opening tag
     = note: found token: ChevronLeftSlash
-  Virtual file: 9.tsx
-  Module mode: false
-    error[PS0013]: expected token Identifier
-     --> 9.tsx:1:5
-      |
-    1 | <a:b.c></a:b.c>;
-      |     ^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: Dot
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxParsingError2.tsx
-Duration: 788.326µs
+Duration: 27.272074ms
   Virtual file: Error1.tsx
   Module mode: false
     error[PS0005]: JSX closing tag does not match opening tag
@@ -355,7 +320,7 @@ Duration: 788.326µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxParsingErrorImmediateSpreadInAttributeValue.tsx
-Duration: 451.774µs
+Duration: 2.242526ms
   Virtual file: a.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -368,7 +333,7 @@ Duration: 451.774µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxUnclosedParserRecovery.ts
-Duration: 12.732628ms
+Duration: 5.715491ms
   Virtual file: jsxParserRecovery.tsx
   Module mode: false
     error[PS0013]: expected token ChevronRight
@@ -381,7 +346,7 @@ Duration: 12.732628ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxAttributeInvalidNames.tsx
-Duration: 490.276µs
+Duration: 6.307377ms
   Virtual file: file.tsx
   Module mode: false
     error[PS0013]: expected token Identifier
@@ -394,7 +359,7 @@ Duration: 490.276µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxElementResolution.tsx
-Duration: 396.136µs
+Duration: 384.431µs
   Virtual file: tsxElementResolution.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -407,7 +372,7 @@ Duration: 396.136µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxElementResolution7.tsx
-Duration: 23.100131ms
+Duration: 8.24653ms
   Virtual file: file.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -420,7 +385,7 @@ Duration: 23.100131ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxEmit3.tsx
-Duration: 304.195µs
+Duration: 1.253932ms
   Virtual file: file.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -433,7 +398,7 @@ Duration: 304.195µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxErrorRecovery1.tsx
-Duration: 394.398µs
+Duration: 370.543µs
   Virtual file: file.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -446,7 +411,7 @@ Duration: 394.398µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxErrorRecovery2.tsx
-Duration: 1.211102ms
+Duration: 2.296112ms
   Virtual file: file1.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -468,7 +433,7 @@ Duration: 1.211102ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxErrorRecovery3.tsx
-Duration: 422.893µs
+Duration: 445.461µs
   Virtual file: file1.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -490,7 +455,7 @@ Duration: 422.893µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxExternalModuleEmit2.tsx
-Duration: 484.563µs
+Duration: 438.818µs
   Virtual file: modules.d.ts
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -503,7 +468,7 @@ Duration: 484.563µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxFragmentErrors.tsx
-Duration: 2.286589ms
+Duration: 42.313422ms
   Virtual file: file.tsx
   Module mode: false
     error[PS0005]: JSX closing tag does not match opening tag
@@ -515,7 +480,7 @@ Duration: 2.286589ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxGenericArrowFunctionParsing.tsx
-Duration: 142.154571ms
+Duration: 1.983491ms
   Virtual file: file.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -528,7 +493,7 @@ Duration: 142.154571ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxLibraryManagedAttributes.tsx
-Duration: 10.684061ms
+Duration: 1.34717ms
   Virtual file: tsxLibraryManagedAttributes.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -541,7 +506,7 @@ Duration: 10.684061ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxParseTests2.tsx
-Duration: 313.184µs
+Duration: 36.273797ms
   Virtual file: file.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -554,7 +519,7 @@ Duration: 313.184µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxPreserveEmit1.tsx
-Duration: 4.862545ms
+Duration: 921.369µs
   Virtual file: react.d.ts
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -576,7 +541,7 @@ Duration: 4.862545ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxReactEmit6.tsx
-Duration: 360.546µs
+Duration: 326.524µs
   Virtual file: react-consumer.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -589,7 +554,7 @@ Duration: 360.546µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxSpreadInvalidType.tsx
-Duration: 2.436419ms
+Duration: 238.479µs
   Virtual file: a.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -602,7 +567,7 @@ Duration: 2.436419ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxTypeArgumentResolution.tsx
-Duration: 419.708µs
+Duration: 2.578165ms
   Virtual file: file.tsx
   Module mode: true
     error[PS0013]: expected token Identifier
@@ -615,7 +580,7 @@ Duration: 419.708µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxTypeArgumentsJsxPreserveOutput.tsx
-Duration: 456.665µs
+Duration: 32.673048ms
   Virtual file: foo.tsx
   Module mode: true
     error[PS0013]: expected token Identifier
@@ -628,7 +593,7 @@ Duration: 456.665µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/unicodeEscapesInJsxtags.tsx
-Duration: 31.737751ms
+Duration: 658.488µs
   Virtual file: file.tsx
   Module mode: true
     error[PS0005]: JSX closing tag does not match opening tag

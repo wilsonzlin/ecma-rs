@@ -10,6 +10,8 @@ mod export_assignment_asi;
 mod for_header_asi;
 #[path = "regressions/import_meta.rs"]
 mod import_meta;
+#[path = "regressions/jsx_namespaces.rs"]
+mod jsx_namespaces;
 #[path = "regressions/jsx_text.rs"]
 mod jsx_text;
 #[path = "regressions/jsx_tsx_disambiguation.rs"]

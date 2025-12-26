@@ -62,68 +62,72 @@ impl<'a> Parser<'a> {
       // Fragment.
       return Ok(None);
     };
-    let start = self.jsx_name_token()?.loc;
+    let start_tok = self.jsx_name_token()?;
+    let mut base_name = self.string(start_tok.loc);
+    let mut base_loc = start_tok.loc;
+    let mut path = Vec::<String>::new();
 
-    let name = if self.consume_if(TT::Colon).is_match() {
-      // Namespaced name.
+    if self
+      .maybe_consume_with_mode(TT::Colon, LexMode::JsxTag)
+      .is_match()
+    {
       let name = self.jsx_name_token()?;
-      JsxElemName::Name(Node::new(
-        start + name.loc,
-        JsxName {
-          namespace: Some(self.string(start)),
-          name: self.string(name.loc),
-        },
-      ))
-    } else if self.peek().typ == TT::Dot && !self.str(start).contains('-') {
-      // Member name.
-      let mut path = Vec::new();
-      let mut loc = start;
-      while self.consume_if(TT::Dot).is_match() {
-        let l = self.require(TT::Identifier)?.loc;
-        path.push(self.string(l));
-        loc += l;
+      base_name = format!("{}:{}", base_name, self.string(name.loc));
+      base_loc += name.loc;
+    }
+
+    // Member expression after identifier or namespaced name: ns:component.path
+    if !self.bytes(base_loc).contains('-') {
+      while self
+        .maybe_consume_with_mode(TT::Dot, LexMode::JsxTag)
+        .is_match()
+      {
+        let part = self.require_with_mode(TT::Identifier, LexMode::JsxTag)?;
+        base_loc += part.loc;
+        path.push(self.string(part.loc));
       }
-      JsxElemName::Member(Node::new(
-        loc,
+    }
+
+    if !path.is_empty() {
+      return Ok(Some(JsxElemName::Member(Node::new(
+        base_loc,
         JsxMemberExpr {
-          base: Node::new(
-            start,
-            IdExpr {
-              name: self.string(start),
-            },
-          ),
+          base: Node::new(base_loc, IdExpr { name: base_name }),
           path,
         },
-      ))
-    } else if !self
-      .bytes(start)
+      ))));
+    }
+
+    let name = if base_name
       .chars()
       .next()
-      .unwrap()
-      .is_ascii_lowercase()
+      .is_some_and(|c| !c.is_ascii_lowercase())
     {
-      // User-defined component.
-      JsxElemName::Id(Node::new(
-        start,
-        IdExpr {
-          name: self.string(start),
-        },
-      ))
+      JsxElemName::Id(Node::new(base_loc, IdExpr { name: base_name }))
     } else {
-      // Built-in component without namespace.
-      JsxElemName::Name(Node::new(
-        start,
-        JsxName {
-          namespace: None,
-          name: self.string(start),
-        },
-      ))
+      let (namespace, name) = if let Some((ns, name)) = base_name.split_once(':') {
+        (Some(ns.to_string()), name.to_string())
+      } else {
+        (None, base_name)
+      };
+      JsxElemName::Name(Node::new(base_loc, JsxName { namespace, name }))
     };
     Ok(Some(name))
   }
 
   /// Parses a JSX attribute value (comes after the equals sign).
   pub fn jsx_attr_val(&mut self, ctx: ParseCtx) -> SyntaxResult<JsxAttrVal> {
+    let next = self.peek_with_mode(LexMode::JsxTag);
+    if matches!(next.typ, TT::Slash | TT::ChevronRight) {
+      // Error recovery: missing attribute value, treat as empty string.
+      return Ok(JsxAttrVal::Text(Node::new(
+        next.loc,
+        JsxText {
+          value: String::new(),
+        },
+      )));
+    }
+
     // Attr values can be an element/fragment directly e.g. `a=<div/>`, or an expression in braces, or a string
     let val = if self.peek().typ == TT::ChevronLeft {
       // JSX element or fragment as attribute value
@@ -171,10 +175,10 @@ impl<'a> Parser<'a> {
         JsxAttrVal::Expression(expr)
       }
     } else {
-      JsxAttrVal::Text(
-        self
-          .with_loc(|p| p.lit_str_val_with_mode(LexMode::JsxTag).map(|value| JsxText { value }))?,
-      )
+      JsxAttrVal::Text(self.with_loc(|p| {
+        p.lit_str_val_with_mode(LexMode::JsxTag)
+          .map(|value| JsxText { value })
+      })?)
     };
     Ok(val)
   }
@@ -271,11 +275,13 @@ impl<'a> Parser<'a> {
       self.peek_with_mode(LexMode::JsxTag).typ,
       TT::ChevronRight | TT::Slash
     ) {
-      attrs.push(if self.peek_with_mode(LexMode::JsxTag).typ == TT::BraceOpen {
-        self.jsx_spread_attr(ctx)?
-      } else {
-        self.jsx_named_attr(ctx)?
-      });
+      attrs.push(
+        if self.peek_with_mode(LexMode::JsxTag).typ == TT::BraceOpen {
+          self.jsx_spread_attr(ctx)?
+        } else {
+          self.jsx_named_attr(ctx)?
+        },
+      );
     }
     Ok(attrs)
   }
@@ -290,7 +296,10 @@ impl<'a> Parser<'a> {
         .then(|| p.jsx_elem_attrs(ctx))
         .transpose()?
         .unwrap_or_default();
-      if p.maybe_consume_with_mode(TT::Slash, LexMode::JsxTag).is_match() {
+      if p
+        .maybe_consume_with_mode(TT::Slash, LexMode::JsxTag)
+        .is_match()
+      {
         // Self closing.
 
         p.require_with_mode(TT::ChevronRight, LexMode::JsxTag)?;
