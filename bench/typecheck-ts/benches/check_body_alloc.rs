@@ -28,6 +28,7 @@ fn main() {
     ("control_flow", "evaluate"),
     ("unions", "area"),
     ("generics", "combine"),
+    ("advanced_types", "mergeDefaults"),
     ("component_tsx", "Component"),
   ];
 

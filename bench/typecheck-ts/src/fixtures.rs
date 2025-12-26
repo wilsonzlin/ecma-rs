@@ -44,7 +44,19 @@ pub fn all_fixtures() -> &'static [Fixture] {
     kind: FixtureKind::Tsx,
   };
 
-  &[CONTROL_FLOW, UNION_INTERSECTION, GENERICS, COMPONENT_TSX]
+  const ADVANCED_TYPES: Fixture = Fixture {
+    name: "advanced_types",
+    source: include_str!("../fixtures/advanced_types.ts"),
+    kind: FixtureKind::Ts,
+  };
+
+  &[
+    CONTROL_FLOW,
+    UNION_INTERSECTION,
+    GENERICS,
+    ADVANCED_TYPES,
+    COMPONENT_TSX,
+  ]
 }
 
 pub fn module_graph_fixtures() -> &'static [ModuleGraphFixture] {

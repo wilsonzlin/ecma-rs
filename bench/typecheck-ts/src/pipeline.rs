@@ -11,18 +11,20 @@ use parse_js::ast::stx::TopLevel;
 use parse_js::error::SyntaxResult;
 use parse_js::{parse_with_options, Dialect, ParseOptions};
 use semantic_js::ts::{bind_ts_program, from_hir_js::lower_to_ts_hir, HirFile, Resolver};
-use std::collections::HashMap;
+use serde::Serialize;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use typecheck_ts::lib_support::{FileKind as TcFileKind, LibManager};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind as TcFileKind, LibManager};
 use typecheck_ts::FileId as TcFileId;
 use typecheck_ts::Host;
 use typecheck_ts::HostError;
 use typecheck_ts::Program;
+use typecheck_ts::QueryStats;
 use types_ts_interned::{
-  Indexer, ObjectType, Param, PropData, PropKey, Property, RelateCtx, Shape, Signature, TypeId,
-  TypeKind, TypeOptions, TypeStore,
+  CacheStats, Indexer, ObjectType, Param, PropData, PropKey, Property, RelateCtx, RelationCache,
+  Shape, Signature, TypeId, TypeKind, TypeOptions, TypeStore,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -40,36 +42,75 @@ pub struct BindSummary {
   pub diagnostics: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TypecheckSummary {
   pub diagnostics: usize,
   pub bodies: usize,
+  pub stats: QueryStats,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct TypeOfDefSummary {
   pub exports: usize,
   pub rendered_types: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct BodyCheckSummary {
   pub diagnostics: usize,
   pub exprs: usize,
+  pub stats: QueryStats,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct RelationStats {
   pub checks: usize,
   pub successes: usize,
+  pub cache: RelationCacheSnapshot,
+}
+
+impl RelationStats {
+  pub fn hit_rate(&self) -> f64 {
+    self.cache.hit_rate()
+  }
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct RelationCacheSnapshot {
+  pub hits: u64,
+  pub misses: u64,
+  pub insertions: u64,
+  pub evictions: u64,
+}
+
+impl RelationCacheSnapshot {
+  pub fn hit_rate(&self) -> f64 {
+    let lookups = self.hits + self.misses;
+    if lookups == 0 {
+      0.0
+    } else {
+      self.hits as f64 / lookups as f64
+    }
+  }
+}
+
+impl From<CacheStats> for RelationCacheSnapshot {
+  fn from(value: CacheStats) -> Self {
+    RelationCacheSnapshot {
+      hits: value.hits,
+      misses: value.misses,
+      insertions: value.insertions,
+      evictions: value.evictions,
+    }
+  }
 }
 
 #[derive(Clone, Debug)]
 pub struct IncrementalTimings {
   pub full: Duration,
   pub edit: Duration,
-  pub full_diagnostics: usize,
-  pub edit_diagnostics: usize,
+  pub full_summary: TypecheckSummary,
+  pub edit_summary: TypecheckSummary,
 }
 
 #[derive(Clone, Debug)]
@@ -103,6 +144,28 @@ fn fixture_filename(fixture: &Fixture) -> String {
       FixtureKind::Ts => format!("{}.ts", fixture.name),
     }
   }
+}
+
+fn entries_for_fixtures(fixtures: &[&Fixture]) -> Vec<(String, Arc<str>)> {
+  let mut seen = HashSet::new();
+  let mut entries = Vec::new();
+  let mut needs_react = false;
+  for fixture in fixtures {
+    let filename = fixture_filename(fixture);
+    if seen.insert(filename.clone()) {
+      entries.push((filename, Arc::from(fixture.source)));
+    }
+    if matches!(fixture.kind, FixtureKind::Tsx) {
+      needs_react = true;
+    }
+  }
+  if needs_react {
+    entries.push((
+      "react.d.ts".to_string(),
+      Arc::from("export const FC: <T>(props: T) => any; export default {};"),
+    ));
+  }
+  entries
 }
 
 pub fn lower_to_hir(
@@ -169,22 +232,30 @@ pub fn bind_module_graph(graph: &ModuleGraphFixture) -> BindSummary {
 }
 
 pub fn typecheck_fixture(fixture: &Fixture) -> TypecheckSummary {
+  typecheck_fixture_with_options(fixture, CompilerOptions::default())
+}
+
+pub fn typecheck_fixture_with_options(
+  fixture: &Fixture,
+  options: CompilerOptions,
+) -> TypecheckSummary {
   let filename = fixture_filename(fixture);
-  let mut entries = vec![(filename.clone(), fixture.source)];
-  if matches!(fixture.kind, FixtureKind::Tsx) {
-    entries.push((
-      "react.d.ts".to_string(),
-      "export const FC: <T>(props: T) => any; export default {};",
-    ));
-  }
-  let host = BenchHost::from_static(entries);
+  let entries = entries_for_fixtures(&[fixture]);
+  let host = BenchHost::with_options(entries, options);
   let root = host.id_for(&filename).expect("root file id");
   run_typecheck(host, vec![root])
 }
 
 pub fn typecheck_module_graph(graph: &ModuleGraphFixture) -> TypecheckSummary {
+  typecheck_module_graph_with_options(graph, CompilerOptions::default())
+}
+
+pub fn typecheck_module_graph_with_options(
+  graph: &ModuleGraphFixture,
+  options: CompilerOptions,
+) -> TypecheckSummary {
   let entries = entries_from_graph(graph);
-  let host = BenchHost::new(entries);
+  let host = BenchHost::with_options(entries, options);
   let root = host
     .id_for(graph.files[0].name)
     .expect("module graph root should exist");
@@ -217,23 +288,70 @@ pub fn type_of_exported_defs(graph: &ModuleGraphFixture) -> TypeOfDefSummary {
 }
 
 pub fn check_body_named(fixture: &Fixture, name: &str) -> BodyCheckSummary {
-  let filename = fixture_filename(fixture);
-  let host = BenchHost::from_static(vec![(filename.clone(), fixture.source)]);
-  let root = host.id_for(&filename).expect("fixture root file id");
-  let program = Program::new(host, vec![root]);
-  let def = program
-    .definitions_in_file(root)
-    .into_iter()
-    .find(|def| program.def_name(*def).as_deref() == Some(name))
-    .unwrap_or_else(|| panic!("missing {name} definition in {}", fixture.name));
-  let body = program
-    .body_of_def(def)
-    .unwrap_or_else(|| panic!("missing body for {name} in {}", fixture.name));
+  check_body_with_warmups((fixture, name), &[], CompilerOptions::default())
+}
+
+pub fn check_body_with_warmups(
+  target: (&Fixture, &str),
+  warmups: &[(&Fixture, &str)],
+  options: CompilerOptions,
+) -> BodyCheckSummary {
+  let mut fixtures: Vec<&Fixture> = Vec::with_capacity(1 + warmups.len());
+  fixtures.push(target.0);
+  for (fixture, _) in warmups {
+    fixtures.push(*fixture);
+  }
+  let entries = entries_for_fixtures(&fixtures);
+  let host = BenchHost::with_options(entries, options);
+  let mut ids = HashMap::new();
+  let mut roots = Vec::new();
+  for fixture in fixtures {
+    let filename = fixture_filename(fixture);
+    if let Some(id) = host.id_for(&filename) {
+      if ids.insert(filename, id).is_none() {
+        roots.push(id);
+      }
+    }
+  }
+  let program = Program::new(host, roots);
+
+  for (fixture, name) in warmups {
+    let filename = fixture_filename(fixture);
+    let file_id = *ids
+      .get(&filename)
+      .unwrap_or_else(|| panic!("missing warmup fixture {filename}"));
+    let body = find_body_named(&program, file_id, name, fixture.name);
+    let _ = program.check_body(body);
+  }
+
+  let target_filename = fixture_filename(target.0);
+  let target_file = *ids
+    .get(&target_filename)
+    .unwrap_or_else(|| panic!("missing target fixture {target_filename}"));
+  let body = find_body_named(&program, target_file, target.1, target.0.name);
   let result = program.check_body(body);
+  let stats = program.query_stats();
   BodyCheckSummary {
     diagnostics: result.diagnostics().len(),
     exprs: result.expr_spans().len(),
+    stats,
   }
+}
+
+fn find_body_named(
+  program: &Program,
+  file: TcFileId,
+  name: &str,
+  fixture_name: &str,
+) -> typecheck_ts::BodyId {
+  let def = program
+    .definitions_in_file(file)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some(name))
+    .unwrap_or_else(|| panic!("missing {name} definition in {fixture_name}"));
+  program
+    .body_of_def(def)
+    .unwrap_or_else(|| panic!("missing body for {name} in {fixture_name}"))
 }
 
 pub fn incremental_recheck(
@@ -255,8 +373,8 @@ pub fn incremental_recheck(
   IncrementalTimings {
     full: full_duration,
     edit: edit_duration,
-    full_diagnostics: full_summary.diagnostics,
-    edit_diagnostics: edit_summary.diagnostics,
+    full_summary,
+    edit_summary,
   }
 }
 
@@ -299,27 +417,54 @@ fn entries_from_graph(graph: &ModuleGraphFixture) -> Vec<(String, Arc<str>)> {
 pub fn assignability_micro(iterations: usize, warm_cache: bool) -> RelationStats {
   if warm_cache {
     let (store, sample) = sample_types();
-    let ctx = RelateCtx::new(store.clone(), TypeOptions::default());
-    run_assignability(&ctx, iterations, &sample)
+    let cache = RelationCache::default();
+    let ctx = RelateCtx::with_cache(store.clone(), TypeOptions::default(), cache.clone());
+    let counts = run_assignability(&ctx, iterations, &sample);
+    RelationStats {
+      checks: counts.checks,
+      successes: counts.successes,
+      cache: cache.stats().into(),
+    }
   } else {
     let mut checks = 0;
     let mut successes = 0;
+    let mut cache = CacheStats::default();
     for _ in 0..iterations {
       let (store, sample) = sample_types();
-      let ctx = RelateCtx::new(store.clone(), TypeOptions::default());
+      let relation_cache = RelationCache::default();
+      let ctx = RelateCtx::with_cache(
+        store.clone(),
+        TypeOptions::default(),
+        relation_cache.clone(),
+      );
       let stats = run_assignability(&ctx, 1, &sample);
+      let cache_stats = relation_cache.stats();
       checks += stats.checks;
       successes += stats.successes;
+      cache.hits += cache_stats.hits;
+      cache.misses += cache_stats.misses;
+      cache.insertions += cache_stats.insertions;
+      cache.evictions += cache_stats.evictions;
     }
-    RelationStats { checks, successes }
+    RelationStats {
+      checks,
+      successes,
+      cache: cache.into(),
+    }
   }
+}
+
+#[derive(Default)]
+struct AssignabilityCounts {
+  checks: usize,
+  successes: usize,
 }
 
 fn run_assignability(
   ctx: &RelateCtx<'_>,
   iterations: usize,
   sample: &SampleTypes,
-) -> RelationStats {
+) -> AssignabilityCounts {
   let mut checks = 0;
   let mut successes = 0;
   for _ in 0..iterations {
@@ -352,7 +497,7 @@ fn run_assignability(
     let _ = ctx.explain_assignable(sample.tagged_object, sample.tagged_object);
   }
 
-  RelationStats { checks, successes }
+  AssignabilityCounts { checks, successes }
 }
 
 fn object_type(store: &TypeStore, shape: Shape) -> TypeId {
@@ -529,6 +674,7 @@ fn run_typecheck_with_manager(
     None => Program::new(host, roots),
   };
   let diagnostics = program.check();
+  let stats = program.query_stats();
 
   let mut bodies = 0;
   for file in all_files {
@@ -545,6 +691,7 @@ fn run_typecheck_with_manager(
   TypecheckSummary {
     diagnostics: diagnostics.len(),
     bodies,
+    stats,
   }
 }
 
@@ -559,10 +706,15 @@ struct BenchFile {
 struct BenchHost {
   files: Vec<BenchFile>,
   name_to_id: HashMap<String, TcFileId>,
+  options: CompilerOptions,
 }
 
 impl BenchHost {
   fn new(entries: Vec<(String, Arc<str>)>) -> Self {
+    Self::with_options(entries, CompilerOptions::default())
+  }
+
+  fn with_options(entries: Vec<(String, Arc<str>)>, options: CompilerOptions) -> Self {
     let mut files = Vec::with_capacity(entries.len());
     let mut name_to_id = HashMap::new();
     for (idx, (name, content)) in entries.into_iter().enumerate() {
@@ -574,15 +726,11 @@ impl BenchHost {
         kind: infer_kind(&name),
       });
     }
-    BenchHost { files, name_to_id }
-  }
-
-  fn from_static(entries: Vec<(String, &'static str)>) -> Self {
-    let owned = entries
-      .into_iter()
-      .map(|(name, content)| (name, Arc::from(content)))
-      .collect();
-    BenchHost::new(owned)
+    BenchHost {
+      files,
+      name_to_id,
+      options,
+    }
   }
 
   fn id_for(&self, name: &str) -> Option<TcFileId> {
@@ -629,6 +777,10 @@ impl Host for BenchHost {
       }
     }
     None
+  }
+
+  fn compiler_options(&self) -> CompilerOptions {
+    self.options.clone()
   }
 }
 
