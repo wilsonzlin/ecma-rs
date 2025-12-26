@@ -27,6 +27,16 @@ jobs:
       - name: Generate lockfile
         run: cargo generate-lockfile
 
+      - name: Regenerate workspace dependency graph
+        run: ./scripts/gen_deps_graph.sh
+
+      - name: Ensure docs/deps.md is up-to-date
+        run: |
+          git diff --exit-code docs/deps.md || {
+            echo "::error ::docs/deps.md is out of date; run ./scripts/gen_deps_graph.sh";
+            exit 1;
+          }
+
       - name: Enforce UTF-8 source APIs
         run: ./scripts/check_utf8_apis.sh
 

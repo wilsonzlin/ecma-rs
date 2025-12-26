@@ -23,6 +23,7 @@ graph TD
     typecheck_ts_bench["typecheck-ts-bench"]
     typecheck_ts_cli["typecheck-ts-cli"]
     typecheck_ts_harness["typecheck-ts-harness"]
+    types_ts["types-ts"]
     types_ts_interned["types-ts-interned"]
     emit_js --> diagnostics
     emit_js --> parse_js
@@ -56,6 +57,7 @@ graph TD
     typecheck_ts --> hir_js
     typecheck_ts --> parse_js
     typecheck_ts --> semantic_js
+    typecheck_ts --> types_ts
     typecheck_ts --> types_ts_interned
     typecheck_ts_bench --> diagnostics
     typecheck_ts_bench --> hir_js

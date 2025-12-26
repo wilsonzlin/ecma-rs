@@ -6,10 +6,11 @@ This workspace is kept warning-free. Before opening a PR, please run the same ch
 - `cargo clippy --workspace --all-targets --all-features -- -A clippy::style -A clippy::complexity -A clippy::perf -A clippy::nursery -A clippy::pedantic -D clippy::correctness -D clippy::suspicious`
 - `cargo check --workspace --all-targets`
 - `cargo test --workspace`
+- `./scripts/gen_deps_graph.sh` (or `just docs`) and ensure `git diff --exit-code docs/deps.md` is clean
 
 Clippy focuses on correctness and suspicious lints while allowing the noisier style/complexity lints so the signal stays actionable.
 
 If you have [`just`](https://github.com/casey/just) installed, the root `justfile` provides shortcuts:
 
 - `just lint` runs `fmt` and `clippy`
-- `just ci` runs the full `fmt` + `clippy` + `check` + `test` suite
+- `just ci` runs the full `fmt` + `clippy` + `check` + `test` suite and enforces `docs/deps.md` stays in sync
