@@ -1,36 +1,11 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::{DefId, FileId, Host, HostError, Program, PropertyKey, TypeKindSummary};
+use typecheck_ts::{DefId, FileKey, MemoryHost, Program, PropertyKey, TypeKindSummary};
 
-#[derive(Default)]
-struct MemoryHost {
-  files: HashMap<FileId, Arc<str>>,
-}
-
-impl MemoryHost {
-  fn insert(&mut self, file: FileId, src: &str) {
-    self.files.insert(file, Arc::from(src.to_string()));
-  }
-}
-
-impl Host for MemoryHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
-    self
-      .files
-      .get(&file)
-      .cloned()
-      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
-  }
-
-  fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
-    None
-  }
-}
-
-fn def_by_name(program: &Program, file: FileId, name: &str) -> Option<DefId> {
+fn def_by_name(program: &Program, file: FileKey, name: &str) -> Option<DefId> {
+  let file_id = program.file_id(&file).unwrap();
   program
-    .definitions_in_file(file)
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some(name))
 }
@@ -38,16 +13,17 @@ fn def_by_name(program: &Program, file: FileId, name: &str) -> Option<DefId> {
 #[test]
 fn recursive_alias_type_of_def_is_bounded() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(0), "type Node<T> = { next: Node<T> };");
+  let file = FileKey::new("node.ts");
+  host.insert(file.clone(), Arc::from("type Node<T> = { next: Node<T> };"));
 
-  let program = Program::new(host, vec![FileId(0)]);
+  let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "expected no diagnostics: {diagnostics:?}"
   );
 
-  let def = def_by_name(&program, FileId(0), "Node").expect("Node defined");
+  let def = def_by_name(&program, file, "Node").expect("Node defined");
   let ty = program.type_of_def_interned(def);
   let summary = program.type_kind(ty);
   assert!(
@@ -61,29 +37,29 @@ fn recursive_alias_type_of_def_is_bounded() {
 fn relate_ctx_handles_cyclic_refs() {
   let mut host = MemoryHost::default();
   host.insert(
-    FileId(0),
+    FileKey::new("types.ts"),
     r#"
 type A = { next: A };
 type B = { next: B };
 "#,
   );
 
-  let program = Program::new(host, vec![FileId(0)]);
+  let program = Program::new(host, vec![FileKey::new("types.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "expected no diagnostics: {diagnostics:?}"
   );
 
-  let a_def = def_by_name(&program, FileId(0), "A").expect("A defined");
-  let b_def = def_by_name(&program, FileId(0), "B").expect("B defined");
+  let a_def = def_by_name(&program, FileKey::new("types.ts"), "A").expect("A defined");
+  let b_def = def_by_name(&program, FileKey::new("types.ts"), "B").expect("B defined");
   let a_ty = program.type_of_def_interned(a_def);
   let b_ty = program.type_of_def_interned(b_def);
 
   assert_eq!(
     program.type_kind(a_ty),
     program.type_kind(b_ty),
-    "structurally identical cycles should relate"
+    "structurally identical cycles should map to the same shape summary"
   );
 }
 
@@ -91,21 +67,22 @@ type B = { next: B };
 fn expansion_is_deterministic_across_runs() {
   let mut host = MemoryHost::default();
   host.insert(
-    FileId(0),
+    FileKey::new("pair.ts"),
     r#"
 type Pair<T> = { value: T; next?: Pair<T> };
 type NumPair = Pair<number>;
 "#,
   );
 
-  let program = Program::new(host, vec![FileId(0)]);
+  let program = Program::new(host, vec![FileKey::new("pair.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "expected no diagnostics: {diagnostics:?}"
   );
 
-  let num_pair = def_by_name(&program, FileId(0), "NumPair").expect("NumPair defined");
+  let num_pair =
+    def_by_name(&program, FileKey::new("pair.ts"), "NumPair").expect("NumPair defined");
   let num_pair_ty = program.type_of_def_interned(num_pair);
 
   let first = program
@@ -117,11 +94,5 @@ type NumPair = Pair<number>;
   assert_eq!(
     first, second,
     "expansion results should be deterministic across calls"
-  );
-
-  assert_eq!(
-    program.type_kind(first),
-    program.type_kind(first),
-    "self-assignability should also terminate for expanded recursive properties"
   );
 }

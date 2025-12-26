@@ -6,18 +6,19 @@ use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::semantic_js;
 use typecheck_ts::{
-  BodyId, DefId, Diagnostic, ExprId, FileId, Host, HostError, PatId, Program, TextRange, TypeId,
+  BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, Host, HostError, PatId, Program, TextRange,
+  TypeId,
 };
 
 const ITERATIONS: usize = 128;
-const ROOT_MAIN: FileId = FileId(0);
-const ROOT_DEP: FileId = FileId(1);
-const LIB_ID: FileId = FileId(1000);
+const ROOT_MAIN: &str = "main.ts";
+const ROOT_DEP: &str = "b.ts";
+const LIB_KEY: &str = "lib:deterministic";
 
 #[derive(Clone)]
 struct DeterministicHost {
-  files: Arc<HashMap<FileId, Arc<str>>>,
-  edges: Arc<HashMap<(FileId, String), FileId>>,
+  files: Arc<HashMap<FileKey, Arc<str>>>,
+  edges: Arc<HashMap<(FileKey, String), FileKey>>,
   libs: Arc<Vec<LibFile>>,
 }
 
@@ -25,7 +26,7 @@ impl DeterministicHost {
   fn new() -> Self {
     let mut files = HashMap::new();
     files.insert(
-      ROOT_MAIN,
+      FileKey::new(ROOT_MAIN),
       Arc::from(
         r#"
           import { value, makeLabel } from "./b";
@@ -44,7 +45,7 @@ impl DeterministicHost {
       ),
     );
     files.insert(
-      ROOT_DEP,
+      FileKey::new(ROOT_DEP),
       Arc::from(
         r#"
           export const value: number = 41;
@@ -56,10 +57,13 @@ impl DeterministicHost {
     );
 
     let mut edges = HashMap::new();
-    edges.insert((ROOT_MAIN, "./b".to_string()), ROOT_DEP);
+    edges.insert(
+      (FileKey::new(ROOT_MAIN), "./b".to_string()),
+      FileKey::new(ROOT_DEP),
+    );
 
     let libs = vec![LibFile {
-      id: LIB_ID,
+      key: FileKey::new(LIB_KEY),
       name: Arc::from("deterministic.d.ts"),
       kind: FileKind::Dts,
       text: Arc::from("declare const implicit: any;"),
@@ -74,7 +78,7 @@ impl DeterministicHost {
 }
 
 impl Host for DeterministicHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
       .get(&file)
@@ -82,8 +86,11 @@ impl Host for DeterministicHost {
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
-    self.edges.get(&(from, specifier.to_string())).copied()
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+    self
+      .edges
+      .get(&(from.clone(), specifier.to_string()))
+      .cloned()
   }
 
   fn compiler_options(&self) -> CompilerOptions {
@@ -97,8 +104,8 @@ impl Host for DeterministicHost {
     (*self.libs).clone()
   }
 
-  fn file_kind(&self, file: FileId) -> FileKind {
-    if self.libs.iter().any(|lib| lib.id == file) {
+  fn file_kind(&self, file: &FileKey) -> FileKind {
+    if self.libs.iter().any(|lib| lib.key == *file) {
       FileKind::Dts
     } else {
       FileKind::Ts
@@ -245,12 +252,15 @@ fn run_parallel_bodies(program: &Arc<Program>, bodies: &[BodyId]) {
 
 #[test]
 fn outputs_remain_deterministic() {
-  let files = [ROOT_MAIN, ROOT_DEP];
   let host = DeterministicHost::new();
-  let roots = vec![ROOT_MAIN, ROOT_DEP];
-  let reversed_roots = vec![ROOT_DEP, ROOT_MAIN];
+  let roots = vec![FileKey::new(ROOT_MAIN), FileKey::new(ROOT_DEP)];
+  let reversed_roots = vec![FileKey::new(ROOT_DEP), FileKey::new(ROOT_MAIN)];
 
   let baseline_program = Arc::new(Program::new(host.clone(), roots.clone()));
+  let files: Vec<FileId> = roots
+    .iter()
+    .map(|k| baseline_program.file_id(k).unwrap())
+    .collect();
   let baseline_bodies = collect_body_ids(&baseline_program, &files);
   run_parallel_bodies(&baseline_program, &baseline_bodies);
   let baseline = snapshot_program(&baseline_program, &files);
@@ -269,9 +279,10 @@ fn outputs_remain_deterministic() {
         reversed_roots.clone()
       },
     ));
-    let body_ids = collect_body_ids(&program, &files);
+    let files_iter: Vec<FileId> = roots.iter().map(|k| program.file_id(k).unwrap()).collect();
+    let body_ids = collect_body_ids(&program, &files_iter);
     run_parallel_bodies(&program, &body_ids);
-    let snapshot = snapshot_program(&program, &files);
+    let snapshot = snapshot_program(&program, &files_iter);
     assert_eq!(snapshot, baseline, "iteration {iteration} drifted");
   }
 }

@@ -207,6 +207,13 @@ impl EngineDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestOptions {
+  pub harness: HarnessOptions,
+  pub rust: CompilerOptions,
+  pub tsc: Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestResult {
   pub id: String,
   pub path: String,
@@ -214,6 +221,7 @@ pub struct TestResult {
   pub duration_ms: u128,
   pub rust: EngineDiagnostics,
   pub tsc: EngineDiagnostics,
+  pub options: TestOptions,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub query_stats: Option<QueryStats>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -250,6 +258,17 @@ pub struct ExpectationOutcome {
 
 fn is_false(value: &bool) -> bool {
   !*value
+}
+
+fn build_test_options(
+  harness_options: &HarnessOptions,
+  tsc_options: &Map<String, Value>,
+) -> TestOptions {
+  TestOptions {
+    harness: harness_options.clone(),
+    rust: harness_options.to_compiler_options(),
+    tsc: tsc_options.clone(),
+  }
 }
 
 #[derive(Clone)]
@@ -310,15 +329,15 @@ impl HarnessFileSet {
     }
   }
 
-  fn root_keys(&self) -> Vec<FileKey> {
+  pub(crate) fn root_keys(&self) -> Vec<FileKey> {
     self.files.iter().map(|f| f.key.clone()).collect()
   }
 
-  fn resolve(&self, normalized: &str) -> Option<FileKey> {
+  pub(crate) fn resolve(&self, normalized: &str) -> Option<FileKey> {
     self.name_to_key.get(normalized).cloned()
   }
 
-  fn name_for_key(&self, key: &FileKey) -> Option<String> {
+  pub(crate) fn name_for_key(&self, key: &FileKey) -> Option<String> {
     self.key_to_name.get(key).cloned()
   }
 
@@ -326,7 +345,7 @@ impl HarnessFileSet {
     self.files.iter()
   }
 
-  fn content(&self, key: &FileKey) -> Option<Arc<str>> {
+  pub(crate) fn content(&self, key: &FileKey) -> Option<Arc<str>> {
     self
       .files
       .iter()
@@ -334,7 +353,7 @@ impl HarnessFileSet {
       .map(|f| f.content.clone())
   }
 
-  fn write_to_dir(&self, dir: &Path) -> std::io::Result<()> {
+  pub(crate) fn write_to_dir(&self, dir: &Path) -> std::io::Result<()> {
     for file in &self.files {
       let path = dir.join(&file.normalized);
       if let Some(parent) = path.parent() {
@@ -473,6 +492,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
 }
 
 fn build_skipped_result(case: &TestCase) -> TestResult {
+  let tsc_options = case.options.to_tsc_options_map();
   TestResult {
     id: case.id.clone(),
     path: case.path.display().to_string(),
@@ -480,6 +500,7 @@ fn build_skipped_result(case: &TestCase) -> TestResult {
     duration_ms: 0,
     rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
     tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
+    options: build_test_options(&case.options, &tsc_options),
     query_stats: None,
     notes: case.notes.clone(),
     detail: None,
@@ -543,6 +564,7 @@ fn run_single_case(
   let timeout_id = case.id.clone();
   let timeout_path = case.path.display().to_string();
   let timeout_notes = case.notes.clone();
+  let timeout_options = build_test_options(&case.options, &case.options.to_tsc_options_map());
   let timeout = opts.timeout;
   let span_tolerance = opts.span_tolerance;
   let update_snapshots = opts.update_snapshots;
@@ -572,6 +594,7 @@ fn run_single_case(
       duration_ms: timeout.as_millis(),
       rust: EngineDiagnostics::skipped(None),
       tsc: EngineDiagnostics::skipped(None),
+      options: timeout_options,
       query_stats: None,
       notes: timeout_notes,
       detail: None,
@@ -602,6 +625,7 @@ fn execute_case(
 
   let (rust, query_stats) = run_rust_with_profile(&file_set, &harness_options, collect_query_stats);
   let tsc_options = harness_options.to_tsc_options_map();
+  let options = build_test_options(&harness_options, &tsc_options);
 
   let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
   let tsc = match compare_mode {
@@ -652,6 +676,7 @@ fn execute_case(
     duration_ms: start.elapsed().as_millis(),
     rust,
     tsc,
+    options,
     query_stats,
     notes,
     detail,
@@ -1030,7 +1055,7 @@ struct SnapshotStore {
 }
 
 #[derive(Clone, Debug)]
-struct ConcurrencyLimiter {
+pub(crate) struct ConcurrencyLimiter {
   inner: Arc<LimiterInner>,
 }
 
@@ -1042,7 +1067,7 @@ struct LimiterInner {
 }
 
 impl ConcurrencyLimiter {
-  fn new(max: usize) -> Self {
+  pub(crate) fn new(max: usize) -> Self {
     let max = max.max(1);
     ConcurrencyLimiter {
       inner: Arc::new(LimiterInner {
@@ -1053,7 +1078,7 @@ impl ConcurrencyLimiter {
     }
   }
 
-  fn acquire(&self) -> ConcurrencyPermit {
+  pub(crate) fn acquire(&self) -> ConcurrencyPermit {
     let mut guard = self.inner.active.lock().unwrap();
     while *guard >= self.inner.max {
       guard = self.inner.cv.wait(guard).unwrap();
@@ -1066,7 +1091,7 @@ impl ConcurrencyLimiter {
 }
 
 #[derive(Debug)]
-struct ConcurrencyPermit {
+pub(crate) struct ConcurrencyPermit {
   inner: Arc<LimiterInner>,
 }
 
@@ -1120,6 +1145,7 @@ impl SnapshotStore {
       schema_version: Some(TSC_BASELINE_SCHEMA_VERSION),
       metadata: TscMetadata::default(),
       diagnostics: diagnostics.to_vec(),
+      type_facts: None,
       crash: None,
     };
     let json = serde_json::to_string_pretty(&payload)?;
@@ -1213,9 +1239,7 @@ mod tests {
     assert_eq!(roots.len(), 2);
 
     let from = roots.last().unwrap();
-    let a_key = host
-      .resolve(from, "a.ts")
-      .expect("a.ts should resolve");
+    let a_key = host.resolve(from, "a.ts").expect("a.ts should resolve");
     assert!(roots.contains(&a_key));
     assert_eq!(&*host.file_text(&a_key).unwrap(), "second version");
   }

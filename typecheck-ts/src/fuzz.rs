@@ -1,32 +1,32 @@
 use std::sync::Arc;
 
 use crate::lib_support::CompilerOptions;
-use crate::{FileId, Host, HostError, Program};
+use crate::{FileKey, Host, HostError, Program};
 
 struct FuzzHost {
-  file: FileId,
+  key: FileKey,
   source: Arc<str>,
 }
 
 impl FuzzHost {
   fn new(source: String) -> Self {
     Self {
-      file: FileId(0),
+      key: FileKey::new("fuzz.ts"),
       source: Arc::from(source),
     }
   }
 }
 
 impl Host for FuzzHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
-    if file == self.file {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
+    if file == &self.key {
       Ok(self.source.clone())
     } else {
       Err(HostError::new(format!("unknown file {file:?}")))
     }
   }
 
-  fn resolve(&self, _from: FileId, _spec: &str) -> Option<FileId> {
+  fn resolve(&self, _from: &FileKey, _spec: &str) -> Option<FileKey> {
     None
   }
 
@@ -46,12 +46,15 @@ impl Host for FuzzHost {
 pub fn fuzz_typecheck_pipeline(data: &[u8]) {
   let source = String::from_utf8_lossy(data).into_owned();
   let host = FuzzHost::new(source);
-  let root = host.file;
-  let program = Program::new(host, vec![root]);
+  let root = host.key.clone();
+  let program = Program::new(host, vec![root.clone()]);
 
   let _ = program.check();
-  let _ = program.exports_of(root);
-  for def in program.definitions_in_file(root) {
+  let Some(root_id) = program.file_id(&root) else {
+    return;
+  };
+  let _ = program.exports_of(root_id);
+  for def in program.definitions_in_file(root_id) {
     let ty = program.type_of_def(def);
     let _ = program.display_type(ty).to_string();
     if let Some(body) = program.body_of_def(def) {

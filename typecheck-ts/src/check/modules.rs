@@ -1,8 +1,7 @@
 use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
 use ::semantic_js::ts as sem_ts;
 
-/// Build [`ExportMap`] for a file using `semantic-js` binder output, preserving
-/// value/type/namespace splits in the TS symbol model.
+/// Build an [`ExportMap`] for a file using `semantic-js` binder output.
 pub(crate) fn exports_from_semantics(
   state: &mut ProgramState,
   semantics: &sem_ts::TsProgramSemantics,
@@ -11,26 +10,13 @@ pub(crate) fn exports_from_semantics(
   let sem_file = sem_ts::FileId(file.0);
   let exports = semantics.exports_of(sem_file);
   let symbols = semantics.symbols();
-  let mut mapped: ExportMap = ExportMap::new();
+  let mut mapped = ExportMap::new();
 
   for (name, group) in exports.iter() {
-    let candidate = group
-      .symbol_for(sem_ts::Namespace::VALUE, symbols)
-      .map(|id| (id, sem_ts::Namespace::VALUE))
-      .or_else(|| {
-        group
-          .symbol_for(sem_ts::Namespace::TYPE, symbols)
-          .map(|id| (id, sem_ts::Namespace::TYPE))
-      })
-      .or_else(|| {
-        group
-          .symbol_for(sem_ts::Namespace::NAMESPACE, symbols)
-          .map(|id| (id, sem_ts::Namespace::NAMESPACE))
-      });
-    if let Some((symbol_id, ns)) = candidate {
+    if let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) {
       mapped.insert(
         name.clone(),
-        map_export(state, semantics, sem_file, symbol_id, ns),
+        map_export(state, semantics, sem_file, symbol_id),
       );
     }
   }
@@ -43,12 +29,11 @@ fn map_export(
   semantics: &sem_ts::TsProgramSemantics,
   sem_file: sem_ts::FileId,
   symbol_id: sem_ts::SymbolId,
-  ns: sem_ts::Namespace,
 ) -> ExportEntry {
   let symbols = semantics.symbols();
   let mut local_def: Option<DefId> = None;
   let mut any_def: Option<DefId> = None;
-  for decl_id in semantics.symbol_decls(symbol_id, ns) {
+  for decl_id in semantics.symbol_decls(symbol_id, sem_ts::Namespace::VALUE) {
     let decl = symbols.decl(*decl_id);
     let Some(def) = map_decl_to_program_def(state, decl) else {
       continue;

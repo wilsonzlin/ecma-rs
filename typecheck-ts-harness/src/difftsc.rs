@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use typecheck_ts::lib_support::CompilerOptions;
-use typecheck_ts::{FileId, Host, HostError, Program};
+use typecheck_ts::{FileKey, Host, HostError, Program};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Args)]
@@ -1520,7 +1520,7 @@ fn collect_rust_type_facts(
 ) -> NormalizedTypeFacts {
   let compiler_options = options.to_compiler_options();
   let host = DifftscHost::new(file_set.clone(), compiler_options.clone());
-  let roots = file_set.root_files();
+  let roots = file_set.root_keys();
   let program = Program::new(host, roots);
   let _ = program.check();
   let facts = TypeFacts {
@@ -1532,12 +1532,15 @@ fn collect_rust_type_facts(
 
 fn collect_export_type_facts(program: &Program, file_set: &HarnessFileSet) -> Vec<ExportTypeFact> {
   let mut facts = Vec::new();
-  for file in file_set.root_files() {
-    let Some(name) = file_set.file_name(file) else {
+  for key in file_set.root_keys() {
+    let Some(file_id) = program.file_id(&key) else {
       continue;
     };
-    let exports = program.exports_of(file);
-    for (export_name, entry) in exports.values {
+    let name = file_set
+      .name_for_key(&key)
+      .unwrap_or_else(|| key.to_string());
+    let exports = program.exports_of(file_id);
+    for (export_name, entry) in exports {
       if let Some(ty) = entry.type_id {
         facts.push(ExportTypeFact {
           file: name.clone(),
@@ -1561,7 +1564,10 @@ fn collect_marker_type_facts(
     let Some(file) = file_set.resolve(&normalized) else {
       continue;
     };
-    if let Some(ty) = program.type_at(file, marker.offset) {
+    let Some(file_id) = program.file_id(&file) else {
+      continue;
+    };
+    if let Some(ty) = program.type_at(file_id, marker.offset) {
       facts.push(TypeAtFact {
         file: marker.file.clone(),
         offset: marker.offset,
@@ -1722,13 +1728,10 @@ impl DifftscHost {
 }
 
 impl Host for DifftscHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
-    let idx = file.0 as usize;
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
-      .iter()
-      .nth(idx)
-      .map(|f| f.content.clone())
+      .content(file)
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
@@ -1736,14 +1739,14 @@ impl Host for DifftscHost {
     self.compiler_options.clone()
   }
 
-  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
     let is_relative = specifier.starts_with("./") || specifier.starts_with("../");
     if !is_relative {
       let normalized = normalize_name(specifier);
       return self.files.resolve(&normalized);
     }
 
-    let base = self.files.file_name(from)?;
+    let base = self.files.name_for_key(from)?;
     let parent = Path::new(&base).parent().unwrap_or_else(|| Path::new(""));
     let joined = parent.join(specifier);
     let base_candidate = normalize_name(joined.to_string_lossy().as_ref());

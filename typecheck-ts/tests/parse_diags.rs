@@ -2,7 +2,7 @@ use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{FileId, TextRange};
 use std::sync::Arc;
 use typecheck_ts::queries::parse;
-use typecheck_ts::{codes, Host, HostError, Program};
+use typecheck_ts::{codes, FileKey, Host, HostError, Program};
 
 struct SingleFile<'a> {
   name: &'a str,
@@ -57,30 +57,30 @@ struct MissingImportHost {
 }
 
 impl Host for MissingImportHost {
-  fn file_text(&self, _file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, _file: &FileKey) -> Result<Arc<str>, HostError> {
     Ok(self.text.clone())
   }
 
-  fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
+  fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
     None
   }
 }
 
 #[test]
 fn unresolved_import_points_at_specifier() {
-  let file = FileId(1);
   let source = r#"import { Foo } from "./missing";"#;
   let host = MissingImportHost {
     text: Arc::from(source.to_string()),
   };
 
-  let program = Program::new(host, vec![file]);
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
+  let file_id = program.file_id(&FileKey::new("entry.ts")).unwrap();
   assert_eq!(diagnostics.len(), 1);
 
   let diag = &diagnostics[0];
   assert_eq!(diag.code.as_str(), codes::UNRESOLVED_MODULE.as_str());
-  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.file, file_id);
 
   let specifier = "\"./missing\"";
   let start = source.find(specifier).expect("missing specifier in source") as u32;

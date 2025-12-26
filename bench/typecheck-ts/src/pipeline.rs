@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use typecheck_ts::lib_support::{CompilerOptions, FileKind as TcFileKind, LibManager};
 use typecheck_ts::FileId as TcFileId;
+use typecheck_ts::FileKey;
 use typecheck_ts::Host;
 use typecheck_ts::HostError;
 use typecheck_ts::Program;
@@ -242,7 +243,7 @@ pub fn typecheck_fixture_with_options(
   let filename = fixture_filename(fixture);
   let entries = entries_for_fixtures(&[fixture]);
   let host = BenchHost::with_options(entries, options);
-  let root = host.id_for(&filename).expect("root file id");
+  let root = host.key_for(&filename).expect("root file key");
   run_typecheck(host, vec![root])
 }
 
@@ -257,7 +258,7 @@ pub fn typecheck_module_graph_with_options(
   let entries = entries_from_graph(graph);
   let host = BenchHost::with_options(entries, options);
   let root = host
-    .id_for(graph.files[0].name)
+    .key_for(graph.files[0].name)
     .expect("module graph root should exist");
   run_typecheck(host, vec![root])
 }
@@ -266,14 +267,21 @@ pub fn type_of_exported_defs(graph: &ModuleGraphFixture) -> TypeOfDefSummary {
   let entries = entries_from_graph(graph);
   let host = BenchHost::new(entries);
   let root = host
-    .id_for(graph.files[0].name)
+    .key_for(graph.files[0].name)
     .expect("module graph root should exist");
+  let keys: Vec<FileKey> = graph
+    .files
+    .iter()
+    .filter_map(|file| host.key_for(file.name))
+    .collect();
   let program = Program::new(host, vec![root]);
   let mut exports = 0usize;
   let mut rendered_types = Vec::new();
 
-  for (idx, _) in graph.files.iter().enumerate() {
-    let file_id = TcFileId(idx as u32);
+  for key in keys {
+    let Some(file_id) = program.file_id(&key) else {
+      continue;
+    };
     for def in program.definitions_in_file(file_id) {
       exports += 1;
       let ty = program.type_of_def(def);
@@ -303,13 +311,13 @@ pub fn check_body_with_warmups(
   }
   let entries = entries_for_fixtures(&fixtures);
   let host = BenchHost::with_options(entries, options);
-  let mut ids = HashMap::new();
+  let mut ids: HashMap<String, FileKey> = HashMap::new();
   let mut roots = Vec::new();
   for fixture in fixtures {
     let filename = fixture_filename(fixture);
-    if let Some(id) = host.id_for(&filename) {
-      if ids.insert(filename, id).is_none() {
-        roots.push(id);
+    if let Some(key) = host.key_for(&filename) {
+      if ids.insert(filename, key.clone()).is_none() {
+        roots.push(key);
       }
     }
   }
@@ -317,17 +325,23 @@ pub fn check_body_with_warmups(
 
   for (fixture, name) in warmups {
     let filename = fixture_filename(fixture);
-    let file_id = *ids
+    let key = ids
       .get(&filename)
       .unwrap_or_else(|| panic!("missing warmup fixture {filename}"));
+    let file_id = program
+      .file_id(key)
+      .unwrap_or_else(|| panic!("missing file id for {filename}"));
     let body = find_body_named(&program, file_id, name, fixture.name);
     let _ = program.check_body(body);
   }
 
   let target_filename = fixture_filename(target.0);
-  let target_file = *ids
+  let target_key = ids
     .get(&target_filename)
     .unwrap_or_else(|| panic!("missing target fixture {target_filename}"));
+  let target_file = program
+    .file_id(target_key)
+    .unwrap_or_else(|| panic!("missing file id for {target_filename}"));
   let body = find_body_named(&program, target_file, target.1, target.0.name);
   let result = program.check_body(body);
   let stats = program.query_stats();
@@ -359,7 +373,7 @@ pub fn incremental_recheck(
   edit: &IncrementalEdit,
 ) -> IncrementalTimings {
   let entries = entries_from_graph(graph);
-  let roots = vec![TcFileId(0)];
+  let roots = vec![graph.files[0].name.to_string()];
   let manager = Arc::new(LibManager::new());
 
   let (full_summary, full_duration) =
@@ -380,12 +394,16 @@ pub fn incremental_recheck(
 
 fn timed_typecheck(
   entries: Vec<(String, Arc<str>)>,
-  roots: Vec<TcFileId>,
+  roots: Vec<String>,
   lib_manager: Arc<LibManager>,
 ) -> (TypecheckSummary, Duration) {
   let started = Instant::now();
   let host = BenchHost::new(entries);
-  let summary = run_typecheck_with_manager(host, roots, Some(lib_manager));
+  let root_keys: Vec<FileKey> = roots
+    .into_iter()
+    .filter_map(|name| host.key_for(&name))
+    .collect();
+  let summary = run_typecheck_with_manager(host, root_keys, Some(lib_manager));
   (summary, started.elapsed())
 }
 
@@ -659,16 +677,15 @@ struct SampleTypes {
   array_of_numbers: TypeId,
 }
 
-fn run_typecheck(host: BenchHost, roots: Vec<TcFileId>) -> TypecheckSummary {
+fn run_typecheck(host: BenchHost, roots: Vec<FileKey>) -> TypecheckSummary {
   run_typecheck_with_manager(host, roots, None)
 }
 
 fn run_typecheck_with_manager(
   host: BenchHost,
-  roots: Vec<TcFileId>,
+  roots: Vec<FileKey>,
   lib_manager: Option<Arc<LibManager>>,
 ) -> TypecheckSummary {
-  let all_files = host.all_file_ids();
   let program = match lib_manager {
     Some(manager) => Program::with_lib_manager(host, roots, manager),
     None => Program::new(host, roots),
@@ -677,7 +694,7 @@ fn run_typecheck_with_manager(
   let stats = program.query_stats();
 
   let mut bodies = 0;
-  for file in all_files {
+  for file in program.files() {
     if program.file_body(file).is_some() {
       bodies += 1;
     }
@@ -697,7 +714,7 @@ fn run_typecheck_with_manager(
 
 #[derive(Clone)]
 struct BenchFile {
-  name: String,
+  key: FileKey,
   content: Arc<str>,
   kind: TcFileKind,
 }
@@ -705,7 +722,8 @@ struct BenchFile {
 #[derive(Clone)]
 struct BenchHost {
   files: Vec<BenchFile>,
-  name_to_id: HashMap<String, TcFileId>,
+  name_to_key: HashMap<String, FileKey>,
+  key_to_name: HashMap<FileKey, String>,
   options: CompilerOptions,
 }
 
@@ -716,64 +734,63 @@ impl BenchHost {
 
   fn with_options(entries: Vec<(String, Arc<str>)>, options: CompilerOptions) -> Self {
     let mut files = Vec::with_capacity(entries.len());
-    let mut name_to_id = HashMap::new();
-    for (idx, (name, content)) in entries.into_iter().enumerate() {
-      let id = TcFileId(idx as u32);
-      name_to_id.insert(normalize(&PathBuf::from(&name)), id);
+    let mut name_to_key = HashMap::new();
+    let mut key_to_name = HashMap::new();
+    for (name, content) in entries.into_iter() {
+      let normalized = normalize(&PathBuf::from(&name));
+      let key = FileKey::new(normalized.clone());
+      name_to_key.insert(normalized.clone(), key.clone());
+      key_to_name.insert(key.clone(), normalized.clone());
       files.push(BenchFile {
-        name: name.clone(),
+        key,
         content,
         kind: infer_kind(&name),
       });
     }
     BenchHost {
       files,
-      name_to_id,
+      name_to_key,
+      key_to_name,
       options,
     }
   }
 
-  fn id_for(&self, name: &str) -> Option<TcFileId> {
+  fn key_for(&self, name: &str) -> Option<FileKey> {
     self
-      .name_to_id
+      .name_to_key
       .get(&normalize(&PathBuf::from(name)))
-      .copied()
+      .cloned()
   }
 
-  fn all_file_ids(&self) -> Vec<TcFileId> {
-    (0..self.files.len())
-      .map(|idx| TcFileId(idx as u32))
-      .collect()
+  fn name_for_key(&self, key: &FileKey) -> Option<String> {
+    self.key_to_name.get(key).cloned()
   }
 }
 
 impl Host for BenchHost {
-  fn file_text(&self, file: TcFileId) -> Result<Arc<str>, HostError> {
-    let idx = file.0 as usize;
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
-      .get(idx)
+      .iter()
+      .find(|f| &f.key == file)
       .map(|f| f.content.clone())
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn file_kind(&self, file: TcFileId) -> TcFileKind {
+  fn file_kind(&self, file: &FileKey) -> TcFileKind {
     self
       .files
-      .get(file.0 as usize)
+      .iter()
+      .find(|f| &f.key == file)
       .map(|f| f.kind)
       .unwrap_or(TcFileKind::Ts)
   }
 
-  fn resolve(&self, from: TcFileId, specifier: &str) -> Option<TcFileId> {
-    let from_name = self
-      .files
-      .get(from.0 as usize)
-      .map(|f| f.name.as_str())
-      .unwrap_or_default();
-    for cand in candidate_paths(from_name, specifier) {
-      if let Some(id) = self.name_to_id.get(&cand) {
-        return Some(*id);
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+    let from_name = self.name_for_key(from)?;
+    for cand in candidate_paths(&from_name, specifier) {
+      if let Some(key) = self.name_to_key.get(&cand) {
+        return Some(key.clone());
       }
     }
     None
