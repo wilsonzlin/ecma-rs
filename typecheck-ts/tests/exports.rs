@@ -1,8 +1,6 @@
-use diagnostics::TextRange;
 use std::collections::HashMap;
 use std::sync::Arc;
-use typecheck_ts::codes;
-use typecheck_ts::{FileId, Host, HostError, Program};
+use typecheck_ts::{codes, FileId, Host, HostError, Program, TextRange};
 
 #[derive(Default)]
 struct MemoryHost {
@@ -35,7 +33,7 @@ impl Host for MemoryHost {
 }
 
 #[test]
-fn exports_follow_reexport_chain() {
+fn value_exports_follow_reexport_chain() {
   let mut host = MemoryHost::default();
   host.insert(FileId(0), "export const foo: number = 1;");
   host.insert(FileId(1), "export { foo as bar } from \"./a\";");
@@ -51,19 +49,19 @@ fn exports_follow_reexport_chain() {
   );
 
   let exports_b = program.exports_of(FileId(1));
-  let bar_entry_b = exports_b.get("bar").expect("bar export in module b");
+  let bar_entry_b = exports_b.values.get("bar").expect("bar export in module b");
   assert!(bar_entry_b.def.is_none());
   let bar_type_b = bar_entry_b.type_id.expect("type for bar in module b");
   assert_eq!(program.display_type(bar_type_b).to_string(), "number");
 
   let exports_c = program.exports_of(FileId(2));
-  let bar_entry_c = exports_c.get("bar").expect("bar export in module c");
+  let bar_entry_c = exports_c.values.get("bar").expect("bar export in module c");
   assert!(bar_entry_c.def.is_none());
   let bar_type_c = bar_entry_c.type_id.expect("type for bar in module c");
   assert_eq!(program.display_type(bar_type_c).to_string(), "number");
 
   let exports_a = program.exports_of(FileId(0));
-  let foo_entry = exports_a.get("foo").expect("foo export in module a");
+  let foo_entry = exports_a.values.get("foo").expect("foo export in module a");
   assert!(foo_entry.def.is_some());
   let foo_type = foo_entry.type_id.expect("type for foo");
   assert_eq!(program.display_type(foo_type).to_string(), "number");
@@ -82,84 +80,35 @@ fn default_export_has_type() {
   );
 
   let exports = program.exports_of(FileId(10));
-  let default_entry = exports.get("default").expect("default export");
+  let default_entry = exports.values.get("default").expect("default export");
   assert!(default_entry.def.is_some());
   let ty = default_entry.type_id.expect("type for default");
   assert_eq!(program.display_type(ty).to_string(), "42");
 }
 
 #[test]
-fn type_only_exports_filtered() {
+fn type_exports_propagate_through_reexports() {
   let mut host = MemoryHost::default();
-  host.insert(
-    FileId(20),
-    "export type Foo = { a: string };\nexport const value = 1;",
-  );
+  host.insert(FileId(20), "export type Foo = { a: string };");
+  host.insert(FileId(21), "export type { Foo } from \"./types\";");
+  host.link(FileId(21), "./types", FileId(20));
 
-  let program = Program::new(host, vec![FileId(20)]);
+  let program = Program::new(host, vec![FileId(21)]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let exports = program.exports_of(FileId(20));
+  let exports_types = program.exports_of(FileId(21)).types;
+  let foo = exports_types.get("Foo").expect("Foo type export");
+  assert!(foo.def.is_none(), "re-export should not point to local def");
+  let foo_ty = foo.type_id.expect("type for Foo");
+  let rendered = program.display_type(foo_ty).to_string();
   assert!(
-    exports.get("Foo").is_none(),
-    "type-only export should be filtered"
+    rendered.contains("a: string"),
+    "expected object type, got {rendered}"
   );
-  let value_entry = exports.get("value").expect("value export");
-  let ty = value_entry.type_id.expect("type for value");
-  assert_eq!(program.display_type(ty).to_string(), "1");
-}
-
-#[test]
-fn missing_reexport_emits_diagnostic() {
-  let mut host = MemoryHost::default();
-  host.insert(FileId(100), "export const foo = 1;");
-  host.insert(FileId(101), "export { bar } from \"./a\";");
-  host.link(FileId(101), "./a", FileId(100));
-
-  let program = Program::new(host, vec![FileId(101)]);
-  let diagnostics = program.check();
-  assert_eq!(diagnostics.len(), 1, "expected a single diagnostic");
-  assert_eq!(diagnostics[0].code.as_str(), codes::UNKNOWN_EXPORT.as_str());
-  assert_eq!(diagnostics[0].primary.file, FileId(101));
-  assert!(
-    diagnostics[0].primary.range.len() > 0,
-    "diagnostic should point at the invalid specifier"
-  );
-
-  let exports = program.exports_of(FileId(101));
-  assert!(
-    exports.get("bar").is_none(),
-    "invalid re-export should be absent"
-  );
-}
-
-#[test]
-fn type_only_reexports_filtered() {
-  let mut host = MemoryHost::default();
-  host.insert(FileId(200), "export type Foo = { a: string };");
-  host.insert(
-    FileId(201),
-    "export { Foo } from \"./types\";\nexport const value = 1;",
-  );
-  host.link(FileId(201), "./types", FileId(200));
-
-  let program = Program::new(host, vec![FileId(201)]);
-  let diagnostics = program.check();
-  assert_eq!(diagnostics.len(), 1, "expected missing export diagnostic");
-  assert_eq!(diagnostics[0].code.as_str(), codes::UNKNOWN_EXPORT.as_str());
-
-  let exports = program.exports_of(FileId(201));
-  assert!(
-    exports.get("Foo").is_none(),
-    "type-only re-export should be ignored"
-  );
-  let value = exports.get("value").expect("value export present");
-  let ty = value.type_id.expect("type for value");
-  assert_eq!(program.display_type(ty).to_string(), "1");
 }
 
 #[test]
@@ -184,7 +133,7 @@ fn export_star_cycle_reaches_fixpoint() {
 
   for file in [FileId(210), FileId(211), FileId(212)] {
     let exports = program.exports_of(file);
-    let shared = exports.get("shared").expect("shared export present");
+    let shared = exports.values.get("shared").expect("shared export present");
     let ty = shared.type_id.expect("type for shared");
     assert_eq!(program.display_type(ty).to_string(), "1");
   }
@@ -206,10 +155,13 @@ fn export_star_skips_default() {
 
   let exports = program.exports_of(FileId(221));
   assert!(
-    exports.get("default").is_none(),
+    exports.values.get("default").is_none(),
     "default should not be re-exported"
   );
-  let named = exports.get("named").expect("named export propagated");
+  let named = exports
+    .values
+    .get("named")
+    .expect("named export propagated");
   let ty = named.type_id.expect("type for named");
   assert_eq!(program.display_type(ty).to_string(), "2");
 }
@@ -231,6 +183,48 @@ fn duplicate_export_reports_conflict() {
   assert_eq!(diagnostics.len(), 1, "expected a conflict diagnostic");
   assert_eq!(diagnostics[0].code.as_str(), "BIND1001");
   assert_eq!(diagnostics[0].primary.file, FileId(232));
+}
+
+#[test]
+fn namespace_exports_include_namespace_slot() {
+  let mut host = MemoryHost::default();
+  host.insert(
+    FileId(30),
+    "export function foo() { return 1; }\nexport namespace foo { }",
+  );
+
+  let program = Program::new(host, vec![FileId(30)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let exports = program.exports_of(FileId(30));
+  let value_entry = exports.values.get("foo").expect("value export foo");
+  let namespace_entry = exports.namespaces.get("foo").expect("namespace export foo");
+  assert_eq!(
+    value_entry.symbol, namespace_entry.symbol,
+    "merged namespace/value should share symbol"
+  );
+}
+
+#[test]
+fn export_star_conflict_reports_diagnostic() {
+  let mut host = MemoryHost::default();
+  host.insert(FileId(100), "export const dup = 1;");
+  host.insert(FileId(101), "export const dup = 2;");
+  host.insert(
+    FileId(102),
+    "export * from \"./one\";\nexport * from \"./two\";",
+  );
+  host.link(FileId(102), "./one", FileId(100));
+  host.link(FileId(102), "./two", FileId(101));
+
+  let program = Program::new(host, vec![FileId(102)]);
+  let diagnostics = program.check();
+  assert_eq!(diagnostics.len(), 1, "expected conflict diagnostic");
+  assert_eq!(diagnostics[0].code.as_str(), "BIND1001");
 }
 
 #[test]
@@ -287,11 +281,11 @@ fn unresolved_export_points_at_specifier() {
 fn interned_type_for_exported_function() {
   let mut host = MemoryHost::default();
   host.insert(
-    FileId(30),
+    FileId(50),
     "export function add(a: number, b: number): number { return a + b; }",
   );
 
-  let program = Program::new(host, vec![FileId(30)]);
+  let program = Program::new(host, vec![FileId(50)]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -299,7 +293,7 @@ fn interned_type_for_exported_function() {
   );
 
   let def = program
-    .definitions_in_file(FileId(30))
+    .definitions_in_file(FileId(50))
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition");

@@ -4,13 +4,13 @@ use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{
   BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeStore,
 };
-use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId, TextRange};
+use crate::{semantic_js, BodyId, DefId, Diagnostic, Exports, FileId, TextRange};
 use types_ts_interned::{
   TypeId, TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.
-pub const PROGRAM_SNAPSHOT_VERSION: u32 = 2;
+pub const PROGRAM_SNAPSHOT_VERSION: u32 = 3;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
 /// to allow offline reconstruction.
@@ -27,7 +27,7 @@ pub struct FileSnapshot {
 pub struct FileStateSnapshot {
   pub file: FileId,
   pub defs: Vec<DefId>,
-  pub exports: ExportMap,
+  pub exports: Exports,
   pub bindings: Vec<(String, SymbolBinding)>,
   pub top_body: Option<BodyId>,
 }

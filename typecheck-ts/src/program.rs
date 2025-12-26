@@ -115,6 +115,17 @@ pub struct ExportEntry {
 /// Mapping from export names to entries.
 pub type ExportMap = BTreeMap<String, ExportEntry>;
 
+/// Exported bindings grouped by namespace. TypeScript maintains separate
+/// namespaces for values, types, and namespaces, so callers should consult the
+/// map that matches their lookup context.
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Debug, Default)]
+pub struct Exports {
+  pub values: ExportMap,
+  pub types: ExportMap,
+  pub namespaces: ExportMap,
+}
+
 /// Per-body typing result. Expression and pattern IDs are local to the body.
 #[allow(dead_code)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -955,29 +966,18 @@ impl Program {
   }
 
   /// Export map for a file.
-  pub fn exports_of(&self, file: FileId) -> ExportMap {
+  pub fn exports_of(&self, file: FileId) -> Exports {
     match self.exports_of_fallible(file) {
       Ok(exports) => exports,
       Err(fatal) => {
         self.record_fatal(fatal);
-        ExportMap::new()
+        Exports::default()
       }
     }
   }
 
-  pub fn exports_of_fallible(&self, file: FileId) -> Result<ExportMap, FatalError> {
-    self.with_analyzed_state(|state| {
-      let mut exports = state.exports_of_file(file);
-      exports.retain(|_, entry| {
-        if let Some(def) = entry.def {
-          if let Some(def_data) = state.def_data.get(&def) {
-            return !matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_));
-          }
-        }
-        true
-      });
-      Ok(exports)
-    })
+  pub fn exports_of_fallible(&self, file: FileId) -> Result<Exports, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.exports_of_file(file)))
   }
 
   /// Helper to render a type as displayable string.
@@ -1378,7 +1378,7 @@ struct ExportAll {
 #[derive(Clone)]
 struct FileState {
   defs: Vec<DefId>,
-  exports: ExportMap,
+  exports: Exports,
   bindings: HashMap<String, SymbolBinding>,
   top_body: Option<BodyId>,
   reexports: Vec<Reexport>,
@@ -2408,6 +2408,18 @@ impl ProgramState {
   }
 
   fn resolve_reexports(&mut self) {
+    if let Some(semantics) = self.semantics.clone() {
+      let mut files: Vec<FileId> = self.files.keys().copied().collect();
+      files.sort_by_key(|f| f.0);
+      for file in files {
+        let exports = check::modules::exports_from_semantics(self, &semantics, file);
+        if let Some(state) = self.files.get_mut(&file) {
+          state.exports = exports;
+        }
+      }
+      return;
+    }
+
     let mut changed = true;
     let mut files: Vec<FileId> = self.files.keys().copied().collect();
     files.sort_by_key(|f| f.0);
@@ -2422,27 +2434,31 @@ impl ProgramState {
           let Some(target) = self.files.get(&spec.from) else {
             continue;
           };
-          if let Some(entry) = target.exports.get(&spec.original) {
-            if let Some(def) = entry.def {
-              if let Some(def_data) = self.def_data.get(&def) {
-                if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
-                  let duplicate = self.diagnostics.iter().any(|existing| {
-                    existing.code.as_str() == codes::UNKNOWN_EXPORT.as_str()
-                      && existing.primary.file == *file
-                      && existing.primary.range == spec.span
-                  });
-                  if !duplicate {
-                    self.diagnostics.push(codes::UNKNOWN_EXPORT.error(
-                      format!("unknown export {}", spec.original),
-                      Span::new(*file, spec.span),
-                    ));
+          let source_map = if spec.type_only {
+            &target.exports.types
+          } else {
+            &target.exports.values
+          };
+          if let Some(entry) = source_map.get(&spec.original) {
+            if !spec.type_only {
+              if let Some(def) = entry.def {
+                if let Some(def_data) = self.def_data.get(&def) {
+                  if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
+                    let duplicate = self.diagnostics.iter().any(|existing| {
+                      existing.code.as_str() == codes::UNKNOWN_EXPORT.as_str()
+                        && existing.primary.file == *file
+                        && existing.primary.range == spec.span
+                    });
+                    if !duplicate {
+                      self.diagnostics.push(codes::UNKNOWN_EXPORT.error(
+                        format!("unknown export {}", spec.original),
+                        Span::new(*file, spec.span),
+                      ));
+                    }
+                    continue;
                   }
-                  continue;
                 }
               }
-            }
-            if spec.type_only {
-              continue;
             }
             let type_id = entry
               .type_id
@@ -2452,21 +2468,22 @@ impl ProgramState {
               def: None,
               type_id,
             };
-            match exports.get(&spec.alias) {
-              Some(existing) => {
-                if existing.symbol == mapped.symbol {
-                  if (existing.def.is_none() && mapped.def.is_some())
-                    || (existing.type_id.is_none() && mapped.type_id.is_some())
-                  {
-                    exports.insert(spec.alias.clone(), mapped);
-                    changed = true;
-                  }
-                }
-              }
-              None => {
-                exports.insert(spec.alias.clone(), mapped);
-                changed = true;
-              }
+            let target_map = if spec.type_only {
+              &mut exports.types
+            } else {
+              &mut exports.values
+            };
+            let previous = target_map.insert(spec.alias.clone(), mapped.clone());
+            if previous
+              .as_ref()
+              .map(|prev| {
+                prev.symbol != mapped.symbol
+                  || prev.def != mapped.def
+                  || prev.type_id != mapped.type_id
+              })
+              .unwrap_or(true)
+            {
+              changed = true;
             }
             continue;
           }
@@ -2487,11 +2504,13 @@ impl ProgramState {
           let Some(target) = self.files.get(&spec.from) else {
             continue;
           };
-          if spec.type_only {
-            continue;
-          }
-          for (name, entry) in target.exports.iter() {
-            if name == "default" {
+          let source_map = if spec.type_only {
+            &target.exports.types
+          } else {
+            &target.exports.values
+          };
+          for (name, entry) in source_map.iter() {
+            if !spec.type_only && name == "default" {
               continue;
             }
             if let Some(def) = entry.def {
@@ -2509,21 +2528,22 @@ impl ProgramState {
               def: None,
               type_id,
             };
-            match exports.get(name) {
-              Some(existing) => {
-                if existing.symbol == mapped.symbol {
-                  if (existing.def.is_none() && mapped.def.is_some())
-                    || (existing.type_id.is_none() && mapped.type_id.is_some())
-                  {
-                    exports.insert(name.clone(), mapped);
-                    changed = true;
-                  }
-                }
-              }
-              None => {
-                exports.insert(name.clone(), mapped);
-                changed = true;
-              }
+            let target_map = if spec.type_only {
+              &mut exports.types
+            } else {
+              &mut exports.values
+            };
+            let previous = target_map.insert(name.clone(), mapped.clone());
+            if previous
+              .as_ref()
+              .map(|prev| {
+                prev.symbol != mapped.symbol
+                  || prev.def != mapped.def
+                  || prev.type_id != mapped.type_id
+              })
+              .unwrap_or(true)
+            {
+              changed = true;
             }
           }
         }
@@ -2537,10 +2557,16 @@ impl ProgramState {
 
   fn update_export_types(&mut self) {
     for state in self.files.values_mut() {
-      for entry in state.exports.values_mut() {
-        if let Some(def) = entry.def {
-          if let Some(ty) = self.def_types.get(&def) {
-            entry.type_id = Some(*ty);
+      for map in [
+        &mut state.exports.values,
+        &mut state.exports.types,
+        &mut state.exports.namespaces,
+      ] {
+        for entry in map.values_mut() {
+          if let Some(def) = entry.def {
+            if let Some(ty) = self.def_types.get(&def) {
+              entry.type_id = Some(*ty);
+            }
           }
         }
       }
@@ -2559,7 +2585,7 @@ impl ProgramState {
     let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
     let mut sem_builder = SemHirBuilder::new(file, sem_file_kind(file_kind));
     let mut defs = Vec::new();
-    let mut exports: ExportMap = BTreeMap::new();
+    let mut exports = Exports::default();
     let mut bindings: HashMap<String, SymbolBinding> = HashMap::new();
     let mut reexports = Vec::new();
     let mut export_all = Vec::new();
@@ -2586,7 +2612,7 @@ impl ProgramState {
             let (binding_name, binding_value) = binding;
             bindings.insert(binding_name.clone(), binding_value.clone());
             if let Some(name) = export_name {
-              exports.insert(
+              exports.values.insert(
                 name,
                 ExportEntry {
                   symbol: binding_value.symbol,
@@ -2607,7 +2633,7 @@ impl ProgramState {
             let (binding_name, binding_value) = binding;
             bindings.insert(binding_name.clone(), binding_value.clone());
             if let Some(name) = export_name {
-              exports.insert(
+              exports.values.insert(
                 name,
                 ExportEntry {
                   symbol: binding_value.symbol,
@@ -2698,7 +2724,7 @@ impl ProgramState {
             });
 
           if interface.stx.export {
-            let entry = exports.entry(name.clone()).or_insert(ExportEntry {
+            let entry = exports.types.entry(name.clone()).or_insert(ExportEntry {
               symbol,
               def: Some(def_id),
               type_id: Some(typ),
@@ -2758,7 +2784,7 @@ impl ProgramState {
             span.range,
           );
           if alias.stx.export {
-            exports.insert(
+            exports.types.insert(
               name.clone(),
               ExportEntry {
                 symbol,
@@ -2818,7 +2844,7 @@ impl ProgramState {
               type_id: None,
             },
           );
-          exports.insert(
+          exports.values.insert(
             "default".to_string(),
             ExportEntry {
               symbol,
@@ -2875,10 +2901,15 @@ impl ProgramState {
                   });
                 }
 
-                if export_list.stx.from.is_none() && !is_type_only {
+                if export_list.stx.from.is_none() {
                   let mapped = bindings.get(&exportable);
                   if let Some(binding) = mapped {
-                    exports.insert(
+                    let target = if is_type_only {
+                      &mut exports.types
+                    } else {
+                      &mut exports.values
+                    };
+                    target.insert(
                       alias.clone(),
                       ExportEntry {
                         symbol: binding.symbol,
@@ -3947,7 +3978,9 @@ impl ProgramState {
               } else {
                 args
                   .iter()
-                  .position(|arg| matches!(&arg.kind, HirExprKind::Ident(name) if name == &parameter))
+                  .position(
+                    |arg| matches!(&arg.kind, HirExprKind::Ident(name) if name == &parameter),
+                  )
                   .unwrap_or(0)
               };
               let arg_ty = arg_types
@@ -4393,7 +4426,12 @@ impl ProgramState {
       }
       Some(DefKind::Import(import)) => {
         let exports = self.exports_of_file(import.from);
-        if let Some(entry) = exports.get(&import.original) {
+        let entry = exports
+          .values
+          .get(&import.original)
+          .or_else(|| exports.types.get(&import.original))
+          .or_else(|| exports.namespaces.get(&import.original));
+        if let Some(entry) = entry {
           if let Some(ty) = entry.type_id {
             ty
           } else if let Some(def) = entry.def {
@@ -4445,19 +4483,25 @@ impl ProgramState {
     ty
   }
 
-  fn exports_of_file(&mut self, file: FileId) -> ExportMap {
+  fn exports_of_file(&mut self, file: FileId) -> Exports {
     let Some(state) = self.files.get(&file).cloned() else {
-      return ExportMap::new();
+      return Exports::default();
     };
-    let mut map = state.exports.clone();
-    for entry in map.values_mut() {
-      if entry.type_id.is_none() {
-        if let Some(def) = entry.def {
-          entry.type_id = Some(self.type_of_def(def));
+    let mut exports = state.exports.clone();
+    for map in [
+      &mut exports.values,
+      &mut exports.types,
+      &mut exports.namespaces,
+    ] {
+      for entry in map.values_mut() {
+        if entry.type_id.is_none() {
+          if let Some(def) = entry.def {
+            entry.type_id = Some(self.type_of_def(def));
+          }
         }
       }
     }
-    map
+    exports
   }
 
   fn ensure_symbols_for_file(&mut self, file: FileId) {
@@ -4522,7 +4566,12 @@ impl ProgramState {
 
   fn resolve_import_symbol(&mut self, import: &ImportData) -> Option<semantic_js::SymbolId> {
     let exports = self.exports_of_file(import.from);
-    exports.get(&import.original).map(|entry| entry.symbol)
+    exports
+      .values
+      .get(&import.original)
+      .or_else(|| exports.types.get(&import.original))
+      .or_else(|| exports.namespaces.get(&import.original))
+      .map(|entry| entry.symbol)
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {

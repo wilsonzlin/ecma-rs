@@ -53,7 +53,7 @@
 //! assert!(diagnostics.is_empty());
 //!
 //! let exports = program.exports_of(FileId(0));
-//! let add_def = exports.get("add").and_then(|e| e.def).unwrap();
+//! let add_def = exports.values.get("add").and_then(|e| e.def).unwrap();
 //! let add_body = program.body_of_def(add_def).unwrap();
 //! let result = program.check_body(add_body);
 //! let ty = program.type_of_expr(add_body, ExprId(0));
@@ -66,7 +66,7 @@
 //! ```rust
 //! use std::collections::HashMap;
 //! use std::sync::Arc;
-//! use typecheck_ts::{ExportMap, FileId, Host, HostError, Program};
+//! use typecheck_ts::{Exports, FileId, Host, HostError, Program};
 //!
 //! #[derive(Default)]
 //! struct MemoryHost {
@@ -113,8 +113,8 @@
 //! let diagnostics = program.check();
 //! assert!(diagnostics.is_empty());
 //!
-//! let exports: ExportMap = program.exports_of(FileId(0));
-//! let total_def = exports.get("total").unwrap().def.unwrap();
+//! let exports: Exports = program.exports_of(FileId(0));
+//! let total_def = exports.values.get("total").unwrap().def.unwrap();
 //! let total_type = program.type_of_def(total_def);
 //! assert_eq!(program.display_type(total_type).to_string(), "number");
 //! ```

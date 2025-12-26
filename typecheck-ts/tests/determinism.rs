@@ -113,6 +113,13 @@ struct ExportSnapshot {
   type_id: Option<TypeId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct ExportSpacesSnapshot {
+  values: BTreeMap<String, ExportSnapshot>,
+  types: BTreeMap<String, ExportSnapshot>,
+  namespaces: BTreeMap<String, ExportSnapshot>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct BodySnapshot {
   diagnostics: Vec<Diagnostic>,
@@ -126,7 +133,7 @@ struct BodySnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DeterministicSnapshot {
   diagnostics: Vec<Diagnostic>,
-  exports: BTreeMap<FileId, BTreeMap<String, ExportSnapshot>>,
+  exports: BTreeMap<FileId, ExportSpacesSnapshot>,
   def_types: BTreeMap<DefId, TypeId>,
   interned_types: BTreeMap<DefId, TypeId>,
   bodies: BTreeMap<BodyId, BodySnapshot>,
@@ -188,19 +195,11 @@ fn snapshot_program(program: &Program, files: &[FileId]) -> DeterministicSnapsho
   let mut exports = BTreeMap::new();
   for &file in files {
     let map = program.exports_of(file);
-    let converted = map
-      .into_iter()
-      .map(|(name, entry)| {
-        (
-          name,
-          ExportSnapshot {
-            symbol: entry.symbol,
-            def: entry.def,
-            type_id: entry.type_id,
-          },
-        )
-      })
-      .collect();
+    let converted = ExportSpacesSnapshot {
+      values: convert_exports(&map.values),
+      types: convert_exports(&map.types),
+      namespaces: convert_exports(&map.namespaces),
+    };
     exports.insert(file, converted);
   }
 
@@ -227,6 +226,22 @@ fn snapshot_program(program: &Program, files: &[FileId]) -> DeterministicSnapsho
     interned_types,
     bodies,
   }
+}
+
+fn convert_exports(map: &typecheck_ts::ExportMap) -> BTreeMap<String, ExportSnapshot> {
+  map
+    .iter()
+    .map(|(name, entry)| {
+      (
+        name.clone(),
+        ExportSnapshot {
+          symbol: entry.symbol,
+          def: entry.def,
+          type_id: entry.type_id,
+        },
+      )
+    })
+    .collect()
 }
 
 fn run_parallel_bodies(program: &Arc<Program>, bodies: &[BodyId]) {

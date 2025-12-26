@@ -121,7 +121,7 @@ struct JsonQueries {
   #[serde(skip_serializing_if = "Option::is_none")]
   symbol_at: Option<SymbolAtResult>,
   #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-  exports: BTreeMap<String, BTreeMap<String, ExportEntryJson>>,
+  exports: BTreeMap<String, ExportSpacesJson>,
 }
 
 #[derive(Serialize)]
@@ -162,6 +162,16 @@ struct ExportEntryJson {
   #[serde(skip_serializing_if = "Option::is_none")]
   #[serde(rename = "type")]
   typ: Option<String>,
+}
+
+#[derive(Default, Serialize)]
+struct ExportSpacesJson {
+  #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+  values: BTreeMap<String, ExportEntryJson>,
+  #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+  types: BTreeMap<String, ExportEntryJson>,
+  #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+  namespaces: BTreeMap<String, ExportEntryJson>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -744,15 +754,32 @@ fn query_exports(
   program: &Program,
   host: &DiskHost,
   path: PathBuf,
-) -> Result<BTreeMap<String, BTreeMap<String, ExportEntryJson>>, String> {
+) -> Result<BTreeMap<String, ExportSpacesJson>, String> {
   let file_id = host
     .id_for_path(&path)
     .ok_or_else(|| format!("unknown file in --exports: {}", path.to_string_lossy()))?;
   let exports = program.exports_of(file_id);
-  let mut map: BTreeMap<String, ExportEntryJson> = BTreeMap::new();
+  let mut spaces = ExportSpacesJson::default();
+  insert_exports(&mut spaces.values, exports.values, program);
+  insert_exports(&mut spaces.types, exports.types, program);
+  insert_exports(&mut spaces.namespaces, exports.namespaces, program);
+  let mut outer = BTreeMap::new();
+  let file_name = host
+    .path_for_id(file_id)
+    .map(|p| p.display().to_string())
+    .unwrap_or_else(|| path.to_string_lossy().to_string());
+  outer.insert(file_name, spaces);
+  Ok(outer)
+}
+
+fn insert_exports(
+  target: &mut BTreeMap<String, ExportEntryJson>,
+  exports: typecheck_ts::ExportMap,
+  program: &Program,
+) {
   for (name, entry) in exports {
     let typ = entry.type_id.map(|t| program.display_type(t).to_string());
-    map.insert(
+    target.insert(
       name,
       ExportEntryJson {
         symbol: entry.symbol.0,
@@ -761,13 +788,6 @@ fn query_exports(
       },
     );
   }
-  let mut outer = BTreeMap::new();
-  let file_name = host
-    .path_for_id(file_id)
-    .map(|p| p.display().to_string())
-    .unwrap_or_else(|| path.to_string_lossy().to_string());
-  outer.insert(file_name, map);
-  Ok(outer)
 }
 
 fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {

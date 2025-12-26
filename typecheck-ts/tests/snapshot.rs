@@ -51,7 +51,7 @@ fn snapshot_roundtrips_queries() {
   );
 
   let exports = program.exports_of(FileId(0));
-  let total_entry = exports.get("total").expect("total export present");
+  let total_entry = exports.values.get("total").expect("total export present");
   let total_def = total_entry.def.expect("total def");
   let total_type = total_entry.type_id.expect("total type");
   let total_body = program.body_of_def(total_def).expect("body for total");
@@ -70,6 +70,7 @@ fn snapshot_roundtrips_queries() {
 
   let restored_exports = restored.exports_of(FileId(0));
   let restored_total = restored_exports
+    .values
     .get("total")
     .expect("restored total export");
   assert_eq!(restored_total.type_id, Some(total_type));
