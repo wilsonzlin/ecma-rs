@@ -3,7 +3,7 @@ use crate::il::inst::Inst;
 use serde::Serialize;
 use std::collections::BTreeMap;
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct OptimizerDebugStep {
   pub name: String,
@@ -12,7 +12,7 @@ pub struct OptimizerDebugStep {
   pub cfg_children: BTreeMap<u32, Vec<u32>>,
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Clone)]
 pub struct OptimizerDebug {
   steps: Vec<OptimizerDebugStep>,
 }
@@ -20,6 +20,10 @@ pub struct OptimizerDebug {
 impl OptimizerDebug {
   pub fn new() -> Self {
     Self { steps: Vec::new() }
+  }
+
+  pub fn steps(&self) -> &[OptimizerDebugStep] {
+    &self.steps
   }
 
   pub fn add_step(&mut self, name: impl AsRef<str>, cfg: &Cfg) {

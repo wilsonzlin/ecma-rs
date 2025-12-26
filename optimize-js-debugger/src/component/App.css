@@ -1,137 +1,218 @@
-.BBlocksExplorer {
-  .step-names {
-    .current {
-      font-weight: bold;
-    }
-  }
+.BBlocksExplorer .step-names .current {
+  font-weight: bold;
+}
 
-  .bblock {
-    border: 1px solid #eee;
-    /* Make translucent to see edges that flow beneath it. */
-    background: rgba(255, 255, 255, 0.8);
-    padding: 0.5rem;
-    font-family: var(--monospace-font-family);
+.BBlocksExplorer .bblock {
+  border: 1px solid #eee;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 0.5rem;
+  font-family: var(--monospace-font-family);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 12rem;
+}
 
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
+.BBlocksExplorer .bblock h1 {
+  text-align: center;
+  color: blue;
+  font-weight: bolder;
+}
 
-    > h1 {
-      text-align: center;
-      color: blue;
-      font-weight: bolder;
-    }
+.BBlocksExplorer .bblock.changed {
+  border-color: #f90;
+  box-shadow: 0 0 8px rgba(255, 153, 0, 0.6);
+}
 
-    .insts {
-      font-size: 0.9rem;
-      display: table;
+.BBlocksExplorer .insts {
+  font-size: 0.9rem;
+  display: table;
+}
 
-      > .inst {
-        display: table-row;
-        color: #333;
+.BBlocksExplorer .insts .inst {
+  display: table-row;
+  color: #333;
+}
 
-        > div {
-          display: table-cell;
+.BBlocksExplorer .insts .inst > div {
+  display: table-cell;
+}
 
-          &:first-child {
-            padding-right: 1.5rem;
-            text-align: right;
-          }
-        }
+.BBlocksExplorer .insts .inst > div:first-child {
+  padding-right: 1.5rem;
+  text-align: right;
+}
 
-        .invalid-inst {
-          color: red;
-        }
+.BBlocksExplorer .insts .invalid-inst {
+  color: red;
+}
 
-        .const {
-          color: orange;
-        }
+.BBlocksExplorer .insts .const {
+  color: orange;
+}
 
-        .eq {
-          color: #999;
-        }
+.BBlocksExplorer .insts .eq {
+  color: #999;
+}
 
-        .fn {
-          color: green;
-        }
+.BBlocksExplorer .insts .fn {
+  color: green;
+}
 
-        .foreign,
-        .unknown {
-          color: #333;
-        }
+.BBlocksExplorer .insts .foreign,
+.BBlocksExplorer .insts .unknown {
+  color: #333;
+}
 
-        .label {
-          color: blue;
-        }
+.BBlocksExplorer .insts .label {
+  color: blue;
+}
 
-        .var {
-          color: purple;
-        }
-      }
-    }
-  }
+.BBlocksExplorer .insts .var {
+  color: purple;
 }
 
 .App {
   position: fixed;
   inset: 0;
+}
 
-  > main {
-    height: 100%;
-    display: flex;
-    align-items: stretch;
+.App > main {
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+}
 
-    > .canvas {
-      flex-grow: 1;
-      min-width: 0;
+.App .canvas {
+  flex-grow: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.5rem;
+}
 
-      display: flex;
-      flex-direction: column;
-      align-items: stretch;
-      gap: 0.5rem;
+.App .toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.5rem;
+  border-bottom: 1px solid #ccc;
+}
 
-      > .function-tabs {
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        padding: 0.5rem;
-        border-bottom: 1px solid #ccc;
-      }
+.App .function-tabs button.active {
+  font-weight: bold;
+}
 
-      > .BBlocksExplorer {
-        flex-grow: 1;
-        min-height: 0;
-      }
-    }
+.App .step-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
 
-    > .pane {
-      flex-shrink: 0;
-      width: 40vw;
+.App .step-controls input[type="search"] {
+  padding: 0.25rem 0.5rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+}
 
-      display: flex;
-      flex-direction: column;
-      align-items: stretch;
+.App .step-controls .toggle {
+  display: inline-flex;
+  gap: 0.25rem;
+  align-items: center;
+}
 
-      > .info {
-        flex-grow: 1;
-        min-height: 0;
-        overflow: auto;
+.App .BBlocksExplorer {
+  flex-grow: 1;
+  min-height: 0;
+}
 
-        .error {
-          font-family: var(--monospace-font-family);
-          color: red;
-          background: #fdd;
-          padding: 0.5rem;
-          border: 1px solid #f99;
-          white-space: pre-wrap;
-        }
-      }
+.App .pane {
+  flex-shrink: 0;
+  width: 40vw;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
 
-      > .editor {
-        flex-shrink: 0;
-        border: 1px solid #ccc;
-      }
-    }
-  }
+.App .pane .info {
+  flex-grow: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0.5rem;
+}
+
+.App .pane .info .error {
+  font-family: var(--monospace-font-family);
+  color: red;
+  background: #fdd;
+  padding: 0.5rem;
+  border: 1px solid #f99;
+  white-space: pre-wrap;
+}
+
+.App .pane .editor {
+  flex-shrink: 0;
+  border: 1px solid #ccc;
+}
+
+.App .pane .editor .controls {
+  padding: 0.5rem;
+  border-bottom: 1px solid #eee;
+}
+
+.App .legend {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.9rem;
+}
+
+.SymbolsPanel {
+  padding: 0.5rem 1rem;
+  overflow: auto;
+}
+
+.SymbolsPanel .summary {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.SymbolsPanel .scopes {
+  list-style: none;
+  padding-left: 0.5rem;
+  margin: 0;
+}
+
+.SymbolsPanel .scope {
+  margin-bottom: 0.5rem;
+}
+
+.SymbolsPanel .scope header {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.SymbolsPanel .scope .symbols {
+  list-style: none;
+  padding-left: 0.75rem;
+}
+
+.SymbolsPanel .scope .symbol-name {
+  font-weight: bold;
+}
+
+.SymbolsPanel .badge {
+  background: #eee;
+  color: #555;
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+
+.SymbolsPanel .badge.warn {
+  background: #ffe8d5;
+  color: #a84200;
 }

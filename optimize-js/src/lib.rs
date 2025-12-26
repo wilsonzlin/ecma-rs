@@ -28,6 +28,7 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::parse;
+use semantic_js::js::ScopeKind;
 pub use semantic_js::js::TopLevelMode;
 use serde::Serialize;
 use ssa::ssa_deconstruct::deconstruct_ssa;
@@ -102,10 +103,56 @@ pub struct ProgramFreeSymbols {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgramScopeKind {
+  Global,
+  Module,
+  Class,
+  NonArrowFunction,
+  ArrowFunction,
+  Block,
+  FunctionExpressionName,
+}
+
+impl From<ScopeKind> for ProgramScopeKind {
+  fn from(kind: ScopeKind) -> Self {
+    match kind {
+      ScopeKind::Global => ProgramScopeKind::Global,
+      ScopeKind::Module => ProgramScopeKind::Module,
+      ScopeKind::Class => ProgramScopeKind::Class,
+      ScopeKind::NonArrowFunction => ProgramScopeKind::NonArrowFunction,
+      ScopeKind::ArrowFunction => ProgramScopeKind::ArrowFunction,
+      ScopeKind::Block => ProgramScopeKind::Block,
+      ScopeKind::FunctionExpressionName => ProgramScopeKind::FunctionExpressionName,
+    }
+  }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProgramScope {
+  pub id: ScopeId,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub parent: Option<ScopeId>,
+  pub kind: ProgramScopeKind,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub symbols: Vec<SymbolId>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub children: Vec<ScopeId>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub tdz_bindings: Vec<SymbolId>,
+  pub is_dynamic: bool,
+  pub has_direct_eval: bool,
+}
+
+#[derive(Debug, Serialize)]
 pub struct ProgramSymbols {
   pub symbols: Vec<ProgramSymbol>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub free_symbols: Option<ProgramFreeSymbols>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub names: Vec<String>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub scopes: Vec<ProgramScope>,
 }
 
 pub fn compile_js_statements(
@@ -242,9 +289,34 @@ fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> Pr
 
   let mut out_symbols = Vec::new();
   collect_scope_symbols(symbols, symbols.top_scope(), captured, &mut out_symbols);
+  let mut scopes = Vec::with_capacity(symbols.semantics.scopes.len());
+  for (idx, scope) in symbols.semantics.scopes.iter().enumerate() {
+    let id = ScopeId(idx as u32);
+    let mut scope_symbols: Vec<_> = scope
+      .iter_symbols_sorted()
+      .map(|(_, symbol)| SymbolId::from(symbol))
+      .collect();
+    scope_symbols.sort_by_key(|sym| sym.raw_id());
+    let mut children: Vec<_> = scope.children.iter().copied().map(Into::into).collect();
+    children.sort_by_key(|child: &ScopeId| child.raw_id());
+    let mut tdz_bindings: Vec<_> = scope.tdz_bindings.iter().copied().map(Into::into).collect();
+    tdz_bindings.sort_by_key(|sym: &SymbolId| sym.raw_id());
+    scopes.push(ProgramScope {
+      id,
+      parent: scope.parent.map(Into::into),
+      kind: scope.kind.into(),
+      symbols: scope_symbols,
+      children,
+      tdz_bindings,
+      is_dynamic: scope.is_dynamic,
+      has_direct_eval: scope.has_direct_eval,
+    });
+  }
   ProgramSymbols {
     symbols: out_symbols,
     free_symbols: None,
+    names: symbols.semantics.names.clone(),
+    scopes,
   }
 }
 

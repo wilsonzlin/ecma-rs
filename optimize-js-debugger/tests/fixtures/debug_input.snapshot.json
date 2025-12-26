@@ -1,0 +1,631 @@
+{
+  "functions": [],
+  "top_level": {
+    "debug": {
+      "steps": [
+        {
+          "name": "source",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": [
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  0
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 1.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  1
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 0
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "Bin",
+                "tgts": [
+                  3
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 1
+                  },
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 2.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": [],
+                "binOp": "+"
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  2
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 3
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  4
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 2
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "Bin",
+                "tgts": [
+                  5
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 4
+                  },
+                  {
+                    "kind": "var",
+                    "value": 1
+                  }
+                ],
+                "spreads": [],
+                "labels": [],
+                "binOp": "+"
+              }
+            ]
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "ssa_insert_phis",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": [
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  0
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 1.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  1
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 0
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "Bin",
+                "tgts": [
+                  3
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 1
+                  },
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 2.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": [],
+                "binOp": "+"
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  2
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 3
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  4
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 2
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "Bin",
+                "tgts": [
+                  5
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 4
+                  },
+                  {
+                    "kind": "var",
+                    "value": 1
+                  }
+                ],
+                "spreads": [],
+                "labels": [],
+                "binOp": "+"
+              }
+            ]
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "ssa_rename_targets",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": [
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  6
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 1.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  7
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 6
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "Bin",
+                "tgts": [
+                  8
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 7
+                  },
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 2.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": [],
+                "binOp": "+"
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  9
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 8
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  10
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 9
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "Bin",
+                "tgts": [
+                  11
+                ],
+                "args": [
+                  {
+                    "kind": "var",
+                    "value": 10
+                  },
+                  {
+                    "kind": "var",
+                    "value": 7
+                  }
+                ],
+                "spreads": [],
+                "labels": [],
+                "binOp": "+"
+              }
+            ]
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt1_dvn",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": [
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  6
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 1.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  7
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 1.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  8
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 3.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  9
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 3.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  10
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 3.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              },
+              {
+                "t": "VarAssign",
+                "tgts": [
+                  11
+                ],
+                "args": [
+                  {
+                    "kind": "const",
+                    "value": {
+                      "kind": "num",
+                      "value": 4.0
+                    }
+                  }
+                ],
+                "spreads": [],
+                "labels": []
+              }
+            ]
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt1_dce",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt1_redundant_assigns",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt1_impossible_branches",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt1_cfg_prune",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt2_dvn",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt2_dce",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt2_redundant_assigns",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt2_impossible_branches",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "opt2_cfg_prune",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        },
+        {
+          "name": "ssa_deconstruct",
+          "bblockOrder": [
+            0
+          ],
+          "bblocks": {
+            "0": []
+          },
+          "cfgChildren": {}
+        }
+      ]
+    },
+    "cfg": {
+      "bblockOrder": [
+        0
+      ],
+      "bblocks": {
+        "0": []
+      },
+      "cfgChildren": {}
+    }
+  },
+  "symbols": {
+    "symbols": [
+      {
+        "id": {
+          "type": "number",
+          "value": "0"
+        },
+        "name": "x",
+        "scope": {
+          "type": "number",
+          "value": "0"
+        },
+        "captured": false
+      },
+      {
+        "id": {
+          "type": "number",
+          "value": "1"
+        },
+        "name": "y",
+        "scope": {
+          "type": "number",
+          "value": "0"
+        },
+        "captured": false
+      }
+    ],
+    "free_symbols": {
+      "top_level": [],
+      "functions": []
+    },
+    "names": [
+      "x",
+      "y"
+    ],
+    "scopes": [
+      {
+        "id": {
+          "type": "number",
+          "value": "0"
+        },
+        "kind": "module",
+        "symbols": [
+          {
+            "type": "number",
+            "value": "0"
+          },
+          {
+            "type": "number",
+            "value": "1"
+          }
+        ],
+        "tdz_bindings": [
+          {
+            "type": "number",
+            "value": "0"
+          },
+          {
+            "type": "number",
+            "value": "1"
+          }
+        ],
+        "is_dynamic": false,
+        "has_direct_eval": false
+      }
+    ]
+  }
+}
