@@ -35,20 +35,19 @@ use core::str::FromStr;
 fn parse_radix(raw: &str, radix: u32) -> Result<f64, ()> {
   // Strip numeric separators (_) before parsing
   let stripped = raw.replace('_', "");
-  match u64::from_str_radix(&stripped, radix) {
-    Ok(v) => Ok(v as f64),
-    Err(e) => {
-      // Check if this is an overflow (number too large) vs invalid format
-      use std::num::IntErrorKind;
-      if e.kind() == &IntErrorKind::PosOverflow {
-        // Number is too large to fit in u64, return Infinity
-        Ok(f64::INFINITY)
-      } else {
-        // Invalid format (e.g., invalid digits for radix)
-        Err(())
-      }
+  if stripped.is_empty() {
+    return Err(());
+  }
+  let radix_f64 = radix as f64;
+  let mut value = 0.0_f64;
+  for ch in stripped.chars() {
+    let digit = ch.to_digit(radix).ok_or(())? as f64;
+    value = value * radix_f64 + digit;
+    if !value.is_finite() {
+      return Ok(f64::INFINITY);
     }
   }
+  Ok(value)
 }
 
 pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {

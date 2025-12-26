@@ -807,6 +807,13 @@ impl<'a> Parser<'a> {
       })?.into_wrapped(),
       TT::Invalid => {
         let raw = self.bytes(t0.loc);
+        if raw
+          .chars()
+          .next()
+          .is_some_and(|c| c.is_ascii_digit() || c == '.')
+        {
+          return Err(t0.error(SyntaxErrorType::MalformedLiteralNumber));
+        }
         match raw.chars().next() {
           Some('"') | Some('\'') => self.lit_str()?.into_wrapped(),
           Some('`') => self.lit_template(ctx)?.into_wrapped(),
@@ -827,6 +834,7 @@ impl<'a> Parser<'a> {
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
     let mut left = self.expr_operand(ctx, terminators, asi)?;
+    let asi_allowed = asi.can_end_with_asi && !self.in_for_header;
 
     loop {
       let cp = self.checkpoint();
@@ -995,7 +1003,7 @@ impl<'a> Parser<'a> {
 
       match MULTARY_OPERATOR_MAPPING.get(&t.typ) {
         None => {
-          if asi.can_end_with_asi
+          if asi_allowed
             && (t.preceded_by_line_terminator || t.typ == TT::BraceClose || t.typ == TT::EOF)
           {
             // Automatic Semicolon Insertion.
@@ -1012,9 +1020,7 @@ impl<'a> Parser<'a> {
           };
           // TypeScript: Trigger ASI when identifier/keyword follows expression
           // Enables permissive parsing like "yield foo" -> "yield" + "foo" (two statements)
-          if asi.can_end_with_asi
-            && (t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ))
-          {
+          if asi_allowed && (t.typ == TT::Identifier || KEYWORDS_MAPPING.contains_key(&t.typ)) {
             self.restore_checkpoint(cp);
             asi.did_end_with_asi = true;
             break;

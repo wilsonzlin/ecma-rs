@@ -103,6 +103,7 @@ pub struct Parser<'a> {
   next_tok_i: usize,
   options: ParseOptions,
   allow_bare_ts_type_args: bool,
+  in_for_header: bool,
 }
 
 // We extend this struct with added methods in the various submodules, instead of simply using free functions and passing `&mut Parser` around, for several reasons:
@@ -120,7 +121,19 @@ impl<'a> Parser<'a> {
       next_tok_i: 0,
       options,
       allow_bare_ts_type_args: false,
+      in_for_header: false,
     }
+  }
+
+  fn with_for_header<T>(
+    &mut self,
+    f: impl FnOnce(&mut Self) -> SyntaxResult<T>,
+  ) -> SyntaxResult<T> {
+    let prev = self.in_for_header;
+    self.in_for_header = true;
+    let out = f(self);
+    self.in_for_header = prev;
+    out
   }
 
   pub fn options(&self) -> ParseOptions {

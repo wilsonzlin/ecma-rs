@@ -91,9 +91,18 @@ impl<'a> Parser<'a> {
           VarDeclParseMode::Asi => Asi::can(),
           VarDeclParseMode::Leftmost => Asi::no(),
         };
-        let initializer = p
-          .consume_if(TT::Equals)
-          .and_then(|| p.expr_with_asi(ctx, [TT::Semicolon, TT::Comma], &mut asi))?;
+        let initializer = if parse_mode == VarDeclParseMode::Leftmost && p.in_for_header {
+          p.consume_if(TT::Equals).and_then(|| {
+            p.expr_with_asi(
+              ctx,
+              [TT::Semicolon, TT::Comma, TT::KeywordIn, TT::KeywordOf],
+              &mut asi,
+            )
+          })?
+        } else {
+          p.consume_if(TT::Equals)
+            .and_then(|| p.expr_with_asi(ctx, [TT::Semicolon, TT::Comma], &mut asi))?
+        };
         declarators.push(VarDeclarator {
           pattern,
           definite_assignment,

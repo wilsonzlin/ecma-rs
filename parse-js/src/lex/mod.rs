@@ -721,83 +721,120 @@ fn consume_identifier_parts(lexer: &mut Lexer<'_>, mode: LexMode) -> LexResult<(
 
 /// Consume digits with numeric separators (_)
 /// ES2021 allows underscores as separators: 1_000_000
-fn consume_digits_with_separators(lexer: &mut Lexer<'_>, digit_filter: &CharFilter) {
+fn consume_digits_with_separators(
+  lexer: &mut Lexer<'_>,
+  digit_filter: &CharFilter,
+) -> (bool, bool) {
+  let mut consumed_digit = false;
+  let mut valid = true;
+  let mut prev_sep = false;
+
   loop {
-    lexer.consume(lexer.while_chars(digit_filter));
-    // Check if next is underscore followed by a digit (numeric separator)
-    if lexer.peek_or_eof(0) == Some('_')
-      && lexer.peek_or_eof(1).map_or(false, |c| digit_filter.has(c))
-    {
-      lexer.skip_expect(1); // consume _
-    } else {
-      break;
+    match lexer.peek_or_eof(0) {
+      Some('_') => {
+        // Separators must be surrounded by digits.
+        let has_following_digit = lexer.peek_or_eof(1).map_or(false, |c| digit_filter.has(c));
+        if prev_sep || !consumed_digit || !has_following_digit {
+          valid = false;
+        }
+        lexer.skip_expect(1);
+        prev_sep = true;
+      }
+      Some(c) if digit_filter.has(c) => {
+        consumed_digit = true;
+        prev_sep = false;
+        lexer.skip_expect(c.len_utf8());
+      }
+      _ => break,
     }
   }
+
+  if prev_sep {
+    valid = false;
+  }
+
+  (consumed_digit, valid)
 }
 
 fn lex_bigint_or_number(lexer: &mut Lexer<'_>) -> LexResult<TT> {
-  // TODO
   let start_pos = lexer.next();
+  let mut valid = true;
   let first_char = lexer.peek(0)?;
-  consume_digits_with_separators(lexer, &DIGIT);
-  let end_pos = lexer.next();
-  if !lexer.consume(lexer.if_char('n')).is_empty() {
-    // Decimal BigInt literals do not allow leading zeros (other than `0n`).
-    let integer_part = &lexer[Loc(start_pos, end_pos)];
-    if first_char == '0' && integer_part.len() > 1 {
-      return Ok(TT::Invalid);
-    }
-    return Ok(TT::LiteralBigInt);
-  }
-  // Check if this is a legacy octal: starts with 0, has more digits, and all digits are 0-7
-  let integer_part = &lexer[Loc(start_pos, end_pos)];
-  let is_legacy_octal = first_char == '0'
+  let mut integer_end = start_pos;
+
+  // Integer part (may be empty for leading-dot literals)
+  let has_integer = if first_char != '.' {
+    let (digits, ok) = consume_digits_with_separators(lexer, &DIGIT);
+    valid &= ok && digits;
+    integer_end = lexer.next();
+    digits
+  } else {
+    false
+  };
+
+  let integer_part = &lexer[Loc(start_pos, integer_end)];
+  let is_legacy_octal = has_integer
+    && integer_part.starts_with('0')
     && integer_part.len() > 1
-    && integer_part.chars().all(|c| matches!(c, '0'..='7' | '_'));
-  // Consume '.' and fractional part if present (but not for legacy octals)
+    && integer_part
+      .chars()
+      .filter(|c| *c != '_')
+      .all(|c| matches!(c, '0'..='7'));
+
+  // BigInt suffix (only allowed for integer literals)
+  if lexer.peek_or_eof(0) == Some('n') && first_char != '.' {
+    if integer_part.len() > 1 && first_char == '0' {
+      valid = false;
+    }
+    lexer.skip_expect(1);
+    return Ok(if valid {
+      TT::LiteralBigInt
+    } else {
+      TT::Invalid
+    });
+  }
+
+  // Fractional part
   if lexer.peek_or_eof(0) == Some('.') && !is_legacy_octal {
     lexer.consume(lexer.if_char('.'));
-    consume_digits_with_separators(lexer, &DIGIT);
+    let (digits, ok) = consume_digits_with_separators(lexer, &DIGIT);
+    valid &= ok;
+    if !has_integer && !digits {
+      valid = false;
+    }
   }
-  // Allow underscore before exponent marker (88_e4 -> 88e4)
-  if lexer.peek_or_eof(0) == Some('_')
-    && lexer
-      .peek_or_eof(1)
-      .map_or(false, |c| matches!(c, 'e' | 'E'))
-  {
-    lexer.skip_expect(1); // consume _
-  }
-  if lexer
-    .peek_or_eof(0)
-    .filter(|&c| matches!(c, 'e' | 'E'))
-    .is_some()
-  {
+
+  // Exponent
+  if matches!(lexer.peek_or_eof(0), Some('e' | 'E')) {
     lexer.skip_expect(1);
-    match lexer.peek(0)? {
-      '+' | '-' => lexer.skip_expect(1),
-      _ => {}
-    };
-    consume_digits_with_separators(lexer, &DIGIT);
+    if matches!(lexer.peek_or_eof(0), Some('+' | '-')) {
+      lexer.skip_expect(1);
+    }
+    let (digits, ok) = consume_digits_with_separators(lexer, &DIGIT);
+    valid &= ok && digits;
   }
-  Ok(TT::LiteralNumber)
+
+  Ok(if valid {
+    TT::LiteralNumber
+  } else {
+    TT::Invalid
+  })
 }
 
 fn lex_binary_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   lexer.skip_expect(2);
-  let start_pos = lexer.next();
-  consume_digits_with_separators(lexer, &DIGIT_BIN);
-  let end_pos = lexer.next();
-  let has_valid_digits = end_pos > start_pos;
+  let (has_digits, valid_digits) = consume_digits_with_separators(lexer, &DIGIT_BIN);
+  let mut valid = valid_digits && has_digits;
 
-  // Consume any remaining decimal digits (which are invalid for binary)
+  // Consume any remaining decimal digits (which are invalid for binary) and separators after them
   let invalid_start = lexer.next();
-  consume_digits_with_separators(lexer, &DIGIT);
+  let (_, extra_valid) = consume_digits_with_separators(lexer, &DIGIT);
   let has_invalid_digits = lexer.next() > invalid_start;
+  valid &= extra_valid && !has_invalid_digits;
 
   let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
 
-  // Invalid if no valid digits, or if there are invalid digits
-  if !has_valid_digits || has_invalid_digits {
+  if !valid {
     return TT::Invalid;
   }
 
@@ -810,48 +847,35 @@ fn lex_binary_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
 
 fn lex_hex_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   lexer.skip_expect(2);
-  let start_pos = lexer.next();
-  consume_digits_with_separators(lexer, &DIGIT_HEX);
-  let end_pos = lexer.next();
-  let has_valid_digits = end_pos > start_pos;
-
+  let (has_digits, valid_digits) = consume_digits_with_separators(lexer, &DIGIT_HEX);
   let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
-
-  // Invalid if no valid digits
-  if !has_valid_digits {
-    return TT::Invalid;
-  }
-
-  if is_bigint {
-    TT::LiteralBigInt
+  if has_digits && valid_digits {
+    if is_bigint {
+      TT::LiteralBigInt
+    } else {
+      TT::LiteralNumber
+    }
   } else {
-    TT::LiteralNumber
+    TT::Invalid
   }
 }
 
 fn lex_oct_bigint_or_number(lexer: &mut Lexer<'_>) -> TT {
   lexer.skip_expect(2);
-  let start_pos = lexer.next();
-  consume_digits_with_separators(lexer, &DIGIT_OCT);
-  let end_pos = lexer.next();
-  let has_valid_digits = end_pos > start_pos;
-
-  // Consume any remaining decimal digits (which are invalid for octal)
+  let (has_digits, valid_digits) = consume_digits_with_separators(lexer, &DIGIT_OCT);
   let invalid_start = lexer.next();
-  consume_digits_with_separators(lexer, &DIGIT);
+  let (_, extra_valid) = consume_digits_with_separators(lexer, &DIGIT);
   let has_invalid_digits = lexer.next() > invalid_start;
-
   let is_bigint = !lexer.consume(lexer.if_char('n')).is_empty();
 
-  // Invalid if no valid digits, or if there are invalid digits
-  if !has_valid_digits || has_invalid_digits {
-    return TT::Invalid;
-  }
-
-  if is_bigint {
-    TT::LiteralBigInt
+  if has_digits && valid_digits && extra_valid && !has_invalid_digits {
+    if is_bigint {
+      TT::LiteralBigInt
+    } else {
+      TT::LiteralNumber
+    }
   } else {
-    TT::LiteralNumber
+    TT::Invalid
   }
 }
 
@@ -1049,8 +1073,14 @@ fn is_ts_only_keyword(tt: TT) -> bool {
 pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token {
   if mode == LexMode::JsxTextContent {
     return lexer.drive(false, |lexer| {
-      // TODO The spec says JSXText cannot contain '>' or '}' either.
-      lexer.consume(lexer.while_not_2_chars('{', '<'));
+      let mut len = 0;
+      for ch in lexer.source[lexer.next..].chars() {
+        if matches!(ch, '{' | '<') {
+          break;
+        }
+        len += ch.len_utf8();
+      }
+      lexer.consume(Match(len));
       TT::JsxTextContent
     });
   };
@@ -1111,6 +1141,15 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
   };
 
   let mut token = lexer.drive_fallible(preceded_by_line_terminator, |lexer| {
+    if mode == LexMode::JsxTag {
+      // In JSX tag context, treat consecutive '>' characters as separate tokens so
+      // `></div>` doesn't get lexed as a single shift operator.
+      if !lexer.if_char('>').is_empty() {
+        lexer.consume(lexer.if_char('>'));
+        return Ok(TT::ChevronRight);
+      }
+    }
+
     if let Some(c) = lexer.peek_or_eof(0) {
       if c == '\\' || is_identifier_start(c) {
         return lex_identifier(lexer, mode);

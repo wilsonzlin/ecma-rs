@@ -7,7 +7,7 @@ use diagnostics::{
 };
 use parse_js;
 use parse_js::lex::{lex_next, LexMode, Lexer};
-use parse_js::Dialect;
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -355,7 +355,23 @@ fn run_test(path: &Path) -> TestResult {
     let mut diagnostics = Vec::new();
 
     if should_parse {
-      if let Err(err) = parse_js::parse(&vf.content) {
+      let dialect = match vf.kind {
+        FileKind::TypeScript => Dialect::Ts,
+        FileKind::Tsx => Dialect::Tsx,
+        FileKind::JavaScript => Dialect::Js,
+        FileKind::Jsx => Dialect::Jsx,
+        FileKind::Other => Dialect::Ts,
+      };
+      let opts = ParseOptions {
+        dialect,
+        source_type: if vf.module {
+          SourceType::Module
+        } else {
+          SourceType::Script
+        },
+      };
+
+      if let Err(err) = parse_with_options(&vf.content, opts) {
         diagnostics.push(diagnostic_from_syntax_error(file_id, &err));
       }
     }

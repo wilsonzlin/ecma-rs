@@ -220,7 +220,11 @@ impl<'a> Parser<'a> {
           },
         )));
       };
-      if self.peek().typ == TT::ChevronLeft {
+      let next = self.peek();
+      if next.typ == TT::BraceClose || next.typ == TT::ChevronRight {
+        return Err(next.error(SyntaxErrorType::ExpectedSyntax("JSX child or expression")));
+      }
+      if next.typ == TT::ChevronLeft {
         let child = self.jsx_elem(ctx)?;
         children.push(JsxElemChild::Element(child));
       };
@@ -260,8 +264,11 @@ impl<'a> Parser<'a> {
 
   pub fn jsx_elem_attrs(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<JsxAttr>> {
     let mut attrs = Vec::<JsxAttr>::new();
-    while !matches!(self.peek().typ, TT::ChevronRight | TT::Slash) {
-      attrs.push(if self.peek().typ == TT::BraceOpen {
+    while !matches!(
+      self.peek_with_mode(LexMode::JsxTag).typ,
+      TT::ChevronRight | TT::Slash
+    ) {
+      attrs.push(if self.peek_with_mode(LexMode::JsxTag).typ == TT::BraceOpen {
         self.jsx_spread_attr(ctx)?
       } else {
         self.jsx_named_attr(ctx)?
@@ -273,17 +280,17 @@ impl<'a> Parser<'a> {
   // https://facebook.github.io/jsx/
   pub fn jsx_elem(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<JsxElem>> {
     self.with_loc(|p| {
-      p.require(TT::ChevronLeft)?;
+      p.require_with_mode(TT::ChevronLeft, LexMode::JsxTag)?;
       let tag_name = p.jsx_elem_name()?;
       let attributes = tag_name
         .is_some()
         .then(|| p.jsx_elem_attrs(ctx))
         .transpose()?
         .unwrap_or_default();
-      if p.consume_if(TT::Slash).is_match() {
+      if p.maybe_consume_with_mode(TT::Slash, LexMode::JsxTag).is_match() {
         // Self closing.
 
-        p.require(TT::ChevronRight)?;
+        p.require_with_mode(TT::ChevronRight, LexMode::JsxTag)?;
         return Ok(JsxElem {
           name: tag_name,
           attributes,
@@ -291,14 +298,14 @@ impl<'a> Parser<'a> {
         });
       }
 
-      p.require(TT::ChevronRight)?;
+      p.require_with_mode(TT::ChevronRight, LexMode::JsxTag)?;
       let children = p.jsx_elem_children(ctx)?;
-      let closing = p.require(TT::ChevronLeftSlash)?;
+      let closing = p.require_with_mode(TT::ChevronLeftSlash, LexMode::JsxTag)?;
       let end_name = p.jsx_elem_name()?;
       if tag_name != end_name {
         return Err(closing.error(SyntaxErrorType::JsxClosingTagMismatch));
       };
-      p.require(TT::ChevronRight)?;
+      p.require_with_mode(TT::ChevronRight, LexMode::JsxTag)?;
       Ok(JsxElem {
         name: tag_name,
         attributes,

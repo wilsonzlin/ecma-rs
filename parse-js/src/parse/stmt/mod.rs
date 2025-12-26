@@ -399,39 +399,42 @@ impl<'a> Parser<'a> {
 
   pub fn for_triple_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ForTripleStmt>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordFor)?;
-      p.require(TT::ParenthesisOpen)?;
-      let init = {
-        let [t0, t1] = p.peek_n();
-        match t0.typ {
-          TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => {
-            ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
+      let (init, cond, post) = p.with_for_header(|p| {
+        p.require(TT::KeywordFor)?;
+        p.require(TT::ParenthesisOpen)?;
+        let init = {
+          let [t0, t1] = p.peek_n();
+          match t0.typ {
+            TT::KeywordVar | TT::KeywordConst | TT::KeywordUsing => {
+              ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
+            }
+            // `let` is contextual - only a declaration if followed by a pattern
+            TT::KeywordLet
+              if t1.typ == TT::BraceOpen
+                || t1.typ == TT::BracketOpen
+                || is_valid_pattern_identifier(t1.typ, ctx.rules) =>
+            {
+              ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
+            }
+            // TypeScript: await using in for loop
+            TT::KeywordAwait if t1.typ == TT::KeywordUsing => {
+              ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
+            }
+            TT::Semicolon => ForTripleStmtInit::None,
+            _ => ForTripleStmtInit::Expr(p.expr(ctx, [TT::Semicolon])?),
           }
-          // `let` is contextual - only a declaration if followed by a pattern
-          TT::KeywordLet
-            if t1.typ == TT::BraceOpen
-              || t1.typ == TT::BracketOpen
-              || is_valid_pattern_identifier(t1.typ, ctx.rules) =>
-          {
-            ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
-          }
-          // TypeScript: await using in for loop
-          TT::KeywordAwait if t1.typ == TT::KeywordUsing => {
-            ForTripleStmtInit::Decl(p.var_decl(ctx, VarDeclParseMode::Leftmost)?)
-          }
-          TT::Semicolon => ForTripleStmtInit::None,
-          _ => ForTripleStmtInit::Expr(p.expr(ctx, [TT::Semicolon])?),
-        }
-      };
-      p.require(TT::Semicolon)?;
-      let cond = (p.peek().typ != TT::Semicolon)
-        .then(|| p.expr(ctx, [TT::Semicolon]))
-        .transpose()?;
-      p.require(TT::Semicolon)?;
-      let post = (p.peek().typ != TT::ParenthesisClose)
-        .then(|| p.expr(ctx, [TT::ParenthesisClose]))
-        .transpose()?;
-      p.require(TT::ParenthesisClose)?;
+        };
+        p.require(TT::Semicolon)?;
+        let cond = (p.peek().typ != TT::Semicolon)
+          .then(|| p.expr(ctx, [TT::Semicolon]))
+          .transpose()?;
+        p.require(TT::Semicolon)?;
+        let post = (p.peek().typ != TT::ParenthesisClose)
+          .then(|| p.expr(ctx, [TT::ParenthesisClose]))
+          .transpose()?;
+        p.require(TT::ParenthesisClose)?;
+        Ok((init, cond, post))
+      })?;
       let body = p.for_body(ctx)?;
       Ok(ForTripleStmt {
         init,
@@ -459,6 +462,14 @@ impl<'a> Parser<'a> {
     })
   }
 
+  /// For error recovery, consume an initializer in a for-in/of header and stop before the loop
+  /// keyword so the parser can continue parsing the right-hand side.
+  fn recover_for_in_of_initializer(&mut self, ctx: ParseCtx) {
+    if self.consume_if(TT::Equals).is_match() {
+      let _ = self.expr(ctx, [TT::KeywordIn, TT::KeywordOf]);
+    }
+  }
+
   pub fn for_in_of_lhs(&mut self, ctx: ParseCtx) -> SyntaxResult<ForInOfLhs> {
     let [t0, t1] = self.peek_n();
     Ok(match t0.typ {
@@ -476,6 +487,7 @@ impl<'a> Parser<'a> {
         if self.consume_if(TT::Colon).is_match() {
           let _ = self.type_expr(ctx);
         }
+        self.recover_for_in_of_initializer(ctx);
 
         // Error recovery: consume excess declarations (e.g., `for (const a, b of arr)`)
         // This handles malformed syntax like: `for (var x, y of arr)` or `for (const a, { [b]: c} of arr)`
@@ -519,6 +531,7 @@ impl<'a> Parser<'a> {
           if self.consume_if(TT::Colon).is_match() {
             let _ = self.type_expr(ctx);
           }
+          self.recover_for_in_of_initializer(ctx);
 
           // Error recovery: consume excess declarations
           while self.peek().typ == TT::Comma {
@@ -552,6 +565,7 @@ impl<'a> Parser<'a> {
         if self.consume_if(TT::Colon).is_match() {
           let _ = self.type_expr(ctx);
         }
+        self.recover_for_in_of_initializer(ctx);
 
         // Error recovery: consume excess declarations
         while self.peek().typ == TT::Comma {
@@ -583,17 +597,20 @@ impl<'a> Parser<'a> {
 
   pub fn for_in_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ForInStmt>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordFor)?;
-      p.require(TT::ParenthesisOpen)?;
-      let lhs = p.for_in_of_lhs(ctx)?;
-      // Special case: if variable name is 'in', the keyword was already consumed
-      // e.g., `for (let in x)` - the 'in' serves as both variable name and keyword
-      if !p.consume_if(TT::KeywordIn).is_match() {
-        // 'in' keyword was already consumed as the variable name
-        // This is fine - just continue parsing
-      }
-      let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
-      p.require(TT::ParenthesisClose)?;
+      let (lhs, rhs) = p.with_for_header(|p| {
+        p.require(TT::KeywordFor)?;
+        p.require(TT::ParenthesisOpen)?;
+        let lhs = p.for_in_of_lhs(ctx)?;
+        // Special case: if variable name is 'in', the keyword was already consumed
+        // e.g., `for (let in x)` - the 'in' serves as both variable name and keyword
+        if !p.consume_if(TT::KeywordIn).is_match() {
+          // 'in' keyword was already consumed as the variable name
+          // This is fine - just continue parsing
+        }
+        let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
+        p.require(TT::ParenthesisClose)?;
+        Ok((lhs, rhs))
+      })?;
       let body = p.for_body(ctx)?;
       Ok(ForInStmt { lhs, rhs, body })
     })
@@ -601,18 +618,21 @@ impl<'a> Parser<'a> {
 
   pub fn for_of_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ForOfStmt>> {
     self.with_loc(|p| {
-      p.require(TT::KeywordFor)?;
-      let await_ = p.consume_if(TT::KeywordAwait).is_match();
-      p.require(TT::ParenthesisOpen)?;
-      let lhs = p.for_in_of_lhs(ctx)?;
-      // Special case: if variable name is 'of', the keyword was already consumed
-      // e.g., `for (let of x)` - the 'of' serves as both variable name and keyword
-      if !p.consume_if(TT::KeywordOf).is_match() {
-        // 'of' keyword was already consumed as the variable name
-        // This is fine - just continue parsing
-      }
-      let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
-      p.require(TT::ParenthesisClose)?;
+      let (await_, lhs, rhs) = p.with_for_header(|p| {
+        p.require(TT::KeywordFor)?;
+        let await_ = p.consume_if(TT::KeywordAwait).is_match();
+        p.require(TT::ParenthesisOpen)?;
+        let lhs = p.for_in_of_lhs(ctx)?;
+        // Special case: if variable name is 'of', the keyword was already consumed
+        // e.g., `for (let of x)` - the 'of' serves as both variable name and keyword
+        if !p.consume_if(TT::KeywordOf).is_match() {
+          // 'of' keyword was already consumed as the variable name
+          // This is fine - just continue parsing
+        }
+        let rhs = p.expr(ctx, [TT::ParenthesisClose])?;
+        p.require(TT::ParenthesisClose)?;
+        Ok((await_, lhs, rhs))
+      })?;
       let body = p.for_body(ctx)?;
       Ok(ForOfStmt {
         await_,
@@ -750,7 +770,7 @@ impl<'a> Parser<'a> {
     }
 
     let cp = self.checkpoint();
-    let typ = Type::determine(self, ctx)?;
+    let typ = self.with_for_header(|p| Type::determine(p, ctx))?;
     self.restore_checkpoint(cp);
     Ok(match typ {
       Type::Triple => self.for_triple_stmt(ctx)?.into_wrapped(),
