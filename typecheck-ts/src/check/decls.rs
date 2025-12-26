@@ -569,7 +569,15 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
 
       if let Some(sem) = self.semantics {
-        if let Some(symbol) = sem.resolve_in_module(self.file, &name, Namespace::TYPE) {
+        let symbol = sem
+          .resolve_in_module(self.file, &name, Namespace::TYPE)
+          .or_else(|| {
+            sem
+              .global_symbols()
+              .get(&name)
+              .and_then(|group| group.symbol_for(Namespace::TYPE, sem.symbols()))
+          });
+        if let Some(symbol) = symbol {
           if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {
             let decl_data = sem.symbols().decl(*decl);
             let target = DefId(decl_data.def_id.0);

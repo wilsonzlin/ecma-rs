@@ -2218,16 +2218,24 @@ impl ProgramState {
           continue;
         };
         let (ty, params) = lowerer.lower_type_info(info, &lowered.names);
-        let target_def = def_map.get(&def.id).copied().or_else(|| {
-          lowered
-            .names
-            .resolve(def.name)
-            .and_then(|n| def_by_name.get(&(*file, n.to_string())).copied())
-        });
-        if let Some(mapped) = target_def {
-          def_types.insert(mapped, ty);
-          if !params.is_empty() {
-            type_params.insert(mapped, params);
+        let target_def = def_map
+          .get(&def.id)
+          .copied()
+          .or_else(|| {
+            lowered
+              .names
+              .resolve(def.name)
+              .and_then(|n| def_by_name.get(&(*file, n.to_string())).copied())
+          })
+          .unwrap_or(def.id);
+        def_types.insert(target_def, ty);
+        if target_def != def.id {
+          def_types.entry(def.id).or_insert(ty);
+        }
+        if !params.is_empty() {
+          type_params.insert(target_def, params.clone());
+          if target_def != def.id {
+            type_params.entry(def.id).or_insert(params);
           }
         }
       }
@@ -2307,47 +2315,25 @@ impl ProgramState {
   }
 
   fn recompute_global_bindings(&mut self) {
+    let mut globals = HashMap::new();
     if let Some(semantics) = self.semantics.as_ref() {
-      let mut globals = HashMap::new();
       let symbols = semantics.symbols();
       for (name, group) in semantics.global_symbols() {
         if let Some(symbol) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) {
+          let def = semantics
+            .symbol_decls(symbol, sem_ts::Namespace::VALUE)
+            .first()
+            .map(|decl| semantics.symbols().decl(*decl).def_id)
+            .map(|id| DefId(id.0));
           globals.insert(
             name.clone(),
             SymbolBinding {
               symbol: symbol.into(),
-              def: None,
+              def,
               type_id: None,
             },
           );
         }
-      }
-      globals
-        .entry("undefined".to_string())
-        .or_insert(SymbolBinding {
-          symbol: self.alloc_symbol(),
-          def: None,
-          type_id: Some(self.builtin.undefined),
-        });
-      self.global_bindings = globals;
-      return;
-    }
-    let mut globals = HashMap::new();
-    let mut files: Vec<_> = self.files.keys().copied().collect();
-    files.sort_by_key(|f| f.0);
-    for file in files {
-      if self.file_kinds.get(&file) != Some(&FileKind::Dts) {
-        continue;
-      }
-      let Some(state) = self.files.get(&file) else {
-        continue;
-      };
-      let mut bindings: Vec<_> = state.bindings.iter().collect();
-      bindings.sort_by(|a, b| a.0.cmp(b.0));
-      for (name, binding) in bindings {
-        globals
-          .entry(name.clone())
-          .or_insert_with(|| binding.clone());
       }
     }
     globals

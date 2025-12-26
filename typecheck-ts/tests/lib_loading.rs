@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
-use typecheck_ts::{FileId, Host, HostError, Program, TextRange};
+use typecheck_ts::{FileId, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
 
 const PROMISE_DOM: &str = include_str!("fixtures/promise_dom.ts");
+const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
 
 #[derive(Default)]
 struct TestHost {
@@ -73,13 +74,23 @@ impl Host for TestHost {
 
 #[test]
 fn bundled_libs_enable_global_promise_and_array() {
-  let host = TestHost::new(CompilerOptions::default())
-    .with_file(FileId(0), "const p = Promise;\nconst a = Array;");
+  let source = "const p = Promise;\nconst a = Array;";
+  let host = TestHost::new(CompilerOptions::default()).with_file(FileId(0), source);
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "expected no diagnostics, got {diagnostics:?}"
+  );
+  let promise_offset = source.find("Promise").expect("Promise offset") as u32;
+  let array_offset = source.find("Array").expect("Array offset") as u32;
+  assert!(
+    program.symbol_at(FileId(0), promise_offset).is_some(),
+    "global Promise should resolve to a symbol"
+  );
+  assert!(
+    program.symbol_at(FileId(0), array_offset).is_some(),
+    "global Array should resolve to a symbol"
   );
 }
 
@@ -194,6 +205,13 @@ fn declare_global_libs_merge_into_globals() {
     diagnostics.is_empty(),
     "declare global from libs should populate global scope: {diagnostics:?}"
   );
+  let offset = "const value = FromLib;"
+    .find("FromLib")
+    .expect("FromLib reference") as u32;
+  assert!(
+    program.symbol_at(FileId(0), offset).is_some(),
+    "declare global value should resolve to a symbol"
+  );
 }
 
 #[test]
@@ -236,6 +254,53 @@ fn imported_type_alias_resolves_interned_type() {
 }
 
 #[test]
+fn bundled_lib_types_expose_promise_and_array_shapes() {
+  let host = TestHost::new(CompilerOptions::default())
+    .with_file(FileId(0), PROMISE_ARRAY_TYPES);
+  let program = Program::new(host, vec![FileId(0)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected libs to satisfy Promise/Array references: {diagnostics:?}"
+  );
+
+  let defs = program.definitions_in_file(FileId(0));
+  let find_def = |name: &str| {
+    defs
+      .iter()
+      .copied()
+      .find(|def| program.def_name(*def).as_deref() == Some(name))
+      .unwrap_or_else(|| panic!("definition {name} not found"))
+  };
+  let promise_def = find_def("UsesPromise");
+  let array_def = find_def("UsesArray");
+
+  let promise_ty = program.type_of_def_interned(promise_def);
+  let array_ty = program.type_of_def_interned(array_def);
+  assert_ne!(
+    program.type_kind(promise_ty),
+    TypeKindSummary::Unknown,
+    "Promise type should not collapse to unknown"
+  );
+  assert_ne!(
+    program.type_kind(array_ty),
+    TypeKindSummary::Unknown,
+    "Array type should not collapse to unknown"
+  );
+
+  let then_prop = program.property_type(promise_ty, PropertyKey::String("then".to_string()));
+  assert!(
+    then_prop.is_some(),
+    "Promise lib surface should expose then property"
+  );
+  let length_prop = program.property_type(array_ty, PropertyKey::String("length".to_string()));
+  assert!(
+    length_prop.is_some(),
+    "Array lib surface should expose length property"
+  );
+}
+
+#[test]
 fn bundled_libs_enable_dom_and_promise_fixture() {
   let mut options = CompilerOptions::default();
   options.include_dom = true;
@@ -245,5 +310,12 @@ fn bundled_libs_enable_dom_and_promise_fixture() {
   assert!(
     diagnostics.is_empty(),
     "expected bundled libs to typecheck Promise/DOM fixture, got {diagnostics:?}"
+  );
+  let document_offset = PROMISE_DOM
+    .find("document")
+    .expect("document reference in fixture") as u32;
+  assert!(
+    program.symbol_at(FileId(0), document_offset).is_some(),
+    "DOM globals should resolve to symbols"
   );
 }
