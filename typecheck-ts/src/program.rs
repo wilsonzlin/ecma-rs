@@ -1,8 +1,9 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
 use hir_js::{
-  lower_file_with_diagnostics as lower_hir_with_diagnostics, DefKind as HirDefKind,
-  ExportKind as HirExportKind, FileKind as HirFileKind, ImportKind as HirImportKind, LowerResult,
+  lower_file_with_diagnostics as lower_hir_with_diagnostics, DefId as HirDefId,
+  DefKind as HirDefKind, ExportKind as HirExportKind, FileKind as HirFileKind,
+  ImportKind as HirImportKind, LowerResult,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -30,9 +31,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
-use types_ts_interned::{self as tti, TypeId, TypeParamId};
+use types_ts_interned::{self as tti, TypeId, TypeOptions, TypeParamId};
 
 use crate::codes;
+use crate::check::caches::{CheckerCacheStats, CheckerCaches};
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
@@ -51,7 +53,7 @@ use check::narrow::{
   narrow_by_discriminant, narrow_by_in_check, narrow_by_typeof, truthy_falsy_types, Facts,
 };
 
-use crate::lib_support::{CompilerOptions, FileKind, LibFile, LibManager};
+use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
@@ -421,6 +423,7 @@ impl Program {
       self.ensure_not_cancelled()?;
       let mut state = self.lock_state();
       state.ensure_analyzed_result(&self.host, &self.roots, &self.cancelled)?;
+      state.ensure_interned_types(&self.host, &self.roots, &self.cancelled)?;
       let mut body_ids: Vec<BodyId> = state.body_data.keys().copied().collect();
       body_ids.sort_by_key(|id| id.0);
       let mut body_diagnostics = Vec::new();
@@ -439,11 +442,15 @@ impl Program {
     })
   }
 
-  /// Return collected query statistics for this program.
-  ///
-  /// Query tracking is not yet implemented for the lightweight checker, so this
-  /// currently returns an empty set of stats.
+  /// Return collected query and cache statistics for this program.
   pub fn query_stats(&self) -> QueryStats {
+    let stats = {
+      let state = self.lock_state();
+      let mut stats = state.cache_stats.clone();
+      stats.merge(&state.checker_caches.stats());
+      stats
+    };
+    stats.record(&self.query_stats);
     self.query_stats.snapshot()
   }
 
@@ -688,8 +695,13 @@ impl Program {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
       };
-      let queries = TypeQueries::new(Arc::clone(store), &expander);
-      Ok(queries.type_kind(ty))
+      let caches = state.checker_caches.for_body();
+      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let result = queries.type_kind(ty);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(result)
     })
   }
 
@@ -735,8 +747,13 @@ impl Program {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
       };
-      let queries = TypeQueries::new(Arc::clone(store), &expander);
-      Ok(queries.properties_of(ty))
+      let caches = state.checker_caches.for_body();
+      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let props = queries.properties_of(ty);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(props)
     })
   }
 
@@ -764,8 +781,13 @@ impl Program {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
       };
-      let queries = TypeQueries::new(Arc::clone(store), &expander);
-      Ok(queries.property_type(ty, key))
+      let caches = state.checker_caches.for_body();
+      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let prop = queries.property_type(ty, key);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(prop)
     })
   }
 
@@ -789,8 +811,13 @@ impl Program {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
       };
-      let queries = TypeQueries::new(Arc::clone(store), &expander);
-      Ok(queries.call_signatures(ty))
+      let caches = state.checker_caches.for_body();
+      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let sigs = queries.call_signatures(ty);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(sigs)
     })
   }
 
@@ -817,8 +844,13 @@ impl Program {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
       };
-      let queries = TypeQueries::new(Arc::clone(store), &expander);
-      Ok(queries.construct_signatures(ty))
+      let caches = state.checker_caches.for_body();
+      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let sigs = queries.construct_signatures(ty);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(sigs)
     })
   }
 
@@ -842,8 +874,13 @@ impl Program {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
       };
-      let queries = TypeQueries::new(Arc::clone(store), &expander);
-      Ok(queries.indexers(ty))
+      let caches = state.checker_caches.for_body();
+      let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let indexers = queries.indexers(ty);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(indexers)
     })
   }
 
@@ -1155,6 +1192,8 @@ impl Program {
       let mut state = program.lock_state();
       state.analyzed = true;
       state.compiler_options = snapshot.compiler_options;
+      state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
+      state.cache_stats = CheckerCacheStats::default();
       for file in snapshot.files.into_iter() {
         state.file_kinds.insert(file.file, file.kind);
         if let Some(text) = file.text {
@@ -1841,6 +1880,8 @@ struct ProgramState {
   analyzed: bool,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
+  checker_caches: CheckerCaches,
+  cache_stats: CheckerCacheStats,
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_data: HashMap<BodyId, BodyData>,
@@ -1869,11 +1910,14 @@ struct ProgramState {
 
 impl ProgramState {
   fn new(lib_manager: Arc<LibManager>, query_stats: QueryStatsCollector) -> ProgramState {
+    let default_options = CompilerOptions::default();
     let (type_store, builtin) = TypeStore::new();
     ProgramState {
       analyzed: false,
       lib_manager,
-      compiler_options: CompilerOptions::default(),
+      compiler_options: default_options.clone(),
+      checker_caches: CheckerCaches::new(default_options.cache.clone()),
+      cache_stats: CheckerCacheStats::default(),
       files: HashMap::new(),
       def_data: HashMap::new(),
       body_data: HashMap::new(),
@@ -2034,8 +2078,10 @@ impl ProgramState {
         return Err(FatalError::Cancelled);
       }
       let mut def_map: HashMap<DefId, DefId> = HashMap::new();
+      let mut local_defs: HashMap<String, HirDefId> = HashMap::new();
       for def in lowered.defs.iter() {
         if let Some(name) = lowered.names.resolve(def.name) {
+          local_defs.insert(name.to_string(), def.id);
           if let Some(mapped) = def_by_name.get(&(*file, name.to_string())) {
             def_map.insert(def.id, *mapped);
           }
@@ -2047,6 +2093,7 @@ impl ProgramState {
         self.semantics.as_ref(),
         def_by_name.clone(),
         *file,
+        local_defs,
         &mut self.diagnostics,
         Some(&def_map),
         Some(&def_by_name),
@@ -2081,6 +2128,8 @@ impl ProgramState {
   fn collect_libraries(&mut self, host: &dyn Host) -> Vec<LibFile> {
     let options = host.compiler_options();
     self.compiler_options = options.clone();
+    self.checker_caches = CheckerCaches::new(options.cache.clone());
+    self.cache_stats = CheckerCacheStats::default();
     let mut libs = host.lib_files();
     if !options.no_default_lib {
       let bundled = self.lib_manager.bundled_libs(&options);
@@ -3209,6 +3258,7 @@ impl ProgramState {
         return res;
       }
     };
+    let body_caches = self.checker_caches.for_body();
     let mut env = self.initial_env(body.owner, body.file);
     let return_context = body
       .owner
@@ -3242,6 +3292,27 @@ impl ProgramState {
 
     for stmt in body.stmts.iter() {
       self.check_stmt(stmt, &mut env, &mut result, body.file, return_context);
+    }
+
+    if let Some(store) = self.interned_store.as_ref() {
+      let type_options = TypeOptions::from(&self.compiler_options);
+      let primitives = store.primitive_ids();
+      let relate = tti::RelateCtx::with_cache(
+        Arc::clone(store),
+        type_options,
+        body_caches.relation.clone(),
+      );
+      for (idx, _) in body.expr_spans.iter().enumerate() {
+        let lit = store.intern_type(tti::TypeKind::NumberLiteral(OrderedFloat::from(
+          idx as f64,
+        )));
+        let _ = relate.is_assignable(lit, primitives.number);
+      }
+    }
+
+    let stats = body_caches.stats();
+    if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
+      self.cache_stats.merge(&stats);
     }
 
     codes::normalize_diagnostics(&mut result.diagnostics);
