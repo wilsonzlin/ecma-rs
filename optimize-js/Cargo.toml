@@ -20,3 +20,8 @@ emit-js = { version = "0.1.0", path = "../emit-js" }
 
 [dev-dependencies]
 serde_json = { version = "1.0" }
+criterion = { version = "0.7", features = ["html_reports"] }
+
+[[bench]]
+name = "analysis"
+harness = false

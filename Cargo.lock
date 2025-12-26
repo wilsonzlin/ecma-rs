@@ -1151,6 +1151,7 @@ name = "optimize-js"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "criterion",
  "crossbeam-utils",
  "dashmap 6.1.0",
  "derive-visitor",
