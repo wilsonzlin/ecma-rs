@@ -283,6 +283,25 @@ fn symbol_at_resolves_type_only_imports() {
 }
 
 #[test]
+fn symbol_at_resolves_function_parameter_uses() {
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("file.ts");
+  let source = "function add(param: number) { return param + 1; }";
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).unwrap();
+
+  let decl_symbol = symbol_for_occurrence(&program, file_id, source, "param", 0);
+  let use_symbol = symbol_for_occurrence(&program, file_id, source, "param", 1);
+
+  assert_eq!(
+    decl_symbol, use_symbol,
+    "parameter declaration and use should resolve to the same symbol"
+  );
+}
+
+#[test]
 #[ignore = "locals resolution currently misses nested closure binding uses"]
 fn symbol_at_prefers_innermost_binding_in_nested_functions() {
   let mut host = MemoryHost::default();
