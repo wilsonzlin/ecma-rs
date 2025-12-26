@@ -1,53 +1,36 @@
-use super::super::{semantic_js, DefId, ExportEntry, Exports, FileId, ProgramState, TypeId};
+use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
 use ::semantic_js::ts as sem_ts;
 
-/// Build [`Exports`] for a file using `semantic-js` binder output, preserving
+/// Build [`ExportMap`] for a file using `semantic-js` binder output, preserving
 /// value/type/namespace splits in the TS symbol model.
 pub(crate) fn exports_from_semantics(
   state: &mut ProgramState,
   semantics: &sem_ts::TsProgramSemantics,
   file: FileId,
-) -> Exports {
+) -> ExportMap {
   let sem_file = sem_ts::FileId(file.0);
   let exports = semantics.exports_of(sem_file);
   let symbols = semantics.symbols();
-  let mut mapped = Exports::default();
+  let mut mapped: ExportMap = ExportMap::new();
 
   for (name, group) in exports.iter() {
-    if let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) {
-      mapped.values.insert(
+    let candidate = group
+      .symbol_for(sem_ts::Namespace::VALUE, symbols)
+      .map(|id| (id, sem_ts::Namespace::VALUE))
+      .or_else(|| {
+        group
+          .symbol_for(sem_ts::Namespace::TYPE, symbols)
+          .map(|id| (id, sem_ts::Namespace::TYPE))
+      })
+      .or_else(|| {
+        group
+          .symbol_for(sem_ts::Namespace::NAMESPACE, symbols)
+          .map(|id| (id, sem_ts::Namespace::NAMESPACE))
+      });
+    if let Some((symbol_id, ns)) = candidate {
+      mapped.insert(
         name.clone(),
-        map_export(
-          state,
-          semantics,
-          sem_file,
-          symbol_id,
-          sem_ts::Namespace::VALUE,
-        ),
-      );
-    }
-    if let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::TYPE, symbols) {
-      mapped.types.insert(
-        name.clone(),
-        map_export(
-          state,
-          semantics,
-          sem_file,
-          symbol_id,
-          sem_ts::Namespace::TYPE,
-        ),
-      );
-    }
-    if let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::NAMESPACE, symbols) {
-      mapped.namespaces.insert(
-        name.clone(),
-        map_export(
-          state,
-          semantics,
-          sem_file,
-          symbol_id,
-          sem_ts::Namespace::NAMESPACE,
-        ),
+        map_export(state, semantics, sem_file, symbol_id, ns),
       );
     }
   }
@@ -77,7 +60,7 @@ fn map_export(
   }
 
   let def_for_type = local_def.or(any_def);
-  let type_id: Option<TypeId> = def_for_type.map(|def| state.type_of_def_interned(def));
+  let type_id: Option<TypeId> = def_for_type.map(|def| state.type_of_def(def));
   let symbol = local_def
     .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
     .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));

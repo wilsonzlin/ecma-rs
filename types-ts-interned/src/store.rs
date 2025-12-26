@@ -475,6 +475,10 @@ impl TypeStore {
       .expect("TypeId not interned")
   }
 
+  pub fn contains_type_id(&self, id: TypeId) -> bool {
+    self.types.contains_key(&id)
+  }
+
   pub fn intern_shape(&self, mut shape: Shape) -> ShapeId {
     for prop in shape.properties.iter_mut() {
       prop.data.ty = self.canon(prop.data.ty);

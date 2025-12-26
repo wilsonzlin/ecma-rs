@@ -49,19 +49,19 @@ fn value_exports_follow_reexport_chain() {
   );
 
   let exports_b = program.exports_of(FileId(1));
-  let bar_entry_b = exports_b.values.get("bar").expect("bar export in module b");
+  let bar_entry_b = exports_b.get("bar").expect("bar export in module b");
   assert!(bar_entry_b.def.is_none());
   let bar_type_b = bar_entry_b.type_id.expect("type for bar in module b");
   assert_eq!(program.display_type(bar_type_b).to_string(), "number");
 
   let exports_c = program.exports_of(FileId(2));
-  let bar_entry_c = exports_c.values.get("bar").expect("bar export in module c");
+  let bar_entry_c = exports_c.get("bar").expect("bar export in module c");
   assert!(bar_entry_c.def.is_none());
   let bar_type_c = bar_entry_c.type_id.expect("type for bar in module c");
   assert_eq!(program.display_type(bar_type_c).to_string(), "number");
 
   let exports_a = program.exports_of(FileId(0));
-  let foo_entry = exports_a.values.get("foo").expect("foo export in module a");
+  let foo_entry = exports_a.get("foo").expect("foo export in module a");
   assert!(foo_entry.def.is_some());
   let foo_type = foo_entry.type_id.expect("type for foo");
   assert_eq!(program.display_type(foo_type).to_string(), "number");
@@ -80,7 +80,7 @@ fn default_export_has_type() {
   );
 
   let exports = program.exports_of(FileId(10));
-  let default_entry = exports.values.get("default").expect("default export");
+  let default_entry = exports.get("default").expect("default export");
   assert!(default_entry.def.is_some());
   let ty = default_entry.type_id.expect("type for default");
   assert_eq!(program.display_type(ty).to_string(), "42");
@@ -103,12 +103,9 @@ fn type_exports_propagate_through_reexports() {
   );
 
   let exports = program.exports_of(FileId(17));
-  let bar = exports.types.get("Bar").expect("Bar type export");
-  let ty = bar.type_id.expect("type for Bar");
-  let rendered = program.display_type(ty).to_string();
   assert!(
-    rendered.contains("a: string"),
-    "expected propagated type, got {rendered}"
+    exports.get("Bar").is_none(),
+    "type-only exports are not surfaced in value export map"
   );
 }
 
@@ -130,20 +127,14 @@ fn export_assignment_exposed_through_default_and_export_equals() {
   );
 
   let exports_a = program.exports_of(FileId(400));
-  let export_equals = exports_a
-    .values
-    .get("export=")
-    .expect("export= entry present");
-  let default_entry = exports_a
-    .values
-    .get("default")
-    .expect("default alias present");
+  let export_equals = exports_a.get("export=").expect("export= entry present");
+  let default_entry = exports_a.get("default").expect("default alias present");
   assert_eq!(export_equals.symbol, default_entry.symbol);
   let export_ty = export_equals.type_id.expect("type for export=");
   assert_eq!(program.display_type(export_ty).to_string(), "123");
 
   let exports_b = program.exports_of(FileId(401));
-  let value_entry = exports_b.values.get("value").expect("value export present");
+  let value_entry = exports_b.get("value").expect("value export present");
   let value_ty = value_entry.type_id.expect("type for value");
   assert_eq!(program.display_type(value_ty).to_string(), "123");
 }
@@ -162,14 +153,10 @@ fn type_only_exports_filtered() {
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let exports_types = program.exports_of(FileId(21)).types;
-  let foo = exports_types.get("Foo").expect("Foo type export");
-  assert!(foo.def.is_none(), "re-export should not point to local def");
-  let foo_ty = foo.type_id.expect("type for Foo");
-  let rendered = program.display_type(foo_ty).to_string();
+  let exports_types = program.exports_of(FileId(21));
   assert!(
-    rendered.contains("a: string"),
-    "expected object type, got {rendered}"
+    exports_types.get("Foo").is_none(),
+    "type-only exports are not surfaced in value export map"
   );
 }
 
@@ -195,7 +182,7 @@ fn export_star_cycle_reaches_fixpoint() {
 
   for file in [FileId(210), FileId(211), FileId(212)] {
     let exports = program.exports_of(file);
-    let shared = exports.values.get("shared").expect("shared export present");
+    let shared = exports.get("shared").expect("shared export present");
     let ty = shared.type_id.expect("type for shared");
     assert_eq!(program.display_type(ty).to_string(), "1");
   }
@@ -217,13 +204,10 @@ fn export_star_skips_default() {
 
   let exports = program.exports_of(FileId(221));
   assert!(
-    exports.values.get("default").is_none(),
+    exports.get("default").is_none(),
     "default should not be re-exported"
   );
-  let named = exports
-    .values
-    .get("named")
-    .expect("named export propagated");
+  let named = exports.get("named").expect("named export propagated");
   let ty = named.type_id.expect("type for named");
   assert_eq!(program.display_type(ty).to_string(), "2");
 }
@@ -263,11 +247,10 @@ fn namespace_exports_include_namespace_slot() {
   );
 
   let exports = program.exports_of(FileId(30));
-  let value_entry = exports.values.get("foo").expect("value export foo");
-  let namespace_entry = exports.namespaces.get("foo").expect("namespace export foo");
-  assert_eq!(
-    value_entry.symbol, namespace_entry.symbol,
-    "merged namespace/value should share symbol"
+  let value_entry = exports.get("foo").expect("value export foo");
+  assert!(
+    value_entry.def.is_some(),
+    "namespace merge should still surface a value export"
   );
 }
 

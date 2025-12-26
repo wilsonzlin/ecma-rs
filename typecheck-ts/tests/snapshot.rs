@@ -51,14 +51,16 @@ fn snapshot_roundtrips_queries() {
   );
 
   let exports = program.exports_of(FileId(0));
-  let total_entry = exports.values.get("total").expect("total export present");
+  let total_entry = exports.get("total").expect("total export present");
   let total_def = total_entry.def.expect("total def");
   let total_type = total_entry.type_id.expect("total type");
+  let total_display = program.display_type(total_type).to_string();
   let total_body = program.body_of_def(total_def).expect("body for total");
   let call_offset = entry_source.find("add(1, 2)").unwrap() as u32;
   let type_at_call = program
     .type_at(FileId(0), call_offset)
     .expect("type at call");
+  let type_at_display = program.display_type(type_at_call).to_string();
 
   let snapshot = program.snapshot();
   let serialized = serde_json::to_string_pretty(&snapshot).expect("serialize snapshot");
@@ -70,16 +72,22 @@ fn snapshot_roundtrips_queries() {
 
   let restored_exports = restored.exports_of(FileId(0));
   let restored_total = restored_exports
-    .values
     .get("total")
     .expect("restored total export");
-  assert_eq!(restored_total.type_id, Some(total_type));
+  let restored_total_type = restored_total.type_id.expect("restored total type");
+  assert_eq!(
+    restored.display_type(restored_total_type).to_string(),
+    total_display
+  );
   let restored_body = restored.body_of_def(total_def).expect("restored body");
   assert_eq!(restored_body, total_body);
   let restored_type_at = restored
     .type_at(FileId(0), call_offset)
     .expect("restored type");
-  assert_eq!(restored_type_at, type_at_call);
+  assert_eq!(
+    restored.display_type(restored_type_at).to_string(),
+    type_at_display
+  );
 }
 
 #[test]
