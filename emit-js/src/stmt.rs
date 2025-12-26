@@ -76,7 +76,8 @@ pub fn emit_stmt(em: &mut Emitter, stmt: &Node<Stmt>) -> EmitResult {
     | Stmt::ImportTypeDecl(_)
     | Stmt::ExportTypeDecl(_)
     | Stmt::ImportEqualsDecl(_)
-    | Stmt::ExportAssignmentDecl(_) => Err(EmitError::unsupported("TS-only statement")),
+    | Stmt::ExportAssignmentDecl(_)
+    | Stmt::ExportAsNamespaceDecl(_) => Err(EmitError::unsupported("TS-only statement")),
   }
 }
 

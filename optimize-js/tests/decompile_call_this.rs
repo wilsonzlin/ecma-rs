@@ -1,11 +1,13 @@
-use optimize_js::compile_source;
+#[path = "common/mod.rs"]
+mod common;
+use common::compile_source;
 use optimize_js::decompile::il::decompile_function;
 use optimize_js::TopLevelMode;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::stmt::Stmt;
 
 fn decompile_source(source: &str) -> Vec<parse_js::ast::node::Node<Stmt>> {
-  let program = compile_source(source, TopLevelMode::Module, false).expect("compile");
+  let program = compile_source(source, TopLevelMode::Module, false);
   decompile_function(&program.top_level).expect("decompile")
 }
 

@@ -1,9 +1,11 @@
-use optimize_js::compile_source;
+#[path = "common/mod.rs"]
+mod common;
+use common::compile_source;
 use optimize_js::TopLevelMode;
 use serde_json::Value;
 
 fn debug_step(source: &str, name: &str) -> Value {
-  let program = compile_source(source, TopLevelMode::Module, true).expect("compile source");
+  let program = compile_source(source, TopLevelMode::Module, true);
   let debug = program
     .top_level
     .debug

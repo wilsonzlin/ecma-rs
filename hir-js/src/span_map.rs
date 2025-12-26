@@ -1,3 +1,4 @@
+use crate::ids::BodyId;
 use crate::ids::DefId;
 use crate::ids::ExportSpecifierId;
 use crate::ids::ExprId;
@@ -13,10 +14,10 @@ use std::collections::BTreeSet;
 /// offset.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct SpanMap {
-  exprs: SpanIndex<ExprId>,
+  exprs: SpanIndex<(BodyId, ExprId)>,
   defs: SpanIndex<DefId>,
   type_exprs: SpanIndex<TypeExprId>,
-  pats: SpanIndex<PatId>,
+  pats: SpanIndex<(BodyId, PatId)>,
   import_specifiers: SpanIndex<ImportSpecifierId>,
   export_specifiers: SpanIndex<ExportSpecifierId>,
 }
@@ -26,8 +27,8 @@ impl SpanMap {
     Self::default()
   }
 
-  pub fn add_expr(&mut self, range: TextRange, id: ExprId) {
-    self.exprs.add(range, id);
+  pub fn add_expr(&mut self, range: TextRange, body: BodyId, id: ExprId) {
+    self.exprs.add(range, (body, id));
   }
 
   pub fn add_def(&mut self, range: TextRange, id: DefId) {
@@ -38,8 +39,8 @@ impl SpanMap {
     self.type_exprs.add(range, id);
   }
 
-  pub fn add_pat(&mut self, range: TextRange, id: PatId) {
-    self.pats.add(range, id);
+  pub fn add_pat(&mut self, range: TextRange, body: BodyId, id: PatId) {
+    self.pats.add(range, (body, id));
   }
 
   pub fn add_import_specifier(&mut self, range: TextRange, id: ImportSpecifierId) {
@@ -62,11 +63,11 @@ impl SpanMap {
 
   /// Returns the innermost expression that contains the offset, preferring the
   /// smallest range length and breaking ties by start offset then id.
-  pub fn expr_at_offset(&self, offset: u32) -> Option<ExprId> {
+  pub fn expr_at_offset(&self, offset: u32) -> Option<(BodyId, ExprId)> {
     self.exprs.query(offset)
   }
 
-  pub fn expr_span_at_offset(&self, offset: u32) -> Option<(ExprId, TextRange)> {
+  pub fn expr_span_at_offset(&self, offset: u32) -> Option<((BodyId, ExprId), TextRange)> {
     self
       .exprs
       .query_span(offset)
@@ -84,11 +85,11 @@ impl SpanMap {
       .map(|span| (span.id, span.range))
   }
 
-  pub fn pat_at_offset(&self, offset: u32) -> Option<PatId> {
+  pub fn pat_at_offset(&self, offset: u32) -> Option<(BodyId, PatId)> {
     self.pats.query(offset)
   }
 
-  pub fn pat_span_at_offset(&self, offset: u32) -> Option<(PatId, TextRange)> {
+  pub fn pat_span_at_offset(&self, offset: u32) -> Option<((BodyId, PatId), TextRange)> {
     self
       .pats
       .query_span(offset)
@@ -183,26 +184,20 @@ impl<T: Copy + Ord> SpanIndex<T> {
   fn query_span(&self, offset: u32) -> Option<ActiveSpan<T>> {
     let idx = self.segments.partition_point(|seg| seg.end <= offset);
     let seg = self.segments.get(idx);
-    if let Some(seg) = seg {
-      if offset >= seg.start {
-        return Some(seg.best);
-      }
-    }
-
+    let mut best = seg.filter(|seg| offset >= seg.start).map(|seg| seg.best);
     let start_idx = self
       .empties
       .partition_point(|span| span.range.start < offset);
-    let mut best_empty: Option<ActiveSpan<T>> = None;
     for span in self.empties.iter().skip(start_idx) {
       if span.range.start != offset {
         break;
       }
-      let replace = best_empty.map(|best| span < &best).unwrap_or(true);
+      let replace = best.map(|b| span < &b).unwrap_or(true);
       if replace {
-        best_empty = Some(*span);
+        best = Some(*span);
       }
     }
-    best_empty
+    best
   }
 }
 
@@ -362,6 +357,7 @@ fn push_segment<T: Copy + Ord>(
 #[cfg(test)]
 mod tests {
   use super::SpanMap;
+  use crate::ids::BodyId;
   use crate::ids::DefId;
   use crate::ids::ExportSpecifierId;
   use crate::ids::ExprId;
@@ -374,10 +370,10 @@ mod tests {
   #[test]
   fn prefers_inner_expr() {
     let mut map = SpanMap::new();
-    map.add_expr(TextRange::new(0, 10), ExprId(0));
-    map.add_expr(TextRange::new(2, 4), ExprId(1));
+    map.add_expr(TextRange::new(0, 10), BodyId(0), ExprId(0));
+    map.add_expr(TextRange::new(2, 4), BodyId(0), ExprId(1));
     map.finalize();
-    assert_eq!(map.expr_at_offset(3), Some(ExprId(1)));
+    assert_eq!(map.expr_at_offset(3), Some((BodyId(0), ExprId(1))));
   }
 
   #[test]
@@ -398,7 +394,7 @@ mod tests {
     for i in 0..span_count {
       let start = i;
       let end = i + span_count + 1;
-      map.add_expr(TextRange::new(start, end), ExprId(i));
+      map.add_expr(TextRange::new(start, end), BodyId(0), ExprId(i));
     }
     map.finalize();
 
@@ -432,12 +428,12 @@ mod tests {
   #[test]
   fn pat_and_import_export_lookup_work() {
     let mut map = SpanMap::new();
-    map.add_pat(TextRange::new(0, 2), PatId(1));
+    map.add_pat(TextRange::new(0, 2), BodyId(0), PatId(1));
     map.add_import_specifier(TextRange::new(4, 6), ImportSpecifierId(2));
     map.add_export_specifier(TextRange::new(8, 10), ExportSpecifierId(3));
     map.finalize();
 
-    assert_eq!(map.pat_at_offset(1), Some(PatId(1)));
+    assert_eq!(map.pat_at_offset(1), Some((BodyId(0), PatId(1))));
     assert_eq!(
       map.import_specifier_at_offset(5),
       Some(ImportSpecifierId(2))

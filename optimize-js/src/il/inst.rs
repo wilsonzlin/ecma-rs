@@ -175,7 +175,7 @@ fn is_dummy_symbol(sym: &SymbolId) -> bool {
 }
 
 fn dummy_symbol() -> SymbolId {
-  SymbolId(u32::MAX)
+  SymbolId(u32::MAX as u64)
 }
 
 #[derive(PartialEq, Eq, Clone, Debug, Serialize)]

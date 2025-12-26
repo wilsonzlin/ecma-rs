@@ -1,5 +1,8 @@
+#[path = "common/mod.rs"]
+mod common;
+use common::compile_source;
 use optimize_js::cfg::cfg::Cfg;
-use optimize_js::{compile_source, TopLevelMode};
+use optimize_js::TopLevelMode;
 use serde_json::to_string;
 
 fn canonical_cfg_json(cfg: &Cfg) -> String {
@@ -17,7 +20,7 @@ fn canonical_cfg_json(cfg: &Cfg) -> String {
 }
 
 fn compile_cfg(source: &str) -> String {
-  let program = compile_source(source, TopLevelMode::Module, false).expect("compile source");
+  let program = compile_source(source, TopLevelMode::Module, false);
   canonical_cfg_json(&program.top_level.body)
 }
 

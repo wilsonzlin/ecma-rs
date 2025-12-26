@@ -1,3 +1,6 @@
+#[path = "common/mod.rs"]
+mod common;
+use common::compile_source;
 use diagnostics::FileId;
 use optimize_js::il::inst::InstTyp;
 use optimize_js::symbol::semantics::{JsSymbols, ScopeId, SymbolId};
@@ -32,7 +35,7 @@ fn compile_with_symbols(
   let (symbols, _) = JsSymbols::bind(&mut node, mode, FileId(0));
   let names = collect_symbol_names(&symbols);
   let analysis = VarAnalysis::analyze(&mut node, &symbols);
-  let program = Program::compile(node, mode, false).expect("compile");
+  let program = compile_source(source, mode, false);
   (program, analysis, names)
 }
 

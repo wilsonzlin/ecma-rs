@@ -1,10 +1,13 @@
+#[path = "common/mod.rs"]
+mod common;
+use common::compile_source;
 use optimize_js::decompile::{collect_foreign_bindings, prepend_foreign_decls, ForeignBindings};
-use optimize_js::{compile_source, Program, TopLevelMode};
+use optimize_js::{Program, TopLevelMode};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 
 fn compile(source: &str, mode: TopLevelMode) -> Program {
-  compile_source(source, mode, false).expect("compile program")
+  compile_source(source, mode, false)
 }
 
 fn var_decl_names(stmt: &Node<Stmt>) -> Vec<String> {

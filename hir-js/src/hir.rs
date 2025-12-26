@@ -32,6 +32,7 @@ pub enum FileKind {
 pub struct HirFile {
   pub file: FileId,
   pub file_kind: FileKind,
+  pub root_body: BodyId,
   pub items: Vec<DefId>,
   pub bodies: Vec<BodyId>,
   pub def_paths: BTreeMap<DefPath, DefId>,
@@ -926,6 +927,7 @@ impl HirFile {
   pub fn new(
     file: FileId,
     file_kind: FileKind,
+    root_body: BodyId,
     items: Vec<DefId>,
     bodies: Vec<BodyId>,
     def_paths: BTreeMap<DefPath, DefId>,
@@ -936,6 +938,7 @@ impl HirFile {
     Self {
       file,
       file_kind,
+      root_body,
       items,
       bodies,
       def_paths,
@@ -961,5 +964,9 @@ impl LowerResult {
 
   pub fn def_id_for_path(&self, path: &DefPath) -> Option<DefId> {
     self.hir.def_paths.get(path).copied()
+  }
+
+  pub fn root_body(&self) -> BodyId {
+    self.hir.root_body
   }
 }

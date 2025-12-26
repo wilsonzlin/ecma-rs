@@ -171,12 +171,7 @@ fn expr_at_offset_prefers_inner_expression() {
   let ast = parse(source).expect("parse");
   let result = lower_file(FileId(1), FileKind::Ts, &ast);
 
-  let def = result
-    .defs
-    .iter()
-    .find(|d| d.path.kind == DefKind::Var)
-    .expect("var def");
-  let body_id = def.body.expect("var has initializer body");
+  let body_id = result.root_body();
   let body = result.body(body_id).expect("body");
   let map = &result.hir.span_map;
 
@@ -195,18 +190,19 @@ fn expr_at_offset_prefers_inner_expression() {
     .exprs
     .iter()
     .enumerate()
-    .filter(|(_, expr)| expr.span.contains(offset))
+    .filter(|(_, expr)| offset >= expr.span.start && offset <= expr.span.end)
     .min_by_key(|(idx, expr)| (expr.span.len(), expr.span.start, *idx))
     .map(|(idx, _)| ExprId(idx as u32))
     .unwrap();
 
   let mapped = map.expr_at_offset(offset).expect("expr at offset");
-  assert_eq!(mapped, expected);
+  assert_eq!(mapped, (body_id, expected));
 
   let binary_span = body.exprs[binary_id.0 as usize].span;
-  let mapped_binary = map
+  let (mapped_body, mapped_binary) = map
     .expr_at_offset(binary_span.start)
     .expect("mapped binary expr");
+  assert_eq!(mapped_body, body_id);
   assert!(body.exprs[mapped_binary.0 as usize].span.len() <= binary_span.len());
 }
 
@@ -282,8 +278,8 @@ fn saturates_overflowing_spans() {
   assert_eq!(def.span.start, u32::MAX);
   assert_eq!(def.span.end, u32::MAX);
 
-  let body_id = def.body.expect("initializer");
-  let body = result.body(body_id).expect("initializer body");
+  let body_id = result.root_body();
+  let body = result.body(body_id).expect("body");
   let stmt_span = body.stmts.first().expect("stmt").span;
   assert_eq!(stmt_span.start, u32::MAX);
   assert_eq!(stmt_span.end, u32::MAX);
@@ -300,12 +296,12 @@ fn lowers_computed_object_keys() {
 
   assert!(diagnostics.is_empty());
 
-  let def = result
+  let _def = result
     .defs
     .iter()
     .find(|d| result.names.resolve(d.path.name) == Some("obj"))
     .expect("obj definition");
-  let body = result.body(def.body.unwrap()).expect("initializer body");
+  let body = result.body(result.root_body()).expect("root body");
   let object_expr = body
     .exprs
     .iter()
@@ -501,13 +497,7 @@ fn parses_jsx_and_tsx_file_kinds() {
   let tsx = lower_from_source_with_kind(FileKind::Tsx, "const el = <div>{value}</div>;")
     .expect("tsx should parse");
   assert_eq!(tsx.hir.file_kind, FileKind::Tsx);
-  let tsx_body = tsx
-    .defs
-    .iter()
-    .find(|d| tsx.names.resolve(d.path.name) == Some("el"))
-    .and_then(|def| def.body)
-    .and_then(|body_id| tsx.body(body_id))
-    .expect("el body");
+  let tsx_body = tsx.body(tsx.root_body()).expect("el body");
   assert!(tsx_body
     .exprs
     .iter()
@@ -516,13 +506,7 @@ fn parses_jsx_and_tsx_file_kinds() {
   let jsx =
     lower_from_source_with_kind(FileKind::Jsx, "const node = <span/>;").expect("jsx should parse");
   assert_eq!(jsx.hir.file_kind, FileKind::Jsx);
-  let jsx_body = jsx
-    .defs
-    .iter()
-    .find(|d| jsx.names.resolve(d.path.name) == Some("node"))
-    .and_then(|def| def.body)
-    .and_then(|body_id| jsx.body(body_id))
-    .expect("node body");
+  let jsx_body = jsx.body(jsx.root_body()).expect("node body");
   assert!(jsx_body
     .exprs
     .iter()
@@ -533,12 +517,12 @@ fn parses_jsx_and_tsx_file_kinds() {
 fn lowers_new_expressions() {
   let ast = parse("const instance = new Foo(1);").expect("parse");
   let result = lower_file(FileId(8), FileKind::Ts, &ast);
-  let def = result
+  let _def = result
     .defs
     .iter()
     .find(|d| result.names.resolve(d.path.name) == Some("instance"))
     .expect("instance def");
-  let body = result.body(def.body.unwrap()).expect("initializer body");
+  let body = result.body(result.root_body()).expect("root body");
   let call = body
     .exprs
     .iter()

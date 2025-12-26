@@ -12,18 +12,31 @@ pub mod util;
 
 pub use crate::decompile::program_to_js;
 pub use crate::decompile::{program_to_ast, DecompileOptions};
+use crate::il::inst::Inst;
+use crate::util::counter::Counter;
+use ahash::HashMap;
 use ahash::HashSet;
 use analysis::defs::calculate_defs;
 use cfg::bblock::convert_insts_to_bblocks;
 use cfg::cfg::Cfg;
 use dashmap::DashMap;
 use dom::Dom;
+use hir_js::lower_file;
+use hir_js::Body;
+use hir_js::BodyId;
+use hir_js::ExprId;
+use hir_js::FileKind as HirFileKind;
+use hir_js::LowerResult;
+use hir_js::NameId;
+use hir_js::NameInterner;
+use hir_js::PatId;
 use opt::optpass_cfg_prune::optpass_cfg_prune;
 use opt::optpass_dvn::optpass_dvn;
 use opt::optpass_impossible_branches::optpass_impossible_branches;
 use opt::optpass_redundant_assigns::optpass_redundant_assigns;
 use opt::optpass_trivial_dce::optpass_trivial_dce;
 use parse_js::ast::node::Node;
+use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
@@ -35,10 +48,13 @@ use ssa::ssa_deconstruct::deconstruct_ssa;
 use ssa::ssa_insert_phis::insert_phis_for_ssa_construction;
 use ssa::ssa_rename::rename_targets_for_ssa_construction;
 use std::ops::Deref;
+use std::collections::BTreeMap;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use symbol::semantics::{JsSymbols, ScopeId, SymbolId};
+use symbol::semantics::{
+  assoc_declared_symbol, assoc_resolved_symbol, JsSymbols, ScopeId, SymbolId,
+};
 use symbol::var_analysis::VarAnalysis;
 use util::debug::OptimizerDebug;
 
@@ -59,6 +75,18 @@ fn diagnostic_with_span(code: &'static str, message: impl Into<String>, loc: Loc
 
 fn unsupported_syntax(loc: Loc, message: impl Into<String>) -> Vec<Diagnostic> {
   vec![diagnostic_with_span("OPT0002", message, loc)]
+}
+
+fn diagnostic_with_range(
+  code: &'static str,
+  message: impl Into<String>,
+  range: TextRange,
+) -> Diagnostic {
+  Diagnostic::error(code, message, Span::new(SOURCE_FILE, range))
+}
+
+fn unsupported_syntax_range(range: TextRange, message: impl Into<String>) -> Vec<Diagnostic> {
+  vec![diagnostic_with_range("OPT0002", message, range)]
 }
 
 fn use_before_declaration(name: &str, loc: Loc) -> Diagnostic {
@@ -155,16 +183,103 @@ pub struct ProgramSymbols {
   pub scopes: Vec<ProgramScope>,
 }
 
-pub fn compile_js_statements(
+#[derive(Clone, Default, Debug)]
+pub(crate) struct HirSymbolBindings {
+  exprs: HashMap<BodyId, HashMap<ExprId, Option<SymbolId>>>,
+  pats: HashMap<BodyId, HashMap<PatId, Option<SymbolId>>>,
+}
+
+impl HirSymbolBindings {
+  fn symbol_for_expr(&self, body: BodyId, expr: ExprId) -> Option<SymbolId> {
+    self
+      .exprs
+      .get(&body)
+      .and_then(|m| m.get(&expr))
+      .and_then(|s| *s)
+  }
+
+  fn symbol_for_pat(&self, body: BodyId, pat: PatId) -> Option<SymbolId> {
+    self
+      .pats
+      .get(&body)
+      .and_then(|m| m.get(&pat))
+      .and_then(|s| *s)
+  }
+}
+
+fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) -> HirSymbolBindings {
+  use derive_visitor::{DriveMut, VisitorMut};
+  use parse_js::ast::expr::pat::IdPat;
+  use parse_js::ast::expr::IdExpr;
+
+  #[derive(VisitorMut)]
+  #[visitor(IdExprNode(enter), IdPatNode(enter))]
+  struct Collector {
+    exprs: BTreeMap<TextRange, Option<SymbolId>>,
+    pats: BTreeMap<TextRange, Option<SymbolId>>,
+  }
+
+  type IdExprNode = Node<IdExpr>;
+  type IdPatNode = Node<IdPat>;
+
+  impl Collector {
+    fn map_symbol(&self, assoc: &NodeAssocData) -> Option<SymbolId> {
+      assoc_declared_symbol(assoc).or_else(|| assoc_resolved_symbol(assoc))
+    }
+
+    fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+      let span = TextRange::new(node.loc.start_u32(), node.loc.end_u32());
+      let sym = self.map_symbol(&node.assoc);
+      self.exprs.insert(span, sym);
+      self.pats.insert(span, sym);
+    }
+
+    fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+      let span = TextRange::new(node.loc.start_u32(), node.loc.end_u32());
+      let sym = self.map_symbol(&node.assoc);
+      self.pats.insert(span, sym);
+    }
+  }
+
+  let mut collector = Collector {
+    exprs: BTreeMap::new(),
+    pats: BTreeMap::new(),
+  };
+  ast.drive_mut(&mut collector);
+
+  let mut bindings = HirSymbolBindings::default();
+  for (body_id, idx) in &lower.body_index {
+    let body = &lower.bodies[*idx];
+    let exprs = bindings.exprs.entry(*body_id).or_default();
+    for (idx, expr) in body.exprs.iter().enumerate() {
+      let id = ExprId(idx as u32);
+      if let Some(sym) = collector.exprs.get(&expr.span) {
+        exprs.insert(id, *sym);
+      }
+    }
+    let pats = bindings.pats.entry(*body_id).or_default();
+    for (idx, pat) in body.pats.iter().enumerate() {
+      let id = PatId(idx as u32);
+      if let Some(sym) = collector.pats.get(&pat.span) {
+        pats.insert(id, *sym);
+      }
+    }
+  }
+
+  bindings
+}
+
+pub(crate) fn build_program_function(
   program: &ProgramCompiler,
-  statements: Vec<Node<Stmt>>,
-) -> OptimizeResult<ProgramFunction> {
+  insts: Vec<Inst>,
+  mut c_label: Counter,
+  mut c_temp: Counter,
+) -> ProgramFunction {
   let mut dbg = program.debug.then(|| OptimizerDebug::new());
   let mut dbg_checkpoint = |name: &str, cfg: &Cfg| {
     dbg.as_mut().map(|dbg| dbg.add_step(name, cfg));
   };
 
-  let (insts, mut c_label, mut c_temp) = program.translate_source_to_inst(statements)?;
   let (bblocks, bblock_order) = convert_insts_to_bblocks(insts, &mut c_label);
   let mut cfg = Cfg::from_bblocks(bblocks, bblock_order);
   // Prune unreachable blocks from 0. This is necessary for dominance calculation to be correct (basic example: every block should be dominated by 0, but if there's an unreachable block it'll make all its descendants not dominated by 0).
@@ -213,10 +328,28 @@ pub fn compile_js_statements(
   deconstruct_ssa(&mut cfg, &mut c_label);
   dbg_checkpoint("ssa_deconstruct", &cfg);
 
-  Ok(ProgramFunction {
+  ProgramFunction {
     debug: dbg,
     body: cfg,
-  })
+  }
+}
+
+pub(crate) fn compile_hir_body(
+  program: &ProgramCompiler,
+  body: BodyId,
+) -> OptimizeResult<ProgramFunction> {
+  let (insts, c_label, c_temp) = crate::il::s2i::stmt::translate_body(program, body)?;
+  Ok(build_program_function(program, insts, c_label, c_temp))
+}
+
+#[cfg(feature = "legacy-ast-lowering")]
+fn compile_js_ast_statements(
+  program: &ProgramCompiler,
+  statements: Vec<Node<Stmt>>,
+) -> OptimizeResult<ProgramFunction> {
+  let (insts, c_label, c_temp) =
+    crate::il::s2i::legacy::translate_source_to_inst(program, statements)?;
+  Ok(build_program_function(program, insts, c_label, c_temp))
 }
 
 pub type FnId = usize;
@@ -230,6 +363,9 @@ pub struct ProgramCompilerInner {
   pub functions: DashMap<FnId, ProgramFunction>,
   pub next_fn_id: AtomicUsize,
   pub debug: bool,
+  pub lower: Arc<LowerResult>,
+  pub(crate) bindings: HirSymbolBindings,
+  pub names: Arc<NameInterner>,
 }
 
 /// Our internal compiler state for a program.
@@ -243,6 +379,28 @@ impl Deref for ProgramCompiler {
 
   fn deref(&self) -> &Self::Target {
     &self.0
+  }
+}
+
+impl ProgramCompiler {
+  fn name_for(&self, name: NameId) -> String {
+    self
+      .names
+      .resolve(name)
+      .map(str::to_string)
+      .unwrap_or_else(|| "<unknown>".to_string())
+  }
+
+  fn symbol_for_expr(&self, body: BodyId, expr: ExprId) -> Option<SymbolId> {
+    self.bindings.symbol_for_expr(body, expr)
+  }
+
+  fn symbol_for_pat(&self, body: BodyId, pat: PatId) -> Option<SymbolId> {
+    self.bindings.symbol_for_pat(body, pat)
+  }
+
+  fn body(&self, id: BodyId) -> &Body {
+    self.lower.body(id).expect("body should exist")
   }
 }
 
@@ -262,6 +420,84 @@ pub struct Program {
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
   let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
   Program::compile(top_level_node, mode, debug)
+}
+
+#[cfg(feature = "legacy-ast-lowering")]
+pub fn compile_source_ast(
+  source: &str,
+  mode: TopLevelMode,
+  debug: bool,
+) -> OptimizeResult<Program> {
+  let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
+  let lower = lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
+  let (semantics, _) = JsSymbols::bind(&mut top_level_node, mode, SOURCE_FILE);
+  let VarAnalysis {
+    foreign,
+    use_before_decl,
+    dynamic_scope,
+    ..
+  } = VarAnalysis::analyze(&mut top_level_node, &semantics);
+  if let Some(loc) = dynamic_scope {
+    return Err(unsupported_syntax(
+      loc,
+      "with statements introduce dynamic scope and are not supported",
+    ));
+  }
+  if !use_before_decl.is_empty() {
+    let mut diagnostics: Vec<_> = use_before_decl
+      .into_iter()
+      .map(|(_, (name, loc))| use_before_declaration(&name, loc))
+      .collect();
+    sort_diagnostics(&mut diagnostics);
+    return Err(diagnostics);
+  };
+  let mut symbol_table = collect_symbol_table(&semantics, &foreign);
+  let bindings = collect_hir_symbol_bindings(&mut top_level_node, &lower);
+  let lower = Arc::new(lower);
+  let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
+    foreign_vars: foreign.clone(),
+    functions: DashMap::new(),
+    next_fn_id: AtomicUsize::new(0),
+    debug,
+    lower: Arc::clone(&lower),
+    bindings,
+    names: Arc::clone(&lower.names),
+  }));
+
+  let TopLevel { body } = *top_level_node.stx;
+  let top_level = crate::il::s2i::legacy::compile_js_statements(&program, body)?;
+  let ProgramCompilerInner {
+    functions,
+    next_fn_id,
+    ..
+  } = Arc::try_unwrap(program.0).unwrap();
+  let fn_count = next_fn_id.load(Ordering::Relaxed);
+  let functions: Vec<_> = (0..fn_count)
+    .map(|i| functions.remove(&i).unwrap().1)
+    .collect();
+
+  let free_symbols = ProgramFreeSymbols {
+    top_level: collect_free_symbols(&top_level),
+    functions: functions.iter().map(collect_free_symbols).collect(),
+  };
+
+  let has_any_symbols = !symbol_table.symbols.is_empty()
+    || !free_symbols.top_level.is_empty()
+    || free_symbols.functions.iter().any(|f| !f.is_empty());
+
+  let symbols = if has_any_symbols {
+    symbol_table.free_symbols = Some(free_symbols);
+    Some(symbol_table)
+  } else {
+    None
+  };
+
+  Ok(Program {
+    functions,
+    top_level,
+    top_level_mode: mode,
+    symbols,
+  })
 }
 
 fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> ProgramSymbols {
@@ -290,8 +526,8 @@ fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> Pr
   let mut out_symbols = Vec::new();
   collect_scope_symbols(symbols, symbols.top_scope(), captured, &mut out_symbols);
   let mut scopes = Vec::with_capacity(symbols.semantics.scopes.len());
-  for (idx, scope) in symbols.semantics.scopes.iter().enumerate() {
-    let id = ScopeId(idx as u32);
+  for (scope_id, scope) in symbols.semantics.scopes.iter() {
+    let id = ScopeId::from(*scope_id);
     let mut scope_symbols: Vec<_> = scope
       .iter_symbols_sorted()
       .map(|(_, symbol)| SymbolId::from(symbol))
@@ -312,10 +548,16 @@ fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> Pr
       has_direct_eval: scope.has_direct_eval,
     });
   }
+  scopes.sort_by_key(|scope| scope.id.raw_id());
   ProgramSymbols {
     symbols: out_symbols,
     free_symbols: None,
-    names: symbols.semantics.names.clone(),
+    names: symbols
+      .semantics
+      .names
+      .iter()
+      .map(|(_, name)| name.clone())
+      .collect(),
     scopes,
   }
 }
@@ -338,8 +580,9 @@ fn collect_free_symbols(func: &ProgramFunction) -> Vec<SymbolId> {
 }
 
 impl Program {
-  pub fn compile(
+  fn compile_with_lower(
     mut top_level_node: Node<TopLevel>,
+    lower: LowerResult,
     top_level_mode: TopLevelMode,
     debug: bool,
   ) -> OptimizeResult<Self> {
@@ -367,14 +610,19 @@ impl Program {
     };
     let mut symbol_table = collect_symbol_table(&semantics, &foreign);
 
-    let TopLevel { body } = *top_level_node.stx;
+    let bindings = collect_hir_symbol_bindings(&mut top_level_node, &lower);
+    let lower = Arc::new(lower);
     let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
       foreign_vars: foreign.clone(),
       functions: DashMap::new(),
       next_fn_id: AtomicUsize::new(0),
       debug,
+      lower: Arc::clone(&lower),
+      bindings,
+      names: Arc::clone(&lower.names),
     }));
-    let top_level = compile_js_statements(&program, body)?;
+
+    let top_level = compile_hir_body(&program, lower.root_body())?;
     let ProgramCompilerInner {
       functions,
       next_fn_id,
@@ -408,6 +656,25 @@ impl Program {
       symbols,
     })
   }
+
+  pub fn compile(
+    top_level_node: Node<TopLevel>,
+    top_level_mode: TopLevelMode,
+    debug: bool,
+  ) -> OptimizeResult<Self> {
+    let lower = hir_js::lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
+    Self::compile_with_lower(top_level_node, lower, top_level_mode, debug)
+  }
+
+  pub fn compile_lowered(
+    source: &str,
+    lower: LowerResult,
+    top_level_mode: TopLevelMode,
+    debug: bool,
+  ) -> OptimizeResult<Self> {
+    let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
+    Self::compile_with_lower(top_level_node, lower, top_level_mode, debug)
+  }
 }
 
 #[cfg(test)]
@@ -420,6 +687,7 @@ mod tests {
   use crate::symbol::var_analysis::VarAnalysis;
   use crate::Program;
   use crate::TopLevelMode;
+  use super::SOURCE_FILE;
   use parse_js::parse;
   use serde_json::to_string;
   use std::collections::HashSet;
@@ -582,6 +850,12 @@ mod tests {
       Program::compile(top_level_node, TopLevelMode::Module, false).expect("compile input");
     let insts = collect_all_insts(&program);
 
+    #[cfg(test)]
+    for inst in insts.iter() {
+      if matches!(inst.t, InstTyp::UnknownLoad | InstTyp::UnknownStore) {
+        eprintln!("unknown inst: {:?}", inst);
+      }
+    }
     assert!(insts.iter().all(|i| i.t != InstTyp::UnknownStore));
     let unknown_names: HashSet<_> = insts
       .iter()

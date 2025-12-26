@@ -1,44 +1,97 @@
-use super::SourceToInst;
-use super::VarType;
-use super::DUMMY_LABEL;
-use crate::il::inst::Arg;
-use crate::il::inst::BinOp;
-use crate::il::inst::Const;
-use crate::il::inst::Inst;
-use crate::unsupported_syntax;
+use super::{HirSourceToInst, VarType, DUMMY_LABEL};
+use crate::il::inst::{Arg, BinOp, Const, Inst};
+use crate::unsupported_syntax_range;
+use crate::util::counter::Counter;
 use crate::OptimizeResult;
-use parse_js::ast::class_or_object::ClassOrObjKey;
-use parse_js::ast::expr::pat::ArrPat;
-use parse_js::ast::expr::pat::IdPat;
-use parse_js::ast::expr::pat::ObjPat;
-use parse_js::ast::expr::pat::ObjPatProp;
-use parse_js::ast::expr::pat::Pat;
-use parse_js::ast::expr::Expr;
-use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::VarDecl;
-use parse_js::ast::stmt::decl::VarDeclarator;
-use parse_js::ast::stmt::BreakStmt;
-use parse_js::ast::stmt::ExprStmt;
-use parse_js::ast::stmt::ForTripleStmt;
-use parse_js::ast::stmt::ForTripleStmtInit;
-use parse_js::ast::stmt::IfStmt;
-use parse_js::ast::stmt::Stmt;
-use parse_js::ast::stmt::WhileStmt;
+use crate::ProgramCompiler;
+use hir_js::{
+  Body, BodyId, ExprId, ForInit, ObjectKey, PatId, PatKind, StmtId, StmtKind, VarDecl,
+  VarDeclarator,
+};
+use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 
-impl<'p> SourceToInst<'p> {
-  // Handle `[a = 1] = x;` or `{b: c = 2} = y;`.
+pub fn key_arg(compiler: &mut HirSourceToInst<'_>, key: &ObjectKey) -> OptimizeResult<Arg> {
+  Ok(match key {
+    ObjectKey::Ident(name) => Arg::Const(Const::Str(compiler.name_for(*name))),
+    ObjectKey::String(s) => Arg::Const(Const::Str(s.clone())),
+    ObjectKey::Number(n) => Arg::Const(Const::Str(n.clone())),
+    ObjectKey::Computed(expr) => compiler.compile_expr(*expr)?,
+  })
+}
+
+fn root_statements(body: &Body) -> Vec<StmtId> {
+  let mut referenced = vec![false; body.stmts.len()];
+  for stmt in body.stmts.iter() {
+    match &stmt.kind {
+      StmtKind::Block(stmts) => {
+        for id in stmts {
+          referenced[id.0 as usize] = true;
+        }
+      }
+      StmtKind::If {
+        consequent,
+        alternate,
+        ..
+      } => {
+        referenced[consequent.0 as usize] = true;
+        if let Some(alt) = alternate {
+          referenced[alt.0 as usize] = true;
+        }
+      }
+      StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } => {
+        referenced[body.0 as usize] = true;
+      }
+      StmtKind::For { body, .. } | StmtKind::ForIn { body, .. } => {
+        referenced[body.0 as usize] = true;
+      }
+      StmtKind::Switch { cases, .. } => {
+        for case in cases {
+          for stmt in case.consequent.iter() {
+            referenced[stmt.0 as usize] = true;
+          }
+        }
+      }
+      StmtKind::Try {
+        block,
+        catch,
+        finally_block,
+      } => {
+        referenced[block.0 as usize] = true;
+        if let Some(catch) = catch {
+          referenced[catch.body.0 as usize] = true;
+        }
+        if let Some(finally) = finally_block {
+          referenced[finally.0 as usize] = true;
+        }
+      }
+      StmtKind::Labeled { body, .. } | StmtKind::With { body, .. } => {
+        referenced[body.0 as usize] = true;
+      }
+      _ => {}
+    }
+  }
+  let mut roots: Vec<_> = body
+    .stmts
+    .iter()
+    .enumerate()
+    .filter_map(|(idx, _)| (!referenced[idx]).then_some(StmtId(idx as u32)))
+    .collect();
+  roots.sort_by_key(|id| body.stmts[id.0 as usize].span.start);
+  roots
+}
+
+impl<'p> HirSourceToInst<'p> {
   pub fn compile_destructuring_via_prop(
     &mut self,
     obj: Arg,
     prop: Arg,
-    target: Node<Pat>,
-    default_value: Option<Node<Expr>>,
+    target: PatId,
+    default_value: Option<ExprId>,
   ) -> OptimizeResult<()> {
     let tmp_var = self.c_temp.bump();
     self.out.push(Inst::bin(tmp_var, obj, BinOp::GetProp, prop));
     if let Some(dv) = default_value {
-      // Compile default value. If `%tmp` is undefined, we need to assign `e.default_value` to it.
       let after_label_id = self.c_label.bump();
       let is_undefined_tmp_var = self.c_temp.bump();
       self.out.push(Inst::bin(
@@ -59,53 +112,36 @@ impl<'p> SourceToInst<'p> {
     self.compile_destructuring(target, Arg::Var(tmp_var))
   }
 
-  pub fn compile_destructuring(&mut self, pat: Node<Pat>, rval: Arg) -> OptimizeResult<()> {
-    match *pat.stx {
-      Pat::Arr(n) => {
-        let ArrPat { elements, rest: _ } = *n.stx;
-        for (i, e) in elements.into_iter().enumerate() {
+  pub fn compile_destructuring(&mut self, pat: PatId, rval: Arg) -> OptimizeResult<()> {
+    match &self.body.pats[pat.0 as usize].kind {
+      PatKind::Array(arr) => {
+        for (i, e) in arr.elements.iter().enumerate() {
           let Some(e) = e else {
             continue;
           };
           self.compile_destructuring_via_prop(
             rval.clone(),
             Arg::Const(Const::Num(JsNumber(i as f64))),
-            e.target,
+            e.pat,
             e.default_value,
           )?;
         }
-        // TODO `rest`.
       }
-      Pat::Obj(n) => {
-        let ObjPat {
-          properties,
-          rest: _,
-        } = *n.stx;
-        for p in properties {
-          let ObjPatProp {
-            key,
-            target,
-            default_value,
-            ..
-          } = *p.stx;
-          let prop = match key {
-            ClassOrObjKey::Direct(d) => Arg::Const(Const::Str(d.stx.key)),
-            ClassOrObjKey::Computed(c) => self.compile_expr(c)?,
-          };
-          self.compile_destructuring_via_prop(rval.clone(), prop, target, default_value)?;
+      PatKind::Object(obj) => {
+        for p in obj.props.iter() {
+          let prop = key_arg(self, &p.key)?;
+          self.compile_destructuring_via_prop(rval.clone(), prop, p.value, p.default_value)?;
         }
-        // TODO `rest`.
       }
-      Pat::Id(n) => {
-        let IdPat { name } = *n.stx;
-        // NOTE: It's possible to destructure-assign to ancestor scope vars (including globals), so just because this is a pattern doesn't mean it's for a local var.
-        let inst = match self.var_type(n.assoc, name.clone()) {
+      PatKind::Ident(name) => {
+        let var_type = self.classify_symbol(self.symbol_for_pat(pat), self.name_for(*name));
+        let inst = match var_type {
           VarType::Local(local) => Inst::var_assign(self.symbol_to_temp(local), rval.clone()),
           VarType::Foreign(foreign) => Inst::foreign_store(foreign, rval.clone()),
           VarType::Unknown(unknown) => Inst::unknown_store(unknown, rval.clone()),
           VarType::Builtin(builtin) => {
-            return Err(unsupported_syntax(
-              pat.loc,
+            return Err(unsupported_syntax_range(
+              self.body.pats[pat.0 as usize].span,
               format!("assignment to builtin {builtin}"),
             ))
           }
@@ -113,8 +149,8 @@ impl<'p> SourceToInst<'p> {
         self.out.push(inst);
       }
       _ => {
-        return Err(unsupported_syntax(
-          pat.loc,
+        return Err(unsupported_syntax_range(
+          self.body.pats[pat.0 as usize].span,
           "unsupported destructuring pattern",
         ))
       }
@@ -122,64 +158,62 @@ impl<'p> SourceToInst<'p> {
     Ok(())
   }
 
-  pub fn compile_stmts(&mut self, stmts: Vec<Node<Stmt>>) -> OptimizeResult<()> {
-    for stmt in stmts {
-      self.compile_stmt(stmt)?;
+  pub fn compile_var_decl(&mut self, decl: &VarDecl) -> OptimizeResult<()> {
+    for VarDeclarator { pat, init } in decl.declarators.iter() {
+      let Some(init) = init else {
+        continue;
+      };
+      let tmp = self.c_temp.bump();
+      let rval = self.compile_expr(*init)?;
+      self.out.push(Inst::var_assign(tmp, rval));
+      self.compile_destructuring(*pat, Arg::Var(tmp))?;
     }
     Ok(())
   }
 
-  pub fn compile_break_stmt(&mut self, BreakStmt { label: _ }: BreakStmt) -> OptimizeResult<()> {
-    // TODO Label.
-    self.out.push(Inst::goto(*self.break_stack.last().unwrap()));
-    Ok(())
-  }
-
-  pub fn compile_for_triple_stmt(
+  fn compile_for_stmt(
     &mut self,
-    ForTripleStmt {
-      init,
-      cond,
-      post,
-      body,
-    }: ForTripleStmt,
+    _span: Loc,
+    init: &Option<ForInit>,
+    cond: &Option<ExprId>,
+    post: &Option<ExprId>,
+    body: StmtId,
   ) -> OptimizeResult<()> {
     match init {
-      ForTripleStmtInit::None => {}
-      ForTripleStmtInit::Expr(e) => {
-        self.compile_expr(e)?;
+      Some(ForInit::Expr(e)) => {
+        self.compile_expr(*e)?;
       }
-      ForTripleStmtInit::Decl(d) => {
-        self.compile_var_decl(*d.stx)?;
+      Some(ForInit::Var(d)) => {
+        self.compile_var_decl(d)?;
       }
+      None => {}
     };
     let loop_entry_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
     self.out.push(Inst::label(loop_entry_label));
     if let Some(cond) = cond {
-      let cond_arg = self.compile_expr(cond)?;
+      let cond_arg = self.compile_expr(*cond)?;
       self
         .out
         .push(Inst::cond_goto(cond_arg, DUMMY_LABEL, after_loop_label));
     };
     self.break_stack.push(after_loop_label);
-    self.compile_stmts(body.stx.body)?;
+    self.compile_stmt(body)?;
     self.break_stack.pop().unwrap();
     if let Some(post) = post {
-      self.compile_expr(post)?;
+      self.compile_expr(*post)?;
     };
     self.out.push(Inst::goto(loop_entry_label));
     self.out.push(Inst::label(after_loop_label));
     Ok(())
   }
 
-  pub fn compile_if_stmt(
+  fn compile_if_stmt(
     &mut self,
-    IfStmt {
-      test,
-      consequent,
-      alternate,
-    }: IfStmt,
+    _span: Loc,
+    test: ExprId,
+    consequent: StmtId,
+    alternate: Option<StmtId>,
   ) -> OptimizeResult<()> {
     let test_arg = self.compile_expr(test)?;
     match alternate {
@@ -207,42 +241,11 @@ impl<'p> SourceToInst<'p> {
     Ok(())
   }
 
-  pub fn compile_var_decl(
-    &mut self,
-    VarDecl {
-      export: _,
-      mode: _,
-      declarators,
-    }: VarDecl,
-  ) -> OptimizeResult<()> {
-    // TODO export.
-    for VarDeclarator {
-      initializer,
-      pattern,
-      type_annotation: _,
-      definite_assignment: _,
-    } in declarators
-    {
-      // TODO `initializer` must exist if `pattern` isn't IdentifierPattern (e.g. `var [a]; var {b};`).
-      let Some(init) = initializer else {
-        continue;
-      };
-      let tmp = self.c_temp.bump();
-      let rval = self.compile_expr(init)?;
-      self.out.push(Inst::var_assign(tmp, rval));
-      self.compile_destructuring(pattern.stx.pat, Arg::Var(tmp))?;
-    }
-    Ok(())
-  }
-
-  pub fn compile_while_stmt(
-    &mut self,
-    WhileStmt { condition, body }: WhileStmt,
-  ) -> OptimizeResult<()> {
+  fn compile_while_stmt(&mut self, test: ExprId, body: StmtId, _span: Loc) -> OptimizeResult<()> {
     let before_test_label = self.c_label.bump();
     let after_loop_label = self.c_label.bump();
     self.out.push(Inst::label(before_test_label));
-    let test_arg = self.compile_expr(condition)?;
+    let test_arg = self.compile_expr(test)?;
     self
       .out
       .push(Inst::cond_goto(test_arg, DUMMY_LABEL, after_loop_label));
@@ -254,25 +257,58 @@ impl<'p> SourceToInst<'p> {
     Ok(())
   }
 
-  pub fn compile_expr_stmt(&mut self, ExprStmt { expr }: ExprStmt) -> OptimizeResult<()> {
-    self.compile_expr(expr)?;
-    Ok(())
-  }
-
-  pub fn compile_stmt(&mut self, n: Node<Stmt>) -> OptimizeResult<()> {
-    let span = n.loc;
-    match *n.stx {
-      Stmt::Block(n) => self.compile_stmts(n.stx.body),
-      Stmt::Break(n) => self.compile_break_stmt(*n.stx),
-      Stmt::Expr(n) => self.compile_expr_stmt(*n.stx),
-      Stmt::ForTriple(n) => self.compile_for_triple_stmt(*n.stx),
-      Stmt::If(n) => self.compile_if_stmt(*n.stx),
-      Stmt::VarDecl(n) => self.compile_var_decl(*n.stx),
-      Stmt::While(n) => self.compile_while_stmt(*n.stx),
-      other => Err(unsupported_syntax(
-        span,
+  pub fn compile_stmt(&mut self, stmt_id: StmtId) -> OptimizeResult<()> {
+    let stmt = &self.body.stmts[stmt_id.0 as usize];
+    let span = Loc(stmt.span.start as usize, stmt.span.end as usize);
+    match &stmt.kind {
+      StmtKind::Block(stmts) => {
+        for stmt in stmts {
+          self.compile_stmt(*stmt)?;
+        }
+        Ok(())
+      }
+      StmtKind::Break(_) => {
+        self.out.push(Inst::goto(*self.break_stack.last().unwrap()));
+        Ok(())
+      }
+      StmtKind::Expr(expr) => {
+        self.compile_expr(*expr)?;
+        Ok(())
+      }
+      StmtKind::For {
+        init,
+        test,
+        update,
+        body,
+      } => self.compile_for_stmt(span, init, test, update, *body),
+      StmtKind::If {
+        test,
+        consequent,
+        alternate,
+      } => self.compile_if_stmt(span, *test, *consequent, *alternate),
+      StmtKind::Var(decl) => self.compile_var_decl(decl),
+      StmtKind::While { test, body } => self.compile_while_stmt(*test, *body, span),
+      StmtKind::Empty => Ok(()),
+      StmtKind::Decl(_) => Ok(()),
+      StmtKind::With { .. } => Err(unsupported_syntax_range(
+        stmt.span,
+        "with statements introduce dynamic scope and are not supported",
+      )),
+      other => Err(unsupported_syntax_range(
+        stmt.span,
         format!("unsupported statement {other:?}"),
       )),
     }
   }
+}
+
+pub fn translate_body(
+  program: &ProgramCompiler,
+  body_id: BodyId,
+) -> OptimizeResult<(Vec<Inst>, Counter, Counter)> {
+  let mut compiler = HirSourceToInst::new(program, body_id);
+  for stmt in root_statements(compiler.body) {
+    compiler.compile_stmt(stmt)?;
+  }
+  Ok((compiler.out, compiler.c_label, compiler.c_temp))
 }

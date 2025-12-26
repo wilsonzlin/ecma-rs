@@ -109,7 +109,11 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
           };
           if let Some(ex) = c_inst.remove_phi(cur) {
             for &parent in parents.iter() {
-              c_inst.insert_phi(parent, ex.clone());
+              if let Some(idx) = c_inst.labels.iter().position(|&l| l == parent) {
+                c_inst.args[idx] = ex.clone();
+              } else {
+                c_inst.insert_phi(parent, ex.clone());
+              }
             }
           };
         }

@@ -1,10 +1,11 @@
-#![cfg(all(feature = "emit", feature = "decompile"))]
-
+#[path = "common/mod.rs"]
+mod common;
+use common::compile_source;
 use emit_js::EmitOptions;
-use optimize_js::{compile_source, decompile::program_to_js, DecompileOptions, TopLevelMode};
+use optimize_js::{decompile::program_to_js, DecompileOptions, TopLevelMode};
 
 fn compile_and_emit(src: &str, mode: TopLevelMode) -> Vec<u8> {
-  let program = compile_source(src, mode, false).expect("compile input");
+  let program = compile_source(src, mode, false);
   program_to_js(
     &program,
     &DecompileOptions::default(),
@@ -22,7 +23,7 @@ fn assert_roundtrip(src: &str, mode: TopLevelMode) {
   let out_str = String::from_utf8(out1).expect("emitted JS should be UTF-8");
 
   parse_js::parse(&out_str).expect("emitted JS should parse");
-  compile_source(&out_str, mode, false).expect("emitted JS should recompile");
+  compile_source(&out_str, mode, false);
 }
 
 #[test]
