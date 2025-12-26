@@ -15,7 +15,10 @@ use std::path::Path;
 
 /// Normalize a path-like string into a canonical, forward-slashed virtual path.
 pub fn normalize_ts_path(raw: &str) -> String {
-  let path = raw.replace('\\', "/");
+  let mut path = raw.replace('\\', "/");
+  if let Some(stripped) = path.strip_prefix("//?/") {
+    path = stripped.to_string();
+  }
   let mut rooted = path.starts_with('/');
   let mut rest = path.trim_start_matches('/');
 
@@ -98,5 +101,10 @@ mod tests {
   fn collapses_to_root_when_empty() {
     assert_eq!(normalize_ts_path(".."), "/");
     assert_eq!(normalize_ts_path("././"), "/");
+  }
+
+  #[test]
+  fn strips_windows_extended_prefix() {
+    assert_eq!(normalize_ts_path(r"\\?\C:\foo\bar.ts"), "c:/foo/bar.ts");
   }
 }
