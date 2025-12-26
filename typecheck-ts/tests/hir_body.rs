@@ -7,7 +7,7 @@ use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use typecheck_ts::check::caches::CheckerCaches;
 use typecheck_ts::check::hir_body::check_body;
 use typecheck_ts::{
-  parse_call_count, reset_parse_call_count, BodyId, ExprId, Program, TypeKindSummary,
+  parse_call_count, reset_parse_call_count, BodyId, ExprId, FileKey, Program, TypeKindSummary,
 };
 use types_ts_interned::{TypeKind, TypeStore};
 
@@ -17,11 +17,11 @@ struct NoLibHost {
 }
 
 impl typecheck_ts::Host for NoLibHost {
-  fn file_text(&self, _file: FileId) -> Result<std::sync::Arc<str>, typecheck_ts::HostError> {
+  fn file_text(&self, _file: &FileKey) -> Result<std::sync::Arc<str>, typecheck_ts::HostError> {
     Ok(std::sync::Arc::from(self.text))
   }
 
-  fn resolve(&self, _from: FileId, _spec: &str) -> Option<FileId> {
+  fn resolve(&self, _from: &FileKey, _spec: &str) -> Option<FileKey> {
     None
   }
 
@@ -183,10 +183,12 @@ fn program_expr_at_matches_body_checker() {
   reset_parse_call_count();
   let source = "export function h(v: number) { return (v + 1) * 2; }";
   let host = NoLibHost { text: source };
-  let program = Program::new(host.clone(), vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host.clone(), vec![key.clone()]);
   let _ = program.check();
 
-  let exports = program.exports_of(FileId(0));
+  let file_id = program.file_id(&key).expect("file id");
+  let exports = program.exports_of(file_id);
   let body = program
     .body_of_def(exports.get("h").and_then(|e| e.def).expect("def for h"))
     .expect("body for h");
@@ -194,7 +196,7 @@ fn program_expr_at_matches_body_checker() {
   let offset = source.find("v + 1").unwrap() as u32 + 1;
 
   let (_res_expr, res_ty) = result.expr_at(offset).expect("body result expr");
-  let (found_body, found_expr) = program.expr_at(FileId(0), offset).expect("program expr");
+  let (found_body, found_expr) = program.expr_at(file_id, offset).expect("program expr");
   assert_eq!(found_body, body);
   let found_span = result
     .expr_span(found_expr)
@@ -204,7 +206,7 @@ fn program_expr_at_matches_body_checker() {
       && (offset < found_span.end || (found_span.is_empty() && offset == found_span.start))
   );
 
-  let ty_at = program.type_at(FileId(0), offset).expect("program type at");
+  let ty_at = program.type_at(file_id, offset).expect("program type at");
   assert_eq!(ty_at, res_ty);
   assert_eq!(
     Some(res_ty),
@@ -313,9 +315,11 @@ fn program_check_body_avoids_reparse() {
   let host = NoLibHost {
     text: "export function f(a: number) { return a + 1; }",
   };
-  let program = typecheck_ts::Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = typecheck_ts::Program::new(host, vec![key.clone()]);
   let _ = program.check();
-  let exports = program.exports_of(FileId(0));
+  let file_id = program.file_id(&key).expect("file id");
+  let exports = program.exports_of(file_id);
   let body = program
     .body_of_def(exports.get("f").and_then(|e| e.def).expect("def"))
     .expect("body");
@@ -332,7 +336,8 @@ fn program_check_body_avoids_reparse() {
 fn program_type_at_prefers_literal_in_call_arguments() {
   let source = "function add(a: number, b: number): number { return a + b; }\nconst result = add(1);";
   let host = NoLibHost { text: source };
-  let program = Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   let call_diags: Vec<_> = diagnostics
     .iter()
@@ -341,7 +346,8 @@ fn program_type_at_prefers_literal_in_call_arguments() {
   assert_eq!(call_diags.len(), 1, "should report one overload error");
   let start = source.find("(1)").expect("argument snippet start") as u32;
   let offset = start + (("(1)").len() as u32 / 2);
-  let ty = program.type_at(FileId(0), offset).expect("type at argument");
+  let file_id = program.file_id(&key).expect("file id");
+  let ty = program.type_at(file_id, offset).expect("type at argument");
   let rendered = program.display_type(ty).to_string();
   assert_eq!(rendered, "number");
 }
@@ -351,9 +357,11 @@ fn program_type_of_expr_returns_interned_unknown_for_missing_expr() {
   let host = NoLibHost {
     text: "export const value = 1;",
   };
-  let program = Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![key.clone()]);
   let _ = program.check();
-  let body = program.file_body(FileId(0)).expect("top-level body");
+  let file_id = program.file_id(&key).expect("file id");
+  let body = program.file_body(file_id).expect("top-level body");
   let ty = program.type_of_expr(body, ExprId(9999));
   assert_eq!(program.type_kind(ty), TypeKindSummary::Unknown);
 }

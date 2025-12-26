@@ -146,6 +146,78 @@ pub use program::*;
 pub use snapshot::*;
 pub use type_queries::*;
 
+use std::collections::HashMap;
+use std::sync::Arc;
+
+/// Simple in-memory host used by tests and examples.
+#[derive(Clone, Default)]
+pub struct MemoryHost {
+  files: HashMap<FileKey, Arc<str>>,
+  edges: HashMap<(FileKey, String), FileKey>,
+  options: lib_support::CompilerOptions,
+  libs: Vec<lib_support::LibFile>,
+}
+
+impl MemoryHost {
+  /// Create a host with default compiler options.
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  /// Set explicit compiler options for this host.
+  pub fn with_options(options: lib_support::CompilerOptions) -> Self {
+    MemoryHost {
+      options,
+      ..Default::default()
+    }
+  }
+
+  /// Insert a file keyed by [`FileKey`].
+  pub fn insert(&mut self, key: FileKey, source: impl Into<Arc<str>>) {
+    self.files.insert(key, source.into());
+  }
+
+  /// Link a module specifier from one file to another.
+  pub fn link(&mut self, from: FileKey, specifier: &str, to: FileKey) {
+    self.edges.insert((from, specifier.to_string()), to);
+  }
+
+  /// Add a library file that will be returned from [`Host::lib_files`].
+  pub fn add_lib(&mut self, lib: lib_support::LibFile) {
+    self.libs.push(lib);
+  }
+}
+
+impl Host for MemoryHost {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
+    self
+      .files
+      .get(file)
+      .cloned()
+      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+  }
+
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+    self.edges.get(&(from.clone(), specifier.to_string())).cloned()
+  }
+
+  fn compiler_options(&self) -> lib_support::CompilerOptions {
+    self.options.clone()
+  }
+
+  fn lib_files(&self) -> Vec<lib_support::LibFile> {
+    self.libs.clone()
+  }
+
+  fn file_kind(&self, file: &FileKey) -> lib_support::FileKind {
+    if self.libs.iter().any(|lib| &lib.key == file) {
+      lib_support::FileKind::Dts
+    } else {
+      lib_support::FileKind::Ts
+    }
+  }
+}
+
 /// Generic type checking helpers (instantiation and inference).
 ///
 /// This module intentionally re-exports internal building blocks from the main

@@ -1,4 +1,4 @@
-use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange};
+use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BodyKind as HirBodyKind,
@@ -49,9 +49,9 @@ use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManag
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
   /// Return the full text for a file.
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError>;
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError>;
   /// Resolve a module specifier relative to `from`.
-  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId>;
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey>;
 
   /// Compiler options influencing lib selection and strictness.
   fn compiler_options(&self) -> CompilerOptions {
@@ -64,7 +64,7 @@ pub trait Host: Send + Sync + 'static {
   }
 
   /// Kind of the file; defaults to TypeScript.
-  fn file_kind(&self, _file: FileId) -> FileKind {
+  fn file_kind(&self, _file: &FileKey) -> FileKind {
     FileKind::Ts
   }
 }
@@ -78,13 +78,13 @@ pub mod semantic_js {
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
     fn from(id: ::semantic_js::ts::SymbolId) -> Self {
-      SymbolId(id.0)
+      SymbolId(id.0.try_into().unwrap_or(u32::MAX))
     }
   }
 
   impl From<SymbolId> for ::semantic_js::ts::SymbolId {
     fn from(id: SymbolId) -> Self {
-      ::semantic_js::ts::SymbolId(id.0)
+      ::semantic_js::ts::SymbolId(id.0.into())
     }
   }
 }
@@ -414,7 +414,7 @@ fn convert_type_for_display(
 /// Primary entry point for parsing and type checking.
 pub struct Program {
   host: Arc<dyn Host>,
-  roots: Vec<FileId>,
+  roots: Vec<FileKey>,
   cancelled: AtomicBool,
   state: std::sync::Mutex<ProgramState>,
   query_stats: QueryStatsCollector,
@@ -428,14 +428,14 @@ const _: fn() = || {
 
 impl Program {
   /// Create a new program from a host and root file list.
-  pub fn new(host: impl Host, roots: Vec<FileId>) -> Program {
+  pub fn new(host: impl Host, roots: Vec<FileKey>) -> Program {
     Program::with_lib_manager(host, roots, Arc::new(LibManager::new()))
   }
 
   /// Create a new program with a provided lib manager (useful for observing invalidation in tests).
   pub fn with_lib_manager(
     host: impl Host,
-    roots: Vec<FileId>,
+    roots: Vec<FileKey>,
     lib_manager: Arc<LibManager>,
   ) -> Program {
     let query_stats = QueryStatsCollector::default();
@@ -456,6 +456,26 @@ impl Program {
         self.record_fatal(fatal);
         CompilerOptions::default()
       }
+    }
+  }
+
+  /// Resolve a file key to its internal [`FileId`], if loaded.
+  pub fn file_id(&self, key: &FileKey) -> Option<FileId> {
+    let state = self.lock_state();
+    state.file_id_for_key(key)
+  }
+
+  /// Resolve a loaded [`FileId`] back to its [`FileKey`], if available.
+  pub fn file_key(&self, file: FileId) -> Option<FileKey> {
+    let state = self.lock_state();
+    state.file_key_for_id(file)
+  }
+
+  /// All known file IDs in this program.
+  pub fn files(&self) -> Vec<FileId> {
+    match self.with_analyzed_state(|state| Ok(state.files.keys().copied().collect())) {
+      Ok(files) => files,
+      Err(_) => Vec::new(),
     }
   }
 
@@ -1107,7 +1127,11 @@ impl Program {
         .lib_texts
         .get(&file)
         .cloned()
-        .or_else(|| self.host.file_text(file).ok());
+        .or_else(|| {
+          state
+            .file_key_for_id(file)
+            .and_then(|key| self.host.file_text(&key).ok())
+        });
       let hash = if let Some(text) = text.as_ref() {
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
@@ -1217,7 +1241,11 @@ impl Program {
       schema_version: PROGRAM_SNAPSHOT_VERSION,
       tool_version: env!("CARGO_PKG_VERSION").to_string(),
       compiler_options: state.compiler_options.clone(),
-      roots: self.roots.clone(),
+      roots: self
+        .roots
+        .iter()
+        .filter_map(|key| state.file_id_for_key(key))
+        .collect(),
       files,
       file_states,
       def_data,
@@ -1248,8 +1276,12 @@ impl Program {
       snapshot.schema_version, PROGRAM_SNAPSHOT_VERSION,
       "Program snapshot schema mismatch"
     );
-    let program =
-      Program::with_lib_manager(host, snapshot.roots.clone(), Arc::new(LibManager::new()));
+    let root_keys: Vec<FileKey> = snapshot
+      .roots
+      .iter()
+      .map(|id| FileKey::new(format!("file{}.ts", id.0)))
+      .collect();
+    let program = Program::with_lib_manager(host, root_keys, Arc::new(LibManager::new()));
     {
       let mut state = program.lock_state();
       state.analyzed = true;
@@ -1257,6 +1289,9 @@ impl Program {
       state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
       for file in snapshot.files.into_iter() {
+        let key = FileKey::new(format!("file{}.ts", file.file.0));
+        state.file_keys.insert(key.clone(), file.file);
+        state.file_ids.insert(file.file, key.clone());
         state.file_kinds.insert(file.file, file.kind);
         if let Some(text) = file.text {
           state.lib_texts.insert(file.file, Arc::from(text));
@@ -1365,14 +1400,16 @@ struct FileState {
 
 struct HostResolver {
   host: Arc<dyn Host>,
+  file_keys: HashMap<FileId, FileKey>,
+  file_ids: HashMap<FileKey, FileId>,
 }
 
 impl sem_ts::Resolver for HostResolver {
   fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
-    self
-      .host
-      .resolve(FileId(from.0), specifier)
-      .map(|f| sem_ts::FileId(f.0))
+    let from_key = self.file_keys.get(&FileId(from.0))?;
+    let target_key = self.host.resolve(from_key, specifier)?;
+    let target_id = self.file_ids.get(&target_key)?;
+    Some(sem_ts::FileId(target_id.0))
   }
 }
 
@@ -1863,6 +1900,8 @@ struct ProgramState {
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
+  file_keys: HashMap<FileKey, FileId>,
+  file_ids: HashMap<FileId, FileKey>,
   file_kinds: HashMap<FileId, FileKind>,
   lib_texts: HashMap<FileId, Arc<str>>,
   global_bindings: HashMap<String, SymbolBinding>,
@@ -1873,6 +1912,7 @@ struct ProgramState {
   interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
   builtin: BuiltinTypes,
   query_stats: QueryStatsCollector,
+  next_file: u32,
   next_def: u32,
   next_body: u32,
   next_symbol: u32,
@@ -1900,6 +1940,8 @@ impl ProgramState {
       body_results: HashMap::new(),
       symbol_occurrences: HashMap::new(),
       symbol_to_def: HashMap::new(),
+      file_keys: HashMap::new(),
+      file_ids: HashMap::new(),
       file_kinds: HashMap::new(),
       lib_texts: HashMap::new(),
       global_bindings: HashMap::new(),
@@ -1910,11 +1952,31 @@ impl ProgramState {
       interned_type_params: HashMap::new(),
       builtin,
       query_stats,
+      next_file: 0,
       next_def: 0,
       next_body: 0,
       next_symbol: 0,
       type_stack: Vec::new(),
     }
+  }
+
+  fn file_id_for_key(&self, key: &FileKey) -> Option<FileId> {
+    self.file_keys.get(key).copied()
+  }
+
+  fn file_key_for_id(&self, id: FileId) -> Option<FileKey> {
+    self.file_ids.get(&id).cloned()
+  }
+
+  fn intern_file_key(&mut self, key: FileKey) -> FileId {
+    if let Some(id) = self.file_keys.get(&key) {
+      return *id;
+    }
+    let id = FileId(self.next_file);
+    self.next_file += 1;
+    self.file_keys.insert(key.clone(), id);
+    self.file_ids.insert(id, key);
+    id
   }
 
   fn interned_unknown(&self) -> TypeId {
@@ -1925,7 +1987,7 @@ impl ProgramState {
       .unwrap_or(self.builtin.unknown)
   }
 
-  fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileId], cancelled: &AtomicBool) {
+  fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileKey], cancelled: &AtomicBool) {
     if let Err(fatal) = self.ensure_analyzed_result(host, roots, cancelled) {
       self.diagnostics.push(fatal_to_diagnostic(fatal));
     }
@@ -1934,17 +1996,24 @@ impl ProgramState {
   fn ensure_analyzed_result(
     &mut self,
     host: &Arc<dyn Host>,
-    roots: &[FileId],
+    roots: &[FileKey],
     cancelled: &AtomicBool,
   ) -> Result<(), FatalError> {
     if self.analyzed {
       return Ok(());
     }
     let libs = self.collect_libraries(host.as_ref());
-    let lib_ids: Vec<FileId> = libs.iter().map(|l| l.id).collect();
+    let lib_ids: Vec<FileId> = libs
+      .iter()
+      .map(|l| self.intern_file_key(l.key.clone()))
+      .collect();
     let lib_id_set: HashSet<FileId> = lib_ids.iter().copied().collect();
     self.process_libs(&libs, host);
-    let mut queue: VecDeque<FileId> = roots.iter().copied().collect();
+    let root_ids: Vec<FileId> = roots
+      .iter()
+      .map(|key| self.intern_file_key(key.clone()))
+      .collect();
+    let mut queue: VecDeque<FileId> = root_ids.iter().copied().collect();
     let mut seen: HashSet<FileId> = HashSet::new();
     while let Some(file) = queue.pop_front() {
       if cancelled.load(Ordering::Relaxed) {
@@ -1956,10 +2025,13 @@ impl ProgramState {
       if lib_id_set.contains(&file) {
         continue;
       }
+      let Some(file_key) = self.file_key_for_id(file) else {
+        continue;
+      };
       self
         .file_kinds
         .entry(file)
-        .or_insert_with(|| host.file_kind(file));
+        .or_insert_with(|| host.file_kind(&file_key));
       let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
       let text = self.load_text(file, host)?;
       let parse_span = QuerySpan::enter(
@@ -2023,7 +2095,7 @@ impl ProgramState {
       }
     }
     if !self.sem_hir.is_empty() {
-      self.compute_semantics(host, roots, &lib_ids);
+      self.compute_semantics(host, &root_ids, &lib_ids);
     }
     self.resolve_reexports();
     self.recompute_global_bindings();
@@ -2035,7 +2107,7 @@ impl ProgramState {
   fn ensure_interned_types(
     &mut self,
     host: &Arc<dyn Host>,
-    roots: &[FileId],
+    roots: &[FileKey],
     cancelled: &AtomicBool,
   ) -> Result<(), FatalError> {
     if self.interned_store.is_some() {
@@ -2070,16 +2142,22 @@ impl ProgramState {
           }
         }
       }
+      let file_key = self.file_key_for_id(*file);
+      let file_ids_map = self.file_keys.clone();
+      let key_to_id = move |key: &FileKey| file_ids_map.get(key).copied();
       let mut lowerer = check::decls::HirDeclLowerer::new(
         Arc::clone(&store),
         &lowered.types,
         self.semantics.as_ref(),
         def_by_name.clone(),
         *file,
+        file_key.clone(),
         local_defs,
         &mut self.diagnostics,
         Some(&def_map),
         Some(&def_by_name),
+        Some(host.as_ref()),
+        Some(&key_to_id),
       );
       for def in lowered.defs.iter() {
         let Some(info) = def.type_info.as_ref() else {
@@ -2123,17 +2201,18 @@ impl ProgramState {
     let mut dts_libs = Vec::new();
     for lib in libs.into_iter() {
       let is_dts = lib.kind == FileKind::Dts || lib.name.ends_with(".d.ts");
+      let file_id = self.intern_file_key(lib.key.clone());
       if !is_dts {
         self.diagnostics.push(codes::NON_DTS_LIB.warning(
           format!(
             "Library '{}' is not a .d.ts file; it will be ignored for global declarations.",
             lib.name
           ),
-          Span::new(lib.id, TextRange::new(0, 0)),
+          Span::new(file_id, TextRange::new(0, 0)),
         ));
         continue;
       }
-      self.file_kinds.insert(lib.id, FileKind::Dts);
+      self.file_kinds.insert(file_id, FileKind::Dts);
       dts_libs.push(lib);
     }
 
@@ -2151,20 +2230,22 @@ impl ProgramState {
 
   fn process_libs(&mut self, libs: &[LibFile], host: &Arc<dyn Host>) {
     for lib in libs {
-      self.lib_texts.insert(lib.id, lib.text.clone());
-      let parsed = parse_file(lib.id, FileKind::Dts, lib.text.as_ref());
+      let file_id = self.intern_file_key(lib.key.clone());
+      self.lib_texts.insert(file_id, lib.text.clone());
+      let parsed = parse_file(file_id, FileKind::Dts, lib.text.as_ref());
       match parsed {
         Ok(ast) => {
           let ast = Arc::new(ast);
-          self.asts.insert(lib.id, Arc::clone(&ast));
-          let (lowered, lower_diags) = lower_hir_with_diagnostics(lib.id, HirFileKind::Dts, &ast);
+          self.asts.insert(file_id, Arc::clone(&ast));
+          let (lowered, lower_diags) =
+            lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
           let sem_hir = sem_hir_from_lower(&lowered);
-          self.map_hir_bodies(lib.id, &lowered);
+          self.map_hir_bodies(file_id, &lowered);
           let mut queue = VecDeque::new();
-          self.bind_file(lib.id, ast.as_ref(), host, &mut queue);
-          self.hir_lowered.insert(lib.id, lowered);
-          self.sem_hir.insert(lib.id, sem_hir);
+          self.bind_file(file_id, ast.as_ref(), host, &mut queue);
+          self.hir_lowered.insert(file_id, lowered);
+          self.sem_hir.insert(file_id, sem_hir);
         }
         Err(err) => {
           self.diagnostics.push(err);
@@ -2177,7 +2258,10 @@ impl ProgramState {
     if let Some(text) = self.lib_texts.get(&file) {
       return Ok(text.clone());
     }
-    host.file_text(file)
+    let Some(key) = self.file_key_for_id(file) else {
+      return Err(HostError::new(format!("missing file key for {file:?}")));
+    };
+    host.file_text(&key)
   }
 
   fn recompute_global_bindings(&mut self) {
@@ -2234,6 +2318,8 @@ impl ProgramState {
   fn compute_semantics(&mut self, host: &Arc<dyn Host>, roots: &[FileId], libs: &[FileId]) {
     let resolver = HostResolver {
       host: Arc::clone(host),
+      file_keys: self.file_ids.clone(),
+      file_ids: self.file_keys.clone(),
     };
     let mut sem_roots: Vec<sem_ts::FileId> = roots
       .iter()
@@ -2819,11 +2905,12 @@ impl ProgramState {
           );
         }
         Stmt::ExportList(export_list) => {
-          let resolved = export_list
-            .stx
-            .from
-            .as_ref()
-            .and_then(|module| host.resolve(file, module));
+          let resolved = export_list.stx.from.as_ref().and_then(|module| {
+            self
+              .file_key_for_id(file)
+              .and_then(|file_key| host.resolve(&file_key, module))
+              .map(|target| self.intern_file_key(target))
+          });
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -2911,7 +2998,10 @@ impl ProgramState {
         }
         Stmt::Import(import_stmt) => {
           let module = import_stmt.stx.module.clone();
-          let resolved = host.resolve(file, &module);
+          let resolved = self
+            .file_key_for_id(file)
+            .and_then(|file_key| host.resolve(&file_key, &module))
+            .map(|target| self.intern_file_key(target));
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -3360,6 +3450,8 @@ impl ProgramState {
         exprs: Vec::new(),
         stmts: Vec::new(),
         pats: Vec::new(),
+        root_stmts: Vec::new(),
+        function: None,
         expr_types: None,
       });
       synthetic.as_ref()
@@ -3736,6 +3828,26 @@ impl ProgramState {
   fn resolve_import_symbol(&mut self, import: &ImportData) -> Option<semantic_js::SymbolId> {
     let exports = self.exports_of_file(import.from);
     exports.get(&import.original).map(|entry| entry.symbol)
+  }
+
+  fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
+    let Some(kind) = self.def_data.get(&def).map(|d| &d.kind) else {
+      return 3;
+    };
+    match ns {
+      sem_ts::Namespace::VALUE => match kind {
+        DefKind::Function(_) => 0,
+        DefKind::Var(_) => 1,
+        _ => 2,
+      },
+      sem_ts::Namespace::NAMESPACE => 2,
+      sem_ts::Namespace::TYPE => match kind {
+        DefKind::Interface(_) => 0,
+        DefKind::TypeAlias(_) => 1,
+        _ => 2,
+      },
+      _ => 3,
+    }
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {

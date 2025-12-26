@@ -5,7 +5,7 @@ use ordered_float::OrderedFloat;
 use typecheck_ts::check::caches::{CheckerCacheStats, CheckerCaches};
 use typecheck_ts::check::instantiate::InstantiationCache;
 use typecheck_ts::lib_support::{CacheMode, CacheOptions, CompilerOptions};
-use typecheck_ts::{CacheKind, FileId, Host, HostError, Program, QueryStatsCollector};
+use typecheck_ts::{CacheKind, FileId, FileKey, Host, HostError, Program, QueryStatsCollector};
 use types_ts_interned::{
   DefId, Param, RelateCtx, Signature, SignatureId, TypeEvaluator, TypeId, TypeKind, TypeOptions,
   TypeParamId, TypeStore,
@@ -261,7 +261,7 @@ fn cache_stats_are_recorded_for_profiling() {
 
 #[derive(Clone)]
 struct CacheHost {
-  files: HashMap<FileId, Arc<str>>,
+  files: HashMap<FileKey, Arc<str>>,
   options: CompilerOptions,
 }
 
@@ -273,13 +273,13 @@ impl CacheHost {
     }
   }
 
-  fn insert(&mut self, file: FileId, source: &str) {
+  fn insert(&mut self, file: FileKey, source: &str) {
     self.files.insert(file, Arc::from(source.to_string()));
   }
 }
 
 impl Host for CacheHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
       .get(&file)
@@ -287,7 +287,7 @@ impl Host for CacheHost {
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
+  fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
     None
   }
 
@@ -317,9 +317,10 @@ fn program_cache_stats_report_evictions() {
     ..CompilerOptions::default()
   };
   let mut host = CacheHost::new(options);
-  host.insert(FileId(0), &relation_heavy_source());
+  let key = FileKey::new("entry.ts");
+  host.insert(key.clone(), &relation_heavy_source());
 
-  let program = Program::new(host, vec![FileId(0)]);
+  let program = Program::new(host, vec![key]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -355,12 +356,14 @@ fn program_cache_evictions_are_deterministic() {
     ..CompilerOptions::default()
   };
   let mut host_a = CacheHost::new(options.clone());
-  host_a.insert(FileId(0), &relation_heavy_source());
+  let key_a = FileKey::new("entry_a.ts");
+  host_a.insert(key_a.clone(), &relation_heavy_source());
   let mut host_b = CacheHost::new(options);
-  host_b.insert(FileId(0), &relation_heavy_source());
+  let key_b = FileKey::new("entry_b.ts");
+  host_b.insert(key_b.clone(), &relation_heavy_source());
 
-  let program_a = Program::new(host_a, vec![FileId(0)]);
-  let program_b = Program::new(host_b, vec![FileId(0)]);
+  let program_a = Program::new(host_a, vec![key_a]);
+  let program_b = Program::new(host_b, vec![key_b]);
 
   let diags_a = program_a.check();
   let diags_b = program_b.check();
@@ -403,15 +406,15 @@ impl SingleFileHost {
 }
 
 impl Host for SingleFileHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
-    if file == FileId(0) {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
+    if file.as_str() == "entry.ts" {
       Ok(self.text.clone())
     } else {
       Err(HostError::new(format!("missing file {file:?}")))
     }
   }
 
-  fn resolve(&self, _from: FileId, _spec: &str) -> Option<FileId> {
+  fn resolve(&self, _from: &FileKey, _spec: &str) -> Option<FileKey> {
     None
   }
 
@@ -443,14 +446,16 @@ fn program_query_stats_include_shared_caches() {
     ..Default::default()
   };
   let host = SingleFileHost::new(source, options);
-  let program = Program::new(host, vec![FileId(0)]);
+  let root = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![root.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "expected clean check run: {diagnostics:#?}"
   );
 
-  let defs = program.definitions_in_file(FileId(0));
+  let file_id = program.file_id(&root).expect("file id");
+  let defs = program.definitions_in_file(file_id);
   for def in &defs {
     let ty = program.type_of_def_interned(*def);
     let _ = program.type_kind(ty);
@@ -491,14 +496,16 @@ fn program_accumulates_per_body_cache_stats() {
     ..Default::default()
   };
   let host = SingleFileHost::new(source, options);
-  let program = Program::new(host, vec![FileId(0)]);
+  let root = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![root.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "expected clean check run: {diagnostics:#?}"
   );
 
-  let defs = program.definitions_in_file(FileId(0));
+  let file_id = program.file_id(&root).expect("file id");
+  let defs = program.definitions_in_file(file_id);
   for _ in 0..2 {
     for def in &defs {
       let ty = program.type_of_def_interned(*def);

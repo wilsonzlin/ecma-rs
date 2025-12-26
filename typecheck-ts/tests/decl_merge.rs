@@ -1,21 +1,25 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::{FileId, Host, HostError, Program};
+use typecheck_ts::{FileId, FileKey, Host, HostError, Program};
+
+fn fk(id: u32) -> FileKey {
+  FileKey::new(format!("file{id}.ts"))
+}
 
 #[derive(Default)]
 struct MemoryHost {
-  files: HashMap<FileId, Arc<str>>,
+  files: HashMap<FileKey, Arc<str>>,
 }
 
 impl MemoryHost {
-  fn insert(&mut self, id: FileId, source: &str) {
-    self.files.insert(id, Arc::from(source.to_string()));
+  fn insert(&mut self, key: FileKey, source: &str) {
+    self.files.insert(key, Arc::from(source.to_string()));
   }
 }
 
 impl Host for MemoryHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
       .get(&file)
@@ -23,7 +27,7 @@ impl Host for MemoryHost {
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, _from: FileId, _spec: &str) -> Option<FileId> {
+  fn resolve(&self, _from: &FileKey, _spec: &str) -> Option<FileKey> {
     None
   }
 }
@@ -31,20 +35,22 @@ impl Host for MemoryHost {
 #[test]
 fn interfaces_merge_members() {
   let mut host = MemoryHost::default();
+  let key = FileKey::new("merge.ts");
   host.insert(
-    FileId(0),
+    key.clone(),
     "interface Foo { a: number; }\ninterface Foo { b: string; }\nconst value: Foo = { a: 1, b: \"ok\" };",
   );
 
-  let program = Program::new(host, vec![FileId(0)]);
+  let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
+  let file_id = program.file_id(&key).expect("file id");
   let def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| program.def_name(*d) == Some("Foo".to_string()))
     .expect("interface Foo");
@@ -59,19 +65,21 @@ fn interfaces_merge_members() {
 #[test]
 fn namespaces_merge_across_declarations() {
   let mut host = MemoryHost::default();
+  let key = FileKey::new("ns.ts");
   host.insert(
-    FileId(1),
+    key.clone(),
     "namespace N { const a = 1; }\nnamespace N { const b = 2; }\nexport { N };",
   );
 
-  let program = Program::new(host, vec![FileId(1)]);
+  let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let exports = program.exports_of(FileId(1));
+  let file_id = program.file_id(&key).expect("file id");
+  let exports = program.exports_of(file_id);
   let ns = exports.get("N").expect("namespace export");
   let ty = ns.type_id.expect("namespace type");
   let rendered = program.display_type(ty).to_string();
@@ -84,12 +92,13 @@ fn namespaces_merge_across_declarations() {
 #[test]
 fn value_and_namespace_merge_callable_and_members() {
   let mut host = MemoryHost::default();
+  let key = fk(2);
   host.insert(
-    FileId(2),
+    key.clone(),
     "function foo() { return 1; }\nnamespace foo { const bar: string = \"ok\"; }\nexport { foo };",
   );
 
-  let program = Program::new(host, vec![FileId(2)]);
+  let program = Program::new(host, vec![key.clone()]);
   println!("starting check value_and_namespace_merge_callable_and_members");
   let diagnostics = program.check();
   println!("finished check with {len} diagnostics", len = diagnostics.len());
@@ -98,8 +107,9 @@ fn value_and_namespace_merge_callable_and_members() {
     "unexpected diagnostics: {diagnostics:?}"
   );
 
+  let file_id = program.file_id(&key).expect("file id");
   let def = program
-    .definitions_in_file(FileId(2))
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| {
       program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some()
@@ -121,16 +131,18 @@ fn value_and_namespace_merge_callable_and_members() {
 #[test]
 fn merged_interfaces_expose_members_interned() {
   let mut host = MemoryHost::default();
+  let key = fk(3);
   host.insert(
-    FileId(3),
+    key.clone(),
     "interface Foo { a: number; }\ninterface Foo { b: string; }",
   );
 
-  let program = Program::new(host, vec![FileId(3)]);
+  let program = Program::new(host, vec![key.clone()]);
   let _ = program.check();
 
+  let file_id = program.file_id(&key).expect("file id");
   let def = program
-    .definitions_in_file(FileId(3))
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| program.def_name(*d) == Some("Foo".to_string()))
     .expect("interface Foo");
@@ -152,16 +164,18 @@ fn merged_interfaces_expose_members_interned() {
 #[test]
 fn merged_namespaces_expose_members_interned() {
   let mut host = MemoryHost::default();
+  let key = fk(4);
   host.insert(
-    FileId(4),
+    key.clone(),
     "namespace N { const a = 1; }\nnamespace N { const b = 2; }",
   );
 
-  let program = Program::new(host, vec![FileId(4)]);
+  let program = Program::new(host, vec![key.clone()]);
   let _ = program.check();
 
+  let file_id = program.file_id(&key).expect("file id");
   let def = program
-    .definitions_in_file(FileId(4))
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| program.def_name(*d) == Some("N".to_string()))
     .expect("namespace N");
@@ -183,16 +197,18 @@ fn merged_namespaces_expose_members_interned() {
 #[test]
 fn value_namespace_merge_keeps_callability_and_members_interned() {
   let mut host = MemoryHost::default();
+  let key = fk(5);
   host.insert(
-    FileId(5),
+    key.clone(),
     "function foo(): number { return 1; }\nnamespace foo { const bar = \"ok\"; }",
   );
 
-  let program = Program::new(host, vec![FileId(5)]);
+  let program = Program::new(host, vec![key.clone()]);
   let _ = program.check();
 
+  let file_id = program.file_id(&key).expect("file id");
   let def = program
-    .definitions_in_file(FileId(5))
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| {
       program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some()
@@ -215,19 +231,21 @@ fn value_namespace_merge_keeps_callability_and_members_interned() {
 #[test]
 fn namespace_then_value_prefers_callable_def_and_merges_members() {
   let mut host = MemoryHost::default();
+  let key = fk(6);
   host.insert(
-    FileId(6),
+    key.clone(),
     "namespace foo { const bar = 1; }\nfunction foo() { return foo.bar; }\nexport { foo };",
   );
 
-  let program = Program::new(host, vec![FileId(6)]);
+  let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let defs = program.definitions_in_file(FileId(6));
+  let file_id = program.file_id(&key).expect("file id");
+  let defs = program.definitions_in_file(file_id);
   let func_def = defs
     .iter()
     .copied()

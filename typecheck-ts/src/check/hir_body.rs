@@ -891,7 +891,9 @@ impl<'a> Checker<'a> {
           &self.relate,
           callee_ty,
           &arg_types,
+          None,
           &type_params,
+          None,
           span,
         );
         for diag in &resolution.diagnostics {

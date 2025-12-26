@@ -1,25 +1,29 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use typecheck_ts::{codes, FileId, Host, HostError, Program, TextRange};
+use typecheck_ts::{codes, FileId, FileKey, Host, HostError, Program, TextRange};
+
+fn fk(id: u32) -> FileKey {
+  FileKey::new(format!("file{id}.ts"))
+}
 
 #[derive(Default)]
 struct MemoryHost {
-  files: HashMap<FileId, Arc<str>>,
-  edges: HashMap<(FileId, String), FileId>,
+  files: HashMap<FileKey, Arc<str>>,
+  edges: HashMap<(FileKey, String), FileKey>,
 }
 
 impl MemoryHost {
-  fn insert(&mut self, id: FileId, source: &str) {
-    self.files.insert(id, Arc::from(source.to_string()));
+  fn insert(&mut self, key: FileKey, source: &str) {
+    self.files.insert(key, Arc::from(source.to_string()));
   }
 
-  fn link(&mut self, from: FileId, specifier: &str, to: FileId) {
+  fn link(&mut self, from: FileKey, specifier: &str, to: FileKey) {
     self.edges.insert((from, specifier.to_string()), to);
   }
 }
 
 impl Host for MemoryHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
       .get(&file)
@@ -27,40 +31,47 @@ impl Host for MemoryHost {
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, from: FileId, spec: &str) -> Option<FileId> {
-    self.edges.get(&(from, spec.to_string())).copied()
+  fn resolve(&self, from: &FileKey, spec: &str) -> Option<FileKey> {
+    self.edges.get(&(from.clone(), spec.to_string())).cloned()
   }
 }
 
 #[test]
 fn value_exports_follow_reexport_chain() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(0), "export const foo: number = 1;");
-  host.insert(FileId(1), "export { foo as bar } from \"./a\";");
-  host.insert(FileId(2), "export * from \"./b\";");
-  host.link(FileId(1), "./a", FileId(0));
-  host.link(FileId(2), "./b", FileId(1));
+  let key_a = fk(0);
+  let key_b = fk(1);
+  let key_c = fk(2);
+  host.insert(key_a.clone(), "export const foo: number = 1;");
+  host.insert(key_b.clone(), "export { foo as bar } from \"./a\";");
+  host.insert(key_c.clone(), "export * from \"./b\";");
+  host.link(key_b.clone(), "./a", key_a.clone());
+  host.link(key_c.clone(), "./b", key_b.clone());
 
-  let program = Program::new(host, vec![FileId(2)]);
+  let program = Program::new(host, vec![key_c.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let exports_b = program.exports_of(FileId(1));
+  let file_a = program.file_id(&key_a).expect("file a");
+  let file_b = program.file_id(&key_b).expect("file b");
+  let file_c = program.file_id(&key_c).expect("file c");
+
+  let exports_b = program.exports_of(file_b);
   let bar_entry_b = exports_b.get("bar").expect("bar export in module b");
   assert!(bar_entry_b.def.is_none());
   let bar_type_b = bar_entry_b.type_id.expect("type for bar in module b");
   assert_eq!(program.display_type(bar_type_b).to_string(), "number");
 
-  let exports_c = program.exports_of(FileId(2));
+  let exports_c = program.exports_of(file_c);
   let bar_entry_c = exports_c.get("bar").expect("bar export in module c");
   assert!(bar_entry_c.def.is_none());
   let bar_type_c = bar_entry_c.type_id.expect("type for bar in module c");
   assert_eq!(program.display_type(bar_type_c).to_string(), "number");
 
-  let exports_a = program.exports_of(FileId(0));
+  let exports_a = program.exports_of(file_a);
   let foo_entry = exports_a.get("foo").expect("foo export in module a");
   assert!(foo_entry.def.is_some());
   let foo_type = foo_entry.type_id.expect("type for foo");
@@ -70,16 +81,18 @@ fn value_exports_follow_reexport_chain() {
 #[test]
 fn default_export_has_type() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(10), "export default 42;");
+  let key = FileKey::new("default.ts");
+  host.insert(key.clone(), "export default 42;");
 
-  let program = Program::new(host, vec![FileId(10)]);
+  let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let exports = program.exports_of(FileId(10));
+  let file_id = program.file_id(&key).expect("file id");
+  let exports = program.exports_of(file_id);
   let default_entry = exports.get("default").expect("default export");
   assert!(default_entry.def.is_some());
   let ty = default_entry.type_id.expect("type for default");
@@ -89,18 +102,21 @@ fn default_export_has_type() {
 #[test]
 fn type_exports_propagate_through_reexports() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(20), "export type Foo = { a: string };");
-  host.insert(FileId(21), "export type { Foo } from \"./types\";");
-  host.link(FileId(21), "./types", FileId(20));
+  let key_types = fk(20);
+  let key_entry = fk(21);
+  host.insert(key_types.clone(), "export type Foo = { a: string };");
+  host.insert(key_entry.clone(), "export type { Foo } from \"./types\";");
+  host.link(key_entry.clone(), "./types", key_types.clone());
 
-  let program = Program::new(host, vec![FileId(21)]);
+  let program = Program::new(host, vec![key_entry.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let exports_types = program.exports_of(FileId(21));
+  let entry_id = program.file_id(&key_entry).expect("entry id");
+  let exports_types = program.exports_of(entry_id);
   let foo = exports_types.get("Foo").expect("Foo type export");
   assert!(foo.def.is_none(), "re-export should not point to local def");
   let foo_ty = foo.type_id.expect("type for Foo");
@@ -114,24 +130,25 @@ fn type_exports_propagate_through_reexports() {
 #[test]
 fn export_star_cycle_reaches_fixpoint() {
   let mut host = MemoryHost::default();
-  host.insert(
-    FileId(210),
-    "export * from \"./b\";\nexport * from \"./c\";",
-  );
-  host.insert(FileId(211), "export * from \"./a\";");
-  host.insert(FileId(212), "export const shared = 1;");
-  host.link(FileId(210), "./b", FileId(211));
-  host.link(FileId(210), "./c", FileId(212));
-  host.link(FileId(211), "./a", FileId(210));
+  let key_a = fk(210);
+  let key_b = fk(211);
+  let key_c = fk(212);
+  host.insert(key_a.clone(), "export * from \"./b\";\nexport * from \"./c\";");
+  host.insert(key_b.clone(), "export * from \"./a\";");
+  host.insert(key_c.clone(), "export const shared = 1;");
+  host.link(key_a.clone(), "./b", key_b.clone());
+  host.link(key_a.clone(), "./c", key_c.clone());
+  host.link(key_b.clone(), "./a", key_a.clone());
 
-  let program = Program::new(host, vec![FileId(210)]);
+  let program = Program::new(host, vec![key_a.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  for file in [FileId(210), FileId(211), FileId(212)] {
+  for key in [key_a, key_b, key_c] {
+    let file = program.file_id(&key).expect("file id");
     let exports = program.exports_of(file);
     let shared = exports.get("shared").expect("shared export present");
     let ty = shared.type_id.expect("type for shared");
@@ -142,18 +159,21 @@ fn export_star_cycle_reaches_fixpoint() {
 #[test]
 fn export_star_skips_default() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(220), "export default 1;\nexport const named = 2;");
-  host.insert(FileId(221), "export * from \"./a\";");
-  host.link(FileId(221), "./a", FileId(220));
+  let key_a = fk(220);
+  let key_b = fk(221);
+  host.insert(key_a.clone(), "export default 1;\nexport const named = 2;");
+  host.insert(key_b.clone(), "export * from \"./a\";");
+  host.link(key_b.clone(), "./a", key_a.clone());
 
-  let program = Program::new(host, vec![FileId(221)]);
+  let program = Program::new(host, vec![key_b.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let exports = program.exports_of(FileId(221));
+  let file_b = program.file_id(&key_b).expect("file id");
+  let exports = program.exports_of(file_b);
   assert!(
     exports.get("default").is_none(),
     "default should not be re-exported"
@@ -168,38 +188,41 @@ fn export_star_skips_default() {
 #[test]
 fn duplicate_export_reports_conflict() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(230), "export const foo = 1;");
-  host.insert(FileId(231), "export function foo(): number { return 2; }");
-  host.insert(
-    FileId(232),
-    "export * from \"./a\";\nexport { foo } from \"./b\";",
-  );
-  host.link(FileId(232), "./a", FileId(230));
-  host.link(FileId(232), "./b", FileId(231));
+  let key_a = fk(230);
+  let key_b = fk(231);
+  let key_c = fk(232);
+  host.insert(key_a.clone(), "export const foo = 1;");
+  host.insert(key_b.clone(), "export function foo(): number { return 2; }");
+  host.insert(key_c.clone(), "export * from \"./a\";\nexport { foo } from \"./b\";");
+  host.link(key_c.clone(), "./a", key_a.clone());
+  host.link(key_c.clone(), "./b", key_b.clone());
 
-  let program = Program::new(host, vec![FileId(232)]);
+  let program = Program::new(host, vec![key_c.clone()]);
   let diagnostics = program.check();
   assert_eq!(diagnostics.len(), 1, "expected a conflict diagnostic");
   assert_eq!(diagnostics[0].code.as_str(), "BIND1001");
-  assert_eq!(diagnostics[0].primary.file, FileId(232));
+  let file_c = program.file_id(&key_c).expect("file c");
+  assert_eq!(diagnostics[0].primary.file, file_c);
 }
 
 #[test]
 fn namespace_exports_include_namespace_slot() {
   let mut host = MemoryHost::default();
+  let key = fk(30);
   host.insert(
-    FileId(30),
+    key.clone(),
     "export function foo() { return 1; }\nexport namespace foo { }",
   );
 
-  let program = Program::new(host, vec![FileId(30)]);
+  let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let exports = program.exports_of(FileId(30));
+  let file_id = program.file_id(&key).expect("file id");
+  let exports = program.exports_of(file_id);
   let value_entry = exports.get("foo").expect("value export foo");
   assert!(
     value_entry.type_id.is_some(),
@@ -210,16 +233,16 @@ fn namespace_exports_include_namespace_slot() {
 #[test]
 fn export_star_conflict_reports_diagnostic() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(100), "export const dup = 1;");
-  host.insert(FileId(101), "export const dup = 2;");
-  host.insert(
-    FileId(102),
-    "export * from \"./one\";\nexport * from \"./two\";",
-  );
-  host.link(FileId(102), "./one", FileId(100));
-  host.link(FileId(102), "./two", FileId(101));
+  let key_one = fk(100);
+  let key_two = fk(101);
+  let key_entry = fk(102);
+  host.insert(key_one.clone(), "export const dup = 1;");
+  host.insert(key_two.clone(), "export const dup = 2;");
+  host.insert(key_entry.clone(), "export * from \"./one\";\nexport * from \"./two\";");
+  host.link(key_entry.clone(), "./one", key_one.clone());
+  host.link(key_entry.clone(), "./two", key_two.clone());
 
-  let program = Program::new(host, vec![FileId(102)]);
+  let program = Program::new(host, vec![key_entry.clone()]);
   let diagnostics = program.check();
   assert_eq!(diagnostics.len(), 1, "expected conflict diagnostic");
   assert_eq!(diagnostics[0].code.as_str(), "BIND1001");
@@ -228,11 +251,13 @@ fn export_star_conflict_reports_diagnostic() {
 #[test]
 fn export_namespace_all_reports_diagnostic() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(300), "export const a = 1;");
-  host.insert(FileId(301), "export * as ns from \"./a\";");
-  host.link(FileId(301), "./a", FileId(300));
+  let key_a = fk(300);
+  let key_b = fk(301);
+  host.insert(key_a.clone(), "export const a = 1;");
+  host.insert(key_b.clone(), "export * as ns from \"./a\";");
+  host.link(key_b.clone(), "./a", key_a.clone());
 
-  let program = Program::new(host, vec![FileId(301)]);
+  let program = Program::new(host, vec![key_b.clone()]);
   let diagnostics = program.check();
   assert_eq!(
     diagnostics.len(),
@@ -249,10 +274,10 @@ fn export_namespace_all_reports_diagnostic() {
 fn unresolved_export_points_at_specifier() {
   let mut host = MemoryHost::default();
   let source = r#"export * from "./missing";"#;
-  let file = FileId(350);
-  host.insert(file, source);
+  let key = fk(350);
+  host.insert(key.clone(), source);
 
-  let program = Program::new(host, vec![file]);
+  let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   assert_eq!(
     diagnostics.len(),
@@ -261,7 +286,8 @@ fn unresolved_export_points_at_specifier() {
   );
   let diag = &diagnostics[0];
   assert_eq!(diag.code.as_str(), codes::UNRESOLVED_MODULE.as_str());
-  assert_eq!(diag.primary.file, file);
+  let file_id = program.file_id(&key).expect("file id");
+  assert_eq!(diag.primary.file, file_id);
 
   let specifier = "\"./missing\"";
   let start = source.find(specifier).expect("missing specifier in source") as u32;
@@ -278,20 +304,22 @@ fn unresolved_export_points_at_specifier() {
 #[test]
 fn interned_type_for_exported_function() {
   let mut host = MemoryHost::default();
+  let key = fk(50);
   host.insert(
-    FileId(50),
+    key.clone(),
     "export function add(a: number, b: number): number { return a + b; }",
   );
 
-  let program = Program::new(host, vec![FileId(50)]);
+  let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
+  let file_id = program.file_id(&key).expect("file id");
   let def = program
-    .definitions_in_file(FileId(50))
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition");
@@ -305,13 +333,15 @@ fn interned_type_for_exported_function() {
 #[test]
 fn recursive_type_alias_produces_ref() {
   let mut host = MemoryHost::default();
-  host.insert(FileId(40), "type Node = Node;");
+  let key = fk(40);
+  host.insert(key.clone(), "type Node = Node;");
 
-  let program = Program::new(host, vec![FileId(40)]);
+  let program = Program::new(host, vec![key.clone()]);
   let _ = program.check();
 
+  let file_id = program.file_id(&key).expect("file id");
   let def = program
-    .definitions_in_file(FileId(40))
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Node"))
     .expect("Node alias");

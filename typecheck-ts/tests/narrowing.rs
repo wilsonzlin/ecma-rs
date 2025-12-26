@@ -514,15 +514,16 @@ function onlyArrays(val: string[] | number) {
   );
 
   let res = check_body_with_env(
-    body,
+    body.0,
+    body.1,
     &lowered.names,
     FileId(0),
     src,
     Arc::clone(&store),
     &initial,
   );
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, TypeDisplay::new(&store, arr).to_string());
   assert_eq!(else_ty, "number");
 }
@@ -561,15 +562,16 @@ function pick(val: string | number) {
 
   let body = body_of(&lowered, &lowered.names, "pick");
   let res = check_body_with_env(
-    body,
+    body.0,
+    body.1,
     &lowered.names,
     FileId(0),
     src,
     Arc::clone(&store),
     &initial,
   );
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "number");
 }
