@@ -454,6 +454,12 @@ fn check_arguments(
       // Prefer fixed parameters over rest matches when both are applicable.
       specificity += 1;
     }
+    if matches!(
+      (store.type_kind(*arg), store.type_kind(expected.ty)),
+      (TypeKind::Any | TypeKind::Unknown, _) | (_, TypeKind::Any | TypeKind::Unknown)
+    ) {
+      continue;
+    }
     if !relate.is_assignable(*arg, expected.ty) {
       return (
         false,

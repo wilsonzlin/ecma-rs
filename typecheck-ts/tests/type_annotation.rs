@@ -72,6 +72,7 @@ fn qualified_type_reference_resolves() {
   let value_def = def_by_name(&mut program, FileKey::new("main.ts"), "Value");
   let foo_def = def_by_name(&mut program, FileKey::new("types.ts"), "Foo");
   let ty = program.type_of_def_interned(value_def);
+  println!("import type resolved to {:?}", program.interned_type_kind(ty));
   match program.interned_type_kind(ty) {
     TypeKind::Ref { def, args } => {
       assert_eq!(def, foo_def);

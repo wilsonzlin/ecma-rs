@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::{FileId, FileKey, Host, HostError, Program};
+use typecheck_ts::{FileKey, Host, HostError, Program};
 
 fn fk(id: u32) -> FileKey {
   FileKey::new(format!("file{id}.ts"))
@@ -43,12 +43,12 @@ fn interfaces_merge_members() {
 
   let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
+  let file_id = program.file_id(&key).expect("file id");
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let file_id = program.file_id(&key).expect("file id");
   let def = program
     .definitions_in_file(file_id)
     .into_iter()
@@ -79,9 +79,11 @@ fn namespaces_merge_across_declarations() {
   );
 
   let file_id = program.file_id(&key).expect("file id");
-  let exports = program.exports_of(file_id);
-  let ns = exports.get("N").expect("namespace export");
-  let ty = ns.type_id.expect("namespace type");
+  let ty = program
+    .exports_of(file_id)
+    .get("N")
+    .and_then(|ns| ns.type_id)
+    .expect("namespace type");
   let rendered = program.display_type(ty).to_string();
   assert!(
     rendered.contains("a") && rendered.contains("b"),
@@ -99,9 +101,7 @@ fn value_and_namespace_merge_callable_and_members() {
   );
 
   let program = Program::new(host, vec![key.clone()]);
-  println!("starting check value_and_namespace_merge_callable_and_members");
   let diagnostics = program.check();
-  println!("finished check with {len} diagnostics", len = diagnostics.len());
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
@@ -115,7 +115,6 @@ fn value_and_namespace_merge_callable_and_members() {
       program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some()
     })
     .expect("foo definition");
-  println!("computing type of def {:?}", def);
   let ty = program.type_of_def(def);
   let rendered = program.display_type(ty).to_string();
   assert!(
@@ -252,7 +251,7 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     .find(|d| program.body_of_def(*d).is_some())
     .expect("function definition preserved after merge");
   let exported = program
-    .exports_of(FileId(6))
+    .exports_of(file_id)
     .get("foo")
     .and_then(|e| e.def)
     .expect("exported foo def");

@@ -149,9 +149,6 @@ fn run_fixture(path: &Path) {
     .collect();
   let mut program = Program::new(host.clone(), roots);
   let diagnostics = program.check();
-  if path.ends_with("argument_count_error") {
-    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
-  }
 
   assert_diagnostics(&program, &host, &fixture.expectations, &diagnostics);
   assert_def_types(&mut program, &host, &fixture.expectations);
@@ -351,6 +348,10 @@ fn assert_expr_types(
       )
     });
     let rendered = program.display_type(ty).to_string();
+    println!(
+      "expr `{}` at offset {} rendered {} (expected {})",
+      expect.snippet, offset, rendered, expect.ty
+    );
     assert_eq!(
       rendered, expect.ty,
       "expected expr `{}` in {} to be {}, got {}",
@@ -476,6 +477,7 @@ fn assert_diagnostics(
     }
   }
   if !remaining.is_empty() {
+    println!("diagnostics: {:?}", diagnostics);
     panic!("unexpected diagnostics left: {:?}", remaining);
   }
 }

@@ -1,4 +1,6 @@
-use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
+use super::super::{
+  semantic_js, DefId, DefKind, ExportEntry, ExportMap, FileId, ProgramState, TypeId,
+};
 use ::semantic_js::ts as sem_ts;
 
 /// Build [`ExportMap`] for a file using `semantic-js` binder output.
@@ -20,12 +22,36 @@ pub(crate) fn exports_from_semantics(
     ];
     for ns in candidates {
       if let Some(symbol_id) = group.symbol_for(ns, symbols) {
-        mapped.insert(
-          name.clone(),
-          map_export(state, semantics, sem_file, symbol_id, ns),
-        );
+        if matches!(ns, sem_ts::Namespace::TYPE) {
+          continue;
+        }
+        let entry = map_export(state, semantics, sem_file, symbol_id, ns);
+        if let Some(def) = entry.def {
+          if let Some(data) = state.def_data.get(&def) {
+            if matches!(data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
+              continue;
+            }
+          }
+        }
+        mapped.insert(name.clone(), entry);
         break;
       }
+    }
+  }
+
+  if let Some(fallback) = state.files.get(&file) {
+    for (name, entry) in fallback.exports.iter() {
+      if mapped.contains_key(name) {
+        continue;
+      }
+      if let Some(def) = entry.def {
+        if let Some(data) = state.def_data.get(&def) {
+          if matches!(data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
+            continue;
+          }
+        }
+      }
+      mapped.insert(name.clone(), entry.clone());
     }
   }
 
@@ -45,9 +71,10 @@ fn map_export(
   for decl_id in semantics.symbol_decls(symbol_id, ns) {
     let decl = symbols.decl(*decl_id);
     if let Some(def) = map_decl_to_program_def(state, decl) {
-      all_defs.push(def);
+      let canonical = state.canonical_def(def).unwrap_or(def);
+      all_defs.push(canonical);
       if decl.file == sem_file {
-        local_defs.push(def);
+        local_defs.push(canonical);
       }
     }
   }

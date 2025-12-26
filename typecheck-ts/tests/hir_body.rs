@@ -54,7 +54,8 @@ fn infers_basic_literals_and_identifiers() {
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
-  let result = check_body(
+  let mut next_symbol = 0;
+  let (result, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -63,6 +64,9 @@ fn infers_basic_literals_and_identifiers() {
     Arc::clone(&store),
     &caches,
     &bindings,
+    &mut next_symbol,
+    None,
+    None,
     None,
   );
 
@@ -98,7 +102,8 @@ fn expression_spans_match_body_indices() {
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
-  let result = check_body(
+  let mut next_symbol = 0;
+  let (result, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -107,6 +112,9 @@ fn expression_spans_match_body_indices() {
     store.clone(),
     &caches,
     &bindings,
+    &mut next_symbol,
+    None,
+    None,
     None,
   );
 
@@ -141,7 +149,8 @@ fn expr_at_returns_innermost_type() {
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
-  let result = check_body(
+  let mut next_symbol = 0;
+  let (result, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -150,6 +159,9 @@ fn expr_at_returns_innermost_type() {
     store.clone(),
     &caches,
     &bindings,
+    &mut next_symbol,
+    None,
+    None,
     None,
   );
 
@@ -237,7 +249,8 @@ fn diagnostics_are_stably_sorted() {
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
-  let result = check_body(
+  let mut next_symbol = 0;
+  let (result, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -246,6 +259,9 @@ fn diagnostics_are_stably_sorted() {
     store.clone(),
     &caches,
     &bindings,
+    &mut next_symbol,
+    None,
+    None,
     None,
   );
   let starts: Vec<u32> = result
@@ -266,7 +282,7 @@ fn call_with_missing_arguments_types_arguments_once() {
     .bodies
     .iter()
     .enumerate()
-    .find(|(_, b)| matches!(b.kind, BodyKind::Initializer))
+    .find(|(_, b)| matches!(b.kind, BodyKind::Initializer | BodyKind::TopLevel))
     .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
     .expect("initializer body");
   let ast = parse_with_options(
@@ -279,7 +295,8 @@ fn call_with_missing_arguments_types_arguments_once() {
   .expect("parse");
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
-  let result = check_body(
+  let mut next_symbol = 0;
+  let (result, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -288,6 +305,9 @@ fn call_with_missing_arguments_types_arguments_once() {
     Arc::clone(&store),
     &caches,
     &HashMap::new(),
+    &mut next_symbol,
+    None,
+    None,
     None,
   );
 

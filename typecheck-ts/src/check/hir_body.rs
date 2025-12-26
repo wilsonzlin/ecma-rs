@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use bumpalo::Bump;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
+use hir_js::span_map::SpanIndex;
 use hir_js::{
   ArrayElement, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr, NameId,
   NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind,
   UnaryOp,
 };
-use hir_js::span_map::SpanIndex;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
@@ -20,8 +20,8 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use types_ts_interned::{
-  ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature, TypeId, TypeKind,
-  TypeStore,
+  ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, RelateHooks, RelateTypeExpander,
+  Shape, Signature, TupleElem, TypeId, TypeKind, TypeStore,
 };
 
 use super::cfg::{BlockId, ControlFlowGraph};
@@ -34,9 +34,10 @@ use super::flow_narrow::{
 use super::caches::BodyCaches;
 use super::expr::resolve_call;
 use super::infer::TypeParamDecl;
+use super::overload::{callable_signatures, expected_arg_type_at};
 use super::type_expr::{TypeLowerer, TypeResolver};
 pub use crate::BodyCheckResult;
-use crate::{codes, BodyId, DefId};
+use crate::{codes, program::semantic_js::SymbolId, BodyId, DefId};
 
 #[derive(Default, Clone)]
 struct Scope {
@@ -47,6 +48,7 @@ struct Scope {
 struct Binding {
   ty: TypeId,
   type_params: Vec<TypeParamDecl>,
+  symbol: Option<SymbolId>,
 }
 
 /// Simple resolver that maps single-segment type names to known definitions.
@@ -376,17 +378,20 @@ impl<'a> AstIndex<'a> {
 }
 
 /// Type-check a lowered HIR body, producing per-expression and per-pattern type tables.
-pub fn check_body(
+pub fn check_body<'a>(
   body_id: BodyId,
   body: &Body,
-  names: &NameInterner,
+  names: &'a NameInterner,
   file: FileId,
   ast: &Node<parse_js::ast::stx::TopLevel>,
   store: Arc<TypeStore>,
   caches: &BodyCaches,
   bindings: &HashMap<String, TypeId>,
+  next_symbol: &'a mut u32,
+  symbols: Option<&'a HashMap<String, SymbolId>>,
   resolver: Option<Arc<dyn TypeResolver>>,
-) -> BodyCheckResult {
+  expander: Option<&'a dyn RelateTypeExpander>,
+) -> (BodyCheckResult, Vec<(TextRange, SymbolId)>) {
   let prim = store.primitive_ids();
   let expr_types = vec![prim.unknown; body.exprs.len()];
   let pat_types = vec![prim.unknown; body.pats.len()];
@@ -410,7 +415,16 @@ pub fn check_body(
     .collect();
 
   let body_range = body_range(body);
-  let relate = RelateCtx::with_cache(Arc::clone(&store), store.options(), caches.relation.clone());
+  let hooks = RelateHooks {
+    expander,
+    ..Default::default()
+  };
+  let relate = RelateCtx::with_hooks_and_cache(
+    Arc::clone(&store),
+    store.options(),
+    hooks,
+    caches.relation.clone(),
+  );
   let mut lowerer = match resolver {
     Some(resolver) => TypeLowerer::with_resolver(Arc::clone(&store), resolver),
     None => TypeLowerer::new(Arc::clone(&store)),
@@ -439,11 +453,17 @@ pub fn check_body(
     file,
     _names: names,
     _bump: Bump::new(),
+    current_return: None,
+    expander,
+    next_symbol,
+    symbol_map: symbols,
+    symbol_occurrences: Vec::new(),
   };
 
   checker.seed_builtins();
   for (name, ty) in bindings {
-    checker.insert_binding(name.clone(), *ty, Vec::new());
+    let symbol = symbols.and_then(|map| map.get(name).copied());
+    checker.insert_binding(name.clone(), *ty, Vec::new(), symbol, None);
   }
 
   match body.kind {
@@ -469,7 +489,7 @@ pub fn check_body(
     .diagnostics
     .extend(checker.lowerer.take_diagnostics());
   codes::normalize_diagnostics(&mut checker.diagnostics);
-  BodyCheckResult {
+  let result = BodyCheckResult {
     body: body_id,
     expr_types: checker.expr_types,
     expr_spans: checker.expr_spans,
@@ -480,7 +500,8 @@ pub fn check_body(
     expr_index: SpanIndex::new(),
     pat_index: SpanIndex::new(),
   }
-  .with_indexes()
+  .with_indexes();
+  (result, checker.symbol_occurrences)
 }
 
 struct Checker<'a> {
@@ -502,18 +523,53 @@ struct Checker<'a> {
   file: FileId,
   _names: &'a NameInterner,
   _bump: Bump,
+  current_return: Option<TypeId>,
+  expander: Option<&'a dyn RelateTypeExpander>,
+  next_symbol: &'a mut u32,
+  symbol_map: Option<&'a HashMap<String, SymbolId>>,
+  symbol_occurrences: Vec<(TextRange, SymbolId)>,
 }
 
 impl<'a> Checker<'a> {
   fn seed_builtins(&mut self) {
     let prim = self.store.primitive_ids();
-    self.insert_binding("undefined".to_string(), prim.undefined, Vec::new());
-    self.insert_binding("NaN".to_string(), prim.number, Vec::new());
+    self.insert_binding(
+      "undefined".to_string(),
+      prim.undefined,
+      Vec::new(),
+      None,
+      None,
+    );
+    self.insert_binding("NaN".to_string(), prim.number, Vec::new(), None, None);
   }
 
-  fn insert_binding(&mut self, name: String, ty: TypeId, type_params: Vec<TypeParamDecl>) {
+  fn alloc_symbol(&mut self) -> SymbolId {
+    let id = SymbolId(*self.next_symbol);
+    *self.next_symbol += 1;
+    id
+  }
+
+  fn insert_binding(
+    &mut self,
+    name: String,
+    ty: TypeId,
+    type_params: Vec<TypeParamDecl>,
+    symbol: Option<SymbolId>,
+    span: Option<TextRange>,
+  ) {
+    let symbol = symbol.unwrap_or_else(|| self.alloc_symbol());
     if let Some(scope) = self.scopes.last_mut() {
-      scope.bindings.insert(name, Binding { ty, type_params });
+      scope.bindings.insert(
+        name.clone(),
+        Binding {
+          ty,
+          type_params,
+          symbol: Some(symbol),
+        },
+      );
+    }
+    if let Some(span) = span {
+      self.symbol_occurrences.push((span, symbol));
     }
   }
 
@@ -547,8 +603,16 @@ impl<'a> Checker<'a> {
       }
     }
     if let Some(func) = best {
+      let prev_return = self.current_return.take();
       self.bind_params(func.func);
+      self.current_return = func
+        .func
+        .stx
+        .return_type
+        .as_ref()
+        .map(|t| self.lowerer.lower_type_expr(t));
       self.check_function_body(func.func);
+      self.current_return = prev_return;
       return true;
     }
     false
@@ -666,7 +730,13 @@ impl<'a> Checker<'a> {
           .stx
           .value
           .as_ref()
-          .map(|v| self.check_expr(v))
+          .map(|v| {
+            let value_ty = self.check_expr(v);
+            if let Some(expected) = self.current_return {
+              self.check_assignable(v, value_ty, expected);
+            }
+            value_ty
+          })
           .unwrap_or(self.store.primitive_ids().undefined);
         self.return_types.push(ty);
       }
@@ -676,8 +746,67 @@ impl<'a> Checker<'a> {
         self.scopes.pop();
       }
       Stmt::If(if_stmt) => {
-        self.check_expr(&if_stmt.stx.test);
+        let test_ty = self.check_expr(&if_stmt.stx.test);
         self.scopes.push(Scope::default());
+        if let AstExpr::Binary(bin) = if_stmt.stx.test.stx.as_ref() {
+          if matches!(bin.stx.operator, OperatorName::Instanceof) {
+            if let AstExpr::Id(id) = bin.stx.left.stx.as_ref() {
+              let shape_id = self.store.intern_shape(Shape::new());
+              let obj = self
+                .store
+                .intern_type(TypeKind::Object(self.store.intern_object(ObjectType { shape: shape_id })));
+              let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
+              self.insert_binding(id.stx.name.clone(), obj, Vec::new(), symbol, None);
+            }
+          } else if matches!(bin.stx.operator, OperatorName::LogicalAnd) {
+            if let AstExpr::Id(id) = bin.stx.left.stx.as_ref() {
+              if let AstExpr::Binary(right) = bin.stx.right.stx.as_ref() {
+                if matches!(right.stx.operator, OperatorName::StrictEquality | OperatorName::Equality) {
+                  if let (AstExpr::Unary(unary), AstExpr::LitStr(str_lit)) =
+                    (right.stx.left.stx.as_ref(), right.stx.right.stx.as_ref())
+                    {
+                      if matches!(unary.stx.operator, OperatorName::Typeof) {
+                        if let AstExpr::Id(arg_id) = unary.stx.argument.stx.as_ref() {
+                          if arg_id.stx.name == id.stx.name && str_lit.stx.value == "string" {
+                            let str_ty = self.store.primitive_ids().string;
+                            let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
+                            self.insert_binding(
+                              id.stx.name.clone(),
+                              str_ty,
+                              Vec::new(),
+                              symbol,
+                              None,
+                            );
+                          }
+                        }
+                      }
+                    }
+                  }
+              }
+            }
+          }
+        }
+        if let AstExpr::Call(call) = if_stmt.stx.test.stx.as_ref() {
+          if let TypeKind::Predicate {
+            asserted: Some(asserted),
+            asserts: false,
+            ..
+          } = self.store.type_kind(test_ty)
+          {
+            if let Some(first_arg) = call.stx.arguments.first() {
+              if let AstExpr::Id(id) = first_arg.stx.value.stx.as_ref() {
+                let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
+                self.insert_binding(
+                  id.stx.name.clone(),
+                  asserted,
+                  Vec::new(),
+                  symbol,
+                  None,
+                );
+              }
+            }
+          }
+        }
         self.check_stmt(&if_stmt.stx.consequent);
         self.scopes.pop();
         if let Some(alt) = &if_stmt.stx.alternate {
@@ -790,9 +919,14 @@ impl<'a> Checker<'a> {
       Stmt::FunctionDecl(func) => {
         // function declarations are handled by separate bodies; just bind the name if available
         if let Some(name) = func.stx.name.as_ref() {
-          let name = name.stx.name.clone();
+          let name_text = name.stx.name.clone();
           let ty = self.function_type(&func.stx.function);
-          self.insert_binding(name, ty, Vec::new());
+          let symbol = self
+            .symbol_map
+            .and_then(|map| map.get(&name_text).copied())
+            .or_else(|| self.lookup(&name_text).and_then(|b| b.symbol));
+          let span = Some(loc_to_range(self.file, name.loc));
+          self.insert_binding(name_text, ty, Vec::new(), symbol, span);
         }
       }
       _ => {}
@@ -808,19 +942,34 @@ impl<'a> Checker<'a> {
   fn check_var_decl(&mut self, decl: &Node<VarDecl>) {
     let prim = self.store.primitive_ids();
     for declarator in decl.stx.declarators.iter() {
+      if let Some(ann) = declarator.type_annotation.as_ref() {
+        self.record_type_reference(ann);
+      }
+      let annot_ty = declarator
+        .type_annotation
+        .as_ref()
+        .map(|ann| {
+          let ty = self.lowerer.lower_type_expr(ann);
+          match self.store.type_kind(ty) {
+            TypeKind::Conditional { .. } => prim.unknown,
+            _ => ty,
+          }
+        });
       let init_ty = if self.check_var_assignments {
         declarator
           .initializer
           .as_ref()
-          .map(|i| self.check_expr(i))
+          .map(|init| {
+            if annot_ty.is_some() {
+              self.check_expr_preserve_literals(init)
+            } else {
+              self.check_expr(init)
+            }
+          })
           .unwrap_or(prim.unknown)
       } else {
         prim.unknown
       };
-      let annot_ty = declarator
-        .type_annotation
-        .as_ref()
-        .map(|ann| self.lowerer.lower_type_expr(ann));
       let final_ty = annot_ty.unwrap_or(init_ty);
       if self.check_var_assignments {
         if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
@@ -833,6 +982,32 @@ impl<'a> Checker<'a> {
 
   fn check_pat(&mut self, pat: &Node<AstPat>, value_ty: TypeId) {
     self.bind_pattern(pat, value_ty);
+  }
+
+  fn check_expr_preserve_literals(&mut self, expr: &Node<AstExpr>) -> TypeId {
+    match expr.stx.as_ref() {
+      AstExpr::LitObj(obj) => self.object_literal_type(obj, true),
+      AstExpr::LitArr(arr) => {
+        let mut elems = Vec::new();
+        for elem in arr.stx.elements.iter() {
+          match elem {
+            parse_js::ast::expr::lit::LitArrElem::Single(v)
+            | parse_js::ast::expr::lit::LitArrElem::Rest(v) => elems.push(self.check_expr(v)),
+            parse_js::ast::expr::lit::LitArrElem::Empty => {}
+          }
+        }
+        let elem_ty = if elems.is_empty() {
+          self.store.primitive_ids().unknown
+        } else {
+          self.store.union(elems)
+        };
+        self.store.intern_type(TypeKind::Array {
+          ty: elem_ty,
+          readonly: false,
+        })
+      }
+      _ => self.check_expr(expr),
+    }
   }
 
   fn check_expr(&mut self, expr: &Node<AstExpr>) -> TypeId {
@@ -901,12 +1076,46 @@ impl<'a> Checker<'a> {
           None,
           span,
         );
+        let contextual_sig = resolution
+          .signature
+          .or_else(|| callable_signatures(self.store.as_ref(), callee_ty).into_iter().next());
+        if let Some(sig_id) = contextual_sig {
+          let sig = self.store.signature(sig_id);
+          for (idx, arg) in call.stx.arguments.iter().enumerate() {
+            if let Some(param_ty) = expected_arg_type_at(self.store.as_ref(), &sig, idx) {
+              self.record_expr_type(arg.stx.value.loc, param_ty);
+            }
+          }
+        }
         for diag in &resolution.diagnostics {
           self.diagnostics.push(diag.clone());
         }
         if resolution.diagnostics.is_empty() {
           if let Some(sig_id) = resolution.signature {
             let sig = self.store.signature(sig_id);
+            if let TypeKind::Predicate {
+              parameter,
+              asserted: Some(asserted),
+              asserts: true,
+              ..
+            } = self.store.type_kind(sig.ret)
+            {
+              let target_idx = parameter
+                .and_then(|name| sig.params.iter().position(|p| p.name == Some(name)))
+                .unwrap_or(0);
+              if let Some(arg) = call.stx.arguments.get(target_idx) {
+                if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
+                  let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
+                  self.insert_binding(
+                    id.stx.name.clone(),
+                    asserted,
+                    Vec::new(),
+                    symbol,
+                    None,
+                  );
+                }
+              }
+            }
             for (idx, arg) in call.stx.arguments.iter().enumerate() {
               if let Some(param) = sig.params.get(idx) {
                 let arg_ty = arg_types
@@ -916,25 +1125,31 @@ impl<'a> Checker<'a> {
                 self.check_assignable(&arg.stx.value, arg_ty, param.ty);
               }
             }
-            let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
             let has_rest = sig.params.iter().any(|p| p.rest);
             let max = if has_rest {
               None
             } else {
               Some(sig.params.len())
             };
-            if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
+            if max.map_or(false, |m| arg_types.len() > m) {
               self
                 .diagnostics
                 .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
             }
           }
         }
-        resolution.return_type
+        let mut ret_ty = resolution.return_type;
+        if resolution.signature.is_none() {
+          if let Some(sig_id) = contextual_sig {
+            ret_ty = self.store.signature(sig_id).ret;
+          }
+        }
+        ret_ty
       }
       AstExpr::Member(mem) => {
         let obj_ty = self.check_expr(&mem.stx.left);
-        self.member_type(obj_ty, &mem.stx.right)
+        let prop_ty = self.member_type(obj_ty, &mem.stx.right);
+        prop_ty
       }
       AstExpr::ComputedMember(mem) => {
         let obj_ty = self.check_expr(&mem.stx.object);
@@ -953,22 +1168,42 @@ impl<'a> Checker<'a> {
         let elem_ty = if elems.is_empty() {
           self.store.primitive_ids().unknown
         } else {
-          self.store.union(elems)
+          let widened: Vec<_> = elems.into_iter().map(|e| self.widen_literal(e)).collect();
+          self.store.union(widened)
         };
         self.store.intern_type(TypeKind::Array {
           ty: elem_ty,
           readonly: false,
         })
       }
-      AstExpr::LitObj(obj) => self.object_literal_type(obj),
+      AstExpr::LitObj(obj) => self.object_literal_type(obj, false),
       AstExpr::Func(func) => self.function_type(&func.stx.func),
       AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func),
       AstExpr::IdPat(_) | AstExpr::ArrPat(_) | AstExpr::ObjPat(_) => {
         self.store.primitive_ids().unknown
       }
-      AstExpr::TypeAssertion(assert) => self.check_expr(&assert.stx.expression),
+      AstExpr::TypeAssertion(assert) => {
+        if assert.stx.const_assertion {
+          self.const_assertion_type(&assert.stx.expression)
+        } else {
+          self.check_expr(&assert.stx.expression)
+        }
+      }
       AstExpr::NonNullAssertion(assert) => self.check_expr(&assert.stx.expression),
-      AstExpr::SatisfiesExpr(expr) => self.check_expr(&expr.stx.expression),
+      AstExpr::SatisfiesExpr(expr) => {
+        let expr_ty = self.check_expr_preserve_literals(&expr.stx.expression);
+        let target_ty = self.lowerer.lower_type_expr(&expr.stx.type_annotation);
+        if !self.relate.is_assignable(expr_ty, target_ty) {
+          self.diagnostics.push(codes::TYPE_MISMATCH.error(
+            "type mismatch",
+            Span {
+              file: self.file,
+              range: loc_to_range(self.file, expr.loc),
+            },
+          ));
+        }
+        expr_ty
+      }
       _ => self.store.primitive_ids().unknown,
     };
     self.record_expr_type(expr.loc, ty);
@@ -977,7 +1212,7 @@ impl<'a> Checker<'a> {
 
   fn member_type(&mut self, obj: TypeId, prop: &str) -> TypeId {
     let prim = self.store.primitive_ids();
-    match self.store.type_kind(obj) {
+    let result = match self.store.type_kind(obj) {
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         for candidate in shape.properties.iter() {
@@ -1002,11 +1237,30 @@ impl<'a> Checker<'a> {
           .unwrap_or(prim.unknown)
       }
       TypeKind::Tuple(elems) => elems.get(0).map(|e| e.ty).unwrap_or(prim.unknown),
+      TypeKind::Union(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          let ty = self.member_type(member, prop);
+          if !matches!(self.store.type_kind(ty), TypeKind::Unknown) {
+            collected.push(ty);
+          }
+        }
+        if collected.is_empty() {
+          prim.unknown
+        } else {
+          self.store.union(collected)
+        }
+      }
       _ => prim.unknown,
-    }
+    };
+    result
   }
 
-  fn object_literal_type(&mut self, obj: &Node<parse_js::ast::expr::lit::LitObjExpr>) -> TypeId {
+  fn object_literal_type(
+    &mut self,
+    obj: &Node<parse_js::ast::expr::lit::LitObjExpr>,
+    preserve_literals: bool,
+  ) -> TypeId {
     let mut shape = Shape::new();
     for member in obj.stx.members.iter() {
       match &member.stx.typ {
@@ -1018,7 +1272,15 @@ impl<'a> Checker<'a> {
             ClassOrObjKey::Computed(_) => continue,
           };
           if let ClassOrObjVal::Prop(Some(expr)) = val {
-            let ty = self.check_expr(expr);
+            let value_ty = if preserve_literals {
+              match expr.stx.as_ref() {
+                AstExpr::LitObj(_) | AstExpr::LitArr(_) => self.const_assertion_type(expr),
+                _ => self.check_expr(expr),
+              }
+            } else {
+              self.check_expr(expr)
+            };
+            let ty = if preserve_literals { value_ty } else { self.widen_literal(value_ty) };
             shape.properties.push(types_ts_interned::Property {
               key: prop_key,
               data: PropData {
@@ -1064,6 +1326,18 @@ impl<'a> Checker<'a> {
 
   fn resolve_ident(&mut self, name: &str, expr: &Node<AstExpr>) -> TypeId {
     if let Some(binding) = self.lookup(name) {
+      if let Some(symbol) = binding
+        .symbol
+        .or_else(|| self.symbol_map.and_then(|map| map.get(name).copied()))
+      {
+        let mut range = loc_to_range(self.file, expr.loc);
+        if range.start == range.end {
+          let len = name.len() as u32;
+          range.start = range.start.saturating_sub(len);
+          range.end = range.start.saturating_add(len);
+        }
+        self.symbol_occurrences.push((range, symbol));
+      }
       return binding.ty;
     }
     let mut range = loc_to_range(self.file, expr.loc);
@@ -1165,9 +1439,35 @@ impl<'a> Checker<'a> {
               },
             ));
           }
-          self.insert_binding(id.stx.name.clone(), value_ty, binding.type_params);
+          let mut span = loc_to_range(self.file, left.loc);
+          let expected = id.stx.name.len() as u32;
+          if span.len() < expected {
+            let start = span.start.saturating_sub(expected);
+            span = TextRange::new(start, start + expected);
+          }
+          let span = Some(span);
+          self.insert_binding(
+            id.stx.name.clone(),
+            value_ty,
+            binding.type_params,
+            binding.symbol,
+            span,
+          );
         } else {
-          self.insert_binding(id.stx.name.clone(), value_ty, Vec::new());
+          let mut span = loc_to_range(self.file, left.loc);
+          let expected = id.stx.name.len() as u32;
+          if span.len() < expected {
+            let start = span.start.saturating_sub(expected);
+            span = TextRange::new(start, start + expected);
+          }
+          let span = Some(span);
+          self.insert_binding(
+            id.stx.name.clone(),
+            value_ty,
+            Vec::new(),
+            None,
+            span,
+          );
         }
       }
       AstExpr::ArrPat(arr) => {
@@ -1200,7 +1500,20 @@ impl<'a> Checker<'a> {
     self.record_pat_type(pat.loc, value);
     match pat.stx.as_ref() {
       AstPat::Id(id) => {
-        self.insert_binding(id.stx.name.clone(), value, type_params);
+        let mut span = loc_to_range(self.file, pat.loc);
+        let expected = id.stx.name.len() as u32;
+        if span.len() < expected {
+          let start = span.start.saturating_sub(expected);
+          span = TextRange::new(start, start + expected);
+        }
+        let span = Some(span);
+        let symbol = if self.scopes.len() == 1 {
+          self.symbol_map
+            .and_then(|map| map.get(&id.stx.name).copied())
+        } else {
+          None
+        };
+        self.insert_binding(id.stx.name.clone(), value, type_params, symbol, span);
       }
       AstPat::Arr(arr) => self.bind_array_pattern(arr, value, type_params),
       AstPat::Obj(obj) => self.bind_object_pattern(obj, value, type_params),
@@ -1335,7 +1648,10 @@ impl<'a> Checker<'a> {
           .stx
           .type_annotation
           .as_ref()
-          .map(|t| self.lowerer.lower_type_expr(t))
+          .map(|t| {
+            self.record_type_reference(t);
+            self.lowerer.lower_type_expr(t)
+          })
           .unwrap_or(self.store.primitive_ids().unknown),
         optional: p.stx.optional,
         rest: p.stx.rest,
@@ -1345,7 +1661,10 @@ impl<'a> Checker<'a> {
       .stx
       .return_type
       .as_ref()
-      .map(|t| self.lowerer.lower_type_expr(t))
+      .map(|t| {
+        self.record_type_reference(t);
+        self.lowerer.lower_type_expr(t)
+      })
       .unwrap_or(self.store.primitive_ids().unknown);
     let sig = Signature {
       params,
@@ -1368,6 +1687,28 @@ impl<'a> Checker<'a> {
     if let Some(id) = self.expr_map.get(&range) {
       if let Some(slot) = self.expr_types.get_mut(id.0 as usize) {
         *slot = ty;
+      }
+      if let Some(span) = self.expr_spans.get_mut(id.0 as usize) {
+        *span = range;
+      }
+    }
+  }
+
+  fn record_type_reference(&mut self, type_expr: &Node<parse_js::ast::type_expr::TypeExpr>) {
+    if let parse_js::ast::type_expr::TypeExpr::TypeReference(reference) = type_expr.stx.as_ref() {
+      if let parse_js::ast::type_expr::TypeEntityName::Identifier(name) = &reference.stx.name {
+        if let Some(symbol) = self
+          .symbol_map
+          .and_then(|map| map.get(name).copied())
+        {
+          let mut range = loc_to_range(self.file, type_expr.loc);
+          let expected = name.len() as u32;
+          if range.len() < expected {
+            let start = range.start.saturating_sub(expected);
+            range = TextRange::new(start, start + expected);
+          }
+          self.symbol_occurrences.push((range, symbol));
+        }
       }
     }
   }
@@ -1405,10 +1746,30 @@ impl<'a> Checker<'a> {
 
   fn type_accepts_props(&self, target: TypeId, props: &HashSet<String>) -> bool {
     match self.store.type_kind(target) {
+      TypeKind::Any | TypeKind::Unknown => true,
       TypeKind::Union(members) => members.iter().any(|m| self.type_accepts_props(*m, props)),
-      TypeKind::Intersection(members) => members.iter().all(|m| self.type_accepts_props(*m, props)),
+      TypeKind::Intersection(members) => props.iter().all(|prop| {
+        let mut single = HashSet::new();
+        single.insert(prop.clone());
+        members
+          .iter()
+          .any(|member| self.type_accepts_props(*member, &single))
+      }),
+      TypeKind::Ref { def, args } => {
+        if let Some(expander) = self.expander {
+          if let Some(expanded) = expander.expand_ref(self.store.as_ref(), def, &args) {
+            return self.type_accepts_props(expanded, props);
+          }
+        }
+        true
+      }
+      TypeKind::TypeParam(_) => true,
+      TypeKind::Mapped(_) => true,
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
+        if shape.properties.is_empty() && shape.indexers.is_empty() {
+          return true;
+        }
         if !shape.indexers.is_empty() {
           return true;
         }
@@ -1425,7 +1786,7 @@ impl<'a> Checker<'a> {
         }
         props.iter().all(|p| allowed.contains(p))
       }
-      _ => true,
+      _ => false,
     }
   }
 
@@ -1435,7 +1796,22 @@ impl<'a> Checker<'a> {
     {
       return;
     }
+    if let TypeKind::Ref { def, args } = self.store.type_kind(dst) {
+      if let Some(expander) = self.expander {
+        if let Some(expanded) = expander.expand_ref(self.store.as_ref(), def, &args) {
+          match self.store.type_kind(expanded) {
+            TypeKind::Unknown | TypeKind::Mapped(_) => return,
+            _ => {}
+          }
+        } else {
+          return;
+        }
+      }
+    }
     if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
+      if matches!(self.store.type_kind(dst), TypeKind::Mapped(_)) {
+        return;
+      }
       if self.has_excess_properties(obj, dst) {
         self.diagnostics.push(codes::EXCESS_PROPERTY.error(
           "excess property",
@@ -1457,6 +1833,100 @@ impl<'a> Checker<'a> {
         range: loc_to_range(self.file, expr.loc),
       },
     ));
+  }
+
+  fn widen_literal(&self, ty: TypeId) -> TypeId {
+    match self.store.type_kind(ty) {
+      TypeKind::NumberLiteral(_) => self.store.primitive_ids().number,
+      TypeKind::StringLiteral(_) => self.store.primitive_ids().string,
+      TypeKind::BooleanLiteral(_) => self.store.primitive_ids().boolean,
+      TypeKind::Union(members) => {
+        let widened: Vec<_> = members.iter().map(|m| self.widen_literal(*m)).collect();
+        self.store.union(widened)
+      }
+      _ => ty,
+    }
+  }
+
+  fn readonly_type(&self, ty: TypeId) -> TypeId {
+    match self.store.type_kind(ty).clone() {
+      TypeKind::Array { ty, .. } => self.store.intern_type(TypeKind::Array {
+        ty: self.readonly_type(ty),
+        readonly: true,
+      }),
+      TypeKind::Tuple(elems) => {
+        let mapped: Vec<_> = elems
+          .into_iter()
+          .map(|mut elem| {
+            elem.ty = self.readonly_type(elem.ty);
+            elem.readonly = true;
+            elem
+          })
+          .collect();
+        self.store.intern_type(TypeKind::Tuple(mapped))
+      }
+      TypeKind::Object(obj_id) => {
+        let mut shape = self.store.shape(self.store.object(obj_id).shape).clone();
+        for prop in shape.properties.iter_mut() {
+          prop.data.readonly = true;
+          prop.data.ty = self.readonly_type(prop.data.ty);
+        }
+        let shape_id = self.store.intern_shape(shape);
+        let obj = self.store.intern_object(ObjectType { shape: shape_id });
+        self.store.intern_type(TypeKind::Object(obj))
+      }
+      TypeKind::Union(members) => {
+        let mapped: Vec<_> = members.into_iter().map(|m| self.readonly_type(m)).collect();
+        self.store.union(mapped)
+      }
+      TypeKind::Intersection(members) => {
+        let mapped: Vec<_> = members.into_iter().map(|m| self.readonly_type(m)).collect();
+        self.store.intersection(mapped)
+      }
+      _ => ty,
+    }
+  }
+
+  fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
+    match expr.stx.as_ref() {
+      AstExpr::LitArr(arr) => {
+        let mut elems = Vec::new();
+        for elem in arr.stx.elements.iter() {
+          match elem {
+            parse_js::ast::expr::lit::LitArrElem::Single(v) => {
+              let elem_ty = self.check_expr(v);
+              let elem_ty = self.readonly_type(elem_ty);
+              elems.push(TupleElem {
+                ty: elem_ty,
+                optional: false,
+                rest: false,
+                readonly: true,
+              });
+            }
+            parse_js::ast::expr::lit::LitArrElem::Rest(v) => {
+              let elem_ty = self.check_expr(v);
+              let elem_ty = self.readonly_type(elem_ty);
+              elems.push(TupleElem {
+                ty: elem_ty,
+                optional: false,
+                rest: true,
+                readonly: true,
+              });
+            }
+            parse_js::ast::expr::lit::LitArrElem::Empty => {}
+          }
+        }
+        self.store.intern_type(TypeKind::Tuple(elems))
+      }
+      AstExpr::LitObj(obj) => {
+        let ty = self.object_literal_type(obj, true);
+        self.readonly_type(ty)
+      }
+      _ => {
+        let ty = self.check_expr(expr);
+        self.readonly_type(ty)
+      }
+    }
   }
 }
 
@@ -2148,13 +2618,17 @@ impl<'a> FlowBodyChecker<'a> {
       if let Some(sig_id) = overloads.first() {
         let sig = self.store.signature(*sig_id);
         if let TypeKind::Predicate {
+          parameter,
           asserted, asserts, ..
         } = self.store.type_kind(sig.ret)
         {
           if let Some(asserted) = asserted {
-            if let Some(arg_expr) = call.args.first().map(|a| a.expr) {
+            let target_idx = parameter
+              .and_then(|name| sig.params.iter().position(|p| p.name == Some(name)))
+              .unwrap_or(0);
+            if let Some(arg_expr) = call.args.get(target_idx).map(|a| a.expr) {
               if let Some(name) = self.ident_name(arg_expr) {
-                let arg_ty = arg_tys.first().copied().unwrap_or(prim.unknown);
+                let arg_ty = arg_tys.get(target_idx).copied().unwrap_or(prim.unknown);
                 let (yes, no) = narrow_by_asserted(arg_ty, asserted, &self.store);
                 if asserts {
                   out.assertions.insert(name, yes);

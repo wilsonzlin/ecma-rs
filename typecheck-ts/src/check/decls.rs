@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::{codes, FileKey, Host};
@@ -655,17 +655,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     import: &hir_js::TypeImport,
     names: &hir_js::NameInterner,
   ) -> TypeId {
-    let Some(host) = self.host else {
-      return self.store.primitive_ids().unknown;
-    };
-
-    let Some(from_key) = self.file_key.as_ref() else {
-      return self.store.primitive_ids().unknown;
-    };
-    let Some(target_key) = host.resolve(from_key, &import.module) else {
-      return self.store.primitive_ids().unknown;
-    };
-    let Some(target_file) = self.key_to_id.and_then(|resolver| resolver(&target_key)) else {
+    let Some(target_file) = self.resolve_import_target(&import.module) else {
       return self.store.primitive_ids().unknown;
     };
 
@@ -702,6 +692,66 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     self.store.primitive_ids().unknown
   }
 
+  fn resolve_import_target(&self, spec: &str) -> Option<FileId> {
+    let from_key = self.file_key.as_ref()?;
+    if let Some(host) = self.host {
+      if let Some(target_key) = host.resolve(from_key, spec) {
+        if let Some(target_file) = self.key_to_id.and_then(|resolver| resolver(&target_key)) {
+          return Some(target_file);
+        }
+      }
+    }
+
+    let mut candidates = Vec::new();
+    candidates.push(spec.to_string());
+    if !spec.ends_with(".ts")
+      && !spec.ends_with(".tsx")
+      && !spec.ends_with(".d.ts")
+      && !spec.ends_with(".js")
+      && !spec.ends_with(".jsx")
+    {
+      candidates.push(format!("{spec}.ts"));
+      candidates.push(format!("{spec}.d.ts"));
+    }
+    let base = std::path::Path::new(from_key.as_str());
+    let base_dir = base.parent().unwrap_or(std::path::Path::new(""));
+    let mut seen = HashSet::new();
+    let existing = candidates.clone();
+    for cand in existing {
+      let joined = base_dir.join(&cand);
+      candidates.push(joined.to_string_lossy().replace('\\', "/"));
+    }
+    let mut trimmed = Vec::new();
+    for cand in candidates.iter() {
+      let mut t = cand.as_str();
+      loop {
+        if let Some(stripped) = t.strip_prefix("./") {
+          t = stripped;
+          continue;
+        }
+        if let Some(stripped) = t.strip_prefix(".\\") {
+          t = stripped;
+          continue;
+        }
+        break;
+      }
+      if t != cand {
+        trimmed.push(t.to_string());
+      }
+    }
+    candidates.extend(trimmed);
+    for cand in candidates {
+      if !seen.insert(cand.clone()) {
+        continue;
+      }
+      let key = FileKey::new(cand);
+      if let Some(id) = self.key_to_id.and_then(|resolver| resolver(&key)) {
+        return Some(id);
+      }
+    }
+    None
+  }
+
   fn resolve_type_name(
     &self,
     name: &hir_js::TypeName,
@@ -714,16 +764,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         self.resolve_named_type(&resolved, file_override.unwrap_or(self.file))
       }
       TypeName::Qualified(path) => {
-        if let Some(last) = path.last().and_then(|id| names.resolve(*id)) {
-          let name = last.to_string();
-          if let Some(map) = self.def_by_name {
-            if let Some((_, def)) = map.iter().find(|((_, n), _)| n == &name) {
-              return Some(*def);
-            }
-          }
-          return self.resolve_named_type(&name, file_override.unwrap_or(self.file));
-        }
-        None
+        path
+          .last()
+          .and_then(|id| names.resolve(*id))
+          .and_then(|resolved| {
+            self.resolve_named_type(&resolved.to_string(), file_override.unwrap_or(self.file))
+          })
       }
       TypeName::Import(import) => import.module.as_ref().and_then(|module| {
         let name = import
