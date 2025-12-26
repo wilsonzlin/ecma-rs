@@ -1,6 +1,7 @@
 use super::*;
 use crate::assoc::{js, ts};
-use crate::ts::locals::{bind_ts_locals, SymbolId as LocalSymbolId};
+use crate::ts::locals::{bind_ts_locals, bind_ts_locals_pure, SymbolId as LocalSymbolId};
+use derive_visitor::{Drive, Visitor};
 use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
 use hir_js::ids::{DefKind, ExprId, TypeExprId};
 use hir_js::lower_file;
@@ -23,6 +24,20 @@ impl StaticResolver {
 impl Resolver for StaticResolver {
   fn resolve(&self, _from: FileId, specifier: &str) -> Option<FileId> {
     self.map.get(specifier).copied()
+  }
+}
+
+#[derive(Default, Visitor)]
+#[visitor(NodeAssocData(enter))]
+struct AssocCounter {
+  non_empty: usize,
+}
+
+impl AssocCounter {
+  fn enter_node_assoc_data(&mut self, assoc: &NodeAssocData) {
+    if !assoc.is_empty() {
+      self.non_empty += 1;
+    }
   }
 }
 
@@ -81,6 +96,31 @@ fn ts_assoc_keys_do_not_overlap_js_accessors() {
   let _: Option<LocalSymbolId> = ts::resolved_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::declared_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::resolved_symbol(&assoc);
+}
+
+#[test]
+fn ts_locals_pure_matches_legacy_and_keeps_ast_clean() {
+  let source =
+    "function wrap(value: Foo) { return value; } type Foo = number; const use_it = wrap(1);";
+
+  let legacy = {
+    let mut ast = parse(source).unwrap();
+    bind_ts_locals(&mut ast, true)
+  };
+
+  let pure = {
+    let mut ast = parse(source).unwrap();
+    let sem = bind_ts_locals_pure(&mut ast, true);
+    let mut counter = AssocCounter::default();
+    ast.drive(&mut counter);
+    assert_eq!(counter.non_empty, 0);
+    sem
+  };
+
+  assert_eq!(legacy.names, pure.names);
+  assert_eq!(legacy.scopes.len(), pure.scopes.len());
+  assert_eq!(legacy.symbols.len(), pure.symbols.len());
+  assert_eq!(legacy.tables, pure.tables);
 }
 
 #[test]

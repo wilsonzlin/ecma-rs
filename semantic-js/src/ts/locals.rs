@@ -1,5 +1,6 @@
 use super::model::Namespace;
-use crate::assoc::ts::{declared_symbol, scope_id, DeclaredSymbol, ResolvedSymbol, ScopeInfo};
+use crate::assoc::ts::{DeclaredSymbol, ResolvedSymbol, ScopeInfo, TsAssocTables};
+use crate::assoc::SpanKey;
 use diagnostics::TextRange;
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
@@ -17,6 +18,7 @@ use parse_js::ast::ts_stmt::{ModuleDecl, NamespaceDecl};
 use parse_js::ast::type_expr::{
   TypeConstructor, TypeEntityName, TypeExpr, TypeFunction, TypeReference,
 };
+use parse_js::loc::Loc;
 use std::collections::{BTreeMap, HashMap};
 
 /// Deterministic identifier for a lexical scope.
@@ -105,8 +107,7 @@ pub struct TsLocalSemantics {
   name_lookup: HashMap<String, NameId>,
   pub scopes: Vec<ScopeData>,
   pub symbols: Vec<SymbolData>,
-  expr_resolutions: BTreeMap<TextRange, SymbolId>,
-  type_resolutions: BTreeMap<TextRange, SymbolId>,
+  pub tables: TsAssocTables,
 }
 
 impl TsLocalSemantics {
@@ -126,12 +127,12 @@ impl TsLocalSemantics {
     expr: hir_js::ids::ExprId,
   ) -> Option<SymbolId> {
     let span = body.exprs[expr.0 as usize].span;
-    self.expr_resolutions.get(&span).copied()
+    self.resolve_expr_span(span)
   }
 
   /// Resolve an expression span without requiring a lowered body reference.
   pub fn resolve_expr_span(&self, span: TextRange) -> Option<SymbolId> {
-    self.expr_resolutions.get(&span).copied()
+    self.tables.resolved_expr(SpanKey::from(span))
   }
 
   /// Resolve a type name in lowered HIR types.
@@ -141,12 +142,100 @@ impl TsLocalSemantics {
     id: hir_js::ids::TypeExprId,
   ) -> Option<SymbolId> {
     let span = types[id.0 as usize].span;
-    self.type_resolutions.get(&span).copied()
+    self.tables.resolved_type(SpanKey::from(span))
   }
 
   /// Resolve a type reference by its span.
   pub fn resolve_type_span(&self, span: TextRange) -> Option<SymbolId> {
-    self.type_resolutions.get(&span).copied()
+    self.tables.resolved_type(SpanKey::from(span))
+  }
+
+  pub fn scope_for_span(&self, span: TextRange) -> Option<ScopeId> {
+    self.tables.scope(SpanKey::from(span))
+  }
+
+  pub fn declared_symbol_for_span(&self, span: TextRange) -> Option<SymbolId> {
+    self.tables.declared_symbol(SpanKey::from(span))
+  }
+}
+
+trait TsAssocStore {
+  fn record_scope(&mut self, loc: Loc, assoc: &mut NodeAssocData, scope: ScopeId);
+  fn scope(&self, loc: Loc, assoc: &NodeAssocData) -> Option<ScopeId>;
+  fn record_declared_symbol(&mut self, loc: Loc, assoc: &mut NodeAssocData, sym: SymbolId);
+  fn declared_symbol(&self, loc: Loc, assoc: &NodeAssocData) -> Option<SymbolId>;
+  fn record_value_resolution(&mut self, loc: Loc, assoc: &mut NodeAssocData, sym: Option<SymbolId>);
+  fn record_type_resolution(&mut self, loc: Loc, assoc: &mut NodeAssocData, sym: Option<SymbolId>);
+}
+
+struct TsAssocRecorder<'a> {
+  tables: &'a mut TsAssocTables,
+  write_assoc: bool,
+}
+
+impl<'a> TsAssocRecorder<'a> {
+  fn new(tables: &'a mut TsAssocTables, write_assoc: bool) -> Self {
+    Self {
+      tables,
+      write_assoc,
+    }
+  }
+
+  fn key(loc: Loc) -> SpanKey {
+    SpanKey::from(loc)
+  }
+}
+
+impl TsAssocStore for TsAssocRecorder<'_> {
+  fn record_scope(&mut self, loc: Loc, assoc: &mut NodeAssocData, scope: ScopeId) {
+    self.tables.record_scope(Self::key(loc), scope);
+    if self.write_assoc {
+      assoc.set(ScopeInfo(scope));
+    }
+  }
+
+  fn scope(&self, loc: Loc, assoc: &NodeAssocData) -> Option<ScopeId> {
+    self
+      .tables
+      .scope(Self::key(loc))
+      .or_else(|| assoc.get::<ScopeInfo>().map(|s| s.0))
+  }
+
+  fn record_declared_symbol(&mut self, loc: Loc, assoc: &mut NodeAssocData, sym: SymbolId) {
+    self.tables.record_declared_symbol(Self::key(loc), sym);
+    if self.write_assoc {
+      assoc.set(DeclaredSymbol(sym));
+    }
+  }
+
+  fn declared_symbol(&self, loc: Loc, assoc: &NodeAssocData) -> Option<SymbolId> {
+    self
+      .tables
+      .declared_symbol(Self::key(loc))
+      .or_else(|| assoc.get::<DeclaredSymbol>().map(|s| s.0))
+  }
+
+  fn record_value_resolution(
+    &mut self,
+    loc: Loc,
+    assoc: &mut NodeAssocData,
+    sym: Option<SymbolId>,
+  ) {
+    if let Some(sym) = sym {
+      self.tables.record_expr_resolution(Self::key(loc), sym);
+    }
+    if self.write_assoc {
+      assoc.set(ResolvedSymbol(sym));
+    }
+  }
+
+  fn record_type_resolution(&mut self, loc: Loc, assoc: &mut NodeAssocData, sym: Option<SymbolId>) {
+    if let Some(sym) = sym {
+      self.tables.record_type_resolution(Self::key(loc), sym);
+    }
+    if self.write_assoc {
+      assoc.set(ResolvedSymbol(sym));
+    }
   }
 }
 
@@ -267,54 +356,67 @@ impl SemanticsBuilder {
     None
   }
 
-  fn into_semantics(
-    self,
-    expr_resolutions: BTreeMap<TextRange, SymbolId>,
-    type_resolutions: BTreeMap<TextRange, SymbolId>,
-  ) -> TsLocalSemantics {
+  fn into_semantics(self, tables: TsAssocTables) -> TsLocalSemantics {
     TsLocalSemantics {
       names: self.names,
       name_lookup: self.name_lookup,
       scopes: self.scopes,
       symbols: self.symbols,
-      expr_resolutions,
-      type_resolutions,
+      tables,
     }
   }
 }
 
-/// Build deterministic TS local scopes and resolution tables for a parsed file.
+/// Build deterministic TS local scopes and resolution tables for a parsed file,
+/// mutating [`NodeAssocData`] for backwards compatibility.
 pub fn bind_ts_locals(top: &mut Node<TopLevel>, is_module: bool) -> TsLocalSemantics {
+  bind_ts_locals_internal(top, is_module, true)
+}
+
+/// Pure variant of [`bind_ts_locals`] that records side tables without mutating
+/// the input AST.
+pub fn bind_ts_locals_pure(top: &mut Node<TopLevel>, is_module: bool) -> TsLocalSemantics {
+  bind_ts_locals_internal(top, is_module, false)
+}
+
+fn bind_ts_locals_internal(
+  top: &mut Node<TopLevel>,
+  is_module: bool,
+  write_assoc: bool,
+) -> TsLocalSemantics {
   let kind = if is_module {
     ScopeKind::Module
   } else {
     ScopeKind::Script
   };
   let (builder, root) = SemanticsBuilder::new(kind);
-  let mut decl = DeclarePass::new(builder, root);
+  let mut tables = TsAssocTables::default();
+  let mut assoc = TsAssocRecorder::new(&mut tables, write_assoc);
+  let mut decl = DeclarePass::new(builder, root, &mut assoc);
   decl.walk_top(top);
   let builder = decl.finish();
 
-  let (expr_resolutions, type_resolutions) = {
-    let mut resolve = ResolvePass::new(&builder, root);
+  {
+    let mut resolve = ResolvePass::new(&builder, root, &mut assoc);
     resolve.walk_top(top);
-    (resolve.expr_resolutions, resolve.type_resolutions)
-  };
-  builder.into_semantics(expr_resolutions, type_resolutions)
+  }
+  builder.into_semantics(tables)
 }
 
-struct DeclarePass {
+struct DeclarePass<'a, A: TsAssocStore> {
   builder: SemanticsBuilder,
   scope_stack: Vec<ScopeId>,
   decl_target: Vec<DeclTarget>,
+  assoc: &'a mut A,
 }
 
-impl DeclarePass {
-  fn new(builder: SemanticsBuilder, root: ScopeId) -> Self {
+impl<'a, A: TsAssocStore> DeclarePass<'a, A> {
+  fn new(builder: SemanticsBuilder, root: ScopeId, assoc: &'a mut A) -> Self {
     Self {
       builder,
       scope_stack: vec![root],
       decl_target: vec![DeclTarget::Lexical],
+      assoc,
     }
   }
 
@@ -332,8 +434,8 @@ impl DeclarePass {
     self.scope_stack.pop();
   }
 
-  fn mark_scope(&self, assoc: &mut NodeAssocData) {
-    assoc.set(ScopeInfo(self.current_scope()));
+  fn mark_scope(&mut self, loc: Loc, assoc: &mut NodeAssocData) {
+    self.assoc.record_scope(loc, assoc, self.current_scope());
   }
 
   fn enter_decl_target(&mut self, target: DeclTarget) {
@@ -356,6 +458,7 @@ impl DeclarePass {
 
   fn declare(
     &mut self,
+    loc: Loc,
     assoc: &mut NodeAssocData,
     name: &str,
     namespaces: Namespace,
@@ -371,18 +474,18 @@ impl DeclarePass {
       DeclTarget::Hoisted => self.hoist_scope(),
     };
     let sym = self.builder.declare(scope, name, namespaces, span);
-    assoc.set(DeclaredSymbol(sym));
+    self.assoc.record_declared_symbol(loc, assoc, sym);
   }
 
   fn walk_top(&mut self, top: &mut Node<TopLevel>) {
-    self.mark_scope(&mut top.assoc);
+    self.mark_scope(top.loc, &mut top.assoc);
     for stmt in top.stx.body.iter_mut() {
       self.walk_stmt(stmt);
     }
   }
 
   fn walk_stmt(&mut self, stmt: &mut Node<AstStmt>) {
-    self.mark_scope(&mut stmt.assoc);
+    self.mark_scope(stmt.loc, &mut stmt.assoc);
     match &mut *stmt.stx {
       AstStmt::Block(block) => {
         self.push_scope(ScopeKind::Block);
@@ -392,13 +495,20 @@ impl DeclarePass {
       AstStmt::VarDecl(var) => self.walk_var_decl(var),
       AstStmt::FunctionDecl(func) => {
         if let Some(name) = &mut func.stx.name {
-          self.declare(&mut name.assoc, &name.stx.name, Namespace::VALUE, None);
+          self.declare(
+            name.loc,
+            &mut name.assoc,
+            &name.stx.name,
+            Namespace::VALUE,
+            None,
+          );
         }
         self.walk_func(&mut func.stx.function);
       }
       AstStmt::ClassDecl(class) => {
         if let Some(name) = &mut class.stx.name {
           self.declare(
+            name.loc,
             &mut name.assoc,
             &name.stx.name,
             Namespace::VALUE | Namespace::TYPE,
@@ -407,7 +517,7 @@ impl DeclarePass {
         }
         self.push_scope(ScopeKind::Class);
         for member in class.stx.members.iter_mut() {
-          self.mark_scope(&mut member.assoc);
+          self.mark_scope(member.loc, &mut member.assoc);
         }
         self.pop_scope();
       }
@@ -455,7 +565,13 @@ impl DeclarePass {
       }
       AstStmt::Label(label) => self.walk_stmt(&mut label.stx.statement),
       AstStmt::InterfaceDecl(intf) => {
-        self.declare(&mut intf.assoc, &intf.stx.name, Namespace::TYPE, None);
+        self.declare(
+          intf.loc,
+          &mut intf.assoc,
+          &intf.stx.name,
+          Namespace::TYPE,
+          None,
+        );
         if let Some(params) = &mut intf.stx.type_parameters {
           self.push_scope(ScopeKind::TypeParams);
           for param in params.iter_mut() {
@@ -468,7 +584,13 @@ impl DeclarePass {
         }
       }
       AstStmt::TypeAliasDecl(alias) => {
-        self.declare(&mut alias.assoc, &alias.stx.name, Namespace::TYPE, None);
+        self.declare(
+          alias.loc,
+          &mut alias.assoc,
+          &alias.stx.name,
+          Namespace::TYPE,
+          None,
+        );
         if let Some(params) = &mut alias.stx.type_parameters {
           self.push_scope(ScopeKind::TypeParams);
           for param in params.iter_mut() {
@@ -494,14 +616,14 @@ impl DeclarePass {
   }
 
   fn walk_block(&mut self, block: &mut Node<BlockStmt>) {
-    self.mark_scope(&mut block.assoc);
+    self.mark_scope(block.loc, &mut block.assoc);
     for stmt in block.stx.body.iter_mut() {
       self.walk_stmt(stmt);
     }
   }
 
   fn walk_catch(&mut self, catch: &mut Node<CatchBlock>) {
-    self.mark_scope(&mut catch.assoc);
+    self.mark_scope(catch.loc, &mut catch.assoc);
     self.push_scope(ScopeKind::Block);
     self.enter_decl_target(DeclTarget::Lexical);
     if let Some(param) = &mut catch.stx.parameter {
@@ -515,7 +637,7 @@ impl DeclarePass {
   }
 
   fn walk_for_body(&mut self, body: &mut Node<ForBody>) {
-    self.mark_scope(&mut body.assoc);
+    self.mark_scope(body.loc, &mut body.assoc);
     self.push_scope(ScopeKind::Block);
     for stmt in body.stx.body.iter_mut() {
       self.walk_stmt(stmt);
@@ -524,7 +646,7 @@ impl DeclarePass {
   }
 
   fn walk_for_triple(&mut self, triple: &mut Node<ForTripleStmt>) {
-    self.mark_scope(&mut triple.assoc);
+    self.mark_scope(triple.loc, &mut triple.assoc);
     match &mut triple.stx.init {
       ForTripleStmtInit::Expr(e) => self.walk_expr(e),
       ForTripleStmtInit::Decl(d) => self.walk_var_decl(d),
@@ -540,7 +662,7 @@ impl DeclarePass {
   }
 
   fn walk_for_in(&mut self, for_in: &mut Node<ForInStmt>) {
-    self.mark_scope(&mut for_in.assoc);
+    self.mark_scope(for_in.loc, &mut for_in.assoc);
     match &mut for_in.stx.lhs {
       ForInOfLhs::Assign(pat) => self.walk_pat(pat, false, Namespace::VALUE),
       ForInOfLhs::Decl((mode, decl)) => {
@@ -559,7 +681,7 @@ impl DeclarePass {
   }
 
   fn walk_for_of(&mut self, for_of: &mut Node<ForOfStmt>) {
-    self.mark_scope(&mut for_of.assoc);
+    self.mark_scope(for_of.loc, &mut for_of.assoc);
     match &mut for_of.stx.lhs {
       ForInOfLhs::Assign(pat) => self.walk_pat(pat, false, Namespace::VALUE),
       ForInOfLhs::Decl((mode, decl)) => {
@@ -578,7 +700,7 @@ impl DeclarePass {
   }
 
   fn walk_var_decl(&mut self, var: &mut Node<VarDecl>) {
-    self.mark_scope(&mut var.assoc);
+    self.mark_scope(var.loc, &mut var.assoc);
     let target = if var.stx.mode == VarDeclMode::Var {
       DeclTarget::Hoisted
     } else {
@@ -602,16 +724,17 @@ impl DeclarePass {
     decl: &mut Node<parse_js::ast::stmt::decl::PatDecl>,
     namespaces: Namespace,
   ) {
-    self.mark_scope(&mut decl.assoc);
+    self.mark_scope(decl.loc, &mut decl.assoc);
     self.walk_pat(&mut decl.stx.pat, true, namespaces);
   }
 
   fn walk_pat(&mut self, pat: &mut Node<AstPat>, in_decl: bool, namespaces: Namespace) {
-    self.mark_scope(&mut pat.assoc);
+    self.mark_scope(pat.loc, &mut pat.assoc);
     match &mut *pat.stx {
       AstPat::Id(id) => {
         if in_decl {
           self.declare(
+            id.loc,
             &mut id.assoc,
             &id.stx.name,
             namespaces,
@@ -626,7 +749,7 @@ impl DeclarePass {
   }
 
   fn walk_arr_pat(&mut self, pat: &mut Node<ArrPat>, in_decl: bool, namespaces: Namespace) {
-    self.mark_scope(&mut pat.assoc);
+    self.mark_scope(pat.loc, &mut pat.assoc);
     for elem in pat.stx.elements.iter_mut().flatten() {
       self.walk_pat(&mut elem.target, in_decl, namespaces);
       if let Some(default) = &mut elem.default_value {
@@ -639,7 +762,7 @@ impl DeclarePass {
   }
 
   fn walk_obj_pat(&mut self, pat: &mut Node<ObjPat>, in_decl: bool, namespaces: Namespace) {
-    self.mark_scope(&mut pat.assoc);
+    self.mark_scope(pat.loc, &mut pat.assoc);
     for prop in pat.stx.properties.iter_mut() {
       self.walk_pat(&mut prop.stx.target, in_decl, namespaces);
       if let Some(default) = &mut prop.stx.default_value {
@@ -652,7 +775,7 @@ impl DeclarePass {
   }
 
   fn walk_expr(&mut self, expr: &mut Node<AstExpr>) {
-    self.mark_scope(&mut expr.assoc);
+    self.mark_scope(expr.loc, &mut expr.assoc);
     match &mut *expr.stx {
       AstExpr::Binary(bin) => {
         self.walk_expr(&mut bin.stx.left);
@@ -676,6 +799,7 @@ impl DeclarePass {
         self.push_scope(ScopeKind::Class);
         if let Some(name) = &mut class.stx.name {
           self.declare(
+            name.loc,
             &mut name.assoc,
             &name.stx.name,
             Namespace::VALUE | Namespace::TYPE,
@@ -705,7 +829,7 @@ impl DeclarePass {
       }
       AstExpr::LitObj(obj) => {
         for member in obj.stx.members.iter_mut() {
-          self.mark_scope(&mut member.assoc);
+          self.mark_scope(member.loc, &mut member.assoc);
         }
       }
       AstExpr::Unary(unary) => self.walk_expr(&mut unary.stx.argument),
@@ -719,7 +843,7 @@ impl DeclarePass {
   }
 
   fn walk_func(&mut self, func: &mut Node<Func>) {
-    self.mark_scope(&mut func.assoc);
+    self.mark_scope(func.loc, &mut func.assoc);
     self.push_scope(ScopeKind::Function);
     self.enter_decl_target(DeclTarget::Hoisted);
     for param in func.stx.parameters.iter_mut() {
@@ -746,8 +870,9 @@ impl DeclarePass {
   }
 
   fn walk_type_param(&mut self, param: &mut Node<parse_js::ast::type_expr::TypeParameter>) {
-    self.mark_scope(&mut param.assoc);
+    self.mark_scope(param.loc, &mut param.assoc);
     self.declare(
+      param.loc,
       &mut param.assoc,
       &param.stx.name,
       Namespace::TYPE,
@@ -762,7 +887,7 @@ impl DeclarePass {
   }
 
   fn walk_type_expr(&mut self, ty: &mut Node<TypeExpr>) {
-    self.mark_scope(&mut ty.assoc);
+    self.mark_scope(ty.loc, &mut ty.assoc);
     match &mut *ty.stx {
       TypeExpr::TypeReference(reference) => self.walk_type_reference(reference),
       TypeExpr::ArrayType(arr) => self.walk_type_expr(&mut arr.stx.element_type),
@@ -786,7 +911,7 @@ impl DeclarePass {
       }
       TypeExpr::ObjectType(obj) => {
         for member in obj.stx.members.iter_mut() {
-          self.mark_scope(&mut member.assoc);
+          self.mark_scope(member.loc, &mut member.assoc);
         }
       }
       TypeExpr::TypeQuery(query) => {
@@ -806,6 +931,7 @@ impl DeclarePass {
       TypeExpr::MappedType(mapped) => {
         self.push_scope(ScopeKind::TypeParams);
         self.declare(
+          mapped.loc,
           &mut mapped.assoc,
           &mapped.stx.type_parameter,
           Namespace::TYPE,
@@ -830,6 +956,7 @@ impl DeclarePass {
       }
       TypeExpr::InferType(infer) => {
         self.declare(
+          infer.loc,
           &mut infer.assoc,
           &infer.stx.type_parameter,
           Namespace::TYPE,
@@ -854,7 +981,7 @@ impl DeclarePass {
   }
 
   fn walk_type_function(&mut self, func: &mut Node<TypeFunction>) {
-    self.mark_scope(&mut func.assoc);
+    self.mark_scope(func.loc, &mut func.assoc);
     self.push_scope(ScopeKind::TypeParams);
     if let Some(params) = &mut func.stx.type_parameters {
       for param in params.iter_mut() {
@@ -869,7 +996,7 @@ impl DeclarePass {
   }
 
   fn walk_constructor_type(&mut self, func: &mut Node<TypeConstructor>) {
-    self.mark_scope(&mut func.assoc);
+    self.mark_scope(func.loc, &mut func.assoc);
     self.push_scope(ScopeKind::TypeParams);
     if let Some(params) = &mut func.stx.type_parameters {
       for param in params.iter_mut() {
@@ -884,7 +1011,7 @@ impl DeclarePass {
   }
 
   fn walk_type_reference(&mut self, reference: &mut Node<TypeReference>) {
-    self.mark_scope(&mut reference.assoc);
+    self.mark_scope(reference.loc, &mut reference.assoc);
     if let Some(args) = &mut reference.stx.type_arguments {
       for arg in args.iter_mut() {
         self.walk_type_expr(arg);
@@ -899,8 +1026,9 @@ impl DeclarePass {
   }
 
   fn walk_namespace(&mut self, ns: &mut Node<NamespaceDecl>) {
-    self.mark_scope(&mut ns.assoc);
+    self.mark_scope(ns.loc, &mut ns.assoc);
     self.declare(
+      ns.loc,
       &mut ns.assoc,
       &ns.stx.name,
       Namespace::VALUE | Namespace::NAMESPACE,
@@ -919,12 +1047,13 @@ impl DeclarePass {
   }
 
   fn walk_module(&mut self, module: &mut Node<ModuleDecl>) {
-    self.mark_scope(&mut module.assoc);
+    self.mark_scope(module.loc, &mut module.assoc);
     let name = match &module.stx.name {
       parse_js::ast::ts_stmt::ModuleName::Identifier(id) => id.as_str(),
       parse_js::ast::ts_stmt::ModuleName::String(s) => s.as_str(),
     };
     self.declare(
+      module.loc,
       &mut module.assoc,
       name,
       Namespace::VALUE | Namespace::NAMESPACE,
@@ -940,7 +1069,7 @@ impl DeclarePass {
   }
 
   fn walk_import(&mut self, import: &mut Node<parse_js::ast::stmt::ImportStmt>) {
-    self.mark_scope(&mut import.assoc);
+    self.mark_scope(import.loc, &mut import.assoc);
     let base_ns = if import.stx.type_only {
       Namespace::TYPE
     } else {
@@ -967,10 +1096,16 @@ impl DeclarePass {
   }
 
   fn walk_import_name(&mut self, name: &mut Node<ImportName>, ns: Namespace) {
-    self.mark_scope(&mut name.assoc);
+    self.mark_scope(name.loc, &mut name.assoc);
     self.walk_pat_decl(&mut name.stx.alias, ns);
     if let AstPat::Id(id) = &mut *name.stx.alias.stx.pat.stx {
-      self.declare(&mut id.assoc, &id.stx.name, ns, Some(to_range(name.loc)));
+      self.declare(
+        id.loc,
+        &mut id.assoc,
+        &id.stx.name,
+        ns,
+        Some(to_range(name.loc)),
+      );
     }
   }
 
@@ -979,20 +1114,18 @@ impl DeclarePass {
   }
 }
 
-struct ResolvePass<'a> {
+struct ResolvePass<'a, A: TsAssocStore> {
   builder: &'a SemanticsBuilder,
   scope_stack: Vec<ScopeId>,
-  expr_resolutions: BTreeMap<TextRange, SymbolId>,
-  type_resolutions: BTreeMap<TextRange, SymbolId>,
+  assoc: &'a mut A,
 }
 
-impl<'a> ResolvePass<'a> {
-  fn new(builder: &'a SemanticsBuilder, root: ScopeId) -> Self {
+impl<'a, A: TsAssocStore> ResolvePass<'a, A> {
+  fn new(builder: &'a SemanticsBuilder, root: ScopeId, assoc: &'a mut A) -> Self {
     Self {
       builder,
       scope_stack: vec![root],
-      expr_resolutions: BTreeMap::new(),
-      type_resolutions: BTreeMap::new(),
+      assoc,
     }
   }
 
@@ -1000,16 +1133,16 @@ impl<'a> ResolvePass<'a> {
     *self.scope_stack.last().unwrap()
   }
 
-  fn push_scope_from_assoc(&mut self, assoc: &NodeAssocData) {
-    if let Some(id) = scope_id(assoc) {
+  fn push_scope_from_assoc(&mut self, loc: Loc, assoc: &NodeAssocData) {
+    if let Some(id) = self.assoc.scope(loc, assoc) {
       if self.scope_stack.last().copied() != Some(id) {
         self.scope_stack.push(id);
       }
     }
   }
 
-  fn pop_scope_from_assoc(&mut self, assoc: &NodeAssocData) {
-    if let Some(id) = scope_id(assoc) {
+  fn pop_scope_from_assoc(&mut self, loc: Loc, assoc: &NodeAssocData) {
+    if let Some(id) = self.assoc.scope(loc, assoc) {
       if self.scope_stack.last().copied() == Some(id) {
         self.scope_stack.pop();
       }
@@ -1017,15 +1150,15 @@ impl<'a> ResolvePass<'a> {
   }
 
   fn walk_top(&mut self, top: &mut Node<TopLevel>) {
-    self.push_scope_from_assoc(&top.assoc);
+    self.push_scope_from_assoc(top.loc, &top.assoc);
     for stmt in top.stx.body.iter_mut() {
       self.walk_stmt(stmt);
     }
-    self.pop_scope_from_assoc(&top.assoc);
+    self.pop_scope_from_assoc(top.loc, &top.assoc);
   }
 
   fn walk_stmt(&mut self, stmt: &mut Node<AstStmt>) {
-    self.push_scope_from_assoc(&stmt.assoc);
+    self.push_scope_from_assoc(stmt.loc, &stmt.assoc);
     match &mut *stmt.stx {
       AstStmt::Block(block) => {
         self.walk_block(block);
@@ -1043,8 +1176,8 @@ impl<'a> ResolvePass<'a> {
       }
       AstStmt::ClassDecl(class) => {
         for member in class.stx.members.iter_mut() {
-          self.push_scope_from_assoc(&member.assoc);
-          self.pop_scope_from_assoc(&member.assoc);
+          self.push_scope_from_assoc(member.loc, &member.assoc);
+          self.pop_scope_from_assoc(member.loc, &member.assoc);
         }
       }
       AstStmt::Expr(expr) => self.walk_expr(&mut expr.stx.expr),
@@ -1166,11 +1299,11 @@ impl<'a> ResolvePass<'a> {
       }
       _ => {}
     }
-    self.pop_scope_from_assoc(&stmt.assoc);
+    self.pop_scope_from_assoc(stmt.loc, &stmt.assoc);
   }
 
   fn walk_namespace(&mut self, ns: &mut Node<NamespaceDecl>) {
-    self.push_scope_from_assoc(&ns.assoc);
+    self.push_scope_from_assoc(ns.loc, &ns.assoc);
     match &mut ns.stx.body {
       parse_js::ast::ts_stmt::NamespaceBody::Block(body) => {
         for stmt in body.iter_mut() {
@@ -1179,15 +1312,15 @@ impl<'a> ResolvePass<'a> {
       }
       parse_js::ast::ts_stmt::NamespaceBody::Namespace(inner) => self.walk_namespace(inner),
     }
-    self.pop_scope_from_assoc(&ns.assoc);
+    self.pop_scope_from_assoc(ns.loc, &ns.assoc);
   }
 
   fn walk_block_stmt(&mut self, block: &mut Node<BlockStmt>) {
-    self.push_scope_from_assoc(&block.assoc);
+    self.push_scope_from_assoc(block.loc, &block.assoc);
     for stmt in block.stx.body.iter_mut() {
       self.walk_stmt(stmt);
     }
-    self.pop_scope_from_assoc(&block.assoc);
+    self.pop_scope_from_assoc(block.loc, &block.assoc);
   }
 
   fn walk_block(&mut self, block: &mut Node<BlockStmt>) {
@@ -1197,11 +1330,11 @@ impl<'a> ResolvePass<'a> {
   }
 
   fn walk_for_body(&mut self, body: &mut Node<ForBody>) {
-    self.push_scope_from_assoc(&body.assoc);
+    self.push_scope_from_assoc(body.loc, &body.assoc);
     for stmt in body.stx.body.iter_mut() {
       self.walk_stmt(stmt);
     }
-    self.pop_scope_from_assoc(&body.assoc);
+    self.pop_scope_from_assoc(body.loc, &body.assoc);
   }
 
   fn walk_pat_decl(&mut self, decl: &mut Node<parse_js::ast::stmt::decl::PatDecl>) {
@@ -1211,18 +1344,17 @@ impl<'a> ResolvePass<'a> {
   fn walk_pat(&mut self, pat: &mut Node<AstPat>) {
     match &mut *pat.stx {
       AstPat::Id(id) => {
-        if declared_symbol(&id.assoc).is_none() {
-          let span = to_range(pat.loc);
+        if let Some(sym) = self.assoc.declared_symbol(id.loc, &id.assoc) {
+          self
+            .assoc
+            .record_value_resolution(pat.loc, &mut id.assoc, Some(sym));
+        } else {
           let sym = self
             .builder
             .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
-          id.assoc.set(ResolvedSymbol(sym));
-          if let Some(sym) = sym {
-            self.expr_resolutions.insert(span, sym);
-          }
-        } else if let Some(sym) = declared_symbol(&id.assoc) {
-          id.assoc.set(ResolvedSymbol(Some(sym)));
-          self.expr_resolutions.insert(to_range(pat.loc), sym);
+          self
+            .assoc
+            .record_value_resolution(pat.loc, &mut id.assoc, sym);
         }
       }
       AstPat::Arr(arr) => {
@@ -1278,14 +1410,12 @@ impl<'a> ResolvePass<'a> {
   fn walk_expr(&mut self, expr: &mut Node<AstExpr>) {
     match &mut *expr.stx {
       AstExpr::Id(id) => {
-        let span = to_range(expr.loc);
         let sym = self
           .builder
           .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
-        expr.assoc.set(ResolvedSymbol(sym));
-        if let Some(sym) = sym {
-          self.expr_resolutions.insert(span, sym);
-        }
+        self
+          .assoc
+          .record_value_resolution(expr.loc, &mut expr.assoc, sym);
       }
       AstExpr::Binary(bin) => {
         self.walk_expr(&mut bin.stx.left);
@@ -1307,14 +1437,12 @@ impl<'a> ResolvePass<'a> {
       AstExpr::ArrowFunc(arrow) => self.walk_func(&mut arrow.stx.func),
       AstExpr::Class(class) => {
         if let Some(name) = &class.stx.name {
-          let span = to_range(name.loc);
           let sym = self
             .builder
             .resolve(self.current_scope(), &name.stx.name, Namespace::VALUE);
-          class.assoc.set(ResolvedSymbol(sym));
-          if let Some(sym) = sym {
-            self.expr_resolutions.insert(span, sym);
-          }
+          self
+            .assoc
+            .record_value_resolution(name.loc, &mut class.assoc, sym);
         }
       }
       AstExpr::ArrPat(arr) => self.walk_arr_pat_expr(arr),
@@ -1338,8 +1466,8 @@ impl<'a> ResolvePass<'a> {
       }
       AstExpr::LitObj(obj) => {
         for member in obj.stx.members.iter_mut() {
-          self.push_scope_from_assoc(&member.assoc);
-          self.pop_scope_from_assoc(&member.assoc);
+          self.push_scope_from_assoc(member.loc, &member.assoc);
+          self.pop_scope_from_assoc(member.loc, &member.assoc);
         }
       }
       AstExpr::Unary(unary) => self.walk_expr(&mut unary.stx.argument),
@@ -1353,7 +1481,7 @@ impl<'a> ResolvePass<'a> {
   }
 
   fn walk_func(&mut self, func: &mut Node<Func>) {
-    self.push_scope_from_assoc(&func.assoc);
+    self.push_scope_from_assoc(func.loc, &func.assoc);
     for param in func.stx.parameters.iter_mut() {
       self.walk_pat_decl(&mut param.stx.pattern);
       if let Some(default) = &mut param.stx.default_value {
@@ -1373,15 +1501,16 @@ impl<'a> ResolvePass<'a> {
         FuncBody::Expression(expr) => self.walk_expr(expr),
       }
     }
-    self.pop_scope_from_assoc(&func.assoc);
+    self.pop_scope_from_assoc(func.loc, &func.assoc);
   }
 
   fn walk_type_expr(&mut self, ty: &mut Node<TypeExpr>) {
     match &mut *ty.stx {
       TypeExpr::TypeReference(reference) => {
-        let span = to_range(ty.loc);
         if let Some(sym) = self.resolve_type_reference(reference) {
-          self.type_resolutions.insert(span, sym);
+          self
+            .assoc
+            .record_type_resolution(ty.loc, &mut ty.assoc, Some(sym));
         }
         if let Some(args) = &mut reference.stx.type_arguments {
           for arg in args.iter_mut() {
@@ -1410,13 +1539,15 @@ impl<'a> ResolvePass<'a> {
       }
       TypeExpr::ObjectType(obj) => {
         for member in obj.stx.members.iter_mut() {
-          self.push_scope_from_assoc(&member.assoc);
-          self.pop_scope_from_assoc(&member.assoc);
+          self.push_scope_from_assoc(member.loc, &member.assoc);
+          self.pop_scope_from_assoc(member.loc, &member.assoc);
         }
       }
       TypeExpr::TypeQuery(query) => {
         if let Some(sym) = self.resolve_type_entity_name(&query.stx.expr_name) {
-          self.type_resolutions.insert(to_range(ty.loc), sym);
+          self
+            .assoc
+            .record_type_resolution(ty.loc, &mut ty.assoc, Some(sym));
         }
       }
       TypeExpr::KeyOfType(k) => self.walk_type_expr(&mut k.stx.type_expr),
@@ -1455,7 +1586,9 @@ impl<'a> ResolvePass<'a> {
       TypeExpr::ImportType(import) => {
         if let Some(qual) = &import.stx.qualifier {
           if let Some(sym) = self.resolve_type_entity_name(qual) {
-            self.type_resolutions.insert(to_range(ty.loc), sym);
+            self
+              .assoc
+              .record_type_resolution(ty.loc, &mut ty.assoc, Some(sym));
           }
         }
         if let Some(args) = &mut import.stx.type_arguments {

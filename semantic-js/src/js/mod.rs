@@ -55,8 +55,10 @@
 //! so iteration is stable; use [`ScopeData::iter_symbols_sorted`] or
 //! [`JsSemantics::scope_symbols`] to traverse symbols deterministically.
 //! Names are interned in first-encounter order using a deterministic lookup map.
-use parse_js::ast::node::Node;
+use crate::assoc::js::{DeclaredSymbol as LegacyDeclaredSymbol, JsAssocTables, ResolvedSymbol};
+use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stx::TopLevel;
+use parse_js::loc::Loc;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
@@ -64,13 +66,98 @@ pub mod declare;
 pub mod resolve;
 
 pub use declare::declare;
+pub(crate) use declare::declare_with_assoc;
 pub use resolve::resolve;
 pub use resolve::JsResolution;
+pub(crate) use resolve::resolve_with_assoc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TopLevelMode {
   Global,
   Module,
+}
+
+pub(crate) trait JsAssocStore {
+  fn record_scope(&mut self, loc: Loc, assoc: &mut NodeAssocData, scope: ScopeId);
+  fn scope(&self, loc: Loc, assoc: &NodeAssocData) -> Option<ScopeId>;
+  fn record_declared_symbol(&mut self, loc: Loc, assoc: &mut NodeAssocData, symbol: SymbolId);
+  fn declared_symbol(&self, loc: Loc, assoc: &NodeAssocData) -> Option<SymbolId>;
+  fn record_resolved_symbol(
+    &mut self,
+    loc: Loc,
+    assoc: &mut NodeAssocData,
+    symbol: Option<SymbolId>,
+    in_tdz: bool,
+  );
+}
+
+#[derive(Default)]
+pub(crate) struct LegacyJsAssocStore;
+
+impl JsAssocStore for LegacyJsAssocStore {
+  fn record_scope(&mut self, _loc: Loc, assoc: &mut NodeAssocData, scope: ScopeId) {
+    assoc.set(scope);
+  }
+
+  fn scope(&self, _loc: Loc, assoc: &NodeAssocData) -> Option<ScopeId> {
+    assoc.get::<ScopeId>().copied()
+  }
+
+  fn record_declared_symbol(&mut self, _loc: Loc, assoc: &mut NodeAssocData, symbol: SymbolId) {
+    assoc.set(LegacyDeclaredSymbol(symbol));
+  }
+
+  fn declared_symbol(&self, _loc: Loc, assoc: &NodeAssocData) -> Option<SymbolId> {
+    assoc.get::<LegacyDeclaredSymbol>().map(|s| s.0)
+  }
+
+  fn record_resolved_symbol(
+    &mut self,
+    _loc: Loc,
+    assoc: &mut NodeAssocData,
+    symbol: Option<SymbolId>,
+    in_tdz: bool,
+  ) {
+    assoc.set(ResolvedSymbol { symbol, in_tdz });
+  }
+}
+
+pub(crate) struct TableJsAssocStore<'a> {
+  tables: &'a mut JsAssocTables,
+}
+
+impl<'a> TableJsAssocStore<'a> {
+  pub fn new(tables: &'a mut JsAssocTables) -> Self {
+    Self { tables }
+  }
+}
+
+impl JsAssocStore for TableJsAssocStore<'_> {
+  fn record_scope(&mut self, loc: Loc, _assoc: &mut NodeAssocData, scope: ScopeId) {
+    self.tables.record_scope(loc, scope);
+  }
+
+  fn scope(&self, loc: Loc, _assoc: &NodeAssocData) -> Option<ScopeId> {
+    self.tables.scope(loc)
+  }
+
+  fn record_declared_symbol(&mut self, loc: Loc, _assoc: &mut NodeAssocData, symbol: SymbolId) {
+    self.tables.record_declared_symbol(loc, symbol);
+  }
+
+  fn declared_symbol(&self, loc: Loc, _assoc: &NodeAssocData) -> Option<SymbolId> {
+    self.tables.declared_symbol(loc)
+  }
+
+  fn record_resolved_symbol(
+    &mut self,
+    loc: Loc,
+    _assoc: &mut NodeAssocData,
+    symbol: Option<SymbolId>,
+    in_tdz: bool,
+  ) {
+    self.tables.record_resolved_symbol(loc, symbol, in_tdz);
+  }
 }
 
 impl FromStr for TopLevelMode {
@@ -249,9 +336,34 @@ impl JsSemantics {
   }
 }
 
+/// Legacy binding entry point that mutates `NodeAssocData`.
+/// Prefer [`bind_js_pure`] when running in parallel or in incremental contexts.
 pub fn bind_js(top_level: &mut Node<TopLevel>, mode: TopLevelMode) -> (JsSemantics, JsResolution) {
-  let sem = declare(top_level, mode);
-  let res = resolve(top_level, &sem);
+  let mut assoc = LegacyJsAssocStore::default();
+  bind_js_with_assoc(top_level, mode, &mut assoc)
+}
+
+/// Pure binding entry point that leaves the AST untouched and returns side tables
+/// keyed by source spans.
+pub fn bind_js_pure(
+  top_level: &mut Node<TopLevel>,
+  mode: TopLevelMode,
+) -> (JsSemantics, JsAssocTables) {
+  let mut tables = JsAssocTables::default();
+  let (sem, _res) = {
+    let mut assoc = TableJsAssocStore::new(&mut tables);
+    bind_js_with_assoc(top_level, mode, &mut assoc)
+  };
+  (sem, tables)
+}
+
+fn bind_js_with_assoc(
+  top_level: &mut Node<TopLevel>,
+  mode: TopLevelMode,
+  assoc: &mut impl JsAssocStore,
+) -> (JsSemantics, JsResolution) {
+  let sem = declare_with_assoc(top_level, mode, assoc);
+  let res = resolve_with_assoc(top_level, &sem, assoc);
   (sem, res)
 }
 

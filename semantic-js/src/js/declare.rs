@@ -1,4 +1,6 @@
+use super::JsAssocStore;
 use super::JsSemantics;
+use super::LegacyJsAssocStore;
 use super::NameId;
 use super::ScopeData;
 use super::ScopeId;
@@ -6,7 +8,6 @@ use super::ScopeKind;
 use super::SymbolData;
 use super::SymbolId;
 use super::TopLevelMode;
-use crate::assoc::js::{scope_id, DeclaredSymbol};
 use derive_visitor::DriveMut;
 use derive_visitor::VisitorMut;
 use parse_js::ast::expr::pat::ClassOrFuncName;
@@ -31,6 +32,7 @@ use parse_js::ast::stmt::ImportStmt;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::WithStmt;
 use parse_js::ast::stx::TopLevel;
+use parse_js::loc::Loc;
 use std::collections::BTreeMap;
 
 type BlockStmtNode = Node<BlockStmt>;
@@ -42,6 +44,7 @@ type FuncDeclNode = Node<FuncDecl>;
 type FuncExprNode = Node<FuncExpr>;
 type FuncNode = Node<Func>;
 type ForBodyNode = Node<ForBody>;
+type IdExprNode = Node<parse_js::ast::expr::IdExpr>;
 type IdPatNode = Node<IdPat>;
 type ImportStmtNode = Node<ImportStmt>;
 type PatDeclNode = Node<PatDecl>;
@@ -49,10 +52,20 @@ type WithStmtNode = Node<WithStmt>;
 type VarDeclNode = Node<VarDecl>;
 
 pub fn declare(top_level: &mut Node<TopLevel>, mode: TopLevelMode) -> JsSemantics {
-  let mut visitor = DeclareVisitor::new(mode);
+  let mut assoc = LegacyJsAssocStore::default();
+  declare_with_assoc(top_level, mode, &mut assoc)
+}
+
+pub(crate) fn declare_with_assoc(
+  top_level: &mut Node<TopLevel>,
+  mode: TopLevelMode,
+  assoc: &mut impl JsAssocStore,
+) -> JsSemantics {
+  let mut visitor = DeclareVisitor::new(mode, assoc);
+  visitor.mark_scope_for_loc(top_level.loc, &mut top_level.assoc);
   top_level.drive_mut(&mut visitor);
   let mut sem = visitor.finish();
-  mark_dynamic_scopes(top_level, &mut sem);
+  mark_dynamic_scopes(top_level, &mut sem, assoc);
   sem
 }
 
@@ -166,6 +179,7 @@ struct DeclContext {
 #[derive(VisitorMut)]
 #[visitor(
   BlockStmtNode,
+  CallExprNode(enter),
   CatchBlockNode,
   ClassDeclNode,
   ClassExprNode,
@@ -174,21 +188,23 @@ struct DeclContext {
   FuncDeclNode(enter),
   FuncExprNode,
   FuncNode,
+  IdExprNode(enter),
   IdPatNode(enter),
   ImportStmtNode,
   PatDeclNode,
   VarDeclNode,
-  NodeAssocData(enter)
+  WithStmtNode(enter)
 )]
-struct DeclareVisitor {
+struct DeclareVisitor<'a, A: JsAssocStore> {
   builder: SemanticsBuilder,
   scope_stack: Vec<ScopeId>,
   decl_target_stack: Vec<DeclContext>,
   in_pattern_decl: Vec<bool>,
+  assoc: &'a mut A,
 }
 
-impl DeclareVisitor {
-  fn new(mode: TopLevelMode) -> Self {
+impl<'a, A: JsAssocStore> DeclareVisitor<'a, A> {
+  fn new(mode: TopLevelMode, assoc: &'a mut A) -> Self {
     let builder = SemanticsBuilder::new(mode);
     let top_scope = builder.top_scope;
     Self {
@@ -196,6 +212,7 @@ impl DeclareVisitor {
       scope_stack: vec![top_scope],
       decl_target_stack: Vec::new(),
       in_pattern_decl: vec![false],
+      assoc,
     }
   }
 
@@ -275,27 +292,32 @@ impl DeclareVisitor {
   }
 
   fn declare_class_or_func_name(&mut self, node: &mut Node<ClassOrFuncName>, ctx: DeclContext) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     if let Some((symbol, _)) = self.declare_with_target(&node.stx.name, ctx) {
-      node.assoc.set(DeclaredSymbol(symbol));
+      self
+        .assoc
+        .record_declared_symbol(node.loc, &mut node.assoc, symbol);
     }
   }
 
-  fn enter_node_assoc_data(&mut self, assoc: &mut NodeAssocData) {
-    assoc.set(self.current_scope());
+  fn mark_scope_for_loc(&mut self, loc: Loc, assoc: &mut NodeAssocData) {
+    self.assoc.record_scope(loc, assoc, self.current_scope());
   }
 }
 
-impl DeclareVisitor {
-  fn enter_block_stmt_node(&mut self, _node: &mut BlockStmtNode) {
+impl<A: JsAssocStore> DeclareVisitor<'_, A> {
+  fn enter_block_stmt_node(&mut self, node: &mut BlockStmtNode) {
     self.push_scope(ScopeKind::Block);
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
   }
 
   fn exit_block_stmt_node(&mut self, _node: &mut BlockStmtNode) {
     self.pop_scope();
   }
 
-  fn enter_catch_block_node(&mut self, _node: &mut CatchBlockNode) {
+  fn enter_catch_block_node(&mut self, node: &mut CatchBlockNode) {
     self.push_scope(ScopeKind::Block);
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     self.push_decl_target(DeclTarget::IfNotGlobal);
   }
 
@@ -315,6 +337,7 @@ impl DeclareVisitor {
       );
     }
     self.push_scope(ScopeKind::Class);
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
   }
 
   fn exit_class_decl_node(&mut self, _node: &mut ClassDeclNode) {
@@ -323,6 +346,7 @@ impl DeclareVisitor {
 
   fn enter_class_expr_node(&mut self, node: &mut ClassExprNode) {
     self.push_scope(ScopeKind::Class);
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     if let Some(name) = &mut node.stx.name {
       self.declare_class_or_func_name(
         name,
@@ -338,8 +362,9 @@ impl DeclareVisitor {
     self.pop_scope();
   }
 
-  fn enter_for_body_node(&mut self, _node: &mut ForBodyNode) {
+  fn enter_for_body_node(&mut self, node: &mut ForBodyNode) {
     self.push_scope(ScopeKind::Block);
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
   }
 
   fn exit_for_body_node(&mut self, _node: &mut ForBodyNode) {
@@ -369,6 +394,7 @@ impl DeclareVisitor {
   }
 
   fn enter_func_decl_node(&mut self, node: &mut FuncDeclNode) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     if let Some(name) = &mut node.stx.name {
       self.declare_class_or_func_name(
         name,
@@ -382,6 +408,7 @@ impl DeclareVisitor {
 
   fn enter_func_expr_node(&mut self, node: &mut FuncExprNode) {
     self.push_scope(ScopeKind::FunctionExpressionName);
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     if let Some(name) = &mut node.stx.name {
       self.declare_class_or_func_name(
         name,
@@ -404,6 +431,7 @@ impl DeclareVisitor {
       ScopeKind::NonArrowFunction
     };
     self.push_scope(kind);
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     self.push_decl_target(DeclTarget::NearestClosure);
   }
 
@@ -413,16 +441,20 @@ impl DeclareVisitor {
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     if self.in_pattern_decl() {
       if let Some(ctx) = self.decl_target_stack.last().copied() {
         if let Some((symbol, _)) = self.declare_with_target(&node.stx.name, ctx) {
-          node.assoc.set(DeclaredSymbol(symbol));
+          self
+            .assoc
+            .record_declared_symbol(node.loc, &mut node.assoc, symbol);
         }
       }
     }
   }
 
-  fn enter_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
+  fn enter_import_stmt_node(&mut self, node: &mut ImportStmtNode) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     self.push_decl_context(DeclTarget::IfNotGlobal, false);
   }
 
@@ -430,7 +462,8 @@ impl DeclareVisitor {
     self.pop_decl_target();
   }
 
-  fn enter_pat_decl_node(&mut self, _node: &mut PatDeclNode) {
+  fn enter_pat_decl_node(&mut self, node: &mut PatDeclNode) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     self.enter_pattern_decl();
   }
 
@@ -439,6 +472,7 @@ impl DeclareVisitor {
   }
 
   fn enter_var_decl_node(&mut self, node: &mut VarDeclNode) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
     let target = match node.stx.mode {
       VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing => {
         DeclTarget::IfNotGlobal
@@ -455,15 +489,28 @@ impl DeclareVisitor {
   fn exit_var_decl_node(&mut self, _node: &mut VarDeclNode) {
     self.pop_decl_target();
   }
+
+  fn enter_call_expr_node(&mut self, node: &mut CallExprNode) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
+  }
+
+  fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
+  }
+
+  fn enter_with_stmt_node(&mut self, node: &mut WithStmtNode) {
+    self.mark_scope_for_loc(node.loc, &mut node.assoc);
+  }
 }
 
 #[derive(VisitorMut)]
 #[visitor(CallExprNode(exit), WithStmtNode(enter))]
-struct DynamicScopeVisitor<'a> {
+struct DynamicScopeVisitor<'a, A: JsAssocStore> {
   sem: &'a mut JsSemantics,
+  assoc: &'a A,
 }
 
-impl DynamicScopeVisitor<'_> {
+impl<A: JsAssocStore> DynamicScopeVisitor<'_, A> {
   fn mark_dynamic(&mut self, scope: ScopeId, direct_eval: bool) {
     let mut current = Some(scope);
     while let Some(scope_id) = current {
@@ -480,11 +527,11 @@ impl DynamicScopeVisitor<'_> {
   }
 
   fn enter_with_stmt_node(&mut self, node: &mut WithStmtNode) {
-    if let Some(scope) = scope_id(&node.assoc) {
+    if let Some(scope) = self.assoc.scope(node.loc, &node.assoc) {
       self.mark_dynamic(scope, false);
     }
     if let Stmt::Block(block) = node.stx.body.stx.as_ref() {
-      if let Some(body_scope) = scope_id(&block.assoc) {
+      if let Some(body_scope) = self.assoc.scope(block.loc, &block.assoc) {
         self.mark_dynamic(body_scope, false);
       }
     }
@@ -496,7 +543,7 @@ impl DynamicScopeVisitor<'_> {
     }
     if let Expr::Id(callee) = node.stx.callee.stx.as_ref() {
       if callee.stx.name == "eval" {
-        if let Some(scope) = scope_id(&node.assoc) {
+        if let Some(scope) = self.assoc.scope(node.loc, &node.assoc) {
           if self.sem.resolve_name_in_scope(scope, "eval").is_none() {
             self.mark_dynamic(scope, true);
           }
@@ -506,8 +553,12 @@ impl DynamicScopeVisitor<'_> {
   }
 }
 
-fn mark_dynamic_scopes(top_level: &mut Node<TopLevel>, sem: &mut JsSemantics) {
-  let mut visitor = DynamicScopeVisitor { sem };
+fn mark_dynamic_scopes(
+  top_level: &mut Node<TopLevel>,
+  sem: &mut JsSemantics,
+  assoc: &impl JsAssocStore,
+) {
+  let mut visitor = DynamicScopeVisitor { sem, assoc };
   top_level.drive_mut(&mut visitor);
 }
 
