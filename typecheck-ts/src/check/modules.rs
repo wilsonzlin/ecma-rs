@@ -1,7 +1,7 @@
 use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
 use ::semantic_js::ts as sem_ts;
 
-/// Build an [`ExportMap`] for a file using `semantic-js` binder output.
+/// Build [`ExportMap`] for a file using `semantic-js` binder output.
 pub(crate) fn exports_from_semantics(
   state: &mut ProgramState,
   semantics: &sem_ts::TsProgramSemantics,
@@ -13,11 +13,19 @@ pub(crate) fn exports_from_semantics(
   let mut mapped = ExportMap::new();
 
   for (name, group) in exports.iter() {
-    if let Some(symbol_id) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) {
-      mapped.insert(
-        name.clone(),
-        map_export(state, semantics, sem_file, symbol_id),
-      );
+    let candidates = [
+      sem_ts::Namespace::VALUE,
+      sem_ts::Namespace::NAMESPACE,
+      sem_ts::Namespace::TYPE,
+    ];
+    for ns in candidates {
+      if let Some(symbol_id) = group.symbol_for(ns, symbols) {
+        mapped.insert(
+          name.clone(),
+          map_export(state, semantics, sem_file, symbol_id, ns),
+        );
+        break;
+      }
     }
   }
 
@@ -29,26 +37,53 @@ fn map_export(
   semantics: &sem_ts::TsProgramSemantics,
   sem_file: sem_ts::FileId,
   symbol_id: sem_ts::SymbolId,
+  ns: sem_ts::Namespace,
 ) -> ExportEntry {
   let symbols = semantics.symbols();
-  let mut local_def: Option<DefId> = None;
-  let mut any_def: Option<DefId> = None;
-  for decl_id in semantics.symbol_decls(symbol_id, sem_ts::Namespace::VALUE) {
+  let mut local_defs: Vec<DefId> = Vec::new();
+  let mut all_defs: Vec<DefId> = Vec::new();
+  for decl_id in semantics.symbol_decls(symbol_id, ns) {
     let decl = symbols.decl(*decl_id);
-    let Some(def) = map_decl_to_program_def(state, decl) else {
-      continue;
-    };
-    any_def.get_or_insert(def);
-    if decl.file == sem_file && local_def.is_none() {
-      local_def = Some(def);
+    if let Some(def) = map_decl_to_program_def(state, decl) {
+      all_defs.push(def);
+      if decl.file == sem_file {
+        local_defs.push(def);
+      }
     }
   }
+  local_defs.sort_by_key(|d| d.0);
+  local_defs.dedup();
+  all_defs.sort_by_key(|d| d.0);
+  all_defs.dedup();
 
-  let def_for_type = local_def.or(any_def);
-  let type_id: Option<TypeId> = def_for_type.map(|def| state.type_of_def(def));
-  let symbol = local_def
+  let pick_best = |defs: &[DefId]| -> Option<DefId> {
+    let mut best: Option<(u8, DefId)> = None;
+    for def in defs.iter().copied() {
+      let priority = state.def_priority(def, ns);
+      best = match best {
+        Some((best_pri, best_def))
+          if best_pri < priority || (best_pri == priority && best_def < def) =>
+        {
+          Some((best_pri, best_def))
+        }
+        _ => Some((priority, def)),
+      };
+    }
+    best.map(|(_, def)| def)
+  };
+
+  let preferred = pick_best(&local_defs).or_else(|| pick_best(&all_defs));
+  let type_id: Option<TypeId> = preferred.map(|def| state.type_of_def(def));
+  let symbol = preferred
     .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
     .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
+  let local_def = preferred.and_then(|def| {
+    if local_defs.contains(&def) {
+      Some(def)
+    } else {
+      None
+    }
+  });
 
   ExportEntry {
     symbol,

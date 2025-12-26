@@ -1317,6 +1317,77 @@ fn insert_export(
   }
 }
 
+fn merge_symbol_bucket(
+  bucket: &[SymbolId],
+  ns: Namespace,
+  symbols: &mut SymbolTable,
+) -> Option<SymbolId> {
+  if bucket.is_empty() {
+    return None;
+  }
+  if bucket.len() == 1 {
+    return Some(bucket[0]);
+  }
+
+  let first = symbols.symbol(bucket[0]).clone();
+  let mut decls: Vec<DeclId> = bucket
+    .iter()
+    .flat_map(|sym| symbols.symbol(*sym).decls_for(ns).iter().copied())
+    .collect();
+  decls.sort_by(|a, b| {
+    symbols
+      .decl(*a)
+      .order
+      .cmp(&symbols.decl(*b).order)
+      .then_with(|| a.cmp(b))
+  });
+  decls.dedup();
+
+  let merged = symbols.alloc_symbol(&first.owner, &first.name, ns, first.origin.clone());
+  for decl in decls {
+    symbols.add_decl_to_symbol(merged, decl, ns);
+  }
+  Some(merged)
+}
+
+fn merge_group_symbols(
+  group: &SymbolGroup,
+  base: &SymbolData,
+  symbols: &mut SymbolTable,
+) -> SymbolId {
+  let mut decls: [Vec<DeclId>; 3] = Default::default();
+  collect_decls(group, symbols, &mut decls);
+
+  for d in decls.iter_mut() {
+    d.sort_by(|a, b| {
+      symbols
+        .decl(*a)
+        .order
+        .cmp(&symbols.decl(*b).order)
+        .then_with(|| a.cmp(b))
+    });
+    d.dedup();
+  }
+
+  let mut mask = Namespace::empty();
+  for (idx, bit) in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE]
+    .iter()
+    .enumerate()
+  {
+    if !decls[idx].is_empty() {
+      mask |= *bit;
+    }
+  }
+
+  let merged = symbols.alloc_symbol(&base.owner, &base.name, mask, base.origin.clone());
+  for bit in mask.iter_bits() {
+    for decl in decls[ns_index(bit)].iter() {
+      symbols.add_decl_to_symbol(merged, *decl, bit);
+    }
+  }
+  merged
+}
+
 fn merge_groups(a: SymbolGroup, b: SymbolGroup, symbols: &mut SymbolTable) -> SymbolGroup {
   let mut temp: [Vec<SymbolId>; 3] = Default::default();
 
@@ -1334,9 +1405,9 @@ fn merge_groups(a: SymbolGroup, b: SymbolGroup, symbols: &mut SymbolTable) -> Sy
     bucket.dedup();
   }
 
-  let value = temp[0].first().copied();
-  let ty = temp[1].first().copied();
-  let namespace = temp[2].first().copied();
+  let value = merge_symbol_bucket(&temp[0], Namespace::VALUE, symbols);
+  let ty = merge_symbol_bucket(&temp[1], Namespace::TYPE, symbols);
+  let namespace = merge_symbol_bucket(&temp[2], Namespace::NAMESPACE, symbols);
 
   // If all namespaces use the same symbol and it contains them, keep merged.
   let same_symbol = value == ty && ty == namespace && value.is_some();
@@ -1344,13 +1415,24 @@ fn merge_groups(a: SymbolGroup, b: SymbolGroup, symbols: &mut SymbolTable) -> Sy
     return SymbolGroup::merged(value.unwrap());
   }
 
-  SymbolGroup {
+  let result = SymbolGroup {
     kind: SymbolGroupKind::Separate {
       value,
       ty,
       namespace,
     },
+  };
+
+  if should_merge_value_namespace(&value, &namespace, symbols) {
+    let base_symbol = value
+      .or(namespace)
+      .and_then(|id| symbols.symbols.get(&id).cloned())
+      .expect("mergeable symbol present");
+    let merged = merge_group_symbols(&result, &base_symbol, symbols);
+    return SymbolGroup::merged(merged);
   }
+
+  result
 }
 
 fn symbol_for_namespace(

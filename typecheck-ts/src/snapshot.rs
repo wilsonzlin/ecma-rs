@@ -4,7 +4,7 @@ use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{
   BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeStore,
 };
-use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId, FileKey, TextRange};
+use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId, TextRange};
 use types_ts_interned::{
   TypeId, TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
@@ -17,8 +17,6 @@ pub const PROGRAM_SNAPSHOT_VERSION: u32 = 3;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FileSnapshot {
   pub file: FileId,
-  pub key: FileKey,
-  pub is_lib: bool,
   pub kind: FileKind,
   pub hash: String,
   pub text: Option<String>,
@@ -58,7 +56,7 @@ pub struct ProgramSnapshot {
   pub schema_version: u32,
   pub tool_version: String,
   pub compiler_options: CompilerOptions,
-  pub roots: Vec<FileKey>,
+  pub roots: Vec<FileId>,
   pub files: Vec<FileSnapshot>,
   pub file_states: Vec<FileStateSnapshot>,
   pub def_data: Vec<DefSnapshot>,
@@ -76,5 +74,5 @@ pub struct ProgramSnapshot {
   pub builtin: BuiltinTypes,
   pub next_def: u32,
   pub next_body: u32,
-  pub next_symbol: u64,
+  pub next_symbol: u32,
 }

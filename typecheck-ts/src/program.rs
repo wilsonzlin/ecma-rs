@@ -1,11 +1,8 @@
-use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
+use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
-use ::semantic_js::ts::from_hir_js::lower_to_ts_hir;
-use ::semantic_js::ts::locals as sem_ts_locals;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, DefId as HirDefId,
-  DefKind as HirDefKind, ExportKind as HirExportKind, FileKind as HirFileKind,
-  ImportKind as HirImportKind, LowerResult,
+  FileKind as HirFileKind, LowerResult,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -18,6 +15,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
+use parse_js::ast::ts_stmt::{NamespaceBody, NamespaceDecl};
 use parse_js::ast::type_expr::{
   TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
@@ -27,17 +25,17 @@ use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
-use types_ts_interned::{self as tti, TypeId, TypeOptions, TypeParamId};
+use types_ts_interned::{self as tti, RelationResult, TypeId, TypeOptions, TypeParamId};
 
 use crate::check::caches::{CheckerCacheStats, CheckerCaches};
 use crate::codes;
+use crate::expand::ProgramTypeExpander;
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
@@ -48,6 +46,7 @@ use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
 };
 use crate::{FatalError, HostError, Ice, IceContext};
+use sem_ts::from_hir_js::lower_to_ts_hir;
 
 #[path = "check/mod.rs"]
 pub(crate) mod check;
@@ -62,9 +61,9 @@ use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManag
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
   /// Return the full text for a file.
-  fn file_text(&self, key: &FileKey) -> Result<Arc<str>, HostError>;
+  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError>;
   /// Resolve a module specifier relative to `from`.
-  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey>;
+  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId>;
 
   /// Compiler options influencing lib selection and strictness.
   fn compiler_options(&self) -> CompilerOptions {
@@ -77,138 +76,17 @@ pub trait Host: Send + Sync + 'static {
   }
 
   /// Kind of the file; defaults to TypeScript.
-  fn file_kind(&self, _file: &FileKey) -> FileKind {
+  fn file_kind(&self, _file: FileId) -> FileKind {
     FileKind::Ts
-  }
-}
-
-/// Builder for configuring and constructing a [`Program`].
-pub struct ProgramBuilder {
-  host: Arc<dyn Host>,
-  roots: Vec<FileKey>,
-  lib_manager: Arc<LibManager>,
-}
-
-impl ProgramBuilder {
-  /// Create a builder for the given host.
-  pub fn new(host: impl Host) -> Self {
-    Self::with_lib_manager(host, Arc::new(LibManager::new()))
-  }
-
-  /// Create a builder with a shared lib manager (useful for tests observing invalidation).
-  pub fn with_lib_manager(host: impl Host, lib_manager: Arc<LibManager>) -> Self {
-    ProgramBuilder {
-      host: Arc::new(host),
-      roots: Vec::new(),
-      lib_manager,
-    }
-  }
-
-  /// Add an entry file.
-  pub fn add_root(mut self, root: impl Into<FileKey>) -> Self {
-    self.roots.push(root.into());
-    self
-  }
-
-  /// Add multiple entry files.
-  pub fn add_roots(mut self, roots: impl IntoIterator<Item = FileKey>) -> Self {
-    self.roots.extend(roots);
-    self
-  }
-
-  /// Build the program.
-  pub fn build(self) -> Program {
-    Program::with_lib_manager_arc(self.host, self.roots, self.lib_manager)
-  }
-
-  /// Convenience helper for building a program from an in-memory map of files.
-  pub fn from_memory_files<I, K, S>(files: I) -> ProgramBuilder
-  where
-    I: IntoIterator<Item = (K, S)>,
-    K: Into<FileKey>,
-    S: Into<Arc<str>>,
-  {
-    let mut host = MemoryHost::default();
-    let mut roots = Vec::new();
-    for (key, text) in files {
-      let key = key.into();
-      host.insert_with_kind(key.clone(), FileKind::Ts, text.into());
-      roots.push(key);
-    }
-    ProgramBuilder::new(host).add_roots(roots)
-  }
-}
-
-/// Simple in-memory host useful for tests and examples.
-#[derive(Default, Clone)]
-pub struct MemoryHost {
-  files: HashMap<FileKey, (Arc<str>, FileKind)>,
-  edges: HashMap<(FileKey, String), FileKey>,
-}
-
-impl MemoryHost {
-  /// Insert a file with a specific kind.
-  pub fn insert_with_kind(
-    &mut self,
-    key: impl Into<FileKey>,
-    kind: FileKind,
-    source: impl Into<Arc<str>>,
-  ) {
-    let key = key.into();
-    self.files.insert(key, (source.into(), kind));
-  }
-
-  /// Insert a TypeScript/JavaScript file.
-  pub fn insert(&mut self, key: impl Into<FileKey>, source: impl Into<Arc<str>>) {
-    self.insert_with_kind(key, FileKind::Ts, source);
-  }
-
-  /// Add a resolution edge for `from` and `specifier`.
-  pub fn link(&mut self, from: impl Into<FileKey>, specifier: &str, to: impl Into<FileKey>) {
-    self
-      .edges
-      .insert((from.into(), specifier.to_string()), to.into());
-  }
-}
-
-impl Host for MemoryHost {
-  fn file_text(&self, key: &FileKey) -> Result<Arc<str>, HostError> {
-    self
-      .files
-      .get(key)
-      .map(|(text, _)| text.clone())
-      .ok_or_else(|| HostError::new(format!("missing file {}", key.as_str())))
-  }
-
-  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    self.edges.get(&(from.clone(), specifier.to_string())).cloned()
-  }
-
-  fn file_kind(&self, file: &FileKey) -> FileKind {
-    self
-      .files
-      .get(file)
-      .map(|(_, kind)| *kind)
-      .unwrap_or(FileKind::Ts)
   }
 }
 
 /// Public symbol identifier exposed through [`Program::symbol_at`].
 pub mod semantic_js {
   /// Opaque symbol identifier.
-  ///
-  /// [`Program::symbol_at`] returns identifiers derived from
-  /// `semantic-js`'s deterministic local binder. Top-level bindings are
-  /// normalized to the program's own module-level symbols (used for
-  /// exports/imports) so cross-file references share identifiers. Other locals
-  /// receive stable, program-scoped identifiers that may not have a global
-  /// [`semantic_js::ts::SymbolId`] counterpart; the `From` conversions simply
-  /// re-wrap the underlying numeric ID and are meaningful only when the values
-  /// originate from the same program (e.g. when relating `symbol_at` results to
-  /// `semantic-js` module semantics).
   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
   #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-  pub struct SymbolId(pub u64);
+  pub struct SymbolId(pub u32);
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
     fn from(id: ::semantic_js::ts::SymbolId) -> Self {
@@ -340,25 +218,6 @@ impl serde::Serialize for TypeDisplay {
   }
 }
 
-#[derive(Clone, Copy)]
-struct ProgramTypeExpander<'a> {
-  def_types: &'a HashMap<DefId, TypeId>,
-  type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
-}
-
-impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
-  fn expand(
-    &self,
-    _store: &tti::TypeStore,
-    def: DefId,
-    _args: &[TypeId],
-  ) -> Option<tti::ExpandedType> {
-    let ty = *self.def_types.get(&def)?;
-    let params = self.type_params.get(&def).cloned().unwrap_or_else(Vec::new);
-    Some(tti::ExpandedType { params, ty })
-  }
-}
-
 fn parse_file(file: FileId, kind: FileKind, source: &str) -> Result<Node<TopLevel>, Diagnostic> {
   parse_with_options(
     source,
@@ -379,11 +238,11 @@ fn parse_file(file: FileId, kind: FileKind, source: &str) -> Result<Node<TopLeve
 fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeStore>, tti::TypeId) {
   let store = tti::TypeStore::new();
   let mut cache = HashMap::new();
-  let interned = convert_type_for_display(ty, state, &store, &mut cache);
+  let interned = convert_type_to_store(ty, state, &store, &mut cache);
   (store, interned)
 }
 
-fn convert_type_for_display(
+fn convert_type_to_store(
   ty: TypeId,
   state: &ProgramState,
   store: &Arc<tti::TypeStore>,
@@ -417,7 +276,7 @@ fn convert_type_for_display(
       let members: Vec<_> = elems
         .into_iter()
         .map(|ty| tti::TupleElem {
-          ty: convert_type_for_display(ty, state, store, cache),
+          ty: convert_type_to_store(ty, state, store, cache),
           optional: false,
           rest: false,
           readonly,
@@ -426,7 +285,7 @@ fn convert_type_for_display(
       store.intern_type(tti::TypeKind::Tuple(members))
     }
     TypeKind::Array(inner) => {
-      let inner = convert_type_for_display(inner, state, store, cache);
+      let inner = convert_type_to_store(inner, state, store, cache);
       store.intern_type(tti::TypeKind::Array {
         ty: inner,
         readonly: false,
@@ -435,28 +294,35 @@ fn convert_type_for_display(
     TypeKind::Union(types) => {
       let members: Vec<_> = types
         .into_iter()
-        .map(|t| convert_type_for_display(t, state, store, cache))
+        .map(|t| convert_type_to_store(t, state, store, cache))
         .collect();
       store.union(members)
+    }
+    TypeKind::Intersection(types) => {
+      let members: Vec<_> = types
+        .into_iter()
+        .map(|t| convert_type_to_store(t, state, store, cache))
+        .collect();
+      store.intersection(members)
     }
     TypeKind::Function { params, ret } => {
       let params: Vec<_> = params
         .into_iter()
         .map(|param| tti::Param {
           name: None,
-          ty: convert_type_for_display(param, state, store, cache),
+          ty: convert_type_to_store(param, state, store, cache),
           optional: false,
           rest: false,
         })
         .collect();
-      let sig = tti::Signature::new(params, convert_type_for_display(ret, state, store, cache));
+      let sig = tti::Signature::new(params, convert_type_to_store(ret, state, store, cache));
       let sig_id = store.intern_signature(sig);
       store.intern_type(tti::TypeKind::Callable {
         overloads: vec![sig_id],
       })
     }
     TypeKind::Predicate { asserted, .. } => match asserted {
-      Some(ty) => convert_type_for_display(ty, state, store, cache),
+      Some(ty) => convert_type_to_store(ty, state, store, cache),
       None => primitives.boolean,
     },
     TypeKind::Object(obj) => {
@@ -464,7 +330,7 @@ fn convert_type_for_display(
       for (name, prop) in obj.props {
         let key = tti::PropKey::String(store.intern_name(name));
         let data = tti::PropData {
-          ty: convert_type_for_display(prop.typ, state, store, cache),
+          ty: convert_type_to_store(prop.typ, state, store, cache),
           optional: prop.optional,
           readonly: prop.readonly,
           accessibility: None,
@@ -477,14 +343,14 @@ fn convert_type_for_display(
       if let Some(value_type) = obj.string_index {
         shape.indexers.push(tti::Indexer {
           key_type: primitives.string,
-          value_type: convert_type_for_display(value_type, state, store, cache),
+          value_type: convert_type_to_store(value_type, state, store, cache),
           readonly: false,
         });
       }
       if let Some(value_type) = obj.number_index {
         shape.indexers.push(tti::Indexer {
           key_type: primitives.number,
-          value_type: convert_type_for_display(value_type, state, store, cache),
+          value_type: convert_type_to_store(value_type, state, store, cache),
           readonly: false,
         });
       }
@@ -500,7 +366,7 @@ fn convert_type_for_display(
 /// Primary entry point for parsing and type checking.
 pub struct Program {
   host: Arc<dyn Host>,
-  roots: Vec<FileKey>,
+  roots: Vec<FileId>,
   cancelled: AtomicBool,
   state: std::sync::Mutex<ProgramState>,
   query_stats: QueryStatsCollector,
@@ -514,72 +380,23 @@ const _: fn() = || {
 
 impl Program {
   /// Create a new program from a host and root file list.
-  pub fn new(host: impl Host, roots: Vec<FileKey>) -> Program {
-    ProgramBuilder::new(host).add_roots(roots).build()
+  pub fn new(host: impl Host, roots: Vec<FileId>) -> Program {
+    Program::with_lib_manager(host, roots, Arc::new(LibManager::new()))
   }
 
   /// Create a new program with a provided lib manager (useful for observing invalidation in tests).
-  pub fn with_lib_manager(host: impl Host, roots: Vec<FileKey>, lib_manager: Arc<LibManager>) -> Program {
-    ProgramBuilder::with_lib_manager(host, lib_manager).add_roots(roots).build()
-  }
-
-  fn with_lib_manager_arc(host: Arc<dyn Host>, roots: Vec<FileKey>, lib_manager: Arc<LibManager>) -> Program {
+  pub fn with_lib_manager(
+    host: impl Host,
+    roots: Vec<FileId>,
+    lib_manager: Arc<LibManager>,
+  ) -> Program {
     let query_stats = QueryStatsCollector::default();
     Program {
-      host,
+      host: Arc::new(host),
       roots,
       cancelled: AtomicBool::new(false),
       state: std::sync::Mutex::new(ProgramState::new(lib_manager, query_stats.clone())),
       query_stats,
-    }
-  }
-
-  /// Known file identifier for a host key, if it participated in analysis.
-  pub fn file_id(&self, key: &FileKey) -> Option<FileId> {
-    match self.with_analyzed_state(|state| Ok(state.host_file_id(key))) {
-      Ok(id) => id,
-      Err(fatal) => {
-        self.record_fatal(fatal);
-        None
-      }
-    }
-  }
-
-  /// Known key for a file identifier.
-  pub fn file_key(&self, file: FileId) -> Option<FileKey> {
-    match self.with_analyzed_state(|state| {
-      Ok(state.file_key(file).map(|k| k.key().clone()))
-    }) {
-      Ok(key) => key,
-      Err(fatal) => {
-        self.record_fatal(fatal);
-        None
-      }
-    }
-  }
-
-  /// All files (including bundled libs) that were part of the program.
-  pub fn files(&self) -> Vec<FileId> {
-    match self.with_analyzed_state(|state| Ok(state.all_files())) {
-      Ok(files) => files,
-      Err(fatal) => {
-        self.record_fatal(fatal);
-        Vec::new()
-      }
-    }
-  }
-
-  /// Retrieve the full text for a file if available.
-  pub fn file_text(&self, file: FileId) -> Option<Arc<str>> {
-    match self.catch_fatal(|| {
-      let state = self.lock_state();
-      Ok(state.load_text(file, &self.host)?)
-    }) {
-      Ok(text) => Some(text),
-      Err(fatal) => {
-        self.record_fatal(fatal);
-        None
-      }
     }
   }
 
@@ -780,9 +597,7 @@ impl Program {
     offset: u32,
   ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
     self.with_analyzed_state(|state| {
-      if !state.ensure_ts_locals(file, &self.host)? {
-        return Ok(None);
-      }
+      state.ensure_symbols_for_file(file);
       Ok(state.symbol_at(file, offset))
     })
   }
@@ -859,16 +674,47 @@ impl Program {
 
   pub fn type_of_def_interned_fallible(&self, def: DefId) -> Result<TypeId, FatalError> {
     self.with_interned_state(|state| {
-      let store = state
-        .interned_store
-        .as_ref()
-        .expect("interned store initialized");
-      Ok(
-        *state
-          .interned_def_types
-          .get(&def)
-          .unwrap_or(&store.primitive_ids().unknown),
-      )
+      let store = Arc::clone(
+        state
+          .interned_store
+          .as_ref()
+          .expect("interned store initialized"),
+      );
+      let mut cache = HashMap::new();
+      let base_ty = state.type_of_def(def);
+      let mut base = convert_type_to_store(base_ty, state, &store, &mut cache);
+      state.interned_def_types.insert(def, base);
+
+      if let Some(symbol) = state.semantic_symbol_for_def(def, sem_ts::Namespace::TYPE) {
+        let decls = state.semantic_decls_for_symbol(symbol, sem_ts::Namespace::TYPE);
+        if decls.len() > 1 {
+          let mut members = Vec::new();
+          for decl in decls {
+            let member_ty =
+              convert_type_to_store(state.type_of_def(decl), state, &store, &mut cache);
+            state.interned_def_types.insert(decl, member_ty);
+            members.push(member_ty);
+          }
+          if !members.is_empty() {
+            base = store.intersection(members);
+          }
+        }
+      }
+
+      let merged_symbol = state
+        .semantic_symbol_for_def(def, sem_ts::Namespace::VALUE)
+        .or_else(|| state.semantic_symbol_for_def(def, sem_ts::Namespace::NAMESPACE));
+      if let Some(namespace_ty) = merged_symbol
+        .and_then(|sym| state.merged_namespace_type_for_symbol(sym))
+        .map(|ty| convert_type_to_store(ty, state, &store, &mut cache))
+      {
+        if namespace_ty != base {
+          base = store.intersection(vec![base, namespace_ty]);
+        }
+      }
+
+      state.interned_def_types.insert(def, base);
+      Ok(base)
     })
   }
 
@@ -889,11 +735,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let result = queries.type_kind(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -941,11 +784,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let props = queries.properties_of(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -975,11 +815,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let prop = queries.property_type(ty, key);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -1005,11 +842,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let sigs = queries.call_signatures(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -1038,11 +872,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let sigs = queries.construct_signatures(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -1068,17 +899,97 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let indexers = queries.indexers(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
       }
       Ok(indexers)
+    })
+  }
+
+  /// Whether `src` is assignable to `dst` using the interned type system.
+  pub fn is_assignable_interned(&self, src: TypeId, dst: TypeId) -> bool {
+    match self.is_assignable_interned_fallible(src, dst) {
+      Ok(res) => res,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        false
+      }
+    }
+  }
+
+  pub fn is_assignable_interned_fallible(
+    &self,
+    src: TypeId,
+    dst: TypeId,
+  ) -> Result<bool, FatalError> {
+    self.with_interned_state(|state| {
+      let store = state
+        .interned_store
+        .as_ref()
+        .expect("interned store initialized");
+      let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
+      let relate = tti::RelateCtx::with_hooks_and_cache(
+        Arc::clone(store),
+        TypeOptions::from(&state.compiler_options),
+        tti::RelateHooks {
+          expander: Some(&expander),
+          is_same_origin_private_member: None,
+        },
+        caches.relation.clone(),
+      );
+      let result = relate.is_assignable(src, dst);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(result)
+    })
+  }
+
+  /// Assignability check that also records the reasoning tree when available.
+  pub fn explain_assignable_interned(&self, src: TypeId, dst: TypeId) -> RelationResult {
+    match self.explain_assignable_interned_fallible(src, dst) {
+      Ok(res) => res,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        RelationResult {
+          result: false,
+          reason: None,
+        }
+      }
+    }
+  }
+
+  pub fn explain_assignable_interned_fallible(
+    &self,
+    src: TypeId,
+    dst: TypeId,
+  ) -> Result<RelationResult, FatalError> {
+    self.with_interned_state(|state| {
+      let store = state
+        .interned_store
+        .as_ref()
+        .expect("interned store initialized");
+      let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
+      let relate = tti::RelateCtx::with_hooks_and_cache(
+        Arc::clone(store),
+        TypeOptions::from(&state.compiler_options),
+        tti::RelateHooks {
+          expander: Some(&expander),
+          is_same_origin_private_member: None,
+        },
+        caches.relation.clone(),
+      );
+      let result = relate.explain_assignable(src, dst);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(result)
     })
   }
 
@@ -1175,6 +1086,7 @@ impl Program {
         DefKind::Import(_) => None,
         DefKind::Interface(_) => None,
         DefKind::TypeAlias(_) => None,
+        DefKind::Namespace(_) => None,
       }))
     })
   }
@@ -1225,19 +1137,11 @@ impl Program {
     let mut files = Vec::new();
     for file in file_ids {
       let kind = *state.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
-      let key = state.file_key(file).map(|k| k.key().clone());
-      let is_lib = matches!(
-        state.file_key(file),
-        Some(ProgramFileKey {
-          origin: FileOrigin::Lib,
-          ..
-        })
-      );
       let text = state
         .lib_texts
         .get(&file)
         .cloned()
-        .or_else(|| key.as_ref().and_then(|k| self.host.file_text(k).ok()));
+        .or_else(|| self.host.file_text(file).ok());
       let hash = if let Some(text) = text.as_ref() {
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
@@ -1247,8 +1151,6 @@ impl Program {
       };
       files.push(FileSnapshot {
         file,
-        key: key.unwrap_or_else(|| FileKey::new(format!("unknown:{file:?}"))),
-        is_lib,
         kind,
         hash,
         text: text.map(|t| t.to_string()),
@@ -1402,20 +1304,10 @@ impl Program {
       state.compiler_options = snapshot.compiler_options;
       state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
-      for file in snapshot.files.iter() {
-        let key = file.key.clone();
-        let pfk = if file.is_lib {
-          ProgramFileKey::lib(key.clone())
-        } else {
-          ProgramFileKey::host(key.clone())
-        };
-        state.file_keys.insert(file.file, pfk.clone());
-        state.key_to_id.insert(pfk, file.file);
+      for file in snapshot.files.into_iter() {
         state.file_kinds.insert(file.file, file.kind);
-        if let Some(text) = file.text.clone() {
-          if file.is_lib {
-            state.lib_texts.insert(file.file, Arc::from(text));
-          }
+        if let Some(text) = file.text {
+          state.lib_texts.insert(file.file, Arc::from(text));
         }
       }
       state.files = snapshot
@@ -1535,20 +1427,14 @@ struct FileState {
 
 struct HostResolver {
   host: Arc<dyn Host>,
-  id_to_key: HashMap<FileId, FileKey>,
-  key_to_id: HashMap<FileKey, FileId>,
 }
 
 impl sem_ts::Resolver for HostResolver {
   fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
-    let file_id = FileId(from.0);
-    let from_key = self.id_to_key.get(&file_id)?;
-    let resolved = self.host.resolve(from_key, specifier)?;
     self
-      .key_to_id
-      .get(&resolved)
-      .copied()
-      .map(|id| sem_ts::FileId(id.0))
+      .host
+      .resolve(FileId(from.0), specifier)
+      .map(|f| sem_ts::FileId(f.0))
   }
 }
 
@@ -1579,6 +1465,7 @@ pub enum DefKind {
   Import(ImportData),
   Interface(InterfaceData),
   TypeAlias(TypeAliasData),
+  Namespace(NamespaceData),
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -1632,6 +1519,12 @@ pub struct InterfaceData {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
 pub struct TypeAliasData {
+  pub typ: TypeId,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct NamespaceData {
   pub typ: TypeId,
 }
 
@@ -1881,6 +1774,7 @@ pub(crate) enum TypeKind {
   Tuple(Vec<TypeId>, bool),
   Array(TypeId),
   Union(Vec<TypeId>),
+  Intersection(Vec<TypeId>),
   Function {
     params: Vec<TypeId>,
     ret: TypeId,
@@ -1974,6 +1868,27 @@ impl TypeStore {
     self.alloc(TypeKind::Union(types))
   }
 
+  pub(crate) fn intersection(&mut self, mut types: Vec<TypeId>) -> TypeId {
+    let mut flat = Vec::new();
+    for ty in types.drain(..) {
+      match self.kind(ty) {
+        TypeKind::Intersection(members) => flat.extend(members.iter().copied()),
+        _ => flat.push(ty),
+      }
+    }
+    types = flat;
+    if types.is_empty() {
+      return self.alloc(TypeKind::Intersection(Vec::new()));
+    }
+    types.sort_by(|a, b| a.0.cmp(&b.0));
+    types.dedup();
+    if types.len() == 1 {
+      return types[0];
+    }
+    let types = types;
+    self.alloc(TypeKind::Intersection(types))
+  }
+
   pub(crate) fn array(&mut self, element: TypeId) -> TypeId {
     self.alloc(TypeKind::Array(element))
   }
@@ -2045,6 +1960,21 @@ pub(crate) fn lookup_property_type(
         None
       } else {
         Some(store.union(collected, builtin))
+      }
+    }
+    TypeKind::Intersection(members) => {
+      let mut collected = Vec::new();
+      for member in members {
+        if let Some(prop_ty) = lookup_property_type(store, member, name, builtin) {
+          collected.push(prop_ty);
+        }
+      }
+      if collected.is_empty() {
+        None
+      } else if collected.len() == 1 {
+        Some(collected[0])
+      } else {
+        Some(store.intersection(collected))
       }
     }
     _ => None,
@@ -2122,75 +2052,8 @@ impl QuerySpan {
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum FileOrigin {
-  Host,
-  Lib,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct ProgramFileKey {
-  origin: FileOrigin,
-  key: FileKey,
-}
-
-impl ProgramFileKey {
-  fn host(key: FileKey) -> Self {
-    ProgramFileKey {
-      origin: FileOrigin::Host,
-      key,
-    }
-  }
-
-  fn lib(key: FileKey) -> Self {
-    ProgramFileKey {
-      origin: FileOrigin::Lib,
-      key,
-    }
-  }
-
-  fn key(&self) -> &FileKey {
-    &self.key
-  }
-}
-
-#[derive(Default)]
-struct StableHasher(u64);
-
-impl Hasher for StableHasher {
-  fn write(&mut self, bytes: &[u8]) {
-    for byte in bytes {
-      self.0 ^= *byte as u64;
-      self.0 = self
-        .0
-        .wrapping_mul(1099511628211); // FNV-1a 64-bit prime
-    }
-  }
-
-  fn write_u64(&mut self, i: u64) {
-    self.write(&i.to_le_bytes());
-  }
-
-  fn finish(&self) -> u64 {
-    self.0
-  }
-}
-
-fn stable_file_id(key: &ProgramFileKey, salt: u64) -> FileId {
-  let mut hasher = StableHasher(0xcbf29ce484222325); // FNV-1a offset basis
-  key.hash(&mut hasher);
-  hasher.write_u64(salt);
-  let mut raw = hasher.finish() as u32;
-  if raw == u32::MAX {
-    raw = raw.wrapping_sub(1);
-  }
-  FileId(raw)
-}
-
 struct ProgramState {
   analyzed: bool,
-  file_keys: HashMap<FileId, ProgramFileKey>,
-  key_to_id: HashMap<ProgramFileKey, FileId>,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
   checker_caches: CheckerCaches,
@@ -2198,10 +2061,8 @@ struct ProgramState {
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_data: HashMap<BodyId, BodyData>,
-  hir_lowered: HashMap<FileId, Arc<LowerResult>>,
-  sem_hir: HashMap<FileId, Arc<sem_ts::HirFile>>,
-  ts_locals: HashMap<FileId, sem_ts_locals::TsLocalSemantics>,
-  local_symbol_map: HashMap<FileId, HashMap<sem_ts_locals::SymbolId, semantic_js::SymbolId>>,
+  hir_lowered: HashMap<FileId, LowerResult>,
+  sem_hir: HashMap<FileId, sem_ts::HirFile>,
   semantics: Option<sem_ts::TsProgramSemantics>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
@@ -2219,25 +2080,16 @@ struct ProgramState {
   query_stats: QueryStatsCollector,
   next_def: u32,
   next_body: u32,
-  next_symbol: u64,
+  next_symbol: u32,
   type_stack: Vec<DefId>,
 }
 
 impl ProgramState {
-  fn resolve_module(&mut self, file: FileId, specifier: &str, host: &Arc<dyn Host>) -> Option<FileId> {
-    let host_key = self.host_key(file)?;
-    host
-      .resolve(&host_key, specifier)
-      .map(|k| self.intern_host_key(k))
-  }
-
   fn new(lib_manager: Arc<LibManager>, query_stats: QueryStatsCollector) -> ProgramState {
     let default_options = CompilerOptions::default();
     let (type_store, builtin) = TypeStore::new();
     ProgramState {
       analyzed: false,
-      file_keys: HashMap::new(),
-      key_to_id: HashMap::new(),
       lib_manager,
       compiler_options: default_options.clone(),
       checker_caches: CheckerCaches::new(default_options.cache.clone()),
@@ -2247,8 +2099,6 @@ impl ProgramState {
       body_data: HashMap::new(),
       hir_lowered: HashMap::new(),
       sem_hir: HashMap::new(),
-      ts_locals: HashMap::new(),
-      local_symbol_map: HashMap::new(),
       semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
@@ -2271,67 +2121,20 @@ impl ProgramState {
     }
   }
 
-  fn intern_host_key(&mut self, key: FileKey) -> FileId {
-    self.intern_file_key(ProgramFileKey::host(key))
+  fn type_expander<'a>(
+    &'a self,
+    store: &Arc<tti::TypeStore>,
+    caches: tti::EvaluatorCaches,
+  ) -> ProgramTypeExpander<'a> {
+    ProgramTypeExpander::new(
+      Arc::clone(store),
+      &self.interned_def_types,
+      &self.interned_type_params,
+      caches,
+    )
   }
 
-  fn intern_lib_key(&mut self, key: FileKey) -> FileId {
-    self.intern_file_key(ProgramFileKey::lib(key))
-  }
-
-  fn intern_file_key(&mut self, key: ProgramFileKey) -> FileId {
-    if let Some(id) = self.key_to_id.get(&key) {
-      return *id;
-    }
-    let mut salt = 0;
-    loop {
-      let id = stable_file_id(&key, salt);
-      if id.0 == u32::MAX || self.file_keys.contains_key(&id) {
-        salt = salt.wrapping_add(1);
-        continue;
-      }
-      self.key_to_id.insert(key.clone(), id);
-      self.file_keys.insert(id, key);
-      return id;
-    }
-  }
-
-  fn file_key(&self, file: FileId) -> Option<ProgramFileKey> {
-    self.file_keys.get(&file).cloned()
-  }
-
-  fn host_key(&self, file: FileId) -> Option<FileKey> {
-    match self.file_key(file)? {
-      ProgramFileKey {
-        origin: FileOrigin::Host,
-        key,
-      } => Some(key),
-      _ => None,
-    }
-  }
-
-  fn file_id_for_key(&self, key: &FileKey) -> Option<FileId> {
-    self
-      .key_to_id
-      .get(&ProgramFileKey::host(key.clone()))
-      .copied()
-      .or_else(|| self.key_to_id.get(&ProgramFileKey::lib(key.clone())).copied())
-  }
-
-  fn host_file_id(&self, key: &FileKey) -> Option<FileId> {
-    self
-      .key_to_id
-      .get(&ProgramFileKey::host(key.clone()))
-      .copied()
-  }
-
-  fn all_files(&self) -> Vec<FileId> {
-    let mut files: Vec<_> = self.file_keys.keys().copied().collect();
-    files.sort_by_key(|f| f.0);
-    files
-  }
-
-  fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileKey], cancelled: &AtomicBool) {
+  fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileId], cancelled: &AtomicBool) {
     if let Err(fatal) = self.ensure_analyzed_result(host, roots, cancelled) {
       self.diagnostics.push(fatal_to_diagnostic(fatal));
     }
@@ -2340,25 +2143,20 @@ impl ProgramState {
   fn ensure_analyzed_result(
     &mut self,
     host: &Arc<dyn Host>,
-    roots: &[FileKey],
+    roots: &[FileId],
     cancelled: &AtomicBool,
   ) -> Result<(), FatalError> {
     if self.analyzed {
       return Ok(());
     }
     let libs = self.collect_libraries(host.as_ref());
-    let lib_ids: Vec<FileId> = libs.iter().map(|(id, _)| *id).collect();
+    let lib_ids: Vec<FileId> = libs.iter().map(|l| l.id).collect();
     let lib_id_set: HashSet<FileId> = lib_ids.iter().copied().collect();
     self.process_libs(&libs);
-    let mut root_ids = Vec::new();
-    let mut queue: VecDeque<FileId> = VecDeque::new();
-    for root in roots.iter().cloned() {
-      let id = self.intern_host_key(root);
-      root_ids.push(id);
-      queue.push_back(id);
-    }
+    let mut queue: BTreeSet<FileId> = roots.iter().copied().collect();
     let mut seen: HashSet<FileId> = HashSet::new();
-    while let Some(file) = queue.pop_front() {
+    while let Some(&file) = queue.iter().next() {
+      queue.remove(&file);
       if cancelled.load(Ordering::Relaxed) {
         return Err(FatalError::Cancelled);
       }
@@ -2368,13 +2166,10 @@ impl ProgramState {
       if lib_id_set.contains(&file) {
         continue;
       }
-      let Some(host_key) = self.host_key(file) else {
-        continue;
-      };
       self
         .file_kinds
         .entry(file)
-        .or_insert_with(|| host.file_kind(&host_key));
+        .or_insert_with(|| host.file_kind(file));
       let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
       let text = self.load_text(file, host)?;
       let parse_span = QuerySpan::enter(
@@ -2395,7 +2190,7 @@ impl ProgramState {
         span.finish(None);
       }
       match parsed {
-        Ok(mut ast) => {
+        Ok(ast) => {
           let (lowered, lower_diags) = lower_hir_with_diagnostics(
             file,
             match file_kind {
@@ -2408,12 +2203,8 @@ impl ProgramState {
             &ast,
           );
           self.diagnostics.extend(lower_diags);
-          let lowered = Arc::new(lowered);
-          self.hir_lowered.insert(file, lowered.clone());
-          let sem_hir = Arc::new(lower_to_ts_hir(&ast, lowered.as_ref()));
-          let is_module = matches!(sem_hir.module_kind, sem_ts::ModuleKind::Module);
-          let locals = sem_ts_locals::bind_ts_locals(&mut ast, file, is_module);
-          self.ts_locals.insert(file, locals);
+          let sem_hir = lower_to_ts_hir(&ast, &lowered);
+          self.hir_lowered.insert(file, lowered);
           self.sem_hir.insert(file, sem_hir);
           let lower_span = QuerySpan::enter(
             QueryKind::LowerHir,
@@ -2439,7 +2230,7 @@ impl ProgramState {
       }
     }
     if !self.sem_hir.is_empty() {
-      self.compute_semantics(host, &root_ids, &lib_ids);
+      self.compute_semantics(host, roots, &lib_ids);
     }
     self.resolve_reexports();
     self.recompute_global_bindings();
@@ -2451,7 +2242,7 @@ impl ProgramState {
   fn ensure_interned_types(
     &mut self,
     host: &Arc<dyn Host>,
-    roots: &[FileKey],
+    roots: &[FileId],
     cancelled: &AtomicBool,
   ) -> Result<(), FatalError> {
     if self.interned_store.is_some() {
@@ -2466,13 +2257,22 @@ impl ProgramState {
     let mut def_types = HashMap::new();
     let mut type_params = HashMap::new();
     let mut def_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
-    for (def_id, data) in self.def_data.iter() {
+    let mut def_entries: Vec<_> = self.def_data.iter().collect();
+    def_entries.sort_by_key(|(def_id, _)| def_id.0);
+    for (def_id, data) in def_entries {
       def_by_name
         .entry((data.file, data.name.clone()))
+        .and_modify(|existing| {
+          if def_id.0 < existing.0 {
+            *existing = *def_id;
+          }
+        })
         .or_insert(*def_id);
     }
 
-    for (file, lowered) in self.hir_lowered.iter() {
+    let mut lowered_files: Vec<_> = self.hir_lowered.iter().collect();
+    lowered_files.sort_by_key(|(file, _)| file.0);
+    for (file, lowered) in lowered_files {
       if cancelled.load(Ordering::Relaxed) {
         return Err(FatalError::Cancelled);
       }
@@ -2486,26 +2286,16 @@ impl ProgramState {
           }
         }
       }
-      let key_lookup_map = self.key_to_id.clone();
-      let key_lookup = move |key: &FileKey| {
-        key_lookup_map
-          .get(&ProgramFileKey::host(key.clone()))
-          .copied()
-          .or_else(|| key_lookup_map.get(&ProgramFileKey::lib(key.clone())).copied())
-      };
       let mut lowerer = check::decls::HirDeclLowerer::new(
         Arc::clone(&store),
         &lowered.types,
         self.semantics.as_ref(),
         def_by_name.clone(),
         *file,
-        self.file_key(*file).map(|k| k.key().clone()),
         local_defs,
         &mut self.diagnostics,
         Some(&def_map),
         Some(&def_by_name),
-        Some(host.as_ref()),
-        Some(&key_lookup),
       );
       for def in lowered.defs.iter() {
         let Some(info) = def.type_info.as_ref() else {
@@ -2534,7 +2324,7 @@ impl ProgramState {
     Ok(())
   }
 
-  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<(FileId, LibFile)> {
+  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<LibFile> {
     let options = host.compiler_options();
     self.compiler_options = options.clone();
     self.checker_caches = CheckerCaches::new(options.cache.clone());
@@ -2542,12 +2332,11 @@ impl ProgramState {
     let mut libs = host.lib_files();
     if !options.no_default_lib {
       let bundled = self.lib_manager.bundled_libs(&options);
-      libs.extend(bundled.files);
+      libs.extend(bundled.libs().iter().map(|lib| lib.file.clone()));
     }
 
     let mut dts_libs = Vec::new();
     for lib in libs.into_iter() {
-      let id = self.intern_lib_key(lib.key.clone());
       let is_dts = lib.kind == FileKind::Dts || lib.name.ends_with(".d.ts");
       if !is_dts {
         self.diagnostics.push(codes::NON_DTS_LIB.warning(
@@ -2555,12 +2344,12 @@ impl ProgramState {
             "Library '{}' is not a .d.ts file; it will be ignored for global declarations.",
             lib.name
           ),
-          Span::new(id, TextRange::new(0, 0)),
+          Span::new(lib.id, TextRange::new(0, 0)),
         ));
         continue;
       }
-      self.file_kinds.insert(id, FileKind::Dts);
-      dts_libs.push((id, lib));
+      self.file_kinds.insert(lib.id, FileKind::Dts);
+      dts_libs.push(lib);
     }
 
     if dts_libs.is_empty() {
@@ -2575,21 +2364,17 @@ impl ProgramState {
     dts_libs
   }
 
-  fn process_libs(&mut self, libs: &[(FileId, LibFile)]) {
-    for (id, lib) in libs {
-      self.lib_texts.insert(*id, lib.text.clone());
-      let parsed = parse_file(*id, FileKind::Dts, lib.text.as_ref());
+  fn process_libs(&mut self, libs: &[LibFile]) {
+    for lib in libs {
+      self.lib_texts.insert(lib.id, lib.text.clone());
+      let parsed = parse_file(lib.id, FileKind::Dts, lib.text.as_ref());
       match parsed {
-        Ok(mut ast) => {
-          let (lowered, lower_diags) = lower_hir_with_diagnostics(*id, HirFileKind::Dts, &ast);
+        Ok(ast) => {
+          let (lowered, lower_diags) = lower_hir_with_diagnostics(lib.id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
-          let lowered = Arc::new(lowered);
-          let sem_hir = Arc::new(lower_to_ts_hir(&ast, lowered.as_ref()));
-          let is_module = matches!(sem_hir.module_kind, sem_ts::ModuleKind::Module);
-          let locals = sem_ts_locals::bind_ts_locals(&mut ast, *id, is_module);
-          self.ts_locals.insert(*id, locals);
-          self.hir_lowered.insert(*id, lowered);
-          self.sem_hir.insert(*id, sem_hir);
+          let sem_hir = lower_to_ts_hir(&ast, &lowered);
+          self.hir_lowered.insert(lib.id, lowered);
+          self.sem_hir.insert(lib.id, sem_hir);
         }
         Err(err) => {
           self.diagnostics.push(err);
@@ -2602,13 +2387,7 @@ impl ProgramState {
     if let Some(text) = self.lib_texts.get(&file) {
       return Ok(text.clone());
     }
-    let Some(key) = self.host_key(file) else {
-      return Err(HostError::new(format!(
-        "missing host file for id {:?}",
-        file
-      )));
-    };
-    host.file_text(&key)
+    host.file_text(file)
   }
 
   fn recompute_global_bindings(&mut self) {
@@ -2638,12 +2417,21 @@ impl ProgramState {
       return;
     }
     let mut globals = HashMap::new();
-    for (file, state) in self.files.iter() {
-      if self.file_kinds.get(file) != Some(&FileKind::Dts) {
+    let mut files: Vec<_> = self.files.keys().copied().collect();
+    files.sort_by_key(|f| f.0);
+    for file in files {
+      if self.file_kinds.get(&file) != Some(&FileKind::Dts) {
         continue;
       }
-      for (name, binding) in state.bindings.iter() {
-        globals.entry(name.clone()).or_insert(binding.clone());
+      let Some(state) = self.files.get(&file) else {
+        continue;
+      };
+      let mut bindings: Vec<_> = state.bindings.iter().collect();
+      bindings.sort_by(|a, b| a.0.cmp(b.0));
+      for (name, binding) in bindings {
+        globals
+          .entry(name.clone())
+          .or_insert_with(|| binding.clone());
       }
     }
     globals
@@ -2657,23 +2445,8 @@ impl ProgramState {
   }
 
   fn compute_semantics(&mut self, host: &Arc<dyn Host>, roots: &[FileId], libs: &[FileId]) {
-    let id_to_key: HashMap<FileId, FileKey> = self
-      .file_keys
-      .iter()
-      .filter_map(|(id, key)| match key {
-        ProgramFileKey {
-          origin: FileOrigin::Host,
-          key,
-        } => Some((*id, key.clone())),
-        _ => None,
-      })
-      .collect();
-    let key_to_id: HashMap<FileKey, FileId> =
-      id_to_key.iter().map(|(id, key)| (key.clone(), *id)).collect();
     let resolver = HostResolver {
       host: Arc::clone(host),
-      id_to_key,
-      key_to_id,
     };
     let mut sem_roots: Vec<sem_ts::FileId> = roots
       .iter()
@@ -2684,23 +2457,28 @@ impl ProgramState {
     sem_roots.dedup();
     let (semantics, diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file| {
       let id = FileId(file.0);
-      self.sem_hir.get(&id).cloned().unwrap_or_else(|| {
-        let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
-          sem_ts::FileKind::Dts
-        } else {
-          sem_ts::FileKind::Ts
-        };
-        Arc::new(sem_ts::HirFile {
-          file_id: file,
-          module_kind: sem_ts::ModuleKind::Module,
-          file_kind,
-          decls: Vec::new(),
-          imports: Vec::new(),
-          exports: Vec::new(),
-          export_as_namespace: Vec::new(),
-          ambient_modules: Vec::new(),
+      self
+        .sem_hir
+        .get(&id)
+        .cloned()
+        .map(Arc::new)
+        .unwrap_or_else(|| {
+          let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
+            sem_ts::FileKind::Dts
+          } else {
+            sem_ts::FileKind::Ts
+          };
+          Arc::new(sem_ts::HirFile {
+            file_id: file,
+            module_kind: sem_ts::ModuleKind::Module,
+            file_kind,
+            decls: Vec::new(),
+            imports: Vec::new(),
+            exports: Vec::new(),
+            export_as_namespace: Vec::new(),
+            ambient_modules: Vec::new(),
+          })
         })
-      })
     });
     self.push_semantic_diagnostics(diags);
     self.semantics = Some(semantics);
@@ -2772,17 +2550,21 @@ impl ProgramState {
               def: None,
               type_id,
             };
-            let previous = exports.insert(spec.alias.clone(), mapped.clone());
-            if previous
-              .as_ref()
-              .map(|prev| {
-                prev.symbol != mapped.symbol
-                  || prev.def != mapped.def
-                  || prev.type_id != mapped.type_id
-              })
-              .unwrap_or(true)
-            {
-              changed = true;
+            match exports.get(&spec.alias) {
+              Some(existing) => {
+                if existing.symbol == mapped.symbol {
+                  if (existing.def.is_none() && mapped.def.is_some())
+                    || (existing.type_id.is_none() && mapped.type_id.is_some())
+                  {
+                    exports.insert(spec.alias.clone(), mapped);
+                    changed = true;
+                  }
+                }
+              }
+              None => {
+                exports.insert(spec.alias.clone(), mapped);
+                changed = true;
+              }
             }
             continue;
           }
@@ -2807,6 +2589,9 @@ impl ProgramState {
             continue;
           }
           for (name, entry) in target.exports.iter() {
+            if name == "default" {
+              continue;
+            }
             if let Some(def) = entry.def {
               if let Some(def_data) = self.def_data.get(&def) {
                 if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
@@ -2822,17 +2607,21 @@ impl ProgramState {
               def: None,
               type_id,
             };
-            let previous = exports.insert(name.clone(), mapped.clone());
-            if previous
-              .as_ref()
-              .map(|prev| {
-                prev.symbol != mapped.symbol
-                  || prev.def != mapped.def
-                  || prev.type_id != mapped.type_id
-              })
-              .unwrap_or(true)
-            {
-              changed = true;
+            match exports.get(name) {
+              Some(existing) => {
+                if existing.symbol == mapped.symbol {
+                  if (existing.def.is_none() && mapped.def.is_some())
+                    || (existing.type_id.is_none() && mapped.type_id.is_some())
+                  {
+                    exports.insert(name.clone(), mapped);
+                    changed = true;
+                  }
+                }
+              }
+              None => {
+                exports.insert(name.clone(), mapped);
+                changed = true;
+              }
             }
           }
         }
@@ -2861,7 +2650,7 @@ impl ProgramState {
     file: FileId,
     ast: Node<TopLevel>,
     host: &Arc<dyn Host>,
-    queue: &mut VecDeque<FileId>,
+    queue: &mut BTreeSet<FileId>,
   ) {
     let top_body_id = self.alloc_body(file, None);
     let mut top_body = BodyBuilder::new(top_body_id, file);
@@ -2927,6 +2716,43 @@ impl ProgramState {
             }
           }
         }
+        Stmt::NamespaceDecl(namespace) => {
+          let span = loc_to_span(file, stmt.loc);
+          if let Some((def_id, binding, export_name)) =
+            self.handle_namespace_decl(file, span.range, *namespace.stx, &mut sem_builder, &bindings)
+          {
+            defs.push(def_id);
+            let (binding_name, binding_value) = binding;
+            let entry = bindings.entry(binding_name.clone()).or_insert(binding_value.clone());
+            if entry.def.is_none() {
+              entry.def = binding_value.def;
+            }
+            match (entry.type_id, binding_value.type_id) {
+              (Some(existing), Some(new_ty)) => {
+                entry.type_id = Some(self.type_store.intersection(vec![existing, new_ty]));
+              }
+              (None, _) => {
+                *entry = binding_value.clone();
+              }
+              _ => {}
+            }
+            if let Some(name) = export_name {
+              let typ = entry.type_id.or(binding_value.type_id);
+              let export_def = binding_value
+                .def
+                .or(entry.def)
+                .unwrap_or(def_id);
+              exports.insert(
+                name,
+                ExportEntry {
+                  symbol: entry.symbol,
+                  def: Some(export_def),
+                  type_id: typ,
+                },
+              );
+            }
+          }
+        }
         Stmt::InterfaceDecl(interface) => {
           let span = loc_to_span(file, stmt.loc);
           let name = interface.stx.name.clone();
@@ -2937,67 +2763,55 @@ impl ProgramState {
               object = self.merge_object_types(object, base_obj);
             }
           }
-          let mut typ = self.type_store.object(object);
-          let existing_interface = bindings
+          let decl_object = object.clone();
+          let mut typ = self.type_store.object(object.clone());
+          if let Some(existing) = bindings.get(&name).and_then(|b| b.type_id) {
+            if let (TypeKind::Object(existing_obj), TypeKind::Object(obj)) = (
+              self.type_store.kind(existing).clone(),
+              self.type_store.kind(typ).clone(),
+            ) {
+              let merged_obj = self.merge_object_types(existing_obj, obj);
+              typ = self.type_store.object(merged_obj);
+            }
+          }
+
+          let symbol = bindings
             .get(&name)
-            .and_then(|b| b.def)
-            .and_then(|id| self.def_data.get(&id).map(|d| (id, d.clone())))
-            .and_then(|(id, data)| match data.kind {
-              DefKind::Interface(existing) => Some((id, data.symbol, existing.typ)),
-              _ => None,
-            });
-          let (def_id, symbol) =
-            if let Some((existing_id, symbol, existing_ty)) = existing_interface {
-              typ = match (
-                self.type_store.kind(existing_ty).clone(),
-                self.type_store.kind(typ).clone(),
-              ) {
-                (TypeKind::Object(existing_obj), TypeKind::Object(obj)) => {
-                  let merged = self.merge_object_types(existing_obj, obj);
-                  self.type_store.object(merged)
-                }
-                _ => self.type_store.union(vec![existing_ty, typ], &self.builtin),
-              };
-              if let Some(def) = self.def_data.get_mut(&existing_id) {
-                def.kind = DefKind::Interface(InterfaceData { typ });
-                def.export = def.export || interface.stx.export;
-              }
-              (existing_id, symbol)
+            .map(|b| b.symbol)
+            .unwrap_or_else(|| self.alloc_symbol());
+          let def_id = self.alloc_def();
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: name.clone(),
+              file,
+              span: span.range,
+              symbol,
+              export: interface.stx.export,
+              kind: DefKind::Interface(InterfaceData {
+                typ: self.type_store.object(decl_object),
+              }),
+            },
+          );
+          self.record_def_symbol(def_id, symbol);
+          defs.push(def_id);
+          sem_builder.add_decl(
+            def_id,
+            name.clone(),
+            sem_ts::DeclKind::Interface,
+            if interface.stx.export {
+              sem_ts::Exported::Named
             } else {
-              let symbol = self.alloc_symbol();
-              let def_id = self.alloc_def();
-              self.def_data.insert(
-                def_id,
-                DefData {
-                  name: name.clone(),
-                  file,
-                  span: span.range,
-                  symbol,
-                  export: interface.stx.export,
-                  kind: DefKind::Interface(InterfaceData { typ }),
-                },
-              );
-              self.record_def_symbol(def_id, symbol);
-              defs.push(def_id);
-              sem_builder.add_decl(
-                def_id,
-                name.clone(),
-                sem_ts::DeclKind::Interface,
-                if interface.stx.export {
-                  sem_ts::Exported::Named
-                } else {
-                  sem_ts::Exported::No
-                },
-                span.range,
-              );
-              (def_id, symbol)
-            };
+              sem_ts::Exported::No
+            },
+            span.range,
+          );
 
           bindings
             .entry(name.clone())
             .and_modify(|binding| {
               binding.symbol = symbol;
-              binding.def = Some(def_id);
+              binding.def.get_or_insert(def_id);
               binding.type_id = Some(typ);
             })
             .or_insert(SymbolBinding {
@@ -3017,7 +2831,6 @@ impl ProgramState {
             entry.type_id = Some(typ);
           }
 
-          self.def_types.insert(def_id, typ);
           self.record_symbol(file, span.range, symbol);
         }
         Stmt::TypeAliasDecl(alias) => {
@@ -3052,21 +2865,8 @@ impl ProgramState {
             },
           );
           self.record_def_symbol(def_id, symbol);
-          self.def_types.insert(def_id, ty);
           defs.push(def_id);
           self.record_symbol(file, span.range, symbol);
-          bindings
-            .entry(name.clone())
-            .and_modify(|binding| {
-              binding.symbol = symbol;
-              binding.def = Some(def_id);
-              binding.type_id = Some(ty);
-            })
-            .or_insert(SymbolBinding {
-              symbol,
-              def: Some(def_id),
-              type_id: Some(ty),
-            });
           sem_builder.add_decl(
             def_id,
             name.clone(),
@@ -3153,9 +2953,9 @@ impl ProgramState {
             .stx
             .from
             .as_ref()
-            .and_then(|module| self.resolve_module(file, module, host));
+            .and_then(|module| host.resolve(file, module));
           if let Some(target) = resolved {
-            queue.push_back(target);
+            queue.insert(target);
           }
           match &export_list.stx.names {
             ExportNames::Specific(names) => {
@@ -3241,9 +3041,9 @@ impl ProgramState {
         }
         Stmt::Import(import_stmt) => {
           let module = import_stmt.stx.module.clone();
-          let resolved = self.resolve_module(file, &module, host);
+          let resolved = host.resolve(file, &module);
           if let Some(target) = resolved {
-            queue.push_back(target);
+            queue.insert(target);
           }
           let mut import_default = None;
           let mut import_namespace = None;
@@ -3282,7 +3082,6 @@ impl ProgramState {
                 }),
               },
             );
-            self.record_def_symbol(def_id, symbol);
             defs.push(def_id);
             bindings.insert(
               alias_name.clone(),
@@ -3416,10 +3215,8 @@ impl ProgramState {
 
     let body_data = top_body.finish(None);
     self.body_data.insert(top_body_id, body_data);
-    self
-      .sem_hir
-      .entry(file)
-      .or_insert_with(|| Arc::new(sem_builder.finish()));
+    let sem_hir = sem_builder.finish();
+    self.sem_hir.insert(file, sem_hir);
     self.files.insert(
       file,
       FileState {
@@ -3575,6 +3372,65 @@ impl ProgramState {
     } else {
       None
     };
+    Some((def_id, binding, export_name))
+  }
+
+  fn handle_namespace_decl(
+    &mut self,
+    file: FileId,
+    span: TextRange,
+    namespace: NamespaceDecl,
+    sem_builder: &mut SemHirBuilder,
+    bindings: &HashMap<String, SymbolBinding>,
+  ) -> Option<(DefId, (String, SymbolBinding), Option<String>)> {
+    let name = namespace.name.clone();
+    let mut object = self.namespace_object_type(file, &namespace.body);
+    let export = namespace.export;
+    let existing = bindings.get(&name).cloned();
+    if let Some(existing_ty) = existing.as_ref().and_then(|b| b.type_id) {
+      if let TypeKind::Object(existing_obj) = self.type_store.kind(existing_ty).clone() {
+        object = self.merge_object_types(existing_obj, object);
+      }
+    }
+    let symbol = existing
+      .as_ref()
+      .map(|b| b.symbol)
+      .unwrap_or_else(|| self.alloc_symbol());
+    let def_id = self.alloc_def();
+    let typ = self.type_store.object(object);
+    self.def_data.insert(
+      def_id,
+      DefData {
+        name: name.clone(),
+        file,
+        span,
+        symbol,
+        export,
+        kind: DefKind::Namespace(NamespaceData { typ }),
+      },
+    );
+    self.record_def_symbol(def_id, symbol);
+    self.record_symbol(file, span, symbol);
+    sem_builder.add_decl(
+      def_id,
+      name.clone(),
+      sem_ts::DeclKind::Namespace,
+      if export {
+        sem_ts::Exported::Named
+      } else {
+        sem_ts::Exported::No
+      },
+      span,
+    );
+    let binding = (
+      name.clone(),
+      SymbolBinding {
+        symbol,
+        def: existing.and_then(|b| b.def).or(Some(def_id)),
+        type_id: Some(typ),
+      },
+    );
+    let export_name = if export { Some(name.clone()) } else { None };
     Some((def_id, binding, export_name))
   }
 
@@ -3740,9 +3596,14 @@ impl ProgramState {
     if let Some(store) = self.interned_store.as_ref() {
       let type_options = TypeOptions::from(&self.compiler_options);
       let primitives = store.primitive_ids();
-      let relate = tti::RelateCtx::with_cache(
+      let expander = self.type_expander(store, body_caches.eval.clone());
+      let relate = tti::RelateCtx::with_hooks_and_cache(
         Arc::clone(store),
         type_options,
+        tti::RelateHooks {
+          expander: Some(&expander),
+          is_same_origin_private_member: None,
+        },
         body_caches.relation.clone(),
       );
       for (idx, _) in body.expr_spans.iter().enumerate() {
@@ -3837,8 +3698,10 @@ impl ProgramState {
           .map(|e| self.check_expr(e, env, result, file, return_context).0)
           .unwrap_or(self.builtin.undefined);
         if let Some(expected) = return_context {
-          if let Some(expr) = expr {
-            check::assign::check_assignment(self, Some(expr), ty, expected, result, file);
+          if !matches!(self.type_store.kind(expected), TypeKind::Predicate { .. }) {
+            if let Some(expr) = expr {
+              check::assign::check_assignment(self, Some(expr), ty, expected, result, file);
+            }
           }
         }
         result.return_types.push(ty);
@@ -4000,6 +3863,27 @@ impl ProgramState {
               self.builtin.unknown
             } else {
               self.type_store.union(collected, &self.builtin)
+            }
+          }
+          TypeKind::Intersection(members) => {
+            let mut collected = Vec::new();
+            for member in members.clone() {
+              if let Some(prop_ty) = match self.type_store.kind(member) {
+                TypeKind::Object(obj) => lookup_prop(obj),
+                TypeKind::Union(_) | TypeKind::Intersection(_) => {
+                  lookup_property_type(&mut self.type_store, member, property, &self.builtin)
+                }
+                _ => None,
+              } {
+                collected.push(prop_ty);
+              }
+            }
+            if collected.is_empty() {
+              self.builtin.unknown
+            } else if collected.len() == 1 {
+              collected[0]
+            } else {
+              self.type_store.intersection(collected)
             }
           }
           _ => self.builtin.unknown,
@@ -4230,72 +4114,127 @@ impl ProgramState {
       },
       HirExprKind::Call { callee, args } => {
         let (callee_ty, _) = self.check_expr(callee, env, result, file, None);
-        if let TypeKind::Function { params, ret } = self.type_store.kind(callee_ty).clone() {
-          if params.len() != args.len() {
-            result
-              .diagnostics
-              .push(codes::ARGUMENT_COUNT_MISMATCH.error(
-                "argument count mismatch",
-                Span {
-                  file,
-                  range: expr.span,
-                },
-              ));
-          }
-          let mut arg_types = Vec::new();
-          for (idx, arg) in args.iter().enumerate() {
-            let expected = params.get(idx).copied();
-            let (arg_ty, _) = self.check_expr(arg, env, result, file, expected);
-            arg_types.push(arg_ty);
-            if let Some(expected) = expected {
-              check::assign::check_assignment(self, Some(arg), arg_ty, expected, result, file);
+        match self.type_store.kind(callee_ty).clone() {
+          TypeKind::Function { params, ret } => {
+            if params.len() != args.len() {
+              result
+                .diagnostics
+                .push(codes::ARGUMENT_COUNT_MISMATCH.error(
+                  "argument count mismatch",
+                  Span {
+                    file,
+                    range: expr.span,
+                  },
+                ));
             }
-          }
-          match self.type_store.kind(ret).clone() {
-            TypeKind::Predicate {
-              parameter: _parameter,
-              asserted,
-              asserts,
-            } => {
-              let arg_ty = arg_types.get(0).copied().unwrap_or(self.builtin.unknown);
-              if let Some(first_arg) = args.get(0) {
-                if let HirExprKind::Ident(name) = &first_arg.kind {
-                  if let Some(asserted_ty) = asserted {
-                    if asserts {
-                      facts.assertions.insert(name.clone(), asserted_ty);
-                    } else {
-                      facts.truthy.insert(name.clone(), asserted_ty);
-                      let complement = match self.type_store.kind(arg_ty).clone() {
-                        TypeKind::Union(members) => {
-                          let remaining: Vec<_> =
-                            members.into_iter().filter(|m| *m != asserted_ty).collect();
-                          self.type_store.union(remaining, &self.builtin)
-                        }
-                        _ => {
-                          if arg_ty == asserted_ty {
-                            self.builtin.never
-                          } else {
-                            arg_ty
+            let mut arg_types = Vec::new();
+            for (idx, arg) in args.iter().enumerate() {
+              let expected = params.get(idx).copied();
+              let (arg_ty, _) = self.check_expr(arg, env, result, file, expected);
+              arg_types.push(arg_ty);
+              if let Some(expected) = expected {
+                check::assign::check_assignment(self, Some(arg), arg_ty, expected, result, file);
+              }
+            }
+            match self.type_store.kind(ret).clone() {
+              TypeKind::Predicate {
+                parameter,
+                asserted,
+                asserts,
+              } => {
+                let target_idx = if parameter.is_empty() {
+                  0
+                } else {
+                  args
+                    .iter()
+                    .position(|arg| matches!(&arg.kind, HirExprKind::Ident(name) if name == &parameter))
+                    .unwrap_or(0)
+                };
+                let arg_ty = arg_types
+                  .get(target_idx)
+                  .copied()
+                  .unwrap_or(self.builtin.unknown);
+                if let Some(arg_expr) = args.get(target_idx) {
+                  if let HirExprKind::Ident(name) = &arg_expr.kind {
+                    if let Some(asserted_ty) = asserted {
+                      if asserts {
+                        facts.assertions.insert(name.clone(), asserted_ty);
+                      } else {
+                        facts.truthy.insert(name.clone(), asserted_ty);
+                        let complement = match self.type_store.kind(arg_ty).clone() {
+                          TypeKind::Union(members) => {
+                            let remaining: Vec<_> =
+                              members.into_iter().filter(|m| *m != asserted_ty).collect();
+                            self.type_store.union(remaining, &self.builtin)
                           }
+                          _ => {
+                            if arg_ty == asserted_ty {
+                              self.builtin.never
+                            } else {
+                              arg_ty
+                            }
+                          }
+                        };
+                        if complement != self.builtin.never {
+                          facts.falsy.insert(name.clone(), complement);
                         }
-                      };
-                      if complement != self.builtin.never {
-                        facts.falsy.insert(name.clone(), complement);
                       }
                     }
                   }
                 }
+                if asserts {
+                  self.builtin.void
+                } else {
+                  self.builtin.boolean
+                }
               }
-              if asserts {
-                self.builtin.void
-              } else {
-                self.builtin.boolean
+              _ => ret,
+            }
+          }
+          TypeKind::Union(members) => {
+            let mut first_params: Option<Vec<TypeId>> = None;
+            let mut returns = Vec::new();
+            for member in members.iter() {
+              if let TypeKind::Function { params, ret } =
+                self.type_store.kind(*member).clone()
+              {
+                if first_params.is_none() {
+                  first_params = Some(params.clone());
+                }
+                returns.push(ret);
               }
             }
-            _ => ret,
+            if let Some(params) = first_params {
+              if params.len() != args.len() {
+                result
+                  .diagnostics
+                  .push(codes::ARGUMENT_COUNT_MISMATCH.error(
+                    "argument count mismatch",
+                    Span {
+                      file,
+                      range: expr.span,
+                    },
+                  ));
+              }
+              for (idx, arg) in args.iter().enumerate() {
+                let expected = params.get(idx).copied();
+                let (arg_ty, _) = self.check_expr(arg, env, result, file, expected);
+                if let Some(expected) = expected {
+                  check::assign::check_assignment(self, Some(arg), arg_ty, expected, result, file);
+                }
+              }
+              if returns.is_empty() {
+                self.builtin.unknown
+              } else if returns.len() == 1 {
+                returns[0]
+              } else {
+                self.type_store.union(returns, &self.builtin)
+              }
+            } else {
+              self.builtin.unknown
+            }
           }
-        } else {
-          self.builtin.unknown
+          _ => self.builtin.unknown,
         }
       }
       HirExprKind::Conditional {
@@ -4324,7 +4263,7 @@ impl ProgramState {
             continue;
           }
           let expected = context
-            .and_then(|ctx| check::object_literal::legacy_contextual_property_type(self, ctx, &prop.name));
+            .and_then(|ctx| check::object_literal::contextual_property_type(self, ctx, &prop.name));
           let (mut ty, _) = self.check_expr(&prop.value, env, result, file, expected.or(context));
           if expected.is_none() && context != Some(self.builtin.never) {
             ty = self.widen_literal(ty);
@@ -4650,6 +4589,136 @@ impl ProgramState {
     env
   }
 
+  fn merged_interface_type(&mut self, def: DefId, base: TypeId) -> Option<TypeId> {
+    let Some(symbol) = self.semantic_symbol_for_def(def, sem_ts::Namespace::TYPE) else {
+      return None;
+    };
+    let decls = self.semantic_decls_for_symbol(symbol, sem_ts::Namespace::TYPE);
+    if decls.len() <= 1 {
+      return None;
+    }
+    let mut merged: Option<ObjectType> = None;
+    for decl_def in decls {
+      if let Some(DefKind::Interface(iface)) = self.def_data.get(&decl_def).map(|d| &d.kind) {
+        if let TypeKind::Object(obj) = self.type_store.kind(iface.typ).clone() {
+          merged = Some(match merged {
+            Some(existing) => self.merge_object_types(existing, obj),
+            None => obj,
+          });
+        }
+      }
+    }
+    merged.map(|obj| self.type_store.object(obj)).or(Some(base))
+  }
+
+  fn merged_namespace_type_for_symbol(&mut self, symbol: sem_ts::SymbolId) -> Option<TypeId> {
+    let mut namespaces: Vec<DefId> = self.semantic_decls_for_symbol(symbol, sem_ts::Namespace::NAMESPACE);
+    if namespaces.is_empty() {
+      return None;
+    }
+
+    let mut merged: Option<ObjectType> = None;
+    for def_id in namespaces.drain(..) {
+      if let Some(DefKind::Namespace(ns)) = self.def_data.get(&def_id).map(|d| &d.kind) {
+        if let TypeKind::Object(obj) = self.type_store.kind(ns.typ).clone() {
+          merged = Some(match merged {
+            Some(existing) => self.merge_object_types(existing, obj),
+            None => obj,
+          });
+        }
+      }
+    }
+    merged.map(|obj| self.type_store.object(obj))
+  }
+
+  fn merge_value_namespace_type(
+    &mut self,
+    def: DefId,
+    base: TypeId,
+    symbol: Option<sem_ts::SymbolId>,
+    namespace_ty: Option<TypeId>,
+  ) -> TypeId {
+    let Some(symbol) = symbol else {
+      return namespace_ty.unwrap_or(base);
+    };
+    let Some(semantics) = self.semantics.as_ref() else {
+      return namespace_ty.unwrap_or(base);
+    };
+    let symbol_data = semantics.symbols().symbol(symbol);
+    let has_namespace = symbol_data
+      .namespaces
+      .contains(sem_ts::Namespace::NAMESPACE);
+    let has_value = symbol_data.namespaces.contains(sem_ts::Namespace::VALUE);
+
+    let ns_ty = if has_namespace {
+      namespace_ty.or_else(|| self.merged_namespace_type_for_symbol(symbol))
+    } else {
+      namespace_ty
+    };
+
+    let mut value_defs = Vec::new();
+    if has_value {
+      value_defs = self.semantic_decls_for_symbol(symbol, sem_ts::Namespace::VALUE);
+    }
+
+    let mergeable = |kind: &DefKind| matches!(kind, DefKind::Function(_));
+    let mut value_ty = None;
+    if let Some(kind) = self.def_data.get(&def).map(|d| &d.kind) {
+      if mergeable(kind) {
+        value_ty = Some(base);
+      }
+    }
+    if value_ty.is_none() {
+      for def_id in value_defs.iter() {
+        if Some(def) == Some(*def_id) {
+          continue;
+        }
+        if let Some(kind) = self.def_data.get(def_id).map(|d| &d.kind) {
+          if mergeable(kind) {
+            value_ty = Some(self.type_of_def(*def_id));
+            break;
+          }
+        }
+      }
+    }
+
+    let mut types: Vec<TypeId> = Vec::new();
+    if let Some(v) = value_ty {
+      types.push(v);
+    } else if has_value {
+      types.push(base);
+    }
+    if let Some(ns) = ns_ty {
+      types.push(ns);
+    } else if types.is_empty() {
+      types.push(base);
+    }
+    types.sort_by_key(|t| t.0);
+    types.dedup();
+
+    if types.len() == 1 {
+      types[0]
+    } else {
+      if value_ty.is_none() && has_namespace && has_value {
+        if let Some(def_data) = self.def_data.get(&def) {
+          let span = Span::new(def_data.file, def_data.span);
+          let already_reported = self.diagnostics.iter().any(|d| {
+            d.code.as_str() == codes::UNSUPPORTED_PATTERN.as_str() && d.primary == span
+          });
+          if !already_reported {
+            self
+              .diagnostics
+              .push(codes::UNSUPPORTED_PATTERN.error(
+                "declaration merging for this symbol kind is not supported yet",
+                span,
+              ));
+          }
+        }
+      }
+      self.type_store.intersection(types)
+    }
+  }
+
   fn type_of_def(&mut self, def: DefId) -> TypeId {
     let cache_hit = self.def_types.contains_key(&def);
     let mut span = QuerySpan::enter(
@@ -4678,7 +4747,11 @@ impl ProgramState {
       return self.builtin.any;
     }
     self.type_stack.push(def);
-    let ty = match self.def_data.get(&def).map(|d| d.kind.clone()) {
+    let merged_symbol = self
+      .semantic_symbol_for_def(def, sem_ts::Namespace::VALUE)
+      .or_else(|| self.semantic_symbol_for_def(def, sem_ts::Namespace::NAMESPACE));
+    let merged_namespace = merged_symbol.and_then(|sym| self.merged_namespace_type_for_symbol(sym));
+    let mut ty = match self.def_data.get(&def).map(|d| d.kind.clone()) {
       Some(DefKind::Function(func)) => self.function_type(def, func),
       Some(DefKind::Var(var)) => {
         let inferred = if let Some(t) = var.typ {
@@ -4711,8 +4784,13 @@ impl ProgramState {
       }
       Some(DefKind::Interface(interface)) => interface.typ,
       Some(DefKind::TypeAlias(alias)) => alias.typ,
+      Some(DefKind::Namespace(namespace)) => merged_namespace.unwrap_or(namespace.typ),
       None => self.builtin.unknown,
     };
+    if let Some(merged) = self.merged_interface_type(def, ty) {
+      ty = merged;
+    }
+    ty = self.merge_value_namespace_type(def, ty, merged_symbol, merged_namespace);
     self.type_stack.pop();
     self.def_types.insert(def, ty);
     if let Some(span) = span.take() {
@@ -4750,6 +4828,9 @@ impl ProgramState {
   }
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
+    if let Some(sem) = self.semantics.clone() {
+      return check::modules::exports_from_semantics(self, &sem, file);
+    }
     let Some(state) = self.files.get(&file).cloned() else {
       return ExportMap::new();
     };
@@ -4764,180 +4845,45 @@ impl ProgramState {
     map
   }
 
-  fn ensure_ts_locals(&mut self, file: FileId, host: &Arc<dyn Host>) -> Result<bool, FatalError> {
-    if self.ts_locals.contains_key(&file) {
-      return Ok(true);
-    }
-    let file_kind = match self.file_kinds.get(&file).copied() {
-      Some(kind) => kind,
-      None => {
-        let kind = self
-          .host_key(file)
-          .as_ref()
-          .map(|key| host.file_kind(key))
-          .unwrap_or(FileKind::Ts);
-        self.file_kinds.insert(file, kind);
-        kind
+  fn ensure_symbols_for_file(&mut self, file: FileId) {
+    if let Some(state) = self.files.get(&file).cloned() {
+      if let Some(body) = state.top_body {
+        let _ = self.check_body(body);
       }
-    };
-    let text = self.load_text(file, host)?;
-    let mut ast = match parse_file(file, file_kind, &text) {
-      Ok(ast) => ast,
-      Err(err) => {
-        self.diagnostics.push(err);
-        return Ok(false);
-      }
-    };
-    let hir_kind = match file_kind {
-      FileKind::Dts => HirFileKind::Dts,
-      FileKind::Js => HirFileKind::Js,
-      FileKind::Jsx => HirFileKind::Jsx,
-      FileKind::Ts => HirFileKind::Ts,
-      FileKind::Tsx => HirFileKind::Tsx,
-    };
-    let (lowered, lower_diags) = lower_hir_with_diagnostics(file, hir_kind, &ast);
-    self.diagnostics.extend(lower_diags);
-    let lowered = Arc::new(lowered);
-    let sem_hir = Arc::new(lower_to_ts_hir(&ast, lowered.as_ref()));
-    let is_module = matches!(sem_hir.module_kind, sem_ts::ModuleKind::Module);
-    let locals = sem_ts_locals::bind_ts_locals(&mut ast, file, is_module);
-    self.ts_locals.insert(file, locals);
-    self.hir_lowered.entry(file).or_insert(lowered);
-    self.sem_hir.entry(file).or_insert(sem_hir);
-    Ok(true)
-  }
-
-  fn ensure_local_symbol_map(&mut self, file: FileId) {
-    if self.local_symbol_map.contains_key(&file) {
-      return;
-    }
-    let Some(locals) = self.ts_locals.get(&file) else {
-      return;
-    };
-    let mut map = HashMap::new();
-    // Bind the file's root scope locals to the same program-level symbols we
-    // use for module exports/imports so top-level references stay consistent
-    // across files. Other locals are assigned stable, program-scoped IDs.
-    let root_scope = locals.root_scope();
-    for symbol in locals.symbols.values() {
-      if symbol.decl_scope == root_scope {
-        if let Some(binding) = self.binding_symbol_for_local(file, locals, symbol) {
-          map.insert(symbol.id, binding);
+      for def in state.defs.iter() {
+        if let Some(body) = self.body_of_def(*def) {
+          let _ = self.check_body(body);
         }
       }
     }
-    let symbol_ids: Vec<_> = locals.symbols.keys().copied().collect();
-    for symbol in symbol_ids {
-      map.entry(symbol).or_insert_with(|| self.alloc_symbol());
-    }
-    self.local_symbol_map.insert(file, map);
-  }
-
-  fn binding_symbol_for_local(
-    &self,
-    file: FileId,
-    locals: &sem_ts_locals::TsLocalSemantics,
-    symbol: &sem_ts_locals::SymbolData,
-  ) -> Option<semantic_js::SymbolId> {
-    if symbol.decl_scope != locals.root_scope() {
-      return None;
-    }
-    let name = locals.names.get(&symbol.name)?;
-    self
-      .files
-      .get(&file)
-      .and_then(|f| f.bindings.get(name).map(|b| b.symbol))
   }
 
   fn symbol_at(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
-    let span_map = {
-      let lowered = self.hir_lowered.get(&file)?;
-      lowered.hir.span_map.clone()
-    };
+    let occurrences = self.symbol_occurrences.get(&file)?;
+    let mut best_containing: Option<(u32, u32, semantic_js::SymbolId)> = None;
+    let mut best_empty: Option<(u32, u32, semantic_js::SymbolId)> = None;
 
-    let local_symbol = {
-      let locals = self.ts_locals.get(&file)?;
-
-      #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-      enum CandidateKind {
-        TypeExpr,
-        Expr,
-        Pat,
-        ImportSpecifier,
-        ExportSpecifier,
-      }
-
-      impl CandidateKind {
-        fn rank(self) -> u8 {
-          match self {
-            CandidateKind::TypeExpr => 0,
-            CandidateKind::Expr => 1,
-            CandidateKind::Pat => 2,
-            CandidateKind::ImportSpecifier => 3,
-            CandidateKind::ExportSpecifier => 4,
-          }
+    for occurrence in occurrences.iter() {
+      let range = occurrence.range;
+      let len = range.len();
+      let key = (len, range.start, occurrence.symbol);
+      if range.start <= offset && offset < range.end {
+        let replace = best_containing.map(|best| key < best).unwrap_or(true);
+        if replace {
+          best_containing = Some(key);
         }
-
-        fn resolve(
-          self,
-          locals: &sem_ts_locals::TsLocalSemantics,
-          span: TextRange,
-        ) -> Option<sem_ts_locals::SymbolId> {
-          match self {
-            CandidateKind::TypeExpr => locals.resolve_type_span(span),
-            CandidateKind::Expr
-            | CandidateKind::Pat
-            | CandidateKind::ImportSpecifier
-            | CandidateKind::ExportSpecifier => locals.resolve_expr_span(span),
-          }
+      } else if range.start == range.end && offset == range.start {
+        let replace = best_empty.map(|best| key < best).unwrap_or(true);
+        if replace {
+          best_empty = Some(key);
         }
-      }
-
-      let mut candidates: Vec<(CandidateKind, TextRange)> = Vec::new();
-      if let Some((_, span)) = span_map.type_expr_span_at_offset(offset) {
-        candidates.push((CandidateKind::TypeExpr, span));
-      }
-      if let Some((_, span)) = span_map.expr_span_at_offset(offset) {
-        candidates.push((CandidateKind::Expr, span));
-      }
-      if let Some((_, span)) = span_map.pat_span_at_offset(offset) {
-        candidates.push((CandidateKind::Pat, span));
-      }
-      if let Some((_, span)) = span_map.import_specifier_span_at_offset(offset) {
-        candidates.push((CandidateKind::ImportSpecifier, span));
-      }
-      if let Some((_, span)) = span_map.export_specifier_span_at_offset(offset) {
-        candidates.push((CandidateKind::ExportSpecifier, span));
-      }
-
-      candidates.sort_by_key(|(kind, span)| (span.len(), span.start, kind.rank(), span.end));
-
-      candidates
-        .into_iter()
-        .find_map(|(kind, span)| kind.resolve(locals, span))
-        .or_else(|| locals.resolve_type_at_offset(offset).map(|(_, sym)| sym))
-        .or_else(|| locals.resolve_expr_at_offset(offset).map(|(_, sym)| sym))
-    }?;
-
-    let symbol = self.map_local_symbol(file, local_symbol)?;
-    Some(self.resolve_symbol(symbol))
-  }
-
-  fn map_local_symbol(
-    &mut self,
-    file: FileId,
-    local_symbol: sem_ts_locals::SymbolId,
-  ) -> Option<semantic_js::SymbolId> {
-    self.ensure_local_symbol_map(file);
-    if let Some(map) = self.local_symbol_map.get(&file) {
-      if let Some(symbol) = map.get(&local_symbol).copied() {
-        return Some(symbol);
       }
     }
-    let symbol = self.alloc_symbol();
-    let map = self.local_symbol_map.get_mut(&file)?;
-    map.insert(local_symbol, symbol);
-    Some(symbol)
+
+    let symbol = best_containing
+      .or(best_empty)
+      .map(|(_, _, symbol)| symbol)?;
+    Some(self.resolve_symbol(symbol))
   }
 
   fn resolve_symbol(&mut self, symbol: semantic_js::SymbolId) -> semantic_js::SymbolId {
@@ -5037,6 +4983,7 @@ impl ProgramState {
       DefKind::Import(_) => None,
       DefKind::Interface(_) => None,
       DefKind::TypeAlias(_) => None,
+      DefKind::Namespace(_) => None,
     })
   }
 
@@ -5128,6 +5075,137 @@ impl ProgramState {
     }
 
     base
+  }
+
+  fn namespace_object_type(&mut self, file: FileId, body: &NamespaceBody) -> ObjectType {
+    let mut object = ObjectType::empty();
+    match body {
+      NamespaceBody::Block(stmts) => {
+        for stmt in stmts {
+          match stmt.stx.as_ref() {
+            Stmt::VarDecl(var) => {
+              for decl in var.stx.declarators.iter() {
+                let name = match decl.pattern.stx.pat.stx.as_ref() {
+                  Pat::Id(id) => id.stx.name.clone(),
+                  _ => {
+                    self
+                      .diagnostics
+                      .push(codes::UNSUPPORTED_PATTERN.error(
+                        "unsupported namespace binding pattern",
+                        loc_to_span(file, decl.pattern.loc),
+                      ));
+                    continue;
+                  }
+                };
+                let ty = decl
+                  .type_annotation
+                  .as_ref()
+                  .map(|t| self.type_from_type_expr(t))
+                  .unwrap_or(self.builtin.unknown);
+                object.props.insert(
+                  name,
+                  ObjectProperty {
+                    typ: ty,
+                    optional: false,
+                    readonly: false,
+                  },
+                );
+              }
+            }
+            Stmt::FunctionDecl(func) => {
+              if let Some(name_node) = func.stx.name.as_ref() {
+                let ty = self.function_decl_type(file, func);
+                object.props.insert(
+                  name_node.stx.name.clone(),
+                  ObjectProperty {
+                    typ: ty,
+                    optional: false,
+                    readonly: false,
+                  },
+                );
+              }
+            }
+            Stmt::InterfaceDecl(interface) => {
+              let mut iface_obj = self.object_type_from_members(&interface.stx.members);
+              for base in interface.stx.extends.iter() {
+                let base_ty = self.type_from_type_expr(base);
+                if let TypeKind::Object(base_obj) = self.type_store.kind(base_ty).clone() {
+                  iface_obj = self.merge_object_types(iface_obj, base_obj);
+                }
+              }
+              let ty = self.type_store.object(iface_obj);
+              object.props.insert(
+                interface.stx.name.clone(),
+                ObjectProperty {
+                  typ: ty,
+                  optional: false,
+                  readonly: false,
+                },
+              );
+            }
+            Stmt::TypeAliasDecl(alias) => {
+              let ty = self.type_from_type_expr(&alias.stx.type_expr);
+              object.props.insert(
+                alias.stx.name.clone(),
+                ObjectProperty {
+                  typ: ty,
+                  optional: false,
+                  readonly: false,
+                },
+              );
+            }
+            Stmt::NamespaceDecl(nested) => {
+              let nested_obj = self.namespace_object_type(file, &nested.stx.body);
+              let ty = self.type_store.object(nested_obj);
+              object.props.insert(
+                nested.stx.name.clone(),
+                ObjectProperty {
+                  typ: ty,
+                  optional: false,
+                  readonly: false,
+                },
+              );
+            }
+            _ => {}
+          }
+        }
+      }
+      NamespaceBody::Namespace(nested) => {
+        let nested_obj = self.namespace_object_type(file, &nested.stx.body);
+        let ty = self.type_store.object(nested_obj);
+        object.props.insert(
+          nested.stx.name.clone(),
+          ObjectProperty {
+            typ: ty,
+            optional: false,
+            readonly: false,
+          },
+        );
+      }
+    }
+    object
+  }
+
+  fn function_decl_type(&mut self, _file: FileId, func: &Node<FuncDecl>) -> TypeId {
+    let mut params = Vec::new();
+    for param in func.stx.function.stx.parameters.iter() {
+      let ty = param
+        .stx
+        .type_annotation
+        .as_ref()
+        .map(|t| self.type_from_type_expr(t))
+        .unwrap_or(self.builtin.any);
+      params.push(ty);
+    }
+    let ret = func
+      .stx
+      .function
+      .stx
+      .return_type
+      .as_ref()
+      .map(|t| self.type_from_type_expr(t))
+      .unwrap_or(self.builtin.any);
+    self.type_store.function(params, ret)
   }
 
   fn type_from_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeId {
@@ -5224,13 +5302,31 @@ impl ProgramState {
   }
 
   fn alloc_symbol(&mut self) -> semantic_js::SymbolId {
-    let id = semantic_js::SymbolId(self.next_symbol.into());
+    let id = semantic_js::SymbolId(self.next_symbol);
     self.next_symbol += 1;
     id
   }
 
   fn record_def_symbol(&mut self, def: DefId, symbol: semantic_js::SymbolId) {
-    self.symbol_to_def.insert(symbol, def);
+    let new_has_body = self
+      .def_data
+      .get(&def)
+      .map(|d| matches!(d.kind, DefKind::Function(_) | DefKind::Var(_)))
+      .unwrap_or(false);
+    let should_replace = match self.symbol_to_def.get(&symbol) {
+      Some(existing) => {
+        let existing_has_body = self
+          .def_data
+          .get(existing)
+          .map(|d| matches!(d.kind, DefKind::Function(_) | DefKind::Var(_)))
+          .unwrap_or(false);
+        !existing_has_body && new_has_body
+      }
+      None => true,
+    };
+    if should_replace {
+      self.symbol_to_def.insert(symbol, def);
+    }
   }
 
   fn record_symbol(&mut self, file: FileId, range: TextRange, symbol: semantic_js::SymbolId) {
@@ -5240,188 +5336,74 @@ impl ProgramState {
       .or_default()
       .push(SymbolOccurrence { range, symbol });
   }
-}
 
-fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
-  let resolve_name = |name| lowered.names.resolve(name).unwrap_or_default().to_string();
-  let mut decls = Vec::new();
-  for def_id in lowered.hir.items.iter() {
-    let Some(idx) = lowered.def_index.get(def_id) else {
-      continue;
-    };
-    let Some(def) = lowered.defs.get(*idx) else {
-      continue;
-    };
-    let name = resolve_name(def.path.name);
-    let mapped = map_def_kind(def.path.kind);
-    let Some(kind) = mapped else {
-      continue;
-    };
-    let exported = if def.is_exported {
-      if def.is_default_export {
-        sem_ts::Exported::Default
-      } else {
-        sem_ts::Exported::Named
+  fn map_semantic_decl_to_def(&self, decl: &sem_ts::DeclData) -> Option<DefId> {
+    let direct = DefId(decl.def_id.0);
+    if self.def_data.contains_key(&direct) {
+      return Some(direct);
+    }
+    let mut best: Option<DefId> = None;
+    for (id, data) in self.def_data.iter() {
+      if data.file == FileId(decl.file.0) && data.name == decl.name {
+        if best.map_or(true, |current| id < &current) {
+          best = Some(*id);
+        }
       }
-    } else {
-      sem_ts::Exported::No
-    };
-    decls.push(sem_ts::Decl {
-      def_id: def.id,
-      name,
-      kind,
-      is_ambient: def.is_ambient,
-      is_global: def.in_global,
-      exported,
-      span: def.span,
-    });
+    }
+    best
   }
 
-  let imports: Vec<_> = lowered
-    .hir
-    .imports
-    .iter()
-    .filter_map(|import| map_import_from_lower(import, lowered, &resolve_name))
-    .collect();
-  let exports: Vec<_> = lowered
-    .hir
-    .exports
-    .iter()
-    .filter_map(|export| map_export_from_lower(export, lowered, &resolve_name))
-    .collect();
-  let module_kind = if imports.is_empty()
-    && exports.is_empty()
-    && decls
+  fn semantic_decls_for_symbol(
+    &self,
+    symbol: sem_ts::SymbolId,
+    ns: sem_ts::Namespace,
+  ) -> Vec<DefId> {
+    let Some(semantics) = self.semantics.as_ref() else {
+      return Vec::new();
+    };
+    let mut defs: Vec<DefId> = semantics
+      .symbol_decls(symbol, ns)
       .iter()
-      .all(|decl| matches!(decl.exported, sem_ts::Exported::No))
-  {
-    sem_ts::ModuleKind::Script
-  } else {
-    sem_ts::ModuleKind::Module
-  };
-
-  sem_ts::HirFile {
-    file_id: sem_ts::FileId(lowered.hir.file.0),
-    module_kind,
-    file_kind: match lowered.hir.file_kind {
-      HirFileKind::Dts => sem_ts::FileKind::Dts,
-      HirFileKind::Ts | HirFileKind::Js | HirFileKind::Jsx | HirFileKind::Tsx => {
-        sem_ts::FileKind::Ts
-      }
-    },
-    decls,
-    imports,
-    exports,
-    export_as_namespace: Vec::new(),
-    ambient_modules: Vec::new(),
+      .filter_map(|decl| self.map_semantic_decl_to_def(semantics.symbols().decl(*decl)))
+      .collect();
+    defs.sort_by_key(|d| d.0);
+    defs.dedup();
+    defs
   }
-}
 
-fn map_def_kind(kind: HirDefKind) -> Option<sem_ts::DeclKind> {
-  match kind {
-    HirDefKind::Function => Some(sem_ts::DeclKind::Function),
-    HirDefKind::Class => Some(sem_ts::DeclKind::Class),
-    HirDefKind::Var => Some(sem_ts::DeclKind::Var),
-    HirDefKind::Interface => Some(sem_ts::DeclKind::Interface),
-    HirDefKind::TypeAlias => Some(sem_ts::DeclKind::TypeAlias),
-    HirDefKind::Enum => Some(sem_ts::DeclKind::Enum),
-    HirDefKind::Namespace | HirDefKind::Module => Some(sem_ts::DeclKind::Namespace),
-    HirDefKind::ImportBinding => None,
-    _ => None,
-  }
-}
-
-fn map_import_from_lower(
-  import: &hir_js::Import,
-  _lowered: &LowerResult,
-  resolve_name: &impl Fn(hir_js::NameId) -> String,
-) -> Option<sem_ts::Import> {
-  match &import.kind {
-    HirImportKind::Es(es) => {
-      let default = es.default.as_ref().map(|binding| sem_ts::ImportDefault {
-        local: resolve_name(binding.local),
-        local_span: binding.span,
-        is_type_only: es.is_type_only,
-      });
-      let namespace = es
-        .namespace
-        .as_ref()
-        .map(|binding| sem_ts::ImportNamespace {
-          local: resolve_name(binding.local),
-          local_span: binding.span,
-          is_type_only: es.is_type_only,
-        });
-      let named = es
-        .named
-        .iter()
-        .map(|spec| sem_ts::ImportNamed {
-          imported: resolve_name(spec.imported),
-          local: resolve_name(spec.local),
-          is_type_only: es.is_type_only || spec.is_type_only,
-          imported_span: spec.span,
-          local_span: spec.span,
-        })
-        .collect();
-      Some(sem_ts::Import {
-        specifier: es.specifier.value.clone(),
-        specifier_span: es.specifier.span,
-        default,
-        namespace,
-        named,
-        is_type_only: es.is_type_only,
-      })
+  fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
+    let Some(kind) = self.def_data.get(&def).map(|d| &d.kind) else {
+      return 3;
+    };
+    match ns {
+      sem_ts::Namespace::VALUE => match kind {
+        DefKind::Function(_) => 0,
+        DefKind::Namespace(_) => 1,
+        _ => 2,
+      },
+      sem_ts::Namespace::NAMESPACE => match kind {
+        DefKind::Namespace(_) => 0,
+        DefKind::Function(_) => 1,
+        _ => 2,
+      },
+      sem_ts::Namespace::TYPE => match kind {
+        DefKind::Interface(_) => 0,
+        DefKind::TypeAlias(_) => 1,
+        _ => 2,
+      },
+      _ => 3,
     }
-    HirImportKind::ImportEquals(_) => None,
   }
-}
 
-fn map_export_from_lower(
-  export: &hir_js::Export,
-  _lowered: &LowerResult,
-  resolve_name: &impl Fn(hir_js::NameId) -> String,
-) -> Option<sem_ts::Export> {
-  match &export.kind {
-    HirExportKind::Named(named) => {
-      let items = named
-        .specifiers
-        .iter()
-        .map(|spec| {
-          let local = resolve_name(spec.local);
-          let exported_name = resolve_name(spec.exported);
-          let exported = if exported_name == local {
-            None
-          } else {
-            Some(exported_name)
-          };
-          let exported_span = exported.as_ref().map(|_| spec.span);
-          sem_ts::ExportSpecifier {
-            local,
-            exported,
-            local_span: spec.span,
-            exported_span,
-          }
-        })
-        .collect();
-      Some(sem_ts::Export::Named(sem_ts::NamedExport {
-        specifier: named.source.as_ref().map(|s| s.value.clone()),
-        specifier_span: named.source.as_ref().map(|s| s.span),
-        items,
-        is_type_only: named.is_type_only,
-      }))
+  fn semantic_symbol_for_def(&self, def: DefId, ns: sem_ts::Namespace) -> Option<sem_ts::SymbolId> {
+    let semantics = self.semantics.as_ref()?;
+    if let Some(symbol) = semantics.symbol_for_def(sem_ts::DefId(def.0), ns) {
+      return Some(symbol);
     }
-    HirExportKind::ExportAll(all) => Some(sem_ts::Export::All(sem_ts::ExportAll {
-      specifier: all.source.value.clone(),
-      is_type_only: all.is_type_only,
-      specifier_span: all.source.span,
-    })),
-    HirExportKind::Default(_) => None,
-    HirExportKind::Assignment(_) => Some(sem_ts::Export::ExportAssignment {
-      expr: String::new(),
-      span: export.span,
-    }),
+    let def_data = self.def_data.get(&def)?;
+    semantics.resolve_in_module(sem_ts::FileId(def_data.file.0), &def_data.name, ns)
   }
 }
-
 struct BodyBuilder {
   id: BodyId,
   file: FileId,
