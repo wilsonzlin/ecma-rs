@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
+use parse_js::{Dialect, ParseOptions, SourceType};
+use semantic_js::ts::locals;
 use typecheck_ts::semantic_js::SymbolId;
 use typecheck_ts::{FileId, FileKey, MemoryHost, Program, TextRange, TypeKindSummary};
 
@@ -302,13 +304,59 @@ fn symbol_at_resolves_function_parameter_uses() {
 }
 
 #[test]
-#[ignore = "locals resolution currently misses nested closure binding uses"]
 fn symbol_at_prefers_innermost_binding_in_nested_functions() {
   let mut host = MemoryHost::default();
   let file = FileKey::new("file.ts");
   let source =
     "const value = 1; const factory = () => { const value = 2; return () => value + 1; }; const result = factory()();";
   host.insert(file.clone(), Arc::from(source.to_string()));
+
+  // Ensure the local semantics consider the inner arrow to reference the innermost
+  // `value` binding rather than the outer one.
+  let mut ast = parse_js::parse_with_options(
+    &source,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse");
+  let locals = locals::bind_ts_locals(&mut ast, FileId(0), true);
+  let value_symbols: Vec<_> = locals
+    .symbols
+    .values()
+    .filter(|sym| locals.names.get(&sym.name).map(|n| n.as_str()) == Some("value"))
+    .collect();
+  assert_eq!(
+    value_symbols.len(),
+    2,
+    "expected outer and inner value bindings"
+  );
+  let positions = positions_of(source, "value");
+  // Occurrence order: outer decl, inner decl, inner use.
+  let outer_decl = positions[0];
+  let inner_decl = positions[1];
+  let inner_use = positions[2];
+  let nearby: Vec<_> = (inner_use.saturating_sub(4)..=inner_use + 4)
+    .filter_map(|off| locals.resolve_expr_at_offset(off).map(|(range, id)| (off, range, id)))
+    .collect();
+  let inner_symbol = locals
+    .resolve_expr_at_offset(inner_use)
+    .map(|(_, id)| id)
+    .unwrap_or_else(|| panic!("inner use should resolve; nearby: {:?}", nearby));
+  let outer_symbol = locals
+    .resolve_expr_at_offset(outer_decl)
+    .map(|(_, id)| id)
+    .expect("outer decl should resolve");
+  let inner_decl_symbol = locals
+    .resolve_expr_at_offset(inner_decl)
+    .map(|(_, id)| id)
+    .expect("inner decl should resolve");
+  assert_ne!(
+    inner_symbol, outer_symbol,
+    "inner use should resolve to inner binding"
+  );
+  assert_eq!(inner_symbol, inner_decl_symbol, "inner use should match inner decl");
 
   let program = Program::new(host, vec![file.clone()]);
   let file_id = program.file_id(&file).expect("file id");

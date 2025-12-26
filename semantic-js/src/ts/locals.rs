@@ -479,7 +479,12 @@ impl DeclarePass {
       AstStmt::VarDecl(var) => self.walk_var_decl(var),
       AstStmt::FunctionDecl(func) => {
         if let Some(name) = &mut func.stx.name {
-          self.declare(&mut name.assoc, &name.stx.name, Namespace::VALUE, None);
+          self.declare(
+            &mut name.assoc,
+            &name.stx.name,
+            Namespace::VALUE,
+            Some(span_for_name(name.loc, &name.stx.name)),
+          );
         }
         self.walk_func(&mut func.stx.function);
       }
@@ -489,7 +494,7 @@ impl DeclarePass {
             &mut name.assoc,
             &name.stx.name,
             Namespace::VALUE | Namespace::TYPE,
-            None,
+            Some(span_for_name(name.loc, &name.stx.name)),
           );
         }
         self.push_scope(ScopeKind::Class, range_of(class));
@@ -542,7 +547,12 @@ impl DeclarePass {
       }
       AstStmt::Label(label) => self.walk_stmt(&mut label.stx.statement),
       AstStmt::InterfaceDecl(intf) => {
-        self.declare(&mut intf.assoc, &intf.stx.name, Namespace::TYPE, None);
+        self.declare(
+          &mut intf.assoc,
+          &intf.stx.name,
+          Namespace::TYPE,
+          Some(span_for_name(intf.loc, &intf.stx.name)),
+        );
         if let Some(params) = &mut intf.stx.type_parameters {
           self.push_scope(ScopeKind::TypeParams, to_range(intf.loc));
           for param in params.iter_mut() {
@@ -555,7 +565,12 @@ impl DeclarePass {
         }
       }
       AstStmt::TypeAliasDecl(alias) => {
-        self.declare(&mut alias.assoc, &alias.stx.name, Namespace::TYPE, None);
+        self.declare(
+          &mut alias.assoc,
+          &alias.stx.name,
+          Namespace::TYPE,
+          Some(span_for_name(alias.loc, &alias.stx.name)),
+        );
         if let Some(params) = &mut alias.stx.type_parameters {
           self.push_scope(ScopeKind::TypeParams, to_range(alias.loc));
           for param in params.iter_mut() {
@@ -588,8 +603,8 @@ impl DeclarePass {
   }
 
   fn walk_catch(&mut self, catch: &mut Node<CatchBlock>) {
-    self.mark_scope(&mut catch.assoc);
     self.push_scope(ScopeKind::Block, range_of(catch));
+    self.mark_scope(&mut catch.assoc);
     self.enter_decl_target(DeclTarget::Lexical);
     if let Some(param) = &mut catch.stx.parameter {
       self.walk_pat_decl(param, Namespace::VALUE);
@@ -602,8 +617,8 @@ impl DeclarePass {
   }
 
   fn walk_for_body(&mut self, body: &mut Node<ForBody>) {
-    self.mark_scope(&mut body.assoc);
     self.push_scope(ScopeKind::Block, range_of(body));
+    self.mark_scope(&mut body.assoc);
     for stmt in body.stx.body.iter_mut() {
       self.walk_stmt(stmt);
     }
@@ -702,7 +717,7 @@ impl DeclarePass {
             &mut id.assoc,
             &id.stx.name,
             namespaces,
-            Some(to_range(pat.loc)),
+            Some(span_for_name(pat.loc, &id.stx.name)),
           );
         }
       }
@@ -806,8 +821,8 @@ impl DeclarePass {
   }
 
   fn walk_func(&mut self, func: &mut Node<Func>) {
-    self.mark_scope(&mut func.assoc);
     self.push_scope(ScopeKind::Function, range_of(func));
+    self.mark_scope(&mut func.assoc);
     self.enter_decl_target(DeclTarget::Hoisted);
     if let Some(params) = &mut func.stx.type_parameters {
       for param in params.iter_mut() {
@@ -846,7 +861,7 @@ impl DeclarePass {
       &mut param.assoc,
       &param.stx.name,
       Namespace::TYPE,
-      Some(to_range(param.loc)),
+      Some(span_for_name(param.loc, &param.stx.name)),
     );
     if let Some(constraint) = &mut param.stx.constraint {
       self.walk_type_expr(constraint);
@@ -904,7 +919,7 @@ impl DeclarePass {
           &mut mapped.assoc,
           &mapped.stx.type_parameter,
           Namespace::TYPE,
-          Some(to_range(mapped.loc)),
+          Some(span_for_name(mapped.loc, &mapped.stx.type_parameter)),
         );
         self.walk_type_expr(&mut mapped.stx.constraint);
         if let Some(name) = &mut mapped.stx.name_type {
@@ -928,7 +943,7 @@ impl DeclarePass {
           &mut infer.assoc,
           &infer.stx.type_parameter,
           Namespace::TYPE,
-          Some(to_range(infer.loc)),
+          Some(span_for_name(infer.loc, &infer.stx.type_parameter)),
         );
         if let Some(cons) = &mut infer.stx.constraint {
           self.walk_type_expr(cons);
@@ -949,8 +964,8 @@ impl DeclarePass {
   }
 
   fn walk_type_function(&mut self, func: &mut Node<TypeFunction>) {
-    self.mark_scope(&mut func.assoc);
     self.push_scope(ScopeKind::TypeParams, range_of(func));
+    self.mark_scope(&mut func.assoc);
     if let Some(params) = &mut func.stx.type_parameters {
       for param in params.iter_mut() {
         self.walk_type_param(param);
@@ -964,8 +979,8 @@ impl DeclarePass {
   }
 
   fn walk_constructor_type(&mut self, func: &mut Node<TypeConstructor>) {
-    self.mark_scope(&mut func.assoc);
     self.push_scope(ScopeKind::TypeParams, range_of(func));
+    self.mark_scope(&mut func.assoc);
     if let Some(params) = &mut func.stx.type_parameters {
       for param in params.iter_mut() {
         self.walk_type_param(param);
@@ -994,16 +1009,16 @@ impl DeclarePass {
   }
 
   fn walk_namespace(&mut self, ns: &mut Node<NamespaceDecl>) {
-    self.mark_scope(&mut ns.assoc);
     self.declare(
       &mut ns.assoc,
       &ns.stx.name,
       Namespace::VALUE | Namespace::NAMESPACE,
-      Some(to_range(ns.loc)),
+      Some(span_for_name(ns.loc, &ns.stx.name)),
     );
     match &mut ns.stx.body {
       parse_js::ast::ts_stmt::NamespaceBody::Block(body) => {
         self.push_scope(ScopeKind::Block, to_range(ns.loc));
+        self.mark_scope(&mut ns.assoc);
         for stmt in body.iter_mut() {
           self.walk_stmt(stmt);
         }
@@ -1014,7 +1029,6 @@ impl DeclarePass {
   }
 
   fn walk_module(&mut self, module: &mut Node<ModuleDecl>) {
-    self.mark_scope(&mut module.assoc);
     let name = match &module.stx.name {
       parse_js::ast::ts_stmt::ModuleName::Identifier(id) => id.as_str(),
       parse_js::ast::ts_stmt::ModuleName::String(s) => s.as_str(),
@@ -1023,10 +1037,11 @@ impl DeclarePass {
       &mut module.assoc,
       name,
       Namespace::VALUE | Namespace::NAMESPACE,
-      Some(to_range(module.loc)),
+      Some(span_for_name(module.loc, name)),
     );
     if let Some(body) = &mut module.stx.body {
       self.push_scope(ScopeKind::Module, to_range(module.loc));
+      self.mark_scope(&mut module.assoc);
       for stmt in body.iter_mut() {
         self.walk_stmt(stmt);
       }
@@ -1139,7 +1154,9 @@ impl<'a> ResolvePass<'a> {
       AstStmt::FunctionDecl(func) => {
         if let Some(name) = &mut func.stx.name {
           if let Some(sym) = declared_symbol(&name.assoc) {
-            self.expr_resolutions.insert(to_range(name.loc), sym);
+            self
+              .expr_resolutions
+              .insert(span_for_name(name.loc, &name.stx.name), sym);
           }
         }
         self.walk_func(&mut func.stx.function);
@@ -1147,7 +1164,9 @@ impl<'a> ResolvePass<'a> {
       AstStmt::ClassDecl(class) => {
         if let Some(name) = &mut class.stx.name {
           if let Some(sym) = declared_symbol(&name.assoc) {
-            self.expr_resolutions.insert(to_range(name.loc), sym);
+            self
+              .expr_resolutions
+              .insert(span_for_name(name.loc, &name.stx.name), sym);
           }
         }
         for member in class.stx.members.iter_mut() {
@@ -1236,7 +1255,9 @@ impl<'a> ResolvePass<'a> {
       }
       AstStmt::InterfaceDecl(intf) => {
         if let Some(sym) = declared_symbol(&intf.assoc) {
-          self.expr_resolutions.insert(to_range(intf.loc), sym);
+          self
+            .expr_resolutions
+            .insert(span_for_name(intf.loc, &intf.stx.name), sym);
         }
         for ext in intf.stx.extends.iter_mut() {
           self.walk_type_expr(ext);
@@ -1244,7 +1265,9 @@ impl<'a> ResolvePass<'a> {
       }
       AstStmt::TypeAliasDecl(alias) => {
         if let Some(sym) = declared_symbol(&alias.assoc) {
-          self.expr_resolutions.insert(to_range(alias.loc), sym);
+          self
+            .expr_resolutions
+            .insert(span_for_name(alias.loc, &alias.stx.name), sym);
         }
         self.walk_type_expr(&mut alias.stx.type_expr);
       }
@@ -1326,7 +1349,7 @@ impl<'a> ResolvePass<'a> {
     match &mut *pat.stx {
       AstPat::Id(id) => {
         if declared_symbol(&id.assoc).is_none() {
-          let span = to_range(pat.loc);
+          let span = span_for_name(pat.loc, &id.stx.name);
           let sym = self
             .builder
             .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
@@ -1336,7 +1359,9 @@ impl<'a> ResolvePass<'a> {
           }
         } else if let Some(sym) = declared_symbol(&id.assoc) {
           id.assoc.set(ResolvedSymbol(Some(sym)));
-          self.expr_resolutions.insert(to_range(pat.loc), sym);
+          self
+            .expr_resolutions
+            .insert(span_for_name(pat.loc, &id.stx.name), sym);
         }
       }
       AstPat::Arr(arr) => {
@@ -1392,7 +1417,7 @@ impl<'a> ResolvePass<'a> {
   fn walk_expr(&mut self, expr: &mut Node<AstExpr>) {
     match &mut *expr.stx {
       AstExpr::Id(id) => {
-        let span = to_range(expr.loc);
+        let span = span_for_name(expr.loc, &id.stx.name);
         let sym = self
           .builder
           .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
@@ -1501,7 +1526,9 @@ impl<'a> ResolvePass<'a> {
   fn walk_type_param(&mut self, param: &mut Node<parse_js::ast::type_expr::TypeParameter>) {
     self.push_scope_from_assoc(&param.assoc);
     if let Some(sym) = declared_symbol(&param.assoc) {
-      self.expr_resolutions.insert(to_range(param.loc), sym);
+      self
+        .expr_resolutions
+        .insert(span_for_name(param.loc, &param.stx.name), sym);
     }
     if let Some(constraint) = &mut param.stx.constraint {
       self.walk_type_expr(constraint);
@@ -1658,4 +1685,15 @@ fn ns_index(ns: Namespace) -> usize {
 
 fn to_range(loc: parse_js::loc::Loc) -> TextRange {
   TextRange::new(loc.start_u32(), loc.end_u32())
+}
+
+fn span_for_name(loc: parse_js::loc::Loc, name: &str) -> TextRange {
+  let range = to_range(loc);
+  let len = name.len() as u32;
+  if range.len() >= len {
+    return range;
+  }
+  let end = range.start;
+  let start = end.saturating_sub(len);
+  TextRange::new(start, end)
 }
