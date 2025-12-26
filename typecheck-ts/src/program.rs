@@ -33,6 +33,7 @@ use tracing::debug_span;
 use types_ts_interned::{self as tti, RelationResult, TypeId, TypeOptions, TypeParamId};
 
 use crate::check::caches::{CheckerCacheStats, CheckerCaches};
+use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
 use crate::expand::ProgramTypeExpander;
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
@@ -1405,6 +1406,195 @@ fn sem_file_kind(kind: FileKind) -> sem_ts::FileKind {
   }
 }
 
+#[derive(Clone)]
+struct ProgramTypeResolver {
+  file: FileId,
+  semantics: Option<sem_ts::TsProgramSemantics>,
+  symbol_to_def: Arc<HashMap<semantic_js::SymbolId, DefId>>,
+  host: Arc<dyn Host>,
+}
+
+impl ProgramTypeResolver {
+  fn new(
+    file: FileId,
+    semantics: Option<sem_ts::TsProgramSemantics>,
+    symbol_to_def: Arc<HashMap<semantic_js::SymbolId, DefId>>,
+    host: Arc<dyn Host>,
+  ) -> Self {
+    Self {
+      file,
+      semantics,
+      symbol_to_def,
+      host,
+    }
+  }
+
+  fn def_for_symbol(&self, symbol: sem_ts::SymbolId, ns: sem_ts::Namespace) -> Option<DefId> {
+    if let Some(def) = self.symbol_to_def.get(&semantic_js::SymbolId::from(symbol)) {
+      return Some(*def);
+    }
+    let sem = self.semantics.as_ref()?;
+    let decls = sem.symbol_decls(symbol, ns);
+    let decl = decls.first()?;
+    let data = sem.symbols().decl(*decl);
+    Some(DefId(data.def_id.0))
+  }
+
+  fn resolve_in_exports(
+    &self,
+    exports: &sem_ts::ExportMap,
+    path: &[String],
+    final_ns: sem_ts::Namespace,
+  ) -> Option<sem_ts::SymbolId> {
+    if path.is_empty() {
+      return None;
+    }
+    let sem = self.semantics.as_ref()?;
+    let mut current_exports = exports;
+    let mut current_symbol = None;
+    let mut module: Option<sem_ts::FileId> = None;
+    for (idx, segment) in path.iter().enumerate() {
+      let group = current_exports.get(segment)?;
+      let target_ns = if idx + 1 == path.len() {
+        final_ns
+      } else {
+        sem_ts::Namespace::NAMESPACE | sem_ts::Namespace::TYPE | sem_ts::Namespace::VALUE
+      };
+      let mut symbol = group.symbol_for(target_ns, sem.symbols());
+      if symbol.is_none() && target_ns != sem_ts::Namespace::TYPE {
+        symbol = group.symbol_for(sem_ts::Namespace::TYPE, sem.symbols());
+      }
+      if symbol.is_none() && target_ns != sem_ts::Namespace::NAMESPACE {
+        symbol = group.symbol_for(sem_ts::Namespace::NAMESPACE, sem.symbols());
+      }
+      let sym = symbol?;
+      current_symbol = Some(sym);
+      module = self.imported_from(sym).or(module);
+      if idx + 1 < path.len() {
+        let Some(mod_id) = module else {
+          return None;
+        };
+        current_exports = sem.exports_of(mod_id);
+      }
+    }
+    current_symbol
+  }
+
+  fn imported_from(&self, symbol: sem_ts::SymbolId) -> Option<sem_ts::FileId> {
+    let sem = self.semantics.as_ref()?;
+    match sem.symbols().symbol(symbol).origin {
+      sem_ts::SymbolOrigin::Import { from: Some(f), .. } => Some(f),
+      _ => None,
+    }
+  }
+
+  fn resolve_qualified(&self, path: &[String], final_ns: sem_ts::Namespace) -> Option<DefId> {
+    if path.is_empty() {
+      return None;
+    }
+    let sem = self.semantics.as_ref()?;
+    let base_name = path.first().unwrap();
+    let mut symbol = sem
+      .resolve_in_module(
+        sem_ts::FileId(self.file.0),
+        base_name,
+        sem_ts::Namespace::NAMESPACE,
+      )
+      .or_else(|| sem.resolve_in_module(sem_ts::FileId(self.file.0), base_name, final_ns));
+    if symbol.is_none() {
+      symbol = sem
+        .global_symbols()
+        .get(base_name)
+        .and_then(|g| g.symbol_for(sem_ts::Namespace::NAMESPACE, sem.symbols()))
+        .or_else(|| {
+          sem
+            .global_symbols()
+            .get(base_name)
+            .and_then(|g| g.symbol_for(final_ns, sem.symbols()))
+        });
+    }
+    let Some(mut current_symbol) = symbol else {
+      return None;
+    };
+    let mut current_module = self
+      .imported_from(current_symbol)
+      .or_else(|| Some(sem_ts::FileId(self.file.0)));
+    if path.len() == 1 {
+      return self.def_for_symbol(current_symbol, final_ns);
+    }
+    for (idx, segment) in path.iter().enumerate().skip(1) {
+      let Some(module) = current_module else {
+        return None;
+      };
+      let exports = sem.exports_of(module);
+      let group = exports.get(segment)?;
+      let target_ns = if idx + 1 == path.len() {
+        final_ns
+      } else {
+        sem_ts::Namespace::NAMESPACE | sem_ts::Namespace::TYPE | sem_ts::Namespace::VALUE
+      };
+      let mut next = group.symbol_for(target_ns, sem.symbols());
+      if next.is_none() && target_ns != sem_ts::Namespace::TYPE {
+        next = group.symbol_for(sem_ts::Namespace::TYPE, sem.symbols());
+      }
+      if next.is_none() && target_ns != sem_ts::Namespace::NAMESPACE {
+        next = group.symbol_for(sem_ts::Namespace::NAMESPACE, sem.symbols());
+      }
+      let Some(found) = next else {
+        return None;
+      };
+      current_symbol = found;
+      current_module = self.imported_from(found).or(Some(module));
+    }
+    self.def_for_symbol(current_symbol, final_ns)
+  }
+}
+
+impl TypeResolver for ProgramTypeResolver {
+  fn resolve_type_name(&self, path: &[String]) -> Option<DefId> {
+    let sem = self.semantics.as_ref()?;
+    if path.is_empty() {
+      return None;
+    }
+    if path.len() == 1 {
+      let name = &path[0];
+      let symbol = sem
+        .resolve_in_module(sem_ts::FileId(self.file.0), name, sem_ts::Namespace::TYPE)
+        .or_else(|| {
+          sem
+            .global_symbols()
+            .get(name)
+            .and_then(|g| g.symbol_for(sem_ts::Namespace::TYPE, sem.symbols()))
+        });
+      return symbol.and_then(|sym| self.def_for_symbol(sym, sem_ts::Namespace::TYPE));
+    }
+    self.resolve_qualified(path, sem_ts::Namespace::TYPE)
+  }
+
+  fn resolve_typeof(&self, path: &[String]) -> Option<DefId> {
+    self.resolve_qualified(path, sem_ts::Namespace::VALUE)
+  }
+
+  fn resolve_import_type(&self, module: &str, qualifier: Option<&[String]>) -> Option<DefId> {
+    let sem = self.semantics.as_ref()?;
+    let resolved = self
+      .host
+      .resolve(self.file, module)
+      .map(|f| sem_ts::FileId(f.0));
+    let exports = if let Some(file) = resolved {
+      Some(sem.exports_of(file).clone())
+    } else {
+      sem.exports_of_ambient_module(module).cloned()
+    }?;
+    let Some(path) = qualifier else {
+      return None;
+    };
+    let symbol = self.resolve_in_exports(&exports, path, sem_ts::Namespace::TYPE)?;
+    self.def_for_symbol(symbol, sem_ts::Namespace::TYPE)
+  }
+}
+
+
 #[allow(dead_code)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
@@ -2185,6 +2375,8 @@ impl ProgramState {
         })
         .or_insert(*def_id);
     }
+    let symbol_to_def = Arc::new(self.symbol_to_def.clone());
+    let semantics = self.semantics.clone();
 
     let mut lowered_files: Vec<_> = self.hir_lowered.iter().collect();
     lowered_files.sort_by_key(|(file, _)| file.0);
@@ -2237,6 +2429,56 @@ impl ProgramState {
           if target_def != def.id {
             type_params.entry(def.id).or_insert(params);
           }
+        }
+      }
+    }
+
+    // Re-lower type declarations directly from syntax with a semantic resolver to
+    // support qualified names and import() types.
+    let mut files: BTreeSet<FileId> = BTreeSet::new();
+    for (file, _) in def_by_name.keys() {
+      files.insert(*file);
+    }
+    for file in files {
+      if cancelled.load(Ordering::Relaxed) {
+        return Err(FatalError::Cancelled);
+      }
+      let resolver: Arc<dyn TypeResolver> = Arc::new(ProgramTypeResolver::new(
+        file,
+        semantics.clone(),
+        Arc::clone(&symbol_to_def),
+        Arc::clone(host),
+      ));
+      let text = match self.load_text(file, host) {
+        Ok(text) => text,
+        Err(err) => return Err(err.into()),
+      };
+      let kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
+      let parsed = match parse_file(file, kind, &text) {
+        Ok(ast) => ast,
+        Err(diag) => {
+          self.diagnostics.push(diag);
+          continue;
+        }
+      };
+      for stmt in parsed.stx.body.iter() {
+        match stmt.stx.as_ref() {
+          Stmt::TypeAliasDecl(alias) => {
+            let Some(def_id) = def_by_name.get(&(file, alias.stx.name.clone())) else {
+              continue;
+            };
+            let mut lowerer = TypeLowerer::with_resolver(Arc::clone(&store), Arc::clone(&resolver));
+            lowerer.set_file(file);
+            let params =
+              lowerer.register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]));
+            let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+            def_types.insert(*def_id, ty);
+            if !params.is_empty() {
+              type_params.insert(*def_id, params);
+            }
+            self.diagnostics.extend(lowerer.take_diagnostics());
+          }
+          _ => {}
         }
       }
     }
