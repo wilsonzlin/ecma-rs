@@ -363,6 +363,19 @@ impl TypeStore {
     self.insert_object_direct(object)
   }
 
+  /// Deterministically compare two property keys using the store's interned
+  /// names. This mirrors the ordering used when canonicalizing shapes.
+  pub fn compare_prop_keys(&self, a: &crate::PropKey, b: &crate::PropKey) -> Ordering {
+    let names = self.names.read();
+    a.cmp_with(b, &|id| names.name(id).to_owned())
+  }
+
+  /// Deterministically compare two signatures using the same ordering applied
+  /// when interning shapes and callable overload sets.
+  pub fn compare_signatures(&self, a: SignatureId, b: SignatureId) -> Ordering {
+    self.signature_cmp(a, b)
+  }
+
   pub fn intern_type(&self, kind: TypeKind) -> TypeId {
     let kind = self.canonicalize_kind(kind);
     match kind {

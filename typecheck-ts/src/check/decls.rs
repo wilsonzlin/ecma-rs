@@ -3,15 +3,15 @@ use std::sync::Arc;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  DefId as HirDefId, DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId,
-  TypeMemberKind, TypeName, TypeParamId as HirTypeParamId, TypeSignature,
+  DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId, TypeMemberKind,
+  TypeName, TypeParamId as HirTypeParamId, TypeSignature,
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use semantic_js::ts::{Namespace, TsProgramSemantics};
 use types_ts_interned::{
-  Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property, Shape,
-  Signature, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
+   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
+   Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 use crate::CODE_UNKNOWN_IDENTIFIER;
@@ -26,6 +26,8 @@ pub struct HirDeclLowerer<'a, 'diag> {
   diagnostics: &'diag mut Vec<Diagnostic>,
   type_params: HashMap<HirTypeParamId, TypeParamId>,
   type_param_names: HashMap<hir_js::NameId, TypeParamId>,
+  def_map: Option<&'a HashMap<DefId, DefId>>,
+  def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
 }
 
 impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
@@ -35,6 +37,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     semantics: Option<&'a TsProgramSemantics>,
     file: FileId,
     diagnostics: &'diag mut Vec<Diagnostic>,
+    def_map: Option<&'a HashMap<DefId, DefId>>,
+    def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
   ) -> Self {
     Self {
       store,
@@ -44,20 +48,27 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       diagnostics,
       type_params: HashMap::new(),
       type_param_names: HashMap::new(),
+      def_map,
+      def_by_name,
     }
   }
 
-  pub fn lower_type_info(&mut self, info: &DefTypeInfo, names: &hir_js::NameInterner) -> TypeId {
+  pub fn lower_type_info(
+    &mut self,
+    info: &DefTypeInfo,
+    names: &hir_js::NameInterner,
+  ) -> (TypeId, Vec<TypeParamId>) {
     match info {
       DefTypeInfo::TypeAlias {
         type_expr,
         type_params,
       } => {
         self.register_type_params(type_params);
+        let params = self.collect_type_params(type_params);
         let ty = self.lower_type_expr(*type_expr, names);
         self.type_params.clear();
         self.type_param_names.clear();
-        ty
+        (ty, params)
       }
       DefTypeInfo::Interface {
         type_params,
@@ -65,6 +76,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         members,
       } => {
         self.register_type_params(type_params);
+        let params = self.collect_type_params(type_params);
         let mut shape = Shape::new();
 
         for member in members.iter() {
@@ -93,7 +105,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         };
         self.type_params.clear();
         self.type_param_names.clear();
-        ty
+        (ty, params)
       }
     }
   }
@@ -305,6 +317,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     new_id
   }
 
+  fn collect_type_params(&self, params: &[HirTypeParamId]) -> Vec<TypeParamId> {
+    params
+      .iter()
+      .filter_map(|id| self.type_params.get(id).copied())
+      .collect()
+  }
+
   fn lower_signature(&mut self, sig: &TypeSignature, names: &hir_js::NameInterner) -> Signature {
     let mut sig_params = Vec::new();
     for param in sig.params.iter() {
@@ -489,22 +508,31 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
 
     if let Some(name) = resolved {
       if let Some(sem) = self.semantics {
-        if let Some(symbol) = sem.resolve_in_module(self.file, &name, Namespace::TYPE) {
-          if let Some(decl) = sem
-            .symbol_decls(symbol, Namespace::TYPE)
-            .first()
-            .map(|d| sem.symbols().decl(*d).def_id)
-          {
-            let args: Vec<_> = reference
-              .type_args
-              .iter()
-              .map(|a| self.lower_type_expr(*a, names))
-              .collect();
-            return self.store.intern_type(TypeKind::Ref {
-              def: HirDefId(decl.0),
-              args,
-            });
-          }
+          if let Some(symbol) = sem.resolve_in_module(self.file, &name, Namespace::TYPE) {
+            if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {
+              let decl_data = sem.symbols().decl(*decl);
+              let args: Vec<_> = reference
+                .type_args
+                .iter()
+                .map(|a| self.lower_type_expr(*a, names))
+                .collect();
+              let target = DefId(decl_data.def_id.0);
+              let mapped = self
+                .def_map
+                .and_then(|map| map.get(&target).copied())
+                .or_else(|| {
+                  self.def_by_name.and_then(|map| {
+                    map
+                      .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
+                      .copied()
+                  })
+                })
+                .unwrap_or(target);
+              return self.store.intern_type(TypeKind::Ref {
+                def: mapped,
+                args,
+              });
+            }
         }
       }
 

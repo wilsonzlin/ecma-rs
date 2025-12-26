@@ -129,11 +129,13 @@ mod api;
 mod error;
 mod profile;
 mod program;
+mod type_queries;
 
 pub use api::*;
 pub use error::*;
 pub use profile::*;
 pub use program::*;
+pub use type_queries::*;
 
 /// Generic type checking helpers (instantiation and inference).
 ///
