@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use typecheck_ts::codes;
 use typecheck_ts::{Diagnostic, FileId, Host, HostError, Program};
 
 #[derive(Default)]
@@ -38,10 +39,11 @@ fn run(source: &str) -> Vec<Diagnostic> {
 fn reports_excess_property_on_fresh_object_literal() {
   let diagnostics = run("let x: { foo: number } = { foo: 1, bar: 2 };");
   assert_eq!(diagnostics.len(), 1);
-  assert!(
-    diagnostics[0].message.contains("excess property"),
-    "unexpected message: {}",
-    diagnostics[0].message
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "unexpected diagnostic: {:?}",
+    diagnostics[0]
   );
 }
 

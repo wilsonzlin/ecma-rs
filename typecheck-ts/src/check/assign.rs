@@ -1,8 +1,7 @@
-use super::super::{
-  Diagnostic, FileId, HirExpr, ProgramState, Span, TypeId, TypeKind, CODE_TYPE_MISMATCH,
-};
+use super::super::{FileId, HirExpr, ProgramState, Span, TypeId, TypeKind};
 use super::body::BodyCheckOutput;
 use super::object_literal;
+use crate::codes;
 
 pub(crate) fn check_assignment(
   state: &mut ProgramState,
@@ -44,14 +43,15 @@ pub(crate) fn check_assignment(
   }
 
   if let Some(expr) = source_expr {
-    output.diagnostics.push(Diagnostic::error(
-      CODE_TYPE_MISMATCH,
-      "type mismatch",
-      Span {
-        file,
-        range: expr.span,
-      },
-    ));
+    output
+      .diagnostics
+      .push(codes::TYPE_MISMATCH.error(
+        "type mismatch",
+        Span {
+          file,
+          range: expr.span,
+        },
+      ));
   }
 
   false

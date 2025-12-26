@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use typecheck_ts::codes;
 use typecheck_ts::{FatalError, FileId, Host, HostError, Program};
 
 struct MissingHost;
@@ -24,5 +25,10 @@ fn missing_file_is_fatal_host_error() {
 
   let diagnostics = program.check();
   assert_eq!(diagnostics.len(), 1);
-  assert_eq!(diagnostics[0].code.as_str(), "HOST0001");
+  assert_eq!(diagnostics[0].code.as_str(), codes::HOST_ERROR.as_str());
+  assert_eq!(diagnostics[0].notes.len(), 1);
+  assert!(
+    diagnostics[0].notes[0].contains("no source span available"),
+    "expected host error note explaining missing span"
+  );
 }

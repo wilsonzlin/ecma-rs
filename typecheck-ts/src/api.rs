@@ -13,6 +13,9 @@ pub use types_ts_interned::TypeId;
 /// Interned `types-ts-interned` identifier for callers that need to construct or
 /// inspect standalone types without the legacy `Program` API.
 pub use types_ts_interned::TypeId as InternedTypeId;
+/// Legacy type identifier used by the lightweight checker. Alias for
+/// `types-ts-interned::TypeId`.
+pub use types_ts_interned::TypeId;
 /// Interned type parameter identifier used by the `TypeQueries` APIs.
 pub use types_ts_interned::TypeParamId;
 

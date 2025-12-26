@@ -34,10 +34,7 @@ use super::flow_narrow::{
 use super::expr::resolve_call;
 use super::infer::TypeParamDecl;
 use super::type_expr::TypeLowerer;
-
-const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
-const CODE_TYPE_MISMATCH: &str = "TC0007";
-const CODE_ARGUMENT_COUNT_MISMATCH: &str = "TC1006";
+use crate::codes;
 
 /// Result of checking a single HIR body produced by `hir-js`.
 #[derive(Debug)]
@@ -461,6 +458,7 @@ pub fn check_body(
   checker
     .diagnostics
     .extend(checker.lowerer.take_diagnostics());
+  codes::normalize_diagnostics(&mut checker.diagnostics);
   BodyCheckResult {
     expr_types: checker.expr_types,
     pat_types: checker.pat_types,
@@ -891,11 +889,9 @@ impl<'a> Checker<'a> {
               Some(sig.params.len())
             };
             if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
-              self.diagnostics.push(Diagnostic::error(
-                CODE_ARGUMENT_COUNT_MISMATCH,
-                "argument count mismatch",
-                span,
-              ));
+              self
+                .diagnostics
+                .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
             }
           }
         }
@@ -1035,8 +1031,7 @@ impl<'a> Checker<'a> {
     if let Some(binding) = self.lookup(name) {
       return binding.ty;
     }
-    self.diagnostics.push(Diagnostic::error(
-      CODE_UNKNOWN_IDENTIFIER,
+    self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
       format!("unknown identifier `{}`", name),
       Span {
         file: self.file,
@@ -1119,8 +1114,7 @@ impl<'a> Checker<'a> {
       AstExpr::Id(id) => {
         if let Some(binding) = self.lookup(&id.stx.name) {
           if !self.relate.is_assignable(value_ty, binding.ty) {
-            self.diagnostics.push(Diagnostic::error(
-              CODE_TYPE_MISMATCH,
+            self.diagnostics.push(codes::TYPE_MISMATCH.error(
               "assignment type mismatch",
               Span {
                 file: self.file,
@@ -1170,8 +1164,7 @@ impl<'a> Checker<'a> {
       AstPat::AssignTarget(expr) => {
         let target_ty = self.check_expr(expr);
         if !self.relate.is_assignable(value, target_ty) {
-          self.diagnostics.push(Diagnostic::error(
-            CODE_TYPE_MISMATCH,
+          self.diagnostics.push(codes::TYPE_MISMATCH.error(
             "assignment type mismatch",
             Span {
               file: self.file,
@@ -1347,8 +1340,7 @@ impl<'a> Checker<'a> {
 
   fn check_assignable(&mut self, expr: &Node<AstExpr>, src: TypeId, dst: TypeId) {
     if !self.relate.is_assignable(src, dst) {
-      self.diagnostics.push(Diagnostic::error(
-        CODE_TYPE_MISMATCH,
+      self.diagnostics.push(codes::TYPE_MISMATCH.error(
         "type mismatch",
         Span {
           file: self.file,

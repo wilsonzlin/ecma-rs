@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::{FileId, Host, HostError, Program};
 
@@ -90,10 +91,15 @@ fn missing_libs_emit_unknown_global_diagnostics() {
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
   assert!(
-    diagnostics.iter().any(|d| d.code == "TC0001"),
+    diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::NO_LIBS_LOADED.as_str()),
     "missing libs should surface a dedicated diagnostic: {diagnostics:?}"
   );
-  let unknowns = diagnostics.iter().filter(|d| d.code == "TC0005").count();
+  let unknowns = diagnostics
+    .iter()
+    .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
+    .count();
   assert!(
     unknowns >= 2,
     "expected unknown global diagnostics for Promise/Array, got {diagnostics:?}"
@@ -116,16 +122,24 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
   assert!(
-    diagnostics.iter().any(|d| d.code == "TC0004"),
+    diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::NON_DTS_LIB.as_str()),
     "non-.d.ts libs should emit a warning: {diagnostics:?}"
   );
   assert!(
-    diagnostics.iter().any(|d| d.code == "TC0001"),
+    diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::NO_LIBS_LOADED.as_str()),
     "ignoring non-.d.ts libs should surface missing libs: {diagnostics:?}"
   );
-  assert!(
-    diagnostics.iter().any(|d| d.code == "TC0005"),
-    "missing globals should still produce unknown identifier diagnostics: {diagnostics:?}"
+  let unknown_identifiers = diagnostics
+    .iter()
+    .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
+    .count();
+  assert_eq!(
+    unknown_identifiers, 1,
+    "expected unknown identifier diagnostic for Provided: {diagnostics:?}"
   );
 }
 

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use diagnostics::{FileId, Span, TextRange};
 use typecheck_ts::check::expr::resolve_call;
 use typecheck_ts::check::infer::TypeParamDecl;
+use typecheck_ts::codes;
 use types_ts_interned::{Param, RelateCtx, Signature, TypeId, TypeKind, TypeOptions, TypeStore};
 
 fn span() -> Span {
@@ -128,7 +129,7 @@ fn reports_no_matching_overload_with_reasons() {
   assert_eq!(resolution.return_type, primitives.unknown);
   assert_eq!(resolution.diagnostics.len(), 1);
   let diag = &resolution.diagnostics[0];
-  assert_eq!(diag.code.as_str(), "TC2000");
+  assert_eq!(diag.code.as_str(), codes::NO_OVERLOAD.as_str());
   assert_eq!(diag.notes.len(), 1);
   assert!(
     diag.notes[0].contains("argument 1"),
@@ -168,7 +169,7 @@ fn reports_ambiguous_call() {
   assert_eq!(resolution.return_type, primitives.unknown);
   assert_eq!(resolution.diagnostics.len(), 1);
   let diag = &resolution.diagnostics[0];
-  assert_eq!(diag.code.as_str(), "TC2001");
+  assert_eq!(diag.code.as_str(), codes::AMBIGUOUS_OVERLOAD.as_str());
   assert_eq!(diag.notes.len(), 2);
 }
 

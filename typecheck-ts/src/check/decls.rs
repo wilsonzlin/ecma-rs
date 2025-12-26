@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::codes;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   DefId as HirDefId, DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId,
@@ -14,14 +15,13 @@ use types_ts_interned::{
   Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
-use crate::CODE_UNKNOWN_IDENTIFIER;
-
 /// Lower HIR type expressions and declarations into interned types.
 #[derive(Debug)]
 pub struct HirDeclLowerer<'a, 'diag> {
   store: Arc<TypeStore>,
   arenas: &'a TypeArenas,
   semantics: Option<&'a TsProgramSemantics>,
+  defs: HashMap<(FileId, String), DefId>,
   file: FileId,
   local_defs: HashMap<String, HirDefId>,
   diagnostics: &'diag mut Vec<Diagnostic>,
@@ -36,6 +36,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     store: Arc<TypeStore>,
     arenas: &'a TypeArenas,
     semantics: Option<&'a TsProgramSemantics>,
+    defs: HashMap<(FileId, String), DefId>,
     file: FileId,
     local_defs: HashMap<String, HirDefId>,
     diagnostics: &'diag mut Vec<Diagnostic>,
@@ -46,6 +47,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       store,
       arenas,
       semantics,
+      defs,
       file,
       local_defs,
       diagnostics,
@@ -510,6 +512,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     };
 
     if let Some(name) = resolved {
+      let args: Vec<_> = reference
+        .type_args
+        .iter()
+        .map(|a| self.lower_type_expr(*a, names))
+        .collect();
+
       if let Some(local) = self.local_defs.get(&name).copied() {
         let mapped = self
           .def_map
@@ -520,22 +528,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
               .and_then(|map| map.get(&(self.file, name.clone())).copied())
           })
           .unwrap_or(local);
-        let args: Vec<_> = reference
-          .type_args
-          .iter()
-          .map(|a| self.lower_type_expr(*a, names))
-          .collect();
         return self.store.intern_type(TypeKind::Ref { def: mapped, args });
       }
+
+      if let Some(def) = self.defs.get(&(self.file, name.clone())) {
+        return self.store.intern_type(TypeKind::Ref { def: *def, args });
+      }
+
       if let Some(sem) = self.semantics {
         if let Some(symbol) = sem.resolve_in_module(self.file, &name, Namespace::TYPE) {
           if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {
             let decl_data = sem.symbols().decl(*decl);
-            let args: Vec<_> = reference
-              .type_args
-              .iter()
-              .map(|a| self.lower_type_expr(*a, names))
-              .collect();
             let target = DefId(decl_data.def_id.0);
             let mapped = self
               .def_map
@@ -553,8 +556,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }
       }
 
-      self.diagnostics.push(Diagnostic::error(
-        CODE_UNKNOWN_IDENTIFIER,
+      self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
         format!("Cannot find name '{name}'."),
         Span::new(self.file, TextRange::new(0, 0)),
       ));

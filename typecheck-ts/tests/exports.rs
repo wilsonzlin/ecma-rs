@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use typecheck_ts::codes;
 use typecheck_ts::{FileId, Host, HostError, Program};
 
 #[derive(Default)]
@@ -120,10 +121,12 @@ fn missing_reexport_emits_diagnostic() {
 
   let program = Program::new(host, vec![FileId(101)]);
   let diagnostics = program.check();
+  assert_eq!(diagnostics.len(), 1, "expected a single diagnostic");
+  assert_eq!(diagnostics[0].code.as_str(), codes::UNKNOWN_EXPORT.as_str());
+  assert_eq!(diagnostics[0].primary.file, FileId(101));
   assert!(
-    diagnostics.is_empty() || diagnostics[0].code.as_str() == "TC1002",
-    "unexpected diagnostics: {:?}",
-    diagnostics
+    diagnostics[0].primary.range.len() > 0,
+    "diagnostic should point at the invalid specifier"
   );
 
   let exports = program.exports_of(FileId(101));
@@ -145,11 +148,8 @@ fn type_only_reexports_filtered() {
 
   let program = Program::new(host, vec![FileId(201)]);
   let diagnostics = program.check();
-  assert!(
-    diagnostics.is_empty() || diagnostics[0].code.as_str() == "TC1002",
-    "unexpected diagnostics: {:?}",
-    diagnostics
-  );
+  assert_eq!(diagnostics.len(), 1, "expected missing export diagnostic");
+  assert_eq!(diagnostics[0].code.as_str(), codes::UNKNOWN_EXPORT.as_str());
 
   let exports = program.exports_of(FileId(201));
   assert!(
@@ -158,11 +158,7 @@ fn type_only_reexports_filtered() {
   );
   let value = exports.get("value").expect("value export present");
   let ty = value.type_id.expect("type for value");
-  let rendered = program.display_type(ty).to_string();
-  assert!(
-    rendered == "number" || rendered == "1",
-    "unexpected value type {rendered}"
-  );
+  assert_eq!(program.display_type(ty).to_string(), "1");
 }
 
 #[test]
@@ -174,12 +170,14 @@ fn export_namespace_all_reports_diagnostic() {
 
   let program = Program::new(host, vec![FileId(301)]);
   let diagnostics = program.check();
-  assert!(
-    diagnostics.is_empty()
-      || diagnostics[0].code.as_str() == "TC1004"
-      || diagnostics[0].code.as_str() == "TC1002",
-    "unexpected diagnostics: {:?}",
-    diagnostics
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected unsupported pattern diagnostic"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::UNSUPPORTED_PATTERN.as_str()
   );
 }
 

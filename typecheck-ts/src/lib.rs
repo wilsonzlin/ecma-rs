@@ -129,6 +129,7 @@
 //! cache and share results without relying on implementation details.
 
 mod api;
+pub mod codes;
 mod error;
 mod profile;
 mod program;

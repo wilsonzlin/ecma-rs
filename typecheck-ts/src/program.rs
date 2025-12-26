@@ -34,6 +34,7 @@ use std::time::Instant;
 use tracing::debug_span;
 use types_ts_interned::{self as tti, RelateCtx, TypeId, TypeOptions, TypeParamId};
 
+use crate::codes;
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
@@ -44,7 +45,6 @@ use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
 };
 use crate::{FatalError, HostError, Ice, IceContext};
-
 #[path = "check/mod.rs"]
 pub(crate) mod check;
 
@@ -56,19 +56,6 @@ use check::narrow::{
 };
 
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
-pub(crate) const CODE_MISSING_LIB: &str = "TC0001";
-pub(crate) const CODE_NON_DTS_LIB: &str = "TC0004";
-pub(crate) const CODE_UNKNOWN_IDENTIFIER: &str = "TC0005";
-pub(crate) const CODE_EXCESS_PROPERTY: &str = "TC0006";
-pub(crate) const CODE_TYPE_MISMATCH: &str = "TC0007";
-
-const CODE_UNRESOLVED_MODULE: &str = "TC1001";
-const CODE_UNKNOWN_EXPORT: &str = "TC1002";
-const CODE_UNSUPPORTED_IMPORT_PATTERN: &str = "TC1003";
-const CODE_UNSUPPORTED_PATTERN: &str = "TC1004";
-const CODE_UNSUPPORTED_PARAM_PATTERN: &str = "TC1005";
-const CODE_MISSING_BODY: &str = "ICE0002";
-const CODE_ARGUMENT_COUNT_MISMATCH: &str = "TC1006";
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
@@ -449,6 +436,7 @@ impl Program {
       }
       state.update_export_types();
       state.resolve_reexports();
+      codes::normalize_diagnostics(&mut diagnostics);
       Ok(diagnostics)
     })
   }
@@ -1164,6 +1152,7 @@ impl Program {
       .collect();
     interned_type_params.sort_by_key(|(def, _)| def.0);
 
+    codes::normalize_diagnostics(&mut state.diagnostics);
     ProgramSnapshot {
       schema_version: PROGRAM_SNAPSHOT_VERSION,
       tool_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1258,12 +1247,16 @@ impl Program {
       state.body_results = snapshot
         .body_results
         .into_iter()
-        .map(|res| (res.body(), Arc::new(res)))
+        .map(|mut res| {
+          codes::normalize_diagnostics(&mut res.diagnostics);
+          (res.body(), Arc::new(res))
+        })
         .collect();
       state.symbol_occurrences = snapshot.symbol_occurrences.into_iter().collect();
       state.symbol_to_def = snapshot.symbol_to_def.into_iter().collect();
       state.global_bindings = snapshot.global_bindings.into_iter().collect();
       state.diagnostics = snapshot.diagnostics;
+      codes::normalize_diagnostics(&mut state.diagnostics);
       state.type_store = snapshot.type_store;
       state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
       state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
@@ -2110,6 +2103,7 @@ impl ProgramState {
     }
     self.resolve_reexports();
     self.recompute_global_bindings();
+    codes::normalize_diagnostics(&mut self.diagnostics);
     self.analyzed = true;
     Ok(())
   }
@@ -2156,6 +2150,7 @@ impl ProgramState {
         Arc::clone(&store),
         &lowered.types,
         self.semantics.as_ref(),
+        def_by_name.clone(),
         *file,
         local_defs,
         &mut self.diagnostics,
@@ -2204,7 +2199,7 @@ impl ProgramState {
       let is_dts = lib.kind == FileKind::Dts || lib.name.ends_with(".d.ts");
       if !is_dts {
         self.diagnostics.push(Diagnostic::warning(
-          CODE_NON_DTS_LIB,
+          codes::NON_DTS_LIB.as_str(),
           format!(
             "Library '{}' is not a .d.ts file; it will be ignored for global declarations.",
             lib.name
@@ -2218,11 +2213,12 @@ impl ProgramState {
     }
 
     if dts_libs.is_empty() {
-      self.diagnostics.push(Diagnostic::error(
-        CODE_MISSING_LIB,
-        "No library files were loaded. Provide libs via the host or enable the bundled-libs feature / disable no_default_lib.",
-        Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
-      ));
+      self
+        .diagnostics
+        .push(codes::NO_LIBS_LOADED.error(
+          "No library files were loaded. Provide libs via the host or enable the bundled-libs feature / disable no_default_lib.",
+          Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
+        ));
     }
 
     dts_libs
@@ -2343,9 +2339,9 @@ impl ProgramState {
     for mut diag in diags {
       if diag.code == "BIND1002" {
         if diag.message.contains("unresolved") {
-          diag.code = CODE_UNRESOLVED_MODULE.into();
+          diag.code = codes::UNRESOLVED_MODULE.as_str().into();
         } else {
-          diag.code = CODE_UNKNOWN_EXPORT.into();
+          diag.code = codes::UNKNOWN_EXPORT.as_str().into();
         }
       }
       let duplicate = self.diagnostics.iter().any(|existing| {
@@ -2380,13 +2376,12 @@ impl ProgramState {
               if let Some(def_data) = self.def_data.get(&def) {
                 if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
                   let duplicate = self.diagnostics.iter().any(|existing| {
-                    existing.code == CODE_UNKNOWN_EXPORT
+                    existing.code == codes::UNKNOWN_EXPORT.as_str()
                       && existing.primary.file == *file
                       && existing.primary.range == spec.span
                   });
                   if !duplicate {
-                    self.diagnostics.push(Diagnostic::error(
-                      CODE_UNKNOWN_EXPORT,
+                    self.diagnostics.push(codes::UNKNOWN_EXPORT.error(
                       format!("unknown export {}", spec.original),
                       Span::new(*file, spec.span),
                     ));
@@ -2421,13 +2416,12 @@ impl ProgramState {
             continue;
           }
           let duplicate = self.diagnostics.iter().any(|existing| {
-            existing.code == CODE_UNKNOWN_EXPORT
+            existing.code == codes::UNKNOWN_EXPORT.as_str()
               && existing.primary.file == *file
               && existing.primary.range == spec.span
           });
           if !duplicate {
-            self.diagnostics.push(Diagnostic::error(
-              CODE_UNKNOWN_EXPORT,
+            self.diagnostics.push(codes::UNKNOWN_EXPORT.error(
               format!("unknown export {}", spec.original),
               Span::new(*file, spec.span),
             ));
@@ -2831,8 +2825,7 @@ impl ProgramState {
                       },
                     );
                   } else {
-                    self.diagnostics.push(Diagnostic::error(
-                      CODE_UNKNOWN_EXPORT,
+                    self.diagnostics.push(codes::UNKNOWN_EXPORT.error(
                       format!("unknown export {exportable}"),
                       loc_to_span(file, name.loc),
                     ));
@@ -2842,11 +2835,10 @@ impl ProgramState {
             }
             ExportNames::All(alias) => {
               if alias.is_some() {
-                self.diagnostics.push(Diagnostic::error(
-                  CODE_UNSUPPORTED_PATTERN,
-                  "unsupported export * as alias",
-                  loc_to_span(file, stmt.loc),
-                ));
+                self.diagnostics.push(
+                  codes::UNSUPPORTED_PATTERN
+                    .error("unsupported export * as alias", loc_to_span(file, stmt.loc)),
+                );
               } else if let Some(spec) = export_list.stx.from.clone() {
                 if let Some(target) = resolved {
                   export_all.push(ExportAll {
@@ -2877,11 +2869,12 @@ impl ProgramState {
             let alias_name = match &default_pat.stx.pat.stx.as_ref() {
               Pat::Id(id) => id.stx.name.clone(),
               _ => {
-                self.diagnostics.push(Diagnostic::error(
-                  CODE_UNSUPPORTED_IMPORT_PATTERN,
-                  "unsupported import pattern",
-                  loc_to_span(file, default_pat.loc),
-                ));
+                self
+                  .diagnostics
+                  .push(codes::UNSUPPORTED_IMPORT_PATTERN.error(
+                    "unsupported import pattern",
+                    loc_to_span(file, default_pat.loc),
+                  ));
                 continue;
               }
             };
@@ -2925,11 +2918,12 @@ impl ProgramState {
                 let alias_name = match &alias_pat.stx.pat.stx.as_ref() {
                   Pat::Id(id) => id.stx.name.clone(),
                   _ => {
-                    self.diagnostics.push(Diagnostic::error(
-                      CODE_UNSUPPORTED_IMPORT_PATTERN,
-                      "unsupported import pattern",
-                      loc_to_span(file, alias_pat.loc),
-                    ));
+                    self
+                      .diagnostics
+                      .push(codes::UNSUPPORTED_IMPORT_PATTERN.error(
+                        "unsupported import pattern",
+                        loc_to_span(file, alias_pat.loc),
+                      ));
                     continue;
                   }
                 };
@@ -2974,11 +2968,10 @@ impl ProgramState {
               let alias_name = match &pat.stx.pat.stx.as_ref() {
                 Pat::Id(id) => id.stx.name.clone(),
                 _ => {
-                  self.diagnostics.push(Diagnostic::error(
-                    CODE_UNSUPPORTED_IMPORT_PATTERN,
-                    "unsupported import pattern",
-                    loc_to_span(file, pat.loc),
-                  ));
+                  self.diagnostics.push(
+                    codes::UNSUPPORTED_IMPORT_PATTERN
+                      .error("unsupported import pattern", loc_to_span(file, pat.loc)),
+                  );
                   continue;
                 }
               };
@@ -3074,11 +3067,9 @@ impl ProgramState {
       let name = match pat.stx.pat.stx.as_ref() {
         Pat::Id(id) => id.stx.name.clone(),
         _ => {
-          self.diagnostics.push(Diagnostic::error(
-            CODE_UNSUPPORTED_PATTERN,
-            "unsupported pattern",
-            loc_to_span(file, pat.loc),
-          ));
+          self.diagnostics.push(
+            codes::UNSUPPORTED_PATTERN.error("unsupported pattern", loc_to_span(file, pat.loc)),
+          );
           continue;
         }
       };
@@ -3255,11 +3246,12 @@ impl ProgramState {
     let name = match param.stx.pattern.stx.pat.stx.as_ref() {
       Pat::Id(id) => id.stx.name.clone(),
       _ => {
-        self.diagnostics.push(Diagnostic::error(
-          CODE_UNSUPPORTED_PARAM_PATTERN,
-          "unsupported parameter pattern",
-          loc_to_span(file, param.loc),
-        ));
+        self
+          .diagnostics
+          .push(codes::UNSUPPORTED_PARAM_PATTERN.error(
+            "unsupported parameter pattern",
+            loc_to_span(file, param.loc),
+          ));
         return None;
       }
     };
@@ -3312,8 +3304,7 @@ impl ProgramState {
           expr_spans: Vec::new(),
           pat_types: Vec::new(),
           pat_spans: Vec::new(),
-          diagnostics: vec![Diagnostic::error(
-            CODE_MISSING_BODY,
+          diagnostics: vec![codes::MISSING_BODY.error(
             "missing body",
             Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
           )],
@@ -3388,7 +3379,9 @@ impl ProgramState {
       self.cache_stats.merge(&stats);
     }
 
-    let res = Arc::new(ctx.into_result());
+    let mut res = ctx.into_result();
+    codes::normalize_diagnostics(&mut res.diagnostics);
+    let res = Arc::new(res);
     self.body_results.insert(body_id, res.clone());
     if let Some(span) = span.take() {
       span.finish(None);
@@ -3583,11 +3576,12 @@ impl ProgramState {
             ty = resolved;
           }
         } else {
-          output.diagnostics.push(Diagnostic::error(
-            CODE_UNKNOWN_IDENTIFIER,
-            format!("Cannot find name '{name}'."),
-            Span::new(file, expr.span),
-          ));
+          output
+            .diagnostics
+            .push(codes::UNKNOWN_IDENTIFIER.error(
+              format!("Cannot find name '{name}'."),
+              Span::new(file, expr.span),
+            ));
         }
         if let Some(binding) = env.get_mut(name) {
           if binding.type_id.is_none() {
@@ -3863,14 +3857,15 @@ impl ProgramState {
         let (callee_ty, _) = self.check_expr(bump, caches, callee, env, output, file, None);
         if let TypeKind::Function { params, ret } = self.type_store.kind(callee_ty).clone() {
           if params.len() != args.len() {
-            output.diagnostics.push(Diagnostic::error(
-              CODE_ARGUMENT_COUNT_MISMATCH,
-              "argument count mismatch",
-              Span {
-                file,
-                range: expr.span,
-              },
-            ));
+            output
+              .diagnostics
+              .push(codes::ARGUMENT_COUNT_MISMATCH.error(
+                "argument count mismatch",
+                Span {
+                  file,
+                  range: expr.span,
+                },
+              ));
           }
           let mut arg_types = Vec::new();
           for (idx, arg) in args.iter().enumerate() {
@@ -4843,11 +4838,10 @@ impl BodyBuilder {
           let name = match pat.stx.pat.stx.as_ref() {
             Pat::Id(id) => id.stx.name.clone(),
             _ => {
-              state.diagnostics.push(Diagnostic::error(
-                CODE_UNSUPPORTED_PATTERN,
-                "unsupported pattern",
-                loc_to_span(self.file, pat.loc),
-              ));
+              state.diagnostics.push(
+                codes::UNSUPPORTED_PATTERN
+                  .error("unsupported pattern", loc_to_span(self.file, pat.loc)),
+              );
               continue;
             }
           };
@@ -5163,20 +5157,22 @@ fn type_member_name(key: &TypePropertyKey) -> Option<String> {
 fn fatal_to_diagnostic(fatal: FatalError) -> Diagnostic {
   let placeholder = Span::new(FileId(0), TextRange::new(0, 0));
   match fatal {
-    FatalError::Host(err) => diagnostics::host_error(None, err.to_string()),
-    FatalError::Cancelled => Diagnostic::error("CANCEL0001", "operation cancelled", placeholder)
-      .with_note("operation was cancelled by the host"),
+    FatalError::Host(err) => {
+      let mut diagnostic = codes::HOST_ERROR.error(err.to_string(), placeholder);
+      diagnostic.push_note("no source span available for this host error; input may be missing");
+      diagnostic
+    }
+    FatalError::Cancelled => codes::CANCELLED.error("operation cancelled", placeholder),
     FatalError::Ice(ice) => {
       let span = span_from_context(&ice.context, placeholder);
-      let mut diagnostic =
-        diagnostics::ice(span, format!("internal compiler error: {}", ice.message));
+      let mut diagnostic = codes::INTERNAL_COMPILER_ERROR
+        .error(format!("internal compiler error: {}", ice.message), span);
       if let Some(backtrace) = ice.backtrace {
         diagnostic.push_note(backtrace);
       }
       diagnostic
     }
-    FatalError::OutOfMemory => Diagnostic::error("OOM0001", "out of memory", placeholder)
-      .with_note("the checker ran out of memory while processing this program"),
+    FatalError::OutOfMemory => codes::OUT_OF_MEMORY.error("out of memory", placeholder),
   }
 }
 

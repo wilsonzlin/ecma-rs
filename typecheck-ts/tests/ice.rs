@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use typecheck_ts::codes;
 use typecheck_ts::{FatalError, FileId, Host, HostError, Program, Severity};
 
 struct PanickingHost;
@@ -25,6 +26,13 @@ fn internal_failure_surfaces_as_ice() {
   let diagnostics = program.check();
   assert_eq!(diagnostics.len(), 1);
   let diag = &diagnostics[0];
-  assert_eq!(diag.code.as_str(), "ICE0001");
+  assert_eq!(diag.code.as_str(), codes::INTERNAL_COMPILER_ERROR.as_str());
   assert_eq!(diag.severity, Severity::Error);
+  assert!(
+    diag
+      .notes
+      .iter()
+      .any(|note| note.contains("please file an issue")),
+    "ICE diagnostics should include a help note"
+  );
 }

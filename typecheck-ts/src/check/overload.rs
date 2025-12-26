@@ -9,9 +9,8 @@ use types_ts_interned::{
 
 use super::infer::{infer_type_arguments_for_call, TypeParamDecl};
 use super::instantiate::Substituter;
+use crate::codes;
 
-const CODE_NO_OVERLOAD: &str = "TC2000";
-const CODE_AMBIGUOUS_OVERLOAD: &str = "TC2001";
 const MAX_NOTES: usize = 5;
 
 /// Result of resolving a call expression against a callable type.
@@ -103,9 +102,12 @@ pub fn resolve_overloads(
   collect_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());
   let primitives = store.primitive_ids();
   if candidates.is_empty() {
-    let diag = Diagnostic::error(CODE_NO_OVERLOAD, "expression is not callable", span).with_note(
-      format!("callee has type {}", TypeDisplay::new(store, callee)),
-    );
+    let diag = codes::NO_OVERLOAD
+      .error("expression is not callable", span)
+      .with_note(format!(
+        "callee has type {}",
+        TypeDisplay::new(store, callee)
+      ));
     return CallResolution {
       return_type: primitives.unknown,
       signature: None,
@@ -440,7 +442,7 @@ fn build_no_match_diagnostic(
   span: Span,
   outcomes: Vec<CandidateOutcome>,
 ) -> Diagnostic {
-  let mut diag = Diagnostic::error(CODE_NO_OVERLOAD, "no overload matches this call", span);
+  let mut diag = codes::NO_OVERLOAD.error("no overload matches this call", span);
   let mut shown = 0usize;
   for outcome in outcomes.iter() {
     if let Some(reason) = &outcome.rejection {
@@ -463,7 +465,7 @@ fn build_no_match_diagnostic(
 }
 
 fn build_ambiguous_diagnostic(span: Span, candidates: &[&CandidateOutcome]) -> Diagnostic {
-  let mut diag = Diagnostic::error(CODE_AMBIGUOUS_OVERLOAD, "call is ambiguous", span);
+  let mut diag = codes::AMBIGUOUS_OVERLOAD.error("call is ambiguous", span);
   let mut shown = 0usize;
   for candidate in candidates.iter() {
     if shown >= MAX_NOTES {

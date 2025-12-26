@@ -1,3 +1,4 @@
+use crate::codes;
 use ahash::AHashMap;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use num_bigint::BigInt;
@@ -18,11 +19,6 @@ use types_ts_interned::{
   Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamId,
   TypeStore,
 };
-
-const CODE_UNRESOLVED_TYPE_REF: &str = "TC2008";
-const CODE_UNSUPPORTED_QUALIFIED_NAME: &str = "TC2009";
-const CODE_UNRESOLVED_IMPORT_TYPE: &str = "TC2010";
-const CODE_UNRESOLVED_TYPE_QUERY: &str = "TC2011";
 
 /// Resolves entity names in type positions to canonical [`DefId`]s.
 pub trait TypeResolver: Send + Sync {
@@ -113,7 +109,9 @@ impl TypeLowerer {
 
   /// Take ownership of accumulated diagnostics.
   pub fn take_diagnostics(&mut self) -> Vec<Diagnostic> {
-    std::mem::take(&mut self.diagnostics)
+    let mut diagnostics = std::mem::take(&mut self.diagnostics);
+    codes::normalize_diagnostics(&mut diagnostics);
+    diagnostics
   }
 
   /// Captured type predicates lowered so far.
@@ -551,7 +549,7 @@ impl TypeLowerer {
           if !type_args.is_empty() {
             self.push_diag(
               reference.loc,
-              CODE_UNRESOLVED_TYPE_REF,
+              &codes::UNRESOLVED_TYPE_REFERENCE,
               format!("type parameter '{}' cannot accept type arguments", name),
             );
           }
@@ -563,7 +561,7 @@ impl TypeLowerer {
         }
         self.push_diag(
           reference.loc,
-          CODE_UNRESOLVED_TYPE_REF,
+          &codes::UNRESOLVED_TYPE_REFERENCE,
           format!("unresolved type '{}'", name),
         );
         self.store.primitive_ids().unknown
@@ -572,7 +570,7 @@ impl TypeLowerer {
         let Some(path) = entity_name_segments(&reference.stx.name) else {
           self.push_diag(
             reference.loc,
-            CODE_UNSUPPORTED_QUALIFIED_NAME,
+            &codes::UNSUPPORTED_QUALIFIED_NAME,
             "unsupported qualified type reference",
           );
           return self.store.primitive_ids().unknown;
@@ -582,7 +580,7 @@ impl TypeLowerer {
         }
         self.push_diag(
           reference.loc,
-          CODE_UNSUPPORTED_QUALIFIED_NAME,
+          &codes::UNSUPPORTED_QUALIFIED_NAME,
           format!("unresolved qualified type '{}'", path.join(".")),
         );
         self.store.primitive_ids().unknown
@@ -590,7 +588,7 @@ impl TypeLowerer {
       TypeEntityName::Import(_) => {
         self.push_diag(
           reference.loc,
-          CODE_UNRESOLVED_TYPE_REF,
+          &codes::UNRESOLVED_TYPE_REFERENCE,
           "import expressions in type references are not supported",
         );
         self.store.primitive_ids().unknown
@@ -602,7 +600,7 @@ impl TypeLowerer {
     let Some(path) = entity_name_segments(&query.stx.expr_name) else {
       self.push_diag(
         query.loc,
-        CODE_UNRESOLVED_TYPE_QUERY,
+        &codes::UNRESOLVED_TYPE_QUERY,
         "unsupported typeof query target",
       );
       return self.store.primitive_ids().unknown;
@@ -612,7 +610,7 @@ impl TypeLowerer {
     }
     self.push_diag(
       query.loc,
-      CODE_UNRESOLVED_TYPE_QUERY,
+      &codes::UNRESOLVED_TYPE_QUERY,
       format!("cannot resolve typeof {}", path.join(".")),
     );
     self.store.primitive_ids().unknown
@@ -642,7 +640,7 @@ impl TypeLowerer {
     if let Some(path) = qualifier.as_ref() {
       message.push_str(&format!(" for {}", path.join(".")));
     }
-    self.push_diag(import.loc, CODE_UNRESOLVED_IMPORT_TYPE, message);
+    self.push_diag(import.loc, &codes::UNRESOLVED_IMPORT_TYPE, message);
     self.store.primitive_ids().unknown
   }
 
@@ -710,11 +708,9 @@ impl TypeLowerer {
     }
   }
 
-  fn push_diag(&mut self, loc: Loc, code: &'static str, message: impl Into<String>) {
+  fn push_diag(&mut self, loc: Loc, code: &codes::Code, message: impl Into<String>) {
     let span = self.span_for(loc);
-    self
-      .diagnostics
-      .push(Diagnostic::error(code, message, span));
+    self.diagnostics.push(code.error(message, span));
   }
 }
 
