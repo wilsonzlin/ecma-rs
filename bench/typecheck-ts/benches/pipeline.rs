@@ -9,6 +9,7 @@ use typecheck_ts_bench::fixtures::module_graph_fixtures;
 use typecheck_ts_bench::pipeline::assignability_micro;
 use typecheck_ts_bench::pipeline::bind_module_graph;
 use typecheck_ts_bench::pipeline::check_body_named;
+use typecheck_ts_bench::pipeline::hir_kind;
 use typecheck_ts_bench::pipeline::incremental_recheck;
 use typecheck_ts_bench::pipeline::lower_to_hir;
 use typecheck_ts_bench::pipeline::parse_and_lower;
@@ -93,7 +94,7 @@ fn main() {
       format!("lower/{}", fixture.name),
       LOWER_ITERS,
       || {
-        let lowered = lower_to_hir(file_id, &parsed);
+        let lowered = lower_to_hir(file_id, hir_kind(fixture.kind), &parsed);
         let summary = summarize_hir(&lowered);
         black_box((summary.defs, summary.bodies, summary.exprs, summary.stmts));
       },

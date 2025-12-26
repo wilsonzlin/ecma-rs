@@ -18,3 +18,11 @@ ordered-float = "3"
 [[bench]]
 name = "pipeline"
 harness = false
+
+[[bench]]
+name = "body_alloc"
+harness = false
+
+[[bench]]
+name = "check_body_alloc"
+harness = false

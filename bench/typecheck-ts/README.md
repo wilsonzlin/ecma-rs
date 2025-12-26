@@ -30,6 +30,8 @@ stable:
   files and a small multi-file project.
 - `relations/*`: assignability micro-bench (`types-ts-interned`) with cold vs warmed
   caches.
+- `body_alloc` and `check_body_alloc`: allocation counters for full fixture
+  checks and isolated `check_body` runs to track arena effectiveness.
 
 ### Incremental scenario
 

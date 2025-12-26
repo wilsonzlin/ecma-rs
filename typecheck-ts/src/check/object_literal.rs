@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
 use super::super::{
-  BodyCheckResult, Diagnostic, FileId, HirExpr, HirExprKind, ObjectType, ProgramState, Span,
-  TypeId, TypeKind, CODE_EXCESS_PROPERTY,
+  Diagnostic, FileId, HirExpr, HirExprKind, ObjectType, ProgramState, Span, TypeId, TypeKind,
+  CODE_EXCESS_PROPERTY,
 };
+use super::body::BodyCheckOutput;
 
 pub(crate) fn is_fresh_object_literal(expr: &HirExpr) -> bool {
   matches!(expr.kind, HirExprKind::Object(_))
@@ -40,7 +41,7 @@ pub(crate) fn check_excess_properties(
   expr: &HirExpr,
   source_type: TypeId,
   target_type: TypeId,
-  result: &mut BodyCheckResult,
+  result: &mut BodyCheckOutput,
   file: FileId,
 ) {
   if !is_fresh_object_literal(expr) {

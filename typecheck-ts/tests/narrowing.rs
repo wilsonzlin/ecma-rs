@@ -103,7 +103,10 @@ fn boolean_truthiness_splits_literals() {
   let body = body_of(&lowered, &lowered.names, "f");
   let store = TypeStore::new();
   let mut initial = HashMap::new();
-  initial.insert(name_id(lowered.names.as_ref(), "flag"), store.primitive_ids().boolean);
+  initial.insert(
+    name_id(lowered.names.as_ref(), "flag"),
+    store.primitive_ids().boolean,
+  );
 
   let res = check_body_with_env(
     body,
@@ -114,16 +117,10 @@ fn boolean_truthiness_splits_literals() {
     &initial,
   );
 
-  let true_ty = TypeDisplay::new(
-    &store,
-    store.intern_type(TypeKind::BooleanLiteral(true)),
-  )
-  .to_string();
-  let false_ty = TypeDisplay::new(
-    &store,
-    store.intern_type(TypeKind::BooleanLiteral(false)),
-  )
-  .to_string();
+  let true_ty =
+    TypeDisplay::new(&store, store.intern_type(TypeKind::BooleanLiteral(true))).to_string();
+  let false_ty =
+    TypeDisplay::new(&store, store.intern_type(TypeKind::BooleanLiteral(false))).to_string();
 
   let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();

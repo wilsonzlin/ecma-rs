@@ -87,14 +87,36 @@ pub fn parse_only(fixture: &Fixture) -> SyntaxResult<Node<TopLevel>> {
   parse_with_options(fixture.source, opts)
 }
 
-pub fn lower_to_hir(file_id: HirFileId, top_level: &Node<TopLevel>) -> LowerResult {
-  lower_file(file_id, HirFileKind::Ts, top_level)
+pub fn hir_kind(kind: FixtureKind) -> HirFileKind {
+  match kind {
+    FixtureKind::Tsx => HirFileKind::Tsx,
+    FixtureKind::Ts => HirFileKind::Ts,
+  }
+}
+
+fn fixture_filename(fixture: &Fixture) -> String {
+  if fixture.name.contains('.') {
+    fixture.name.to_string()
+  } else {
+    match fixture.kind {
+      FixtureKind::Tsx => format!("{}.tsx", fixture.name),
+      FixtureKind::Ts => format!("{}.ts", fixture.name),
+    }
+  }
+}
+
+pub fn lower_to_hir(
+  file_id: HirFileId,
+  kind: HirFileKind,
+  top_level: &Node<TopLevel>,
+) -> LowerResult {
+  lower_file(file_id, kind, top_level)
 }
 
 pub fn parse_and_lower(file_id: HirFileId, fixture: &Fixture) -> HirSummary {
   let parsed = parse_only(fixture)
     .unwrap_or_else(|err| panic!("fixtures must parse ({}): {err:?}", fixture.name));
-  let lowered = lower_to_hir(file_id, &parsed);
+  let lowered = lower_to_hir(file_id, hir_kind(fixture.kind), &parsed);
   summarize_hir(&lowered)
 }
 
@@ -123,7 +145,7 @@ pub fn bind_module_graph(graph: &ModuleGraphFixture) -> BindSummary {
     let file_id = semantic_js::ts::FileId(idx as u32);
     resolver.insert(file_id, fixture.name.to_string());
     let parsed = parse_only(fixture).expect("fixture should parse for binding");
-    let lowered = lower_to_hir(file_id, &parsed);
+    let lowered = lower_to_hir(file_id, hir_kind(fixture.kind), &parsed);
     let sem_hir = lower_to_ts_hir(&parsed, &lowered);
     files.insert(file_id, Arc::new(sem_hir));
   }
@@ -147,7 +169,8 @@ pub fn bind_module_graph(graph: &ModuleGraphFixture) -> BindSummary {
 }
 
 pub fn typecheck_fixture(fixture: &Fixture) -> TypecheckSummary {
-  let mut entries = vec![(fixture.name.to_string(), fixture.source)];
+  let filename = fixture_filename(fixture);
+  let mut entries = vec![(filename.clone(), fixture.source)];
   if matches!(fixture.kind, FixtureKind::Tsx) {
     entries.push((
       "react.d.ts".to_string(),
@@ -155,7 +178,7 @@ pub fn typecheck_fixture(fixture: &Fixture) -> TypecheckSummary {
     ));
   }
   let host = BenchHost::from_static(entries);
-  let root = host.id_for(fixture.name).expect("root file id");
+  let root = host.id_for(&filename).expect("root file id");
   run_typecheck(host, vec![root])
 }
 
@@ -194,8 +217,9 @@ pub fn type_of_exported_defs(graph: &ModuleGraphFixture) -> TypeOfDefSummary {
 }
 
 pub fn check_body_named(fixture: &Fixture, name: &str) -> BodyCheckSummary {
-  let host = BenchHost::from_static(vec![(fixture.name.to_string(), fixture.source)]);
-  let root = host.id_for(fixture.name).expect("fixture root file id");
+  let filename = fixture_filename(fixture);
+  let host = BenchHost::from_static(vec![(filename.clone(), fixture.source)]);
+  let root = host.id_for(&filename).expect("fixture root file id");
   let program = Program::new(host, vec![root]);
   let def = program
     .definitions_in_file(root)

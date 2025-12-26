@@ -5,8 +5,10 @@ use bumpalo::Bump;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   ArrayElement, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr, NameId,
-  NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind, UnaryOp,
+  NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind,
+  UnaryOp,
 };
+use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
@@ -17,7 +19,6 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
-use ordered_float::OrderedFloat;
 use types_ts_interned::{
   ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature, TypeId, TypeKind,
   TypeStore,
@@ -26,8 +27,8 @@ use types_ts_interned::{
 use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::Env;
 use super::flow_narrow::{
-  narrow_by_asserted, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof, narrow_by_literal,
-  narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
+  narrow_by_asserted, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
+  narrow_by_literal, narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
 };
 
 use super::expr::resolve_call;
@@ -222,7 +223,9 @@ impl<'a> AstIndex<'a> {
   fn index_function(&mut self, func: &'a Node<Func>, file: FileId) {
     if let Some(body) = &func.stx.body {
       let body_span = match body {
-        FuncBody::Block(block) => span_for_stmt_list(&block, file).unwrap_or(loc_to_range(file, func.loc)),
+        FuncBody::Block(block) => {
+          span_for_stmt_list(&block, file).unwrap_or(loc_to_range(file, func.loc))
+        }
         FuncBody::Expression(expr) => loc_to_range(file, expr.loc),
       };
       self.functions.push(FunctionInfo { body_span, func });
@@ -455,7 +458,9 @@ pub fn check_body(
     }
   }
 
-  checker.diagnostics.extend(checker.lowerer.take_diagnostics());
+  checker
+    .diagnostics
+    .extend(checker.lowerer.take_diagnostics());
   BodyCheckResult {
     expr_types: checker.expr_types,
     pat_types: checker.pat_types,
@@ -515,7 +520,10 @@ impl<'a> Checker<'a> {
         let len = func.body_span.end.saturating_sub(func.body_span.start);
         let replace = match best {
           Some(existing) => {
-            let existing_len = existing.body_span.end.saturating_sub(existing.body_span.start);
+            let existing_len = existing
+              .body_span
+              .end
+              .saturating_sub(existing.body_span.start);
             len < existing_len
           }
           None => true,
@@ -550,7 +558,9 @@ impl<'a> Checker<'a> {
     }
     if let Some((pat_span, info)) = best {
       if let Some(init) = info.initializer {
-        let annotation = info.type_annotation.map(|ann| self.lowerer.lower_type_expr(ann));
+        let annotation = info
+          .type_annotation
+          .map(|ann| self.lowerer.lower_type_expr(ann));
         let init_ty = self.check_expr(init);
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span) {
@@ -574,11 +584,7 @@ impl<'a> Checker<'a> {
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
-      let default_ty = param
-        .stx
-        .default_value
-        .as_ref()
-        .map(|d| self.check_expr(d));
+      let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
       let mut ty = annotation.unwrap_or(self.store.primitive_ids().unknown);
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
@@ -589,7 +595,10 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn lower_type_params(&mut self, params: &[Node<parse_js::ast::type_expr::TypeParameter>]) -> Vec<TypeParamDecl> {
+  fn lower_type_params(
+    &mut self,
+    params: &[Node<parse_js::ast::type_expr::TypeParameter>],
+  ) -> Vec<TypeParamDecl> {
     let ids = self.lowerer.register_type_params(params);
     let mut decls = Vec::new();
     for (param, id) in params.iter().zip(ids.iter()) {
@@ -815,9 +824,7 @@ impl<'a> Checker<'a> {
       }
       AstExpr::LitStr(str_lit) => {
         let name = self.store.intern_name(str_lit.stx.value.clone());
-        self
-          .store
-          .intern_type(TypeKind::StringLiteral(name))
+        self.store.intern_type(TypeKind::StringLiteral(name))
       }
       AstExpr::LitBool(b) => self
         .store
@@ -862,7 +869,14 @@ impl<'a> Checker<'a> {
           .get(&callee_ty)
           .cloned()
           .unwrap_or_default();
-        let resolution = resolve_call(&self.store, &self.relate, callee_ty, &arg_types, &type_params, span);
+        let resolution = resolve_call(
+          &self.store,
+          &self.relate,
+          callee_ty,
+          &arg_types,
+          &type_params,
+          span,
+        );
         for diag in &resolution.diagnostics {
           self.diagnostics.push(diag.clone());
         }
@@ -871,7 +885,11 @@ impl<'a> Checker<'a> {
             let sig = self.store.signature(sig_id);
             let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
             let has_rest = sig.params.iter().any(|p| p.rest);
-            let max = if has_rest { None } else { Some(sig.params.len()) };
+            let max = if has_rest {
+              None
+            } else {
+              Some(sig.params.len())
+            };
             if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
               self.diagnostics.push(Diagnostic::error(
                 CODE_ARGUMENT_COUNT_MISMATCH,
@@ -906,11 +924,10 @@ impl<'a> Checker<'a> {
         } else {
           self.store.union(elems)
         };
-        self.store
-          .intern_type(TypeKind::Array {
-            ty: elem_ty,
-            readonly: false,
-          })
+        self.store.intern_type(TypeKind::Array {
+          ty: elem_ty,
+          readonly: false,
+        })
       }
       AstExpr::LitObj(obj) => self.object_literal_type(obj),
       AstExpr::Func(func) => self.function_type(&func.stx.func),
@@ -953,10 +970,7 @@ impl<'a> Checker<'a> {
           .map(|idx| idx.value_type)
           .unwrap_or(prim.unknown)
       }
-      TypeKind::Tuple(elems) => elems
-        .get(0)
-        .map(|e| e.ty)
-        .unwrap_or(prim.unknown),
+      TypeKind::Tuple(elems) => elems.get(0).map(|e| e.ty).unwrap_or(prim.unknown),
       _ => prim.unknown,
     }
   }
@@ -1196,9 +1210,9 @@ impl<'a> Checker<'a> {
     }
     if let Some(rest) = &arr.stx.rest {
       let rest_ty = match self.store.type_kind(value) {
-        TypeKind::Array { ty, readonly } => self
-          .store
-          .intern_type(TypeKind::Array { ty, readonly }),
+        TypeKind::Array { ty, readonly } => {
+          self.store.intern_type(TypeKind::Array { ty, readonly })
+        }
         TypeKind::Tuple(elems) => {
           let elems: Vec<TypeId> = elems.into_iter().map(|e| e.ty).collect();
           let elem_ty = if elems.is_empty() {
@@ -1206,19 +1220,15 @@ impl<'a> Checker<'a> {
           } else {
             self.store.union(elems)
           };
-          self
-            .store
-            .intern_type(TypeKind::Array {
-              ty: elem_ty,
-              readonly: false,
-            })
-        }
-        _ => self
-          .store
-          .intern_type(TypeKind::Array {
-            ty: prim.unknown,
+          self.store.intern_type(TypeKind::Array {
+            ty: elem_ty,
             readonly: false,
-          }),
+          })
+        }
+        _ => self.store.intern_type(TypeKind::Array {
+          ty: prim.unknown,
+          readonly: false,
+        }),
       };
       self.bind_pattern_with_type_params(rest, rest_ty, type_params.clone());
     }
@@ -1308,9 +1318,9 @@ impl<'a> Checker<'a> {
       this_param: None,
     };
     let sig_id = self.store.intern_signature(sig);
-    let ty = self
-      .store
-      .intern_type(TypeKind::Callable { overloads: vec![sig_id] });
+    let ty = self.store.intern_type(TypeKind::Callable {
+      overloads: vec![sig_id],
+    });
     if !type_param_decls.is_empty() {
       self.function_type_params.insert(ty, type_param_decls);
     }
@@ -1365,9 +1375,7 @@ fn span_for_stmt_list(stmts: &[Node<Stmt>], file: FileId) -> Option<TextRange> {
     start = Some(start.map_or(range.start, |s| s.min(range.start)));
     end = Some(end.map_or(range.end, |e| e.max(range.end)));
   }
-  start
-    .zip(end)
-    .map(|(s, e)| TextRange::new(s, e))
+  start.zip(end).map(|(s, e)| TextRange::new(s, e))
 }
 
 fn body_range(body: &Body) -> TextRange {
@@ -1427,7 +1435,12 @@ struct FlowBodyChecker<'a> {
 }
 
 impl<'a> FlowBodyChecker<'a> {
-  fn new(body: &'a Body, names: &'a NameInterner, store: Arc<TypeStore>, initial: &HashMap<NameId, TypeId>) -> Self {
+  fn new(
+    body: &'a Body,
+    names: &'a NameInterner,
+    store: Arc<TypeStore>,
+    initial: &HashMap<NameId, TypeId>,
+  ) -> Self {
     let prim = store.primitive_ids();
     let expr_types = vec![prim.unknown; body.exprs.len()];
     let mut pat_types = vec![prim.unknown; body.pats.len()];
@@ -1513,10 +1526,19 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
-  fn process_block(&mut self, block_id: BlockId, mut env: Env, cfg: &ControlFlowGraph) -> Vec<(BlockId, Env)> {
+  fn process_block(
+    &mut self,
+    block_id: BlockId,
+    mut env: Env,
+    cfg: &ControlFlowGraph,
+  ) -> Vec<(BlockId, Env)> {
     let block = &cfg.blocks[block_id.0];
     if block.stmts.is_empty() {
-      return block.successors.iter().map(|succ| (*succ, env.clone())).collect();
+      return block
+        .successors
+        .iter()
+        .map(|succ| (*succ, env.clone()))
+        .collect();
     }
 
     let mut outgoing = Vec::new();
@@ -1646,7 +1668,10 @@ impl<'a> FlowBodyChecker<'a> {
           }
           return outgoing;
         }
-        StmtKind::Switch { discriminant, cases } => {
+        StmtKind::Switch {
+          discriminant,
+          cases,
+        } => {
           let discriminant_ty = self.eval_expr(*discriminant, &mut env).0;
           for (idx, case) in cases.iter().enumerate() {
             if let Some(succ) = block.successors.get(idx) {
@@ -1666,7 +1691,11 @@ impl<'a> FlowBodyChecker<'a> {
           }
           return outgoing;
         }
-        StmtKind::Try { block: _, catch, finally_block } => {
+        StmtKind::Try {
+          block: _,
+          catch,
+          finally_block,
+        } => {
           if let Some(succ) = block.successors.get(0) {
             outgoing.push((*succ, env.clone()));
           }
@@ -1700,13 +1729,10 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn record_return(&mut self, stmt: StmtId, ty: TypeId) {
     let prim = self.store.primitive_ids();
-    let idx = *self
-      .return_indices
-      .entry(stmt)
-      .or_insert_with(|| {
-        self.return_types.push(prim.unknown);
-        self.return_types.len() - 1
-      });
+    let idx = *self.return_indices.entry(stmt).or_insert_with(|| {
+      self.return_types.push(prim.unknown);
+      self.return_types.len() - 1
+    });
     let slot = self.return_types.get_mut(idx).unwrap();
     if *slot == prim.unknown {
       *slot = ty;
@@ -1728,19 +1754,18 @@ impl<'a> FlowBodyChecker<'a> {
         ty
       }
       ExprKind::Literal(lit) => match lit {
-        hir_js::Literal::Number(num) => self
+        hir_js::Literal::Number(num) => self.store.intern_type(TypeKind::NumberLiteral(
+          num.parse::<f64>().unwrap_or(0.0).into(),
+        )),
+        hir_js::Literal::String(s) => self
           .store
-          .intern_type(TypeKind::NumberLiteral(num.parse::<f64>().unwrap_or(0.0).into())),
-        hir_js::Literal::String(s) => {
-          self.store.intern_type(TypeKind::StringLiteral(self.store.intern_name(s.clone())))
-        }
+          .intern_type(TypeKind::StringLiteral(self.store.intern_name(s.clone()))),
         hir_js::Literal::Boolean(b) => self.store.intern_type(TypeKind::BooleanLiteral(*b)),
         hir_js::Literal::Null => prim.null,
         hir_js::Literal::Undefined => prim.undefined,
-        hir_js::Literal::BigInt(v) => {
-          self.store
-            .intern_type(TypeKind::BigIntLiteral(v.parse::<i128>().unwrap_or(0).into()))
-        }
+        hir_js::Literal::BigInt(v) => self.store.intern_type(TypeKind::BigIntLiteral(
+          v.parse::<i128>().unwrap_or(0).into(),
+        )),
         hir_js::Literal::Regex(_) => prim.string,
       },
       ExprKind::Unary { op, expr } => match op {
@@ -1789,10 +1814,12 @@ impl<'a> FlowBodyChecker<'a> {
           let (l_ty, _) = self.eval_expr(*left, env);
           let (r_ty, _) = self.eval_expr(*right, env);
           match (self.store.type_kind(l_ty), self.store.type_kind(r_ty)) {
-            (TypeKind::String | TypeKind::StringLiteral(_), _) | (_, TypeKind::String | TypeKind::StringLiteral(_)) => {
-              prim.string
-            }
-            (TypeKind::Number | TypeKind::NumberLiteral(_), TypeKind::Number | TypeKind::NumberLiteral(_)) => prim.number,
+            (TypeKind::String | TypeKind::StringLiteral(_), _)
+            | (_, TypeKind::String | TypeKind::StringLiteral(_)) => prim.string,
+            (
+              TypeKind::Number | TypeKind::NumberLiteral(_),
+              TypeKind::Number | TypeKind::NumberLiteral(_),
+            ) => prim.number,
             _ => self.store.union(vec![l_ty, r_ty]),
           }
         }
@@ -1847,7 +1874,11 @@ impl<'a> FlowBodyChecker<'a> {
         let obj_ty = self.eval_expr(mem.object, env).0;
         self.member_type(obj_ty, &mem)
       }
-      ExprKind::Conditional { test, consequent, alternate } => {
+      ExprKind::Conditional {
+        test,
+        consequent,
+        alternate,
+      } => {
         let cond_facts = self.eval_expr(*test, env).1;
         let mut then_env = env.clone();
         then_env.apply_facts(&cond_facts);
@@ -1872,12 +1903,10 @@ impl<'a> FlowBodyChecker<'a> {
         } else {
           self.store.union(elem_tys)
         };
-        self
-          .store
-          .intern_type(TypeKind::Array {
-            ty: elem_ty,
-            readonly: false,
-          })
+        self.store.intern_type(TypeKind::Array {
+          ty: elem_ty,
+          readonly: false,
+        })
       }
       ExprKind::Object(obj) => self.object_type(obj, env),
       ExprKind::FunctionExpr { .. } => prim.unknown,
@@ -1885,7 +1914,9 @@ impl<'a> FlowBodyChecker<'a> {
       ExprKind::Template(_) => prim.string,
       ExprKind::TaggedTemplate { .. } => prim.unknown,
       ExprKind::Await { expr } => self.eval_expr(*expr, env).0,
-      ExprKind::Yield { expr, .. } => expr.map(|id| self.eval_expr(id, env).0).unwrap_or(prim.undefined),
+      ExprKind::Yield { expr, .. } => expr
+        .map(|id| self.eval_expr(id, env).0)
+        .unwrap_or(prim.undefined),
       ExprKind::TypeAssertion { expr } => self.eval_expr(*expr, env).0,
       ExprKind::NonNull { expr } => self.eval_expr(*expr, env).0,
       ExprKind::Satisfies { expr } => self.eval_expr(*expr, env).0,
@@ -1999,14 +2030,16 @@ impl<'a> FlowBodyChecker<'a> {
   fn eval_call(&mut self, call: &hir_js::CallExpr, env: &mut Env, out: &mut Facts) -> TypeId {
     let prim = self.store.primitive_ids();
     let callee_ty = self.eval_expr(call.callee, env).0;
-    let arg_tys: Vec<TypeId> = call.args.iter().map(|arg| self.eval_expr(arg.expr, env).0).collect();
+    let arg_tys: Vec<TypeId> = call
+      .args
+      .iter()
+      .map(|arg| self.eval_expr(arg.expr, env).0)
+      .collect();
     if let TypeKind::Callable { overloads } = self.store.type_kind(callee_ty) {
       if let Some(sig_id) = overloads.first() {
         let sig = self.store.signature(*sig_id);
         if let TypeKind::Predicate {
-          asserted,
-          asserts,
-          ..
+          asserted, asserts, ..
         } = self.store.type_kind(sig.ret)
         {
           if let Some(asserted) = asserted {
@@ -2023,7 +2056,11 @@ impl<'a> FlowBodyChecker<'a> {
               }
             }
           }
-          return if asserts { prim.undefined } else { prim.boolean };
+          return if asserts {
+            prim.undefined
+          } else {
+            prim.boolean
+          };
         }
         return sig.ret;
       }
@@ -2060,11 +2097,18 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn hir_name(&self, id: NameId) -> String {
-    self.names.resolve(id).map(|s| s.to_owned()).unwrap_or_default()
+    self
+      .names
+      .resolve(id)
+      .map(|s| s.to_owned())
+      .unwrap_or_default()
   }
 
   fn discriminant_member(&self, expr_id: ExprId) -> Option<(NameId, String, TypeId)> {
-    if let ExprKind::Member(MemberExpr { object, property, .. }) = &self.body.exprs[expr_id.0 as usize].kind {
+    if let ExprKind::Member(MemberExpr {
+      object, property, ..
+    }) = &self.body.exprs[expr_id.0 as usize].kind
+    {
       if let Some(name) = self.ident_name(*object) {
         let prop = match property {
           ObjectKey::Ident(id) => Some(self.hir_name(*id)),
@@ -2082,12 +2126,24 @@ impl<'a> FlowBodyChecker<'a> {
     let left_expr = &self.body.exprs[left.0 as usize].kind;
     let right_expr = &self.body.exprs[right.0 as usize].kind;
     match (left_expr, right_expr) {
-      (ExprKind::Unary { op: UnaryOp::Typeof, expr }, ExprKind::Literal(hir_js::Literal::String(s))) => {
+      (
+        ExprKind::Unary {
+          op: UnaryOp::Typeof,
+          expr,
+        },
+        ExprKind::Literal(hir_js::Literal::String(s)),
+      ) => {
         if let Some(name) = self.ident_name(*expr) {
           return Some((name, self.expr_types[expr.0 as usize], s.clone()));
         }
       }
-      (ExprKind::Literal(hir_js::Literal::String(s)), ExprKind::Unary { op: UnaryOp::Typeof, expr }) => {
+      (
+        ExprKind::Literal(hir_js::Literal::String(s)),
+        ExprKind::Unary {
+          op: UnaryOp::Typeof,
+          expr,
+        },
+      ) => {
         if let Some(name) = self.ident_name(*expr) {
           return Some((name, self.expr_types[expr.0 as usize], s.clone()));
         }
@@ -2117,7 +2173,10 @@ impl<'a> FlowBodyChecker<'a> {
       PatKind::Array(arr) => {
         let element_ty = match self.store.type_kind(value_ty) {
           TypeKind::Array { ty, .. } => ty,
-          TypeKind::Tuple(elems) => elems.first().map(|e| e.ty).unwrap_or(self.store.primitive_ids().unknown),
+          TypeKind::Tuple(elems) => elems
+            .first()
+            .map(|e| e.ty)
+            .unwrap_or(self.store.primitive_ids().unknown),
           _ => self.store.primitive_ids().unknown,
         };
         for (idx, elem) in arr.elements.iter().enumerate() {

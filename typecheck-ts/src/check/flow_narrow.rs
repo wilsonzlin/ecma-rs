@@ -204,7 +204,12 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
 }
 
 /// Narrow by a discriminant property check (e.g. `x.kind === "foo"`).
-pub fn narrow_by_discriminant(ty: TypeId, prop: &str, value: &str, store: &TypeStore) -> (TypeId, TypeId) {
+pub fn narrow_by_discriminant(
+  ty: TypeId,
+  prop: &str,
+  value: &str,
+  store: &TypeStore,
+) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
   let mut yes = Vec::new();
   let mut no = Vec::new();
@@ -234,7 +239,8 @@ pub fn narrow_by_discriminant(ty: TypeId, prop: &str, value: &str, store: &TypeS
             }
           }
           TypeKind::String => {
-            if matches!(property.key, types_ts_interned::PropKey::String(name) if store.name(name) == prop) {
+            if matches!(property.key, types_ts_interned::PropKey::String(name) if store.name(name) == prop)
+            {
               matched = true;
               break;
             }
@@ -307,9 +313,10 @@ pub fn narrow_by_instanceof(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
       }
       (store.union(yes), store.union(no))
     }
-    TypeKind::Object(_) | TypeKind::Array { .. } | TypeKind::Callable { .. } | TypeKind::Ref { .. } => {
-      (ty, primitives.never)
-    }
+    TypeKind::Object(_)
+    | TypeKind::Array { .. }
+    | TypeKind::Callable { .. }
+    | TypeKind::Ref { .. } => (ty, primitives.never),
     _ => (primitives.never, ty),
   }
 }
@@ -352,7 +359,10 @@ fn matches_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> bool {
       store.type_kind(ty),
       TypeKind::String | TypeKind::StringLiteral(_)
     ),
-    TypeKind::Number => matches!(store.type_kind(ty), TypeKind::Number | TypeKind::NumberLiteral(_)),
+    TypeKind::Number => matches!(
+      store.type_kind(ty),
+      TypeKind::Number | TypeKind::NumberLiteral(_)
+    ),
     TypeKind::Boolean => matches!(
       store.type_kind(ty),
       TypeKind::Boolean | TypeKind::BooleanLiteral(_)

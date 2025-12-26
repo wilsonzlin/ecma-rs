@@ -5,9 +5,13 @@
 //! taking the union of compatible types, ensuring convergence even in the
 //! presence of loops.
 
+use bumpalo::{collections::Vec as BumpVec, Bump};
 use std::collections::HashMap;
 
+use super::body::BodyCaches;
 use crate::program::{BuiltinTypes, TypeId, TypeKind, TypeStore};
+
+type SymbolName = String;
 
 /// Narrowing facts produced by evaluating an expression in a boolean context.
 ///
@@ -15,36 +19,83 @@ use crate::program::{BuiltinTypes, TypeId, TypeKind, TypeStore};
 /// - `falsy` applies when the expression evaluates to a falsy value.
 /// - `assertions` apply unconditionally after the expression completes
 ///   successfully (used for assertion functions).
-#[derive(Clone, Debug, Default)]
-pub struct Facts {
-  pub truthy: HashMap<String, TypeId>,
-  pub falsy: HashMap<String, TypeId>,
-  pub assertions: HashMap<String, TypeId>,
+#[derive(Debug)]
+pub struct Facts<'a> {
+  pub truthy: FactMap<'a>,
+  pub falsy: FactMap<'a>,
+  pub assertions: FactMap<'a>,
 }
 
-impl Facts {
+#[derive(Debug)]
+pub struct FactMap<'a> {
+  entries: BumpVec<'a, (SymbolName, TypeId)>,
+}
+
+impl<'a> FactMap<'a> {
+  pub fn new_in(bump: &'a Bump) -> Self {
+    FactMap {
+      entries: BumpVec::new_in(bump),
+    }
+  }
+
+  pub fn insert(&mut self, key: SymbolName, value: TypeId) {
+    if let Some((_, existing)) = self.entries.iter_mut().find(|(k, _)| *k == key) {
+      *existing = value;
+    } else {
+      self.entries.push((key, value));
+    }
+  }
+
+  pub fn iter(&self) -> impl Iterator<Item = &(SymbolName, TypeId)> {
+    self.entries.iter()
+  }
+
+  pub fn is_empty(&self) -> bool {
+    self.entries.is_empty()
+  }
+}
+
+impl<'a> Facts<'a> {
+  pub fn new_in(bump: &'a Bump) -> Self {
+    Facts {
+      truthy: FactMap::new_in(bump),
+      falsy: FactMap::new_in(bump),
+      assertions: FactMap::new_in(bump),
+    }
+  }
+
   /// Merge another set of facts into this one, joining types with union.
-  pub fn merge(&mut self, other: Facts, store: &mut TypeStore, builtin: &BuiltinTypes) {
-    for (k, v) in other.truthy {
-      self
-        .truthy
-        .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v], builtin))
-        .or_insert(v);
-    }
-    for (k, v) in other.falsy {
-      self
-        .falsy
-        .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v], builtin))
-        .or_insert(v);
-    }
-    for (k, v) in other.assertions {
-      self
-        .assertions
-        .entry(k)
-        .and_modify(|existing| *existing = store.union(vec![*existing, v], builtin))
-        .or_insert(v);
+  pub fn merge(
+    &mut self,
+    other: Facts<'a>,
+    store: &mut TypeStore,
+    builtin: &BuiltinTypes,
+    caches: &BodyCaches,
+  ) {
+    merge_map(&mut self.truthy, other.truthy, store, builtin, caches);
+    merge_map(&mut self.falsy, other.falsy, store, builtin, caches);
+    merge_map(
+      &mut self.assertions,
+      other.assertions,
+      store,
+      builtin,
+      caches,
+    );
+  }
+}
+
+fn merge_map(
+  target: &mut FactMap<'_>,
+  other: FactMap<'_>,
+  store: &mut TypeStore,
+  builtin: &BuiltinTypes,
+  caches: &BodyCaches,
+) {
+  for (name, ty) in other.entries {
+    if let Some((_, existing)) = target.entries.iter_mut().find(|(k, _)| k == &name) {
+      *existing = caches.union_from_iter(store, builtin, [*existing, ty]);
+    } else {
+      target.entries.push((name, ty));
     }
   }
 }
@@ -54,6 +105,7 @@ pub fn truthy_falsy_types(
   ty: TypeId,
   store: &mut TypeStore,
   builtin: &BuiltinTypes,
+  caches: &BodyCaches,
 ) -> (TypeId, TypeId) {
   let kind = store.kind(ty).clone();
   match kind {
@@ -61,7 +113,7 @@ pub fn truthy_falsy_types(
       let mut truthy = Vec::new();
       let mut falsy = Vec::new();
       for member in members {
-        let (t, f) = truthy_falsy_types(member, store, builtin);
+        let (t, f) = truthy_falsy_types(member, store, builtin, caches);
         if t != builtin.never {
           truthy.push(t);
         }
@@ -69,7 +121,10 @@ pub fn truthy_falsy_types(
           falsy.push(f);
         }
       }
-      (store.union(truthy, builtin), store.union(falsy, builtin))
+      (
+        caches.union_from_iter(store, builtin, truthy),
+        caches.union_from_iter(store, builtin, falsy),
+      )
     }
     TypeKind::Null | TypeKind::Undefined => (builtin.never, ty),
     TypeKind::LiteralBoolean(false) => (builtin.never, ty),
@@ -87,6 +142,7 @@ pub fn narrow_by_typeof(
   target: &str,
   store: &mut TypeStore,
   builtin: &BuiltinTypes,
+  caches: &BodyCaches,
 ) -> (TypeId, TypeId) {
   let matches = |k: &TypeKind| match k {
     TypeKind::String | TypeKind::LiteralString(_) => target == "string",
@@ -110,7 +166,10 @@ pub fn narrow_by_typeof(
           no.push(member);
         }
       }
-      (store.union(yes, builtin), store.union(no, builtin))
+      (
+        caches.union_from_iter(store, builtin, yes),
+        caches.union_from_iter(store, builtin, no),
+      )
     }
     _ => {
       if matches(&kind) {
@@ -129,13 +188,14 @@ pub fn narrow_by_discriminant(
   value: &str,
   store: &mut TypeStore,
   builtin: &BuiltinTypes,
+  caches: &BodyCaches,
 ) -> (TypeId, TypeId) {
   let mut yes = Vec::new();
   let mut no = Vec::new();
   match store.kind(ty).clone() {
     TypeKind::Union(members) => {
       for member in members {
-        let (t, f) = narrow_by_discriminant(member, prop, value, store, builtin);
+        let (t, f) = narrow_by_discriminant(member, prop, value, store, builtin, caches);
         if t != builtin.never {
           yes.push(t);
         }
@@ -163,7 +223,10 @@ pub fn narrow_by_discriminant(
     _ => no.push(ty),
   }
 
-  (store.union(yes, builtin), store.union(no, builtin))
+  (
+    caches.union_from_iter(store, builtin, yes),
+    caches.union_from_iter(store, builtin, no),
+  )
 }
 
 /// Narrow by an `in` check (`"prop" in x`).
@@ -172,13 +235,14 @@ pub fn narrow_by_in_check(
   prop: &str,
   store: &mut TypeStore,
   builtin: &BuiltinTypes,
+  caches: &BodyCaches,
 ) -> (TypeId, TypeId) {
   let mut yes = Vec::new();
   let mut no = Vec::new();
   match store.kind(ty).clone() {
     TypeKind::Union(members) => {
       for member in members {
-        let (t, f) = narrow_by_in_check(member, prop, store, builtin);
+        let (t, f) = narrow_by_in_check(member, prop, store, builtin, caches);
         if t != builtin.never {
           yes.push(t);
         }
@@ -196,17 +260,25 @@ pub fn narrow_by_in_check(
     }
     _ => no.push(ty),
   }
-  (store.union(yes, builtin), store.union(no, builtin))
+  (
+    caches.union_from_iter(store, builtin, yes),
+    caches.union_from_iter(store, builtin, no),
+  )
 }
 
 /// Narrow by an `instanceof` check, keeping only object-like members.
-pub fn narrow_by_instanceof(ty: TypeId, store: &mut TypeStore, builtin: &BuiltinTypes) -> (TypeId, TypeId) {
+pub fn narrow_by_instanceof(
+  ty: TypeId,
+  store: &mut TypeStore,
+  builtin: &BuiltinTypes,
+  caches: &BodyCaches,
+) -> (TypeId, TypeId) {
   match store.kind(ty).clone() {
     TypeKind::Union(members) => {
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        let (y, n) = narrow_by_instanceof(member, store, builtin);
+        let (y, n) = narrow_by_instanceof(member, store, builtin, caches);
         if y != builtin.never {
           yes.push(y);
         }
@@ -214,7 +286,10 @@ pub fn narrow_by_instanceof(ty: TypeId, store: &mut TypeStore, builtin: &Builtin
           no.push(n);
         }
       }
-      (store.union(yes, builtin), store.union(no, builtin))
+      (
+        caches.union_from_iter(store, builtin, yes),
+        caches.union_from_iter(store, builtin, no),
+      )
     }
     TypeKind::Object(_) | TypeKind::Array(_) | TypeKind::Function { .. } => (ty, builtin.never),
     _ => (builtin.never, ty),
