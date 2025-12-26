@@ -8,6 +8,7 @@ use hir_js::{
   NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind,
   UnaryOp,
 };
+use hir_js::span_map::SpanIndex;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
@@ -476,7 +477,10 @@ pub fn check_body(
     pat_spans: checker.pat_spans,
     diagnostics: checker.diagnostics,
     return_types: checker.return_types,
+    expr_index: SpanIndex::new(),
+    pat_index: SpanIndex::new(),
   }
+  .with_indexes()
 }
 
 struct Checker<'a> {
@@ -1599,7 +1603,10 @@ impl<'a> FlowBodyChecker<'a> {
       pat_spans: self.pat_spans,
       diagnostics: self.diagnostics,
       return_types: self.return_types,
+      expr_index: SpanIndex::new(),
+      pat_index: SpanIndex::new(),
     }
+    .with_indexes()
   }
 
   fn run(&mut self, initial: &HashMap<NameId, TypeId>) {

@@ -6,6 +6,7 @@ pub(crate) mod decls;
 pub(crate) mod expr;
 pub(super) mod flow;
 pub(super) mod flow_narrow;
+pub(super) mod legacy_narrow;
 pub mod hir_body;
 pub(crate) mod infer;
 pub(crate) mod instantiate;
