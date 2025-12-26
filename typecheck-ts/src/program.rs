@@ -26,6 +26,7 @@ use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -1902,11 +1903,11 @@ enum HirExprKind {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
 pub struct TypeStore {
-  kinds: Vec<TypeKind>,
+  kinds: BTreeMap<TypeId, TypeKind>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ObjectProperty {
   pub(crate) typ: TypeId,
   pub(crate) optional: bool,
@@ -1914,7 +1915,7 @@ pub(crate) struct ObjectProperty {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ObjectType {
   pub(crate) props: BTreeMap<String, ObjectProperty>,
   pub(crate) string_index: Option<TypeId>,
@@ -1936,7 +1937,7 @@ impl ObjectType {
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum TypeKind {
   Any,
   Unknown,
@@ -1983,7 +1984,9 @@ pub struct BuiltinTypes {
 
 impl TypeStore {
   fn new() -> (TypeStore, BuiltinTypes) {
-    let mut store = TypeStore { kinds: Vec::new() };
+    let mut store = TypeStore {
+      kinds: BTreeMap::new(),
+    };
     let any = store.alloc(TypeKind::Any);
     let unknown = store.alloc(TypeKind::Unknown);
     let never = store.alloc(TypeKind::Never);
@@ -2012,16 +2015,26 @@ impl TypeStore {
   }
 
   fn alloc(&mut self, kind: TypeKind) -> TypeId {
-    if let Some((idx, _)) = self.kinds.iter().enumerate().find(|(_, k)| **k == kind) {
-      return TypeId((idx as u128).into());
+    let mut salt = 0u64;
+    loop {
+      let id = TypeId(stable_type_fingerprint(&kind, salt));
+      match self.kinds.entry(id) {
+        std::collections::btree_map::Entry::Vacant(slot) => {
+          slot.insert(kind);
+          return id;
+        }
+        std::collections::btree_map::Entry::Occupied(existing) => {
+          if existing.get() == &kind {
+            return id;
+          }
+          salt = salt.wrapping_add(1);
+        }
+      }
     }
-    let id = TypeId((self.kinds.len() as u128).into());
-    self.kinds.push(kind);
-    id
   }
 
   pub(crate) fn kind(&self, id: TypeId) -> &TypeKind {
-    self.kinds.get(id.0 as usize).unwrap()
+    self.kinds.get(&id).unwrap()
   }
 
   pub(crate) fn union(&mut self, mut types: Vec<TypeId>, builtin: &BuiltinTypes) -> TypeId {
@@ -2151,6 +2164,35 @@ impl TypeStore {
       TypeKind::Object(_) => 17,
     }
   }
+}
+
+fn stable_type_fingerprint(kind: &TypeKind, salt: u64) -> u128 {
+  const OFFSET1: u64 = 0xcbf2_9ce4_8422_2325;
+  const OFFSET2: u64 = 0x85eb_ca6b_c8f6_9b07;
+  const PRIME: u64 = 0x1000_0000_01b3;
+
+  struct StableHasher(u64);
+  impl Hasher for StableHasher {
+    fn write(&mut self, bytes: &[u8]) {
+      for b in bytes {
+        self.0 ^= *b as u64;
+        self.0 = self.0.wrapping_mul(PRIME);
+      }
+    }
+    fn finish(&self) -> u64 {
+      self.0
+    }
+  }
+
+  let mut hasher_low = StableHasher(OFFSET1 ^ salt);
+  kind.hash(&mut hasher_low);
+  let low = hasher_low.finish();
+
+  let mut hasher_high = StableHasher(OFFSET2 ^ salt.rotate_left(1));
+  kind.hash(&mut hasher_high);
+  let high = hasher_high.finish();
+
+  ((high as u128) << 64) | low as u128
 }
 
 pub(crate) fn lookup_property_type(
