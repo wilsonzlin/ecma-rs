@@ -326,18 +326,11 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     }
 
     if !exports.is_empty() {
-      for (file, map) in &exports {
+      for (file, spaces) in &exports {
         println!("exports for {file}:");
-        for (name, entry) in map {
-          let mut line = format!("  {name} -> symbol {}", entry.symbol);
-          if let Some(def) = entry.def {
-            line.push_str(&format!(", def {def}"));
-          }
-          if let Some(typ) = &entry.typ {
-            line.push_str(&format!(", type {typ}"));
-          }
-          println!("{line}");
-        }
+        print_export_space("  values", &spaces.values);
+        print_export_space("  types", &spaces.types);
+        print_export_space("  namespaces", &spaces.namespaces);
       }
     }
   }
@@ -670,6 +663,23 @@ fn query_exports(
     .unwrap_or_else(|| path.to_string_lossy().to_string());
   outer.insert(file_name, spaces);
   Ok(outer)
+}
+
+fn print_export_space(label: &str, exports: &BTreeMap<String, ExportEntryJson>) {
+  if exports.is_empty() {
+    return;
+  }
+  println!("{label}:");
+  for (name, entry) in exports {
+    let mut line = format!("    {name} -> symbol {}", entry.symbol);
+    if let Some(def) = entry.def {
+      line.push_str(&format!(", def {def}"));
+    }
+    if let Some(typ) = &entry.typ {
+      line.push_str(&format!(", type {typ}"));
+    }
+    println!("{line}");
+  }
 }
 
 fn insert_exports(
