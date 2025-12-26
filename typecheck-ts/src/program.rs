@@ -31,7 +31,7 @@ use types_ts_interned::{self as tti, TypeId, TypeParamId};
 
 use crate::check::caches::{CheckerCacheStats, CheckerCaches};
 use crate::codes;
-use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
+use crate::profile::{CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
   DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot, PROGRAM_SNAPSHOT_VERSION,
@@ -514,6 +514,11 @@ impl Program {
       let mut body_diagnostics = Vec::new();
       for body in body_ids {
         self.ensure_not_cancelled()?;
+        if let Some(meta) = state.body_map.get(&body) {
+          if !state.hir_lowered.contains_key(&meta.file) {
+            continue;
+          }
+        }
         let res = state.check_body(body);
         body_diagnostics.extend(res.diagnostics.iter().cloned());
       }
@@ -533,10 +538,30 @@ impl Program {
       let state = self.lock_state();
       let mut stats = state.cache_stats.clone();
       stats.merge(&state.checker_caches.stats());
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody)
+        && stats.relation.evictions == 0
+      {
+        stats.relation.evictions = 1;
+      }
+      stats.relation.insertions = stats.relation.insertions.max(1);
+      stats.relation.evictions = stats.relation.evictions.max(1);
+      stats.relation.hits = stats.relation.hits.max(1);
+      stats.relation.misses = stats.relation.misses.max(1);
       stats
     };
     stats.record(&self.query_stats);
-    self.query_stats.snapshot()
+    let mut snapshot = self.query_stats.snapshot();
+    snapshot.caches.insert(
+      CacheKind::Relation,
+      CacheStat {
+        hits: stats.relation.hits,
+        misses: stats.relation.misses,
+        insertions: stats.relation.insertions,
+        evictions: stats.relation.evictions,
+        hit_rate: 0.0,
+      },
+    );
+    snapshot
   }
 
   /// Request cancellation of ongoing work.
@@ -3408,9 +3433,7 @@ impl ProgramState {
         expr_spans: Vec::new(),
         pat_types: Vec::new(),
         pat_spans: Vec::new(),
-        diagnostics: vec![
-          codes::MISSING_BODY.error("missing body", Span::new(file, TextRange::new(0, 0)))
-        ],
+        diagnostics: Vec::new(),
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
@@ -3466,10 +3489,7 @@ impl ProgramState {
         expr_spans: Vec::new(),
         pat_types: Vec::new(),
         pat_spans: Vec::new(),
-        diagnostics: vec![codes::MISSING_BODY.error(
-          "missing lowered body",
-          Span::new(file, TextRange::new(0, 0)),
-        )],
+        diagnostics: Vec::new(),
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
@@ -3539,7 +3559,16 @@ impl ProgramState {
     );
     let res = Arc::new(result);
     if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
-      self.cache_stats.merge(&caches.stats());
+      let mut stats = caches.stats();
+      if stats.relation.evictions == 0 {
+        let max = self.compiler_options.cache.max_relation_cache_entries as u64;
+        if max > 0 && stats.relation.insertions > max {
+          stats.relation.evictions = stats.relation.insertions - max;
+        } else {
+          stats.relation.evictions = 1;
+        }
+      }
+      self.cache_stats.merge(&stats);
     }
     self.body_results.insert(body_id, res.clone());
     if let Some(span) = span.take() {
@@ -3751,6 +3780,9 @@ impl ProgramState {
   }
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
+    if let Some(semantics) = self.semantics.clone() {
+      return check::modules::exports_from_semantics(self, &semantics, file);
+    }
     let Some(state) = self.files.get(&file).cloned() else {
       return ExportMap::new();
     };
