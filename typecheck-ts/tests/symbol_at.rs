@@ -277,3 +277,25 @@ fn symbol_at_resolves_type_only_imports() {
   assert_eq!(decl_symbol, import_symbol);
   assert_eq!(import_symbol, use_symbol);
 }
+
+#[test]
+fn symbol_at_prefers_innermost_binding_in_nested_functions() {
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("file.ts");
+  let source =
+    "const value = 1; const factory = () => { const value = 2; return () => value + 1; }; const result = factory()();";
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+
+  let inner_decl = symbol_for_occurrence(&program, file_id, source, "value", 1);
+  let inner_use_offset = source
+    .rfind("value + 1")
+    .expect("offset of inner use") as u32;
+  let inner_use = program
+    .symbol_at(file_id, inner_use_offset)
+    .expect("symbol at inner use");
+
+  assert_eq!(inner_decl, inner_use, "should resolve to innermost binding");
+}
