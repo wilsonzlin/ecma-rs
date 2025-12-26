@@ -220,7 +220,9 @@ impl SymbolCollectorVisitor<'_> {
   }
 
   fn exit_export_name_node(&mut self, _node: &mut ExportNameNode) {
-    self.inner.ignore_id_pats -= 1;
+    if self.inner.ignore_id_pats > 0 {
+      self.inner.ignore_id_pats -= 1;
+    }
   }
 }
 

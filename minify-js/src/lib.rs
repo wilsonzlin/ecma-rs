@@ -1,6 +1,14 @@
 pub use diagnostics::{Diagnostic, FileId, Severity, Span, TextRange};
 #[cfg(feature = "emit-minify")]
-use emit_js::{emit_top_level_diagnostic, EmitOptions};
+use emit_js::{
+  emit_hir_file_diagnostic, emit_top_level_diagnostic, EmitOptions,
+};
+#[cfg(feature = "emit-minify")]
+use hir_js::{lower_file, FileKind};
+#[cfg(feature = "emit-minify")]
+use parse_js::ast::node::Node;
+#[cfg(feature = "emit-minify")]
+use parse_js::ast::stx::TopLevel;
 use parse_js::{parse_with_options, ParseOptions, SourceType};
 #[cfg(not(feature = "emit-minify"))]
 use rename::rewrite_source;
@@ -14,6 +22,14 @@ mod rename;
 #[cfg(test)]
 mod tests;
 mod ts_erase;
+
+#[cfg(feature = "emit-minify")]
+fn hir_can_emit(top: &Node<TopLevel>) -> bool {
+  // HIR emission currently supports a subset of constructs; keep using the
+  // stable AST emitter for minification until HIR coverage is expanded.
+  let _ = top;
+  false
+}
 
 /// Minifies UTF-8 JavaScript or TypeScript code.
 ///
@@ -87,6 +103,8 @@ pub fn minify_with_options(
 
   let mut last_error = None;
   let mut parsed = None;
+  #[cfg(feature = "emit-minify")]
+  let mut used_dialect = None;
   for dialect in parse_dialects {
     let parse_opts = ParseOptions {
       dialect,
@@ -97,6 +115,10 @@ pub fn minify_with_options(
     };
     match parse_with_options(source, parse_opts) {
       Ok(ast) => {
+        #[cfg(feature = "emit-minify")]
+        {
+          used_dialect = Some(dialect);
+        }
         parsed = Some(ast);
         break;
       }
@@ -108,6 +130,8 @@ pub fn minify_with_options(
     Some(ast) => ast,
     None => return Err(vec![last_error.unwrap().to_diagnostic(file)]),
   };
+  #[cfg(feature = "emit-minify")]
+  let used_dialect = used_dialect.expect("successful parse must set dialect");
 
   erase_types(file, &mut top_level_node)?;
 
@@ -117,8 +141,23 @@ pub fn minify_with_options(
   #[cfg(feature = "emit-minify")]
   {
     apply_renames(&mut top_level_node, &renames);
-    let emitted = emit_top_level_diagnostic(file, &top_level_node, EmitOptions::minified())
-      .map_err(|diag| vec![diag])?;
+    let file_kind = match used_dialect {
+      Dialect::Js => FileKind::Js,
+      Dialect::Jsx => FileKind::Jsx,
+      Dialect::Ts => FileKind::Ts,
+      Dialect::Tsx => FileKind::Tsx,
+      Dialect::Dts => FileKind::Dts,
+    };
+    let emit_opts = EmitOptions::minified();
+    let emitted = if hir_can_emit(&top_level_node) {
+      match emit_hir_file_diagnostic(&lower_file(file, file_kind, &top_level_node), emit_opts.clone()) {
+        Ok(code) => code,
+        Err(_) => emit_top_level_diagnostic(file, &top_level_node, emit_opts)
+          .map_err(|diag| vec![diag])?,
+      }
+    } else {
+      emit_top_level_diagnostic(file, &top_level_node, emit_opts).map_err(|diag| vec![diag])?
+    };
     output.clear();
     output.extend_from_slice(emitted.as_bytes());
     return Ok(());
