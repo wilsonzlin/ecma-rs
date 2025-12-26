@@ -2,10 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{
-  BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeStore,
+  BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeId, TypeStore,
 };
 use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId, TextRange};
-use types_ts_interned::{TypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot};
+use types_ts_interned::{
+  TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
+};
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.
 pub const PROGRAM_SNAPSHOT_VERSION: u32 = 2;
@@ -67,7 +69,7 @@ pub struct ProgramSnapshot {
   pub diagnostics: Vec<Diagnostic>,
   pub type_store: TypeStore,
   pub interned_type_store: InternedTypeStoreSnapshot,
-  pub interned_def_types: Vec<(DefId, TypeId)>,
+  pub interned_def_types: Vec<(DefId, InternedTypeId)>,
   pub interned_type_params: Vec<(DefId, Vec<TypeParamId>)>,
   pub builtin: BuiltinTypes,
   pub next_def: u32,

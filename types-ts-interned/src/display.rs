@@ -7,7 +7,6 @@ use crate::shape::PropKey;
 use crate::shape::Property;
 use crate::store::TypeStore;
 use std::fmt;
-use std::sync::Arc;
 use unicode_ident::{is_xid_continue, is_xid_start};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -17,7 +16,6 @@ enum Precedence {
   Primary,
 }
 
-#[derive(Debug)]
 pub struct TypeDisplay<'a> {
   store: &'a TypeStore,
   ty: TypeId,

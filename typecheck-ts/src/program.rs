@@ -144,7 +144,8 @@ pub struct SymbolInfo {
 
 /// Per-body typing result. Expression IDs are local to the body.
 #[allow(dead_code)]
-#[derive(Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
 pub struct BodyCheckResult {
   body: BodyId,
   expr_types: Vec<TypeId>,
@@ -785,6 +786,206 @@ impl Program {
     }
   }
 
+  #[cfg(feature = "serde")]
+  pub fn snapshot(&self) -> crate::snapshot::ProgramSnapshot {
+    use crate::snapshot::{
+      BodyDataSnapshot, DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot,
+      PROGRAM_SNAPSHOT_VERSION,
+    };
+    let mut state = self.lock_state();
+    state.ensure_analyzed(&self.host, &self.roots, &self.cancelled);
+
+    let mut files: Vec<_> = state
+      .file_kinds
+      .iter()
+      .map(|(file, kind)| FileSnapshot {
+        file: *file,
+        kind: *kind,
+        hash: String::new(),
+        text: state
+          .lib_texts
+          .get(file)
+          .map(|t| t.as_ref().to_string()),
+      })
+      .collect();
+    files.sort_by_key(|f| f.file.0);
+
+    let mut file_states: Vec<_> = state
+      .files
+      .iter()
+      .map(|(file, st)| {
+        let mut bindings: Vec<_> = st.bindings.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        bindings.sort_by(|a, b| a.0.cmp(&b.0));
+        FileStateSnapshot {
+          file: *file,
+          defs: st.defs.clone(),
+          exports: st.exports.clone(),
+          bindings,
+          top_body: st.top_body,
+        }
+      })
+      .collect();
+    file_states.sort_by_key(|s| s.file.0);
+
+    let mut def_data: Vec<_> = state
+      .def_data
+      .iter()
+      .map(|(def, data)| DefSnapshot {
+        def: *def,
+        data: data.clone(),
+      })
+      .collect();
+    def_data.sort_by_key(|d| d.def.0);
+
+    let mut body_data: Vec<_> = state
+      .body_data
+      .iter()
+      .map(|(_, data)| BodyDataSnapshot {
+        id: data.id,
+        file: data.file,
+        owner: data.owner,
+        expr_spans: data.expr_spans.clone(),
+        pat_spans: Vec::new(),
+      })
+      .collect();
+    body_data.sort_by_key(|b| b.id.0);
+
+    let mut def_types: Vec<_> = state.def_types.iter().map(|(d, t)| (*d, *t)).collect();
+    def_types.sort_by_key(|(d, _)| d.0);
+
+    let mut body_results: Vec<_> = state
+      .body_results
+      .iter()
+      .map(|(_, res)| (**res).clone())
+      .collect();
+    body_results.sort_by_key(|r| r.body.0);
+
+    let mut symbol_occurrences: Vec<_> = state
+      .symbol_occurrences
+      .iter()
+      .map(|(file, occ)| (*file, occ.clone()))
+      .collect();
+    symbol_occurrences.sort_by_key(|(f, _)| f.0);
+
+    let mut symbol_to_def: Vec<_> = state
+      .symbol_to_def
+      .iter()
+      .map(|(s, d)| (*s, *d))
+      .collect();
+    symbol_to_def.sort_by_key(|(_, d)| d.0);
+
+    let mut global_bindings: Vec<_> = state
+      .global_bindings
+      .iter()
+      .map(|(k, v)| (k.clone(), v.clone()))
+      .collect();
+    global_bindings.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut interned_def_types: Vec<_> = state
+      .decl_types
+      .iter()
+      .map(|(d, t)| (*d, *t))
+      .collect();
+    interned_def_types.sort_by_key(|(d, _)| d.0);
+
+    let mut interned_type_params = Vec::new();
+    ProgramSnapshot {
+      schema_version: PROGRAM_SNAPSHOT_VERSION,
+      tool_version: env!("CARGO_PKG_VERSION").to_string(),
+      compiler_options: state.compiler_options.clone(),
+      roots: self.roots.clone(),
+      files,
+      file_states,
+      def_data,
+      body_data,
+      def_types,
+      body_results,
+      symbol_occurrences,
+      symbol_to_def,
+      global_bindings,
+      diagnostics: state.diagnostics.clone(),
+      type_store: state.type_store.clone(),
+      interned_type_store: state.interned_store.snapshot(),
+      interned_def_types,
+      interned_type_params: interned_type_params.clone(),
+      builtin: state.builtin,
+      next_def: state.next_def,
+      next_body: state.next_body,
+      next_symbol: state.next_symbol,
+    }
+  }
+
+  #[cfg(feature = "serde")]
+  pub fn from_snapshot(host: impl Host, snapshot: crate::snapshot::ProgramSnapshot) -> Program {
+    let program = Program::with_lib_manager(host, snapshot.roots.clone(), Arc::new(LibManager::new()));
+    {
+      let mut state = program.lock_state();
+      state.analyzed = true;
+      state.compiler_options = snapshot.compiler_options.clone();
+      state.file_kinds = snapshot.files.iter().map(|f| (f.file, f.kind)).collect();
+      state.lib_texts = snapshot
+        .files
+        .iter()
+        .filter_map(|f| f.text.as_ref().map(|t| (f.file, Arc::from(t.clone()))))
+        .collect();
+      state.files = snapshot
+        .file_states
+        .iter()
+        .map(|f| {
+          let bindings: HashMap<_, _> = f.bindings.iter().cloned().collect();
+          (
+            f.file,
+            FileState {
+              defs: f.defs.clone(),
+              exports: f.exports.clone(),
+              bindings,
+              top_body: f.top_body,
+            },
+          )
+        })
+        .collect();
+      state.def_data = snapshot
+        .def_data
+        .iter()
+        .map(|d| (d.def, d.data.clone()))
+        .collect();
+      state.body_data = snapshot
+        .body_data
+        .iter()
+        .map(|b| {
+          (
+            b.id,
+            BodyData {
+              id: b.id,
+              file: b.file,
+              owner: b.owner,
+              stmts: Vec::new(),
+              expr_spans: b.expr_spans.clone(),
+            },
+          )
+        })
+        .collect();
+      state.def_types = snapshot.def_types.iter().cloned().collect();
+      state.body_results = snapshot
+        .body_results
+        .iter()
+        .map(|r| (r.body, Arc::new(r.clone())))
+        .collect();
+      state.symbol_occurrences = snapshot.symbol_occurrences.iter().cloned().collect();
+      state.symbol_to_def = snapshot.symbol_to_def.iter().cloned().collect();
+      state.global_bindings = snapshot.global_bindings.iter().cloned().collect();
+      state.diagnostics = snapshot.diagnostics.clone();
+      state.type_store = snapshot.type_store.clone();
+      state.interned_store = InternedTypeStore::from_snapshot(snapshot.interned_type_store);
+      state.decl_types = snapshot.interned_def_types.iter().cloned().collect();
+      state.builtin = snapshot.builtin;
+      state.next_def = snapshot.next_def;
+      state.next_body = snapshot.next_body;
+      state.next_symbol = snapshot.next_symbol;
+    }
+    program
+  }
+
   pub fn definitions_in_file_fallible(&self, file: FileId) -> Result<Vec<DefId>, FatalError> {
     self.with_analyzed_state(|state| {
       Ok(
@@ -874,19 +1075,22 @@ impl<'a> TypeExpander for ProgramTypeExpander<'a> {
 }
 
 #[derive(Clone, Debug)]
-struct SymbolOccurrence {
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SymbolOccurrence {
   range: TextRange,
   symbol: semantic_js::SymbolId,
 }
 
 #[derive(Clone, Debug)]
-struct SymbolBinding {
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SymbolBinding {
   symbol: semantic_js::SymbolId,
   def: Option<DefId>,
   type_id: Option<TypeId>,
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 struct PendingReexport {
   source: FileId,
   target: FileId,
@@ -895,6 +1099,7 @@ struct PendingReexport {
 }
 
 #[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 struct FileState {
   defs: Vec<DefId>,
   exports: ExportMap,
@@ -916,8 +1121,9 @@ impl sem_ts::Resolver for HostResolver {
 }
 
 #[allow(dead_code)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
-struct DefData {
+pub struct DefData {
   name: String,
   file: FileId,
   span: TextRange,
@@ -927,7 +1133,8 @@ struct DefData {
 }
 
 #[derive(Clone, Debug)]
-enum DefKind {
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum DefKind {
   Function(FuncData),
   Var(VarData),
   Import(ImportData),
@@ -936,30 +1143,34 @@ enum DefKind {
 }
 
 #[derive(Clone, Debug)]
-struct FuncData {
-  params: Vec<ParamData>,
-  return_ann: Option<TypeId>,
-  body: Option<BodyId>,
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct FuncData {
+  pub params: Vec<ParamData>,
+  pub return_ann: Option<TypeId>,
+  pub body: Option<BodyId>,
 }
 
 #[derive(Clone, Debug)]
-struct ParamData {
-  name: String,
-  typ: Option<TypeId>,
-  symbol: semantic_js::SymbolId,
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ParamData {
+  pub name: String,
+  pub typ: Option<TypeId>,
+  pub symbol: semantic_js::SymbolId,
 }
 
 #[derive(Clone, Debug)]
-struct VarData {
-  typ: Option<TypeId>,
-  init: Option<ExprId>,
-  body: BodyId,
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct VarData {
+  pub typ: Option<TypeId>,
+  pub init: Option<ExprId>,
+  pub body: BodyId,
 }
 
 #[derive(Clone, Debug)]
-struct ImportData {
-  from: FileId,
-  original: String,
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct ImportData {
+  pub from: FileId,
+  pub original: String,
 }
 
 #[derive(Clone, Debug)]
@@ -1164,23 +1375,26 @@ impl ExprContext {
   }
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
-pub(crate) struct TypeStore {
+pub struct TypeStore {
   kinds: Vec<TypeKind>,
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ObjectProperty {
-  pub(crate) typ: TypeId,
-  pub(crate) optional: bool,
-  pub(crate) readonly: bool,
+pub struct ObjectProperty {
+  pub typ: TypeId,
+  pub optional: bool,
+  pub readonly: bool,
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ObjectType {
-  pub(crate) props: BTreeMap<String, ObjectProperty>,
-  pub(crate) string_index: Option<TypeId>,
-  pub(crate) number_index: Option<TypeId>,
+pub struct ObjectType {
+  pub props: BTreeMap<String, ObjectProperty>,
+  pub string_index: Option<TypeId>,
+  pub number_index: Option<TypeId>,
 }
 
 impl ObjectType {
@@ -1197,8 +1411,35 @@ impl ObjectType {
   }
 }
 
+pub(crate) fn lookup_property_type(
+  store: &mut TypeStore,
+  ty: TypeId,
+  name: &str,
+  builtin: &BuiltinTypes,
+) -> Option<TypeId> {
+  match store.kind(ty).clone() {
+    TypeKind::Any | TypeKind::Unknown => None,
+    TypeKind::Object(obj) => obj.props.get(name).map(|p| p.typ),
+    TypeKind::Union(types) => {
+      let mut collected = Vec::new();
+      for member in types {
+        if let Some(prop) = lookup_property_type(store, member, name, builtin) {
+          collected.push(prop);
+        }
+      }
+      if collected.is_empty() {
+        None
+      } else {
+        Some(store.union(collected, builtin))
+      }
+    }
+    _ => None,
+  }
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum TypeKind {
+pub enum TypeKind {
   Any,
   Unknown,
   Never,
@@ -1233,18 +1474,19 @@ pub(crate) enum TypeKind {
 }
 
 #[allow(dead_code)]
-#[derive(Clone, Copy)]
-pub(crate) struct BuiltinTypes {
-  pub(crate) any: TypeId,
-  pub(crate) unknown: TypeId,
-  pub(crate) never: TypeId,
-  pub(crate) void: TypeId,
-  pub(crate) number: TypeId,
-  pub(crate) string: TypeId,
-  pub(crate) boolean: TypeId,
-  pub(crate) null: TypeId,
-  pub(crate) undefined: TypeId,
-  pub(crate) object: TypeId,
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Copy, Debug)]
+pub struct BuiltinTypes {
+  pub any: TypeId,
+  pub unknown: TypeId,
+  pub never: TypeId,
+  pub void: TypeId,
+  pub number: TypeId,
+  pub string: TypeId,
+  pub boolean: TypeId,
+  pub null: TypeId,
+  pub undefined: TypeId,
+  pub object: TypeId,
 }
 
 impl TypeStore {
