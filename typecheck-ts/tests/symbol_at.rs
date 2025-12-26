@@ -31,14 +31,22 @@ fn symbol_for_occurrence(
   let mut offsets: Vec<u32> = (start..end).collect();
   offsets.extend(end..search_end);
   offsets.extend(search_start..start);
-  offsets
+  let (offset, symbol) = offsets
     .into_iter()
-    .find_map(|offset| program.symbol_at(file, offset))
+    .find_map(|offset| program.symbol_at(file, offset).map(|sym| (offset, sym)))
     .unwrap_or_else(|| {
       panic!(
         "no symbol for '{needle}' occurrence {occurrence} in range {search_start}..{search_end}"
       )
-    })
+    });
+  for _ in 0..3 {
+    assert_eq!(
+      Some(symbol),
+      program.symbol_at(file, offset),
+      "symbol_at should be deterministic for {needle} at offset {offset}"
+    );
+  }
+  symbol
 }
 
 #[test]
@@ -96,6 +104,38 @@ fn expr_at_prefers_innermost_span() {
 }
 
 #[test]
+fn symbol_at_local_variable() {
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("file.ts");
+  let source = "let value = 1;\nconst copy = value;";
+  host.insert(file.clone(), source);
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file = program.file_id(&file).expect("file id");
+  let decl_symbol = symbol_for_occurrence(&program, file, source, "value", 0);
+  let use_symbol = symbol_for_occurrence(&program, file, source, "value", 1);
+
+  assert_eq!(decl_symbol, use_symbol);
+}
+
+#[test]
+fn symbol_at_function_parameter() {
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("file.ts");
+  let source = "function wrap(param: number) { const inner = param; return param; }";
+  host.insert(file.clone(), source);
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file = program.file_id(&file).expect("file id");
+  let decl_symbol = symbol_for_occurrence(&program, file, source, "param", 0);
+  let first_use = symbol_for_occurrence(&program, file, source, "param", 1);
+  let second_use = symbol_for_occurrence(&program, file, source, "param", 2);
+
+  assert_eq!(decl_symbol, first_use);
+  assert_eq!(first_use, second_use);
+}
+
+#[test]
 fn symbol_at_resolves_imports() {
   let mut host = MemoryHost::default();
   let file_a = FileKey::new("a.ts");
@@ -116,6 +156,25 @@ fn symbol_at_resolves_imports() {
 
   assert_eq!(decl_symbol, import_symbol);
   assert_eq!(decl_symbol, use_symbol);
+}
+
+#[test]
+fn symbol_at_type_reference_in_annotation() {
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("file.ts");
+  let source = "type Foo = { value: number };\nfunction use(arg: Foo): Foo { const local: Foo = arg; return local; }";
+  host.insert(file.clone(), source);
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file = program.file_id(&file).expect("file id");
+  let decl_symbol = symbol_for_occurrence(&program, file, source, "Foo", 0);
+  let param_symbol = symbol_for_occurrence(&program, file, source, "Foo", 1);
+  let return_symbol = symbol_for_occurrence(&program, file, source, "Foo", 2);
+  let local_symbol = symbol_for_occurrence(&program, file, source, "Foo", 3);
+
+  assert_eq!(decl_symbol, param_symbol);
+  assert_eq!(param_symbol, return_symbol);
+  assert_eq!(return_symbol, local_symbol);
 }
 
 #[test]
@@ -146,21 +205,28 @@ fn symbol_at_import_binding_with_alias() {
 fn symbol_at_respects_local_shadowing() {
   let mut host = MemoryHost::default();
   let file = FileKey::new("file.ts");
-  let source = "const foo = 1; function wrap() { const foo = 2; return foo; } const again = foo;";
+  let source = "const foo = 1; { const foo = 2; { const foo = 3; foo; } foo; } const again = foo;";
   host.insert(file.clone(), Arc::from(source.to_string()));
 
   let program = Program::new(host, vec![file.clone()]);
   let file = program.file_id(&file).unwrap();
   let outer_symbol = symbol_for_occurrence(&program, file, source, "foo", 0);
-  let inner_symbol = symbol_for_occurrence(&program, file, source, "foo", 1);
-  let inner_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 2);
-  let outer_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 3);
+  let mid_symbol = symbol_for_occurrence(&program, file, source, "foo", 1);
+  let inner_symbol = symbol_for_occurrence(&program, file, source, "foo", 2);
+  let inner_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 3);
+  let mid_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 4);
+  let outer_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 5);
 
   assert_eq!(
     inner_symbol, inner_use_symbol,
     "inner binding should resolve"
   );
+  assert_eq!(mid_symbol, mid_use_symbol, "mid binding should resolve");
   assert_ne!(inner_symbol, outer_symbol, "shadowed symbols should differ");
+  assert_ne!(
+    inner_symbol, mid_symbol,
+    "nested blocks should shadow parents"
+  );
   assert_eq!(
     outer_symbol, outer_use_symbol,
     "outer usage should see outer binding"

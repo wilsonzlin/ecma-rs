@@ -31,6 +31,12 @@ impl ScopeId {
   }
 }
 
+impl Default for ScopeId {
+  fn default() -> Self {
+    ScopeId(0)
+  }
+}
+
 /// Deterministic identifier for an interned name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NameId(pub u64);
@@ -129,6 +135,7 @@ pub struct SymbolData {
 /// and type resolutions keyed by their spans.
 #[derive(Default, Debug)]
 pub struct TsLocalSemantics {
+  root: ScopeId,
   pub names: BTreeMap<NameId, String>,
   #[allow(dead_code)]
   name_lookup: BTreeMap<String, NameId>,
@@ -139,6 +146,11 @@ pub struct TsLocalSemantics {
 }
 
 impl TsLocalSemantics {
+  /// The root scope for the file. This is always the first allocated scope.
+  pub fn root_scope(&self) -> ScopeId {
+    self.root
+  }
+
   pub fn scope(&self, id: ScopeId) -> &ScopeData {
     self.scopes.get(&id).expect("scope exists for id")
   }
@@ -177,6 +189,29 @@ impl TsLocalSemantics {
   pub fn resolve_type_span(&self, span: TextRange) -> Option<SymbolId> {
     self.type_resolutions.get(&span).copied()
   }
+
+  /// Resolve the smallest expression span containing the provided offset.
+  pub fn resolve_expr_at_offset(&self, offset: u32) -> Option<(TextRange, SymbolId)> {
+    resolve_span_at_offset(&self.expr_resolutions, offset)
+  }
+
+  /// Resolve the smallest type span containing the provided offset.
+  pub fn resolve_type_at_offset(&self, offset: u32) -> Option<(TextRange, SymbolId)> {
+    resolve_span_at_offset(&self.type_resolutions, offset)
+  }
+}
+
+fn resolve_span_at_offset(
+  map: &BTreeMap<TextRange, SymbolId>,
+  offset: u32,
+) -> Option<(TextRange, SymbolId)> {
+  map
+    .iter()
+    .filter(|(range, _)| {
+      (range.start <= offset && offset < range.end) || (range.is_empty() && range.start == offset)
+    })
+    .min_by_key(|(range, sym)| (range.len(), range.start, range.end, sym.raw() as u32))
+    .map(|(range, sym)| (*range, *sym))
 }
 
 #[derive(Clone, Copy)]
@@ -187,6 +222,7 @@ enum DeclTarget {
 
 struct SemanticsBuilder {
   file: FileId,
+  root: ScopeId,
   names: BTreeMap<NameId, String>,
   name_lookup: BTreeMap<String, NameId>,
   scopes: BTreeMap<ScopeId, ScopeData>,
@@ -203,6 +239,7 @@ impl SemanticsBuilder {
         file,
         names: BTreeMap::new(),
         name_lookup: BTreeMap::new(),
+        root: root_id,
         scopes,
         symbols: BTreeMap::new(),
       },
@@ -314,6 +351,7 @@ impl SemanticsBuilder {
     type_resolutions: BTreeMap<TextRange, SymbolId>,
   ) -> TsLocalSemantics {
     TsLocalSemantics {
+      root: self.root,
       names: self.names,
       name_lookup: self.name_lookup,
       scopes: self.scopes,
@@ -771,6 +809,11 @@ impl DeclarePass {
     self.mark_scope(&mut func.assoc);
     self.push_scope(ScopeKind::Function, range_of(func));
     self.enter_decl_target(DeclTarget::Hoisted);
+    if let Some(params) = &mut func.stx.type_parameters {
+      for param in params.iter_mut() {
+        self.walk_type_param(param);
+      }
+    }
     for param in func.stx.parameters.iter_mut() {
       self.walk_pat_decl(&mut param.stx.pattern, Namespace::VALUE);
       if let Some(default) = &mut param.stx.default_value {
@@ -779,6 +822,9 @@ impl DeclarePass {
       if let Some(ty) = &mut param.stx.type_annotation {
         self.walk_type_expr(ty);
       }
+    }
+    if let Some(ret) = &mut func.stx.return_type {
+      self.walk_type_expr(ret);
     }
     if let Some(body) = &mut func.stx.body {
       match body {
@@ -1082,15 +1128,28 @@ impl<'a> ResolvePass<'a> {
       AstStmt::VarDecl(var) => {
         for decl in var.stx.declarators.iter_mut() {
           self.walk_pat_decl(&mut decl.pattern);
+          if let Some(annot) = &mut decl.type_annotation {
+            self.walk_type_expr(annot);
+          }
           if let Some(init) = &mut decl.initializer {
             self.walk_expr(init);
           }
         }
       }
       AstStmt::FunctionDecl(func) => {
+        if let Some(name) = &mut func.stx.name {
+          if let Some(sym) = declared_symbol(&name.assoc) {
+            self.expr_resolutions.insert(to_range(name.loc), sym);
+          }
+        }
         self.walk_func(&mut func.stx.function);
       }
       AstStmt::ClassDecl(class) => {
+        if let Some(name) = &mut class.stx.name {
+          if let Some(sym) = declared_symbol(&name.assoc) {
+            self.expr_resolutions.insert(to_range(name.loc), sym);
+          }
+        }
         for member in class.stx.members.iter_mut() {
           self.push_scope_from_assoc(&member.assoc);
           self.pop_scope_from_assoc(&member.assoc);
@@ -1176,11 +1235,17 @@ impl<'a> ResolvePass<'a> {
         self.walk_stmt(&mut w.stx.body);
       }
       AstStmt::InterfaceDecl(intf) => {
+        if let Some(sym) = declared_symbol(&intf.assoc) {
+          self.expr_resolutions.insert(to_range(intf.loc), sym);
+        }
         for ext in intf.stx.extends.iter_mut() {
           self.walk_type_expr(ext);
         }
       }
       AstStmt::TypeAliasDecl(alias) => {
+        if let Some(sym) = declared_symbol(&alias.assoc) {
+          self.expr_resolutions.insert(to_range(alias.loc), sym);
+        }
         self.walk_type_expr(&mut alias.stx.type_expr);
       }
       AstStmt::NamespaceDecl(ns) => match &mut ns.stx.body {
@@ -1403,6 +1468,11 @@ impl<'a> ResolvePass<'a> {
 
   fn walk_func(&mut self, func: &mut Node<Func>) {
     self.push_scope_from_assoc(&func.assoc);
+    if let Some(params) = &mut func.stx.type_parameters {
+      for param in params.iter_mut() {
+        self.walk_type_param(param);
+      }
+    }
     for param in func.stx.parameters.iter_mut() {
       self.walk_pat_decl(&mut param.stx.pattern);
       if let Some(default) = &mut param.stx.default_value {
@@ -1411,6 +1481,9 @@ impl<'a> ResolvePass<'a> {
       if let Some(ty) = &mut param.stx.type_annotation {
         self.walk_type_expr(ty);
       }
+    }
+    if let Some(ret) = &mut func.stx.return_type {
+      self.walk_type_expr(ret);
     }
     if let Some(body) = &mut func.stx.body {
       match body {
@@ -1423,6 +1496,20 @@ impl<'a> ResolvePass<'a> {
       }
     }
     self.pop_scope_from_assoc(&func.assoc);
+  }
+
+  fn walk_type_param(&mut self, param: &mut Node<parse_js::ast::type_expr::TypeParameter>) {
+    self.push_scope_from_assoc(&param.assoc);
+    if let Some(sym) = declared_symbol(&param.assoc) {
+      self.expr_resolutions.insert(to_range(param.loc), sym);
+    }
+    if let Some(constraint) = &mut param.stx.constraint {
+      self.walk_type_expr(constraint);
+    }
+    if let Some(default) = &mut param.stx.default {
+      self.walk_type_expr(default);
+    }
+    self.pop_scope_from_assoc(&param.assoc);
   }
 
   fn walk_type_expr(&mut self, ty: &mut Node<TypeExpr>) {

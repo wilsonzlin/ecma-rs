@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::codes;
-use crate::{FileKey, Host};
+use crate::{codes, FileKey, Host};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   DefId as HirDefId, DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId,

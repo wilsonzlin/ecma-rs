@@ -6,7 +6,7 @@ use typecheck_ts::check::infer::{
   infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature, TypeParamDecl,
 };
 use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
-use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TypeKindSummary};
+use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey, TypeKindSummary};
 use types_ts_interned::{
   CacheConfig, DefId, Param, Signature, TypeId, TypeKind, TypeParamId, TypeStore,
 };
@@ -401,53 +401,23 @@ fn infers_from_contextual_return_in_call() {
 
 #[test]
 fn imported_type_alias_uses_source_definition() {
-  #[derive(Default)]
-  struct ImportHost {
-    files: HashMap<FileKey, Arc<str>>,
-    resolutions: HashMap<String, FileKey>,
-  }
-
-  impl ImportHost {
-    fn insert(&mut self, file: FileKey, src: &str) {
-      self.files.insert(file, Arc::from(src.to_string()));
-    }
-
-    fn resolve_to(&mut self, specifier: &str, target: FileKey) {
-      self.resolutions.insert(specifier.to_string(), target);
-    }
-  }
-
-  impl Host for ImportHost {
-    fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
-      self
-        .files
-        .get(&file)
-        .cloned()
-        .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
-    }
-
-    fn resolve(&self, _from: &FileKey, specifier: &str) -> Option<FileKey> {
-      self.resolutions.get(specifier).cloned()
-    }
-  }
-
-  let mut host = ImportHost::default();
+  let mut host = MemoryHost::default();
+  let file_a = FileKey::new("a.ts");
+  let file_b = FileKey::new("b.ts");
+  host.insert(file_a.clone(), "export type Value = { value: number };");
   host.insert(
-    FileKey::new("a.ts"),
-    "export type Value = { value: number };",
-  );
-  host.insert(
-    FileKey::new("b.ts"),
+    file_b.clone(),
     r#"
 import { Value } from "./a";
 type Uses = Value;
 "#,
   );
-  host.resolve_to("./a", FileKey::new("a.ts"));
+  host.link(file_b.clone(), "./a", file_a.clone());
 
-  let program = Program::new(host, vec![FileKey::new("b.ts")]);
+  let program = Program::new(host, vec![file_b.clone()]);
+  let file_b = program.file_id(&file_b).unwrap();
   let uses_def = program
-    .definitions_in_file(program.file_id(&FileKey::new("b.ts")).unwrap())
+    .definitions_in_file(file_b)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Uses"))
     .expect("Uses alias present");
@@ -460,40 +430,16 @@ type Uses = Value;
 
 #[test]
 fn function_definition_exposes_signature() {
-  #[derive(Default)]
-  struct SigHost {
-    files: HashMap<FileKey, Arc<str>>,
-  }
-
-  impl SigHost {
-    fn insert(&mut self, file: FileKey, src: &str) {
-      self.files.insert(file, Arc::from(src.to_string()));
-    }
-  }
-
-  impl Host for SigHost {
-    fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
-      self
-        .files
-        .get(&file)
-        .cloned()
-        .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
-    }
-
-    fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
-      None
-    }
-  }
-
-  let mut host = SigHost::default();
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("file.ts");
   host.insert(
-    FileKey::new("entry.ts"),
+    file.clone(),
     "export function add(a: number, b: string): string { return a + b; }",
   );
-  let entry = FileKey::new("entry.ts");
-  let program = Program::new(host, vec![entry.clone()]);
+  let program = Program::new(host, vec![file.clone()]);
+  let file = program.file_id(&file).unwrap();
   let add_def = program
-    .definitions_in_file(program.file_id(&entry).unwrap())
+    .definitions_in_file(file)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition present");

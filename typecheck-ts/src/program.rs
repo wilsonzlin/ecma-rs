@@ -1,5 +1,7 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
+use ::semantic_js::ts::from_hir_js::lower_to_ts_hir;
+use ::semantic_js::ts::locals as sem_ts_locals;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, DefId as HirDefId,
   DefKind as HirDefKind, ExportKind as HirExportKind, FileKind as HirFileKind,
@@ -194,6 +196,16 @@ impl Host for MemoryHost {
 /// Public symbol identifier exposed through [`Program::symbol_at`].
 pub mod semantic_js {
   /// Opaque symbol identifier.
+  ///
+  /// [`Program::symbol_at`] returns identifiers derived from
+  /// `semantic-js`'s deterministic local binder. Top-level bindings are
+  /// normalized to the program's own module-level symbols (used for
+  /// exports/imports) so cross-file references share identifiers. Other locals
+  /// receive stable, program-scoped identifiers that may not have a global
+  /// [`semantic_js::ts::SymbolId`] counterpart; the `From` conversions simply
+  /// re-wrap the underlying numeric ID and are meaningful only when the values
+  /// originate from the same program (e.g. when relating `symbol_at` results to
+  /// `semantic-js` module semantics).
   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
   #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
   pub struct SymbolId(pub u64);
@@ -768,7 +780,9 @@ impl Program {
     offset: u32,
   ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
     self.with_analyzed_state(|state| {
-      state.ensure_symbols_for_file(file);
+      if !state.ensure_ts_locals(file, &self.host)? {
+        return Ok(None);
+      }
       Ok(state.symbol_at(file, offset))
     })
   }
@@ -2184,8 +2198,10 @@ struct ProgramState {
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_data: HashMap<BodyId, BodyData>,
-  hir_lowered: HashMap<FileId, LowerResult>,
-  sem_hir: HashMap<FileId, sem_ts::HirFile>,
+  hir_lowered: HashMap<FileId, Arc<LowerResult>>,
+  sem_hir: HashMap<FileId, Arc<sem_ts::HirFile>>,
+  ts_locals: HashMap<FileId, sem_ts_locals::TsLocalSemantics>,
+  local_symbol_map: HashMap<FileId, HashMap<sem_ts_locals::SymbolId, semantic_js::SymbolId>>,
   semantics: Option<sem_ts::TsProgramSemantics>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
@@ -2203,7 +2219,7 @@ struct ProgramState {
   query_stats: QueryStatsCollector,
   next_def: u32,
   next_body: u32,
-  next_symbol: u32,
+  next_symbol: u64,
   type_stack: Vec<DefId>,
 }
 
@@ -2231,6 +2247,8 @@ impl ProgramState {
       body_data: HashMap::new(),
       hir_lowered: HashMap::new(),
       sem_hir: HashMap::new(),
+      ts_locals: HashMap::new(),
+      local_symbol_map: HashMap::new(),
       semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
@@ -2377,7 +2395,7 @@ impl ProgramState {
         span.finish(None);
       }
       match parsed {
-        Ok(ast) => {
+        Ok(mut ast) => {
           let (lowered, lower_diags) = lower_hir_with_diagnostics(
             file,
             match file_kind {
@@ -2390,8 +2408,12 @@ impl ProgramState {
             &ast,
           );
           self.diagnostics.extend(lower_diags);
+          let lowered = Arc::new(lowered);
           self.hir_lowered.insert(file, lowered.clone());
-          let sem_hir = sem_hir_from_lower(&lowered);
+          let sem_hir = Arc::new(lower_to_ts_hir(&ast, lowered.as_ref()));
+          let is_module = matches!(sem_hir.module_kind, sem_ts::ModuleKind::Module);
+          let locals = sem_ts_locals::bind_ts_locals(&mut ast, file, is_module);
+          self.ts_locals.insert(file, locals);
           self.sem_hir.insert(file, sem_hir);
           let lower_span = QuerySpan::enter(
             QueryKind::LowerHir,
@@ -2558,10 +2580,14 @@ impl ProgramState {
       self.lib_texts.insert(*id, lib.text.clone());
       let parsed = parse_file(*id, FileKind::Dts, lib.text.as_ref());
       match parsed {
-        Ok(ast) => {
+        Ok(mut ast) => {
           let (lowered, lower_diags) = lower_hir_with_diagnostics(*id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
-          let sem_hir = sem_hir_from_lower(&lowered);
+          let lowered = Arc::new(lowered);
+          let sem_hir = Arc::new(lower_to_ts_hir(&ast, lowered.as_ref()));
+          let is_module = matches!(sem_hir.module_kind, sem_ts::ModuleKind::Module);
+          let locals = sem_ts_locals::bind_ts_locals(&mut ast, *id, is_module);
+          self.ts_locals.insert(*id, locals);
           self.hir_lowered.insert(*id, lowered);
           self.sem_hir.insert(*id, sem_hir);
         }
@@ -2658,28 +2684,23 @@ impl ProgramState {
     sem_roots.dedup();
     let (semantics, diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file| {
       let id = FileId(file.0);
-      self
-        .sem_hir
-        .get(&id)
-        .cloned()
-        .map(Arc::new)
-        .unwrap_or_else(|| {
-          let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
-            sem_ts::FileKind::Dts
-          } else {
-            sem_ts::FileKind::Ts
-          };
-          Arc::new(sem_ts::HirFile {
-            file_id: file,
-            module_kind: sem_ts::ModuleKind::Module,
-            file_kind,
-            decls: Vec::new(),
-            imports: Vec::new(),
-            exports: Vec::new(),
-            export_as_namespace: Vec::new(),
-            ambient_modules: Vec::new(),
-          })
+      self.sem_hir.get(&id).cloned().unwrap_or_else(|| {
+        let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
+          sem_ts::FileKind::Dts
+        } else {
+          sem_ts::FileKind::Ts
+        };
+        Arc::new(sem_ts::HirFile {
+          file_id: file,
+          module_kind: sem_ts::ModuleKind::Module,
+          file_kind,
+          decls: Vec::new(),
+          imports: Vec::new(),
+          exports: Vec::new(),
+          export_as_namespace: Vec::new(),
+          ambient_modules: Vec::new(),
         })
+      })
     });
     self.push_semantic_diagnostics(diags);
     self.semantics = Some(semantics);
@@ -3034,6 +3055,18 @@ impl ProgramState {
           self.def_types.insert(def_id, ty);
           defs.push(def_id);
           self.record_symbol(file, span.range, symbol);
+          bindings
+            .entry(name.clone())
+            .and_modify(|binding| {
+              binding.symbol = symbol;
+              binding.def = Some(def_id);
+              binding.type_id = Some(ty);
+            })
+            .or_insert(SymbolBinding {
+              symbol,
+              def: Some(def_id),
+              type_id: Some(ty),
+            });
           sem_builder.add_decl(
             def_id,
             name.clone(),
@@ -3249,6 +3282,7 @@ impl ProgramState {
                 }),
               },
             );
+            self.record_def_symbol(def_id, symbol);
             defs.push(def_id);
             bindings.insert(
               alias_name.clone(),
@@ -3385,7 +3419,7 @@ impl ProgramState {
     self
       .sem_hir
       .entry(file)
-      .or_insert_with(|| sem_builder.finish());
+      .or_insert_with(|| Arc::new(sem_builder.finish()));
     self.files.insert(
       file,
       FileState {
@@ -4730,45 +4764,180 @@ impl ProgramState {
     map
   }
 
-  fn ensure_symbols_for_file(&mut self, file: FileId) {
-    if let Some(state) = self.files.get(&file).cloned() {
-      if let Some(body) = state.top_body {
-        let _ = self.check_body(body);
+  fn ensure_ts_locals(&mut self, file: FileId, host: &Arc<dyn Host>) -> Result<bool, FatalError> {
+    if self.ts_locals.contains_key(&file) {
+      return Ok(true);
+    }
+    let file_kind = match self.file_kinds.get(&file).copied() {
+      Some(kind) => kind,
+      None => {
+        let kind = self
+          .host_key(file)
+          .as_ref()
+          .map(|key| host.file_kind(key))
+          .unwrap_or(FileKind::Ts);
+        self.file_kinds.insert(file, kind);
+        kind
       }
-      for def in state.defs.iter() {
-        if let Some(body) = self.body_of_def(*def) {
-          let _ = self.check_body(body);
+    };
+    let text = self.load_text(file, host)?;
+    let mut ast = match parse_file(file, file_kind, &text) {
+      Ok(ast) => ast,
+      Err(err) => {
+        self.diagnostics.push(err);
+        return Ok(false);
+      }
+    };
+    let hir_kind = match file_kind {
+      FileKind::Dts => HirFileKind::Dts,
+      FileKind::Js => HirFileKind::Js,
+      FileKind::Jsx => HirFileKind::Jsx,
+      FileKind::Ts => HirFileKind::Ts,
+      FileKind::Tsx => HirFileKind::Tsx,
+    };
+    let (lowered, lower_diags) = lower_hir_with_diagnostics(file, hir_kind, &ast);
+    self.diagnostics.extend(lower_diags);
+    let lowered = Arc::new(lowered);
+    let sem_hir = Arc::new(lower_to_ts_hir(&ast, lowered.as_ref()));
+    let is_module = matches!(sem_hir.module_kind, sem_ts::ModuleKind::Module);
+    let locals = sem_ts_locals::bind_ts_locals(&mut ast, file, is_module);
+    self.ts_locals.insert(file, locals);
+    self.hir_lowered.entry(file).or_insert(lowered);
+    self.sem_hir.entry(file).or_insert(sem_hir);
+    Ok(true)
+  }
+
+  fn ensure_local_symbol_map(&mut self, file: FileId) {
+    if self.local_symbol_map.contains_key(&file) {
+      return;
+    }
+    let Some(locals) = self.ts_locals.get(&file) else {
+      return;
+    };
+    let mut map = HashMap::new();
+    // Bind the file's root scope locals to the same program-level symbols we
+    // use for module exports/imports so top-level references stay consistent
+    // across files. Other locals are assigned stable, program-scoped IDs.
+    let root_scope = locals.root_scope();
+    for symbol in locals.symbols.values() {
+      if symbol.decl_scope == root_scope {
+        if let Some(binding) = self.binding_symbol_for_local(file, locals, symbol) {
+          map.insert(symbol.id, binding);
         }
       }
     }
+    let symbol_ids: Vec<_> = locals.symbols.keys().copied().collect();
+    for symbol in symbol_ids {
+      map.entry(symbol).or_insert_with(|| self.alloc_symbol());
+    }
+    self.local_symbol_map.insert(file, map);
+  }
+
+  fn binding_symbol_for_local(
+    &self,
+    file: FileId,
+    locals: &sem_ts_locals::TsLocalSemantics,
+    symbol: &sem_ts_locals::SymbolData,
+  ) -> Option<semantic_js::SymbolId> {
+    if symbol.decl_scope != locals.root_scope() {
+      return None;
+    }
+    let name = locals.names.get(&symbol.name)?;
+    self
+      .files
+      .get(&file)
+      .and_then(|f| f.bindings.get(name).map(|b| b.symbol))
   }
 
   fn symbol_at(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
-    let occurrences = self.symbol_occurrences.get(&file)?;
-    let mut best_containing: Option<(u32, u32, semantic_js::SymbolId)> = None;
-    let mut best_empty: Option<(u32, u32, semantic_js::SymbolId)> = None;
+    let span_map = {
+      let lowered = self.hir_lowered.get(&file)?;
+      lowered.hir.span_map.clone()
+    };
 
-    for occurrence in occurrences.iter() {
-      let range = occurrence.range;
-      let len = range.len();
-      let key = (len, range.start, occurrence.symbol);
-      if range.start <= offset && offset < range.end {
-        let replace = best_containing.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_containing = Some(key);
+    let local_symbol = {
+      let locals = self.ts_locals.get(&file)?;
+
+      #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+      enum CandidateKind {
+        TypeExpr,
+        Expr,
+        Pat,
+        ImportSpecifier,
+        ExportSpecifier,
+      }
+
+      impl CandidateKind {
+        fn rank(self) -> u8 {
+          match self {
+            CandidateKind::TypeExpr => 0,
+            CandidateKind::Expr => 1,
+            CandidateKind::Pat => 2,
+            CandidateKind::ImportSpecifier => 3,
+            CandidateKind::ExportSpecifier => 4,
+          }
         }
-      } else if range.start == range.end && offset == range.start {
-        let replace = best_empty.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_empty = Some(key);
+
+        fn resolve(
+          self,
+          locals: &sem_ts_locals::TsLocalSemantics,
+          span: TextRange,
+        ) -> Option<sem_ts_locals::SymbolId> {
+          match self {
+            CandidateKind::TypeExpr => locals.resolve_type_span(span),
+            CandidateKind::Expr
+            | CandidateKind::Pat
+            | CandidateKind::ImportSpecifier
+            | CandidateKind::ExportSpecifier => locals.resolve_expr_span(span),
+          }
         }
       }
-    }
 
-    let symbol = best_containing
-      .or(best_empty)
-      .map(|(_, _, symbol)| symbol)?;
+      let mut candidates: Vec<(CandidateKind, TextRange)> = Vec::new();
+      if let Some((_, span)) = span_map.type_expr_span_at_offset(offset) {
+        candidates.push((CandidateKind::TypeExpr, span));
+      }
+      if let Some((_, span)) = span_map.expr_span_at_offset(offset) {
+        candidates.push((CandidateKind::Expr, span));
+      }
+      if let Some((_, span)) = span_map.pat_span_at_offset(offset) {
+        candidates.push((CandidateKind::Pat, span));
+      }
+      if let Some((_, span)) = span_map.import_specifier_span_at_offset(offset) {
+        candidates.push((CandidateKind::ImportSpecifier, span));
+      }
+      if let Some((_, span)) = span_map.export_specifier_span_at_offset(offset) {
+        candidates.push((CandidateKind::ExportSpecifier, span));
+      }
+
+      candidates.sort_by_key(|(kind, span)| (span.len(), span.start, kind.rank(), span.end));
+
+      candidates
+        .into_iter()
+        .find_map(|(kind, span)| kind.resolve(locals, span))
+        .or_else(|| locals.resolve_type_at_offset(offset).map(|(_, sym)| sym))
+        .or_else(|| locals.resolve_expr_at_offset(offset).map(|(_, sym)| sym))
+    }?;
+
+    let symbol = self.map_local_symbol(file, local_symbol)?;
     Some(self.resolve_symbol(symbol))
+  }
+
+  fn map_local_symbol(
+    &mut self,
+    file: FileId,
+    local_symbol: sem_ts_locals::SymbolId,
+  ) -> Option<semantic_js::SymbolId> {
+    self.ensure_local_symbol_map(file);
+    if let Some(map) = self.local_symbol_map.get(&file) {
+      if let Some(symbol) = map.get(&local_symbol).copied() {
+        return Some(symbol);
+      }
+    }
+    let symbol = self.alloc_symbol();
+    let map = self.local_symbol_map.get_mut(&file)?;
+    map.insert(local_symbol, symbol);
+    Some(symbol)
   }
 
   fn resolve_symbol(&mut self, symbol: semantic_js::SymbolId) -> semantic_js::SymbolId {

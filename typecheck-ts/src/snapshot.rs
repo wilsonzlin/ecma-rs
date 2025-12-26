@@ -76,5 +76,5 @@ pub struct ProgramSnapshot {
   pub builtin: BuiltinTypes,
   pub next_def: u32,
   pub next_body: u32,
-  pub next_symbol: u32,
+  pub next_symbol: u64,
 }
