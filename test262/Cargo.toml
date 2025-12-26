@@ -4,7 +4,16 @@ version = "0.0.1"
 edition = "2021"
 
 [dependencies]
+anyhow = "1.0"
 clap = { version = "4.0.32", features = ["derive"] }
 diagnostics = { path = "../diagnostics" }
+globset = "0.4"
 parse-js = { path = "../parse-js", features = ["diagnostics"] }
 rayon = "1.6"
+regex = "1.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3.12"

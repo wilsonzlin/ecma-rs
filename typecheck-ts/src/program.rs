@@ -33,8 +33,8 @@ use std::time::Instant;
 use tracing::debug_span;
 use types_ts_interned::{self as tti, TypeId, TypeOptions, TypeParamId};
 
-use crate::codes;
 use crate::check::caches::{CheckerCacheStats, CheckerCaches};
+use crate::codes;
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
@@ -410,6 +410,17 @@ impl Program {
     }
   }
 
+  /// Compiler options used by this program.
+  pub fn compiler_options(&self) -> CompilerOptions {
+    match self.with_analyzed_state(|state| Ok(state.compiler_options.clone())) {
+      Ok(opts) => opts,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        CompilerOptions::default()
+      }
+    }
+  }
+
   /// Parse, bind, and type-check all known files, returning accumulated diagnostics.
   pub fn check(&self) -> Vec<Diagnostic> {
     match self.check_fallible() {
@@ -599,6 +610,17 @@ impl Program {
       state.ensure_symbols_for_file(file);
       Ok(state.symbol_at(file, offset))
     })
+  }
+
+  /// Symbol metadata if available (def, file, type, name).
+  pub fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
+    match self.with_analyzed_state(|state| Ok(state.symbol_info(symbol))) {
+      Ok(info) => info,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
   }
 
   /// Innermost expression covering an offset within a file.
@@ -1277,6 +1299,17 @@ pub struct SymbolBinding {
   pub symbol: semantic_js::SymbolId,
   pub def: Option<DefId>,
   pub type_id: Option<TypeId>,
+}
+
+/// Symbol metadata exposed via [`Program::symbol_info`].
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct SymbolInfo {
+  pub symbol: semantic_js::SymbolId,
+  pub def: Option<DefId>,
+  pub file: Option<FileId>,
+  pub type_id: Option<TypeId>,
+  pub name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -3315,9 +3348,7 @@ impl ProgramState {
         body_caches.relation.clone(),
       );
       for (idx, _) in body.expr_spans.iter().enumerate() {
-        let lit = store.intern_type(tti::TypeKind::NumberLiteral(OrderedFloat::from(
-          idx as f64,
-        )));
+        let lit = store.intern_type(tti::TypeKind::NumberLiteral(OrderedFloat::from(idx as f64)));
         let _ = relate.is_assignable(lit, primitives.number);
       }
     }
@@ -4058,7 +4089,10 @@ impl ProgramState {
       } => self.branch_returns(consequent) && self.branch_returns(alternate),
       HirStmt::Switch { cases, .. } => {
         let has_default = cases.iter().any(|case| case.test.is_none());
-        has_default && cases.iter().all(|case| self.branch_returns(&case.consequent))
+        has_default
+          && cases
+            .iter()
+            .all(|case| self.branch_returns(&case.consequent))
       }
       _ => false,
     })
@@ -4107,6 +4141,15 @@ impl ProgramState {
   fn is_assignable(&self, src: TypeId, dst: TypeId) -> bool {
     if src == dst || dst == self.builtin.any || src == self.builtin.never {
       return true;
+    }
+    if !self.compiler_options.strict_null_checks {
+      let src_kind = self.type_store.kind(src);
+      let dst_kind = self.type_store.kind(dst);
+      if matches!(src_kind, TypeKind::Null | TypeKind::Undefined)
+        || matches!(dst_kind, TypeKind::Null | TypeKind::Undefined)
+      {
+        return true;
+      }
     }
     let src_kind = self.type_store.kind(src).clone();
     let dst_kind = self.type_store.kind(dst).clone();
@@ -4386,6 +4429,41 @@ impl ProgramState {
   fn resolve_import_symbol(&mut self, import: &ImportData) -> Option<semantic_js::SymbolId> {
     let exports = self.exports_of_file(import.from);
     exports.get(&import.original).map(|entry| entry.symbol)
+  }
+
+  fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
+    let binding = self
+      .global_bindings
+      .iter()
+      .find(|(_, binding)| binding.symbol == symbol);
+
+    let def = self
+      .symbol_to_def
+      .get(&symbol)
+      .copied()
+      .or_else(|| binding.as_ref().and_then(|(_, b)| b.def));
+    let type_id = def
+      .and_then(|def_id| self.def_types.get(&def_id).copied())
+      .or_else(|| binding.as_ref().and_then(|(_, b)| b.type_id));
+    let mut name = def
+      .and_then(|def_id| self.def_data.get(&def_id).map(|data| data.name.clone()))
+      .or_else(|| binding.as_ref().map(|(name, _)| name.to_string()));
+    let file = def.and_then(|def_id| self.def_data.get(&def_id).map(|data| data.file));
+
+    if def.is_none() && type_id.is_none() && name.is_none() {
+      return None;
+    }
+    if name.is_none() {
+      name = binding.as_ref().map(|(name, _)| name.to_string());
+    }
+
+    Some(SymbolInfo {
+      symbol,
+      def,
+      file,
+      type_id,
+      name,
+    })
   }
 
   fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {

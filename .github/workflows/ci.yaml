@@ -110,3 +110,35 @@ jobs:
         with:
           name: difftsc-report
           path: difftsc-report.json
+
+  test262-parser:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch test262 parser tests corpus
+        run: git submodule update --init test262/data
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Run test262 parser tests
+        run: |
+          mkdir -p reports
+          cargo run -p test262 --release --locked -- \
+            --data-dir test262/data \
+            --manifest test262/manifest.toml \
+            --report-path reports/test262-parser-report.json \
+            --fail-on new
+
+      - name: Upload test262 parser report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test262-parser-report
+          path: reports/test262-parser-report.json
