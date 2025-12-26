@@ -56,6 +56,7 @@ use check::legacy_narrow::{
   narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
 };
 
+use crate::lib_support::lib_env::{prepare_lib, PreparedLib};
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
 
 /// Environment provider for [`Program`].
@@ -2167,8 +2168,8 @@ struct ProgramState {
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_data: HashMap<BodyId, BodyData>,
-  hir_lowered: HashMap<FileId, LowerResult>,
-  sem_hir: HashMap<FileId, sem_ts::HirFile>,
+  hir_lowered: HashMap<FileId, Arc<LowerResult>>,
+  sem_hir: HashMap<FileId, Arc<sem_ts::HirFile>>,
   semantics: Option<sem_ts::TsProgramSemantics>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
@@ -2256,7 +2257,7 @@ impl ProgramState {
       return Ok(());
     }
     let libs = self.collect_libraries(host.as_ref());
-    let lib_ids: Vec<FileId> = libs.iter().map(|l| l.id).collect();
+    let lib_ids: Vec<FileId> = libs.iter().map(|l| l.file.id).collect();
     let lib_id_set: HashSet<FileId> = lib_ids.iter().copied().collect();
     self.process_libs(&libs);
     let mut queue: BTreeSet<FileId> = roots.iter().copied().collect();
@@ -2309,8 +2310,9 @@ impl ProgramState {
             &ast,
           );
           self.diagnostics.extend(lower_diags);
-          let sem_hir = lower_to_ts_hir(&ast, &lowered);
-          self.hir_lowered.insert(file, lowered);
+          let lowered = Arc::new(lowered);
+          self.hir_lowered.insert(file, lowered.clone());
+          let sem_hir = Arc::new(lower_to_ts_hir(&ast, lowered.as_ref()));
           self.sem_hir.insert(file, sem_hir);
           let lower_span = QuerySpan::enter(
             QueryKind::LowerHir,
@@ -2384,6 +2386,7 @@ impl ProgramState {
       if cancelled.load(Ordering::Relaxed) {
         return Err(FatalError::Cancelled);
       }
+      let lowered = lowered.as_ref();
       let mut def_map: HashMap<DefId, DefId> = HashMap::new();
       let mut local_defs: HashMap<String, HirDefId> = HashMap::new();
       for def in lowered.defs.iter() {
@@ -2490,19 +2493,13 @@ impl ProgramState {
     Ok(())
   }
 
-  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<LibFile> {
+  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<PreparedLib> {
     let options = host.compiler_options();
     self.compiler_options = options.clone();
     self.checker_caches = CheckerCaches::new(options.cache.clone());
     self.cache_stats = CheckerCacheStats::default();
-    let mut libs = host.lib_files();
-    if !options.no_default_lib {
-      let bundled = self.lib_manager.bundled_libs(&options);
-      libs.extend(bundled.files);
-    }
-
-    let mut dts_libs = Vec::new();
-    for lib in libs.into_iter() {
+    let mut prepared_libs = Vec::new();
+    for lib in host.lib_files() {
       let is_dts = lib.kind == FileKind::Dts || lib.name.ends_with(".d.ts");
       if !is_dts {
         self.diagnostics.push(codes::NON_DTS_LIB.warning(
@@ -2514,11 +2511,14 @@ impl ProgramState {
         ));
         continue;
       }
-      self.file_kinds.insert(lib.id, FileKind::Dts);
-      dts_libs.push(lib);
+      prepared_libs.push(prepare_lib(lib));
+    }
+    if !options.no_default_lib {
+      let bundled = self.lib_manager.bundled_libs(&options);
+      prepared_libs.extend(bundled.libs().iter().cloned());
     }
 
-    if dts_libs.is_empty() {
+    if prepared_libs.is_empty() {
       self
         .diagnostics
         .push(codes::NO_LIBS_LOADED.error(
@@ -2527,24 +2527,19 @@ impl ProgramState {
         ));
     }
 
-    dts_libs
+    prepared_libs
   }
 
-  fn process_libs(&mut self, libs: &[LibFile]) {
+  fn process_libs(&mut self, libs: &[PreparedLib]) {
     for lib in libs {
-      self.lib_texts.insert(lib.id, lib.text.clone());
-      let parsed = parse_file(lib.id, FileKind::Dts, lib.text.as_ref());
-      match parsed {
-        Ok(ast) => {
-          let (lowered, lower_diags) = lower_hir_with_diagnostics(lib.id, HirFileKind::Dts, &ast);
-          self.diagnostics.extend(lower_diags);
-          let sem_hir = lower_to_ts_hir(&ast, &lowered);
-          self.hir_lowered.insert(lib.id, lowered);
-          self.sem_hir.insert(lib.id, sem_hir);
-        }
-        Err(err) => {
-          self.diagnostics.push(err);
-        }
+      self.file_kinds.entry(lib.file.id).or_insert(FileKind::Dts);
+      self.lib_texts.insert(lib.file.id, lib.file.text.clone());
+      self.diagnostics.extend(lib.diagnostics.iter().cloned());
+      if let Some(lowered) = &lib.lowered {
+        self.hir_lowered.insert(lib.file.id, lowered.clone());
+      }
+      if let Some(sem_hir) = &lib.sem_hir {
+        self.sem_hir.insert(lib.file.id, sem_hir.clone());
       }
     }
   }
@@ -2601,28 +2596,23 @@ impl ProgramState {
     sem_roots.dedup();
     let (semantics, diags) = sem_ts::bind_ts_program(&sem_roots, &resolver, |file| {
       let id = FileId(file.0);
-      self
-        .sem_hir
-        .get(&id)
-        .cloned()
-        .map(Arc::new)
-        .unwrap_or_else(|| {
-          let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
-            sem_ts::FileKind::Dts
-          } else {
-            sem_ts::FileKind::Ts
-          };
-          Arc::new(sem_ts::HirFile {
-            file_id: file,
-            module_kind: sem_ts::ModuleKind::Module,
-            file_kind,
-            decls: Vec::new(),
-            imports: Vec::new(),
-            exports: Vec::new(),
-            export_as_namespace: Vec::new(),
-            ambient_modules: Vec::new(),
-          })
+      self.sem_hir.get(&id).cloned().unwrap_or_else(|| {
+        let file_kind = if self.file_kinds.get(&id) == Some(&FileKind::Dts) {
+          sem_ts::FileKind::Dts
+        } else {
+          sem_ts::FileKind::Ts
+        };
+        Arc::new(sem_ts::HirFile {
+          file_id: file,
+          module_kind: sem_ts::ModuleKind::Module,
+          file_kind,
+          decls: Vec::new(),
+          imports: Vec::new(),
+          exports: Vec::new(),
+          export_as_namespace: Vec::new(),
+          ambient_modules: Vec::new(),
         })
+      })
     });
     self.push_semantic_diagnostics(diags);
     self.semantics = Some(semantics);
@@ -3370,7 +3360,7 @@ impl ProgramState {
     self
       .sem_hir
       .entry(file)
-      .or_insert_with(|| sem_builder.finish());
+      .or_insert_with(|| Arc::new(sem_builder.finish()));
     self.files.insert(
       file,
       FileState {

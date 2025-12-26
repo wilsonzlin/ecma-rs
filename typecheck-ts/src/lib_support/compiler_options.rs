@@ -223,7 +223,7 @@ impl LibName {
 
 /// Ordered set of libs to load.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct LibSet {
   libs: Vec<LibName>,
 }

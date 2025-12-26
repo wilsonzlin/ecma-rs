@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use typecheck_ts::codes;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
-use typecheck_ts::{FileId, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibManager};
+use typecheck_ts::{
+  FileId, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary,
+};
 
 const PROMISE_DOM: &str = include_str!("fixtures/promise_dom.ts");
 const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
@@ -317,5 +319,46 @@ fn bundled_libs_enable_dom_and_promise_fixture() {
   assert!(
     program.symbol_at(FileId(0), document_offset).is_some(),
     "DOM globals should resolve to symbols"
+  );
+}
+
+#[test]
+fn lib_manager_caches_and_invalidates_on_option_change() {
+  let manager = Arc::new(LibManager::new());
+
+  let host = TestHost::new(CompilerOptions::default()).with_file(FileId(0), "/* first */");
+  let program = Program::with_lib_manager(host, vec![FileId(0)], Arc::clone(&manager));
+  program.check();
+  let first_stats = manager.stats();
+  assert_eq!(
+    first_stats.cache_misses, 1,
+    "initial load should populate the cache"
+  );
+  assert_eq!(first_stats.cache_hits, 0, "first load cannot be a hit");
+
+  let host_again = TestHost::new(CompilerOptions::default()).with_file(FileId(1), "/* second */");
+  let program_again = Program::with_lib_manager(host_again, vec![FileId(1)], Arc::clone(&manager));
+  program_again.check();
+  let second_stats = manager.stats();
+  assert_eq!(
+    second_stats.cache_hits, 1,
+    "second program should reuse cached bundled libs"
+  );
+  assert_eq!(
+    second_stats.cache_misses, 1,
+    "cache should not be recomputed when options match"
+  );
+
+  let mut changed_options = CompilerOptions::default();
+  changed_options.strict_null_checks = false;
+  let host_changed =
+    TestHost::new(changed_options).with_file(FileId(2), "/* third (options changed) */");
+  let program_changed =
+    Program::with_lib_manager(host_changed, vec![FileId(2)], Arc::clone(&manager));
+  program_changed.check();
+  let final_stats = manager.stats();
+  assert_eq!(
+    final_stats.cache_misses, 2,
+    "changing type-affecting options should invalidate bundled lib cache"
   );
 }
