@@ -24,6 +24,8 @@ const SHAPE_DOMAIN: u64 = 0x7368_6170;
 const OBJECT_DOMAIN: u64 = 0x6f62_6a65;
 const NAME_DOMAIN: u64 = 0x6e61_6d65;
 
+type FingerprintFn = fn(u128, u64, u64) -> u128;
+
 fn stable_state(domain: u64) -> RandomState {
   RandomState::with_seeds(
     HASH_KEY1 ^ domain,
@@ -42,11 +44,17 @@ fn stable_hash64<T: Hash>(value: &T, domain: u64, salt: u64) -> u64 {
 
 /// Produce a 128-bit fingerprint for a value using domain-separated, stable
 /// hashing. Two hashes are mixed to virtually eliminate collisions without
-/// relying on insertion order.
-fn fingerprint<T: Hash>(value: &T, domain: u64) -> u128 {
-  let primary = stable_hash64(value, domain, 0);
-  let secondary = stable_hash64(value, domain, 1);
+/// relying on insertion order. An explicit salt is used so that callers can
+/// deterministically rehash to resolve collisions.
+fn fingerprint<T: Hash>(value: &T, domain: u64, salt: u64) -> u128 {
+  let base_salt = salt.wrapping_mul(2);
+  let primary = stable_hash64(value, domain, base_salt);
+  let secondary = stable_hash64(value, domain, base_salt.wrapping_add(1));
   ((primary as u128) << 64) | secondary as u128
+}
+
+fn default_fingerprint(raw: u128, _domain: u64, _salt: u64) -> u128 {
+  raw
 }
 
 #[derive(Default, Debug)]
@@ -122,6 +130,7 @@ pub struct TypeStore {
   objects: DashMap<ObjectId, ObjectType, RandomState>,
   names: RwLock<NameInterner>,
   signatures: DashMap<SignatureId, Signature, RandomState>,
+  fingerprint_fn: FingerprintFn,
   options: TypeOptions,
   primitives: PrimitiveIds,
 }
@@ -147,12 +156,20 @@ impl TypeStore {
   }
 
   pub fn with_options(options: TypeOptions) -> Arc<Self> {
+    Self::with_options_and_fingerprint(options, default_fingerprint)
+  }
+
+  fn with_options_and_fingerprint(
+    options: TypeOptions,
+    fingerprint_fn: FingerprintFn,
+  ) -> Arc<Self> {
     let mut store = Self {
       types: Self::new_dashmap(TYPE_DOMAIN),
       shapes: Self::new_dashmap(SHAPE_DOMAIN),
       objects: Self::new_dashmap(OBJECT_DOMAIN),
       names: Default::default(),
       signatures: Self::new_dashmap(SIGNATURE_DOMAIN),
+      fingerprint_fn,
       options,
       primitives: PrimitiveIds {
         any: TypeId(0),
@@ -188,23 +205,59 @@ impl TypeStore {
     Arc::new(store)
   }
 
-  fn make_type_id(kind: &TypeKind) -> TypeId {
-    TypeId(fingerprint(kind, TYPE_DOMAIN))
+  fn fingerprint_value<T: Hash>(&self, value: &T, domain: u64, salt: u64) -> u128 {
+    (self.fingerprint_fn)(fingerprint(value, domain, salt), domain, salt)
   }
 
-  fn make_signature_id(sig: &Signature) -> SignatureId {
-    SignatureId(fingerprint(sig, SIGNATURE_DOMAIN))
+  fn make_type_id(&self, kind: &TypeKind, salt: u64) -> TypeId {
+    TypeId(self.fingerprint_value(kind, TYPE_DOMAIN, salt))
   }
 
-  fn make_shape_id(shape: &Shape) -> ShapeId {
-    ShapeId(fingerprint(shape, SHAPE_DOMAIN))
+  fn make_signature_id(&self, sig: &Signature, salt: u64) -> SignatureId {
+    SignatureId(self.fingerprint_value(sig, SIGNATURE_DOMAIN, salt))
   }
 
-  fn make_object_id(object: &ObjectType) -> ObjectId {
-    ObjectId(fingerprint(object, OBJECT_DOMAIN))
+  fn make_shape_id(&self, shape: &Shape, salt: u64) -> ShapeId {
+    ShapeId(self.fingerprint_value(shape, SHAPE_DOMAIN, salt))
   }
 
-  fn insert_with_id<T: Clone + Eq, Id: Copy + Eq + Hash + std::fmt::Debug>(
+  fn make_object_id(&self, object: &ObjectType, salt: u64) -> ObjectId {
+    ObjectId(self.fingerprint_value(object, OBJECT_DOMAIN, salt))
+  }
+
+  /// Insert a value keyed by a fingerprint-derived ID, retrying with an
+  /// incremented salt when an occupied entry holds a different value. This
+  /// mirrors `NameInterner::intern` but is safe to call from multiple threads.
+  fn insert_with_collision<T, Id, MakeId>(
+    map: &DashMap<Id, T, RandomState>,
+    value: T,
+    _kind: &str,
+    mut make_id: MakeId,
+  ) -> Id
+  where
+    T: Eq,
+    Id: Copy + Eq + Hash + std::fmt::Debug,
+    MakeId: FnMut(&T, u64) -> Id,
+  {
+    let mut salt = 0u64;
+    loop {
+      let id = make_id(&value, salt);
+      match map.entry(id) {
+        Entry::Occupied(entry) => {
+          if entry.get() == &value {
+            return id;
+          }
+          salt = salt.wrapping_add(1);
+        }
+        Entry::Vacant(entry) => {
+          entry.insert(value);
+          return id;
+        }
+      }
+    }
+  }
+
+  fn insert_with_expected_id<T: Eq, Id: Copy + Eq + Hash + std::fmt::Debug>(
     map: &DashMap<Id, T, RandomState>,
     id: Id,
     value: T,
@@ -225,23 +278,27 @@ impl TypeStore {
   }
 
   fn insert_type_direct(&self, kind: TypeKind) -> TypeId {
-    let id = Self::make_type_id(&kind);
-    Self::insert_with_id(&self.types, id, kind, "type")
+    Self::insert_with_collision(&self.types, kind, "type", |value, salt| {
+      self.make_type_id(value, salt)
+    })
   }
 
   fn insert_signature_direct(&self, sig: Signature) -> SignatureId {
-    let id = Self::make_signature_id(&sig);
-    Self::insert_with_id(&self.signatures, id, sig, "signature")
+    Self::insert_with_collision(&self.signatures, sig, "signature", |value, salt| {
+      self.make_signature_id(value, salt)
+    })
   }
 
   fn insert_shape_direct(&self, shape: Shape) -> ShapeId {
-    let id = Self::make_shape_id(&shape);
-    Self::insert_with_id(&self.shapes, id, shape, "shape")
+    Self::insert_with_collision(&self.shapes, shape, "shape", |value, salt| {
+      self.make_shape_id(value, salt)
+    })
   }
 
   fn insert_object_direct(&self, object: ObjectType) -> ObjectId {
-    let id = Self::make_object_id(&object);
-    Self::insert_with_id(&self.objects, id, object, "object")
+    Self::insert_with_collision(&self.objects, object, "object", |value, salt| {
+      self.make_object_id(value, salt)
+    })
   }
 
   pub fn options(&self) -> TypeOptions {
@@ -319,6 +376,7 @@ impl TypeStore {
       objects: Self::new_dashmap(OBJECT_DOMAIN),
       names: Default::default(),
       signatures: Self::new_dashmap(SIGNATURE_DOMAIN),
+      fingerprint_fn: default_fingerprint,
       options,
       primitives,
     };
@@ -332,16 +390,16 @@ impl TypeStore {
     }
 
     for (id, kind) in types {
-      Self::insert_with_id(&store.types, id, kind, "type");
+      Self::insert_with_expected_id(&store.types, id, kind, "type");
     }
     for (id, shape) in shapes {
-      Self::insert_with_id(&store.shapes, id, shape, "shape");
+      Self::insert_with_expected_id(&store.shapes, id, shape, "shape");
     }
     for (id, object) in objects {
-      Self::insert_with_id(&store.objects, id, object, "object");
+      Self::insert_with_expected_id(&store.objects, id, object, "object");
     }
     for (id, sig) in signatures {
-      Self::insert_with_id(&store.signatures, id, sig, "signature");
+      Self::insert_with_expected_id(&store.signatures, id, sig, "signature");
     }
 
     debug_assert!(store.types.contains_key(&primitives.any));
@@ -1214,5 +1272,129 @@ impl<'de> Deserialize<'de> for TypeStore {
   {
     let snapshot = TypeStoreSnapshot::deserialize(deserializer)?;
     Ok(Self::from_snapshot_inner(snapshot))
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use ordered_float::OrderedFloat;
+  use std::collections::HashSet;
+  use std::sync::{Arc, Barrier};
+  use std::thread;
+
+  fn colliding_fingerprint(_: u128, domain: u64, salt: u64) -> u128 {
+    ((domain as u128) << 64) | salt as u128
+  }
+
+  #[test]
+  fn deterministic_rehash_on_collisions() {
+    let store =
+      TypeStore::with_options_and_fingerprint(TypeOptions::default(), colliding_fingerprint);
+    let primitives = store.primitive_ids();
+
+    let sig_a = store.intern_signature(Signature::new(
+      vec![Param {
+        name: None,
+        ty: primitives.boolean,
+        optional: false,
+        rest: false,
+      }],
+      primitives.number,
+    ));
+    let sig_b = store.intern_signature(Signature::new(
+      vec![Param {
+        name: None,
+        ty: primitives.string,
+        optional: true,
+        rest: false,
+      }],
+      primitives.boolean,
+    ));
+    assert_ne!(sig_a, sig_b);
+    assert_eq!(store.signature(sig_a).ret, primitives.number);
+    assert_eq!(store.signature(sig_b).ret, primitives.boolean);
+
+    let mut shape_a = Shape::new();
+    shape_a.call_signatures.push(sig_a);
+    let mut shape_b = Shape::new();
+    shape_b.call_signatures.push(sig_b);
+
+    let shape_a = store.intern_shape(shape_a);
+    let shape_b = store.intern_shape(shape_b);
+    assert_ne!(shape_a, shape_b);
+    assert_eq!(store.shape(shape_a).call_signatures, vec![sig_a]);
+    assert_eq!(store.shape(shape_b).call_signatures, vec![sig_b]);
+
+    let object_a = store.intern_object(ObjectType { shape: shape_a });
+    let object_b = store.intern_object(ObjectType { shape: shape_b });
+    assert_ne!(object_a, object_b);
+    assert_eq!(store.object(object_a).shape, shape_a);
+    assert_eq!(store.object(object_b).shape, shape_b);
+
+    let type_a = store.intern_type(TypeKind::Object(object_a));
+    let type_b = store.intern_type(TypeKind::Object(object_b));
+
+    assert_ne!(type_a, type_b);
+    assert_eq!(store.type_kind(type_a), TypeKind::Object(object_a));
+    assert_eq!(store.type_kind(type_b), TypeKind::Object(object_b));
+
+    let repeated = vec![
+      store.intern_signature(Signature::new(Vec::new(), primitives.number)),
+      store.intern_signature(Signature::new(Vec::new(), primitives.number)),
+    ];
+    assert_eq!(repeated[0], repeated[1]);
+
+    let ids: HashSet<_> = [type_a, type_b].into_iter().collect();
+    assert_eq!(ids.len(), 2);
+
+    let shapes: HashSet<_> = [shape_a, shape_b].into_iter().collect();
+    assert_eq!(shapes.len(), 2);
+
+    let objects: HashSet<_> = [object_a, object_b].into_iter().collect();
+    assert_eq!(objects.len(), 2);
+  }
+
+  #[test]
+  fn parallel_interning_retries_collisions() {
+    let store =
+      TypeStore::with_options_and_fingerprint(TypeOptions::default(), colliding_fingerprint);
+    let name = store.intern_name("parallel");
+
+    let kinds = vec![
+      TypeKind::BooleanLiteral(true),
+      TypeKind::NumberLiteral(OrderedFloat(1.0)),
+      TypeKind::StringLiteral(name),
+    ];
+
+    let barrier = Arc::new(Barrier::new(4));
+    let handles: Vec<_> = (0..4)
+      .map(|_| {
+        let store = Arc::clone(&store);
+        let barrier = barrier.clone();
+        let kinds = kinds.clone();
+        thread::spawn(move || {
+          barrier.wait();
+          kinds
+            .iter()
+            .map(|kind| store.intern_type(kind.clone()))
+            .collect::<Vec<_>>()
+        })
+      })
+      .collect();
+
+    let mut results = Vec::new();
+    for handle in handles {
+      results.push(handle.join().expect("thread panicked"));
+    }
+
+    let reference = results.first().expect("no thread results").clone();
+    for ids in results.iter().skip(1) {
+      assert_eq!(ids, &reference);
+    }
+
+    for (id, expected_kind) in reference.iter().zip(kinds.iter()) {
+      assert_eq!(store.type_kind(*id), expected_kind.clone());
+    }
   }
 }
