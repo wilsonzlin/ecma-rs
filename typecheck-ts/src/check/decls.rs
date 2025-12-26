@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::codes;
+use crate::Host;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   DefId as HirDefId, DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId,
@@ -16,7 +17,6 @@ use types_ts_interned::{
 };
 
 /// Lower HIR type expressions and declarations into interned types.
-#[derive(Debug)]
 pub struct HirDeclLowerer<'a, 'diag> {
   store: Arc<TypeStore>,
   arenas: &'a TypeArenas,
@@ -29,6 +29,7 @@ pub struct HirDeclLowerer<'a, 'diag> {
   type_param_names: HashMap<hir_js::NameId, TypeParamId>,
   def_map: Option<&'a HashMap<DefId, DefId>>,
   def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
+  host: Option<&'a dyn Host>,
 }
 
 impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
@@ -42,6 +43,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     diagnostics: &'diag mut Vec<Diagnostic>,
     def_map: Option<&'a HashMap<DefId, DefId>>,
     def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
+    host: Option<&'a dyn Host>,
   ) -> Self {
     Self {
       store,
@@ -55,6 +57,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       type_param_names: HashMap::new(),
       def_map,
       def_by_name,
+      host,
     }
   }
 
@@ -134,6 +137,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       TypeExprKind::Void => self.store.primitive_ids().void,
       TypeExprKind::Null => self.store.primitive_ids().null,
       TypeExprKind::Undefined => self.store.primitive_ids().undefined,
+      TypeExprKind::Object => {
+        let shape = Shape::new();
+        let shape_id = self.store.intern_shape(shape);
+        let obj = self.store.intern_object(ObjectType { shape: shape_id });
+        self.store.intern_type(TypeKind::Object(obj))
+      }
       TypeExprKind::Boolean => self.store.primitive_ids().boolean,
       TypeExprKind::Number => self.store.primitive_ids().number,
       TypeExprKind::String => self.store.primitive_ids().string,
@@ -211,6 +220,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
       TypeExprKind::Parenthesized(inner) => self.lower_type_expr(*inner, names),
       TypeExprKind::TypeRef(r) => self.lower_type_ref(r, names),
+      TypeExprKind::TypeQuery(name) => {
+        let reference = hir_js::TypeRef {
+          name: name.clone(),
+          type_args: Vec::new(),
+        };
+        self.lower_type_ref(&reference, names)
+      }
       TypeExprKind::KeyOf(inner) => {
         let ty = self.lower_type_expr(*inner, names);
         self.store.intern_type(TypeKind::KeyOf(ty))
@@ -260,7 +276,20 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         ))
       }
       TypeExprKind::Infer(param) => self.lower_infer_type(*param, names),
-      _ => self.store.primitive_ids().unknown,
+      TypeExprKind::TypePredicate(pred) => {
+        let asserted = pred
+          .type_annotation
+          .map(|ty| self.lower_type_expr(ty, names));
+        let parameter = names
+          .resolve(pred.parameter)
+          .map(|n| self.store.intern_name(n.to_string()));
+        self.store.intern_type(TypeKind::Predicate {
+          parameter,
+          asserted,
+          asserts: pred.asserts,
+        })
+      }
+      TypeExprKind::Import(import) => self.lower_import_type(import, names),
     }
   }
 
@@ -276,7 +305,6 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       .name_type
       .as_ref()
       .map(|n| self.lower_type_expr(*n, names));
-    let as_type = name_type;
     self.store.intern_type(TypeKind::Mapped(MappedType {
       param: tp,
       source: constraint,
@@ -284,7 +312,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       readonly: self.map_modifier(mapped.readonly),
       optional: self.map_modifier(mapped.optional),
       name_type,
-      as_type,
+      as_type: None,
     }))
   }
 
@@ -455,7 +483,43 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           readonly: idx.readonly,
         });
       }
-      _ => {}
+      TypeMemberKind::Getter(getter) => {
+        if let Some((key, mut data)) = self.lower_property(
+          &hir_js::TypePropertySignature {
+            readonly: true,
+            optional: false,
+            name: getter.name.clone(),
+            type_annotation: getter.return_type,
+          },
+          names,
+        ) {
+          data.readonly = true;
+          shape.properties.push(Property { key, data });
+        }
+      }
+      TypeMemberKind::Setter(setter) => {
+        if let Some((key, mut data)) = self.lower_property(
+          &hir_js::TypePropertySignature {
+            readonly: false,
+            optional: setter.parameter.optional,
+            name: setter.name.clone(),
+            type_annotation: Some(setter.parameter.ty),
+          },
+          names,
+        ) {
+          data.readonly = false;
+          shape.properties.push(Property { key, data });
+        }
+      }
+      TypeMemberKind::Mapped(mapped) => {
+        let key_type = self.lower_type_expr(mapped.constraint, names);
+        let value_type = self.lower_type_expr(mapped.value_type, names);
+        shape.indexers.push(Indexer {
+          key_type,
+          value_type,
+          readonly: matches!(mapped.readonly, hir_js::TypeMappedModifier::Plus),
+        });
+      }
     }
   }
 
@@ -544,74 +608,176 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
     }
 
-    let resolved = match &reference.name {
-      TypeName::Ident(id) => names.resolve(*id).map(|s| s.to_string()),
-      TypeName::Qualified(path) => path
-        .last()
-        .and_then(|id| names.resolve(*id))
-        .map(|s| s.to_string()),
-      _ => None,
-    };
-
-    if let Some(name) = resolved {
+    if let Some(resolved) = self.resolve_type_name(&reference.name, names, None) {
       let args: Vec<_> = reference
         .type_args
         .iter()
         .map(|a| self.lower_type_expr(*a, names))
         .collect();
+      return self.store.intern_type(TypeKind::Ref {
+        def: resolved,
+        args,
+      });
+    }
 
-      if let Some(local) = self.local_defs.get(&name).copied() {
-        let mapped = self
+    let name = match &reference.name {
+      TypeName::Ident(id) => names.resolve(*id).unwrap_or_default().to_string(),
+      TypeName::Qualified(path) => path
+        .last()
+        .and_then(|id| names.resolve(*id))
+        .unwrap_or_default()
+        .to_string(),
+      TypeName::Import(import) => import
+        .qualifier
+        .as_ref()
+        .and_then(|q| q.last())
+        .and_then(|id| names.resolve(*id))
+        .unwrap_or_default()
+        .to_string(),
+      TypeName::ImportExpr => String::new(),
+    };
+
+    self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+      format!("Cannot find name '{name}'."),
+      Span::new(self.file, TextRange::new(0, 0)),
+    ));
+
+    self.store.primitive_ids().unknown
+  }
+
+  fn lower_import_type(
+    &mut self,
+    import: &hir_js::TypeImport,
+    names: &hir_js::NameInterner,
+  ) -> TypeId {
+    let Some(host) = self.host else {
+      return self.store.primitive_ids().unknown;
+    };
+
+    let Some(target_file) = host.resolve(self.file, &import.module) else {
+      return self.store.primitive_ids().unknown;
+    };
+
+    let args: Vec<_> = import
+      .type_args
+      .iter()
+      .map(|a| self.lower_type_expr(*a, names))
+      .collect();
+
+    let qualifier_name = import.qualifier.as_ref().and_then(|q| match q {
+      TypeName::Ident(id) => names.resolve(*id),
+      TypeName::Qualified(path) => path.last().and_then(|id| names.resolve(*id)),
+      TypeName::Import(inner) => inner
+        .qualifier
+        .as_ref()
+        .and_then(|segments| segments.last())
+        .and_then(|id| names.resolve(*id)),
+      TypeName::ImportExpr => None,
+    });
+
+    if let Some(name) = qualifier_name.map(|n| n.to_string()) {
+      if let Some(def) = self
+        .def_by_name
+        .and_then(|map| map.get(&(target_file, name.clone())).copied())
+        .or_else(|| self.defs.get(&(target_file, name.clone())).copied())
+      {
+        return self.store.intern_type(TypeKind::Ref {
+          def,
+          args: args.clone(),
+        });
+      }
+    }
+
+    self.store.primitive_ids().unknown
+  }
+
+  fn resolve_type_name(
+    &self,
+    name: &hir_js::TypeName,
+    names: &hir_js::NameInterner,
+    file_override: Option<FileId>,
+  ) -> Option<DefId> {
+    match name {
+      TypeName::Ident(id) => {
+        let resolved = names.resolve(*id)?.to_string();
+        self.resolve_named_type(&resolved, file_override.unwrap_or(self.file))
+      }
+      TypeName::Qualified(path) => {
+        path
+          .last()
+          .and_then(|id| names.resolve(*id))
+          .and_then(|resolved| {
+            self.resolve_named_type(&resolved.to_string(), file_override.unwrap_or(self.file))
+          })
+      }
+      TypeName::Import(import) => import.module.as_ref().and_then(|module| {
+        let name = import
+          .qualifier
+          .as_ref()
+          .and_then(|segments| segments.last())
+          .and_then(|id| names.resolve(*id))
+          .map(|s| s.to_string())?;
+        let target_file = self.host.and_then(|h| h.resolve(self.file, module))?;
+        self.resolve_named_type(&name, target_file)
+      }),
+      TypeName::ImportExpr => None,
+    }
+  }
+
+  fn resolve_named_type(&self, name: &str, file: FileId) -> Option<DefId> {
+    if file == self.file {
+      if let Some(local) = self.local_defs.get(name).copied() {
+        return self
           .def_map
           .and_then(|map| map.get(&local).copied())
           .or_else(|| {
             self
               .def_by_name
-              .and_then(|map| map.get(&(self.file, name.clone())).copied())
+              .and_then(|map| map.get(&(self.file, name.to_string())).copied())
           })
-          .unwrap_or(local);
-        return self.store.intern_type(TypeKind::Ref { def: mapped, args });
+          .or(Some(local));
       }
-
-      if let Some(def) = self.defs.get(&(self.file, name.clone())) {
-        return self.store.intern_type(TypeKind::Ref { def: *def, args });
-      }
-
-      if let Some(sem) = self.semantics {
-        let symbol = sem
-          .resolve_in_module(self.file, &name, Namespace::TYPE)
-          .or_else(|| {
-            sem
-              .global_symbols()
-              .get(&name)
-              .and_then(|group| group.symbol_for(Namespace::TYPE, sem.symbols()))
-          });
-        if let Some(symbol) = symbol {
-          if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {
-            let decl_data = sem.symbols().decl(*decl);
-            let target = DefId(decl_data.def_id.0);
-            let mapped = self
-              .def_map
-              .and_then(|map| map.get(&target).copied())
-              .or_else(|| {
-                self.def_by_name.and_then(|map| {
-                  map
-                    .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
-                    .copied()
-                })
-              })
-              .unwrap_or(target);
-            return self.store.intern_type(TypeKind::Ref { def: mapped, args });
-          }
-        }
-      }
-
-      self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
-        format!("Cannot find name '{name}'."),
-        Span::new(self.file, TextRange::new(0, 0)),
-      ));
     }
 
-    self.store.primitive_ids().unknown
+    if let Some(def) = self.defs.get(&(file, name.to_string())) {
+      return Some(*def);
+    }
+
+    if let Some(def) = self
+      .def_by_name
+      .and_then(|map| map.get(&(file, name.to_string())).copied())
+    {
+      return Some(def);
+    }
+
+    if let Some(sem) = self.semantics {
+      if let Some(symbol) = sem.resolve_in_module(file, name, Namespace::TYPE) {
+        if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {
+          let decl_data = sem.symbols().decl(*decl);
+          let target = DefId(decl_data.def_id.0);
+          return self
+            .def_map
+            .and_then(|map| map.get(&target).copied())
+            .or_else(|| {
+              self.def_by_name.and_then(|map| {
+                map
+                  .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
+                  .copied()
+              })
+            })
+            .or(Some(target));
+        }
+      }
+    }
+
+    None
+  }
+}
+
+impl<'a, 'diag> std::fmt::Debug for HirDeclLowerer<'a, 'diag> {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("HirDeclLowerer")
+      .field("file", &self.file)
+      .finish_non_exhaustive()
   }
 }

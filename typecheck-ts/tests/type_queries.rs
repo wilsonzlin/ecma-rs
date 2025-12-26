@@ -27,6 +27,36 @@ fn object_type(store: &Arc<TypeStore>, shape: Shape) -> TypeId {
   store.intern_type(TypeKind::Object(obj_id))
 }
 
+#[derive(Default)]
+struct TestHost {
+  files: HashMap<FileId, Arc<str>>,
+  resolutions: HashMap<String, FileId>,
+}
+
+impl TestHost {
+  fn insert(&mut self, file: FileId, src: &str) {
+    self.files.insert(file, Arc::from(src.to_string()));
+  }
+
+  fn resolve_to(&mut self, specifier: &str, target: FileId) {
+    self.resolutions.insert(specifier.to_string(), target);
+  }
+}
+
+impl Host for TestHost {
+  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+    self
+      .files
+      .get(&file)
+      .cloned()
+      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+  }
+
+  fn resolve(&self, _from: FileId, specifier: &str) -> Option<FileId> {
+    self.resolutions.get(specifier).copied()
+  }
+}
+
 #[test]
 fn object_properties_include_modifiers() {
   let store = TypeStore::new();
@@ -510,4 +540,226 @@ type Alias = Thing;
     TypeKind::Boolean
   ));
   assert!(!indexers[0].readonly);
+}
+
+#[test]
+fn type_alias_recursion_is_cycle_safe() {
+  let mut host = TestHost::default();
+  host.insert(FileId(0), "type Alias = Alias | number;");
+  let program = Program::new(host, vec![FileId(0)]);
+  let alias_def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Alias"))
+    .expect("alias definition present");
+  let ty = program.type_of_def(alias_def);
+  match program.type_kind(ty) {
+    TypeKindSummary::Union { members } => assert_eq!(members, 2),
+    other => panic!("expected union for recursive alias, got {other:?}"),
+  }
+  let rendered = program.display_type(ty).to_string();
+  assert!(
+    rendered.contains("Alias") || rendered.contains("number"),
+    "display should render recursive alias, got {rendered}"
+  );
+}
+
+#[test]
+fn interface_extends_and_intersections_merge_shapes() {
+  let mut host = TestHost::default();
+  host.insert(
+    FileId(0),
+    r#"
+interface Base { a: string; }
+interface Extra { b: number; }
+interface Derived extends Base { c: boolean; }
+type Combined = Derived & Extra;
+"#,
+  );
+  let program = Program::new(host, vec![FileId(0)]);
+  let combined_def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Combined"))
+    .expect("combined alias present");
+  let ty = program.type_of_def(combined_def);
+  let props = program.properties_of(ty);
+  let prop = |name: &str| {
+    props
+      .iter()
+      .find(|p| p.key == PropertyKey::String(name.to_string()))
+      .cloned()
+      .expect("property present")
+  };
+  assert!(matches!(
+    program.interned_type_kind(prop("a").ty),
+    TypeKind::String
+  ));
+  assert!(matches!(
+    program.interned_type_kind(prop("b").ty),
+    TypeKind::Number
+  ));
+  assert!(matches!(
+    program.interned_type_kind(prop("c").ty),
+    TypeKind::Boolean
+  ));
+}
+
+#[test]
+fn function_signature_is_lowered_from_type_alias() {
+  let mut host = TestHost::default();
+  host.insert(
+    FileId(0),
+    "type FnAlias = (value: string, count?: number) => boolean;",
+  );
+  let program = Program::new(host, vec![FileId(0)]);
+  let fn_def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("FnAlias"))
+    .expect("function alias present");
+  let ty = program.type_of_def(fn_def);
+  let sigs = program.call_signatures(ty);
+  assert_eq!(sigs.len(), 1);
+  let sig = &sigs[0].signature;
+  assert_eq!(sig.params.len(), 2);
+  assert!(matches!(
+    program.interned_type_kind(sig.params[0].ty),
+    TypeKind::String
+  ));
+  assert!(matches!(
+    program.interned_type_kind(sig.params[1].ty),
+    TypeKind::Number
+  ));
+  assert!(sig.params[1].optional);
+  assert!(matches!(
+    program.interned_type_kind(sig.ret),
+    TypeKind::Boolean
+  ));
+}
+
+#[test]
+fn recursive_alias_properties_preserve_references() {
+  let mut host = TestHost::default();
+  host.insert(
+    FileId(0),
+    r#"
+type List = { value: number; next: List | null };
+"#,
+  );
+  let program = Program::new(host, vec![FileId(0)]);
+  let list_def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("List"))
+    .expect("List alias present");
+  let ty = program.type_of_def(list_def);
+  let props = program.properties_of(ty);
+  let value = props
+    .iter()
+    .find(|p| p.key == PropertyKey::String("value".into()))
+    .expect("value property present");
+  assert_eq!(program.display_type(value.ty).to_string(), "number");
+  let next = props
+    .iter()
+    .find(|p| p.key == PropertyKey::String("next".into()))
+    .expect("next property present");
+  assert_eq!(program.display_type(next.ty).to_string(), "List | null");
+}
+
+#[test]
+fn recursive_type_alias_expands_through_refs() {
+  let mut host = TestHost::default();
+  host.insert(
+    FileId(0),
+    r#"
+type Node = { value: number; next?: Node };
+"#,
+  );
+  let program = Program::new(host, vec![FileId(0)]);
+  let node_def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Node"))
+    .expect("Node definition present");
+  let node_ty = program.type_of_def(node_def);
+  let next_ty = program
+    .property_type(node_ty, PropertyKey::String("next".into()))
+    .expect("next property available");
+  match program.interned_type_kind(next_ty) {
+    TypeKind::Union(members) => {
+      assert!(
+        members
+          .iter()
+          .any(|member| match program.interned_type_kind(*member) {
+            TypeKind::Ref { def, .. } => def.0 == node_def.0,
+            _ => false,
+          }),
+        "union should include self reference"
+      );
+      assert!(
+        members
+          .iter()
+          .any(|member| matches!(program.type_kind(*member), TypeKindSummary::Undefined)),
+        "optional property should include undefined"
+      );
+    }
+    TypeKind::Ref { def, .. } => assert_eq!(def.0, node_def.0),
+    other => panic!("expected ref or union to self, got {other:?}"),
+  }
+}
+
+#[test]
+fn interface_extends_and_intersections_merge_members() {
+  let mut host = TestHost::default();
+  host.insert(
+    FileId(0),
+    r#"
+interface Base { base: number }
+interface Derived extends Base { derived: string }
+type Combined = Derived & { extra: boolean };
+"#,
+  );
+  let program = Program::new(host, vec![FileId(0)]);
+  let derived_def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Derived"))
+    .expect("Derived interface present");
+  let combined_def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Combined"))
+    .expect("Combined alias present");
+
+  let derived_ty = program.type_of_def(derived_def);
+  let base_prop = program
+    .property_type(derived_ty, PropertyKey::String("base".into()))
+    .expect("base property present");
+  assert!(matches!(
+    program.type_kind(base_prop),
+    TypeKindSummary::Number
+  ));
+  let derived_prop = program
+    .property_type(derived_ty, PropertyKey::String("derived".into()))
+    .expect("derived property present");
+  assert!(matches!(
+    program.type_kind(derived_prop),
+    TypeKindSummary::String
+  ));
+
+  let combined_ty = program.type_of_def(combined_def);
+  for (name, expected) in [
+    ("base", TypeKindSummary::Number),
+    ("derived", TypeKindSummary::String),
+    ("extra", TypeKindSummary::Boolean),
+  ] {
+    let prop = program
+      .property_type(combined_ty, PropertyKey::String(name.into()))
+      .unwrap_or_else(|| panic!("{name} property missing"));
+    assert!(
+      matches!(program.type_kind(prop), k if k == expected),
+      "{name} property should match expected kind"
+    );
+  }
 }

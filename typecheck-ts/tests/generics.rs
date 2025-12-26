@@ -6,6 +6,7 @@ use typecheck_ts::check::infer::{
   infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature, TypeParamDecl,
 };
 use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
+use typecheck_ts::{FileId, Host, HostError, Program, PropertyKey, TypeKindSummary};
 use types_ts_interned::{
   CacheConfig, DefId, Param, Signature, TypeId, TypeKind, TypeParamId, TypeStore,
 };
@@ -396,4 +397,117 @@ fn infers_from_contextual_return_in_call() {
 
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
+}
+
+#[test]
+fn imported_type_alias_uses_source_definition() {
+  #[derive(Default)]
+  struct ImportHost {
+    files: HashMap<FileId, Arc<str>>,
+    resolutions: HashMap<String, FileId>,
+  }
+
+  impl ImportHost {
+    fn insert(&mut self, file: FileId, src: &str) {
+      self.files.insert(file, Arc::from(src.to_string()));
+    }
+
+    fn resolve_to(&mut self, specifier: &str, target: FileId) {
+      self.resolutions.insert(specifier.to_string(), target);
+    }
+  }
+
+  impl Host for ImportHost {
+    fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+      self
+        .files
+        .get(&file)
+        .cloned()
+        .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+    }
+
+    fn resolve(&self, _from: FileId, specifier: &str) -> Option<FileId> {
+      self.resolutions.get(specifier).copied()
+    }
+  }
+
+  let mut host = ImportHost::default();
+  host.insert(FileId(0), "export type Value = { value: number };");
+  host.insert(
+    FileId(1),
+    r#"
+import { Value } from "./a";
+type Uses = Value;
+"#,
+  );
+  host.resolve_to("./a", FileId(0));
+
+  let program = Program::new(host, vec![FileId(1)]);
+  let uses_def = program
+    .definitions_in_file(FileId(1))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("Uses"))
+    .expect("Uses alias present");
+  let ty = program.type_of_def(uses_def);
+  let prop = program
+    .property_type(ty, PropertyKey::String("value".into()))
+    .expect("value property present");
+  assert!(matches!(program.interned_type_kind(prop), TypeKind::Number));
+}
+
+#[test]
+fn function_definition_exposes_signature() {
+  #[derive(Default)]
+  struct SigHost {
+    files: HashMap<FileId, Arc<str>>,
+  }
+
+  impl SigHost {
+    fn insert(&mut self, file: FileId, src: &str) {
+      self.files.insert(file, Arc::from(src.to_string()));
+    }
+  }
+
+  impl Host for SigHost {
+    fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+      self
+        .files
+        .get(&file)
+        .cloned()
+        .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+    }
+
+    fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
+      None
+    }
+  }
+
+  let mut host = SigHost::default();
+  host.insert(
+    FileId(0),
+    "export function add(a: number, b: string): string { return a + b; }",
+  );
+  let program = Program::new(host, vec![FileId(0)]);
+  let add_def = program
+    .definitions_in_file(FileId(0))
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("add"))
+    .expect("add definition present");
+  let ty = program.type_of_def(add_def);
+  let sigs = program.call_signatures(ty);
+  assert_eq!(sigs.len(), 1);
+  let sig = &sigs[0].signature;
+  assert_eq!(sig.params.len(), 2);
+  assert!(matches!(
+    program.type_kind(sig.params[0].ty),
+    TypeKindSummary::Number
+  ));
+  assert!(matches!(
+    program.type_kind(sig.params[1].ty),
+    TypeKindSummary::String
+  ));
+  assert!(matches!(
+    program.type_kind(sig.ret),
+    TypeKindSummary::String
+  ));
 }

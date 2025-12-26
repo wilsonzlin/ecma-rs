@@ -77,7 +77,7 @@ fn map_export(
   }
 
   let def_for_type = local_def.or(any_def);
-  let type_id: Option<TypeId> = def_for_type.map(|def| state.type_of_def(def));
+  let type_id: Option<TypeId> = def_for_type.map(|def| state.type_of_def_interned(def));
   let symbol = local_def
     .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
     .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
