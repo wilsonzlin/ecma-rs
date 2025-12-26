@@ -197,7 +197,7 @@ impl<'a> Parser<'a> {
   }
 
   pub fn since_checkpoint(&self, checkpoint: &ParserCheckpoint) -> Loc {
-    let start = self.buf[checkpoint.next_tok_i].token.loc.1;
+    let start = self.buf[checkpoint.next_tok_i].token.loc.0;
     Loc(start, self.lexer.next())
   }
 
