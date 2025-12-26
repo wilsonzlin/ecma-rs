@@ -1020,7 +1020,7 @@ struct SnapshotStore {
 }
 
 #[derive(Clone, Debug)]
-struct ConcurrencyLimiter {
+pub(crate) struct ConcurrencyLimiter {
   inner: Arc<LimiterInner>,
 }
 
@@ -1032,7 +1032,7 @@ struct LimiterInner {
 }
 
 impl ConcurrencyLimiter {
-  fn new(max: usize) -> Self {
+  pub(crate) fn new(max: usize) -> Self {
     let max = max.max(1);
     ConcurrencyLimiter {
       inner: Arc::new(LimiterInner {
@@ -1043,7 +1043,7 @@ impl ConcurrencyLimiter {
     }
   }
 
-  fn acquire(&self) -> ConcurrencyPermit {
+  pub(crate) fn acquire(&self) -> ConcurrencyPermit {
     let mut guard = self.inner.active.lock().unwrap();
     while *guard >= self.inner.max {
       guard = self.inner.cv.wait(guard).unwrap();
@@ -1056,7 +1056,7 @@ impl ConcurrencyLimiter {
 }
 
 #[derive(Debug)]
-struct ConcurrencyPermit {
+pub(crate) struct ConcurrencyPermit {
   inner: Arc<LimiterInner>,
 }
 

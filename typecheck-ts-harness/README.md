@@ -92,6 +92,8 @@ cargo run -p typecheck-ts-harness --release -- conformance \
   each shard in a separate process/job for parallelism.
 - Timeouts apply per test case (default 10s) and kill only the offending test,
   not the whole run.
+- Execution is parallel by default; cap worker threads with `--jobs <n>` (default
+  is the CPU count). Combine with sharding for coarse-grained CI splits.
 - Comparison is configurable:
   - `--compare auto|tsc|snapshot|none` (default auto: prefer `tsc`, then
     snapshots, else none with a warning)
@@ -141,6 +143,9 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 # Print raw tsc payloads for mismatches
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --print-tsc
 
+# Limit parallel workers (defaults to CPU count)
+cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --use-baselines --jobs 4
+
 # Emit JSON (includes diff details) and continue even if mismatches are found
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --compare-rust --json --allow-mismatches
 ```
@@ -149,6 +154,9 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 - `with-node` feature disabled or missing Node → command logs `difftsc skipped`
   and exits successfully. Differential runs with `--use-baselines` can proceed
   without Node.
+- TSC and Rust executions are parallelized across `--jobs` workers. Node
+  invocations are concurrency-limited to keep process count bounded, and JSON
+  output is stably ordered regardless of scheduling.
 - Baselines are read from/written to `baselines/<suite>/<test>.json` (see below).
 - The wrapper uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
   writes `{ schemaVersion, metadata: { typescriptVersion, options }, diagnostics: [...] }`.

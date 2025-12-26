@@ -1,5 +1,5 @@
 use assert_cmd::Command;
-use serde_json::to_string;
+use serde_json::{to_string, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -333,4 +333,54 @@ fn json_results_are_stably_ordered_with_parallel_execution() {
 
   let ids_second: Vec<_> = second.results.iter().map(|r| r.id.clone()).collect();
   assert_eq!(ids, ids_second);
+}
+
+#[test]
+fn difftsc_results_are_sorted_with_parallel_execution() {
+  let suite = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/difftsc");
+
+  let run = || -> Value {
+    #[allow(deprecated)]
+    let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+    cmd
+      .arg("difftsc")
+      .arg("--suite")
+      .arg(&suite)
+      .arg("--compare-rust")
+      .arg("--use-baselines")
+      .arg("--json")
+      .arg("--jobs")
+      .arg("2")
+      .arg("--allow-mismatches");
+
+    let output = cmd.assert().success().get_output().stdout.clone();
+    serde_json::from_slice(&output).expect("json output")
+  };
+
+  let first = run();
+  let second = run();
+
+  let extract_ids = |report: &Value| -> Vec<String> {
+    let results = report["results"]
+      .as_array()
+      .map(|arr| arr.as_slice())
+      .unwrap_or(&[]);
+    results
+      .iter()
+      .filter_map(|case| {
+        case
+          .get("name")
+          .and_then(|n| n.as_str())
+          .map(|s| s.to_string())
+      })
+      .collect()
+  };
+
+  let ids = extract_ids(&first);
+  let mut sorted = ids.clone();
+  sorted.sort();
+
+  assert!(!ids.is_empty());
+  assert_eq!(ids, sorted);
+  assert_eq!(ids, extract_ids(&second));
 }

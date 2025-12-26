@@ -7,7 +7,7 @@ use crate::diagnostic_norm::{
 use crate::directives::HarnessOptions;
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
-use crate::runner::{run_rust, EngineStatus, HarnessFileSet};
+use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet};
 use crate::tsc::{
   apply_default_tsc_options, node_available, TscDiagnostics, TscRequest, TscRunner,
   TSC_BASELINE_SCHEMA_VERSION,
@@ -15,12 +15,15 @@ use crate::tsc::{
 use crate::{read_utf8_file, FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
+use num_cpus;
+use rayon::{prelude::*, ThreadPoolBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Args)]
@@ -68,6 +71,10 @@ pub struct DifftscArgs {
   /// When to fail the run on mismatches.
   #[arg(long, value_enum, default_value_t = FailOn::New)]
   pub fail_on: FailOn,
+
+  /// Number of worker threads to use.
+  #[arg(long, default_value_t = num_cpus::get())]
+  pub jobs: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,6 +204,46 @@ pub fn run(args: DifftscArgs) -> Result<CommandStatus> {
 }
 
 #[cfg(feature = "with-node")]
+struct TscRunnerPool {
+  node_path: PathBuf,
+  limiter: Arc<ConcurrencyLimiter>,
+  runners: Mutex<Vec<TscRunner>>,
+}
+
+#[cfg(feature = "with-node")]
+impl TscRunnerPool {
+  fn new(node_path: PathBuf, limiter: Arc<ConcurrencyLimiter>) -> Self {
+    Self {
+      node_path,
+      limiter,
+      runners: Mutex::new(Vec::new()),
+    }
+  }
+
+  fn run(&self, test: &TestCase, options: &Map<String, Value>) -> Result<TscDiagnostics> {
+    let _permit = self.limiter.acquire();
+    let mut runner = self.checkout()?;
+    let result = run_tsc_on_test(test, &mut runner, options);
+    self.release(runner);
+    result
+  }
+
+  fn checkout(&self) -> Result<TscRunner> {
+    let mut runners = self.runners.lock().unwrap();
+    if let Some(runner) = runners.pop() {
+      Ok(runner)
+    } else {
+      TscRunner::new(self.node_path.clone())
+    }
+  }
+
+  fn release(&self, runner: TscRunner) {
+    let mut runners = self.runners.lock().unwrap();
+    runners.push(runner);
+  }
+}
+
+#[cfg(feature = "with-node")]
 fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
   let suite_path = resolve_suite_path(&args.suite)?;
   if !suite_path.exists() {
@@ -231,7 +278,15 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
     return Err(anyhow!("suite `{}` contains no tests", suite_name));
   }
 
-  let mut runner = if needs_live_tsc(&args) {
+  let jobs = args.jobs.max(1);
+  let tsc_limiter = Arc::new(ConcurrencyLimiter::new(jobs));
+  let pool = ThreadPoolBuilder::new()
+    .num_threads(jobs)
+    .build()
+    .map_err(|err| anyhow!("create thread pool: {err}"))?;
+
+  let needs_live_tsc = needs_live_tsc(&args);
+  let tsc_pool = if needs_live_tsc {
     if !node_available(&args.node) {
       eprintln!(
         "difftsc skipped: Node.js not available at {}",
@@ -239,40 +294,53 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
       );
       return Ok(CommandStatus::Skipped);
     }
-    Some(TscRunner::new(args.node.clone())?)
+    Some(TscRunnerPool::new(
+      args.node.clone(),
+      Arc::clone(&tsc_limiter),
+    ))
   } else {
     None
   };
 
-  let mut results = Vec::new();
+  let normalization = NormalizationOptions::with_span_tolerance(args.span_tolerance);
+  let tsc_pool = tsc_pool.as_ref();
+  let mut results_with_ids: Vec<(String, CaseReport)> = pool.install(|| {
+    tests
+      .par_iter()
+      .map(|test| {
+        let test_id = format!("{suite_name}/{}", test.name);
+        let expectation = expectations.lookup(&test_id);
+        if expectation.expectation.kind == ExpectationKind::Skip {
+          return (
+            test_id,
+            CaseReport {
+              name: test.name.clone(),
+              status: CaseStatus::Skipped,
+              expected: None,
+              actual: None,
+              diff: None,
+              report: None,
+              notes: vec!["skipped by manifest".to_string()],
+            },
+          );
+        }
+
+        let report = run_single_test(test, &args, tsc_pool, &baselines_root, &normalization);
+
+        (test_id, report)
+      })
+      .collect()
+  });
+
+  results_with_ids.sort_by(|a, b| a.0.cmp(&b.0));
+
   let mut expected_mismatches = 0usize;
   let mut unexpected_mismatches = 0usize;
   let mut flaky_mismatches = 0usize;
-  let normalization = NormalizationOptions::with_span_tolerance(args.span_tolerance);
-  for test in tests {
-    let test_id = format!("{suite_name}/{}", test.name);
-    let expectation = expectations.lookup(&test_id);
-    if expectation.expectation.kind == ExpectationKind::Skip {
-      results.push(CaseReport {
-        name: test.name.clone(),
-        status: CaseStatus::Skipped,
-        expected: None,
-        actual: None,
-        diff: None,
-        report: None,
-        notes: vec!["skipped by manifest".to_string()],
-      });
-      continue;
-    }
-
-    let report = run_single_test(
-      &test,
-      &args,
-      runner.as_mut(),
-      &baselines_root,
-      &normalization,
-    );
+  let mut results = Vec::with_capacity(results_with_ids.len());
+  for (test_id, report) in results_with_ids {
     if matches!(report.status, CaseStatus::Mismatch) {
+      let expectation = expectations.lookup(&test_id);
       if expectation.expectation.kind == ExpectationKind::Flaky {
         flaky_mismatches += 1;
       } else if expectation.covers_mismatch() {
@@ -392,7 +460,7 @@ fn print_human_summary(suite: &str, summary: &Summary, results: &[CaseReport]) {
 fn run_single_test(
   test: &TestCase,
   args: &DifftscArgs,
-  runner: Option<&mut TscRunner>,
+  tsc_pool: Option<&TscRunnerPool>,
   baselines_root: &Path,
   normalization: &NormalizationOptions,
 ) -> CaseReport {
@@ -402,7 +470,7 @@ fn run_single_test(
   let tsc_options = harness_options.to_tsc_options_map();
 
   let live_tsc = if needs_live_tsc(args) {
-    let Some(runner) = runner else {
+    let Some(pool) = tsc_pool else {
       return CaseReport {
         name: test.name.clone(),
         status: CaseStatus::TscFailed,
@@ -414,7 +482,7 @@ fn run_single_test(
       };
     };
 
-    match run_tsc_on_test(test, runner, &tsc_options) {
+    match pool.run(test, &tsc_options) {
       Ok(diags) => Some(diags),
       Err(err) => {
         return CaseReport {
