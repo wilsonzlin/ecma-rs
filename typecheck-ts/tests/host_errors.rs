@@ -1,23 +1,23 @@
 use std::sync::Arc;
 
 use typecheck_ts::codes;
-use typecheck_ts::{FatalError, FileId, Host, HostError, Program};
+use typecheck_ts::{FatalError, FileKey, Host, HostError, Program};
 
 struct MissingHost;
 
 impl Host for MissingHost {
-  fn file_text(&self, _file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, _file: &FileKey) -> Result<Arc<str>, HostError> {
     Err(HostError::new("missing file text"))
   }
 
-  fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
+  fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
     None
   }
 }
 
 #[test]
 fn missing_file_is_fatal_host_error() {
-  let program = Program::new(MissingHost, vec![FileId(0)]);
+  let program = Program::new(MissingHost, vec![FileKey::new("missing.ts")]);
   match program.check_fallible() {
     Err(FatalError::Host(err)) => assert_eq!(err.to_string(), "missing file text"),
     other => panic!("expected fatal host error, got {other:?}"),

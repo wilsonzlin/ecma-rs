@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use typecheck_ts::lib_support::CompilerOptions;
-use typecheck_ts::{FileId, Host, HostError, Program};
+use typecheck_ts::{FileKey, Host, HostError, Program};
 use typecheck_ts_harness::VirtualFile;
 
 #[cfg(feature = "with-node")]
@@ -18,30 +18,41 @@ use typecheck_ts_harness::tsc::{node_available, TscDiagnostics, TscRequest, TscR
 
 #[derive(Clone)]
 struct SimpleHost {
-  files: Vec<VirtualFile>,
+  files: std::collections::HashMap<String, Arc<str>>,
+  names: Vec<FileKey>,
   options: CompilerOptions,
 }
 
 impl SimpleHost {
   fn new(files: Vec<VirtualFile>, options: CompilerOptions) -> Self {
-    Self { files, options }
+    let mut map = std::collections::HashMap::new();
+    let mut names = Vec::new();
+    for file in files {
+      names.push(FileKey::new(file.name.clone()));
+      map.insert(file.name, Arc::from(file.content));
+    }
+    Self {
+      files: map,
+      names,
+      options,
+    }
   }
 
-  fn roots(&self) -> Vec<FileId> {
-    (0..self.files.len()).map(|i| FileId(i as u32)).collect()
+  fn roots(&self) -> Vec<FileKey> {
+    self.names.clone()
   }
 }
 
 impl Host for SimpleHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
-      .get(file.0 as usize)
-      .map(|f| Arc::from(f.content.clone()))
+      .get(file.as_str())
+      .cloned()
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
+  fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
     None
   }
 

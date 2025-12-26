@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use tracing::{info_span, Level};
 use tracing_subscriber::fmt::format::FmtSpan;
 use typecheck_ts::lib_support::CompilerOptions;
-use typecheck_ts::{FileId, Host, HostError, Program, QueryStats};
+use typecheck_ts::{FileKey, Host, HostError, Program, QueryStats};
 use walkdir::WalkDir;
 
 const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
@@ -207,21 +207,6 @@ impl EngineDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TestOptions {
-  pub harness: HarnessOptions,
-  pub rust: CompilerOptions,
-  pub tsc: Map<String, Value>,
-}
-
-impl TestOptions {
-  fn from_harness(harness: HarnessOptions) -> Self {
-    let rust = harness.to_compiler_options();
-    let tsc = harness.to_tsc_options_map();
-    Self { harness, rust, tsc }
-  }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestResult {
   pub id: String,
   pub path: String,
@@ -229,7 +214,6 @@ pub struct TestResult {
   pub duration_ms: u128,
   pub rust: EngineDiagnostics,
   pub tsc: EngineDiagnostics,
-  pub options: TestOptions,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub query_stats: Option<QueryStats>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -269,15 +253,17 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Clone)]
-pub(crate) struct HarnessFile {
-  pub(crate) normalized: String,
-  pub(crate) content: Arc<str>,
+struct HarnessFile {
+  normalized: String,
+  key: FileKey,
+  content: Arc<str>,
 }
 
 #[derive(Clone)]
 pub(crate) struct HarnessFileSet {
   files: Vec<HarnessFile>,
-  name_to_id: HashMap<String, FileId>,
+  name_to_key: HashMap<String, FileKey>,
+  key_to_name: HashMap<FileKey, String>,
 }
 
 #[derive(Clone)]
@@ -299,44 +285,53 @@ impl HarnessFileSet {
     }
 
     let mut stored = Vec::with_capacity(last_occurrence.len());
-    let mut name_to_id = HashMap::new();
+    let mut name_to_key = HashMap::new();
+    let mut key_to_name = HashMap::new();
 
     for (idx, normalized) in normalized_names.into_iter().enumerate() {
       if last_occurrence.get(&normalized).copied() != Some(idx) {
         continue;
       }
 
-      let file_id = FileId(stored.len() as u32);
-      name_to_id.insert(normalized.clone(), file_id);
+      let key = FileKey::new(normalized.clone());
+      name_to_key.insert(normalized.clone(), key.clone());
+      key_to_name.insert(key.clone(), normalized.clone());
       stored.push(HarnessFile {
         normalized,
+        key,
         content: Arc::from(files[idx].content.clone()),
       });
     }
 
     Self {
       files: stored,
-      name_to_id,
+      name_to_key,
+      key_to_name,
     }
   }
 
-  pub(crate) fn root_files(&self) -> Vec<FileId> {
-    (0..self.files.len()).map(|i| FileId(i as u32)).collect()
+  fn root_keys(&self) -> Vec<FileKey> {
+    self.files.iter().map(|f| f.key.clone()).collect()
   }
 
-  pub(crate) fn file_name(&self, file: FileId) -> Option<String> {
+  fn resolve(&self, normalized: &str) -> Option<FileKey> {
+    self.name_to_key.get(normalized).cloned()
+  }
+
+  fn name_for_key(&self, key: &FileKey) -> Option<String> {
+    self.key_to_name.get(key).cloned()
+  }
+
+  fn iter(&self) -> impl Iterator<Item = &HarnessFile> {
+    self.files.iter()
+  }
+
+  fn content(&self, key: &FileKey) -> Option<Arc<str>> {
     self
       .files
-      .get(file.0 as usize)
-      .map(|f| f.normalized.clone())
-  }
-
-  pub(crate) fn resolve(&self, normalized: &str) -> Option<FileId> {
-    self.name_to_id.get(normalized).copied()
-  }
-
-  pub(crate) fn iter(&self) -> impl Iterator<Item = &HarnessFile> {
-    self.files.iter()
+      .iter()
+      .find(|f| &f.key == key)
+      .map(|f| f.content.clone())
   }
 
   fn write_to_dir(&self, dir: &Path) -> std::io::Result<()> {
@@ -485,7 +480,6 @@ fn build_skipped_result(case: &TestCase) -> TestResult {
     duration_ms: 0,
     rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
     tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
-    options: TestOptions::from_harness(case.options.clone()),
     query_stats: None,
     notes: case.notes.clone(),
     detail: None,
@@ -553,9 +547,6 @@ fn run_single_case(
   let span_tolerance = opts.span_tolerance;
   let update_snapshots = opts.update_snapshots;
   let collect_query_stats = opts.profile;
-  let test_options = TestOptions::from_harness(case.options.clone());
-  let timeout_options = test_options.clone();
-  let options_for_thread = test_options;
   std::thread::spawn(move || {
     let _entered = span_for_thread.enter();
     let result = execute_case(
@@ -568,7 +559,6 @@ fn run_single_case(
       update_snapshots,
       collect_query_stats,
       tsc_limiter,
-      options_for_thread,
     );
     let _ = tx.send(result);
   });
@@ -582,7 +572,6 @@ fn run_single_case(
       duration_ms: timeout.as_millis(),
       rust: EngineDiagnostics::skipped(None),
       tsc: EngineDiagnostics::skipped(None),
-      options: timeout_options,
       query_stats: None,
       notes: timeout_notes,
       detail: None,
@@ -602,7 +591,6 @@ fn execute_case(
   update_snapshots: bool,
   collect_query_stats: bool,
   tsc_limiter: Arc<ConcurrencyLimiter>,
-  options: TestOptions,
 ) -> TestResult {
   let start = Instant::now();
   if let Some(delay) = harness_sleep_for_case(&case.id) {
@@ -610,15 +598,17 @@ fn execute_case(
   }
   let notes = case.notes.clone();
   let file_set = HarnessFileSet::new(&case.deduped_files);
+  let harness_options = case.options.clone();
 
-  let (rust, query_stats) = run_rust_with_profile(&file_set, &options.rust, collect_query_stats);
+  let (rust, query_stats) = run_rust_with_profile(&file_set, &harness_options, collect_query_stats);
+  let tsc_options = harness_options.to_tsc_options_map();
 
   let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
   let tsc = match compare_mode {
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
     CompareMode::Tsc => {
       if tsc_available {
-        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &options.tsc, &tsc_limiter);
+        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
         tsc_raw = raw;
         diag
       } else {
@@ -628,7 +618,7 @@ fn execute_case(
     CompareMode::Snapshot => {
       if update_snapshots {
         if tsc_available {
-          let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &options.tsc, &tsc_limiter);
+          let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
           tsc_raw = raw;
           diag
         } else {
@@ -662,7 +652,6 @@ fn execute_case(
     duration_ms: start.elapsed().as_millis(),
     rust,
     tsc,
-    options,
     query_stats,
     notes,
     detail,
@@ -672,23 +661,25 @@ fn execute_case(
 }
 
 pub(crate) fn run_rust(file_set: &HarnessFileSet, options: &HarnessOptions) -> EngineDiagnostics {
-  let compiler_options = options.to_compiler_options();
-  run_rust_with_profile(file_set, &compiler_options, false).0
+  run_rust_with_profile(file_set, options, false).0
 }
 
 fn run_rust_with_profile(
   file_set: &HarnessFileSet,
-  compiler_options: &CompilerOptions,
+  options: &HarnessOptions,
   collect_profile: bool,
 ) -> (EngineDiagnostics, Option<QueryStats>) {
+  let compiler_options = options.to_compiler_options();
   let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
-  let roots = file_set.root_files();
+  let roots = file_set.root_keys();
   let program = Program::new(host, roots);
   let result = std::panic::catch_unwind(AssertUnwindSafe(|| program.check()));
   let stats = (collect_profile && result.is_ok()).then(|| program.query_stats());
   let diagnostics = match result {
     Ok(diags) => EngineDiagnostics::ok(normalize_rust_diagnostics(&diags, |id| {
-      file_set.file_name(id)
+      program
+        .file_key(id)
+        .and_then(|key| file_set.name_for_key(&key))
     })),
     Err(_) => EngineDiagnostics::ice("typechecker panicked"),
   };
@@ -880,28 +871,25 @@ impl HarnessHost {
 }
 
 impl Host for HarnessHost {
-  fn file_text(&self, file: FileId) -> std::result::Result<Arc<str>, HostError> {
-    let idx = file.0 as usize;
+  fn file_text(&self, file: &FileKey) -> std::result::Result<Arc<str>, HostError> {
     self
       .files
-      .files
-      .get(idx)
-      .map(|f| f.content.clone())
-      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+      .content(file)
+      .ok_or_else(|| HostError::new(format!("missing file {}", file.as_str())))
   }
 
   fn compiler_options(&self) -> CompilerOptions {
     self.compiler_options.clone()
   }
 
-  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
     let is_relative = specifier.starts_with("./") || specifier.starts_with("../");
     if !is_relative {
       let normalized = normalize_name(specifier);
       return self.files.resolve(&normalized);
     }
 
-    let base = self.files.file_name(from)?;
+    let base = self.files.name_for_key(from)?;
     let parent = Path::new(&base).parent().unwrap_or_else(|| Path::new(""));
     let joined = parent.join(specifier);
     let base_candidate = normalize_name(joined.to_string_lossy().as_ref());
@@ -1042,7 +1030,7 @@ struct SnapshotStore {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ConcurrencyLimiter {
+struct ConcurrencyLimiter {
   inner: Arc<LimiterInner>,
 }
 
@@ -1054,7 +1042,7 @@ struct LimiterInner {
 }
 
 impl ConcurrencyLimiter {
-  pub(crate) fn new(max: usize) -> Self {
+  fn new(max: usize) -> Self {
     let max = max.max(1);
     ConcurrencyLimiter {
       inner: Arc::new(LimiterInner {
@@ -1065,7 +1053,7 @@ impl ConcurrencyLimiter {
     }
   }
 
-  pub(crate) fn acquire(&self) -> ConcurrencyPermit {
+  fn acquire(&self) -> ConcurrencyPermit {
     let mut guard = self.inner.active.lock().unwrap();
     while *guard >= self.inner.max {
       guard = self.inner.cv.wait(guard).unwrap();
@@ -1078,7 +1066,7 @@ impl ConcurrencyLimiter {
 }
 
 #[derive(Debug)]
-pub(crate) struct ConcurrencyPermit {
+struct ConcurrencyPermit {
   inner: Arc<LimiterInner>,
 }
 
@@ -1133,7 +1121,6 @@ impl SnapshotStore {
       metadata: TscMetadata::default(),
       diagnostics: diagnostics.to_vec(),
       crash: None,
-      type_facts: None,
     };
     let json = serde_json::to_string_pretty(&payload)?;
     std::fs::write(path, format!("{json}\n"))
@@ -1221,14 +1208,16 @@ mod tests {
 
     let file_set = HarnessFileSet::new(&files);
     let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
-    let roots = file_set.root_files();
+    let roots = file_set.root_keys();
 
     assert_eq!(roots.len(), 2);
 
-    let from = *roots.last().unwrap();
-    let a_id = host.resolve(from, "a.ts").expect("a.ts should resolve");
-    assert!(roots.contains(&a_id));
-    assert_eq!(&*host.file_text(a_id).unwrap(), "second version");
+    let from = roots.last().unwrap();
+    let a_key = host
+      .resolve(from, "a.ts")
+      .expect("a.ts should resolve");
+    assert!(roots.contains(&a_key));
+    assert_eq!(&*host.file_text(&a_key).unwrap(), "second version");
   }
 
   #[test]
@@ -1243,7 +1232,7 @@ mod tests {
     let compiler_options = harness_options.to_compiler_options();
     let file_set = HarnessFileSet::new(&files);
     let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
-    let program = Program::new(host, file_set.root_files());
+    let program = Program::new(host, file_set.root_keys());
 
     assert_eq!(program.compiler_options(), compiler_options);
   }

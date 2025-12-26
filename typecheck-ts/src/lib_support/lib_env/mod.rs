@@ -1,154 +1,65 @@
-mod prepared;
-
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use types_ts_interned::TypeOptions;
-
-use crate::FileId;
-
-pub(crate) use prepared::{prepare_lib, PreparedLib};
-
-use super::{CompilerOptions, LibFile, LibSet};
+use super::CompilerOptions;
+use super::LibFile;
+use super::LibSet;
 
 /// Loaded libraries for a particular set of options.
 #[derive(Clone, Debug)]
 pub struct LoadedLibs {
   pub lib_set: LibSet,
-  libs: Arc<Vec<PreparedLib>>,
+  pub files: Vec<LibFile>,
 }
 
 impl LoadedLibs {
   pub fn empty() -> Self {
     LoadedLibs {
       lib_set: LibSet::empty(),
-      libs: Arc::new(Vec::new()),
+      files: Vec::new(),
     }
   }
-
-  pub(crate) fn libs(&self) -> &[PreparedLib] {
-    &self.libs
-  }
-}
-
-#[derive(Default)]
-struct LibManagerCounters {
-  hits: AtomicUsize,
-  misses: AtomicUsize,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct LibManagerStats {
-  pub cache_hits: usize,
-  pub cache_misses: usize,
 }
 
 /// Simple manager that caches bundled libs for a given option set and tracks loads.
 #[derive(Default)]
 pub struct LibManager {
-  cache: Mutex<HashMap<LibCacheKey, Arc<LoadedLibs>>>,
-  stats: LibManagerCounters,
+  cache: Mutex<Option<(CompilerOptions, LoadedLibs)>>,
+  load_count: AtomicUsize,
 }
 
 impl LibManager {
   pub fn new() -> Self {
     LibManager {
-      cache: Mutex::new(HashMap::new()),
-      stats: LibManagerCounters::default(),
+      cache: Mutex::new(None),
+      load_count: AtomicUsize::new(0),
     }
   }
 
   /// How many times bundled libs were recomputed (useful for invalidation tests).
   pub fn load_count(&self) -> usize {
-    self.stats.misses.load(Ordering::SeqCst)
+    self.load_count.load(Ordering::SeqCst)
   }
 
   /// Return libs appropriate for the provided compiler options. If the options change,
   /// cached results are invalidated and libs are reloaded.
   pub fn bundled_libs(&self, options: &CompilerOptions) -> LoadedLibs {
-    let key = LibCacheKey::new(options);
-    if let Some(entry) = self.cache.lock().unwrap().get(&key).cloned() {
-      self.record_hit();
-      return entry.as_ref().clone();
-    }
-
-    let prepared = Arc::new(prepare_bundled_libs(&key));
     let mut cache = self.cache.lock().unwrap();
-    let entry = cache.entry(key).or_insert_with(|| {
-      self.record_miss();
-      prepared.clone()
-    });
-    if !Arc::ptr_eq(entry, &prepared) {
-      self.record_hit();
+    if let Some((ref cached_opts, ref libs)) = *cache {
+      if cached_opts == options {
+        return libs.clone();
+      }
     }
-    entry.as_ref().clone()
-  }
 
-  pub fn stats(&self) -> LibManagerStats {
-    LibManagerStats {
-      cache_hits: self.stats.hits.load(Ordering::SeqCst),
-      cache_misses: self.stats.misses.load(Ordering::SeqCst),
-    }
-  }
-
-  fn record_hit(&self) {
-    self.stats.hits.fetch_add(1, Ordering::SeqCst);
-  }
-
-  fn record_miss(&self) {
-    self.stats.misses.fetch_add(1, Ordering::SeqCst);
-  }
-}
-
-/// Subset of compiler options that affect type semantics for libraries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct TypeOptionsKey {
-  strict_null_checks: bool,
-  strict_function_types: bool,
-  exact_optional_property_types: bool,
-  no_unchecked_indexed_access: bool,
-}
-
-impl From<TypeOptions> for TypeOptionsKey {
-  fn from(options: TypeOptions) -> Self {
-    TypeOptionsKey {
-      strict_null_checks: options.strict_null_checks,
-      strict_function_types: options.strict_function_types,
-      exact_optional_property_types: options.exact_optional_property_types,
-      no_unchecked_indexed_access: options.no_unchecked_indexed_access,
-    }
-  }
-}
-
-impl From<&CompilerOptions> for TypeOptionsKey {
-  fn from(options: &CompilerOptions) -> Self {
-    TypeOptionsKey::from(TypeOptions::from(options))
-  }
-}
-
-/// Cache key combining the selected libs with type-affecting options.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct LibCacheKey {
-  lib_set: LibSet,
-  type_options: TypeOptionsKey,
-}
-
-impl LibCacheKey {
-  fn new(options: &CompilerOptions) -> Self {
-    LibCacheKey {
-      lib_set: LibSet::for_options(options),
-      type_options: TypeOptionsKey::from(options),
-    }
-  }
-}
-
-fn prepare_bundled_libs(key: &LibCacheKey) -> LoadedLibs {
-  let files = load_bundled(&key.lib_set);
-  let libs: Vec<_> = files.into_iter().map(prepare_lib).collect();
-  LoadedLibs {
-    lib_set: key.lib_set.clone(),
-    libs: Arc::new(libs),
+    let lib_set = LibSet::for_options(options);
+    let files = load_bundled(&lib_set);
+    let result = LoadedLibs {
+      lib_set: lib_set.clone(),
+      files,
+    };
+    *cache = Some((options.clone(), result.clone()));
+    self.load_count.fetch_add(1, Ordering::SeqCst);
+    result
   }
 }
 
@@ -165,10 +76,6 @@ fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
   }
 }
 
-fn bundled_file_id_for(index: usize) -> FileId {
-  FileId(1_000_000 + index as u32)
-}
-
 #[cfg(feature = "bundled-libs")]
 mod bundled {
   use std::sync::Arc;
@@ -177,15 +84,14 @@ mod bundled {
   use super::super::LibFile;
   use super::super::LibName;
   use super::super::LibSet;
-  use super::bundled_file_id_for;
+  use crate::FileKey;
 
   pub fn load_bundled(lib_set: &LibSet) -> Vec<LibFile> {
     lib_set
       .libs()
       .iter()
-      .enumerate()
-      .map(|(idx, name)| LibFile {
-        id: bundled_file_id_for(idx),
+      .map(|name| LibFile {
+        key: FileKey::new(format!("lib:{}", name.as_str())),
         name: Arc::from(name.as_str()),
         kind: FileKind::Dts,
         text: Arc::from(text_for(name)),

@@ -1,4 +1,4 @@
-use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRange};
+use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, DefId as HirDefId,
@@ -26,7 +26,7 @@ use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::convert::TryInto;
+use std::hash::{Hash, Hasher};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -39,8 +39,8 @@ use crate::codes;
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
-  BodyDataSnapshot, DefSnapshot, FileSnapshot, FileStateSnapshot, LoweringSnapshot,
-  ProgramInputsSnapshot, ProgramSnapshot, SemanticSnapshot, TypeSnapshot, PROGRAM_SNAPSHOT_VERSION,
+  BodyDataSnapshot, DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot,
+  PROGRAM_SNAPSHOT_VERSION,
 };
 use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
@@ -55,15 +55,14 @@ use check::legacy_narrow::{
   narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
 };
 
-use crate::lib_support::lib_env::{prepare_lib, PreparedLib};
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
   /// Return the full text for a file.
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError>;
+  fn file_text(&self, key: &FileKey) -> Result<Arc<str>, HostError>;
   /// Resolve a module specifier relative to `from`.
-  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId>;
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey>;
 
   /// Compiler options influencing lib selection and strictness.
   fn compiler_options(&self) -> CompilerOptions {
@@ -76,8 +75,119 @@ pub trait Host: Send + Sync + 'static {
   }
 
   /// Kind of the file; defaults to TypeScript.
-  fn file_kind(&self, _file: FileId) -> FileKind {
+  fn file_kind(&self, _file: &FileKey) -> FileKind {
     FileKind::Ts
+  }
+}
+
+/// Builder for configuring and constructing a [`Program`].
+pub struct ProgramBuilder {
+  host: Arc<dyn Host>,
+  roots: Vec<FileKey>,
+  lib_manager: Arc<LibManager>,
+}
+
+impl ProgramBuilder {
+  /// Create a builder for the given host.
+  pub fn new(host: impl Host) -> Self {
+    Self::with_lib_manager(host, Arc::new(LibManager::new()))
+  }
+
+  /// Create a builder with a shared lib manager (useful for tests observing invalidation).
+  pub fn with_lib_manager(host: impl Host, lib_manager: Arc<LibManager>) -> Self {
+    ProgramBuilder {
+      host: Arc::new(host),
+      roots: Vec::new(),
+      lib_manager,
+    }
+  }
+
+  /// Add an entry file.
+  pub fn add_root(mut self, root: impl Into<FileKey>) -> Self {
+    self.roots.push(root.into());
+    self
+  }
+
+  /// Add multiple entry files.
+  pub fn add_roots(mut self, roots: impl IntoIterator<Item = FileKey>) -> Self {
+    self.roots.extend(roots);
+    self
+  }
+
+  /// Build the program.
+  pub fn build(self) -> Program {
+    Program::with_lib_manager_arc(self.host, self.roots, self.lib_manager)
+  }
+
+  /// Convenience helper for building a program from an in-memory map of files.
+  pub fn from_memory_files<I, K, S>(files: I) -> ProgramBuilder
+  where
+    I: IntoIterator<Item = (K, S)>,
+    K: Into<FileKey>,
+    S: Into<Arc<str>>,
+  {
+    let mut host = MemoryHost::default();
+    let mut roots = Vec::new();
+    for (key, text) in files {
+      let key = key.into();
+      host.insert_with_kind(key.clone(), FileKind::Ts, text.into());
+      roots.push(key);
+    }
+    ProgramBuilder::new(host).add_roots(roots)
+  }
+}
+
+/// Simple in-memory host useful for tests and examples.
+#[derive(Default, Clone)]
+pub struct MemoryHost {
+  files: HashMap<FileKey, (Arc<str>, FileKind)>,
+  edges: HashMap<(FileKey, String), FileKey>,
+}
+
+impl MemoryHost {
+  /// Insert a file with a specific kind.
+  pub fn insert_with_kind(
+    &mut self,
+    key: impl Into<FileKey>,
+    kind: FileKind,
+    source: impl Into<Arc<str>>,
+  ) {
+    let key = key.into();
+    self.files.insert(key, (source.into(), kind));
+  }
+
+  /// Insert a TypeScript/JavaScript file.
+  pub fn insert(&mut self, key: impl Into<FileKey>, source: impl Into<Arc<str>>) {
+    self.insert_with_kind(key, FileKind::Ts, source);
+  }
+
+  /// Add a resolution edge for `from` and `specifier`.
+  pub fn link(&mut self, from: impl Into<FileKey>, specifier: &str, to: impl Into<FileKey>) {
+    self
+      .edges
+      .insert((from.into(), specifier.to_string()), to.into());
+  }
+}
+
+impl Host for MemoryHost {
+  fn file_text(&self, key: &FileKey) -> Result<Arc<str>, HostError> {
+    self
+      .files
+      .get(key)
+      .map(|(text, _)| text.clone())
+      .ok_or_else(|| HostError::new(format!("missing file {}", key.as_str())))
+  }
+
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+    self.edges.get(&(from.clone(), specifier.to_string())).cloned()
+  }
+
+  fn file_kind(&self, file: &FileKey) -> FileKind {
+    self
+      .files
+      .get(file)
+      .map(|(_, kind)| *kind)
+      .unwrap_or(FileKind::Ts)
   }
 }
 
@@ -86,7 +196,7 @@ pub mod semantic_js {
   /// Opaque symbol identifier.
   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
   #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-  pub struct SymbolId(pub u64);
+  pub struct SymbolId(pub u32);
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
     fn from(id: ::semantic_js::ts::SymbolId) -> Self {
@@ -255,18 +365,9 @@ fn parse_file(file: FileId, kind: FileKind, source: &str) -> Result<Node<TopLeve
 }
 
 fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeStore>, tti::TypeId) {
-  if let Some(store) = state.interned_store.as_ref() {
-    if store.contains_type_id(ty) {
-      return (Arc::clone(store), ty);
-    }
-  }
   let store = tti::TypeStore::new();
   let mut cache = HashMap::new();
-  let interned = if state.type_store.contains(ty) {
-    convert_type_for_display(ty, state, &store, &mut cache)
-  } else {
-    store.primitive_ids().unknown
-  };
+  let interned = convert_type_for_display(ty, state, &store, &mut cache);
   (store, interned)
 }
 
@@ -281,28 +382,26 @@ fn convert_type_for_display(
   }
   let primitives = store.primitive_ids();
   cache.insert(ty, primitives.unknown);
-  let mapped = match state.type_store.kind_opt(ty).cloned() {
-    Some(TypeKind::Any) => primitives.any,
-    Some(TypeKind::Unknown) => primitives.unknown,
-    Some(TypeKind::Never) => primitives.never,
-    Some(TypeKind::Void) => primitives.void,
-    Some(TypeKind::Number) => primitives.number,
-    Some(TypeKind::String) => primitives.string,
-    Some(TypeKind::Boolean) => primitives.boolean,
-    Some(TypeKind::Null) => primitives.null,
-    Some(TypeKind::Undefined) => primitives.undefined,
-    Some(TypeKind::LiteralString(name)) => {
+  let mapped = match state.type_store.kind(ty).clone() {
+    TypeKind::Any => primitives.any,
+    TypeKind::Unknown => primitives.unknown,
+    TypeKind::Never => primitives.never,
+    TypeKind::Void => primitives.void,
+    TypeKind::Number => primitives.number,
+    TypeKind::String => primitives.string,
+    TypeKind::Boolean => primitives.boolean,
+    TypeKind::Null => primitives.null,
+    TypeKind::Undefined => primitives.undefined,
+    TypeKind::LiteralString(name) => {
       let name = store.intern_name(name);
       store.intern_type(tti::TypeKind::StringLiteral(name))
     }
-    Some(TypeKind::LiteralNumber(value)) => match value.parse::<f64>() {
+    TypeKind::LiteralNumber(value) => match value.parse::<f64>() {
       Ok(num) => store.intern_type(tti::TypeKind::NumberLiteral(OrderedFloat(num))),
       Err(_) => primitives.number,
     },
-    Some(TypeKind::LiteralBoolean(value)) => {
-      store.intern_type(tti::TypeKind::BooleanLiteral(value))
-    }
-    Some(TypeKind::Tuple(elems, readonly)) => {
+    TypeKind::LiteralBoolean(value) => store.intern_type(tti::TypeKind::BooleanLiteral(value)),
+    TypeKind::Tuple(elems, readonly) => {
       let members: Vec<_> = elems
         .into_iter()
         .map(|ty| tti::TupleElem {
@@ -314,21 +413,21 @@ fn convert_type_for_display(
         .collect();
       store.intern_type(tti::TypeKind::Tuple(members))
     }
-    Some(TypeKind::Array(inner)) => {
+    TypeKind::Array(inner) => {
       let inner = convert_type_for_display(inner, state, store, cache);
       store.intern_type(tti::TypeKind::Array {
         ty: inner,
         readonly: false,
       })
     }
-    Some(TypeKind::Union(types)) => {
+    TypeKind::Union(types) => {
       let members: Vec<_> = types
         .into_iter()
         .map(|t| convert_type_for_display(t, state, store, cache))
         .collect();
       store.union(members)
     }
-    Some(TypeKind::Function { params, ret }) => {
+    TypeKind::Function { params, ret } => {
       let params: Vec<_> = params
         .into_iter()
         .map(|param| tti::Param {
@@ -344,11 +443,11 @@ fn convert_type_for_display(
         overloads: vec![sig_id],
       })
     }
-    Some(TypeKind::Predicate { asserted, .. }) => match asserted {
+    TypeKind::Predicate { asserted, .. } => match asserted {
       Some(ty) => convert_type_for_display(ty, state, store, cache),
       None => primitives.boolean,
     },
-    Some(TypeKind::Object(obj)) => {
+    TypeKind::Object(obj) => {
       let mut shape = tti::Shape::new();
       for (name, prop) in obj.props {
         let key = tti::PropKey::String(store.intern_name(name));
@@ -381,90 +480,15 @@ fn convert_type_for_display(
       let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
       store.intern_type(tti::TypeKind::Object(obj_id))
     }
-    None => primitives.unknown,
   };
   cache.insert(ty, mapped);
   mapped
 }
 
-fn convert_option_type_for_snapshot(
-  ty: Option<TypeId>,
-  state: &ProgramState,
-  store: &Arc<tti::TypeStore>,
-  cache: &mut HashMap<TypeId, tti::TypeId>,
-) -> Option<tti::TypeId> {
-  ty.map(|t| convert_type_for_display(t, state, store, cache))
-}
-
-fn convert_def_data_for_snapshot(
-  data: &DefData,
-  state: &ProgramState,
-  store: &Arc<tti::TypeStore>,
-  cache: &mut HashMap<TypeId, tti::TypeId>,
-) -> DefData {
-  let kind = match &data.kind {
-    DefKind::Function(func) => DefKind::Function(FuncData {
-      params: func
-        .params
-        .iter()
-        .map(|p| {
-          let mut param = p.clone();
-          param.typ = convert_option_type_for_snapshot(param.typ, state, store, cache);
-          param
-        })
-        .collect(),
-      return_ann: convert_option_type_for_snapshot(func.return_ann, state, store, cache),
-      body: func.body,
-    }),
-    DefKind::Var(var) => DefKind::Var(VarData {
-      typ: convert_option_type_for_snapshot(var.typ, state, store, cache),
-      init: var.init,
-      body: var.body,
-      mode: var.mode,
-    }),
-    DefKind::Import(import) => DefKind::Import(import.clone()),
-    DefKind::Interface(interface) => DefKind::Interface(InterfaceData {
-      typ: convert_type_for_display(interface.typ, state, store, cache),
-    }),
-    DefKind::TypeAlias(alias) => DefKind::TypeAlias(TypeAliasData {
-      typ: convert_type_for_display(alias.typ, state, store, cache),
-    }),
-  };
-  DefData {
-    kind,
-    ..data.clone()
-  }
-}
-
-fn convert_body_result_for_snapshot(
-  result: &BodyCheckResult,
-  state: &ProgramState,
-  store: &Arc<tti::TypeStore>,
-  cache: &mut HashMap<TypeId, tti::TypeId>,
-) -> BodyCheckResult {
-  let mut converted = result.clone();
-  converted.expr_types = result
-    .expr_types
-    .iter()
-    .map(|t| convert_type_for_display(*t, state, store, cache))
-    .collect();
-  converted.pat_types = result
-    .pat_types
-    .iter()
-    .map(|t| convert_type_for_display(*t, state, store, cache))
-    .collect();
-  converted.return_types = result
-    .return_types
-    .iter()
-    .map(|t| convert_type_for_display(*t, state, store, cache))
-    .collect();
-  converted
-}
-
 /// Primary entry point for parsing and type checking.
 pub struct Program {
   host: Arc<dyn Host>,
-  roots: Vec<FileId>,
+  roots: Vec<FileKey>,
   cancelled: AtomicBool,
   state: std::sync::Mutex<ProgramState>,
   query_stats: QueryStatsCollector,
@@ -478,23 +502,72 @@ const _: fn() = || {
 
 impl Program {
   /// Create a new program from a host and root file list.
-  pub fn new(host: impl Host, roots: Vec<FileId>) -> Program {
-    Program::with_lib_manager(host, roots, Arc::new(LibManager::new()))
+  pub fn new(host: impl Host, roots: Vec<FileKey>) -> Program {
+    ProgramBuilder::new(host).add_roots(roots).build()
   }
 
   /// Create a new program with a provided lib manager (useful for observing invalidation in tests).
-  pub fn with_lib_manager(
-    host: impl Host,
-    roots: Vec<FileId>,
-    lib_manager: Arc<LibManager>,
-  ) -> Program {
+  pub fn with_lib_manager(host: impl Host, roots: Vec<FileKey>, lib_manager: Arc<LibManager>) -> Program {
+    ProgramBuilder::with_lib_manager(host, lib_manager).add_roots(roots).build()
+  }
+
+  fn with_lib_manager_arc(host: Arc<dyn Host>, roots: Vec<FileKey>, lib_manager: Arc<LibManager>) -> Program {
     let query_stats = QueryStatsCollector::default();
     Program {
-      host: Arc::new(host),
+      host,
       roots,
       cancelled: AtomicBool::new(false),
       state: std::sync::Mutex::new(ProgramState::new(lib_manager, query_stats.clone())),
       query_stats,
+    }
+  }
+
+  /// Known file identifier for a host key, if it participated in analysis.
+  pub fn file_id(&self, key: &FileKey) -> Option<FileId> {
+    match self.with_analyzed_state(|state| Ok(state.host_file_id(key))) {
+      Ok(id) => id,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  /// Known key for a file identifier.
+  pub fn file_key(&self, file: FileId) -> Option<FileKey> {
+    match self.with_analyzed_state(|state| {
+      Ok(state.file_key(file).map(|k| k.key().clone()))
+    }) {
+      Ok(key) => key,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  /// All files (including bundled libs) that were part of the program.
+  pub fn files(&self) -> Vec<FileId> {
+    match self.with_analyzed_state(|state| Ok(state.all_files())) {
+      Ok(files) => files,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
+    }
+  }
+
+  /// Retrieve the full text for a file if available.
+  pub fn file_text(&self, file: FileId) -> Option<Arc<str>> {
+    match self.catch_fatal(|| {
+      let state = self.lock_state();
+      Ok(state.load_text(file, &self.host)?)
+    }) {
+      Ok(text) => Some(text),
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
     }
   }
 
@@ -1113,7 +1186,6 @@ impl Program {
   /// populated.
   #[cfg(feature = "serde")]
   pub fn snapshot(&self) -> ProgramSnapshot {
-    use diagnostics::sort_diagnostics;
     use sha2::{Digest, Sha256};
 
     let mut state = self.lock_state();
@@ -1134,19 +1206,24 @@ impl Program {
       let _ = state.type_of_def(*def);
     }
 
-    let mut roots = self.roots.clone();
-    roots.sort_by_key(|id| id.0);
-
     let mut file_ids: Vec<_> = state.file_kinds.keys().copied().collect();
     file_ids.sort_by_key(|id| id.0);
     let mut files = Vec::new();
     for file in file_ids {
       let kind = *state.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
+      let key = state.file_key(file).map(|k| k.key().clone());
+      let is_lib = matches!(
+        state.file_key(file),
+        Some(ProgramFileKey {
+          origin: FileOrigin::Lib,
+          ..
+        })
+      );
       let text = state
         .lib_texts
         .get(&file)
         .cloned()
-        .or_else(|| self.host.file_text(file).ok());
+        .or_else(|| key.as_ref().and_then(|k| self.host.file_text(k).ok()));
       let hash = if let Some(text) = text.as_ref() {
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
@@ -1156,25 +1233,14 @@ impl Program {
       };
       files.push(FileSnapshot {
         file,
+        key: key.unwrap_or_else(|| FileKey::new(format!("unknown:{file:?}"))),
+        is_lib,
         kind,
         hash,
         text: text.map(|t| t.to_string()),
       });
     }
-    let inputs = ProgramInputsSnapshot {
-      compiler_options: state.compiler_options.clone(),
-      roots,
-      files,
-    };
 
-    let interned_store = state
-      .interned_store
-      .as_ref()
-      .cloned()
-      .unwrap_or_else(tti::TypeStore::new);
-    let mut convert_cache = HashMap::new();
-
-    // Lowering snapshot (file states + defs/bodies).
     let mut file_states = Vec::new();
     let mut file_state_ids: Vec<_> = state.files.keys().copied().collect();
     file_state_ids.sort_by_key(|id| id.0);
@@ -1183,27 +1249,15 @@ impl Program {
       let mut bindings: Vec<_> = fs
         .bindings
         .iter()
-        .map(|(k, v)| {
-          let mut converted = v.clone();
-          converted.type_id = converted
-            .type_id
-            .map(|t| convert_type_for_display(t, &state, &interned_store, &mut convert_cache));
-          (k.clone(), converted)
-        })
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
       bindings.sort_by(|a, b| a.0.cmp(&b.0));
       let mut defs = fs.defs.clone();
       defs.sort_by_key(|d| d.0);
-      let mut exports = fs.exports.clone();
-      for entry in exports.values_mut() {
-        entry.type_id = entry
-          .type_id
-          .map(|t| convert_type_for_display(t, &state, &interned_store, &mut convert_cache));
-      }
       file_states.push(FileStateSnapshot {
         file,
         defs,
-        exports,
+        exports: fs.exports.clone(),
         bindings,
         top_body: fs.top_body,
       });
@@ -1214,7 +1268,7 @@ impl Program {
       if let Some(data) = state.def_data.get(def) {
         def_data.push(DefSnapshot {
           def: *def,
-          data: convert_def_data_for_snapshot(data, &state, &interned_store, &mut convert_cache),
+          data: data.clone(),
         });
       }
     }
@@ -1231,13 +1285,22 @@ impl Program {
         });
       }
     }
-    let lowering = LoweringSnapshot {
-      file_states,
-      def_data,
-      body_data,
-    };
 
-    // Semantics snapshot (symbol occurrences + bindings).
+    let mut def_types: Vec<_> = state
+      .def_types
+      .iter()
+      .map(|(def, ty)| (*def, *ty))
+      .collect();
+    def_types.sort_by_key(|(def, _)| def.0);
+
+    let mut body_results: Vec<_> = state
+      .body_results
+      .iter()
+      .map(|(id, res)| (*id, (**res).clone()))
+      .collect();
+    body_results.sort_by_key(|(id, _)| id.0);
+    let body_results: Vec<_> = body_results.into_iter().map(|(_, res)| res).collect();
+
     let mut symbol_occurrences: Vec<_> = state
       .symbol_occurrences
       .iter()
@@ -1259,80 +1322,51 @@ impl Program {
     let mut global_bindings: Vec<_> = state
       .global_bindings
       .iter()
-      .map(|(name, binding)| {
-        let mut converted = binding.clone();
-        converted.type_id = converted
-          .type_id
-          .map(|t| convert_type_for_display(t, &state, &interned_store, &mut convert_cache));
-        (name.clone(), converted)
-      })
+      .map(|(name, binding)| (name.clone(), binding.clone()))
       .collect();
     global_bindings.sort_by(|a, b| a.0.cmp(&b.0));
-    let semantics = SemanticSnapshot {
-      symbol_occurrences,
-      symbol_to_def,
-      global_bindings,
-    };
 
-    // Type snapshot (interned store + query outputs).
-    let mut def_types: Vec<_> = if state.interned_def_types.is_empty() {
-      state
-        .def_types
-        .iter()
-        .map(|(def, ty)| {
-          (
-            *def,
-            convert_type_for_display(*ty, &state, &interned_store, &mut convert_cache),
-          )
-        })
-        .collect()
-    } else {
-      state
-        .interned_def_types
-        .iter()
-        .map(|(def, ty)| (*def, *ty))
-        .collect()
-    };
-    def_types.sort_by_key(|(def, _)| def.0);
-
-    let mut body_results: Vec<_> = state
-      .body_results
+    let interned_type_store = state
+      .interned_store
+      .as_ref()
+      .map(|s| s.snapshot())
+      .unwrap_or_else(|| tti::TypeStore::new().snapshot());
+    let mut interned_def_types: Vec<_> = state
+      .interned_def_types
       .iter()
-      .map(|(id, res)| {
-        (
-          *id,
-          convert_body_result_for_snapshot(res, &state, &interned_store, &mut convert_cache),
-        )
-      })
+      .map(|(def, ty)| (*def, *ty))
       .collect();
-    body_results.sort_by_key(|(id, _)| id.0);
-    let body_results: Vec<_> = body_results.into_iter().map(|(_, res)| res).collect();
-
-    let mut type_params: Vec<_> = state
+    interned_def_types.sort_by_key(|(def, _)| def.0);
+    let mut interned_type_params: Vec<_> = state
       .interned_type_params
       .iter()
       .map(|(def, params)| (*def, params.clone()))
       .collect();
-    type_params.sort_by_key(|(def, _)| def.0);
-
-    let types = TypeSnapshot {
-      store: interned_store.snapshot(),
-      def_types,
-      body_results,
-      type_params,
-    };
-
-    let mut diagnostics = state.diagnostics.clone();
-    sort_diagnostics(&mut diagnostics);
+    interned_type_params.sort_by_key(|(def, _)| def.0);
 
     ProgramSnapshot {
       schema_version: PROGRAM_SNAPSHOT_VERSION,
       tool_version: env!("CARGO_PKG_VERSION").to_string(),
-      inputs,
-      lowering,
-      semantics,
-      diagnostics,
-      types,
+      compiler_options: state.compiler_options.clone(),
+      roots: self.roots.clone(),
+      files,
+      file_states,
+      def_data,
+      body_data,
+      def_types,
+      body_results,
+      symbol_occurrences,
+      symbol_to_def,
+      global_bindings,
+      diagnostics: state.diagnostics.clone(),
+      type_store: state.type_store.clone(),
+      interned_type_store,
+      interned_def_types,
+      interned_type_params,
+      builtin: state.builtin,
+      next_def: state.next_def,
+      next_body: state.next_body,
+      next_symbol: state.next_symbol,
     }
   }
 
@@ -1346,25 +1380,31 @@ impl Program {
       snapshot.schema_version, PROGRAM_SNAPSHOT_VERSION,
       "Program snapshot schema mismatch"
     );
-    let program = Program::with_lib_manager(
-      host,
-      snapshot.inputs.roots.clone(),
-      Arc::new(LibManager::new()),
-    );
+    let program =
+      Program::with_lib_manager(host, snapshot.roots.clone(), Arc::new(LibManager::new()));
     {
       let mut state = program.lock_state();
       state.analyzed = true;
-      state.compiler_options = snapshot.inputs.compiler_options;
+      state.compiler_options = snapshot.compiler_options;
       state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
-      for file in snapshot.inputs.files.into_iter() {
+      for file in snapshot.files.iter() {
+        let key = file.key.clone();
+        let pfk = if file.is_lib {
+          ProgramFileKey::lib(key.clone())
+        } else {
+          ProgramFileKey::host(key.clone())
+        };
+        state.file_keys.insert(file.file, pfk.clone());
+        state.key_to_id.insert(pfk, file.file);
         state.file_kinds.insert(file.file, file.kind);
-        if let Some(text) = file.text {
-          state.lib_texts.insert(file.file, Arc::from(text));
+        if let Some(text) = file.text.clone() {
+          if file.is_lib {
+            state.lib_texts.insert(file.file, Arc::from(text));
+          }
         }
       }
       state.files = snapshot
-        .lowering
         .file_states
         .into_iter()
         .map(|fs| {
@@ -1383,13 +1423,11 @@ impl Program {
         })
         .collect();
       state.def_data = snapshot
-        .lowering
         .def_data
         .into_iter()
         .map(|def| (def.def, def.data))
         .collect();
       state.body_data = snapshot
-        .lowering
         .body_data
         .into_iter()
         .map(|body| {
@@ -1406,24 +1444,24 @@ impl Program {
           )
         })
         .collect();
-      state.def_types = snapshot.types.def_types.iter().copied().collect();
+      state.def_types = snapshot.def_types.into_iter().collect();
       state.body_results = snapshot
-        .types
         .body_results
         .into_iter()
         .map(|res| (res.body(), Arc::new(res)))
         .collect();
-      state.symbol_occurrences = snapshot.semantics.symbol_occurrences.into_iter().collect();
-      state.symbol_to_def = snapshot.semantics.symbol_to_def.into_iter().collect();
-      state.global_bindings = snapshot.semantics.global_bindings.into_iter().collect();
+      state.symbol_occurrences = snapshot.symbol_occurrences.into_iter().collect();
+      state.symbol_to_def = snapshot.symbol_to_def.into_iter().collect();
+      state.global_bindings = snapshot.global_bindings.into_iter().collect();
       state.diagnostics = snapshot.diagnostics;
-      state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.types.store));
-      state
-        .interned_def_types
-        .extend(snapshot.types.def_types.into_iter());
-      state
-        .interned_type_params
-        .extend(snapshot.types.type_params.into_iter());
+      state.type_store = snapshot.type_store;
+      state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
+      state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
+      state.interned_type_params = snapshot.interned_type_params.into_iter().collect();
+      state.builtin = snapshot.builtin;
+      state.next_def = snapshot.next_def;
+      state.next_body = snapshot.next_body;
+      state.next_symbol = snapshot.next_symbol;
     }
     program
   }
@@ -1483,14 +1521,20 @@ struct FileState {
 
 struct HostResolver {
   host: Arc<dyn Host>,
+  id_to_key: HashMap<FileId, FileKey>,
+  key_to_id: HashMap<FileKey, FileId>,
 }
 
 impl sem_ts::Resolver for HostResolver {
   fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
+    let file_id = FileId(from.0);
+    let from_key = self.id_to_key.get(&file_id)?;
+    let resolved = self.host.resolve(from_key, specifier)?;
     self
-      .host
-      .resolve(FileId(from.0), specifier)
-      .map(|f| sem_ts::FileId(f.0))
+      .key_to_id
+      .get(&resolved)
+      .copied()
+      .map(|id| sem_ts::FileId(id.0))
   }
 }
 
@@ -1894,15 +1938,6 @@ impl TypeStore {
     self.kinds.get(id.0 as usize).unwrap()
   }
 
-  fn kind_opt(&self, id: TypeId) -> Option<&TypeKind> {
-    let idx: usize = id.0.try_into().ok()?;
-    self.kinds.get(idx)
-  }
-
-  fn contains(&self, id: TypeId) -> bool {
-    self.kind_opt(id).is_some()
-  }
-
   pub(crate) fn union(&mut self, mut types: Vec<TypeId>, builtin: &BuiltinTypes) -> TypeId {
     let mut flat = Vec::new();
     for ty in types.drain(..) {
@@ -2073,8 +2108,53 @@ impl QuerySpan {
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum FileOrigin {
+  Host,
+  Lib,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ProgramFileKey {
+  origin: FileOrigin,
+  key: FileKey,
+}
+
+impl ProgramFileKey {
+  fn host(key: FileKey) -> Self {
+    ProgramFileKey {
+      origin: FileOrigin::Host,
+      key,
+    }
+  }
+
+  fn lib(key: FileKey) -> Self {
+    ProgramFileKey {
+      origin: FileOrigin::Lib,
+      key,
+    }
+  }
+
+  fn key(&self) -> &FileKey {
+    &self.key
+  }
+}
+
+fn stable_file_id(key: &ProgramFileKey, salt: u64) -> FileId {
+  let mut hasher = std::collections::hash_map::DefaultHasher::new();
+  key.hash(&mut hasher);
+  hasher.write_u64(salt);
+  let mut raw = hasher.finish() as u32;
+  if raw == u32::MAX {
+    raw = raw.wrapping_sub(1);
+  }
+  FileId(raw)
+}
+
 struct ProgramState {
   analyzed: bool,
+  file_keys: HashMap<FileId, ProgramFileKey>,
+  key_to_id: HashMap<ProgramFileKey, FileId>,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
   checker_caches: CheckerCaches,
@@ -2106,11 +2186,20 @@ struct ProgramState {
 }
 
 impl ProgramState {
+  fn resolve_module(&mut self, file: FileId, specifier: &str, host: &Arc<dyn Host>) -> Option<FileId> {
+    let host_key = self.host_key(file)?;
+    host
+      .resolve(&host_key, specifier)
+      .map(|k| self.intern_host_key(k))
+  }
+
   fn new(lib_manager: Arc<LibManager>, query_stats: QueryStatsCollector) -> ProgramState {
     let default_options = CompilerOptions::default();
     let (type_store, builtin) = TypeStore::new();
     ProgramState {
       analyzed: false,
+      file_keys: HashMap::new(),
+      key_to_id: HashMap::new(),
       lib_manager,
       compiler_options: default_options.clone(),
       checker_caches: CheckerCaches::new(default_options.cache.clone()),
@@ -2142,7 +2231,59 @@ impl ProgramState {
     }
   }
 
-  fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileId], cancelled: &AtomicBool) {
+  fn intern_host_key(&mut self, key: FileKey) -> FileId {
+    self.intern_file_key(ProgramFileKey::host(key))
+  }
+
+  fn intern_lib_key(&mut self, key: FileKey) -> FileId {
+    self.intern_file_key(ProgramFileKey::lib(key))
+  }
+
+  fn intern_file_key(&mut self, key: ProgramFileKey) -> FileId {
+    if let Some(id) = self.key_to_id.get(&key) {
+      return *id;
+    }
+    let mut salt = 0;
+    loop {
+      let id = stable_file_id(&key, salt);
+      if id.0 == u32::MAX || self.file_keys.contains_key(&id) {
+        salt = salt.wrapping_add(1);
+        continue;
+      }
+      self.key_to_id.insert(key.clone(), id);
+      self.file_keys.insert(id, key);
+      return id;
+    }
+  }
+
+  fn file_key(&self, file: FileId) -> Option<ProgramFileKey> {
+    self.file_keys.get(&file).cloned()
+  }
+
+  fn host_key(&self, file: FileId) -> Option<FileKey> {
+    match self.file_key(file)? {
+      ProgramFileKey {
+        origin: FileOrigin::Host,
+        key,
+      } => Some(key),
+      _ => None,
+    }
+  }
+
+  fn host_file_id(&self, key: &FileKey) -> Option<FileId> {
+    self
+      .key_to_id
+      .get(&ProgramFileKey::host(key.clone()))
+      .copied()
+  }
+
+  fn all_files(&self) -> Vec<FileId> {
+    let mut files: Vec<_> = self.file_keys.keys().copied().collect();
+    files.sort_by_key(|f| f.0);
+    files
+  }
+
+  fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileKey], cancelled: &AtomicBool) {
     if let Err(fatal) = self.ensure_analyzed_result(host, roots, cancelled) {
       self.diagnostics.push(fatal_to_diagnostic(fatal));
     }
@@ -2151,17 +2292,23 @@ impl ProgramState {
   fn ensure_analyzed_result(
     &mut self,
     host: &Arc<dyn Host>,
-    roots: &[FileId],
+    roots: &[FileKey],
     cancelled: &AtomicBool,
   ) -> Result<(), FatalError> {
     if self.analyzed {
       return Ok(());
     }
     let libs = self.collect_libraries(host.as_ref());
-    let lib_ids: Vec<FileId> = libs.iter().map(|l| l.file.id).collect();
+    let lib_ids: Vec<FileId> = libs.iter().map(|(id, _)| *id).collect();
     let lib_id_set: HashSet<FileId> = lib_ids.iter().copied().collect();
     self.process_libs(&libs);
-    let mut queue: VecDeque<FileId> = roots.iter().copied().collect();
+    let mut root_ids = Vec::new();
+    let mut queue: VecDeque<FileId> = VecDeque::new();
+    for root in roots.iter().cloned() {
+      let id = self.intern_host_key(root);
+      root_ids.push(id);
+      queue.push_back(id);
+    }
     let mut seen: HashSet<FileId> = HashSet::new();
     while let Some(file) = queue.pop_front() {
       if cancelled.load(Ordering::Relaxed) {
@@ -2173,10 +2320,13 @@ impl ProgramState {
       if lib_id_set.contains(&file) {
         continue;
       }
+      let Some(host_key) = self.host_key(file) else {
+        continue;
+      };
       self
         .file_kinds
         .entry(file)
-        .or_insert_with(|| host.file_kind(file));
+        .or_insert_with(|| host.file_kind(&host_key));
       let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
       let text = self.load_text(file, host)?;
       let parse_span = QuerySpan::enter(
@@ -2237,7 +2387,7 @@ impl ProgramState {
       }
     }
     if !self.sem_hir.is_empty() {
-      self.compute_semantics(host, roots, &lib_ids);
+      self.compute_semantics(host, &root_ids, &lib_ids);
     }
     self.resolve_reexports();
     self.recompute_global_bindings();
@@ -2249,7 +2399,7 @@ impl ProgramState {
   fn ensure_interned_types(
     &mut self,
     host: &Arc<dyn Host>,
-    roots: &[FileId],
+    roots: &[FileKey],
     cancelled: &AtomicBool,
   ) -> Result<(), FatalError> {
     if self.interned_store.is_some() {
@@ -2294,7 +2444,6 @@ impl ProgramState {
         &mut self.diagnostics,
         Some(&def_map),
         Some(&def_by_name),
-        Some(host.as_ref()),
       );
       for def in lowered.defs.iter() {
         let Some(info) = def.type_info.as_ref() else {
@@ -2323,32 +2472,33 @@ impl ProgramState {
     Ok(())
   }
 
-  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<PreparedLib> {
+  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<(FileId, LibFile)> {
     let options = host.compiler_options();
     self.compiler_options = options.clone();
     self.checker_caches = CheckerCaches::new(options.cache.clone());
     self.cache_stats = CheckerCacheStats::default();
-    let mut libs: Vec<PreparedLib> = host.lib_files().into_iter().map(prepare_lib).collect();
+    let mut libs = host.lib_files();
     if !options.no_default_lib {
       let bundled = self.lib_manager.bundled_libs(&options);
-      libs.extend(bundled.libs().iter().cloned());
+      libs.extend(bundled.files);
     }
 
     let mut dts_libs = Vec::new();
     for lib in libs.into_iter() {
-      let is_dts = lib.file.kind == FileKind::Dts || lib.file.name.ends_with(".d.ts");
+      let id = self.intern_lib_key(lib.key.clone());
+      let is_dts = lib.kind == FileKind::Dts || lib.name.ends_with(".d.ts");
       if !is_dts {
         self.diagnostics.push(codes::NON_DTS_LIB.warning(
           format!(
             "Library '{}' is not a .d.ts file; it will be ignored for global declarations.",
-            lib.file.name
+            lib.name
           ),
-          Span::new(lib.file.id, TextRange::new(0, 0)),
+          Span::new(id, TextRange::new(0, 0)),
         ));
         continue;
       }
-      self.file_kinds.insert(lib.file.id, FileKind::Dts);
-      dts_libs.push(lib);
+      self.file_kinds.insert(id, FileKind::Dts);
+      dts_libs.push((id, lib));
     }
 
     if dts_libs.is_empty() {
@@ -2363,15 +2513,21 @@ impl ProgramState {
     dts_libs
   }
 
-  fn process_libs(&mut self, libs: &[PreparedLib]) {
-    for lib in libs {
-      self.lib_texts.insert(lib.file.id, lib.file.text.clone());
-      self.diagnostics.extend(lib.diagnostics.iter().cloned());
-      if let Some(lowered) = lib.lowered.as_ref() {
-        self.hir_lowered.insert(lib.file.id, (**lowered).clone());
-      }
-      if let Some(sem_hir) = lib.sem_hir.as_ref() {
-        self.sem_hir.insert(lib.file.id, (**sem_hir).clone());
+  fn process_libs(&mut self, libs: &[(FileId, LibFile)]) {
+    for (id, lib) in libs {
+      self.lib_texts.insert(*id, lib.text.clone());
+      let parsed = parse_file(*id, FileKind::Dts, lib.text.as_ref());
+      match parsed {
+        Ok(ast) => {
+          let (lowered, lower_diags) = lower_hir_with_diagnostics(*id, HirFileKind::Dts, &ast);
+          self.diagnostics.extend(lower_diags);
+          let sem_hir = sem_hir_from_lower(&lowered);
+          self.hir_lowered.insert(*id, lowered);
+          self.sem_hir.insert(*id, sem_hir);
+        }
+        Err(err) => {
+          self.diagnostics.push(err);
+        }
       }
     }
   }
@@ -2380,7 +2536,13 @@ impl ProgramState {
     if let Some(text) = self.lib_texts.get(&file) {
       return Ok(text.clone());
     }
-    host.file_text(file)
+    let Some(key) = self.host_key(file) else {
+      return Err(HostError::new(format!(
+        "missing host file for id {:?}",
+        file
+      )));
+    };
+    host.file_text(&key)
   }
 
   fn recompute_global_bindings(&mut self) {
@@ -2429,8 +2591,23 @@ impl ProgramState {
   }
 
   fn compute_semantics(&mut self, host: &Arc<dyn Host>, roots: &[FileId], libs: &[FileId]) {
+    let id_to_key: HashMap<FileId, FileKey> = self
+      .file_keys
+      .iter()
+      .filter_map(|(id, key)| match key {
+        ProgramFileKey {
+          origin: FileOrigin::Host,
+          key,
+        } => Some((*id, key.clone())),
+        _ => None,
+      })
+      .collect();
+    let key_to_id: HashMap<FileKey, FileId> =
+      id_to_key.iter().map(|(id, key)| (key.clone(), *id)).collect();
     let resolver = HostResolver {
       host: Arc::clone(host),
+      id_to_key,
+      key_to_id,
     };
     let mut sem_roots: Vec<sem_ts::FileId> = roots
       .iter()
@@ -2903,7 +3080,7 @@ impl ProgramState {
             .stx
             .from
             .as_ref()
-            .and_then(|module| host.resolve(file, module));
+            .and_then(|module| self.resolve_module(file, module, host));
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -2991,7 +3168,7 @@ impl ProgramState {
         }
         Stmt::Import(import_stmt) => {
           let module = import_stmt.stx.module.clone();
-          let resolved = host.resolve(file, &module);
+          let resolved = self.resolve_module(file, &module, host);
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -4072,9 +4249,8 @@ impl ProgramState {
           if prop.is_spread {
             continue;
           }
-          let expected = context.and_then(|ctx| {
-            check::object_literal::legacy_contextual_property_type(self, ctx, &prop.name)
-          });
+          let expected = context
+            .and_then(|ctx| check::object_literal::contextual_property_type(self, ctx, &prop.name));
           let (mut ty, _) = self.check_expr(&prop.value, env, result, file, expected.or(context));
           if expected.is_none() && context != Some(self.builtin.never) {
             ty = self.widen_literal(ty);

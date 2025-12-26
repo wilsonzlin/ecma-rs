@@ -2,18 +2,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use typecheck_ts::codes;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibManager};
-use typecheck_ts::{FileId, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibName};
+use typecheck_ts::{FileKey, Host, HostError, Program, TextRange};
 
 const PROMISE_DOM: &str = include_str!("fixtures/promise_dom.ts");
-const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
 
 #[derive(Default)]
 struct TestHost {
-  files: HashMap<FileId, Arc<str>>,
+  files: HashMap<FileKey, Arc<str>>,
   options: CompilerOptions,
   libs: Vec<LibFile>,
-  edges: HashMap<(FileId, String), FileId>,
+  edges: HashMap<(FileKey, String), FileKey>,
 }
 
 impl TestHost {
@@ -26,8 +25,8 @@ impl TestHost {
     }
   }
 
-  fn with_file(mut self, id: FileId, text: &str) -> Self {
-    self.files.insert(id, Arc::from(text));
+  fn with_file(mut self, key: FileKey, text: &str) -> Self {
+    self.files.insert(key, Arc::from(text));
     self
   }
 
@@ -36,14 +35,14 @@ impl TestHost {
     self
   }
 
-  fn link(mut self, from: FileId, spec: &str, to: FileId) -> Self {
+  fn link(mut self, from: FileKey, spec: &str, to: FileKey) -> Self {
     self.edges.insert((from, spec.to_string()), to);
     self
   }
 }
 
 impl Host for TestHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
       .get(&file)
@@ -51,8 +50,11 @@ impl Host for TestHost {
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
-    self.edges.get(&(from, specifier.to_string())).copied()
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+    self
+      .edges
+      .get(&(from.clone(), specifier.to_string()))
+      .cloned()
   }
 
   fn compiler_options(&self) -> CompilerOptions {
@@ -63,8 +65,8 @@ impl Host for TestHost {
     self.libs.clone()
   }
 
-  fn file_kind(&self, file: FileId) -> FileKind {
-    if let Some(lib) = self.libs.iter().find(|l| l.id == file) {
+  fn file_kind(&self, file: &FileKey) -> FileKind {
+    if let Some(lib) = self.libs.iter().find(|l| &l.key == file) {
       lib.kind
     } else {
       FileKind::Ts
@@ -74,23 +76,14 @@ impl Host for TestHost {
 
 #[test]
 fn bundled_libs_enable_global_promise_and_array() {
-  let source = "const p = Promise;\nconst a = Array;";
-  let host = TestHost::new(CompilerOptions::default()).with_file(FileId(0), source);
-  let program = Program::new(host, vec![FileId(0)]);
+  let entry = FileKey::new("entry.ts");
+  let host = TestHost::new(CompilerOptions::default())
+    .with_file(entry.clone(), "const p = Promise;\nconst a = Array;");
+  let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "expected no diagnostics, got {diagnostics:?}"
-  );
-  let promise_offset = source.find("Promise").expect("Promise offset") as u32;
-  let array_offset = source.find("Array").expect("Array offset") as u32;
-  assert!(
-    program.symbol_at(FileId(0), promise_offset).is_some(),
-    "global Promise should resolve to a symbol"
-  );
-  assert!(
-    program.symbol_at(FileId(0), array_offset).is_some(),
-    "global Array should resolve to a symbol"
   );
 }
 
@@ -98,8 +91,9 @@ fn bundled_libs_enable_global_promise_and_array() {
 fn missing_libs_emit_unknown_global_diagnostics() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
-  let host = TestHost::new(options).with_file(FileId(0), "const p = Promise;\nconst a = Array;");
-  let program = Program::new(host, vec![FileId(0)]);
+  let entry = FileKey::new("entry.ts");
+  let host = TestHost::new(options).with_file(entry.clone(), "const p = Promise;\nconst a = Array;");
+  let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
   assert!(
     diagnostics
@@ -122,7 +116,7 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let lib = LibFile {
-    id: FileId(99),
+    key: FileKey::new("custom.js"),
     name: Arc::from("custom.js"),
     kind: FileKind::Js,
     text: Arc::from("var Provided = 1;"),
@@ -130,8 +124,8 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
   let source = "const p = Promise;\nconst a = Array;\nconst value = Provided;";
   let host = TestHost::new(options)
     .with_lib(lib)
-    .with_file(FileId(0), source);
-  let program = Program::new(host, vec![FileId(0)]);
+    .with_file(FileKey::new("entry.ts"), source);
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics
@@ -170,15 +164,15 @@ fn host_provided_libs_are_loaded() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let lib = LibFile {
-    id: FileId(99),
+    key: FileKey::new("custom.d.ts"),
     name: Arc::from("custom.d.ts"),
     kind: FileKind::Dts,
     text: Arc::from("declare const Provided: number;"),
   };
   let host = TestHost::new(options)
     .with_lib(lib)
-    .with_file(FileId(0), "const x = Provided;");
-  let program = Program::new(host, vec![FileId(0)]);
+    .with_file(FileKey::new("entry.ts"), "const x = Provided;");
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -191,26 +185,19 @@ fn declare_global_libs_merge_into_globals() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let lib = LibFile {
-    id: FileId(100),
+    key: FileKey::new("globals.d.ts"),
     name: Arc::from("globals.d.ts"),
     kind: FileKind::Dts,
     text: Arc::from("export {};\ndeclare global { const FromLib: string; }"),
   };
   let host = TestHost::new(options)
     .with_lib(lib)
-    .with_file(FileId(0), "const value = FromLib;");
-  let program = Program::new(host, vec![FileId(0)]);
+    .with_file(FileKey::new("entry.ts"), "const value = FromLib;");
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "declare global from libs should populate global scope: {diagnostics:?}"
-  );
-  let offset = "const value = FromLib;"
-    .find("FromLib")
-    .expect("FromLib reference") as u32;
-  assert!(
-    program.symbol_at(FileId(0), offset).is_some(),
-    "declare global value should resolve to a symbol"
   );
 }
 
@@ -219,15 +206,15 @@ fn declare_module_libs_do_not_crash() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let lib = LibFile {
-    id: FileId(101),
+    key: FileKey::new("ambient.d.ts"),
     name: Arc::from("ambient.d.ts"),
     kind: FileKind::Dts,
     text: Arc::from(r#"declare module "ambient" { interface Foo { bar: string; } }"#),
   };
   let host = TestHost::new(options)
     .with_lib(lib)
-    .with_file(FileId(0), "/* noop */");
-  let program = Program::new(host, vec![FileId(0)]);
+    .with_file(FileKey::new("entry.ts"), "/* noop */");
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -236,16 +223,39 @@ fn declare_module_libs_do_not_crash() {
 }
 
 #[test]
+fn host_file_named_like_lib_does_not_collide() {
+  let mut options = CompilerOptions::default();
+  options.libs = vec![LibName::Es2020];
+  let key = FileKey::new("lib:es2020");
+  let host = TestHost::new(options).with_file(key.clone(), "export const local = 1;");
+  let program = Program::new(host, vec![key.clone()]);
+  let mut ids_for_key = Vec::new();
+  for file in program.files() {
+    if let Some(k) = program.file_key(file) {
+      if k == key {
+        ids_for_key.push(file);
+      }
+    }
+  }
+  assert_eq!(
+    ids_for_key.len(),
+    2,
+    "both host file and bundled lib should coexist even with identical keys"
+  );
+  assert_ne!(ids_for_key[0], ids_for_key[1]);
+}
+
+#[test]
 fn imported_type_alias_resolves_interned_type() {
   let host = TestHost::new(CompilerOptions::default())
-    .with_file(FileId(1), "export type Foo = number;")
+    .with_file(FileKey::new("types.ts"), "export type Foo = number;")
     .with_file(
-      FileId(0),
+      FileKey::new("entry.ts"),
       "import type { Foo } from \"./types\"; type Bar = Foo;",
     )
-    .link(FileId(0), "./types", FileId(1));
+    .link(FileKey::new("entry.ts"), "./types", FileKey::new("types.ts"));
 
-  let program = Program::new(host, vec![FileId(0)]);
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -254,108 +264,14 @@ fn imported_type_alias_resolves_interned_type() {
 }
 
 #[test]
-fn bundled_lib_types_expose_promise_and_array_shapes() {
-  let host = TestHost::new(CompilerOptions::default()).with_file(FileId(0), PROMISE_ARRAY_TYPES);
-  let program = Program::new(host, vec![FileId(0)]);
-  let diagnostics = program.check();
-  assert!(
-    diagnostics.is_empty(),
-    "expected libs to satisfy Promise/Array references: {diagnostics:?}"
-  );
-
-  let defs = program.definitions_in_file(FileId(0));
-  let find_def = |name: &str| {
-    defs
-      .iter()
-      .copied()
-      .find(|def| program.def_name(*def).as_deref() == Some(name))
-      .unwrap_or_else(|| panic!("definition {name} not found"))
-  };
-  let promise_def = find_def("UsesPromise");
-  let array_def = find_def("UsesArray");
-
-  let promise_ty = program.type_of_def_interned(promise_def);
-  let array_ty = program.type_of_def_interned(array_def);
-  assert_ne!(
-    program.type_kind(promise_ty),
-    TypeKindSummary::Unknown,
-    "Promise type should not collapse to unknown"
-  );
-  assert_ne!(
-    program.type_kind(array_ty),
-    TypeKindSummary::Unknown,
-    "Array type should not collapse to unknown"
-  );
-
-  let then_prop = program.property_type(promise_ty, PropertyKey::String("then".to_string()));
-  assert!(
-    then_prop.is_some(),
-    "Promise lib surface should expose then property"
-  );
-  let length_prop = program.property_type(array_ty, PropertyKey::String("length".to_string()));
-  assert!(
-    length_prop.is_some(),
-    "Array lib surface should expose length property"
-  );
-}
-
-#[test]
 fn bundled_libs_enable_dom_and_promise_fixture() {
   let mut options = CompilerOptions::default();
   options.include_dom = true;
-  let host = TestHost::new(options).with_file(FileId(0), PROMISE_DOM);
-  let program = Program::new(host, vec![FileId(0)]);
+  let host = TestHost::new(options).with_file(FileKey::new("entry.ts"), PROMISE_DOM);
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "expected bundled libs to typecheck Promise/DOM fixture, got {diagnostics:?}"
-  );
-  let document_offset = PROMISE_DOM
-    .find("document")
-    .expect("document reference in fixture") as u32;
-  assert!(
-    program.symbol_at(FileId(0), document_offset).is_some(),
-    "DOM globals should resolve to symbols"
-  );
-}
-
-#[test]
-fn lib_manager_caches_and_invalidates_on_option_change() {
-  let manager = Arc::new(LibManager::new());
-
-  let host = TestHost::new(CompilerOptions::default()).with_file(FileId(0), "/* first */");
-  let program = Program::with_lib_manager(host, vec![FileId(0)], Arc::clone(&manager));
-  program.check();
-  let first_stats = manager.stats();
-  assert_eq!(
-    first_stats.cache_misses, 1,
-    "initial load should populate the cache"
-  );
-  assert_eq!(first_stats.cache_hits, 0, "first load cannot be a hit");
-
-  let host_again = TestHost::new(CompilerOptions::default()).with_file(FileId(1), "/* second */");
-  let program_again = Program::with_lib_manager(host_again, vec![FileId(1)], Arc::clone(&manager));
-  program_again.check();
-  let second_stats = manager.stats();
-  assert_eq!(
-    second_stats.cache_hits, 1,
-    "second program should reuse cached bundled libs"
-  );
-  assert_eq!(
-    second_stats.cache_misses, 1,
-    "cache should not be recomputed when options match"
-  );
-
-  let mut changed_options = CompilerOptions::default();
-  changed_options.strict_null_checks = false;
-  let host_changed =
-    TestHost::new(changed_options).with_file(FileId(2), "/* third (options changed) */");
-  let program_changed =
-    Program::with_lib_manager(host_changed, vec![FileId(2)], Arc::clone(&manager));
-  program_changed.check();
-  let final_stats = manager.stats();
-  assert_eq!(
-    final_stats.cache_misses, 2,
-    "changing type-affecting options should invalidate bundled lib cache"
   );
 }

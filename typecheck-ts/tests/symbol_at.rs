@@ -1,38 +1,7 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use typecheck_ts::semantic_js::SymbolId;
-use typecheck_ts::{FileId, Host, HostError, Program, TextRange};
-
-#[derive(Default)]
-struct MemoryHost {
-  files: HashMap<FileId, Arc<str>>,
-  edges: HashMap<(FileId, String), FileId>,
-}
-
-impl MemoryHost {
-  fn insert(&mut self, id: FileId, text: &str) {
-    self.files.insert(id, Arc::from(text.to_string()));
-  }
-
-  fn link(&mut self, from: FileId, spec: &str, to: FileId) {
-    self.edges.insert((from, spec.to_string()), to);
-  }
-}
-
-impl Host for MemoryHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
-    self
-      .files
-      .get(&file)
-      .cloned()
-      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
-  }
-
-  fn resolve(&self, from: FileId, spec: &str) -> Option<FileId> {
-    self.edges.get(&(from, spec.to_string())).copied()
-  }
-}
+use typecheck_ts::{FileId, FileKey, MemoryHost, Program, TextRange};
 
 fn positions_of(source: &str, needle: &str) -> Vec<u32> {
   let mut positions = Vec::new();
@@ -76,11 +45,12 @@ fn symbol_for_occurrence(
 fn expr_at_prefers_innermost_span() {
   let mut host = MemoryHost::default();
   let source = "const value = 1 + (2 + 3);";
-  let file = FileId(0);
-  host.insert(file, source);
+  let file = FileKey::new("file.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
 
-  let program = Program::new(host, vec![file]);
-  let main_body = program.file_body(file).expect("body for file");
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+  let main_body = program.file_body(file_id).expect("body for file");
   let result = program.check_body(main_body);
   let mut spans = Vec::new();
   let mut idx = 0;
@@ -114,28 +84,32 @@ fn expr_at_prefers_innermost_span() {
   let (_expected_expr, expected_span) = target.expect("nested expressions");
   let offset = expected_span.start;
 
-  let (found_body, expr) = program.expr_at(file, offset).expect("expression at offset");
+  let (found_body, expr) = program
+    .expr_at(file_id, offset)
+    .expect("expression at offset");
   assert_eq!(found_body, main_body);
   let span = result.expr_span(expr).expect("expr span");
   assert_eq!(span, expected_span);
 
-  let ty = program.type_at(file, offset).expect("type at offset");
+  let ty = program.type_at(file_id, offset).expect("type at offset");
   assert_eq!(program.display_type(ty).to_string(), "number");
 }
 
 #[test]
 fn symbol_at_resolves_imports() {
   let mut host = MemoryHost::default();
-  let file_a = FileId(0);
-  let file_b = FileId(1);
+  let file_a = FileKey::new("a.ts");
+  let file_b = FileKey::new("b.ts");
   let source_a = "export function foo() { return 1; }";
   let source_b = "import { foo } from \"./a\";\nexport const result = foo();\n";
 
-  host.insert(file_a, source_a);
-  host.insert(file_b, source_b);
-  host.link(file_b, "./a", file_a);
+  host.insert(file_a.clone(), Arc::from(source_a.to_string()));
+  host.insert(file_b.clone(), Arc::from(source_b.to_string()));
+  host.link(file_b.clone(), "./a", file_a.clone());
 
-  let program = Program::new(host, vec![file_b]);
+  let program = Program::new(host, vec![file_b.clone()]);
+  let file_a = program.file_id(&file_a).unwrap();
+  let file_b = program.file_id(&file_b).unwrap();
   let decl_symbol = symbol_for_occurrence(&program, file_a, source_a, "foo", 0);
   let import_symbol = symbol_for_occurrence(&program, file_b, source_b, "foo", 0);
   let use_symbol = symbol_for_occurrence(&program, file_b, source_b, "foo", 1);
@@ -147,16 +121,18 @@ fn symbol_at_resolves_imports() {
 #[test]
 fn symbol_at_import_binding_with_alias() {
   let mut host = MemoryHost::default();
-  let file_a = FileId(0);
-  let file_b = FileId(1);
+  let file_a = FileKey::new("a.ts");
+  let file_b = FileKey::new("b.ts");
   let source_a = "export const original = 1;";
   let source_b = "import { original as alias } from \"./a\";\nconst value = alias;";
 
-  host.insert(file_a, source_a);
-  host.insert(file_b, source_b);
-  host.link(file_b, "./a", file_a);
+  host.insert(file_a.clone(), Arc::from(source_a.to_string()));
+  host.insert(file_b.clone(), Arc::from(source_b.to_string()));
+  host.link(file_b.clone(), "./a", file_a.clone());
 
-  let program = Program::new(host, vec![file_b]);
+  let program = Program::new(host, vec![file_b.clone()]);
+  let file_a = program.file_id(&file_a).unwrap();
+  let file_b = program.file_id(&file_b).unwrap();
 
   let decl_symbol = symbol_for_occurrence(&program, file_a, source_a, "original", 0);
   let import_symbol = symbol_for_occurrence(&program, file_b, source_b, "alias", 0);
@@ -169,11 +145,12 @@ fn symbol_at_import_binding_with_alias() {
 #[test]
 fn symbol_at_respects_local_shadowing() {
   let mut host = MemoryHost::default();
-  let file = FileId(0);
+  let file = FileKey::new("file.ts");
   let source = "const foo = 1; function wrap() { const foo = 2; return foo; } const again = foo;";
-  host.insert(file, source);
+  host.insert(file.clone(), Arc::from(source.to_string()));
 
-  let program = Program::new(host, vec![file]);
+  let program = Program::new(host, vec![file.clone()]);
+  let file = program.file_id(&file).unwrap();
   let outer_symbol = symbol_for_occurrence(&program, file, source, "foo", 0);
   let inner_symbol = symbol_for_occurrence(&program, file, source, "foo", 1);
   let inner_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 2);
@@ -193,16 +170,18 @@ fn symbol_at_respects_local_shadowing() {
 #[test]
 fn symbol_at_resolves_type_only_imports() {
   let mut host = MemoryHost::default();
-  let file_a = FileId(0);
-  let file_b = FileId(1);
+  let file_a = FileKey::new("a.ts");
+  let file_b = FileKey::new("b.ts");
   let source_a = "export type Foo = { value: number };";
   let source_b = "import type { Foo } from \"./a\";\ntype Bar = Foo;";
 
-  host.insert(file_a, source_a);
-  host.insert(file_b, source_b);
-  host.link(file_b, "./a", file_a);
+  host.insert(file_a.clone(), Arc::from(source_a.to_string()));
+  host.insert(file_b.clone(), Arc::from(source_b.to_string()));
+  host.link(file_b.clone(), "./a", file_a.clone());
 
-  let program = Program::new(host, vec![file_b]);
+  let program = Program::new(host, vec![file_b.clone()]);
+  let file_a = program.file_id(&file_a).unwrap();
+  let file_b = program.file_id(&file_b).unwrap();
   let decl_symbol = symbol_for_occurrence(&program, file_a, source_a, "Foo", 0);
   let import_symbol = symbol_for_occurrence(&program, file_b, source_b, "Foo", 0);
   let use_symbol = symbol_for_occurrence(&program, file_b, source_b, "Foo", 1);

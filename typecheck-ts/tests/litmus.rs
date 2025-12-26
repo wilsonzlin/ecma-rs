@@ -3,51 +3,52 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use typecheck_ts::{BodyId, ExprId, FileId, Host, HostError, Program, Severity};
+use typecheck_ts::{BodyId, ExprId, FileId, FileKey, Host, HostError, Program, Severity};
 
 #[derive(Clone)]
 struct FixtureHost {
-  sources: HashMap<FileId, Arc<str>>,
-  path_by_id: HashMap<FileId, String>,
-  id_by_path: HashMap<String, FileId>,
+  sources: HashMap<FileKey, Arc<str>>,
+  path_by_key: HashMap<FileKey, String>,
+  key_by_path: HashMap<String, FileKey>,
 }
 
 impl FixtureHost {
   fn new(files: &[(String, String)]) -> FixtureHost {
     let mut sources = HashMap::new();
-    let mut path_by_id = HashMap::new();
-    let mut id_by_path = HashMap::new();
-    for (idx, (path, source)) in files.iter().enumerate() {
-      let id = FileId(idx as u32);
-      sources.insert(id, Arc::from(source.clone()));
-      path_by_id.insert(id, path.clone());
-      id_by_path.insert(path.clone(), id);
+    let mut path_by_key = HashMap::new();
+    let mut key_by_path = HashMap::new();
+    for (path, source) in files.iter() {
+      let key = FileKey::new(path.clone());
+      sources.insert(key.clone(), Arc::from(source.clone()));
+      path_by_key.insert(key.clone(), path.clone());
+      key_by_path.insert(path.clone(), key);
     }
     FixtureHost {
       sources,
-      path_by_id,
-      id_by_path,
+      path_by_key,
+      key_by_path,
     }
   }
 
-  fn file_id(&self, path: &str) -> FileId {
-    *self
-      .id_by_path
+  fn file_key(&self, path: &str) -> FileKey {
+    self
+      .key_by_path
       .get(path)
+      .cloned()
       .unwrap_or_else(|| panic!("no file named {path}"))
   }
 
-  fn path(&self, id: FileId) -> &str {
+  fn path(&self, key: &FileKey) -> &str {
     self
-      .path_by_id
-      .get(&id)
+      .path_by_key
+      .get(key)
       .map(|s| s.as_str())
       .unwrap_or("<unknown>")
   }
 }
 
 impl Host for FixtureHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .sources
       .get(&file)
@@ -55,7 +56,7 @@ impl Host for FixtureHost {
       .ok_or_else(|| HostError::new(format!("missing file {:?}", file)))
   }
 
-  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
     let from_path = Path::new(self.path(from));
     let mut resolved = PathBuf::new();
     if let Some(parent) = from_path.parent() {
@@ -66,7 +67,7 @@ impl Host for FixtureHost {
       resolved.set_extension("ts");
     }
     let normalized = normalize_path(&resolved);
-    self.id_by_path.get(&normalized).copied()
+    self.key_by_path.get(&normalized).cloned()
   }
 }
 
@@ -140,15 +141,15 @@ fn collect_fixture_dirs(base: &Path) -> Vec<PathBuf> {
 fn run_fixture(path: &Path) {
   let fixture = load_fixture(path);
   let host = FixtureHost::new(&fixture.files);
-  let roots: Vec<FileId> = fixture
+  let roots: Vec<FileKey> = fixture
     .roots
     .iter()
-    .map(|root| host.file_id(root))
+    .map(|root| host.file_key(root))
     .collect();
   let mut program = Program::new(host.clone(), roots);
   let diagnostics = program.check();
 
-  assert_diagnostics(&host, &fixture.expectations, &diagnostics);
+  assert_diagnostics(&program, &host, &fixture.expectations, &diagnostics);
   assert_def_types(&mut program, &host, &fixture.expectations);
   assert_expr_types(&mut program, &host, &fixture.expectations);
 }
@@ -307,7 +308,10 @@ fn find_snippet(
 
 fn assert_def_types(program: &mut Program, host: &FixtureHost, expectations: &FixtureExpectations) {
   for expect in expectations.def_types.iter() {
-    let file = host.file_id(&expect.file);
+    let file_key = host.file_key(&expect.file);
+    let file = program
+      .file_id(&file_key)
+      .unwrap_or_else(|| panic!("missing file id for {}", expect.file));
     let def = program
       .definitions_in_file(file)
       .into_iter()
@@ -332,7 +336,10 @@ fn assert_expr_types(
     let offset = expect
       .offset
       .unwrap_or_else(|| panic!("missing offset for {}", expect.snippet));
-    let file = host.file_id(&expect.file);
+    let file_key = host.file_key(&expect.file);
+    let file = program
+      .file_id(&file_key)
+      .unwrap_or_else(|| panic!("missing file id for {}", expect.file));
     let ty = resolve_expr_type(program, file, offset).unwrap_or_else(|| {
       panic!(
         "no expression found at offset {} in {}",
@@ -410,6 +417,7 @@ fn resolve_expr_type(
 }
 
 fn assert_diagnostics(
+  program: &Program,
   host: &FixtureHost,
   expectations: &FixtureExpectations,
   diagnostics: &[typecheck_ts::Diagnostic],
@@ -418,12 +426,14 @@ fn assert_diagnostics(
     .iter()
     .map(|d| {
       let primary = &d.primary;
-      let span = Some((
-        host.path(primary.file).to_string(),
-        primary.range.start,
-        primary.range.end,
-        d.severity,
-      ));
+      let span = program.file_key(primary.file).map(|key| {
+        (
+          host.path(&key).to_string(),
+          primary.range.start,
+          primary.range.end,
+          d.severity,
+        )
+      });
       (d.code.as_str().to_string(), span)
     })
     .collect();

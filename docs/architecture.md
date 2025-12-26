@@ -95,7 +95,10 @@ other crates use this for structured errors and spans.
 
 ### typecheck-ts
 - Public facade for TypeScript checking. `Program::new(host, roots)` wires a
-  user-provided `Host` (file_text + module `resolve`) into the pipeline.
+  user-provided `Host` (file_text + module `resolve`) into the pipeline. Hosts
+  operate on deterministic [`FileKey`]s (opaque strings/paths), while
+  [`Program`] owns the mapping from keys to internal `FileId`s to avoid
+  collisions with bundled libs or other virtual files.
 - Core APIs:
   - `Program::check()` parses, lowers, binds, and type-checks all reachable
     files, returning diagnostics.

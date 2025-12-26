@@ -1,41 +1,9 @@
-use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::fmt::MakeWriter;
 
-use typecheck_ts::{FileId, Host, HostError, Program};
-
-#[derive(Default)]
-struct MemoryHost {
-  files: Mutex<HashMap<FileId, Arc<str>>>,
-}
-
-impl MemoryHost {
-  fn insert(&self, id: FileId, src: &str) {
-    self
-      .files
-      .lock()
-      .unwrap()
-      .insert(id, Arc::from(src.to_string()));
-  }
-}
-
-impl Host for MemoryHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
-    self
-      .files
-      .lock()
-      .unwrap()
-      .get(&file)
-      .cloned()
-      .ok_or_else(|| HostError::new("missing file"))
-  }
-
-  fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
-    None
-  }
-}
+use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[derive(Clone, Default)]
 struct SharedWriter {
@@ -87,9 +55,10 @@ fn tracing_emits_query_spans() {
     .finish();
   let _guard = tracing::subscriber::set_default(subscriber);
 
-  let host = MemoryHost::default();
-  host.insert(FileId(0), "export const value = 1;");
-  let program = Program::new(host, vec![FileId(0)]);
+  let mut host = MemoryHost::default();
+  let key = FileKey::new("input.ts");
+  host.insert(key.clone(), Arc::from("export const value = 1;"));
+  let program = Program::new(host, vec![key]);
   let diagnostics = program.check();
   assert!(diagnostics.is_empty());
 

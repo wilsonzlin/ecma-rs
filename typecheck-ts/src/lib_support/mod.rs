@@ -18,7 +18,7 @@ use std::sync::Arc;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use crate::FileId;
+use crate::FileKey;
 
 /// Kinds of supported files.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -34,7 +34,7 @@ pub enum FileKind {
 /// A library file that can be loaded before user source files.
 #[derive(Clone, Debug)]
 pub struct LibFile {
-  pub id: FileId,
+  pub key: FileKey,
   pub name: Arc<str>,
   pub kind: FileKind,
   pub text: Arc<str>,

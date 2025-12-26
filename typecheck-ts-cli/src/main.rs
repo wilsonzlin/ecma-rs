@@ -10,8 +10,7 @@ use std::sync::{Arc, Mutex};
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibName, ScriptTarget};
-use typecheck_ts::resolve::{canonicalize_path, normalize_path, NodeResolver, ResolveOptions};
-use typecheck_ts::{Host, HostError, Program};
+use typecheck_ts::{FileKey, Host, HostError, Program};
 
 #[derive(Parser)]
 #[command(author, version, about = "TypeScript type checking CLI")]
@@ -93,21 +92,25 @@ struct TypecheckArgs {
   profile: bool,
 }
 
+#[derive(Clone, Copy)]
+enum ResolutionMode {
+  Simple,
+  Node,
+}
+
 #[derive(Clone)]
 struct DiskHost {
   state: Arc<Mutex<DiskState>>,
-  resolver: NodeResolver,
+  resolver: ResolutionMode,
   compiler_options: CompilerOptions,
 }
 
 #[derive(Default, Clone)]
 struct DiskState {
-  next_id: u32,
-  path_to_id: BTreeMap<String, FileId>,
-  id_to_path: Vec<PathBuf>,
-  id_to_name: Vec<String>,
-  id_to_kind: Vec<FileKind>,
-  texts: HashMap<FileId, Arc<str>>,
+  path_to_key: BTreeMap<PathBuf, FileKey>,
+  key_to_path: HashMap<FileKey, PathBuf>,
+  key_to_kind: HashMap<FileKey, FileKind>,
+  texts: HashMap<FileKey, Arc<str>>,
 }
 
 #[derive(Default, Serialize)]
@@ -117,12 +120,11 @@ struct JsonQueries {
   #[serde(skip_serializing_if = "Option::is_none")]
   symbol_at: Option<SymbolAtResult>,
   #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-  exports: BTreeMap<String, ExportSpacesJson>,
+  exports: BTreeMap<String, BTreeMap<String, ExportEntryJson>>,
 }
 
 #[derive(Serialize)]
 struct JsonOutput {
-  files: Vec<String>,
   diagnostics: Vec<Diagnostic>,
   queries: JsonQueries,
 }
@@ -159,16 +161,6 @@ struct ExportEntryJson {
   #[serde(skip_serializing_if = "Option::is_none")]
   #[serde(rename = "type")]
   typ: Option<String>,
-}
-
-#[derive(Default, Serialize)]
-struct ExportSpacesJson {
-  #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-  values: BTreeMap<String, ExportEntryJson>,
-  #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-  types: BTreeMap<String, ExportEntryJson>,
-  #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-  namespaces: BTreeMap<String, ExportEntryJson>,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -214,8 +206,10 @@ fn main() -> ExitCode {
 fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   init_tracing(args.trace || args.profile);
 
-  let resolution = ResolveOptions {
-    node_modules: args.node_resolve,
+  let resolution = if args.node_resolve {
+    ResolutionMode::Node
+  } else {
+    ResolutionMode::Simple
   };
 
   let options = match build_compiler_options(&args) {
@@ -273,7 +267,6 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
 
   if args.json {
     let output = JsonOutput {
-      files: host.file_names(),
       diagnostics: diagnostics.clone(),
       queries: JsonQueries {
         type_at,
@@ -291,7 +284,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
       }
     }
   } else {
-    let snapshot = host.snapshot();
+    let snapshot = snapshot_from_program(&program);
     for diagnostic in &diagnostics {
       println!("{}", render_diagnostic(&snapshot, diagnostic));
     }
@@ -328,11 +321,18 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     }
 
     if !exports.is_empty() {
-      for (file, spaces) in &exports {
+      for (file, map) in &exports {
         println!("exports for {file}:");
-        print_export_space("  values", &spaces.values);
-        print_export_space("  types", &spaces.types);
-        print_export_space("  namespaces", &spaces.namespaces);
+        for (name, entry) in map {
+          let mut line = format!("  {name} -> symbol {}", entry.symbol);
+          if let Some(def) = entry.def {
+            line.push_str(&format!(", def {def}"));
+          }
+          if let Some(typ) = &entry.typ {
+            line.push_str(&format!(", type {typ}"));
+          }
+          println!("{line}");
+        }
       }
     }
   }
@@ -420,151 +420,218 @@ fn init_tracing(enabled: bool) {
 impl DiskHost {
   fn new(
     entries: &[PathBuf],
-    resolver: ResolveOptions,
+    resolver: ResolutionMode,
     compiler_options: CompilerOptions,
-  ) -> Result<(Self, Vec<FileId>), String> {
+  ) -> Result<(Self, Vec<FileKey>), String> {
     let mut state = DiskState::default();
     let mut roots = Vec::new();
     for entry in entries {
       let canonical = canonicalize_path(entry)
         .map_err(|err| format!("failed to read entry {}: {err}", entry.to_string_lossy()))?;
-      let id = state.intern_canonical(canonical);
-      roots.push(id);
+      let key = state.intern_path(canonical);
+      roots.push(key);
     }
 
     Ok((
       DiskHost {
         state: Arc::new(Mutex::new(state)),
-        resolver: NodeResolver::new(resolver),
+        resolver,
         compiler_options,
       },
       roots,
     ))
   }
 
-  fn id_for_path(&self, path: &Path) -> Option<FileId> {
+  fn key_for_path(&self, path: &Path) -> Option<FileKey> {
     let canonical = canonicalize_path(path).ok()?;
     let state = self.state.lock().unwrap();
-    state.path_to_id.get(&normalize_path(&canonical)).copied()
+    state.path_to_key.get(&canonical).cloned()
   }
 
-  fn path_for_id(&self, file: FileId) -> Option<PathBuf> {
+  fn path_for_key(&self, key: &FileKey) -> Option<PathBuf> {
     let state = self.state.lock().unwrap();
-    state.id_to_path.get(file.0 as usize).cloned()
-  }
-
-  fn name_for_id(&self, file: FileId) -> Option<String> {
-    let state = self.state.lock().unwrap();
-    state.id_to_name.get(file.0 as usize).cloned()
-  }
-
-  fn file_names(&self) -> Vec<String> {
-    let state = self.state.lock().unwrap();
-    state.id_to_name.clone()
-  }
-  fn snapshot(&self) -> HostSnapshot {
-    let mut state = self.state.lock().unwrap();
-    let paths = state.id_to_path.clone();
-    let names = state.id_to_name.clone();
-    let mut texts = Vec::with_capacity(paths.len());
-    for (idx, path) in paths.iter().enumerate() {
-      let id = FileId(idx as u32);
-      let text = match state.texts.get(&id) {
-        Some(text) => Some(text.as_ref().to_string()),
-        None => match fs::read_to_string(path) {
-          Ok(text) => {
-            state.texts.insert(id, Arc::from(text.clone()));
-            Some(text)
-          }
-          Err(err) => {
-            tracing::warn!("failed to read {}: {err}", path.display());
-            None
-          }
-        },
-      };
-      texts.push(text);
-    }
-    HostSnapshot { names, texts }
+    state.key_to_path.get(key).cloned()
   }
 }
 
 impl DiskState {
-  fn intern_with_normalized(&mut self, path: PathBuf, normalized: String) -> FileId {
-    if let Some(id) = self.path_to_id.get(&normalized) {
-      return *id;
+  fn intern_path(&mut self, path: PathBuf) -> FileKey {
+    if let Some(key) = self.path_to_key.get(&path) {
+      return key.clone();
     }
-    let id = FileId(self.next_id);
-    self.next_id += 1;
+    let key = FileKey::new(path.display().to_string());
     let kind = file_kind_for(&path);
-    self.path_to_id.insert(normalized.clone(), id);
-    self.id_to_path.push(path);
-    self.id_to_name.push(normalized);
-    self.id_to_kind.push(kind);
-    id
-  }
-
-  fn intern_canonical(&mut self, path: PathBuf) -> FileId {
-    let normalized = normalize_path(&path);
-    self.intern_with_normalized(path, normalized)
+    self.path_to_key.insert(path.clone(), key.clone());
+    self.key_to_path.insert(key.clone(), path);
+    self.key_to_kind.insert(key.clone(), kind);
+    key
   }
 }
 
 impl Host for DiskHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, key: &FileKey) -> Result<Arc<str>, HostError> {
     let mut state = self.state.lock().unwrap();
-    if let Some(text) = state.texts.get(&file) {
+    if let Some(text) = state.texts.get(key) {
       return Ok(text.clone());
     }
     let path = state
-      .id_to_path
-      .get(file.0 as usize)
+      .key_to_path
+      .get(key)
       .cloned()
-      .ok_or_else(|| HostError::new(format!("unknown file {file:?}")))?;
+      .ok_or_else(|| HostError::new(format!("unknown file {key}")))?;
     let text = fs::read_to_string(&path)
       .map_err(|err| HostError::new(format!("failed to read {}: {err}", path.display())))?;
     let arc: Arc<str> = Arc::from(text);
-    state.texts.insert(file, arc.clone());
+    state.texts.insert(key.clone(), arc.clone());
     Ok(arc)
   }
 
-  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
-    let base = self.path_for_id(from)?;
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+    let base = self.path_for_key(from)?;
     let resolved = self.resolver.resolve(&base, specifier)?;
-    let normalized = normalize_path(&resolved);
+    let canonical = canonicalize_path(&resolved).ok()?;
     let mut state = self.state.lock().unwrap();
-    Some(state.intern_with_normalized(resolved, normalized))
+    Some(state.intern_path(canonical))
   }
 
   fn compiler_options(&self) -> CompilerOptions {
     self.compiler_options.clone()
   }
 
-  fn file_kind(&self, file: FileId) -> FileKind {
+  fn file_kind(&self, file: &FileKey) -> FileKind {
     let state = self.state.lock().unwrap();
-    state
-      .id_to_kind
-      .get(file.0 as usize)
-      .copied()
-      .unwrap_or(FileKind::Ts)
+    state.key_to_kind.get(file).copied().unwrap_or(FileKind::Ts)
   }
 }
 
-struct HostSnapshot {
-  names: Vec<String>,
-  texts: Vec<Option<String>>,
+struct ProgramSourceSnapshot {
+  names: HashMap<FileId, String>,
+  texts: HashMap<FileId, String>,
 }
 
-impl SourceProvider for HostSnapshot {
+impl SourceProvider for ProgramSourceSnapshot {
   fn file_name(&self, file: FileId) -> Option<&str> {
-    self.names.get(file.0 as usize).map(|s| s.as_str())
+    self.names.get(&file).map(|s| s.as_str())
   }
 
   fn file_text(&self, file: FileId) -> Option<&str> {
     self
       .texts
-      .get(file.0 as usize)
-      .and_then(|text| text.as_deref())
+      .get(&file)
+      .map(|text| text.as_str())
   }
+}
+
+fn snapshot_from_program(program: &Program) -> ProgramSourceSnapshot {
+  let mut names = HashMap::new();
+  let mut texts = HashMap::new();
+  for file in program.files() {
+    if let Some(key) = program.file_key(file) {
+      names.insert(file, key.to_string());
+    }
+    if let Some(text) = program.file_text(file) {
+      texts.insert(file, text.to_string());
+    }
+  }
+  ProgramSourceSnapshot { names, texts }
+}
+
+impl ResolutionMode {
+  fn resolve(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
+    match self {
+      ResolutionMode::Simple => resolve_relative(from, specifier),
+      ResolutionMode::Node => resolve_node_like(from, specifier),
+    }
+  }
+}
+
+fn resolve_relative(from: &Path, specifier: &str) -> Option<PathBuf> {
+  let base_dir = from.parent().unwrap_or_else(|| Path::new(""));
+  let joined = base_dir.join(specifier);
+  resolve_with_candidates(&joined)
+}
+
+fn resolve_node_like(from: &Path, specifier: &str) -> Option<PathBuf> {
+  if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/') {
+    return resolve_relative(from, specifier);
+  }
+
+  let mut current = Some(from.parent().unwrap_or_else(|| Path::new("")));
+  while let Some(dir) = current {
+    let candidate = dir.join("node_modules").join(specifier);
+    if let Some(found) = resolve_with_candidates(&candidate) {
+      return Some(found);
+    }
+    current = dir.parent();
+  }
+
+  None
+}
+
+fn resolve_with_candidates(base: &Path) -> Option<PathBuf> {
+  let candidates = candidate_paths(base);
+  for cand in candidates {
+    if cand.is_file() {
+      if let Ok(canon) = canonicalize_path(&cand) {
+        return Some(canon);
+      }
+    }
+  }
+  None
+}
+
+fn candidate_paths(base: &Path) -> Vec<PathBuf> {
+  const EXTENSIONS: &[&str] = &["ts", "d.ts", "tsx", "js", "jsx"];
+  let mut candidates = Vec::new();
+  let has_extension = has_known_extension(base);
+  if has_extension {
+    candidates.push(base.to_path_buf());
+  } else {
+    for ext in EXTENSIONS {
+      candidates.push(with_extension(base, ext));
+    }
+  }
+
+  if !has_extension || base.is_dir() {
+    let base_dir = base;
+    for ext in EXTENSIONS {
+      candidates.push(base_dir.join("index").with_extension(ext));
+    }
+  }
+
+  candidates
+}
+
+fn has_known_extension(path: &Path) -> bool {
+  let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+  name.ends_with(".d.ts")
+    || matches!(
+      path.extension().and_then(|e| e.to_str()),
+      Some("ts" | "tsx" | "js" | "jsx")
+    )
+}
+
+fn with_extension(base: &Path, ext: &str) -> PathBuf {
+  if ext == "d.ts" {
+    let mut path = base.to_path_buf();
+    let current_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    if current_ext == "ts" || current_ext == "tsx" || current_ext == "js" || current_ext == "jsx" {
+      path.set_extension("d.ts");
+      return path;
+    }
+    path.with_extension("d.ts")
+  } else {
+    base.with_extension(ext)
+  }
+}
+
+fn canonicalize_path(path: &Path) -> std::io::Result<PathBuf> {
+  let canonical = if path.is_absolute() {
+    path.to_path_buf()
+  } else {
+    std::env::current_dir()?.join(path)
+  };
+  canonical.canonicalize()
 }
 
 fn file_kind_for(path: &Path) -> FileKind {
@@ -598,13 +665,17 @@ fn query_type_at(
 ) -> Result<Option<TypeAtResult>, String> {
   let (path, offset) = parse_offset_arg(raw)?;
   let file_id = host
-    .id_for_path(&path)
+    .key_for_path(&path)
     .ok_or_else(|| format!("unknown file in --type-at: {}", path.to_string_lossy()))?;
+  let file_id = program
+    .file_id(&file_id)
+    .ok_or_else(|| format!("file not part of program: {}", path.to_string_lossy()))?;
   match program.type_at(file_id, offset) {
     Some(ty) => {
       let typ = program.display_type(ty).to_string();
       let file = host
-        .name_for_id(file_id)
+        .path_for_key(&program.file_key(file_id).unwrap_or_else(|| FileKey::new(path.display().to_string())))
+        .map(|p| p.display().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string());
       Ok(Some(TypeAtResult { file, offset, typ }))
     }
@@ -619,8 +690,11 @@ fn query_symbol_at(
 ) -> Result<Option<SymbolAtResult>, String> {
   let (path, offset) = parse_offset_arg(raw)?;
   let file_id = host
-    .id_for_path(&path)
+    .key_for_path(&path)
     .ok_or_else(|| format!("unknown file in --symbol-at: {}", path.to_string_lossy()))?;
+  let file_id = program
+    .file_id(&file_id)
+    .ok_or_else(|| format!("file not part of program: {}", path.to_string_lossy()))?;
   let symbol = match program.symbol_at(file_id, offset) {
     Some(sym) => sym,
     None => return Ok(None),
@@ -628,7 +702,11 @@ fn query_symbol_at(
   let info = program.symbol_info(symbol);
   let (def, def_file, typ, name) = match info {
     Some(info) => {
-      let def_file = info.file.and_then(|id| host.name_for_id(id));
+      let def_file = info
+        .file
+        .and_then(|id| program.file_key(id))
+        .and_then(|key| host.path_for_key(&key))
+        .map(|p| p.display().to_string());
       let typ = info.type_id.map(|id| program.display_type(id).to_string());
       (info.def.map(|d| d.0), def_file, typ, info.name)
     }
@@ -636,7 +714,8 @@ fn query_symbol_at(
   };
 
   let file = host
-    .name_for_id(file_id)
+    .path_for_key(&program.file_key(file_id).unwrap_or_else(|| FileKey::new(path.display().to_string())))
+    .map(|p| p.display().to_string())
     .unwrap_or_else(|| path.to_string_lossy().to_string());
 
   Ok(Some(SymbolAtResult {
@@ -654,48 +733,18 @@ fn query_exports(
   program: &Program,
   host: &DiskHost,
   path: PathBuf,
-) -> Result<BTreeMap<String, ExportSpacesJson>, String> {
+) -> Result<BTreeMap<String, BTreeMap<String, ExportEntryJson>>, String> {
   let file_id = host
-    .id_for_path(&path)
+    .key_for_path(&path)
     .ok_or_else(|| format!("unknown file in --exports: {}", path.to_string_lossy()))?;
+  let file_id = program
+    .file_id(&file_id)
+    .ok_or_else(|| format!("file not part of program: {}", path.to_string_lossy()))?;
   let exports = program.exports_of(file_id);
-  let mut spaces = ExportSpacesJson::default();
-  insert_exports(&mut spaces.values, exports.values, program);
-  insert_exports(&mut spaces.types, exports.types, program);
-  insert_exports(&mut spaces.namespaces, exports.namespaces, program);
-  let mut outer = BTreeMap::new();
-  let file_name = host
-    .name_for_id(file_id)
-    .unwrap_or_else(|| path.to_string_lossy().to_string());
-  outer.insert(file_name, spaces);
-  Ok(outer)
-}
-
-fn print_export_space(label: &str, exports: &BTreeMap<String, ExportEntryJson>) {
-  if exports.is_empty() {
-    return;
-  }
-  println!("{label}:");
-  for (name, entry) in exports {
-    let mut line = format!("    {name} -> symbol {}", entry.symbol);
-    if let Some(def) = entry.def {
-      line.push_str(&format!(", def {def}"));
-    }
-    if let Some(typ) = &entry.typ {
-      line.push_str(&format!(", type {typ}"));
-    }
-    println!("{line}");
-  }
-}
-
-fn insert_exports(
-  target: &mut BTreeMap<String, ExportEntryJson>,
-  exports: typecheck_ts::ExportMap,
-  program: &Program,
-) {
+  let mut map: BTreeMap<String, ExportEntryJson> = BTreeMap::new();
   for (name, entry) in exports {
     let typ = entry.type_id.map(|t| program.display_type(t).to_string());
-    target.insert(
+    map.insert(
       name,
       ExportEntryJson {
         symbol: entry.symbol.0,
@@ -704,6 +753,13 @@ fn insert_exports(
       },
     );
   }
+  let mut outer = BTreeMap::new();
+  let file_name = host
+    .path_for_key(&program.file_key(file_id).unwrap_or_else(|| FileKey::new(path.display().to_string())))
+    .map(|p| p.display().to_string())
+    .unwrap_or_else(|| path.to_string_lossy().to_string());
+  outer.insert(file_name, map);
+  Ok(outer)
 }
 
 fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {

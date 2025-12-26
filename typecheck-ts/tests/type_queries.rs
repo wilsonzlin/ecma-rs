@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::{FileId, Host, HostError, Program, PropertyKey, TypeKindSummary, TypeQueries};
+use typecheck_ts::{FileKey, Program, PropertyKey, TypeKindSummary, TypeQueries};
 use types_ts_interned::{
   DefId, ExpandedType, Indexer, ObjectType, Param, PropData, PropKey, Property, Shape, Signature,
   TypeExpander, TypeId, TypeKind, TypeStore,
@@ -404,34 +404,10 @@ fn index_signatures_are_sorted_by_key() {
 
 #[test]
 fn program_structural_queries_expand_refs() {
-  #[derive(Default)]
-  struct MemoryHost {
-    files: HashMap<FileId, Arc<str>>,
-  }
-
-  impl MemoryHost {
-    fn insert(&mut self, file: FileId, src: &str) {
-      self.files.insert(file, Arc::from(src.to_string()));
-    }
-  }
-
-  impl Host for MemoryHost {
-    fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
-      self
-        .files
-        .get(&file)
-        .cloned()
-        .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
-    }
-
-    fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
-      None
-    }
-  }
-
-  let mut host = MemoryHost::default();
+  let mut host = typecheck_ts::MemoryHost::default();
+  let file = FileKey::new("input.ts");
   host.insert(
-    FileId(0),
+    file.clone(),
     r#"
 interface Thing {
   readonly a: number;
@@ -446,7 +422,8 @@ type Alias = Thing;
 "#,
   );
 
-  let program = Program::new(host, vec![FileId(0)]);
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).unwrap();
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -454,7 +431,7 @@ type Alias = Thing;
   );
 
   let alias_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(file_id)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Alias"))
     .expect("alias definition present");
