@@ -827,6 +827,9 @@ impl<'a> RelateCtx<'a> {
       (TypeKind::BigIntLiteral(_), TypeKind::BigInt) => Some(true),
       (TypeKind::TemplateLiteral(_), TypeKind::String) => Some(true),
       (TypeKind::UniqueSymbol, TypeKind::Symbol) => Some(true),
+      (TypeKind::Predicate { .. }, TypeKind::Boolean) => Some(true),
+      (TypeKind::Boolean, TypeKind::Predicate { .. }) => Some(true),
+      (TypeKind::Predicate { .. }, TypeKind::Predicate { .. }) => Some(true),
       _ => None,
     }
   }

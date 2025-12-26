@@ -89,7 +89,7 @@ impl<'a> Parser<'a> {
             "import not allowed in scripts",
           )));
         }
-        if !ctx.top_level {
+        if !ctx.top_level || ctx.in_namespace {
           return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
             "import declarations must be at top level",
           )));

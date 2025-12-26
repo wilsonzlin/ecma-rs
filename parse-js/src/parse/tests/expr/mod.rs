@@ -21,6 +21,7 @@ fn parse_expr_with_options(input: &str, opts: ParseOptions) -> Node<Expr> {
       yield_allowed: true,
     },
     top_level: true,
+    in_namespace: false,
   };
   parser.expr(ctx, [TT::Semicolon]).unwrap()
 }

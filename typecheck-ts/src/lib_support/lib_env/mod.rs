@@ -91,7 +91,7 @@ mod bundled {
       .libs()
       .iter()
       .map(|name| LibFile {
-        key: FileKey::new(format!("lib:{}", name.as_str())),
+        key: FileKey::new(format!("lib:{}", name.option_name())),
         name: Arc::from(name.as_str()),
         kind: FileKind::Dts,
         text: Arc::from(text_for(name)),

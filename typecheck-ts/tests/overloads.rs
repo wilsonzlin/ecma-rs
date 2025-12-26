@@ -146,7 +146,7 @@ fn reports_no_matching_overload_with_reasons() {
   );
 
   assert!(resolution.signature.is_none());
-  assert_eq!(resolution.return_type, primitives.unknown);
+  assert_eq!(resolution.return_type, primitives.number);
   assert_eq!(resolution.diagnostics.len(), 1);
   let diag = &resolution.diagnostics[0];
   assert_eq!(diag.code.as_str(), codes::NO_OVERLOAD.as_str());

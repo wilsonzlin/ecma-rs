@@ -17,18 +17,18 @@
 //! use std::collections::HashMap;
 //! use std::sync::Arc;
 //! use typecheck_ts::{ExprId, FileKey, Host, HostError, Program};
-//!
+//! 
 //! #[derive(Default)]
 //! struct MemoryHost {
 //!   files: HashMap<FileKey, Arc<str>>,
 //! }
-//!
+//! 
 //! impl MemoryHost {
 //!   fn insert(&mut self, key: FileKey, source: &str) {
-//!    self.files.insert(key, Arc::from(source.to_string()));
+//!     self.files.insert(key, Arc::from(source.to_string()));
 //!   }
 //! }
-//!
+//! 
 //! impl Host for MemoryHost {
 //!   fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
 //!     self
@@ -37,14 +37,14 @@
 //!       .cloned()
 //!       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
 //!   }
-//!
+//! 
 //!   fn resolve(&self, _from: &FileKey, _spec: &str) -> Option<FileKey> {
 //!     None
 //!   }
 //! }
-//!
+//! 
 //! let mut host = MemoryHost::default();
-//! let file = FileKey::new("input.ts");
+//! let file = FileKey::new("file0.ts");
 //! host.insert(
 //!   file.clone(),
 //!   "export function add(a: number, b: number) { return a + b; }",
@@ -52,7 +52,7 @@
 //! let program = Program::new(host, vec![file.clone()]);
 //! let diagnostics = program.check();
 //! assert!(diagnostics.is_empty());
-//!
+//! 
 //! let file_id = program.file_id(&file).unwrap();
 //! let exports = program.exports_of(file_id);
 //! let add_def = exports.get("add").and_then(|e| e.def).unwrap();
@@ -80,7 +80,7 @@
 //!   fn insert(&mut self, key: FileKey, source: &str) {
 //!     self.files.insert(key, Arc::from(source.to_string()));
 //!   }
-//!
+//! 
 //!   fn link(&mut self, from: FileKey, specifier: &str, to: FileKey) {
 //!     self.edges.insert((from, specifier.to_string()), to);
 //!   }
@@ -90,35 +90,33 @@
 //!   fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
 //!     self
 //!       .files
-//!       .get(&file)
+//!       .get(file)
 //!       .cloned()
 //!       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
 //!   }
-//!
+//! 
 //!   fn resolve(&self, from: &FileKey, spec: &str) -> Option<FileKey> {
 //!     self.edges.get(&(from.clone(), spec.to_string())).cloned()
 //!   }
 //! }
 //!
 //! let mut host = MemoryHost::default();
-//! let entry = FileKey::new("main.ts");
-//! let math = FileKey::new("math.ts");
 //! host.insert(
-//!   entry.clone(),
+//!   FileKey::new("index.ts"),
 //!   "import { add } from \"./math\";\nexport const total = add(1, 2);",
 //! );
 //! host.insert(
-//!   math.clone(),
+//!   FileKey::new("math.ts"),
 //!   "export function add(a: number, b: number): number { return a + b; }",
 //! );
-//! host.link(entry.clone(), "./math", math.clone());
-//!
-//! let program = Program::new(host, vec![entry.clone()]);
+//! host.link(FileKey::new("index.ts"), "./math", FileKey::new("math.ts"));
+//! 
+//! let program = Program::new(host, vec![FileKey::new("index.ts")]);
 //! let diagnostics = program.check();
 //! assert!(diagnostics.is_empty());
-//!
-//! let entry_id = program.file_id(&entry).unwrap();
-//! let exports = program.exports_of(entry_id);
+//! 
+//! let exports = program
+//!   .exports_of(program.file_id(&FileKey::new("index.ts")).unwrap());
 //! let total_def = exports.get("total").unwrap().def.unwrap();
 //! let total_type = program.type_of_def(total_def);
 //! assert_eq!(program.display_type(total_type).to_string(), "number");
@@ -153,6 +151,7 @@ pub use snapshot::*;
 pub use type_queries::*;
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Simple in-memory host used by tests and examples.
@@ -204,9 +203,32 @@ impl Host for MemoryHost {
   }
 
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    self
+    if let Some(mapped) = self
       .edges
       .get(&(from.clone(), specifier.to_string()))
+      .cloned()
+    {
+      return Some(mapped);
+    }
+
+    let from_path = Path::new(from.as_str());
+    let mut resolved = PathBuf::new();
+    if let Some(parent) = from_path.parent() {
+      resolved.push(parent);
+    }
+    resolved.push(specifier);
+    if resolved.extension().is_none() {
+      resolved.set_extension("ts");
+    }
+    let mut candidate = resolved.to_string_lossy().to_string();
+    if let Some(stripped) = candidate.strip_prefix("./") {
+      candidate = stripped.to_string();
+    }
+    let normalized = diagnostics::paths::normalize_ts_path(&candidate);
+    self
+      .files
+      .keys()
+      .find(|key| key.as_str() == candidate || key.as_str() == normalized)
       .cloned()
   }
 

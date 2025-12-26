@@ -26,6 +26,7 @@ fn default_ctx(opts: &ParseOptions) -> ParseCtx {
       yield_allowed: true,
     },
     top_level: true,
+    in_namespace: false,
   }
 }
 

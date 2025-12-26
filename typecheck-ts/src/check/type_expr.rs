@@ -15,9 +15,8 @@ use parse_js::loc::Loc;
 use std::fmt;
 use std::sync::Arc;
 use types_ts_interned::{
-  DefId, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property, Shape,
-  Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamId,
-  TypeStore,
+  DefId, MappedModifier, MappedType, NameId, ObjectType, Param, PropData, PropKey, Property, Shape,
+  Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 /// Resolves entity names in type positions to canonical [`DefId`]s.
@@ -675,7 +674,7 @@ impl TypeLowerer {
   }
 
   fn lower_type_predicate(&mut self, pred: &Node<TypePredicate>) -> TypeId {
-    let ty = pred
+    let asserted = pred
       .stx
       .type_annotation
       .as_ref()
@@ -685,7 +684,7 @@ impl TypeLowerer {
       span,
       asserts: pred.stx.asserts,
       parameter: pred.stx.parameter_name.clone(),
-      ty,
+      ty: asserted,
     });
     self.store.primitive_ids().boolean
   }

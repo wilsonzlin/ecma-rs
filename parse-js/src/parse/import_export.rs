@@ -122,7 +122,7 @@ impl<'a> Parser<'a> {
   /// - `import a, {"b" as c, d, e as f, default as g} from "module"`
   /// - TypeScript import equals: `import a = require("module")` or `import a = Foo.Bar`
   pub fn import_stmt(&mut self, ctx: ParseCtx, export: bool) -> SyntaxResult<Node<Stmt>> {
-    if !ctx.top_level {
+    if !ctx.top_level || ctx.in_namespace {
       return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax(
         "import declarations must be at top level",
       )));

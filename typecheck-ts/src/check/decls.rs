@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{codes, FileKey, Host};
@@ -9,7 +9,7 @@ use hir_js::{
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
-use semantic_js::ts::{Namespace, TsProgramSemantics};
+use semantic_js::ts::{Namespace, SymbolOrigin, SymbolOwner, TsProgramSemantics};
 use types_ts_interned::{
   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
   Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
@@ -655,7 +655,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     import: &hir_js::TypeImport,
     names: &hir_js::NameInterner,
   ) -> TypeId {
-    let Some(target_file) = self.resolve_import_target(&import.module) else {
+    let Some(host) = self.host else {
+      return self.store.primitive_ids().unknown;
+    };
+
+    let Some(from_key) = self.file_key.as_ref() else {
+      return self.store.primitive_ids().unknown;
+    };
+    let Some(target_key) = host.resolve(from_key, &import.module) else {
+      return self.store.primitive_ids().unknown;
+    };
+    let Some(target_file) = self.key_to_id.and_then(|resolver| resolver(&target_key)) else {
       return self.store.primitive_ids().unknown;
     };
 
@@ -692,66 +702,6 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     self.store.primitive_ids().unknown
   }
 
-  fn resolve_import_target(&self, spec: &str) -> Option<FileId> {
-    let from_key = self.file_key.as_ref()?;
-    if let Some(host) = self.host {
-      if let Some(target_key) = host.resolve(from_key, spec) {
-        if let Some(target_file) = self.key_to_id.and_then(|resolver| resolver(&target_key)) {
-          return Some(target_file);
-        }
-      }
-    }
-
-    let mut candidates = Vec::new();
-    candidates.push(spec.to_string());
-    if !spec.ends_with(".ts")
-      && !spec.ends_with(".tsx")
-      && !spec.ends_with(".d.ts")
-      && !spec.ends_with(".js")
-      && !spec.ends_with(".jsx")
-    {
-      candidates.push(format!("{spec}.ts"));
-      candidates.push(format!("{spec}.d.ts"));
-    }
-    let base = std::path::Path::new(from_key.as_str());
-    let base_dir = base.parent().unwrap_or(std::path::Path::new(""));
-    let mut seen = HashSet::new();
-    let existing = candidates.clone();
-    for cand in existing {
-      let joined = base_dir.join(&cand);
-      candidates.push(joined.to_string_lossy().replace('\\', "/"));
-    }
-    let mut trimmed = Vec::new();
-    for cand in candidates.iter() {
-      let mut t = cand.as_str();
-      loop {
-        if let Some(stripped) = t.strip_prefix("./") {
-          t = stripped;
-          continue;
-        }
-        if let Some(stripped) = t.strip_prefix(".\\") {
-          t = stripped;
-          continue;
-        }
-        break;
-      }
-      if t != cand {
-        trimmed.push(t.to_string());
-      }
-    }
-    candidates.extend(trimmed);
-    for cand in candidates {
-      if !seen.insert(cand.clone()) {
-        continue;
-      }
-      let key = FileKey::new(cand);
-      if let Some(id) = self.key_to_id.and_then(|resolver| resolver(&key)) {
-        return Some(id);
-      }
-    }
-    None
-  }
-
   fn resolve_type_name(
     &self,
     name: &hir_js::TypeName,
@@ -764,11 +714,15 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         self.resolve_named_type(&resolved, file_override.unwrap_or(self.file))
       }
       TypeName::Qualified(path) => {
-        path
-          .last()
-          .and_then(|id| names.resolve(*id))
-          .and_then(|resolved| {
-            self.resolve_named_type(&resolved.to_string(), file_override.unwrap_or(self.file))
+        self
+          .resolve_qualified_type(path, names, file_override.unwrap_or(self.file))
+          .or_else(|| {
+            path
+              .last()
+              .and_then(|id| names.resolve(*id))
+              .and_then(|resolved| {
+                self.resolve_named_type(&resolved.to_string(), file_override.unwrap_or(self.file))
+              })
           })
       }
       TypeName::Import(import) => import.module.as_ref().and_then(|module| {
@@ -802,16 +756,15 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
     }
 
-    let mut best: Option<DefId> = None;
     if let Some(def) = self.defs.get(&(file, name.to_string())) {
-      best = Some(*def);
+      return Some(*def);
     }
 
     if let Some(def) = self
       .def_by_name
       .and_then(|map| map.get(&(file, name.to_string())).copied())
     {
-      best = Some(best.map_or(def, |existing| existing.min(def)));
+      return Some(def);
     }
 
     if let Some(sem) = self.semantics {
@@ -834,22 +787,105 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
     }
 
-    if best.is_none() {
-      for ((_, candidate), def) in self.defs.iter() {
-        if candidate == name {
-          best = Some(best.map_or(*def, |existing| existing.min(*def)));
-        }
-      }
-      if let Some(map) = self.def_by_name {
-        for ((_, candidate), def) in map.iter() {
-          if candidate == name {
-            best = Some(best.map_or(*def, |existing| existing.min(*def)));
-          }
-        }
-      }
+    None
+  }
+
+  fn resolve_qualified_type(
+    &self,
+    path: &[hir_js::NameId],
+    names: &hir_js::NameInterner,
+    file: FileId,
+  ) -> Option<DefId> {
+    let sem = self.semantics?;
+    let mut segments = Vec::new();
+    for id in path.iter() {
+      let Some(name) = names.resolve(*id) else {
+        return None;
+      };
+      segments.push(name.to_string());
+    }
+    if segments.is_empty() {
+      return None;
     }
 
-    best
+    let mut symbol = self.resolve_symbol_in_module(sem, file, &segments[0])?;
+    let mut current_file = self
+      .symbol_target_file(sem, symbol)
+      .unwrap_or(file);
+    for segment in segments.iter().skip(1) {
+      symbol = self.resolve_symbol_export(sem, current_file, segment)?;
+      current_file = self
+        .symbol_target_file(sem, symbol)
+        .unwrap_or(current_file);
+    }
+
+    self.def_for_symbol(sem, symbol)
+  }
+
+  fn resolve_symbol_in_module(
+    &self,
+    sem: &TsProgramSemantics,
+    file: FileId,
+    name: &str,
+  ) -> Option<semantic_js::ts::SymbolId> {
+    for ns in [Namespace::TYPE, Namespace::NAMESPACE, Namespace::VALUE] {
+      if let Some(sym) = sem.resolve_in_module(file, name, ns) {
+        return Some(sym);
+      }
+    }
+    None
+  }
+
+  fn resolve_symbol_export(
+    &self,
+    sem: &TsProgramSemantics,
+    file: FileId,
+    name: &str,
+  ) -> Option<semantic_js::ts::SymbolId> {
+    for ns in [Namespace::TYPE, Namespace::NAMESPACE, Namespace::VALUE] {
+      if let Some(sym) = sem.resolve_export(file, name, ns) {
+        return Some(sym);
+      }
+    }
+    None
+  }
+
+  fn symbol_target_file(
+    &self,
+    sem: &TsProgramSemantics,
+    symbol: semantic_js::ts::SymbolId,
+  ) -> Option<FileId> {
+    let sym = sem.symbols().symbol(symbol);
+    match &sym.origin {
+      SymbolOrigin::Import { from, .. } => from.clone(),
+      _ => match &sym.owner {
+        SymbolOwner::Module(file) => Some(*file),
+        _ => None,
+      },
+    }
+  }
+
+  fn def_for_symbol(
+    &self,
+    sem: &TsProgramSemantics,
+    symbol: semantic_js::ts::SymbolId,
+  ) -> Option<DefId> {
+    for ns in [Namespace::TYPE, Namespace::NAMESPACE, Namespace::VALUE] {
+      if let Some(decl) = sem.symbol_decls(symbol, ns).first() {
+        let decl_data = sem.symbols().decl(*decl);
+        let def = DefId(decl_data.def_id.0);
+        return self
+          .def_map
+          .and_then(|map| map.get(&def).copied())
+          .or_else(|| {
+            self
+              .def_by_name
+              .and_then(|map| map.get(&(decl_data.file, decl_data.name.clone())).copied())
+          })
+          .or(Some(def));
+      }
+    }
+    None
   }
 }
 

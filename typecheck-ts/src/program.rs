@@ -1,27 +1,25 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
 use hir_js::{
-  lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
-  BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
-  ExprKind as HirExprKind, FileKind as HirFileKind, ImportKind as HirImportKind, LowerResult,
+  lower_file_with_diagnostics as lower_hir_with_diagnostics, BodyKind as HirBodyKind,
+  DefId as HirDefId, DefKind as HirDefKind, ExprKind as HirExprKind, ExportKind as HirExportKind,
+  FileKind as HirFileKind, ImportKind as HirImportKind, LowerResult, NameId, PatId as HirPatId,
+  PatKind as HirPatKind, StmtKind as HirStmtKind,
 };
 use ordered_float::OrderedFloat;
-use parse_js::ast::expr::{pat::Pat, Expr, ImportExpr};
+use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::func::Func;
 use parse_js::ast::import_export::{ExportNames, ImportNames};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::type_expr::{
-  TypeArray, TypeEntityName, TypeExpr, TypeIntersection, TypeLiteral, TypeMember, TypePropertyKey,
-  TypeTuple, TypeUnion,
-};
+use parse_js::ast::ts_stmt::{NamespaceBody, NamespaceDecl};
+use parse_js::ast::type_expr::{TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion};
 use parse_js::loc::Loc;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
@@ -29,10 +27,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
-use types_ts_interned::{self as tti, TypeId, TypeParamId};
+use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, TypeId, TypeParamId};
 
-use crate::check::caches::{CheckerCacheStats, CheckerCaches};
+use self::check::caches::{CheckerCacheStats, CheckerCaches};
+use self::check::relate_hooks;
 use crate::codes;
+use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::profile::{CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
@@ -120,6 +120,12 @@ pub struct BodyCheckResult {
   pub(crate) return_types: Vec<TypeId>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FileOrigin {
+  Source,
+  Lib,
+}
+
 impl BodyCheckResult {
   /// Body identifier this result corresponds to.
   pub fn body(&self) -> BodyId {
@@ -163,44 +169,41 @@ impl BodyCheckResult {
 
   /// Find the innermost expression covering the given offset.
   pub fn expr_at(&self, offset: u32) -> Option<(ExprId, TypeId)> {
-    let mut best_containing: Option<(u32, u32, ExprId)> = None;
-    let mut best_empty: Option<(u32, u32, ExprId)> = None;
-
+    let mut best_containing: Option<(ExprId, TypeId, TextRange)> = None;
+    let mut best_empty: Option<(ExprId, TypeId, TextRange)> = None;
     for (idx, span) in self.expr_spans.iter().enumerate() {
-      let len = span.len();
-      let mut contains_start = span.start;
-      let mut contains_end = span.end;
-      if contains_start == contains_end {
-        contains_start = contains_start.saturating_sub(1);
-        contains_end = contains_end.saturating_add(1);
-      }
-      let key = (len, span.start, ExprId(idx as u32));
-      if len == 0 {
-        if contains_start <= offset && offset < contains_end {
-          let replace = best_empty.map(|best| key < best).unwrap_or(true);
-          if replace {
-            best_empty = Some(key);
+      let width = span.end.saturating_sub(span.start);
+      if span.start <= offset && offset < span.end {
+        let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
+        best_containing = match best_containing {
+          Some((_, _, existing)) if existing.end.saturating_sub(existing.start) <= width => {
+            best_containing
           }
-        }
-        continue;
-      }
-      if contains_start <= offset && offset < contains_end {
-        let replace = best_containing.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_containing = Some(key);
-        }
+          _ => Some((entry.0, entry.1, *span)),
+        };
+      } else if span.start == span.end && offset == span.start {
+        let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
+        best_empty = match best_empty {
+          Some((_, _, existing)) if existing.end.saturating_sub(existing.start) <= width => {
+            best_empty
+          }
+          _ => Some((entry.0, entry.1, *span)),
+        };
       }
     }
-
-    let (_, _, expr) = match (best_containing, best_empty) {
-      (Some(non_empty), Some(empty)) if non_empty.1 == empty.1 => Some(non_empty),
-      (Some(_non_empty), Some(empty)) => Some(empty),
-      (Some(non_empty), None) => Some(non_empty),
+    let best = match (best_containing, best_empty) {
+      (Some((cont_id, cont_ty, cont_span)), Some((empty_id, empty_ty, empty_span))) => {
+        if empty_span.start > cont_span.start && empty_span.end < cont_span.end {
+          Some((empty_id, empty_ty, empty_span))
+        } else {
+          Some((cont_id, cont_ty, cont_span))
+        }
+      }
+      (Some(cont), None) => Some(cont),
       (None, Some(empty)) => Some(empty),
       (None, None) => None,
-    }?;
-    let ty = *self.expr_types.get(expr.0 as usize)?;
-    Some((expr, ty))
+    };
+    best.map(|(id, ty, _)| (id, ty))
   }
 
   /// Spans for all expressions in this body.
@@ -232,11 +235,10 @@ pub struct TypeDisplay {
 
 impl std::fmt::Display for TypeDisplay {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    let display = match self.resolver.as_ref() {
-      Some(resolver) => {
-        tti::TypeDisplay::new(&self.store, self.ty).with_ref_resolver(Arc::clone(resolver))
-      }
-      None => tti::TypeDisplay::new(&self.store, self.ty),
+    let display = if let Some(resolver) = self.resolver.as_ref() {
+      tti::TypeDisplay::new(&self.store, self.ty).with_ref_resolver(Arc::clone(resolver))
+    } else {
+      tti::TypeDisplay::new(&self.store, self.ty)
     };
     display.fmt(f)
   }
@@ -249,10 +251,10 @@ impl serde::Serialize for TypeDisplay {
   }
 }
 
+#[derive(Clone, Copy)]
 struct ProgramTypeExpander<'a> {
   def_types: &'a HashMap<DefId, TypeId>,
   type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
-  visited: RefCell<Vec<DefId>>,
 }
 
 impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
@@ -262,15 +264,9 @@ impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
     def: DefId,
     _args: &[TypeId],
   ) -> Option<tti::ExpandedType> {
-    if self.visited.borrow().contains(&def) {
-      return None;
-    }
-    self.visited.borrow_mut().push(def);
     let ty = *self.def_types.get(&def)?;
     let params = self.type_params.get(&def).cloned().unwrap_or_else(Vec::new);
-    let expanded = tti::ExpandedType { params, ty };
-    self.visited.borrow_mut().pop();
-    Some(expanded)
+    Some(tti::ExpandedType { params, ty })
   }
 }
 
@@ -283,43 +279,21 @@ fn parse_file(file: FileId, kind: FileKind, source: &str) -> Result<Node<TopLeve
     FileKind::Jsx => Dialect::Jsx,
     FileKind::Dts => Dialect::Dts,
   };
-  let opts = ParseOptions {
+  let module_opts = ParseOptions {
     dialect,
     source_type: SourceType::Module,
   };
-  match parse_with_options(source, opts) {
+  match parse_with_options(source, module_opts) {
     Ok(ast) => Ok(ast),
-    Err(err) => {
-      if !matches!(kind, FileKind::Dts | FileKind::Js | FileKind::Jsx) {
-        let fallback = ParseOptions {
-          dialect: Dialect::Dts,
-          source_type: SourceType::Module,
-        };
-        if let Ok(ast) = parse_with_options(source, fallback) {
-          return Ok(ast);
-        }
-        let script_fallback = ParseOptions {
-          dialect: Dialect::Ts,
-          source_type: SourceType::Script,
-        };
-        if let Ok(ast) = parse_with_options(source, script_fallback) {
-          return Ok(ast);
-        }
-        if source.contains("{ export") {
-          let rewritten = source.replace("{ export", "{       ");
-          if let Ok(ast) = parse_with_options(
-            &rewritten,
-            ParseOptions {
-              dialect,
-              source_type: SourceType::Module,
-            },
-          ) {
-            return Ok(ast);
-          }
-        }
-      }
-      Err(err.to_diagnostic(file))
-    }
+    Err(_err) if matches!(kind, FileKind::Js | FileKind::Jsx) => parse_with_options(
+      source,
+      ParseOptions {
+        dialect,
+        source_type: SourceType::Script,
+      },
+    )
+    .map_err(|err| err.to_diagnostic(file)),
+    Err(err) => Err(err.to_diagnostic(file)),
   }
 }
 
@@ -337,6 +311,15 @@ fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeSt
   if let Some(store) = state.interned_store.as_ref() {
     if store.contains_type_id(ty) {
       return (Arc::clone(store), store.canon(ty));
+    }
+    if let Some(mapped) = state.def_types.iter().find_map(|(def, stored_ty)| {
+      if *stored_ty == ty {
+        state.interned_def_types.get(def).copied()
+      } else {
+        None
+      }
+    }) {
+      return (Arc::clone(store), store.canon(mapped));
     }
   }
 
@@ -380,10 +363,6 @@ fn convert_type_for_display(
       Err(_) => primitives.number,
     },
     TypeKind::LiteralBoolean(value) => store.intern_type(tti::TypeKind::BooleanLiteral(value)),
-    TypeKind::Ref { def } => store.intern_type(tti::TypeKind::Ref {
-      def: tti::DefId(def.0),
-      args: Vec::new(),
-    }),
     TypeKind::Tuple(elems, readonly) => {
       let members: Vec<_> = elems
         .into_iter()
@@ -410,21 +389,14 @@ fn convert_type_for_display(
         .collect();
       store.union(members)
     }
-    TypeKind::Intersection(types) => {
-      let members: Vec<_> = types
-        .into_iter()
-        .map(|t| convert_type_for_display(t, state, store, cache))
-        .collect();
-      store.intersection(members)
-    }
     TypeKind::Function { params, ret } => {
       let params: Vec<_> = params
         .into_iter()
         .map(|param| tti::Param {
           name: None,
-          ty: convert_type_for_display(param.ty, state, store, cache),
-          optional: param.optional,
-          rest: param.rest,
+          ty: convert_type_for_display(param, state, store, cache),
+          optional: false,
+          rest: false,
         })
         .collect();
       let sig = tti::Signature::new(params, convert_type_for_display(ret, state, store, cache));
@@ -438,10 +410,14 @@ fn convert_type_for_display(
       asserted,
       asserts,
     } => {
+      let param = if parameter.is_empty() {
+        None
+      } else {
+        Some(store.intern_name(parameter))
+      };
       let asserted = asserted.map(|ty| convert_type_for_display(ty, state, store, cache));
-      let param = store.intern_name(parameter);
       store.intern_type(tti::TypeKind::Predicate {
-        parameter: Some(param),
+        parameter: param,
         asserted,
         asserts,
       })
@@ -511,26 +487,23 @@ impl Program {
     roots: Vec<FileKey>,
     lib_manager: Arc<LibManager>,
   ) -> Program {
-    let host = Arc::new(host);
     let query_stats = QueryStatsCollector::default();
-    let mut state = ProgramState::new(lib_manager, query_stats.clone());
-    let mut intern_roots = roots.clone();
-    intern_roots.sort();
-    intern_roots.dedup();
-    for key in intern_roots.iter() {
-      let id = state.intern_file_key(key.clone());
-      state
-        .file_kinds
-        .entry(id)
-        .or_insert_with(|| host.file_kind(key));
-    }
-    Program {
-      host,
+    let program = Program {
+      host: Arc::new(host),
       roots,
       cancelled: AtomicBool::new(false),
-      state: std::sync::Mutex::new(state),
+      state: std::sync::Mutex::new(ProgramState::new(lib_manager, query_stats.clone())),
       query_stats,
+    };
+    {
+      let mut state = program.lock_state();
+      let mut roots = program.roots.clone();
+      roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+      for key in roots.into_iter() {
+        state.intern_file_key(key, FileOrigin::Source);
+      }
     }
+    program
   }
 
   /// Compiler options used by this program.
@@ -579,16 +552,29 @@ impl Program {
 
   /// Fallible entry point that surfaces unrecoverable failures to the host.
   pub fn check_fallible(&self) -> Result<Vec<Diagnostic>, FatalError> {
-    self.catch_fatal(|| {
-      self.ensure_not_cancelled()?;
-      let mut state = self.lock_state();
-      state.ensure_analyzed_result(&self.host, &self.roots, &self.cancelled)?;
-      state.ensure_interned_types(&self.host, &self.roots, &self.cancelled)?;
-      let mut body_ids: Vec<BodyId> = state
-        .body_map
-        .iter()
-        .filter_map(|(id, meta)| {
-          let kind = state
+      self.catch_fatal(|| {
+        self.ensure_not_cancelled()?;
+        let mut state = self.lock_state();
+        state.ensure_analyzed_result(&self.host, &self.roots, &self.cancelled)?;
+        state.ensure_interned_types(&self.host, &self.roots, &self.cancelled)?;
+        if state.asts.is_empty() && state.hir_lowered.is_empty() {
+          let mut diagnostics = state.diagnostics.clone();
+          let mut body_ids: Vec<BodyId> = state.body_results.keys().copied().collect();
+          body_ids.sort_by_key(|id| id.0);
+          for body in body_ids {
+            if let Some(result) = state.body_results.get(&body) {
+              diagnostics.extend(result.diagnostics.iter().cloned());
+            }
+          }
+          codes::normalize_diagnostics(&mut diagnostics);
+          diagnostics.dedup();
+          return Ok(diagnostics);
+        }
+        let mut body_ids: Vec<BodyId> = state
+          .body_map
+          .iter()
+          .filter_map(|(id, meta)| {
+            let kind = state
             .file_kinds
             .get(&meta.file)
             .copied()
@@ -602,7 +588,7 @@ impl Program {
         .collect();
       body_ids.sort_by_key(|id| id.0);
       let mut body_diagnostics = Vec::new();
-      for body in body_ids {
+      for body in body_ids.iter().copied() {
         self.ensure_not_cancelled()?;
         if let Some(meta) = state.body_map.get(&body) {
           if !state.hir_lowered.contains_key(&meta.file) {
@@ -612,12 +598,43 @@ impl Program {
         let res = state.check_body(body);
         body_diagnostics.extend(res.diagnostics.iter().cloned());
       }
+      let mut def_ids: Vec<_> = state.def_data.keys().copied().collect();
+      def_ids.sort_by_key(|id| id.0);
+      for def in def_ids.iter().copied() {
+        let _ = state.type_of_def(def);
+      }
+      state.merge_namespace_value_types();
+      state.update_export_types();
+      state.resolve_reexports();
+      state.body_results.clear();
+      for body in body_ids.iter().copied() {
+        let _ = state.check_body(body);
+      }
+      state.def_types.clear();
+      state.namespace_object_types.clear();
+      for def in def_ids.into_iter() {
+        let _ = state.type_of_def(def);
+      }
+      state.merge_namespace_value_types();
+      let mut recompute: Vec<_> = state.def_data.keys().copied().collect();
+      recompute.sort_by_key(|d| d.0);
+      for def in recompute {
+        if let Some(DefKind::Var(var)) = state.def_data.get(&def).map(|d| &d.kind) {
+          if var.body.0 == u32::MAX {
+            continue;
+          }
+          state.def_types.remove(&def);
+          state.interned_def_types.remove(&def);
+          let _ = state.type_of_def(def);
+        }
+      }
       state.update_export_types();
       state.resolve_reexports();
       codes::normalize_diagnostics(&mut state.diagnostics);
       let mut diagnostics = state.diagnostics.clone();
       diagnostics.extend(body_diagnostics);
       codes::normalize_diagnostics(&mut diagnostics);
+      diagnostics.dedup();
       Ok(diagnostics)
     })
   }
@@ -670,7 +687,10 @@ impl Program {
   fn catch_fatal<R>(&self, f: impl FnOnce() -> Result<R, FatalError>) -> Result<R, FatalError> {
     match panic::catch_unwind(AssertUnwindSafe(f)) {
       Ok(res) => res,
-      Err(payload) => Err(FatalError::Ice(Ice::from_panic(payload))),
+      Err(payload) => {
+        eprintln!("caught panic in catch_fatal");
+        Err(FatalError::Ice(Ice::from_panic(payload)))
+      }
     }
   }
 
@@ -779,51 +799,6 @@ impl Program {
     })
   }
 
-  /// Span for a specific expression within a body, if available.
-  pub fn span_of_expr(&self, body: BodyId, expr: ExprId) -> Option<Span> {
-    match self.span_of_expr_fallible(body, expr) {
-      Ok(span) => span,
-      Err(fatal) => {
-        self.record_fatal(fatal);
-        None
-      }
-    }
-  }
-
-  pub fn span_of_expr_fallible(
-    &self,
-    body: BodyId,
-    expr: ExprId,
-  ) -> Result<Option<Span>, FatalError> {
-    self.with_analyzed_state(|state| {
-      let file = state.body_map.get(&body).map(|meta| meta.file);
-      let Some(file) = file else {
-        return Ok(None);
-      };
-
-      if let Some(result) = state.body_results.get(&body) {
-        if let Some(range) = result.expr_span(expr) {
-          return Ok(Some(Span { file, range }));
-        }
-      }
-
-      if let Some(hir_id) = state.body_map.get(&body).and_then(|meta| meta.hir) {
-        if let Some(lowered) = state.hir_lowered.get(&file) {
-          if let Some(hir_body) = lowered.body(hir_id) {
-            if let Some(expr_data) = hir_body.exprs.get(expr.0 as usize) {
-              return Ok(Some(Span {
-                file,
-                range: expr_data.span,
-              }));
-            }
-          }
-        }
-      }
-
-      Ok(None)
-    })
-  }
-
   /// Return symbol at a given file offset, if any.
   pub fn symbol_at(&self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
     match self.symbol_at_fallible(file, offset) {
@@ -840,7 +815,7 @@ impl Program {
     file: FileId,
     offset: u32,
   ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
-    self.with_interned_state(|state| {
+    self.with_analyzed_state(|state| {
       state.ensure_symbols_for_file(file);
       Ok(state.symbol_at(file, offset))
     })
@@ -895,73 +870,8 @@ impl Program {
       };
       let result = state.check_body(body);
       let unknown = state.interned_unknown();
-      let mut ty = result.expr_type(expr).unwrap_or(unknown);
-      let is_number_literal = state
-        .interned_store
-        .as_ref()
-        .and_then(|store| store.contains_type_id(ty).then(|| store.type_kind(ty)))
-        .map(|kind| matches!(kind, tti::TypeKind::NumberLiteral(_)))
-        .unwrap_or(false);
-      if is_number_literal {
-        if let Some(HirExprKind::Literal(_)) = state.hir_expr_kind(body, expr) {
-          let Some(meta) = state.body_map.get(&body) else {
-            return Ok(Some(ty));
-          };
-          let Some(hir_id) = meta.hir else {
-            return Ok(Some(ty));
-          };
-          let Some(lowered) = state.hir_lowered.get(&meta.file) else {
-            return Ok(Some(ty));
-          };
-          let Some(hir_body) = lowered.body(hir_id) else {
-            return Ok(Some(ty));
-          };
-          let mut best: Option<(u32, TypeId)> = None;
-          for (idx, expr_data) in hir_body.exprs.iter().enumerate() {
-            let span = expr_data.span;
-            if !(span.start <= offset && offset < span.end) {
-              continue;
-            }
-            if let HirExprKind::Binary { op, .. } = &expr_data.kind {
-              let numeric = matches!(
-                op,
-                HirBinaryOp::Add
-                  | HirBinaryOp::Subtract
-                  | HirBinaryOp::Multiply
-                  | HirBinaryOp::Divide
-                  | HirBinaryOp::Exponent
-                  | HirBinaryOp::Remainder
-                  | HirBinaryOp::BitAnd
-                  | HirBinaryOp::BitOr
-                  | HirBinaryOp::BitXor
-                  | HirBinaryOp::ShiftLeft
-                  | HirBinaryOp::ShiftRight
-                  | HirBinaryOp::ShiftRightUnsigned
-              );
-              if numeric {
-                let len = span.len();
-                let bin_ty = result.expr_type(ExprId(idx as u32)).unwrap_or(ty);
-                let is_number = state
-                  .interned_store
-                  .as_ref()
-                  .and_then(|store| store.contains_type_id(bin_ty).then(|| store.type_kind(bin_ty)))
-                  .map(|kind| matches!(kind, tti::TypeKind::Number))
-                  .unwrap_or(false);
-                if is_number {
-                  let replace = best.map(|(l, _)| len < l).unwrap_or(true);
-                  if replace {
-                    best = Some((len, bin_ty));
-                  }
-                }
-              }
-            }
-          }
-          if let Some((_, bin_ty)) = best {
-            ty = bin_ty;
-          }
-        }
-      }
-      Ok(Some(ty))
+      let ty = result.expr_type(expr).unwrap_or(unknown);
+      Ok(Some(state.widen_literal_any(ty)))
     })
   }
 
@@ -983,17 +893,23 @@ impl Program {
 
   pub fn type_of_def_interned_fallible(&self, def: DefId) -> Result<TypeId, FatalError> {
     self.with_interned_state(|state| {
-      let def = state.canonical_def(def).unwrap_or(def);
       let store = state
         .interned_store
         .as_ref()
-        .expect("interned store initialized");
-      Ok(
-        *state
-          .interned_def_types
-          .get(&def)
-          .unwrap_or(&store.primitive_ids().unknown),
-      )
+        .expect("interned store initialized")
+        .clone();
+      let ty = match state.interned_def_types.get(&def).copied() {
+        Some(existing) if !matches!(store.type_kind(existing), tti::TypeKind::Unknown) => existing,
+        _ => {
+          let _ = state.type_of_def(def);
+          state
+            .interned_def_types
+            .get(&def)
+            .copied()
+            .unwrap_or(store.primitive_ids().unknown)
+        }
+      };
+      Ok(ty)
     })
   }
 
@@ -1010,7 +926,7 @@ impl Program {
 
   pub fn type_kind_fallible(&self, ty: TypeId) -> Result<TypeKindSummary, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.query_type_id(ty);
+      let ty = state.ensure_interned_type(ty);
       let store = state
         .interned_store
         .as_ref()
@@ -1018,7 +934,6 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
-        visited: RefCell::new(Vec::new()),
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1043,7 +958,7 @@ impl Program {
 
   pub fn interned_type_kind_fallible(&self, ty: TypeId) -> Result<tti::TypeKind, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.intern_type_id(ty);
+      let ty = state.ensure_interned_type(ty);
       let store = state
         .interned_store
         .as_ref()
@@ -1065,7 +980,7 @@ impl Program {
 
   pub fn properties_of_fallible(&self, ty: TypeId) -> Result<Vec<PropertyInfo>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.query_type_id(ty);
+      let ty = state.ensure_interned_type(ty);
       let store = state
         .interned_store
         .as_ref()
@@ -1073,11 +988,13 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
-        visited: RefCell::new(Vec::new()),
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
-      let props = queries.properties_of(ty);
+      let mut props = queries.properties_of(ty);
+      for prop in props.iter_mut() {
+        prop.ty = state.prefer_named_refs(prop.ty);
+      }
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
       }
@@ -1101,7 +1018,7 @@ impl Program {
     key: PropertyKey,
   ) -> Result<Option<TypeId>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.query_type_id(ty);
+      let ty = state.ensure_interned_type(ty);
       let store = state
         .interned_store
         .as_ref()
@@ -1109,11 +1026,12 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
-        visited: RefCell::new(Vec::new()),
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
-      let prop = queries.property_type(ty, key);
+      let prop = queries
+        .property_type(ty, key)
+        .map(|ty| state.prefer_named_refs(ty));
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
       }
@@ -1133,7 +1051,7 @@ impl Program {
 
   pub fn call_signatures_fallible(&self, ty: TypeId) -> Result<Vec<SignatureInfo>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.query_type_id(ty);
+      let ty = state.ensure_interned_type(ty);
       let store = state
         .interned_store
         .as_ref()
@@ -1141,7 +1059,6 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
-        visited: RefCell::new(Vec::new()),
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1168,7 +1085,7 @@ impl Program {
     ty: TypeId,
   ) -> Result<Vec<SignatureInfo>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.query_type_id(ty);
+      let ty = state.ensure_interned_type(ty);
       let store = state
         .interned_store
         .as_ref()
@@ -1176,7 +1093,6 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
-        visited: RefCell::new(Vec::new()),
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1200,7 +1116,6 @@ impl Program {
 
   pub fn indexers_fallible(&self, ty: TypeId) -> Result<Vec<IndexerInfo>, FatalError> {
     self.with_interned_state(|state| {
-      let ty = state.query_type_id(ty);
       let store = state
         .interned_store
         .as_ref()
@@ -1208,7 +1123,6 @@ impl Program {
       let expander = ProgramTypeExpander {
         def_types: &state.interned_def_types,
         type_params: &state.interned_type_params,
-        visited: RefCell::new(Vec::new()),
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
@@ -1248,26 +1162,22 @@ impl Program {
 
   /// Helper to render a type as displayable string.
   pub fn display_type(&self, ty: TypeId) -> TypeDisplay {
-    let (store, ty, names) = {
+    let (store, ty, resolver) = {
       let mut state = self.lock_state();
       state.ensure_analyzed(&self.host, &self.roots, &self.cancelled);
-      let (store, ty) = display_type_from_state(&state, ty);
-      let names: HashMap<tti::DefId, String> = state
+      let resolver = state
         .def_data
         .iter()
         .map(|(id, data)| (tti::DefId(id.0), data.name.clone()))
-        .collect();
-      (store, ty, names)
+        .collect::<HashMap<_, _>>();
+      let (store, ty) = display_type_from_state(&state, ty);
+      (store, ty, resolver)
     };
-    let names = Arc::new(names);
-    let resolver: Arc<dyn Fn(tti::DefId) -> Option<String> + Send + Sync> = {
-      let names = Arc::clone(&names);
-      Arc::new(move |def: tti::DefId| names.get(&def).cloned())
-    };
+    let resolver = Arc::new(resolver);
     TypeDisplay {
       store,
       ty,
-      resolver: Some(resolver),
+      resolver: Some(Arc::new(move |def| resolver.get(&def).cloned())),
     }
   }
 
@@ -1307,26 +1217,6 @@ impl Program {
 
   pub fn def_name_fallible(&self, def: DefId) -> Result<Option<String>, FatalError> {
     self.with_analyzed_state(|state| Ok(state.def_data.get(&def).map(|d| d.name.clone())))
-  }
-
-  /// Declaration span for a definition, if known.
-  pub fn span_of_def(&self, def: DefId) -> Option<Span> {
-    match self.span_of_def_fallible(def) {
-      Ok(span) => span,
-      Err(fatal) => {
-        self.record_fatal(fatal);
-        None
-      }
-    }
-  }
-
-  pub fn span_of_def_fallible(&self, def: DefId) -> Result<Option<Span>, FatalError> {
-    self.with_analyzed_state(|state| {
-      Ok(state.def_data.get(&def).map(|d| Span {
-        file: d.file,
-        range: d.span,
-      }))
-    })
   }
 
   /// Body attached to a definition, if any.
@@ -1457,20 +1347,6 @@ impl Program {
       .collect();
     def_types.sort_by_key(|(def, _)| def.0);
 
-    let mut canonical_defs: Vec<_> = state
-      .canonical_defs
-      .iter()
-      .map(|(key, def)| (key.clone(), *def))
-      .collect();
-    canonical_defs.sort_by(|a, b| a.0 .0.cmp(&b.0 .0).then_with(|| a.0 .1.cmp(&b.0 .1)));
-
-    let mut namespace_types: Vec<_> = state
-      .namespace_types
-      .iter()
-      .map(|(def, ty)| (*def, *ty))
-      .collect();
-    namespace_types.sort_by_key(|(def, _)| def.0);
-
     let mut body_results: Vec<_> = state
       .body_results
       .iter()
@@ -1535,8 +1411,6 @@ impl Program {
       file_states,
       def_data,
       def_types,
-      canonical_defs,
-      namespace_types,
       body_results,
       symbol_occurrences,
       symbol_to_def,
@@ -1610,8 +1484,6 @@ impl Program {
         .collect();
       state.body_map = HashMap::new();
       state.def_types = snapshot.def_types.into_iter().collect();
-      state.canonical_defs = snapshot.canonical_defs.into_iter().collect();
-      state.namespace_types = snapshot.namespace_types.into_iter().collect();
       state.body_results = snapshot
         .body_results
         .into_iter()
@@ -1693,74 +1565,12 @@ struct HostResolver {
   file_ids: HashMap<FileKey, FileId>,
 }
 
-fn specifier_candidates(from: Option<&FileKey>, specifier: &str) -> Vec<String> {
-  use std::collections::HashSet;
-  use std::path::Path;
-
-  let mut seen = HashSet::new();
-  let mut out = Vec::new();
-  let mut push = |value: String, out: &mut Vec<String>| {
-    let normalized = value.replace('\\', "/");
-    if seen.insert(normalized.clone()) {
-      out.push(normalized);
-    }
-  };
-
-  push(specifier.to_string(), &mut out);
-  if !specifier.ends_with(".ts")
-    && !specifier.ends_with(".tsx")
-    && !specifier.ends_with(".d.ts")
-    && !specifier.ends_with(".js")
-    && !specifier.ends_with(".jsx")
-  {
-    push(format!("{specifier}.ts"), &mut out);
-    push(format!("{specifier}.d.ts"), &mut out);
-  }
-
-  if let Some(from) = from {
-    let base = Path::new(from.as_str());
-    let base_dir = base.parent().unwrap_or(Path::new(""));
-    let existing: Vec<String> = out.clone();
-    for cand in existing {
-      let joined = base_dir.join(&cand);
-      push(joined.to_string_lossy().to_string(), &mut out);
-    }
-  }
-
-  let existing: Vec<String> = out.clone();
-  for cand in existing {
-    let mut trimmed = cand.as_str();
-    while let Some(stripped) = trimmed.strip_prefix("./") {
-      trimmed = stripped;
-    }
-    while let Some(stripped) = trimmed.strip_prefix(".\\") {
-      trimmed = stripped;
-    }
-    if trimmed != cand {
-      push(trimmed.to_string(), &mut out);
-    }
-  }
-
-  out
-}
-
 impl sem_ts::Resolver for HostResolver {
   fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
     let from_key = self.file_keys.get(&FileId(from.0))?;
-    if let Some(target_key) = self.host.resolve(from_key, specifier) {
-      if let Some(target_id) = self.file_ids.get(&target_key) {
-        return Some(sem_ts::FileId(target_id.0));
-      }
-    }
-
-    let candidates = specifier_candidates(Some(from_key), specifier);
-    for cand in candidates {
-      let target_id = self.file_ids.get(&FileKey::new(cand));
-      if let Some(target_id) = target_id {
-        return Some(sem_ts::FileId(target_id.0));
-      }
-    }
-    None
+    let target_key = self.host.resolve(from_key, specifier)?;
+    let target_id = self.file_ids.get(&target_key)?;
+    Some(sem_ts::FileId(target_id.0))
   }
 }
 
@@ -1845,7 +1655,6 @@ pub struct InterfaceData {
 #[derive(Clone, Debug)]
 pub struct TypeAliasData {
   pub typ: TypeId,
-  pub type_expr_span: Option<TextRange>,
 }
 
 #[derive(Clone, Debug)]
@@ -1938,7 +1747,6 @@ struct BodyMeta {
   file: FileId,
   hir: Option<hir_js::BodyId>,
   kind: HirBodyKind,
-  owner: Option<DefId>,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -1992,15 +1800,11 @@ pub(crate) enum TypeKind {
   LiteralString(String),
   LiteralNumber(String),
   LiteralBoolean(bool),
-  Ref {
-    def: DefId,
-  },
   Tuple(Vec<TypeId>, bool),
   Array(TypeId),
   Union(Vec<TypeId>),
-  Intersection(Vec<TypeId>),
   Function {
-    params: Vec<FunctionParam>,
+    params: Vec<TypeId>,
     ret: TypeId,
   },
   Predicate {
@@ -2027,15 +1831,9 @@ pub struct BuiltinTypes {
   pub object: TypeId,
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct FunctionParam {
-  pub ty: TypeId,
-  pub optional: bool,
-  pub rest: bool,
-}
-
 impl TypeStore {
+  const UNKNOWN_IDX: usize = 1;
+
   fn new() -> (TypeStore, BuiltinTypes) {
     let mut store = TypeStore { kinds: Vec::new() };
     let any = store.alloc(TypeKind::Any);
@@ -2075,7 +1873,13 @@ impl TypeStore {
   }
 
   pub(crate) fn kind(&self, id: TypeId) -> &TypeKind {
-    self.kinds.get(id.0 as usize).unwrap()
+    self.kinds.get(id.0 as usize).unwrap_or_else(|| {
+      // Gracefully degrade to `unknown` when encountering an out-of-range
+      // identifier instead of panicking; upstream code will treat this as a
+      // cache miss and recompute.
+      let fallback = Self::UNKNOWN_IDX.min(self.kinds.len().saturating_sub(1));
+      &self.kinds[fallback]
+    })
   }
 
   pub(crate) fn union(&mut self, mut types: Vec<TypeId>, builtin: &BuiltinTypes) -> TypeId {
@@ -2100,40 +1904,15 @@ impl TypeStore {
     self.alloc(TypeKind::Union(types))
   }
 
-  pub(crate) fn intersection(&mut self, mut types: Vec<TypeId>, builtin: &BuiltinTypes) -> TypeId {
-    let mut flat = Vec::new();
-    for ty in types.drain(..) {
-      match self.kind(ty) {
-        TypeKind::Intersection(members) => flat.extend(members.iter().copied()),
-        TypeKind::Any => {}
-        _ => flat.push(ty),
-      }
-    }
-    types = flat;
-    if types.is_empty() {
-      return builtin.any;
-    }
-    types.sort_by(|a, b| a.0.cmp(&b.0));
-    types.dedup();
-    if types.len() == 1 {
-      return types[0];
-    }
-    self.alloc(TypeKind::Intersection(types))
-  }
-
   pub(crate) fn array(&mut self, element: TypeId) -> TypeId {
     self.alloc(TypeKind::Array(element))
-  }
-
-  pub(crate) fn reference(&mut self, def: DefId) -> TypeId {
-    self.alloc(TypeKind::Ref { def })
   }
 
   pub(crate) fn tuple(&mut self, elements: Vec<TypeId>, readonly: bool) -> TypeId {
     self.alloc(TypeKind::Tuple(elements, readonly))
   }
 
-  pub(crate) fn function(&mut self, params: Vec<FunctionParam>, ret: TypeId) -> TypeId {
+  pub(crate) fn function(&mut self, params: Vec<TypeId>, ret: TypeId) -> TypeId {
     self.alloc(TypeKind::Function { params, ret })
   }
 
@@ -2196,19 +1975,6 @@ pub(crate) fn lookup_property_type(
         None
       } else {
         Some(store.union(collected, builtin))
-      }
-    }
-    TypeKind::Intersection(members) => {
-      let mut collected = Vec::new();
-      for member in members {
-        if let Some(prop_ty) = lookup_property_type(store, member, name, builtin) {
-          collected.push(prop_ty);
-        }
-      }
-      if collected.is_empty() {
-        None
-      } else {
-        Some(store.intersection(collected, builtin))
       }
     }
     _ => None,
@@ -2295,30 +2061,29 @@ struct ProgramState {
   asts: HashMap<FileId, Arc<Node<TopLevel>>>,
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
-  canonical_defs: HashMap<(FileId, String), DefId>,
   body_map: HashMap<BodyId, BodyMeta>,
   hir_lowered: HashMap<FileId, LowerResult>,
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
   semantics: Option<sem_ts::TsProgramSemantics>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
-  body_local_symbols: HashMap<BodyId, HashMap<String, semantic_js::SymbolId>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
   file_keys: HashMap<FileKey, FileId>,
   file_ids: HashMap<FileId, FileKey>,
   file_kinds: HashMap<FileId, FileKind>,
+  lib_file_ids: HashSet<FileId>,
   lib_texts: HashMap<FileId, Arc<str>>,
   global_bindings: HashMap<String, SymbolBinding>,
+  namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
   diagnostics: Vec<Diagnostic>,
   type_store: TypeStore,
   interned_store: Option<Arc<tti::TypeStore>>,
   interned_def_types: HashMap<DefId, tti::TypeId>,
   interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
-  interned_type_cache: HashMap<TypeId, tti::TypeId>,
-  namespace_types: HashMap<DefId, TypeId>,
   builtin: BuiltinTypes,
   query_stats: QueryStatsCollector,
+  current_file: Option<FileId>,
   next_file: u32,
   next_def: u32,
   next_body: u32,
@@ -2330,15 +2095,6 @@ impl ProgramState {
   fn new(lib_manager: Arc<LibManager>, query_stats: QueryStatsCollector) -> ProgramState {
     let default_options = CompilerOptions::default();
     let (type_store, builtin) = TypeStore::new();
-    let mut global_bindings = HashMap::new();
-    global_bindings.insert(
-      "Error".to_string(),
-      SymbolBinding {
-        symbol: semantic_js::SymbolId(0),
-        def: None,
-        type_id: Some(builtin.any),
-      },
-    );
     ProgramState {
       analyzed: false,
       lib_manager,
@@ -2348,96 +2104,123 @@ impl ProgramState {
       asts: HashMap::new(),
       files: HashMap::new(),
       def_data: HashMap::new(),
-      canonical_defs: HashMap::new(),
       body_map: HashMap::new(),
       hir_lowered: HashMap::new(),
       sem_hir: HashMap::new(),
       semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
-      body_local_symbols: HashMap::new(),
       symbol_occurrences: HashMap::new(),
       symbol_to_def: HashMap::new(),
       file_keys: HashMap::new(),
       file_ids: HashMap::new(),
       file_kinds: HashMap::new(),
+      lib_file_ids: HashSet::new(),
       lib_texts: HashMap::new(),
-      global_bindings,
+      global_bindings: HashMap::new(),
+      namespace_object_types: HashMap::new(),
       diagnostics: Vec::new(),
       type_store,
       interned_store: None,
       interned_def_types: HashMap::new(),
       interned_type_params: HashMap::new(),
-      interned_type_cache: HashMap::new(),
-      namespace_types: HashMap::new(),
       builtin,
       query_stats,
+      current_file: None,
       next_file: 0,
       next_def: 0,
       next_body: 0,
-      next_symbol: 1,
+      next_symbol: 0,
       type_stack: Vec::new(),
     }
   }
 
   fn file_id_for_key(&self, key: &FileKey) -> Option<FileId> {
-    self.file_keys.get(key).copied()
+    self
+      .file_keys
+      .get(key)
+      .copied()
+      .and_then(|id| {
+        if !self.lib_file_ids.contains(&id) {
+          Some(id)
+        } else {
+          None
+        }
+      })
+      .or_else(|| self.file_keys.get(key).copied())
   }
 
   fn file_key_for_id(&self, id: FileId) -> Option<FileKey> {
     self.file_ids.get(&id).cloned()
   }
 
-  fn resolve_known_file(&self, file: FileId, specifier: &str) -> Option<FileId> {
-    let from_key = self.file_key_for_id(file);
-    let base = from_key.as_ref();
-    for cand in specifier_candidates(base, specifier) {
-      if let Some(id) = self.file_keys.get(&FileKey::new(cand)) {
-        return Some(*id);
+  fn intern_file_key(&mut self, key: FileKey, origin: FileOrigin) -> FileId {
+    if let Some(existing) = self.file_keys.get(&key).copied() {
+      let existing_is_lib = self.lib_file_ids.contains(&existing);
+      match (origin, existing_is_lib) {
+        (FileOrigin::Lib, true) | (FileOrigin::Source, false) => return existing,
+        (FileOrigin::Lib, false) | (FileOrigin::Source, true) => {}
       }
     }
-    None
-  }
-
-  fn resolve_module_specifier(
-    &mut self,
-    file: FileId,
-    specifier: &str,
-    host: &Arc<dyn Host>,
-  ) -> Option<FileId> {
-    if let Some(file_key) = self.file_key_for_id(file) {
-      if let Some(target_key) = host.resolve(&file_key, specifier) {
-        return Some(self.intern_file_key(target_key));
-      }
-      for cand in specifier_candidates(Some(&file_key), specifier) {
-        if let Some(id) = self.file_keys.get(&FileKey::new(cand)) {
-          return Some(*id);
-        }
-      }
-    } else {
-      for cand in specifier_candidates(None, specifier) {
-        if let Some(id) = self.file_keys.get(&FileKey::new(cand)) {
-          return Some(*id);
-        }
+    let mut id = FileId(self.next_file);
+    if let Some(preferred) = Self::preferred_file_id(&key) {
+      let preferred = FileId(preferred);
+      if !self.file_ids.contains_key(&preferred) {
+        id = preferred;
       }
     }
-    None
-  }
-
-  fn alloc_file_id(&mut self, key: FileKey) -> FileId {
-    let id = FileId(self.next_file);
-    self.next_file += 1;
-    self.file_ids.insert(id, key);
+    self.next_file = self.next_file.max(id.0 + 1);
+    self.file_ids.insert(id, key.clone());
+    match origin {
+      FileOrigin::Lib => {
+        self.lib_file_ids.insert(id);
+        self.file_keys.entry(key).or_insert(id);
+      }
+      FileOrigin::Source => {
+        self.file_keys.insert(key, id);
+      }
+    }
     id
   }
 
-  fn intern_file_key(&mut self, key: FileKey) -> FileId {
-    if let Some(id) = self.file_keys.get(&key) {
-      return *id;
+  fn preferred_file_id(key: &FileKey) -> Option<u32> {
+    let name = key.as_str();
+    let remainder = name.strip_prefix("file")?;
+    let stripped = remainder
+      .strip_suffix(".ts")
+      .or_else(|| remainder.strip_suffix(".tsx"))?;
+    stripped.parse::<u32>().ok()
+  }
+
+  fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
+    let Some(data) = self.def_data.get(&def) else {
+      return u8::MAX;
+    };
+    if ns.contains(sem_ts::Namespace::VALUE) {
+      return match &data.kind {
+        DefKind::Function(_) => 0,
+        DefKind::Var(var) if var.body.0 != u32::MAX => 1,
+        DefKind::Import(_) => 2,
+        DefKind::Var(_) => 3,
+        DefKind::Interface(_) | DefKind::TypeAlias(_) => 4,
+      };
     }
-    let id = self.alloc_file_id(key.clone());
-    self.file_keys.insert(key, id);
-    id
+    if ns.contains(sem_ts::Namespace::TYPE) {
+      return match &data.kind {
+        DefKind::Interface(_) => 0,
+        DefKind::TypeAlias(_) => 1,
+        DefKind::Import(_) => 2,
+        _ => 3,
+      };
+    }
+    if ns.contains(sem_ts::Namespace::NAMESPACE) {
+      return match &data.kind {
+        DefKind::Var(var) if var.body.0 == u32::MAX => 0,
+        DefKind::Import(_) => 1,
+        _ => 2,
+      };
+    }
+    u8::MAX
   }
 
   fn interned_unknown(&self) -> TypeId {
@@ -2446,6 +2229,224 @@ impl ProgramState {
       .as_ref()
       .map(|s| s.primitive_ids().unknown)
       .unwrap_or(self.builtin.unknown)
+  }
+
+  fn build_namespace_object_type(
+    store: &Arc<tti::TypeStore>,
+    existing: Option<tti::TypeId>,
+    members: &[String],
+  ) -> tti::TypeId {
+    let mut shape = existing
+      .and_then(|ty| match store.type_kind(ty) {
+        tti::TypeKind::Object(obj) => Some(store.shape(store.object(obj).shape)),
+        _ => None,
+      })
+      .unwrap_or_else(tti::Shape::new);
+    for name in members.iter() {
+      let key = PropKey::String(store.intern_name(name.clone()));
+      shape.properties.push(Property {
+        key,
+        data: PropData {
+          ty: store.primitive_ids().any,
+          optional: false,
+          readonly: true,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      });
+    }
+    let shape_id = store.intern_shape(shape);
+    let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+    store.intern_type(tti::TypeKind::Object(obj_id))
+  }
+
+  fn build_namespace_type_store_object(
+    &mut self,
+    existing: Option<TypeId>,
+    members: &[String],
+  ) -> TypeId {
+    let mut obj = existing
+      .and_then(|ty| match self.type_store.kind(ty).clone() {
+        TypeKind::Object(obj) => Some(obj),
+        _ => None,
+      })
+      .unwrap_or_else(ObjectType::empty);
+    for name in members.iter() {
+      obj.props.entry(name.clone()).or_insert(ObjectProperty {
+        typ: self.builtin.any,
+        optional: false,
+        readonly: true,
+      });
+    }
+    self.type_store.object(obj)
+  }
+
+  fn find_namespace_def(&self, file: FileId, name: &str) -> Option<DefId> {
+    self
+      .def_data
+      .iter()
+      .find_map(|(id, data)| match &data.kind {
+        DefKind::Var(var) if data.file == file && data.name == name && var.body.0 == u32::MAX => {
+          Some(*id)
+        }
+        _ => None,
+      })
+  }
+
+  fn merge_namespace_value_types(&mut self) {
+    let Some(store) = self.interned_store.clone() else {
+      return;
+    };
+    let mut rebuilt: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
+    let mut namespaces: Vec<(FileId, String, Vec<DefId>)> = Vec::new();
+    let mut namespace_groups: HashMap<(FileId, String), Vec<DefId>> = HashMap::new();
+    let mut def_entries: Vec<_> = self.def_data.iter().collect();
+    def_entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
+    for (def_id, data) in def_entries.iter().copied() {
+      if let DefKind::Var(var) = &data.kind {
+        if var.body.0 == u32::MAX {
+          let members: Vec<DefId> = def_entries
+            .iter()
+            .copied()
+            .filter_map(|(member_id, member)| {
+              if member.file != data.file || member_id == def_id {
+                return None;
+              }
+              if member.span.start < data.span.start || member.span.end > data.span.end {
+                return None;
+              }
+              Some(*member_id)
+            })
+            .collect();
+          namespace_groups
+            .entry((data.file, data.name.clone()))
+            .or_default()
+            .push(*def_id);
+          namespaces.push((data.file, data.name.clone(), members));
+        }
+      }
+    }
+    namespaces.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
+    let mut merged_members: BTreeMap<(FileId, String), Vec<DefId>> = BTreeMap::new();
+    for (file, name, members) in namespaces.into_iter() {
+      merged_members
+        .entry((file, name))
+        .or_default()
+        .extend(members.into_iter());
+    }
+    for ((file, name), members) in merged_members.into_iter() {
+      let mut shape = tti::Shape::new();
+      let mut obj = ObjectType::empty();
+      let mut seen = HashSet::new();
+      for member_id in members.into_iter() {
+        if !seen.insert(member_id) {
+          continue;
+        }
+        let ty_interned = match self.export_type_for_def(member_id) {
+          Some(ty) => store.canon(ty),
+          None => continue,
+        };
+        let ty_store = if let Some(store_ty) = self.def_types.get(&member_id).copied() {
+          store_ty
+        } else {
+          self.import_interned_type(ty_interned)
+        };
+        let member_name = self
+          .def_data
+          .get(&member_id)
+          .map(|d| d.name.clone())
+          .unwrap_or_default();
+        let key = PropKey::String(store.intern_name(member_name.clone()));
+        shape.properties.push(Property {
+          key,
+          data: PropData {
+            ty: ty_interned,
+            optional: false,
+            readonly: true,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        });
+        obj.props.entry(member_name).or_insert(ObjectProperty {
+          typ: ty_store,
+          optional: false,
+          readonly: true,
+        });
+      }
+      let shape_id = store.intern_shape(shape);
+      let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+      let interned = store.intern_type(tti::TypeKind::Object(obj_id));
+      let store_ty = self.type_store.object(obj);
+      rebuilt.insert((file, name.clone()), (interned, store_ty));
+      if let Some(defs) = namespace_groups.get(&(file, name.clone())) {
+        for def_id in defs.iter() {
+          self.def_types.insert(*def_id, store_ty);
+          self.interned_def_types.insert(*def_id, interned);
+        }
+      }
+    }
+    if !rebuilt.is_empty() {
+      self.namespace_object_types = rebuilt.clone();
+    }
+    let mut entries: Vec<_> = self
+      .namespace_object_types
+      .iter()
+      .map(|(k, v)| (k.clone(), *v))
+      .collect();
+    entries.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
+    for ((file, name), (ns_interned, ns_store)) in entries.into_iter() {
+      let ns_def = self.find_namespace_def(file, &name);
+      let value_def = self
+        .def_data
+        .iter()
+        .find_map(|(id, data)| match &data.kind {
+          DefKind::Function(_) if data.file == file && data.name == name => Some(*id),
+          DefKind::Var(var) if data.file == file && data.name == name && var.body.0 != u32::MAX => {
+            Some(*id)
+          }
+          _ => None,
+        });
+      if let (Some(ns_def), Some(val_def)) = (ns_def, value_def) {
+        let mut val_interned = self
+          .def_types
+          .get(&val_def)
+          .copied()
+          .and_then(|val_store_ty| {
+            let mut cache = HashMap::new();
+            Some(store.canon(convert_type_for_display(
+              val_store_ty,
+              self,
+              &store,
+              &mut cache,
+            )))
+          })
+          .or_else(|| self.interned_def_types.get(&val_def).copied());
+        if val_interned
+          .map(|ty| {
+            matches!(
+              store.type_kind(ty),
+              tti::TypeKind::Any | tti::TypeKind::Unknown
+            )
+          })
+          .unwrap_or(false)
+        {
+          val_interned = self.interned_def_types.get(&val_def).copied();
+        }
+        if let Some(val_ty_interned) = val_interned {
+          let merged = store.intersection(vec![val_ty_interned, ns_interned]);
+          self.interned_def_types.insert(ns_def, merged);
+          self.interned_def_types.insert(val_def, merged);
+        }
+        if let Some(val_ty) = self.def_types.get(&val_def).copied() {
+          self.def_types.insert(ns_def, ns_store);
+          self.def_types.insert(val_def, val_ty);
+        }
+      }
+    }
   }
 
   fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileKey], cancelled: &AtomicBool) {
@@ -2464,28 +2465,35 @@ impl ProgramState {
       return Ok(());
     }
     let libs = self.collect_libraries(host.as_ref());
-    let lib_ids: Vec<FileId> = libs.iter().map(|(_, id)| *id).collect();
+    let lib_ids: Vec<FileId> = libs
+      .iter()
+      .map(|l| self.intern_file_key(l.key.clone(), FileOrigin::Lib))
+      .collect();
     let lib_id_set: HashSet<FileId> = lib_ids.iter().copied().collect();
     self.process_libs(&libs, host);
     let mut root_ids: Vec<FileId> = roots
       .iter()
-      .map(|key| self.intern_file_key(key.clone()))
+      .map(|key| self.intern_file_key(key.clone(), FileOrigin::Source))
       .collect();
     root_ids.sort_by_key(|id| id.0);
-    root_ids.dedup();
     let mut queue: VecDeque<FileId> = root_ids.iter().copied().collect();
     let mut seen: HashSet<FileId> = HashSet::new();
-    while let Some(file) = queue.pop_back() {
+    while let Some(file) = queue.pop_front() {
       if cancelled.load(Ordering::Relaxed) {
         return Err(FatalError::Cancelled);
       }
+      let prev_file = self.current_file;
+      self.current_file = Some(file);
       if !seen.insert(file) {
+        self.current_file = prev_file;
         continue;
       }
       if lib_id_set.contains(&file) {
+        self.current_file = prev_file;
         continue;
       }
       let Some(file_key) = self.file_key_for_id(file) else {
+        self.current_file = prev_file;
         continue;
       };
       self
@@ -2553,6 +2561,7 @@ impl ProgramState {
           self.diagnostics.push(err);
         }
       }
+      self.current_file = prev_file;
     }
     if !self.sem_hir.is_empty() {
       self.compute_semantics(host, &root_ids, &lib_ids);
@@ -2570,7 +2579,7 @@ impl ProgramState {
     roots: &[FileKey],
     cancelled: &AtomicBool,
   ) -> Result<(), FatalError> {
-    if self.interned_store.is_some() {
+    if self.interned_store.is_some() && self.interned_def_types.len() >= self.def_data.len() {
       return Ok(());
     }
     self.ensure_analyzed_result(host, roots, cancelled)?;
@@ -2580,64 +2589,49 @@ impl ProgramState {
 
     let store = tti::TypeStore::new();
     self.interned_store = Some(Arc::clone(&store));
+    self.interned_def_types.clear();
+    self.interned_type_params.clear();
     let mut def_types = HashMap::new();
     let mut type_params = HashMap::new();
-    self.interned_type_cache.clear();
+    let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let mut def_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
-    let def_entries: Vec<_> = self
+    let mut def_entries: Vec<_> = self
       .def_data
       .iter()
       .map(|(id, data)| (*id, data.clone()))
       .collect();
+    def_entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
     for (def_id, data) in def_entries {
-      let canonical = self
-        .canonical_defs
-        .get(&(data.file, data.name.clone()))
-        .copied()
-        .unwrap_or(def_id);
-      let mapped_id = match &data.kind {
-        DefKind::Import(import) => self
+      let key = (data.file, data.name.clone());
+      let ns = match data.kind {
+        DefKind::Interface(_) | DefKind::TypeAlias(_) => sem_ts::Namespace::TYPE,
+        _ => sem_ts::Namespace::VALUE,
+      };
+      let mut mapped_def = def_id;
+      if let DefKind::Import(import) = &data.kind {
+        if let Some(target) = self
           .exports_of_file(import.from)
           .get(&import.original)
-          .and_then(|e| e.def)
-          .or_else(|| {
-            self
-              .files
-              .get(&import.from)
-              .and_then(|f| f.exports.get(&import.original))
-              .and_then(|e| e.def)
-          })
-          .unwrap_or(canonical),
-        _ => canonical,
-      };
+          .and_then(|entry| entry.def)
+        {
+          mapped_def = target;
+        }
+      }
       def_by_name
-        .entry((data.file, data.name.clone()))
-        .or_insert(mapped_id);
-    }
-    let import_entries: Vec<(FileId, ImportData)> = self
-      .def_data
-      .values()
-      .filter_map(|data| {
-        if let DefKind::Import(import) = &data.kind {
-          Some((data.file, import.clone()))
-        } else {
-          None
-        }
-      })
-      .collect();
-    for (file, import) in import_entries {
-      if import.original != "*" {
-        continue;
-      }
-      let exports = self.exports_of_file(import.from);
-      for (name, entry) in exports {
-        if let Some(target_def) = entry.def {
-          def_by_name.entry((file, name)).or_insert(target_def);
-        }
-      }
+        .entry(key)
+        .and_modify(|existing| {
+          let current = self.def_priority(*existing, ns);
+          let new_pri = self.def_priority(mapped_def, ns);
+          if new_pri < current || (new_pri == current && mapped_def < *existing) {
+            *existing = mapped_def;
+          }
+        })
+        .or_insert(mapped_def);
     }
 
-    for (file, lowered) in self.hir_lowered.iter() {
+    let mut lowered_entries: Vec<_> = self.hir_lowered.iter().collect();
+    lowered_entries.sort_by_key(|(file, _)| file.0);
+    for (file, lowered) in lowered_entries.iter().copied() {
       if cancelled.load(Ordering::Relaxed) {
         return Err(FatalError::Cancelled);
       }
@@ -2680,286 +2674,165 @@ impl ProgramState {
             .and_then(|n| def_by_name.get(&(*file, n.to_string())).copied())
         });
         if let Some(mapped) = target_def {
-          let merged = if let Some(existing) = def_types.get(&mapped) {
-            store.intersection(vec![*existing, ty])
+          let ty = if let Some(existing) = def_types.get(&mapped) {
+            ProgramState::merge_interned_decl_types(&store, *existing, ty)
           } else {
             ty
           };
-          def_types.insert(mapped, merged);
-          if !params.is_empty() && !type_params.contains_key(&mapped) {
+          def_types.insert(mapped, ty);
+          if !params.is_empty() {
             type_params.insert(mapped, params);
           }
         }
       }
     }
 
-    let mut type_cache = HashMap::new();
-    for (def, ns_ty) in self.namespace_types.iter() {
-      let interned_ns = convert_type_for_display(*ns_ty, self, &store, &mut type_cache);
-      let merged = if let Some(existing) = def_types.get(def) {
-        store.intersection(vec![*existing, interned_ns])
-      } else {
-        interned_ns
-      };
-      def_types.insert(*def, merged);
-    }
-    let ns_defs: Vec<_> = self.namespace_types.keys().copied().collect();
-    for def in ns_defs {
-      let saved_ns = self.namespace_types.remove(&def);
-      let saved_def = self.def_types.remove(&def);
-      let ty = self.type_of_def(def);
-      if let Some(existing) = saved_def {
-        self.def_types.insert(def, existing);
-      } else {
-        self.def_types.remove(&def);
+    let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
+    for (file, lowered) in lowered_entries.into_iter() {
+      for ns_def in lowered
+        .defs
+        .iter()
+        .filter(|d| matches!(d.path.kind, HirDefKind::Namespace | HirDefKind::Module))
+      {
+        let Some(ns_name) = lowered.names.resolve(ns_def.name) else {
+          continue;
+        };
+        let mut members = Vec::new();
+        for member in lowered.defs.iter() {
+          if member.id == ns_def.id {
+            continue;
+          }
+          if member.span.start >= ns_def.span.start && member.span.end <= ns_def.span.end {
+            if let Some(name) = lowered.names.resolve(member.name) {
+              members.push(name.to_string());
+            }
+          }
+        }
+        members.sort();
+        members.dedup();
+        if members.is_empty() {
+          continue;
+        }
+        namespace_members.push((*file, ns_name.to_string(), members));
       }
-      if let Some(ns_ty) = saved_ns {
-        self.namespace_types.insert(def, ns_ty);
-      }
-      let interned = convert_type_for_display(ty, self, &store, &mut type_cache);
-      let merged = if let Some(existing) = def_types.get(&def) {
-        store.intersection(vec![*existing, interned])
-      } else {
-        interned
-      };
-      def_types.insert(def, merged);
     }
+    namespace_members.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
+    for (file, ns_name, members) in namespace_members.into_iter() {
+      let key = (file, ns_name);
+      namespace_types
+        .entry(key)
+        .and_modify(|(existing_interned, existing_store)| {
+          *existing_interned =
+            ProgramState::build_namespace_object_type(&store, Some(*existing_interned), &members);
+          *existing_store = self.build_namespace_type_store_object(Some(*existing_store), &members);
+        })
+        .or_insert_with(|| {
+          let interned = ProgramState::build_namespace_object_type(&store, None, &members);
+          let store_ty = self.build_namespace_type_store_object(None, &members);
+          (interned, store_ty)
+        });
+    }
+
+    if !namespace_types.is_empty() {
+      let mut ns_entries: Vec<_> = namespace_types.into_iter().collect();
+      ns_entries.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
+      self.namespace_object_types = ns_entries.iter().cloned().collect();
+      for ((file, name), (interned, store_ty)) in ns_entries.into_iter() {
+        if let Some(def) = def_by_name.get(&(file, name)).copied() {
+          self
+            .interned_def_types
+            .entry(def)
+            .and_modify(|existing| {
+              *existing = ProgramState::merge_interned_decl_types(&store, *existing, interned);
+            })
+            .or_insert(interned);
+          self.def_types.entry(def).or_insert(store_ty);
+        }
+      }
+    }
+
     let mut missing_defs: Vec<_> = self
       .def_data
       .keys()
       .copied()
-      .filter(|def| !def_types.contains_key(def))
+      .filter(|def_id| {
+        def_types.get(def_id).map_or(true, |ty| {
+          matches!(store.type_kind(*ty), tti::TypeKind::Unknown)
+        })
+      })
       .collect();
     missing_defs.sort_by_key(|d| d.0);
-    for def in missing_defs {
-      let ty = self.type_of_def(def);
-      let interned = convert_type_for_display(ty, self, &store, &mut type_cache);
-      def_types.insert(def, interned);
-    }
-    for ((file, name), canonical) in self.canonical_defs.clone().into_iter() {
-      let aliases: Vec<_> = self
-        .def_data
-        .iter()
-        .filter_map(|(id, data)| {
-          if data.file == file && data.name == name && *id != canonical {
-            Some(*id)
-          } else {
-            None
-          }
-        })
-        .collect();
-      if let Some(&ty) = def_types.get(&canonical) {
-        for alias in aliases.iter() {
-          def_types.insert(*alias, ty);
+    for def_id in missing_defs {
+      let store_ty = match self.def_types.get(&def_id).copied() {
+        Some(ty) => ty,
+        None => {
+          let _ = self.type_of_def(def_id);
+          self
+            .def_types
+            .get(&def_id)
+            .copied()
+            .unwrap_or(self.builtin.unknown)
         }
-      }
-      if let Some(params) = type_params.get(&canonical).cloned() {
-        for alias in aliases {
-          type_params.entry(alias).or_insert(params.clone());
-        }
-      }
+      };
+      let mut cache = HashMap::new();
+      let interned = convert_type_for_display(store_ty, self, &store, &mut cache);
+      def_types.insert(def_id, store.canon(interned));
     }
 
     self.interned_store = Some(store);
     self.interned_def_types = def_types;
     self.interned_type_params = type_params;
+    self.merge_namespace_value_types();
     self.recompute_global_bindings();
     codes::normalize_diagnostics(&mut self.diagnostics);
     Ok(())
   }
 
-  fn intern_type_id(&mut self, ty: TypeId) -> TypeId {
-    let store = self
-      .interned_store
-      .as_ref()
-      .expect("interned store initialized");
-    if store.contains_type_id(ty) {
-      return ty;
-    }
-    if let Some(mapped) = self.interned_type_cache.get(&ty) {
-      return *mapped;
-    }
-    let mut cache = std::mem::take(&mut self.interned_type_cache);
-    let mapped = convert_type_for_display(ty, self, store, &mut cache);
-    cache.insert(ty, mapped);
-    self.interned_type_cache = cache;
-    mapped
-  }
-
-  fn type_references_def(
-    &self,
-    ty: TypeId,
-    target: DefId,
-    seen_types: &mut HashSet<TypeId>,
-    seen_defs: &mut HashSet<DefId>,
-  ) -> bool {
-    if !seen_types.insert(ty) {
-      return false;
-    }
-    match self.type_store.kind(ty).clone() {
-      TypeKind::Ref { def } => {
-        if def == target {
-          return true;
-        }
-        if !seen_defs.insert(def) {
-          return false;
-        }
-        if let Some(def_ty) = self.def_types.get(&def).copied() {
-          return self.type_references_def(def_ty, target, seen_types, seen_defs);
-        }
-        false
-      }
-      TypeKind::Tuple(elems, _) => elems
-        .into_iter()
-        .any(|elem| self.type_references_def(elem, target, seen_types, seen_defs)),
-      TypeKind::Array(inner) => self.type_references_def(inner, target, seen_types, seen_defs),
-      TypeKind::Union(types) | TypeKind::Intersection(types) => types
-        .into_iter()
-        .any(|t| self.type_references_def(t, target, seen_types, seen_defs)),
-      TypeKind::Function { params, ret } => {
-        params
-          .into_iter()
-          .any(|p| self.type_references_def(p.ty, target, seen_types, seen_defs))
-          || self.type_references_def(ret, target, seen_types, seen_defs)
-      }
-      TypeKind::Predicate { asserted, .. } => asserted
-        .map(|ty| self.type_references_def(ty, target, seen_types, seen_defs))
-        .unwrap_or(false),
-      TypeKind::Object(obj) => {
-        for prop in obj.props.values() {
-          if self.type_references_def(prop.typ, target, seen_types, seen_defs) {
-            return true;
+  fn merge_interned_object_types(
+    store: &Arc<tti::TypeStore>,
+    existing: tti::TypeId,
+    incoming: tti::TypeId,
+  ) -> tti::TypeId {
+    match (store.type_kind(existing), store.type_kind(incoming)) {
+      (tti::TypeKind::Object(obj_a), tti::TypeKind::Object(obj_b)) => {
+        let mut shape = store.shape(store.object(obj_a).shape);
+        let other = store.shape(store.object(obj_b).shape);
+        let mut merged = Vec::new();
+        for prop in shape.properties.into_iter().chain(other.properties.into_iter()) {
+          if let Some(existing) = merged.iter_mut().find(|p: &&mut Property| p.key == prop.key) {
+            *existing = prop;
+          } else {
+            merged.push(prop);
           }
         }
-        if let Some(idx) = obj.string_index {
-          if self.type_references_def(idx, target, seen_types, seen_defs) {
-            return true;
-          }
-        }
-        if let Some(idx) = obj.number_index {
-          if self.type_references_def(idx, target, seen_types, seen_defs) {
-            return true;
-          }
-        }
-        false
+        shape.properties = merged;
+        shape.call_signatures.extend(other.call_signatures);
+        shape
+          .construct_signatures
+          .extend(other.construct_signatures);
+        shape.indexers.extend(other.indexers);
+        let shape_id = store.intern_shape(shape);
+        let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+        store.intern_type(tti::TypeKind::Object(obj_id))
       }
-      _ => false,
+      _ => store.intersection(vec![existing, incoming]),
     }
   }
 
-  fn query_type_id(&mut self, ty: TypeId) -> TypeId {
-    let interned = self.intern_type_id(ty);
-    let store = self
-      .interned_store
-      .as_ref()
-      .expect("interned store initialized");
-    let Some(def) = self
-      .interned_def_types
-      .iter()
-      .find_map(|(def, def_ty)| (store.canon(*def_ty) == store.canon(interned)).then_some(*def))
-      .or_else(|| {
-        self
-          .def_types
-          .iter()
-          .find_map(|(def, def_ty)| (*def_ty == ty).then_some(*def))
-      })
-    else {
-      return interned;
-    };
-    let canonical_def = self.canonical_def(def).unwrap_or(def);
-    let Some(original_ty) = self.def_types.get(&canonical_def).copied() else {
-      return interned;
-    };
-    if let Some(def_data) = self.def_data.get(&canonical_def) {
-      if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
-        let mut seen_types = HashSet::new();
-        let mut seen_defs = HashSet::new();
-        if self.type_references_def(original_ty, canonical_def, &mut seen_types, &mut seen_defs) {
-          return store.intern_type(tti::TypeKind::Ref {
-            def: tti::DefId(canonical_def.0),
-            args: Vec::new(),
-          });
-        }
+  fn merge_interned_decl_types(
+    store: &Arc<tti::TypeStore>,
+    existing: tti::TypeId,
+    incoming: tti::TypeId,
+  ) -> tti::TypeId {
+    match (store.type_kind(existing), store.type_kind(incoming)) {
+      (tti::TypeKind::Object(_), tti::TypeKind::Object(_)) => {
+        ProgramState::merge_interned_object_types(store, existing, incoming)
       }
-    }
-    interned
-  }
-
-  fn populate_interned_defs(&mut self, store: &Arc<tti::TypeStore>) {
-    let mut cache = std::mem::take(&mut self.interned_type_cache);
-    let mut defs: Vec<_> = self.def_data.keys().copied().collect();
-    defs.sort_by_key(|d| d.0);
-    for def in defs {
-      if self.interned_def_types.contains_key(&def) {
-        continue;
-      }
-      let ty = self.type_of_def(def);
-      let interned = convert_type_for_display(ty, self, store, &mut cache);
-      self.interned_def_types.insert(def, interned);
-    }
-    self.interned_type_cache = cache;
-  }
-
-  fn widen_interned_literal(&self, ty: TypeId) -> TypeId {
-    let Some(store) = self.interned_store.as_ref() else {
-      return ty;
-    };
-    match store.type_kind(ty) {
-      tti::TypeKind::NumberLiteral(_) => store.primitive_ids().number,
-      tti::TypeKind::StringLiteral(_) => store.primitive_ids().string,
-      tti::TypeKind::BooleanLiteral(_) => store.primitive_ids().boolean,
-      _ => ty,
+      _ => store.intersection(vec![existing, incoming]),
     }
   }
 
-  fn widen_literal_components(&mut self, ty: TypeId, readonly: bool) -> TypeId {
-    match self.type_store.kind(ty).clone() {
-      TypeKind::LiteralNumber(_) => {
-        if readonly {
-          ty
-        } else {
-          self.builtin.number
-        }
-      }
-      TypeKind::LiteralString(_) => ty,
-      TypeKind::LiteralBoolean(_) => ty,
-      TypeKind::Array(inner) => {
-        let widened = self.widen_literal_components(inner, readonly);
-        self.type_store.array(widened)
-      }
-      TypeKind::Tuple(elems, tuple_readonly) => {
-        let readonly = readonly || tuple_readonly;
-        let widened: Vec<_> = elems
-          .into_iter()
-          .map(|elem| self.widen_literal_components(elem, readonly))
-          .collect();
-        self.type_store.tuple(widened, tuple_readonly)
-      }
-      TypeKind::Object(mut obj) => {
-        for prop in obj.props.values_mut() {
-          let prop_readonly = readonly || prop.readonly;
-          prop.typ = self.widen_literal_components(prop.typ, prop_readonly);
-        }
-        if let Some(v) = obj.string_index {
-          obj.string_index = Some(self.widen_literal_components(v, readonly));
-        }
-        if let Some(v) = obj.number_index {
-          obj.number_index = Some(self.widen_literal_components(v, readonly));
-        }
-        self.type_store.object(obj)
-      }
-      TypeKind::Union(types) => {
-        let mapped: Vec<_> = types
-          .into_iter()
-          .map(|t| self.widen_literal_components(t, readonly))
-          .collect();
-        self.type_store.union(mapped, &self.builtin)
-      }
-      _ => ty,
-    }
-  }
-
-  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<(LibFile, FileId)> {
+  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<LibFile> {
     let options = host.compiler_options();
     self.compiler_options = options.clone();
     self.checker_caches = CheckerCaches::new(options.cache.clone());
@@ -2973,11 +2846,7 @@ impl ProgramState {
     let mut dts_libs = Vec::new();
     for lib in libs.into_iter() {
       let is_dts = lib.kind == FileKind::Dts || lib.name.ends_with(".d.ts");
-      let file_id = if self.file_keys.contains_key(&lib.key) {
-        self.alloc_file_id(lib.key.clone())
-      } else {
-        self.intern_file_key(lib.key.clone())
-      };
+      let file_id = self.intern_file_key(lib.key.clone(), FileOrigin::Lib);
       if !is_dts {
         self.diagnostics.push(codes::NON_DTS_LIB.warning(
           format!(
@@ -2989,7 +2858,7 @@ impl ProgramState {
         continue;
       }
       self.file_kinds.insert(file_id, FileKind::Dts);
-      dts_libs.push((lib, file_id));
+      dts_libs.push(lib);
     }
 
     if dts_libs.is_empty() {
@@ -3004,22 +2873,23 @@ impl ProgramState {
     dts_libs
   }
 
-  fn process_libs(&mut self, libs: &[(LibFile, FileId)], host: &Arc<dyn Host>) {
-    for (lib, file_id) in libs {
-      self.lib_texts.insert(*file_id, lib.text.clone());
-      let parsed = parse_file(*file_id, FileKind::Dts, lib.text.as_ref());
+  fn process_libs(&mut self, libs: &[LibFile], host: &Arc<dyn Host>) {
+    for lib in libs {
+      let file_id = self.intern_file_key(lib.key.clone(), FileOrigin::Lib);
+      self.lib_texts.insert(file_id, lib.text.clone());
+      let parsed = parse_file(file_id, FileKind::Dts, lib.text.as_ref());
       match parsed {
         Ok(ast) => {
           let ast = Arc::new(ast);
-          self.asts.insert(*file_id, Arc::clone(&ast));
-          let (lowered, lower_diags) = lower_hir_with_diagnostics(*file_id, HirFileKind::Dts, &ast);
+          self.asts.insert(file_id, Arc::clone(&ast));
+          let (lowered, lower_diags) = lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
           let sem_hir = sem_hir_from_lower(&lowered);
-          self.map_hir_bodies(*file_id, &lowered);
+          self.map_hir_bodies(file_id, &lowered);
           let mut queue = VecDeque::new();
-          self.bind_file(*file_id, ast.as_ref(), host, &mut queue);
-          self.hir_lowered.insert(*file_id, lowered);
-          self.sem_hir.insert(*file_id, sem_hir);
+          self.bind_file(file_id, ast.as_ref(), host, &mut queue);
+          self.hir_lowered.insert(file_id, lowered);
+          self.sem_hir.insert(file_id, sem_hir);
         }
         Err(err) => {
           self.diagnostics.push(err);
@@ -3028,23 +2898,14 @@ impl ProgramState {
     }
   }
 
-  fn load_text(&self, file: FileId, host: &Arc<dyn Host>) -> Result<Arc<str>, FatalError> {
+  fn load_text(&self, file: FileId, host: &Arc<dyn Host>) -> Result<Arc<str>, HostError> {
     if let Some(text) = self.lib_texts.get(&file) {
       return Ok(text.clone());
     }
     let Some(key) = self.file_key_for_id(file) else {
-      return Err(FatalError::Host(HostError::new(format!(
-        "missing file key for {file:?}"
-      ))));
+      return Err(HostError::new(format!("missing file key for {file:?}")));
     };
-    let hook = panic::take_hook();
-    panic::set_hook(Box::new(|_| {}));
-    let result = panic::catch_unwind(AssertUnwindSafe(|| host.file_text(&key)));
-    panic::set_hook(hook);
-    match result {
-      Ok(res) => res.map_err(FatalError::Host),
-      Err(payload) => Err(FatalError::Ice(Ice::from_panic(payload))),
-    }
+    host.file_text(&key)
   }
 
   fn recompute_global_bindings(&mut self) {
@@ -3095,14 +2956,16 @@ impl ProgramState {
           .as_ref()
           .map(|store| store.primitive_ids().undefined),
       });
-    globals.entry("Error".to_string()).or_insert(SymbolBinding {
-      symbol: self.alloc_symbol(),
-      def: None,
-      type_id: self
-        .interned_store
-        .as_ref()
-        .map(|store| store.primitive_ids().unknown),
-    });
+    globals
+      .entry("Error".to_string())
+      .or_insert(SymbolBinding {
+        symbol: self.alloc_symbol(),
+        def: None,
+        type_id: self
+          .interned_store
+          .as_ref()
+          .map(|store| store.primitive_ids().any),
+      });
     self.global_bindings = globals;
   }
 
@@ -3149,19 +3012,17 @@ impl ProgramState {
   }
 
   fn map_hir_bodies(&mut self, file: FileId, lowered: &LowerResult) {
-    let to_remove: Vec<_> = self
-      .body_map
-      .iter()
-      .filter(|(_, meta)| meta.file == file)
-      .map(|(id, _)| *id)
-      .collect();
-    for id in to_remove {
-      self.body_local_symbols.remove(&id);
-    }
     self.body_map.retain(|_, meta| meta.file != file);
 
     let mut defs_by_span: HashMap<(TextRange, &'static str), DefId> = HashMap::new();
     let mut defs_by_name: HashMap<(String, &'static str), DefId> = HashMap::new();
+    let mut namespace_defs: HashSet<DefId> = HashSet::new();
+    let namespace_spans: Vec<TextRange> = lowered
+      .defs
+      .iter()
+      .filter(|d| matches!(d.path.kind, HirDefKind::Namespace | HirDefKind::Module))
+      .map(|d| d.span)
+      .collect();
     for (def_id, data) in self.def_data.iter() {
       if data.file != file {
         continue;
@@ -3178,96 +3039,151 @@ impl ProgramState {
     }
 
     let mut hir_to_prog: HashMap<hir_js::DefId, DefId> = HashMap::new();
-    let mut prog_body_ids = Vec::with_capacity(lowered.bodies.len());
-    prog_body_ids.resize(lowered.bodies.len(), BodyId(u32::MAX));
-    let mut body_id_map = HashMap::new();
-    for (hir_id, idx) in lowered.body_index.iter() {
+    let mut hir_to_prog_body: HashMap<hir_js::BodyId, BodyId> = HashMap::new();
+    for hir_body_id in lowered.body_index.keys() {
       let id = BodyId(self.next_body);
       self.next_body += 1;
-      if let Some(slot) = prog_body_ids.get_mut(*idx) {
-        *slot = id;
-      }
-      body_id_map.insert(*hir_id, id);
-    }
-    let root_prog_body = body_id_map.get(&lowered.hir.root_body).copied();
-    let mut hir_ids = vec![hir_js::BodyId(u32::MAX); lowered.bodies.len()];
-    for (hir_id, idx) in lowered.body_index.iter() {
-      if let Some(slot) = hir_ids.get_mut(*idx) {
-        *slot = *hir_id;
-      }
+      hir_to_prog_body.insert(*hir_body_id, id);
     }
     for def in lowered.defs.iter() {
       let kind = match def.path.kind {
         HirDefKind::Function | HirDefKind::Method | HirDefKind::Constructor => Some("fn"),
-        HirDefKind::Var | HirDefKind::Field | HirDefKind::Param | HirDefKind::ExportAlias => {
-          Some("var")
-        }
+        HirDefKind::Var
+        | HirDefKind::Field
+        | HirDefKind::Param
+        | HirDefKind::ExportAlias
+        | HirDefKind::Namespace
+        | HirDefKind::Module => Some("var"),
         _ => None,
       };
       let Some(kind) = kind else { continue };
-      let prog_def = defs_by_span.get(&(def.span, kind)).copied().or_else(|| {
+      let mut prog_def = defs_by_span.get(&(def.span, kind)).copied().or_else(|| {
         lowered
           .names
           .resolve(def.name)
           .and_then(|name| defs_by_name.get(&(name.to_string(), kind)).copied())
       });
-      if let Some(prog_def) = prog_def {
-        hir_to_prog.insert(def.id, prog_def);
-        if let Some(data) = self.def_data.get_mut(&prog_def) {
-          let mapped_body = def.body.and_then(|b| body_id_map.get(&b).copied());
-          match &mut data.kind {
-            DefKind::Function(func) => func.body = mapped_body,
-            DefKind::Var(var) => var.body = mapped_body.unwrap_or(var.body),
-            _ => {}
+      if prog_def.is_none() && matches!(def.path.kind, HirDefKind::Namespace | HirDefKind::Module) {
+        if let Some(name) = lowered.names.resolve(def.name) {
+          let def_id = self.alloc_def();
+          let symbol = self.alloc_symbol();
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: name.to_string(),
+              file,
+              span: def.span,
+              symbol,
+              export: false,
+              kind: DefKind::Var(VarData {
+                typ: None,
+                init: None,
+                body: BodyId(u32::MAX),
+                mode: VarDeclMode::Var,
+              }),
+            },
+          );
+          self.record_def_symbol(def_id, symbol);
+          if let Some(state) = self.files.get_mut(&file) {
+            state.defs.push(def_id);
           }
+          defs_by_span.insert((def.span, kind), def_id);
+          defs_by_name.insert((name.to_string(), kind), def_id);
+          prog_def = Some(def_id);
         }
       }
-    }
-
-    for (idx, hir_body) in lowered.bodies.iter().enumerate() {
-      let hir_body_id = *hir_ids.get(idx).unwrap_or(&hir_js::BodyId(u32::MAX));
-      let body_id = prog_body_ids.get(idx).copied().unwrap_or(BodyId(u32::MAX));
-      let owner_def = hir_to_prog.get(&hir_body.owner).copied();
-      if let Some(def_id) = owner_def {
-        if let Some(def) = self.def_data.get_mut(&def_id) {
-          match &mut def.kind {
-            DefKind::Function(func) => func.body = Some(body_id),
+      if prog_def.is_none()
+        && matches!(def.path.kind, HirDefKind::Var)
+        && namespace_spans
+          .iter()
+          .any(|ns| def.span.start >= ns.start && def.span.end <= ns.end)
+      {
+        if let Some(name) = lowered.names.resolve(def.name) {
+          let symbol = self.alloc_symbol();
+          let def_id = self.alloc_def();
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: name.to_string(),
+              file,
+              span: def.span,
+              symbol,
+              export: false,
+              kind: DefKind::Var(VarData {
+                typ: None,
+                init: None,
+                body: BodyId(u32::MAX),
+                mode: VarDeclMode::Const,
+              }),
+            },
+          );
+          self.record_def_symbol(def_id, symbol);
+          if let Some(state) = self.files.get_mut(&file) {
+            state.defs.push(def_id);
+          }
+          defs_by_span.insert((def.span, "var"), def_id);
+          defs_by_name.insert((name.to_string(), "var"), def_id);
+          prog_def = Some(def_id);
+        }
+      }
+      if let Some(prog_def) = prog_def {
+        if matches!(def.path.kind, HirDefKind::Namespace | HirDefKind::Module) {
+          namespace_defs.insert(prog_def);
+        }
+        hir_to_prog.insert(def.id, prog_def);
+        if let Some(data) = self.def_data.get_mut(&prog_def) {
+          let mapped_body = def.body.and_then(|b| hir_to_prog_body.get(&b).copied());
+          match &mut data.kind {
+            DefKind::Function(func) => func.body = mapped_body,
             DefKind::Var(var) => {
-              var.body = body_id;
-              let init_expr = hir_body.stmts.iter().find_map(|stmt| match &stmt.kind {
-                hir_js::StmtKind::Var(decl) => decl.declarators.iter().find_map(|d| d.init),
-                hir_js::StmtKind::Expr(expr) => Some(*expr),
-                hir_js::StmtKind::Return(ret) => *ret,
-                _ => None,
-              });
-              if let Some(init_expr) = init_expr {
-                var.init = Some(init_expr);
+              if !matches!(def.path.kind, HirDefKind::Namespace | HirDefKind::Module) {
+                var.body = mapped_body.unwrap_or(var.body);
               }
             }
             _ => {}
           }
         }
       }
+    }
 
+    for (hir_body_id, idx) in lowered.body_index.iter() {
+      let body_id = hir_to_prog_body
+        .get(hir_body_id)
+        .copied()
+        .unwrap_or(BodyId(u32::MAX));
+      let hir_body = lowered
+        .bodies
+        .get(*idx)
+        .map(Arc::as_ref)
+        .unwrap_or_else(|| panic!("missing lowered body for id {:?}", hir_body_id));
       for stmt in hir_body.stmts.iter() {
-        if !matches!(hir_body.kind, HirBodyKind::TopLevel) {
-          break;
-        }
         if let hir_js::StmtKind::Var(decl) = &stmt.kind {
           for declarator in decl.declarators.iter() {
-            if let Some(pat) = hir_body.pats.get(declarator.pat.0 as usize) {
-              if let hir_js::PatKind::Ident(name_id) = pat.kind {
-                if let Some(name) = lowered.names.resolve(name_id) {
-                  if let Some(def_id) = defs_by_name.get(&(name.to_string(), "var")).copied() {
-                    if let Some(def) = self.def_data.get_mut(&def_id) {
-                      if let DefKind::Var(var) = &mut def.kind {
-                        if var.body.0 == u32::MAX {
-                          var.body = body_id;
-                        }
-                        if var.init.is_none() {
-                          var.init = declarator.init;
-                        }
-                      }
+            let pat_span = hir_body.pats.get(declarator.pat.0 as usize).map(|p| p.span);
+            let def_id = pat_span
+              .and_then(|span| defs_by_span.get(&(span, "var")).copied())
+              .or_else(|| {
+                hir_body
+                  .pats
+                  .get(declarator.pat.0 as usize)
+                  .and_then(|pat| match &pat.kind {
+                    hir_js::PatKind::Ident(name_id) => lowered
+                      .names
+                      .resolve(*name_id)
+                      .and_then(|name| defs_by_name.get(&(name.to_string(), "var")).copied()),
+                    _ => None,
+                  })
+              });
+            if let Some(def_id) = def_id {
+              if let Some(def) = self.def_data.get_mut(&def_id) {
+                if let DefKind::Var(var) = &mut def.kind {
+                  let prefer = matches!(hir_body.kind, HirBodyKind::Initializer);
+                  if var.body.0 == u32::MAX || prefer {
+                    var.body = body_id;
+                  }
+                  if let Some(init) = declarator.init {
+                    if var.init.is_none() || prefer {
+                      var.init = Some(init);
                     }
                   }
                 }
@@ -3276,14 +3192,41 @@ impl ProgramState {
           }
         }
       }
+      if let Some(def_id) = hir_to_prog.get(&hir_body.owner).copied() {
+        if namespace_defs.contains(&def_id) {
+          continue;
+        }
+        if let Some(def) = self.def_data.get_mut(&def_id) {
+          match &mut def.kind {
+            DefKind::Function(func) => func.body = Some(body_id),
+            DefKind::Var(var) => {
+              let prefer = matches!(hir_body.kind, HirBodyKind::Initializer);
+              if var.body.0 == u32::MAX || prefer {
+                var.body = body_id;
+              }
+              let init_expr = hir_body.stmts.iter().find_map(|stmt| match &stmt.kind {
+                hir_js::StmtKind::Var(decl) => decl.declarators.iter().find_map(|d| d.init),
+                hir_js::StmtKind::Expr(expr) => Some(*expr),
+                hir_js::StmtKind::Return(ret) => *ret,
+                _ => None,
+              });
+              if let Some(init_expr) = init_expr {
+                if var.init.is_none() || prefer {
+                  var.init = Some(init_expr);
+                }
+              }
+            }
+            _ => {}
+          }
+        }
+      }
 
       self.body_map.insert(
         body_id,
         BodyMeta {
           file,
-          hir: Some(hir_body_id),
+          hir: Some(*hir_body_id),
           kind: hir_body.kind,
-          owner: owner_def,
         },
       );
 
@@ -3298,17 +3241,7 @@ impl ProgramState {
       .body_map
       .values()
       .any(|meta| meta.file == file && matches!(meta.kind, HirBodyKind::TopLevel));
-    if let Some(root_body) = root_prog_body {
-      if let Some(state) = self.files.get_mut(&file) {
-        state.top_body = Some(root_body);
-      }
-      self.body_map.entry(root_body).or_insert(BodyMeta {
-        file,
-        hir: Some(lowered.hir.root_body),
-        kind: HirBodyKind::TopLevel,
-        owner: None,
-      });
-    } else if !has_top_level {
+    if !has_top_level {
       let body_id = BodyId(self.next_body);
       self.next_body += 1;
       self.body_map.insert(
@@ -3317,7 +3250,6 @@ impl ProgramState {
           file,
           hir: None,
           kind: HirBodyKind::TopLevel,
-          owner: None,
         },
       );
       if let Some(state) = self.files.get_mut(&file) {
@@ -3333,11 +3265,10 @@ impl ProgramState {
           file: *file,
           hir: None,
           kind: HirBodyKind::Unknown,
-          owner: None,
         });
       }
     }
-    for (def_id, data) in self.def_data.iter() {
+    for data in self.def_data.values() {
       let body = match &data.kind {
         DefKind::Function(func) => func.body,
         DefKind::Var(var) if var.body.0 != u32::MAX => Some(var.body),
@@ -3348,7 +3279,6 @@ impl ProgramState {
           file: data.file,
           hir: None,
           kind: HirBodyKind::Unknown,
-          owner: Some(*def_id),
         });
       }
     }
@@ -3391,26 +3321,25 @@ impl ProgramState {
             continue;
           };
           if let Some(entry) = target.exports.get(&spec.original) {
-            if let Some(def) = entry.def {
-              if let Some(def_data) = self.def_data.get(&def) {
-                if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
-                  let duplicate = self.diagnostics.iter().any(|existing| {
-                    existing.code.as_str() == codes::UNKNOWN_EXPORT.as_str()
-                      && existing.primary.file == *file
-                      && existing.primary.range == spec.span
-                  });
-                  if !duplicate {
-                    self.diagnostics.push(codes::UNKNOWN_EXPORT.error(
-                      format!("unknown export {}", spec.original),
-                      Span::new(*file, spec.span),
-                    ));
+            if !spec.type_only {
+              if let Some(def) = entry.def {
+                if let Some(def_data) = self.def_data.get(&def) {
+                  if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
+                    let duplicate = self.diagnostics.iter().any(|existing| {
+                      existing.code.as_str() == codes::UNKNOWN_EXPORT.as_str()
+                        && existing.primary.file == *file
+                        && existing.primary.range == spec.span
+                    });
+                    if !duplicate {
+                      self.diagnostics.push(codes::UNKNOWN_EXPORT.error(
+                        format!("unknown export {}", spec.original),
+                        Span::new(*file, spec.span),
+                      ));
+                    }
+                    continue;
                   }
-                  continue;
                 }
               }
-            }
-            if spec.type_only {
-              continue;
             }
             let type_id = entry
               .type_id
@@ -3420,17 +3349,28 @@ impl ProgramState {
               def: None,
               type_id,
             };
-            let previous = exports.insert(spec.alias.clone(), mapped.clone());
-            if previous
-              .as_ref()
-              .map(|prev| {
-                prev.symbol != mapped.symbol
-                  || prev.def != mapped.def
-                  || prev.type_id != mapped.type_id
-              })
-              .unwrap_or(true)
-            {
-              changed = true;
+            let mut update = true;
+            if let Some(existing) = exports.get(&spec.alias) {
+              if existing.symbol == mapped.symbol && existing.def == mapped.def {
+                update = mapped.type_id.is_some()
+                  && (existing.type_id.is_none() || existing.type_id != mapped.type_id);
+              } else {
+                update = false;
+              }
+            }
+            if update {
+              let previous = exports.insert(spec.alias.clone(), mapped.clone());
+              if previous
+                .as_ref()
+                .map(|prev| {
+                  prev.symbol != mapped.symbol
+                    || prev.def != mapped.def
+                    || prev.type_id != mapped.type_id
+                })
+                .unwrap_or(true)
+              {
+                changed = true;
+              }
             }
             continue;
           }
@@ -3451,16 +3391,18 @@ impl ProgramState {
           let Some(target) = self.files.get(&spec.from) else {
             continue;
           };
-          if spec.type_only {
-            continue;
-          }
           for (name, entry) in target.exports.iter() {
+            let mut is_type = false;
             if let Some(def) = entry.def {
               if let Some(def_data) = self.def_data.get(&def) {
-                if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
+                is_type = matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_));
+                if !spec.type_only && is_type {
                   continue;
                 }
               }
+            }
+            if spec.type_only && !is_type {
+              continue;
             }
             let type_id = entry
               .type_id
@@ -3470,17 +3412,28 @@ impl ProgramState {
               def: None,
               type_id,
             };
-            let previous = exports.insert(name.clone(), mapped.clone());
-            if previous
-              .as_ref()
-              .map(|prev| {
-                prev.symbol != mapped.symbol
-                  || prev.def != mapped.def
-                  || prev.type_id != mapped.type_id
-              })
-              .unwrap_or(true)
-            {
-              changed = true;
+            let mut update = true;
+            if let Some(existing) = exports.get(name) {
+              if existing.symbol == mapped.symbol && existing.def == mapped.def {
+                update = mapped.type_id.is_some()
+                  && (existing.type_id.is_none() || existing.type_id != mapped.type_id);
+              } else {
+                update = false;
+              }
+            }
+            if update {
+              let previous = exports.insert(name.clone(), mapped.clone());
+              if previous
+                .as_ref()
+                .map(|prev| {
+                  prev.symbol != mapped.symbol
+                    || prev.def != mapped.def
+                    || prev.type_id != mapped.type_id
+                })
+                .unwrap_or(true)
+              {
+                changed = true;
+              }
             }
           }
         }
@@ -3493,94 +3446,324 @@ impl ProgramState {
   }
 
   fn update_export_types(&mut self) {
-    let files: Vec<_> = self.files.keys().copied().collect();
-    for file in files {
-      let Some(state) = self.files.get(&file) else {
-        continue;
-      };
-      let exports: Vec<_> = state
-        .exports
-        .iter()
-        .map(|(name, entry)| (name.clone(), entry.def))
-        .collect();
-      let exported_defs: Vec<_> = state
-        .defs
-        .iter()
-        .filter_map(|def| {
-          self
-            .def_data
-            .get(def)
-            .filter(|data| data.export)
-            .map(|data| (data.name.clone(), *def, data.symbol))
-        })
-        .collect();
-      let _ = state;
-
-      for (name, def) in exports {
-        if let Some(def) = def {
-          let ty = self.type_of_def(def);
-          if let Some(state) = self.files.get_mut(&file) {
-            if let Some(entry) = state.exports.get_mut(&name) {
-              entry.type_id = Some(ty);
-            }
-          }
+    let mut updates: Vec<(FileId, String, DefId)> = Vec::new();
+    for (file_id, state) in self.files.iter() {
+      for (name, entry) in state.exports.iter() {
+        if let Some(def) = entry.def {
+          updates.push((*file_id, name.clone(), def));
         }
       }
-
-      for (name, def, symbol) in exported_defs {
-        let ty = self.type_of_def(def);
-        if let Some(state) = self.files.get_mut(&file) {
-          let entry = state.exports.entry(name).or_insert(ExportEntry {
-            symbol,
-            def: Some(def),
-            type_id: None,
-          });
-          entry.def = Some(def);
-          entry.type_id = Some(ty);
+    }
+    for (file_id, name, def) in updates.into_iter() {
+      if let Some(ty) = self.export_type_for_def(def) {
+        if let Some(state) = self.files.get_mut(&file_id) {
+          if let Some(entry) = state.exports.get_mut(&name) {
+            entry.type_id = Some(ty);
+          }
         }
       }
     }
   }
 
-  fn register_canonical_def(&mut self, file: FileId, name: &str, def: DefId, kind: &DefKind) {
-    let prefer_new = matches!(kind, DefKind::Function(_));
-    self
-      .canonical_defs
-      .entry((file, name.to_string()))
-      .and_modify(|existing| {
-        if prefer_new {
-          *existing = def;
-        }
-      })
-      .or_insert(def);
-  }
-
-  pub(crate) fn canonical_def(&self, def: DefId) -> Option<DefId> {
-    let data = self.def_data.get(&def)?;
-    self
-      .canonical_defs
-      .get(&(data.file, data.name.clone()))
-      .copied()
-  }
-
-  fn merge_namespace_type(&mut self, def: DefId, ns_ty: TypeId) -> TypeId {
-    let merged = if let Some(existing) = self.namespace_types.get(&def).copied() {
-      match (
-        self.type_store.kind(existing).clone(),
-        self.type_store.kind(ns_ty).clone(),
-      ) {
-        (TypeKind::Object(existing_obj), TypeKind::Object(obj)) => {
-          let merged = self.merge_object_types(existing_obj, obj);
-          self.type_store.object(merged)
-        }
-        _ => self.type_store.union(vec![existing, ns_ty], &self.builtin),
-      }
-    } else {
-      ns_ty
+  fn export_type_for_def(&mut self, def: DefId) -> Option<TypeId> {
+    if self.interned_store.is_some() && !self.def_types.contains_key(&def) {
+      let _ = self.type_of_def(def);
+    }
+    if let Some(ty) = self.interned_def_types.get(&def).copied() {
+      return Some(ty);
+    }
+    let Some(store_ty) = self.def_types.get(&def).copied() else {
+      return None;
     };
-    self.namespace_types.insert(def, merged);
-    self.def_types.remove(&def);
-    merged
+    if let Some(store) = self.interned_store.as_ref() {
+      let mut cache = HashMap::new();
+      let interned = convert_type_for_display(store_ty, self, store, &mut cache);
+      let interned = store.canon(interned);
+      self.interned_def_types.insert(def, interned);
+      Some(interned)
+    } else {
+      Some(store_ty)
+    }
+  }
+
+  fn queue_type_imports_in_stmt(
+    &mut self,
+    file: FileId,
+    stmt: &Node<Stmt>,
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    match stmt.stx.as_ref() {
+      Stmt::TypeAliasDecl(alias) => {
+        self.queue_type_imports_in_type_expr(file, &alias.stx.type_expr, host, queue);
+      }
+      Stmt::FunctionDecl(func) => {
+        for param in func.stx.function.stx.parameters.iter() {
+          if let Some(ann) = param.stx.type_annotation.as_ref() {
+            self.queue_type_imports_in_type_expr(file, ann, host, queue);
+          }
+        }
+        if let Some(ret) = func.stx.function.stx.return_type.as_ref() {
+          self.queue_type_imports_in_type_expr(file, ret, host, queue);
+        }
+        if let Some(body) = func.stx.function.stx.body.as_ref() {
+          if let parse_js::ast::func::FuncBody::Block(block) = body {
+            for stmt in block.iter() {
+              self.queue_type_imports_in_stmt(file, stmt, host, queue);
+            }
+          }
+        }
+      }
+      Stmt::VarDecl(var) => {
+        for decl in var.stx.declarators.iter() {
+          if let Some(ann) = decl.type_annotation.as_ref() {
+            self.queue_type_imports_in_type_expr(file, ann, host, queue);
+          }
+        }
+      }
+      Stmt::Block(block) => {
+        for stmt in block.stx.body.iter() {
+          self.queue_type_imports_in_stmt(file, stmt, host, queue);
+        }
+      }
+      Stmt::NamespaceDecl(ns) => {
+        self.queue_type_imports_in_namespace_body(file, &ns.stx.body, host, queue);
+      }
+      Stmt::ModuleDecl(module) => {
+        if let Some(body) = &module.stx.body {
+          for stmt in body.iter() {
+            self.queue_type_imports_in_stmt(file, stmt, host, queue);
+          }
+        }
+      }
+      Stmt::GlobalDecl(global) => {
+        for stmt in global.stx.body.iter() {
+          self.queue_type_imports_in_stmt(file, stmt, host, queue);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn queue_type_imports_in_namespace_body(
+    &mut self,
+    file: FileId,
+    body: &NamespaceBody,
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    match body {
+      NamespaceBody::Block(stmts) => {
+        for stmt in stmts.iter() {
+          self.queue_type_imports_in_stmt(file, stmt, host, queue);
+        }
+      }
+      NamespaceBody::Namespace(inner) => {
+        self.queue_type_imports_in_namespace_body(file, &inner.stx.body, host, queue)
+      }
+    }
+  }
+
+  fn queue_type_imports_in_type_expr(
+    &mut self,
+    file: FileId,
+    expr: &Node<TypeExpr>,
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    match expr.stx.as_ref() {
+      TypeExpr::ImportType(import) => {
+        if let Some(file_key) = self.file_key_for_id(file) {
+          if let Some(target_key) = host.resolve(&file_key, &import.stx.module_specifier) {
+            let target = self.intern_file_key(target_key, FileOrigin::Source);
+            queue.push_back(target);
+          }
+        }
+        if let Some(args) = import.stx.type_arguments.as_ref() {
+          for arg in args {
+            self.queue_type_imports_in_type_expr(file, arg, host, queue);
+          }
+        }
+        if let Some(qualifier) = import.stx.qualifier.as_ref() {
+          self.queue_type_imports_in_entity_name(file, qualifier, host, queue);
+        }
+      }
+      TypeExpr::ArrayType(arr) => {
+        self.queue_type_imports_in_type_expr(file, &arr.stx.element_type, host, queue);
+      }
+      TypeExpr::TupleType(tuple) => {
+        for elem in tuple.stx.elements.iter() {
+          self.queue_type_imports_in_type_expr(file, &elem.stx.type_expr, host, queue);
+        }
+      }
+      TypeExpr::UnionType(union) => {
+        for ty in union.stx.types.iter() {
+          self.queue_type_imports_in_type_expr(file, ty, host, queue);
+        }
+      }
+      TypeExpr::IntersectionType(intersection) => {
+        for ty in intersection.stx.types.iter() {
+          self.queue_type_imports_in_type_expr(file, ty, host, queue);
+        }
+      }
+      TypeExpr::FunctionType(func) => {
+        for param in func.stx.parameters.iter() {
+          self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
+        }
+        self.queue_type_imports_in_type_expr(file, &func.stx.return_type, host, queue);
+        if let Some(params) = func.stx.type_parameters.as_ref() {
+          for tp in params.iter() {
+            if let Some(constraint) = tp.stx.constraint.as_ref() {
+              self.queue_type_imports_in_type_expr(file, constraint, host, queue);
+            }
+            if let Some(default) = tp.stx.default.as_ref() {
+              self.queue_type_imports_in_type_expr(file, default, host, queue);
+            }
+          }
+        }
+      }
+      TypeExpr::ConstructorType(cons) => {
+        for param in cons.stx.parameters.iter() {
+          self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
+        }
+        self.queue_type_imports_in_type_expr(file, &cons.stx.return_type, host, queue);
+        if let Some(params) = cons.stx.type_parameters.as_ref() {
+          for tp in params.iter() {
+            if let Some(constraint) = tp.stx.constraint.as_ref() {
+              self.queue_type_imports_in_type_expr(file, constraint, host, queue);
+            }
+            if let Some(default) = tp.stx.default.as_ref() {
+              self.queue_type_imports_in_type_expr(file, default, host, queue);
+            }
+          }
+        }
+      }
+      TypeExpr::ObjectType(obj) => {
+        for member in obj.stx.members.iter() {
+          match member.stx.as_ref() {
+            TypeMember::Property(prop) => {
+              if let Some(ann) = prop.stx.type_annotation.as_ref() {
+                self.queue_type_imports_in_type_expr(file, ann, host, queue);
+              }
+            }
+            TypeMember::Method(method) => {
+              for param in method.stx.parameters.iter() {
+                self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
+              }
+              if let Some(ret) = method.stx.return_type.as_ref() {
+                self.queue_type_imports_in_type_expr(file, ret, host, queue);
+              }
+              if let Some(params) = method.stx.type_parameters.as_ref() {
+                for tp in params.iter() {
+                  if let Some(constraint) = tp.stx.constraint.as_ref() {
+                    self.queue_type_imports_in_type_expr(file, constraint, host, queue);
+                  }
+                  if let Some(default) = tp.stx.default.as_ref() {
+                    self.queue_type_imports_in_type_expr(file, default, host, queue);
+                  }
+                }
+              }
+            }
+            TypeMember::Constructor(cons) => {
+              for param in cons.stx.parameters.iter() {
+                self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
+              }
+              if let Some(ret) = cons.stx.return_type.as_ref() {
+                self.queue_type_imports_in_type_expr(file, ret, host, queue);
+              }
+            }
+            TypeMember::CallSignature(call) => {
+              for param in call.stx.parameters.iter() {
+                self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
+              }
+              if let Some(ret) = call.stx.return_type.as_ref() {
+                self.queue_type_imports_in_type_expr(file, ret, host, queue);
+              }
+              if let Some(params) = call.stx.type_parameters.as_ref() {
+                for tp in params.iter() {
+                  if let Some(constraint) = tp.stx.constraint.as_ref() {
+                    self.queue_type_imports_in_type_expr(file, constraint, host, queue);
+                  }
+                  if let Some(default) = tp.stx.default.as_ref() {
+                    self.queue_type_imports_in_type_expr(file, default, host, queue);
+                  }
+                }
+              }
+            }
+            TypeMember::IndexSignature(idx) => {
+              self.queue_type_imports_in_type_expr(file, &idx.stx.parameter_type, host, queue);
+              self.queue_type_imports_in_type_expr(file, &idx.stx.type_annotation, host, queue);
+            }
+            _ => {}
+          }
+        }
+      }
+      TypeExpr::ParenthesizedType(inner) => {
+        self.queue_type_imports_in_type_expr(file, &inner.stx.type_expr, host, queue);
+      }
+      TypeExpr::KeyOfType(keyof) => {
+        self.queue_type_imports_in_type_expr(file, &keyof.stx.type_expr, host, queue);
+      }
+      TypeExpr::IndexedAccessType(indexed) => {
+        self.queue_type_imports_in_type_expr(file, &indexed.stx.object_type, host, queue);
+        self.queue_type_imports_in_type_expr(file, &indexed.stx.index_type, host, queue);
+      }
+      TypeExpr::ConditionalType(cond) => {
+        self.queue_type_imports_in_type_expr(file, &cond.stx.check_type, host, queue);
+        self.queue_type_imports_in_type_expr(file, &cond.stx.extends_type, host, queue);
+        self.queue_type_imports_in_type_expr(file, &cond.stx.true_type, host, queue);
+        self.queue_type_imports_in_type_expr(file, &cond.stx.false_type, host, queue);
+      }
+      TypeExpr::MappedType(mapped) => {
+        self.queue_type_imports_in_type_expr(file, &mapped.stx.constraint, host, queue);
+        self.queue_type_imports_in_type_expr(file, &mapped.stx.type_expr, host, queue);
+        if let Some(name_type) = mapped.stx.name_type.as_ref() {
+          self.queue_type_imports_in_type_expr(file, name_type, host, queue);
+        }
+      }
+      TypeExpr::TemplateLiteralType(tpl) => {
+        for span in tpl.stx.spans.iter() {
+          self.queue_type_imports_in_type_expr(file, &span.stx.type_expr, host, queue);
+        }
+      }
+      TypeExpr::TypePredicate(pred) => {
+        if let Some(ann) = pred.stx.type_annotation.as_ref() {
+          self.queue_type_imports_in_type_expr(file, ann, host, queue);
+        }
+      }
+      TypeExpr::InferType(infer) => {
+        if let Some(constraint) = infer.stx.constraint.as_ref() {
+          self.queue_type_imports_in_type_expr(file, constraint, host, queue);
+        }
+      }
+      TypeExpr::TypeReference(reference) => {
+        if let Some(args) = reference.stx.type_arguments.as_ref() {
+          for arg in args {
+            self.queue_type_imports_in_type_expr(file, arg, host, queue);
+          }
+        }
+      }
+      TypeExpr::TypeQuery(query) => {
+        self.queue_type_imports_in_entity_name(file, &query.stx.expr_name, host, queue);
+      }
+      _ => {}
+    }
+  }
+
+  fn queue_type_imports_in_entity_name(
+    &mut self,
+    file: FileId,
+    name: &TypeEntityName,
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    match name {
+      TypeEntityName::Qualified(qualified) => {
+        self.queue_type_imports_in_entity_name(file, &qualified.left, host, queue);
+      }
+      TypeEntityName::Import(_) => {}
+      _ => {}
+    }
   }
 
   fn bind_file(
@@ -3597,89 +3780,14 @@ impl ProgramState {
     let mut bindings: HashMap<String, SymbolBinding> = HashMap::new();
     let mut reexports = Vec::new();
     let mut export_all = Vec::new();
-    let source = self.load_text(file, host).ok();
-    let refine_span = |range: TextRange, name: &str| -> TextRange {
-      if let Some(text) = source.as_deref() {
-        let len = text.len() as u32;
-        let start = range.start.min(len);
-        let end = range.end.min(len);
-        if start < end && (end as usize) <= text.len() {
-          if let Some(rel) = text[start as usize..end as usize].find(name) {
-            let abs = start + rel as u32;
-            return TextRange::new(abs, abs + name.len() as u32);
-          }
-        }
-        if let Some(pos) = text.find(name) {
-          let abs = pos as u32;
-          return TextRange::new(abs, abs + name.len() as u32);
-        }
-      }
-      range
-    };
-
-    fn collect_namespace_body(
-      state: &mut ProgramState,
-      stmts: &[Node<Stmt>],
-      object: &mut ObjectType,
-    ) {
-      for stmt in stmts {
-        match stmt.stx.as_ref() {
-          Stmt::VarDecl(var) => {
-            for decl in var.stx.declarators.iter() {
-              if let Pat::Id(id) = decl.pattern.stx.pat.stx.as_ref() {
-                let typ = decl
-                  .initializer
-                  .as_ref()
-                  .and_then(|init| state.literal_type_from_expr(init))
-                  .unwrap_or(state.builtin.unknown);
-                object.props.insert(
-                  id.stx.name.clone(),
-                  ObjectProperty {
-                    typ,
-                    optional: false,
-                    readonly: false,
-                  },
-                );
-              }
-            }
-          }
-          Stmt::NamespaceDecl(ns) => collect_namespace_members(state, &ns.stx.body, object),
-          Stmt::ModuleDecl(module) => {
-            if let Some(body) = module.stx.body.as_ref() {
-              collect_namespace_body(state, body, object);
-            }
-          }
-          _ => {}
-        }
-      }
-    }
-
-    fn collect_namespace_members(
-      state: &mut ProgramState,
-      body: &parse_js::ast::ts_stmt::NamespaceBody,
-      object: &mut ObjectType,
-    ) {
-      match body {
-        parse_js::ast::ts_stmt::NamespaceBody::Block(stmts) => {
-          collect_namespace_body(state, stmts, object);
-        }
-        parse_js::ast::ts_stmt::NamespaceBody::Namespace(inner) => {
-          collect_namespace_members(state, &inner.stx.body, object);
-        }
-      }
-    }
 
     for stmt in ast.stx.body.iter() {
+      self.queue_type_imports_in_stmt(file, stmt, host, queue);
       match stmt.stx.as_ref() {
         Stmt::VarDecl(var) => {
           let var_span = loc_to_span(file, stmt.loc);
-          let new_defs = self.handle_var_decl(
-            file,
-            var_span.range,
-            var.stx.as_ref(),
-            &mut sem_builder,
-            &refine_span,
-          );
+          let new_defs =
+            self.handle_var_decl(file, var_span.range, var.stx.as_ref(), &mut sem_builder);
           for (def_id, binding, export_name) in new_defs {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -3698,96 +3806,9 @@ impl ProgramState {
         }
         Stmt::FunctionDecl(func) => {
           let span = loc_to_span(file, stmt.loc);
-          if let Some(name_node) = func.stx.name.as_ref() {
-            let name = name_node.stx.name.clone();
-            if let Some(existing) = bindings.get(&name).cloned() {
-              let symbol = existing.symbol;
-              let def_id = self.alloc_def();
-              let func_data =
-                self.lower_function(file, func.stx.function.stx.as_ref(), def_id, &refine_span);
-              let func_kind = DefKind::Function(func_data.clone());
-              self.def_data.insert(
-                def_id,
-                DefData {
-                  name: name.clone(),
-                  file,
-                  span: span.range,
-                  symbol,
-                  export: func.stx.export || func.stx.export_default,
-                  kind: func_kind.clone(),
-                },
-              );
-              self.record_def_symbol(def_id, symbol);
-              self.register_canonical_def(file, &name, def_id, &func_kind);
-              if let Some(ns_def) = existing.def {
-                if let Some(ns_ty) = self.namespace_types.get(&ns_def).copied() {
-                  self.merge_namespace_type(def_id, ns_ty);
-                }
-              }
-              let mut ns_types = Vec::new();
-              for (alias, data) in self.def_data.iter() {
-                if data.file == file && data.name == name && *alias != def_id {
-                  if let Some(ns_ty) = self.namespace_types.get(alias).copied() {
-                    ns_types.push(ns_ty);
-                  }
-                }
-              }
-              for ns_ty in ns_types {
-                self.merge_namespace_type(def_id, ns_ty);
-              }
-              if !defs.contains(&def_id) {
-                defs.push(def_id);
-              }
-              bindings.insert(
-                name.clone(),
-                SymbolBinding {
-                  symbol,
-                  def: Some(def_id),
-                  type_id: None,
-                },
-              );
-              let export_name = if func.stx.export_default {
-                Some("default".to_string())
-              } else if func.stx.export {
-                Some(name.clone())
-              } else {
-                None
-              };
-              if let Some(export_name) = export_name {
-                exports.insert(
-                  export_name,
-                  ExportEntry {
-                    symbol,
-                    def: Some(def_id),
-                    type_id: None,
-                  },
-                );
-              }
-              let name_span = refine_span(loc_to_span(file, name_node.loc).range, &name);
-              self.record_symbol(file, name_span, symbol);
-              sem_builder.add_decl(
-                def_id,
-                name.clone(),
-                sem_ts::DeclKind::Function,
-                if func.stx.export_default {
-                  sem_ts::Exported::Default
-                } else if func.stx.export {
-                  sem_ts::Exported::Named
-                } else {
-                  sem_ts::Exported::No
-                },
-                name_span,
-              );
-              continue;
-            }
-          }
-          if let Some((def_id, binding, export_name)) = self.handle_function_decl(
-            file,
-            span.range,
-            func.stx.as_ref(),
-            &mut sem_builder,
-            &refine_span,
-          ) {
+          if let Some((def_id, binding, export_name)) =
+            self.handle_function_decl(file, span.range, func.stx.as_ref(), &mut sem_builder)
+          {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
             bindings.insert(binding_name.clone(), binding_value.clone());
@@ -3806,6 +3827,14 @@ impl ProgramState {
         Stmt::InterfaceDecl(interface) => {
           let span = loc_to_span(file, stmt.loc);
           let name = interface.stx.name.clone();
+          let mut object = self.object_type_from_members(&interface.stx.members);
+          for base in interface.stx.extends.iter() {
+            let base_ty = self.type_from_type_expr(base);
+            if let TypeKind::Object(base_obj) = self.type_store.kind(base_ty).clone() {
+              object = self.merge_object_types(object, base_obj);
+            }
+          }
+          let mut typ = self.type_store.object(object);
           let existing_interface = bindings
             .get(&name)
             .and_then(|b| b.def)
@@ -3814,35 +3843,8 @@ impl ProgramState {
               DefKind::Interface(existing) => Some((id, data.symbol, existing.typ)),
               _ => None,
             });
-          let (def_id, symbol) = match existing_interface.as_ref() {
-            Some((existing_id, symbol, _)) => (*existing_id, *symbol),
-            None => (self.alloc_def(), self.alloc_symbol()),
-          };
-          self
-            .canonical_defs
-            .entry((file, name.clone()))
-            .or_insert(def_id);
-          let mut object = self.object_type_from_members(file, &interface.stx.members);
-          for base in interface.stx.extends.iter() {
-            let base_ty = self.type_from_type_expr(file, base);
-            let merged = match self.type_store.kind(base_ty).clone() {
-              TypeKind::Object(base_obj) => Some(base_obj),
-              TypeKind::Ref { def } => {
-                let base_type = self.type_of_def(def);
-                match self.type_store.kind(base_type).clone() {
-                  TypeKind::Object(base_obj) => Some(base_obj),
-                  _ => None,
-                }
-              }
-              _ => None,
-            };
-            if let Some(base_obj) = merged {
-              object = self.merge_object_types(object, base_obj);
-            }
-          }
-          let mut typ = self.type_store.object(object);
           let (def_id, symbol) =
-            if let Some((existing_id, existing_symbol, existing_ty)) = existing_interface {
+            if let Some((existing_id, symbol, existing_ty)) = existing_interface {
               typ = match (
                 self.type_store.kind(existing_ty).clone(),
                 self.type_store.kind(typ).clone(),
@@ -3857,9 +3859,10 @@ impl ProgramState {
                 def.kind = DefKind::Interface(InterfaceData { typ });
                 def.export = def.export || interface.stx.export;
               }
-              (existing_id, existing_symbol)
+              (existing_id, symbol)
             } else {
-              let iface_kind = DefKind::Interface(InterfaceData { typ });
+              let symbol = self.alloc_symbol();
+              let def_id = self.alloc_def();
               self.def_data.insert(
                 def_id,
                 DefData {
@@ -3868,10 +3871,9 @@ impl ProgramState {
                   span: span.range,
                   symbol,
                   export: interface.stx.export,
-                  kind: iface_kind.clone(),
+                  kind: DefKind::Interface(InterfaceData { typ }),
                 },
               );
-              self.register_canonical_def(file, &name, def_id, &iface_kind);
               self.record_def_symbol(def_id, symbol);
               defs.push(def_id);
               sem_builder.add_decl(
@@ -3913,276 +3915,15 @@ impl ProgramState {
           }
 
           self.def_types.insert(def_id, typ);
-          let name_span = refine_span(span.range, &name);
-          self.record_symbol(file, name_span, symbol);
-        }
-        Stmt::NamespaceDecl(ns) => {
-          let span = loc_to_span(file, stmt.loc);
-          let name = ns.stx.name.clone();
-          let mut object = ObjectType::empty();
-          collect_namespace_members(self, &ns.stx.body, &mut object);
-          let ns_type = self.type_store.object(object);
-          if let Some(existing) = bindings.get(&name).cloned() {
-            let def_id = existing.def.unwrap_or_else(|| {
-              let def_id = self.alloc_def();
-              self.def_data.insert(
-                def_id,
-                DefData {
-                  name: name.clone(),
-                  file,
-                  span: span.range,
-                  symbol: existing.symbol,
-                  export: ns.stx.export,
-                  kind: DefKind::Var(VarData {
-                    typ: None,
-                    init: None,
-                    body: BodyId(u32::MAX),
-                    mode: VarDeclMode::Var,
-                  }),
-                },
-              );
-              self.record_def_symbol(def_id, existing.symbol);
-              def_id
-            });
-            let merged = self.merge_namespace_type(def_id, ns_type);
-            if let Some(data) = self.def_data.get_mut(&def_id) {
-              data.export = data.export || ns.stx.export;
-              match &mut data.kind {
-                DefKind::Var(var) => {
-                  var.typ = Some(merged);
-                  var.body = BodyId(u32::MAX);
-                }
-                _ => {}
-              }
-            }
-            if let Some(kind) = self.def_data.get(&def_id).map(|d| d.kind.clone()) {
-              self.register_canonical_def(file, &name, def_id, &kind);
-            }
-            if !defs.contains(&def_id) {
-              defs.push(def_id);
-            }
-            bindings.insert(
-              name.clone(),
-              SymbolBinding {
-                symbol: existing.symbol,
-                def: Some(def_id),
-                type_id: self
-                  .def_data
-                  .get(&def_id)
-                  .and_then(|d| match &d.kind {
-                    DefKind::Var(var) => var.typ,
-                    _ => None,
-                  })
-                  .or(Some(merged)),
-              },
-            );
-            if ns.stx.export {
-              let entry = exports.entry(name.clone()).or_insert(ExportEntry {
-                symbol: existing.symbol,
-                def: Some(def_id),
-                type_id: None,
-              });
-              entry.def = Some(def_id);
-              entry.type_id = entry.type_id.or_else(|| {
-                self
-                  .def_data
-                  .get(&def_id)
-                  .and_then(|d| match &d.kind {
-                    DefKind::Var(var) => var.typ,
-                    _ => None,
-                  })
-                  .or(Some(merged))
-              });
-            }
-            let name_span = refine_span(span.range, &name);
-            self.record_symbol(file, name_span, existing.symbol);
-          } else {
-            let symbol = self.alloc_symbol();
-            let def_id = self.alloc_def();
-            let merged = self.merge_namespace_type(def_id, ns_type);
-            self.def_data.insert(
-              def_id,
-              DefData {
-                name: name.clone(),
-                file,
-                span: span.range,
-                symbol,
-                export: ns.stx.export,
-                kind: DefKind::Var(VarData {
-                  typ: Some(merged),
-                  init: None,
-                  body: BodyId(u32::MAX),
-                  mode: VarDeclMode::Var,
-                }),
-              },
-            );
-            self.record_def_symbol(def_id, symbol);
-            if let Some(kind) = self.def_data.get(&def_id).map(|d| d.kind.clone()) {
-              self.register_canonical_def(file, &name, def_id, &kind);
-            }
-            defs.push(def_id);
-            bindings.insert(
-              name.clone(),
-              SymbolBinding {
-                symbol,
-                def: Some(def_id),
-                type_id: Some(merged),
-              },
-            );
-            if ns.stx.export {
-              exports.insert(
-                name.clone(),
-                ExportEntry {
-                  symbol,
-                  def: Some(def_id),
-                  type_id: Some(merged),
-                },
-              );
-            }
-            let name_span = refine_span(span.range, &name);
-            self.record_symbol(file, name_span, symbol);
-          }
-        }
-        Stmt::ModuleDecl(module) => {
-          if let parse_js::ast::ts_stmt::ModuleName::Identifier(name) = &module.stx.name {
-            if let Some(body) = module.stx.body.as_ref() {
-              let span = loc_to_span(file, stmt.loc);
-              let mut object = ObjectType::empty();
-              collect_namespace_body(self, body, &mut object);
-              let ns_type = self.type_store.object(object);
-              if let Some(existing) = bindings.get(name.as_str()).cloned() {
-                let def_id = existing.def.unwrap_or_else(|| {
-                  let def_id = self.alloc_def();
-                  self.def_data.insert(
-                    def_id,
-                    DefData {
-                      name: name.clone(),
-                      file,
-                      span: span.range,
-                      symbol: existing.symbol,
-                      export: module.stx.export,
-                      kind: DefKind::Var(VarData {
-                        typ: None,
-                        init: None,
-                        body: BodyId(u32::MAX),
-                        mode: VarDeclMode::Var,
-                      }),
-                    },
-                  );
-                  self.record_def_symbol(def_id, existing.symbol);
-                  def_id
-                });
-                let merged = self.merge_namespace_type(def_id, ns_type);
-                if let Some(data) = self.def_data.get_mut(&def_id) {
-                  data.export = data.export || module.stx.export;
-                  match &mut data.kind {
-                    DefKind::Var(var) => {
-                      var.typ = Some(merged);
-                      var.body = BodyId(u32::MAX);
-                    }
-                    _ => {}
-                  }
-                }
-                if let Some(kind) = self.def_data.get(&def_id).map(|d| d.kind.clone()) {
-                  self.register_canonical_def(file, &name, def_id, &kind);
-                }
-                if !defs.contains(&def_id) {
-                  defs.push(def_id);
-                }
-                bindings.insert(
-                  name.clone(),
-                  SymbolBinding {
-                    symbol: existing.symbol,
-                    def: Some(def_id),
-                    type_id: self
-                      .def_data
-                      .get(&def_id)
-                      .and_then(|d| match &d.kind {
-                        DefKind::Var(var) => var.typ,
-                        _ => None,
-                      })
-                      .or(Some(merged)),
-                  },
-                );
-                if module.stx.export {
-                  let entry = exports.entry(name.clone()).or_insert(ExportEntry {
-                    symbol: existing.symbol,
-                    def: Some(def_id),
-                    type_id: None,
-                  });
-                  entry.def = Some(def_id);
-                  entry.type_id = entry.type_id.or_else(|| {
-                    self
-                      .def_data
-                      .get(&def_id)
-                      .and_then(|d| match &d.kind {
-                        DefKind::Var(var) => var.typ,
-                        _ => None,
-                      })
-                      .or(Some(merged))
-                  });
-                }
-                let name_span = refine_span(span.range, &name);
-                self.record_symbol(file, name_span, existing.symbol);
-              } else {
-                let symbol = self.alloc_symbol();
-                let def_id = self.alloc_def();
-                let merged = self.merge_namespace_type(def_id, ns_type);
-                self.def_data.insert(
-                  def_id,
-                  DefData {
-                    name: name.clone(),
-                    file,
-                    span: span.range,
-                    symbol,
-                    export: module.stx.export,
-                    kind: DefKind::Var(VarData {
-                      typ: Some(merged),
-                      init: None,
-                      body: BodyId(u32::MAX),
-                      mode: VarDeclMode::Var,
-                    }),
-                  },
-                );
-                self.record_def_symbol(def_id, symbol);
-                if let Some(kind) = self.def_data.get(&def_id).map(|d| d.kind.clone()) {
-                  self.register_canonical_def(file, &name, def_id, &kind);
-                }
-                defs.push(def_id);
-                bindings.insert(
-                  name.clone(),
-                  SymbolBinding {
-                    symbol,
-                    def: Some(def_id),
-                    type_id: Some(merged),
-                  },
-                );
-                if module.stx.export {
-                  exports.insert(
-                    name.clone(),
-                    ExportEntry {
-                      symbol,
-                      def: Some(def_id),
-                      type_id: Some(merged),
-                    },
-                  );
-                }
-                let name_span = refine_span(span.range, &name);
-                self.record_symbol(file, name_span, symbol);
-              }
-            }
-          }
+          self.record_symbol(file, span.range, symbol);
         }
         Stmt::TypeAliasDecl(alias) => {
           let span = loc_to_span(file, stmt.loc);
           let name = alias.stx.name.clone();
-          let def_id = self.alloc_def();
-          let symbol = self.alloc_symbol();
-          self
-            .canonical_defs
-            .entry((file, name.clone()))
-            .or_insert(def_id);
-          let ty = self.type_from_type_expr(file, &alias.stx.type_expr);
+          let mut ty = self.type_from_type_expr(&alias.stx.type_expr);
+          if ty == self.builtin.unknown {
+            ty = self.type_store.literal_string(name.clone());
+          }
           if let TypeExpr::TypeReference(reference) = alias.stx.type_expr.stx.as_ref() {
             if let TypeEntityName::Identifier(type_name) = &reference.stx.name {
               if let Some(binding) = bindings.get(type_name) {
@@ -4194,10 +3935,8 @@ impl ProgramState {
               }
             }
           }
-          let alias_kind = DefKind::TypeAlias(TypeAliasData {
-            typ: ty,
-            type_expr_span: Some(loc_to_span(file, alias.stx.type_expr.loc).range),
-          });
+          let def_id = self.alloc_def();
+          let symbol = self.alloc_symbol();
           self.def_data.insert(
             def_id,
             DefData {
@@ -4206,13 +3945,11 @@ impl ProgramState {
               span: span.range,
               symbol,
               export: alias.stx.export,
-              kind: alias_kind.clone(),
+              kind: DefKind::TypeAlias(TypeAliasData { typ: ty }),
             },
           );
-          self.register_canonical_def(file, &name, def_id, &alias_kind);
           self.record_def_symbol(def_id, symbol);
           self.def_types.insert(def_id, ty);
-          defs.push(def_id);
           bindings.insert(
             name.clone(),
             SymbolBinding {
@@ -4221,8 +3958,8 @@ impl ProgramState {
               type_id: Some(ty),
             },
           );
-          let name_span = refine_span(span.range, &name);
-          self.record_symbol(file, name_span, symbol);
+          defs.push(def_id);
+          self.record_symbol(file, span.range, symbol);
           sem_builder.add_decl(
             def_id,
             name.clone(),
@@ -4241,6 +3978,95 @@ impl ProgramState {
                 symbol,
                 def: Some(def_id),
                 type_id: Some(ty),
+              },
+            );
+          }
+        }
+        Stmt::NamespaceDecl(ns) => {
+          let span = loc_to_span(file, stmt.loc);
+          let name = ns.stx.name.clone();
+          let symbol = self.alloc_symbol();
+          let def_id = self.alloc_def();
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: name.clone(),
+              file,
+              span: span.range,
+              symbol,
+              export: ns.stx.export,
+              kind: DefKind::Var(VarData {
+                typ: None,
+                init: None,
+                body: BodyId(u32::MAX),
+                mode: VarDeclMode::Var,
+              }),
+            },
+          );
+          self.record_def_symbol(def_id, symbol);
+          self.record_symbol(file, span.range, symbol);
+          defs.push(def_id);
+          bindings.insert(
+            name.clone(),
+            SymbolBinding {
+              symbol,
+              def: Some(def_id),
+              type_id: None,
+            },
+          );
+          if ns.stx.export {
+            exports.insert(
+              name.clone(),
+              ExportEntry {
+                symbol,
+                def: Some(def_id),
+                type_id: None,
+              },
+            );
+          }
+        }
+        Stmt::ModuleDecl(module) => {
+          let span = loc_to_span(file, stmt.loc);
+          let name = match &module.stx.name {
+            parse_js::ast::ts_stmt::ModuleName::Identifier(id) => id.clone(),
+            parse_js::ast::ts_stmt::ModuleName::String(s) => s.clone(),
+          };
+          let symbol = self.alloc_symbol();
+          let def_id = self.alloc_def();
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: name.clone(),
+              file,
+              span: span.range,
+              symbol,
+              export: module.stx.export,
+              kind: DefKind::Var(VarData {
+                typ: None,
+                init: None,
+                body: BodyId(u32::MAX),
+                mode: VarDeclMode::Var,
+              }),
+            },
+          );
+          self.record_def_symbol(def_id, symbol);
+          self.record_symbol(file, span.range, symbol);
+          defs.push(def_id);
+          bindings.insert(
+            name.clone(),
+            SymbolBinding {
+              symbol,
+              def: Some(def_id),
+              type_id: None,
+            },
+          );
+          if module.stx.export {
+            exports.insert(
+              name.clone(),
+              ExportEntry {
+                symbol,
+                def: Some(def_id),
+                type_id: None,
               },
             );
           }
@@ -4292,11 +4118,12 @@ impl ProgramState {
           );
         }
         Stmt::ExportList(export_list) => {
-          let resolved = export_list
-            .stx
-            .from
-            .as_ref()
-            .and_then(|module| self.resolve_module_specifier(file, module, host));
+          let resolved = export_list.stx.from.as_ref().and_then(|module| {
+            self
+              .file_key_for_id(file)
+              .and_then(|file_key| host.resolve(&file_key, module))
+              .map(|target| self.intern_file_key(target, FileOrigin::Source))
+          });
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -4384,7 +4211,10 @@ impl ProgramState {
         }
         Stmt::Import(import_stmt) => {
           let module = import_stmt.stx.module.clone();
-          let resolved = self.resolve_module_specifier(file, &module, host);
+          let resolved = self
+            .file_key_for_id(file)
+            .and_then(|file_key| host.resolve(&file_key, &module))
+            .map(|target| self.intern_file_key(target, FileOrigin::Source));
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -4434,8 +4264,7 @@ impl ProgramState {
                 type_id: None,
               },
             );
-            let alias_span = refine_span(loc_to_span(file, default_pat.loc).range, &alias_name);
-            self.record_symbol(file, alias_span, symbol);
+            self.record_symbol(file, loc_to_span(file, default_pat.loc).range, symbol);
           }
           match import_stmt.stx.names {
             Some(ImportNames::Specific(ref list)) => {
@@ -4488,8 +4317,7 @@ impl ProgramState {
                     type_id: None,
                   },
                 );
-                let alias_span = refine_span(loc_to_span(file, alias_pat.loc).range, &alias_name);
-                self.record_symbol(file, alias_span, symbol);
+                self.record_symbol(file, loc_to_span(file, alias_pat.loc).range, symbol);
               }
             }
             Some(ImportNames::All(ref pat)) => {
@@ -4534,8 +4362,7 @@ impl ProgramState {
                   type_id: None,
                 },
               );
-              let alias_span = refine_span(loc_to_span(file, pat.loc).range, &alias_name);
-              self.record_symbol(file, alias_span, symbol);
+              self.record_symbol(file, loc_to_span(file, pat.loc).range, symbol);
             }
             None => {}
           }
@@ -4576,13 +4403,12 @@ impl ProgramState {
     span: TextRange,
     var: &VarDecl,
     sem_builder: &mut SemHirBuilder,
-    refine_span: &impl Fn(TextRange, &str) -> TextRange,
   ) -> Vec<(DefId, (String, SymbolBinding), Option<String>)> {
     let mut defs = Vec::new();
     for declarator in var.declarators.iter() {
       let pat = &declarator.pattern;
-      let (name, name_loc) = match pat.stx.pat.stx.as_ref() {
-        Pat::Id(id) => (id.stx.name.clone(), id.loc),
+      let name = match pat.stx.pat.stx.as_ref() {
+        Pat::Id(id) => id.stx.name.clone(),
         _ => {
           self.diagnostics.push(
             codes::UNSUPPORTED_PATTERN.error("unsupported pattern", loc_to_span(file, pat.loc)),
@@ -4590,45 +4416,13 @@ impl ProgramState {
           continue;
         }
       };
-      let mut type_ann = declarator
+      let type_ann = declarator
         .type_annotation
         .as_ref()
-        .map(|t| self.type_from_type_expr(file, t));
-      if matches!(type_ann, Some(ty) if ty == self.builtin.unknown) {
-        if let Some(parse_js::ast::type_expr::TypeExpr::TypeReference(reference)) =
-          declarator.type_annotation.as_ref().map(|t| t.stx.as_ref())
-        {
-          if let TypeEntityName::Identifier(name) = &reference.stx.name {
-            let type_name = name.clone();
-            let resolved = self
-              .canonical_defs
-              .get(&(file, type_name.clone()))
-              .copied()
-              .or_else(|| {
-                self.def_data.iter().find_map(|(id, data)| {
-                  if data.file == file && data.name == type_name {
-                    Some(*id)
-                  } else {
-                    None
-                  }
-                })
-              });
-            if let Some(def_id) = resolved {
-              type_ann = Some(self.type_of_def(def_id));
-            }
-          }
-        }
-      }
+        .map(|t| self.type_from_type_expr(t));
       let symbol = self.alloc_symbol();
       let def_id = self.alloc_def();
-      let name_span = refine_span(loc_to_span(file, name_loc).range, &name);
-      self.record_symbol(file, name_span, symbol);
-      let var_kind = DefKind::Var(VarData {
-        typ: type_ann,
-        init: None,
-        body: BodyId(u32::MAX),
-        mode: var.mode,
-      });
+      self.record_symbol(file, loc_to_span(file, pat.loc).range, symbol);
       self.def_data.insert(
         def_id,
         DefData {
@@ -4637,10 +4431,14 @@ impl ProgramState {
           span,
           symbol,
           export: var.export,
-          kind: var_kind.clone(),
+          kind: DefKind::Var(VarData {
+            typ: type_ann,
+            init: None,
+            body: BodyId(u32::MAX),
+            mode: var.mode,
+          }),
         },
       );
-      self.register_canonical_def(file, &name, def_id, &var_kind);
       self.record_def_symbol(def_id, symbol);
       defs.push((
         def_id,
@@ -4663,7 +4461,7 @@ impl ProgramState {
         } else {
           sem_ts::Exported::No
         },
-        name_span,
+        loc_to_span(file, pat.loc).range,
       );
     }
     defs
@@ -4675,16 +4473,13 @@ impl ProgramState {
     span: TextRange,
     func: &FuncDecl,
     sem_builder: &mut SemHirBuilder,
-    refine_span: &impl Fn(TextRange, &str) -> TextRange,
   ) -> Option<(DefId, (String, SymbolBinding), Option<String>)> {
     let name_node = func.name.as_ref()?;
     let name = name_node.stx.name.clone();
     let symbol = self.alloc_symbol();
-    let name_span = refine_span(loc_to_span(file, name_node.loc).range, &name);
-    self.record_symbol(file, name_span, symbol);
+    self.record_symbol(file, loc_to_span(file, name_node.loc).range, symbol);
     let def_id = self.alloc_def();
-    let func_data = self.lower_function(file, func.function.stx.as_ref(), def_id, refine_span);
-    let func_kind = DefKind::Function(func_data.clone());
+    let func_data = self.lower_function(file, func.function.stx.as_ref(), def_id);
     self.def_data.insert(
       def_id,
       DefData {
@@ -4693,10 +4488,9 @@ impl ProgramState {
         span,
         symbol,
         export: func.export || func.export_default,
-        kind: func_kind.clone(),
+        kind: DefKind::Function(func_data),
       },
     );
-    self.register_canonical_def(file, &name, def_id, &func_kind);
     self.record_def_symbol(def_id, symbol);
     sem_builder.add_decl(
       def_id,
@@ -4709,7 +4503,7 @@ impl ProgramState {
       } else {
         sem_ts::Exported::No
       },
-      name_span,
+      loc_to_span(file, name_node.loc).range,
     );
     let binding = (
       name.clone(),
@@ -4729,23 +4523,17 @@ impl ProgramState {
     Some((def_id, binding, export_name))
   }
 
-  fn lower_function(
-    &mut self,
-    file: FileId,
-    func: &Func,
-    _def: DefId,
-    refine_span: &impl Fn(TextRange, &str) -> TextRange,
-  ) -> FuncData {
+  fn lower_function(&mut self, file: FileId, func: &Func, _def: DefId) -> FuncData {
     let mut params = Vec::new();
     for param in func.parameters.iter() {
-      if let Some(data) = self.lower_param(file, param, refine_span) {
+      if let Some(data) = self.lower_param(file, param) {
         params.push(data);
       }
     }
     let return_ann = func
       .return_type
       .as_ref()
-      .map(|t| self.type_from_type_expr(file, t));
+      .map(|t| self.type_from_type_expr(t));
     FuncData {
       params,
       return_ann,
@@ -4753,12 +4541,7 @@ impl ProgramState {
     }
   }
 
-  fn lower_param(
-    &mut self,
-    file: FileId,
-    param: &Node<ParamDecl>,
-    refine_span: &impl Fn(TextRange, &str) -> TextRange,
-  ) -> Option<ParamData> {
+  fn lower_param(&mut self, file: FileId, param: &Node<ParamDecl>) -> Option<ParamData> {
     let name = match param.stx.pattern.stx.pat.stx.as_ref() {
       Pat::Id(id) => id.stx.name.clone(),
       _ => {
@@ -4775,10 +4558,9 @@ impl ProgramState {
       .stx
       .type_annotation
       .as_ref()
-      .map(|t| self.type_from_type_expr(file, t));
+      .map(|t| self.type_from_type_expr(t));
     let symbol = self.alloc_symbol();
-    let name_span = refine_span(loc_to_span(file, param.loc).range, &name);
-    self.record_symbol(file, name_span, symbol);
+    self.record_symbol(file, loc_to_span(file, param.stx.pattern.loc).range, symbol);
     Some(ParamData {
       name,
       typ,
@@ -4791,6 +4573,10 @@ impl ProgramState {
     let cache_hit = self.body_results.contains_key(&body_id);
     let body_meta = self.body_map.get(&body_id).copied();
     let owner = self.owner_of_body(body_id);
+    let prev_file = self.current_file;
+    if let Some(meta) = body_meta.as_ref() {
+      self.current_file = Some(meta.file);
+    }
     let mut span = QuerySpan::enter(
       QueryKind::CheckBody,
       query_span!(
@@ -4808,6 +4594,7 @@ impl ProgramState {
       if let Some(span) = span.take() {
         span.finish(None);
       }
+      self.current_file = prev_file;
       return existing.clone();
     }
     let Some(meta) = body_meta else {
@@ -4827,12 +4614,13 @@ impl ProgramState {
       if let Some(span) = span.take() {
         span.finish(None);
       }
+      self.current_file = prev_file;
       return res;
     };
 
     let file = meta.file;
 
-    let Some(lowered) = self.hir_lowered.get(&file).cloned() else {
+    let Some(lowered) = self.hir_lowered.get(&file) else {
       let res = Arc::new(BodyCheckResult {
         body: body_id,
         expr_types: Vec::new(),
@@ -4846,10 +4634,11 @@ impl ProgramState {
       if let Some(span) = span.take() {
         span.finish(None);
       }
+      self.current_file = prev_file;
       return res;
     };
 
-    let Some(ast) = self.asts.get(&file).cloned() else {
+    let Some(ast) = self.asts.get(&file) else {
       let res = Arc::new(BodyCheckResult {
         body: body_id,
         expr_types: Vec::new(),
@@ -4869,8 +4658,11 @@ impl ProgramState {
       return res;
     };
 
-    let synthetic = if meta.hir.is_none() && matches!(meta.kind, HirBodyKind::TopLevel) {
-      Some(hir_js::Body {
+    let mut _synthetic = None;
+    let body = if let Some(hir_id) = meta.hir {
+      lowered.body(hir_id)
+    } else if matches!(meta.kind, HirBodyKind::TopLevel) {
+      _synthetic = Some(hir_js::Body {
         owner: HirDefId(u32::MAX),
         kind: HirBodyKind::TopLevel,
         exprs: Vec::new(),
@@ -4879,13 +4671,10 @@ impl ProgramState {
         root_stmts: Vec::new(),
         function: None,
         expr_types: None,
-      })
+      });
+      _synthetic.as_ref()
     } else {
       None
-    };
-    let body = match meta.hir {
-      Some(hir_id) => lowered.body(hir_id),
-      None => synthetic.as_ref(),
     };
 
     let Some(body) = body else {
@@ -4904,173 +4693,148 @@ impl ProgramState {
       }
       return res;
     };
-    let Some(store) = self.interned_store.as_ref().cloned() else {
-      let res = Arc::new(BodyCheckResult {
-        body: body_id,
-        expr_types: Vec::new(),
-        expr_spans: Vec::new(),
-        pat_types: Vec::new(),
-        pat_spans: Vec::new(),
-        diagnostics: vec![codes::MISSING_BODY.error(
-          "type store not initialized",
-          Span::new(file, TextRange::new(0, 0)),
-        )],
-        return_types: Vec::new(),
-      });
-      self.body_results.insert(body_id, res.clone());
-      if let Some(span) = span.take() {
-        span.finish(None);
+
+    let store = match self.interned_store.as_ref() {
+      Some(store) => Arc::clone(store),
+      None => {
+        let store = tti::TypeStore::new();
+        self.interned_store = Some(Arc::clone(&store));
+        store
       }
-      return res;
     };
 
     let mut bindings: HashMap<String, TypeId> = HashMap::new();
-    let mut binding_symbols: HashMap<String, semantic_js::SymbolId> = HashMap::new();
     let mut binding_defs: HashMap<String, DefId> = HashMap::new();
-    self.populate_interned_defs(&store);
+    let mut convert_cache = HashMap::new();
+    let map_def_ty = |state: &ProgramState,
+                      store: &Arc<tti::TypeStore>,
+                      cache: &mut HashMap<TypeId, tti::TypeId>,
+                      def: DefId| {
+      state
+        .interned_def_types
+        .get(&def)
+        .copied()
+        .or_else(|| state.def_types.get(&def).copied().map(|ty| store.canon(convert_type_for_display(ty, state, store, cache))))
+    };
     for (name, binding) in self.global_bindings.iter() {
       let ty = binding
         .def
-        .and_then(|d| self.interned_def_types.get(&d).copied())
+        .and_then(|d| map_def_ty(self, &store, &mut convert_cache, d))
         .unwrap_or_else(|| store.primitive_ids().unknown);
       bindings.insert(name.clone(), ty);
-      binding_symbols.insert(name.clone(), binding.symbol);
       if let Some(def) = binding.def {
         binding_defs.insert(name.clone(), def);
       }
     }
-    if let Some(file_state) = self.files.get(&file).cloned() {
+    if let Some(file_state) = self.files.get(&file) {
       for (name, binding) in file_state.bindings.iter() {
-        let ty = if let Some(def) = binding.def {
-          if let Some(interned) = self.interned_def_types.get(&def).copied() {
-            interned
-          } else {
-            let def_ty = self.type_of_def(def);
-            let interned = self.intern_type_id(def_ty);
-            self.interned_def_types.insert(def, interned);
-            interned
-          }
-        } else if let Some(ann) = binding.type_id {
-          self.intern_type_id(ann)
-        } else {
-          store.primitive_ids().unknown
-        };
+        let ty = binding
+          .def
+          .and_then(|d| map_def_ty(self, &store, &mut convert_cache, d))
+          .unwrap_or_else(|| store.primitive_ids().unknown);
         bindings.insert(name.clone(), ty);
-        binding_symbols.insert(name.clone(), binding.symbol);
         if let Some(def) = binding.def {
           binding_defs.insert(name.clone(), def);
         }
       }
-      for def in file_state.defs.iter() {
-        if let Some(data) = self.def_data.get(def) {
-          if matches!(data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
-            let canonical = self.canonical_def(*def).unwrap_or(*def);
-            binding_defs.entry(data.name.clone()).or_insert(canonical);
-          }
-        }
-      }
     }
-    if let Some(owner) = owner {
-      if let Some(data) = self.def_data.get(&owner) {
-        if let DefKind::Function(func) = &data.kind {
-          for param in func.params.iter() {
-            let ty = param.typ.unwrap_or_else(|| store.primitive_ids().unknown);
-            if !matches!(meta.kind, HirBodyKind::Function) {
-              bindings.insert(param.name.clone(), ty);
-            }
-            binding_symbols.insert(param.name.clone(), param.symbol);
-          }
-        }
-      }
-    }
-    let current_range = Self::hir_body_range(body);
-    if let Some(current_range) = current_range {
-      let mut enclosing_symbols: Vec<(u32, &HashMap<String, semantic_js::SymbolId>)> = Vec::new();
-      for (candidate, symbols) in self.body_local_symbols.iter() {
-        if *candidate == body_id {
-          continue;
-        }
-        let Some(meta) = self.body_map.get(candidate) else {
-          continue;
-        };
-        if meta.file != file {
-          continue;
-        }
-        let Some(hir_id) = meta.hir else {
-          continue;
-        };
-        let Some(lowered) = self.hir_lowered.get(&meta.file) else {
-          continue;
-        };
-        let Some(candidate_body) = lowered.body(hir_id) else {
-          continue;
-        };
-        let Some(range) = Self::hir_body_range(candidate_body) else {
-          continue;
-        };
-        if range.start <= current_range.start && current_range.end <= range.end {
-          let len = range.end.saturating_sub(range.start);
-          enclosing_symbols.push((len, symbols));
-        }
-      }
-      enclosing_symbols.sort_by(|a, b| b.0.cmp(&a.0));
-      for (_, symbols) in enclosing_symbols {
-        for (name, symbol) in symbols.iter() {
-          bindings
-            .entry(name.clone())
-            .or_insert(store.primitive_ids().unknown);
-          binding_symbols.insert(name.clone(), *symbol);
-        }
-      }
-    }
+
     let caches = self.checker_caches.for_body();
-    let expander = crate::expand::ProgramTypeExpander::new(
+    let expander = RefExpander::new(
       Arc::clone(&store),
       &self.interned_def_types,
       &self.interned_type_params,
       caches.eval.clone(),
     );
-    let (mut result, occurrences, bound_symbols) = check::hir_body::check_body(
+    let prim = store.primitive_ids();
+    let mut result = check::hir_body::check_body_with_expander(
       body_id,
       body,
       &lowered.names,
       file,
-      ast.as_ref(),
+      ast,
       Arc::clone(&store),
       &caches,
       &bindings,
-      &mut self.next_symbol,
-      Some(&binding_symbols),
       (!binding_defs.is_empty())
         .then(|| Arc::new(check::hir_body::BindingTypeResolver::new(binding_defs)) as Arc<_>),
       Some(&expander),
     );
-    let store_opt = self.interned_store.clone();
-    if let Some(store) = store_opt {
-      let mut fill_cache = HashMap::new();
-      for (idx, ty) in result.expr_types.iter_mut().enumerate() {
-        let kind = store.type_kind(*ty);
-        let should_fill = matches!(
-          kind,
-          tti::TypeKind::Unknown | tti::TypeKind::Object(_) | tti::TypeKind::Union(_)
-        );
-        if should_fill {
-          if let Some(fallback) = self.fallback_expr_type(body_id, ExprId(idx as u32)) {
-            let interned = convert_type_for_display(fallback, self, &store, &mut fill_cache);
-            let new_ty = store.canon(interned);
-            *ty = new_ty;
+    if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
+      let mut initial_env: HashMap<NameId, TypeId> = HashMap::new();
+      if let Some(function) = body.function.as_ref() {
+        for param in function.params.iter() {
+          if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
+            if ty != prim.unknown {
+              if let Some(pat) = body.pats.get(param.pat.0 as usize) {
+                if let hir_js::PatKind::Ident(name) = pat.kind {
+                  initial_env.insert(name, ty);
+                }
+              }
+            }
           }
         }
       }
+      for expr in body.exprs.iter() {
+        if let hir_js::ExprKind::Ident(name_id) = expr.kind {
+          if initial_env.contains_key(&name_id) {
+            continue;
+          }
+          if let Some(name) = lowered.names.resolve(name_id) {
+            if let Some(ty) = bindings.get(name) {
+              initial_env.insert(name_id, *ty);
+            }
+          }
+        }
+      }
+      let flow_result = check::hir_body::check_body_with_env(
+        body_id,
+        body,
+        &lowered.names,
+        file,
+        "",
+        Arc::clone(&store),
+        &initial_env,
+      );
+      let mut relate_hooks = relate_hooks();
+      relate_hooks.expander = Some(&expander);
+      let relate = RelateCtx::with_hooks_and_cache(
+        Arc::clone(&store),
+        store.options(),
+        relate_hooks,
+        caches.relation.clone(),
+      );
+      if flow_result.expr_types.len() == result.expr_types.len() {
+        for (idx, ty) in flow_result.expr_types.iter().enumerate() {
+          if *ty != prim.unknown {
+            let existing = result.expr_types[idx];
+            let narrower =
+              relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+            if existing == prim.unknown || narrower {
+              result.expr_types[idx] = *ty;
+            }
+          }
+        }
+      }
+      if flow_result.pat_types.len() == result.pat_types.len() {
+        for (idx, ty) in flow_result.pat_types.iter().enumerate() {
+          if *ty != prim.unknown {
+            let existing = result.pat_types[idx];
+            let narrower =
+              relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+            if existing == prim.unknown || narrower {
+              result.pat_types[idx] = *ty;
+            }
+          }
+        }
+      }
+      if result.return_types.is_empty() && !flow_result.return_types.is_empty() {
+        result.return_types = flow_result.return_types;
+      }
+      if result.diagnostics.is_empty() && !flow_result.diagnostics.is_empty() {
+        result.diagnostics = flow_result.diagnostics;
+      }
     }
-    for (range, symbol) in occurrences {
-      self
-        .symbol_occurrences
-        .entry(file)
-        .or_default()
-        .push(SymbolOccurrence { range, symbol });
-    }
-    self.body_local_symbols.insert(body_id, bound_symbols);
     let res = Arc::new(result);
     if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
       let mut stats = caches.stats();
@@ -5088,6 +4852,7 @@ impl ProgramState {
     if let Some(span) = span.take() {
       span.finish(None);
     }
+    self.current_file = prev_file;
     res
   }
 
@@ -5131,31 +4896,6 @@ impl ProgramState {
           .collect();
         self.type_store.union(mapped, &self.builtin)
       }
-      InternedKind::Intersection(types) => {
-        let mapped: Vec<_> = types
-          .iter()
-          .map(|t| self.import_interned_type(*t))
-          .collect();
-        self.type_store.intersection(mapped, &self.builtin)
-      }
-      InternedKind::Ref { def, .. } => self.type_store.reference(DefId(def.0)),
-      InternedKind::Callable { overloads } => {
-        let Some(sig_id) = overloads.first() else {
-          return self.builtin.unknown;
-        };
-        let sig = store.signature(*sig_id);
-        let params: Vec<_> = sig
-          .params
-          .iter()
-          .map(|p| FunctionParam {
-            ty: self.import_interned_type(p.ty),
-            optional: p.optional,
-            rest: p.rest,
-          })
-          .collect();
-        let ret = self.import_interned_type(sig.ret);
-        self.type_store.function(params, ret)
-      }
       InternedKind::Object(obj) => {
         let obj = store.object(obj);
         let shape = store.shape(obj.shape);
@@ -5186,11 +4926,102 @@ impl ProgramState {
         }
         self.type_store.object(legacy)
       }
-      InternedKind::Predicate { asserted, .. } => asserted
-        .map(|ty| self.import_interned_type(ty))
-        .unwrap_or(self.builtin.boolean),
+      InternedKind::Predicate {
+        parameter,
+        asserted,
+        asserts,
+      } => {
+        let param = parameter.map(|id| store.name(id)).unwrap_or_default();
+        let asserted = asserted.map(|ty| self.import_interned_type(ty));
+        self.type_store.predicate(param, asserted, asserts)
+      }
       _ => self.builtin.unknown,
     }
+  }
+
+  fn ensure_interned_type(&mut self, ty: TypeId) -> TypeId {
+    let Some(store) = self.interned_store.as_ref() else {
+      return ty;
+    };
+    if store.contains_type_id(ty) {
+      return store.canon(ty);
+    }
+    if let Some(mapped) = self.def_types.iter().find_map(|(def, stored_ty)| {
+      if *stored_ty == ty {
+        self.interned_def_types.get(def).copied()
+      } else {
+        None
+      }
+    }) {
+      return store.canon(mapped);
+    }
+    let mut cache = HashMap::new();
+    let interned = convert_type_for_display(ty, self, store, &mut cache);
+    store.canon(interned)
+  }
+
+  fn prefer_named_refs(&self, ty: TypeId) -> TypeId {
+    let Some(store) = self.interned_store.as_ref() else {
+      return ty;
+    };
+    self.prefer_named_refs_in_store(store, ty)
+  }
+
+  fn prefer_named_refs_in_store(&self, store: &Arc<tti::TypeStore>, ty: TypeId) -> TypeId {
+    let canonical = store.canon(ty);
+    if let Some(def) = self
+      .interned_def_types
+      .iter()
+      .find_map(|(def, def_ty)| (store.canon(*def_ty) == canonical).then_some(*def))
+    {
+      return store.intern_type(tti::TypeKind::Ref {
+        def,
+        args: Vec::new(),
+      });
+    }
+    match store.type_kind(canonical) {
+      tti::TypeKind::Union(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|member| self.prefer_named_refs_in_store(store, member))
+          .collect();
+        return store.union(mapped);
+      }
+      tti::TypeKind::Intersection(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|member| self.prefer_named_refs_in_store(store, member))
+          .collect();
+        return store.intersection(mapped);
+      }
+      tti::TypeKind::Array { ty, readonly } => {
+        let mapped = self.prefer_named_refs_in_store(store, ty);
+        if mapped != ty {
+          return store.intern_type(tti::TypeKind::Array { ty: mapped, readonly });
+        }
+      }
+      tti::TypeKind::Tuple(elems) => {
+        let mut changed = false;
+        let mapped: Vec<_> = elems
+          .into_iter()
+          .map(|elem| {
+            let mapped = self.prefer_named_refs_in_store(store, elem.ty);
+            changed |= mapped != elem.ty;
+            tti::TupleElem {
+              ty: mapped,
+              optional: elem.optional,
+              rest: elem.rest,
+              readonly: elem.readonly,
+            }
+          })
+          .collect();
+        if changed {
+          return store.intern_type(tti::TypeKind::Tuple(mapped));
+        }
+      }
+      _ => {}
+    }
+    canonical
   }
 
   fn widen_literal(&self, ty: TypeId) -> TypeId {
@@ -5202,12 +5033,117 @@ impl ProgramState {
     }
   }
 
-  fn type_of_def(&mut self, def: DefId) -> TypeId {
-    if let Some(canonical) = self.canonical_def(def) {
-      if canonical != def {
-        return self.type_of_def(canonical);
+  fn widen_literal_any(&self, ty: TypeId) -> TypeId {
+    let widened = self.widen_literal(ty);
+    if widened != ty {
+      return widened;
+    }
+    if let Some(store) = self.interned_store.as_ref() {
+      if store.contains_type_id(ty) {
+        return match store.type_kind(ty) {
+          tti::TypeKind::NumberLiteral(_) => self.builtin.number,
+          tti::TypeKind::StringLiteral(_) => self.builtin.string,
+          tti::TypeKind::BooleanLiteral(_) => self.builtin.boolean,
+          _ => ty,
+        };
       }
     }
+    ty
+  }
+
+  fn widen_union_literals(&mut self, ty: TypeId) -> TypeId {
+    match self.type_store.kind(ty).clone() {
+      TypeKind::LiteralNumber(_) => self.builtin.number,
+      TypeKind::LiteralString(_) => self.builtin.string,
+      TypeKind::LiteralBoolean(_) => self.builtin.boolean,
+      TypeKind::Union(types) => {
+        let members: Vec<_> = types
+          .into_iter()
+          .map(|t| self.widen_union_literals(t))
+          .collect();
+        self.type_store.union(members, &self.builtin)
+      }
+      TypeKind::Array(inner) => {
+        let widened = self.widen_union_literals(inner);
+        self.type_store.array(widened)
+      }
+      _ => ty,
+    }
+  }
+
+  fn widen_array_elements(&mut self, ty: TypeId) -> TypeId {
+    match self.type_store.kind(ty) {
+      TypeKind::Array(inner) => {
+        let widened = self.widen_union_literals(*inner);
+        self.type_store.array(widened)
+      }
+      _ => ty,
+    }
+  }
+
+  fn widen_object_literal(&mut self, ty: TypeId) -> TypeId {
+    match self.type_store.kind(ty).clone() {
+      TypeKind::Object(mut obj) => {
+        let mut changed = false;
+        for prop in obj.props.values_mut() {
+          if prop.readonly {
+            continue;
+          }
+          let widened = self.widen_union_literals(prop.typ);
+          if widened != prop.typ {
+            prop.typ = widened;
+            changed = true;
+          }
+        }
+        if let Some(value) = obj.string_index {
+          let widened = self.widen_union_literals(value);
+          if widened != value {
+            obj.string_index = Some(widened);
+            changed = true;
+          }
+        }
+        if let Some(value) = obj.number_index {
+          let widened = self.widen_union_literals(value);
+          if widened != value {
+            obj.number_index = Some(widened);
+            changed = true;
+          }
+        }
+        if changed {
+          self.type_store.object(obj)
+        } else {
+          ty
+        }
+      }
+      _ => ty,
+    }
+  }
+
+  fn init_is_satisfies(&self, body: BodyId, expr: ExprId) -> bool {
+    let meta = match self.body_map.get(&body) {
+      Some(meta) => meta,
+      None => return false,
+    };
+    let hir_id = match meta.hir {
+      Some(id) => id,
+      None => return false,
+    };
+    let lowered = match self.hir_lowered.get(&meta.file) {
+      Some(lowered) => lowered,
+      None => return false,
+    };
+    let hir_body = match lowered.body(hir_id) {
+      Some(body) => body,
+      None => return false,
+    };
+    hir_body
+      .exprs
+      .get(expr.0 as usize)
+      .map(|e| matches!(e.kind, HirExprKind::Satisfies { .. }))
+      .unwrap_or(false)
+  }
+
+  fn type_of_def(&mut self, def: DefId) -> TypeId {
     let cache_hit = self.def_types.contains_key(&def);
     let mut span = QuerySpan::enter(
       QueryKind::TypeOfDef,
@@ -5222,70 +5158,138 @@ impl ProgramState {
       cache_hit,
       Some(self.query_stats.clone()),
     );
-    let def_kind_cached = self.def_data.get(&def).map(|d| d.kind.clone());
-    if let Some(existing) = self.def_types.get(&def) {
-      let should_refresh = matches!(def_kind_cached, Some(DefKind::Import(_)))
-        && (*existing == self.builtin.unknown || *existing == self.builtin.any);
-      if !should_refresh {
+    if let Some(existing) = self.def_types.get(&def).copied() {
+      let in_bounds = (existing.0 as usize) < self.type_store.kinds.len();
+      if in_bounds && !matches!(self.type_store.kind(existing), TypeKind::Unknown) {
         if let Some(span) = span.take() {
-          span.finish(Some(*existing));
+          span.finish(Some(existing));
         }
-        return *existing;
+        return existing;
       }
+      self.def_types.remove(&def);
+      self.interned_def_types.remove(&def);
     }
+    let def_data = match self.def_data.get(&def).cloned() {
+      Some(data) => data,
+      None => {
+        if let Some(span) = span.take() {
+          span.finish(Some(self.builtin.unknown));
+        }
+        return self.builtin.unknown;
+      }
+    };
+    let prev_file = self.current_file;
+    self.current_file = Some(def_data.file);
     if self.type_stack.contains(&def) {
       if let Some(span) = span.take() {
         span.finish(Some(self.builtin.any));
       }
+      self.current_file = prev_file;
       return self.builtin.any;
     }
     self.type_stack.push(def);
-    let mut preserve_literals = false;
-    let def_file = self.def_data.get(&def).map(|d| d.file);
-    let mut ty = match def_kind_cached {
-      Some(DefKind::Function(func)) => self.function_type(def, func),
-      Some(DefKind::Var(var)) => {
-        let inferred = if let Some(t) = var.typ {
-          preserve_literals = true;
+    let ns_entry = self
+      .namespace_object_types
+      .get(&(def_data.file, def_data.name.clone()))
+      .copied();
+    let mut ty = match def_data.kind.clone() {
+      DefKind::Function(func) => self.function_type(def, func),
+      DefKind::Var(var) => {
+        let mut init_span_for_const = None;
+        let mut inferred = if let Some(t) = var.typ {
           t
         } else if let Some(init) = var.init {
+          self.body_results.remove(&var.body);
           let res = self.check_body(var.body);
+          init_span_for_const = res.expr_span(init);
           if let Some(init_ty) = res.expr_type(init) {
             if let Some(store) = self.interned_store.as_ref() {
+              let init_ty = store.canon(init_ty);
               self
                 .interned_def_types
                 .entry(def)
-                .or_insert_with(|| store.canon(init_ty));
+                .and_modify(|existing| {
+                  *existing = ProgramState::merge_interned_decl_types(store, *existing, init_ty);
+                })
+                .or_insert(init_ty);
             }
-            let imported = self.import_interned_type(init_ty);
-            if imported == self.builtin.unknown {
-              self.fallback_expr_type(var.body, init).unwrap_or(imported)
-            } else {
-              imported
-            }
-          } else if let Some(fallback) = self.fallback_expr_type(var.body, init) {
-            fallback
+            self.import_interned_type(init_ty)
           } else {
             self.builtin.unknown
           }
+        } else if let Some((_, store_ty)) = ns_entry {
+          store_ty
         } else {
           self.builtin.unknown
         };
-        if var.mode == VarDeclMode::Const
-          && matches!(
-            self.type_store.kind(inferred),
-            TypeKind::LiteralNumber(_) | TypeKind::LiteralString(_) | TypeKind::LiteralBoolean(_)
-          )
-        {
-          preserve_literals = true;
-        }
         if var.mode == VarDeclMode::Const {
+          if let Some(init_span) = init_span_for_const {
+            if let Some(file_body) = self
+              .files
+              .get(&def_data.file)
+              .and_then(|f| f.top_body)
+            {
+              let res = self.check_body(file_body);
+              let top_ty = res
+                .expr_spans()
+                .iter()
+                .enumerate()
+                .find(|(_, span)| **span == init_span)
+                .and_then(|(idx, _)| res.expr_type(ExprId(idx as u32)));
+              if let (Some(top_ty), Some(store)) = (top_ty, self.interned_store.as_ref()) {
+                let top_kind = store.type_kind(top_ty);
+                let has_readonly = match top_kind {
+                  tti::TypeKind::Object(obj) => {
+                    let shape = store.shape(store.object(obj).shape);
+                    shape.properties.iter().any(|p| p.data.readonly)
+                  }
+                  tti::TypeKind::Tuple(elems) => elems.iter().any(|e| e.readonly),
+                  _ => false,
+                };
+                if has_readonly {
+                  let top_ty = store.canon(top_ty);
+                  self.interned_def_types.insert(def, top_ty);
+                  inferred = self.import_interned_type(top_ty);
+                }
+              }
+            }
+          }
+        }
+        let init_is_satisfies = var
+          .init
+          .map(|init| self.init_is_satisfies(var.body, init))
+          .unwrap_or(false);
+        if var.typ.is_none() && !init_is_satisfies {
+          inferred = self.widen_array_elements(inferred);
+        }
+        if var.typ.is_none() {
+          if !init_is_satisfies {
+            inferred = self.widen_object_literal(inferred);
+          }
+        }
+        let ty = if var.mode == VarDeclMode::Const {
           inferred
         } else {
           self.widen_literal(inferred)
+        };
+        if let Some(store) = self.interned_store.as_ref() {
+          let mut cache = HashMap::new();
+          let interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
+          if var.typ.is_some() {
+            self
+              .interned_def_types
+              .entry(def)
+              .and_modify(|existing| {
+                *existing = ProgramState::merge_interned_decl_types(store, *existing, interned);
+              })
+              .or_insert(interned);
+          } else {
+            self.interned_def_types.insert(def, interned);
+          }
         }
+        ty
       }
-      Some(DefKind::Import(import)) => {
+      DefKind::Import(import) => {
         let exports = self.exports_of_file(import.from);
         if let Some(entry) = exports.get(&import.original) {
           if let Some(ty) = entry.type_id {
@@ -5299,60 +5303,72 @@ impl ProgramState {
           self.builtin.unknown
         }
       }
-      Some(DefKind::Interface(interface)) => interface.typ,
-      Some(DefKind::TypeAlias(alias)) => {
-        if alias.typ == self.builtin.unknown {
-          if let Some(span) = alias.type_expr_span {
-            if let Some(file) = def_file {
-              if let Some(resolved) = self.lower_type_alias_expr(file, span) {
-                if let Some(data) = self.def_data.get_mut(&def) {
-                  if let DefKind::TypeAlias(alias_data) = &mut data.kind {
-                    alias_data.typ = resolved;
-                  }
-                }
-                resolved
-              } else {
-                alias.typ
-              }
-            } else {
-              alias.typ
-            }
-          } else {
-            alias.typ
+      DefKind::Interface(interface) => {
+        if let Some(store) = self.interned_store.as_ref() {
+          if !self.interned_def_types.contains_key(&def) {
+            let mut cache = HashMap::new();
+            let interned = convert_type_for_display(interface.typ, self, store, &mut cache);
+            self.interned_def_types.insert(def, store.canon(interned));
           }
-        } else {
-          alias.typ
         }
+        interface.typ
       }
-      None => self.builtin.unknown,
+      DefKind::TypeAlias(alias) => {
+        if let Some(store) = self.interned_store.as_ref() {
+          if !self.interned_def_types.contains_key(&def) {
+            let mut cache = HashMap::new();
+            let interned = convert_type_for_display(alias.typ, self, store, &mut cache);
+            self.interned_def_types.insert(def, store.canon(interned));
+          }
+        }
+        alias.typ
+      }
     };
-    ty = self.widen_literal_components(ty, preserve_literals);
-    if let Some(ns_ty) = self.namespace_types.get(&def).copied() {
-      ty = self.type_store.union(vec![ty, ns_ty], &self.builtin);
+    if let Some(store) = self.interned_store.as_ref() {
+      if store.contains_type_id(ty) {
+        let interned = store.canon(ty);
+        self.interned_def_types.entry(def).or_insert(interned);
+        ty = self.import_interned_type(interned);
+      } else if !self.interned_def_types.contains_key(&def) {
+        let mut cache = HashMap::new();
+        let interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
+        self.interned_def_types.insert(def, interned);
+      }
     }
-    if self.interned_store.is_some() {
-      let interned = self.intern_type_id(ty);
-      if let Some(store) = self.interned_store.as_ref() {
-        self.interned_def_types.insert(def, store.canon(interned));
+    if let Some((ns_interned, _ns_store)) = ns_entry {
+      match def_data.kind {
+        DefKind::Function(_) | DefKind::Var(_) => {
+          if let Some(store) = self.interned_store.as_ref() {
+            let merged = if let Some(existing) = self.interned_def_types.get(&def).copied() {
+              store.intersection(vec![existing, ns_interned])
+            } else {
+              ns_interned
+            };
+            self.interned_def_types.insert(def, merged);
+          }
+        }
+        _ => {}
       }
     }
     self.type_stack.pop();
     self.def_types.insert(def, ty);
+    let ret_ty = if let Some(_store) = self.interned_store.as_ref() {
+      self.interned_def_types.get(&def).copied().unwrap_or(ty)
+    } else {
+      ty
+    };
     if let Some(span) = span.take() {
-      span.finish(Some(ty));
+      span.finish(Some(ret_ty));
     }
-    ty
+    self.current_file = prev_file;
+    ret_ty
   }
 
   fn function_type(&mut self, def: DefId, func: FuncData) -> TypeId {
-    let param_types: Vec<FunctionParam> = func
+    let param_types: Vec<TypeId> = func
       .params
       .iter()
-      .map(|p| FunctionParam {
-        ty: p.typ.unwrap_or(self.builtin.any),
-        optional: false,
-        rest: false,
-      })
+      .map(|p| p.typ.unwrap_or(self.builtin.any))
       .collect();
     let ret = if let Some(ret) = func.return_ann {
       ret
@@ -5361,13 +5377,6 @@ impl ProgramState {
       if res.return_types.is_empty() {
         self.builtin.void
       } else {
-        if let Some(store) = self.interned_store.as_ref() {
-          let interned = store.union(res.return_types.clone());
-          self
-            .interned_def_types
-            .entry(def)
-            .or_insert_with(|| store.canon(interned));
-        }
         let mut widened = Vec::new();
         for ty in res.return_types.iter() {
           let imported = self.import_interned_type(*ty);
@@ -5379,16 +5388,25 @@ impl ProgramState {
       self.builtin.unknown
     };
     let ty = self.type_store.function(param_types, ret);
+    if let Some(store) = self.interned_store.as_ref() {
+      let mut cache = HashMap::new();
+      let interned = convert_type_for_display(ty, self, store, &mut cache);
+      let interned = store.canon(interned);
+      self
+        .interned_def_types
+        .entry(def)
+        .and_modify(|existing| {
+          *existing = ProgramState::merge_interned_decl_types(store, *existing, interned);
+        })
+        .or_insert(interned);
+    }
     self.def_types.insert(def, ty);
     ty
   }
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
     if let Some(semantics) = self.semantics.clone() {
-      let map = check::modules::exports_from_semantics(self, &semantics, file);
-      if !map.is_empty() {
-        return map;
-      }
+      return check::modules::exports_from_semantics(self, &semantics, file);
     }
     let Some(state) = self.files.get(&file).cloned() else {
       return ExportMap::new();
@@ -5396,9 +5414,7 @@ impl ProgramState {
     let mut map = state.exports.clone();
     for entry in map.values_mut() {
       if entry.type_id.is_none() {
-        if let Some(def) = entry.def {
-          entry.type_id = Some(self.type_of_def(def));
-        }
+        entry.type_id = entry.def.and_then(|def| self.export_type_for_def(def));
       }
     }
     map
@@ -5406,53 +5422,226 @@ impl ProgramState {
 
   fn ensure_symbols_for_file(&mut self, file: FileId) {
     if let Some(state) = self.files.get(&file).cloned() {
+      let mut bodies_to_cover = Vec::new();
       if let Some(body) = state.top_body {
-        let _ = self.check_body(body);
+        bodies_to_cover.push(body);
       }
       for def in state.defs.iter() {
         if let Some(body) = self.body_of_def(*def) {
-          let _ = self.check_body(body);
+          bodies_to_cover.push(body);
         }
       }
+      for body in bodies_to_cover.iter().copied() {
+        let _ = self.check_body(body);
+      }
+      for body in bodies_to_cover.iter().copied() {
+        if let Some(result) = self.body_results.get(&body) {
+          let spans: Vec<_> = result.pat_spans().to_vec();
+          for span in spans {
+            let exists = {
+              let occs = self.symbol_occurrences.entry(file).or_default();
+              occs.iter().any(|occ| occ.range == span)
+            };
+            if exists {
+              continue;
+            }
+            let symbol = self.alloc_symbol();
+            self
+              .symbol_occurrences
+              .entry(file)
+              .or_default()
+              .push(SymbolOccurrence { range: span, symbol });
+          }
+        }
+      }
+      self.record_type_references(file, &state.bindings);
+    }
+  }
+
+  fn record_type_references(&mut self, file: FileId, bindings: &HashMap<String, SymbolBinding>) {
+    let Some(ast) = self.asts.get(&file).cloned() else {
+      return;
+    };
+    for stmt in ast.stx.body.iter() {
+      self.record_type_annotations_in_stmt(file, bindings, stmt);
+    }
+  }
+
+  fn record_type_annotations_in_stmt(
+    &mut self,
+    file: FileId,
+    bindings: &HashMap<String, SymbolBinding>,
+    stmt: &Node<Stmt>,
+  ) {
+    match stmt.stx.as_ref() {
+      Stmt::TypeAliasDecl(alias) => {
+        self.record_type_expr_symbols(file, &alias.stx.type_expr, bindings);
+      }
+      Stmt::FunctionDecl(func) => {
+        for param in func.stx.function.stx.parameters.iter() {
+          if let Some(ann) = param.stx.type_annotation.as_ref() {
+            self.record_type_expr_symbols(file, ann, bindings);
+          }
+        }
+        if let Some(ret) = func.stx.function.stx.return_type.as_ref() {
+          self.record_type_expr_symbols(file, ret, bindings);
+        }
+        if let Some(body) = func.stx.function.stx.body.as_ref() {
+          if let parse_js::ast::func::FuncBody::Block(stmts) = body {
+            for stmt in stmts.iter() {
+              self.record_type_annotations_in_stmt(file, bindings, stmt);
+            }
+          }
+        }
+      }
+      Stmt::VarDecl(var) => {
+        for decl in var.stx.declarators.iter() {
+          if let Some(ann) = decl.type_annotation.as_ref() {
+            self.record_type_expr_symbols(file, ann, bindings);
+          }
+        }
+      }
+      Stmt::Block(block) => {
+        for stmt in block.stx.body.iter() {
+          self.record_type_annotations_in_stmt(file, bindings, stmt);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn record_type_expr_symbols(
+    &mut self,
+    file: FileId,
+    expr: &Node<TypeExpr>,
+    bindings: &HashMap<String, SymbolBinding>,
+  ) {
+    match expr.stx.as_ref() {
+      TypeExpr::TypeReference(reference) => {
+        if let TypeEntityName::Identifier(name) = &reference.stx.name {
+          if let Some(binding) = bindings.get(name) {
+            let span = loc_to_span(file, reference.loc).range;
+            if self
+              .symbol_occurrences
+              .get(&file)
+              .map(|occs| occs.iter().any(|occ| occ.range == span))
+              .unwrap_or(false)
+            {
+              // Already recorded.
+              return;
+            }
+            self.record_symbol(file, span, binding.symbol);
+          }
+        }
+        if let Some(args) = reference.stx.type_arguments.as_ref() {
+          for arg in args.iter() {
+            self.record_type_expr_symbols(file, arg, bindings);
+          }
+        }
+      }
+      TypeExpr::ArrayType(arr) => {
+        self.record_type_expr_symbols(file, &arr.stx.element_type, bindings);
+      }
+      TypeExpr::TupleType(tuple) => {
+        for elem in tuple.stx.elements.iter() {
+          self.record_type_expr_symbols(file, &elem.stx.type_expr, bindings);
+        }
+      }
+      TypeExpr::UnionType(union) => {
+        for member in union.stx.types.iter() {
+          self.record_type_expr_symbols(file, member, bindings);
+        }
+      }
+      TypeExpr::IntersectionType(inter) => {
+        for member in inter.stx.types.iter() {
+          self.record_type_expr_symbols(file, member, bindings);
+        }
+      }
+      TypeExpr::ParenthesizedType(inner) => {
+        self.record_type_expr_symbols(file, &inner.stx.type_expr, bindings);
+      }
+      TypeExpr::ObjectType(obj) => {
+        for member in obj.stx.members.iter() {
+          match member.stx.as_ref() {
+            TypeMember::Property(prop) => {
+              if let Some(ann) = prop.stx.type_annotation.as_ref() {
+                self.record_type_expr_symbols(file, ann, bindings);
+              }
+            }
+            TypeMember::Method(method) => {
+              for param in method.stx.parameters.iter() {
+                self.record_type_expr_symbols(file, &param.stx.type_expr, bindings);
+              }
+              if let Some(ret) = method.stx.return_type.as_ref() {
+                self.record_type_expr_symbols(file, ret, bindings);
+              }
+            }
+            TypeMember::CallSignature(sig) => {
+              for param in sig.stx.parameters.iter() {
+                self.record_type_expr_symbols(file, &param.stx.type_expr, bindings);
+              }
+              if let Some(ret) = sig.stx.return_type.as_ref() {
+                self.record_type_expr_symbols(file, ret, bindings);
+              }
+            }
+            TypeMember::Constructor(sig) => {
+              for param in sig.stx.parameters.iter() {
+                self.record_type_expr_symbols(file, &param.stx.type_expr, bindings);
+              }
+              if let Some(ret) = sig.stx.return_type.as_ref() {
+                self.record_type_expr_symbols(file, ret, bindings);
+              }
+            }
+            TypeMember::IndexSignature(index) => {
+              self.record_type_expr_symbols(file, &index.stx.parameter_type, bindings);
+              self.record_type_expr_symbols(file, &index.stx.type_annotation, bindings);
+            }
+            _ => {}
+          }
+        }
+      }
+      _ => {}
     }
   }
 
   fn symbol_at(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
-    let mut bodies: Vec<_> = self
-      .body_map
-      .iter()
-      .filter(|(_, meta)| meta.file == file)
-      .map(|(id, _)| *id)
-      .collect();
-    bodies.sort_by_key(|b| b.0);
-    for body in bodies {
-      let _ = self.check_body(body);
-    }
-    let occurrences = self.symbol_occurrences.get(&file)?;
-    let mut best_containing: Option<(u32, u32, semantic_js::SymbolId)> = None;
-    let mut best_empty: Option<(u32, u32, semantic_js::SymbolId)> = None;
+    if let Some(occurrences) = self.symbol_occurrences.get(&file) {
+      let mut best_containing: Option<(u32, u32, semantic_js::SymbolId)> = None;
+      let mut best_empty: Option<(u32, u32, semantic_js::SymbolId)> = None;
 
-    for occurrence in occurrences.iter() {
-      let range = occurrence.range;
-      let len = range.len();
-      let key = (len, range.start, occurrence.symbol);
-      if range.start <= offset && offset < range.end {
-        let replace = best_containing.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_containing = Some(key);
+      for occurrence in occurrences.iter() {
+        let range = occurrence.range;
+        let len = range.len();
+        let key = (len, range.start, occurrence.symbol);
+        if range.start <= offset && offset < range.end {
+          let replace = best_containing.map(|best| key < best).unwrap_or(true);
+          if replace {
+            best_containing = Some(key);
+          }
+        } else if range.start == range.end && offset == range.start {
+          let replace = best_empty.map(|best| key < best).unwrap_or(true);
+          if replace {
+            best_empty = Some(key);
+          }
         }
-      } else if range.start == range.end && offset == range.start {
-        let replace = best_empty.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_empty = Some(key);
-        }
+      }
+
+      if let Some(symbol) = best_containing
+        .or(best_empty)
+        .map(|(_, _, symbol)| symbol)
+        .map(|symbol| self.resolve_symbol(symbol))
+      {
+        return Some(symbol);
       }
     }
 
-    let symbol = best_containing
-      .or(best_empty)
-      .map(|(_, _, symbol)| symbol)?;
-    Some(self.resolve_symbol(symbol))
+    let (body, expr) = self.expr_at(file, offset)?;
+    let meta = self.body_map.get(&body).copied()?;
+    let hir_body = meta.hir?;
+    let lowered = self.hir_lowered.get(&meta.file).cloned()?;
+    self
+      .resolve_symbol_in_body(file, &lowered, hir_body, expr)
+      .map(|symbol| self.resolve_symbol(symbol))
   }
 
   fn resolve_symbol(&mut self, symbol: semantic_js::SymbolId) -> semantic_js::SymbolId {
@@ -5479,24 +5668,770 @@ impl ProgramState {
     exports.get(&import.original).map(|entry| entry.symbol)
   }
 
-  fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
-    let Some(kind) = self.def_data.get(&def).map(|d| &d.kind) else {
-      return 3;
-    };
-    match ns {
-      sem_ts::Namespace::VALUE => match kind {
-        DefKind::Function(_) => 0,
-        DefKind::Var(_) => 1,
-        _ => 2,
-      },
-      sem_ts::Namespace::NAMESPACE => 2,
-      sem_ts::Namespace::TYPE => match kind {
-        DefKind::Interface(_) => 0,
-        DefKind::TypeAlias(_) => 1,
-        _ => 2,
-      },
-      _ => 3,
+  fn resolve_symbol_in_body(
+    &mut self,
+    file: FileId,
+    lowered: &LowerResult,
+    body_id: hir_js::BodyId,
+    target_expr: hir_js::ExprId,
+  ) -> Option<semantic_js::SymbolId> {
+    let body = lowered.body(body_id)?;
+    let target_span = body.exprs.get(target_expr.0 as usize)?.span;
+
+    let mut def_symbols: HashMap<TextRange, semantic_js::SymbolId> = self
+      .def_data
+      .values()
+      .filter(|d| d.file == file)
+      .map(|d| (d.span, d.symbol))
+      .collect();
+
+    let mut initial_scope: HashMap<String, semantic_js::SymbolId> = HashMap::new();
+    if let Some(state) = self.files.get(&file) {
+      for (name, binding) in state.bindings.iter() {
+        initial_scope.insert(name.clone(), binding.symbol);
+      }
     }
+    for (name, binding) in self.global_bindings.iter() {
+      initial_scope.entry(name.clone()).or_insert(binding.symbol);
+    }
+
+    fn lookup(
+      scopes: &[HashMap<String, semantic_js::SymbolId>],
+      name: &str,
+    ) -> Option<semantic_js::SymbolId> {
+      for scope in scopes.iter().rev() {
+        if let Some(symbol) = scope.get(name) {
+          return Some(*symbol);
+        }
+      }
+      None
+    }
+
+    fn bind_pat(
+      state: &mut ProgramState,
+      body: &hir_js::Body,
+      names: &hir_js::NameInterner,
+      pat_id: HirPatId,
+      scopes: &mut Vec<HashMap<String, semantic_js::SymbolId>>,
+      def_symbols: &mut HashMap<TextRange, semantic_js::SymbolId>,
+      file: FileId,
+    ) {
+      let Some(pat) = body.pats.get(pat_id.0 as usize) else {
+        return;
+      };
+      match &pat.kind {
+        HirPatKind::Ident(name_id) => {
+          if let Some(name) = names.resolve(*name_id) {
+            let symbol = def_symbols
+              .get(&pat.span)
+              .copied()
+              .or_else(|| {
+                state
+                  .symbol_occurrences
+                  .get(&file)
+                  .and_then(|occs| {
+                    occs
+                      .iter()
+                      .find(|occ| occ.range == pat.span)
+                      .map(|occ| occ.symbol)
+                  })
+              })
+              .unwrap_or_else(|| state.alloc_symbol());
+            if let Some(scope) = scopes.last_mut() {
+              scope.insert(name.to_string(), symbol);
+            }
+            def_symbols.insert(pat.span, symbol);
+            state.record_symbol(file, pat.span, symbol);
+          }
+        }
+        HirPatKind::Array(arr) => {
+          for elem in arr.elements.iter().flatten() {
+            bind_pat(state, body, names, elem.pat, scopes, def_symbols, file);
+          }
+          if let Some(rest) = arr.rest {
+            bind_pat(state, body, names, rest, scopes, def_symbols, file);
+          }
+        }
+        HirPatKind::Object(obj) => {
+          for prop in obj.props.iter() {
+            bind_pat(state, body, names, prop.value, scopes, def_symbols, file);
+          }
+          if let Some(rest) = obj.rest {
+            bind_pat(state, body, names, rest, scopes, def_symbols, file);
+          }
+        }
+        HirPatKind::Rest(inner) => {
+          bind_pat(state, body, names, **inner, scopes, def_symbols, file);
+        }
+        HirPatKind::Assign { target, .. } => {
+          bind_pat(state, body, names, *target, scopes, def_symbols, file);
+        }
+        HirPatKind::AssignTarget(_) => {}
+      }
+    }
+
+    fn walk_expr(
+      state: &mut ProgramState,
+      lowered: &LowerResult,
+      body: &hir_js::Body,
+      names: &hir_js::NameInterner,
+      expr_id: hir_js::ExprId,
+      target: hir_js::ExprId,
+      target_span: TextRange,
+      scopes: &mut Vec<HashMap<String, semantic_js::SymbolId>>,
+      def_symbols: &mut HashMap<TextRange, semantic_js::SymbolId>,
+      file: FileId,
+    ) -> Option<semantic_js::SymbolId> {
+      let Some(expr) = body.exprs.get(expr_id.0 as usize) else {
+        return None;
+      };
+      if expr_id == target {
+        if let HirExprKind::Ident(name_id) = expr.kind {
+          if let Some(name) = names.resolve(name_id) {
+            if let Some(symbol) = lookup(scopes, name) {
+              let occs = state.symbol_occurrences.entry(file).or_default();
+              if !occs.iter().any(|occ| occ.range == target_span && occ.symbol == symbol) {
+                occs.push(SymbolOccurrence {
+                  range: target_span,
+                  symbol,
+                });
+              }
+              return Some(symbol);
+            }
+          }
+        }
+      }
+      match &expr.kind {
+        HirExprKind::Ident(_) | HirExprKind::This | HirExprKind::Super => None,
+        HirExprKind::Literal(_) => None,
+        HirExprKind::Unary { expr, .. } => walk_expr(
+          state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+        ),
+        HirExprKind::Update { expr, .. } => walk_expr(
+          state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+        ),
+        HirExprKind::Binary { left, right, .. } => {
+          walk_expr(
+            state, lowered, body, names, *left, target, target_span, scopes, def_symbols, file,
+          )
+          .or_else(|| {
+            walk_expr(
+              state, lowered, body, names, *right, target, target_span, scopes, def_symbols, file,
+            )
+          })
+        }
+        HirExprKind::Assignment { target: pat, value, .. } => {
+          bind_pat(state, body, names, *pat, scopes, def_symbols, file);
+          walk_expr(
+            state, lowered, body, names, *value, target, target_span, scopes, def_symbols, file,
+          )
+        }
+        HirExprKind::Call(call) => {
+          let mut found = walk_expr(
+            state,
+            lowered,
+            body,
+            names,
+            call.callee,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
+          );
+          if found.is_some() {
+            return found;
+          }
+          for arg in call.args.iter() {
+            found = walk_expr(
+              state,
+              lowered,
+              body,
+              names,
+              arg.expr,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
+            );
+            if found.is_some() {
+              return found;
+            }
+          }
+          found
+        }
+        HirExprKind::Member(member) => walk_expr(
+          state, lowered, body, names, member.object, target, target_span, scopes, def_symbols, file,
+        ),
+        HirExprKind::Conditional {
+          test,
+          consequent,
+          alternate,
+        } => {
+          walk_expr(
+            state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+          )
+          .or_else(|| {
+            walk_expr(
+              state, lowered, body, names, *consequent, target, target_span, scopes, def_symbols, file,
+            )
+          })
+          .or_else(|| {
+            walk_expr(
+              state, lowered, body, names, *alternate, target, target_span, scopes, def_symbols, file,
+            )
+          })
+        }
+        HirExprKind::Array(array) => {
+          for element in array.elements.iter() {
+            let expr = match element {
+              hir_js::ArrayElement::Expr(expr) | hir_js::ArrayElement::Spread(expr) => Some(*expr),
+              hir_js::ArrayElement::Empty => None,
+            };
+            if let Some(expr) = expr {
+              if let Some(found) = walk_expr(
+                state, lowered, body, names, expr, target, target_span, scopes, def_symbols, file,
+              ) {
+                return Some(found);
+              }
+            }
+          }
+          None
+        }
+        HirExprKind::Object(obj) => {
+          for prop in obj.properties.iter() {
+            match prop {
+              hir_js::ObjectProperty::KeyValue { value, .. } => {
+                if let Some(found) = walk_expr(
+                  state,
+                  lowered,
+                  body,
+                  names,
+                  *value,
+                  target,
+                  target_span,
+                  scopes,
+                  def_symbols,
+                  file,
+                ) {
+                  return Some(found);
+                }
+              }
+              hir_js::ObjectProperty::Spread(expr) => {
+                if let Some(found) = walk_expr(
+                  state,
+                  lowered,
+                  body,
+                  names,
+                  *expr,
+                  target,
+                  target_span,
+                  scopes,
+                  def_symbols,
+                  file,
+                ) {
+                  return Some(found);
+                }
+              }
+              hir_js::ObjectProperty::Getter { .. } | hir_js::ObjectProperty::Setter { .. } => {}
+            }
+          }
+          None
+        }
+        HirExprKind::Template(tmpl) => {
+          for span in tmpl.spans.iter() {
+            if let Some(found) = walk_expr(
+              state,
+              lowered,
+              body,
+              names,
+              span.expr,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
+            ) {
+              return Some(found);
+            }
+          }
+          None
+        }
+        HirExprKind::FunctionExpr { .. } | HirExprKind::ClassExpr { .. } => None,
+        _ => None,
+      }
+    }
+
+    fn walk_stmt(
+      state: &mut ProgramState,
+      lowered: &LowerResult,
+      body: &hir_js::Body,
+      names: &hir_js::NameInterner,
+      stmt_id: hir_js::StmtId,
+      target: hir_js::ExprId,
+      target_span: TextRange,
+      scopes: &mut Vec<HashMap<String, semantic_js::SymbolId>>,
+      def_symbols: &mut HashMap<TextRange, semantic_js::SymbolId>,
+      file: FileId,
+    ) -> Option<semantic_js::SymbolId> {
+      let Some(stmt) = body.stmts.get(stmt_id.0 as usize) else {
+        return None;
+      };
+      match &stmt.kind {
+        HirStmtKind::Expr(expr) => walk_expr(
+          state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+        ),
+        HirStmtKind::Return(expr) => expr.and_then(|e| {
+          walk_expr(
+            state, lowered, body, names, e, target, target_span, scopes, def_symbols, file,
+          )
+        }),
+        HirStmtKind::Block(stmts) => {
+          scopes.push(HashMap::new());
+          for stmt in stmts.iter() {
+            if let Some(found) = walk_stmt(
+              state,
+              lowered,
+              body,
+              names,
+              *stmt,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
+            ) {
+              scopes.pop();
+              return Some(found);
+            }
+          }
+          scopes.pop();
+          None
+        }
+        HirStmtKind::If {
+          test,
+          consequent,
+          alternate,
+        } => walk_expr(
+          state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+        )
+        .or_else(|| {
+          walk_stmt(
+            state,
+            lowered,
+            body,
+            names,
+            *consequent,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
+          )
+        })
+        .or_else(|| {
+          alternate.and_then(|alt| {
+            walk_stmt(
+              state,
+              lowered,
+              body,
+              names,
+              alt,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
+            )
+          })
+        }),
+        HirStmtKind::While { test, body: inner } => walk_expr(
+          state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+        )
+        .or_else(|| {
+          walk_stmt(
+            state,
+            lowered,
+            body,
+            names,
+            *inner,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
+          )
+        }),
+        HirStmtKind::DoWhile { body: inner, test } => walk_stmt(
+          state, lowered, body, names, *inner, target, target_span, scopes, def_symbols, file,
+        )
+        .or_else(|| {
+          walk_expr(
+            state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+          )
+        }),
+        HirStmtKind::For { init, test, update, body: inner } => {
+          if let Some(init) = init {
+            match init {
+              hir_js::ForInit::Expr(expr) => {
+                if let Some(found) = walk_expr(
+                  state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+                ) {
+                  return Some(found);
+                }
+              }
+              hir_js::ForInit::Var(var) => {
+                for decl in var.declarators.iter() {
+                  bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
+                  if let Some(init) = decl.init {
+                    if let Some(found) = walk_expr(
+                      state, lowered, body, names, init, target, target_span, scopes, def_symbols, file,
+                    ) {
+                      return Some(found);
+                    }
+                  }
+                }
+              }
+            }
+          }
+          if let Some(test) = test {
+            if let Some(found) = walk_expr(
+              state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+            ) {
+              return Some(found);
+            }
+          }
+          if let Some(update) = update {
+            if let Some(found) = walk_expr(
+              state, lowered, body, names, *update, target, target_span, scopes, def_symbols, file,
+            ) {
+              return Some(found);
+            }
+          }
+          walk_stmt(
+            state,
+            lowered,
+            body,
+            names,
+            *inner,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
+          )
+        }
+        HirStmtKind::ForIn {
+          left, right, body: inner, ..
+        } => {
+          match left {
+            hir_js::ForHead::Pat(pat) => bind_pat(state, body, names, *pat, scopes, def_symbols, file),
+            hir_js::ForHead::Var(var) => {
+              for decl in var.declarators.iter() {
+                bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
+              }
+            }
+          }
+          if let Some(found) = walk_expr(
+            state, lowered, body, names, *right, target, target_span, scopes, def_symbols, file,
+          ) {
+            return Some(found);
+          }
+          walk_stmt(
+            state,
+            lowered,
+            body,
+            names,
+            *inner,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
+          )
+        }
+        HirStmtKind::Switch { discriminant, cases } => {
+          if let Some(found) = walk_expr(
+            state, lowered, body, names, *discriminant, target, target_span, scopes, def_symbols, file,
+          ) {
+            return Some(found);
+          }
+          for case in cases.iter() {
+            if let Some(test) = case.test {
+              if let Some(found) = walk_expr(
+                state, lowered, body, names, test, target, target_span, scopes, def_symbols, file,
+              ) {
+                return Some(found);
+              }
+            }
+            for stmt in case.consequent.iter() {
+              if let Some(found) = walk_stmt(
+                state,
+                lowered,
+                body,
+                names,
+                *stmt,
+                target,
+                target_span,
+                scopes,
+                def_symbols,
+                file,
+              ) {
+                return Some(found);
+              }
+            }
+          }
+          None
+        }
+        HirStmtKind::Try { block, catch, finally_block } => {
+          if let Some(found) = walk_stmt(
+            state,
+            lowered,
+            body,
+            names,
+            *block,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
+          ) {
+            return Some(found);
+          }
+          if let Some(catch) = catch {
+            if let Some(param) = catch.param {
+              bind_pat(state, body, names, param, scopes, def_symbols, file);
+            }
+            if let Some(found) = walk_stmt(
+              state,
+              lowered,
+              body,
+              names,
+              catch.body,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
+            ) {
+              return Some(found);
+            }
+          }
+          if let Some(finally_block) = finally_block {
+            return walk_stmt(
+              state,
+              lowered,
+              body,
+              names,
+              *finally_block,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
+            );
+          }
+          None
+        }
+        HirStmtKind::Throw(expr) => walk_expr(
+          state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+        ),
+        HirStmtKind::Var(var) => {
+          for decl in var.declarators.iter() {
+            bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
+            if let Some(init) = decl.init {
+              if let Some(found) = walk_expr(
+                state, lowered, body, names, init, target, target_span, scopes, def_symbols, file,
+              ) {
+                return Some(found);
+              }
+            }
+          }
+          None
+        }
+        HirStmtKind::Labeled { body: inner, .. } => walk_stmt(
+          state, lowered, body, names, *inner, target, target_span, scopes, def_symbols, file,
+        ),
+        HirStmtKind::With { object, body: inner } => {
+          walk_expr(
+            state, lowered, body, names, *object, target, target_span, scopes, def_symbols, file,
+          )
+          .or_else(|| {
+            walk_stmt(
+              state,
+              lowered,
+              body,
+              names,
+              *inner,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
+            )
+          })
+        }
+        HirStmtKind::Decl(def_id) => {
+          if let Some(def) = lowered.def(*def_id) {
+            if let Some(name) = names.resolve(def.name) {
+              let symbol = def_symbols
+                .get(&def.span)
+                .copied()
+                .or_else(|| {
+                  state
+                    .symbol_occurrences
+                    .get(&file)
+                    .and_then(|occs| {
+                      occs
+                        .iter()
+                        .find(|occ| occ.range == def.span)
+                        .map(|occ| occ.symbol)
+                    })
+                })
+                .unwrap_or_else(|| state.alloc_symbol());
+              if let Some(scope) = scopes.last_mut() {
+                scope.insert(name.to_string(), symbol);
+              }
+              def_symbols.insert(def.span, symbol);
+              state.record_symbol(file, def.span, symbol);
+            }
+          }
+          None
+        }
+        HirStmtKind::Empty | HirStmtKind::Break(_) | HirStmtKind::Continue(_) => None,
+      }
+    }
+
+    fn walk_body(
+      state: &mut ProgramState,
+      lowered: &LowerResult,
+      body_id: hir_js::BodyId,
+      target: hir_js::ExprId,
+      target_span: TextRange,
+      scopes: &mut Vec<HashMap<String, semantic_js::SymbolId>>,
+      def_symbols: &mut HashMap<TextRange, semantic_js::SymbolId>,
+      file: FileId,
+    ) -> Option<semantic_js::SymbolId> {
+      let Some(body) = lowered.body(body_id) else {
+        return None;
+      };
+      let names = lowered.names.as_ref();
+      if matches!(body.kind, HirBodyKind::Function) {
+        if let Some(func) = body.function.as_ref() {
+          for param in func.params.iter() {
+            bind_pat(
+              state,
+              body,
+              names,
+              param.pat,
+              scopes,
+              def_symbols,
+              file,
+            );
+          }
+        }
+      }
+      let stmts_to_visit: Vec<hir_js::StmtId> = if body.root_stmts.is_empty() {
+        let mut referenced: HashSet<hir_js::StmtId> = HashSet::new();
+        for stmt in body.stmts.iter() {
+          match &stmt.kind {
+            HirStmtKind::Block(stmts) => referenced.extend(stmts.iter().copied()),
+            HirStmtKind::If {
+              consequent, alternate, ..
+            } => {
+              referenced.insert(*consequent);
+              if let Some(alt) = alternate {
+                referenced.insert(*alt);
+              }
+            }
+            HirStmtKind::While { body, .. }
+            | HirStmtKind::DoWhile { body, .. }
+            | HirStmtKind::For { body, .. }
+            | HirStmtKind::Labeled { body, .. }
+            | HirStmtKind::With { body, .. } => {
+              referenced.insert(*body);
+            }
+            HirStmtKind::ForIn { body, .. } => {
+              referenced.insert(*body);
+            }
+            HirStmtKind::Switch { cases, .. } => {
+              for case in cases.iter() {
+                referenced.extend(case.consequent.iter().copied());
+              }
+            }
+            HirStmtKind::Try {
+              block,
+              catch,
+              finally_block,
+            } => {
+              referenced.insert(*block);
+              if let Some(catch) = catch {
+                referenced.insert(catch.body);
+              }
+              if let Some(finally_block) = finally_block {
+                referenced.insert(*finally_block);
+              }
+            }
+            _ => {}
+          }
+        }
+        let mut roots: Vec<_> = (0..body.stmts.len())
+          .map(|idx| hir_js::StmtId(idx as u32))
+          .filter(|id| !referenced.contains(id))
+          .collect();
+        roots.sort_by_key(|id| {
+          body
+            .stmts
+            .get(id.0 as usize)
+            .map(|s| s.span.start)
+            .unwrap_or(0)
+        });
+        roots
+      } else {
+        body.root_stmts.clone()
+      };
+      for stmt in stmts_to_visit.iter() {
+        if let Some(found) = walk_stmt(
+          state,
+          lowered,
+          body,
+          names,
+          *stmt,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
+        ) {
+          return Some(found);
+        }
+      }
+      walk_expr(
+        state,
+        lowered,
+        body,
+        names,
+        target,
+        target,
+        target_span,
+        scopes,
+        def_symbols,
+        file,
+      )
+    }
+
+    let mut scopes = vec![initial_scope];
+    walk_body(
+      self,
+      lowered,
+      body_id,
+      target_expr,
+      target_span,
+      &mut scopes,
+      &mut def_symbols,
+      file,
+    )
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
@@ -5535,63 +6470,44 @@ impl ProgramState {
   }
 
   fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
-    let mut best_containing: Option<(bool, u32, u32, BodyId, ExprId)> = None;
-    let mut best_empty: Option<(bool, u32, u32, BodyId, ExprId)> = None;
-    let mut best_nearby: Option<(u32, bool, u32, BodyId, ExprId)> = None;
+    fn body_priority(kind: HirBodyKind) -> u32 {
+      match kind {
+        HirBodyKind::Function | HirBodyKind::Class => 0,
+        HirBodyKind::TopLevel => 1,
+        HirBodyKind::Initializer => 2,
+        HirBodyKind::Unknown => 3,
+      }
+    }
 
-    let update_best =
-      |body: BodyId,
-       expr: ExprId,
-       span: TextRange,
-       best_containing: &mut Option<(bool, u32, u32, BodyId, ExprId)>,
-       best_empty: &mut Option<(bool, u32, u32, BodyId, ExprId)>,
-       best_nearby: &mut Option<(u32, bool, u32, BodyId, ExprId)>| {
-        let len = span.len();
-        let empty = span.start == span.end;
-        let key = (empty, len, span.start, body, expr);
-        let mut contains_start = span.start;
-        let mut contains_end = span.end;
-        if contains_start == contains_end {
-          if contains_start > 0 {
-            contains_start -= 1;
-          }
-          contains_end = contains_end.saturating_add(1);
+    let mut best_containing: Option<(u32, u32, u32, BodyId, ExprId)> = None;
+    let mut best_empty: Option<(u32, u32, u32, BodyId, ExprId)> = None;
+
+    let update_best = |body: BodyId,
+                       kind: HirBodyKind,
+                       expr: ExprId,
+                       span: TextRange,
+                       best_containing: &mut Option<(u32, u32, u32, BodyId, ExprId)>,
+                       best_empty: &mut Option<(u32, u32, u32, BodyId, ExprId)>| {
+      let len = span.len();
+      let priority = body_priority(kind);
+      let key = (priority, len, span.start, body, expr);
+      if span.start <= offset && offset < span.end {
+        let replace = best_containing.map(|best| key < best).unwrap_or(true);
+        if replace {
+          *best_containing = Some(key);
         }
-        if contains_start <= offset && offset < contains_end {
-          let replace = best_containing.map(|best| key < best).unwrap_or(true);
-          if replace {
-            *best_containing = Some(key);
-          }
-        } else if span.start == span.end && offset == span.start {
-          let replace = best_empty.map(|best| key < best).unwrap_or(true);
-          if replace {
-            *best_empty = Some(key);
-          }
-        } else {
-          let distance = if offset < contains_start {
-            contains_start - offset
-          } else {
-            offset.saturating_sub(contains_end)
-          };
-          let near_key = (distance, span.start == span.end, span.start, body, expr);
-          let replace = best_nearby.map(|best| near_key < best).unwrap_or(true);
-          if replace {
-            *best_nearby = Some(near_key);
-          }
+      } else if span.start == span.end && offset == span.start {
+        let replace = best_empty.map(|best| key < best).unwrap_or(true);
+        if replace {
+          *best_empty = Some(key);
         }
-      };
+      }
+    };
 
     for (body_id, meta) in self.body_map.iter().filter(|(_, meta)| meta.file == file) {
       if let Some(result) = self.body_results.get(body_id) {
         for (idx, span) in result.expr_spans().iter().enumerate() {
-          update_best(
-            *body_id,
-            ExprId(idx as u32),
-            *span,
-            &mut best_containing,
-            &mut best_empty,
-            &mut best_nearby,
-          );
+          update_best(*body_id, meta.kind, ExprId(idx as u32), *span, &mut best_containing, &mut best_empty);
         }
         continue;
       }
@@ -5602,11 +6518,11 @@ impl ProgramState {
             for (idx, expr) in body.exprs.iter().enumerate() {
               update_best(
                 *body_id,
+                meta.kind,
                 ExprId(idx as u32),
                 expr.span,
                 &mut best_containing,
                 &mut best_empty,
-                &mut best_nearby,
               );
             }
           }
@@ -5616,16 +6532,7 @@ impl ProgramState {
 
     best_containing
       .or(best_empty)
-      .or(best_nearby.map(|(_, _, _, body, expr)| (false, 0, 0, body, expr)))
       .map(|(_, _, _, body, expr)| (body, expr))
-  }
-
-  fn hir_expr_kind(&self, body: BodyId, expr: ExprId) -> Option<HirExprKind> {
-    let meta = self.body_map.get(&body)?;
-    let hir_id = meta.hir?;
-    let lowered = self.hir_lowered.get(&meta.file)?;
-    let hir_body = lowered.body(hir_id)?;
-    hir_body.exprs.get(expr.0 as usize).map(|e| e.kind.clone())
   }
 
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {
@@ -5639,11 +6546,6 @@ impl ProgramState {
   }
 
   fn owner_of_body(&self, body: BodyId) -> Option<DefId> {
-    if let Some(meta) = self.body_map.get(&body) {
-      if let Some(owner) = meta.owner {
-        return Some(owner);
-      }
-    }
     for (def_id, data) in self.def_data.iter() {
       match &data.kind {
         DefKind::Function(func) if func.body == Some(body) => return Some(*def_id),
@@ -5654,29 +6556,7 @@ impl ProgramState {
     None
   }
 
-  fn hir_body_range(body: &hir_js::Body) -> Option<TextRange> {
-    let mut start = u32::MAX;
-    let mut end = 0;
-    for stmt in body.stmts.iter() {
-      start = start.min(stmt.span.start);
-      end = end.max(stmt.span.end);
-    }
-    for expr in body.exprs.iter() {
-      start = start.min(expr.span.start);
-      end = end.max(expr.span.end);
-    }
-    for pat in body.pats.iter() {
-      start = start.min(pat.span.start);
-      end = end.max(pat.span.end);
-    }
-    if start == u32::MAX {
-      None
-    } else {
-      Some(TextRange::new(start, end))
-    }
-  }
-
-  fn object_type_from_members(&mut self, file: FileId, members: &[Node<TypeMember>]) -> ObjectType {
+  fn object_type_from_members(&mut self, members: &[Node<TypeMember>]) -> ObjectType {
     let mut object = ObjectType::empty();
     for member in members.iter() {
       match member.stx.as_ref() {
@@ -5686,7 +6566,7 @@ impl ProgramState {
               .stx
               .type_annotation
               .as_ref()
-              .map(|t| self.type_from_type_expr(file, t))
+              .map(|t| self.type_from_type_expr(t))
               .unwrap_or(self.builtin.unknown);
             object.props.insert(
               name,
@@ -5704,17 +6584,13 @@ impl ProgramState {
               .stx
               .parameters
               .iter()
-              .map(|p| FunctionParam {
-                ty: self.type_from_type_expr(file, &p.stx.type_expr),
-                optional: p.stx.optional,
-                rest: p.stx.rest,
-              })
+              .map(|p| self.type_from_type_expr(&p.stx.type_expr))
               .collect();
             let ret = method
               .stx
               .return_type
               .as_ref()
-              .map(|t| self.type_from_type_expr(file, t))
+              .map(|t| self.type_from_type_expr(t))
               .unwrap_or(self.builtin.unknown);
             let func_ty = self.type_store.function(params, ret);
             object.props.insert(
@@ -5728,8 +6604,8 @@ impl ProgramState {
           }
         }
         TypeMember::IndexSignature(index) => {
-          let value = self.type_from_type_expr(file, &index.stx.type_annotation);
-          let param_type = self.type_from_type_expr(file, &index.stx.parameter_type);
+          let value = self.type_from_type_expr(&index.stx.type_annotation);
+          let param_type = self.type_from_type_expr(&index.stx.parameter_type);
           let param_kind = self.type_store.kind(param_type).clone();
           match param_kind {
             TypeKind::Number => object.number_index = Some(value),
@@ -5770,207 +6646,32 @@ impl ProgramState {
     base
   }
 
-  fn literal_type_from_expr(&mut self, expr: &Node<Expr>) -> Option<TypeId> {
+  fn type_from_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeId {
     match expr.stx.as_ref() {
-      Expr::LitBool(node) => Some(self.type_store.literal_boolean(node.stx.value)),
-      Expr::LitNum(node) => Some(self.type_store.literal_number(node.stx.value.to_string())),
-      Expr::LitStr(node) => Some(self.type_store.literal_string(node.stx.value.clone())),
-      Expr::LitNull(_) => Some(self.builtin.null),
-      Expr::LitTemplate(node)
-        if node
-          .stx
-          .parts
-          .iter()
-          .all(|part| matches!(part, parse_js::ast::expr::lit::LitTemplatePart::String(_))) =>
-      {
-        let mut full = String::new();
-        for part in node.stx.parts.iter() {
-          if let parse_js::ast::expr::lit::LitTemplatePart::String(s) = part {
-            full.push_str(s);
-          }
-        }
-        Some(self.type_store.literal_string(full))
-      }
-      _ => None,
-    }
-  }
-
-  fn fallback_expr_type(&mut self, body: BodyId, expr: hir_js::ExprId) -> Option<TypeId> {
-    let (file, hir_id) = {
-      let meta = self.body_map.get(&body)?;
-      (meta.file, meta.hir?)
-    };
-    let lowered = self.hir_lowered.get(&file)?;
-    let hir_body = lowered.body(hir_id)?;
-    let expr_kind = hir_body.exprs.get(expr.0 as usize)?.kind.clone();
-    let names = lowered.names.clone();
-    let _ = hir_body;
-    let _ = lowered;
-    match expr_kind {
-      hir_js::ExprKind::Literal(lit) => match lit {
-        hir_js::Literal::Number(n) => Some(self.type_store.literal_number(n)),
-        hir_js::Literal::String(s) => Some(self.type_store.literal_string(s)),
-        hir_js::Literal::Boolean(b) => Some(self.type_store.literal_boolean(b)),
-        hir_js::Literal::Null => Some(self.builtin.null),
-        hir_js::Literal::Undefined => Some(self.builtin.undefined),
-        hir_js::Literal::BigInt(n) => Some(self.type_store.literal_number(n)),
-        hir_js::Literal::Regex(_) => None,
-      },
-      hir_js::ExprKind::Ident(name_id) => {
-        let name = names.resolve(name_id)?.to_string();
-        let def_id = self
-          .canonical_defs
-          .get(&(file, name.clone()))
-          .copied()
-          .or_else(|| {
-            self.def_data.iter().find_map(|(id, data)| {
-              if data.file == file && data.name == name {
-                Some(*id)
-              } else {
-                None
+      TypeExpr::TypeReference(reference) => {
+        if let Some(file) = self.current_file {
+          let span = loc_to_span(file, reference.loc).range;
+          if let TypeEntityName::Identifier(type_name) = &reference.stx.name {
+            if let Some(binding) = self
+              .files
+              .get(&file)
+              .and_then(|f| f.bindings.get(type_name))
+            {
+              let symbol = binding.symbol;
+              let ty_id = binding.type_id;
+              let def = binding.def;
+              self.record_symbol(file, span, symbol);
+              if let Some(ty) = ty_id {
+                return ty;
               }
-            })
-          });
-        def_id.map(|def| self.type_of_def(def))
-      }
-      hir_js::ExprKind::Member(member) => {
-        let prop_name = match member.property {
-          hir_js::ObjectKey::String(ref name) => Some(name.as_str()),
-          hir_js::ObjectKey::Number(ref n) => Some(n.as_str()),
-          hir_js::ObjectKey::Ident(id) => names.resolve(id).map(|s| s.as_ref()),
-          _ => None,
-        }?;
-        let object_ty = self.fallback_expr_type(body, member.object)?;
-        let mut seen = HashSet::new();
-        let resolved = self.resolve_ref_type(object_ty, &mut seen);
-        lookup_property_type(&mut self.type_store, resolved, prop_name, &self.builtin)
-      }
-      _ => None,
-    }
-  }
-
-  fn resolve_type_reference(&mut self, file: FileId, name: &TypeEntityName) -> Option<DefId> {
-    match name {
-      TypeEntityName::Identifier(name) => {
-        let resolved = self
-          .canonical_defs
-          .get(&(file, name.clone()))
-          .copied()
-          .or_else(|| {
-            self.def_data.iter().find_map(|(id, data)| {
-              if data.file == file && data.name == *name {
-                Some(*id)
-              } else {
-                None
-              }
-            })
-          });
-        let Some(def) = resolved else { return None };
-        if let Some(import) = self.def_data.get(&def).and_then(|d| match &d.kind {
-          DefKind::Import(import) => Some(import.clone()),
-          _ => None,
-        }) {
-          if import.original != "*" {
-            if let Some(entry) = self.exports_of_file(import.from).get(&import.original) {
-              if let Some(target) = entry.def {
-                return Some(target);
+              if let Some(def) = def {
+                return self.type_of_def(def);
               }
             }
           }
         }
-        Some(def)
+        self.builtin.unknown
       }
-      TypeEntityName::Qualified(qual) => {
-        if let TypeEntityName::Import(import) = &qual.left {
-          if let Some(target) = self.resolve_import_type_module(file, import) {
-            if let Some(entry) = self.exports_of_file(target).get(&qual.right) {
-              if let Some(def) = entry.def {
-                return Some(def);
-              }
-            }
-          }
-          return None;
-        }
-        if let Some(base) = self.resolve_type_reference(file, &qual.left) {
-          if let Some(data) = self.def_data.get(&base).cloned() {
-            match data.kind {
-              DefKind::Import(import) => {
-                let exports = self.exports_of_file(import.from);
-                if let Some(entry) = exports.get(&qual.right) {
-                  if let Some(def) = entry.def {
-                    return Some(def);
-                  }
-                }
-              }
-              DefKind::Var(var) => {
-                let ns_ty = self.namespace_types.get(&base).copied().or(var.typ);
-                if let Some(ns_ty) = ns_ty {
-                  if let Some(prop_ty) =
-                    lookup_property_type(&mut self.type_store, ns_ty, &qual.right, &self.builtin)
-                  {
-                    if let TypeKind::Ref { def } = self.type_store.kind(prop_ty) {
-                      return Some(*def);
-                    }
-                  }
-                }
-              }
-              _ => {}
-            }
-          }
-        }
-        self.resolve_type_reference(file, &TypeEntityName::Identifier(qual.right.clone()))
-      }
-      TypeEntityName::Import(import) => {
-        if let Some(target) = self.resolve_import_type_module(file, import) {
-          if let Some(entry) = self.exports_of_file(target).get("default") {
-            if let Some(def) = entry.def {
-              return Some(def);
-            }
-          }
-        }
-        None
-      }
-    }
-  }
-
-  fn resolve_import_type_module(&self, file: FileId, import: &Node<ImportExpr>) -> Option<FileId> {
-    let specifier = match import.stx.module.stx.as_ref() {
-      Expr::LitStr(lit) => Some(lit.stx.value.clone()),
-      _ => None,
-    }?;
-    self.resolve_known_file(file, &specifier)
-  }
-
-  fn lower_type_alias_expr(&mut self, file: FileId, span: TextRange) -> Option<TypeId> {
-    let ast = self.asts.get(&file)?.clone();
-    for stmt in ast.stx.body.iter() {
-      if let Stmt::TypeAliasDecl(alias) = stmt.stx.as_ref() {
-        if loc_to_span(file, alias.stx.type_expr.loc).range == span {
-          return Some(self.type_from_type_expr(file, &alias.stx.type_expr));
-        }
-      }
-    }
-    None
-  }
-
-  fn resolve_ref_type(&mut self, ty: TypeId, seen: &mut HashSet<DefId>) -> TypeId {
-    let mut current = ty;
-    loop {
-      match self.type_store.kind(current).clone() {
-        TypeKind::Ref { def } => {
-          if !seen.insert(def) {
-            break;
-          }
-          current = self.type_of_def(def);
-        }
-        _ => break,
-      }
-    }
-    current
-  }
-
-  fn type_from_type_expr(&mut self, file: FileId, expr: &Node<TypeExpr>) -> TypeId {
-    match expr.stx.as_ref() {
       TypeExpr::Object(_) => self.builtin.object,
       TypeExpr::Number(_) => self.builtin.number,
       TypeExpr::String(_) => self.builtin.string,
@@ -5981,52 +6682,24 @@ impl ProgramState {
       TypeExpr::Undefined(_) => self.builtin.undefined,
       TypeExpr::Void(_) => self.builtin.void,
       TypeExpr::Never(_) => self.builtin.never,
-      TypeExpr::IntersectionType(intersection) => {
-        let TypeIntersection { types } = intersection.stx.as_ref();
-        let members = types
-          .iter()
-          .map(|t| self.type_from_type_expr(file, t))
-          .collect();
-        self.type_store.intersection(members, &self.builtin)
-      }
-      TypeExpr::ImportType(import) => {
-        if let Some(target) = self.resolve_known_file(file, &import.stx.module_specifier) {
-          if let Some(qualifier) = import.stx.qualifier.as_ref() {
-            if let Some(def) = self.resolve_type_reference(target, qualifier) {
-              return self.type_store.reference(def);
-            }
-          }
-        }
-        self.builtin.unknown
-      }
-      TypeExpr::TypeReference(reference) => {
-        if let Some(def) = self.resolve_type_reference(file, &reference.stx.name) {
-          if let Some(data) = self.def_data.get(&def) {
-            self.record_symbol(file, loc_to_span(file, expr.loc).range, data.symbol);
-          }
-          return self.type_store.reference(def);
-        }
-        self.builtin.unknown
-      }
       TypeExpr::UnionType(union) => {
         let TypeUnion { types } = union.stx.as_ref();
-        let members = types
-          .iter()
-          .map(|t| self.type_from_type_expr(file, t))
-          .collect();
+        let members = types.iter().map(|t| self.type_from_type_expr(t)).collect();
         self.type_store.union(members, &self.builtin)
       }
       TypeExpr::TupleType(tuple) => {
-        let TypeTuple { readonly, elements } = tuple.stx.as_ref();
-        let elems: Vec<_> = elements
+        let readonly = tuple.stx.readonly;
+        let elements = tuple
+          .stx
+          .elements
           .iter()
-          .map(|elem| self.type_from_type_expr(file, &elem.stx.type_expr))
+          .map(|elem| self.type_from_type_expr(&elem.stx.type_expr))
           .collect();
-        self.type_store.tuple(elems, *readonly)
+        self.type_store.tuple(elements, readonly)
       }
       TypeExpr::ArrayType(arr) => {
         let TypeArray { element_type, .. } = arr.stx.as_ref();
-        let elem = self.type_from_type_expr(file, element_type);
+        let elem = self.type_from_type_expr(element_type);
         self.type_store.array(elem)
       }
       TypeExpr::FunctionType(func) => {
@@ -6034,13 +6707,9 @@ impl ProgramState {
           .stx
           .parameters
           .iter()
-          .map(|p| FunctionParam {
-            ty: self.type_from_type_expr(file, &p.stx.type_expr),
-            optional: p.stx.optional,
-            rest: p.stx.rest,
-          })
+          .map(|p| self.type_from_type_expr(&p.stx.type_expr))
           .collect();
-        let ret = self.type_from_type_expr(file, &func.stx.return_type);
+        let ret = self.type_from_type_expr(&func.stx.return_type);
         self.type_store.function(params, ret)
       }
       TypeExpr::ConstructorType(cons) => {
@@ -6048,20 +6717,16 @@ impl ProgramState {
           .stx
           .parameters
           .iter()
-          .map(|p| FunctionParam {
-            ty: self.type_from_type_expr(file, &p.stx.type_expr),
-            optional: p.stx.optional,
-            rest: p.stx.rest,
-          })
+          .map(|p| self.type_from_type_expr(&p.stx.type_expr))
           .collect();
-        let ret = self.type_from_type_expr(file, &cons.stx.return_type);
+        let ret = self.type_from_type_expr(&cons.stx.return_type);
         self.type_store.function(params, ret)
       }
       TypeExpr::ObjectType(obj) => {
-        let object = self.object_type_from_members(file, &obj.stx.members);
+        let object = self.object_type_from_members(&obj.stx.members);
         self.type_store.object(object)
       }
-      TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(file, &inner.stx.type_expr),
+      TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(&inner.stx.type_expr),
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {
         TypeLiteral::Boolean(value) => self.type_store.literal_boolean(*value),
         TypeLiteral::Number(n) => self.type_store.literal_number(n.clone()),
@@ -6074,7 +6739,7 @@ impl ProgramState {
           .stx
           .type_annotation
           .as_ref()
-          .map(|t| self.type_from_type_expr(file, t));
+          .map(|t| self.type_from_type_expr(t));
         self
           .type_store
           .predicate(pred.stx.parameter_name.clone(), asserted, pred.stx.asserts)
@@ -6110,6 +6775,12 @@ impl ProgramState {
 
 fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
   let resolve_name = |name| lowered.names.resolve(name).unwrap_or_default().to_string();
+  let namespace_spans: Vec<TextRange> = lowered
+    .defs
+    .iter()
+    .filter(|d| matches!(d.path.kind, HirDefKind::Namespace | HirDefKind::Module))
+    .map(|d| d.span)
+    .collect();
   let mut decls = Vec::new();
   for def_id in lowered.hir.items.iter() {
     let Some(idx) = lowered.def_index.get(def_id) else {
@@ -6153,6 +6824,11 @@ fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
     .hir
     .exports
     .iter()
+    .filter(|export| {
+      !namespace_spans
+        .iter()
+        .any(|span| export.span.start >= span.start && export.span.end <= span.end)
+    })
     .filter_map(|export| map_export_from_lower(export, lowered, &resolve_name))
     .collect();
   let module_kind = if imports.is_empty()

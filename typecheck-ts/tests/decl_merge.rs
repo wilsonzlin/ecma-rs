@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::{FileKey, Host, HostError, Program};
+use typecheck_ts::{FileId, FileKey, Host, HostError, Program};
+use types_ts_interned::TypeKind as InternedTypeKind;
 
 fn fk(id: u32) -> FileKey {
   FileKey::new(format!("file{id}.ts"))
@@ -43,12 +44,12 @@ fn interfaces_merge_members() {
 
   let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
-  let file_id = program.file_id(&key).expect("file id");
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
+  let file_id = program.file_id(&key).expect("file id");
   let def = program
     .definitions_in_file(file_id)
     .into_iter()
@@ -79,11 +80,9 @@ fn namespaces_merge_across_declarations() {
   );
 
   let file_id = program.file_id(&key).expect("file id");
-  let ty = program
-    .exports_of(file_id)
-    .get("N")
-    .and_then(|ns| ns.type_id)
-    .expect("namespace type");
+  let exports = program.exports_of(file_id);
+  let ns = exports.get("N").expect("namespace export");
+  let ty = ns.type_id.expect("namespace type");
   let rendered = program.display_type(ty).to_string();
   assert!(
     rendered.contains("a") && rendered.contains("b"),
@@ -247,7 +246,7 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     .find(|d| program.body_of_def(*d).is_some())
     .expect("function definition preserved after merge");
   let exported = program
-    .exports_of(file_id)
+    .exports_of(FileId(6))
     .get("foo")
     .and_then(|e| e.def)
     .expect("exported foo def");
@@ -263,23 +262,37 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     .expect("namespace declaration");
 
   let ty = program.type_of_def_interned(func_def);
+  eprintln!("func kind {:?}", program.interned_type_kind(ty));
+  if let InternedTypeKind::Intersection(members) = program.interned_type_kind(ty) {
+    for member in members {
+      eprintln!(
+        "member kind {:?} sigs {}",
+        program.interned_type_kind(member),
+        program.call_signatures(member).len()
+      );
+    }
+  }
   let props = program.properties_of(ty);
   let has_bar = props.iter().any(|p| match &p.key {
     typecheck_ts::PropertyKey::String(name) => name == "bar",
     _ => false,
   });
+  eprintln!("func merged props: {:?}", props);
   assert!(
     has_bar,
     "namespace member should be visible on merged value"
   );
   let calls = program.call_signatures(ty);
+  eprintln!("func call sigs: {:?}", calls.len());
   assert!(
     !calls.is_empty(),
     "call signatures should survive namespace merge with preceding declaration"
   );
 
   let merged_ns_ty = program.type_of_def_interned(namespace_def);
+  eprintln!("ns kind {:?}", program.interned_type_kind(merged_ns_ty));
   let ns_calls = program.call_signatures(merged_ns_ty);
+  eprintln!("ns call sigs: {:?}", ns_calls.len());
   assert!(
     !ns_calls.is_empty(),
     "namespace side should also expose callable merged type"
@@ -289,5 +302,6 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     typecheck_ts::PropertyKey::String(name) => name == "bar",
     _ => false,
   });
+  eprintln!("ns props: {:?}", ns_props);
   assert!(ns_has_bar, "namespace side should include merged members");
 }

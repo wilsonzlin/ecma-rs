@@ -600,6 +600,10 @@ impl TsProgramSemantics {
       .expect("exports available for file")
   }
 
+  pub fn exports_of_opt(&self, file: FileId) -> Option<&ExportMap> {
+    self.module_exports.get(&file)
+  }
+
   pub fn symbols(&self) -> &SymbolTable {
     &self.symbols
   }

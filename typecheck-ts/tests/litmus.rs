@@ -149,7 +149,163 @@ fn run_fixture(path: &Path) {
     .collect();
   let mut program = Program::new(host.clone(), roots);
   let diagnostics = program.check();
-
+  if !diagnostics.is_empty() && !path.ends_with("as_const") && !path.ends_with("argument_count_error")
+  {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+  }
+  if path.ends_with("argument_count_error") {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+  }
+  if path.ends_with("as_const") {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+    let snap = program.snapshot();
+    println!("DEBUG as_const def_types {:?}", snap.def_types);
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        if name == "tuple" || name == "nested" || name == "readonlyTuple" {
+          println!("DEBUG {} => {}", name, program.display_type(*ty));
+        }
+      }
+    }
+    for entry in snap.def_data.iter() {
+      if entry.data.name == "readonlyTuple" {
+        println!("DEBUG readonlyTuple def_data {:?}", entry.data);
+      }
+    }
+    let main = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main) {
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("DEBUG as_const exprs");
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          let desc = res
+            .expr_type(ExprId(idx as u32))
+            .map(|ty| program.display_type(ty).to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+          println!("  {}: {:?} -> {}", idx, span, desc);
+        }
+      }
+    }
+  }
+  if path.ends_with("function_return_inference") {
+    let snap = program.snapshot();
+    println!("DEBUG function_return_inference def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    println!("DEBUG function_return_inference def data:");
+    for entry in snap.def_data.iter() {
+      println!("  def {:?} name {} kind {:?}", entry.def, entry.data.name, entry.data.kind);
+    }
+  }
+  if path.ends_with("imports_exports") {
+    let snap = program.snapshot();
+    println!("DEBUG imports_exports def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    println!("DEBUG imports_exports def data:");
+    for entry in snap.def_data.iter() {
+      println!("  def {:?} name {} kind {:?}", entry.def, entry.data.name, entry.data.kind);
+    }
+    let main_key = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main_key) {
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("DEBUG imports_exports body exprs:");
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          let ty = res
+            .expr_type(ExprId(idx as u32))
+            .map(|t| program.display_type(t).to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+          println!("  expr {} span {:?} ty {}", idx, span, ty);
+        }
+      }
+    }
+  }
+  if path.ends_with("literal_widening") {
+    let snap = program.snapshot();
+    println!("DEBUG literal_widening def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    println!("DEBUG literal_widening def data:");
+    for entry in snap.def_data.iter() {
+      println!("  def {:?} name {} kind {:?}", entry.def, entry.data.name, entry.data.kind);
+    }
+  }
+  if path.ends_with("mapped_type_annotation") {
+    let snap = program.snapshot();
+    println!("DEBUG mapped_type_annotation def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    println!("DEBUG mapped_type_annotation def data:");
+    for entry in snap.def_data.iter() {
+      println!("  def {:?} name {} kind {:?}", entry.def, entry.data.name, entry.data.kind);
+    }
+  }
+  if path.ends_with("narrowing_patterns") {
+    let snap = program.snapshot();
+    if let Some(err) = snap.def_data.iter().find(|d| d.data.name == "Error") {
+      let ty = snap
+        .def_types
+        .iter()
+        .find(|(id, _)| *id == err.def)
+        .map(|(_, ty)| *ty);
+      let rendered = ty
+        .map(|ty| program.display_type(ty).to_string())
+        .unwrap_or_else(|| "<none>".to_string());
+      println!("DEBUG narrowing_patterns Error def {:?} ty {}", err.def, rendered);
+    } else {
+      println!("DEBUG narrowing_patterns missing Error def");
+    }
+    let main = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main) {
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("DEBUG narrowing_patterns exprs:");
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          let ty = res
+            .expr_type(ExprId(idx as u32))
+            .map(|t| program.display_type(t).to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+          println!("  {}: {:?} -> {}", idx, span, ty);
+        }
+      }
+      for def in program.definitions_in_file(file) {
+        if let Some(body) = program.body_of_def(def) {
+          let name = program.def_name(def).unwrap_or_else(|| "<anon>".to_string());
+          let res = program.check_body(body);
+          println!("DEBUG narrowing_patterns def {} exprs:", name);
+          for (idx, span) in res.expr_spans().iter().enumerate() {
+            let ty = res
+              .expr_type(ExprId(idx as u32))
+              .map(|t| program.display_type(t).to_string())
+              .unwrap_or_else(|| "<none>".to_string());
+            println!("  {}: {:?} -> {}", idx, span, ty);
+          }
+        }
+      }
+    }
+  }
+  if path.ends_with("satisfies") {
+    let snap = program.snapshot();
+    println!("DEBUG satisfies def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+  }
   assert_diagnostics(&program, &host, &fixture.expectations, &diagnostics);
   assert_def_types(&mut program, &host, &fixture.expectations);
   assert_expr_types(&mut program, &host, &fixture.expectations);
@@ -348,10 +504,6 @@ fn assert_expr_types(
       )
     });
     let rendered = program.display_type(ty).to_string();
-    println!(
-      "expr `{}` at offset {} rendered {} (expected {})",
-      expect.snippet, offset, rendered, expect.ty
-    );
     assert_eq!(
       rendered, expect.ty,
       "expected expr `{}` in {} to be {}, got {}",
@@ -477,7 +629,6 @@ fn assert_diagnostics(
     }
   }
   if !remaining.is_empty() {
-    println!("diagnostics: {:?}", diagnostics);
     panic!("unexpected diagnostics left: {:?}", remaining);
   }
 }

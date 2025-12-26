@@ -78,7 +78,7 @@ impl ArityInfo {
   }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum CandidateRejection {
   Arity {
     min: usize,
@@ -97,7 +97,7 @@ enum CandidateRejection {
   },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct CandidateOutcome {
   sig_id: SignatureId,
   display: String,
@@ -241,9 +241,28 @@ pub fn resolve_overloads(
   let mut applicable: Vec<&CandidateOutcome> =
     outcomes.iter().filter(|c| c.rejection.is_none()).collect();
   if applicable.is_empty() {
+    let mut fallback = outcomes.clone();
     let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes);
+    fallback.sort_by(|a, b| {
+      (
+        a.specificity,
+        a.unknown_inferred,
+        a.instantiated_sig.params.len(),
+        a.sig_id,
+      )
+        .cmp(&(
+          b.specificity,
+          b.unknown_inferred,
+          b.instantiated_sig.params.len(),
+          b.sig_id,
+        ))
+    });
+    let ret = fallback
+      .first()
+      .map(|best| best.instantiated_sig.ret)
+      .unwrap_or(primitives.unknown);
     return CallResolution {
-      return_type: primitives.unknown,
+      return_type: ret,
       signature: None,
       diagnostics: vec![diag],
     };

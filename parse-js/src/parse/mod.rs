@@ -31,6 +31,7 @@ pub mod type_expr;
 pub struct ParseCtx {
   pub rules: ParsePatternRules, // For simplicity, this is a copy, not a non-mutable reference, to avoid having a separate lifetime for it. The value is only two booleans, so a reference is probably slower, and it's supposed to be immutable (i.e. changes come from altered copying, not mutating the original single instance), so there shouldn't be any difference between a reference and a copy.
   pub top_level: bool,
+  pub in_namespace: bool,
 }
 
 impl ParseCtx {
@@ -42,8 +43,26 @@ impl ParseCtx {
     ParseCtx { top_level, ..*self }
   }
 
+  pub fn with_namespace(&self, in_namespace: bool) -> ParseCtx {
+    ParseCtx {
+      in_namespace,
+      ..*self
+    }
+  }
+
   pub fn non_top_level(&self) -> ParseCtx {
-    self.with_top_level(false)
+    ParseCtx {
+      top_level: false,
+      ..*self
+    }
+  }
+
+  pub fn namespace_body(&self) -> ParseCtx {
+    ParseCtx {
+      top_level: true,
+      in_namespace: true,
+      ..*self
+    }
   }
 }
 

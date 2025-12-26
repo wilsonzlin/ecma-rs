@@ -14,6 +14,7 @@ impl<'a> Parser<'a> {
         yield_allowed: true,
       },
       top_level: true,
+      in_namespace: false,
     };
     let body = self.stmts(ctx, TT::EOF)?;
     self.require(TT::EOF)?;

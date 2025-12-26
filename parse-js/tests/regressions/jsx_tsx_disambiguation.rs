@@ -22,6 +22,7 @@ fn parse_expr(source: &str, dialect: Dialect) -> SyntaxResult<parse_js::ast::nod
       yield_allowed: true,
     },
     top_level: true,
+    in_namespace: false,
   };
   let expr = parser.expr(ctx, [TT::EOF])?;
   parser.require(TT::EOF)?;

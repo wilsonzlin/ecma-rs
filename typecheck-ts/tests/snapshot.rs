@@ -80,13 +80,29 @@ fn snapshot_roundtrips_queries() {
   let restored_total = restored_exports
     .get("total")
     .expect("restored total export");
+  if restored_total.type_id != Some(total_type) {
+    let display_orig = program.display_type(total_type).to_string();
+    let display_restored = restored_total
+      .type_id
+      .map(|ty| restored.display_type(ty).to_string())
+      .unwrap_or_else(|| "<none>".to_string());
+    eprintln!(
+      "DEBUG snapshot total type mismatch: original {} restored {}",
+      display_orig, display_restored
+    );
+  }
   assert_eq!(restored_total.type_id, Some(total_type));
   let restored_body = restored.body_of_def(total_def).expect("restored body");
   assert_eq!(restored_body, total_body);
   let restored_type_at = restored
     .type_at(restored_entry, call_offset)
     .expect("restored type");
-  assert_eq!(restored_type_at, type_at_call);
+  if restored_type_at != type_at_call {
+    panic!(
+      "snapshot type mismatch: original {:?} restored {:?}",
+      type_at_call, restored_type_at
+    );
+  }
 }
 
 #[test]

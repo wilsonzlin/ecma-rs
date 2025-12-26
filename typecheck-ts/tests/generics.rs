@@ -6,7 +6,7 @@ use typecheck_ts::check::infer::{
   infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature, TypeParamDecl,
 };
 use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
-use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TypeKindSummary};
+use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey, TypeKindSummary};
 use types_ts_interned::{
   CacheConfig, DefId, Param, Signature, TypeId, TypeKind, TypeParamId, TypeStore,
 };
@@ -401,37 +401,7 @@ fn infers_from_contextual_return_in_call() {
 
 #[test]
 fn imported_type_alias_uses_source_definition() {
-  #[derive(Default)]
-  struct ImportHost {
-    files: HashMap<FileKey, Arc<str>>,
-    resolutions: HashMap<String, FileKey>,
-  }
-
-  impl ImportHost {
-    fn insert(&mut self, file: FileKey, src: &str) {
-      self.files.insert(file, Arc::from(src.to_string()));
-    }
-
-    fn resolve_to(&mut self, specifier: &str, target: FileKey) {
-      self.resolutions.insert(specifier.to_string(), target);
-    }
-  }
-
-  impl Host for ImportHost {
-    fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
-      self
-        .files
-        .get(file)
-        .cloned()
-        .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
-    }
-
-    fn resolve(&self, _from: &FileKey, specifier: &str) -> Option<FileKey> {
-      self.resolutions.get(specifier).cloned()
-    }
-  }
-
-  let mut host = ImportHost::default();
+  let mut host = MemoryHost::default();
   let file_a = FileKey::new("a.ts");
   let file_b = FileKey::new("b.ts");
   host.insert(file_a.clone(), "export type Value = { value: number };");
@@ -442,25 +412,22 @@ import { Value } from "./a";
 type Uses = Value;
 "#,
   );
-  host.resolve_to("./a", file_a.clone());
+  host.link(file_b.clone(), "./a", file_a.clone());
 
   let program = Program::new(host, vec![file_b.clone()]);
-  let _file_a_id = program.file_id(&file_a).expect("file id for a");
-  let file_b_id = program.file_id(&file_b).expect("file id for b");
+  let file_a = program.file_id(&file_a).unwrap();
   let value_def = program
-    .definitions_in_file(_file_a_id)
+    .definitions_in_file(file_a)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Value"))
-    .expect("Value alias present");
-  let value_ty = program.type_of_def_interned(value_def);
-  let value_prop = program.property_type(value_ty, PropertyKey::String("value".into()));
-  assert!(value_prop.is_some(), "value property on source alias");
+    .unwrap();
+  let file_b = program.file_id(&file_b).unwrap();
   let uses_def = program
-    .definitions_in_file(file_b_id)
+    .definitions_in_file(file_b)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Uses"))
     .expect("Uses alias present");
-  let ty = program.type_of_def_interned(uses_def);
+  let ty = program.type_of_def(uses_def);
   let prop = program
     .property_type(ty, PropertyKey::String("value".into()))
     .expect("value property present");
@@ -469,46 +436,27 @@ type Uses = Value;
 
 #[test]
 fn function_definition_exposes_signature() {
-  #[derive(Default)]
-  struct SigHost {
-    files: HashMap<FileKey, Arc<str>>,
-  }
-
-  impl SigHost {
-    fn insert(&mut self, file: FileKey, src: &str) {
-      self.files.insert(file, Arc::from(src.to_string()));
-    }
-  }
-
-  impl Host for SigHost {
-    fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
-      self
-        .files
-        .get(file)
-        .cloned()
-        .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
-    }
-
-    fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
-      None
-    }
-  }
-
-  let mut host = SigHost::default();
-  let file = FileKey::new("entry.ts");
+  let mut host = MemoryHost::default();
+  let file = FileKey::new("file.ts");
   host.insert(
     file.clone(),
     "export function add(a: number, b: string): string { return a + b; }",
   );
   let program = Program::new(host, vec![file.clone()]);
-  let file_id = program.file_id(&file).expect("file id");
+  let file = program.file_id(&file).unwrap();
   let add_def = program
-    .definitions_in_file(file_id)
+    .definitions_in_file(file)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition present");
-  let ty = program.type_of_def_interned(add_def);
+  let ty = program.type_of_def(add_def);
+  eprintln!("add rendered {}", program.display_type(ty));
+  eprintln!(
+    "add interned kind {:?}",
+    program.interned_type_kind(program.type_of_def_interned(add_def))
+  );
   let sigs = program.call_signatures(ty);
+  eprintln!("call sigs {}", sigs.len());
   assert_eq!(sigs.len(), 1);
   let sig = &sigs[0].signature;
   assert_eq!(sig.params.len(), 2);

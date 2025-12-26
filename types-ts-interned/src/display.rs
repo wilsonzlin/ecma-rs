@@ -197,9 +197,9 @@ impl<'a> TypeDisplay<'a> {
         write!(f, "[]")
       }
       TypeKind::Union(members) => {
-        let mut ordered = members.clone();
-        ordered.sort_by(|a, b| self.union_cmp(*a, *b));
-        let mut iter = ordered.iter().peekable();
+        let mut members = members.clone();
+        members.sort_by(|a, b| self.union_member_cmp(*a, *b));
+        let mut iter = members.iter().peekable();
         while let Some(member) = iter.next() {
           self.fmt_with_prec(*member, Precedence::Union, f)?;
           if iter.peek().is_some() {
@@ -390,12 +390,20 @@ impl<'a> TypeDisplay<'a> {
     }
   }
 
-  fn union_cmp(&self, a: TypeId, b: TypeId) -> Ordering {
-    match (self.store.type_kind(a), self.store.type_kind(b)) {
-      (TypeKind::Ref { .. }, TypeKind::Null | TypeKind::Undefined) => Ordering::Less,
-      (TypeKind::Null | TypeKind::Undefined, TypeKind::Ref { .. }) => Ordering::Greater,
-      _ => self.store.type_cmp(a, b),
+  fn union_member_cmp(&self, a: TypeId, b: TypeId) -> Ordering {
+    let a_kind = self.store.type_kind(a);
+    let b_kind = self.store.type_kind(b);
+    let a_ref = matches!(a_kind, TypeKind::Ref { .. });
+    let b_ref = matches!(b_kind, TypeKind::Ref { .. });
+    let a_nullish = matches!(a_kind, TypeKind::Null | TypeKind::Undefined);
+    let b_nullish = matches!(b_kind, TypeKind::Null | TypeKind::Undefined);
+    if a_ref && b_nullish {
+      return Ordering::Less;
     }
+    if b_ref && a_nullish {
+      return Ordering::Greater;
+    }
+    self.store.type_cmp(a, b)
   }
 
   fn fmt_signature(

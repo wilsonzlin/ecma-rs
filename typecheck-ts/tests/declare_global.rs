@@ -53,13 +53,13 @@ fn interfaces_merge_members_for_interned_types() {
   );
 
   let program = Program::new(host, vec![file.clone()]);
-  let file_id = program.file_id(&file).expect("file id");
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
+  let file_id = program.file_id(&file).expect("file id");
   let def = program
     .definitions_in_file(file_id)
     .into_iter()

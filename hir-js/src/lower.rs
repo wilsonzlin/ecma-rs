@@ -274,7 +274,7 @@ impl<'a> DefSource<'a> {
       | DefSource::Method(_)
       | DefSource::Getter(_)
       | DefSource::Setter(_) => Some(BodyKind::Function),
-      DefSource::Var(..) => None,
+      DefSource::Var(..) => Some(BodyKind::Initializer),
       DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
       DefSource::None => None,
     }
@@ -895,6 +895,10 @@ fn lower_stmt(
       StmtKind::With { object: obj, body }
     }
     AstStmt::VarDecl(decl) => StmtKind::Var(lower_var_decl_stmt(decl, builder, ctx)),
+    AstStmt::NamespaceDecl(ns) => {
+      let stmts = lower_namespace_body(&ns.stx.body, builder, ctx);
+      StmtKind::Block(stmts)
+    }
     AstStmt::FunctionDecl(func) => {
       if let Some(def_id) = builder.def_lookup.def_for_node(func) {
         StmtKind::Decl(def_id)
@@ -944,6 +948,20 @@ fn lower_var_decl_stmt(
     declarators.push(VarDeclarator { pat: pat_id, init });
   }
   VarDecl { kind, declarators }
+}
+
+fn lower_namespace_body(
+  body: &NamespaceBody,
+  builder: &mut BodyBuilder<'_>,
+  ctx: &mut LoweringContext,
+) -> Vec<StmtId> {
+  match body {
+    NamespaceBody::Block(stmts) => stmts
+      .iter()
+      .map(|stmt| lower_stmt(stmt, builder, ctx))
+      .collect(),
+    NamespaceBody::Namespace(inner) => lower_namespace_body(&inner.stx.body, builder, ctx),
+  }
 }
 
 fn lower_for_head(

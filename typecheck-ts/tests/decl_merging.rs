@@ -104,6 +104,12 @@ export const name = Lib.version;
 
   let file_id = program.file_id(&file).unwrap();
   let exports = program.exports_of(file_id);
+  println!("DEBUG exports: {:?}", exports.keys().collect::<Vec<_>>());
+  for def in program.definitions_in_file(file_id) {
+    let name = program.def_name(def).unwrap_or_else(|| "<anon>".to_string());
+    let ty = program.display_type(program.type_of_def(def)).to_string();
+    println!("  def {:?} name {} body {:?} type {}", def, name, program.body_of_def(def), ty);
+  }
   let lib_ty = exports
     .get("Lib")
     .and_then(|e| e.type_id)
@@ -118,6 +124,34 @@ export const name = Lib.version;
     "merged Lib should remain callable, got {rendered}"
   );
 
+  if let Some(def) = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("version"))
+  {
+    if let Some(body) = program.body_of_def(def) {
+      let res = program.check_body(body);
+      println!("DEBUG version body exprs:");
+      for (idx, span) in res.expr_spans().iter().enumerate() {
+        let ty = res.expr_type(typecheck_ts::ExprId(idx as u32)).unwrap();
+        println!("  {}: {:?} -> {}", idx, span, program.display_type(ty));
+      }
+    }
+  }
+  if let Some(def) = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("name"))
+  {
+    if let Some(body) = program.body_of_def(def) {
+      let res = program.check_body(body);
+      println!("DEBUG name body exprs:");
+      for (idx, span) in res.expr_spans().iter().enumerate() {
+        let ty = res.expr_type(typecheck_ts::ExprId(idx as u32)).unwrap();
+        println!("  {}: {:?} -> {}", idx, span, program.display_type(ty));
+      }
+    }
+  }
   let result_ty = exports
     .get("result")
     .and_then(|e| e.type_id)
@@ -132,9 +166,10 @@ export const name = Lib.version;
     .get("name")
     .and_then(|e| e.type_id)
     .expect("name export type");
+  let name_rendered = program.display_type(name_ty).to_string();
+  eprintln!("name type: {name_rendered}");
   assert!(
-    program.display_type(name_ty).to_string().contains("1.0.0")
-      || program.display_type(name_ty).to_string().contains("string"),
+    name_rendered.contains("1.0.0") || name_rendered.contains("string"),
     "property access through merged namespace should preserve literal type"
   );
 }
