@@ -1,7 +1,7 @@
 //! Internal helpers for checking assignments, object literals, and generic instantiation.
 
 pub(super) mod assign;
-pub(crate) mod body;
+pub mod hir_body;
 pub(super) mod cfg;
 pub(crate) mod decls;
 pub(crate) mod expr;

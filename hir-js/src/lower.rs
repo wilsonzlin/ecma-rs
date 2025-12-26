@@ -3409,7 +3409,11 @@ fn lower_module_items(
       }
       ModuleItemKind::ExportedDecl(decl) => match decl.kind {
         ExportedDeclKind::Func(func) => {
-          if let Some(def) = def_lookup.def_for_node(func) {
+          if let Some(def) = def_lookup
+            .def_for_node(func)
+            .and_then(|d| defs.get(d.0 as usize).map(|_| d))
+            .or_else(|| find_def(defs, DefKind::Function, func.loc.into()).map(|d| d.id))
+          {
             let body = def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
             if decl.default {
               exports.push(Export {
@@ -3425,13 +3429,10 @@ fn lower_module_items(
               });
               next_export += 1;
             } else {
-              let Some(name_id) = def_index
-                .get(&def)
-                .and_then(|idx| defs.get(*idx))
-                .map(|d| d.path.name)
-              else {
+              let Some(def_data) = def_by_id(defs, def) else {
                 continue;
               };
+              let name_id = def_data.path.name;
               push_named_export(
                 &mut exports,
                 span_map,
@@ -3466,13 +3467,10 @@ fn lower_module_items(
               });
               next_export += 1;
             } else {
-              let Some(name_id) = def_index
-                .get(&def)
-                .and_then(|idx| defs.get(*idx))
-                .map(|d| d.path.name)
-              else {
+              let Some(def_data) = def_by_id(defs, def) else {
                 continue;
               };
+              let name_id = def_data.path.name;
               push_named_export(
                 &mut exports,
                 span_map,
@@ -3667,4 +3665,8 @@ fn lower_module_items(
 
 fn find_def<'a>(defs: &'a [DefData], kind: DefKind, span: TextRange) -> Option<&'a DefData> {
   defs.iter().find(|d| d.path.kind == kind && d.span == span)
+}
+
+fn def_by_id<'a>(defs: &'a [DefData], id: DefId) -> Option<&'a DefData> {
+  defs.iter().find(|d| d.id == id)
 }

@@ -163,7 +163,7 @@ pub mod check {
   }
 
   pub mod hir_body {
-    pub use crate::program::check::body::*;
+    pub use crate::program::check::hir_body::*;
   }
 }
 

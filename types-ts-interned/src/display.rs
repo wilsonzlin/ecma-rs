@@ -1,11 +1,11 @@
-use crate::ids::{DefId, NameId, TypeId};
+use crate::ids::NameId;
+use crate::ids::TypeId;
 use crate::kind::MappedModifier;
 use crate::kind::TemplateLiteralType;
 use crate::kind::TypeKind;
 use crate::shape::PropKey;
 use crate::shape::Property;
 use crate::store::TypeStore;
-use std::sync::Arc;
 use std::fmt;
 use unicode_ident::{is_xid_continue, is_xid_start};
 
@@ -16,29 +16,15 @@ enum Precedence {
   Primary,
 }
 
+#[derive(Debug)]
 pub struct TypeDisplay<'a> {
   store: &'a TypeStore,
   ty: TypeId,
-  ref_resolver: Option<Arc<dyn Fn(DefId) -> Option<String> + Send + Sync + 'a>>,
 }
 
 impl<'a> TypeDisplay<'a> {
   pub fn new(store: &'a TypeStore, ty: TypeId) -> Self {
-    Self {
-      store,
-      ty,
-      ref_resolver: None,
-    }
-  }
-
-  /// Provide a resolver for [`TypeKind::Ref`] nodes that returns a friendly name
-  /// for the referenced definition, if available.
-  pub fn with_ref_resolver(
-    mut self,
-    resolver: Arc<dyn Fn(DefId) -> Option<String> + Send + Sync + 'a>,
-  ) -> Self {
-    self.ref_resolver = Some(resolver);
-    self
+    Self { store, ty }
   }
 
   fn precedence(&self, ty: TypeId) -> Precedence {
@@ -158,7 +144,7 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::This => write!(f, "this"),
       TypeKind::Infer(param) => write!(f, "infer T{}", param.0),
       TypeKind::Tuple(elems) => {
-        let all_readonly = elems.iter().all(|elem| elem.readonly);
+        let all_readonly = !elems.is_empty() && elems.iter().all(|elem| elem.readonly);
         if all_readonly {
           write!(f, "readonly ")?;
         }
@@ -272,23 +258,6 @@ impl<'a> TypeDisplay<'a> {
         Ok(())
       }
       TypeKind::Ref { def, args } => {
-        if let Some(resolver) = &self.ref_resolver {
-          if let Some(name) = resolver(def) {
-            write!(f, "{name}")?;
-            if !args.is_empty() {
-              write!(f, "<")?;
-              let mut iter = args.iter().peekable();
-              while let Some(arg) = iter.next() {
-                self.fmt_type(*arg, f)?;
-                if iter.peek().is_some() {
-                  write!(f, ", ")?;
-                }
-              }
-              write!(f, ">")?;
-            }
-            return Ok(());
-          }
-        }
         write!(f, "ref#{}", def.0)?;
         if !args.is_empty() {
           write!(f, "<")?;
@@ -398,14 +367,6 @@ impl<'a> TypeDisplay<'a> {
     }
     write!(f, ") => ")?;
     self.fmt_type(sig.ret, f)
-  }
-}
-
-impl<'a> fmt::Debug for TypeDisplay<'a> {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_struct("TypeDisplay")
-      .field("ty", &self.ty)
-      .finish()
   }
 }
 

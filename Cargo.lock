@@ -2004,6 +2004,7 @@ name = "typecheck-ts"
 version = "0.1.0"
 dependencies = [
  "ahash",
+ "bumpalo",
  "diagnostics",
  "hir-js",
  "num-bigint",

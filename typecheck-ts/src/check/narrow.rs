@@ -73,7 +73,9 @@ pub fn truthy_falsy_types(
     }
     TypeKind::Null | TypeKind::Undefined => (builtin.never, ty),
     TypeKind::LiteralBoolean(false) => (builtin.never, ty),
-    TypeKind::LiteralNumber(n) if n == "0" => (builtin.never, ty),
+    TypeKind::LiteralNumber(n) if n.parse::<f64>().ok().map_or(false, |v| v == 0.0) => {
+      (builtin.never, ty)
+    }
     TypeKind::LiteralString(s) if s.is_empty() => (builtin.never, ty),
     _ => (ty, builtin.never),
   }
@@ -142,10 +144,11 @@ pub fn narrow_by_discriminant(
         }
       }
     }
-    TypeKind::Object(obj) => {
-      if let Some(prop_data) = obj.props.get(prop) {
-        let matches = match store.kind(prop_data.typ) {
-          TypeKind::LiteralString(s) => s == value,
+    TypeKind::Object(_) => match super::super::lookup_property_type(store, ty, prop, builtin) {
+      Some(prop_ty) => {
+        let prop_kind = store.kind(prop_ty).clone();
+        let matches = match prop_kind {
+          TypeKind::LiteralString(name) => name == value,
           TypeKind::String => true,
           _ => false,
         };
@@ -154,10 +157,9 @@ pub fn narrow_by_discriminant(
         } else {
           no.push(ty);
         }
-      } else {
-        no.push(ty);
       }
-    }
+      None => no.push(ty),
+    },
     _ => no.push(ty),
   }
 
@@ -185,17 +187,8 @@ pub fn narrow_by_in_check(
         }
       }
     }
-    TypeKind::Object(obj) => {
-      let has_prop = if obj.props.contains_key(prop) {
-        true
-      } else if obj.string_index.is_some() {
-        true
-      } else if prop.parse::<usize>().is_ok() {
-        obj.number_index.is_some()
-      } else {
-        false
-      };
-      if has_prop {
+    TypeKind::Object(_) => {
+      if super::super::lookup_property_type(store, ty, prop, builtin).is_some() {
         yes.push(ty);
       } else {
         no.push(ty);
