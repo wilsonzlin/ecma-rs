@@ -13,9 +13,13 @@ pub use types_ts_interned::TypeOptions;
 
 use std::sync::Arc;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use crate::FileId;
 
 /// Kinds of supported files.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileKind {
   Js,

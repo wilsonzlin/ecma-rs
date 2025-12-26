@@ -1,14 +1,41 @@
-use super::super::{
-  BodyCheckResult, Diagnostic, FileId, HirExpr, HirExprKind, ObjectType, ProgramState, Span, TypeId,
-  TypeKind, CODE_EXCESS_PROPERTY,
-};
 use std::collections::HashSet;
 
-pub(super) fn is_fresh_object_literal(expr: &HirExpr) -> bool {
+use super::super::{
+  BodyCheckResult, Diagnostic, FileId, HirExpr, HirExprKind, ObjectType, ProgramState, Span,
+  TypeId, TypeKind, CODE_EXCESS_PROPERTY,
+};
+
+pub(crate) fn is_fresh_object_literal(expr: &HirExpr) -> bool {
   matches!(expr.kind, HirExprKind::Object(_))
 }
 
-pub(super) fn check_excess_properties(
+/// Return the contextual type for a property on an object literal when the target type is known.
+pub(crate) fn contextual_property_type(
+  state: &mut ProgramState,
+  target: TypeId,
+  name: &str,
+) -> Option<TypeId> {
+  match state.type_store.kind(target).clone() {
+    TypeKind::Any | TypeKind::Unknown => None,
+    TypeKind::Object(obj) => property_type_from_object(&obj, name),
+    TypeKind::Union(members) => {
+      let mut collected = Vec::new();
+      for member in members {
+        if let Some(ty) = contextual_property_type(state, member, name) {
+          collected.push(ty);
+        }
+      }
+      if collected.is_empty() {
+        None
+      } else {
+        Some(state.type_store.union(collected, &state.builtin))
+      }
+    }
+    _ => None,
+  }
+}
+
+pub(crate) fn check_excess_properties(
   state: &mut ProgramState,
   expr: &HirExpr,
   source_type: TypeId,
@@ -19,8 +46,11 @@ pub(super) fn check_excess_properties(
   if !is_fresh_object_literal(expr) {
     return;
   }
+  if !matches!(expr.kind, HirExprKind::Object(_)) {
+    return;
+  };
 
-  let Some(source_obj) = state.expect_object_type(source_type) else {
+  let Some(source_obj) = expect_object_type(state, source_type) else {
     return;
   };
 
@@ -35,6 +65,21 @@ pub(super) fn check_excess_properties(
         },
       ));
     }
+  }
+}
+
+fn expect_object_type(state: &ProgramState, ty: TypeId) -> Option<ObjectType> {
+  match state.type_store.kind(ty) {
+    TypeKind::Object(obj) => Some(obj.clone()),
+    TypeKind::Union(members) => {
+      members
+        .iter()
+        .find_map(|member| match state.type_store.kind(*member) {
+          TypeKind::Object(obj) => Some(obj.clone()),
+          _ => None,
+        })
+    }
+    _ => None,
   }
 }
 
@@ -77,5 +122,16 @@ fn excess_keys(
       best
     }
     _ => None,
+  }
+}
+
+fn property_type_from_object(obj: &ObjectType, name: &str) -> Option<TypeId> {
+  if let Some(prop) = obj.props.get(name) {
+    return Some(prop.typ);
+  }
+  if name.parse::<usize>().is_ok() {
+    obj.number_index.or(obj.string_index)
+  } else {
+    obj.string_index
   }
 }

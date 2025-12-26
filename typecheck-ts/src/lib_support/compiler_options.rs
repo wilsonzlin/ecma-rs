@@ -1,6 +1,8 @@
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Target language level.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScriptTarget {
   Es3,
@@ -17,6 +19,7 @@ pub enum ScriptTarget {
 }
 
 /// JSX transform mode.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum JsxMode {
   Preserve,
@@ -26,6 +29,7 @@ pub enum JsxMode {
 }
 
 /// Module system to emit/parse.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ModuleKind {
   None,
@@ -66,6 +70,7 @@ impl Default for ScriptTarget {
 }
 
 /// Compiler configuration that materially affects lib selection and typing.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct CompilerOptions {
   pub target: ScriptTarget,
@@ -105,6 +110,7 @@ impl Default for CompilerOptions {
 }
 
 /// Named libraries that can be loaded.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LibName {
   Es5,
@@ -155,6 +161,7 @@ impl LibName {
 }
 
 /// Ordered set of libs to load.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibSet {
   libs: Vec<LibName>,

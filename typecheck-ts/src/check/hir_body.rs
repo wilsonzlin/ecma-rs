@@ -4,6 +4,7 @@ use std::sync::Arc;
 use bumpalo::Bump;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{Body, BodyKind, ExprId, NameInterner, PatId};
+use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
@@ -14,7 +15,6 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
-use ordered_float::OrderedFloat;
 use types_ts_interned::{
   ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature, TypeId, TypeKind,
   TypeStore,
@@ -212,7 +212,9 @@ impl<'a> AstIndex<'a> {
   fn index_function(&mut self, func: &'a Node<Func>, file: FileId) {
     if let Some(body) = &func.stx.body {
       let body_span = match body {
-        FuncBody::Block(block) => span_for_stmt_list(&block, file).unwrap_or(loc_to_range(file, func.loc)),
+        FuncBody::Block(block) => {
+          span_for_stmt_list(&block, file).unwrap_or(loc_to_range(file, func.loc))
+        }
         FuncBody::Expression(expr) => loc_to_range(file, expr.loc),
       };
       self.functions.push(FunctionInfo { body_span, func });
@@ -445,7 +447,9 @@ pub fn check_body(
     }
   }
 
-  checker.diagnostics.extend(checker.lowerer.take_diagnostics());
+  checker
+    .diagnostics
+    .extend(checker.lowerer.take_diagnostics());
   BodyCheckResult {
     expr_types: checker.expr_types,
     pat_types: checker.pat_types,
@@ -505,7 +509,10 @@ impl<'a> Checker<'a> {
         let len = func.body_span.end.saturating_sub(func.body_span.start);
         let replace = match best {
           Some(existing) => {
-            let existing_len = existing.body_span.end.saturating_sub(existing.body_span.start);
+            let existing_len = existing
+              .body_span
+              .end
+              .saturating_sub(existing.body_span.start);
             len < existing_len
           }
           None => true,
@@ -540,7 +547,9 @@ impl<'a> Checker<'a> {
     }
     if let Some((pat_span, info)) = best {
       if let Some(init) = info.initializer {
-        let annotation = info.type_annotation.map(|ann| self.lowerer.lower_type_expr(ann));
+        let annotation = info
+          .type_annotation
+          .map(|ann| self.lowerer.lower_type_expr(ann));
         let init_ty = self.check_expr(init);
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span) {
@@ -564,11 +573,7 @@ impl<'a> Checker<'a> {
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
-      let default_ty = param
-        .stx
-        .default_value
-        .as_ref()
-        .map(|d| self.check_expr(d));
+      let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
       let mut ty = annotation.unwrap_or(self.store.primitive_ids().unknown);
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
@@ -579,7 +584,10 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn lower_type_params(&mut self, params: &[Node<parse_js::ast::type_expr::TypeParameter>]) -> Vec<TypeParamDecl> {
+  fn lower_type_params(
+    &mut self,
+    params: &[Node<parse_js::ast::type_expr::TypeParameter>],
+  ) -> Vec<TypeParamDecl> {
     let ids = self.lowerer.register_type_params(params);
     let mut decls = Vec::new();
     for (param, id) in params.iter().zip(ids.iter()) {
@@ -805,9 +813,7 @@ impl<'a> Checker<'a> {
       }
       AstExpr::LitStr(str_lit) => {
         let name = self.store.intern_name(str_lit.stx.value.clone());
-        self
-          .store
-          .intern_type(TypeKind::StringLiteral(name))
+        self.store.intern_type(TypeKind::StringLiteral(name))
       }
       AstExpr::LitBool(b) => self
         .store
@@ -852,7 +858,14 @@ impl<'a> Checker<'a> {
           .get(&callee_ty)
           .cloned()
           .unwrap_or_default();
-        let resolution = resolve_call(&self.store, &self.relate, callee_ty, &arg_types, &type_params, span);
+        let resolution = resolve_call(
+          &self.store,
+          &self.relate,
+          callee_ty,
+          &arg_types,
+          &type_params,
+          span,
+        );
         for diag in &resolution.diagnostics {
           self.diagnostics.push(diag.clone());
         }
@@ -861,7 +874,11 @@ impl<'a> Checker<'a> {
             let sig = self.store.signature(sig_id);
             let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
             let has_rest = sig.params.iter().any(|p| p.rest);
-            let max = if has_rest { None } else { Some(sig.params.len()) };
+            let max = if has_rest {
+              None
+            } else {
+              Some(sig.params.len())
+            };
             if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
               self.diagnostics.push(Diagnostic::error(
                 CODE_ARGUMENT_COUNT_MISMATCH,
@@ -896,11 +913,10 @@ impl<'a> Checker<'a> {
         } else {
           self.store.union(elems)
         };
-        self.store
-          .intern_type(TypeKind::Array {
-            ty: elem_ty,
-            readonly: false,
-          })
+        self.store.intern_type(TypeKind::Array {
+          ty: elem_ty,
+          readonly: false,
+        })
       }
       AstExpr::LitObj(obj) => self.object_literal_type(obj),
       AstExpr::Func(func) => self.function_type(&func.stx.func),
@@ -943,10 +959,7 @@ impl<'a> Checker<'a> {
           .map(|idx| idx.value_type)
           .unwrap_or(prim.unknown)
       }
-      TypeKind::Tuple(elems) => elems
-        .get(0)
-        .map(|e| e.ty)
-        .unwrap_or(prim.unknown),
+      TypeKind::Tuple(elems) => elems.get(0).map(|e| e.ty).unwrap_or(prim.unknown),
       _ => prim.unknown,
     }
   }
@@ -1186,9 +1199,9 @@ impl<'a> Checker<'a> {
     }
     if let Some(rest) = &arr.stx.rest {
       let rest_ty = match self.store.type_kind(value) {
-        TypeKind::Array { ty, readonly } => self
-          .store
-          .intern_type(TypeKind::Array { ty, readonly }),
+        TypeKind::Array { ty, readonly } => {
+          self.store.intern_type(TypeKind::Array { ty, readonly })
+        }
         TypeKind::Tuple(elems) => {
           let elems: Vec<TypeId> = elems.into_iter().map(|e| e.ty).collect();
           let elem_ty = if elems.is_empty() {
@@ -1196,19 +1209,15 @@ impl<'a> Checker<'a> {
           } else {
             self.store.union(elems)
           };
-          self
-            .store
-            .intern_type(TypeKind::Array {
-              ty: elem_ty,
-              readonly: false,
-            })
-        }
-        _ => self
-          .store
-          .intern_type(TypeKind::Array {
-            ty: prim.unknown,
+          self.store.intern_type(TypeKind::Array {
+            ty: elem_ty,
             readonly: false,
-          }),
+          })
+        }
+        _ => self.store.intern_type(TypeKind::Array {
+          ty: prim.unknown,
+          readonly: false,
+        }),
       };
       self.bind_pattern_with_type_params(rest, rest_ty, type_params.clone());
     }
@@ -1298,9 +1307,9 @@ impl<'a> Checker<'a> {
       this_param: None,
     };
     let sig_id = self.store.intern_signature(sig);
-    let ty = self
-      .store
-      .intern_type(TypeKind::Callable { overloads: vec![sig_id] });
+    let ty = self.store.intern_type(TypeKind::Callable {
+      overloads: vec![sig_id],
+    });
     if !type_param_decls.is_empty() {
       self.function_type_params.insert(ty, type_param_decls);
     }
@@ -1355,9 +1364,7 @@ fn span_for_stmt_list(stmts: &[Node<Stmt>], file: FileId) -> Option<TextRange> {
     start = Some(start.map_or(range.start, |s| s.min(range.start)));
     end = Some(end.map_or(range.end, |e| e.max(range.end)));
   }
-  start
-    .zip(end)
-    .map(|(s, e)| TextRange::new(s, e))
+  start.zip(end).map(|(s, e)| TextRange::new(s, e))
 }
 
 fn body_range(body: &Body) -> TextRange {

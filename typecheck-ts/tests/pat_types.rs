@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use hir_js::{lower_from_source, BodyKind};
-use typecheck_ts::FileId;
 use typecheck_ts::check::hir_body::check_body;
+use typecheck_ts::FileId;
 use types_ts_interned::TypeStore;
 
 #[test]

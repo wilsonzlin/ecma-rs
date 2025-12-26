@@ -50,3 +50,4 @@ pub use signature::Param;
 pub use signature::Signature;
 pub use store::PrimitiveIds;
 pub use store::TypeStore;
+pub use store::TypeStoreSnapshot;

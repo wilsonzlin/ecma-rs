@@ -8,6 +8,7 @@ use ahash::RandomState;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
 use parking_lot::RwLock;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::sync::Arc;
@@ -94,7 +95,7 @@ impl NameInterner {
   }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct PrimitiveIds {
   pub any: TypeId,
   pub unknown: TypeId,
@@ -123,6 +124,17 @@ pub struct TypeStore {
   signatures: DashMap<SignatureId, Signature, RandomState>,
   options: TypeOptions,
   primitives: PrimitiveIds,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypeStoreSnapshot {
+  options: TypeOptions,
+  primitives: PrimitiveIds,
+  types: Vec<(TypeId, TypeKind)>,
+  shapes: Vec<(ShapeId, Shape)>,
+  objects: Vec<(ObjectId, ObjectType)>,
+  signatures: Vec<(SignatureId, Signature)>,
+  names: Vec<(NameId, String)>,
 }
 
 impl TypeStore {
@@ -238,6 +250,118 @@ impl TypeStore {
 
   pub fn primitive_ids(&self) -> PrimitiveIds {
     self.primitives
+  }
+
+  pub fn snapshot(&self) -> TypeStoreSnapshot {
+    let mut types: Vec<_> = self
+      .types
+      .iter()
+      .map(|entry| (*entry.key(), entry.value().clone()))
+      .collect();
+    types.sort_by_key(|(id, _)| *id);
+
+    let mut shapes: Vec<_> = self
+      .shapes
+      .iter()
+      .map(|entry| (*entry.key(), entry.value().clone()))
+      .collect();
+    shapes.sort_by_key(|(id, _)| *id);
+
+    let mut objects: Vec<_> = self
+      .objects
+      .iter()
+      .map(|entry| (*entry.key(), entry.value().clone()))
+      .collect();
+    objects.sort_by_key(|(id, _)| *id);
+
+    let mut signatures: Vec<_> = self
+      .signatures
+      .iter()
+      .map(|entry| (*entry.key(), entry.value().clone()))
+      .collect();
+    signatures.sort_by_key(|(id, _)| *id);
+
+    let mut names: Vec<_> = {
+      let guard = self.names.read();
+      guard
+        .by_id
+        .iter()
+        .map(|(id, name)| (*id, name.clone()))
+        .collect()
+    };
+    names.sort_by_key(|(id, _)| *id);
+
+    TypeStoreSnapshot {
+      options: self.options,
+      primitives: self.primitives,
+      types,
+      shapes,
+      objects,
+      signatures,
+      names,
+    }
+  }
+
+  fn from_snapshot_inner(snapshot: TypeStoreSnapshot) -> Self {
+    let TypeStoreSnapshot {
+      options,
+      primitives,
+      types,
+      shapes,
+      objects,
+      signatures,
+      names,
+    } = snapshot;
+
+    let store = Self {
+      types: Self::new_dashmap(TYPE_DOMAIN),
+      shapes: Self::new_dashmap(SHAPE_DOMAIN),
+      objects: Self::new_dashmap(OBJECT_DOMAIN),
+      names: Default::default(),
+      signatures: Self::new_dashmap(SIGNATURE_DOMAIN),
+      options,
+      primitives,
+    };
+
+    {
+      let mut interner = store.names.write();
+      for (id, name) in names {
+        interner.by_id.insert(id, name.clone());
+        interner.by_name.insert(name, id);
+      }
+    }
+
+    for (id, kind) in types {
+      Self::insert_with_id(&store.types, id, kind, "type");
+    }
+    for (id, shape) in shapes {
+      Self::insert_with_id(&store.shapes, id, shape, "shape");
+    }
+    for (id, object) in objects {
+      Self::insert_with_id(&store.objects, id, object, "object");
+    }
+    for (id, sig) in signatures {
+      Self::insert_with_id(&store.signatures, id, sig, "signature");
+    }
+
+    debug_assert!(store.types.contains_key(&primitives.any));
+    debug_assert!(store.types.contains_key(&primitives.unknown));
+    debug_assert!(store.types.contains_key(&primitives.never));
+    debug_assert!(store.types.contains_key(&primitives.void));
+    debug_assert!(store.types.contains_key(&primitives.null));
+    debug_assert!(store.types.contains_key(&primitives.undefined));
+    debug_assert!(store.types.contains_key(&primitives.boolean));
+    debug_assert!(store.types.contains_key(&primitives.number));
+    debug_assert!(store.types.contains_key(&primitives.string));
+    debug_assert!(store.types.contains_key(&primitives.bigint));
+    debug_assert!(store.types.contains_key(&primitives.symbol));
+    debug_assert!(store.types.contains_key(&primitives.unique_symbol));
+
+    store
+  }
+
+  pub fn from_snapshot(snapshot: TypeStoreSnapshot) -> Arc<Self> {
+    Arc::new(Self::from_snapshot_inner(snapshot))
   }
 
   pub fn name(&self, id: NameId) -> String {
@@ -1032,5 +1156,24 @@ impl TypeStore {
       }
       TypeKind::KeyOf(inner) => json!({ "kind": "keyof", "ty": inner.0.to_string() }),
     }
+  }
+}
+
+impl Serialize for TypeStore {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: Serializer,
+  {
+    self.snapshot().serialize(serializer)
+  }
+}
+
+impl<'de> Deserialize<'de> for TypeStore {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: Deserializer<'de>,
+  {
+    let snapshot = TypeStoreSnapshot::deserialize(deserializer)?;
+    Ok(Self::from_snapshot_inner(snapshot))
   }
 }

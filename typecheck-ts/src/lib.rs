@@ -129,12 +129,16 @@ mod api;
 mod error;
 mod profile;
 mod program;
+#[cfg(feature = "serde")]
+mod snapshot;
 mod type_queries;
 
 pub use api::*;
 pub use error::*;
 pub use profile::*;
 pub use program::*;
+#[cfg(feature = "serde")]
+pub use snapshot::*;
 pub use type_queries::*;
 
 /// Generic type checking helpers (instantiation and inference).

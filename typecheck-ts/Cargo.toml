@@ -24,6 +24,7 @@ ahash = "0.8"
 ordered-float = "3"
 num-bigint = "0.4"
 bumpalo = "3"
+sha2 = "0.10"
 
 [dev-dependencies]
 diagnostics = { path = "../diagnostics" }
