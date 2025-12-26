@@ -213,3 +213,10 @@ pub enum ImportEqualsRhs {
 pub struct ExportAssignmentDecl {
   pub expression: Node<Expr>,
 }
+
+/// `export as namespace Foo;`
+#[derive(Debug, Drive, DriveMut, Serialize)]
+pub struct ExportAsNamespaceDecl {
+  #[drive(skip)]
+  pub name: String,
+}

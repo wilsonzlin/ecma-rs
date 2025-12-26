@@ -62,6 +62,7 @@ pub enum Stmt {
   ExportTypeDecl(Node<ExportTypeDecl>),
   ImportEqualsDecl(Node<ImportEqualsDecl>),
   ExportAssignmentDecl(Node<ExportAssignmentDecl>),
+  ExportAsNamespaceDecl(Node<ExportAsNamespaceDecl>),
 }
 
 #[derive(Debug, Drive, DriveMut, Serialize)]

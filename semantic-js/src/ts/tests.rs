@@ -1,5 +1,6 @@
 use super::*;
 use crate::assoc::{js, ts};
+use crate::ts::from_hir_js::lower_to_ts_hir;
 use crate::ts::locals::{bind_ts_locals, bind_ts_locals_pure, SymbolId as LocalSymbolId};
 use derive_visitor::{Drive, Visitor};
 use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
@@ -1220,6 +1221,42 @@ fn export_as_namespace_prefers_namespace_exports() {
     .expect("global namespace available");
 
   assert_eq!(ns_export, global);
+}
+
+#[test]
+fn export_as_namespace_parsed_from_ast() {
+  let ast = parse(
+    r#"
+    export function foo(): void;
+    export as namespace Lib;
+  "#,
+  )
+  .unwrap();
+  let lowered = lower_file(FileId(120), HirFileKind::Dts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lowered);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { FileId(120) => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (semantics, diags) = bind_ts_program(&[FileId(120)], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
+  assert!(diags.is_empty());
+
+  let symbols = semantics.symbols();
+  let foo_symbol = semantics
+    .exports_of(FileId(120))
+    .get("foo")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .unwrap();
+  let global = semantics
+    .global_symbols()
+    .get("Lib")
+    .expect("global namespace present")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("global value available");
+  assert_eq!(foo_symbol, global);
 }
 
 #[test]

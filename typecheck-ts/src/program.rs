@@ -3308,6 +3308,15 @@ impl ProgramState {
             exports.values.entry("default".to_string()).or_insert(entry);
           }
         }
+        Stmt::ExportAsNamespaceDecl(decl) => {
+          let span = loc_to_span(file, decl.loc).range;
+          sem_builder
+            .export_as_namespace
+            .push(sem_ts::ExportAsNamespace {
+              name: decl.stx.name.clone(),
+              span,
+            });
+        }
         Stmt::Import(import_stmt) => {
           let module = import_stmt.stx.module.clone();
           let resolved = host.resolve(file, &module);

@@ -1,6 +1,6 @@
 use crate::ts::{
-  Decl, DeclKind, Export, ExportAll, ExportSpecifier, Exported, FileKind, HirFile, Import,
-  ImportDefault, ImportNamed, ImportNamespace, ModuleKind, NamedExport,
+  Decl, DeclKind, Export, ExportAll, ExportAsNamespace, ExportSpecifier, Exported, FileKind,
+  HirFile, Import, ImportDefault, ImportNamed, ImportNamespace, ModuleKind, NamedExport,
 };
 use diagnostics::TextRange;
 use hir_js::{DefId, DefKind, ExportKind, FileKind as HirFileKind, ImportKind, LowerResult};
@@ -23,6 +23,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
   let mut imports = Vec::new();
   let mut exports = Vec::new();
   let mut exported: HashMap<DefId, Exported> = HashMap::new();
+  let mut export_as_namespace = Vec::new();
 
   // Track module syntax to determine module vs script semantics.
   let mut has_module_syntax = false;
@@ -202,6 +203,13 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         };
         exports.push(Export::ExportAssignment {
           expr,
+          span: stmt_range,
+        });
+      }
+      Stmt::ExportAsNamespaceDecl(decl) => {
+        has_module_syntax = true;
+        export_as_namespace.push(ExportAsNamespace {
+          name: decl.stx.name.clone(),
           span: stmt_range,
         });
       }
@@ -498,7 +506,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
     decls,
     imports,
     exports,
-    export_as_namespace: Vec::new(),
+    export_as_namespace,
     ambient_modules: Vec::new(),
   }
 }

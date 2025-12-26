@@ -352,6 +352,23 @@ impl<'a> Parser<'a> {
         .map(|node| node.into_wrapped());
     }
 
+    // TypeScript: export as namespace Foo;
+    if t1.typ == TT::KeywordAs && t2.typ == TT::KeywordNamespace {
+      return self
+        .with_loc(|p| {
+          p.require(TT::KeywordExport)?;
+          p.require(TT::KeywordAs)?;
+          p.require(TT::KeywordNamespace)?;
+          let name = p.require_identifier()?;
+          let t = p.peek();
+          if t.typ != TT::EOF && !t.preceded_by_line_terminator {
+            let _ = p.consume_if(TT::Semicolon);
+          }
+          Ok(crate::ast::ts_stmt::ExportAsNamespaceDecl { name })
+        })
+        .map(|node| node.into_wrapped());
+    }
+
     #[rustfmt::skip]
     let stmt: Node<Stmt> = match (t1.typ, t2.typ) {
       // `class` and `function` are treated as statements that are hoisted, not expressions; however, they can be unnamed, which gives them the name `default`.
