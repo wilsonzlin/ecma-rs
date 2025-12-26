@@ -271,6 +271,7 @@ fn resolve_index(
             readonly: prop.readonly,
             accessibility: None,
             is_method: false,
+            origin: None,
             declared_on: None,
           },
         });

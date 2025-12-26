@@ -132,6 +132,8 @@ mod api;
 pub mod codes;
 mod error;
 mod expand;
+#[cfg(feature = "fuzzing")]
+mod fuzz;
 mod profile;
 mod program;
 #[cfg(feature = "serde")]
@@ -140,6 +142,8 @@ mod type_queries;
 
 pub use api::*;
 pub use error::*;
+#[cfg(feature = "fuzzing")]
+pub use fuzz::*;
 pub use profile::*;
 pub use program::*;
 #[cfg(feature = "serde")]
