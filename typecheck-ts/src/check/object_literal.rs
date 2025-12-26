@@ -13,7 +13,7 @@ use super::super::{
   Span as HirSpan, TypeKind as LegacyTypeKind,
 };
 use crate::codes;
-use crate::type_queries::{PropertyKey, TypeQueries};
+use crate::type_queries::{PropertyKey, TypeKindSummary, TypeQueries};
 
 /// Check for excess properties on a fresh object literal assignment using the
 /// interned type system. Diagnostics are returned for the caller to attach to
@@ -34,37 +34,37 @@ pub(crate) fn check_excess_properties(
   }
 
   // Avoid excess property checks when the target is clearly not object-like.
-  match store.type_kind(target_type) {
-    InternedTypeKind::Any | InternedTypeKind::Unknown => return Vec::new(),
-    InternedTypeKind::Object(_)
-    | InternedTypeKind::Union(_)
-    | InternedTypeKind::Intersection(_)
-    | InternedTypeKind::Ref { .. }
-    | InternedTypeKind::Mapped(_) => {}
+  let queries = TypeQueries::new(Arc::clone(store), expander);
+  let evaluated = queries.evaluate(target_type);
+  match queries.type_kind(evaluated) {
+    TypeKindSummary::Any | TypeKindSummary::Unknown => return Vec::new(),
+    TypeKindSummary::Object
+    | TypeKindSummary::Union { .. }
+    | TypeKindSummary::Intersection { .. }
+    | TypeKindSummary::Ref { .. }
+    | TypeKindSummary::Mapped => {}
     _ => return Vec::new(),
   }
 
-  let queries = TypeQueries::new(Arc::clone(store), expander);
-  let Some(extras) = find_excess_properties(&queries, store.as_ref(), target_type, &props) else {
-    return Vec::new();
-  };
-
-  extras
-    .into_iter()
-    .map(|prop| {
-      let mut diagnostic = codes::EXCESS_PROPERTY.error(
-        format!("excess property '{}' in object literal", prop.name),
-        Span::new(file, object_span),
-      );
-      if let Some(span) = prop.span {
-        diagnostic.push_label(Label::secondary(
-          Span::new(file, span),
-          format!("property '{}' is not allowed here", prop.name),
-        ));
-      }
-      diagnostic
-    })
-    .collect()
+  match find_excess_properties(&queries, store.as_ref(), evaluated, &props) {
+    ExcessCheck::Excess(extras) => extras
+      .into_iter()
+      .map(|prop| {
+        let mut diagnostic = codes::EXCESS_PROPERTY.error(
+          format!("excess property '{}' in object literal", prop.name),
+          Span::new(file, object_span),
+        );
+        if let Some(span) = prop.span {
+          diagnostic.push_label(Label::secondary(
+            Span::new(file, span),
+            format!("property '{}' is not allowed here", prop.name),
+          ));
+        }
+        diagnostic
+      })
+      .collect(),
+    _ => Vec::new(),
+  }
 }
 
 struct LiteralProp {
@@ -111,15 +111,19 @@ fn find_excess_properties<'a, E: TypeExpander>(
   store: &TypeStore,
   target: TypeId,
   props: &'a [LiteralProp],
-) -> Option<Vec<&'a LiteralProp>> {
-  match store.type_kind(target) {
-    InternedTypeKind::Any | InternedTypeKind::Unknown => None,
+) -> ExcessCheck<'a> {
+  let evaluated = queries.evaluate(target);
+  match store.type_kind(evaluated) {
     InternedTypeKind::Union(members) => {
       let mut best: Option<Vec<&LiteralProp>> = None;
+      let mut any_allowed = false;
       for member in members.iter() {
         match find_excess_properties(queries, store, *member, props) {
-          None => return None,
-          Some(extras) => {
+          ExcessCheck::Allowed => {
+            any_allowed = true;
+            break;
+          }
+          ExcessCheck::Excess(extras) => {
             let replace = match &best {
               None => true,
               Some(current) => extras.len() < current.len(),
@@ -128,27 +132,53 @@ fn find_excess_properties<'a, E: TypeExpander>(
               best = Some(extras);
             }
           }
+          ExcessCheck::NotApplicable => {}
         }
       }
-      best
+      if any_allowed {
+        ExcessCheck::Allowed
+      } else if let Some(extras) = best {
+        ExcessCheck::Excess(extras)
+      } else {
+        ExcessCheck::NotApplicable
+      }
     }
     _ => {
-      if queries.properties_of(target).is_empty() && queries.indexers(target).is_empty() {
-        return None;
+      if !is_object_like(queries, evaluated) {
+        return ExcessCheck::NotApplicable;
+      }
+      if queries.properties_of(evaluated).is_empty() && queries.indexers(evaluated).is_empty() {
+        return ExcessCheck::Allowed;
       }
       let mut extras = Vec::new();
       for prop in props.iter() {
-        if !property_allowed(queries, target, &prop.name) {
+        if !property_allowed(queries, evaluated, &prop.name) {
           extras.push(prop);
         }
       }
       if extras.is_empty() {
-        None
+        ExcessCheck::Allowed
       } else {
-        Some(extras)
+        ExcessCheck::Excess(extras)
       }
     }
   }
+}
+
+enum ExcessCheck<'a> {
+  NotApplicable,
+  Allowed,
+  Excess(Vec<&'a LiteralProp>),
+}
+
+fn is_object_like<E: TypeExpander>(queries: &TypeQueries<'_, E>, ty: TypeId) -> bool {
+  matches!(
+    queries.type_kind(ty),
+    TypeKindSummary::Object
+      | TypeKindSummary::Intersection { .. }
+      | TypeKindSummary::Ref { .. }
+      | TypeKindSummary::Mapped
+  )
 }
 
 fn property_allowed<E: TypeExpander>(
@@ -221,7 +251,8 @@ pub(crate) fn legacy_check_excess_properties(
     return;
   }
 
-  let Some(excess) = legacy_find_excess_properties(state, target_type, props) else {
+  let LegacyExcessCheck::Excess(excess) = legacy_find_excess_properties(state, target_type, props)
+  else {
     return;
   };
 
@@ -264,20 +295,32 @@ struct LegacyExcessResult<'a> {
   allowed: Vec<String>,
 }
 
+enum LegacyExcessCheck<'a> {
+  NotApplicable,
+  Allowed,
+  Excess(LegacyExcessResult<'a>),
+}
+
 fn legacy_find_excess_properties<'a>(
   state: &mut ProgramState,
   target_type: TypeId,
   props: &'a [HirObjectProperty],
-) -> Option<LegacyExcessResult<'a>> {
+) -> LegacyExcessCheck<'a> {
   match state.type_store.kind(target_type).clone() {
-    LegacyTypeKind::Any | LegacyTypeKind::Unknown => None,
-    LegacyTypeKind::Object(obj) => legacy_excess_against_object(&obj, props),
+    LegacyTypeKind::Any | LegacyTypeKind::Unknown => LegacyExcessCheck::Allowed,
+    LegacyTypeKind::Object(obj) => legacy_excess_against_object(&obj, props)
+      .map(LegacyExcessCheck::Excess)
+      .unwrap_or(LegacyExcessCheck::Allowed),
     LegacyTypeKind::Union(members) => {
       let mut best: Option<LegacyExcessResult> = None;
+      let mut any_allowed = false;
       for member in members {
         match legacy_find_excess_properties(state, member, props) {
-          None => return None,
-          Some(res) => {
+          LegacyExcessCheck::Allowed => {
+            any_allowed = true;
+            break;
+          }
+          LegacyExcessCheck::Excess(res) => {
             let replace = match &best {
               None => true,
               Some(current) => {
@@ -290,11 +333,18 @@ fn legacy_find_excess_properties<'a>(
               best = Some(res);
             }
           }
+          LegacyExcessCheck::NotApplicable => {}
         }
       }
-      best
+      if any_allowed {
+        LegacyExcessCheck::Allowed
+      } else if let Some(res) = best {
+        LegacyExcessCheck::Excess(res)
+      } else {
+        LegacyExcessCheck::NotApplicable
+      }
     }
-    _ => None,
+    _ => LegacyExcessCheck::NotApplicable,
   }
 }
 

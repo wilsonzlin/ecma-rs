@@ -12,6 +12,14 @@ const unionOk: { foo: number } | { bar: number } = { foo: 1 };
 const unionBad: { foo: number } | { bar: number } = { foo: 1, bar: 2 };
 // expect-diagnostic: TC0006 "unionBad: { foo: number } | { bar: number } = { foo: 1, bar: 2 }"
 
+type UnionWithPrimitive = { foo: number } | number;
+const unionPrimitive: UnionWithPrimitive = { foo: 1, bar: 2 };
+// expect-diagnostic: TC0006 "UnionWithPrimitive = { foo: 1, bar: 2 }"
+
+type Nested = { inner: { foo: number } };
+const indexedAccess: Nested["inner"] = { foo: 1, bar: 2 };
+// expect-diagnostic: TC0006 "indexedAccess: Nested[\"inner\"] = { foo: 1, bar: 2 }"
+
 function make(): { foo: number } {
   return { foo: 1, bar: 2 };
 }

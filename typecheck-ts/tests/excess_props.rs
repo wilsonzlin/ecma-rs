@@ -151,3 +151,26 @@ fn call_argument_checks_excess_properties() {
   );
   assert_eq!(diagnostics.len(), 1);
 }
+
+#[test]
+fn union_with_non_object_still_checks_object_member() {
+  let diagnostics = run_top_level("let x: { foo: number } | number = { foo: 1, bar: 2 };");
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected excess property diagnostic, got {:?}",
+    diagnostics
+  );
+}
+
+#[test]
+fn indexed_access_target_runs_excess_property_check() {
+  let diagnostics =
+    run_top_level("let x: ({ inner: { foo: number } })['inner'] = { foo: 1, bar: 2 };");
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected excess property diagnostic, got {:?}",
+    diagnostics
+  );
+}

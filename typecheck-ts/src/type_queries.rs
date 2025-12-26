@@ -121,6 +121,13 @@ impl<'a, E: TypeExpander> TypeQueries<'a, E> {
     self.with_ctx(|ctx| ctx.summarize_kind(ty))
   }
 
+  /// Lazily expand the given type reference using the configured expander.
+  /// Returned [`TypeId`]s are interned in the same [`TypeStore`] and can be
+  /// inspected directly.
+  pub fn evaluate(&self, ty: TypeId) -> TypeId {
+    self.with_ctx(|ctx| ctx.evaluate(ty))
+  }
+
   /// Deterministic list of properties on the given type. For union types, only
   /// properties present on all members are returned. For intersection types,
   /// properties from all members are merged. Property types include `undefined`
@@ -268,6 +275,10 @@ impl<'a, E: TypeExpander> QueryCtx<'a, E> {
   fn summarize_kind(&mut self, ty: TypeId) -> TypeKindSummary {
     let evaluated = self.evaluator.evaluate(ty);
     summarize_kind(&self.store, evaluated)
+  }
+
+  fn evaluate(&mut self, ty: TypeId) -> TypeId {
+    self.evaluator.evaluate(ty)
   }
 
   fn shape_for(&mut self, ty: TypeId) -> ShapeInfo {
