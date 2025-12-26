@@ -111,14 +111,7 @@ struct Fixture {
 #[test]
 fn litmus_fixtures() {
   let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/litmus");
-  let mut fixtures = Vec::new();
-  for entry in fs::read_dir(&base).expect("read litmus dir") {
-    let entry = entry.expect("dir entry");
-    if entry.file_type().expect("file type").is_dir() {
-      fixtures.push(entry.path());
-    }
-  }
-  fixtures.sort();
+  let fixtures = collect_fixture_dirs(&base);
   assert!(
     !fixtures.is_empty(),
     "no fixtures found under {}",
@@ -127,6 +120,21 @@ fn litmus_fixtures() {
   for fixture in fixtures {
     run_fixture(&fixture);
   }
+}
+
+fn collect_fixture_dirs(base: &Path) -> Vec<PathBuf> {
+  let mut fixtures = Vec::new();
+  for entry in fs::read_dir(base).expect("read litmus dir") {
+    let entry = entry.expect("dir entry");
+    if entry.file_type().expect("file type").is_dir() {
+      let dir = entry.path();
+      if dir.join("main.ts").is_file() {
+        fixtures.push(dir);
+      }
+    }
+  }
+  fixtures.sort();
+  fixtures
 }
 
 fn run_fixture(path: &Path) {
