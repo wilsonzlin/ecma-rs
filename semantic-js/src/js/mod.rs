@@ -48,17 +48,17 @@
 //!   calls to `eval(...)` are marked as dynamic so downstream consumers can
 //!   avoid unsafe optimizations or renames.
 //!
-//! ## Determinism caveats
+//! ## Determinism
 //!
-//! Scope and symbol IDs are allocated in traversal order and stored in `Vec`s.
-//! Scope symbol tables use [`std::collections::BTreeMap`] keyed by [`NameId`]
-//! so iteration is stable; use [`ScopeData::iter_symbols_sorted`] or
-//! [`JsSemantics::scope_symbols`] to traverse symbols deterministically.
-//! Names are interned in first-encounter order using a deterministic lookup map.
-use crate::assoc::js::{DeclaredSymbol as LegacyDeclaredSymbol, JsAssocTables, ResolvedSymbol};
-use parse_js::ast::node::{Node, NodeAssocData};
+//! Scope, symbol, and name IDs are content-addressed using the file id, parent
+//! scope, declaration kind, and source spans so the same source always produces
+//! the same identifiers even when bound in parallel. Scope symbol tables use
+//! [`std::collections::BTreeMap`] keyed by [`NameId`] so iteration is stable; use
+//! [`ScopeData::iter_symbols_sorted`] or [`JsSemantics::scope_symbols`] to
+//! traverse symbols deterministically.
+use diagnostics::FileId;
+use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
-use parse_js::loc::Loc;
 use std::collections::BTreeMap;
 use std::str::FromStr;
 
@@ -66,98 +66,13 @@ pub mod declare;
 pub mod resolve;
 
 pub use declare::declare;
-pub(crate) use declare::declare_with_assoc;
 pub use resolve::resolve;
 pub use resolve::JsResolution;
-pub(crate) use resolve::resolve_with_assoc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TopLevelMode {
   Global,
   Module,
-}
-
-pub(crate) trait JsAssocStore {
-  fn record_scope(&mut self, loc: Loc, assoc: &mut NodeAssocData, scope: ScopeId);
-  fn scope(&self, loc: Loc, assoc: &NodeAssocData) -> Option<ScopeId>;
-  fn record_declared_symbol(&mut self, loc: Loc, assoc: &mut NodeAssocData, symbol: SymbolId);
-  fn declared_symbol(&self, loc: Loc, assoc: &NodeAssocData) -> Option<SymbolId>;
-  fn record_resolved_symbol(
-    &mut self,
-    loc: Loc,
-    assoc: &mut NodeAssocData,
-    symbol: Option<SymbolId>,
-    in_tdz: bool,
-  );
-}
-
-#[derive(Default)]
-pub(crate) struct LegacyJsAssocStore;
-
-impl JsAssocStore for LegacyJsAssocStore {
-  fn record_scope(&mut self, _loc: Loc, assoc: &mut NodeAssocData, scope: ScopeId) {
-    assoc.set(scope);
-  }
-
-  fn scope(&self, _loc: Loc, assoc: &NodeAssocData) -> Option<ScopeId> {
-    assoc.get::<ScopeId>().copied()
-  }
-
-  fn record_declared_symbol(&mut self, _loc: Loc, assoc: &mut NodeAssocData, symbol: SymbolId) {
-    assoc.set(LegacyDeclaredSymbol(symbol));
-  }
-
-  fn declared_symbol(&self, _loc: Loc, assoc: &NodeAssocData) -> Option<SymbolId> {
-    assoc.get::<LegacyDeclaredSymbol>().map(|s| s.0)
-  }
-
-  fn record_resolved_symbol(
-    &mut self,
-    _loc: Loc,
-    assoc: &mut NodeAssocData,
-    symbol: Option<SymbolId>,
-    in_tdz: bool,
-  ) {
-    assoc.set(ResolvedSymbol { symbol, in_tdz });
-  }
-}
-
-pub(crate) struct TableJsAssocStore<'a> {
-  tables: &'a mut JsAssocTables,
-}
-
-impl<'a> TableJsAssocStore<'a> {
-  pub fn new(tables: &'a mut JsAssocTables) -> Self {
-    Self { tables }
-  }
-}
-
-impl JsAssocStore for TableJsAssocStore<'_> {
-  fn record_scope(&mut self, loc: Loc, _assoc: &mut NodeAssocData, scope: ScopeId) {
-    self.tables.record_scope(loc, scope);
-  }
-
-  fn scope(&self, loc: Loc, _assoc: &NodeAssocData) -> Option<ScopeId> {
-    self.tables.scope(loc)
-  }
-
-  fn record_declared_symbol(&mut self, loc: Loc, _assoc: &mut NodeAssocData, symbol: SymbolId) {
-    self.tables.record_declared_symbol(loc, symbol);
-  }
-
-  fn declared_symbol(&self, loc: Loc, _assoc: &NodeAssocData) -> Option<SymbolId> {
-    self.tables.declared_symbol(loc)
-  }
-
-  fn record_resolved_symbol(
-    &mut self,
-    loc: Loc,
-    _assoc: &mut NodeAssocData,
-    symbol: Option<SymbolId>,
-    in_tdz: bool,
-  ) {
-    self.tables.record_resolved_symbol(loc, symbol, in_tdz);
-  }
 }
 
 impl FromStr for TopLevelMode {
@@ -172,58 +87,46 @@ impl FromStr for TopLevelMode {
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct ScopeId(u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ScopeId(u64);
 
 impl ScopeId {
-  pub fn index(self) -> usize {
-    self.0 as usize
-  }
-
-  pub fn raw(self) -> u32 {
+  pub fn raw(self) -> u64 {
     self.0
   }
 
-  pub fn from_raw(raw: u32) -> Self {
+  pub fn from_raw(raw: u64) -> Self {
     ScopeId(raw)
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct SymbolId(u32);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SymbolId(u64);
 
 impl SymbolId {
-  pub fn index(self) -> usize {
-    self.0 as usize
-  }
-
-  pub fn raw(self) -> u32 {
+  pub fn raw(self) -> u64 {
     self.0
   }
 
-  pub fn from_raw(raw: u32) -> Self {
+  pub fn from_raw(raw: u64) -> Self {
     SymbolId(raw)
   }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct NameId(u32);
+pub struct NameId(u64);
 
 impl NameId {
-  pub fn index(self) -> usize {
-    self.0 as usize
-  }
-
-  pub fn raw(self) -> u32 {
+  pub fn raw(self) -> u64 {
     self.0
   }
 
-  pub fn from_raw(raw: u32) -> Self {
+  pub fn from_raw(raw: u64) -> Self {
     NameId(raw)
   }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScopeKind {
   Global,
   Module,
@@ -278,12 +181,12 @@ pub struct SymbolData {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsSemantics {
-  /// Interned identifier strings in order of first encounter.
-  pub names: Vec<String>,
+  /// Interned identifier strings keyed by stable [`NameId`]s.
+  pub names: BTreeMap<NameId, String>,
   /// String → [`NameId`] lookup for deterministic resolution of raw names.
   pub name_lookup: BTreeMap<String, NameId>,
-  pub scopes: Vec<ScopeData>,
-  pub symbols: Vec<SymbolData>,
+  pub scopes: BTreeMap<ScopeId, ScopeData>,
+  pub symbols: BTreeMap<SymbolId, SymbolData>,
   pub top_scope: ScopeId,
 }
 
@@ -293,15 +196,19 @@ impl JsSemantics {
   }
 
   pub fn scope(&self, id: ScopeId) -> &ScopeData {
-    &self.scopes[id.index()]
+    self.scopes.get(&id).expect("scope exists for id")
   }
 
   pub fn symbol(&self, id: SymbolId) -> &SymbolData {
-    &self.symbols[id.index()]
+    self.symbols.get(&id).expect("symbol exists for id")
   }
 
   pub fn name(&self, id: NameId) -> &str {
-    &self.names[id.index()]
+    self
+      .names
+      .get(&id)
+      .map(|s| s.as_str())
+      .expect("name exists for id")
   }
 
   pub fn name_id(&self, name: &str) -> Option<NameId> {
@@ -336,34 +243,13 @@ impl JsSemantics {
   }
 }
 
-/// Legacy binding entry point that mutates `NodeAssocData`.
-/// Prefer [`bind_js_pure`] when running in parallel or in incremental contexts.
-pub fn bind_js(top_level: &mut Node<TopLevel>, mode: TopLevelMode) -> (JsSemantics, JsResolution) {
-  let mut assoc = LegacyJsAssocStore::default();
-  bind_js_with_assoc(top_level, mode, &mut assoc)
-}
-
-/// Pure binding entry point that leaves the AST untouched and returns side tables
-/// keyed by source spans.
-pub fn bind_js_pure(
+pub fn bind_js(
   top_level: &mut Node<TopLevel>,
   mode: TopLevelMode,
-) -> (JsSemantics, JsAssocTables) {
-  let mut tables = JsAssocTables::default();
-  let (sem, _res) = {
-    let mut assoc = TableJsAssocStore::new(&mut tables);
-    bind_js_with_assoc(top_level, mode, &mut assoc)
-  };
-  (sem, tables)
-}
-
-fn bind_js_with_assoc(
-  top_level: &mut Node<TopLevel>,
-  mode: TopLevelMode,
-  assoc: &mut impl JsAssocStore,
+  file: FileId,
 ) -> (JsSemantics, JsResolution) {
-  let sem = declare_with_assoc(top_level, mode, assoc);
-  let res = resolve_with_assoc(top_level, &sem, assoc);
+  let sem = declare(top_level, mode, file);
+  let res = resolve(top_level, &sem);
   (sem, res)
 }
 

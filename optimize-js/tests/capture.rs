@@ -1,3 +1,4 @@
+use diagnostics::FileId;
 use optimize_js::il::inst::InstTyp;
 use optimize_js::symbol::semantics::{JsSymbols, ScopeId, SymbolId};
 use optimize_js::symbol::var_analysis::VarAnalysis;
@@ -28,7 +29,7 @@ fn compile_with_symbols(
   mode: TopLevelMode,
 ) -> (Program, VarAnalysis, HashMap<SymbolId, String>) {
   let mut node = parse(source).expect("parse source");
-  let (symbols, _) = JsSymbols::bind(&mut node, mode);
+  let (symbols, _) = JsSymbols::bind(&mut node, mode, FileId(0));
   let names = collect_symbol_names(&symbols);
   let analysis = VarAnalysis::analyze(&mut node, &symbols);
   let program = Program::compile(node, mode, false).expect("compile");

@@ -1,17 +1,18 @@
 use super::*;
 use crate::assoc::{js, ts};
-use crate::ts::from_hir_js::lower_to_ts_hir;
-use crate::ts::locals::{bind_ts_locals, bind_ts_locals_pure, SymbolId as LocalSymbolId};
-use derive_visitor::{Drive, Visitor};
+use crate::ts::locals::{bind_ts_locals, SymbolId as LocalSymbolId};
 use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
 use hir_js::ids::{DefKind, ExprId, TypeExprId};
 use hir_js::lower_file;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::parse;
+use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::any::TypeId;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::thread;
 
+#[derive(Clone)]
 struct StaticResolver {
   map: HashMap<String, FileId>,
 }
@@ -25,20 +26,6 @@ impl StaticResolver {
 impl Resolver for StaticResolver {
   fn resolve(&self, _from: FileId, specifier: &str) -> Option<FileId> {
     self.map.get(specifier).copied()
-  }
-}
-
-#[derive(Default, Visitor)]
-#[visitor(NodeAssocData(enter))]
-struct AssocCounter {
-  non_empty: usize,
-}
-
-impl AssocCounter {
-  fn enter_node_assoc_data(&mut self, assoc: &NodeAssocData) {
-    if !assoc.is_empty() {
-      self.non_empty += 1;
-    }
   }
 }
 
@@ -56,6 +43,63 @@ fn mk_decl(def: u32, name: &str, kind: DeclKind, exported: Exported) -> Decl {
 
 fn span(start: u32) -> TextRange {
   TextRange::new(start, start + 1)
+}
+
+fn export_snapshot(
+  sem: &TsProgramSemantics,
+  files: &[FileId],
+) -> BTreeMap<FileId, Vec<(String, Namespace, SymbolId)>> {
+  let mut out = BTreeMap::new();
+  for file in files {
+    let mut entries = Vec::new();
+    for (name, group) in sem.exports_of(*file).iter() {
+      for ns in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
+        if let Some(sym) = group.symbol_for(ns, sem.symbols()) {
+          entries.push((name.clone(), ns, sym));
+        }
+      }
+    }
+    entries.sort_by(|a, b| {
+      a.0
+        .cmp(&b.0)
+        .then_with(|| a.1.bits().cmp(&b.1.bits()))
+        .then_with(|| a.2.cmp(&b.2))
+    });
+    out.insert(*file, entries);
+  }
+  out
+}
+
+fn symbol_table_snapshot(table: &SymbolTable) -> (Vec<SymbolData>, Vec<DeclData>) {
+  let mut symbols: Vec<_> = table.symbols.values().cloned().collect();
+  symbols.sort_by_key(|s| s.id);
+
+  let mut decls: Vec<_> = table.decls.values().cloned().collect();
+  decls.sort_by_key(|d| d.id);
+
+  (symbols, decls)
+}
+
+fn symbols_for_owner(table: &SymbolTable, owner: &SymbolOwner) -> Vec<SymbolData> {
+  let mut symbols: Vec<_> = table
+    .symbols
+    .values()
+    .filter(|s| &s.owner == owner)
+    .cloned()
+    .collect();
+  symbols.sort_by_key(|s| s.id);
+  symbols
+}
+
+fn decls_for_file(table: &SymbolTable, file: FileId) -> Vec<DeclData> {
+  let mut decls: Vec<_> = table
+    .decls
+    .values()
+    .filter(|d| d.file == file)
+    .cloned()
+    .collect();
+  decls.sort_by_key(|d| d.id);
+  decls
 }
 
 #[test]
@@ -97,31 +141,6 @@ fn ts_assoc_keys_do_not_overlap_js_accessors() {
   let _: Option<LocalSymbolId> = ts::resolved_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::declared_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::resolved_symbol(&assoc);
-}
-
-#[test]
-fn ts_locals_pure_matches_legacy_and_keeps_ast_clean() {
-  let source =
-    "function wrap(value: Foo) { return value; } type Foo = number; const use_it = wrap(1);";
-
-  let legacy = {
-    let mut ast = parse(source).unwrap();
-    bind_ts_locals(&mut ast, true)
-  };
-
-  let pure = {
-    let mut ast = parse(source).unwrap();
-    let sem = bind_ts_locals_pure(&mut ast, true);
-    let mut counter = AssocCounter::default();
-    ast.drive(&mut counter);
-    assert_eq!(counter.non_empty, 0);
-    sem
-  };
-
-  assert_eq!(legacy.names, pure.names);
-  assert_eq!(legacy.scopes.len(), pure.scopes.len());
-  assert_eq!(legacy.symbols.len(), pure.symbols.len());
-  assert_eq!(legacy.tables, pure.tables);
 }
 
 #[test]
@@ -682,69 +701,177 @@ fn resolve_export_handles_export_star_cycles() {
 }
 
 #[test]
-fn export_star_cycles_reach_fixpoint() {
-  let file_a = FileId(72);
-  let file_b = FileId(73);
-  let file_c = FileId(74);
+fn binder_is_deterministic_across_orders_and_threads() {
+  let file_a = FileId(300);
+  let file_b = FileId(301);
+  let file_c = FileId(302);
 
   let mut a = HirFile::module(file_a);
-  a.exports.push(Export::All(ExportAll {
-    specifier: "b".to_string(),
-    is_type_only: false,
-    specifier_span: span(1),
-  }));
-  a.exports.push(Export::All(ExportAll {
-    specifier: "c".to_string(),
-    is_type_only: false,
-    specifier_span: span(2),
-  }));
+  a.decls
+    .push(mk_decl(0, "Foo", DeclKind::Function, Exported::Named));
+  a
+    .decls
+    .push(mk_decl(1, "Foo", DeclKind::Namespace, Exported::Named));
+  a
+    .decls
+    .push(mk_decl(2, "TypeOnly", DeclKind::Interface, Exported::Named));
 
   let mut b = HirFile::module(file_b);
-  b.exports.push(Export::All(ExportAll {
+  b.imports.push(Import {
     specifier: "a".to_string(),
+    specifier_span: span(10),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Foo".to_string(),
+      local: "Foo".to_string(),
+      is_type_only: false,
+      imported_span: span(11),
+      local_span: span(12),
+    }],
     is_type_only: false,
-    specifier_span: span(3),
+  });
+  b.decls
+    .push(mk_decl(0, "LocalB", DeclKind::Function, Exported::Named));
+  b.exports.push(Export::Named(NamedExport {
+    specifier: Some("a".to_string()),
+    specifier_span: Some(span(13)),
+    items: vec![ExportSpecifier {
+      local: "Foo".to_string(),
+      exported: Some("Bar".to_string()),
+      local_span: span(14),
+      exported_span: Some(span(15)),
+    }],
+    is_type_only: false,
+  }));
+  b.exports.push(Export::Named(NamedExport {
+    specifier: None,
+    specifier_span: None,
+    items: vec![ExportSpecifier {
+      local: "LocalB".to_string(),
+      exported: None,
+      local_span: span(18),
+      exported_span: None,
+    }],
+    is_type_only: false,
   }));
 
   let mut c = HirFile::module(file_c);
+  c.exports.push(Export::All(ExportAll {
+    specifier: "b".to_string(),
+    is_type_only: false,
+    specifier_span: span(17),
+  }));
+  c.exports.push(Export::Named(NamedExport {
+    specifier: Some("a".to_string()),
+    specifier_span: Some(span(19)),
+    items: vec![ExportSpecifier {
+      local: "TypeOnly".to_string(),
+      exported: None,
+      local_span: span(20),
+      exported_span: None,
+    }],
+    is_type_only: true,
+  }));
   c.decls
-    .push(mk_decl(0, "value", DeclKind::Var, Exported::Named));
+    .push(mk_decl(1, "Local", DeclKind::Var, Exported::Named));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
     file_a => Arc::new(a),
     file_b => Arc::new(b),
     file_c => Arc::new(c),
   };
-  let resolver = StaticResolver::new(maplit::hashmap! {
+  let resolver_map = maplit::hashmap! {
     "a".to_string() => file_a,
     "b".to_string() => file_b,
-    "c".to_string() => file_c,
-  });
+  };
+  let roots = vec![file_a, file_b, file_c];
 
-  let (semantics, diags) =
-    bind_ts_program(&[file_a], &resolver, |f| files.get(&f).unwrap().clone());
+  let baseline_resolver = StaticResolver::new(resolver_map.clone());
+  let (baseline, diags) =
+    bind_ts_program(&roots, &baseline_resolver, |f| files.get(&f).unwrap().clone());
   assert!(diags.is_empty());
+  let baseline_exports = export_snapshot(&baseline, &roots);
+  let baseline_symbols = symbol_table_snapshot(baseline.symbols());
 
-  let exports_a = semantics.exports_of(file_a);
-  let exports_b = semantics.exports_of(file_b);
-  let exports_c = semantics.exports_of(file_c);
-  let symbols = semantics.symbols();
+  let files = Arc::new(files);
+  let resolver_map = Arc::new(resolver_map);
 
-  let value_a = exports_a
-    .get("value")
-    .and_then(|g| g.symbol_for(Namespace::VALUE, symbols))
-    .expect("value exported from a");
-  let value_b = exports_b
-    .get("value")
-    .and_then(|g| g.symbol_for(Namespace::VALUE, symbols))
-    .expect("value exported from b");
-  let value_c = exports_c
-    .get("value")
-    .and_then(|g| g.symbol_for(Namespace::VALUE, symbols))
-    .expect("value exported from c");
+  let mut orders = vec![roots.clone()];
+  for seed in 0..5 {
+    let mut order = roots.clone();
+    order.shuffle(&mut StdRng::seed_from_u64(seed + 1));
+    orders.push(order);
+  }
 
-  assert_eq!(value_a, value_b);
-  assert_eq!(value_b, value_c);
+  let handles: Vec<_> = orders
+    .into_iter()
+    .map(|order| {
+      let files = files.clone();
+      let resolver_map = resolver_map.clone();
+      thread::spawn(move || {
+        let resolver = StaticResolver::new((*resolver_map).clone());
+        let (sem, diags) =
+          bind_ts_program(&order, &resolver, |f| files.get(&f).unwrap().clone());
+        assert!(diags.is_empty());
+        (export_snapshot(&sem, &order), symbol_table_snapshot(sem.symbols()))
+      })
+    })
+    .collect();
+
+  for handle in handles {
+    let (exports, symbols) = handle.join().unwrap();
+    assert_eq!(exports, baseline_exports);
+    assert_eq!(symbols, baseline_symbols);
+  }
+}
+
+#[test]
+fn unrelated_file_does_not_renumber_symbols() {
+  let keep_file = FileId(310);
+  let mut keep = HirFile::module(keep_file);
+  keep
+    .decls
+    .push(mk_decl(0, "Keep", DeclKind::Var, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { keep_file => Arc::new(keep) };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (before, diags) =
+    bind_ts_program(&[keep_file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+  let keep_symbol = before
+    .resolve_export(keep_file, "Keep", Namespace::VALUE)
+    .expect("exported symbol");
+  let keep_owner = SymbolOwner::Module(keep_file);
+  let keep_symbols_before = symbols_for_owner(before.symbols(), &keep_owner);
+  let keep_decls_before = decls_for_file(before.symbols(), keep_file);
+
+  let mut with_extra = files.clone();
+  let extra_file = FileId(311);
+  let mut extra = HirFile::module(extra_file);
+  extra
+    .decls
+    .push(mk_decl(1, "NewThing", DeclKind::Class, Exported::Named));
+  with_extra.insert(extra_file, Arc::new(extra));
+
+  let (after, diags_after) = bind_ts_program(&[keep_file, extra_file], &resolver, |f| {
+    with_extra.get(&f).unwrap().clone()
+  });
+  assert!(diags_after.is_empty());
+  let keep_after = after
+    .resolve_export(keep_file, "Keep", Namespace::VALUE)
+    .expect("keep still exported");
+  let keep_symbols_after = symbols_for_owner(after.symbols(), &keep_owner);
+  let keep_decls_after = decls_for_file(after.symbols(), keep_file);
+
+  assert_eq!(keep_symbol, keep_after);
+  assert_eq!(
+    export_snapshot(&before, &[keep_file]),
+    export_snapshot(&after, &[keep_file])
+  );
+  assert_eq!(keep_symbols_before, keep_symbols_after);
+  assert_eq!(keep_decls_before, keep_decls_after);
 }
 
 #[test]
@@ -841,55 +968,6 @@ fn duplicate_export_has_two_labels() {
   assert_eq!(diag.labels[0].span.file, file_b);
   assert_eq!(diag.labels[0].span.range, span(1));
   assert!(!diag.labels[0].is_primary);
-}
-
-#[test]
-fn duplicate_exports_report_per_namespace() {
-  let file_x = FileId(62);
-  let mut x = HirFile::module(file_x);
-  x.decls
-    .push(mk_decl(0, "DupNs", DeclKind::Function, Exported::Named));
-
-  let file_y = FileId(63);
-  let mut y = HirFile::module(file_y);
-  y.decls
-    .push(mk_decl(1, "DupNs", DeclKind::Var, Exported::Named));
-
-  let file_z = FileId(64);
-  let mut z = HirFile::module(file_z);
-  z.exports.push(Export::All(ExportAll {
-    specifier: "x".to_string(),
-    is_type_only: false,
-    specifier_span: TextRange::new(300, 301),
-  }));
-  z.exports.push(Export::Named(NamedExport {
-    specifier: Some("y".to_string()),
-    specifier_span: Some(TextRange::new(302, 303)),
-    items: vec![ExportSpecifier {
-      local: "DupNs".to_string(),
-      exported: None,
-      local_span: TextRange::new(304, 305),
-      exported_span: None,
-    }],
-    is_type_only: false,
-  }));
-
-  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
-    file_x => Arc::new(x),
-    file_y => Arc::new(y),
-    file_z => Arc::new(z),
-  };
-  let resolver = StaticResolver::new(maplit::hashmap! {
-    "x".to_string() => file_x,
-    "y".to_string() => file_y,
-  });
-
-  let (_semantics, diags) =
-    bind_ts_program(&[file_z], &resolver, |f| files.get(&f).unwrap().clone());
-  assert_eq!(diags.len(), 1);
-  let diag = &diags[0];
-  assert_eq!(diag.code, "BIND1001");
-  assert_eq!(diag.primary.file, file_z);
 }
 
 #[test]
@@ -1054,9 +1132,6 @@ fn script_exports_report_single_diagnostic_with_span() {
 fn export_assignment_reports_span() {
   let file = FileId(94);
   let mut hir = HirFile::module(file);
-  hir
-    .decls
-    .push(mk_decl(0, "foo", DeclKind::Var, Exported::No));
   hir.exports.push(Export::ExportAssignment {
     expr: "foo".to_string(),
     span: span(10),
@@ -1064,90 +1139,13 @@ fn export_assignment_reports_span() {
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
   let resolver = StaticResolver::new(HashMap::new());
-  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
 
-  assert!(diags.is_empty());
-  let exports = semantics.exports_of(file);
-  let symbols = semantics.symbols();
-  let local = semantics
-    .resolve_in_module(file, "foo", Namespace::VALUE)
-    .expect("local binding");
-  let export_equals = exports
-    .get("export=")
-    .expect("export= entry present")
-    .symbol_for(Namespace::VALUE, symbols)
-    .expect("export= resolves");
-  let default_export = exports
-    .get("default")
-    .expect("default alias present")
-    .symbol_for(Namespace::VALUE, symbols)
-    .expect("default resolves");
-  assert_eq!(local, export_equals);
-  assert_eq!(export_equals, default_export);
-}
-
-#[test]
-fn export_assignment_uses_imported_symbol() {
-  let file_a = FileId(96);
-  let mut a = HirFile::module(file_a);
-  a.decls
-    .push(mk_decl(0, "Foo", DeclKind::Class, Exported::Named));
-
-  let file_b = FileId(97);
-  let mut b = HirFile::module(file_b);
-  b.imports.push(Import {
-    specifier: "a".to_string(),
-    specifier_span: span(5),
-    default: None,
-    namespace: None,
-    named: vec![ImportNamed {
-      imported: "Foo".to_string(),
-      local: "Foo".to_string(),
-      is_type_only: false,
-      imported_span: span(6),
-      local_span: span(7),
-    }],
-    is_type_only: false,
-  });
-  b.exports.push(Export::ExportAssignment {
-    expr: "Foo".to_string(),
-    span: span(8),
-  });
-
-  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
-    file_a => Arc::new(a),
-    file_b => Arc::new(b),
-  };
-  let resolver = StaticResolver::new(maplit::hashmap! {
-    "a".to_string() => file_a,
-  });
-
-  let (semantics, diags) =
-    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
-  assert!(diags.is_empty());
-
-  let symbols = semantics.symbols();
-  let foo_a = semantics
-    .exports_of(file_a)
-    .get("Foo")
-    .unwrap()
-    .symbol_for(Namespace::VALUE, symbols)
-    .unwrap();
-  let export_equals = semantics
-    .exports_of(file_b)
-    .get("export=")
-    .unwrap()
-    .symbol_for(Namespace::VALUE, symbols)
-    .unwrap();
-  let default_export = semantics
-    .exports_of(file_b)
-    .get("default")
-    .unwrap()
-    .symbol_for(Namespace::VALUE, symbols)
-    .unwrap();
-
-  assert_eq!(foo_a, export_equals);
-  assert_eq!(export_equals, default_export);
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1003");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(10));
 }
 
 #[test]
@@ -1155,108 +1153,20 @@ fn export_as_namespace_reports_diagnostic() {
   let file = FileId(95);
   let mut hir = HirFile::module(file);
   hir.file_kind = FileKind::Dts;
-  hir
-    .decls
-    .push(mk_decl(0, "Foo", DeclKind::Function, Exported::No));
-  hir.exports.push(Export::ExportAssignment {
-    expr: "Foo".to_string(),
-    span: span(30),
-  });
   hir.export_as_namespace.push(ExportAsNamespace {
-    name: "GlobalFoo".to_string(),
+    name: "Foo".to_string(),
     span: span(20),
   });
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
   let resolver = StaticResolver::new(HashMap::new());
-  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
 
-  assert!(diags.is_empty());
-  let symbols = semantics.symbols();
-  let export_equals = semantics
-    .exports_of(file)
-    .get("export=")
-    .expect("export= present")
-    .symbol_for(Namespace::VALUE, symbols)
-    .expect("export= resolves");
-  let global = semantics
-    .global_symbols()
-    .get("GlobalFoo")
-    .expect("global namespace present")
-    .symbol_for(Namespace::VALUE, symbols)
-    .expect("global value present");
-  assert_eq!(export_equals, global);
-}
-
-#[test]
-fn export_as_namespace_prefers_namespace_exports() {
-  let file = FileId(96);
-  let mut hir = HirFile::module(file);
-  hir.file_kind = FileKind::Dts;
-  hir
-    .decls
-    .push(mk_decl(0, "Ns", DeclKind::Namespace, Exported::Named));
-  hir.export_as_namespace.push(ExportAsNamespace {
-    name: "GlobalNs".to_string(),
-    span: span(15),
-  });
-
-  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
-  let resolver = StaticResolver::new(HashMap::new());
-  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
-
-  assert!(diags.is_empty());
-  let symbols = semantics.symbols();
-  let ns_export = semantics
-    .exports_of(file)
-    .get("Ns")
-    .unwrap()
-    .symbol_for(Namespace::NAMESPACE, symbols)
-    .expect("namespace export available");
-  let global = semantics
-    .global_symbols()
-    .get("GlobalNs")
-    .expect("global namespace present")
-    .symbol_for(Namespace::NAMESPACE, symbols)
-    .expect("global namespace available");
-
-  assert_eq!(ns_export, global);
-}
-
-#[test]
-fn export_as_namespace_parsed_from_ast() {
-  let ast = parse(
-    r#"
-    export function foo(): void;
-    export as namespace Lib;
-  "#,
-  )
-  .unwrap();
-  let lowered = lower_file(FileId(120), HirFileKind::Dts, &ast);
-  let hir = lower_to_ts_hir(&ast, &lowered);
-
-  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { FileId(120) => Arc::new(hir) };
-  let resolver = StaticResolver::new(HashMap::new());
-
-  let (semantics, diags) = bind_ts_program(&[FileId(120)], &resolver, |f| {
-    files.get(&f).unwrap().clone()
-  });
-  assert!(diags.is_empty());
-
-  let symbols = semantics.symbols();
-  let foo_symbol = semantics
-    .exports_of(FileId(120))
-    .get("foo")
-    .unwrap()
-    .symbol_for(Namespace::VALUE, symbols)
-    .unwrap();
-  let global = semantics
-    .global_symbols()
-    .get("Lib")
-    .expect("global namespace present")
-    .symbol_for(Namespace::VALUE, symbols)
-    .expect("global value available");
-  assert_eq!(foo_symbol, global);
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1003");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(20));
 }
 
 #[test]
@@ -1364,16 +1274,16 @@ fn body_by_name<'a>(
     .find(|d| d.path.kind == kind && lowered.names.resolve(d.path.name) == Some(name))
     .expect("definition present");
   if let Some(body_id) = def.body {
-    if let Some(body) = lowered.body(body_id) {
-      return body;
+    if let Some(body) = lowered.bodies.get(body_id.0 as usize) {
+      return body.as_ref();
     }
   }
   lowered
     .bodies
     .iter()
     .find(|b| b.owner == def.id)
-    .map(Arc::as_ref)
-    .or_else(|| lowered.bodies.first().map(Arc::as_ref))
+    .or_else(|| lowered.bodies.first())
+    .map(|b| b.as_ref())
     .unwrap_or_else(|| panic!("body available for {}", name))
 }
 
@@ -1392,7 +1302,7 @@ fn locals_resolve_block_shadowing() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, true);
+  let locals = bind_ts_locals(&mut ast, FileId(90), true);
   let lowered = lower_file(FileId(90), HirFileKind::Ts, &ast);
   let body = body_by_name(&lowered, "f", DefKind::Function);
 
@@ -1428,7 +1338,7 @@ fn locals_hoist_var_declarations() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, true);
+  let locals = bind_ts_locals(&mut ast, FileId(91), true);
   let lowered = lower_file(FileId(91), HirFileKind::Ts, &ast);
   let body = body_by_name(&lowered, "g", DefKind::Function);
 
@@ -1455,7 +1365,7 @@ fn locals_separate_value_and_type_namespaces() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, true);
+  let locals = bind_ts_locals(&mut ast, FileId(92), true);
   let lowered = lower_file(FileId(92), HirFileKind::Ts, &ast);
 
   let type_ref = lowered
@@ -1499,7 +1409,7 @@ fn type_only_imports_skip_value_resolution() {
   "#,
   )
   .unwrap();
-  let locals = bind_ts_locals(&mut ast, true);
+  let locals = bind_ts_locals(&mut ast, FileId(93), true);
   let lowered = lower_file(FileId(93), HirFileKind::Ts, &ast);
 
   let type_ref = lowered

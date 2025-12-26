@@ -1,4 +1,5 @@
-use super::{JsAssocStore, JsSemantics, LegacyJsAssocStore, ScopeId, SymbolId};
+use super::{JsSemantics, ScopeId, SymbolId};
+use crate::assoc::js::{declared_symbol, scope_id, ResolvedSymbol};
 use derive_visitor::{DriveMut, VisitorMut};
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::{ClassExpr, FuncExpr, IdExpr};
@@ -8,7 +9,6 @@ use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::decl::{ClassDecl, VarDecl, VarDeclMode, VarDeclarator};
 use parse_js::ast::stmt::{BlockStmt, CatchBlock, ForBody, ForInOfLhs};
 use parse_js::ast::stx::TopLevel;
-use parse_js::loc::Loc;
 use std::collections::HashSet;
 
 #[derive(Debug, Default)]
@@ -18,16 +18,7 @@ pub struct JsResolution {
 }
 
 pub fn resolve(top_level: &mut Node<TopLevel>, sem: &JsSemantics) -> JsResolution {
-  let mut assoc = LegacyJsAssocStore::default();
-  resolve_with_assoc(top_level, sem, &mut assoc)
-}
-
-pub(crate) fn resolve_with_assoc(
-  top_level: &mut Node<TopLevel>,
-  sem: &JsSemantics,
-  assoc: &mut impl JsAssocStore,
-) -> JsResolution {
-  let mut visitor = ResolveVisitor::new(sem, assoc);
+  let mut visitor = ResolveVisitor::new(sem);
   top_level.drive_mut(&mut visitor);
   JsResolution {
     resolved: visitor.resolved,
@@ -84,7 +75,7 @@ impl TdzFrame {
   VarDeclNode(enter, exit),
   VarDeclaratorNode(enter, exit)
 )]
-struct ResolveVisitor<'a, A: JsAssocStore> {
+struct ResolveVisitor<'a> {
   sem: &'a JsSemantics,
   resolved: usize,
   unresolved: usize,
@@ -93,11 +84,10 @@ struct ResolveVisitor<'a, A: JsAssocStore> {
   var_decl_mode_stack: Vec<VarDeclMode>,
   pending_active: Vec<bool>,
   pending_symbols: Vec<Vec<SymbolId>>,
-  assoc: &'a mut A,
 }
 
-impl<'a, A: JsAssocStore> ResolveVisitor<'a, A> {
-  fn new(sem: &'a JsSemantics, assoc: &'a mut A) -> ResolveVisitor<'a, A> {
+impl ResolveVisitor<'_> {
+  fn new(sem: &JsSemantics) -> ResolveVisitor<'_> {
     let top_scope = sem.top_scope();
     ResolveVisitor {
       sem,
@@ -108,12 +98,11 @@ impl<'a, A: JsAssocStore> ResolveVisitor<'a, A> {
       var_decl_mode_stack: Vec::new(),
       pending_active: Vec::new(),
       pending_symbols: Vec::new(),
-      assoc,
     }
   }
 
-  fn push_scope_from_assoc(&mut self, loc: Loc, assoc: &NodeAssocData) {
-    if let Some(scope) = self.assoc.scope(loc, assoc) {
+  fn push_scope_from_assoc(&mut self, assoc: &NodeAssocData) {
+    if let Some(scope) = scope_id(assoc) {
       if Some(scope) != self.scope_stack.last().copied() {
         self.scope_stack.push(scope);
         self.tdz_stack.push(TdzFrame::new(scope, self.sem));
@@ -121,8 +110,8 @@ impl<'a, A: JsAssocStore> ResolveVisitor<'a, A> {
     }
   }
 
-  fn pop_scope_from_assoc(&mut self, loc: Loc, assoc: &NodeAssocData) {
-    if let Some(scope) = self.assoc.scope(loc, assoc) {
+  fn pop_scope_from_assoc(&mut self, assoc: &NodeAssocData) {
+    if let Some(scope) = scope_id(assoc) {
       if Some(scope) == self.scope_stack.last().copied() {
         self.scope_stack.pop();
         self.tdz_stack.pop();
@@ -182,10 +171,8 @@ impl<'a, A: JsAssocStore> ResolveVisitor<'a, A> {
     }
   }
 
-  fn mark(&mut self, loc: Loc, assoc: &mut NodeAssocData, symbol: Option<SymbolId>, in_tdz: bool) {
-    self
-      .assoc
-      .record_resolved_symbol(loc, assoc, symbol, in_tdz);
+  fn mark(&mut self, assoc: &mut NodeAssocData, symbol: Option<SymbolId>, in_tdz: bool) {
+    assoc.set(ResolvedSymbol { symbol, in_tdz });
     if symbol.is_some() {
       self.resolved += 1;
     } else {
@@ -193,32 +180,32 @@ impl<'a, A: JsAssocStore> ResolveVisitor<'a, A> {
     }
   }
 
-  fn resolve_use(&mut self, loc: Loc, assoc: &mut NodeAssocData, name: &str) {
-    if let Some(scope) = self.assoc.scope(loc, assoc) {
+  fn resolve_use(&mut self, assoc: &mut NodeAssocData, name: &str) {
+    if let Some(scope) = scope_id(assoc) {
       let symbol = self.sem.resolve_name_in_scope(scope, name);
       let in_tdz = symbol.map_or(false, |sym| self.symbol_in_tdz(sym));
-      self.mark(loc, assoc, symbol, in_tdz);
+      self.mark(assoc, symbol, in_tdz);
     } else {
-      self.mark(loc, assoc, None, false);
+      self.mark(assoc, None, false);
     }
   }
 }
 
-impl<A: JsAssocStore> ResolveVisitor<'_, A> {
+impl ResolveVisitor<'_> {
   fn enter_block_stmt_node(&mut self, node: &mut BlockStmtNode) {
-    self.push_scope_from_assoc(node.loc, &node.assoc);
+    self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_block_stmt_node(&mut self, node: &mut BlockStmtNode) {
-    self.pop_scope_from_assoc(node.loc, &node.assoc);
+    self.pop_scope_from_assoc(&node.assoc);
   }
 
   fn enter_catch_block_node(&mut self, node: &mut CatchBlockNode) {
-    self.push_scope_from_assoc(node.loc, &node.assoc);
+    self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_catch_block_node(&mut self, node: &mut CatchBlockNode) {
-    self.pop_scope_from_assoc(node.loc, &node.assoc);
+    self.pop_scope_from_assoc(&node.assoc);
   }
 
   fn enter_class_decl_node(&mut self, node: &mut ClassDeclNode) {
@@ -226,39 +213,39 @@ impl<A: JsAssocStore> ResolveVisitor<'_, A> {
       .stx
       .name
       .as_ref()
-      .and_then(|name| self.assoc.declared_symbol(name.loc, &name.assoc))
+      .and_then(|name| declared_symbol(&name.assoc))
       .map(|sym| self.is_lexical_symbol(sym));
     let active = has_lexical_name.unwrap_or(false);
     self.push_pending(active);
     if active {
       if let Some(name) = &mut node.stx.name {
-        if let Some(sym) = self.assoc.declared_symbol(name.loc, &name.assoc) {
+        if let Some(sym) = declared_symbol(&name.assoc) {
           self.record_pending(sym);
         }
       }
     }
-    self.push_scope_from_assoc(node.loc, &node.assoc);
+    self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_class_decl_node(&mut self, node: &mut ClassDeclNode) {
-    self.pop_scope_from_assoc(node.loc, &node.assoc);
+    self.pop_scope_from_assoc(&node.assoc);
     self.pop_pending();
   }
 
   fn enter_class_expr_node(&mut self, node: &mut ClassExprNode) {
-    self.push_scope_from_assoc(node.loc, &node.assoc);
+    self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_class_expr_node(&mut self, node: &mut ClassExprNode) {
-    self.pop_scope_from_assoc(node.loc, &node.assoc);
+    self.pop_scope_from_assoc(&node.assoc);
   }
 
   fn enter_for_body_node(&mut self, node: &mut ForBodyNode) {
-    self.push_scope_from_assoc(node.loc, &node.assoc);
+    self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_for_body_node(&mut self, node: &mut ForBodyNode) {
-    self.pop_scope_from_assoc(node.loc, &node.assoc);
+    self.pop_scope_from_assoc(&node.assoc);
   }
 
   fn enter_for_in_of_lhs(&mut self, node: &mut ForInOfLhs) {
@@ -277,34 +264,34 @@ impl<A: JsAssocStore> ResolveVisitor<'_, A> {
   }
 
   fn enter_func_expr_node(&mut self, node: &mut FuncExprNode) {
-    self.push_scope_from_assoc(node.loc, &node.assoc);
+    self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_func_expr_node(&mut self, node: &mut FuncExprNode) {
-    self.pop_scope_from_assoc(node.loc, &node.assoc);
+    self.pop_scope_from_assoc(&node.assoc);
   }
 
   fn enter_func_node(&mut self, node: &mut FuncNode) {
-    self.push_scope_from_assoc(node.loc, &node.assoc);
+    self.push_scope_from_assoc(&node.assoc);
   }
 
   fn exit_func_node(&mut self, node: &mut FuncNode) {
-    self.pop_scope_from_assoc(node.loc, &node.assoc);
+    self.pop_scope_from_assoc(&node.assoc);
   }
 
   fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
-    self.resolve_use(node.loc, &mut node.assoc, &node.stx.name);
+    self.resolve_use(&mut node.assoc, &node.stx.name);
   }
 
   fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
-    if let Some(declared) = self.assoc.declared_symbol(node.loc, &node.assoc) {
+    if let Some(declared) = declared_symbol(&node.assoc) {
       let in_tdz = self.symbol_in_tdz(declared);
-      self.mark(node.loc, &mut node.assoc, Some(declared), in_tdz);
+      self.mark(&mut node.assoc, Some(declared), in_tdz);
       if self.is_lexical_symbol(declared) {
         self.record_pending(declared);
       }
     } else {
-      self.resolve_use(node.loc, &mut node.assoc, &node.stx.name);
+      self.resolve_use(&mut node.assoc, &node.stx.name);
     }
   }
 

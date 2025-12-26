@@ -89,7 +89,7 @@ pub mod semantic_js {
   /// Opaque symbol identifier.
   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
   #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-  pub struct SymbolId(pub u32);
+  pub struct SymbolId(pub u64);
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
     fn from(id: ::semantic_js::ts::SymbolId) -> Self {

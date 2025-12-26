@@ -18,10 +18,8 @@
 //!   maps for consumption by a type checker or any consumer that needs
 //!   TypeScript-aware module graphs.
 //!
-//! Both modes avoid global locks and allocate stable identifiers sequentially
-//! into vectors. Consumers should treat the IDs as opaque handles that are
-//! repeatable for the same inputs; there is no support yet for cross-run
-//! stability guarantees beyond deterministic traversal of the provided HIR/AST.
+//! Both modes avoid global locks and allocate stable, content-addressed
+//! identifiers so callers see the same IDs regardless of traversal order.
 //!
 //! ## JS mode quickstart
 //!
@@ -82,7 +80,7 @@
 //! )
 //! .unwrap();
 //!
-//! let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+//! let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module, diagnostics::FileId(0));
 //!
 //! let mut collect = Collect::default();
 //! ast.drive_mut(&mut collect);
@@ -101,13 +99,13 @@
 //! // Scope iteration is deterministic (ordered by NameId).
 //! let top_symbols: Vec<_> = sem
 //!   .scope_symbols(top_scope)
-//!   .map(|(name, symbol)| (sem.name(name).to_string(), symbol.index()))
+//!   .map(|(name, symbol)| (sem.name(name).to_string(), symbol.raw()))
 //!   .collect();
 //! assert_eq!(
 //!   top_symbols,
 //!   vec![
-//!     ("top".to_string(), collect.decls["top"].1.index()),
-//!     ("make".to_string(), collect.decls["make"].1.index())
+//!     ("top".to_string(), collect.decls["top"].1.raw()),
+//!     ("make".to_string(), collect.decls["make"].1.raw())
 //!   ]
 //! );
 //! ```
@@ -124,5 +122,6 @@
 //!   and returned as immutable snapshots.
 
 pub mod assoc;
+pub(crate) mod hash;
 pub mod js;
 pub mod ts;

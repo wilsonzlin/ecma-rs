@@ -5,8 +5,11 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-const EXPORT_EQUALS_NAME: &str = "export=";
-const DEFAULT_EXPORT_NAME: &str = "default";
+#[derive(Clone, Debug)]
+enum ExportStatus {
+  InProgress(ExportMap),
+  Done(ExportMap),
+}
 
 #[derive(Clone, Debug)]
 struct ModuleState {
@@ -49,10 +52,6 @@ enum ExportSpec {
   ExportAll {
     from: Option<FileId>,
     type_only: bool,
-    span: Span,
-  },
-  ExportEquals {
-    expr: String,
     span: Span,
   },
 }
@@ -115,7 +114,8 @@ pub fn bind_ts_program(
     symbols: SymbolTable::new(),
     global_symbols: BTreeMap::new(),
     diagnostics: Vec::new(),
-    next_decl_order: 0,
+    export_cache: HashMap::new(),
+    ambient_export_cache: HashMap::new(),
   };
   binder.run(roots)
 }
@@ -128,7 +128,8 @@ struct Binder<'a, HP: Fn(FileId) -> Arc<HirFile>> {
   symbols: SymbolTable,
   global_symbols: SymbolGroups,
   diagnostics: Vec<Diagnostic>,
-  next_decl_order: u32,
+  export_cache: HashMap<FileId, ExportStatus>,
+  ambient_export_cache: HashMap<String, ExportStatus>,
 }
 
 impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
@@ -147,9 +148,17 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       queue.extend(deps);
     }
 
-    self.compute_exports();
+    // Compute exports for every module.
+    let files: Vec<FileId> = self.modules.keys().cloned().collect();
+    for file in files {
+      self.exports_for(file);
+    }
 
-    self.apply_export_as_namespace();
+    // Compute exports for ambient modules.
+    let ambient_specs: Vec<String> = self.ambient_modules.keys().cloned().collect();
+    for spec in ambient_specs {
+      self.exports_for_ambient(&spec);
+    }
 
     let module_exports = self
       .modules
@@ -172,6 +181,26 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       .map(|(name, m)| (name.clone(), m.exports.clone()))
       .collect();
 
+    for state in self.modules.values() {
+      for export in &state.export_as_namespace {
+        self.diagnostics.push(Diagnostic::error(
+          "BIND1003",
+          "export as namespace is not supported yet",
+          export.span,
+        ));
+      }
+    }
+
+    for state in self.ambient_modules.values() {
+      for export in &state.export_as_namespace {
+        self.diagnostics.push(Diagnostic::error(
+          "BIND1003",
+          "export as namespace is not supported yet",
+          export.span,
+        ));
+      }
+    }
+
     let global_symbols = self.global_symbols.clone();
 
     sort_diagnostics(&mut self.diagnostics);
@@ -188,14 +217,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     )
   }
 
-  fn push_diag_once(&mut self, diag: Diagnostic) {
-    if !self.diagnostics.contains(&diag) {
-      self.diagnostics.push(diag);
-    }
-  }
-
   fn bind_file(&mut self, hir: Arc<HirFile>) -> Vec<FileId> {
     let mut state = ModuleState::new(hir.file_id);
+    let owner = SymbolOwner::Module(hir.file_id);
     let mut deps = Vec::new();
     let is_script = self.is_effective_script(
       hir.module_kind,
@@ -209,6 +233,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
 
     self.bind_module_items(
       &mut state,
+      &owner,
       hir.file_id,
       hir.file_kind,
       hir.module_kind,
@@ -236,6 +261,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     module: &AmbientModule,
   ) -> Vec<FileId> {
     let mut deps = Vec::new();
+    let owner = SymbolOwner::AmbientModule(module.name.clone());
     let mut state = self
       .ambient_modules
       .remove(&module.name)
@@ -243,6 +269,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
 
     self.bind_module_items(
       &mut state,
+      &owner,
       file_id,
       file_kind,
       ModuleKind::Module,
@@ -266,6 +293,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   fn bind_module_items(
     &mut self,
     state: &mut ModuleState,
+    owner: &SymbolOwner,
     file_id: FileId,
     file_kind: FileKind,
     _module_kind: ModuleKind,
@@ -289,7 +317,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         continue;
       }
       let namespaces = decl.kind.namespaces();
-      let order = self.bump_order();
+      let order = decl.span.start;
       let decl_id = self.symbols.alloc_decl(
         file_id,
         decl.name.clone(),
@@ -300,13 +328,14 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         order,
         Some(decl.def_id),
       );
-      let symbol_id = add_decl_to_groups(
+      let _symbol_id = add_decl_to_groups(
         &mut state.symbols,
         &decl.name,
         decl_id,
         namespaces,
         &mut self.symbols,
         SymbolOrigin::Local,
+        owner,
       );
       if self.decl_participates_in_global_kind(file_kind, decl, is_script) {
         add_decl_to_groups(
@@ -316,6 +345,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           namespaces,
           &mut self.symbols,
           SymbolOrigin::Local,
+          &SymbolOwner::Global,
         );
       } else if decl.is_global && file_kind != FileKind::Dts {
         let span = Span::new(file_id, decl.span);
@@ -362,10 +392,6 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           })
         }
       }
-
-      // Keep namespaces stored on symbol entry.
-      let sym = self.symbols.symbol_mut(symbol_id);
-      sym.namespaces |= namespaces;
     }
 
     for import in imports {
@@ -385,8 +411,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           imported: ImportItem::Default,
           type_only: import.is_type_only || default.is_type_only,
           def_id: import_def_ids.get(&default.local).copied(),
+          local_span: default.local_span,
         };
-        self.add_import_binding(state, file_id, &entry);
+        self.add_import_binding(state, owner, file_id, &entry);
       }
       if let Some(ns) = &import.namespace {
         let entry = ImportEntry {
@@ -395,8 +422,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           imported: ImportItem::Namespace,
           type_only: import.is_type_only || ns.is_type_only,
           def_id: import_def_ids.get(&ns.local).copied(),
+          local_span: ns.local_span,
         };
-        self.add_import_binding(state, file_id, &entry);
+        self.add_import_binding(state, owner, file_id, &entry);
       }
       for named in &import.named {
         let entry = ImportEntry {
@@ -405,8 +433,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           imported: ImportItem::Named(named.imported.clone()),
           type_only: import.is_type_only || named.is_type_only,
           def_id: import_def_ids.get(&named.local).copied(),
+          local_span: named.local_span,
         };
-        self.add_import_binding(state, file_id, &entry);
+        self.add_import_binding(state, owner, file_id, &entry);
       }
     }
 
@@ -466,14 +495,15 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           });
           has_exports = true;
         }
-        Export::ExportAssignment { span, expr } => {
+        Export::ExportAssignment { span, .. } => {
           let span = Span::new(file_id, *span);
           first_export_span.get_or_insert(span);
           if !is_script {
-            state.export_specs.push(ExportSpec::ExportEquals {
-              expr: expr.clone(),
+            self.diagnostics.push(Diagnostic::error(
+              "BIND1003",
+              "export assignments are not supported yet",
               span,
-            });
+            ));
           }
           has_exports = true;
         }
@@ -543,7 +573,13 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     }
   }
 
-  fn add_import_binding(&mut self, state: &mut ModuleState, file: FileId, entry: &ImportEntry) {
+  fn add_import_binding(
+    &mut self,
+    state: &mut ModuleState,
+    owner: &SymbolOwner,
+    file: FileId,
+    entry: &ImportEntry,
+  ) {
     state.imports.insert(entry.local.clone(), entry.clone());
     let namespaces = if entry.type_only {
       Namespace::TYPE
@@ -553,7 +589,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         _ => Namespace::VALUE | Namespace::TYPE,
       }
     };
-    let order = self.bump_order();
+    let order = entry.local_span.start;
     let decl_id = self.symbols.alloc_decl(
       file,
       entry.local.clone(),
@@ -578,6 +614,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           ImportItem::Namespace => "*".to_string(),
         },
       },
+      owner,
     );
   }
 
@@ -602,139 +639,166 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     resolved
   }
 
-  fn compute_exports(&mut self) {
-    let module_ids: Vec<FileId> = self.modules.keys().cloned().collect();
-    let mut changed = true;
-    while changed {
-      changed = false;
-      for file in module_ids.iter() {
-        let Some(module) = self.modules.get(file).cloned() else {
-          continue;
-        };
-        let mut export_spans = module.export_spans.clone();
-        let mut map = module.exports.clone();
-        let mut module_changed = false;
-        for spec in &module.export_specs {
-          if self.apply_export_spec(&module, spec, &mut map, &mut export_spans, false) {
-            module_changed = true;
-          }
-        }
-        if module_changed {
-          changed = true;
-          if let Some(state) = self.modules.get_mut(file) {
-            state.exports = map.clone();
-            state.export_spans = export_spans.clone();
-          }
-        }
-      }
-    }
-
-    for file in module_ids {
-      let Some(module) = self.modules.get(&file).cloned() else {
-        continue;
+  fn exports_for(&mut self, file: FileId) -> ExportMap {
+    if let Some(status) = self.export_cache.get(&file) {
+      return match status {
+        ExportStatus::InProgress(m) | ExportStatus::Done(m) => m.clone(),
       };
+    }
+    self
+      .export_cache
+      .insert(file, ExportStatus::InProgress(ExportMap::new()));
+    let mut map = ExportMap::new();
+    if let Some(module) = self.modules.get(&file).cloned() {
       let mut export_spans = module.export_spans.clone();
-      let mut map = module.exports.clone();
       for spec in &module.export_specs {
-        let _ = self.apply_export_spec(&module, spec, &mut map, &mut export_spans, true);
+        match spec {
+          ExportSpec::Local {
+            name,
+            exported_as,
+            type_only,
+            span,
+          } => {
+            self.add_local_export(
+              &module,
+              name,
+              exported_as,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+          ExportSpec::ReExport {
+            from,
+            name,
+            exported_as,
+            type_only,
+            span,
+          } => {
+            self.add_reexport(
+              &module,
+              *from,
+              name,
+              exported_as,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+          ExportSpec::ExportAll {
+            from,
+            type_only,
+            span,
+          } => {
+            self.add_export_all(
+              &module,
+              *from,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+        }
+        self
+          .export_cache
+          .insert(file, ExportStatus::InProgress(map.clone()));
       }
-      if let Some(state) = self.modules.get_mut(&file) {
-        state.exports = map;
-        state.export_spans = export_spans;
+      if let Some(module) = self.modules.get_mut(&file) {
+        module.export_spans = export_spans.clone();
       }
     }
 
-    let ambient_ids: Vec<String> = self.ambient_modules.keys().cloned().collect();
-    let mut ambient_changed = true;
-    while ambient_changed {
-      ambient_changed = false;
-      for name in ambient_ids.iter() {
-        let Some(module) = self.ambient_modules.get(name).cloned() else {
-          continue;
-        };
-        let mut export_spans = module.export_spans.clone();
-        let mut map = module.exports.clone();
-        let mut module_changed = false;
-        for spec in &module.export_specs {
-          if self.apply_export_spec(&module, spec, &mut map, &mut export_spans, false) {
-            module_changed = true;
-          }
-        }
-        if module_changed {
-          ambient_changed = true;
-          if let Some(state) = self.ambient_modules.get_mut(name) {
-            state.exports = map.clone();
-            state.export_spans = export_spans.clone();
-          }
-        }
-      }
+    self
+      .export_cache
+      .insert(file, ExportStatus::Done(map.clone()));
+    if let Some(module) = self.modules.get_mut(&file) {
+      module.exports = map.clone();
     }
-
-    for name in ambient_ids {
-      let Some(module) = self.ambient_modules.get(&name).cloned() else {
-        continue;
-      };
-      let mut export_spans = module.export_spans.clone();
-      let mut map = module.exports.clone();
-      for spec in &module.export_specs {
-        let _ = self.apply_export_spec(&module, spec, &mut map, &mut export_spans, true);
-      }
-      if let Some(state) = self.ambient_modules.get_mut(&name) {
-        state.exports = map;
-        state.export_spans = export_spans;
-      }
-    }
+    map
   }
 
-  fn apply_export_spec(
-    &mut self,
-    module: &ModuleState,
-    spec: &ExportSpec,
-    map: &mut ExportMap,
-    export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
-    emit_missing: bool,
-  ) -> bool {
-    match spec {
-      ExportSpec::Local {
-        name,
-        exported_as,
-        type_only,
-        span,
-      } => self.add_local_export(
-        module,
-        name,
-        exported_as,
-        *type_only,
-        *span,
-        map,
-        export_spans,
-        emit_missing,
-      ),
-      ExportSpec::ReExport {
-        from,
-        name,
-        exported_as,
-        type_only,
-        span,
-      } => self.add_reexport(
-        *from,
-        name,
-        exported_as,
-        *type_only,
-        *span,
-        map,
-        export_spans,
-        emit_missing,
-      ),
-      ExportSpec::ExportAll {
-        from,
-        type_only,
-        span,
-      } => self.add_export_all(*from, *type_only, *span, map, export_spans),
-      ExportSpec::ExportEquals { expr, span } => {
-        self.add_export_assignment(module, expr, *span, map, export_spans, emit_missing)
+  fn exports_for_ambient(&mut self, name: &str) -> ExportMap {
+    if let Some(status) = self.ambient_export_cache.get(name) {
+      return match status {
+        ExportStatus::InProgress(m) | ExportStatus::Done(m) => m.clone(),
+      };
+    }
+    self
+      .ambient_export_cache
+      .insert(name.to_string(), ExportStatus::InProgress(ExportMap::new()));
+    let mut map = ExportMap::new();
+    if let Some(module) = self.ambient_modules.get(name).cloned() {
+      let mut export_spans = module.export_spans.clone();
+      for spec in &module.export_specs {
+        match spec {
+          ExportSpec::Local {
+            name,
+            exported_as,
+            type_only,
+            span,
+          } => {
+            self.add_local_export(
+              &module,
+              name,
+              exported_as,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+          ExportSpec::ReExport {
+            from,
+            name,
+            exported_as,
+            type_only,
+            span,
+          } => {
+            self.add_reexport(
+              &module,
+              *from,
+              name,
+              exported_as,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+          ExportSpec::ExportAll {
+            from,
+            type_only,
+            span,
+          } => {
+            self.add_export_all(
+              &module,
+              *from,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+        }
+        self
+          .ambient_export_cache
+          .insert(name.to_string(), ExportStatus::InProgress(map.clone()));
+      }
+      if let Some(module) = self.ambient_modules.get_mut(name) {
+        module.export_spans = export_spans.clone();
       }
     }
+
+    self
+      .ambient_export_cache
+      .insert(name.to_string(), ExportStatus::Done(map.clone()));
+    if let Some(module) = self.ambient_modules.get_mut(name) {
+      module.exports = map.clone();
+    }
+    map
   }
 
   fn add_local_export(
@@ -746,8 +810,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     origin_span: Span,
     map: &mut ExportMap,
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
-    emit_missing: bool,
-  ) -> bool {
+  ) {
     if let Some(import) = module.imports.get(name) {
       if let Some(from) = import.from {
         let target_name = match &import.imported {
@@ -755,11 +818,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           ImportItem::Default => "default".to_string(),
           ImportItem::Namespace => name.to_string(),
         };
-        let target_exports = self
-          .modules
-          .get(&from)
-          .map(|m| m.exports.clone())
-          .unwrap_or_default();
+        let target_exports = self.exports_for(from);
         if let Some(entry) = target_exports.get(&target_name) {
           let filtered = filter_group(
             entry.clone(),
@@ -771,22 +830,25 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             &self.symbols,
           );
           if let Some(group) = filtered {
-            return self.insert_export(map, export_spans, exported_as, origin_span, group);
-          } else if emit_missing {
-            self.push_diag_once(Diagnostic::error(
-              "BIND1002",
-              format!("cannot find export '{}' in module", target_name),
+            insert_export(
+              map,
+              export_spans,
+              exported_as,
               origin_span,
-            ));
+              group,
+              &mut self.symbols,
+              &mut self.diagnostics,
+            );
+            return;
           }
-        } else if emit_missing {
-          self.push_diag_once(Diagnostic::error(
+        } else {
+          self.diagnostics.push(Diagnostic::error(
             "BIND1002",
             format!("cannot find export '{}' in module", target_name),
             origin_span,
           ));
+          return;
         }
-        return false;
       }
     }
 
@@ -801,26 +863,34 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         &self.symbols,
       );
       if let Some(g) = filtered {
-        return self.insert_export(map, export_spans, exported_as, origin_span, g);
-      } else if emit_missing {
-        self.push_diag_once(Diagnostic::error(
+        insert_export(
+          map,
+          export_spans,
+          exported_as,
+          origin_span,
+          g,
+          &mut self.symbols,
+          &mut self.diagnostics,
+        );
+      } else {
+        self.diagnostics.push(Diagnostic::error(
           "BIND1002",
           format!("cannot export '{}': symbol not found", name),
           origin_span,
         ));
       }
-    } else if emit_missing {
-      self.push_diag_once(Diagnostic::error(
+    } else {
+      self.diagnostics.push(Diagnostic::error(
         "BIND1002",
         format!("cannot export '{}': symbol not found", name),
         origin_span,
       ));
     }
-    false
   }
 
   fn add_reexport(
     &mut self,
+    _module: &ModuleState,
     from: Option<FileId>,
     name: &str,
     exported_as: &str,
@@ -828,202 +898,75 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     origin_span: Span,
     map: &mut ExportMap,
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
-    emit_missing: bool,
-  ) -> bool {
-    let Some(target) = from else {
-      return false;
-    };
-    let target_exports = self
-      .modules
-      .get(&target)
-      .map(|m| m.exports.clone())
-      .unwrap_or_default();
-    if let Some(entry) = target_exports.get(name) {
-      if let Some(group) = filter_group(
-        entry.clone(),
-        if type_only {
-          Namespace::TYPE
-        } else {
-          Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
-        },
-        &self.symbols,
-      ) {
-        return self.insert_export(map, export_spans, exported_as, origin_span, group);
-      } else if emit_missing {
-        self.push_diag_once(Diagnostic::error(
+  ) {
+    if let Some(target) = from {
+      let target_exports = self.exports_for(target);
+      if let Some(entry) = target_exports.get(name) {
+        if let Some(group) = filter_group(
+          entry.clone(),
+          if type_only {
+            Namespace::TYPE
+          } else {
+            Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+          },
+          &self.symbols,
+        ) {
+          insert_export(
+            map,
+            export_spans,
+            exported_as,
+            origin_span,
+            group,
+            &mut self.symbols,
+            &mut self.diagnostics,
+          );
+        }
+      } else {
+        self.diagnostics.push(Diagnostic::error(
           "BIND1002",
           format!("cannot re-export '{}': not found", name),
           origin_span,
         ));
       }
-    } else if emit_missing {
-      self.push_diag_once(Diagnostic::error(
-        "BIND1002",
-        format!("cannot re-export '{}': not found", name),
-        origin_span,
-      ));
     }
-    false
-  }
-
-  fn add_export_assignment(
-    &mut self,
-    module: &ModuleState,
-    expr: &str,
-    origin_span: Span,
-    map: &mut ExportMap,
-    export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
-    emit_missing: bool,
-  ) -> bool {
-    if expr.is_empty() {
-      if emit_missing {
-        self.push_diag_once(Diagnostic::error(
-          "BIND1002",
-          "export assignment must target an identifier",
-          origin_span,
-        ));
-      }
-      return false;
-    }
-
-    let mut changed = self.add_local_export(
-      module,
-      expr,
-      EXPORT_EQUALS_NAME,
-      false,
-      origin_span,
-      map,
-      export_spans,
-      emit_missing,
-    );
-
-    if let Some(group) = map.get(EXPORT_EQUALS_NAME).cloned() {
-      if self.insert_export(map, export_spans, DEFAULT_EXPORT_NAME, origin_span, group) {
-        changed = true;
-      }
-    }
-
-    changed
   }
 
   fn add_export_all(
     &mut self,
+    _module: &ModuleState,
     from: Option<FileId>,
     type_only: bool,
     origin_span: Span,
     map: &mut ExportMap,
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
-  ) -> bool {
-    let Some(target) = from else {
-      return false;
-    };
-    let target_exports = self
-      .modules
-      .get(&target)
-      .map(|m| m.exports.clone())
-      .unwrap_or_default();
-    let mut changed = false;
-    for (name, entry) in target_exports.iter() {
-      if name == DEFAULT_EXPORT_NAME || name == EXPORT_EQUALS_NAME {
-        continue;
-      }
-      if let Some(group) = filter_group(
-        entry.clone(),
-        if type_only {
-          Namespace::TYPE
-        } else {
-          Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
-        },
-        &self.symbols,
-      ) {
-        if self.insert_export(map, export_spans, name, origin_span, group) {
-          changed = true;
-        }
-      }
-    }
-    changed
-  }
-
-  fn apply_export_as_namespace(&mut self) {
-    let module_ids: Vec<FileId> = self.modules.keys().copied().collect();
-    for file in module_ids {
-      if let Some(state) = self.modules.get(&file).cloned() {
-        for entry in state.export_as_namespace {
-          self.add_export_as_namespace_binding(&entry, &state.exports);
-        }
-      }
-    }
-
-    let ambient_ids: Vec<String> = self.ambient_modules.keys().cloned().collect();
-    for name in ambient_ids {
-      if let Some(state) = self.ambient_modules.get(&name).cloned() {
-        for entry in state.export_as_namespace {
-          self.add_export_as_namespace_binding(&entry, &state.exports);
-        }
-      }
-    }
-  }
-
-  fn add_export_as_namespace_binding(
-    &mut self,
-    entry: &ExportAsNamespaceEntry,
-    exports: &ExportMap,
   ) {
-    let mut target = exports.get(EXPORT_EQUALS_NAME).and_then(|g| {
-      filter_group(
-        g.clone(),
-        Namespace::VALUE | Namespace::NAMESPACE,
-        &self.symbols,
-      )
-    });
-
-    if target.is_none() {
-      target = exports.get(DEFAULT_EXPORT_NAME).and_then(|g| {
-        filter_group(
-          g.clone(),
-          Namespace::VALUE | Namespace::NAMESPACE,
-          &self.symbols,
-        )
-      });
-    }
-
-    if target.is_none() {
-      for group in exports.values() {
-        if let Some(filtered) = filter_group(
-          group.clone(),
-          Namespace::VALUE | Namespace::NAMESPACE,
+    if let Some(target) = from {
+      let target_exports = self.exports_for(target);
+      for (name, entry) in target_exports.iter() {
+        if name == "default" {
+          continue;
+        }
+        if let Some(group) = filter_group(
+          entry.clone(),
+          if type_only {
+            Namespace::TYPE
+          } else {
+            Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+          },
           &self.symbols,
         ) {
-          target = Some(filtered);
-          break;
+          insert_export(
+            map,
+            export_spans,
+            name,
+            origin_span,
+            group,
+            &mut self.symbols,
+            &mut self.diagnostics,
+          );
         }
       }
     }
-
-    let Some(group) = target else {
-      self.push_diag_once(Diagnostic::error(
-        "BIND1002",
-        format!(
-          "cannot export namespace '{}': module has no value or namespace exports",
-          entry.name
-        ),
-        entry.span,
-      ));
-      return;
-    };
-
-    if let Some(existing) = self.global_symbols.remove(&entry.name) {
-      let merged = merge_groups(existing, group, &mut self.symbols);
-      self.global_symbols.insert(entry.name.clone(), merged);
-    } else {
-      self.global_symbols.insert(entry.name.clone(), group);
-    }
-  }
-
-  fn bump_order(&mut self) -> u32 {
-    let order = self.next_decl_order;
-    self.next_decl_order += 1;
-    order
   }
 }
 
@@ -1034,9 +977,11 @@ fn add_decl_to_groups(
   namespaces: Namespace,
   table: &mut SymbolTable,
   origin: SymbolOrigin,
+  owner: &SymbolOwner,
 ) -> SymbolId {
   let group = symbols.remove(name).unwrap_or_else(SymbolGroup::empty);
-  let (group, symbol_id) = merge_decl_into_group(group, name, decl, namespaces, table, origin);
+  let (group, symbol_id) =
+    merge_decl_into_group(group, name, decl, namespaces, table, origin, owner);
   symbols.insert(name.to_string(), group);
   symbol_id
 }
@@ -1108,6 +1053,7 @@ fn merge_decl_into_group(
   namespaces: Namespace,
   symbols: &mut SymbolTable,
   origin: SymbolOrigin,
+  owner: &SymbolOwner,
 ) -> (SymbolGroup, SymbolId) {
   if namespaces.is_empty() {
     return (group, SymbolId(0));
@@ -1120,7 +1066,15 @@ fn merge_decl_into_group(
 
   if !namespaces.is_single() {
     // Create a merged symbol that includes any existing declarations as well.
-    let merged_sym = build_merged_symbol(&group, name, decl, namespaces, symbols, origin.clone());
+    let merged_sym = build_merged_symbol(
+      &group,
+      name,
+      decl,
+      namespaces,
+      symbols,
+      origin.clone(),
+      owner,
+    );
     return (SymbolGroup::merged(merged_sym), merged_sym);
   }
 
@@ -1149,7 +1103,7 @@ fn merge_decl_into_group(
     symbols.add_decl_to_symbol(*sym, decl, namespaces);
     *sym
   } else {
-    let sym = symbols.alloc_symbol(name, namespaces, origin.clone());
+    let sym = symbols.alloc_symbol(owner, name, namespaces, origin.clone());
     symbols.add_decl_to_symbol(sym, decl, namespaces);
     *target_slot = Some(sym);
     sym
@@ -1171,6 +1125,7 @@ fn merge_decl_into_group(
       Namespace::empty(),
       symbols,
       origin,
+      owner,
     );
     return (SymbolGroup::merged(merged_sym), merged_sym);
   }
@@ -1194,6 +1149,7 @@ fn build_merged_symbol(
   namespaces: Namespace,
   symbols: &mut SymbolTable,
   origin: SymbolOrigin,
+  owner: &SymbolOwner,
 ) -> SymbolId {
   let mut decls: [Vec<DeclId>; 3] = Default::default();
   collect_decls(group, symbols, &mut decls);
@@ -1202,7 +1158,13 @@ fn build_merged_symbol(
   }
 
   for d in decls.iter_mut() {
-    d.sort_by_key(|d| symbols.decl(*d).order);
+    d.sort_by(|a, b| {
+      symbols
+        .decl(*a)
+        .order
+        .cmp(&symbols.decl(*b).order)
+        .then_with(|| a.cmp(b))
+    });
     d.dedup();
   }
 
@@ -1216,7 +1178,7 @@ fn build_merged_symbol(
     }
   }
 
-  let sym = symbols.alloc_symbol(name, mask, origin);
+  let sym = symbols.alloc_symbol(owner, name, mask, origin);
   for bit in mask.iter_bits() {
     for d in decls[ns_index(bit)].iter() {
       symbols.add_decl_to_symbol(sym, *d, bit);
@@ -1302,16 +1264,60 @@ fn namespace_name(ns: Namespace) -> &'static str {
   }
 }
 
-fn groups_equal(a: &SymbolGroup, b: &SymbolGroup, symbols: &SymbolTable) -> bool {
-  for bit in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
-    if symbol_for_namespace(a, bit, symbols) != symbol_for_namespace(b, bit, symbols) {
-      return false;
+fn insert_export(
+  map: &mut ExportMap,
+  spans: &mut BTreeMap<String, ExportNamespaceSpans>,
+  name: &str,
+  origin_span: Span,
+  group: SymbolGroup,
+  symbols: &mut SymbolTable,
+  diags: &mut Vec<Diagnostic>,
+) {
+  if let Some(existing) = map.get(name) {
+    if let Some(existing_spans) = spans.get(name) {
+      for bit in group.namespaces(symbols).iter_bits() {
+        let existing_sym = symbol_for_namespace(existing, bit, symbols);
+        let new_sym = symbol_for_namespace(&group, bit, symbols);
+        if let (Some(existing_sym), Some(new_sym)) = (existing_sym, new_sym) {
+          if existing_sym != new_sym {
+            let previous = existing_spans.span_for(bit).unwrap_or(origin_span);
+            diags.push(
+              Diagnostic::error(
+                "BIND1001",
+                format!(
+                  "duplicate export of '{}' in {} namespace",
+                  name,
+                  namespace_name(bit)
+                ),
+                origin_span,
+              )
+              .with_label(Label::secondary(previous, "previous export here")),
+            );
+          }
+        }
+      }
     }
   }
-  true
+
+  if let Some(existing) = map.remove(name) {
+    let merged = merge_groups(existing, group, symbols);
+    map.insert(name.to_string(), merged);
+  } else {
+    map.insert(name.to_string(), group);
+  }
+
+  let entry = spans.entry(name.to_string()).or_default();
+  for bit in map
+    .get(name)
+    .expect("just inserted export")
+    .namespaces(symbols)
+    .iter_bits()
+  {
+    entry.set_if_empty(bit, origin_span);
+  }
 }
 
-fn merge_groups(a: SymbolGroup, b: SymbolGroup, symbols: &SymbolTable) -> SymbolGroup {
+fn merge_groups(a: SymbolGroup, b: SymbolGroup, symbols: &mut SymbolTable) -> SymbolGroup {
   let mut temp: [Vec<SymbolId>; 3] = Default::default();
 
   for bit in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
@@ -1344,61 +1350,6 @@ fn merge_groups(a: SymbolGroup, b: SymbolGroup, symbols: &SymbolTable) -> Symbol
       ty,
       namespace,
     },
-  }
-}
-
-impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
-  fn insert_export(
-    &mut self,
-    map: &mut ExportMap,
-    spans: &mut BTreeMap<String, ExportNamespaceSpans>,
-    name: &str,
-    origin_span: Span,
-    group: SymbolGroup,
-  ) -> bool {
-    if let Some(existing) = map.get(name) {
-      if let Some(existing_spans) = spans.get(name) {
-        for bit in group.namespaces(&self.symbols).iter_bits() {
-          let existing_sym = symbol_for_namespace(existing, bit, &self.symbols);
-          let new_sym = symbol_for_namespace(&group, bit, &self.symbols);
-          if let (Some(existing_sym), Some(new_sym)) = (existing_sym, new_sym) {
-            if existing_sym != new_sym {
-              let previous = existing_spans.span_for(bit).unwrap_or(origin_span);
-              self.push_diag_once(
-                Diagnostic::error(
-                  "BIND1001",
-                  format!(
-                    "duplicate export of '{}' in {} namespace",
-                    name,
-                    namespace_name(bit)
-                  ),
-                  origin_span,
-                )
-                .with_label(Label::secondary(previous, "previous export here")),
-              );
-            }
-          }
-        }
-      }
-    }
-
-    let existing = map.remove(name);
-    let merged = if let Some(existing) = existing.clone() {
-      merge_groups(existing, group, &self.symbols)
-    } else {
-      group
-    };
-    let changed = existing
-      .as_ref()
-      .map(|old| !groups_equal(old, &merged, &self.symbols))
-      .unwrap_or(true);
-    map.insert(name.to_string(), merged.clone());
-
-    let entry = spans.entry(name.to_string()).or_default();
-    for bit in merged.namespaces(&self.symbols).iter_bits() {
-      entry.set_if_empty(bit, origin_span);
-    }
-    changed
   }
 }
 

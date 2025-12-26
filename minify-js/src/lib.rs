@@ -133,7 +133,7 @@ pub fn minify_with_options(
 
   erase_types(file, &mut top_level_node)?;
 
-  let (sem, _) = bind_js(&mut top_level_node, options.top_level_mode);
+  let (sem, _) = bind_js(&mut top_level_node, options.top_level_mode, file);
   let usage = collect_usages(&mut top_level_node, &sem, options.top_level_mode);
   let renames = assign_names(&sem, &usage);
   #[cfg(feature = "emit-minify")]

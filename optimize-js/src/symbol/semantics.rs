@@ -1,3 +1,4 @@
+use diagnostics::FileId;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stx::TopLevel;
@@ -9,26 +10,26 @@ use std::cmp::Ordering;
 pub use semantic_js::js::ScopeKind;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
-pub struct ScopeId(pub u32);
+pub struct ScopeId(pub u64);
 
 impl From<semantic_js::js::ScopeId> for ScopeId {
   fn from(value: semantic_js::js::ScopeId) -> Self {
-    ScopeId(value.index() as u32)
+    ScopeId(value.raw())
   }
 }
 
 impl ScopeId {
-  pub fn raw_id(self) -> u32 {
+  pub fn raw_id(self) -> u64 {
     self.0
   }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
-pub struct SymbolId(pub u32);
+pub struct SymbolId(pub u64);
 
 impl From<semantic_js::js::SymbolId> for SymbolId {
   fn from(value: semantic_js::js::SymbolId) -> Self {
-    SymbolId(value.index() as u32)
+    SymbolId(value.raw())
   }
 }
 
@@ -56,8 +57,12 @@ pub struct JsSymbols {
 }
 
 impl JsSymbols {
-  pub fn bind(top_level: &mut Node<TopLevel>, mode: TopLevelMode) -> (Self, JsResolution) {
-    let (semantics, resolution) = bind_js(top_level, mode);
+  pub fn bind(
+    top_level: &mut Node<TopLevel>,
+    mode: TopLevelMode,
+    file: FileId,
+  ) -> (Self, JsResolution) {
+    let (semantics, resolution) = bind_js(top_level, mode, file);
     (Self { semantics }, resolution)
   }
 
@@ -66,7 +71,11 @@ impl JsSymbols {
   }
 
   fn scope_data(&self, scope: ScopeId) -> &ScopeData {
-    &self.semantics.scopes[scope.0 as usize]
+    self
+      .semantics
+      .scopes
+      .get(&semantic_js::js::ScopeId::from_raw(scope.0))
+      .expect("scope available")
   }
 
   pub fn scope_kind(&self, scope: ScopeId) -> ScopeKind {
@@ -87,11 +96,22 @@ impl JsSymbols {
   }
 
   pub fn symbol_decl_scope(&self, symbol: SymbolId) -> ScopeId {
-    ScopeId::from(self.semantics.symbols[symbol.0 as usize].decl_scope)
+    ScopeId::from(
+      self
+        .semantics
+        .symbols
+        .get(&semantic_js::js::SymbolId::from_raw(symbol.0))
+        .expect("symbol present")
+        .decl_scope,
+    )
   }
 
   pub fn symbol_name(&self, symbol: SymbolId) -> &str {
-    let data = &self.semantics.symbols[symbol.0 as usize];
+    let data = self
+      .semantics
+      .symbols
+      .get(&semantic_js::js::SymbolId::from_raw(symbol.0))
+      .expect("symbol present");
     self.semantics.name(data.name)
   }
 

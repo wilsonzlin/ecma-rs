@@ -15,6 +15,7 @@ The snippet below demonstrates how to:
 use std::collections::HashMap;
 
 use derive_visitor::{DriveMut, VisitorMut};
+use diagnostics::FileId;
 use parse_js::{
   ast::{
     expr::{pat::IdPat, IdExpr},
@@ -65,7 +66,7 @@ let mut ast = parse(
 )
 .unwrap();
 
-let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(0));
 
 let mut collect = Collect::default();
 ast.drive_mut(&mut collect);
@@ -77,13 +78,13 @@ for (name, _, resolved) in &collect.uses {
 
 let top_symbols: Vec<_> = sem
   .scope_symbols(sem.top_scope())
-  .map(|(name, symbol)| (sem.name(name).to_string(), symbol.index()))
+  .map(|(name, symbol)| (sem.name(name).to_string(), symbol.raw()))
   .collect();
 assert_eq!(
   top_symbols,
   vec![
-    ("top".to_string(), collect.decls["top"].1.index()),
-    ("make".to_string(), collect.decls["make"].1.index())
+    ("top".to_string(), collect.decls["top"].1.raw()),
+    ("make".to_string(), collect.decls["make"].1.raw())
   ]
 );
 ```

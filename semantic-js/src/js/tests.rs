@@ -1,15 +1,13 @@
-use crate::assoc::js::{
-  declared_symbol, declared_symbol_for_node, resolved_symbol, resolved_symbol_for_node,
-  resolved_symbol_info, JsAssocTables, ResolvedSymbol,
-};
-use crate::js::{bind_js, bind_js_pure, declare, JsSemantics, ScopeKind, SymbolId, TopLevelMode};
-use derive_visitor::{Drive, DriveMut, Visitor, VisitorMut};
+use crate::assoc::js::{declared_symbol, resolved_symbol, resolved_symbol_info, ResolvedSymbol};
+use crate::js::{bind_js, declare, JsSemantics, ScopeKind, SymbolId, TopLevelMode};
+use derive_visitor::DriveMut;
+use derive_visitor::VisitorMut;
+use diagnostics::FileId;
 use parse_js::ast::expr::pat::IdPat;
 use parse_js::ast::expr::IdExpr;
 use parse_js::ast::node::Node;
 use parse_js::parse;
 use std::fmt::Write;
-use std::thread;
 
 #[derive(Default, VisitorMut)]
 #[visitor(IdExprNode(enter), IdPatNode(enter))]
@@ -62,45 +60,26 @@ impl CollectWithInfo {
   }
 }
 
-#[derive(Visitor)]
-#[visitor(IdExprNode(enter), IdPatNode(enter))]
-struct CollectFromTables<'a> {
-  tables: &'a JsAssocTables,
-  id_exprs: Vec<(String, Option<SymbolId>)>,
-  id_pats: Vec<(String, Option<SymbolId>, bool)>,
-}
-
-impl<'a> CollectFromTables<'a> {
-  fn enter_id_expr_node(&mut self, node: &IdExprNode) {
-    self.id_exprs.push((
-      node.stx.name.clone(),
-      resolved_symbol_for_node(self.tables, node),
-    ));
-  }
-
-  fn enter_id_pat_node(&mut self, node: &IdPatNode) {
-    let declared = declared_symbol_for_node(self.tables, node);
-    self.id_pats.push((
-      node.stx.name.clone(),
-      resolved_symbol_for_node(self.tables, node),
-      declared.is_some(),
-    ));
-  }
-}
-
 fn snapshot(sem: &JsSemantics) -> Vec<u8> {
   let mut out = String::new();
-  writeln!(&mut out, "names {:?}", sem.names).unwrap();
+  let mut names: Vec<_> = sem
+    .names
+    .iter()
+    .map(|(id, name)| (id.raw(), name.clone()))
+    .collect();
+  names.sort_by_key(|(id, _)| *id);
+  writeln!(&mut out, "names {:?}", names).unwrap();
   writeln!(&mut out, "name_lookup {:?}", sem.name_lookup).unwrap();
-  for (idx, scope) in sem.scopes.iter().enumerate() {
+  for (id, scope) in sem.scopes.iter() {
     writeln!(
       &mut out,
-      "scope {idx} {:?} parent {:?}",
+      "scope {} {:?} parent {:?}",
+      id.raw(),
       scope.kind,
-      scope.parent.map(|p| p.index())
+      scope.parent.map(|p| p.raw())
     )
     .unwrap();
-    let children: Vec<_> = scope.children.iter().map(|child| child.index()).collect();
+    let children: Vec<_> = scope.children.iter().map(|child| child.raw()).collect();
     writeln!(&mut out, "  children {children:?}").unwrap();
     writeln!(
       &mut out,
@@ -108,41 +87,21 @@ fn snapshot(sem: &JsSemantics) -> Vec<u8> {
       scope.is_dynamic, scope.has_direct_eval
     )
     .unwrap();
-    let tdz: Vec<_> = scope.tdz_bindings.iter().map(|sym| sym.index()).collect();
+    let tdz: Vec<_> = scope.tdz_bindings.iter().map(|sym| sym.raw()).collect();
     writeln!(&mut out, "  tdz_bindings {tdz:?}").unwrap();
     let symbols: Vec<_> = scope
       .iter_symbols_sorted()
-      .map(|(name, symbol)| (name.index(), symbol.index()))
+      .map(|(name, symbol)| (name.raw(), symbol.raw()))
       .collect();
     writeln!(&mut out, "  symbols {symbols:?}").unwrap();
   }
-  for (idx, symbol) in sem.symbols.iter().enumerate() {
+  for (id, symbol) in sem.symbols.iter() {
     writeln!(
       &mut out,
-      "symbol {idx} name {} decl_scope {}",
-      symbol.name.index(),
-      symbol.decl_scope.index()
-    )
-    .unwrap();
-  }
-  out.into_bytes()
-}
-
-fn snapshot_tables(tables: &JsAssocTables) -> Vec<u8> {
-  let mut out = String::new();
-  for (span, scope) in &tables.scopes {
-    writeln!(&mut out, "scope {:?} {}", span, scope.index()).unwrap();
-  }
-  for (span, sym) in &tables.declared {
-    writeln!(&mut out, "decl {:?} {}", span, sym.index()).unwrap();
-  }
-  for (span, resolved) in &tables.resolved {
-    writeln!(
-      &mut out,
-      "resolved {:?} {:?} tdz {}",
-      span,
-      resolved.symbol.map(|s| s.index()),
-      resolved.in_tdz
+      "symbol {} name {} decl_scope {}",
+      id.raw(),
+      symbol.name.raw(),
+      symbol.decl_scope.raw()
     )
     .unwrap();
   }
@@ -152,7 +111,7 @@ fn snapshot_tables(tables: &JsAssocTables) -> Vec<u8> {
 #[test]
 fn shadowing_prefers_inner_bindings() {
   let mut ast = parse("let a = 1; { let a = 2; a; } a;").unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(0));
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -175,7 +134,7 @@ fn shadowing_prefers_inner_bindings() {
 #[test]
 fn function_expression_name_is_local() {
   let mut ast = parse("const x = function foo() { return foo; }; foo;").unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(1));
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -189,7 +148,7 @@ fn function_expression_name_is_local() {
 #[test]
 fn destructuring_assignment_resolves_existing_symbol() {
   let mut ast = parse("let a; ({a} = obj);").unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(2));
 
   let mut collect = Collect::default();
   ast.drive_mut(&mut collect);
@@ -216,7 +175,7 @@ fn hoists_var_and_function_declarations() {
     "function wrap() { use_before; { var use_before = 1; } fn_call(); function fn_call() {} }",
   )
   .unwrap();
-  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(3));
 
   let mut collect = CollectWithInfo::default();
   ast.drive_mut(&mut collect);
@@ -250,7 +209,7 @@ fn hoists_var_and_function_declarations() {
 #[test]
 fn marks_lexical_uses_in_tdz() {
   let mut ast = parse("let outer = 0; { outer; let outer = 1; outer; }").unwrap();
-  let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module);
+  let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(4));
 
   let mut collect = CollectWithInfo::default();
   ast.drive_mut(&mut collect);
@@ -282,7 +241,7 @@ fn marks_lexical_uses_in_tdz() {
 #[test]
 fn public_resolve_handles_late_declarations() {
   let mut ast = parse("later; const later = 1;").unwrap();
-  let sem = declare(&mut ast, TopLevelMode::Module);
+  let sem = declare(&mut ast, TopLevelMode::Module, FileId(20));
 
   let resolved = sem.resolve_name_in_scope(sem.top_scope(), "later");
   let later = sem.name_id("later").expect("name interned");
@@ -292,7 +251,7 @@ fn public_resolve_handles_late_declarations() {
 #[test]
 fn public_resolve_traverses_parents() {
   let mut ast = parse("const outer = 1; { outer; }").unwrap();
-  let sem = declare(&mut ast, TopLevelMode::Module);
+  let sem = declare(&mut ast, TopLevelMode::Module, FileId(21));
 
   let top_scope = sem.top_scope();
   let block_scope = sem.scope(top_scope).children[0];
@@ -307,7 +266,7 @@ fn public_resolve_traverses_parents() {
 #[test]
 fn public_resolve_unknown_name_returns_none() {
   let mut ast = parse("const known = 1;").unwrap();
-  let sem = declare(&mut ast, TopLevelMode::Module);
+  let sem = declare(&mut ast, TopLevelMode::Module, FileId(22));
 
   assert_eq!(sem.resolve_name_in_scope(sem.top_scope(), "missing"), None);
 }
@@ -315,7 +274,7 @@ fn public_resolve_unknown_name_returns_none() {
 #[test]
 fn scope_symbols_iteration_is_stable() {
   let mut ast = parse("let b = 1; let a = 2;").unwrap();
-  let sem = declare(&mut ast, TopLevelMode::Module);
+  let sem = declare(&mut ast, TopLevelMode::Module, FileId(23));
 
   let first = sem
     .scope_symbols(sem.top_scope())
@@ -328,81 +287,6 @@ fn scope_symbols_iteration_is_stable() {
 
   assert_eq!(first, vec!["b", "a"]);
   assert_eq!(first, second);
-}
-
-#[test]
-fn pure_binding_matches_legacy() {
-  let source =
-    "let outer = 1; function wrap(arg) { let shadow = arg; return outer + shadow; } wrap(2);";
-
-  let legacy = {
-    let mut ast = parse(source).unwrap();
-    let (sem, _) = bind_js(&mut ast, TopLevelMode::Module);
-    let mut collect = Collect::default();
-    ast.drive_mut(&mut collect);
-    (sem, collect)
-  };
-
-  let pure = {
-    let mut ast = parse(source).unwrap();
-    let (sem, tables) = bind_js_pure(&mut ast, TopLevelMode::Module);
-    let mut collect = CollectFromTables {
-      tables: &tables,
-      id_exprs: Vec::new(),
-      id_pats: Vec::new(),
-    };
-    ast.drive(&mut collect);
-    (sem, collect.id_exprs, collect.id_pats, tables)
-  };
-
-  assert_eq!(snapshot(&legacy.0), snapshot(&pure.0));
-  assert_eq!(legacy.1.id_exprs, pure.1);
-  assert_eq!(legacy.1.id_pats, pure.2);
-  assert_eq!(
-    legacy
-      .1
-      .id_pats
-      .iter()
-      .filter_map(|(_, resolved, is_decl)| if *is_decl { *resolved } else { None })
-      .collect::<Vec<_>>()
-      .len(),
-    pure
-      .2
-      .iter()
-      .filter_map(|(_, resolved, is_decl)| if *is_decl { *resolved } else { None })
-      .collect::<Vec<_>>()
-      .len()
-  );
-  assert!(!pure.3.scopes.is_empty());
-}
-
-#[test]
-fn bind_js_pure_is_parallel_safe() {
-  let source = r#"
-    const top = 1;
-    function make(v) {
-      return () => v + top;
-    }
-    make(2)();
-  "#;
-
-  let handles: Vec<_> = (0..8)
-    .map(|_| {
-      let src = source.to_string();
-      thread::spawn(move || {
-        let mut ast = parse(&src).unwrap();
-        let (sem, tables) = bind_js_pure(&mut ast, TopLevelMode::Module);
-        (snapshot(&sem), snapshot_tables(&tables))
-      })
-    })
-    .collect();
-
-  let mut iter = handles.into_iter();
-  let first = iter.next().unwrap().join().unwrap();
-  for handle in iter {
-    let out = handle.join().unwrap();
-    assert_eq!(out, first);
-  }
 }
 
 #[test]
@@ -423,12 +307,12 @@ fn semantics_are_deterministic_between_runs() {
 
   let first = {
     let mut ast = parse(source).unwrap();
-    let sem = declare(&mut ast, TopLevelMode::Module);
+    let sem = declare(&mut ast, TopLevelMode::Module, FileId(24));
     snapshot(&sem)
   };
   let second = {
     let mut ast = parse(source).unwrap();
-    let sem = declare(&mut ast, TopLevelMode::Module);
+    let sem = declare(&mut ast, TopLevelMode::Module, FileId(24));
     snapshot(&sem)
   };
 
@@ -445,7 +329,7 @@ fn marks_dynamic_scopes_for_with_and_eval() {
   "#,
   )
   .unwrap();
-  let sem = declare(&mut ast, TopLevelMode::Module);
+  let sem = declare(&mut ast, TopLevelMode::Module, FileId(26));
 
   let top_scope = sem.top_scope();
   assert!(sem.scope(top_scope).is_dynamic);

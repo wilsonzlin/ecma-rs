@@ -343,7 +343,7 @@ impl Program {
     top_level_mode: TopLevelMode,
     debug: bool,
   ) -> OptimizeResult<Self> {
-    let (semantics, _) = JsSymbols::bind(&mut top_level_node, top_level_mode);
+    let (semantics, _) = JsSymbols::bind(&mut top_level_node, top_level_mode, SOURCE_FILE);
     let VarAnalysis {
       foreign,
       use_before_decl,
@@ -571,7 +571,7 @@ mod tests {
     "#;
 
     let mut top_level_node = parse(source).expect("parse input");
-    let (symbols, _) = JsSymbols::bind(&mut top_level_node, TopLevelMode::Module);
+    let (symbols, _) = JsSymbols::bind(&mut top_level_node, TopLevelMode::Module, SOURCE_FILE);
     let analysis = VarAnalysis::analyze(&mut top_level_node, &symbols);
     assert_eq!(analysis.declared.len(), 1);
     assert!(analysis.unknown.contains("obj"));

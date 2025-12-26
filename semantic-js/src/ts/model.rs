@@ -3,8 +3,8 @@
 //! The TS binder operates in the three TypeScript namespaces (`value`, `type`,
 //! and `namespace`) and groups declarations by name into [`SymbolGroup`]s. Each
 //! [`SymbolData`] holds the merged declarations for the namespaces it
-//! participates in; declaration ordering is preserved via an incrementing
-//! `order` counter to keep merged overloads deterministic.
+//! participates in. IDs are content-addressed so merged overloads and exports
+//! remain stable regardless of traversal order.
 //!
 //! File identity and diagnostics reuse shared workspace types from
 //! [`diagnostics`], and declaration IDs are shared with HIR via
@@ -22,18 +22,19 @@
 //! - ambient module export/symbol maps addressable by module specifier strings.
 //!
 //! The binder currently focuses on module graph semantics and declaration
-//! merging. It does not model statement-level scopes or contextual type-only
-//! exports beyond the supplied `is_type_only` flags. Cross-file ambient
-//! augmentations are only represented through re-exports/imports rather than
-//! global name injection. Ambient module declarations (`declare module "foo" {
-//! }`) are bound into their own export/symbol maps; `export as namespace` and
-//! `export =` export assignments are surfaced for consumers that need
-//! CommonJS/UMD interop.
+//! merging. It does not model statement-level scopes, contextual type-only
+//! exports beyond the supplied `is_type_only` flags, or `export =` assignments
+//! (which are reported as diagnostics). Cross-file ambient augmentations are
+//! only represented through re-exports/imports rather than global name
+//! injection.
+//! Ambient module declarations (`declare module "foo" { }`) are bound into
+//! their own export/symbol maps; unimplemented features such as `export as
+//! namespace` and `export =` are reported deterministically via diagnostics.
 //!
 //! Binder diagnostics use the shared [`diagnostics`] crate with stable codes:
 //! - `BIND1001`: duplicate export
 //! - `BIND1002`: unresolved import/export or missing export
-//! - `BIND1003`: exports in a script module
+//! - `BIND1003`: unsupported export assignment or exports in a script module
 //!
 //! ## Determinism expectations
 //!
@@ -41,9 +42,9 @@
 //!   sorted iteration for public APIs.
 //! - Declaration lists inside symbols are sorted by their `order` field, which
 //!   increments deterministically as HIR declarations are visited.
-//! - `SymbolId`, `DeclId`, and `DefId` allocation is sequential and repeatable
-//!   for the same traversal order; consumers should not assume stability across
-//!   different root orders or resolver outputs.
+//! - `SymbolId`, `DeclId`, and synthetic `DefId` allocation is derived from
+//!   stable content (file id, names, namespaces, declaration kinds, and spans) so
+//!   different root orders or threads produce identical outputs.
 //! - Binder diagnostics are sorted before being returned to avoid any accidental
 //!   dependency on hash map iteration order.
 //! - Internal caches may use hash maps, but public APIs avoid exposing their
@@ -62,6 +63,7 @@
 //!   three namespaces unless marked type-only.
 //! - Exports store [`SymbolGroup`]s per name; type-only exports filter out the
 //!   value/namespace bits before insertion.
+use crate::hash::{stable_hash, stable_hash_u32};
 use bitflags::bitflags;
 pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
 pub use hir_js::DefId;
@@ -91,12 +93,12 @@ impl Namespace {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct SymbolId(pub u32);
+pub struct SymbolId(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DeclId(pub u32);
+pub struct DeclId(pub u64);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DeclKind {
   Function,
   Class,
@@ -120,6 +122,26 @@ impl DeclKind {
       DeclKind::ImportBinding => Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE,
     }
   }
+}
+
+fn stable_symbol_id(owner: &SymbolOwner, name: &str, namespaces: Namespace) -> SymbolId {
+  SymbolId(stable_hash(&(owner, name, namespaces.bits())))
+}
+
+fn stable_decl_id(
+  file: FileId,
+  name: &str,
+  kind: &DeclKind,
+  namespaces: Namespace,
+  def_id: DefId,
+  order: u32,
+) -> DeclId {
+  let hash = stable_hash(&(file, name, kind, namespaces.bits(), def_id.0, order));
+  DeclId(hash)
+}
+
+fn synthetic_def_id(file: FileId, name: &str, kind: &DeclKind, order: u32) -> DefId {
+  DefId(stable_hash_u32(&(file, name, kind, order)))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -213,7 +235,7 @@ pub struct ExportAll {
 pub enum Export {
   Named(NamedExport),
   All(ExportAll),
-  /// `export =` assignments expose a CommonJS-style export binding.
+  /// `export =` assignments are tracked for diagnostics.
   ExportAssignment {
     expr: String,
     span: TextRange,
@@ -279,7 +301,7 @@ impl HirFile {
   }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeclData {
   pub id: DeclId,
   pub def_id: DefId,
@@ -292,7 +314,14 @@ pub struct DeclData {
   pub order: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SymbolOwner {
+  Module(FileId),
+  Global,
+  AmbientModule(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SymbolOrigin {
   Local,
   Import {
@@ -301,11 +330,12 @@ pub enum SymbolOrigin {
   },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolData {
   pub id: SymbolId,
   pub name: String,
   pub namespaces: Namespace,
+  pub owner: SymbolOwner,
   pub decls: [Vec<DeclId>; 3],
   pub origin: SymbolOrigin,
 }
@@ -424,9 +454,8 @@ pub trait Resolver {
 
 #[derive(Default, Clone, Debug)]
 pub struct SymbolTable {
-  pub(crate) symbols: Vec<SymbolData>,
-  pub(crate) decls: Vec<DeclData>,
-  next_def: u32,
+  pub(crate) symbols: BTreeMap<SymbolId, SymbolData>,
+  pub(crate) decls: BTreeMap<DeclId, DeclData>,
 }
 
 impl SymbolTable {
@@ -440,21 +469,21 @@ impl SymbolTable {
   }
 
   pub fn symbol(&self, id: SymbolId) -> &SymbolData {
-    &self.symbols[id.0 as usize]
+    self.symbols.get(&id).expect("symbol exists for id")
   }
 
   pub fn symbol_mut(&mut self, id: SymbolId) -> &mut SymbolData {
-    &mut self.symbols[id.0 as usize]
+    self.symbols.get_mut(&id).expect("symbol exists for id")
   }
 
   pub fn decl(&self, id: DeclId) -> &DeclData {
-    &self.decls[id.0 as usize]
+    self.decls.get(&id).expect("decl exists for id")
   }
 
   /// Find the symbol that owns a declaration for the given [`DefId`] in the
   /// requested namespace.
   pub fn symbol_for_def(&self, def: DefId, ns: Namespace) -> Option<SymbolId> {
-    for sym in self.symbols.iter() {
+    for sym in self.symbols.values() {
       if !sym.namespaces.contains(ns) {
         continue;
       }
@@ -480,16 +509,9 @@ impl SymbolTable {
     order: u32,
     def_id: Option<DefId>,
   ) -> DeclId {
-    let def = def_id.unwrap_or_else(|| {
-      let id = DefId(self.next_def);
-      self.next_def += 1;
-      id
-    });
-    if def.0 >= self.next_def {
-      self.next_def = def.0 + 1;
-    }
-    let id = DeclId(self.decls.len() as u32);
-    self.decls.push(DeclData {
+    let def = def_id.unwrap_or_else(|| synthetic_def_id(file, &name, &kind, order));
+    let id = stable_decl_id(file, &name, &kind, namespaces, def, order);
+    self.decls.entry(id).or_insert(DeclData {
       id,
       def_id: def,
       file,
@@ -505,15 +527,17 @@ impl SymbolTable {
 
   pub fn alloc_symbol(
     &mut self,
+    owner: &SymbolOwner,
     name: &str,
     namespaces: Namespace,
     origin: SymbolOrigin,
   ) -> SymbolId {
-    let id = SymbolId(self.symbols.len() as u32);
-    self.symbols.push(SymbolData {
+    let id = stable_symbol_id(owner, name, namespaces);
+    self.symbols.entry(id).or_insert(SymbolData {
       id,
       name: name.to_string(),
       namespaces,
+      owner: owner.clone(),
       decls: Default::default(),
       origin,
     });
@@ -523,7 +547,10 @@ impl SymbolTable {
   pub fn add_decl_to_symbol(&mut self, symbol: SymbolId, decl: DeclId, namespaces: Namespace) {
     {
       let sym = self.symbol_mut(symbol);
-      sym.namespaces |= namespaces;
+      debug_assert!(
+        sym.namespaces.contains(namespaces),
+        "symbol namespaces should contain declaration namespaces"
+      );
     }
 
     for bit in namespaces.iter_bits() {
@@ -533,7 +560,13 @@ impl SymbolTable {
         list_ref.push(decl);
         std::mem::take(list_ref)
       };
-      list.sort_by_key(|d| self.decl(*d).order);
+      list.sort_by(|a, b| {
+        self
+          .decl(*a)
+          .order
+          .cmp(&self.decl(*b).order)
+          .then_with(|| a.cmp(b))
+      });
       list.dedup();
       self.symbol_mut(symbol).decls[ns_index(bit)] = list;
     }
@@ -626,6 +659,7 @@ pub(crate) struct ImportEntry {
   pub imported: ImportItem,
   pub type_only: bool,
   pub def_id: Option<DefId>,
+  pub local_span: TextRange,
 }
 
 #[derive(Clone, Debug)]

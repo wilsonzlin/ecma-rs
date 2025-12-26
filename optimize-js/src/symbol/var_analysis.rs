@@ -141,6 +141,7 @@ mod tests {
   use super::VarAnalysis;
   use ahash::HashMap;
   use ahash::HashSet;
+  use diagnostics::FileId;
   use parse_js::parse;
   use semantic_js::js::TopLevelMode;
 
@@ -148,7 +149,7 @@ mod tests {
 
   fn parse_and_visit(source: &str) -> (VarAnalysis, JsSymbols) {
     let mut parsed = parse(source).unwrap();
-    let (symbols, _) = JsSymbols::bind(&mut parsed, TopLevelMode::Global);
+    let (symbols, _) = JsSymbols::bind(&mut parsed, TopLevelMode::Global, FileId(0));
     let analysis = VarAnalysis::analyze(&mut parsed, &symbols);
     (analysis, symbols)
   }
