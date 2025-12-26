@@ -44,3 +44,9 @@ fn jsx_text_allows_unescaped_gt_in_text() {
   let texts = jsx_text_values("<div>></div>");
   assert_eq!(texts, vec![">"]);
 }
+
+#[test]
+fn jsx_attribute_string_allows_escaped_quote() {
+  let source = "<div attr=\"&#0123;&hellip;&#x7D;\\\"></div>;";
+  parse_with_options(source, tsx_opts()).unwrap();
+}

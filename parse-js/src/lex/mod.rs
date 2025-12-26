@@ -986,6 +986,23 @@ fn lex_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   })
 }
 
+fn lex_jsx_string(lexer: &mut Lexer<'_>) -> LexResult<TT> {
+  let quote = lexer.consume_next()?;
+  loop {
+    lexer.consume(lexer.while_not_char(quote));
+    match lexer.peek_or_eof(0) {
+      Some(c) if c == quote => {
+        lexer.skip_expect(c.len_utf8());
+        return Ok(TT::LiteralString);
+      }
+      Some(_) => {
+        lexer.skip_expect(1);
+      }
+      None => return Err(LexNotFound),
+    }
+  }
+}
+
 /// Ends with `${` or backtick.
 pub(crate) fn lex_template_string_continue(lexer: &mut Lexer<'_>) -> LexResult<TT> {
   let mut ended = false;
@@ -1163,6 +1180,7 @@ pub fn lex_next(lexer: &mut Lexer<'_>, mode: LexMode, dialect: Dialect) -> Token
         TT::LiteralNumberBin => Ok(lex_binary_bigint_or_number(lexer)),
         TT::LiteralNumberHex => Ok(lex_hex_bigint_or_number(lexer)),
         TT::LiteralNumberOct => Ok(lex_oct_bigint_or_number(lexer)),
+        TT::LiteralString if mode == LexMode::JsxTag => lex_jsx_string(lexer),
         TT::LiteralString => lex_string(lexer),
         TT::LiteralTemplatePartString => lex_template(lexer),
         TT::PrivateMember => lex_private_member(lexer),

@@ -171,7 +171,10 @@ impl<'a> Parser<'a> {
         JsxAttrVal::Expression(expr)
       }
     } else {
-      JsxAttrVal::Text(self.with_loc(|p| p.lit_str_val().map(|value| JsxText { value }))?)
+      JsxAttrVal::Text(
+        self
+          .with_loc(|p| p.lit_str_val_with_mode(LexMode::JsxTag).map(|value| JsxText { value }))?,
+      )
     };
     Ok(val)
   }

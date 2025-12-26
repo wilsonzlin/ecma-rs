@@ -718,13 +718,19 @@ impl<'a> Parser<'a> {
   /// Parses a literal string and returns the raw string value normalized (e.g. escapes decoded).
   /// Does *not* return a node; use `lit_str` for that.
   pub fn lit_str_val(&mut self) -> SyntaxResult<String> {
-    let peek = self.peek();
+    self.lit_str_val_with_mode(LexMode::Standard)
+  }
+
+  pub fn lit_str_val_with_mode(&mut self, mode: LexMode) -> SyntaxResult<String> {
+    let peek = self.peek_with_mode(mode);
     let t = if matches!(peek.typ, TT::LiteralString | TT::Invalid)
-      && self.str(peek.loc).starts_with(|c| c == '"' || c == '\'')
+      && self
+        .str(peek.loc)
+        .starts_with(|c: char| c == '"' || c == '\'')
     {
-      self.consume()
+      self.consume_with_mode(mode)
     } else {
-      self.require(TT::LiteralString)?
+      self.require_with_mode(TT::LiteralString, mode)?
     };
     let raw = self.bytes(t.loc);
     let quote = raw
@@ -739,6 +745,14 @@ impl<'a> Parser<'a> {
       t.loc.1
     };
     let body = self.bytes(Loc(body_start, body_end));
+    if mode == LexMode::JsxTag {
+      if !has_closing {
+        return Err(
+          Loc(body_end, body_end).error(SyntaxErrorType::UnexpectedEnd, Some(TT::LiteralString)),
+        );
+      }
+      return Ok(body.to_string());
+    }
     let decoded = decode_literal(body, false).map_err(|err| {
       literal_error_to_syntax(
         err,
