@@ -10,9 +10,10 @@ use typecheck_ts::CacheKind;
 use typecheck_ts::QueryKind;
 use typecheck_ts_bench::fixtures::{all_fixtures, module_graph_fixtures};
 use typecheck_ts_bench::pipeline::{
-  assignability_micro, bind_module_graph, check_body_with_warmups, hir_kind, incremental_recheck,
-  lower_to_hir, parse_and_lower, parse_only, summarize_hir, type_of_exported_defs,
-  typecheck_fixture, typecheck_module_graph, BodyCheckSummary, RelationStats, TypecheckSummary,
+  assignability_micro, bind_module_graph, check_body_named, check_body_with_warmups, hir_kind,
+  incremental_recheck, lower_to_hir, parse_and_lower, parse_only, summarize_hir,
+  type_of_exported_defs, typecheck_fixture, typecheck_module_graph, BodyCheckSummary,
+  RelationStats, TypecheckSummary,
 };
 use typecheck_ts_bench::IncrementalEdit;
 
@@ -288,6 +289,7 @@ fn main() {
   results.push(measure("check_body/control_flow", CHECK_BODY_ITERS, || {
     let summary = check_body_named(control_flow, "evaluate");
     black_box((summary.exprs, summary.diagnostics));
+    detail_from_body(&summary)
   }));
 
   let generics = fixtures

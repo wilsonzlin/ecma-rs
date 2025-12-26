@@ -1,10 +1,10 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
 use hir_js::{
-  lower_file_with_diagnostics as lower_hir_with_diagnostics, BodyKind as HirBodyKind,
-  DefId as HirDefId, DefKind as HirDefKind, ExprKind as HirExprKind, ExportKind as HirExportKind,
-  FileKind as HirFileKind, ImportKind as HirImportKind, LowerResult, NameId, PatId as HirPatId,
-  PatKind as HirPatKind, StmtKind as HirStmtKind,
+  lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
+  BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
+  ExprKind as HirExprKind, FileKind as HirFileKind, ImportKind as HirImportKind, LowerResult, NameId,
+  PatId as HirPatId, PatKind as HirPatKind, StmtKind as HirStmtKind,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::expr::pat::Pat;
@@ -14,8 +14,10 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::{NamespaceBody, NamespaceDecl};
-use parse_js::ast::type_expr::{TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion};
+use parse_js::ast::ts_stmt::NamespaceBody;
+use parse_js::ast::type_expr::{
+  TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
+};
 use parse_js::loc::Loc;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 #[cfg(feature = "serde")]
@@ -534,6 +536,17 @@ impl Program {
     state.file_key_for_id(file)
   }
 
+  /// Text contents for a loaded file, if available from the host.
+  pub fn file_text(&self, file: FileId) -> Option<Arc<str>> {
+    match self.with_analyzed_state(|state| Ok(state.load_text(file, &self.host).ok())) {
+      Ok(text) => text,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
   /// All known file IDs in this program.
   pub fn files(&self) -> Vec<FileId> {
     match self.with_analyzed_state(|state| Ok(state.files.keys().copied().collect())) {
@@ -552,29 +565,29 @@ impl Program {
 
   /// Fallible entry point that surfaces unrecoverable failures to the host.
   pub fn check_fallible(&self) -> Result<Vec<Diagnostic>, FatalError> {
-      self.catch_fatal(|| {
-        self.ensure_not_cancelled()?;
-        let mut state = self.lock_state();
-        state.ensure_analyzed_result(&self.host, &self.roots, &self.cancelled)?;
-        state.ensure_interned_types(&self.host, &self.roots, &self.cancelled)?;
-        if state.asts.is_empty() && state.hir_lowered.is_empty() {
-          let mut diagnostics = state.diagnostics.clone();
-          let mut body_ids: Vec<BodyId> = state.body_results.keys().copied().collect();
-          body_ids.sort_by_key(|id| id.0);
-          for body in body_ids {
-            if let Some(result) = state.body_results.get(&body) {
-              diagnostics.extend(result.diagnostics.iter().cloned());
-            }
+    self.catch_fatal(|| {
+      self.ensure_not_cancelled()?;
+      let mut state = self.lock_state();
+      state.ensure_analyzed_result(&self.host, &self.roots, &self.cancelled)?;
+      state.ensure_interned_types(&self.host, &self.roots, &self.cancelled)?;
+      if state.asts.is_empty() && state.hir_lowered.is_empty() {
+        let mut diagnostics = state.diagnostics.clone();
+        let mut body_ids: Vec<BodyId> = state.body_results.keys().copied().collect();
+        body_ids.sort_by_key(|id| id.0);
+        for body in body_ids {
+          if let Some(result) = state.body_results.get(&body) {
+            diagnostics.extend(result.diagnostics.iter().cloned());
           }
-          codes::normalize_diagnostics(&mut diagnostics);
-          diagnostics.dedup();
-          return Ok(diagnostics);
         }
-        let mut body_ids: Vec<BodyId> = state
-          .body_map
-          .iter()
-          .filter_map(|(id, meta)| {
-            let kind = state
+        codes::normalize_diagnostics(&mut diagnostics);
+        diagnostics.dedup();
+        return Ok(diagnostics);
+      }
+      let mut body_ids: Vec<BodyId> = state
+        .body_map
+        .iter()
+        .filter_map(|(id, meta)| {
+          let kind = state
             .file_kinds
             .get(&meta.file)
             .copied()
@@ -870,8 +883,88 @@ impl Program {
       };
       let result = state.check_body(body);
       let unknown = state.interned_unknown();
-      let ty = result.expr_type(expr).unwrap_or(unknown);
-      Ok(Some(state.widen_literal_any(ty)))
+      let mut ty = result.expr_type(expr).unwrap_or(unknown);
+      let is_number_literal = state
+        .interned_store
+        .as_ref()
+        .and_then(|store| store.contains_type_id(ty).then(|| store.type_kind(ty)))
+        .map(|kind| matches!(kind, tti::TypeKind::NumberLiteral(_)))
+        .unwrap_or(false);
+      if is_number_literal {
+        let is_literal = state
+          .body_map
+          .get(&body)
+          .and_then(|meta| meta.hir)
+          .and_then(|hir_id| {
+            state
+              .hir_lowered
+              .get(&file)
+              .and_then(|lowered| lowered.body(hir_id))
+              .and_then(|hir_body| {
+                hir_body
+                  .exprs
+                  .get(expr.0 as usize)
+                  .map(|expr_data| matches!(expr_data.kind, HirExprKind::Literal(_)))
+              })
+          })
+          .unwrap_or(false);
+        if is_literal {
+          if let Some(meta) = state.body_map.get(&body) {
+            if let Some(hir_id) = meta.hir {
+              if let Some(lowered) = state.hir_lowered.get(&meta.file) {
+                if let Some(hir_body) = lowered.body(hir_id) {
+                  let mut best: Option<(u32, TypeId)> = None;
+                  for (idx, expr_data) in hir_body.exprs.iter().enumerate() {
+                    let span = expr_data.span;
+                    if !(span.start <= offset && offset < span.end) {
+                      continue;
+                    }
+                    if let HirExprKind::Binary { op, .. } = &expr_data.kind {
+                      let numeric = matches!(
+                        op,
+                        HirBinaryOp::Add
+                          | HirBinaryOp::Subtract
+                          | HirBinaryOp::Multiply
+                          | HirBinaryOp::Divide
+                          | HirBinaryOp::Exponent
+                          | HirBinaryOp::Remainder
+                          | HirBinaryOp::BitAnd
+                          | HirBinaryOp::BitOr
+                          | HirBinaryOp::BitXor
+                          | HirBinaryOp::ShiftLeft
+                          | HirBinaryOp::ShiftRight
+                          | HirBinaryOp::ShiftRightUnsigned
+                      );
+                      if !numeric {
+                        continue;
+                      }
+                      let len = span.len();
+                      let bin_ty = result.expr_type(ExprId(idx as u32)).unwrap_or(ty);
+                      let is_number = state
+                        .interned_store
+                        .as_ref()
+                        .and_then(|store| store.contains_type_id(bin_ty).then(|| store.type_kind(bin_ty)))
+                        .map(|kind| matches!(kind, tti::TypeKind::Number))
+                        .unwrap_or(false);
+                      if is_number {
+                        let replace = best.map(|(l, _)| len < l).unwrap_or(true);
+                        if replace {
+                          best = Some((len, bin_ty));
+                        }
+                      }
+                    }
+                  }
+                  if let Some((_, bin_ty)) = best {
+                    ty = bin_ty;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      let ty = state.ensure_interned_type(ty);
+      Ok(Some(ty))
     })
   }
 
@@ -1257,6 +1350,53 @@ impl Program {
     self.with_analyzed_state(|state| Ok(state.files.get(&file).and_then(|f| f.top_body)))
   }
 
+  /// Span of a definition, if known.
+  pub fn span_of_def(&self, def: DefId) -> Option<Span> {
+    match self.span_of_def_fallible(def) {
+      Ok(span) => span,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn span_of_def_fallible(&self, def: DefId) -> Result<Option<Span>, FatalError> {
+    self.with_analyzed_state(|state| {
+      Ok(
+        state
+          .def_data
+          .get(&def)
+          .map(|data| Span::new(data.file, data.span)),
+      )
+    })
+  }
+
+  /// Span of an expression within a body, if available from cached results.
+  pub fn span_of_expr(&self, body: BodyId, expr: ExprId) -> Option<Span> {
+    match self.span_of_expr_fallible(body, expr) {
+      Ok(span) => span,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn span_of_expr_fallible(
+    &self,
+    body: BodyId,
+    expr: ExprId,
+  ) -> Result<Option<Span>, FatalError> {
+    self.with_analyzed_state(|state| {
+      let Some(meta) = state.body_map.get(&body).copied() else {
+        return Ok(None);
+      };
+      let res = state.check_body(body);
+      Ok(res.expr_span(expr).map(|range| Span::new(meta.file, range)))
+    })
+  }
+
   /// Serialize the current analyzed state into a deterministic snapshot suitable
   /// for caching or offline queries. All bodies and definitions are fully
   /// checked before serialization to ensure type and diagnostic tables are
@@ -1398,6 +1538,20 @@ impl Program {
       .collect();
     interned_type_params.sort_by_key(|(def, _)| def.0);
 
+    let mut canonical_defs: Vec<_> = state.canonical_defs().into_iter().collect();
+    canonical_defs.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
+
+    let mut namespace_types: Vec<_> = state
+      .namespace_object_types
+      .iter()
+      .filter_map(|((file, name), (_, store_ty))| {
+        state
+          .find_namespace_def(*file, name)
+          .map(|def| (def, *store_ty))
+      })
+      .collect();
+    namespace_types.sort_by_key(|(def, _)| def.0);
+
     ProgramSnapshot {
       schema_version: PROGRAM_SNAPSHOT_VERSION,
       tool_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1411,6 +1565,8 @@ impl Program {
       file_states,
       def_data,
       def_types,
+      canonical_defs,
+      namespace_types,
       body_results,
       symbol_occurrences,
       symbol_to_def,
@@ -1483,6 +1639,7 @@ impl Program {
         .map(|def| (def.def, def.data))
         .collect();
       state.body_map = HashMap::new();
+      state.body_parents = HashMap::new();
       state.def_types = snapshot.def_types.into_iter().collect();
       state.body_results = snapshot
         .body_results
@@ -1498,6 +1655,28 @@ impl Program {
       state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
       state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
       state.interned_type_params = snapshot.interned_type_params.into_iter().collect();
+      if let Some(store) = state.interned_store.clone() {
+        for (def, store_ty) in snapshot.namespace_types.into_iter() {
+          state.def_types.entry(def).or_insert(store_ty);
+          let def_data = state.def_data.get(&def).cloned();
+          let interned = state
+            .interned_def_types
+            .get(&def)
+            .copied()
+            .unwrap_or_else(|| {
+              let mut cache = HashMap::new();
+              store.canon(convert_type_for_display(
+                store_ty, &state, &store, &mut cache,
+              ))
+            });
+          if let Some(data) = def_data {
+            state
+              .namespace_object_types
+              .insert((data.file, data.name.clone()), (interned, store_ty));
+          }
+          state.interned_def_types.entry(def).or_insert(interned);
+        }
+      }
       state.builtin = snapshot.builtin;
       state.next_def = snapshot.next_def;
       state.next_body = snapshot.next_body;
@@ -2062,6 +2241,7 @@ struct ProgramState {
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
   body_map: HashMap<BodyId, BodyMeta>,
+  body_parents: HashMap<BodyId, BodyId>,
   hir_lowered: HashMap<FileId, LowerResult>,
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
   semantics: Option<sem_ts::TsProgramSemantics>,
@@ -2105,6 +2285,7 @@ impl ProgramState {
       files: HashMap::new(),
       def_data: HashMap::new(),
       body_map: HashMap::new(),
+      body_parents: HashMap::new(),
       hir_lowered: HashMap::new(),
       sem_hir: HashMap::new(),
       semantics: None,
@@ -2221,6 +2402,44 @@ impl ProgramState {
       };
     }
     u8::MAX
+  }
+
+  fn canonical_defs(&mut self) -> HashMap<(FileId, String), DefId> {
+    let mut def_entries: Vec<_> = self
+      .def_data
+      .iter()
+      .map(|(id, data)| (*id, data.clone()))
+      .collect();
+    def_entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
+    let mut def_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
+    for (def_id, data) in def_entries {
+      let key = (data.file, data.name.clone());
+      let ns = match data.kind {
+        DefKind::Interface(_) | DefKind::TypeAlias(_) => sem_ts::Namespace::TYPE,
+        _ => sem_ts::Namespace::VALUE,
+      };
+      let mut mapped_def = def_id;
+      if let DefKind::Import(import) = &data.kind {
+        if let Some(target) = self
+          .exports_of_file(import.from)
+          .get(&import.original)
+          .and_then(|entry| entry.def)
+        {
+          mapped_def = target;
+        }
+      }
+      def_by_name
+        .entry(key)
+        .and_modify(|existing| {
+          let current = self.def_priority(*existing, ns);
+          let new_pri = self.def_priority(mapped_def, ns);
+          if new_pri < current || (new_pri == current && mapped_def < *existing) {
+            *existing = mapped_def;
+          }
+        })
+        .or_insert(mapped_def);
+    }
+    def_by_name
   }
 
   fn interned_unknown(&self) -> TypeId {
@@ -2587,47 +2806,20 @@ impl ProgramState {
       return Err(FatalError::Cancelled);
     }
 
-    let store = tti::TypeStore::new();
-    self.interned_store = Some(Arc::clone(&store));
+    let store = self
+      .interned_store
+      .clone()
+      .unwrap_or_else(|| {
+        let store = tti::TypeStore::new();
+        self.interned_store = Some(Arc::clone(&store));
+        store
+      });
     self.interned_def_types.clear();
     self.interned_type_params.clear();
     let mut def_types = HashMap::new();
     let mut type_params = HashMap::new();
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
-    let mut def_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
-    let mut def_entries: Vec<_> = self
-      .def_data
-      .iter()
-      .map(|(id, data)| (*id, data.clone()))
-      .collect();
-    def_entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
-    for (def_id, data) in def_entries {
-      let key = (data.file, data.name.clone());
-      let ns = match data.kind {
-        DefKind::Interface(_) | DefKind::TypeAlias(_) => sem_ts::Namespace::TYPE,
-        _ => sem_ts::Namespace::VALUE,
-      };
-      let mut mapped_def = def_id;
-      if let DefKind::Import(import) = &data.kind {
-        if let Some(target) = self
-          .exports_of_file(import.from)
-          .get(&import.original)
-          .and_then(|entry| entry.def)
-        {
-          mapped_def = target;
-        }
-      }
-      def_by_name
-        .entry(key)
-        .and_modify(|existing| {
-          let current = self.def_priority(*existing, ns);
-          let new_pri = self.def_priority(mapped_def, ns);
-          if new_pri < current || (new_pri == current && mapped_def < *existing) {
-            *existing = mapped_def;
-          }
-        })
-        .or_insert(mapped_def);
-    }
+    let def_by_name = self.canonical_defs();
 
     let mut lowered_entries: Vec<_> = self.hir_lowered.iter().collect();
     lowered_entries.sort_by_key(|(file, _)| file.0);
@@ -2798,8 +2990,15 @@ impl ProgramState {
         let mut shape = store.shape(store.object(obj_a).shape);
         let other = store.shape(store.object(obj_b).shape);
         let mut merged = Vec::new();
-        for prop in shape.properties.into_iter().chain(other.properties.into_iter()) {
-          if let Some(existing) = merged.iter_mut().find(|p: &&mut Property| p.key == prop.key) {
+        for prop in shape
+          .properties
+          .into_iter()
+          .chain(other.properties.into_iter())
+        {
+          if let Some(existing) = merged
+            .iter_mut()
+            .find(|p: &&mut Property| p.key == prop.key)
+          {
             *existing = prop;
           } else {
             merged.push(prop);
@@ -2956,16 +3155,14 @@ impl ProgramState {
           .as_ref()
           .map(|store| store.primitive_ids().undefined),
       });
-    globals
-      .entry("Error".to_string())
-      .or_insert(SymbolBinding {
-        symbol: self.alloc_symbol(),
-        def: None,
-        type_id: self
-          .interned_store
-          .as_ref()
-          .map(|store| store.primitive_ids().any),
-      });
+    globals.entry("Error".to_string()).or_insert(SymbolBinding {
+      symbol: self.alloc_symbol(),
+      def: None,
+      type_id: self
+        .interned_store
+        .as_ref()
+        .map(|store| store.primitive_ids().any),
+    });
     self.global_bindings = globals;
   }
 
@@ -3012,7 +3209,14 @@ impl ProgramState {
   }
 
   fn map_hir_bodies(&mut self, file: FileId, lowered: &LowerResult) {
+    let stale: HashSet<_> = self
+      .body_map
+      .iter()
+      .filter(|(_, meta)| meta.file == file)
+      .map(|(id, _)| *id)
+      .collect();
     self.body_map.retain(|_, meta| meta.file != file);
+    self.body_parents.retain(|child, _| !stale.contains(child));
 
     let mut defs_by_span: HashMap<(TextRange, &'static str), DefId> = HashMap::new();
     let mut defs_by_name: HashMap<(String, &'static str), DefId> = HashMap::new();
@@ -3218,6 +3422,27 @@ impl ProgramState {
             }
             _ => {}
           }
+        }
+      }
+
+      for stmt in hir_body.stmts.iter() {
+        if let hir_js::StmtKind::Decl(def) = &stmt.kind {
+          if let Some(hir_def) = lowered.def(*def) {
+            if let Some(child) = hir_def.body.and_then(|b| hir_to_prog_body.get(&b).copied()) {
+              self.body_parents.insert(child, body_id);
+            }
+          }
+        }
+      }
+
+      for expr in hir_body.exprs.iter() {
+        match &expr.kind {
+          HirExprKind::FunctionExpr { body, .. } | HirExprKind::ClassExpr { body, .. } => {
+            if let Some(child) = hir_to_prog_body.get(body).copied() {
+              self.body_parents.insert(child, body_id);
+            }
+          }
+          _ => {}
         }
       }
 
@@ -4569,6 +4794,124 @@ impl ProgramState {
     })
   }
 
+  fn collect_parent_bindings(
+    &mut self,
+    body_id: BodyId,
+    bindings: &mut HashMap<String, TypeId>,
+    binding_defs: &mut HashMap<String, DefId>,
+  ) {
+    fn record_pat(
+      state: &ProgramState,
+      pat_id: HirPatId,
+      body: &hir_js::Body,
+      names: &hir_js::NameInterner,
+      result: &BodyCheckResult,
+      bindings: &mut HashMap<String, TypeId>,
+      binding_defs: &mut HashMap<String, DefId>,
+      file: FileId,
+    ) {
+      let Some(pat) = body.pats.get(pat_id.0 as usize) else {
+        return;
+      };
+      let ty = result.pat_type(PatId(pat_id.0)).unwrap_or(state.builtin.unknown);
+      match &pat.kind {
+        HirPatKind::Ident(name_id) => {
+          if let Some(name) = names.resolve(*name_id) {
+            if ty != state.builtin.unknown {
+              bindings.entry(name.to_string()).or_insert(ty);
+            }
+            if let Some(def_id) = state
+              .def_data
+              .iter()
+              .find_map(|(id, data)| (data.file == file && data.span == pat.span).then_some(*id))
+            {
+              binding_defs.entry(name.to_string()).or_insert(def_id);
+            }
+          }
+        }
+        HirPatKind::Array(arr) => {
+          for elem in arr.elements.iter().flatten() {
+            record_pat(
+              state,
+              elem.pat,
+              body,
+              names,
+              result,
+              bindings,
+              binding_defs,
+              file,
+            );
+          }
+          if let Some(rest) = arr.rest {
+            record_pat(state, rest, body, names, result, bindings, binding_defs, file);
+          }
+        }
+        HirPatKind::Object(obj) => {
+          for prop in obj.props.iter() {
+            record_pat(
+              state,
+              prop.value,
+              body,
+              names,
+              result,
+              bindings,
+              binding_defs,
+              file,
+            );
+          }
+          if let Some(rest) = obj.rest {
+            record_pat(state, rest, body, names, result, bindings, binding_defs, file);
+          }
+        }
+        HirPatKind::Rest(inner) => {
+          record_pat(state, **inner, body, names, result, bindings, binding_defs, file);
+        }
+        HirPatKind::Assign { target, .. } => {
+          record_pat(state, *target, body, names, result, bindings, binding_defs, file);
+        }
+        HirPatKind::AssignTarget(_) => {}
+      }
+    }
+
+    let mut visited = HashSet::new();
+    let mut current = self.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let parent_result = self.check_body(parent);
+      let Some(meta) = self.body_map.get(&parent).copied() else {
+        current = self.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(hir_body_id) = meta.hir else {
+        current = self.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(lowered) = self.hir_lowered.get(&meta.file) else {
+        current = self.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(body) = lowered.body(hir_body_id) else {
+        current = self.body_parents.get(&parent).copied();
+        continue;
+      };
+      for pat in body.pats.iter().enumerate() {
+        record_pat(
+          self,
+          HirPatId(pat.0 as u32),
+          body,
+          &lowered.names,
+          &parent_result,
+          bindings,
+          binding_defs,
+          meta.file,
+        );
+      }
+      current = self.body_parents.get(&parent).copied();
+    }
+  }
+
   fn check_body(&mut self, body_id: BodyId) -> Arc<BodyCheckResult> {
     let cache_hit = self.body_results.contains_key(&body_id);
     let body_meta = self.body_map.get(&body_id).copied();
@@ -4620,7 +4963,7 @@ impl ProgramState {
 
     let file = meta.file;
 
-    let Some(lowered) = self.hir_lowered.get(&file) else {
+    let Some(lowered) = self.hir_lowered.get(&file).cloned() else {
       let res = Arc::new(BodyCheckResult {
         body: body_id,
         expr_types: Vec::new(),
@@ -4638,7 +4981,7 @@ impl ProgramState {
       return res;
     };
 
-    let Some(ast) = self.asts.get(&file) else {
+    let Some(ast) = self.asts.get(&file).cloned() else {
       let res = Arc::new(BodyCheckResult {
         body: body_id,
         expr_types: Vec::new(),
@@ -4710,11 +5053,13 @@ impl ProgramState {
                       store: &Arc<tti::TypeStore>,
                       cache: &mut HashMap<TypeId, tti::TypeId>,
                       def: DefId| {
-      state
-        .interned_def_types
-        .get(&def)
-        .copied()
-        .or_else(|| state.def_types.get(&def).copied().map(|ty| store.canon(convert_type_for_display(ty, state, store, cache))))
+      state.interned_def_types.get(&def).copied().or_else(|| {
+        state
+          .def_types
+          .get(&def)
+          .copied()
+          .map(|ty| store.canon(convert_type_for_display(ty, state, store, cache)))
+      })
     };
     for (name, binding) in self.global_bindings.iter() {
       let ty = binding
@@ -4739,6 +5084,8 @@ impl ProgramState {
       }
     }
 
+    self.collect_parent_bindings(body_id, &mut bindings, &mut binding_defs);
+
     let caches = self.checker_caches.for_body();
     let expander = RefExpander::new(
       Arc::clone(&store),
@@ -4752,7 +5099,7 @@ impl ProgramState {
       body,
       &lowered.names,
       file,
-      ast,
+      ast.as_ref(),
       Arc::clone(&store),
       &caches,
       &bindings,
@@ -4997,7 +5344,10 @@ impl ProgramState {
       tti::TypeKind::Array { ty, readonly } => {
         let mapped = self.prefer_named_refs_in_store(store, ty);
         if mapped != ty {
-          return store.intern_type(tti::TypeKind::Array { ty: mapped, readonly });
+          return store.intern_type(tti::TypeKind::Array {
+            ty: mapped,
+            readonly,
+          });
         }
       }
       tti::TypeKind::Tuple(elems) => {
@@ -5224,11 +5574,7 @@ impl ProgramState {
         };
         if var.mode == VarDeclMode::Const {
           if let Some(init_span) = init_span_for_const {
-            if let Some(file_body) = self
-              .files
-              .get(&def_data.file)
-              .and_then(|f| f.top_body)
-            {
+            if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
               let res = self.check_body(file_body);
               let top_ty = res
                 .expr_spans()
@@ -5450,7 +5796,10 @@ impl ProgramState {
               .symbol_occurrences
               .entry(file)
               .or_default()
-              .push(SymbolOccurrence { range: span, symbol });
+              .push(SymbolOccurrence {
+                range: span,
+                symbol,
+              });
           }
         }
       }
@@ -5637,10 +5986,9 @@ impl ProgramState {
 
     let (body, expr) = self.expr_at(file, offset)?;
     let meta = self.body_map.get(&body).copied()?;
-    let hir_body = meta.hir?;
     let lowered = self.hir_lowered.get(&meta.file).cloned()?;
     self
-      .resolve_symbol_in_body(file, &lowered, hir_body, expr)
+      .resolve_symbol_in_body(file, &lowered, body, meta, expr)
       .map(|symbol| self.resolve_symbol(symbol))
   }
 
@@ -5672,10 +6020,12 @@ impl ProgramState {
     &mut self,
     file: FileId,
     lowered: &LowerResult,
-    body_id: hir_js::BodyId,
+    prog_body: BodyId,
+    meta: BodyMeta,
     target_expr: hir_js::ExprId,
   ) -> Option<semantic_js::SymbolId> {
-    let body = lowered.body(body_id)?;
+    let hir_body = meta.hir?;
+    let body = lowered.body(hir_body)?;
     let target_span = body.exprs.get(target_expr.0 as usize)?.span;
 
     let mut def_symbols: HashMap<TextRange, semantic_js::SymbolId> = self
@@ -5726,15 +6076,12 @@ impl ProgramState {
               .get(&pat.span)
               .copied()
               .or_else(|| {
-                state
-                  .symbol_occurrences
-                  .get(&file)
-                  .and_then(|occs| {
-                    occs
-                      .iter()
-                      .find(|occ| occ.range == pat.span)
-                      .map(|occ| occ.symbol)
-                  })
+                state.symbol_occurrences.get(&file).and_then(|occs| {
+                  occs
+                    .iter()
+                    .find(|occ| occ.range == pat.span)
+                    .map(|occ| occ.symbol)
+                })
               })
               .unwrap_or_else(|| state.alloc_symbol());
             if let Some(scope) = scopes.last_mut() {
@@ -5790,7 +6137,10 @@ impl ProgramState {
           if let Some(name) = names.resolve(name_id) {
             if let Some(symbol) = lookup(scopes, name) {
               let occs = state.symbol_occurrences.entry(file).or_default();
-              if !occs.iter().any(|occ| occ.range == target_span && occ.symbol == symbol) {
+              if !occs
+                .iter()
+                .any(|occ| occ.range == target_span && occ.symbol == symbol)
+              {
                 occs.push(SymbolOccurrence {
                   range: target_span,
                   symbol,
@@ -5805,25 +6155,70 @@ impl ProgramState {
         HirExprKind::Ident(_) | HirExprKind::This | HirExprKind::Super => None,
         HirExprKind::Literal(_) => None,
         HirExprKind::Unary { expr, .. } => walk_expr(
-          state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          *expr,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         ),
         HirExprKind::Update { expr, .. } => walk_expr(
-          state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          *expr,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         ),
-        HirExprKind::Binary { left, right, .. } => {
+        HirExprKind::Binary { left, right, .. } => walk_expr(
+          state,
+          lowered,
+          body,
+          names,
+          *left,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
+        )
+        .or_else(|| {
           walk_expr(
-            state, lowered, body, names, *left, target, target_span, scopes, def_symbols, file,
+            state,
+            lowered,
+            body,
+            names,
+            *right,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
           )
-          .or_else(|| {
-            walk_expr(
-              state, lowered, body, names, *right, target, target_span, scopes, def_symbols, file,
-            )
-          })
-        }
-        HirExprKind::Assignment { target: pat, value, .. } => {
+        }),
+        HirExprKind::Assignment {
+          target: pat, value, ..
+        } => {
           bind_pat(state, body, names, *pat, scopes, def_symbols, file);
           walk_expr(
-            state, lowered, body, names, *value, target, target_span, scopes, def_symbols, file,
+            state,
+            lowered,
+            body,
+            names,
+            *value,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
           )
         }
         HirExprKind::Call(call) => {
@@ -5862,27 +6257,61 @@ impl ProgramState {
           found
         }
         HirExprKind::Member(member) => walk_expr(
-          state, lowered, body, names, member.object, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          member.object,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         ),
         HirExprKind::Conditional {
           test,
           consequent,
           alternate,
-        } => {
+        } => walk_expr(
+          state,
+          lowered,
+          body,
+          names,
+          *test,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
+        )
+        .or_else(|| {
           walk_expr(
-            state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+            state,
+            lowered,
+            body,
+            names,
+            *consequent,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
           )
-          .or_else(|| {
-            walk_expr(
-              state, lowered, body, names, *consequent, target, target_span, scopes, def_symbols, file,
-            )
-          })
-          .or_else(|| {
-            walk_expr(
-              state, lowered, body, names, *alternate, target, target_span, scopes, def_symbols, file,
-            )
-          })
-        }
+        })
+        .or_else(|| {
+          walk_expr(
+            state,
+            lowered,
+            body,
+            names,
+            *alternate,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
+          )
+        }),
         HirExprKind::Array(array) => {
           for element in array.elements.iter() {
             let expr = match element {
@@ -5891,7 +6320,16 @@ impl ProgramState {
             };
             if let Some(expr) = expr {
               if let Some(found) = walk_expr(
-                state, lowered, body, names, expr, target, target_span, scopes, def_symbols, file,
+                state,
+                lowered,
+                body,
+                names,
+                expr,
+                target,
+                target_span,
+                scopes,
+                def_symbols,
+                file,
               ) {
                 return Some(found);
               }
@@ -5980,11 +6418,29 @@ impl ProgramState {
       };
       match &stmt.kind {
         HirStmtKind::Expr(expr) => walk_expr(
-          state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          *expr,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         ),
         HirStmtKind::Return(expr) => expr.and_then(|e| {
           walk_expr(
-            state, lowered, body, names, e, target, target_span, scopes, def_symbols, file,
+            state,
+            lowered,
+            body,
+            names,
+            e,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
           )
         }),
         HirStmtKind::Block(stmts) => {
@@ -6014,7 +6470,16 @@ impl ProgramState {
           consequent,
           alternate,
         } => walk_expr(
-          state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          *test,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         )
         .or_else(|| {
           walk_stmt(
@@ -6047,7 +6512,16 @@ impl ProgramState {
           })
         }),
         HirStmtKind::While { test, body: inner } => walk_expr(
-          state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          *test,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         )
         .or_else(|| {
           walk_stmt(
@@ -6064,19 +6538,51 @@ impl ProgramState {
           )
         }),
         HirStmtKind::DoWhile { body: inner, test } => walk_stmt(
-          state, lowered, body, names, *inner, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          *inner,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         )
         .or_else(|| {
           walk_expr(
-            state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+            state,
+            lowered,
+            body,
+            names,
+            *test,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
           )
         }),
-        HirStmtKind::For { init, test, update, body: inner } => {
+        HirStmtKind::For {
+          init,
+          test,
+          update,
+          body: inner,
+        } => {
           if let Some(init) = init {
             match init {
               hir_js::ForInit::Expr(expr) => {
                 if let Some(found) = walk_expr(
-                  state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+                  state,
+                  lowered,
+                  body,
+                  names,
+                  *expr,
+                  target,
+                  target_span,
+                  scopes,
+                  def_symbols,
+                  file,
                 ) {
                   return Some(found);
                 }
@@ -6086,7 +6592,16 @@ impl ProgramState {
                   bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
                   if let Some(init) = decl.init {
                     if let Some(found) = walk_expr(
-                      state, lowered, body, names, init, target, target_span, scopes, def_symbols, file,
+                      state,
+                      lowered,
+                      body,
+                      names,
+                      init,
+                      target,
+                      target_span,
+                      scopes,
+                      def_symbols,
+                      file,
                     ) {
                       return Some(found);
                     }
@@ -6097,14 +6612,32 @@ impl ProgramState {
           }
           if let Some(test) = test {
             if let Some(found) = walk_expr(
-              state, lowered, body, names, *test, target, target_span, scopes, def_symbols, file,
+              state,
+              lowered,
+              body,
+              names,
+              *test,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
             ) {
               return Some(found);
             }
           }
           if let Some(update) = update {
             if let Some(found) = walk_expr(
-              state, lowered, body, names, *update, target, target_span, scopes, def_symbols, file,
+              state,
+              lowered,
+              body,
+              names,
+              *update,
+              target,
+              target_span,
+              scopes,
+              def_symbols,
+              file,
             ) {
               return Some(found);
             }
@@ -6123,10 +6656,15 @@ impl ProgramState {
           )
         }
         HirStmtKind::ForIn {
-          left, right, body: inner, ..
+          left,
+          right,
+          body: inner,
+          ..
         } => {
           match left {
-            hir_js::ForHead::Pat(pat) => bind_pat(state, body, names, *pat, scopes, def_symbols, file),
+            hir_js::ForHead::Pat(pat) => {
+              bind_pat(state, body, names, *pat, scopes, def_symbols, file)
+            }
             hir_js::ForHead::Var(var) => {
               for decl in var.declarators.iter() {
                 bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
@@ -6134,7 +6672,16 @@ impl ProgramState {
             }
           }
           if let Some(found) = walk_expr(
-            state, lowered, body, names, *right, target, target_span, scopes, def_symbols, file,
+            state,
+            lowered,
+            body,
+            names,
+            *right,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
           ) {
             return Some(found);
           }
@@ -6151,16 +6698,37 @@ impl ProgramState {
             file,
           )
         }
-        HirStmtKind::Switch { discriminant, cases } => {
+        HirStmtKind::Switch {
+          discriminant,
+          cases,
+        } => {
           if let Some(found) = walk_expr(
-            state, lowered, body, names, *discriminant, target, target_span, scopes, def_symbols, file,
+            state,
+            lowered,
+            body,
+            names,
+            *discriminant,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
           ) {
             return Some(found);
           }
           for case in cases.iter() {
             if let Some(test) = case.test {
               if let Some(found) = walk_expr(
-                state, lowered, body, names, test, target, target_span, scopes, def_symbols, file,
+                state,
+                lowered,
+                body,
+                names,
+                test,
+                target,
+                target_span,
+                scopes,
+                def_symbols,
+                file,
               ) {
                 return Some(found);
               }
@@ -6184,7 +6752,11 @@ impl ProgramState {
           }
           None
         }
-        HirStmtKind::Try { block, catch, finally_block } => {
+        HirStmtKind::Try {
+          block,
+          catch,
+          finally_block,
+        } => {
           if let Some(found) = walk_stmt(
             state,
             lowered,
@@ -6235,14 +6807,32 @@ impl ProgramState {
           None
         }
         HirStmtKind::Throw(expr) => walk_expr(
-          state, lowered, body, names, *expr, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          *expr,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         ),
         HirStmtKind::Var(var) => {
           for decl in var.declarators.iter() {
             bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
             if let Some(init) = decl.init {
               if let Some(found) = walk_expr(
-                state, lowered, body, names, init, target, target_span, scopes, def_symbols, file,
+                state,
+                lowered,
+                body,
+                names,
+                init,
+                target,
+                target_span,
+                scopes,
+                def_symbols,
+                file,
               ) {
                 return Some(found);
               }
@@ -6251,27 +6841,46 @@ impl ProgramState {
           None
         }
         HirStmtKind::Labeled { body: inner, .. } => walk_stmt(
-          state, lowered, body, names, *inner, target, target_span, scopes, def_symbols, file,
+          state,
+          lowered,
+          body,
+          names,
+          *inner,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
         ),
-        HirStmtKind::With { object, body: inner } => {
-          walk_expr(
-            state, lowered, body, names, *object, target, target_span, scopes, def_symbols, file,
+        HirStmtKind::With {
+          object,
+          body: inner,
+        } => walk_expr(
+          state,
+          lowered,
+          body,
+          names,
+          *object,
+          target,
+          target_span,
+          scopes,
+          def_symbols,
+          file,
+        )
+        .or_else(|| {
+          walk_stmt(
+            state,
+            lowered,
+            body,
+            names,
+            *inner,
+            target,
+            target_span,
+            scopes,
+            def_symbols,
+            file,
           )
-          .or_else(|| {
-            walk_stmt(
-              state,
-              lowered,
-              body,
-              names,
-              *inner,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            )
-          })
-        }
+        }),
         HirStmtKind::Decl(def_id) => {
           if let Some(def) = lowered.def(*def_id) {
             if let Some(name) = names.resolve(def.name) {
@@ -6279,15 +6888,12 @@ impl ProgramState {
                 .get(&def.span)
                 .copied()
                 .or_else(|| {
-                  state
-                    .symbol_occurrences
-                    .get(&file)
-                    .and_then(|occs| {
-                      occs
-                        .iter()
-                        .find(|occ| occ.range == def.span)
-                        .map(|occ| occ.symbol)
-                    })
+                  state.symbol_occurrences.get(&file).and_then(|occs| {
+                    occs
+                      .iter()
+                      .find(|occ| occ.range == def.span)
+                      .map(|occ| occ.symbol)
+                  })
                 })
                 .unwrap_or_else(|| state.alloc_symbol());
               if let Some(scope) = scopes.last_mut() {
@@ -6320,15 +6926,7 @@ impl ProgramState {
       if matches!(body.kind, HirBodyKind::Function) {
         if let Some(func) = body.function.as_ref() {
           for param in func.params.iter() {
-            bind_pat(
-              state,
-              body,
-              names,
-              param.pat,
-              scopes,
-              def_symbols,
-              file,
-            );
+            bind_pat(state, body, names, param.pat, scopes, def_symbols, file);
           }
         }
       }
@@ -6338,7 +6936,9 @@ impl ProgramState {
           match &stmt.kind {
             HirStmtKind::Block(stmts) => referenced.extend(stmts.iter().copied()),
             HirStmtKind::If {
-              consequent, alternate, ..
+              consequent,
+              alternate,
+              ..
             } => {
               referenced.insert(*consequent);
               if let Some(alt) = alternate {
@@ -6422,10 +7022,47 @@ impl ProgramState {
     }
 
     let mut scopes = vec![initial_scope];
+    let mut parent_chain = Vec::new();
+    let mut current = self.body_parents.get(&prog_body).copied();
+    let mut visited = HashSet::new();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      parent_chain.push(parent);
+      current = self.body_parents.get(&parent).copied();
+    }
+    for parent in parent_chain.into_iter().rev() {
+      let Some(meta) = self.body_map.get(&parent).copied() else {
+        continue;
+      };
+      let Some(hir_id) = meta.hir else {
+        continue;
+      };
+      let Some(lowered) = self.hir_lowered.get(&meta.file).cloned() else {
+        continue;
+      };
+      let Some(body) = lowered.body(hir_id) else {
+        continue;
+      };
+      let names = lowered.names.clone();
+      scopes.push(HashMap::new());
+      for (idx, _) in body.pats.iter().enumerate() {
+        bind_pat(
+          self,
+          body,
+          &names,
+          HirPatId(idx as u32),
+          &mut scopes,
+          &mut def_symbols,
+          meta.file,
+        );
+      }
+    }
     walk_body(
       self,
       lowered,
-      body_id,
+      hir_body,
       target_expr,
       target_span,
       &mut scopes,
@@ -6479,35 +7116,48 @@ impl ProgramState {
       }
     }
 
-    let mut best_containing: Option<(u32, u32, u32, BodyId, ExprId)> = None;
-    let mut best_empty: Option<(u32, u32, u32, BodyId, ExprId)> = None;
+    let mut best_containing: Option<(u32, u32, u32, u32, BodyId, ExprId)> = None;
+    let mut best_empty: Option<(u32, u32, u32, u32, BodyId, ExprId)> = None;
 
-    let update_best = |body: BodyId,
-                       kind: HirBodyKind,
-                       expr: ExprId,
-                       span: TextRange,
-                       best_containing: &mut Option<(u32, u32, u32, BodyId, ExprId)>,
-                       best_empty: &mut Option<(u32, u32, u32, BodyId, ExprId)>| {
-      let len = span.len();
-      let priority = body_priority(kind);
-      let key = (priority, len, span.start, body, expr);
-      if span.start <= offset && offset < span.end {
-        let replace = best_containing.map(|best| key < best).unwrap_or(true);
-        if replace {
-          *best_containing = Some(key);
+    let update_best =
+      |body: BodyId,
+       kind: HirBodyKind,
+       expr: ExprId,
+       span: TextRange,
+       best_containing: &mut Option<(u32, u32, u32, u32, BodyId, ExprId)>,
+       best_empty: &mut Option<(u32, u32, u32, u32, BodyId, ExprId)>| {
+        let len = span.len();
+        let priority = body_priority(kind);
+        let parent_rank = if self.body_parents.contains_key(&body) {
+          0
+        } else {
+          1
+        };
+        let key = (priority, parent_rank, len, span.start, body, expr);
+        if span.start <= offset && offset < span.end {
+          let replace = best_containing.map(|best| key < best).unwrap_or(true);
+          if replace {
+            *best_containing = Some(key);
+          }
+        } else if span.start == span.end && offset == span.start {
+          let replace = best_empty.map(|best| key < best).unwrap_or(true);
+          if replace {
+            *best_empty = Some(key);
+          }
         }
-      } else if span.start == span.end && offset == span.start {
-        let replace = best_empty.map(|best| key < best).unwrap_or(true);
-        if replace {
-          *best_empty = Some(key);
-        }
-      }
-    };
+      };
 
     for (body_id, meta) in self.body_map.iter().filter(|(_, meta)| meta.file == file) {
       if let Some(result) = self.body_results.get(body_id) {
         for (idx, span) in result.expr_spans().iter().enumerate() {
-          update_best(*body_id, meta.kind, ExprId(idx as u32), *span, &mut best_containing, &mut best_empty);
+          update_best(
+            *body_id,
+            meta.kind,
+            ExprId(idx as u32),
+            *span,
+            &mut best_containing,
+            &mut best_empty,
+          );
         }
         continue;
       }
@@ -6532,7 +7182,7 @@ impl ProgramState {
 
     best_containing
       .or(best_empty)
-      .map(|(_, _, _, body, expr)| (body, expr))
+      .map(|(_, _, _, _, body, expr)| (body, expr))
   }
 
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {
@@ -6667,6 +7317,22 @@ impl ProgramState {
               if let Some(def) = def {
                 return self.type_of_def(def);
               }
+            }
+            let mut entries: Vec<_> = self.def_data.iter().collect();
+            entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
+            let mut best: Option<(DefId, u8)> = None;
+            for (id, data) in entries.into_iter() {
+              if data.name != *type_name {
+                continue;
+              }
+              let pri = self.def_priority(*id, sem_ts::Namespace::TYPE);
+              match best {
+                Some((_, existing)) if existing <= pri => {}
+                _ => best = Some((*id, pri)),
+              }
+            }
+            if let Some((id, _)) = best {
+              return self.type_of_def(id);
             }
           }
         }

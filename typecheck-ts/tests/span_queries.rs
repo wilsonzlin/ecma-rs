@@ -203,8 +203,6 @@ fn type_at_prefers_innermost_member_access() {
     .expect("offset of innermost member") as u32;
 
   let ty = program.type_at(file_id, offset).expect("type at member");
-  assert_eq!(program.display_type(ty).to_string(), "42");
-
   let (body, expr) = program.expr_at(file_id, offset).expect("expr at offset");
   let span = program.span_of_expr(body, expr).expect("expr span");
   let snippet = &source[span.range.start as usize..span.range.end as usize];
@@ -212,6 +210,7 @@ fn type_at_prefers_innermost_member_access() {
     snippet.contains("value"),
     "expected member access containing 'value', got {snippet}"
   );
+  assert_eq!(program.display_type(ty).to_string(), "42");
 }
 
 #[test]

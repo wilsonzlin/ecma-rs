@@ -15,8 +15,8 @@ use parse_js::loc::Loc;
 use std::fmt;
 use std::sync::Arc;
 use types_ts_interned::{
-  DefId, MappedModifier, MappedType, NameId, ObjectType, Param, PropData, PropKey, Property, Shape,
-  Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
+  DefId, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property, Shape, Signature,
+  TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 /// Resolves entity names in type positions to canonical [`DefId`]s.

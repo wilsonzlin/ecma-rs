@@ -5,7 +5,6 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
-use typecheck_ts::resolve::normalize_path;
 
 fn fixture(name: &str) -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -15,7 +14,11 @@ fn fixture(name: &str) -> PathBuf {
 }
 
 fn normalized(path: &Path) -> String {
-  normalize_path(path)
+  path
+    .canonicalize()
+    .unwrap_or_else(|_| path.to_path_buf())
+    .display()
+    .to_string()
 }
 
 #[test]

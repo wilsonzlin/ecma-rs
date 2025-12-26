@@ -149,7 +149,9 @@ fn run_fixture(path: &Path) {
     .collect();
   let mut program = Program::new(host.clone(), roots);
   let diagnostics = program.check();
-  if !diagnostics.is_empty() && !path.ends_with("as_const") && !path.ends_with("argument_count_error")
+  if !diagnostics.is_empty()
+    && !path.ends_with("as_const")
+    && !path.ends_with("argument_count_error")
   {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
   }
@@ -197,7 +199,10 @@ fn run_fixture(path: &Path) {
     }
     println!("DEBUG function_return_inference def data:");
     for entry in snap.def_data.iter() {
-      println!("  def {:?} name {} kind {:?}", entry.def, entry.data.name, entry.data.kind);
+      println!(
+        "  def {:?} name {} kind {:?}",
+        entry.def, entry.data.name, entry.data.kind
+      );
     }
   }
   if path.ends_with("imports_exports") {
@@ -210,7 +215,10 @@ fn run_fixture(path: &Path) {
     }
     println!("DEBUG imports_exports def data:");
     for entry in snap.def_data.iter() {
-      println!("  def {:?} name {} kind {:?}", entry.def, entry.data.name, entry.data.kind);
+      println!(
+        "  def {:?} name {} kind {:?}",
+        entry.def, entry.data.name, entry.data.kind
+      );
     }
     let main_key = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main_key) {
@@ -237,7 +245,10 @@ fn run_fixture(path: &Path) {
     }
     println!("DEBUG literal_widening def data:");
     for entry in snap.def_data.iter() {
-      println!("  def {:?} name {} kind {:?}", entry.def, entry.data.name, entry.data.kind);
+      println!(
+        "  def {:?} name {} kind {:?}",
+        entry.def, entry.data.name, entry.data.kind
+      );
     }
   }
   if path.ends_with("mapped_type_annotation") {
@@ -250,7 +261,10 @@ fn run_fixture(path: &Path) {
     }
     println!("DEBUG mapped_type_annotation def data:");
     for entry in snap.def_data.iter() {
-      println!("  def {:?} name {} kind {:?}", entry.def, entry.data.name, entry.data.kind);
+      println!(
+        "  def {:?} name {} kind {:?}",
+        entry.def, entry.data.name, entry.data.kind
+      );
     }
   }
   if path.ends_with("narrowing_patterns") {
@@ -264,7 +278,10 @@ fn run_fixture(path: &Path) {
       let rendered = ty
         .map(|ty| program.display_type(ty).to_string())
         .unwrap_or_else(|| "<none>".to_string());
-      println!("DEBUG narrowing_patterns Error def {:?} ty {}", err.def, rendered);
+      println!(
+        "DEBUG narrowing_patterns Error def {:?} ty {}",
+        err.def, rendered
+      );
     } else {
       println!("DEBUG narrowing_patterns missing Error def");
     }
@@ -283,7 +300,9 @@ fn run_fixture(path: &Path) {
       }
       for def in program.definitions_in_file(file) {
         if let Some(body) = program.body_of_def(def) {
-          let name = program.def_name(def).unwrap_or_else(|| "<anon>".to_string());
+          let name = program
+            .def_name(def)
+            .unwrap_or_else(|| "<anon>".to_string());
           let res = program.check_body(body);
           println!("DEBUG narrowing_patterns def {} exprs:", name);
           for (idx, span) in res.expr_spans().iter().enumerate() {

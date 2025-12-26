@@ -757,6 +757,49 @@ impl<'a> RelateCtx<'a> {
         record,
         depth + 1,
       ),
+      (
+        TypeKind::Array { ty: src_elem, .. },
+        TypeKind::Object(dst_obj),
+      ) => {
+        let dst_shape = self.store.shape(self.store.object(*dst_obj).shape);
+        if let Some(idx) = dst_shape
+          .indexers
+          .iter()
+          .find(|idx| matches!(self.store.type_kind(idx.key_type), TypeKind::Number))
+        {
+          let related = self.relate_internal(
+            *src_elem,
+            idx.value_type,
+            RelationKind::Assignable,
+            mode,
+            record,
+            depth + 1,
+          );
+          let reason = self.join_reasons(
+            record,
+            key,
+            vec![related.reason],
+            related.result,
+            Some("array to object indexer".into()),
+            depth,
+          );
+          return RelationResult {
+            result: related.result,
+            reason,
+          };
+        }
+        RelationResult {
+          result: false,
+          reason: self.join_reasons(
+            record,
+            key,
+            Vec::new(),
+            false,
+            Some("array to object".into()),
+            depth,
+          ),
+        }
+      }
       (TypeKind::Tuple(src_elems), TypeKind::Tuple(dst_elems)) => {
         self.relate_tuple(src_elems, dst_elems, key, mode, record, depth + 1)
       }

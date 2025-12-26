@@ -125,6 +125,7 @@ struct JsonQueries {
 
 #[derive(Serialize)]
 struct JsonOutput {
+  files: Vec<String>,
   diagnostics: Vec<Diagnostic>,
   queries: JsonQueries,
 }
@@ -141,7 +142,7 @@ struct TypeAtResult {
 struct SymbolAtResult {
   file: String,
   offset: u32,
-  symbol: u64,
+  symbol: u32,
   #[serde(skip_serializing_if = "Option::is_none")]
   name: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -155,7 +156,7 @@ struct SymbolAtResult {
 
 #[derive(Serialize)]
 struct ExportEntryJson {
-  symbol: u64,
+  symbol: u32,
   #[serde(skip_serializing_if = "Option::is_none")]
   def: Option<u32>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -266,7 +267,15 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   };
 
   if args.json {
+    let mut files: Vec<String> = program
+      .files()
+      .into_iter()
+      .filter_map(|id| program.file_key(id))
+      .map(|key| key.to_string())
+      .collect();
+    files.sort();
     let output = JsonOutput {
+      files,
       diagnostics: diagnostics.clone(),
       queries: JsonQueries {
         type_at,

@@ -106,9 +106,17 @@ export const name = Lib.version;
   let exports = program.exports_of(file_id);
   println!("DEBUG exports: {:?}", exports.keys().collect::<Vec<_>>());
   for def in program.definitions_in_file(file_id) {
-    let name = program.def_name(def).unwrap_or_else(|| "<anon>".to_string());
+    let name = program
+      .def_name(def)
+      .unwrap_or_else(|| "<anon>".to_string());
     let ty = program.display_type(program.type_of_def(def)).to_string();
-    println!("  def {:?} name {} body {:?} type {}", def, name, program.body_of_def(def), ty);
+    println!(
+      "  def {:?} name {} body {:?} type {}",
+      def,
+      name,
+      program.body_of_def(def),
+      ty
+    );
   }
   let lib_ty = exports
     .get("Lib")

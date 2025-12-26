@@ -73,11 +73,7 @@ impl<'a> VarVisitor<'a> {
         if usage_ls != decl_ls {
           self.foreign.insert(symbol);
         } else if !self.declared.contains(&symbol) {
-          let start = loc.0.saturating_sub(name.len());
-          let end = start + name.len();
-          self
-            .use_before_decl
-            .insert(symbol, (name.to_string(), Loc(start, end)));
+          self.use_before_decl.insert(symbol, (name.to_string(), loc));
         }
       }
     }

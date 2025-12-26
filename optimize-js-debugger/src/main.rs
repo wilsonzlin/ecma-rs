@@ -582,6 +582,13 @@ mod tests {
     let expected: PostCompileRes =
       serde_json::from_str(include_str!("../tests/fixtures/debug_input.snapshot.json"))
         .expect("parse snapshot");
+    if std::env::var_os("UPDATE_SNAPSHOT").is_some() {
+      std::fs::write(
+        "tests/fixtures/debug_input.snapshot.json",
+        serde_json::to_string_pretty(&parsed).expect("serialize snapshot"),
+      )
+      .expect("write snapshot");
+    }
     assert_eq!(
       parsed, expected,
       "debugger response should match recorded snapshot"

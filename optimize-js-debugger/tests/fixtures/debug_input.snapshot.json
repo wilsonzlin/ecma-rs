@@ -566,24 +566,24 @@
       {
         "id": {
           "type": "number",
-          "value": "0"
+          "value": "18333300745394825691"
         },
         "name": "x",
         "scope": {
           "type": "number",
-          "value": "0"
+          "value": "7506331373899659333"
         },
         "captured": false
       },
       {
         "id": {
           "type": "number",
-          "value": "1"
+          "value": "1149992103364881355"
         },
         "name": "y",
         "scope": {
           "type": "number",
-          "value": "0"
+          "value": "7506331373899659333"
         },
         "captured": false
       }
@@ -593,34 +593,34 @@
       "functions": []
     },
     "names": [
-      "x",
-      "y"
+      "y",
+      "x"
     ],
     "scopes": [
       {
         "id": {
           "type": "number",
-          "value": "0"
+          "value": "7506331373899659333"
         },
         "kind": "module",
         "symbols": [
           {
             "type": "number",
-            "value": "0"
+            "value": "1149992103364881355"
           },
           {
             "type": "number",
-            "value": "1"
+            "value": "18333300745394825691"
           }
         ],
         "tdz_bindings": [
           {
             "type": "number",
-            "value": "0"
+            "value": "1149992103364881355"
           },
           {
             "type": "number",
-            "value": "1"
+            "value": "18333300745394825691"
           }
         ],
         "is_dynamic": false,

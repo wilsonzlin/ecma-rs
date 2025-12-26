@@ -387,6 +387,16 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
     (TypeKind::Array { ty: src_ty, .. }, TypeKind::Array { ty: dst_ty, .. }) => {
       return is_assignable(store, *src_ty, *dst_ty)
     }
+    (TypeKind::Array { ty: src_ty, .. }, TypeKind::Object(dst_obj)) => {
+      let dst_shape = store.shape(store.object(*dst_obj).shape);
+      if let Some(idx) = dst_shape
+        .indexers
+        .iter()
+        .find(|idx| matches!(store.type_kind(idx.key_type), TypeKind::Number))
+      {
+        return is_assignable(store, *src_ty, idx.value_type);
+      }
+    }
     (TypeKind::Tuple(src_elems), TypeKind::Tuple(dst_elems)) => {
       if src_elems.len() != dst_elems.len() {
         return false;

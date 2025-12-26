@@ -17,18 +17,18 @@
 //! use std::collections::HashMap;
 //! use std::sync::Arc;
 //! use typecheck_ts::{ExprId, FileKey, Host, HostError, Program};
-//! 
+//!
 //! #[derive(Default)]
 //! struct MemoryHost {
 //!   files: HashMap<FileKey, Arc<str>>,
 //! }
-//! 
+//!
 //! impl MemoryHost {
 //!   fn insert(&mut self, key: FileKey, source: &str) {
 //!     self.files.insert(key, Arc::from(source.to_string()));
 //!   }
 //! }
-//! 
+//!
 //! impl Host for MemoryHost {
 //!   fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
 //!     self
@@ -37,12 +37,12 @@
 //!       .cloned()
 //!       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
 //!   }
-//! 
+//!
 //!   fn resolve(&self, _from: &FileKey, _spec: &str) -> Option<FileKey> {
 //!     None
 //!   }
 //! }
-//! 
+//!
 //! let mut host = MemoryHost::default();
 //! let file = FileKey::new("file0.ts");
 //! host.insert(
@@ -52,7 +52,7 @@
 //! let program = Program::new(host, vec![file.clone()]);
 //! let diagnostics = program.check();
 //! assert!(diagnostics.is_empty());
-//! 
+//!
 //! let file_id = program.file_id(&file).unwrap();
 //! let exports = program.exports_of(file_id);
 //! let add_def = exports.get("add").and_then(|e| e.def).unwrap();
@@ -80,7 +80,7 @@
 //!   fn insert(&mut self, key: FileKey, source: &str) {
 //!     self.files.insert(key, Arc::from(source.to_string()));
 //!   }
-//! 
+//!
 //!   fn link(&mut self, from: FileKey, specifier: &str, to: FileKey) {
 //!     self.edges.insert((from, specifier.to_string()), to);
 //!   }
@@ -94,7 +94,7 @@
 //!       .cloned()
 //!       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
 //!   }
-//! 
+//!
 //!   fn resolve(&self, from: &FileKey, spec: &str) -> Option<FileKey> {
 //!     self.edges.get(&(from.clone(), spec.to_string())).cloned()
 //!   }
@@ -110,11 +110,11 @@
 //!   "export function add(a: number, b: number): number { return a + b; }",
 //! );
 //! host.link(FileKey::new("index.ts"), "./math", FileKey::new("math.ts"));
-//! 
+//!
 //! let program = Program::new(host, vec![FileKey::new("index.ts")]);
 //! let diagnostics = program.check();
 //! assert!(diagnostics.is_empty());
-//! 
+//!
 //! let exports = program
 //!   .exports_of(program.file_id(&FileKey::new("index.ts")).unwrap());
 //! let total_def = exports.get("total").unwrap().def.unwrap();

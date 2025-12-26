@@ -34,8 +34,8 @@ use super::flow_narrow::{
 
 use super::caches::BodyCaches;
 use super::expr::resolve_call;
-use super::overload::callable_signatures;
 use super::infer::TypeParamDecl;
+use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
@@ -91,6 +91,7 @@ struct VarInfo<'a> {
 
 #[derive(Clone, Copy)]
 struct FunctionInfo<'a> {
+  func_span: TextRange,
   body_span: TextRange,
   func: &'a Node<Func>,
 }
@@ -248,6 +249,7 @@ impl<'a> AstIndex<'a> {
   }
 
   fn index_function(&mut self, func: &'a Node<Func>, file: FileId) {
+    let func_span = loc_to_range(file, func.loc);
     if let Some(body) = &func.stx.body {
       let body_span = match body {
         FuncBody::Block(block) => {
@@ -255,7 +257,11 @@ impl<'a> AstIndex<'a> {
         }
         FuncBody::Expression(expr) => loc_to_range(file, expr.loc),
       };
-      self.functions.push(FunctionInfo { body_span, func });
+      self.functions.push(FunctionInfo {
+        func_span,
+        body_span,
+        func,
+      });
     }
 
     for param in func.stx.parameters.iter() {
@@ -579,21 +585,24 @@ impl<'a> Checker<'a> {
   fn check_enclosing_function(&mut self, body_range: TextRange) -> bool {
     let mut best: Option<FunctionInfo<'_>> = None;
     for func in self.index.functions.iter() {
-      if ranges_overlap(func.body_span, body_range) {
-        let len = func.body_span.end.saturating_sub(func.body_span.start);
-        let replace = match best {
-          Some(existing) => {
-            let existing_len = existing
-              .body_span
-              .end
-              .saturating_sub(existing.body_span.start);
-            len < existing_len
-          }
-          None => true,
-        };
-        if replace {
-          best = Some(*func);
+      let contains =
+        func.func_span.start <= body_range.start && func.func_span.end >= body_range.end;
+      if !contains {
+        continue;
+      }
+      let len = func.func_span.end.saturating_sub(func.func_span.start);
+      let replace = match best {
+        Some(existing) => {
+          let existing_len = existing
+            .func_span
+            .end
+            .saturating_sub(existing.func_span.start);
+          len < existing_len
         }
+        None => true,
+      };
+      if replace {
+        best = Some(*func);
       }
     }
     if let Some(func) = best {
@@ -859,18 +868,14 @@ impl<'a> Checker<'a> {
           let name_str = name.stx.name.clone();
           let fn_ty = self.function_type(&func.stx.function);
           if let Some(existing) = self.lookup(&name_str) {
-            let has_callables =
-              !callable_signatures(self.store.as_ref(), existing.ty).is_empty();
+            let has_callables = !callable_signatures(self.store.as_ref(), existing.ty).is_empty();
             let ty = if has_callables {
               existing.ty
             } else {
               self.store.intersection(vec![existing.ty, fn_ty])
             };
             if let Some(params) = self.function_type_params.get(&fn_ty).cloned() {
-              self
-                .function_type_params
-                .entry(ty)
-                .or_insert(params);
+              self.function_type_params.entry(ty).or_insert(params);
             }
             self.insert_binding(name_str, ty, Vec::new());
           } else {
@@ -1047,9 +1052,11 @@ impl<'a> Checker<'a> {
             }
           }
         }
-        let contextual_sig = resolution
-          .signature
-          .or_else(|| callable_signatures(self.store.as_ref(), callee_ty).into_iter().next());
+        let contextual_sig = resolution.signature.or_else(|| {
+          callable_signatures(self.store.as_ref(), callee_ty)
+            .into_iter()
+            .next()
+        });
         if let Some(sig_id) = contextual_sig {
           let sig = self.store.signature(sig_id);
           for (idx, arg) in call.stx.arguments.iter().enumerate() {
@@ -1376,12 +1383,17 @@ impl<'a> Checker<'a> {
       TypeKind::StringLiteral(_) => prim.string,
       TypeKind::BooleanLiteral(_) => prim.boolean,
       TypeKind::Union(members) => {
-        let mapped: Vec<_> = members.into_iter().map(|m| self.widen_object_prop(m)).collect();
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_prop(m))
+          .collect();
         self.store.union(mapped)
       }
       TypeKind::Intersection(members) => {
-        let mapped: Vec<_> =
-          members.into_iter().map(|m| self.widen_object_prop(m)).collect();
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_prop(m))
+          .collect();
         self.store.intersection(mapped)
       }
       _ => ty,
@@ -1712,10 +1724,41 @@ impl<'a> Checker<'a> {
   }
 
   fn contextual_arg_type(&self, arg_ty: TypeId, param_ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
     match (self.store.type_kind(arg_ty), self.store.type_kind(param_ty)) {
-      (TypeKind::NumberLiteral(_), TypeKind::Number) => self.store.primitive_ids().number,
-      (TypeKind::StringLiteral(_), TypeKind::String) => self.store.primitive_ids().string,
-      (TypeKind::BooleanLiteral(_), TypeKind::Boolean) => self.store.primitive_ids().boolean,
+      (TypeKind::NumberLiteral(_), TypeKind::Number) => prim.number,
+      (TypeKind::StringLiteral(_), TypeKind::String) => prim.string,
+      (TypeKind::BooleanLiteral(_), TypeKind::Boolean) => prim.boolean,
+      (TypeKind::Union(members), TypeKind::Number) => {
+        if members
+          .iter()
+          .all(|m| matches!(self.store.type_kind(*m), TypeKind::NumberLiteral(_)))
+        {
+          prim.number
+        } else {
+          arg_ty
+        }
+      }
+      (TypeKind::Union(members), TypeKind::String) => {
+        if members
+          .iter()
+          .all(|m| matches!(self.store.type_kind(*m), TypeKind::StringLiteral(_)))
+        {
+          prim.string
+        } else {
+          arg_ty
+        }
+      }
+      (TypeKind::Union(members), TypeKind::Boolean) => {
+        if members
+          .iter()
+          .all(|m| matches!(self.store.type_kind(*m), TypeKind::BooleanLiteral(_)))
+        {
+          prim.boolean
+        } else {
+          arg_ty
+        }
+      }
       _ => arg_ty,
     }
   }
@@ -1742,7 +1785,10 @@ impl<'a> Checker<'a> {
         self
           .hook
           .expand_ref(store, def, args)
-          .map(|ty| ExpandedType { params: Vec::new(), ty })
+          .map(|ty| ExpandedType {
+            params: Vec::new(),
+            ty,
+          })
       }
     }
 
@@ -1842,9 +1888,10 @@ impl<'a> Checker<'a> {
         .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, &args))
         .map(|expanded| self.is_mapped_type(expanded))
         .unwrap_or(false),
-      TypeKind::Union(members) | TypeKind::Intersection(members) => {
-        members.iter().copied().any(|member| self.is_mapped_type(member))
-      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => members
+        .iter()
+        .copied()
+        .any(|member| self.is_mapped_type(member)),
       TypeKind::IndexedAccess { .. } => {
         let expanded = self.expand_for_props(ty);
         expanded != ty && self.is_mapped_type(expanded)
@@ -1858,6 +1905,11 @@ impl<'a> Checker<'a> {
       || matches!(self.store.type_kind(dst), TypeKind::Any | TypeKind::Unknown)
     {
       return;
+    }
+    if let TypeKind::Array { ty, .. } = self.store.type_kind(src) {
+      if matches!(self.store.type_kind(ty), TypeKind::Unknown) {
+        return;
+      }
     }
     if matches!(self.store.type_kind(src), TypeKind::Conditional { .. })
       || matches!(self.store.type_kind(dst), TypeKind::Conditional { .. })
@@ -2450,7 +2502,7 @@ impl<'a> FlowBodyChecker<'a> {
           }
         }
         let elem_ty = if elem_tys.is_empty() {
-          prim.unknown
+          prim.any
         } else {
           self.store.union(elem_tys)
         };
@@ -2857,12 +2909,17 @@ impl<'a> FlowBodyChecker<'a> {
       TypeKind::StringLiteral(_) => prim.string,
       TypeKind::BooleanLiteral(_) => prim.boolean,
       TypeKind::Union(members) => {
-        let mapped: Vec<_> = members.into_iter().map(|m| self.widen_object_prop(m)).collect();
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_prop(m))
+          .collect();
         self.store.union(mapped)
       }
       TypeKind::Intersection(members) => {
-        let mapped: Vec<_> =
-          members.into_iter().map(|m| self.widen_object_prop(m)).collect();
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_prop(m))
+          .collect();
         self.store.intersection(mapped)
       }
       _ => ty,

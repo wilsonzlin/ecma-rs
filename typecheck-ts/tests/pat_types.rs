@@ -32,8 +32,7 @@ fn records_pattern_types_for_params_and_vars() {
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
-  let mut next_symbol = 0;
-  let (result, _, _) = check_body(
+  let result = check_body(
     body_id,
     body,
     &names,
@@ -42,9 +41,6 @@ fn records_pattern_types_for_params_and_vars() {
     store.clone(),
     &caches,
     &bindings,
-    &mut next_symbol,
-    None,
-    None,
     None,
   );
   let prim = store.primitive_ids();

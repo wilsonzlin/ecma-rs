@@ -713,18 +713,16 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         let resolved = names.resolve(*id)?.to_string();
         self.resolve_named_type(&resolved, file_override.unwrap_or(self.file))
       }
-      TypeName::Qualified(path) => {
-        self
-          .resolve_qualified_type(path, names, file_override.unwrap_or(self.file))
-          .or_else(|| {
-            path
-              .last()
-              .and_then(|id| names.resolve(*id))
-              .and_then(|resolved| {
-                self.resolve_named_type(&resolved.to_string(), file_override.unwrap_or(self.file))
-              })
-          })
-      }
+      TypeName::Qualified(path) => self
+        .resolve_qualified_type(path, names, file_override.unwrap_or(self.file))
+        .or_else(|| {
+          path
+            .last()
+            .and_then(|id| names.resolve(*id))
+            .and_then(|resolved| {
+              self.resolve_named_type(&resolved.to_string(), file_override.unwrap_or(self.file))
+            })
+        }),
       TypeName::Import(import) => import.module.as_ref().and_then(|module| {
         let name = import
           .qualifier
@@ -785,6 +783,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
             .or(Some(target));
         }
       }
+      if let Some((_, group)) = sem
+        .global_symbols()
+        .iter()
+        .find(|(global_name, _)| *global_name == name)
+      {
+        if let Some(symbol) = group.symbol_for(Namespace::TYPE, sem.symbols()) {
+          if let Some(def) = self.def_for_symbol(sem, symbol) {
+            return Some(def);
+          }
+        }
+      }
     }
 
     None
@@ -809,14 +818,10 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
 
     let mut symbol = self.resolve_symbol_in_module(sem, file, &segments[0])?;
-    let mut current_file = self
-      .symbol_target_file(sem, symbol)
-      .unwrap_or(file);
+    let mut current_file = self.symbol_target_file(sem, symbol).unwrap_or(file);
     for segment in segments.iter().skip(1) {
       symbol = self.resolve_symbol_export(sem, current_file, segment)?;
-      current_file = self
-        .symbol_target_file(sem, symbol)
-        .unwrap_or(current_file);
+      current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
     }
 
     self.def_for_symbol(sem, symbol)
