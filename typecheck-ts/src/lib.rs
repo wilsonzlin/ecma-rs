@@ -131,6 +131,7 @@
 mod api;
 pub mod codes;
 mod error;
+mod expand;
 mod profile;
 mod program;
 #[cfg(feature = "serde")]

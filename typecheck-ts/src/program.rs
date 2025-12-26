@@ -30,10 +30,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
-use types_ts_interned::{self as tti, TypeId, TypeOptions, TypeParamId};
+use types_ts_interned::{self as tti, RelationResult, TypeId, TypeOptions, TypeParamId};
 
 use crate::check::caches::{CheckerCacheStats, CheckerCaches};
 use crate::codes;
+use crate::expand::ProgramTypeExpander;
 use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
@@ -213,25 +214,6 @@ impl std::fmt::Display for TypeDisplay {
 impl serde::Serialize for TypeDisplay {
   fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&self.to_string())
-  }
-}
-
-#[derive(Clone, Copy)]
-struct ProgramTypeExpander<'a> {
-  def_types: &'a HashMap<DefId, TypeId>,
-  type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
-}
-
-impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
-  fn expand(
-    &self,
-    _store: &tti::TypeStore,
-    def: DefId,
-    _args: &[TypeId],
-  ) -> Option<tti::ExpandedType> {
-    let ty = *self.def_types.get(&def)?;
-    let params = self.type_params.get(&def).cloned().unwrap_or_else(Vec::new);
-    Some(tti::ExpandedType { params, ty })
   }
 }
 
@@ -714,11 +696,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let result = queries.type_kind(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -766,11 +745,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let props = queries.properties_of(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -800,11 +776,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let prop = queries.property_type(ty, key);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -830,11 +803,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let sigs = queries.call_signatures(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -863,11 +833,8 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let sigs = queries.construct_signatures(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -893,17 +860,97 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
-      let expander = ProgramTypeExpander {
-        def_types: &state.interned_def_types,
-        type_params: &state.interned_type_params,
-      };
       let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
       let indexers = queries.indexers(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
       }
       Ok(indexers)
+    })
+  }
+
+  /// Whether `src` is assignable to `dst` using the interned type system.
+  pub fn is_assignable_interned(&self, src: TypeId, dst: TypeId) -> bool {
+    match self.is_assignable_interned_fallible(src, dst) {
+      Ok(res) => res,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        false
+      }
+    }
+  }
+
+  pub fn is_assignable_interned_fallible(
+    &self,
+    src: TypeId,
+    dst: TypeId,
+  ) -> Result<bool, FatalError> {
+    self.with_interned_state(|state| {
+      let store = state
+        .interned_store
+        .as_ref()
+        .expect("interned store initialized");
+      let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
+      let relate = tti::RelateCtx::with_hooks_and_cache(
+        Arc::clone(store),
+        TypeOptions::from(&state.compiler_options),
+        tti::RelateHooks {
+          expander: Some(&expander),
+          is_same_origin_private_member: None,
+        },
+        caches.relation.clone(),
+      );
+      let result = relate.is_assignable(src, dst);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(result)
+    })
+  }
+
+  /// Assignability check that also records the reasoning tree when available.
+  pub fn explain_assignable_interned(&self, src: TypeId, dst: TypeId) -> RelationResult {
+    match self.explain_assignable_interned_fallible(src, dst) {
+      Ok(res) => res,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        RelationResult {
+          result: false,
+          reason: None,
+        }
+      }
+    }
+  }
+
+  pub fn explain_assignable_interned_fallible(
+    &self,
+    src: TypeId,
+    dst: TypeId,
+  ) -> Result<RelationResult, FatalError> {
+    self.with_interned_state(|state| {
+      let store = state
+        .interned_store
+        .as_ref()
+        .expect("interned store initialized");
+      let caches = state.checker_caches.for_body();
+      let expander = state.type_expander(store, caches.eval.clone());
+      let relate = tti::RelateCtx::with_hooks_and_cache(
+        Arc::clone(store),
+        TypeOptions::from(&state.compiler_options),
+        tti::RelateHooks {
+          expander: Some(&expander),
+          is_same_origin_private_member: None,
+        },
+        caches.relation.clone(),
+      );
+      let result = relate.explain_assignable(src, dst);
+      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
+        state.cache_stats.merge(&caches.stats());
+      }
+      Ok(result)
     })
   }
 
@@ -1988,6 +2035,19 @@ impl ProgramState {
       next_symbol: 0,
       type_stack: Vec::new(),
     }
+  }
+
+  fn type_expander<'a>(
+    &'a self,
+    store: &Arc<tti::TypeStore>,
+    caches: tti::EvaluatorCaches,
+  ) -> ProgramTypeExpander<'a> {
+    ProgramTypeExpander::new(
+      Arc::clone(store),
+      &self.interned_def_types,
+      &self.interned_type_params,
+      caches,
+    )
   }
 
   fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileId], cancelled: &AtomicBool) {
@@ -3372,9 +3432,14 @@ impl ProgramState {
     if let Some(store) = self.interned_store.as_ref() {
       let type_options = TypeOptions::from(&self.compiler_options);
       let primitives = store.primitive_ids();
-      let relate = tti::RelateCtx::with_cache(
+      let expander = self.type_expander(store, body_caches.eval.clone());
+      let relate = tti::RelateCtx::with_hooks_and_cache(
         Arc::clone(store),
         type_options,
+        tti::RelateHooks {
+          expander: Some(&expander),
+          is_same_origin_private_member: None,
+        },
         body_caches.relation.clone(),
       );
       for (idx, _) in body.expr_spans.iter().enumerate() {
