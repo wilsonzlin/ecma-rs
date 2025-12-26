@@ -1,8 +1,6 @@
 pub use diagnostics::{Diagnostic, FileId, Severity, Span, TextRange};
 #[cfg(feature = "emit-minify")]
-use emit_js::{emit_hir_file_diagnostic, EmitOptions};
-#[cfg(feature = "emit-minify")]
-use hir_js::{lower_file, FileKind};
+use emit_js::{emit_top_level_diagnostic, EmitOptions};
 use parse_js::{parse_with_options, ParseOptions, SourceType};
 #[cfg(not(feature = "emit-minify"))]
 use rename::rewrite_source;
@@ -89,7 +87,6 @@ pub fn minify_with_options(
 
   let mut last_error = None;
   let mut parsed = None;
-  let mut used_dialect = None;
   for dialect in parse_dialects {
     let parse_opts = ParseOptions {
       dialect,
@@ -100,7 +97,6 @@ pub fn minify_with_options(
     };
     match parse_with_options(source, parse_opts) {
       Ok(ast) => {
-        used_dialect = Some(dialect);
         parsed = Some(ast);
         break;
       }
@@ -112,9 +108,6 @@ pub fn minify_with_options(
     Some(ast) => ast,
     None => return Err(vec![last_error.unwrap().to_diagnostic(file)]),
   };
-  let used_dialect = used_dialect.expect("successful parse must set dialect");
-  #[cfg(not(feature = "emit-minify"))]
-  let _ = used_dialect;
 
   erase_types(file, &mut top_level_node)?;
 
@@ -124,16 +117,8 @@ pub fn minify_with_options(
   #[cfg(feature = "emit-minify")]
   {
     apply_renames(&mut top_level_node, &renames);
-    let file_kind = match used_dialect {
-      Dialect::Js => FileKind::Js,
-      Dialect::Jsx => FileKind::Jsx,
-      Dialect::Ts => FileKind::Ts,
-      Dialect::Tsx => FileKind::Tsx,
-      Dialect::Dts => FileKind::Dts,
-    };
-    let lowered = lower_file(file, file_kind, &top_level_node);
-    let emitted =
-      emit_hir_file_diagnostic(&lowered, EmitOptions::minified()).map_err(|diag| vec![diag])?;
+    let emitted = emit_top_level_diagnostic(file, &top_level_node, EmitOptions::minified())
+      .map_err(|diag| vec![diag])?;
     output.clear();
     output.extend_from_slice(emitted.as_bytes());
     return Ok(());
