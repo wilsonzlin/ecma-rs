@@ -22,6 +22,9 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 If any step silently produces zero tests or fails with “cannot find module
 `typescript`”, revisit the prerequisites below.
 
+All fixtures are treated as UTF-8; discovery will fail fast on invalid encodings
+to keep spans and offsets consistent.
+
 ## Prerequisites
 
 ### TypeScript upstream suite (submodule)

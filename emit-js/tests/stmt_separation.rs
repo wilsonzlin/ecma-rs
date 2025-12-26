@@ -1,4 +1,4 @@
-use emit_js::{emit_program, EmitMode, EmitOptions, Emitter};
+use emit_js::{emit_program, EmitOptions, Emitter};
 use parse_js::{Dialect, ParseOptions, SourceType};
 use serde_json::to_value;
 
@@ -14,7 +14,11 @@ fn assert_roundtrip(src: &str) -> bool {
       return false;
     }
   };
-  let mut em = Emitter::new(EmitOptions::from(EmitMode::Minified));
+<<<<<<< HEAD
+  let mut em = Emitter::new(EmitOptions::minified());
+=======
+  let mut em = Emitter::new(EmitOptions::minified());
+>>>>>>> 7d09a50 (hygiene: harden UTF-8 handling at CLI boundaries)
   emit_program(&mut em, parsed.stx.as_ref())
     .unwrap_or_else(|err| panic!("emit failed for {src:?}: {err:?}"));
   let emitted = String::from_utf8(em.into_bytes()).expect("utf-8");

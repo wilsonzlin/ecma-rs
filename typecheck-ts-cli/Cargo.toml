@@ -16,3 +16,4 @@ typecheck-ts = { path = "../typecheck-ts" }
 [dev-dependencies]
 assert_cmd = "2.0"
 predicates = "3.1"
+tempfile = "3"

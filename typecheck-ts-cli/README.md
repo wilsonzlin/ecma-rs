@@ -31,6 +31,12 @@ cargo run -p typecheck-ts-cli -- typecheck fixtures/basic.ts --json
 - `--trace` / `--profile`: emit tracing spans in JSON (compatible with the
   harness profiling format).
 
+### Encoding
+
+Source files are read as UTF-8. Offsets passed to `--type-at`/`--symbol-at` are
+byte offsets in that UTF-8 text; invalid encodings cause the CLI to exit with an
+error before rendering diagnostics.
+
 ### Module resolution
 
 By default, imports are resolved relative to the importing file, checking

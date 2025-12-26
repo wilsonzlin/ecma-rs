@@ -105,7 +105,7 @@ struct DiskHost {
   compiler_options: CompilerOptions,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct DiskState {
   next_id: u32,
   path_to_id: BTreeMap<PathBuf, FileId>,
@@ -266,8 +266,6 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     None => BTreeMap::new(),
   };
 
-  let snapshot = host.snapshot();
-
   if args.json {
     let output = JsonOutput {
       diagnostics: diagnostics.clone(),
@@ -287,6 +285,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
       }
     }
   } else {
+    let snapshot = host.snapshot();
     for diagnostic in &diagnostics {
       println!("{}", render_diagnostic(&snapshot, diagnostic));
     }
@@ -456,15 +455,25 @@ impl DiskHost {
   }
 
   fn snapshot(&self) -> HostSnapshot {
-    let state = self.state.lock().unwrap();
-    let mut names = Vec::with_capacity(state.id_to_path.len());
-    let mut texts = Vec::with_capacity(state.id_to_path.len());
-    for (idx, path) in state.id_to_path.iter().enumerate() {
+    let mut state = self.state.lock().unwrap();
+    let paths = state.id_to_path.clone();
+    let mut names = Vec::with_capacity(paths.len());
+    let mut texts = Vec::with_capacity(paths.len());
+    for (idx, path) in paths.iter().enumerate() {
       names.push(path.display().to_string());
       let id = FileId(idx as u32);
       let text = match state.texts.get(&id) {
-        Some(text) => text.as_ref().to_string(),
-        None => fs::read_to_string(path).unwrap_or_default(),
+        Some(text) => Some(text.as_ref().to_string()),
+        None => match fs::read_to_string(path) {
+          Ok(text) => {
+            state.texts.insert(id, Arc::from(text.clone()));
+            Some(text)
+          }
+          Err(err) => {
+            tracing::warn!("failed to read {}: {err}", path.display());
+            None
+          }
+        },
       };
       texts.push(text);
     }
@@ -529,7 +538,7 @@ impl Host for DiskHost {
 
 struct HostSnapshot {
   names: Vec<String>,
-  texts: Vec<String>,
+  texts: Vec<Option<String>>,
 }
 
 impl SourceProvider for HostSnapshot {
@@ -538,7 +547,10 @@ impl SourceProvider for HostSnapshot {
   }
 
   fn file_text(&self, file: FileId) -> Option<&str> {
-    self.texts.get(file.0 as usize).map(|s| s.as_str())
+    self
+      .texts
+      .get(file.0 as usize)
+      .and_then(|text| text.as_deref())
   }
 }
 

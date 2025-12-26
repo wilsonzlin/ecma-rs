@@ -2,7 +2,9 @@ use assert_cmd::Command;
 use predicates::str::is_empty;
 use serde_json::Value;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
 
 fn fixture(name: &str) -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -90,5 +92,30 @@ fn json_output_is_stable_and_parseable() {
   assert!(
     diagnostics.iter().any(|d| d.get("code").is_some()),
     "diagnostics should include codes: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn rejects_invalid_utf8_sources() {
+  let mut file = NamedTempFile::new().expect("temp file");
+  file
+    .write_all(&[0xFF])
+    .expect("write invalid utf-8 to temp file");
+  let path = file.path().to_path_buf();
+
+  let output = Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .args(["typecheck"])
+    .arg(path.as_os_str())
+    .assert()
+    .failure()
+    .get_output()
+    .stdout
+    .clone();
+
+  let stdout = String::from_utf8_lossy(&output);
+  assert!(
+    stdout.contains("UTF-8"),
+    "expected UTF-8 error in CLI output, got: {stdout}"
   );
 }
