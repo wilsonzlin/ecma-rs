@@ -10,11 +10,10 @@
 //! [`Program::symbol_at`](crate::Program::symbol_at) and
 //! [`Program::type_at`](crate::Program::type_at) always return the smallest
 //! covering symbol or expression, even when nested bodies are involved, by
-//! delegating to deterministic span indexes backed by the shared `hir-js`
-//! [`SpanMap`](hir_js::span_map::SpanMap) for `O(log n)` lookups instead of
-//! per-expression scans. Per-body results
-//! ([`BodyCheckResult`](crate::BodyCheckResult)) expose the same indexed span
-//! accessors to avoid linear walks when resolving offsets within a single body.
+//! scanning recorded spans from checked bodies and HIR where necessary.
+//! Per-body results ([`BodyCheckResult`](crate::BodyCheckResult)) expose the
+//! same span lookups to avoid repeating expression walks when resolving offsets
+//! within a single body.
 
 use std::fmt;
 use std::sync::Arc;

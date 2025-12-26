@@ -55,7 +55,7 @@ fn infers_basic_literals_and_identifiers() {
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
   let mut next_symbol = 0;
-  let (result, _) = check_body(
+  let (result, _, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -103,7 +103,7 @@ fn expression_spans_match_body_indices() {
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
   let mut next_symbol = 0;
-  let (result, _) = check_body(
+  let (result, _, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -150,7 +150,7 @@ fn expr_at_returns_innermost_type() {
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
   let mut next_symbol = 0;
-  let (result, _) = check_body(
+  let (result, _, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -250,7 +250,7 @@ fn diagnostics_are_stably_sorted() {
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
   let mut next_symbol = 0;
-  let (result, _) = check_body(
+  let (result, _, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -276,7 +276,8 @@ fn diagnostics_are_stably_sorted() {
 
 #[test]
 fn call_with_missing_arguments_types_arguments_once() {
-  let source = "function add(a: number, b: number): number { return a + b; }\nconst result = add(1);";
+  let source =
+    "function add(a: number, b: number): number { return a + b; }\nconst result = add(1);";
   let lowered = lower_from_source(source).expect("lower");
   let (body_id, body) = lowered
     .bodies
@@ -296,7 +297,7 @@ fn call_with_missing_arguments_types_arguments_once() {
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let mut next_symbol = 0;
-  let (result, _) = check_body(
+  let (result, _, _) = check_body(
     body_id,
     body,
     &lowered.names,
@@ -354,7 +355,8 @@ fn program_check_body_avoids_reparse() {
 
 #[test]
 fn program_type_at_prefers_literal_in_call_arguments() {
-  let source = "function add(a: number, b: number): number { return a + b; }\nconst result = add(1);";
+  let source =
+    "function add(a: number, b: number): number { return a + b; }\nconst result = add(1);";
   let host = NoLibHost { text: source };
   let key = FileKey::new("entry.ts");
   let program = Program::new(host, vec![key.clone()]);

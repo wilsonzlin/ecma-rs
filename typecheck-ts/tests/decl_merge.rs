@@ -111,9 +111,7 @@ fn value_and_namespace_merge_callable_and_members() {
   let def = program
     .definitions_in_file(file_id)
     .into_iter()
-    .find(|d| {
-      program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some()
-    })
+    .find(|d| program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some())
     .expect("foo definition");
   let ty = program.type_of_def(def);
   let rendered = program.display_type(ty).to_string();
@@ -209,9 +207,7 @@ fn value_namespace_merge_keeps_callability_and_members_interned() {
   let def = program
     .definitions_in_file(file_id)
     .into_iter()
-    .find(|d| {
-      program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some()
-    })
+    .find(|d| program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some())
     .expect("foo definition");
   let ty = program.type_of_def_interned(def);
   let props = program.properties_of(ty);
@@ -272,7 +268,10 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     typecheck_ts::PropertyKey::String(name) => name == "bar",
     _ => false,
   });
-  assert!(has_bar, "namespace member should be visible on merged value");
+  assert!(
+    has_bar,
+    "namespace member should be visible on merged value"
+  );
   let calls = program.call_signatures(ty);
   assert!(
     !calls.is_empty(),

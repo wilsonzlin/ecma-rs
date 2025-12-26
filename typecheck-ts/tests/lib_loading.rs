@@ -275,7 +275,8 @@ fn imported_type_alias_resolves_interned_type() {
 #[test]
 fn bundled_lib_types_expose_promise_and_array_shapes() {
   let entry = FileKey::new("libs.ts");
-  let host = TestHost::new(CompilerOptions::default()).with_file(entry.clone(), PROMISE_ARRAY_TYPES);
+  let host =
+    TestHost::new(CompilerOptions::default()).with_file(entry.clone(), PROMISE_ARRAY_TYPES);
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
   assert!(

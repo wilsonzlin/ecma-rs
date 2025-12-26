@@ -191,7 +191,8 @@ fn type_at_prefers_inner_identifier_in_nested_arrows() {
 #[test]
 fn type_at_prefers_innermost_member_access() {
   let mut host = MemoryHost::default();
-  let source = "const obj = { nested: { value: 42 } } as const; const total = obj.nested.value + 1;";
+  let source =
+    "const obj = { nested: { value: 42 } } as const; const total = obj.nested.value + 1;";
   let file = FileKey::new("members.ts");
   host.insert(file.clone(), Arc::from(source.to_string()));
 
@@ -199,8 +200,7 @@ fn type_at_prefers_innermost_member_access() {
   let file_id = program.file_id(&file).expect("file id");
   let offset = source
     .rfind("value + 1")
-    .expect("offset of innermost member")
-    as u32;
+    .expect("offset of innermost member") as u32;
 
   let ty = program.type_at(file_id, offset).expect("type at member");
   assert_eq!(program.display_type(ty).to_string(), "42");
@@ -217,13 +217,18 @@ fn type_at_prefers_innermost_member_access() {
 #[test]
 fn type_at_prefers_inner_body_expression_in_nested_functions() {
   let mut host = MemoryHost::default();
-  let source = "function outer() { return (function inner(arg: string) { return arg + \"!\"; })(\"hi\"); }";
+  let source =
+    "function outer() { return (function inner(arg: string) { return arg + \"!\"; })(\"hi\"); }";
   let file = FileKey::new("nested_funcs.ts");
   host.insert(file.clone(), Arc::from(source.to_string()));
 
   let program = Program::new(host, vec![file.clone()]);
   let file_id = program.file_id(&file).expect("file id");
-  let offset = source.rfind("arg +").expect("inner arg").try_into().unwrap();
+  let offset = source
+    .rfind("arg +")
+    .expect("inner arg")
+    .try_into()
+    .unwrap();
 
   let ty = program.type_at(file_id, offset).expect("type at offset");
   assert_eq!(program.display_type(ty).to_string(), "string");

@@ -123,7 +123,7 @@
 //! let total_type = program.type_of_def(total_def);
 //! assert_eq!(program.display_type(total_type).to_string(), "number");
 //! ```
-//! 
+//!
 //! # Features
 //!
 //! - `serde` (default): enables serialization for identifiers, diagnostics, and
@@ -146,8 +146,8 @@ mod type_queries;
 pub use api::*;
 pub use error::*;
 pub use profile::*;
-pub use program::*;
 pub use program::BodyCheckResult;
+pub use program::*;
 #[cfg(feature = "serde")]
 pub use snapshot::*;
 pub use type_queries::*;
@@ -204,7 +204,10 @@ impl Host for MemoryHost {
   }
 
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
-    self.edges.get(&(from.clone(), specifier.to_string())).cloned()
+    self
+      .edges
+      .get(&(from.clone(), specifier.to_string()))
+      .cloned()
   }
 
   fn compiler_options(&self) -> lib_support::CompilerOptions {

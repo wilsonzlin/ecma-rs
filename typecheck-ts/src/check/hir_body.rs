@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use bumpalo::Bump;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
-use hir_js::span_map::SpanIndex;
 use hir_js::{
   ArrayElement, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr, NameId,
   NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind,
@@ -391,7 +390,11 @@ pub fn check_body<'a>(
   symbols: Option<&'a HashMap<String, SymbolId>>,
   resolver: Option<Arc<dyn TypeResolver>>,
   expander: Option<&'a dyn RelateTypeExpander>,
-) -> (BodyCheckResult, Vec<(TextRange, SymbolId)>) {
+) -> (
+  BodyCheckResult,
+  Vec<(TextRange, SymbolId)>,
+  HashMap<String, SymbolId>,
+) {
   let prim = store.primitive_ids();
   let expr_types = vec![prim.unknown; body.exprs.len()];
   let pat_types = vec![prim.unknown; body.pats.len()];
@@ -458,6 +461,7 @@ pub fn check_body<'a>(
     next_symbol,
     symbol_map: symbols,
     symbol_occurrences: Vec::new(),
+    bound_symbols: HashMap::new(),
   };
 
   checker.seed_builtins();
@@ -497,11 +501,8 @@ pub fn check_body<'a>(
     pat_spans: checker.pat_spans,
     diagnostics: checker.diagnostics,
     return_types: checker.return_types,
-    expr_index: SpanIndex::new(),
-    pat_index: SpanIndex::new(),
-  }
-  .with_indexes();
-  (result, checker.symbol_occurrences)
+  };
+  (result, checker.symbol_occurrences, checker.bound_symbols)
 }
 
 struct Checker<'a> {
@@ -528,6 +529,7 @@ struct Checker<'a> {
   next_symbol: &'a mut u32,
   symbol_map: Option<&'a HashMap<String, SymbolId>>,
   symbol_occurrences: Vec<(TextRange, SymbolId)>,
+  bound_symbols: HashMap<String, SymbolId>,
 }
 
 impl<'a> Checker<'a> {
@@ -571,6 +573,7 @@ impl<'a> Checker<'a> {
     if let Some(span) = span {
       self.symbol_occurrences.push((span, symbol));
     }
+    self.bound_symbols.insert(name, symbol);
   }
 
   fn lookup(&self, name: &str) -> Option<Binding> {
@@ -583,39 +586,49 @@ impl<'a> Checker<'a> {
   }
 
   fn check_enclosing_function(&mut self, body_range: TextRange) -> bool {
-    let mut best: Option<FunctionInfo<'_>> = None;
-    for func in self.index.functions.iter() {
-      if ranges_overlap(func.body_span, body_range) {
-        let len = func.body_span.end.saturating_sub(func.body_span.start);
-        let replace = match best {
-          Some(existing) => {
-            let existing_len = existing
-              .body_span
-              .end
-              .saturating_sub(existing.body_span.start);
-            len < existing_len
-          }
-          None => true,
-        };
-        if replace {
-          best = Some(*func);
-        }
-      }
+    let mut enclosing: Vec<FunctionInfo<'_>> = self
+      .index
+      .functions
+      .iter()
+      .copied()
+      .filter(|func| contains_range(func.body_span, body_range))
+      .collect();
+    if enclosing.is_empty() {
+      enclosing = self
+        .index
+        .functions
+        .iter()
+        .copied()
+        .filter(|func| ranges_overlap(func.body_span, body_range))
+        .collect();
     }
-    if let Some(func) = best {
-      let prev_return = self.current_return.take();
+    if enclosing.is_empty() {
+      return false;
+    }
+    let base_scope_depth = self.scopes.len();
+    enclosing.sort_by_key(|func| {
+      (
+        !contains_range(func.body_span, body_range),
+        func.body_span.end.saturating_sub(func.body_span.start),
+      )
+    });
+    let target = *enclosing.first().expect("non-empty enclosing functions");
+    // Bind parameters from outermost to innermost so inner bindings can shadow.
+    for func in enclosing.iter().rev() {
+      self.scopes.push(Scope::default());
       self.bind_params(func.func);
-      self.current_return = func
-        .func
-        .stx
-        .return_type
-        .as_ref()
-        .map(|t| self.lowerer.lower_type_expr(t));
-      self.check_function_body(func.func);
-      self.current_return = prev_return;
-      return true;
     }
-    false
+    let prev_return = self.current_return.take();
+    self.current_return = target
+      .func
+      .stx
+      .return_type
+      .as_ref()
+      .map(|t| self.lowerer.lower_type_expr(t));
+    self.check_function_body(target.func);
+    self.current_return = prev_return;
+    self.scopes.truncate(base_scope_depth);
+    true
   }
 
   fn check_matching_initializer(&mut self, body_range: TextRange) -> bool {
@@ -752,36 +765,39 @@ impl<'a> Checker<'a> {
           if matches!(bin.stx.operator, OperatorName::Instanceof) {
             if let AstExpr::Id(id) = bin.stx.left.stx.as_ref() {
               let shape_id = self.store.intern_shape(Shape::new());
-              let obj = self
-                .store
-                .intern_type(TypeKind::Object(self.store.intern_object(ObjectType { shape: shape_id })));
+              let obj = self.store.intern_type(TypeKind::Object(
+                self.store.intern_object(ObjectType { shape: shape_id }),
+              ));
               let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
               self.insert_binding(id.stx.name.clone(), obj, Vec::new(), symbol, None);
             }
           } else if matches!(bin.stx.operator, OperatorName::LogicalAnd) {
             if let AstExpr::Id(id) = bin.stx.left.stx.as_ref() {
               if let AstExpr::Binary(right) = bin.stx.right.stx.as_ref() {
-                if matches!(right.stx.operator, OperatorName::StrictEquality | OperatorName::Equality) {
+                if matches!(
+                  right.stx.operator,
+                  OperatorName::StrictEquality | OperatorName::Equality
+                ) {
                   if let (AstExpr::Unary(unary), AstExpr::LitStr(str_lit)) =
                     (right.stx.left.stx.as_ref(), right.stx.right.stx.as_ref())
-                    {
-                      if matches!(unary.stx.operator, OperatorName::Typeof) {
-                        if let AstExpr::Id(arg_id) = unary.stx.argument.stx.as_ref() {
-                          if arg_id.stx.name == id.stx.name && str_lit.stx.value == "string" {
-                            let str_ty = self.store.primitive_ids().string;
-                            let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
-                            self.insert_binding(
-                              id.stx.name.clone(),
-                              str_ty,
-                              Vec::new(),
-                              symbol,
-                              None,
-                            );
-                          }
+                  {
+                    if matches!(unary.stx.operator, OperatorName::Typeof) {
+                      if let AstExpr::Id(arg_id) = unary.stx.argument.stx.as_ref() {
+                        if arg_id.stx.name == id.stx.name && str_lit.stx.value == "string" {
+                          let str_ty = self.store.primitive_ids().string;
+                          let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
+                          self.insert_binding(
+                            id.stx.name.clone(),
+                            str_ty,
+                            Vec::new(),
+                            symbol,
+                            None,
+                          );
                         }
                       }
                     }
                   }
+                }
               }
             }
           }
@@ -796,13 +812,7 @@ impl<'a> Checker<'a> {
             if let Some(first_arg) = call.stx.arguments.first() {
               if let AstExpr::Id(id) = first_arg.stx.value.stx.as_ref() {
                 let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
-                self.insert_binding(
-                  id.stx.name.clone(),
-                  asserted,
-                  Vec::new(),
-                  symbol,
-                  None,
-                );
+                self.insert_binding(id.stx.name.clone(), asserted, Vec::new(), symbol, None);
               }
             }
           }
@@ -945,16 +955,13 @@ impl<'a> Checker<'a> {
       if let Some(ann) = declarator.type_annotation.as_ref() {
         self.record_type_reference(ann);
       }
-      let annot_ty = declarator
-        .type_annotation
-        .as_ref()
-        .map(|ann| {
-          let ty = self.lowerer.lower_type_expr(ann);
-          match self.store.type_kind(ty) {
-            TypeKind::Conditional { .. } => prim.unknown,
-            _ => ty,
-          }
-        });
+      let annot_ty = declarator.type_annotation.as_ref().map(|ann| {
+        let ty = self.lowerer.lower_type_expr(ann);
+        match self.store.type_kind(ty) {
+          TypeKind::Conditional { .. } => prim.unknown,
+          _ => ty,
+        }
+      });
       let init_ty = if self.check_var_assignments {
         declarator
           .initializer
@@ -997,7 +1004,7 @@ impl<'a> Checker<'a> {
           }
         }
         let elem_ty = if elems.is_empty() {
-          self.store.primitive_ids().unknown
+          self.store.primitive_ids().any
         } else {
           self.store.union(elems)
         };
@@ -1076,9 +1083,11 @@ impl<'a> Checker<'a> {
           None,
           span,
         );
-        let contextual_sig = resolution
-          .signature
-          .or_else(|| callable_signatures(self.store.as_ref(), callee_ty).into_iter().next());
+        let contextual_sig = resolution.signature.or_else(|| {
+          callable_signatures(self.store.as_ref(), callee_ty)
+            .into_iter()
+            .next()
+        });
         if let Some(sig_id) = contextual_sig {
           let sig = self.store.signature(sig_id);
           for (idx, arg) in call.stx.arguments.iter().enumerate() {
@@ -1106,13 +1115,7 @@ impl<'a> Checker<'a> {
               if let Some(arg) = call.stx.arguments.get(target_idx) {
                 if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
                   let symbol = self.lookup(&id.stx.name).and_then(|b| b.symbol);
-                  self.insert_binding(
-                    id.stx.name.clone(),
-                    asserted,
-                    Vec::new(),
-                    symbol,
-                    None,
-                  );
+                  self.insert_binding(id.stx.name.clone(), asserted, Vec::new(), symbol, None);
                 }
               }
             }
@@ -1166,7 +1169,7 @@ impl<'a> Checker<'a> {
           }
         }
         let elem_ty = if elems.is_empty() {
-          self.store.primitive_ids().unknown
+          self.store.primitive_ids().any
         } else {
           let widened: Vec<_> = elems.into_iter().map(|e| self.widen_literal(e)).collect();
           self.store.union(widened)
@@ -1280,7 +1283,11 @@ impl<'a> Checker<'a> {
             } else {
               self.check_expr(expr)
             };
-            let ty = if preserve_literals { value_ty } else { self.widen_literal(value_ty) };
+            let ty = if preserve_literals {
+              value_ty
+            } else {
+              self.widen_literal(value_ty)
+            };
             shape.properties.push(types_ts_interned::Property {
               key: prop_key,
               data: PropData {
@@ -1346,15 +1353,13 @@ impl<'a> Checker<'a> {
       range.start = range.start.saturating_sub(len);
       range.end = range.start.saturating_add(len);
     }
-    self
-      .diagnostics
-      .push(codes::UNKNOWN_IDENTIFIER.error(
-        format!("unknown identifier `{}`", name),
-        Span {
-          file: self.file,
-          range,
-        },
-      ));
+    self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+      format!("unknown identifier `{}`", name),
+      Span {
+        file: self.file,
+        range,
+      },
+    ));
     self.store.primitive_ids().unknown
   }
 
@@ -1461,13 +1466,7 @@ impl<'a> Checker<'a> {
             span = TextRange::new(start, start + expected);
           }
           let span = Some(span);
-          self.insert_binding(
-            id.stx.name.clone(),
-            value_ty,
-            Vec::new(),
-            None,
-            span,
-          );
+          self.insert_binding(id.stx.name.clone(), value_ty, Vec::new(), None, span);
         }
       }
       AstExpr::ArrPat(arr) => {
@@ -1507,11 +1506,21 @@ impl<'a> Checker<'a> {
           span = TextRange::new(start, start + expected);
         }
         let span = Some(span);
-        let symbol = if self.scopes.len() == 1 {
-          self.symbol_map
-            .and_then(|map| map.get(&id.stx.name).copied())
-        } else {
+        let current_binding = self
+          .scopes
+          .last()
+          .and_then(|scope| scope.bindings.get(&id.stx.name));
+        let shadowed = self.scopes[..self.scopes.len().saturating_sub(1)]
+          .iter()
+          .any(|scope| scope.bindings.contains_key(&id.stx.name));
+        let symbol = if let Some(binding) = current_binding {
+          binding.symbol
+        } else if shadowed {
           None
+        } else {
+          self
+            .symbol_map
+            .and_then(|map| map.get(&id.stx.name).copied())
         };
         self.insert_binding(id.stx.name.clone(), value, type_params, symbol, span);
       }
@@ -1697,10 +1706,7 @@ impl<'a> Checker<'a> {
   fn record_type_reference(&mut self, type_expr: &Node<parse_js::ast::type_expr::TypeExpr>) {
     if let parse_js::ast::type_expr::TypeExpr::TypeReference(reference) = type_expr.stx.as_ref() {
       if let parse_js::ast::type_expr::TypeEntityName::Identifier(name) = &reference.stx.name {
-        if let Some(symbol) = self
-          .symbol_map
-          .and_then(|map| map.get(name).copied())
-        {
+        if let Some(symbol) = self.symbol_map.and_then(|map| map.get(name).copied()) {
           let mut range = loc_to_range(self.file, type_expr.loc);
           let expected = name.len() as u32;
           if range.len() < expected {
@@ -1791,6 +1797,16 @@ impl<'a> Checker<'a> {
   }
 
   fn check_assignable(&mut self, expr: &Node<AstExpr>, src: TypeId, dst: TypeId) {
+    if let AstExpr::LitArr(arr) = expr.stx.as_ref() {
+      let empty = arr
+        .stx
+        .elements
+        .iter()
+        .all(|elem| matches!(elem, parse_js::ast::expr::lit::LitArrElem::Empty));
+      if empty {
+        return;
+      }
+    }
     if matches!(self.store.type_kind(src), TypeKind::Any | TypeKind::Unknown)
       || matches!(self.store.type_kind(dst), TypeKind::Any | TypeKind::Unknown)
     {
@@ -1960,9 +1976,11 @@ fn body_range(body: &Body) -> TextRange {
     start = start.min(expr.span.start);
     end = end.max(expr.span.end);
   }
-  for pat in body.pats.iter() {
-    start = start.min(pat.span.start);
-    end = end.max(pat.span.end);
+  if start == u32::MAX {
+    for pat in body.pats.iter() {
+      start = start.min(pat.span.start);
+      end = end.max(pat.span.end);
+    }
   }
   if start == u32::MAX {
     TextRange::new(0, 0)
@@ -2073,10 +2091,7 @@ impl<'a> FlowBodyChecker<'a> {
       pat_spans: self.pat_spans,
       diagnostics: self.diagnostics,
       return_types: self.return_types,
-      expr_index: SpanIndex::new(),
-      pat_index: SpanIndex::new(),
     }
-    .with_indexes()
   }
 
   fn run(&mut self, initial: &HashMap<NameId, TypeId>) {
@@ -2619,7 +2634,9 @@ impl<'a> FlowBodyChecker<'a> {
         let sig = self.store.signature(*sig_id);
         if let TypeKind::Predicate {
           parameter,
-          asserted, asserts, ..
+          asserted,
+          asserts,
+          ..
         } = self.store.type_kind(sig.ret)
         {
           if let Some(asserted) = asserted {

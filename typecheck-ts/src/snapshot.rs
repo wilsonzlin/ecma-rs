@@ -2,23 +2,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{
-  BodyCheckResult, BuiltinTypes, DefData, ExportMap, SymbolBinding, SymbolOccurrence, TypeStore,
+  BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeStore,
 };
-use crate::{semantic_js, BodyId, DefId, Diagnostic, FileId, FileKey, TextRange};
+use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId};
 use types_ts_interned::{
   TypeId, TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.
-pub const PROGRAM_SNAPSHOT_VERSION: u32 = 6;
+pub const PROGRAM_SNAPSHOT_VERSION: u32 = 7;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
 /// to allow offline reconstruction.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FileSnapshot {
   pub file: FileId,
-  pub key: FileKey,
-  pub is_lib: bool,
   pub kind: FileKind,
   pub hash: String,
   pub text: Option<String>,
@@ -41,16 +39,6 @@ pub struct DefSnapshot {
   pub data: DefData,
 }
 
-/// Minimal body metadata needed for offset and query mapping.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BodyDataSnapshot {
-  pub id: BodyId,
-  pub file: FileId,
-  pub owner: Option<DefId>,
-  pub expr_spans: Vec<TextRange>,
-  pub pat_spans: Vec<TextRange>,
-}
-
 /// Stable, deterministic snapshot of a checked program suitable for caching and
 /// offline queries.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -58,11 +46,10 @@ pub struct ProgramSnapshot {
   pub schema_version: u32,
   pub tool_version: String,
   pub compiler_options: CompilerOptions,
-  pub roots: Vec<FileKey>,
+  pub roots: Vec<FileId>,
   pub files: Vec<FileSnapshot>,
   pub file_states: Vec<FileStateSnapshot>,
   pub def_data: Vec<DefSnapshot>,
-  pub body_data: Vec<BodyDataSnapshot>,
   pub def_types: Vec<(DefId, TypeId)>,
   pub canonical_defs: Vec<((FileId, String), DefId)>,
   pub namespace_types: Vec<(DefId, TypeId)>,

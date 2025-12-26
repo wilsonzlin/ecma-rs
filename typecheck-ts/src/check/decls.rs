@@ -802,15 +802,16 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
     }
 
+    let mut best: Option<DefId> = None;
     if let Some(def) = self.defs.get(&(file, name.to_string())) {
-      return Some(*def);
+      best = Some(*def);
     }
 
     if let Some(def) = self
       .def_by_name
       .and_then(|map| map.get(&(file, name.to_string())).copied())
     {
-      return Some(def);
+      best = Some(best.map_or(def, |existing| existing.min(def)));
     }
 
     if let Some(sem) = self.semantics {
@@ -833,7 +834,22 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
     }
 
-    None
+    if best.is_none() {
+      for ((_, candidate), def) in self.defs.iter() {
+        if candidate == name {
+          best = Some(best.map_or(*def, |existing| existing.min(*def)));
+        }
+      }
+      if let Some(map) = self.def_by_name {
+        for ((_, candidate), def) in map.iter() {
+          if candidate == name {
+            best = Some(best.map_or(*def, |existing| existing.min(*def)));
+          }
+        }
+      }
+    }
+
+    best
   }
 }
 

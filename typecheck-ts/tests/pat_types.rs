@@ -33,7 +33,7 @@ fn records_pattern_types_for_params_and_vars() {
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
   let mut next_symbol = 0;
-  let (result, _) = check_body(
+  let (result, _, _) = check_body(
     body_id,
     body,
     &names,

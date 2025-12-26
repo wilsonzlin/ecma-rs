@@ -18,7 +18,10 @@ interface Foo { b: number; }
 
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let file_id = program.file_id(&file).unwrap();
   let foo_def = program
@@ -54,7 +57,10 @@ export namespace Config { export const b = 2; }
 
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let file_id = program.file_id(&file).unwrap();
   let exports = program.exports_of(file_id);
@@ -91,7 +97,10 @@ export const name = Lib.version;
 
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let file_id = program.file_id(&file).unwrap();
   let exports = program.exports_of(file_id);

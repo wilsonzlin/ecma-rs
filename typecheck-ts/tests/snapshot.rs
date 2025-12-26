@@ -20,7 +20,9 @@ impl MemoryHost {
   }
 
   fn link(&mut self, from: FileId, specifier: &str, to: FileId) {
-    self.edges.insert((key(from), specifier.to_string()), key(to));
+    self
+      .edges
+      .insert((key(from), specifier.to_string()), key(to));
   }
 }
 
@@ -61,7 +63,9 @@ fn snapshot_roundtrips_queries() {
   let total_type = total_entry.type_id.expect("total type");
   let total_body = program.body_of_def(total_def).expect("body for total");
   let call_offset = entry_source.find("add(1, 2)").unwrap() as u32;
-  let type_at_call = program.type_at(file_entry, call_offset).expect("type at call");
+  let type_at_call = program
+    .type_at(file_entry, call_offset)
+    .expect("type at call");
 
   let snapshot = program.snapshot();
   let serialized = serde_json::to_string_pretty(&snapshot).expect("serialize snapshot");

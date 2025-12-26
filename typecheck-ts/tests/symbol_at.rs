@@ -333,13 +333,10 @@ fn symbol_at_prefers_innermost_binding_in_nested_functions() {
   let outer_decl = positions[0];
   let inner_decl = positions[1];
   let inner_use = positions[2];
-  let nearby: Vec<_> = (inner_use.saturating_sub(4)..=inner_use + 4)
-    .filter_map(|off| locals.resolve_expr_at_offset(off).map(|(range, id)| (off, range, id)))
-    .collect();
   let inner_symbol = locals
     .resolve_expr_at_offset(inner_use)
     .map(|(_, id)| id)
-    .unwrap_or_else(|| panic!("inner use should resolve; nearby: {:?}", nearby));
+    .expect("inner use should resolve");
   let outer_symbol = locals
     .resolve_expr_at_offset(outer_decl)
     .map(|(_, id)| id)
@@ -352,18 +349,40 @@ fn symbol_at_prefers_innermost_binding_in_nested_functions() {
     inner_symbol, outer_symbol,
     "inner use should resolve to inner binding"
   );
-  assert_eq!(inner_symbol, inner_decl_symbol, "inner use should match inner decl");
+  assert_eq!(
+    inner_symbol, inner_decl_symbol,
+    "inner use should match inner decl"
+  );
 
   let program = Program::new(host, vec![file.clone()]);
   let file_id = program.file_id(&file).expect("file id");
+  let snapshot = program.snapshot();
+  if let Some((_, occs)) = snapshot
+    .symbol_occurrences
+    .iter()
+    .find(|(id, _)| *id == file_id)
+  {
+    for occ in occs {
+      let text = &source[occ.range.start as usize..occ.range.end as usize];
+      println!("{:?} -> {:?} ({text})", occ.range, occ.symbol);
+    }
+  }
+  let outer_decl_symbol = program
+    .symbol_at(file_id, outer_decl)
+    .expect("outer declaration");
+  let inner_decl_symbol = program
+    .symbol_at(file_id, inner_decl)
+    .expect("inner declaration");
+  let inner_use_symbol = program
+    .symbol_at(file_id, inner_use)
+    .expect("inner use");
 
-  let inner_decl = symbol_for_occurrence(&program, file_id, source, "value", 1);
-  let inner_use_offset = source
-    .rfind("value + 1")
-    .expect("offset of inner use") as u32;
-  let inner_use = program
-    .symbol_at(file_id, inner_use_offset)
-    .expect("symbol at inner use");
-
-  assert_eq!(inner_decl, inner_use, "should resolve to innermost binding");
+  assert_ne!(
+    outer_decl_symbol, inner_decl_symbol,
+    "inner binding should shadow outer binding"
+  );
+  assert_eq!(
+    inner_decl_symbol, inner_use_symbol,
+    "should resolve to innermost binding"
+  );
 }
