@@ -65,7 +65,15 @@ fn selects_literal_overload() {
     overloads: vec![literal_id, wide_id],
   });
 
-  let resolution = resolve_call(&store, &relate, callable, &[click, handler], &[], span());
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    callable,
+    &[click, handler],
+    &[],
+    None,
+    span(),
+  );
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(literal_id));
@@ -98,6 +106,7 @@ fn infers_generic_return_type() {
     callable,
     &[primitives.number],
     &decls,
+    None,
     span(),
   );
 
@@ -123,7 +132,15 @@ fn reports_no_matching_overload_with_reasons() {
     overloads: vec![sig_id],
   });
 
-  let resolution = resolve_call(&store, &relate, callable, &[primitives.string], &[], span());
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    callable,
+    &[primitives.string],
+    &[],
+    None,
+    span(),
+  );
 
   assert!(resolution.signature.is_none());
   assert_eq!(resolution.return_type, primitives.unknown);
@@ -163,7 +180,15 @@ fn reports_ambiguous_call() {
     overloads: vec![sig_a_id, sig_b_id],
   });
 
-  let resolution = resolve_call(&store, &relate, callable, &[primitives.string], &[], span());
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    callable,
+    &[primitives.string],
+    &[],
+    None,
+    span(),
+  );
 
   assert!(resolution.signature.is_none());
   assert_eq!(resolution.return_type, primitives.unknown);
@@ -209,7 +234,7 @@ fn prefers_union_compatible_overload() {
     overloads: vec![sig_string_id, sig_number_id, sig_union_id],
   });
 
-  let resolution = resolve_call(&store, &relate, callable, &[union], &[], span());
+  let resolution = resolve_call(&store, &relate, callable, &[union], &[], None, span());
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(sig_union_id));
@@ -259,6 +284,7 @@ fn prefers_fixed_arity_over_rest() {
     callable,
     &[primitives.string, primitives.string],
     &[],
+    None,
     span(),
   );
 
@@ -297,9 +323,51 @@ fn prefers_non_generic_when_inference_is_unknown() {
   });
 
   let decls = vec![TypeParamDecl::new(t_param)];
-  let resolution = resolve_call(&store, &relate, callable, &[primitives.any], &decls, span());
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    callable,
+    &[primitives.any],
+    &decls,
+    None,
+    span(),
+  );
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(sig_any_id));
   assert_eq!(resolution.return_type, primitives.string);
+}
+
+#[test]
+fn uses_contextual_return_for_generic_inference() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+
+  let t_param = types_ts_interned::TypeParamId(0);
+  let t_type = store.intern_type(TypeKind::TypeParam(t_param));
+  let sig = Signature {
+    params: vec![param("value", t_type, &store)],
+    ret: t_type,
+    type_params: vec![t_param],
+    this_param: None,
+  };
+  let sig_id = store.intern_signature(sig);
+  let callable = store.intern_type(TypeKind::Callable {
+    overloads: vec![sig_id],
+  });
+
+  let decls = vec![TypeParamDecl::new(t_param)];
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    callable,
+    &[primitives.any],
+    &decls,
+    Some(primitives.number),
+    span(),
+  );
+
+  assert!(resolution.diagnostics.is_empty());
+  assert_eq!(resolution.return_type, primitives.number);
 }

@@ -371,3 +371,29 @@ fn infers_from_contextual_signature_parameter() {
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
 }
+
+#[test]
+fn infers_from_contextual_return_in_call() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let t_param = TypeParamId(0);
+  let t_type = store.intern_type(TypeKind::TypeParam(t_param));
+
+  let sig = Signature {
+    params: vec![param("value", t_type, &store)],
+    ret: t_type,
+    type_params: vec![t_param],
+    this_param: None,
+  };
+
+  let result = infer_type_arguments_for_call(
+    &store,
+    &sig,
+    &[TypeParamDecl::new(t_param)],
+    &[primitives.unknown],
+    Some(primitives.string),
+  );
+
+  assert!(result.diagnostics.is_empty());
+  assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
+}

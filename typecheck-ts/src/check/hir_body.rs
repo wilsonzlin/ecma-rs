@@ -32,7 +32,9 @@ use super::flow_narrow::{
 };
 
 use super::expr::resolve_call;
-use super::infer::TypeParamDecl;
+use super::infer::{infer_type_arguments_from_contextual_signature, TypeParamDecl};
+use super::instantiate::Substituter;
+use super::overload;
 use super::type_expr::TypeLowerer;
 use crate::codes;
 
@@ -560,7 +562,7 @@ impl<'a> Checker<'a> {
         let annotation = info
           .type_annotation
           .map(|ann| self.lowerer.lower_type_expr(ann));
-        let init_ty = self.check_expr(init);
+        let init_ty = self.check_expr_with_context(init, annotation);
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span) {
           self.bind_pattern(pat, ty);
@@ -583,10 +585,10 @@ impl<'a> Checker<'a> {
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
-      let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
       let mut ty = annotation.unwrap_or(self.store.primitive_ids().unknown);
-      if let Some(default) = default_ty {
-        ty = self.store.union(vec![ty, default]);
+      if let Some(default) = &param.stx.default_value {
+        let default_ty = self.check_expr_with_context(default, Some(ty));
+        ty = self.store.union(vec![ty, default_ty]);
       }
       if let Some(pat) = self.index.pats.get(&pat_span) {
         self.bind_pattern_with_type_params(pat, ty, type_param_decls.clone());
@@ -774,7 +776,7 @@ impl<'a> Checker<'a> {
         // function declarations are handled by separate bodies; just bind the name if available
         if let Some(name) = func.stx.name.as_ref() {
           let name = name.stx.name.clone();
-          let ty = self.function_type(&func.stx.function);
+          let ty = self.function_type(&func.stx.function, None);
           self.insert_binding(name, ty, Vec::new());
         }
       }
@@ -791,15 +793,15 @@ impl<'a> Checker<'a> {
   fn check_var_decl(&mut self, decl: &Node<VarDecl>) {
     let prim = self.store.primitive_ids();
     for declarator in decl.stx.declarators.iter() {
-      let init_ty = declarator
-        .initializer
-        .as_ref()
-        .map(|i| self.check_expr(i))
-        .unwrap_or(prim.unknown);
       let annot_ty = declarator
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
+      let init_ty = declarator
+        .initializer
+        .as_ref()
+        .map(|i| self.check_expr_with_context(i, annot_ty))
+        .unwrap_or(prim.unknown);
       let final_ty = annot_ty.unwrap_or(init_ty);
       if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
         self.check_assignable(init, init_ty, ann);
@@ -813,6 +815,14 @@ impl<'a> Checker<'a> {
   }
 
   fn check_expr(&mut self, expr: &Node<AstExpr>) -> TypeId {
+    self.check_expr_with_context(expr, None)
+  }
+
+  fn check_expr_with_context(
+    &mut self,
+    expr: &Node<AstExpr>,
+    contextual: Option<TypeId>,
+  ) -> TypeId {
     let ty = match expr.stx.as_ref() {
       AstExpr::Id(id) => self.resolve_ident(&id.stx.name, expr),
       AstExpr::LitNum(num) => {
@@ -847,17 +857,22 @@ impl<'a> Checker<'a> {
       },
       AstExpr::Binary(bin) => self.check_binary(bin.stx.operator, &bin.stx.left, &bin.stx.right),
       AstExpr::Cond(cond) => {
-        let cons = self.check_expr(&cond.stx.consequent);
-        let alt = self.check_expr(&cond.stx.alternate);
+        let cons = self.check_expr_with_context(&cond.stx.consequent, contextual);
+        let alt = self.check_expr_with_context(&cond.stx.alternate, contextual);
         self.store.union(vec![cons, alt])
       }
       AstExpr::Call(call) => {
-        let callee_ty = self.check_expr(&call.stx.callee);
+        let callee_ty = self.check_expr_with_context(&call.stx.callee, None);
+        let arg_contexts = self.contextual_argument_types(callee_ty, call.stx.arguments.len());
         let arg_types: Vec<TypeId> = call
           .stx
           .arguments
           .iter()
-          .map(|arg| self.check_expr(&arg.stx.value))
+          .enumerate()
+          .map(|(idx, arg)| {
+            let ctx = arg_contexts.get(idx).and_then(|c| *c);
+            self.check_expr_with_context(&arg.stx.value, ctx)
+          })
           .collect();
         let span = Span {
           file: self.file,
@@ -874,6 +889,7 @@ impl<'a> Checker<'a> {
           callee_ty,
           &arg_types,
           &type_params,
+          contextual,
           span,
         );
         for diag in &resolution.diagnostics {
@@ -927,8 +943,8 @@ impl<'a> Checker<'a> {
         })
       }
       AstExpr::LitObj(obj) => self.object_literal_type(obj),
-      AstExpr::Func(func) => self.function_type(&func.stx.func),
-      AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func),
+      AstExpr::Func(func) => self.function_type(&func.stx.func, contextual),
+      AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func, contextual),
       AstExpr::IdPat(_) | AstExpr::ArrPat(_) | AstExpr::ObjPat(_) => {
         self.store.primitive_ids().unknown
       }
@@ -1110,10 +1126,14 @@ impl<'a> Checker<'a> {
     left: &Node<AstExpr>,
     right: &Node<AstExpr>,
   ) -> TypeId {
-    let value_ty = self.check_expr(right);
+    let target_binding = match left.stx.as_ref() {
+      AstExpr::Id(id) => self.lookup(&id.stx.name),
+      _ => None,
+    };
+    let value_ty = self.check_expr_with_context(right, target_binding.as_ref().map(|b| b.ty));
     match left.stx.as_ref() {
       AstExpr::Id(id) => {
-        if let Some(binding) = self.lookup(&id.stx.name) {
+        if let Some(binding) = target_binding {
           if !self.relate.is_assignable(value_ty, binding.ty) {
             self.diagnostics.push(codes::TYPE_MISMATCH.error(
               "assignment type mismatch",
@@ -1196,7 +1216,7 @@ impl<'a> Checker<'a> {
           _ => element_ty,
         };
         if let Some(default) = &elem.default_value {
-          let default_ty = self.check_expr(default);
+          let default_ty = self.check_expr_with_context(default, Some(target_ty));
           target_ty = self.store.union(vec![target_ty, default_ty]);
         }
         self.bind_pattern(&elem.target, target_ty);
@@ -1266,7 +1286,7 @@ impl<'a> Checker<'a> {
         }
       }
       if let Some(default) = &prop.stx.default_value {
-        let default_ty = self.check_expr(default);
+        let default_ty = self.check_expr_with_context(default, Some(prop_ty));
         prop_ty = self.store.union(vec![prop_ty, default_ty]);
       }
       self.bind_pattern(&prop.stx.target, prop_ty);
@@ -1276,41 +1296,112 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn function_type(&mut self, func: &Node<Func>) -> TypeId {
+  fn function_type(&mut self, func: &Node<Func>, contextual: Option<TypeId>) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let contextual_sig = self.contextual_signature(contextual);
+
     let mut type_param_decls = Vec::new();
-    let mut type_params_ids = Vec::new();
+    let mut type_param_ids = Vec::new();
     if let Some(params) = func.stx.type_parameters.as_ref() {
-      type_param_decls = self.lower_type_params(params);
-      type_params_ids = type_param_decls.iter().map(|d| d.id).collect();
+      let decls = self.lower_type_params(params);
+      type_param_ids.extend(decls.iter().map(|d| d.id));
+      type_param_decls.extend(decls);
     }
-    let params = func
-      .stx
-      .parameters
-      .iter()
-      .map(|p| SigParam {
-        name: None,
-        ty: p
-          .stx
-          .type_annotation
-          .as_ref()
-          .map(|t| self.lowerer.lower_type_expr(t))
-          .unwrap_or(self.store.primitive_ids().unknown),
-        optional: p.stx.optional,
-        rest: p.stx.rest,
-      })
-      .collect::<Vec<_>>();
-    let ret = func
+    if let Some(sig) = &contextual_sig {
+      for tp in sig.type_params.iter() {
+        if !type_param_ids.contains(tp) {
+          type_param_ids.push(*tp);
+          type_param_decls.push(TypeParamDecl::new(*tp));
+        }
+      }
+    }
+
+    self.scopes.push(Scope::default());
+
+    let mut param_types = Vec::new();
+    for (idx, param) in func.stx.parameters.iter().enumerate() {
+      let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
+      let annotation = param
+        .stx
+        .type_annotation
+        .as_ref()
+        .map(|t| self.lowerer.lower_type_expr(t));
+      let contextual_param = contextual_sig
+        .as_ref()
+        .and_then(|sig| self.contextual_param_type(sig, idx));
+      let mut ty = annotation.or(contextual_param).unwrap_or(prim.unknown);
+      if let Some(default) = &param.stx.default_value {
+        let default_ty = self.check_expr_with_context(default, Some(ty));
+        ty = self.store.union(vec![ty, default_ty]);
+      }
+      param_types.push(ty);
+      if let Some(pat) = self.index.pats.get(&pat_span) {
+        self.bind_pattern_with_type_params(pat, ty, type_param_decls.clone());
+      }
+    }
+
+    let contextual_ret = contextual_sig.as_ref().map(|sig| sig.ret);
+    let mut ret_ty = func
       .stx
       .return_type
       .as_ref()
-      .map(|t| self.lowerer.lower_type_expr(t))
-      .unwrap_or(self.store.primitive_ids().unknown);
-    let sig = Signature {
-      params,
-      ret,
-      type_params: type_params_ids,
+      .map(|t| self.lowerer.lower_type_expr(t));
+    if ret_ty.is_none() {
+      ret_ty = Some(match &func.stx.body {
+        Some(FuncBody::Expression(expr)) => self.check_expr_with_context(expr, contextual_ret),
+        Some(FuncBody::Block(block)) => {
+          let prev_returns = self.return_types.len();
+          self.check_stmt_list(block);
+          let returns = self.return_types.split_off(prev_returns);
+          if returns.is_empty() {
+            contextual_ret.unwrap_or(prim.void)
+          } else {
+            self.store.union(returns)
+          }
+        }
+        None => contextual_ret.unwrap_or(prim.void),
+      });
+    }
+    let ret_ty = ret_ty.unwrap_or(prim.unknown);
+
+    let mut sig = Signature {
+      params: func
+        .stx
+        .parameters
+        .iter()
+        .zip(param_types.iter())
+        .map(|(p, ty)| SigParam {
+          name: None,
+          ty: *ty,
+          optional: p.stx.optional,
+          rest: p.stx.rest,
+        })
+        .collect::<Vec<_>>(),
+      ret: ret_ty,
+      type_params: type_param_ids.clone(),
       this_param: None,
     };
+
+    if let Some(ctx_sig) = contextual_sig.as_ref() {
+      let inference = infer_type_arguments_from_contextual_signature(
+        &self.store,
+        ctx_sig,
+        &type_param_decls,
+        &sig,
+      );
+      if inference.diagnostics.is_empty() && !inference.substitutions.is_empty() {
+        let mut substituter =
+          Substituter::new(Arc::clone(&self.store), inference.substitutions.clone());
+        let instantiated_id = substituter.substitute_signature(ctx_sig);
+        let instantiated_sig = self.store.signature(instantiated_id);
+        sig = instantiated_sig.clone();
+        type_param_ids = instantiated_sig.type_params.clone();
+        type_param_decls.retain(|decl| type_param_ids.contains(&decl.id));
+      }
+    }
+
+    self.scopes.pop();
+
     let sig_id = self.store.intern_signature(sig);
     let ty = self.store.intern_type(TypeKind::Callable {
       overloads: vec![sig_id],
@@ -1349,6 +1440,45 @@ impl<'a> Checker<'a> {
         },
       ));
     }
+  }
+
+  fn contextual_signature(&self, contextual: Option<TypeId>) -> Option<Signature> {
+    let ty = contextual?;
+    let sigs = overload::callable_signatures(self.store.as_ref(), ty);
+    sigs.first().map(|id| self.store.signature(*id))
+  }
+
+  fn contextual_param_type(&self, sig: &Signature, index: usize) -> Option<TypeId> {
+    overload::expected_arg_type_at(self.store.as_ref(), sig, index)
+  }
+
+  fn contextual_argument_types(&self, callee: TypeId, arg_count: usize) -> Vec<Option<TypeId>> {
+    let mut contexts = vec![None; arg_count];
+    if arg_count == 0 {
+      return contexts;
+    }
+    let sigs = overload::callable_signatures(self.store.as_ref(), callee);
+    if sigs.is_empty() {
+      return contexts;
+    }
+    for idx in 0..arg_count {
+      let mut types = Vec::new();
+      for sig_id in sigs.iter() {
+        let sig = self.store.signature(*sig_id);
+        if let Some(param_ty) = self.contextual_param_type(&sig, idx) {
+          types.push(param_ty);
+        }
+      }
+      if let Some(first) = types.first().copied() {
+        let ctx_ty = if types.len() == 1 {
+          first
+        } else {
+          self.store.union(types)
+        };
+        contexts[idx] = Some(ctx_ty);
+      }
+    }
+    contexts
   }
 }
 

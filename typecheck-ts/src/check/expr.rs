@@ -13,7 +13,16 @@ pub fn resolve_call(
   callee: TypeId,
   args: &[TypeId],
   type_params: &[TypeParamDecl],
+  contextual_return: Option<TypeId>,
   span: Span,
 ) -> CallResolution {
-  resolve_overloads(store, relate, callee, args, type_params, span)
+  resolve_overloads(
+    store,
+    relate,
+    callee,
+    args,
+    type_params,
+    contextual_return,
+    span,
+  )
 }

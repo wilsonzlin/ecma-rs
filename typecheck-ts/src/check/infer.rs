@@ -267,10 +267,20 @@ impl InferenceContext {
       let bounds = self.bounds.get(tp).cloned().unwrap_or_default();
       let mut candidate: Option<TypeId> = None;
       if !bounds.lower.is_empty() {
-        candidate = Some(if bounds.lower.len() == 1 {
-          bounds.lower[0]
+        let mut lowers = bounds.lower.clone();
+        if lowers.len() > 1 {
+          let has_specific = lowers
+            .iter()
+            .any(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
+          if has_specific {
+            lowers
+              .retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
+          }
+        }
+        candidate = Some(if lowers.len() == 1 {
+          lowers[0]
         } else {
-          self.store.union(bounds.lower.clone())
+          self.store.union(lowers)
         });
       }
       if candidate.is_none() && !bounds.upper.is_empty() {

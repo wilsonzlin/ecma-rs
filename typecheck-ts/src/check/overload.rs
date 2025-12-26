@@ -24,6 +24,22 @@ pub struct CallResolution {
   pub diagnostics: Vec<Diagnostic>,
 }
 
+/// Collect all callable signatures from a type, expanding unions/intersections
+/// and object call signatures.
+pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
+  let mut out = Vec::new();
+  collect_signatures(store, ty, &mut out, &mut HashSet::new());
+  out
+}
+
+/// Expected argument type at the given index, applying rest element expansion
+/// when needed. Returns `None` if the signature does not accept an argument at
+/// this position.
+pub fn expected_arg_type_at(store: &TypeStore, sig: &Signature, index: usize) -> Option<TypeId> {
+  let arity = analyze_arity(store, sig);
+  expected_arg_type(sig, &arity, index).map(|p| p.ty)
+}
+
 #[derive(Clone, Debug)]
 enum RestStyle {
   Array(TypeId),
@@ -96,6 +112,7 @@ pub fn resolve_overloads(
   callee: TypeId,
   args: &[TypeId],
   type_params: &[TypeParamDecl],
+  contextual_return: Option<TypeId>,
   span: Span,
 ) -> CallResolution {
   let mut candidates = Vec::new();
@@ -141,7 +158,8 @@ pub fn resolve_overloads(
       continue;
     }
 
-    let inference = infer_type_arguments_for_call(store, &original_sig, type_params, args, None);
+    let inference =
+      infer_type_arguments_for_call(store, &original_sig, type_params, args, contextual_return);
     outcome.unknown_inferred = count_unknown(
       store.as_ref(),
       &inference.substitutions,
