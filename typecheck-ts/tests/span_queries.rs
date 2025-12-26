@@ -135,3 +135,88 @@ fn span_of_def_returns_declaration_span() {
     "definition span should include function name, got {snippet}"
   );
 }
+
+#[test]
+fn type_at_prefers_innermost_in_nested_arrows() {
+  let mut host = MemoryHost::default();
+  let source = "const nested = (() => () => 1 + 2)();";
+  let file = FileKey::new("arrows.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+  let offset = source.rfind('2').expect("offset of literal") as u32;
+
+  let ty = program.type_at(file_id, offset).expect("type at literal");
+  assert_eq!(program.display_type(ty).to_string(), "number");
+
+  let (body, expr) = program.expr_at(file_id, offset).expect("expr at literal");
+  let span = program.span_of_expr(body, expr).expect("span of expr");
+  assert_eq!(
+    &source[span.range.start as usize..span.range.end as usize],
+    "2",
+    "should select innermost literal in nested arrow body"
+  );
+}
+
+#[test]
+fn type_at_prefers_inner_identifier_in_nested_arrows() {
+  let mut host = MemoryHost::default();
+  let source = "const run = ((value: number) => () => value + 1)(41)();";
+  let file = FileKey::new("arrow_capture.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+  let offset = source
+    .rfind("value")
+    .expect("inner identifier")
+    .try_into()
+    .expect("offset fits");
+
+  let (body, expr) = program.expr_at(file_id, offset).expect("expr at offset");
+  let span = program.span_of_expr(body, expr).expect("span of expr");
+  assert_eq!(
+    &source[span.range.start as usize..span.range.end as usize],
+    "value",
+    "innermost captured identifier should be selected"
+  );
+
+  let ty = program
+    .type_at(file_id, offset)
+    .expect("type at inner identifier");
+  assert_eq!(program.display_type(ty).to_string(), "number");
+}
+
+#[test]
+fn nested_body_lookup_uses_span_map() {
+  let mut host = MemoryHost::default();
+  let source = "function outer() { function inner() { return 1 + 2; } return inner(); }";
+  let file = FileKey::new("nested.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+  let offset = source.find('1').expect("literal offset") as u32;
+
+  let top_body = program.file_body(file_id).expect("top-level body");
+  let (body, expr) = program.expr_at(file_id, offset).expect("expr at literal");
+  assert_ne!(
+    body, top_body,
+    "lookup should select inner body from span map"
+  );
+
+  let span = program.span_of_expr(body, expr).expect("span of expr");
+  assert_eq!(
+    &source[span.range.start as usize..span.range.end as usize],
+    "1",
+    "innermost literal span should be returned"
+  );
+
+  let ty = program.type_at(file_id, offset).expect("type at literal");
+  let display = program.display_type(ty).to_string();
+  assert!(
+    display == "number" || display == "1",
+    "expected numeric literal type, got {display}"
+  );
+}

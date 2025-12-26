@@ -67,33 +67,24 @@ impl SpanMap {
     self.exprs.query(offset)
   }
 
-  pub fn expr_span_at_offset(&self, offset: u32) -> Option<((BodyId, ExprId), TextRange)> {
-    self
-      .exprs
-      .query_span(offset)
-      .map(|span| (span.id, span.range))
+  pub fn expr_span_at_offset(&self, offset: u32) -> Option<SpanResult<(BodyId, ExprId)>> {
+    self.exprs.query_span(offset)
   }
 
   pub fn type_expr_at_offset(&self, offset: u32) -> Option<TypeExprId> {
     self.type_exprs.query(offset)
   }
 
-  pub fn type_expr_span_at_offset(&self, offset: u32) -> Option<(TypeExprId, TextRange)> {
-    self
-      .type_exprs
-      .query_span(offset)
-      .map(|span| (span.id, span.range))
+  pub fn type_expr_span_at_offset(&self, offset: u32) -> Option<SpanResult<TypeExprId>> {
+    self.type_exprs.query_span(offset)
   }
 
   pub fn pat_at_offset(&self, offset: u32) -> Option<(BodyId, PatId)> {
     self.pats.query(offset)
   }
 
-  pub fn pat_span_at_offset(&self, offset: u32) -> Option<((BodyId, PatId), TextRange)> {
-    self
-      .pats
-      .query_span(offset)
-      .map(|span| (span.id, span.range))
+  pub fn pat_span_at_offset(&self, offset: u32) -> Option<SpanResult<(BodyId, PatId)>> {
+    self.pats.query_span(offset)
   }
 
   pub fn import_specifier_at_offset(&self, offset: u32) -> Option<ImportSpecifierId> {
@@ -103,11 +94,8 @@ impl SpanMap {
   pub fn import_specifier_span_at_offset(
     &self,
     offset: u32,
-  ) -> Option<(ImportSpecifierId, TextRange)> {
-    self
-      .import_specifiers
-      .query_span(offset)
-      .map(|span| (span.id, span.range))
+  ) -> Option<SpanResult<ImportSpecifierId>> {
+    self.import_specifiers.query_span(offset)
   }
 
   pub fn export_specifier_at_offset(&self, offset: u32) -> Option<ExportSpecifierId> {
@@ -117,11 +105,8 @@ impl SpanMap {
   pub fn export_specifier_span_at_offset(
     &self,
     offset: u32,
-  ) -> Option<(ExportSpecifierId, TextRange)> {
-    self
-      .export_specifiers
-      .query_span(offset)
-      .map(|span| (span.id, span.range))
+  ) -> Option<SpanResult<ExportSpecifierId>> {
+    self.export_specifiers.query_span(offset)
   }
 
   /// Returns the innermost definition that contains the offset, preferring the
@@ -130,11 +115,8 @@ impl SpanMap {
     self.defs.query(offset)
   }
 
-  pub fn def_span_at_offset(&self, offset: u32) -> Option<(DefId, TextRange)> {
-    self
-      .defs
-      .query_span(offset)
-      .map(|span| (span.id, span.range))
+  pub fn def_span_at_offset(&self, offset: u32) -> Option<SpanResult<DefId>> {
+    self.defs.query_span(offset)
   }
 
   pub fn expr_span(&self, body: BodyId, expr: ExprId) -> Option<TextRange> {
@@ -480,10 +462,9 @@ mod tests {
     map.finalize();
 
     assert_eq!(map.expr_at_offset(5), Some((BodyId(0), ExprId(1))));
-    let ((body, id), span) = map.expr_span_at_offset(5).expect("span for empty expr");
-    assert_eq!(body, BodyId(0));
-    assert_eq!(id, ExprId(1));
-    assert_eq!(span, TextRange::new(5, 5));
+    let span = map.expr_span_at_offset(5).expect("span for empty expr");
+    assert_eq!(span.id, (BodyId(0), ExprId(1)));
+    assert_eq!(span.range, TextRange::new(5, 5));
   }
 
   #[test]
@@ -493,6 +474,18 @@ mod tests {
     map.add_def(TextRange::new(0, 4), DefId(1));
     map.finalize();
     assert_eq!(map.def_at_offset(1), Some(DefId(1)));
+  }
+
+  #[test]
+  fn tie_breakers_are_deterministic() {
+    let mut index = SpanIndex::new();
+    index.add(TextRange::new(0, 3), 1u32);
+    index.add(TextRange::new(0, 3), 0u32);
+    index.finalize();
+
+    let span = index.query_span(1).expect("span at offset");
+    assert_eq!(span.id, 0);
+    assert_eq!(span.range, TextRange::new(0, 3));
   }
 
   #[test]
@@ -571,10 +564,9 @@ mod tests {
     map.add_expr(TextRange::new(2, 4), BodyId(1), ExprId(0));
     map.finalize();
 
-    let ((body, expr), span) = map.expr_span_at_offset(3).expect("expr with body");
-    assert_eq!(body, BodyId(1));
-    assert_eq!(expr, ExprId(0));
-    assert_eq!(span, TextRange::new(2, 4));
+    let span = map.expr_span_at_offset(3).expect("expr with body");
+    assert_eq!(span.id, (BodyId(1), ExprId(0)));
+    assert_eq!(span.range, TextRange::new(2, 4));
   }
 
   #[test]
