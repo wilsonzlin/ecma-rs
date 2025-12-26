@@ -1,7 +1,7 @@
 TypeScript Conformance Test Failures Report
 
-Total: 211, Passed: 187, Failed: 24
-Pass Rate: 88.63%
+Total: 211, Passed: 194, Failed: 17
+Pass Rate: 91.94%
 
 ================================================================================
 
@@ -10,33 +10,20 @@ FAILURES:
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxAndTypeAssertion.tsx
-Duration: 561.575µs
+Duration: 3.147599ms
   Virtual file: jsxAndTypeAssertion.tsx
   Module mode: false
-    error[PS0002]: expected expression operator
-     --> jsxAndTypeAssertion.tsx:8:17
+    error[PS0013]: expected token BraceClose
+     --> jsxAndTypeAssertion.tsx:14:36
       |
-    8 | x = <any> { test: <any></any> };
-      |                 ^ expected expression operator
-    = note: expected expression operator
-    = note: found token: Colon
-
-================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/jsxCheckJsxNoTypeArgumentsAllowed.tsx
-Duration: 2.524874ms
-  Virtual file: file.jsx
-  Module mode: true
-    error[PS0013]: expected token Identifier
-     --> file.jsx:4:16
-      |
-    4 | let x = <MyComp<Prop> a={10} b="hi" />; // error, no type arguments in js
-      |                ^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: ChevronLeft
+    14 | x = <foo test={<foo>{}}>hello</foo>;
+       |                                    ^ expected token BraceClose
+    = note: expected token BraceClose
+    = note: found token: Semicolon
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxInvalidEsprimaTestSuite.tsx
-Duration: 28.743146ms
+Duration: 16.00636ms
   Virtual file: 1.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -48,30 +35,22 @@ Duration: 28.743146ms
     = note: found token: ChevronLeftSlash
   Virtual file: 10.tsx
   Module mode: false
-    error[PS0013]: expected token Identifier
-     --> 10.tsx:1:5
+    error[PS0013]: expected token ChevronRight
+     --> 10.tsx:1:13
       |
     1 | <a.b:c></a.b:c>;
-      |     ^ expected token Identifier
-    = note: expected token Identifier
+      |             ^ expected token ChevronRight
+    = note: expected token ChevronRight
     = note: found token: Colon
-  Virtual file: 11.tsx
-  Module mode: false
-    error[PS0005]: JSX closing tag does not match opening tag
-     --> 11.tsx:1:8
-      |
-    1 | <a.b.c></a>;
-      |        ^^ JSX closing tag does not match opening tag
-    = note: found token: ChevronLeftSlash
   Virtual file: 12.tsx
   Module mode: false
     error[PS0013]: expected token ChevronRight
-     --> 12.tsx:1:2
+     --> 12.tsx:1:8
       |
     1 | <.a></.a>;
-      |  ^ expected token ChevronRight
+      |        ^ expected token ChevronRight
     = note: expected token ChevronRight
-    = note: found token: Dot
+    = note: found token: Identifier
   Virtual file: 13.tsx
   Module mode: false
     error[PS0013]: expected token Identifier
@@ -83,37 +62,39 @@ Duration: 28.743146ms
     = note: found token: ChevronRight
   Virtual file: 14.tsx
   Module mode: false
-    error[PS0013]: expected token Identifier
-     --> 14.tsx:1:3
+    error[PS0013]: expected token ChevronRight
+     --> 14.tsx:1:12
       |
     1 | <a[foo]></a[foo]>;
-      |   ^ expected token Identifier
-    = note: expected token Identifier
+      |            ^ expected token ChevronRight
+    = note: expected token ChevronRight
     = note: found token: BracketOpen
   Virtual file: 15.tsx
   Module mode: false
-    error[PS0013]: expected token Identifier
-     --> 15.tsx:1:3
+    error[PS0013]: expected token ChevronRight
+     --> 15.tsx:1:14
       |
     1 | <a['foo']></a['foo']>;
-      |   ^ expected token Identifier
-    = note: expected token Identifier
+      |              ^ expected token ChevronRight
+    = note: expected token ChevronRight
     = note: found token: BracketOpen
   Virtual file: 16.tsx
   Module mode: false
-    error[PS0015]: unexpected end before EOF
+    error[PS0013]: expected token ChevronLeftSlash
      --> 16.tsx:1:10
       |
     1 | <a><a />;
-      |          ^ unexpected end before EOF
+      |          ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
     = note: found token: EOF
   Virtual file: 17.tsx
   Module mode: false
-    error[PS0015]: unexpected end before EOF
+    error[PS0013]: expected token ChevronLeftSlash
      --> 17.tsx:1:10
       |
     1 | <a b={}>;
-      |          ^ unexpected end before EOF
+      |          ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
     = note: found token: EOF
   Virtual file: 18.tsx
   Module mode: false
@@ -135,40 +116,22 @@ Duration: 28.743146ms
     = note: found token: ChevronLeftSlash
   Virtual file: 2.tsx
   Module mode: false
-    error[PS0013]: expected token Identifier
-     --> 2.tsx:1:5
+    error[PS0013]: expected token ChevronLeftSlash
+     --> 2.tsx:1:8
       |
     1 | <a: />;
-      |     ^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: Slash
-  Virtual file: 20.tsx
-  Module mode: false
-    error[PS0013]: expected token BraceClose
-     --> 20.tsx:1:10
-      |
-    1 | <a>{"str";}</a>;
-      |          ^ expected token BraceClose
-    = note: expected token BraceClose
-    = note: found token: Semicolon
-  Virtual file: 21.tsx
-  Module mode: false
-    error[PS0013]: expected token Identifier
-     --> 21.tsx:1:20
-      |
-    1 | <span className="a", id="b" />;
-      |                    ^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: Comma
+      |        ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
+    = note: found token: EOF
   Virtual file: 22.tsx
   Module mode: false
-    error[PS0013]: expected token Identifier
-     --> 22.tsx:1:15
+    error[PS0013]: expected token ChevronLeftSlash
+     --> 22.tsx:1:22
       |
     1 | <div className"app">;
-      |               ^^^^^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: LiteralString
+      |                      ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
+    = note: found token: EOF
   Virtual file: 23.tsx
   Module mode: false
     error[PS0013]: expected token DotDotDot
@@ -207,31 +170,13 @@ Duration: 28.743146ms
     = note: found token: BraceClose
   Virtual file: 29.tsx
   Module mode: false
-    error[PS0013]: expected token ChevronRight
-     --> 29.tsx:1:7
+    error[PS0013]: expected token ChevronLeftSlash
+     --> 29.tsx:2:1
       |
-    1 | <a b=<}>;
-      |       ^ expected token ChevronRight
-    = note: expected token ChevronRight
-    = note: found token: BraceClose
-  Virtual file: 3.tsx
-  Module mode: false
-    error[PS0013]: expected token ChevronRight
-     --> 3.tsx:1:2
-      |
-    1 | <:a />;
-      |  ^ expected token ChevronRight
-    = note: expected token ChevronRight
-    = note: found token: Colon
-  Virtual file: 31.tsx
-  Module mode: false
-    error[PS0013]: expected token Identifier
-     --> 31.tsx:1:4
-      |
-    1 | <a .../*hai*/asdf/>;
-      |    ^^^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: DotDotDot
+    2 | 
+      | ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
+    = note: found token: EOF
   Virtual file: 4.tsx
   Module mode: false
     error[PS0013]: expected token LiteralString
@@ -243,20 +188,13 @@ Duration: 28.743146ms
     = note: found token: Identifier
   Virtual file: 5.tsx
   Module mode: false
-    error[PS0015]: unexpected end before EOF
+    error[PS0013]: expected token ChevronLeftSlash
      --> 5.tsx:1:5
       |
     1 | <a>;
-      |     ^ unexpected end before EOF
+      |     ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
     = note: found token: EOF
-  Virtual file: 6.tsx
-  Module mode: false
-    error[PS0005]: JSX closing tag does not match opening tag
-     --> 6.tsx:1:4
-      |
-    1 | <a></b>;
-      |    ^^ JSX closing tag does not match opening tag
-    = note: found token: ChevronLeftSlash
   Virtual file: 7.tsx
   Module mode: false
     error[PS0015]: unexpected end before LiteralString
@@ -265,101 +203,63 @@ Duration: 28.743146ms
     1 | <a foo="bar;
       |             ^ unexpected end before LiteralString
     = note: found token: LiteralString
-  Virtual file: 8.tsx
-  Module mode: false
-    error[PS0005]: JSX closing tag does not match opening tag
-     --> 8.tsx:1:6
-      |
-    1 | <a:b></b>;
-      |      ^^ JSX closing tag does not match opening tag
-    = note: found token: ChevronLeftSlash
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxParsingError2.tsx
-Duration: 27.272074ms
+Duration: 750.737µs
   Virtual file: Error1.tsx
   Module mode: false
-    error[PS0005]: JSX closing tag does not match opening tag
-     --> Error1.tsx:2:21
+    error[PS0013]: expected token ChevronLeftSlash
+     --> Error1.tsx:3:1
       |
-    2 | let x1 = <div><span></div>;
-      |                     ^^ JSX closing tag does not match opening tag
-    = note: found token: ChevronLeftSlash
-  Virtual file: Error2.tsx
-  Module mode: false
-    error[PS0005]: JSX closing tag does not match opening tag
-     --> Error2.tsx:1:15
-      |
-    1 | let x2 = <div></span>;
-      |               ^^ JSX closing tag does not match opening tag
-    = note: found token: ChevronLeftSlash
+    3 | 
+      | ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
+    = note: found token: EOF
   Virtual file: Error3.tsx
   Module mode: false
-    error[PS0015]: unexpected end before EOF
+    error[PS0013]: expected token ChevronLeftSlash
      --> Error3.tsx:3:1
       |
     3 | 
-      | ^ unexpected end before EOF
+      | ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
     = note: found token: EOF
   Virtual file: Error4.tsx
   Module mode: false
-    error[PS0005]: JSX closing tag does not match opening tag
-     --> Error4.tsx:1:20
+    error[PS0013]: expected token ChevronLeftSlash
+     --> Error4.tsx:2:1
       |
-    1 | let x4 = <div><div></span>;
-      |                    ^^ JSX closing tag does not match opening tag
-    = note: found token: ChevronLeftSlash
+    2 | 
+      | ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
+    = note: found token: EOF
   Virtual file: Error5.tsx
   Module mode: false
-    error[PS0015]: unexpected end before EOF
+    error[PS0013]: expected token ChevronLeftSlash
      --> Error5.tsx:2:1
       |
     2 | 
-      | ^ unexpected end before EOF
+      | ^ expected token ChevronLeftSlash
+    = note: expected token ChevronLeftSlash
     = note: found token: EOF
 
 ================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/jsxParsingErrorImmediateSpreadInAttributeValue.tsx
-Duration: 2.242526ms
-  Virtual file: a.tsx
-  Module mode: false
-    error[PS0002]: expected expression operand
-     --> a.tsx:12:7
-      |
-    12 | <X a={...a} />
-       |       ^^^ expected expression operand
-    = note: expected expression operand
-    = note: found token: DotDotDot
-
-================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/jsxUnclosedParserRecovery.ts
-Duration: 5.715491ms
+Duration: 5.207001ms
   Virtual file: jsxParserRecovery.tsx
   Module mode: false
     error[PS0013]: expected token ChevronRight
-     --> jsxParserRecovery.tsx:14:1
+     --> jsxParserRecovery.tsx:34:1
       |
-    14 | </div>;
+    34 | </div>;
        | ^^ expected token ChevronRight
     = note: expected token ChevronRight
     = note: found token: ChevronLeftSlash
 
 ================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/tsxAttributeInvalidNames.tsx
-Duration: 6.307377ms
-  Virtual file: file.tsx
-  Module mode: false
-    error[PS0013]: expected token Identifier
-     --> file.tsx:11:8
-      |
-    11 | <test1 32data={32} />;
-       |        ^^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: LiteralNumber
-
-================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxElementResolution.tsx
-Duration: 384.431µs
+Duration: 11.435766ms
   Virtual file: tsxElementResolution.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -372,7 +272,7 @@ Duration: 384.431µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxElementResolution7.tsx
-Duration: 8.24653ms
+Duration: 20.578561ms
   Virtual file: file.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -385,7 +285,7 @@ Duration: 8.24653ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxEmit3.tsx
-Duration: 1.253932ms
+Duration: 2.900446ms
   Virtual file: file.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -397,21 +297,8 @@ Duration: 1.253932ms
     = note: found token: KeywordExport
 
 ================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/tsxErrorRecovery1.tsx
-Duration: 370.543µs
-  Virtual file: file.tsx
-  Module mode: false
-    error[PS0002]: expected expression operand
-     --> file.tsx:6:20
-      |
-    6 |   var x = <div>  { </div>
-      |                    ^^ expected expression operand
-    = note: expected expression operand
-    = note: found token: ChevronLeftSlash
-
-================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxErrorRecovery2.tsx
-Duration: 2.296112ms
+Duration: 14.001933ms
   Virtual file: file1.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -433,7 +320,7 @@ Duration: 2.296112ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxErrorRecovery3.tsx
-Duration: 445.461µs
+Duration: 1.609943ms
   Virtual file: file1.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -455,7 +342,7 @@ Duration: 445.461µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxExternalModuleEmit2.tsx
-Duration: 438.818µs
+Duration: 2.043181ms
   Virtual file: modules.d.ts
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -468,19 +355,20 @@ Duration: 438.818µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxFragmentErrors.tsx
-Duration: 42.313422ms
+Duration: 2.641459ms
   Virtual file: file.tsx
   Module mode: false
-    error[PS0005]: JSX closing tag does not match opening tag
-     --> file.tsx:11:5
+    error[PS0002]: expected expression operand
+     --> file.tsx:13:2
       |
-    11 | <>hi</div> // Error
-       |     ^^ JSX closing tag does not match opening tag
-    = note: found token: ChevronLeftSlash
+    13 | <>eof   // Error
+       |  ^ expected expression operand
+    = note: expected expression operand
+    = note: found token: ChevronRight
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxGenericArrowFunctionParsing.tsx
-Duration: 1.983491ms
+Duration: 4.466685ms
   Virtual file: file.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -493,7 +381,7 @@ Duration: 1.983491ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxLibraryManagedAttributes.tsx
-Duration: 1.34717ms
+Duration: 8.631323ms
   Virtual file: tsxLibraryManagedAttributes.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -506,7 +394,7 @@ Duration: 1.34717ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxParseTests2.tsx
-Duration: 36.273797ms
+Duration: 291.115µs
   Virtual file: file.tsx
   Module mode: false
     error[PS0002]: expected expression operand
@@ -519,7 +407,7 @@ Duration: 36.273797ms
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxPreserveEmit1.tsx
-Duration: 921.369µs
+Duration: 389.944µs
   Virtual file: react.d.ts
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -541,7 +429,7 @@ Duration: 921.369µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxReactEmit6.tsx
-Duration: 326.524µs
+Duration: 3.227582ms
   Virtual file: react-consumer.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -554,7 +442,7 @@ Duration: 326.524µs
 
 ================================================================================
 File: tests/TypeScript/tests/cases/conformance/jsx/tsxSpreadInvalidType.tsx
-Duration: 238.479µs
+Duration: 732.824µs
   Virtual file: a.tsx
   Module mode: true
     error[PS0002]: expected export declarations must be at top level
@@ -564,41 +452,3 @@ Duration: 238.479µs
       |     ^^^^^^ expected export declarations must be at top level
     = note: expected export declarations must be at top level
     = note: found token: KeywordExport
-
-================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/tsxTypeArgumentResolution.tsx
-Duration: 2.578165ms
-  Virtual file: file.tsx
-  Module mode: true
-    error[PS0013]: expected token Identifier
-     --> file.tsx:17:16
-      |
-    17 | let x = <MyComp<Prop> a={10} b="hi" />; // OK
-       |                ^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: ChevronLeft
-
-================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/tsxTypeArgumentsJsxPreserveOutput.tsx
-Duration: 32.673048ms
-  Virtual file: foo.tsx
-  Module mode: true
-    error[PS0013]: expected token Identifier
-     --> foo.tsx:17:9
-      |
-    17 |     <Foo<unknown> />
-       |         ^ expected token Identifier
-    = note: expected token Identifier
-    = note: found token: ChevronLeft
-
-================================================================================
-File: tests/TypeScript/tests/cases/conformance/jsx/unicodeEscapesInJsxtags.tsx
-Duration: 658.488µs
-  Virtual file: file.tsx
-  Module mode: true
-    error[PS0005]: JSX closing tag does not match opening tag
-     --> file.tsx:21:11
-      |
-    21 | ; <\u0061></a>
-       |           ^^ JSX closing tag does not match opening tag
-    = note: found token: ChevronLeftSlash

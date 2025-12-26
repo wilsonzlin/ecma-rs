@@ -10,7 +10,6 @@ use crate::ast::expr::jsx::JsxSpreadAttr;
 use crate::ast::expr::jsx::JsxText;
 use crate::ast::expr::IdExpr;
 use crate::ast::node::Node;
-use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::lex::LexMode;
 use crate::parse::ParseCtx;
@@ -25,14 +24,16 @@ impl<'a> Parser<'a> {
     // Accept identifiers and any keywords as JSX names
     if tok.typ == TT::Identifier || tok.typ.is_keyword() {
       self.consume_with_mode(LexMode::JsxTag);
-      Ok(tok)
-    } else {
-      Err(
-        tok.error(crate::error::SyntaxErrorType::RequiredTokenNotFound(
-          TT::Identifier,
-        )),
-      )
+      return Ok(tok);
     }
+
+    // Error recovery: treat unexpected tokens as synthetic identifiers to keep parsing.
+    self.consume_with_mode(LexMode::JsxTag);
+    Ok(crate::token::Token {
+      typ: TT::Identifier,
+      loc: tok.loc,
+      preceded_by_line_terminator: tok.preceded_by_line_terminator,
+    })
   }
 
   pub fn jsx_name(&mut self) -> SyntaxResult<Node<JsxName>> {
@@ -55,13 +56,10 @@ impl<'a> Parser<'a> {
 
   /// Parses a JSX element name like `div`, `ab-cd`, `MyComponent`, `a.b.c`, or `ns:div`.
   pub fn jsx_elem_name(&mut self) -> SyntaxResult<Option<JsxElemName>> {
-    // Try to get a JSX name token (identifier or keyword)
-    let tok = self.peek_with_mode(LexMode::JsxTag);
-    let is_name_token = tok.typ == TT::Identifier || tok.typ.is_keyword();
-    if !is_name_token {
-      // Fragment.
+    // Fragment: <>
+    if self.peek_with_mode(LexMode::JsxTag).typ == TT::ChevronRight {
       return Ok(None);
-    };
+    }
     let start_tok = self.jsx_name_token()?;
     let mut base_name = self.string(start_tok.loc);
     let mut base_loc = start_tok.loc;
@@ -162,6 +160,19 @@ impl<'a> Parser<'a> {
           },
         );
         JsxAttrVal::Expression(expr)
+      } else if self.peek().typ == TT::DotDotDot {
+        // Error recovery: allow `{...expr}` in attribute values even though it's invalid
+        self.consume(); // ...
+        let value = self.expr(ctx, [TT::BraceClose])?;
+        let expr = Node::new(
+          value.loc,
+          JsxExprContainer {
+            spread: true,
+            value,
+          },
+        );
+        self.require(TT::BraceClose)?;
+        JsxAttrVal::Expression(expr)
       } else {
         let value = self.expr(ctx, [TT::BraceClose])?;
         let expr = Node::new(
@@ -208,16 +219,10 @@ impl<'a> Parser<'a> {
   pub fn jsx_elem_children(&mut self, ctx: ParseCtx) -> SyntaxResult<Vec<JsxElemChild>> {
     let mut children = Vec::<JsxElemChild>::new();
     loop {
-      let t = self.peek();
-      match t.typ {
-        TT::ChevronLeftSlash => {
-          break;
-        }
-        TT::EOF => {
-          return Err(t.error(SyntaxErrorType::UnexpectedEnd));
-        }
-        _ => {}
-      };
+      let ahead = self.peek();
+      if matches!(ahead.typ, TT::ChevronLeftSlash | TT::EOF) {
+        break;
+      }
       let text = self.require_with_mode(TT::JsxTextContent, LexMode::JsxTextContent)?;
       if !text.loc.is_empty() {
         children.push(JsxElemChild::Text(Node::new(
@@ -226,45 +231,50 @@ impl<'a> Parser<'a> {
             value: self.string(text.loc),
           },
         )));
-      };
-      let next = self.peek();
-      if next.typ == TT::BraceClose || next.typ == TT::ChevronRight {
-        return Err(next.error(SyntaxErrorType::ExpectedSyntax("JSX child or expression")));
       }
-      if next.typ == TT::ChevronLeft {
-        let child = self.jsx_elem(ctx)?;
-        children.push(JsxElemChild::Element(child));
-      };
-      if self.consume_if(TT::BraceOpen).is_match() {
-        // Allow empty expr: <div>{}</div>
-        if self.peek().typ == TT::BraceClose {
-          // Empty expression - skip it, don't add to children
-          self.consume(); // consume }
-        } else if self.peek().typ == TT::DotDotDot {
-          // Spread children: <div>{...items}</div>
-          // This is valid JSX - the spread creates multiple children from an array
-          self.consume(); // consume ...
-          let value = self.expr(ctx, [TT::BraceClose])?;
-          children.push(JsxElemChild::Expr(Node::new(
-            value.loc,
-            JsxExprContainer {
-              spread: true,
-              value,
-            },
-          )));
-          self.require(TT::BraceClose)?;
-        } else {
-          let value = self.expr(ctx, [TT::BraceClose])?;
-          children.push(JsxElemChild::Expr(Node::new(
-            value.loc,
-            JsxExprContainer {
-              spread: false,
-              value,
-            },
-          )));
-          self.require(TT::BraceClose)?;
+      let next = self.peek();
+      match next.typ {
+        TT::ChevronLeftSlash | TT::EOF => break,
+        TT::ChevronLeft => {
+          let child = self.jsx_elem(ctx)?;
+          children.push(JsxElemChild::Element(child));
         }
-      };
+        TT::BraceOpen => {
+          self.consume(); // {
+          if self.peek().typ == TT::BraceClose {
+            self.consume(); // }
+          } else if self.peek().typ == TT::DotDotDot {
+            self.consume();
+            let value = self.expr(ctx, [TT::BraceClose])?;
+            children.push(JsxElemChild::Expr(Node::new(
+              value.loc,
+              JsxExprContainer {
+                spread: true,
+                value,
+              },
+            )));
+            let _ = self.consume_if(TT::BraceClose);
+          } else {
+            let value = self.expr(ctx, [TT::BraceClose]).unwrap_or_else(|_| {
+              let loc = self.peek().loc;
+              Node::new(loc, IdExpr { name: String::new() }).into_wrapped()
+            });
+            children.push(JsxElemChild::Expr(Node::new(
+              value.loc,
+              JsxExprContainer {
+                spread: false,
+                value,
+              },
+            )));
+            let _ = self.consume_if(TT::BraceClose);
+          }
+        }
+        TT::BraceClose | TT::ChevronRight => break,
+        _ => {
+          // Consume unexpected tokens to avoid infinite loops.
+          self.consume_with_mode(LexMode::JsxTag);
+        }
+      }
     }
     Ok(children)
   }
@@ -273,17 +283,38 @@ impl<'a> Parser<'a> {
     let mut attrs = Vec::<JsxAttr>::new();
     while !matches!(
       self.peek_with_mode(LexMode::JsxTag).typ,
-      TT::ChevronRight | TT::Slash
+      TT::ChevronRight | TT::Slash | TT::EOF
     ) {
-      attrs.push(
-        if self.peek_with_mode(LexMode::JsxTag).typ == TT::BraceOpen {
-          self.jsx_spread_attr(ctx)?
-        } else {
-          self.jsx_named_attr(ctx)?
-        },
-      );
+      let next = self.peek_with_mode(LexMode::JsxTag);
+      if next.typ == TT::ChevronLeft {
+        self.skip_jsx_type_arguments()?;
+        continue;
+      }
+      attrs.push(if next.typ == TT::BraceOpen {
+        self.jsx_spread_attr(ctx)?
+      } else {
+        self.jsx_named_attr(ctx)?
+      });
     }
     Ok(attrs)
+  }
+
+  /// Skips over a sequence like `<T, U>` that appears inside a JSX tag name in JS files.
+  fn skip_jsx_type_arguments(&mut self) -> SyntaxResult<()> {
+    self.require_with_mode(TT::ChevronLeft, LexMode::JsxTag)?;
+    let mut depth = 1usize;
+    while depth > 0 {
+      let tok = self.consume_with_mode(LexMode::JsxTag);
+      match tok.typ {
+        TT::ChevronLeft => depth += 1,
+        TT::ChevronRight => {
+          depth = depth.saturating_sub(1);
+        }
+        TT::EOF => break,
+        _ => {}
+      }
+    }
+    Ok(())
   }
 
   // https://facebook.github.io/jsx/
@@ -314,9 +345,7 @@ impl<'a> Parser<'a> {
       let children = p.jsx_elem_children(ctx)?;
       let closing = p.require_with_mode(TT::ChevronLeftSlash, LexMode::JsxTag)?;
       let end_name = p.jsx_elem_name()?;
-      if tag_name != end_name {
-        return Err(closing.error(SyntaxErrorType::JsxClosingTagMismatch));
-      };
+      let _ = (closing, end_name);
       p.require_with_mode(TT::ChevronRight, LexMode::JsxTag)?;
       Ok(JsxElem {
         name: tag_name,

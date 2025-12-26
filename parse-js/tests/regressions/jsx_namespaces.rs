@@ -49,3 +49,13 @@ fn jsx_attribute_missing_value_recovers_as_empty_text() {
     other => panic!("expected named attribute, got {:?}", other),
   }
 }
+
+#[test]
+fn jsx_type_arguments_are_skipped_in_jsx() {
+  parse_with_options("<MyComp<Prop> a={10} />", tsx_opts()).unwrap();
+}
+
+#[test]
+fn jsx_attribute_value_allows_spread_recovery() {
+  parse_with_options("<X a={...props} />", tsx_opts()).unwrap();
+}
