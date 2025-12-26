@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use diagnostics::FileId;
-use hir_js::{lower_from_source, Body, DefKind, LowerResult, NameId, NameInterner};
+use hir_js::{lower_from_source, Body, BodyId, DefKind, LowerResult, NameId, NameInterner};
 use typecheck_ts::check::hir_body::check_body_with_env;
 use types_ts_interned::{
   NameId as TypeNameId, Param, PropData, PropKey, Property, Shape, Signature, TypeDisplay, TypeId,
@@ -14,13 +14,14 @@ fn name_id(names: &NameInterner, target: &str) -> NameId {
   clone.intern(target)
 }
 
-fn body_of<'a>(lowered: &'a LowerResult, names: &NameInterner, func: &str) -> &'a Body {
+fn body_of<'a>(lowered: &'a LowerResult, names: &NameInterner, func: &str) -> (BodyId, &'a Body) {
   let def = lowered
     .defs
     .iter()
     .find(|d| names.resolve(d.name) == Some(func) && d.path.kind == DefKind::Function)
     .unwrap_or_else(|| panic!("missing function {func}"));
-  lowered.body(def.body.expect("function body")).unwrap()
+  let body_id = def.body.expect("function body");
+  (body_id, lowered.body(body_id).unwrap())
 }
 
 fn obj_type(store: &Arc<TypeStore>, props: &[(&str, TypeId)]) -> TypeId {
@@ -88,7 +89,7 @@ fn predicate_callable_with_params(
 fn narrows_truthiness() {
   let src = "function f(x: string | null) { if (x) { return x; } else { return x; } return x; }";
   let lowered = lower_from_source(src).expect("lower");
-  let body = body_of(&lowered, &lowered.names, "f");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
@@ -97,6 +98,7 @@ fn narrows_truthiness() {
     store.union(vec![prim.string, prim.null]),
   );
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -104,8 +106,8 @@ fn narrows_truthiness() {
     Arc::clone(&store),
     &initial,
   );
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "null");
 }
@@ -114,7 +116,7 @@ fn narrows_truthiness() {
 fn boolean_truthiness_splits_literals() {
   let src = "function f(flag: boolean) { if (flag) { return flag; } else { return flag; } }";
   let lowered = lower_from_source(src).expect("lower");
-  let body = body_of(&lowered, &lowered.names, "f");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
   let store = TypeStore::new();
   let mut initial = HashMap::new();
   initial.insert(
@@ -123,6 +125,7 @@ fn boolean_truthiness_splits_literals() {
   );
 
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -136,8 +139,8 @@ fn boolean_truthiness_splits_literals() {
   let false_ty =
     TypeDisplay::new(&store, store.intern_type(TypeKind::BooleanLiteral(false))).to_string();
 
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, true_ty);
   assert_eq!(else_ty, false_ty);
 }
@@ -146,7 +149,7 @@ fn boolean_truthiness_splits_literals() {
 fn narrows_typeof_checks() {
   let src = "function f(x: string | number) { if (typeof x === \"string\") { return x; } else { return x; } }";
   let lowered = lower_from_source(src).expect("lower");
-  let body = body_of(&lowered, &lowered.names, "f");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
@@ -155,6 +158,7 @@ fn narrows_typeof_checks() {
     store.union(vec![prim.string, prim.number]),
   );
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -162,7 +166,7 @@ fn narrows_typeof_checks() {
     Arc::clone(&store),
     &initial,
   );
-  let ret_types = res.return_types;
+  let ret_types = res.return_types();
   let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
   let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
   assert_eq!(then_ty, "string");
@@ -173,7 +177,7 @@ fn narrows_typeof_checks() {
 fn typeof_function_narrows_callables() {
   let src = "function pick(x) { if (typeof x === \"function\") { return x; } return x; }";
   let lowered = lower_from_source(src).expect("lower");
-  let body = body_of(&lowered, &lowered.names, "pick");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "pick");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
 
@@ -196,6 +200,7 @@ fn typeof_function_narrows_callables() {
   );
 
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -204,8 +209,8 @@ fn typeof_function_narrows_callables() {
     &initial,
   );
 
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, callable_display);
   assert_eq!(else_ty, "number");
 }
@@ -214,7 +219,7 @@ fn typeof_function_narrows_callables() {
 fn narrows_discriminants() {
   let src = "function g(x: { kind: \"foo\", value: string } | { kind: \"bar\", value: number }) { if (x.kind === \"foo\") { return x.value; } else { return x.value; } }";
   let lowered = lower_from_source(src).expect("lower");
-  let body = body_of(&lowered, &lowered.names, "g");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "g");
   let store = TypeStore::new();
   let mut initial = HashMap::new();
   let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
@@ -232,6 +237,7 @@ fn narrows_discriminants() {
     store.union(vec![foo_obj, bar_obj]),
   );
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -239,7 +245,7 @@ fn narrows_discriminants() {
     Arc::clone(&store),
     &initial,
   );
-  let ret_types = res.return_types;
+  let ret_types = res.return_types();
   let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
   let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
   assert_eq!(then_ty, "string");
@@ -268,8 +274,9 @@ function test(x: string | number) {
   let guard_ty = predicate_callable(&store, x_ty, prim.string, false);
   initial.insert(name_id(lowered.names.as_ref(), "isStr"), guard_ty);
 
-  let body = body_of(&lowered, &lowered.names, "test");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "test");
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -277,7 +284,7 @@ function test(x: string | number) {
     Arc::clone(&store),
     &initial,
   );
-  let ret_types = res.return_types;
+  let ret_types = res.return_types();
 
   let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
   let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
@@ -316,8 +323,9 @@ function useIt(val: string | number) {
   );
   initial.insert(assert_name, assert_ty);
 
-  let body = body_of(&lowered, &lowered.names, "useIt");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "useIt");
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -325,7 +333,7 @@ function useIt(val: string | number) {
     Arc::clone(&store),
     &initial,
   );
-  let ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
+  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   assert_eq!(ty, "string");
 }
 
@@ -342,7 +350,7 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
 }
 "#;
   let lowered = lower_from_source(src).expect("lower");
-  let body = body_of(&lowered, &lowered.names, "area");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "area");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let square = obj_type(
@@ -371,6 +379,7 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
     store.union(vec![square, circle]),
   );
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -378,8 +387,8 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
     Arc::clone(&store),
     &initial,
   );
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "number");
   assert_eq!(else_ty, "number");
 }
@@ -395,7 +404,7 @@ function f(x: string | null) {
 }
 "#;
   let lowered = lower_from_source(src).expect("lower");
-  let body = body_of(&lowered, &lowered.names, "f");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
@@ -404,6 +413,7 @@ function f(x: string | null) {
     store.union(vec![prim.string, prim.null]),
   );
   let res = check_body_with_env(
+    body_id,
     body,
     &lowered.names,
     FileId(0),
@@ -411,8 +421,8 @@ function f(x: string | null) {
     Arc::clone(&store),
     &initial,
   );
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "null");
 }
@@ -438,13 +448,14 @@ function onlyObjects(val: object | number) {
   let store = TypeStore::new();
   let prim = store.primitive_ids();
 
-  let pick_body = body_of(&lowered, &lowered.names, "pick");
+  let (pick_body_id, pick_body) = body_of(&lowered, &lowered.names, "pick");
   let mut pick_env = HashMap::new();
   let pick_param = name_id(lowered.names.as_ref(), "x");
   let val_obj = obj_type(&store, &[("value", prim.string)]);
   let other_obj = obj_type(&store, &[("other", prim.number)]);
   pick_env.insert(pick_param, store.union(vec![val_obj, other_obj]));
   let res = check_body_with_env(
+    pick_body_id,
     pick_body,
     &lowered.names,
     FileId(0),
@@ -452,18 +463,19 @@ function onlyObjects(val: object | number) {
     Arc::clone(&store),
     &pick_env,
   );
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "number");
 
-  let obj_body = body_of(&lowered, &lowered.names, "onlyObjects");
+  let (obj_body_id, obj_body) = body_of(&lowered, &lowered.names, "onlyObjects");
   let mut obj_env = HashMap::new();
   obj_env.insert(
     name_id(lowered.names.as_ref(), "val"),
     store.union(vec![obj_type(&store, &[]), prim.number]),
   );
   let res = check_body_with_env(
+    obj_body_id,
     obj_body,
     &lowered.names,
     FileId(0),
@@ -471,8 +483,8 @@ function onlyObjects(val: object | number) {
     Arc::clone(&store),
     &obj_env,
   );
-  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
-  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "{}");
   assert_eq!(else_ty, "number");
 }

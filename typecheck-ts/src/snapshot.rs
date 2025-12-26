@@ -4,7 +4,7 @@ use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{
   BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeStore,
 };
-use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId, TextRange};
+use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId};
 use types_ts_interned::{
   TypeId, TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
@@ -39,16 +39,6 @@ pub struct DefSnapshot {
   pub data: DefData,
 }
 
-/// Minimal body metadata needed for offset and query mapping.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct BodyDataSnapshot {
-  pub id: BodyId,
-  pub file: FileId,
-  pub owner: Option<DefId>,
-  pub expr_spans: Vec<TextRange>,
-  pub pat_spans: Vec<TextRange>,
-}
-
 /// Stable, deterministic snapshot of a checked program suitable for caching and
 /// offline queries.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -60,7 +50,6 @@ pub struct ProgramSnapshot {
   pub files: Vec<FileSnapshot>,
   pub file_states: Vec<FileStateSnapshot>,
   pub def_data: Vec<DefSnapshot>,
-  pub body_data: Vec<BodyDataSnapshot>,
   pub def_types: Vec<(DefId, TypeId)>,
   pub body_results: Vec<BodyCheckResult>,
   pub symbol_occurrences: Vec<(FileId, Vec<SymbolOccurrence>)>,

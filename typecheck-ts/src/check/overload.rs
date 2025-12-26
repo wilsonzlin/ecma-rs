@@ -123,6 +123,13 @@ pub fn resolve_overloads(
   let mut candidates = Vec::new();
   collect_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());
   let primitives = store.primitive_ids();
+  if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
+    return CallResolution {
+      return_type: primitives.unknown,
+      signature: None,
+      diagnostics: Vec::new(),
+    };
+  }
   if candidates.is_empty() {
     let diag = codes::NO_OVERLOAD
       .error("expression is not callable", span)

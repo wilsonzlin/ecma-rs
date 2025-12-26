@@ -139,6 +139,7 @@ fn collect_fixture_dirs(base: &Path) -> Vec<PathBuf> {
 }
 
 fn run_fixture(path: &Path) {
+  println!("checking fixture {}", path.display());
   let fixture = load_fixture(path);
   let host = FixtureHost::new(&fixture.files);
   let roots: Vec<FileKey> = fixture
@@ -148,6 +149,9 @@ fn run_fixture(path: &Path) {
     .collect();
   let mut program = Program::new(host.clone(), roots);
   let diagnostics = program.check();
+  if path.ends_with("argument_count_error") {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+  }
 
   assert_diagnostics(&program, &host, &fixture.expectations, &diagnostics);
   assert_def_types(&mut program, &host, &fixture.expectations);
@@ -371,7 +375,7 @@ fn resolve_expr_type(
       .filter_map(|def| program.body_of_def(def)),
   );
   let mut best: Option<(u32, typecheck_ts::TypeId)> = None;
-  for probe in [offset, offset.saturating_sub(1)] {
+  for probe in [offset, offset.saturating_sub(1), offset.saturating_add(1)] {
     for body in candidates.iter().copied() {
       let result = program.check_body(body);
       if let Some((expr_id, ty)) = result.expr_at(probe) {

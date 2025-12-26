@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use bumpalo::Bump;
@@ -14,14 +14,13 @@ use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::{ParamDecl, VarDecl, VarDeclMode};
+use parse_js::ast::stmt::decl::{ParamDecl, VarDecl};
 use parse_js::ast::stmt::Stmt;
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
-use parse_js::parse;
 use types_ts_interned::{
-  ExpandedType, ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature,
-  TupleElem, TypeExpander, TypeId, TypeKind, TypeStore,
+  ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature, TypeId, TypeKind,
+  TypeStore,
 };
 
 use super::cfg::{BlockId, ControlFlowGraph};
@@ -31,38 +30,11 @@ use super::flow_narrow::{
   narrow_by_literal, narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
 };
 
+use super::caches::BodyCaches;
 use super::expr::resolve_call;
-use super::infer::{infer_type_arguments_from_contextual_signature, TypeParamDecl};
-use super::instantiate::Substituter;
-use super::object_literal;
-use super::overload;
-use super::relate_hooks;
-use super::type_expr::TypeLowerer;
-use crate::codes;
-
-/// Result of checking a single HIR body produced by `hir-js`.
-#[derive(Debug)]
-pub struct BodyCheckResult {
-  pub expr_types: Vec<TypeId>,
-  pub pat_types: Vec<TypeId>,
-  pub expr_spans: Vec<TextRange>,
-  pub pat_spans: Vec<TextRange>,
-  pub diagnostics: Vec<Diagnostic>,
-  pub return_types: Vec<TypeId>,
-}
-
-struct NoopExpander;
-
-impl TypeExpander for NoopExpander {
-  fn expand(
-    &self,
-    _store: &TypeStore,
-    _def: types_ts_interned::DefId,
-    _args: &[TypeId],
-  ) -> Option<ExpandedType> {
-    None
-  }
-}
+use super::infer::TypeParamDecl;
+use super::type_expr::{TypeLowerer, TypeResolver};
+use crate::{codes, BodyCheckResult, BodyId, DefId};
 
 #[derive(Default, Clone)]
 struct Scope {
@@ -75,42 +47,23 @@ struct Binding {
   type_params: Vec<TypeParamDecl>,
 }
 
-#[derive(Clone, Copy)]
-struct ExprContext {
-  contextual_type: Option<TypeId>,
-  const_context: bool,
-  prefer_widening: bool,
+/// Simple resolver that maps single-segment type names to known definitions.
+#[derive(Clone)]
+pub struct BindingTypeResolver {
+  map: HashMap<String, DefId>,
 }
 
-impl ExprContext {
-  fn base() -> Self {
-    Self {
-      contextual_type: None,
-      const_context: false,
-      prefer_widening: false,
-    }
+impl BindingTypeResolver {
+  pub fn new(map: HashMap<String, DefId>) -> Self {
+    Self { map }
   }
+}
 
-  fn with_contextual_type(mut self, ty: Option<TypeId>) -> Self {
-    self.contextual_type = ty;
-    self
-  }
-
-  fn with_const_context(mut self) -> Self {
-    self.const_context = true;
-    self
-  }
-
-  fn with_prefer_widening(mut self) -> Self {
-    self.prefer_widening = true;
-    self
-  }
-
-  fn for_subexpression(self) -> Self {
-    Self {
-      contextual_type: None,
-      const_context: self.const_context,
-      prefer_widening: false,
+impl TypeResolver for BindingTypeResolver {
+  fn resolve_type_name(&self, path: &[String]) -> Option<DefId> {
+    match path {
+      [name] => self.map.get(name).copied(),
+      _ => None,
     }
   }
 }
@@ -422,38 +375,24 @@ impl<'a> AstIndex<'a> {
 
 /// Type-check a lowered HIR body, producing per-expression and per-pattern type tables.
 pub fn check_body(
+  body_id: BodyId,
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  source: &str,
+  ast: &Node<parse_js::ast::stx::TopLevel>,
   store: Arc<TypeStore>,
+  caches: &BodyCaches,
+  bindings: &HashMap<String, TypeId>,
+  resolver: Option<Arc<dyn TypeResolver>>,
 ) -> BodyCheckResult {
   let prim = store.primitive_ids();
   let expr_types = vec![prim.unknown; body.exprs.len()];
   let pat_types = vec![prim.unknown; body.pats.len()];
   let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
   let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
-  let mut diagnostics = Vec::new();
-  let return_types = Vec::new();
-
-  let parsed = match parse(source) {
-    Ok(ast) => ast,
-    Err(err) => {
-      diagnostics.push(err.to_diagnostic(file));
-      codes::normalize_diagnostics(&mut diagnostics);
-      return BodyCheckResult {
-        expr_types,
-        pat_types,
-        expr_spans,
-        pat_spans,
-        diagnostics,
-        return_types,
-      };
-    }
-  };
 
   let mut index = AstIndex::new();
-  index.index_top_level(&parsed, file);
+  index.index_top_level(ast, file);
 
   let expr_map: HashMap<TextRange, ExprId> = body
     .exprs
@@ -469,9 +408,16 @@ pub fn check_body(
     .collect();
 
   let body_range = body_range(body);
-  let relate = RelateCtx::with_hooks(Arc::clone(&store), store.options(), relate_hooks());
-  let mut lowerer = TypeLowerer::new(Arc::clone(&store));
+  let relate = RelateCtx::with_cache(Arc::clone(&store), store.options(), caches.relation.clone());
+  let mut lowerer = match resolver {
+    Some(resolver) => TypeLowerer::with_resolver(Arc::clone(&store), resolver),
+    None => TypeLowerer::new(Arc::clone(&store)),
+  };
   lowerer.set_file(file);
+  let synthetic_top_level = matches!(body.kind, BodyKind::TopLevel)
+    && body.exprs.is_empty()
+    && body.stmts.is_empty()
+    && body.pats.is_empty();
   let mut checker = Checker {
     store,
     relate,
@@ -487,29 +433,33 @@ pub fn check_body(
     index,
     scopes: vec![Scope::default()],
     function_type_params: HashMap::new(),
+    check_var_assignments: !synthetic_top_level,
     file,
     _names: names,
     _bump: Bump::new(),
   };
 
   checker.seed_builtins();
+  for (name, ty) in bindings {
+    checker.insert_binding(name.clone(), *ty, Vec::new());
+  }
 
   match body.kind {
     BodyKind::TopLevel => {
-      checker.check_stmt_list(&parsed.stx.body);
+      checker.check_stmt_list(&ast.stx.body);
     }
     BodyKind::Function => {
       if !checker.check_enclosing_function(body_range) {
-        checker.check_stmt_list(&parsed.stx.body);
+        checker.check_stmt_list(&ast.stx.body);
       }
     }
     BodyKind::Initializer => {
       if !checker.check_matching_initializer(body_range) {
-        checker.check_stmt_list(&parsed.stx.body);
+        checker.check_stmt_list(&ast.stx.body);
       }
     }
     BodyKind::Class | BodyKind::Unknown => {
-      checker.check_stmt_list(&parsed.stx.body);
+      checker.check_stmt_list(&ast.stx.body);
     }
   }
 
@@ -518,9 +468,10 @@ pub fn check_body(
     .extend(checker.lowerer.take_diagnostics());
   codes::normalize_diagnostics(&mut checker.diagnostics);
   BodyCheckResult {
+    body: body_id,
     expr_types: checker.expr_types,
-    pat_types: checker.pat_types,
     expr_spans: checker.expr_spans,
+    pat_types: checker.pat_types,
     pat_spans: checker.pat_spans,
     diagnostics: checker.diagnostics,
     return_types: checker.return_types,
@@ -542,6 +493,7 @@ struct Checker<'a> {
   index: AstIndex<'a>,
   scopes: Vec<Scope>,
   function_type_params: HashMap<TypeId, Vec<TypeParamDecl>>,
+  check_var_assignments: bool,
   file: FileId,
   _names: &'a NameInterner,
   _bump: Bump,
@@ -617,11 +569,7 @@ impl<'a> Checker<'a> {
         let annotation = info
           .type_annotation
           .map(|ann| self.lowerer.lower_type_expr(ann));
-        let mut expr_ctx = ExprContext::base().with_contextual_type(annotation);
-        if annotation.is_none() {
-          expr_ctx = expr_ctx.with_prefer_widening();
-        }
-        let init_ty = self.check_expr_with_ctx(init, expr_ctx);
+        let init_ty = self.check_expr(init);
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span) {
           self.bind_pattern(pat, ty);
@@ -639,31 +587,15 @@ impl<'a> Checker<'a> {
     }
     for param in func.stx.parameters.iter() {
       let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
-      let is_this = matches!(
-        param.stx.pattern.stx.pat.stx.as_ref(),
-        AstPat::Id(id) if id.stx.name == "this"
-      );
       let annotation = param
         .stx
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
-      let mut default_ctx = ExprContext::base().with_contextual_type(annotation);
-      if annotation.is_none() {
-        default_ctx = default_ctx.with_prefer_widening();
-      }
-      let default_ty = param
-        .stx
-        .default_value
-        .as_ref()
-        .map(|d| self.check_expr_with_ctx(d, default_ctx));
+      let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
       let mut ty = annotation.unwrap_or(self.store.primitive_ids().unknown);
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
-      }
-      if is_this {
-        self.insert_binding("this".to_string(), ty, type_param_decls.clone());
-        continue;
       }
       if let Some(pat) = self.index.pats.get(&pat_span) {
         self.bind_pattern_with_type_params(pat, ty, type_param_decls.clone());
@@ -720,6 +652,9 @@ impl<'a> Checker<'a> {
     match stmt.stx.as_ref() {
       Stmt::Expr(expr_stmt) => {
         self.check_expr(&expr_stmt.stx.expr);
+      }
+      Stmt::ExportDefaultExpr(default_expr) => {
+        self.check_expr(&default_expr.stx.expression);
       }
       Stmt::Return(ret) => {
         let ty = ret
@@ -851,7 +786,7 @@ impl<'a> Checker<'a> {
         // function declarations are handled by separate bodies; just bind the name if available
         if let Some(name) = func.stx.name.as_ref() {
           let name = name.stx.name.clone();
-          let ty = self.function_type(&func.stx.function, None);
+          let ty = self.function_type(&func.stx.function);
           self.insert_binding(name, ty, Vec::new());
         }
       }
@@ -868,22 +803,24 @@ impl<'a> Checker<'a> {
   fn check_var_decl(&mut self, decl: &Node<VarDecl>) {
     let prim = self.store.primitive_ids();
     for declarator in decl.stx.declarators.iter() {
+      let init_ty = if self.check_var_assignments {
+        declarator
+          .initializer
+          .as_ref()
+          .map(|i| self.check_expr(i))
+          .unwrap_or(prim.unknown)
+      } else {
+        prim.unknown
+      };
       let annot_ty = declarator
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
-      let mut expr_ctx = ExprContext::base().with_contextual_type(annot_ty);
-      if matches!(decl.stx.mode, VarDeclMode::Let | VarDeclMode::Var) && annot_ty.is_none() {
-        expr_ctx = expr_ctx.with_prefer_widening();
-      }
-      let init_ty = declarator
-        .initializer
-        .as_ref()
-        .map(|i| self.check_expr_with_ctx(i, expr_ctx))
-        .unwrap_or(prim.unknown);
       let final_ty = annot_ty.unwrap_or(init_ty);
-      if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
-        self.check_assignable(init, init_ty, ann);
+      if self.check_var_assignments {
+        if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
+          self.check_assignable(init, init_ty, ann);
+        }
       }
       self.check_pat(&declarator.pattern.stx.pat, final_ty);
     }
@@ -894,10 +831,6 @@ impl<'a> Checker<'a> {
   }
 
   fn check_expr(&mut self, expr: &Node<AstExpr>) -> TypeId {
-    self.check_expr_with_ctx(expr, ExprContext::base())
-  }
-
-  fn check_expr_with_ctx(&mut self, expr: &Node<AstExpr>, ctx: ExprContext) -> TypeId {
     let ty = match expr.stx.as_ref() {
       AstExpr::Id(id) => self.resolve_ident(&id.stx.name, expr),
       AstExpr::LitNum(num) => {
@@ -921,10 +854,7 @@ impl<'a> Checker<'a> {
           .store
           .intern_type(TypeKind::BigIntLiteral(parsed.into()))
       }
-      AstExpr::This(_) => self
-        .lookup("this")
-        .map(|b| b.ty)
-        .unwrap_or(self.store.primitive_ids().unknown),
+      AstExpr::This(_) => self.store.primitive_ids().unknown,
       AstExpr::Super(_) => self.store.primitive_ids().unknown,
       AstExpr::Unary(un) => self.check_unary(un.stx.operator, &un.stx.argument),
       AstExpr::UnaryPostfix(post) => match post.stx.operator {
@@ -935,47 +865,17 @@ impl<'a> Checker<'a> {
       },
       AstExpr::Binary(bin) => self.check_binary(bin.stx.operator, &bin.stx.left, &bin.stx.right),
       AstExpr::Cond(cond) => {
-        let sub_ctx = ctx.for_subexpression();
-        let cons = self.check_expr_with_ctx(&cond.stx.consequent, sub_ctx);
-        let alt = self.check_expr_with_ctx(&cond.stx.alternate, sub_ctx);
+        let cons = self.check_expr(&cond.stx.consequent);
+        let alt = self.check_expr(&cond.stx.alternate);
         self.store.union(vec![cons, alt])
       }
       AstExpr::Call(call) => {
-        let sub_ctx = ctx.for_subexpression();
-        let (callee_ty, this_arg, arg_contexts) = match call.stx.callee.stx.as_ref() {
-          AstExpr::Member(mem) => {
-            let obj_ty = self.check_expr_with_ctx(&mem.stx.left, sub_ctx);
-            let prop_ty = self.member_type(obj_ty, &mem.stx.right);
-            self.record_expr_type(call.stx.callee.loc, prop_ty);
-            let contexts = self.contextual_argument_types(prop_ty, call.stx.arguments.len());
-            (prop_ty, Some(obj_ty), contexts)
-          }
-          AstExpr::ComputedMember(mem) => {
-            let obj_ty = self.check_expr_with_ctx(&mem.stx.object, sub_ctx);
-            let _ = self.check_expr_with_ctx(&mem.stx.member, sub_ctx);
-            let prop_ty = self.member_type(obj_ty, "<computed>");
-            self.record_expr_type(call.stx.callee.loc, prop_ty);
-            let contexts = self.contextual_argument_types(prop_ty, call.stx.arguments.len());
-            (prop_ty, Some(obj_ty), contexts)
-          }
-          _ => {
-            let callee_ty = self.check_expr_with_ctx(&call.stx.callee, sub_ctx);
-            let arg_contexts = self.contextual_argument_types(callee_ty, call.stx.arguments.len());
-            (callee_ty, None, arg_contexts)
-          }
-        };
+        let callee_ty = self.check_expr(&call.stx.callee);
         let arg_types: Vec<TypeId> = call
           .stx
           .arguments
           .iter()
-          .enumerate()
-          .map(|(idx, arg)| {
-            let mut arg_ctx = ctx.for_subexpression();
-            if let Some(contextual) = arg_contexts.get(idx).and_then(|c| *c) {
-              arg_ctx = arg_ctx.with_contextual_type(Some(contextual));
-            }
-            self.check_expr_with_ctx(&arg.stx.value, arg_ctx)
-          })
+          .map(|arg| self.check_expr(&arg.stx.value))
           .collect();
         let span = Span {
           file: self.file,
@@ -991,9 +891,7 @@ impl<'a> Checker<'a> {
           &self.relate,
           callee_ty,
           &arg_types,
-          this_arg,
           &type_params,
-          ctx.contextual_type,
           span,
         );
         for diag in &resolution.diagnostics {
@@ -1002,6 +900,15 @@ impl<'a> Checker<'a> {
         if resolution.diagnostics.is_empty() {
           if let Some(sig_id) = resolution.signature {
             let sig = self.store.signature(sig_id);
+            for (idx, arg) in call.stx.arguments.iter().enumerate() {
+              if let Some(param) = sig.params.get(idx) {
+                let arg_ty = arg_types
+                  .get(idx)
+                  .copied()
+                  .unwrap_or(self.store.primitive_ids().unknown);
+                self.check_assignable(&arg.stx.value, arg_ty, param.ty);
+              }
+            }
             let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
             let has_rest = sig.params.iter().any(|p| p.rest);
             let max = if has_rest {
@@ -1014,88 +921,51 @@ impl<'a> Checker<'a> {
                 .diagnostics
                 .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
             }
-            let expander = NoopExpander;
-            for (idx, arg) in call.stx.arguments.iter().enumerate() {
-              if let Some(param_ty) = self.param_type_for_arg(&sig.params, idx) {
-                let diags = object_literal::check_excess_properties(
-                  &self.store,
-                  &expander,
-                  &arg.stx.value,
-                  param_ty,
-                  self.file,
-                );
-                self.diagnostics.extend(diags);
-              }
-            }
           }
         }
         resolution.return_type
       }
       AstExpr::Member(mem) => {
-        let obj_ty = self.check_expr_with_ctx(&mem.stx.left, ctx.for_subexpression());
+        let obj_ty = self.check_expr(&mem.stx.left);
         self.member_type(obj_ty, &mem.stx.right)
       }
       AstExpr::ComputedMember(mem) => {
-        let obj_ty = self.check_expr_with_ctx(&mem.stx.object, ctx.for_subexpression());
-        let _ = self.check_expr_with_ctx(&mem.stx.member, ctx.for_subexpression());
+        let obj_ty = self.check_expr(&mem.stx.object);
+        let _ = self.check_expr(&mem.stx.member);
         self.member_type(obj_ty, "<computed>")
       }
-      AstExpr::LitArr(arr) => self.array_literal_type(arr, ctx),
-      AstExpr::LitObj(obj) => self.object_literal_type(obj, ctx),
-      AstExpr::Func(func) => self.function_type(&func.stx.func, ctx.contextual_type),
-      AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func, ctx.contextual_type),
+      AstExpr::LitArr(arr) => {
+        let mut elems = Vec::new();
+        for elem in arr.stx.elements.iter() {
+          match elem {
+            parse_js::ast::expr::lit::LitArrElem::Single(v) => elems.push(self.check_expr(v)),
+            parse_js::ast::expr::lit::LitArrElem::Rest(v) => elems.push(self.check_expr(v)),
+            parse_js::ast::expr::lit::LitArrElem::Empty => {}
+          }
+        }
+        let elem_ty = if elems.is_empty() {
+          self.store.primitive_ids().unknown
+        } else {
+          self.store.union(elems)
+        };
+        self.store.intern_type(TypeKind::Array {
+          ty: elem_ty,
+          readonly: false,
+        })
+      }
+      AstExpr::LitObj(obj) => self.object_literal_type(obj),
+      AstExpr::Func(func) => self.function_type(&func.stx.func),
+      AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func),
       AstExpr::IdPat(_) | AstExpr::ArrPat(_) | AstExpr::ObjPat(_) => {
         self.store.primitive_ids().unknown
       }
-      AstExpr::TypeAssertion(assert) if assert.stx.const_assertion => {
-        let inner_ctx = ExprContext::base().with_const_context();
-        let ty = self.check_expr_with_ctx(&assert.stx.expression, inner_ctx);
-        let ty = self.apply_widening(ty, inner_ctx);
-        self.record_expr_type(expr.loc, ty);
-        return ty;
-      }
-      AstExpr::TypeAssertion(assert) => {
-        self.check_expr_with_ctx(&assert.stx.expression, ctx.for_subexpression())
-      }
-      AstExpr::NonNullAssertion(assert) => {
-        self.check_expr_with_ctx(&assert.stx.expression, ctx.for_subexpression())
-      }
-      AstExpr::SatisfiesExpr(expr) => {
-        let target = self.lowerer.lower_type_expr(&expr.stx.type_annotation);
-        let inner_ctx = ctx.for_subexpression().with_contextual_type(Some(target));
-        let expr_ty = self.check_expr_with_ctx(&expr.stx.expression, inner_ctx);
-        self.check_assignable(&expr.stx.expression, expr_ty, target);
-        expr_ty
-      }
+      AstExpr::TypeAssertion(assert) => self.check_expr(&assert.stx.expression),
+      AstExpr::NonNullAssertion(assert) => self.check_expr(&assert.stx.expression),
+      AstExpr::SatisfiesExpr(expr) => self.check_expr(&expr.stx.expression),
       _ => self.store.primitive_ids().unknown,
     };
-    let ty = self.apply_widening(ty, ctx);
     self.record_expr_type(expr.loc, ty);
     ty
-  }
-
-  fn param_type_for_arg(&self, params: &[SigParam], idx: usize) -> Option<TypeId> {
-    if let Some(param) = params.get(idx) {
-      return Some(self.unwrap_rest_type(param));
-    }
-    params.last().and_then(|param| {
-      if param.rest {
-        Some(self.unwrap_rest_type(param))
-      } else {
-        None
-      }
-    })
-  }
-
-  fn unwrap_rest_type(&self, param: &SigParam) -> TypeId {
-    if !param.rest {
-      return param.ty;
-    }
-    match self.store.type_kind(param.ty) {
-      TypeKind::Array { ty, .. } => ty,
-      TypeKind::Tuple(elems) => elems.first().map(|e| e.ty).unwrap_or(param.ty),
-      _ => param.ty,
-    }
   }
 
   fn member_type(&mut self, obj: TypeId, prop: &str) -> TypeId {
@@ -1129,123 +999,8 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn array_literal_type(
-    &mut self,
-    arr: &Node<parse_js::ast::expr::lit::LitArrExpr>,
-    ctx: ExprContext,
-  ) -> TypeId {
-    let prim = self.store.primitive_ids();
-    let tuple_context = ctx
-      .contextual_type
-      .and_then(|ty| match self.store.type_kind(ty) {
-        TypeKind::Tuple(elems) => Some(elems),
-        _ => None,
-      });
-    let array_context = ctx
-      .contextual_type
-      .and_then(|ty| match self.store.type_kind(ty) {
-        TypeKind::Array { ty, readonly } => Some((ty, readonly)),
-        _ => None,
-      });
-    let mut elem_types = Vec::new();
-    let mut has_rest = false;
-    let mut has_hole = false;
-    for (idx, elem) in arr.stx.elements.iter().enumerate() {
-      match elem {
-        parse_js::ast::expr::lit::LitArrElem::Single(v) => {
-          let mut elem_ctx = ctx.for_subexpression();
-          if let Some(tuple) = tuple_context.as_ref().and_then(|t| t.get(idx)) {
-            elem_ctx = elem_ctx.with_contextual_type(Some(tuple.ty));
-            if tuple.readonly {
-              elem_ctx.const_context = true;
-            }
-          } else if let Some((ty, readonly)) = array_context {
-            elem_ctx = elem_ctx.with_contextual_type(Some(ty));
-            if readonly {
-              elem_ctx.const_context = true;
-            }
-          }
-          let mut ty = self.check_expr_with_ctx(v, elem_ctx);
-          if !self.prefers_literal_context(elem_ctx)
-            && tuple_context.is_none()
-            && !ctx.const_context
-          {
-            ty = self.widen_literal_type(ty);
-          }
-          elem_types.push(ty);
-        }
-        parse_js::ast::expr::lit::LitArrElem::Rest(v) => {
-          has_rest = true;
-          let rest_ctx = ctx.for_subexpression();
-          let mut ty = self.check_expr_with_ctx(v, rest_ctx);
-          if let TypeKind::Array { ty: inner, .. } = self.store.type_kind(ty) {
-            ty = inner;
-          }
-          if !self.prefers_literal_context(rest_ctx) && !ctx.const_context {
-            ty = self.widen_literal_type(ty);
-          }
-          elem_types.push(ty);
-        }
-        parse_js::ast::expr::lit::LitArrElem::Empty => {
-          has_hole = true;
-        }
-      }
-    }
-
-    if ctx.const_context && !has_rest && !has_hole {
-      let tuple_elems = elem_types
-        .into_iter()
-        .map(|ty| TupleElem {
-          ty,
-          optional: false,
-          rest: false,
-          readonly: true,
-        })
-        .collect();
-      return self.store.intern_type(TypeKind::Tuple(tuple_elems));
-    }
-
-    if let Some(target_elems) = tuple_context.as_ref() {
-      if !has_rest && !has_hole && target_elems.len() == elem_types.len() {
-        let tuple_elems = elem_types
-          .into_iter()
-          .zip(target_elems.iter())
-          .map(|(ty, target)| TupleElem {
-            ty,
-            optional: target.optional,
-            rest: target.rest,
-            readonly: target.readonly,
-          })
-          .collect();
-        return self.store.intern_type(TypeKind::Tuple(tuple_elems));
-      }
-    }
-
-    let elem_ty = if elem_types.is_empty() {
-      prim.unknown
-    } else {
-      self.store.union(elem_types)
-    };
-    let mut readonly =
-      ctx.const_context || array_context.map(|(_, readonly)| readonly).unwrap_or(false);
-    if let Some(target_elems) = tuple_context.as_ref() {
-      if target_elems.iter().all(|e| e.readonly) {
-        readonly = true;
-      }
-    }
-    self.store.intern_type(TypeKind::Array {
-      ty: elem_ty,
-      readonly,
-    })
-  }
-
-  fn object_literal_type(
-    &mut self,
-    obj: &Node<parse_js::ast::expr::lit::LitObjExpr>,
-    ctx: ExprContext,
-  ) -> TypeId {
+  fn object_literal_type(&mut self, obj: &Node<parse_js::ast::expr::lit::LitObjExpr>) -> TypeId {
     let mut shape = Shape::new();
-    let prefer_literal = self.prefers_literal_context(ctx);
     for member in obj.stx.members.iter() {
       match &member.stx.typ {
         ObjMemberType::Valued { key, val } => {
@@ -1256,28 +1011,13 @@ impl<'a> Checker<'a> {
             ClassOrObjKey::Computed(_) => continue,
           };
           if let ClassOrObjVal::Prop(Some(expr)) = val {
-            let contextual = ctx
-              .contextual_type
-              .and_then(|ty| self.contextual_property(ty, &prop_key));
-            let mut value_ctx = ctx.for_subexpression();
-            if let Some(prop) = contextual.as_ref() {
-              value_ctx = value_ctx.with_contextual_type(Some(prop.ty));
-              if prop.readonly {
-                value_ctx.const_context = true;
-              }
-            }
-            let mut ty = self.check_expr_with_ctx(expr, value_ctx);
-            if !prefer_literal {
-              ty = self.widen_literal_type(ty);
-            }
-            let readonly =
-              ctx.const_context || contextual.as_ref().map(|p| p.readonly).unwrap_or(false);
+            let ty = self.check_expr(expr);
             shape.properties.push(types_ts_interned::Property {
               key: prop_key,
               data: PropData {
                 ty,
                 optional: false,
-                readonly,
+                readonly: false,
                 accessibility: None,
                 is_method: false,
                 origin: None,
@@ -1288,19 +1028,16 @@ impl<'a> Checker<'a> {
         }
         ObjMemberType::Shorthand { id } => {
           let key = PropKey::String(self.store.intern_name(id.stx.name.clone()));
-          let mut ty = self
+          let ty = self
             .lookup(&id.stx.name)
             .map(|b| b.ty)
             .unwrap_or(self.store.primitive_ids().unknown);
-          if !prefer_literal {
-            ty = self.widen_literal_type(ty);
-          }
           shape.properties.push(types_ts_interned::Property {
             key,
             data: PropData {
               ty,
               optional: false,
-              readonly: ctx.const_context,
+              readonly: false,
               accessibility: None,
               is_method: false,
               origin: None,
@@ -1309,7 +1046,7 @@ impl<'a> Checker<'a> {
           });
         }
         ObjMemberType::Rest { val } => {
-          let _ = self.check_expr_with_ctx(val, ctx.for_subexpression());
+          let _ = self.check_expr(val);
         }
       }
     }
@@ -1318,99 +1055,25 @@ impl<'a> Checker<'a> {
     self.store.intern_type(TypeKind::Object(obj))
   }
 
-  fn apply_widening(&self, ty: TypeId, ctx: ExprContext) -> TypeId {
-    if ctx.prefer_widening && !self.prefers_literal_context(ctx) {
-      self.widen_literal_type(ty)
-    } else {
-      ty
-    }
-  }
-
-  fn widen_literal_type(&self, ty: TypeId) -> TypeId {
-    match self.store.type_kind(ty) {
-      TypeKind::BooleanLiteral(_) => self.store.primitive_ids().boolean,
-      TypeKind::NumberLiteral(_) => self.store.primitive_ids().number,
-      TypeKind::StringLiteral(_) => self.store.primitive_ids().string,
-      TypeKind::BigIntLiteral(_) => self.store.primitive_ids().bigint,
-      TypeKind::UniqueSymbol => self.store.primitive_ids().symbol,
-      TypeKind::Union(members) => {
-        let widened: Vec<_> = members
-          .into_iter()
-          .map(|member| self.widen_literal_type(member))
-          .collect();
-        self.store.union(widened)
-      }
-      _ => ty,
-    }
-  }
-
-  fn prefers_literal_context(&self, ctx: ExprContext) -> bool {
-    if ctx.const_context {
-      return true;
-    }
-    ctx
-      .contextual_type
-      .map(|ty| self.is_literal_context_type(ty))
-      .unwrap_or(false)
-  }
-
-  fn is_literal_context_type(&self, ty: TypeId) -> bool {
-    match self.store.type_kind(ty) {
-      TypeKind::NumberLiteral(_)
-      | TypeKind::StringLiteral(_)
-      | TypeKind::BooleanLiteral(_)
-      | TypeKind::BigIntLiteral(_)
-      | TypeKind::UniqueSymbol => true,
-      TypeKind::Array { ty, .. } => self.is_literal_context_type(ty),
-      TypeKind::Tuple(_) => true,
-      TypeKind::Union(members) | TypeKind::Intersection(members) => members
-        .into_iter()
-        .any(|member| self.is_literal_context_type(member)),
-      TypeKind::Object(obj_id) => {
-        let shape = self.store.shape(self.store.object(obj_id).shape);
-        shape
-          .properties
-          .iter()
-          .any(|prop| self.is_literal_context_type(prop.data.ty))
-      }
-      _ => false,
-    }
-  }
-
-  fn contextual_property(&self, contextual: TypeId, key: &PropKey) -> Option<PropData> {
-    match self.store.type_kind(contextual) {
-      TypeKind::Object(obj_id) => {
-        let shape = self.store.shape(self.store.object(obj_id).shape);
-        for prop in shape.properties.iter() {
-          if prop.key == *key {
-            return Some(prop.data.clone());
-          }
-        }
-        None
-      }
-      TypeKind::Union(members) | TypeKind::Intersection(members) => {
-        for member in members {
-          if let Some(data) = self.contextual_property(member, key) {
-            return Some(data);
-          }
-        }
-        None
-      }
-      _ => None,
-    }
-  }
-
   fn resolve_ident(&mut self, name: &str, expr: &Node<AstExpr>) -> TypeId {
     if let Some(binding) = self.lookup(name) {
       return binding.ty;
     }
-    self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
-      format!("unknown identifier `{}`", name),
-      Span {
-        file: self.file,
-        range: loc_to_range(self.file, expr.loc),
-      },
-    ));
+    let mut range = loc_to_range(self.file, expr.loc);
+    if range.start == range.end {
+      let len = name.len() as u32;
+      range.start = range.start.saturating_sub(len);
+      range.end = range.start.saturating_add(len);
+    }
+    self
+      .diagnostics
+      .push(codes::UNKNOWN_IDENTIFIER.error(
+        format!("unknown identifier `{}`", name),
+        Span {
+          file: self.file,
+          range,
+        },
+      ));
     self.store.primitive_ids().unknown
   }
 
@@ -1482,25 +1145,10 @@ impl<'a> Checker<'a> {
     left: &Node<AstExpr>,
     right: &Node<AstExpr>,
   ) -> TypeId {
-    let target_binding = match left.stx.as_ref() {
-      AstExpr::Id(id) => self.lookup(&id.stx.name),
-      _ => None,
-    };
-    let rhs_ctx =
-      ExprContext::base().with_contextual_type(target_binding.as_ref().map(|binding| binding.ty));
-    let value_ty = self.check_expr_with_ctx(right, rhs_ctx);
+    let value_ty = self.check_expr(right);
     match left.stx.as_ref() {
       AstExpr::Id(id) => {
-        if let Some(binding) = target_binding {
-          let expander = NoopExpander;
-          let diags = object_literal::check_excess_properties(
-            &self.store,
-            &expander,
-            right,
-            binding.ty,
-            self.file,
-          );
-          self.diagnostics.extend(diags);
+        if let Some(binding) = self.lookup(&id.stx.name) {
           if !self.relate.is_assignable(value_ty, binding.ty) {
             self.diagnostics.push(codes::TYPE_MISMATCH.error(
               "assignment type mismatch",
@@ -1583,10 +1231,7 @@ impl<'a> Checker<'a> {
           _ => element_ty,
         };
         if let Some(default) = &elem.default_value {
-          let default_ty = self.check_expr_with_ctx(
-            default,
-            ExprContext::base().with_contextual_type(Some(target_ty)),
-          );
+          let default_ty = self.check_expr(default);
           target_ty = self.store.union(vec![target_ty, default_ty]);
         }
         self.bind_pattern(&elem.target, target_ty);
@@ -1656,10 +1301,7 @@ impl<'a> Checker<'a> {
         }
       }
       if let Some(default) = &prop.stx.default_value {
-        let default_ty = self.check_expr_with_ctx(
-          default,
-          ExprContext::base().with_contextual_type(Some(prop_ty)),
-        );
+        let default_ty = self.check_expr(default);
         prop_ty = self.store.union(vec![prop_ty, default_ty]);
       }
       self.bind_pattern(&prop.stx.target, prop_ty);
@@ -1669,131 +1311,41 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn function_type(&mut self, func: &Node<Func>, contextual: Option<TypeId>) -> TypeId {
-    let prim = self.store.primitive_ids();
-    let contextual_sig = self.contextual_signature(contextual);
-
+  fn function_type(&mut self, func: &Node<Func>) -> TypeId {
     let mut type_param_decls = Vec::new();
-    let mut type_param_ids = Vec::new();
+    let mut type_params_ids = Vec::new();
     if let Some(params) = func.stx.type_parameters.as_ref() {
-      let decls = self.lower_type_params(params);
-      type_param_ids.extend(decls.iter().map(|d| d.id));
-      type_param_decls.extend(decls);
+      type_param_decls = self.lower_type_params(params);
+      type_params_ids = type_param_decls.iter().map(|d| d.id).collect();
     }
-    if let Some(sig) = &contextual_sig {
-      for tp in sig.type_params.iter() {
-        if !type_param_ids.contains(tp) {
-          type_param_ids.push(*tp);
-          type_param_decls.push(TypeParamDecl::new(*tp));
-        }
-      }
-    }
-
-    self.scopes.push(Scope::default());
-
-    let mut this_param = None;
-    let mut params = Vec::new();
-    for (idx, param) in func.stx.parameters.iter().enumerate() {
-      let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
-      let annotation = param
-        .stx
-        .type_annotation
-        .as_ref()
-        .map(|t| self.lowerer.lower_type_expr(t));
-      let contextual_param = contextual_sig
-        .as_ref()
-        .and_then(|sig| self.contextual_param_type(sig, idx));
-      let mut ty = annotation.or(contextual_param).unwrap_or(prim.unknown);
-      let mut default_ctx = ExprContext::base().with_contextual_type(Some(ty));
-      if annotation.is_none() && contextual_param.is_none() {
-        default_ctx = default_ctx.with_prefer_widening();
-      }
-      if let Some(default) = &param.stx.default_value {
-        let default_ty = self.check_expr_with_ctx(default, default_ctx);
-        ty = self.store.union(vec![ty, default_ty]);
-      }
-      let is_this = matches!(
-        param.stx.pattern.stx.pat.stx.as_ref(),
-        AstPat::Id(id) if id.stx.name == "this"
-      );
-      if is_this && this_param.is_none() {
-        this_param = Some(ty);
-        self.insert_binding("this".to_string(), ty, type_param_decls.clone());
-        continue;
-      }
-      if let Some(pat) = self.index.pats.get(&pat_span) {
-        self.bind_pattern_with_type_params(pat, ty, type_param_decls.clone());
-      }
-      params.push(SigParam {
+    let params = func
+      .stx
+      .parameters
+      .iter()
+      .map(|p| SigParam {
         name: None,
-        ty,
-        optional: param.stx.optional,
-        rest: param.stx.rest,
-      });
-    }
-
-    let contextual_ret = contextual_sig.as_ref().map(|sig| sig.ret);
-    let mut ret_ty = func
+        ty: p
+          .stx
+          .type_annotation
+          .as_ref()
+          .map(|t| self.lowerer.lower_type_expr(t))
+          .unwrap_or(self.store.primitive_ids().unknown),
+        optional: p.stx.optional,
+        rest: p.stx.rest,
+      })
+      .collect::<Vec<_>>();
+    let ret = func
       .stx
       .return_type
       .as_ref()
-      .map(|t| self.lowerer.lower_type_expr(t));
-    if ret_ty.is_none() {
-      ret_ty = Some(match &func.stx.body {
-        Some(FuncBody::Expression(expr)) => {
-          let mut ret_ctx = ExprContext::base().with_contextual_type(contextual_ret);
-          if contextual_ret.is_none() {
-            ret_ctx = ret_ctx.with_prefer_widening();
-          }
-          self.check_expr_with_ctx(expr, ret_ctx)
-        }
-        Some(FuncBody::Block(block)) => {
-          let prev_returns = self.return_types.len();
-          self.check_stmt_list(block);
-          let returns = self.return_types.split_off(prev_returns);
-          if returns.is_empty() {
-            contextual_ret.unwrap_or(prim.void)
-          } else {
-            let ret = self.store.union(returns);
-            if contextual_ret.is_none() {
-              self.widen_literal_type(ret)
-            } else {
-              ret
-            }
-          }
-        }
-        None => contextual_ret.unwrap_or(prim.void),
-      });
-    }
-    let ret_ty = ret_ty.unwrap_or(prim.unknown);
-
-    let mut sig = Signature {
+      .map(|t| self.lowerer.lower_type_expr(t))
+      .unwrap_or(self.store.primitive_ids().unknown);
+    let sig = Signature {
       params,
-      ret: ret_ty,
-      type_params: type_param_ids.clone(),
-      this_param,
+      ret,
+      type_params: type_params_ids,
+      this_param: None,
     };
-
-    if let Some(ctx_sig) = contextual_sig.as_ref() {
-      let inference = infer_type_arguments_from_contextual_signature(
-        &self.store,
-        ctx_sig,
-        &type_param_decls,
-        &sig,
-      );
-      if inference.diagnostics.is_empty() && !inference.substitutions.is_empty() {
-        let mut substituter =
-          Substituter::new(Arc::clone(&self.store), inference.substitutions.clone());
-        let instantiated_id = substituter.substitute_signature(ctx_sig);
-        let instantiated_sig = self.store.signature(instantiated_id);
-        sig = instantiated_sig.clone();
-        type_param_ids = instantiated_sig.type_params.clone();
-        type_param_decls.retain(|decl| type_param_ids.contains(&decl.id));
-      }
-    }
-
-    self.scopes.pop();
-
     let sig_id = self.store.intern_signature(sig);
     let ty = self.store.intern_type(TypeKind::Callable {
       overloads: vec![sig_id],
@@ -1822,59 +1374,82 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn check_assignable(&mut self, expr: &Node<AstExpr>, src: TypeId, dst: TypeId) {
-    let expander = NoopExpander;
-    let diags =
-      object_literal::check_excess_properties(&self.store, &expander, expr, dst, self.file);
-    self.diagnostics.extend(diags);
-    if !self.relate.is_assignable(src, dst) {
-      self.diagnostics.push(codes::TYPE_MISMATCH.error(
-        "type mismatch",
-        Span {
-          file: self.file,
-          range: loc_to_range(self.file, expr.loc),
-        },
-      ));
-    }
-  }
-
-  fn contextual_signature(&self, contextual: Option<TypeId>) -> Option<Signature> {
-    let ty = contextual?;
-    let sigs = overload::callable_signatures(self.store.as_ref(), ty);
-    sigs.first().map(|id| self.store.signature(*id))
-  }
-
-  fn contextual_param_type(&self, sig: &Signature, index: usize) -> Option<TypeId> {
-    overload::expected_arg_type_at(self.store.as_ref(), sig, index)
-  }
-
-  fn contextual_argument_types(&self, callee: TypeId, arg_count: usize) -> Vec<Option<TypeId>> {
-    let mut contexts = vec![None; arg_count];
-    if arg_count == 0 {
-      return contexts;
-    }
-    let sigs = overload::callable_signatures(self.store.as_ref(), callee);
-    if sigs.is_empty() {
-      return contexts;
-    }
-    for idx in 0..arg_count {
-      let mut types = Vec::new();
-      for sig_id in sigs.iter() {
-        let sig = self.store.signature(*sig_id);
-        if let Some(param_ty) = self.contextual_param_type(&sig, idx) {
-          types.push(param_ty);
+  fn has_excess_properties(
+    &self,
+    obj: &Node<parse_js::ast::expr::lit::LitObjExpr>,
+    target: TypeId,
+  ) -> bool {
+    let mut props = HashSet::new();
+    for member in obj.stx.members.iter() {
+      match &member.stx.typ {
+        ObjMemberType::Valued { key, .. } => {
+          if let ClassOrObjKey::Direct(direct) = key {
+            props.insert(direct.stx.key.clone());
+          }
         }
-      }
-      if let Some(first) = types.first().copied() {
-        let ctx_ty = if types.len() == 1 {
-          first
-        } else {
-          self.store.union(types)
-        };
-        contexts[idx] = Some(ctx_ty);
+        ObjMemberType::Shorthand { id } => {
+          props.insert(id.stx.name.clone());
+        }
+        ObjMemberType::Rest { .. } => return false,
       }
     }
-    contexts
+    !self.type_accepts_props(target, &props)
+  }
+
+  fn type_accepts_props(&self, target: TypeId, props: &HashSet<String>) -> bool {
+    match self.store.type_kind(target) {
+      TypeKind::Union(members) => members.iter().any(|m| self.type_accepts_props(*m, props)),
+      TypeKind::Intersection(members) => members.iter().all(|m| self.type_accepts_props(*m, props)),
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        if !shape.indexers.is_empty() {
+          return true;
+        }
+        let mut allowed: HashSet<String> = HashSet::new();
+        for prop in shape.properties.iter() {
+          match prop.key {
+            PropKey::String(name) | PropKey::Symbol(name) => {
+              allowed.insert(self.store.name(name));
+            }
+            PropKey::Number(num) => {
+              allowed.insert(num.to_string());
+            }
+          }
+        }
+        props.iter().all(|p| allowed.contains(p))
+      }
+      _ => true,
+    }
+  }
+
+  fn check_assignable(&mut self, expr: &Node<AstExpr>, src: TypeId, dst: TypeId) {
+    if matches!(self.store.type_kind(src), TypeKind::Any | TypeKind::Unknown)
+      || matches!(self.store.type_kind(dst), TypeKind::Any | TypeKind::Unknown)
+    {
+      return;
+    }
+    if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
+      if self.has_excess_properties(obj, dst) {
+        self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+          "excess property",
+          Span {
+            file: self.file,
+            range: loc_to_range(self.file, expr.loc),
+          },
+        ));
+        return;
+      }
+    }
+    if self.relate.is_assignable(src, dst) {
+      return;
+    }
+    self.diagnostics.push(codes::TYPE_MISMATCH.error(
+      "type mismatch",
+      Span {
+        file: self.file,
+        range: loc_to_range(self.file, expr.loc),
+      },
+    ));
   }
 }
 
@@ -1928,6 +1503,7 @@ fn loc_to_range(_file: FileId, loc: Loc) -> TextRange {
 /// lightweight, statement-level analysis that uses a CFG plus a simple lattice
 /// of variable environments to drive narrowing.
 pub fn check_body_with_env(
+  body_id: BodyId,
   body: &Body,
   names: &NameInterner,
   _file: FileId,
@@ -1935,12 +1511,13 @@ pub fn check_body_with_env(
   store: Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
 ) -> BodyCheckResult {
-  let mut checker = FlowBodyChecker::new(body, names, Arc::clone(&store), initial);
+  let mut checker = FlowBodyChecker::new(body_id, body, names, Arc::clone(&store), initial);
   checker.run(initial);
   checker.into_result()
 }
 
 struct FlowBodyChecker<'a> {
+  body_id: BodyId,
   body: &'a Body,
   names: &'a NameInterner,
   store: Arc<TypeStore>,
@@ -1955,6 +1532,7 @@ struct FlowBodyChecker<'a> {
 
 impl<'a> FlowBodyChecker<'a> {
   fn new(
+    body_id: BodyId,
     body: &'a Body,
     names: &'a NameInterner,
     store: Arc<TypeStore>,
@@ -1995,6 +1573,7 @@ impl<'a> FlowBodyChecker<'a> {
     let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
 
     Self {
+      body_id,
       body,
       names,
       store,
@@ -2010,6 +1589,7 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn into_result(self) -> BodyCheckResult {
     BodyCheckResult {
+      body: self.body_id,
       expr_types: self.expr_types,
       pat_types: self.pat_types,
       expr_spans: self.expr_spans,
@@ -2558,36 +2138,13 @@ impl<'a> FlowBodyChecker<'a> {
       if let Some(sig_id) = overloads.first() {
         let sig = self.store.signature(*sig_id);
         if let TypeKind::Predicate {
-          parameter,
-          asserted,
-          asserts,
+          asserted, asserts, ..
         } = self.store.type_kind(sig.ret)
         {
           if let Some(asserted) = asserted {
-            let target_idx = parameter
-              .and_then(|param| {
-                let param_name = self.store.name(param);
-                sig.params.iter().position(|p| {
-                  p.name
-                    .map(|name| self.store.name(name) == param_name)
-                    .unwrap_or(false)
-                })
-              })
-              .or_else(|| {
-                parameter.and_then(|param| {
-                  let param_name = self.store.name(param);
-                  call.args.iter().position(|arg| {
-                    self
-                      .ident_name(arg.expr)
-                      .map(|name| self.hir_name(name) == param_name)
-                      .unwrap_or(false)
-                  })
-                })
-              })
-              .unwrap_or(0);
-            if let Some(arg) = call.args.get(target_idx) {
-              if let Some(name) = self.ident_name(arg.expr) {
-                let arg_ty = arg_tys.get(target_idx).copied().unwrap_or(prim.unknown);
+            if let Some(arg_expr) = call.args.first().map(|a| a.expr) {
+              if let Some(name) = self.ident_name(arg_expr) {
+                let arg_ty = arg_tys.first().copied().unwrap_or(prim.unknown);
                 let (yes, no) = narrow_by_asserted(arg_ty, asserted, &self.store);
                 if asserts {
                   out.assertions.insert(name, yes);

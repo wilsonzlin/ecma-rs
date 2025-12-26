@@ -143,6 +143,7 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
     .iter()
     .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
     .collect();
+  dbg!(&unknown_identifiers);
   assert!(
     unknown_identifiers.len() >= 3,
     "expected unknown identifier diagnostics for Promise, Array, and Provided: {diagnostics:?}"
@@ -151,10 +152,12 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
     .find("Provided")
     .expect("source should include Provided") as u32;
   let provided_end = provided_start + "Provided".len() as u32;
+  let has_provided = unknown_identifiers
+    .iter()
+    .any(|diag| diag.primary.range == TextRange::new(provided_start, provided_end));
+  dbg!(provided_start, provided_end, has_provided);
   assert!(
-    unknown_identifiers
-      .iter()
-      .any(|diag| diag.primary.range == TextRange::new(provided_start, provided_end)),
+    has_provided,
     "expected unknown identifier diagnostic for Provided: {diagnostics:?}"
   );
 }
