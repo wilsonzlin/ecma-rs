@@ -43,7 +43,7 @@ use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::*;
 use parse_js::loc::Loc;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{btree_map::Entry, BTreeMap, HashMap};
 use std::sync::Arc;
 
 struct LoweringContext {
@@ -225,6 +225,29 @@ impl DefLookup {
   }
 }
 
+fn allocate_def_id(def_path: DefPath, allocated: &mut BTreeMap<u32, DefPath>) -> DefId {
+  let mut salt = 0u64;
+  loop {
+    let candidate = if salt == 0 {
+      def_path.stable_hash_u32()
+    } else {
+      def_path.stable_hash_with_salt(salt)
+    };
+    match allocated.entry(candidate) {
+      Entry::Vacant(slot) => {
+        slot.insert(def_path);
+        return DefId(candidate);
+      }
+      Entry::Occupied(existing) if *existing.get() == def_path => {
+        return DefId(candidate);
+      }
+      Entry::Occupied(_) => {
+        salt += 1;
+      }
+    }
+  }
+}
+
 impl<'a> DefSource<'a> {
   fn has_body(&self) -> bool {
     !matches!(self, DefSource::None)
@@ -271,6 +294,7 @@ pub fn lower_file_with_diagnostics(
   let mut pending_types = Vec::new();
   let mut disambiguators: BTreeMap<(DefKind, NameId), u32> = BTreeMap::new();
   let mut def_lookup = DefLookup::default();
+  let mut allocated_def_ids: BTreeMap<u32, DefPath> = BTreeMap::new();
 
   let mut planned = Vec::new();
   let mut next_body_id: u32 = 0;
@@ -278,7 +302,7 @@ pub fn lower_file_with_diagnostics(
     let dis = disambiguators.entry((desc.kind, desc.name)).or_insert(0);
     let def_path = DefPath::new(file, desc.kind, desc.name, *dis);
     *dis += 1;
-    let def_id = DefId(def_path.stable_hash_u32());
+    let def_id = allocate_def_id(def_path, &mut allocated_def_ids);
     let body_id = if desc.source.has_body() {
       let id = BodyId(next_body_id);
       next_body_id += 1;
@@ -3675,4 +3699,55 @@ fn lower_module_items(
 
 fn find_def<'a>(defs: &'a [DefData], kind: DefKind, span: TextRange) -> Option<&'a DefData> {
   defs.iter().find(|d| d.path.kind == kind && d.span == span)
+}
+
+#[cfg(test)]
+mod tests {
+  use crate::ids::with_test_def_path_hasher;
+  use crate::lower_from_source_with_kind;
+  use crate::FileKind;
+  use std::collections::HashSet;
+
+  #[test]
+  fn def_ids_are_rehashed_on_collision() {
+    let source = "function first() {}\nfunction second() {}";
+    let lowered = with_test_def_path_hasher(
+      |_| 1,
+      || lower_from_source_with_kind(FileKind::Ts, source).expect("lower"),
+    );
+
+    let ids: Vec<_> = lowered.defs.iter().map(|d| d.id).collect();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0].0, 1, "first def should keep overridden hash");
+    assert_ne!(
+      ids[0], ids[1],
+      "collisions must be resolved by rehashing with a salt"
+    );
+    let unique_ids: HashSet<_> = ids.iter().copied().collect();
+    assert_eq!(
+      unique_ids.len(),
+      ids.len(),
+      "all DefIds should be unique after rehashing"
+    );
+
+    let ids_again: Vec<_> = with_test_def_path_hasher(
+      |_| 1,
+      || {
+        lower_from_source_with_kind(FileKind::Ts, source)
+          .expect("lower deterministically")
+          .defs
+          .into_iter()
+          .map(|def| def.id)
+          .collect()
+      },
+    );
+    assert_eq!(ids, ids_again, "rehashing must remain deterministic");
+
+    let def_path_ids: HashSet<_> = lowered.hir.def_paths.values().copied().collect();
+    assert_eq!(
+      def_path_ids.len(),
+      lowered.hir.def_paths.len(),
+      "DefPath map should not reuse DefIds after collisions"
+    );
+  }
 }

@@ -1,8 +1,20 @@
 use diagnostics::FileId;
 
+#[cfg(test)]
+use std::cell::Cell;
+
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+/// Stable identifier for a lowered definition.
+///
+/// `DefId` values are derived from hashing a [`DefPath`] with a deterministic,
+/// platform-independent hasher and truncating the result to 32 bits. Because
+/// truncation can theoretically collide, lowering keeps a map of allocated
+/// identifiers and will re-hash the `DefPath` with an incrementing salt until
+/// an unused value is found. The list of definition descriptors is sorted
+/// before allocation, so collision handling is deterministic for a given
+/// source file.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct DefId(pub u32);
@@ -101,21 +113,35 @@ impl DefPath {
   }
 
   pub fn stable_hash(&self) -> u64 {
-    let mut hasher = StableHasher::new();
-    hasher.write_u64(self.module.0 as u64);
-    hasher.write_u64(self.kind as u64);
-    hasher.write_u64(self.disambiguator as u64);
-    hasher.write_u64(self.name.0);
+    let hasher = self.stable_hash_impl(None);
     hasher.finish()
   }
 
   pub fn stable_hash_u32(&self) -> u32 {
+    #[cfg(test)]
+    if let Some(hash) = test_def_path_hash_override(self) {
+      return hash;
+    }
+
+    self.stable_hash_with_salt(0)
+  }
+
+  /// Compute a stable hash with an additional deterministic salt to derive an
+  /// alternative `DefId` when the base hash collides.
+  pub fn stable_hash_with_salt(&self, salt: u64) -> u32 {
+    self.stable_hash_impl(Some(salt)).finish_u32()
+  }
+
+  fn stable_hash_impl(&self, salt: Option<u64>) -> StableHasher {
     let mut hasher = StableHasher::new();
     hasher.write_u64(self.module.0 as u64);
     hasher.write_u64(self.kind as u64);
     hasher.write_u64(self.disambiguator as u64);
     hasher.write_u64(self.name.0);
-    hasher.finish_u32()
+    if let Some(salt) = salt.filter(|s| *s != 0) {
+      hasher.write_u64(salt);
+    }
+    hasher
   }
 }
 
@@ -154,4 +180,31 @@ impl StableHasher {
     self.0 ^= byte as u64;
     self.0 = self.0.wrapping_mul(STABLE_HASH_PRIME);
   }
+}
+
+#[cfg(test)]
+thread_local! {
+  static TEST_DEF_PATH_HASH_OVERRIDE: Cell<Option<fn(&DefPath) -> u32>> = Cell::new(None);
+}
+
+#[cfg(test)]
+fn test_def_path_hash_override(def_path: &DefPath) -> Option<u32> {
+  TEST_DEF_PATH_HASH_OVERRIDE.with(|cell| cell.get().map(|hasher| hasher(def_path)))
+}
+
+/// Run `f` with a test-only override for `DefPath::stable_hash_u32`.
+///
+/// The override is thread-local to avoid affecting other tests running in
+/// parallel; it is cleared before returning.
+#[cfg(test)]
+pub(crate) fn with_test_def_path_hasher<R>(
+  hasher: fn(&DefPath) -> u32,
+  f: impl FnOnce() -> R,
+) -> R {
+  TEST_DEF_PATH_HASH_OVERRIDE.with(|cell| {
+    let prev = cell.replace(Some(hasher));
+    let result = f();
+    cell.set(prev);
+    result
+  })
 }
