@@ -1037,7 +1037,7 @@ fn body_by_name<'a>(
   let def = lowered
     .defs
     .iter()
-    .find(|d| d.path.kind == kind && lowered.names.resolve(d.path.name).as_deref() == Some(name))
+    .find(|d| d.path.kind == kind && lowered.names.resolve(d.path.name) == Some(name))
     .expect("definition present");
   if let Some(body_id) = def.body {
     if let Some(body) = lowered.bodies.get(body_id.0 as usize) {

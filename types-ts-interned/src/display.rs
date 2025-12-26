@@ -7,6 +7,7 @@ use crate::shape::PropKey;
 use crate::shape::Property;
 use crate::store::TypeStore;
 use std::fmt;
+use std::sync::Arc;
 use unicode_ident::{is_xid_continue, is_xid_start};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -367,6 +368,12 @@ impl<'a> TypeDisplay<'a> {
     }
     write!(f, ") => ")?;
     self.fmt_type(sig.ret, f)
+  }
+}
+
+impl<'a> fmt::Debug for TypeDisplay<'a> {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_struct("TypeDisplay").field("ty", &self.ty).finish()
   }
 }
 

@@ -14,11 +14,7 @@ fn assert_roundtrip(src: &str) -> bool {
       return false;
     }
   };
-<<<<<<< HEAD
   let mut em = Emitter::new(EmitOptions::minified());
-=======
-  let mut em = Emitter::new(EmitOptions::minified());
->>>>>>> 7d09a50 (hygiene: harden UTF-8 handling at CLI boundaries)
   emit_program(&mut em, parsed.stx.as_ref())
     .unwrap_or_else(|err| panic!("emit failed for {src:?}: {err:?}"));
   let emitted = String::from_utf8(em.into_bytes()).expect("utf-8");
@@ -26,7 +22,7 @@ fn assert_roundtrip(src: &str) -> bool {
     Ok(ast) => ast,
     Err(err) => {
       eprintln!("SKIP reparse {emitted:?}: {err:?}");
-      return;
+      return false;
     }
   };
   assert_eq!(
