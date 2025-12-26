@@ -11,7 +11,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "json"] }
-typecheck-ts = { path = "../typecheck-ts" }
+typecheck-ts = { path = "../typecheck-ts", features = ["resolve"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

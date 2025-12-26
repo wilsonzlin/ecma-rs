@@ -10,6 +10,7 @@ default = ["bundled-libs", "serde"]
 bundled-libs = []
 serde = ["dep:serde", "diagnostics/serde", "hir-js/serde"]
 fuzzing = ["hir-js/fuzzing", "types-ts-interned/fuzzing"]
+resolve = []
 
 [dependencies]
 diagnostics = { path = "../diagnostics" }

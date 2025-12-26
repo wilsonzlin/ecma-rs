@@ -188,3 +188,7 @@ pub mod queries;
 
 /// Utilities for selecting bundled `.d.ts` libraries and compiler options.
 pub mod lib_support;
+
+/// Optional helpers for deterministic module resolution and path normalisation.
+#[cfg(feature = "resolve")]
+pub mod resolve;

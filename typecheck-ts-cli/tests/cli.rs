@@ -1,16 +1,21 @@
 use assert_cmd::Command;
-use predicates::str::is_empty;
+use predicates::str::{contains, is_empty};
 use serde_json::Value;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
+use typecheck_ts::resolve::normalize_path;
 
 fn fixture(name: &str) -> PathBuf {
   Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("tests")
     .join("fixtures")
     .join(name)
+}
+
+fn normalized(path: &Path) -> String {
+  normalize_path(path)
 }
 
 #[test]
@@ -28,6 +33,7 @@ fn typecheck_succeeds_on_basic_fixture() {
 #[test]
 fn type_at_reports_number() {
   let path = fixture("basic.ts");
+  let normalized_path = normalized(&path);
   let content = fs::read_to_string(&path).expect("read fixture");
   let offset = content
     .find("a + b")
@@ -48,13 +54,47 @@ fn type_at_reports_number() {
 
   let stdout = String::from_utf8(output).unwrap();
   assert!(
-    stdout.contains(&format!("type at {}:{}", path.display(), offset)),
+    stdout.contains(&format!("type at {}:{}", normalized_path, offset)),
     "missing type-at header in output: {stdout:?}"
   );
   assert!(
     stdout.contains("number"),
     "expected number type in output, got {stdout:?}"
   );
+}
+
+#[test]
+fn resolves_relative_modules_and_index_files() {
+  let path = fixture("resolution/entry.ts");
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .args(["typecheck"])
+    .arg(path.as_os_str())
+    .assert()
+    .success()
+    .stdout(is_empty());
+}
+
+#[test]
+fn node_modules_resolution_is_opt_in() {
+  let path = fixture("node_project/src/main.ts");
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .args(["typecheck"])
+    .arg(path.as_os_str())
+    .assert()
+    .failure()
+    .stdout(contains("unresolved import"));
+
+  Command::cargo_bin("typecheck-ts-cli")
+    .unwrap()
+    .args(["typecheck"])
+    .arg(path.as_os_str())
+    .arg("--node-resolve")
+    .assert()
+    .success()
+    .stdout(is_empty());
 }
 
 #[test]

@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibName, ScriptTarget};
+use typecheck_ts::resolve::{canonicalize_path, normalize_path, NodeResolver, ResolveOptions};
 use typecheck_ts::{Host, HostError, Program};
 
 #[derive(Parser)]
@@ -92,24 +93,19 @@ struct TypecheckArgs {
   profile: bool,
 }
 
-#[derive(Clone, Copy)]
-enum ResolutionMode {
-  Simple,
-  Node,
-}
-
 #[derive(Clone)]
 struct DiskHost {
   state: Arc<Mutex<DiskState>>,
-  resolver: ResolutionMode,
+  resolver: NodeResolver,
   compiler_options: CompilerOptions,
 }
 
 #[derive(Default, Clone)]
 struct DiskState {
   next_id: u32,
-  path_to_id: BTreeMap<PathBuf, FileId>,
+  path_to_id: BTreeMap<String, FileId>,
   id_to_path: Vec<PathBuf>,
+  id_to_name: Vec<String>,
   id_to_kind: Vec<FileKind>,
   texts: HashMap<FileId, Arc<str>>,
 }
@@ -217,10 +213,8 @@ fn main() -> ExitCode {
 fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   init_tracing(args.trace || args.profile);
 
-  let resolution = if args.node_resolve {
-    ResolutionMode::Node
-  } else {
-    ResolutionMode::Simple
+  let resolution = ResolveOptions {
+    node_modules: args.node_resolve,
   };
 
   let options = match build_compiler_options(&args) {
@@ -431,7 +425,7 @@ fn init_tracing(enabled: bool) {
 impl DiskHost {
   fn new(
     entries: &[PathBuf],
-    resolver: ResolutionMode,
+    resolver: ResolveOptions,
     compiler_options: CompilerOptions,
   ) -> Result<(Self, Vec<FileId>), String> {
     let mut state = DiskState::default();
@@ -439,14 +433,14 @@ impl DiskHost {
     for entry in entries {
       let canonical = canonicalize_path(entry)
         .map_err(|err| format!("failed to read entry {}: {err}", entry.to_string_lossy()))?;
-      let id = state.intern_path(canonical);
+      let id = state.intern_canonical(canonical);
       roots.push(id);
     }
 
     Ok((
       DiskHost {
         state: Arc::new(Mutex::new(state)),
-        resolver,
+        resolver: NodeResolver::new(resolver),
         compiler_options,
       },
       roots,
@@ -456,7 +450,7 @@ impl DiskHost {
   fn id_for_path(&self, path: &Path) -> Option<FileId> {
     let canonical = canonicalize_path(path).ok()?;
     let state = self.state.lock().unwrap();
-    state.path_to_id.get(&canonical).copied()
+    state.path_to_id.get(&normalize_path(&canonical)).copied()
   }
 
   fn path_for_id(&self, file: FileId) -> Option<PathBuf> {
@@ -464,13 +458,17 @@ impl DiskHost {
     state.id_to_path.get(file.0 as usize).cloned()
   }
 
+  fn display_name(&self, file: FileId) -> Option<String> {
+    let state = self.state.lock().unwrap();
+    state.id_to_name.get(file.0 as usize).cloned()
+  }
+
   fn snapshot(&self) -> HostSnapshot {
     let mut state = self.state.lock().unwrap();
     let paths = state.id_to_path.clone();
-    let mut names = Vec::with_capacity(paths.len());
+    let names = state.id_to_name.clone();
     let mut texts = Vec::with_capacity(paths.len());
     for (idx, path) in paths.iter().enumerate() {
-      names.push(path.display().to_string());
       let id = FileId(idx as u32);
       let text = match state.texts.get(&id) {
         Some(text) => Some(text.as_ref().to_string()),
@@ -492,17 +490,23 @@ impl DiskHost {
 }
 
 impl DiskState {
-  fn intern_path(&mut self, path: PathBuf) -> FileId {
-    if let Some(id) = self.path_to_id.get(&path) {
+  fn intern_with_normalized(&mut self, path: PathBuf, normalized: String) -> FileId {
+    if let Some(id) = self.path_to_id.get(&normalized) {
       return *id;
     }
     let id = FileId(self.next_id);
     self.next_id += 1;
     let kind = file_kind_for(&path);
-    self.path_to_id.insert(path.clone(), id);
+    self.path_to_id.insert(normalized.clone(), id);
     self.id_to_path.push(path);
+    self.id_to_name.push(normalized);
     self.id_to_kind.push(kind);
     id
+  }
+
+  fn intern_canonical(&mut self, path: PathBuf) -> FileId {
+    let normalized = normalize_path(&path);
+    self.intern_with_normalized(path, normalized)
   }
 }
 
@@ -527,9 +531,9 @@ impl Host for DiskHost {
   fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
     let base = self.path_for_id(from)?;
     let resolved = self.resolver.resolve(&base, specifier)?;
-    let canonical = canonicalize_path(&resolved).ok()?;
+    let normalized = normalize_path(&resolved);
     let mut state = self.state.lock().unwrap();
-    Some(state.intern_path(canonical))
+    Some(state.intern_with_normalized(resolved, normalized))
   }
 
   fn compiler_options(&self) -> CompilerOptions {
@@ -562,104 +566,6 @@ impl SourceProvider for HostSnapshot {
       .get(file.0 as usize)
       .and_then(|text| text.as_deref())
   }
-}
-
-impl ResolutionMode {
-  fn resolve(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
-    match self {
-      ResolutionMode::Simple => resolve_relative(from, specifier),
-      ResolutionMode::Node => resolve_node_like(from, specifier),
-    }
-  }
-}
-
-fn resolve_relative(from: &Path, specifier: &str) -> Option<PathBuf> {
-  let base_dir = from.parent().unwrap_or_else(|| Path::new(""));
-  let joined = base_dir.join(specifier);
-  resolve_with_candidates(&joined)
-}
-
-fn resolve_node_like(from: &Path, specifier: &str) -> Option<PathBuf> {
-  if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/') {
-    return resolve_relative(from, specifier);
-  }
-
-  let mut current = Some(from.parent().unwrap_or_else(|| Path::new("")));
-  while let Some(dir) = current {
-    let candidate = dir.join("node_modules").join(specifier);
-    if let Some(found) = resolve_with_candidates(&candidate) {
-      return Some(found);
-    }
-    current = dir.parent();
-  }
-
-  None
-}
-
-fn resolve_with_candidates(base: &Path) -> Option<PathBuf> {
-  let candidates = candidate_paths(base);
-  for cand in candidates {
-    if cand.is_file() {
-      if let Ok(canon) = canonicalize_path(&cand) {
-        return Some(canon);
-      }
-    }
-  }
-  None
-}
-
-fn candidate_paths(base: &Path) -> Vec<PathBuf> {
-  const EXTENSIONS: &[&str] = &["ts", "d.ts", "tsx", "js", "jsx"];
-  let mut candidates = Vec::new();
-  let has_extension = has_known_extension(base);
-  if has_extension {
-    candidates.push(base.to_path_buf());
-  } else {
-    for ext in EXTENSIONS {
-      candidates.push(with_extension(base, ext));
-    }
-  }
-
-  if !has_extension || base.is_dir() {
-    let base_dir = base;
-    for ext in EXTENSIONS {
-      candidates.push(base_dir.join("index").with_extension(ext));
-    }
-  }
-
-  candidates
-}
-
-fn has_known_extension(path: &Path) -> bool {
-  let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-  name.ends_with(".d.ts")
-    || matches!(
-      path.extension().and_then(|e| e.to_str()),
-      Some("ts" | "tsx" | "js" | "jsx")
-    )
-}
-
-fn with_extension(base: &Path, ext: &str) -> PathBuf {
-  if ext == "d.ts" {
-    let mut path = base.to_path_buf();
-    let current_ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-    if current_ext == "ts" || current_ext == "tsx" || current_ext == "js" || current_ext == "jsx" {
-      path.set_extension("d.ts");
-      return path;
-    }
-    path.with_extension("d.ts")
-  } else {
-    base.with_extension(ext)
-  }
-}
-
-fn canonicalize_path(path: &Path) -> std::io::Result<PathBuf> {
-  let canonical = if path.is_absolute() {
-    path.to_path_buf()
-  } else {
-    std::env::current_dir()?.join(path)
-  };
-  canonical.canonicalize()
 }
 
 fn file_kind_for(path: &Path) -> FileKind {
@@ -699,8 +605,7 @@ fn query_type_at(
     Some(ty) => {
       let typ = program.display_type(ty).to_string();
       let file = host
-        .path_for_id(file_id)
-        .map(|p| p.display().to_string())
+        .display_name(file_id)
         .unwrap_or_else(|| path.to_string_lossy().to_string());
       Ok(Some(TypeAtResult { file, offset, typ }))
     }
@@ -724,10 +629,7 @@ fn query_symbol_at(
   let info = program.symbol_info(symbol);
   let (def, def_file, typ, name) = match info {
     Some(info) => {
-      let def_file = info
-        .file
-        .and_then(|id| host.path_for_id(id))
-        .map(|p| p.display().to_string());
+      let def_file = info.file.and_then(|id| host.display_name(id));
       let typ = info.type_id.map(|id| program.display_type(id).to_string());
       (info.def.map(|d| d.0), def_file, typ, info.name)
     }
@@ -735,8 +637,7 @@ fn query_symbol_at(
   };
 
   let file = host
-    .path_for_id(file_id)
-    .map(|p| p.display().to_string())
+    .display_name(file_id)
     .unwrap_or_else(|| path.to_string_lossy().to_string());
 
   Ok(Some(SymbolAtResult {
@@ -765,8 +666,7 @@ fn query_exports(
   insert_exports(&mut spaces.namespaces, exports.namespaces, program);
   let mut outer = BTreeMap::new();
   let file_name = host
-    .path_for_id(file_id)
-    .map(|p| p.display().to_string())
+    .display_name(file_id)
     .unwrap_or_else(|| path.to_string_lossy().to_string());
   outer.insert(file_name, spaces);
   Ok(outer)
