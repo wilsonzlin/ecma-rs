@@ -25,8 +25,6 @@ mod ts_erase;
 
 #[cfg(feature = "emit-minify")]
 fn hir_can_emit(top: &Node<TopLevel>) -> bool {
-  // HIR emission currently supports a subset of constructs; keep using the
-  // stable AST emitter for minification until HIR coverage is expanded.
   let _ = top;
   false
 }

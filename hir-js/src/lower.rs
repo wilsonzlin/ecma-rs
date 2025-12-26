@@ -3616,19 +3616,19 @@ fn lower_module_items(
       }
       ModuleItemKind::ExportDefaultExpr(node) => {
         if let Some(def) = def_lookup.def_for_node(node) {
-          let expr_id = def_lookup
-            .body_for(def)
-            .and_then(|body_id| body_by_id(body_id, bodies, body_index))
+          if let Some(body_id) = def_lookup.body_for(def) {
+            let expr_id = body_by_id(body_id, bodies, body_index)
             .and_then(|b| b.exprs.len().checked_sub(1).map(|idx| ExprId(idx as u32)))
             .unwrap_or(ExprId(0));
-          exports.push(Export {
-            id: ExportId(next_export),
-            span: item.span,
-            kind: ExportKind::Default(ExportDefault {
-              value: ExportDefaultValue::Expr(expr_id),
-            }),
-          });
-          next_export += 1;
+            exports.push(Export {
+              id: ExportId(next_export),
+              span: item.span,
+              kind: ExportKind::Default(ExportDefault {
+                value: ExportDefaultValue::Expr { expr: expr_id, body: body_id },
+              }),
+            });
+            next_export += 1;
+          }
         }
       }
       ModuleItemKind::ExportAssignment(assign) => {
@@ -3640,7 +3640,7 @@ fn lower_module_items(
             exports.push(Export {
               id: ExportId(next_export),
               span: item.span,
-              kind: ExportKind::Assignment(ExportAssignment { expr }),
+              kind: ExportKind::Assignment(ExportAssignment { expr, body: body_id }),
             });
             next_export += 1;
           }

@@ -149,7 +149,10 @@ pub struct ExportDefault {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ExportDefaultValue {
-  Expr(ExprId),
+  Expr {
+    expr: ExprId,
+    body: BodyId,
+  },
   Class {
     def: DefId,
     body: BodyId,
@@ -165,6 +168,7 @@ pub enum ExportDefaultValue {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportAssignment {
   pub expr: ExprId,
+  pub body: BodyId,
 }
 
 #[derive(Debug, Clone, PartialEq)]

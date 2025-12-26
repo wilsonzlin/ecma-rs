@@ -6,10 +6,11 @@ use crate::precedence::{
 use crate::{EmitError, EmitOptions, EmitResult, Emitter};
 use diagnostics::Diagnostic;
 use hir_js::{
-  AssignOp, BinaryOp, Body, BodyId, DefData, DefId, Expr, ExprId, ExprKind, FunctionBody,
-  FunctionData, Literal, LowerResult, MemberExpr, NameId, ObjectKey, ObjectLiteral, ObjectProperty,
-  Param, Pat, PatId, PatKind, Stmt, StmtId, StmtKind, TemplateLiteral, UnaryOp, UpdateOp, VarDecl,
-  VarDeclKind,
+  AssignOp, BinaryOp, Body, BodyId, DefData, DefId, Export, ExportAll, ExportDefault,
+  ExportDefaultValue, ExportKind, ExportNamed, Expr, ExprId, ExprKind, FunctionBody, FunctionData,
+  Import, ImportBinding, ImportEqualsTarget, ImportEs, ImportKind, Literal, LowerResult, MemberExpr,
+  NameId, ObjectKey, ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt, StmtId,
+  StmtKind, TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
 };
 use parse_js::operator::{OperatorName, OPERATORS};
 
@@ -38,14 +39,16 @@ pub fn emit_hir_file_diagnostic(
 pub fn emit_hir_file(em: &mut Emitter, lowered: &LowerResult) -> EmitResult {
   let ctx = HirContext::new(lowered);
   let mut first = true;
-  for def in lowered.hir.items.iter().copied() {
-    if let Some(def_data) = ctx.def(def) {
-      if !first && !em.minify() {
-        em.write_newline();
-      }
-      emit_def(em, &ctx, def_data)?;
-      first = false;
+  for item in top_level_items(&ctx) {
+    if !first && !em.minify() {
+      em.write_newline();
     }
+    match item {
+      TopItem::Def(def) => emit_def(em, &ctx, def)?,
+      TopItem::Import(import) => emit_import(em, &ctx, import)?,
+      TopItem::Export(export) => emit_export(em, &ctx, export)?,
+    }
+    first = false;
   }
   Ok(())
 }
@@ -125,6 +128,230 @@ fn emit_def(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitResult
     _ => Err(EmitError::unsupported(
       "definition kind not supported for HIR emission",
     )),
+  }
+}
+
+fn emit_import(em: &mut Emitter, ctx: &HirContext<'_>, import: &Import) -> EmitResult {
+  match &import.kind {
+    ImportKind::Es(es) => emit_import_es(em, ctx, es),
+    ImportKind::ImportEquals(eq) => emit_import_equals(em, ctx, &eq.local, &eq.target),
+  }
+}
+
+fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> EmitResult {
+  // Type-only imports do not produce runtime code after type erasure.
+  if es.is_type_only {
+    return Ok(());
+  }
+  em.write_keyword("import");
+  let mut wrote = false;
+  if let Some(default) = &es.default {
+    em.write_identifier(ctx.name(default.local));
+    wrote = true;
+  }
+  if let Some(ns) = &es.namespace {
+    if wrote {
+      em.write_punct(",");
+    }
+    em.write_punct("*");
+    em.write_keyword("as");
+    em.write_identifier(ctx.name(ns.local));
+    wrote = true;
+  }
+  let named_specifiers: Vec<_> = es
+    .named
+    .iter()
+    .filter(|s| !s.is_type_only)
+    .collect();
+  if !named_specifiers.is_empty() {
+    if wrote {
+      em.write_punct(",");
+    }
+    em.write_punct("{");
+    for (idx, spec) in named_specifiers.iter().enumerate() {
+      if idx > 0 {
+        em.write_punct(",");
+      }
+      em.write_identifier(ctx.name(spec.imported));
+      if spec.imported != spec.local {
+        em.write_keyword("as");
+        em.write_identifier(ctx.name(spec.local));
+      }
+    }
+    em.write_punct("}");
+    wrote = true;
+  }
+  if wrote {
+    em.write_keyword("from");
+  }
+  emit_string(em, &es.specifier.value);
+  em.write_semicolon();
+  Ok(())
+}
+
+fn emit_import_equals(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  import: &ImportBinding,
+  target: &ImportEqualsTarget,
+) -> EmitResult {
+  em.write_keyword("const");
+  em.write_identifier(ctx.name(import.local));
+  em.write_punct("=");
+  match target {
+    ImportEqualsTarget::Module(spec) => {
+      em.write_identifier("require");
+      em.write_punct("(");
+      emit_string(em, &spec.value);
+      em.write_punct(")");
+    }
+    ImportEqualsTarget::Path(path) => {
+      for (idx, part) in path.iter().enumerate() {
+        if idx > 0 {
+          em.write_punct(".");
+        }
+        em.write_identifier(ctx.name(*part));
+      }
+    }
+  }
+  em.write_semicolon();
+  Ok(())
+}
+
+fn emit_export(em: &mut Emitter, ctx: &HirContext<'_>, export: &Export) -> EmitResult {
+  match &export.kind {
+    ExportKind::Named(named) => emit_export_named(em, ctx, named),
+    ExportKind::ExportAll(all) => emit_export_all(em, ctx, all),
+    ExportKind::Default(default) => emit_export_default(em, ctx, default),
+    ExportKind::Assignment(assign) => {
+      em.write_keyword("export");
+      em.write_punct("=");
+      let body = ctx
+        .body(assign.body)
+        .ok_or_else(|| EmitError::unsupported("export assignment body missing"))?;
+      emit_expr_with_min_prec(em, ctx, body, assign.expr, Prec::LOWEST)?;
+      em.write_semicolon();
+      Ok(())
+    }
+  }
+}
+
+fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed) -> EmitResult {
+  let specs: Vec<_> = named
+    .specifiers
+    .iter()
+    .filter(|s| {
+      if s.is_type_only {
+        return false;
+      }
+      if named.source.is_none() && s.exported == s.local {
+        // Skip redundant named exports for locally emitted declarations.
+        return s.local_def.is_none();
+      }
+      true
+    })
+    .collect();
+  if specs.is_empty() {
+    return Ok(());
+  }
+  em.write_keyword("export");
+  em.write_punct("{");
+  for (idx, spec) in specs.iter().enumerate() {
+    if idx > 0 {
+      em.write_punct(",");
+    }
+    em.write_identifier(ctx.name(spec.local));
+    if spec.local != spec.exported {
+      em.write_keyword("as");
+      em.write_identifier(ctx.name(spec.exported));
+    }
+  }
+  em.write_punct("}");
+  if let Some(source) = &named.source {
+    em.write_keyword("from");
+    emit_string(em, &source.value);
+  }
+  em.write_semicolon();
+  Ok(())
+}
+
+fn emit_export_all(em: &mut Emitter, ctx: &HirContext<'_>, all: &ExportAll) -> EmitResult {
+  em.write_keyword("export");
+  em.write_punct("*");
+  em.write_keyword("from");
+  emit_string(em, &all.source.value);
+  if let Some(alias) = &all.alias {
+    em.write_keyword("as");
+    em.write_identifier(ctx.name(alias.exported));
+  }
+  em.write_semicolon();
+  Ok(())
+}
+
+fn emit_export_default(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  default: &ExportDefault,
+) -> EmitResult {
+  em.write_keyword("export");
+  em.write_keyword("default");
+  match &default.value {
+    ExportDefaultValue::Expr { expr, body } => {
+      let body = ctx
+        .body(*body)
+        .ok_or_else(|| EmitError::unsupported("export default body missing"))?;
+      emit_expr_with_min_prec(em, ctx, body, *expr, Prec::LOWEST)?;
+      em.write_semicolon();
+      Ok(())
+    }
+    ExportDefaultValue::Function { body, name, .. } => {
+      let body = ctx
+        .body(*body)
+        .ok_or_else(|| EmitError::unsupported("function body not found for export default"))?;
+      let func = body
+        .function
+        .as_ref()
+        .ok_or_else(|| EmitError::unsupported("function metadata missing for export default"))?;
+      emit_function_like(em, ctx, name.map(|n| ctx.name(n)), func, body)
+    }
+    ExportDefaultValue::Class { .. } => Err(EmitError::unsupported(
+      "class default exports are not supported in HIR emission",
+    )),
+  }
+}
+
+fn top_level_items<'a>(ctx: &'a HirContext<'a>) -> Vec<TopItem<'a>> {
+  let mut items = Vec::new();
+  for import in &ctx.lowered.hir.imports {
+    items.push(TopItem::Import(import));
+  }
+  for export in &ctx.lowered.hir.exports {
+    items.push(TopItem::Export(export));
+  }
+  for def_id in ctx.lowered.hir.items.iter().copied() {
+    if let Some(def) = ctx.def(def_id) {
+      if !def.is_exported && !def.is_default_export {
+        items.push(TopItem::Def(def));
+      }
+    }
+  }
+  items.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+  items
+}
+
+enum TopItem<'a> {
+  Def(&'a DefData),
+  Import(&'a Import),
+  Export(&'a Export),
+}
+
+impl<'a> TopItem<'a> {
+  fn sort_key(&self) -> (u32, u8) {
+    match self {
+      TopItem::Import(import) => (import.span.start, 0),
+      TopItem::Export(export) => (export.span.start, 1),
+      TopItem::Def(def) => (def.span.start, 2),
+    }
   }
 }
 
