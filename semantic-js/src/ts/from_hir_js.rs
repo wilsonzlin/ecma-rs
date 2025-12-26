@@ -3,7 +3,7 @@ use crate::ts::{
   ImportDefault, ImportNamed, ImportNamespace, ModuleKind, NamedExport,
 };
 use diagnostics::TextRange;
-use hir_js::{DefId, DefKind, FileKind as HirFileKind, LowerResult};
+use hir_js::{DefId, DefKind, ExportKind, FileKind as HirFileKind, ImportKind, LowerResult};
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::import_export::{ExportNames, ImportNames};
 use parse_js::ast::node::Node;
@@ -27,6 +27,36 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
   let mut has_module_syntax = false;
 
   let item_ids: HashSet<DefId> = lower.hir.items.iter().copied().collect();
+
+  let imports_by_span: HashMap<_, _> = lower
+    .hir
+    .imports
+    .iter()
+    .map(|import| (import.span, import))
+    .collect();
+  let exports_by_span: HashMap<_, _> = lower
+    .hir
+    .exports
+    .iter()
+    .map(|export| (export.span, export))
+    .collect();
+  let import_specifier_span = |range: TextRange| -> Option<TextRange> {
+    imports_by_span
+      .get(&range)
+      .and_then(|import| match &import.kind {
+        ImportKind::Es(es) => Some(es.specifier.span),
+        ImportKind::ImportEquals(_) => None,
+      })
+  };
+  let export_specifier_span = |range: TextRange| -> Option<TextRange> {
+    exports_by_span
+      .get(&range)
+      .and_then(|export| match &export.kind {
+        ExportKind::Named(named) => named.source.as_ref().map(|s| s.span),
+        ExportKind::ExportAll(all) => Some(all.source.span),
+        _ => None,
+      })
+  };
 
   for stmt in ast.stx.body.iter() {
     let stmt_range = to_range(stmt.loc);
@@ -74,7 +104,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
 
         imports.push(Import {
           specifier: import.stx.module.clone(),
-          specifier_span: stmt_range,
+          specifier_span: import_specifier_span(stmt_range).unwrap_or(stmt_range),
           default,
           namespace,
           named,
@@ -88,7 +118,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
             if alias.is_none() {
               if let Some(specifier) = list.stx.from.clone() {
                 exports.push(Export::All(ExportAll {
-                  specifier_span: stmt_range,
+                  specifier_span: export_specifier_span(stmt_range).unwrap_or(stmt_range),
                   specifier,
                   is_type_only: list.stx.type_only,
                 }));
@@ -128,7 +158,11 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
             }
             exports.push(Export::Named(NamedExport {
               specifier: list.stx.from.clone(),
-              specifier_span: list.stx.from.as_ref().map(|_| stmt_range),
+              specifier_span: list
+                .stx
+                .from
+                .as_ref()
+                .map(|_| export_specifier_span(stmt_range).unwrap_or(stmt_range)),
               items,
               is_type_only: list.stx.type_only || names.iter().all(|n| n.stx.type_only),
             }));
@@ -182,7 +216,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
           .collect();
         imports.push(Import {
           specifier: import_type.stx.module.clone(),
-          specifier_span: stmt_range,
+          specifier_span: import_specifier_span(stmt_range).unwrap_or(stmt_range),
           default: None,
           namespace: None,
           named,
@@ -204,7 +238,11 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
           .collect();
         exports.push(Export::Named(NamedExport {
           specifier: export_type.stx.module.clone(),
-          specifier_span: export_type.stx.module.as_ref().map(|_| stmt_range),
+          specifier_span: export_type
+            .stx
+            .module
+            .as_ref()
+            .map(|_| export_specifier_span(stmt_range).unwrap_or(stmt_range)),
           items,
           is_type_only: true,
         }));

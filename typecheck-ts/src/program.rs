@@ -2,8 +2,7 @@ use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, PatId, Span, TextRan
 use ::semantic_js::ts as sem_ts;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, DefId as HirDefId,
-  DefKind as HirDefKind, ExportKind as HirExportKind, FileKind as HirFileKind,
-  ImportKind as HirImportKind, LowerResult,
+  FileKind as HirFileKind, LowerResult,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
@@ -45,6 +44,7 @@ use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
 };
 use crate::{FatalError, HostError, Ice, IceContext};
+use sem_ts::from_hir_js::lower_to_ts_hir;
 
 #[path = "check/mod.rs"]
 pub(crate) mod check;
@@ -2058,8 +2058,8 @@ impl ProgramState {
             &ast,
           );
           self.diagnostics.extend(lower_diags);
-          self.hir_lowered.insert(file, lowered.clone());
-          let sem_hir = sem_hir_from_lower(&lowered);
+          let sem_hir = lower_to_ts_hir(&ast, &lowered);
+          self.hir_lowered.insert(file, lowered);
           self.sem_hir.insert(file, sem_hir);
           let lower_span = QuerySpan::enter(
             QueryKind::LowerHir,
@@ -2218,7 +2218,7 @@ impl ProgramState {
         Ok(ast) => {
           let (lowered, lower_diags) = lower_hir_with_diagnostics(lib.id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
-          let sem_hir = sem_hir_from_lower(&lowered);
+          let sem_hir = lower_to_ts_hir(&ast, &lowered);
           self.hir_lowered.insert(lib.id, lowered);
           self.sem_hir.insert(lib.id, sem_hir);
         }
@@ -4708,187 +4708,6 @@ impl ProgramState {
       .push(SymbolOccurrence { range, symbol });
   }
 }
-
-fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
-  let resolve_name = |name| lowered.names.resolve(name).unwrap_or_default().to_string();
-  let mut decls = Vec::new();
-  for def_id in lowered.hir.items.iter() {
-    let Some(idx) = lowered.def_index.get(def_id) else {
-      continue;
-    };
-    let Some(def) = lowered.defs.get(*idx) else {
-      continue;
-    };
-    let name = resolve_name(def.path.name);
-    let mapped = map_def_kind(def.path.kind);
-    let Some(kind) = mapped else {
-      continue;
-    };
-    let exported = if def.is_exported {
-      if def.is_default_export {
-        sem_ts::Exported::Default
-      } else {
-        sem_ts::Exported::Named
-      }
-    } else {
-      sem_ts::Exported::No
-    };
-    decls.push(sem_ts::Decl {
-      def_id: def.id,
-      name,
-      kind,
-      is_ambient: def.is_ambient,
-      is_global: def.in_global,
-      exported,
-      span: def.span,
-    });
-  }
-
-  let imports: Vec<_> = lowered
-    .hir
-    .imports
-    .iter()
-    .filter_map(|import| map_import_from_lower(import, lowered, &resolve_name))
-    .collect();
-  let exports: Vec<_> = lowered
-    .hir
-    .exports
-    .iter()
-    .filter_map(|export| map_export_from_lower(export, lowered, &resolve_name))
-    .collect();
-  let module_kind = if imports.is_empty()
-    && exports.is_empty()
-    && decls
-      .iter()
-      .all(|decl| matches!(decl.exported, sem_ts::Exported::No))
-  {
-    sem_ts::ModuleKind::Script
-  } else {
-    sem_ts::ModuleKind::Module
-  };
-
-  sem_ts::HirFile {
-    file_id: sem_ts::FileId(lowered.hir.file.0),
-    module_kind,
-    file_kind: match lowered.hir.file_kind {
-      HirFileKind::Dts => sem_ts::FileKind::Dts,
-      HirFileKind::Ts | HirFileKind::Js | HirFileKind::Jsx | HirFileKind::Tsx => {
-        sem_ts::FileKind::Ts
-      }
-    },
-    decls,
-    imports,
-    exports,
-    export_as_namespace: Vec::new(),
-    ambient_modules: Vec::new(),
-  }
-}
-
-fn map_def_kind(kind: HirDefKind) -> Option<sem_ts::DeclKind> {
-  match kind {
-    HirDefKind::Function => Some(sem_ts::DeclKind::Function),
-    HirDefKind::Class => Some(sem_ts::DeclKind::Class),
-    HirDefKind::Var => Some(sem_ts::DeclKind::Var),
-    HirDefKind::Interface => Some(sem_ts::DeclKind::Interface),
-    HirDefKind::TypeAlias => Some(sem_ts::DeclKind::TypeAlias),
-    HirDefKind::Enum => Some(sem_ts::DeclKind::Enum),
-    HirDefKind::Namespace | HirDefKind::Module => Some(sem_ts::DeclKind::Namespace),
-    HirDefKind::ImportBinding => None,
-    _ => None,
-  }
-}
-
-fn map_import_from_lower(
-  import: &hir_js::Import,
-  _lowered: &LowerResult,
-  resolve_name: &impl Fn(hir_js::NameId) -> String,
-) -> Option<sem_ts::Import> {
-  match &import.kind {
-    HirImportKind::Es(es) => {
-      let default = es.default.as_ref().map(|binding| sem_ts::ImportDefault {
-        local: resolve_name(binding.local),
-        local_span: binding.span,
-        is_type_only: es.is_type_only,
-      });
-      let namespace = es
-        .namespace
-        .as_ref()
-        .map(|binding| sem_ts::ImportNamespace {
-          local: resolve_name(binding.local),
-          local_span: binding.span,
-          is_type_only: es.is_type_only,
-        });
-      let named = es
-        .named
-        .iter()
-        .map(|spec| sem_ts::ImportNamed {
-          imported: resolve_name(spec.imported),
-          local: resolve_name(spec.local),
-          is_type_only: es.is_type_only || spec.is_type_only,
-          imported_span: spec.span,
-          local_span: spec.span,
-        })
-        .collect();
-      Some(sem_ts::Import {
-        specifier: es.specifier.value.clone(),
-        specifier_span: es.specifier.span,
-        default,
-        namespace,
-        named,
-        is_type_only: es.is_type_only,
-      })
-    }
-    HirImportKind::ImportEquals(_) => None,
-  }
-}
-
-fn map_export_from_lower(
-  export: &hir_js::Export,
-  _lowered: &LowerResult,
-  resolve_name: &impl Fn(hir_js::NameId) -> String,
-) -> Option<sem_ts::Export> {
-  match &export.kind {
-    HirExportKind::Named(named) => {
-      let items = named
-        .specifiers
-        .iter()
-        .map(|spec| {
-          let local = resolve_name(spec.local);
-          let exported_name = resolve_name(spec.exported);
-          let exported = if exported_name == local {
-            None
-          } else {
-            Some(exported_name)
-          };
-          let exported_span = exported.as_ref().map(|_| spec.span);
-          sem_ts::ExportSpecifier {
-            local,
-            exported,
-            local_span: spec.span,
-            exported_span,
-          }
-        })
-        .collect();
-      Some(sem_ts::Export::Named(sem_ts::NamedExport {
-        specifier: named.source.as_ref().map(|s| s.value.clone()),
-        specifier_span: named.source.as_ref().map(|s| s.span),
-        items,
-        is_type_only: named.is_type_only,
-      }))
-    }
-    HirExportKind::ExportAll(all) => Some(sem_ts::Export::All(sem_ts::ExportAll {
-      specifier: all.source.value.clone(),
-      is_type_only: all.is_type_only,
-      specifier_span: all.source.span,
-    })),
-    HirExportKind::Default(_) => None,
-    HirExportKind::Assignment(_) => Some(sem_ts::Export::ExportAssignment {
-      expr: String::new(),
-      span: export.span,
-    }),
-  }
-}
-
 struct BodyBuilder {
   id: BodyId,
   file: FileId,

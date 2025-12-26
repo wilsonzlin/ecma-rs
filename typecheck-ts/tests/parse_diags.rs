@@ -1,6 +1,8 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{FileId, TextRange};
+use std::sync::Arc;
 use typecheck_ts::queries::parse;
+use typecheck_ts::{codes, Host, HostError, Program};
 
 struct SingleFile<'a> {
   name: &'a str,
@@ -47,5 +49,47 @@ fn reports_diagnostic_with_span_for_invalid_syntax() {
   assert!(
     rendered.contains(&expected_position),
     "rendered diagnostic should include file/line/column, got:\n{rendered}"
+  );
+}
+
+struct MissingImportHost {
+  text: Arc<str>,
+}
+
+impl Host for MissingImportHost {
+  fn file_text(&self, _file: FileId) -> Result<Arc<str>, HostError> {
+    Ok(self.text.clone())
+  }
+
+  fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
+    None
+  }
+}
+
+#[test]
+fn unresolved_import_points_at_specifier() {
+  let file = FileId(1);
+  let source = r#"import { Foo } from "./missing";"#;
+  let host = MissingImportHost {
+    text: Arc::from(source.to_string()),
+  };
+
+  let program = Program::new(host, vec![file]);
+  let diagnostics = program.check();
+  assert_eq!(diagnostics.len(), 1);
+
+  let diag = &diagnostics[0];
+  assert_eq!(diag.code.as_str(), codes::UNRESOLVED_MODULE.as_str());
+  assert_eq!(diag.primary.file, file);
+
+  let specifier = "\"./missing\"";
+  let start = source.find(specifier).expect("missing specifier in source") as u32;
+  let end = start + specifier.len() as u32;
+  let expected_span = TextRange::new(start, end);
+  assert!(
+    diag.primary.range.start <= expected_span.start && diag.primary.range.end >= expected_span.end,
+    "diagnostic span {:?} should cover specifier {:?}",
+    diag.primary.range,
+    expected_span
   );
 }

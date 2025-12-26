@@ -1,3 +1,4 @@
+use diagnostics::TextRange;
 use std::collections::HashMap;
 use std::sync::Arc;
 use typecheck_ts::codes;
@@ -178,6 +179,36 @@ fn export_namespace_all_reports_diagnostic() {
   assert_eq!(
     diagnostics[0].code.as_str(),
     codes::UNSUPPORTED_PATTERN.as_str()
+  );
+}
+
+#[test]
+fn unresolved_export_points_at_specifier() {
+  let mut host = MemoryHost::default();
+  let source = r#"export * from "./missing";"#;
+  let file = FileId(350);
+  host.insert(file, source);
+
+  let program = Program::new(host, vec![file]);
+  let diagnostics = program.check();
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected unresolved module diagnostic"
+  );
+  let diag = &diagnostics[0];
+  assert_eq!(diag.code.as_str(), codes::UNRESOLVED_MODULE.as_str());
+  assert_eq!(diag.primary.file, file);
+
+  let specifier = "\"./missing\"";
+  let start = source.find(specifier).expect("missing specifier in source") as u32;
+  let end = start + specifier.len() as u32;
+  let expected_span = TextRange::new(start, end);
+  assert!(
+    diag.primary.range.start <= expected_span.start && diag.primary.range.end >= expected_span.end,
+    "diagnostic span {:?} should cover specifier {:?}",
+    diag.primary.range,
+    expected_span
   );
 }
 
