@@ -118,7 +118,10 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
   };
   let host = TestHost::new(options)
     .with_lib(lib)
-    .with_file(FileId(0), "const value = Provided;");
+    .with_file(
+      FileId(0),
+      "const p = Promise;\nconst a = Array;\nconst value = Provided;",
+    );
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
   assert!(
@@ -137,9 +140,9 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
     .iter()
     .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
     .count();
-  assert_eq!(
-    unknown_identifiers, 1,
-    "expected unknown identifier diagnostic for Provided: {diagnostics:?}"
+  assert!(
+    unknown_identifiers >= 3,
+    "expected unknown identifier diagnostics for Promise, Array, and Provided: {diagnostics:?}"
   );
 }
 

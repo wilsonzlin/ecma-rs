@@ -1,5 +1,4 @@
-use crate::ids::NameId;
-use crate::ids::TypeId;
+use crate::ids::{DefId, NameId, TypeId};
 use crate::kind::MappedModifier;
 use crate::kind::TemplateLiteralType;
 use crate::kind::TypeKind;
@@ -7,6 +6,7 @@ use crate::shape::PropKey;
 use crate::shape::Property;
 use crate::store::TypeStore;
 use std::fmt;
+use std::sync::Arc;
 use unicode_ident::{is_xid_continue, is_xid_start};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -19,11 +19,26 @@ enum Precedence {
 pub struct TypeDisplay<'a> {
   store: &'a TypeStore,
   ty: TypeId,
+  ref_resolver: Option<Arc<dyn Fn(DefId) -> Option<String> + Send + Sync + 'a>>,
 }
 
 impl<'a> TypeDisplay<'a> {
   pub fn new(store: &'a TypeStore, ty: TypeId) -> Self {
-    Self { store, ty }
+    Self {
+      store,
+      ty,
+      ref_resolver: None,
+    }
+  }
+
+  /// Provide a resolver for [`TypeKind::Ref`] nodes that returns a friendly name
+  /// for the referenced definition, if available.
+  pub fn with_ref_resolver(
+    mut self,
+    resolver: Arc<dyn Fn(DefId) -> Option<String> + Send + Sync + 'a>,
+  ) -> Self {
+    self.ref_resolver = Some(resolver);
+    self
   }
 
   fn precedence(&self, ty: TypeId) -> Precedence {
@@ -143,13 +158,17 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::This => write!(f, "this"),
       TypeKind::Infer(param) => write!(f, "infer T{}", param.0),
       TypeKind::Tuple(elems) => {
+        let readonly_tuple = elems.iter().all(|elem| elem.readonly);
+        if readonly_tuple {
+          write!(f, "readonly ")?;
+        }
         write!(f, "[")?;
         let mut iter = elems.iter().peekable();
         while let Some(elem) = iter.next() {
           if elem.rest {
             write!(f, "...")?;
           }
-          if elem.readonly {
+          if elem.readonly && !readonly_tuple {
             write!(f, "readonly ")?;
           }
           self.fmt_with_prec(elem.ty, Precedence::Primary, f)?;
@@ -253,6 +272,23 @@ impl<'a> TypeDisplay<'a> {
         Ok(())
       }
       TypeKind::Ref { def, args } => {
+        if let Some(resolver) = &self.ref_resolver {
+          if let Some(name) = resolver(def) {
+            write!(f, "{name}")?;
+            if !args.is_empty() {
+              write!(f, "<")?;
+              let mut iter = args.iter().peekable();
+              while let Some(arg) = iter.next() {
+                self.fmt_type(*arg, f)?;
+                if iter.peek().is_some() {
+                  write!(f, ", ")?;
+                }
+              }
+              write!(f, ">")?;
+            }
+            return Ok(());
+          }
+        }
         write!(f, "ref#{}", def.0)?;
         if !args.is_empty() {
           write!(f, "<")?;

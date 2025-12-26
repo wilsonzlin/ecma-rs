@@ -58,6 +58,7 @@ impl Code {
 pub fn normalize_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
   for diagnostic in diagnostics.iter_mut() {
     sort_labels(&mut diagnostic.labels);
+    diagnostic.notes.sort();
   }
   sort_diagnostics(diagnostics);
 }
