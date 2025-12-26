@@ -9,7 +9,7 @@ use crate::hir::{
   VarDecl, VarDeclKind, VarDeclarator,
 };
 use crate::ids::{
-  BodyId, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
+  BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
   ImportSpecifierId, NameId, PatId, StmtId,
 };
 use crate::intern::NameInterner;
@@ -200,6 +200,20 @@ struct DefLookup {
   def_bodies: HashMap<DefId, BodyId>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct PlannedBody {
+  id: BodyId,
+  kind: BodyKind,
+}
+
+#[derive(Debug)]
+struct PlannedDef<'a> {
+  desc: DefDescriptor<'a>,
+  def_id: DefId,
+  def_path: DefPath,
+  body: Option<PlannedBody>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct RawNode(*const ());
 
@@ -249,8 +263,15 @@ fn allocate_def_id(def_path: DefPath, allocated: &mut BTreeMap<u32, DefPath>) ->
 }
 
 impl<'a> DefSource<'a> {
-  fn has_body(&self) -> bool {
-    !matches!(self, DefSource::None)
+  fn body_kind(&self) -> Option<BodyKind> {
+    match self {
+      DefSource::Function(_) | DefSource::ArrowFunction(_) | DefSource::FuncExpr(_) => {
+        Some(BodyKind::Function)
+      }
+      DefSource::Var(_) => Some(BodyKind::Initializer),
+      DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
+      DefSource::None => None,
+    }
   }
 
   fn ptr(&self) -> Option<RawNode> {
@@ -297,37 +318,49 @@ pub fn lower_file_with_diagnostics(
   let mut allocated_def_ids: BTreeMap<u32, DefPath> = BTreeMap::new();
 
   let mut planned = Vec::new();
-  let mut next_body_id: u32 = 0;
+  let mut body_disambiguators: BTreeMap<DefId, u32> = BTreeMap::new();
   for desc in descriptors {
     let dis = disambiguators.entry((desc.kind, desc.name)).or_insert(0);
     let def_path = DefPath::new(file, desc.kind, desc.name, *dis);
     *dis += 1;
     let def_id = allocate_def_id(def_path, &mut allocated_def_ids);
-    let body_id = if desc.source.has_body() {
-      let id = BodyId(next_body_id);
-      next_body_id += 1;
-      Some(id)
-    } else {
-      None
-    };
+    let body = desc.source.body_kind().map(|kind| {
+      let disambiguator = body_disambiguators.entry(def_id).or_insert(0);
+      let id = BodyId(BodyPath::new(def_id, kind, *disambiguator).stable_hash_u32());
+      *disambiguator += 1;
+      PlannedBody { id, kind }
+    });
     def_lookup.record_source(&desc.source, def_id);
-    if let Some(body_id) = body_id {
-      def_lookup.def_bodies.insert(def_id, body_id);
+    if let Some(body) = &body {
+      def_lookup.def_bodies.insert(def_id, body.id);
     }
-    planned.push((desc, def_id, body_id, def_path));
+    planned.push(PlannedDef {
+      desc,
+      def_id,
+      def_path,
+      body,
+    });
   }
 
-  let body_ids: Vec<BodyId> = (0..next_body_id).map(|i| BodyId(i)).collect();
-  let mut bodies: Vec<Option<Arc<Body>>> = vec![None; next_body_id as usize];
+  let mut body_ids: Vec<BodyId> = Vec::new();
+  let mut bodies: Vec<Arc<Body>> = Vec::new();
+  let mut body_index: BTreeMap<BodyId, usize> = BTreeMap::new();
   let mut items = Vec::new();
 
-  for (desc, def_id, body_id, def_path) in planned {
+  for PlannedDef {
+    desc,
+    def_id,
+    def_path,
+    body,
+  } in planned
+  {
     if desc.is_item {
       items.push(def_id);
     }
 
     span_map.add_def(desc.span, def_id);
 
+    let body_id = body.map(|b| b.id);
     let def_data = DefData {
       id: def_id,
       name: desc.name,
@@ -345,18 +378,22 @@ pub fn lower_file_with_diagnostics(
       pending_types.push((def_id, type_source));
     }
 
-    if let Some(body_id) = body_id {
-      if let Some(body) = lower_body_from_source(
+    if let Some(body) = body {
+      let body_arc = lower_body_from_source(
         def_id,
-        body_id,
+        body.id,
         &desc.source,
         &def_lookup,
         &mut names,
         &mut span_map,
         &mut ctx,
-      ) {
-        bodies[body_id.0 as usize] = Some(Arc::new(body));
-      }
+      )
+      .map(Arc::new)
+      .unwrap_or_else(|| Arc::new(empty_body(def_id, body.kind)));
+      let idx = bodies.len();
+      body_ids.push(body.id);
+      body_index.insert(body.id, idx);
+      bodies.push(body_arc);
     }
 
     defs.push(def_data);
@@ -386,28 +423,8 @@ pub fn lower_file_with_diagnostics(
     type_lowerer.finish()
   };
 
-  let bodies: Vec<Arc<Body>> = bodies
-    .into_iter()
-    .map(|body| {
-      body.unwrap_or_else(|| {
-        Arc::new(Body {
-          owner: DefId(u32::MAX),
-          kind: BodyKind::Unknown,
-          exprs: Vec::new(),
-          stmts: Vec::new(),
-          pats: Vec::new(),
-          expr_types: None,
-        })
-      })
-    })
-    .collect();
-
   let def_paths: BTreeMap<DefPath, DefId> = defs.iter().map(|def| (def.path, def.id)).collect();
   let def_index = id_to_index.clone();
-  let mut body_index = BTreeMap::new();
-  for (idx, id) in body_ids.iter().enumerate() {
-    body_index.insert(*id, idx);
-  }
 
   let (imports, exports) = lower_module_items(
     module_items,
@@ -416,6 +433,7 @@ pub fn lower_file_with_diagnostics(
     &defs,
     &id_to_index,
     &bodies,
+    &body_index,
     &mut span_map,
     &mut ctx,
   );
@@ -444,6 +462,17 @@ pub fn lower_file_with_diagnostics(
 /// tooling so overflow and unsupported constructs can be surfaced.
 pub fn lower_file(file: FileId, file_kind: FileKind, ast: &Node<TopLevel>) -> LowerResult {
   lower_file_with_diagnostics(file, file_kind, ast).0
+}
+
+fn empty_body(owner: DefId, kind: BodyKind) -> Body {
+  Body {
+    owner,
+    kind,
+    exprs: Vec::new(),
+    stmts: Vec::new(),
+    pats: Vec::new(),
+    expr_types: None,
+  }
 }
 
 fn lower_body_from_source(
@@ -3156,6 +3185,17 @@ fn push_named_export(
   *next_export += 1;
 }
 
+fn body_by_id<'a>(
+  body_id: BodyId,
+  bodies: &'a [Arc<Body>],
+  body_index: &BTreeMap<BodyId, usize>,
+) -> Option<&'a Body> {
+  body_index
+    .get(&body_id)
+    .and_then(|idx| bodies.get(*idx))
+    .map(Arc::as_ref)
+}
+
 fn lower_module_items(
   module_items: Vec<ModuleItem<'_>>,
   names: &mut NameInterner,
@@ -3163,6 +3203,7 @@ fn lower_module_items(
   defs: &[DefData],
   _def_index: &BTreeMap<DefId, usize>,
   bodies: &[Arc<Body>],
+  body_index: &BTreeMap<BodyId, usize>,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> (Vec<Import>, Vec<Export>) {
@@ -3400,9 +3441,9 @@ fn lower_module_items(
       }
       ModuleItemKind::ExportDefaultExpr(node) => {
         if let Some(def) = def_lookup.def_for_node(node) {
-          let body = def_lookup.body_for(def).unwrap_or(BodyId(u32::MAX));
-          let expr_id = bodies
-            .get(body.0 as usize)
+          let expr_id = def_lookup
+            .body_for(def)
+            .and_then(|body_id| body_by_id(body_id, bodies, body_index))
             .and_then(|b| b.exprs.len().checked_sub(1).map(|idx| ExprId(idx as u32)))
             .unwrap_or(ExprId(0));
           exports.push(Export {
@@ -3418,8 +3459,7 @@ fn lower_module_items(
       ModuleItemKind::ExportAssignment(assign) => {
         if let Some(def) = def_lookup.def_for_node(assign) {
           if let Some(body_id) = def_lookup.body_for(def) {
-            let expr = bodies
-              .get(body_id.0 as usize)
+            let expr = body_by_id(body_id, bodies, body_index)
               .and_then(|b| b.exprs.len().checked_sub(1).map(|idx| ExprId(idx as u32)))
               .unwrap_or(ExprId(0));
             exports.push(Export {

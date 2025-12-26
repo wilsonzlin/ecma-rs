@@ -16,6 +16,7 @@ use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
 use proptest::prelude::*;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
 fn def_ids_are_sorted_and_stable() {
@@ -70,6 +71,67 @@ fn def_ids_survive_unrelated_insertions() {
       .get(path)
       .expect("path should exist in variant");
     assert_eq!(id, other, "def id changed for path {:?}", path);
+  }
+}
+
+#[test]
+fn body_ids_are_stable_across_runs() {
+  let source = "function keep() {}\nconst value = () => keep();";
+  let ast = parse(source).expect("parse");
+  let (first, diagnostics) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast);
+  assert!(diagnostics.is_empty());
+
+  let ast_again = parse(source).expect("parse again");
+  let (second, diagnostics_again) =
+    lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast_again);
+  assert!(diagnostics_again.is_empty());
+
+  let first_map: BTreeMap<_, _> = first
+    .defs
+    .iter()
+    .filter_map(|def| def.body.map(|body| (def.path, body)))
+    .collect();
+  let second_map: BTreeMap<_, _> = second
+    .defs
+    .iter()
+    .filter_map(|def| def.body.map(|body| (def.path, body)))
+    .collect();
+
+  assert_eq!(first_map, second_map, "body mapping changed across runs");
+
+  let first_set: BTreeSet<_> = first.hir.bodies.iter().copied().collect();
+  let second_set: BTreeSet<_> = second.hir.bodies.iter().copied().collect();
+  assert_eq!(first_set, second_set, "body ids changed across runs");
+}
+
+#[test]
+fn body_ids_survive_unrelated_insertions() {
+  let base = "function keep() {}\nconst value = 1;";
+  let with_extra = "function keep() {}\nconst inserted = 0;\nconst value = 1;";
+
+  let base_ast = parse(base).expect("parse base");
+  let base_result = lower_file(FileId(0), FileKind::Ts, &base_ast);
+
+  let extra_ast = parse(with_extra).expect("parse variant");
+  let extra_result = lower_file(FileId(0), FileKind::Ts, &extra_ast);
+
+  for def in base_result.defs.iter().filter(|d| d.body.is_some()) {
+    let base_body = def.body.expect("base body id present");
+    let extra_def_id = extra_result
+      .hir
+      .def_paths
+      .get(&def.path)
+      .copied()
+      .expect("path should exist after insertion");
+    let extra_body = extra_result
+      .def(extra_def_id)
+      .and_then(|def| def.body)
+      .expect("body should exist in variant");
+    assert_eq!(
+      base_body, extra_body,
+      "body id changed for def path {:?}",
+      def.path
+    );
   }
 }
 
@@ -243,7 +305,7 @@ fn lowers_computed_object_keys() {
     .iter()
     .find(|d| result.names.resolve(d.path.name) == Some("obj"))
     .expect("obj definition");
-  let body = result.bodies[def.body.unwrap().0 as usize].as_ref();
+  let body = result.body(def.body.unwrap()).expect("initializer body");
   let object_expr = body
     .exprs
     .iter()
@@ -424,7 +486,7 @@ fn lowers_control_flow_statements() {
     .iter()
     .find(|d| result.names.resolve(d.path.name) == Some("demo"))
     .expect("demo function");
-  let body = result.bodies[func.body.unwrap().0 as usize].as_ref();
+  let body = result.body(func.body.unwrap()).expect("function body");
   let kinds: Vec<_> = body.stmts.iter().map(|s| &s.kind).collect();
 
   assert!(kinds.iter().any(|k| matches!(k, StmtKind::If { .. })));
@@ -444,7 +506,7 @@ fn parses_jsx_and_tsx_file_kinds() {
     .iter()
     .find(|d| tsx.names.resolve(d.path.name) == Some("el"))
     .and_then(|def| def.body)
-    .map(|body_id| tsx.bodies[body_id.0 as usize].as_ref())
+    .and_then(|body_id| tsx.body(body_id))
     .expect("el body");
   assert!(tsx_body
     .exprs
@@ -459,7 +521,7 @@ fn parses_jsx_and_tsx_file_kinds() {
     .iter()
     .find(|d| jsx.names.resolve(d.path.name) == Some("node"))
     .and_then(|def| def.body)
-    .map(|body_id| jsx.bodies[body_id.0 as usize].as_ref())
+    .and_then(|body_id| jsx.body(body_id))
     .expect("node body");
   assert!(jsx_body
     .exprs
@@ -476,7 +538,7 @@ fn lowers_new_expressions() {
     .iter()
     .find(|d| result.names.resolve(d.path.name) == Some("instance"))
     .expect("instance def");
-  let body = result.bodies[def.body.unwrap().0 as usize].as_ref();
+  let body = result.body(def.body.unwrap()).expect("initializer body");
   let call = body
     .exprs
     .iter()

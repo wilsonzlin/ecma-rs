@@ -477,7 +477,8 @@ pub struct Body {
   pub expr_types: Option<Vec<()>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
 pub enum BodyKind {
   TopLevel,
   Function,

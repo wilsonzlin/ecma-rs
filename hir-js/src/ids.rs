@@ -1,3 +1,4 @@
+use crate::hir::BodyKind;
 use diagnostics::FileId;
 
 #[cfg(test)]
@@ -22,6 +23,44 @@ pub struct DefId(pub u32);
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct BodyId(pub u32);
+
+/// Content-addressed identifier for a lowered body.
+///
+/// `BodyId` values are derived from their owning [`DefId`], the body kind, and
+/// an optional disambiguator (see [`BodyPath`]) to remain stable even when new
+/// bodies are introduced elsewhere in the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct BodyPath {
+  pub owner: DefId,
+  pub kind: BodyKind,
+  pub disambiguator: u32,
+}
+
+impl BodyPath {
+  pub fn new(owner: DefId, kind: BodyKind, disambiguator: u32) -> Self {
+    Self {
+      owner,
+      kind,
+      disambiguator,
+    }
+  }
+
+  pub fn stable_hash(&self) -> u64 {
+    let mut hasher = StableHasher::new();
+    hasher.write_u64(self.owner.0 as u64);
+    hasher.write_u64(self.kind as u64);
+    hasher.write_u64(self.disambiguator as u64);
+    hasher.finish()
+  }
+
+  pub fn stable_hash_u32(&self) -> u32 {
+    let mut hasher = StableHasher::new();
+    hasher.write_u64(self.owner.0 as u64);
+    hasher.write_u64(self.kind as u64);
+    hasher.write_u64(self.disambiguator as u64);
+    hasher.finish_u32()
+  }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
