@@ -383,6 +383,7 @@ pub fn check_body(
     Ok(ast) => ast,
     Err(err) => {
       diagnostics.push(err.to_diagnostic(file));
+      codes::normalize_diagnostics(&mut diagnostics);
       return BodyCheckResult {
         expr_types,
         pat_types,
