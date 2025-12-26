@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use typecheck_ts::{FileKey, Program, PropertyKey, TypeKindSummary, TypeQueries};
+use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TypeKindSummary, TypeQueries};
 use types_ts_interned::{
   DefId, ExpandedType, Indexer, ObjectType, Param, PropData, PropKey, Property, Shape, Signature,
   TypeExpander, TypeId, TypeKind, TypeStore,
@@ -29,22 +29,22 @@ fn object_type(store: &Arc<TypeStore>, shape: Shape) -> TypeId {
 
 #[derive(Default)]
 struct TestHost {
-  files: HashMap<FileId, Arc<str>>,
-  resolutions: HashMap<String, FileId>,
+  files: HashMap<FileKey, Arc<str>>,
+  resolutions: HashMap<String, FileKey>,
 }
 
 impl TestHost {
-  fn insert(&mut self, file: FileId, src: &str) {
+  fn insert(&mut self, file: FileKey, src: &str) {
     self.files.insert(file, Arc::from(src.to_string()));
   }
 
-  fn resolve_to(&mut self, specifier: &str, target: FileId) {
+  fn resolve_to(&mut self, specifier: &str, target: FileKey) {
     self.resolutions.insert(specifier.to_string(), target);
   }
 }
 
 impl Host for TestHost {
-  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
     self
       .files
       .get(&file)
@@ -52,8 +52,8 @@ impl Host for TestHost {
       .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
   }
 
-  fn resolve(&self, _from: FileId, specifier: &str) -> Option<FileId> {
-    self.resolutions.get(specifier).copied()
+  fn resolve(&self, _from: &FileKey, specifier: &str) -> Option<FileKey> {
+    self.resolutions.get(specifier).cloned()
   }
 }
 
@@ -522,10 +522,11 @@ type Alias = Thing;
 #[test]
 fn type_alias_recursion_is_cycle_safe() {
   let mut host = TestHost::default();
-  host.insert(FileId(0), "type Alias = Alias | number;");
-  let program = Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  host.insert(key.clone(), "type Alias = Alias | number;");
+  let program = Program::new(host, vec![key.clone()]);
   let alias_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(program.file_id(&key).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Alias"))
     .expect("alias definition present");
@@ -545,7 +546,7 @@ fn type_alias_recursion_is_cycle_safe() {
 fn interface_extends_and_intersections_merge_shapes() {
   let mut host = TestHost::default();
   host.insert(
-    FileId(0),
+    FileKey::new("entry.ts"),
     r#"
 interface Base { a: string; }
 interface Extra { b: number; }
@@ -553,9 +554,10 @@ interface Derived extends Base { c: boolean; }
 type Combined = Derived & Extra;
 "#,
   );
-  let program = Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![key.clone()]);
   let combined_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(program.file_id(&key).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Combined"))
     .expect("combined alias present");
@@ -586,12 +588,13 @@ type Combined = Derived & Extra;
 fn function_signature_is_lowered_from_type_alias() {
   let mut host = TestHost::default();
   host.insert(
-    FileId(0),
+    FileKey::new("entry.ts"),
     "type FnAlias = (value: string, count?: number) => boolean;",
   );
-  let program = Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![key.clone()]);
   let fn_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(program.file_id(&key).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("FnAlias"))
     .expect("function alias present");
@@ -619,14 +622,15 @@ fn function_signature_is_lowered_from_type_alias() {
 fn recursive_alias_properties_preserve_references() {
   let mut host = TestHost::default();
   host.insert(
-    FileId(0),
+    FileKey::new("entry.ts"),
     r#"
 type List = { value: number; next: List | null };
 "#,
   );
-  let program = Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![key.clone()]);
   let list_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(program.file_id(&key).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("List"))
     .expect("List alias present");
@@ -648,14 +652,15 @@ type List = { value: number; next: List | null };
 fn recursive_type_alias_expands_through_refs() {
   let mut host = TestHost::default();
   host.insert(
-    FileId(0),
+    FileKey::new("entry.ts"),
     r#"
 type Node = { value: number; next?: Node };
 "#,
   );
-  let program = Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![key.clone()]);
   let node_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(program.file_id(&key).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Node"))
     .expect("Node definition present");
@@ -690,21 +695,22 @@ type Node = { value: number; next?: Node };
 fn interface_extends_and_intersections_merge_members() {
   let mut host = TestHost::default();
   host.insert(
-    FileId(0),
+    FileKey::new("entry.ts"),
     r#"
 interface Base { base: number }
 interface Derived extends Base { derived: string }
 type Combined = Derived & { extra: boolean };
 "#,
   );
-  let program = Program::new(host, vec![FileId(0)]);
+  let key = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![key.clone()]);
   let derived_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(program.file_id(&key).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Derived"))
     .expect("Derived interface present");
   let combined_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(program.file_id(&key).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Combined"))
     .expect("Combined alias present");

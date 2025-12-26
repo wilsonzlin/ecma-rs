@@ -6,7 +6,7 @@ use typecheck_ts::check::infer::{
   infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature, TypeParamDecl,
 };
 use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
-use typecheck_ts::{FileId, Host, HostError, Program, PropertyKey, TypeKindSummary};
+use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TypeKindSummary};
 use types_ts_interned::{
   CacheConfig, DefId, Param, Signature, TypeId, TypeKind, TypeParamId, TypeStore,
 };
@@ -403,22 +403,22 @@ fn infers_from_contextual_return_in_call() {
 fn imported_type_alias_uses_source_definition() {
   #[derive(Default)]
   struct ImportHost {
-    files: HashMap<FileId, Arc<str>>,
-    resolutions: HashMap<String, FileId>,
+    files: HashMap<FileKey, Arc<str>>,
+    resolutions: HashMap<String, FileKey>,
   }
 
   impl ImportHost {
-    fn insert(&mut self, file: FileId, src: &str) {
+    fn insert(&mut self, file: FileKey, src: &str) {
       self.files.insert(file, Arc::from(src.to_string()));
     }
 
-    fn resolve_to(&mut self, specifier: &str, target: FileId) {
+    fn resolve_to(&mut self, specifier: &str, target: FileKey) {
       self.resolutions.insert(specifier.to_string(), target);
     }
   }
 
   impl Host for ImportHost {
-    fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+    fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
       self
         .files
         .get(&file)
@@ -426,25 +426,28 @@ fn imported_type_alias_uses_source_definition() {
         .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
     }
 
-    fn resolve(&self, _from: FileId, specifier: &str) -> Option<FileId> {
-      self.resolutions.get(specifier).copied()
+    fn resolve(&self, _from: &FileKey, specifier: &str) -> Option<FileKey> {
+      self.resolutions.get(specifier).cloned()
     }
   }
 
   let mut host = ImportHost::default();
-  host.insert(FileId(0), "export type Value = { value: number };");
   host.insert(
-    FileId(1),
+    FileKey::new("a.ts"),
+    "export type Value = { value: number };",
+  );
+  host.insert(
+    FileKey::new("b.ts"),
     r#"
 import { Value } from "./a";
 type Uses = Value;
 "#,
   );
-  host.resolve_to("./a", FileId(0));
+  host.resolve_to("./a", FileKey::new("a.ts"));
 
-  let program = Program::new(host, vec![FileId(1)]);
+  let program = Program::new(host, vec![FileKey::new("b.ts")]);
   let uses_def = program
-    .definitions_in_file(FileId(1))
+    .definitions_in_file(program.file_id(&FileKey::new("b.ts")).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Uses"))
     .expect("Uses alias present");
@@ -459,17 +462,17 @@ type Uses = Value;
 fn function_definition_exposes_signature() {
   #[derive(Default)]
   struct SigHost {
-    files: HashMap<FileId, Arc<str>>,
+    files: HashMap<FileKey, Arc<str>>,
   }
 
   impl SigHost {
-    fn insert(&mut self, file: FileId, src: &str) {
+    fn insert(&mut self, file: FileKey, src: &str) {
       self.files.insert(file, Arc::from(src.to_string()));
     }
   }
 
   impl Host for SigHost {
-    fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+    fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
       self
         .files
         .get(&file)
@@ -477,19 +480,20 @@ fn function_definition_exposes_signature() {
         .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
     }
 
-    fn resolve(&self, _from: FileId, _specifier: &str) -> Option<FileId> {
+    fn resolve(&self, _from: &FileKey, _specifier: &str) -> Option<FileKey> {
       None
     }
   }
 
   let mut host = SigHost::default();
   host.insert(
-    FileId(0),
+    FileKey::new("entry.ts"),
     "export function add(a: number, b: string): string { return a + b; }",
   );
-  let program = Program::new(host, vec![FileId(0)]);
+  let entry = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![entry.clone()]);
   let add_def = program
-    .definitions_in_file(FileId(0))
+    .definitions_in_file(program.file_id(&entry).unwrap())
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition present");

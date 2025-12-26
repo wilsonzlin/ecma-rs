@@ -196,7 +196,7 @@ pub mod semantic_js {
   /// Opaque symbol identifier.
   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
   #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-  pub struct SymbolId(pub u32);
+  pub struct SymbolId(pub u64);
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
     fn from(id: ::semantic_js::ts::SymbolId) -> Self {
@@ -2140,8 +2140,30 @@ impl ProgramFileKey {
   }
 }
 
+#[derive(Default)]
+struct StableHasher(u64);
+
+impl Hasher for StableHasher {
+  fn write(&mut self, bytes: &[u8]) {
+    for byte in bytes {
+      self.0 ^= *byte as u64;
+      self.0 = self
+        .0
+        .wrapping_mul(1099511628211); // FNV-1a 64-bit prime
+    }
+  }
+
+  fn write_u64(&mut self, i: u64) {
+    self.write(&i.to_le_bytes());
+  }
+
+  fn finish(&self) -> u64 {
+    self.0
+  }
+}
+
 fn stable_file_id(key: &ProgramFileKey, salt: u64) -> FileId {
-  let mut hasher = std::collections::hash_map::DefaultHasher::new();
+  let mut hasher = StableHasher(0xcbf29ce484222325); // FNV-1a offset basis
   key.hash(&mut hasher);
   hasher.write_u64(salt);
   let mut raw = hasher.finish() as u32;
@@ -2268,6 +2290,14 @@ impl ProgramState {
       } => Some(key),
       _ => None,
     }
+  }
+
+  fn file_id_for_key(&self, key: &FileKey) -> Option<FileId> {
+    self
+      .key_to_id
+      .get(&ProgramFileKey::host(key.clone()))
+      .copied()
+      .or_else(|| self.key_to_id.get(&ProgramFileKey::lib(key.clone())).copied())
   }
 
   fn host_file_id(&self, key: &FileKey) -> Option<FileId> {
@@ -2434,16 +2464,26 @@ impl ProgramState {
           }
         }
       }
+      let key_lookup_map = self.key_to_id.clone();
+      let key_lookup = move |key: &FileKey| {
+        key_lookup_map
+          .get(&ProgramFileKey::host(key.clone()))
+          .copied()
+          .or_else(|| key_lookup_map.get(&ProgramFileKey::lib(key.clone())).copied())
+      };
       let mut lowerer = check::decls::HirDeclLowerer::new(
         Arc::clone(&store),
         &lowered.types,
         self.semantics.as_ref(),
         def_by_name.clone(),
         *file,
+        self.file_key(*file).map(|k| k.key().clone()),
         local_defs,
         &mut self.diagnostics,
         Some(&def_map),
         Some(&def_by_name),
+        Some(host.as_ref()),
+        Some(&key_lookup),
       );
       for def in lowered.defs.iter() {
         let Some(info) = def.type_info.as_ref() else {
@@ -4250,7 +4290,7 @@ impl ProgramState {
             continue;
           }
           let expected = context
-            .and_then(|ctx| check::object_literal::contextual_property_type(self, ctx, &prop.name));
+            .and_then(|ctx| check::object_literal::legacy_contextual_property_type(self, ctx, &prop.name));
           let (mut ty, _) = self.check_expr(&prop.value, env, result, file, expected.or(context));
           if expected.is_none() && context != Some(self.builtin.never) {
             ty = self.widen_literal(ty);
@@ -5015,7 +5055,7 @@ impl ProgramState {
   }
 
   fn alloc_symbol(&mut self) -> semantic_js::SymbolId {
-    let id = semantic_js::SymbolId(self.next_symbol);
+    let id = semantic_js::SymbolId(self.next_symbol.into());
     self.next_symbol += 1;
     id
   }

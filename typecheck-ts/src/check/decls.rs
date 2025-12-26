@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::codes;
-use crate::Host;
+use crate::{FileKey, Host};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   DefId as HirDefId, DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId,
@@ -23,6 +23,7 @@ pub struct HirDeclLowerer<'a, 'diag> {
   semantics: Option<&'a TsProgramSemantics>,
   defs: HashMap<(FileId, String), DefId>,
   file: FileId,
+  file_key: Option<FileKey>,
   local_defs: HashMap<String, HirDefId>,
   diagnostics: &'diag mut Vec<Diagnostic>,
   type_params: HashMap<HirTypeParamId, TypeParamId>,
@@ -30,6 +31,7 @@ pub struct HirDeclLowerer<'a, 'diag> {
   def_map: Option<&'a HashMap<DefId, DefId>>,
   def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
   host: Option<&'a dyn Host>,
+  key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
 }
 
 impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
@@ -39,11 +41,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     semantics: Option<&'a TsProgramSemantics>,
     defs: HashMap<(FileId, String), DefId>,
     file: FileId,
+    file_key: Option<FileKey>,
     local_defs: HashMap<String, HirDefId>,
     diagnostics: &'diag mut Vec<Diagnostic>,
     def_map: Option<&'a HashMap<DefId, DefId>>,
     def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
     host: Option<&'a dyn Host>,
+    key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
   ) -> Self {
     Self {
       store,
@@ -51,6 +55,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       semantics,
       defs,
       file,
+      file_key,
       local_defs,
       diagnostics,
       type_params: HashMap::new(),
@@ -58,6 +63,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       def_map,
       def_by_name,
       host,
+      key_to_id,
     }
   }
 
@@ -654,7 +660,16 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       return self.store.primitive_ids().unknown;
     };
 
-    let Some(target_file) = host.resolve(self.file, &import.module) else {
+    let Some(from_key) = self.file_key.as_ref() else {
+      return self.store.primitive_ids().unknown;
+    };
+    let Some(target_key) = host.resolve(from_key, &import.module) else {
+      return self.store.primitive_ids().unknown;
+    };
+    let Some(target_file) = self
+      .key_to_id
+      .and_then(|resolver| resolver(&target_key))
+    else {
       return self.store.primitive_ids().unknown;
     };
 
@@ -717,7 +732,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           .and_then(|segments| segments.last())
           .and_then(|id| names.resolve(*id))
           .map(|s| s.to_string())?;
-        let target_file = self.host.and_then(|h| h.resolve(self.file, module))?;
+        let from_key = self.file_key.as_ref()?;
+        let target_key = self.host.and_then(|h| h.resolve(from_key, module))?;
+        let target_file = self.key_to_id.and_then(|resolver| resolver(&target_key))?;
         self.resolve_named_type(&name, target_file)
       }),
       TypeName::ImportExpr => None,
