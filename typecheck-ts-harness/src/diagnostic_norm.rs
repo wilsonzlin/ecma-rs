@@ -296,6 +296,170 @@ pub fn normalize_path_for_compare(path: &str, options: &NormalizationOptions) ->
   normalize_file_name(Some(path.to_string()), options).unwrap_or_else(|| path.to_string())
 }
 
+/// Normalize a rendered type string for stable comparisons.
+///
+/// The normalizer is intentionally lightweight; it collapses whitespace, sorts
+/// top-level union and intersection members, and strips parameter names from
+/// arrow-function signatures so differences in source-level identifiers do not
+/// cause spurious diffs.
+pub fn normalize_type_string(raw: &str) -> String {
+  fn split_top_level(raw: &str, delim: char) -> Option<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth_paren = 0i32;
+    let mut depth_brace = 0i32;
+    let mut depth_bracket = 0i32;
+    let mut depth_angle = 0i32;
+    for (idx, ch) in raw.char_indices() {
+      match ch {
+        '(' => depth_paren += 1,
+        ')' => depth_paren -= 1,
+        '{' => depth_brace += 1,
+        '}' => depth_brace -= 1,
+        '[' => depth_bracket += 1,
+        ']' => depth_bracket -= 1,
+        '<' => depth_angle += 1,
+        '>' => depth_angle -= 1,
+        _ => {}
+      }
+      if ch == delim
+        && depth_paren == 0
+        && depth_brace == 0
+        && depth_bracket == 0
+        && depth_angle == 0
+      {
+        parts.push(raw[start..idx].trim().to_string());
+        start = idx + ch.len_utf8();
+      }
+    }
+    if parts.is_empty() {
+      return None;
+    }
+    parts.push(raw[start..].trim().to_string());
+    Some(parts)
+  }
+
+  fn strip_param_names(params: &str) -> String {
+    fn split_params(raw: &str) -> Vec<String> {
+      let mut parts = Vec::new();
+      let mut start = 0usize;
+      let mut depth_paren = 0i32;
+      let mut depth_brace = 0i32;
+      let mut depth_bracket = 0i32;
+      let mut depth_angle = 0i32;
+      for (idx, ch) in raw.char_indices() {
+        match ch {
+          '(' => depth_paren += 1,
+          ')' => depth_paren -= 1,
+          '{' => depth_brace += 1,
+          '}' => depth_brace -= 1,
+          '[' => depth_bracket += 1,
+          ']' => depth_bracket -= 1,
+          '<' => depth_angle += 1,
+          '>' => depth_angle -= 1,
+          ',' => {
+            if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 && depth_angle == 0 {
+              parts.push(raw[start..idx].trim().to_string());
+              start = idx + 1;
+            }
+          }
+          _ => {}
+        }
+      }
+      parts.push(raw[start..].trim().to_string());
+      parts
+    }
+
+    fn strip_single_param(raw: &str) -> String {
+      let mut depth_paren = 0i32;
+      let mut depth_brace = 0i32;
+      let mut depth_bracket = 0i32;
+      let mut depth_angle = 0i32;
+      for (idx, ch) in raw.char_indices() {
+        match ch {
+          '(' => depth_paren += 1,
+          ')' => depth_paren -= 1,
+          '{' => depth_brace += 1,
+          '}' => depth_brace -= 1,
+          '[' => depth_bracket += 1,
+          ']' => depth_bracket -= 1,
+          '<' => depth_angle += 1,
+          '>' => depth_angle -= 1,
+          ':' => {
+            if depth_paren == 0 && depth_brace == 0 && depth_bracket == 0 && depth_angle == 0 {
+              let rest = raw[idx + ch.len_utf8()..].trim();
+              let is_rest = raw.trim_start().starts_with("...");
+              return if is_rest {
+                format!("...{rest}")
+              } else {
+                rest.to_string()
+              };
+            }
+          }
+          _ => {}
+        }
+      }
+      raw.trim().to_string()
+    }
+
+    let mut normalized = Vec::new();
+    for param in split_params(params) {
+      if param.is_empty() {
+        continue;
+      }
+      normalized.push(strip_single_param(&param));
+    }
+    normalized.join(", ")
+  }
+
+  let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+  let normalized = collapsed.trim().to_string();
+  let tighten = |s: String| s.replace("< ", "<").replace(" >", ">");
+
+  if let Some(parts) = split_top_level(&normalized, '|') {
+    let mut normalized_parts: Vec<_> = parts
+      .into_iter()
+      .filter(|p| !p.is_empty())
+      .map(|p| normalize_type_string(&p))
+      .collect();
+    normalized_parts.sort();
+    normalized_parts.dedup();
+    return tighten(normalized_parts.join(" | "));
+  }
+
+  if let Some(parts) = split_top_level(&normalized, '&') {
+    let mut normalized_parts: Vec<_> = parts
+      .into_iter()
+      .filter(|p| !p.is_empty())
+      .map(|p| normalize_type_string(&p))
+      .collect();
+    normalized_parts.sort();
+    normalized_parts.dedup();
+    return tighten(normalized_parts.join(" & "));
+  }
+
+  if let Some(arrow_idx) = normalized.find("=>") {
+    let params_part = normalized[..arrow_idx].trim_end();
+    let ret_part = normalized[arrow_idx + 2..].trim_start();
+    if let Some(start_paren) = params_part.rfind('(') {
+      if params_part.ends_with(')') && start_paren < params_part.len() {
+        let params = &params_part[start_paren + 1..params_part.len() - 1];
+        let before = params_part[..start_paren].trim();
+        let stripped = strip_param_names(params);
+        let before = if before.is_empty() {
+          String::new()
+        } else {
+          format!("{before}")
+        };
+        let ret = normalize_type_string(ret_part);
+        return tighten(format!("{before}({stripped}) => {ret}"));
+      }
+    }
+  }
+
+  tighten(normalized)
+}
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -362,5 +526,21 @@ mod tests {
     ];
     let normalized = normalize_tsc_diagnostics_with_options(&diags, &options);
     assert_eq!(normalized[0].file, normalized[1].file);
+  }
+
+  #[test]
+  fn normalizes_type_strings() {
+    assert_eq!(
+      normalize_type_string("string | number"),
+      "number | string".to_string()
+    );
+    assert_eq!(
+      normalize_type_string("(a: number, b: string)=>Promise< string >"),
+      "(number, string) => Promise<string>".to_string()
+    );
+    assert_eq!(
+      normalize_type_string("Promise< string | number >"),
+      "Promise<string | number>".to_string()
+    );
   }
 }

@@ -118,6 +118,7 @@ fn run_tsc(
     root_names: vec![file.name.clone()],
     files,
     options,
+    type_queries: Vec::new(),
   };
 
   runner.check(request).expect("tsc output")

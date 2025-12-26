@@ -287,7 +287,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         Some(mapped) => self.evaluate_with_subst(mapped, subst, depth + 1),
         None => {
           let constraint = constraint.map(|c| self.evaluate_with_subst(c, subst, depth + 1));
-          self.store
+          self
+            .store
             .intern_type(TypeKind::Infer { param, constraint })
         }
       },

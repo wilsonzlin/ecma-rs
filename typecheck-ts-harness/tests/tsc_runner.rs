@@ -58,6 +58,7 @@ fn reports_single_file_error() {
     root_names: vec!["main.ts".to_string()],
     files,
     options: Map::new(),
+    type_queries: Vec::new(),
   };
 
   let output = runner.check(request).expect("tsc output");
@@ -89,6 +90,7 @@ fn resolves_relative_imports_across_files() {
     root_names: vec!["a.ts".to_string(), "b.ts".to_string()],
     files,
     options: Map::new(),
+    type_queries: Vec::new(),
   };
 
   let output = runner.check(request).expect("tsc output");

@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Context, Result};
-use crate::tsc::TSC_BASELINE_SCHEMA_VERSION;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use crate::tsc::{TscDiagnostic, TscDiagnostics, TscMetadata, TSC_BASELINE_SCHEMA_VERSION};
+use serde_json;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -61,31 +60,5 @@ impl TscRunner {
   }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TscDiagnostics {
-  #[serde(default)]
-  pub schema_version: Option<u32>,
-  #[serde(default)]
-  pub metadata: TscMetadata,
-  pub diagnostics: Vec<TscDiagnostic>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct TscMetadata {
-  #[serde(default)]
-  pub typescript_version: Option<String>,
-  #[serde(default)]
-  pub options: Map<String, Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TscDiagnostic {
-  pub code: u32,
-  pub file: Option<String>,
-  pub start: u32,
-  pub end: u32,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub category: Option<String>,
-  #[serde(default, skip_serializing_if = "Option::is_none")]
-  pub message: Option<String>,
-}
+// Re-export types for convenience.
+pub use crate::tsc::{TscDiagnostic, TscDiagnostics, TscMetadata};

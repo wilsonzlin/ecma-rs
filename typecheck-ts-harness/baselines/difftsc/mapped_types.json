@@ -15,14 +15,23 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [
-    {
-      "code": 2322,
-      "file": "use.ts",
-      "start": 70,
-      "end": 73,
-      "category": "error",
-      "message": "Type 'string' is not assignable to type 'number'."
-    }
-  ]
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "mapped_types.ts",
+        "name": "partial",
+        "type": "ReadonlyPartial<Options>"
+      }
+    ],
+    "markers": [
+      {
+        "file": "mapped_types.ts",
+        "offset": 120,
+        "line": 3,
+        "column": 16,
+        "type": "ReadonlyPartial<Options>"
+      }
+    ]
+  }
 }

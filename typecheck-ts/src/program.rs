@@ -983,6 +983,28 @@ impl Program {
     self.with_analyzed_state(|state| Ok(state.exports_of_file(file)))
   }
 
+  /// Type of a specific export in a file, if known.
+  pub fn type_of_export(&self, file: FileId, name: &str) -> Option<TypeId> {
+    match self.type_of_export_fallible(file, name) {
+      Ok(ty) => ty,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn type_of_export_fallible(
+    &self,
+    file: FileId,
+    name: &str,
+  ) -> Result<Option<TypeId>, FatalError> {
+    self.with_analyzed_state(|state| {
+      let exports = state.exports_of_file(file);
+      Ok(exports.values.get(name).and_then(|entry| entry.type_id))
+    })
+  }
+
   /// Helper to render a type as displayable string.
   pub fn display_type(&self, ty: TypeId) -> TypeDisplay {
     let (store, ty) = {
@@ -1595,7 +1617,6 @@ impl TypeResolver for ProgramTypeResolver {
     self.def_for_symbol(symbol, sem_ts::Namespace::TYPE)
   }
 }
-
 
 #[allow(dead_code)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]

@@ -269,9 +269,9 @@ fn is_false(value: &bool) -> bool {
 }
 
 #[derive(Clone)]
-struct HarnessFile {
-  normalized: String,
-  content: Arc<str>,
+pub(crate) struct HarnessFile {
+  pub(crate) normalized: String,
+  pub(crate) content: Arc<str>,
 }
 
 #[derive(Clone)]
@@ -320,22 +320,22 @@ impl HarnessFileSet {
     }
   }
 
-  fn root_files(&self) -> Vec<FileId> {
+  pub(crate) fn root_files(&self) -> Vec<FileId> {
     (0..self.files.len()).map(|i| FileId(i as u32)).collect()
   }
 
-  fn file_name(&self, file: FileId) -> Option<String> {
+  pub(crate) fn file_name(&self, file: FileId) -> Option<String> {
     self
       .files
       .get(file.0 as usize)
       .map(|f| f.normalized.clone())
   }
 
-  fn resolve(&self, normalized: &str) -> Option<FileId> {
+  pub(crate) fn resolve(&self, normalized: &str) -> Option<FileId> {
     self.name_to_id.get(normalized).copied()
   }
 
-  fn iter(&self) -> impl Iterator<Item = &HarnessFile> {
+  pub(crate) fn iter(&self) -> impl Iterator<Item = &HarnessFile> {
     self.files.iter()
   }
 
@@ -1133,6 +1133,7 @@ impl SnapshotStore {
       metadata: TscMetadata::default(),
       diagnostics: diagnostics.to_vec(),
       crash: None,
+      type_facts: None,
     };
     let json = serde_json::to_string_pretty(&payload)?;
     std::fs::write(path, format!("{json}\n"))

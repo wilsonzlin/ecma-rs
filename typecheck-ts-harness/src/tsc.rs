@@ -27,9 +27,21 @@ pub struct TscRequest {
   pub files: HashMap<String, String>,
   #[serde(default)]
   pub options: Map<String, Value>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub type_queries: Vec<TypeQuery>,
 }
 
-pub const TSC_BASELINE_SCHEMA_VERSION: u32 = 1;
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TypeQuery {
+  pub file: String,
+  pub offset: u32,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub line: Option<u32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub column: Option<u32>,
+}
+
+pub const TSC_BASELINE_SCHEMA_VERSION: u32 = 2;
 /// Merge default tsc options used by the harness with a provided options map.
 pub fn apply_default_tsc_options(options: &mut Map<String, Value>) {
   options
@@ -45,18 +57,20 @@ pub fn apply_default_tsc_options(options: &mut Map<String, Value>) {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TscDiagnostics {
-  #[serde(default)]
+  #[serde(default, alias = "schemaVersion")]
   pub schema_version: Option<u32>,
   #[serde(default)]
   pub metadata: TscMetadata,
   pub diagnostics: Vec<TscDiagnostic>,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub crash: Option<TscCrash>,
+  #[serde(default, alias = "typeFacts", skip_serializing_if = "Option::is_none")]
+  pub type_facts: Option<TypeFacts>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TscMetadata {
-  #[serde(default)]
+  #[serde(default, alias = "typescriptVersion")]
   pub typescript_version: Option<String>,
   #[serde(default)]
   pub options: Map<String, Value>,
@@ -77,6 +91,40 @@ pub struct TscDiagnostic {
   pub category: Option<String>,
   #[serde(default)]
   pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TypeFacts {
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub exports: Vec<ExportTypeFact>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub markers: Vec<TypeAtFact>,
+}
+
+impl TypeFacts {
+  pub fn is_empty(&self) -> bool {
+    self.exports.is_empty() && self.markers.is_empty()
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportTypeFact {
+  pub file: String,
+  pub name: String,
+  #[serde(rename = "type")]
+  pub type_str: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TypeAtFact {
+  pub file: String,
+  pub offset: u32,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub line: Option<u32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub column: Option<u32>,
+  #[serde(rename = "type")]
+  pub type_str: String,
 }
 
 #[cfg(feature = "with-node")]

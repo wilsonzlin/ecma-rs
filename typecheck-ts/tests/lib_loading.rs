@@ -3,9 +3,7 @@ use std::sync::Arc;
 
 use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibManager};
-use typecheck_ts::{
-  FileId, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary,
-};
+use typecheck_ts::{FileId, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
 
 const PROMISE_DOM: &str = include_str!("fixtures/promise_dom.ts");
 const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
@@ -257,8 +255,7 @@ fn imported_type_alias_resolves_interned_type() {
 
 #[test]
 fn bundled_lib_types_expose_promise_and_array_shapes() {
-  let host = TestHost::new(CompilerOptions::default())
-    .with_file(FileId(0), PROMISE_ARRAY_TYPES);
+  let host = TestHost::new(CompilerOptions::default()).with_file(FileId(0), PROMISE_ARRAY_TYPES);
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
   assert!(

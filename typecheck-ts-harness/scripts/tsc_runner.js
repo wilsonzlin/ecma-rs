@@ -5,7 +5,7 @@ const readline = require("readline");
 const ts = require("typescript");
 
 const VIRTUAL_ROOT = "/";
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 function normalizePath(fileName) {
   return path.posix.normalize(fileName.replace(/\\/g, "/"));
@@ -69,6 +69,337 @@ function categoryToString(category) {
 
 function flattenMessage(messageText) {
   return ts.flattenDiagnosticMessageText(messageText, "\n");
+}
+
+function computeLineStarts(text) {
+  const starts = [0];
+  for (let idx = 0; idx < text.length; idx++) {
+    const ch = text.charCodeAt(idx);
+    if (ch === 13 /* \r */) {
+      if (text.charCodeAt(idx + 1) === 10 /* \n */) {
+        idx++;
+      }
+      starts.push(idx + 1);
+    } else if (ch === 10 /* \n */) {
+      starts.push(idx + 1);
+    }
+  }
+  return starts;
+}
+
+function collectTypeQueries(files) {
+  const queries = [];
+  for (const [rawName, text] of Object.entries(files || {})) {
+    const normalized = normalizePath(rawName);
+    const lineStarts = computeLineStarts(text);
+    const lines = text.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      let search = line.indexOf("^?");
+      while (search !== -1) {
+        const before = line.slice(0, search);
+        const hasCodeBefore =
+          before.trim().length > 0 && !before.trim().startsWith("//");
+        const targetLine = hasCodeBefore ? i : i - 1;
+        if (targetLine >= 0) {
+          const start = lineStarts[targetLine] ?? 0;
+          const end = lineStarts[targetLine + 1] ?? text.length;
+          const column = Math.min(search, end - start);
+          const offset = start + column;
+          queries.push({
+            file: normalized,
+            offset,
+            line: targetLine,
+            column,
+          });
+        }
+        search = line.indexOf("^?", search + 2);
+      }
+    }
+  }
+  return queries;
+}
+
+function splitTopLevel(raw, delim) {
+  const parts = [];
+  let start = 0;
+  let depthParen = 0;
+  let depthBrace = 0;
+  let depthBracket = 0;
+  let depthAngle = 0;
+  for (let idx = 0; idx < raw.length; idx++) {
+    const ch = raw[idx];
+    switch (ch) {
+      case "(":
+        depthParen++;
+        break;
+      case ")":
+        depthParen--;
+        break;
+      case "{":
+        depthBrace++;
+        break;
+      case "}":
+        depthBrace--;
+        break;
+      case "[":
+        depthBracket++;
+        break;
+      case "]":
+        depthBracket--;
+        break;
+      case "<":
+        depthAngle++;
+        break;
+      case ">":
+        depthAngle--;
+        break;
+      default:
+    }
+    if (
+      ch === delim &&
+      depthParen === 0 &&
+      depthBrace === 0 &&
+      depthBracket === 0 &&
+      depthAngle === 0
+    ) {
+      parts.push(raw.slice(start, idx).trim());
+      start = idx + 1;
+    }
+  }
+  if (parts.length === 0) {
+    return null;
+  }
+  parts.push(raw.slice(start).trim());
+  return parts;
+}
+
+function stripParamNames(params) {
+  const parts = [];
+  let start = 0;
+  let depthParen = 0;
+  let depthBrace = 0;
+  let depthBracket = 0;
+  let depthAngle = 0;
+  for (let idx = 0; idx < params.length; idx++) {
+    const ch = params[idx];
+    switch (ch) {
+      case "(":
+        depthParen++;
+        break;
+      case ")":
+        depthParen--;
+        break;
+      case "{":
+        depthBrace++;
+        break;
+      case "}":
+        depthBrace--;
+        break;
+      case "[":
+        depthBracket++;
+        break;
+      case "]":
+        depthBracket--;
+        break;
+      case "<":
+        depthAngle++;
+        break;
+      case ">":
+        depthAngle--;
+        break;
+      case ",":
+        if (
+          depthParen === 0 &&
+          depthBrace === 0 &&
+          depthBracket === 0 &&
+          depthAngle === 0
+        ) {
+          parts.push(params.slice(start, idx).trim());
+          start = idx + 1;
+        }
+        break;
+      default:
+    }
+  }
+  parts.push(params.slice(start).trim());
+
+  const normalized = [];
+  for (const part of parts) {
+    if (!part) continue;
+    let depthP = 0;
+    let depthB = 0;
+    let depthBr = 0;
+    let depthA = 0;
+    let colon = -1;
+    for (let idx = 0; idx < part.length; idx++) {
+      const ch = part[idx];
+      switch (ch) {
+        case "(":
+          depthP++;
+          break;
+        case ")":
+          depthP--;
+          break;
+        case "{":
+          depthB++;
+          break;
+        case "}":
+          depthB--;
+          break;
+        case "[":
+          depthBr++;
+          break;
+        case "]":
+          depthBr--;
+          break;
+        case "<":
+          depthA++;
+          break;
+        case ">":
+          depthA--;
+          break;
+        case ":":
+          if (
+            depthP === 0 &&
+            depthB === 0 &&
+            depthBr === 0 &&
+            depthA === 0
+          ) {
+            colon = idx;
+            idx = part.length;
+          }
+          break;
+        default:
+      }
+    }
+    if (colon === -1) {
+      normalized.push(part.trim());
+      continue;
+    }
+    const rest = part.slice(colon + 1).trim();
+    const isRest = part.trimStart().startsWith("...");
+    normalized.push(isRest ? `...${rest}` : rest);
+  }
+
+  return normalized.join(", ");
+}
+
+function normalizeTypeString(raw) {
+  const collapsed = raw.split(/\s+/).join(" ").trim();
+  const union = splitTopLevel(collapsed, "|");
+  if (union && union.length) {
+    const normalized = union
+      .filter(Boolean)
+      .map((part) => normalizeTypeString(part));
+    normalized.sort();
+    return Array.from(new Set(normalized)).join(" | ");
+  }
+  const intersections = splitTopLevel(collapsed, "&");
+  if (intersections && intersections.length) {
+    const normalized = intersections
+      .filter(Boolean)
+      .map((part) => normalizeTypeString(part));
+    normalized.sort();
+    return Array.from(new Set(normalized)).join(" & ");
+  }
+
+  const arrowIdx = collapsed.indexOf("=>");
+  if (arrowIdx !== -1) {
+    const paramsPart = collapsed.slice(0, arrowIdx).trimEnd();
+    const retPart = collapsed.slice(arrowIdx + 2).trimStart();
+    const startParen = paramsPart.lastIndexOf("(");
+    if (startParen !== -1 && paramsPart.endsWith(")")) {
+      const params = paramsPart.slice(startParen + 1, paramsPart.length - 1);
+      const before = paramsPart.slice(0, startParen).trim();
+      const stripped = stripParamNames(params);
+      const ret = normalizeTypeString(retPart);
+      return `${before ? `${before}` : ""}(${stripped}) => ${ret}`;
+    }
+  }
+
+  return collapsed;
+}
+
+const TYPE_FORMAT_FLAGS =
+  ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.WriteArrowStyleSignature;
+
+function renderType(checker, type, context) {
+  return normalizeTypeString(
+    checker.typeToString(type, context, TYPE_FORMAT_FLAGS),
+  );
+}
+
+function collectExportTypes(checker, sourceFile) {
+  const moduleSymbol = checker.getSymbolAtLocation(sourceFile);
+  if (!moduleSymbol) {
+    return [];
+  }
+  const exports = checker.getExportsOfModule(moduleSymbol) || [];
+  const facts = [];
+  for (const sym of exports) {
+    const target =
+      sym.getFlags() & ts.SymbolFlags.Alias
+        ? checker.getAliasedSymbol(sym)
+        : sym;
+    if ((target.getFlags() & ts.SymbolFlags.Value) === 0) {
+      continue;
+    }
+    const decl =
+      target.valueDeclaration ||
+      (target.declarations && target.declarations[0]) ||
+      sourceFile;
+    const type = checker.getTypeOfSymbolAtLocation(target, decl);
+    const typeStr = renderType(checker, type, decl);
+    facts.push({
+      file: path.posix.relative(VIRTUAL_ROOT, normalizePath(sourceFile.fileName)),
+      name: sym.getName(),
+      type: typeStr,
+    });
+  }
+  return facts;
+}
+
+function collectMarkerTypes(checker, markers, sourceFiles) {
+  const facts = [];
+  for (const marker of markers) {
+    const absName = toAbsolute(marker.file);
+    const sf = sourceFiles.get(absName);
+    if (!sf) continue;
+    const node =
+      ts.findPrecedingToken(marker.offset, sf) ??
+      ts.getTokenAtPosition(sf, marker.offset);
+    if (!node) continue;
+    const type = checker.getTypeAtLocation(node);
+    const typeStr = renderType(checker, type, node);
+    facts.push({
+      file: path.posix.relative(VIRTUAL_ROOT, normalizePath(sf.fileName)),
+      offset: marker.offset,
+      line: marker.line,
+      column: marker.column,
+      type: typeStr,
+    });
+  }
+  return facts;
+}
+
+function collectTypeFacts(program, checker, markers, requestFiles) {
+  const sourceFiles = new Map();
+  for (const sf of program.getSourceFiles()) {
+    sourceFiles.set(normalizePath(sf.fileName), sf);
+  }
+  const exports = [];
+  for (const rawName of Object.keys(requestFiles || {})) {
+    const absName = toAbsolute(rawName);
+    const sf = sourceFiles.get(absName);
+    if (!sf) continue;
+    exports.push(...collectExportTypes(checker, sf));
+  }
+  const markerFacts = collectMarkerTypes(checker, markers, sourceFiles);
+  if (exports.length === 0 && markerFacts.length === 0) {
+    return null;
+  }
+  return { exports, markers: markerFacts };
 }
 
 function serializeDiagnostic(diagnostic) {
@@ -192,6 +523,23 @@ function runRequest(request) {
     ...optionErrors,
     ...ts.getPreEmitDiagnostics(program),
   ];
+  const providedMarkers =
+    (request.type_queries && request.type_queries.length
+      ? request.type_queries
+      : request.typeQueries && request.typeQueries.length
+        ? request.typeQueries
+        : null) ?? null;
+  const markers =
+    providedMarkers && providedMarkers.length
+      ? providedMarkers
+      : collectTypeQueries(request.files);
+  const checker = program.getTypeChecker();
+  const typeFacts = collectTypeFacts(
+    program,
+    checker,
+    markers,
+    request.files ?? {},
+  );
   return {
     schemaVersion: SCHEMA_VERSION,
     metadata: {
@@ -199,6 +547,7 @@ function runRequest(request) {
       options,
     },
     diagnostics: serializeDiagnostics(diagnostics),
+    type_facts: typeFacts,
   };
 }
 

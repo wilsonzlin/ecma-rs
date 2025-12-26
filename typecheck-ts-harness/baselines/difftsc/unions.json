@@ -15,14 +15,23 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [
-    {
-      "code": 2322,
-      "file": "use.ts",
-      "start": 70,
-      "end": 73,
-      "category": "error",
-      "message": "Type 'string' is not assignable to type 'number'."
-    }
-  ]
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "unions.ts",
+        "name": "unionValue",
+        "type": "\"a\" | 1"
+      }
+    ],
+    "markers": [
+      {
+        "file": "unions.ts",
+        "offset": 15,
+        "line": 0,
+        "column": 15,
+        "type": "\"a\" | 1"
+      }
+    ]
+  }
 }

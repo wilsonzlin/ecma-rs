@@ -2494,13 +2494,36 @@ impl<'a> FlowBodyChecker<'a> {
       if let Some(sig_id) = overloads.first() {
         let sig = self.store.signature(*sig_id);
         if let TypeKind::Predicate {
-          asserted, asserts, ..
+          parameter,
+          asserted,
+          asserts,
         } = self.store.type_kind(sig.ret)
         {
           if let Some(asserted) = asserted {
-            if let Some(arg_expr) = call.args.first().map(|a| a.expr) {
-              if let Some(name) = self.ident_name(arg_expr) {
-                let arg_ty = arg_tys.first().copied().unwrap_or(prim.unknown);
+            let target_idx = parameter
+              .and_then(|param| {
+                let param_name = self.store.name(param);
+                sig.params.iter().position(|p| {
+                  p.name
+                    .map(|name| self.store.name(name) == param_name)
+                    .unwrap_or(false)
+                })
+              })
+              .or_else(|| {
+                parameter.and_then(|param| {
+                  let param_name = self.store.name(param);
+                  call.args.iter().position(|arg| {
+                    self
+                      .ident_name(arg.expr)
+                      .map(|name| self.hir_name(name) == param_name)
+                      .unwrap_or(false)
+                  })
+                })
+              })
+              .unwrap_or(0);
+            if let Some(arg) = call.args.get(target_idx) {
+              if let Some(name) = self.ident_name(arg.expr) {
+                let arg_ty = arg_tys.get(target_idx).copied().unwrap_or(prim.unknown);
                 let (yes, no) = narrow_by_asserted(arg_ty, asserted, &self.store);
                 if asserts {
                   out.assertions.insert(name, yes);

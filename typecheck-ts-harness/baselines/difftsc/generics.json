@@ -15,14 +15,23 @@
       "useDefineForClassFields": true
     }
   },
-  "diagnostics": [
-    {
-      "code": 2322,
-      "file": "use.ts",
-      "start": 70,
-      "end": 73,
-      "category": "error",
-      "message": "Type 'string' is not assignable to type 'number'."
-    }
-  ]
+  "diagnostics": [],
+  "type_facts": {
+    "exports": [
+      {
+        "file": "generics.ts",
+        "name": "genericValue",
+        "type": "{ a: number; b: string; }"
+      }
+    ],
+    "markers": [
+      {
+        "file": "generics.ts",
+        "offset": 70,
+        "line": 4,
+        "column": 18,
+        "type": "{ a: number; b: string; }"
+      }
+    ]
+  }
 }

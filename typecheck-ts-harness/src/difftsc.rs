@@ -2,15 +2,15 @@
 
 use crate::diagnostic_norm::{
   diagnostic_code_display, normalize_path_for_compare, normalize_tsc_diagnostics_with_options,
-  sort_diagnostics, NormalizationOptions, NormalizedDiagnostic,
+  normalize_type_string, sort_diagnostics, NormalizationOptions, NormalizedDiagnostic,
 };
 use crate::directives::HarnessOptions;
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet};
 use crate::tsc::{
-  apply_default_tsc_options, node_available, TscDiagnostics, TscRequest, TscRunner,
-  TSC_BASELINE_SCHEMA_VERSION,
+  apply_default_tsc_options, node_available, ExportTypeFact, TscDiagnostics, TscRequest, TscRunner,
+  TypeAtFact, TypeFacts, TypeQuery, TSC_BASELINE_SCHEMA_VERSION,
 };
 use crate::{read_utf8_file, FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
@@ -24,6 +24,8 @@ use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use typecheck_ts::lib_support::CompilerOptions;
+use typecheck_ts::{FileId, Host, HostError, Program};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Args)]
@@ -148,6 +150,82 @@ impl MismatchReport {
   }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+struct NormalizedTypeFacts {
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  exports: Vec<NormalizedExportType>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  markers: Vec<NormalizedMarkerType>,
+}
+
+impl NormalizedTypeFacts {
+  fn is_empty(&self) -> bool {
+    self.exports.is_empty() && self.markers.is_empty()
+  }
+
+  fn sort(&mut self) {
+    self
+      .exports
+      .sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
+    self
+      .markers
+      .sort_by(|a, b| (&a.file, a.offset, &a.type_str).cmp(&(&b.file, b.offset, &b.type_str)));
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct NormalizedExportType {
+  file: String,
+  name: String,
+  #[serde(rename = "type")]
+  type_str: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct NormalizedMarkerType {
+  file: String,
+  offset: u32,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  line: Option<u32>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  column: Option<u32>,
+  #[serde(rename = "type")]
+  type_str: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TypeMismatchPair<T> {
+  expected: T,
+  actual: T,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct TypeMismatchReport {
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  missing_exports: Vec<NormalizedExportType>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  unexpected_exports: Vec<NormalizedExportType>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  mismatched_exports: Vec<TypeMismatchPair<NormalizedExportType>>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  missing_markers: Vec<NormalizedMarkerType>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  unexpected_markers: Vec<NormalizedMarkerType>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  mismatched_markers: Vec<TypeMismatchPair<NormalizedMarkerType>>,
+}
+
+impl TypeMismatchReport {
+  fn is_empty(&self) -> bool {
+    self.missing_exports.is_empty()
+      && self.unexpected_exports.is_empty()
+      && self.mismatched_exports.is_empty()
+      && self.missing_markers.is_empty()
+      && self.unexpected_markers.is_empty()
+      && self.mismatched_markers.is_empty()
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CaseReport {
   name: String,
@@ -158,6 +236,12 @@ struct CaseReport {
   actual: Option<Vec<NormalizedDiagnostic>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   diff: Option<MismatchReport>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  expected_types: Option<NormalizedTypeFacts>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  actual_types: Option<NormalizedTypeFacts>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  type_diff: Option<TypeMismatchReport>,
   #[serde(skip_serializing_if = "Option::is_none")]
   report: Option<String>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -220,10 +304,15 @@ impl TscRunnerPool {
     }
   }
 
-  fn run(&self, test: &TestCase, options: &Map<String, Value>) -> Result<TscDiagnostics> {
+  fn run(
+    &self,
+    test: &TestCase,
+    options: &Map<String, Value>,
+    type_queries: &[TypeQuery],
+  ) -> Result<TscDiagnostics> {
     let _permit = self.limiter.acquire();
     let mut runner = self.checkout()?;
-    let result = run_tsc_on_test(test, &mut runner, options);
+    let result = run_tsc_on_test(test, &mut runner, options, type_queries);
     self.release(runner);
     result
   }
@@ -319,6 +408,9 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
               expected: None,
               actual: None,
               diff: None,
+              expected_types: None,
+              actual_types: None,
+              type_diff: None,
               report: None,
               notes: vec!["skipped by manifest".to_string()],
             },
@@ -436,19 +528,31 @@ fn print_human_summary(suite: &str, summary: &Summary, results: &[CaseReport]) {
     .iter()
     .filter(|c| matches!(c.status, CaseStatus::Mismatch))
   {
-    let detail = case
-      .diff
-      .as_ref()
-      .map(|d| {
-        format!(
-          "missing={}, unexpected={}, code_mismatch={}, span_mismatch={}",
-          d.missing.len(),
-          d.unexpected.len(),
-          d.code.len(),
-          d.span.len()
-        )
-      })
-      .unwrap_or_else(|| "differences detected".to_string());
+    let mut sections = Vec::new();
+    if let Some(d) = case.diff.as_ref() {
+      sections.push(format!(
+        "missing={}, unexpected={}, code_mismatch={}, span_mismatch={}",
+        d.missing.len(),
+        d.unexpected.len(),
+        d.code.len(),
+        d.span.len()
+      ));
+    }
+    if let Some(t) = case.type_diff.as_ref() {
+      let export_total =
+        t.missing_exports.len() + t.unexpected_exports.len() + t.mismatched_exports.len();
+      let marker_total =
+        t.missing_markers.len() + t.unexpected_markers.len() + t.mismatched_markers.len();
+      sections.push(format!(
+        "type_exports={}, type_markers={}",
+        export_total, marker_total
+      ));
+    }
+    let detail = if sections.is_empty() {
+      "differences detected".to_string()
+    } else {
+      sections.join("; ")
+    };
     eprintln!("  {}: {}", case.name, detail);
     if let Some(report) = &case.report {
       eprintln!("{report}");
@@ -468,6 +572,7 @@ fn run_single_test(
   let notes = Vec::new();
   let harness_options = HarnessOptions::default();
   let tsc_options = harness_options.to_tsc_options_map();
+  let type_queries = collect_type_queries(&test.files);
 
   let live_tsc = if needs_live_tsc(args) {
     let Some(pool) = tsc_pool else {
@@ -477,12 +582,15 @@ fn run_single_test(
         expected: None,
         actual: None,
         diff: None,
+        expected_types: None,
+        actual_types: None,
+        type_diff: None,
         report: None,
         notes: vec!["tsc runner unavailable".to_string()],
       };
     };
 
-    match pool.run(test, &tsc_options) {
+    match pool.run(test, &tsc_options, &type_queries) {
       Ok(diags) => Some(diags),
       Err(err) => {
         return CaseReport {
@@ -491,6 +599,9 @@ fn run_single_test(
           expected: None,
           actual: None,
           diff: None,
+          expected_types: None,
+          actual_types: None,
+          type_diff: None,
           report: None,
           notes: vec![err.to_string()],
         };
@@ -509,6 +620,9 @@ fn run_single_test(
           expected: None,
           actual: None,
           diff: None,
+          expected_types: None,
+          actual_types: None,
+          type_diff: None,
           report: None,
           notes: vec![err.to_string()],
         };
@@ -524,6 +638,9 @@ fn run_single_test(
         expected: None,
         actual: None,
         diff: None,
+        expected_types: None,
+        actual_types: None,
+        type_diff: None,
         report: None,
         notes,
       };
@@ -538,6 +655,9 @@ fn run_single_test(
           expected: None,
           actual: None,
           diff: None,
+          expected_types: None,
+          actual_types: None,
+          type_diff: None,
           report: None,
           notes: vec![err.to_string()],
         };
@@ -548,16 +668,20 @@ fn run_single_test(
       &live_tsc.as_ref().expect("live tsc required").diagnostics,
       normalization,
     );
+    let expected_types = normalize_type_facts(&baseline.type_facts, normalization);
+    let actual_types = normalize_type_facts(
+      &live_tsc.as_ref().expect("live tsc required").type_facts,
+      normalization,
+    );
     let diff = diff_diagnostics(&expected, &actual, normalization);
-    let status = if diff.is_some() {
+    let type_diff = diff_type_facts(&expected_types, &actual_types);
+    let status = if diff.is_some() || type_diff.is_some() {
       CaseStatus::Mismatch
     } else {
       CaseStatus::Matched
     };
-    let report = diff
-      .as_ref()
-      .map(|d| render_mismatch_report(test, d, normalization));
-    if args.print_tsc && diff.is_some() {
+    let report = render_full_report(test, diff.as_ref(), type_diff.as_ref(), normalization);
+    if args.print_tsc && (diff.is_some() || type_diff.is_some()) {
       print_tsc_response(test, &baseline_path, &live_tsc);
     }
     return CaseReport {
@@ -565,7 +689,10 @@ fn run_single_test(
       status,
       expected: Some(expected),
       actual: Some(actual),
+      expected_types: (!expected_types.is_empty()).then_some(expected_types),
+      actual_types: (!actual_types.is_empty()).then_some(actual_types),
       diff,
+      type_diff,
       report,
       notes,
     };
@@ -583,6 +710,9 @@ fn run_single_test(
           expected: None,
           actual: None,
           diff: None,
+          expected_types: None,
+          actual_types: None,
+          type_diff: None,
           report: None,
           notes: vec![err.to_string()],
         };
@@ -593,13 +723,22 @@ fn run_single_test(
   let file_set = HarnessFileSet::new(&test.files);
   let rust = run_rust(&file_set, &harness_options);
   let expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
+  let expected_types = normalize_type_facts(&tsc_diags.type_facts, normalization);
+  let actual_types = if rust.status == EngineStatus::Ok {
+    collect_rust_type_facts(&file_set, &harness_options, &type_queries, normalization)
+  } else {
+    NormalizedTypeFacts::default()
+  };
   if rust.status != EngineStatus::Ok {
     return CaseReport {
       name: test.name.clone(),
       status: CaseStatus::RustFailed,
       expected: Some(expected),
       actual: None,
+      expected_types: (!expected_types.is_empty()).then_some(expected_types),
+      actual_types: None,
       diff: None,
+      type_diff: None,
       report: None,
       notes: rust.error.into_iter().collect(),
     };
@@ -608,15 +747,14 @@ fn run_single_test(
   let actual: Vec<NormalizedDiagnostic> = rust.diagnostics.clone();
 
   let diff = diff_diagnostics(&expected, &actual, normalization);
-  let status = if diff.is_some() {
+  let type_diff = diff_type_facts(&expected_types, &actual_types);
+  let status = if diff.is_some() || type_diff.is_some() {
     CaseStatus::Mismatch
   } else {
     CaseStatus::Matched
   };
-  let report = diff
-    .as_ref()
-    .map(|d| render_mismatch_report(test, d, normalization));
-  if args.print_tsc && diff.is_some() {
+  let report = render_full_report(test, diff.as_ref(), type_diff.as_ref(), normalization);
+  if args.print_tsc && (diff.is_some() || type_diff.is_some()) {
     print_tsc_response(test, &baseline_path, &Some(tsc_diags.clone()));
   }
 
@@ -625,7 +763,10 @@ fn run_single_test(
     status,
     expected: Some(expected),
     actual: Some(actual),
+    expected_types: (!expected_types.is_empty()).then_some(expected_types),
+    actual_types: (!actual_types.is_empty()).then_some(actual_types),
     diff,
+    type_diff,
     report,
     notes,
   }
@@ -685,6 +826,97 @@ fn diff_diagnostics(
     None
   } else {
     Some(diff)
+  }
+}
+
+fn normalize_type_facts(
+  facts: &Option<TypeFacts>,
+  normalization: &NormalizationOptions,
+) -> NormalizedTypeFacts {
+  let Some(facts) = facts else {
+    return NormalizedTypeFacts::default();
+  };
+
+  let mut normalized = NormalizedTypeFacts {
+    exports: facts
+      .exports
+      .iter()
+      .map(|fact| NormalizedExportType {
+        file: normalize_path_for_compare(&fact.file, normalization),
+        name: fact.name.clone(),
+        type_str: normalize_type_string(&fact.type_str),
+      })
+      .collect(),
+    markers: facts
+      .markers
+      .iter()
+      .map(|fact| NormalizedMarkerType {
+        file: normalize_path_for_compare(&fact.file, normalization),
+        offset: fact.offset,
+        line: fact.line,
+        column: fact.column,
+        type_str: normalize_type_string(&fact.type_str),
+      })
+      .collect(),
+  };
+  normalized.sort();
+  normalized
+}
+
+fn diff_type_facts(
+  expected: &NormalizedTypeFacts,
+  actual: &NormalizedTypeFacts,
+) -> Option<TypeMismatchReport> {
+  let mut report = TypeMismatchReport::default();
+
+  let mut actual_exports: HashMap<(String, String), NormalizedExportType> = actual
+    .exports
+    .iter()
+    .map(|exp| ((exp.file.clone(), exp.name.clone()), exp.clone()))
+    .collect();
+  for expected_export in &expected.exports {
+    let key = (expected_export.file.clone(), expected_export.name.clone());
+    if let Some(actual_export) = actual_exports.remove(&key) {
+      if expected_export.type_str != actual_export.type_str {
+        report.mismatched_exports.push(TypeMismatchPair {
+          expected: expected_export.clone(),
+          actual: actual_export,
+        });
+      }
+    } else {
+      report.missing_exports.push(expected_export.clone());
+    }
+  }
+  report
+    .unexpected_exports
+    .extend(actual_exports.into_values());
+
+  let mut actual_markers: HashMap<(String, u32), NormalizedMarkerType> = actual
+    .markers
+    .iter()
+    .map(|marker| ((marker.file.clone(), marker.offset), marker.clone()))
+    .collect();
+  for expected_marker in &expected.markers {
+    let key = (expected_marker.file.clone(), expected_marker.offset);
+    if let Some(actual_marker) = actual_markers.remove(&key) {
+      if expected_marker.type_str != actual_marker.type_str {
+        report.mismatched_markers.push(TypeMismatchPair {
+          expected: expected_marker.clone(),
+          actual: actual_marker,
+        });
+      }
+    } else {
+      report.missing_markers.push(expected_marker.clone());
+    }
+  }
+  report
+    .unexpected_markers
+    .extend(actual_markers.into_values());
+
+  if report.is_empty() {
+    None
+  } else {
+    Some(report)
   }
 }
 
@@ -819,6 +1051,158 @@ fn render_mismatch_report(
   report.trim_end().to_string()
 }
 
+fn render_type_mismatch_report(
+  test: &TestCase,
+  diff: &TypeMismatchReport,
+  normalization: &NormalizationOptions,
+) -> String {
+  let files = build_file_map(&test.files, normalization);
+  let mut report = String::new();
+
+  if !diff.missing_exports.is_empty() {
+    let mut missing = diff.missing_exports.clone();
+    missing.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
+    writeln!(&mut report, "missing export types (tsc only):").ok();
+    for fact in missing {
+      writeln!(&mut report, "- {}", format_export_fact(&fact)).ok();
+    }
+  }
+
+  if !diff.unexpected_exports.is_empty() {
+    if !report.is_empty() {
+      report.push('\n');
+    }
+    let mut unexpected = diff.unexpected_exports.clone();
+    unexpected.sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
+    writeln!(&mut report, "extra export types (rust only):").ok();
+    for fact in unexpected {
+      writeln!(&mut report, "- {}", format_export_fact(&fact)).ok();
+    }
+  }
+
+  if !diff.mismatched_exports.is_empty() {
+    if !report.is_empty() {
+      report.push('\n');
+    }
+    let mut pairs = diff.mismatched_exports.clone();
+    pairs.sort_by(|a, b| {
+      (
+        &a.expected.file,
+        &a.expected.name,
+        &a.expected.type_str,
+        &a.actual.type_str,
+      )
+        .cmp(&(
+          &b.expected.file,
+          &b.expected.name,
+          &b.expected.type_str,
+          &b.actual.type_str,
+        ))
+    });
+    writeln!(&mut report, "export type mismatches:").ok();
+    for pair in pairs {
+      writeln!(
+        &mut report,
+        "- expected: {}",
+        format_export_fact(&pair.expected)
+      )
+      .ok();
+      writeln!(
+        &mut report,
+        "  actual: {}",
+        format_export_fact(&pair.actual)
+      )
+      .ok();
+    }
+  }
+
+  if !diff.missing_markers.is_empty() {
+    if !report.is_empty() {
+      report.push('\n');
+    }
+    let mut missing = diff.missing_markers.clone();
+    missing.sort_by(|a, b| (&a.file, a.offset).cmp(&(&b.file, b.offset)));
+    writeln!(&mut report, "missing type queries (tsc only):").ok();
+    for fact in missing {
+      writeln!(&mut report, "- {}", format_marker_fact(&fact, &files)).ok();
+    }
+  }
+
+  if !diff.unexpected_markers.is_empty() {
+    if !report.is_empty() {
+      report.push('\n');
+    }
+    let mut unexpected = diff.unexpected_markers.clone();
+    unexpected.sort_by(|a, b| (&a.file, a.offset).cmp(&(&b.file, b.offset)));
+    writeln!(&mut report, "extra type queries (rust only):").ok();
+    for fact in unexpected {
+      writeln!(&mut report, "- {}", format_marker_fact(&fact, &files)).ok();
+    }
+  }
+
+  if !diff.mismatched_markers.is_empty() {
+    if !report.is_empty() {
+      report.push('\n');
+    }
+    let mut pairs = diff.mismatched_markers.clone();
+    pairs.sort_by(|a, b| {
+      (
+        &a.expected.file,
+        a.expected.offset,
+        &a.expected.type_str,
+        &a.actual.type_str,
+      )
+        .cmp(&(
+          &b.expected.file,
+          b.expected.offset,
+          &b.expected.type_str,
+          &b.actual.type_str,
+        ))
+    });
+    writeln!(&mut report, "type query mismatches:").ok();
+    for pair in pairs {
+      writeln!(
+        &mut report,
+        "- expected: {}",
+        format_marker_fact(&pair.expected, &files)
+      )
+      .ok();
+      writeln!(
+        &mut report,
+        "  actual: {}",
+        format_marker_fact(&pair.actual, &files)
+      )
+      .ok();
+    }
+  }
+
+  report.trim_end().to_string()
+}
+
+fn render_full_report(
+  test: &TestCase,
+  diag: Option<&MismatchReport>,
+  types: Option<&TypeMismatchReport>,
+  normalization: &NormalizationOptions,
+) -> Option<String> {
+  let mut sections = Vec::new();
+  if let Some(diag) = diag {
+    sections.push(render_mismatch_report(test, diag, normalization));
+  }
+  if let Some(types) = types {
+    let rendered = render_type_mismatch_report(test, types, normalization);
+    if !rendered.is_empty() {
+      sections.push(rendered);
+    }
+  }
+
+  if sections.is_empty() {
+    None
+  } else {
+    Some(sections.join("\n\n"))
+  }
+}
+
 fn sort_pairs(pairs: &mut Vec<MismatchPair>) {
   pairs.sort_by(|a, b| {
     (
@@ -842,6 +1226,24 @@ fn code_key(diag: &NormalizedDiagnostic) -> String {
     .as_ref()
     .map(diagnostic_code_display)
     .unwrap_or_default()
+}
+
+fn format_export_fact(fact: &NormalizedExportType) -> String {
+  format!("{}::{} ({})", fact.file, fact.name, fact.type_str)
+}
+
+fn format_marker_fact(fact: &NormalizedMarkerType, files: &HashMap<String, String>) -> String {
+  let file = fact.file.clone();
+  if let Some((line, col)) = fact
+    .line
+    .zip(fact.column)
+    .map(|(l, c)| (l as usize + 1, c as usize + 1))
+    .or_else(|| marker_line_col(fact, files))
+  {
+    format!("{file}:{line}:{col} ({})", fact.type_str)
+  } else {
+    format!("{file}:{} ({})", fact.offset, fact.type_str)
+  }
 }
 
 fn build_file_map(
@@ -1056,6 +1458,14 @@ fn offset_to_line_col(content: &str, offset: usize) -> (usize, usize) {
   (line, col)
 }
 
+fn marker_line_col(
+  marker: &NormalizedMarkerType,
+  files: &HashMap<String, String>,
+) -> Option<(usize, usize)> {
+  let content = files.get(&marker.file)?;
+  Some(offset_to_line_col(content, marker.offset as usize))
+}
+
 fn print_tsc_response(test: &TestCase, baseline_path: &Path, response: &Option<TscDiagnostics>) {
   if let Some(tsc) = response {
     if let Ok(json) = serde_json::to_string_pretty(tsc) {
@@ -1067,6 +1477,101 @@ fn print_tsc_response(test: &TestCase, baseline_path: &Path, response: &Option<T
       );
     }
   }
+}
+
+fn collect_type_queries(files: &[VirtualFile]) -> Vec<TypeQuery> {
+  let mut queries = Vec::new();
+  for file in files {
+    let normalized = normalize_name(&file.name);
+    let lines = collect_lines(&file.content);
+    for (idx, line) in lines.iter().enumerate() {
+      let mut search_start = 0usize;
+      while let Some(rel_idx) = line.text[search_start..].find("^?") {
+        let absolute_idx = search_start + rel_idx;
+        let before = &line.text[..absolute_idx];
+        let has_code_before = !before.trim().is_empty() && !before.trim().starts_with("//");
+        let target_line = if has_code_before {
+          idx
+        } else {
+          idx.saturating_sub(1)
+        };
+        if let Some(target) = lines.get(target_line) {
+          let column = absolute_idx.min(target.text.len());
+          let offset = target.start + column;
+          queries.push(TypeQuery {
+            file: normalized.clone(),
+            offset: offset as u32,
+            line: Some(target_line as u32),
+            column: Some(column as u32),
+          });
+        }
+        search_start = absolute_idx + 2;
+      }
+    }
+  }
+  queries
+}
+
+fn collect_rust_type_facts(
+  file_set: &HarnessFileSet,
+  options: &HarnessOptions,
+  markers: &[TypeQuery],
+  normalization: &NormalizationOptions,
+) -> NormalizedTypeFacts {
+  let compiler_options = options.to_compiler_options();
+  let host = DifftscHost::new(file_set.clone(), compiler_options.clone());
+  let roots = file_set.root_files();
+  let program = Program::new(host, roots);
+  let _ = program.check();
+  let facts = TypeFacts {
+    exports: collect_export_type_facts(&program, file_set),
+    markers: collect_marker_type_facts(&program, file_set, markers),
+  };
+  normalize_type_facts(&Some(facts), normalization)
+}
+
+fn collect_export_type_facts(program: &Program, file_set: &HarnessFileSet) -> Vec<ExportTypeFact> {
+  let mut facts = Vec::new();
+  for file in file_set.root_files() {
+    let Some(name) = file_set.file_name(file) else {
+      continue;
+    };
+    let exports = program.exports_of(file);
+    for (export_name, entry) in exports.values {
+      if let Some(ty) = entry.type_id {
+        facts.push(ExportTypeFact {
+          file: name.clone(),
+          name: export_name.clone(),
+          type_str: program.display_type(ty).to_string(),
+        });
+      }
+    }
+  }
+  facts
+}
+
+fn collect_marker_type_facts(
+  program: &Program,
+  file_set: &HarnessFileSet,
+  markers: &[TypeQuery],
+) -> Vec<TypeAtFact> {
+  let mut facts = Vec::new();
+  for marker in markers {
+    let normalized = normalize_name(&marker.file);
+    let Some(file) = file_set.resolve(&normalized) else {
+      continue;
+    };
+    if let Some(ty) = program.type_at(file, marker.offset) {
+      facts.push(TypeAtFact {
+        file: marker.file.clone(),
+        offset: marker.offset,
+        line: marker.line,
+        column: marker.column,
+        type_str: program.display_type(ty).to_string(),
+      });
+    }
+  }
+  facts
 }
 
 #[cfg(feature = "with-node")]
@@ -1096,7 +1601,11 @@ fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
 }
 
 #[cfg(feature = "with-node")]
-fn build_request(test: &TestCase, base_options: &Map<String, Value>) -> TscRequest {
+fn build_request(
+  test: &TestCase,
+  base_options: &Map<String, Value>,
+  type_queries: &[TypeQuery],
+) -> TscRequest {
   let mut files = HashMap::new();
   let mut root_names = Vec::new();
 
@@ -1116,6 +1625,7 @@ fn build_request(test: &TestCase, base_options: &Map<String, Value>) -> TscReque
     root_names,
     files,
     options,
+    type_queries: type_queries.to_vec(),
   }
 }
 
@@ -1124,8 +1634,9 @@ fn run_tsc_on_test(
   test: &TestCase,
   runner: &mut TscRunner,
   options: &Map<String, Value>,
+  type_queries: &[TypeQuery],
 ) -> Result<TscDiagnostics> {
-  let request = build_request(test, options);
+  let request = build_request(test, options, type_queries);
   runner
     .check(request)
     .with_context(|| format!("run tsc for test {}", test.name))
@@ -1195,6 +1706,86 @@ fn collect_files_recursively(dir: &Path) -> Result<Vec<VirtualFile>> {
   Ok(files)
 }
 
+#[derive(Clone)]
+struct DifftscHost {
+  files: HarnessFileSet,
+  compiler_options: CompilerOptions,
+}
+
+impl DifftscHost {
+  fn new(files: HarnessFileSet, compiler_options: CompilerOptions) -> Self {
+    Self {
+      files,
+      compiler_options,
+    }
+  }
+}
+
+impl Host for DifftscHost {
+  fn file_text(&self, file: FileId) -> Result<Arc<str>, HostError> {
+    let idx = file.0 as usize;
+    self
+      .files
+      .iter()
+      .nth(idx)
+      .map(|f| f.content.clone())
+      .ok_or_else(|| HostError::new(format!("missing file {file:?}")))
+  }
+
+  fn compiler_options(&self) -> CompilerOptions {
+    self.compiler_options.clone()
+  }
+
+  fn resolve(&self, from: FileId, specifier: &str) -> Option<FileId> {
+    let is_relative = specifier.starts_with("./") || specifier.starts_with("../");
+    if !is_relative {
+      let normalized = normalize_name(specifier);
+      return self.files.resolve(&normalized);
+    }
+
+    let base = self.files.file_name(from)?;
+    let parent = Path::new(&base).parent().unwrap_or_else(|| Path::new(""));
+    let joined = parent.join(specifier);
+    let base_candidate = normalize_name(joined.to_string_lossy().as_ref());
+
+    let mut candidates = Vec::new();
+    candidates.push(base_candidate.clone());
+
+    if base_candidate.ends_with(".js") {
+      let trimmed = base_candidate.trim_end_matches(".js");
+      candidates.push(format!("{trimmed}.ts"));
+      candidates.push(format!("{trimmed}.tsx"));
+    } else if base_candidate.ends_with(".jsx") {
+      let trimmed = base_candidate.trim_end_matches(".jsx");
+      candidates.push(format!("{trimmed}.tsx"));
+    } else if !has_known_extension(&base_candidate) {
+      for ext in ["ts", "tsx", "d.ts", "js", "jsx"] {
+        candidates.push(format!("{base_candidate}.{ext}"));
+      }
+    }
+
+    let base_path = Path::new(&base_candidate);
+    for ext in [
+      "index.ts",
+      "index.tsx",
+      "index.d.ts",
+      "index.js",
+      "index.jsx",
+    ] {
+      let joined = base_path.join(ext);
+      candidates.push(normalize_name(joined.to_string_lossy().as_ref()));
+    }
+
+    for cand in candidates {
+      if let Some(found) = self.files.resolve(&cand) {
+        return Some(found);
+      }
+    }
+
+    None
+  }
+}
+
 fn is_source_file(path: &Path) -> bool {
   let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
   if file_name.ends_with(".d.ts") {
@@ -1222,6 +1813,14 @@ fn test_name_from_path(path: &Path) -> Result<String> {
     .and_then(|stem| stem.to_str())
     .map(|s| s.to_string())
     .context("test file missing stem")
+}
+
+fn has_known_extension(name: &str) -> bool {
+  name.ends_with(".d.ts")
+    || name.ends_with(".ts")
+    || name.ends_with(".tsx")
+    || name.ends_with(".js")
+    || name.ends_with(".jsx")
 }
 
 fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
