@@ -3682,8 +3682,7 @@ impl ProgramState {
           facts.merge(lf, &mut self.type_store, &self.builtin);
           facts.merge(rf, &mut self.type_store, &self.builtin);
           if let HirExprKind::Ident(name) = &left.kind {
-            let (yes, no) =
-              narrow_by_instanceof(lt, &mut self.type_store, &self.builtin);
+            let (yes, no) = narrow_by_instanceof(lt, &mut self.type_store, &self.builtin);
             if yes != self.builtin.never {
               facts.truthy.insert(name.clone(), yes);
             }
