@@ -163,6 +163,77 @@ fn type_only_reexports_filtered() {
 }
 
 #[test]
+fn export_star_cycle_reaches_fixpoint() {
+  let mut host = MemoryHost::default();
+  host.insert(
+    FileId(210),
+    "export * from \"./b\";\nexport * from \"./c\";",
+  );
+  host.insert(FileId(211), "export * from \"./a\";");
+  host.insert(FileId(212), "export const shared = 1;");
+  host.link(FileId(210), "./b", FileId(211));
+  host.link(FileId(210), "./c", FileId(212));
+  host.link(FileId(211), "./a", FileId(210));
+
+  let program = Program::new(host, vec![FileId(210)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  for file in [FileId(210), FileId(211), FileId(212)] {
+    let exports = program.exports_of(file);
+    let shared = exports.get("shared").expect("shared export present");
+    let ty = shared.type_id.expect("type for shared");
+    assert_eq!(program.display_type(ty).to_string(), "1");
+  }
+}
+
+#[test]
+fn export_star_skips_default() {
+  let mut host = MemoryHost::default();
+  host.insert(FileId(220), "export default 1;\nexport const named = 2;");
+  host.insert(FileId(221), "export * from \"./a\";");
+  host.link(FileId(221), "./a", FileId(220));
+
+  let program = Program::new(host, vec![FileId(221)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let exports = program.exports_of(FileId(221));
+  assert!(
+    exports.get("default").is_none(),
+    "default should not be re-exported"
+  );
+  let named = exports.get("named").expect("named export propagated");
+  let ty = named.type_id.expect("type for named");
+  assert_eq!(program.display_type(ty).to_string(), "2");
+}
+
+#[test]
+fn duplicate_export_reports_conflict() {
+  let mut host = MemoryHost::default();
+  host.insert(FileId(230), "export const foo = 1;");
+  host.insert(FileId(231), "export function foo(): number { return 2; }");
+  host.insert(
+    FileId(232),
+    "export * from \"./a\";\nexport { foo } from \"./b\";",
+  );
+  host.link(FileId(232), "./a", FileId(230));
+  host.link(FileId(232), "./b", FileId(231));
+
+  let program = Program::new(host, vec![FileId(232)]);
+  let diagnostics = program.check();
+  assert_eq!(diagnostics.len(), 1, "expected a conflict diagnostic");
+  assert_eq!(diagnostics[0].code.as_str(), "BIND1001");
+  assert_eq!(diagnostics[0].primary.file, FileId(232));
+}
+
+#[test]
 fn export_namespace_all_reports_diagnostic() {
   let mut host = MemoryHost::default();
   host.insert(FileId(300), "export const a = 1;");

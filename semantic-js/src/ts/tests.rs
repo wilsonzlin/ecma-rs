@@ -641,6 +641,72 @@ fn resolve_export_handles_export_star_cycles() {
 }
 
 #[test]
+fn export_star_cycles_reach_fixpoint() {
+  let file_a = FileId(72);
+  let file_b = FileId(73);
+  let file_c = FileId(74);
+
+  let mut a = HirFile::module(file_a);
+  a.exports.push(Export::All(ExportAll {
+    specifier: "b".to_string(),
+    is_type_only: false,
+    specifier_span: span(1),
+  }));
+  a.exports.push(Export::All(ExportAll {
+    specifier: "c".to_string(),
+    is_type_only: false,
+    specifier_span: span(2),
+  }));
+
+  let mut b = HirFile::module(file_b);
+  b.exports.push(Export::All(ExportAll {
+    specifier: "a".to_string(),
+    is_type_only: false,
+    specifier_span: span(3),
+  }));
+
+  let mut c = HirFile::module(file_c);
+  c.decls
+    .push(mk_decl(0, "value", DeclKind::Var, Exported::Named));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+    file_c => Arc::new(c),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+    "b".to_string() => file_b,
+    "c".to_string() => file_c,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_a], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports_a = semantics.exports_of(file_a);
+  let exports_b = semantics.exports_of(file_b);
+  let exports_c = semantics.exports_of(file_c);
+  let symbols = semantics.symbols();
+
+  let value_a = exports_a
+    .get("value")
+    .and_then(|g| g.symbol_for(Namespace::VALUE, symbols))
+    .expect("value exported from a");
+  let value_b = exports_b
+    .get("value")
+    .and_then(|g| g.symbol_for(Namespace::VALUE, symbols))
+    .expect("value exported from b");
+  let value_c = exports_c
+    .get("value")
+    .and_then(|g| g.symbol_for(Namespace::VALUE, symbols))
+    .expect("value exported from c");
+
+  assert_eq!(value_a, value_b);
+  assert_eq!(value_b, value_c);
+}
+
+#[test]
 fn global_symbol_groups_are_deterministic() {
   let file_a = FileId(60);
   let mut a = HirFile::script(file_a);
@@ -734,6 +800,55 @@ fn duplicate_export_has_two_labels() {
   assert_eq!(diag.labels[0].span.file, file_b);
   assert_eq!(diag.labels[0].span.range, span(1));
   assert!(!diag.labels[0].is_primary);
+}
+
+#[test]
+fn duplicate_exports_report_per_namespace() {
+  let file_x = FileId(62);
+  let mut x = HirFile::module(file_x);
+  x.decls
+    .push(mk_decl(0, "DupNs", DeclKind::Function, Exported::Named));
+
+  let file_y = FileId(63);
+  let mut y = HirFile::module(file_y);
+  y.decls
+    .push(mk_decl(1, "DupNs", DeclKind::Var, Exported::Named));
+
+  let file_z = FileId(64);
+  let mut z = HirFile::module(file_z);
+  z.exports.push(Export::All(ExportAll {
+    specifier: "x".to_string(),
+    is_type_only: false,
+    specifier_span: TextRange::new(300, 301),
+  }));
+  z.exports.push(Export::Named(NamedExport {
+    specifier: Some("y".to_string()),
+    specifier_span: Some(TextRange::new(302, 303)),
+    items: vec![ExportSpecifier {
+      local: "DupNs".to_string(),
+      exported: None,
+      local_span: TextRange::new(304, 305),
+      exported_span: None,
+    }],
+    is_type_only: false,
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_x => Arc::new(x),
+    file_y => Arc::new(y),
+    file_z => Arc::new(z),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "x".to_string() => file_x,
+    "y".to_string() => file_y,
+  });
+
+  let (_semantics, diags) =
+    bind_ts_program(&[file_z], &resolver, |f| files.get(&f).unwrap().clone());
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1001");
+  assert_eq!(diag.primary.file, file_z);
 }
 
 #[test]

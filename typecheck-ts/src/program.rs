@@ -2406,17 +2406,21 @@ impl ProgramState {
               def: None,
               type_id,
             };
-            let previous = exports.insert(spec.alias.clone(), mapped.clone());
-            if previous
-              .as_ref()
-              .map(|prev| {
-                prev.symbol != mapped.symbol
-                  || prev.def != mapped.def
-                  || prev.type_id != mapped.type_id
-              })
-              .unwrap_or(true)
-            {
-              changed = true;
+            match exports.get(&spec.alias) {
+              Some(existing) => {
+                if existing.symbol == mapped.symbol {
+                  if (existing.def.is_none() && mapped.def.is_some())
+                    || (existing.type_id.is_none() && mapped.type_id.is_some())
+                  {
+                    exports.insert(spec.alias.clone(), mapped);
+                    changed = true;
+                  }
+                }
+              }
+              None => {
+                exports.insert(spec.alias.clone(), mapped);
+                changed = true;
+              }
             }
             continue;
           }
@@ -2441,6 +2445,9 @@ impl ProgramState {
             continue;
           }
           for (name, entry) in target.exports.iter() {
+            if name == "default" {
+              continue;
+            }
             if let Some(def) = entry.def {
               if let Some(def_data) = self.def_data.get(&def) {
                 if matches!(def_data.kind, DefKind::TypeAlias(_) | DefKind::Interface(_)) {
@@ -2456,17 +2463,21 @@ impl ProgramState {
               def: None,
               type_id,
             };
-            let previous = exports.insert(name.clone(), mapped.clone());
-            if previous
-              .as_ref()
-              .map(|prev| {
-                prev.symbol != mapped.symbol
-                  || prev.def != mapped.def
-                  || prev.type_id != mapped.type_id
-              })
-              .unwrap_or(true)
-            {
-              changed = true;
+            match exports.get(name) {
+              Some(existing) => {
+                if existing.symbol == mapped.symbol {
+                  if (existing.def.is_none() && mapped.def.is_some())
+                    || (existing.type_id.is_none() && mapped.type_id.is_some())
+                  {
+                    exports.insert(name.clone(), mapped);
+                    changed = true;
+                  }
+                }
+              }
+              None => {
+                exports.insert(name.clone(), mapped);
+                changed = true;
+              }
             }
           }
         }
