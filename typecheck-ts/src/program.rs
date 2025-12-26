@@ -5091,40 +5091,12 @@ impl ProgramState {
 
   fn span_map_for_file(&mut self, file: FileId) -> Option<&SpanMap> {
     if !self.expr_span_maps.contains_key(&file) {
-      let mut map = SpanMap::new();
-      let mut bodies: Vec<_> = self
-        .body_data
-        .values()
-        .filter(|body| body.file == file)
-        .collect();
-      bodies.sort_by_key(|body| body.id.0);
-      for body in bodies {
-        for (idx, span) in body.expr_spans.iter().enumerate() {
-          map.add_expr(normalize_range(*span), body.id, ExprId(idx as u32));
-        }
-        for (idx, span) in body.pat_spans.iter().enumerate() {
-          map.add_pat(normalize_range(*span), body.id, PatId(idx as u32));
-        }
-      }
-      let mut defs: Vec<_> = self
-        .def_data
-        .iter()
-        .filter(|(_, def)| def.file == file)
-        .collect();
-      defs.sort_by_key(|(id, _)| id.0);
-      for (def_id, def) in defs {
-        map.add_def(normalize_range(def.span), *def_id);
-      }
       if let Some(lowered) = self.hir_lowered.get(&file) {
-        for (idx, type_expr) in lowered.types.type_exprs.iter().enumerate() {
-          map.add_type_expr(
-            normalize_range(type_expr.span),
-            hir_js::ids::TypeExprId(idx as u32),
-          );
-        }
+        let mut map = lowered.hir.span_map.clone();
+        // Defensive finalize in case clones are taken before segments are built.
+        map.finalize();
+        self.expr_span_maps.insert(file, map);
       }
-      map.finalize();
-      self.expr_span_maps.insert(file, map);
     }
     self.expr_span_maps.get(&file)
   }
