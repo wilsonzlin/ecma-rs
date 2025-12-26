@@ -394,7 +394,7 @@ fn summarize_kind(store: &TypeStore, ty: TypeId) -> TypeKindSummary {
     TypeKind::StringLiteral(id) => TypeKindSummary::StringLiteral(store.name(id)),
     TypeKind::BigIntLiteral(val) => TypeKindSummary::BigIntLiteral(val),
     TypeKind::This => TypeKindSummary::This,
-    TypeKind::Infer(param) => TypeKindSummary::Infer(param),
+    TypeKind::Infer { param, .. } => TypeKindSummary::Infer(param),
     TypeKind::Tuple(elems) => TypeKindSummary::Tuple { len: elems.len() },
     TypeKind::Array { readonly, .. } => TypeKindSummary::Array { readonly },
     TypeKind::Union(members) => TypeKindSummary::Union {

@@ -548,6 +548,10 @@ impl TypeStore {
         false_ty: self.canon(false_ty),
         distributive,
       },
+      TypeKind::Infer { param, constraint } => TypeKind::Infer {
+        param,
+        constraint: constraint.map(|c| self.canon(c)),
+      },
       TypeKind::Mapped(mut mapped) => {
         mapped.source = self.canon(mapped.source);
         mapped.value = self.canon(mapped.value);
@@ -760,7 +764,16 @@ impl TypeStore {
         self.compare_slices(&a_args, &b_args)
       }
       (TypeKind::This, TypeKind::This) => Ordering::Equal,
-      (TypeKind::Infer(a), TypeKind::Infer(b)) => a.0.cmp(&b.0),
+      (
+        TypeKind::Infer {
+          param: a,
+          constraint: a_c,
+        },
+        TypeKind::Infer {
+          param: b,
+          constraint: b_c,
+        },
+      ) => a.0.cmp(&b.0).then_with(|| self.option_type_cmp(a_c, b_c)),
       (TypeKind::Tuple(a), TypeKind::Tuple(b)) => {
         let mut idx = 0;
         loop {
@@ -1123,7 +1136,11 @@ impl TypeStore {
         json!({ "kind": "ref", "def": def.0, "args": args.iter().map(|a| a.0.to_string()).collect::<Vec<_>>() })
       }
       TypeKind::This => json!({ "kind": "this" }),
-      TypeKind::Infer(param) => json!({ "kind": "infer", "param": param.0 }),
+      TypeKind::Infer { param, constraint } => json!({
+        "kind": "infer",
+        "param": param.0,
+        "constraint": constraint.map(|c| c.0.to_string()),
+      }),
       TypeKind::Tuple(elems) => json!({
         "kind": "tuple",
         "elems": elems.iter().map(|e| json!({

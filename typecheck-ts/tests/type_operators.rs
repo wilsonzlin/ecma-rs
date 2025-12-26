@@ -85,6 +85,31 @@ fn eval_keyof_object_literal() {
 }
 
 #[test]
+fn eval_keyof_union_collects_member_keys() {
+  let alias = parse_type_alias("type K = keyof ({ a: number } | { b: string } | { c: boolean });");
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store.clone());
+  let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+  let evaluated = store.evaluate(ty);
+  let mut names: Vec<_> = match store.type_kind(evaluated) {
+    TypeKind::Union(members) => members
+      .into_iter()
+      .map(|m| match store.type_kind(m) {
+        TypeKind::StringLiteral(id) => store.name(id),
+        other => panic!("unexpected member {:?}", other),
+      })
+      .collect(),
+    TypeKind::StringLiteral(id) => vec![store.name(id)],
+    other => panic!("unexpected kind {:?}", other),
+  };
+  names.sort();
+  assert_eq!(
+    names,
+    vec!["a".to_string(), "b".to_string(), "c".to_string()]
+  );
+}
+
+#[test]
 fn eval_indexed_access_with_union_key() {
   let alias = parse_type_alias("type V = { a: number; b?: string }['a' | 'b'];");
   let store = TypeStore::new();
@@ -95,6 +120,69 @@ fn eval_indexed_access_with_union_key() {
     store.display(evaluated).to_string(),
     "undefined | number | string"
   );
+}
+
+#[test]
+fn indexed_access_over_union_distributes() {
+  let store = TypeStore::new();
+  let name_a = store.intern_name("a");
+  let name_b = store.intern_name("b");
+
+  let left_shape = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(name_a),
+      data: PropData {
+        ty: store.primitive_ids().string,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let right_shape = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(name_b),
+      data: PropData {
+        ty: store.primitive_ids().number,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+
+  let left = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: left_shape }),
+  ));
+  let right = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: right_shape }),
+  ));
+  let union = store.union(vec![left, right]);
+  let index = store.intern_type(TypeKind::KeyOf(union));
+  let indexed = store.intern_type(TypeKind::IndexedAccess { obj: union, index });
+  let evaluated = store.evaluate(indexed);
+  let members = match store.type_kind(evaluated) {
+    TypeKind::Union(members) => members,
+    other => vec![store.intern_type(other)],
+  };
+
+  let mut kinds: Vec<_> = members.into_iter().map(|m| store.type_kind(m)).collect();
+  kinds.sort_by_key(|k| format!("{:?}", k));
+  assert!(kinds.contains(&TypeKind::String));
+  assert!(kinds.contains(&TypeKind::Number));
+  assert_eq!(kinds.len(), 2);
 }
 
 #[test]
@@ -129,7 +217,8 @@ fn captures_type_predicate_details() {
 
 #[test]
 fn lowers_infer_type_binding() {
-  let alias = parse_type_alias("type Inferred<T> = T extends infer U ? U[] : never;");
+  let alias =
+    parse_type_alias("type Inferred<T> = T extends infer U extends string ? U[] : never;");
   let store = TypeStore::new();
   let mut lowerer = TypeLowerer::new(store.clone());
   lowerer.register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]));
@@ -143,7 +232,13 @@ fn lowers_infer_type_binding() {
   };
 
   let inferred_id = match store.type_kind(extends) {
-    TypeKind::Infer(id) => id,
+    TypeKind::Infer { param, constraint } => {
+      let Some(bound) = constraint else {
+        panic!("expected constraint")
+      };
+      assert!(matches!(store.type_kind(bound), TypeKind::String));
+      param
+    }
     other => panic!("expected infer, got {:?}", other),
   };
 
@@ -152,6 +247,19 @@ fn lowers_infer_type_binding() {
     other => panic!("expected array, got {:?}", other),
   };
   assert_eq!(store.type_kind(inner), TypeKind::TypeParam(inferred_id));
+}
+
+#[test]
+fn lowers_distributive_conditional_for_naked_param() {
+  let alias = parse_type_alias("type Result<T> = T extends string ? true : false;");
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store.clone());
+  lowerer.register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]));
+  let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+  let TypeKind::Conditional { distributive, .. } = store.type_kind(ty) else {
+    panic!("expected conditional");
+  };
+  assert!(distributive);
 }
 
 #[test]

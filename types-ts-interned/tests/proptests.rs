@@ -55,7 +55,12 @@ fn arbitrary_type(store: Arc<TypeStore>) -> BoxedStrategy<TypeId> {
       .prop_map(move |n| bigint_lit_store.intern_type(TypeKind::BigIntLiteral(BigInt::from(n)))),
     (0u32..4)
       .prop_map(move |id| type_param_store.intern_type(TypeKind::TypeParam(TypeParamId(id)))),
-    (0u32..4).prop_map(move |id| infer_store.intern_type(TypeKind::Infer(TypeParamId(id)))),
+    (0u32..4).prop_map(move |id| {
+      infer_store.intern_type(TypeKind::Infer {
+        param: TypeParamId(id),
+        constraint: None,
+      })
+    }),
     Just(store.intern_type(TypeKind::This)),
   ];
 

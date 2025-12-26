@@ -156,7 +156,14 @@ impl<'a> TypeDisplay<'a> {
       }
       TypeKind::BigIntLiteral(ref val) => write!(f, "{}n", val),
       TypeKind::This => write!(f, "this"),
-      TypeKind::Infer(param) => write!(f, "infer T{}", param.0),
+      TypeKind::Infer { param, constraint } => {
+        write!(f, "infer T{}", param.0)?;
+        if let Some(constraint) = constraint {
+          write!(f, " extends ")?;
+          self.fmt_with_prec(constraint, Precedence::Primary, f)?;
+        }
+        Ok(())
+      }
       TypeKind::Tuple(elems) => {
         let readonly_tuple = elems.iter().all(|elem| elem.readonly);
         if readonly_tuple {

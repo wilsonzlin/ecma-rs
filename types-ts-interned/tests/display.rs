@@ -223,7 +223,10 @@ fn formats_new_type_variants() {
   let this_ty = store.intern_type(TypeKind::This);
   assert_eq!(format!("{}", store.display(this_ty)), "this");
 
-  let infer_ty = store.intern_type(TypeKind::Infer(TypeParamId(3)));
+  let infer_ty = store.intern_type(TypeKind::Infer {
+    param: TypeParamId(3),
+    constraint: None,
+  });
   assert_eq!(format!("{}", store.display(infer_ty)), "infer T3");
 
   let array = store.intern_type(TypeKind::Array {

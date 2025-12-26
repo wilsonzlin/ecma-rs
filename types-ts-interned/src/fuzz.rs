@@ -48,6 +48,8 @@ enum SerializedType {
   This,
   Infer {
     id: u32,
+    #[serde(default)]
+    constraint: Option<usize>,
   },
   Tuple {
     elements: Vec<SerializedTupleElem>,
@@ -220,7 +222,11 @@ fn resolve_index(
       store.intern_type(TypeKind::BigIntLiteral(BigInt::from(value)))
     }
     SerializedType::This => store.intern_type(TypeKind::This),
-    SerializedType::Infer { id } => store.intern_type(TypeKind::Infer(TypeParamId(id))),
+    SerializedType::Infer { id, constraint } => store.intern_type(TypeKind::Infer {
+      param: TypeParamId(id),
+      constraint: constraint
+        .map(|idx| resolve_index(graph, store, cache, visiting, idx, depth + 1)),
+    }),
     SerializedType::Tuple { elements } => {
       let elems = elements
         .iter()

@@ -433,7 +433,9 @@ fn count_unknown(
 ) -> usize {
   subst
     .values()
-    .filter(|v| **v == any || **v == unknown || matches!(store.type_kind(**v), TypeKind::Infer(_)))
+    .filter(|v| {
+      **v == any || **v == unknown || matches!(store.type_kind(**v), TypeKind::Infer { .. })
+    })
     .count()
 }
 

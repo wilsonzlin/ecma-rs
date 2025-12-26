@@ -245,7 +245,10 @@ fn canon_is_idempotent_for_new_variants() {
     other => panic!("expected tuple, got {:?}", other),
   }
 
-  let infer = store.intern_type(TypeKind::Infer(TypeParamId(42)));
+  let infer = store.intern_type(TypeKind::Infer {
+    param: TypeParamId(42),
+    constraint: None,
+  });
   assert_eq!(infer, store.canon(store.canon(infer)));
 
   let this_ty = store.intern_type(TypeKind::This);

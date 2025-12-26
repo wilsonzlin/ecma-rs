@@ -259,6 +259,74 @@ fn indexed_access_collects_optional_properties() {
 }
 
 #[test]
+fn indexed_access_over_union_collects_member_properties() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let name_a = store.intern_name("a");
+  let name_b = store.intern_name("b");
+
+  let shape1 = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(name_a),
+      data: PropData {
+        ty: primitives.string,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let shape2 = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(name_b),
+      data: PropData {
+        ty: primitives.number,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+
+  let union_obj = store.union(vec![
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: shape1 }),
+    )),
+    store.intern_type(TypeKind::Object(
+      store.intern_object(ObjectType { shape: shape2 }),
+    )),
+  ]);
+  let index = store.intern_type(TypeKind::KeyOf(union_obj));
+  let indexed = store.intern_type(TypeKind::IndexedAccess {
+    obj: union_obj,
+    index,
+  });
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+  let result = eval.evaluate(indexed);
+  let TypeKind::Union(members) = store.type_kind(result) else {
+    panic!("expected union, got {:?}", store.type_kind(result));
+  };
+  assert!(members.contains(&primitives.string));
+  assert!(members.contains(&primitives.number));
+  assert_eq!(members.len(), 2);
+}
+
+#[test]
 fn keyof_respects_union_and_intersection_semantics() {
   let store = TypeStore::new();
 
@@ -341,7 +409,7 @@ fn keyof_respects_union_and_intersection_semantics() {
 
   let union_keys = eval.evaluate(store.intern_type(TypeKind::KeyOf(store.union(vec![obj1, obj2]))));
   let union_kind = store.type_kind(union_keys);
-  let union_names: Vec<String> = match union_kind {
+  let mut union_names: Vec<String> = match union_kind {
     TypeKind::Union(members) => members
       .iter()
       .map(|m| match store.type_kind(*m) {
@@ -352,7 +420,11 @@ fn keyof_respects_union_and_intersection_semantics() {
     TypeKind::StringLiteral(id) => vec![store.name(id)],
     other => panic!("unexpected {:?}", other),
   };
-  assert_eq!(union_names, vec!["b".to_string()]);
+  union_names.sort();
+  assert_eq!(
+    union_names,
+    vec!["a".to_string(), "b".to_string(), "c".to_string()]
+  );
 
   let inter_keys =
     eval.evaluate(store.intern_type(TypeKind::KeyOf(store.intersection(vec![obj1, obj2]))));

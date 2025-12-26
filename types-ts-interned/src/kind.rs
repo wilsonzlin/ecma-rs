@@ -82,7 +82,10 @@ pub enum TypeKind {
   StringLiteral(NameId),
   BigIntLiteral(BigInt),
   This,
-  Infer(TypeParamId),
+  Infer {
+    param: TypeParamId,
+    constraint: Option<TypeId>,
+  },
   Tuple(Vec<TupleElem>),
   Array {
     ty: TypeId,
@@ -146,7 +149,7 @@ impl TypeKind {
       TypeKind::StringLiteral(_) => 14,
       TypeKind::BigIntLiteral(_) => 15,
       TypeKind::This => 16,
-      TypeKind::Infer(_) => 17,
+      TypeKind::Infer { .. } => 17,
       TypeKind::Tuple(_) => 18,
       TypeKind::Array { .. } => 19,
       TypeKind::Union(_) => 20,

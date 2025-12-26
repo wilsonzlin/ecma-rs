@@ -649,8 +649,15 @@ impl TypeLowerer {
       Some(id) => *id,
       None => self.alloc_type_param(infer.stx.type_parameter.clone()),
     };
-    // TODO: Track infer constraints once the type representation supports it.
-    self.store.intern_type(TypeKind::Infer(id))
+    let constraint = infer
+      .stx
+      .constraint
+      .as_ref()
+      .map(|c| self.lower_type_expr(c));
+    self.store.intern_type(TypeKind::Infer {
+      param: id,
+      constraint,
+    })
   }
 
   fn lower_type_predicate(&mut self, pred: &Node<TypePredicate>) -> TypeId {

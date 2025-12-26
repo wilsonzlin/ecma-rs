@@ -226,16 +226,21 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           .intern_type(TypeKind::IndexedAccess { obj, index: idx })
       }
       TypeExprKind::Conditional(cond) => {
+        let distributive = self.is_naked_type_param(cond.check_type);
+        let prev_params = self.type_params.clone();
+        let prev_names = self.type_param_names.clone();
         let check = self.lower_type_expr(cond.check_type, names);
         let extends = self.lower_type_expr(cond.extends_type, names);
         let true_ty = self.lower_type_expr(cond.true_type, names);
         let false_ty = self.lower_type_expr(cond.false_type, names);
+        self.type_params = prev_params;
+        self.type_param_names = prev_names;
         self.store.intern_type(TypeKind::Conditional {
           check,
           extends,
           true_ty,
           false_ty,
-          distributive: false,
+          distributive,
         })
       }
       TypeExprKind::Mapped(mapped) => self.lower_mapped_type(mapped, names),
@@ -254,6 +259,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           },
         ))
       }
+      TypeExprKind::Infer(param) => self.lower_infer_type(*param, names),
       _ => self.store.primitive_ids().unknown,
     }
   }
@@ -270,6 +276,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       .name_type
       .as_ref()
       .map(|n| self.lower_type_expr(*n, names));
+    let as_type = name_type;
     self.store.intern_type(TypeKind::Mapped(MappedType {
       param: tp,
       source: constraint,
@@ -277,8 +284,34 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       readonly: self.map_modifier(mapped.readonly),
       optional: self.map_modifier(mapped.optional),
       name_type,
-      as_type: None,
+      as_type,
     }))
+  }
+
+  fn lower_infer_type(&mut self, id: HirTypeParamId, names: &hir_js::NameInterner) -> TypeId {
+    let param = self.alloc_type_param(id);
+    let constraint = self
+      .arenas
+      .type_params
+      .get(id.0 as usize)
+      .and_then(|tp| tp.constraint)
+      .map(|c| self.lower_type_expr(c, names));
+    self
+      .store
+      .intern_type(TypeKind::Infer { param, constraint })
+  }
+
+  fn is_naked_type_param(&self, expr: TypeExprId) -> bool {
+    let ty = &self.arenas.type_exprs[expr.0 as usize];
+    match &ty.kind {
+      TypeExprKind::TypeRef(reference) if reference.type_args.is_empty() => {
+        matches!(
+          reference.name,
+          TypeName::Ident(name) if self.type_param_names.contains_key(&name)
+        )
+      }
+      _ => false,
+    }
   }
 
   fn lower_function_type(

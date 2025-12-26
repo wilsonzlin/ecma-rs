@@ -133,6 +133,7 @@ impl KeySet {
     }
   }
 
+  #[allow(dead_code)]
   fn intersect(self, other: Self, store: &TypeStore) -> Self {
     match (self, other) {
       (KeySet::Known(a), KeySet::Known(b)) => {
@@ -281,6 +282,14 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       TypeKind::TypeParam(id) => match subst.get(id) {
         Some(mapped) => self.evaluate_with_subst(mapped, subst, depth + 1),
         None => ty,
+      },
+      TypeKind::Infer { param, constraint } => match subst.get(param) {
+        Some(mapped) => self.evaluate_with_subst(mapped, subst, depth + 1),
+        None => {
+          let constraint = constraint.map(|c| self.evaluate_with_subst(c, subst, depth + 1));
+          self.store
+            .intern_type(TypeKind::Infer { param, constraint })
+        }
       },
       TypeKind::Union(members) => {
         let evaluated: Vec<_> = members
@@ -901,17 +910,11 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
 
   fn keys_from_type_id(&mut self, ty: TypeId, subst: &Substitution, depth: usize) -> KeySet {
     match self.store.type_kind(ty) {
-      TypeKind::Union(members) => {
-        let mut iter = members.into_iter();
-        let Some(first) = iter.next() else {
-          return KeySet::known(Vec::new(), &self.store);
-        };
-        let mut acc = self.keys_from_type(first, subst, depth + 1);
-        for member in iter {
-          acc = acc.intersect(self.keys_from_type(member, subst, depth + 1), &self.store);
-        }
-        acc
-      }
+      TypeKind::Union(members) => members
+        .into_iter()
+        .fold(KeySet::known(Vec::new(), &self.store), |acc, member| {
+          acc.union(self.keys_from_type(member, subst, depth + 1), &self.store)
+        }),
       TypeKind::Intersection(members) => {
         let mut acc = KeySet::known(Vec::new(), &self.store);
         for member in members {
