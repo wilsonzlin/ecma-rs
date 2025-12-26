@@ -245,7 +245,8 @@ fn finalize_expectations(files: &HashMap<String, String>, expectations: &mut Fix
       &expr.snippet,
       expectations.ignored_spans.get(&expr.file),
     );
-    expr.offset = Some(range.0 as u32);
+    let mid = range.0 + (range.1 - range.0) / 2;
+    expr.offset = Some(mid as u32);
   }
   for diag in expectations.diagnostics.iter_mut() {
     if let Some(snippet) = &diag.snippet {

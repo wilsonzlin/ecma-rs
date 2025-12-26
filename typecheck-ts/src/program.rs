@@ -50,8 +50,8 @@ use crate::{FatalError, HostError, Ice, IceContext};
 pub(crate) mod check;
 
 use check::legacy_narrow::{
-  narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof, narrow_by_typeof,
-  truthy_falsy_types, Facts,
+  narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof, narrow_by_literal,
+  narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
 };
 
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
@@ -1525,6 +1525,11 @@ enum HirStmt {
     body: Vec<HirStmt>,
     span: TextRange,
   },
+  Switch {
+    discriminant: HirExpr,
+    cases: Vec<HirSwitchCase>,
+    span: TextRange,
+  },
 }
 
 #[derive(Clone, Debug)]
@@ -1540,6 +1545,12 @@ struct HirObjectProperty {
   value: HirExpr,
   span: TextRange,
   is_spread: bool,
+}
+
+#[derive(Clone, Debug)]
+struct HirSwitchCase {
+  test: Option<HirExpr>,
+  consequent: Vec<HirStmt>,
 }
 
 #[derive(Clone, Debug)]
@@ -3454,6 +3465,38 @@ impl ProgramState {
         self.apply_fact_map(&mut merged, &cond_facts.falsy);
         *env = merged;
       }
+      HirStmt::Switch {
+        discriminant,
+        cases,
+        ..
+      } => {
+        let (disc_ty, _) = self.check_expr(discriminant, env, result, file, None);
+        let mut merged_env: Option<HashMap<String, SymbolBinding>> = None;
+        let has_default = cases.iter().any(|case| case.test.is_none());
+        for case in cases {
+          let mut case_env = env.clone();
+          if let Some(test) = &case.test {
+            let _ = self.check_expr(test, &mut case_env, result, file, None);
+            self.apply_switch_narrowing(discriminant, disc_ty, test, &mut case_env, result, file);
+          }
+          for stmt in case.consequent.iter() {
+            self.check_stmt(stmt, &mut case_env, result, file, return_context);
+          }
+          merged_env = Some(match merged_env {
+            Some(existing) => self.merge_envs(&existing, &case_env),
+            None => case_env,
+          });
+        }
+        if !has_default {
+          merged_env = Some(match merged_env {
+            Some(existing) => self.merge_envs(&existing, env),
+            None => env.clone(),
+          });
+        }
+        if let Some(new_env) = merged_env {
+          *env = new_env;
+        }
+      }
     }
   }
 
@@ -3930,6 +3973,58 @@ impl ProgramState {
     }
   }
 
+  fn literal_value_from_expr(&self, expr: &HirExpr) -> Option<LiteralValue> {
+    match &expr.kind {
+      HirExprKind::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
+      HirExprKind::NumberLiteral(n) => Some(LiteralValue::Number(n.clone())),
+      HirExprKind::BooleanLiteral(b) => Some(LiteralValue::Boolean(*b)),
+      HirExprKind::Null => Some(LiteralValue::Null),
+      _ => None,
+    }
+  }
+
+  fn apply_switch_narrowing(
+    &mut self,
+    discriminant: &HirExpr,
+    discriminant_ty: TypeId,
+    test: &HirExpr,
+    env: &mut HashMap<String, SymbolBinding>,
+    result: &mut BodyCheckResult,
+    file: FileId,
+  ) {
+    if let HirExprKind::Member { object, property } = &discriminant.kind {
+      if let HirExprKind::Ident(obj_name) = &object.kind {
+        let (obj_ty, _) = self.check_expr(object, env, result, file, None);
+        if let Some(LiteralValue::String(value)) = self.literal_value_from_expr(test) {
+          let (yes, _) = narrow_by_discriminant(
+            obj_ty,
+            property,
+            &value,
+            &mut self.type_store,
+            &self.builtin,
+          );
+          if yes != self.builtin.never {
+            if let Some(binding) = env.get_mut(obj_name) {
+              binding.type_id = Some(yes);
+            }
+          }
+        }
+        return;
+      }
+    }
+    if let HirExprKind::Ident(name) = &discriminant.kind {
+      if let Some(lit) = self.literal_value_from_expr(test) {
+        let (yes, _) =
+          narrow_by_literal(discriminant_ty, &lit, &mut self.type_store, &self.builtin);
+        if yes != self.builtin.never {
+          if let Some(binding) = env.get_mut(name) {
+            binding.type_id = Some(yes);
+          }
+        }
+      }
+    }
+  }
+
   fn merge_envs(
     &mut self,
     left: &HashMap<String, SymbolBinding>,
@@ -3961,6 +4056,10 @@ impl ProgramState {
         alternate,
         ..
       } => self.branch_returns(consequent) && self.branch_returns(alternate),
+      HirStmt::Switch { cases, .. } => {
+        let has_default = cases.iter().any(|case| case.test.is_none());
+        has_default && cases.iter().all(|case| self.branch_returns(&case.consequent))
+      }
       _ => false,
     })
   }
@@ -4826,6 +4925,23 @@ impl BodyBuilder {
           test,
           body: body_stmts,
           span: loc_to_span(self.file, wh.loc).range,
+        });
+      }
+      Stmt::Switch(sw) => {
+        let discriminant = self.lower_expr(sw.stx.test, state);
+        let mut cases = Vec::new();
+        for branch in sw.stx.branches {
+          let test = branch.stx.case.map(|expr| self.lower_expr(expr, state));
+          let mut consequent = Vec::new();
+          for stmt in branch.stx.body {
+            self.lower_stmt_into(stmt, state, &mut consequent);
+          }
+          cases.push(HirSwitchCase { test, consequent });
+        }
+        out.push(HirStmt::Switch {
+          discriminant,
+          cases,
+          span: loc_to_span(self.file, sw.loc).range,
         });
       }
       _ => {}
