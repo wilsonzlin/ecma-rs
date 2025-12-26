@@ -1053,6 +1053,9 @@ fn script_exports_report_single_diagnostic_with_span() {
 fn export_assignment_reports_span() {
   let file = FileId(94);
   let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "foo", DeclKind::Var, Exported::No));
   hir.exports.push(Export::ExportAssignment {
     expr: "foo".to_string(),
     span: span(10),
@@ -1060,13 +1063,90 @@ fn export_assignment_reports_span() {
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
   let resolver = StaticResolver::new(HashMap::new());
-  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
 
-  assert_eq!(diags.len(), 1);
-  let diag = &diags[0];
-  assert_eq!(diag.code, "BIND1003");
-  assert_eq!(diag.primary.file, file);
-  assert_eq!(diag.primary.range, span(10));
+  assert!(diags.is_empty());
+  let exports = semantics.exports_of(file);
+  let symbols = semantics.symbols();
+  let local = semantics
+    .resolve_in_module(file, "foo", Namespace::VALUE)
+    .expect("local binding");
+  let export_equals = exports
+    .get("export=")
+    .expect("export= entry present")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("export= resolves");
+  let default_export = exports
+    .get("default")
+    .expect("default alias present")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("default resolves");
+  assert_eq!(local, export_equals);
+  assert_eq!(export_equals, default_export);
+}
+
+#[test]
+fn export_assignment_uses_imported_symbol() {
+  let file_a = FileId(96);
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "Foo", DeclKind::Class, Exported::Named));
+
+  let file_b = FileId(97);
+  let mut b = HirFile::module(file_b);
+  b.imports.push(Import {
+    specifier: "a".to_string(),
+    specifier_span: span(5),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Foo".to_string(),
+      local: "Foo".to_string(),
+      is_type_only: false,
+      imported_span: span(6),
+      local_span: span(7),
+    }],
+    is_type_only: false,
+  });
+  b.exports.push(Export::ExportAssignment {
+    expr: "Foo".to_string(),
+    span: span(8),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let symbols = semantics.symbols();
+  let foo_a = semantics
+    .exports_of(file_a)
+    .get("Foo")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .unwrap();
+  let export_equals = semantics
+    .exports_of(file_b)
+    .get("export=")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .unwrap();
+  let default_export = semantics
+    .exports_of(file_b)
+    .get("default")
+    .unwrap()
+    .symbol_for(Namespace::VALUE, symbols)
+    .unwrap();
+
+  assert_eq!(foo_a, export_equals);
+  assert_eq!(export_equals, default_export);
 }
 
 #[test]
@@ -1074,20 +1154,72 @@ fn export_as_namespace_reports_diagnostic() {
   let file = FileId(95);
   let mut hir = HirFile::module(file);
   hir.file_kind = FileKind::Dts;
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Function, Exported::No));
+  hir.exports.push(Export::ExportAssignment {
+    expr: "Foo".to_string(),
+    span: span(30),
+  });
   hir.export_as_namespace.push(ExportAsNamespace {
-    name: "Foo".to_string(),
+    name: "GlobalFoo".to_string(),
     span: span(20),
   });
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
   let resolver = StaticResolver::new(HashMap::new());
-  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
 
-  assert_eq!(diags.len(), 1);
-  let diag = &diags[0];
-  assert_eq!(diag.code, "BIND1003");
-  assert_eq!(diag.primary.file, file);
-  assert_eq!(diag.primary.range, span(20));
+  assert!(diags.is_empty());
+  let symbols = semantics.symbols();
+  let export_equals = semantics
+    .exports_of(file)
+    .get("export=")
+    .expect("export= present")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("export= resolves");
+  let global = semantics
+    .global_symbols()
+    .get("GlobalFoo")
+    .expect("global namespace present")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("global value present");
+  assert_eq!(export_equals, global);
+}
+
+#[test]
+fn export_as_namespace_prefers_namespace_exports() {
+  let file = FileId(96);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+  hir
+    .decls
+    .push(mk_decl(0, "Ns", DeclKind::Namespace, Exported::Named));
+  hir.export_as_namespace.push(ExportAsNamespace {
+    name: "GlobalNs".to_string(),
+    span: span(15),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert!(diags.is_empty());
+  let symbols = semantics.symbols();
+  let ns_export = semantics
+    .exports_of(file)
+    .get("Ns")
+    .unwrap()
+    .symbol_for(Namespace::NAMESPACE, symbols)
+    .expect("namespace export available");
+  let global = semantics
+    .global_symbols()
+    .get("GlobalNs")
+    .expect("global namespace present")
+    .symbol_for(Namespace::NAMESPACE, symbols)
+    .expect("global namespace available");
+
+  assert_eq!(ns_export, global);
 }
 
 #[test]

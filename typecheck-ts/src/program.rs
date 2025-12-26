@@ -56,6 +56,7 @@ use check::legacy_narrow::{
   narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof, narrow_by_literal,
   narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
 };
+use check::modules;
 
 use crate::lib_support::lib_env::{prepare_lib, PreparedLib};
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
@@ -1701,6 +1702,7 @@ struct SemHirBuilder {
   decls: Vec<sem_ts::Decl>,
   imports: Vec<sem_ts::Import>,
   exports: Vec<sem_ts::Export>,
+  export_as_namespace: Vec<sem_ts::ExportAsNamespace>,
 }
 
 impl SemHirBuilder {
@@ -1711,6 +1713,7 @@ impl SemHirBuilder {
       decls: Vec::new(),
       imports: Vec::new(),
       exports: Vec::new(),
+      export_as_namespace: Vec::new(),
     }
   }
 
@@ -1765,6 +1768,12 @@ impl SemHirBuilder {
     }));
   }
 
+  fn add_export_assignment(&mut self, expr: String, span: TextRange) {
+    self
+      .exports
+      .push(sem_ts::Export::ExportAssignment { expr, span });
+  }
+
   fn finish(self) -> sem_ts::HirFile {
     sem_ts::HirFile {
       file_id: sem_ts::FileId(self.file.0),
@@ -1773,7 +1782,7 @@ impl SemHirBuilder {
       decls: self.decls,
       imports: self.imports,
       exports: self.exports,
-      export_as_namespace: Vec::new(),
+      export_as_namespace: self.export_as_namespace,
       ambient_modules: Vec::new(),
     }
   }
@@ -2647,18 +2656,25 @@ impl ProgramState {
     if let Some(semantics) = self.semantics.as_ref() {
       let symbols = semantics.symbols();
       for (name, group) in semantics.global_symbols() {
-        if let Some(symbol) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) {
+        let mut chosen_ns = sem_ts::Namespace::VALUE;
+        let mut symbol = group.symbol_for(sem_ts::Namespace::VALUE, symbols);
+        if symbol.is_none() {
+          chosen_ns = sem_ts::Namespace::NAMESPACE;
+          symbol = group.symbol_for(sem_ts::Namespace::NAMESPACE, symbols);
+        }
+        if let Some(symbol) = symbol {
           let def = semantics
-            .symbol_decls(symbol, sem_ts::Namespace::VALUE)
+            .symbol_decls(symbol, chosen_ns)
             .first()
             .map(|decl| semantics.symbols().decl(*decl).def_id)
             .map(|id| DefId(id.0));
+          let type_id = def.and_then(|d| self.def_types.get(&d).copied());
           globals.insert(
             name.clone(),
             SymbolBinding {
               symbol: symbol.into(),
               def,
-              type_id: None,
+              type_id,
             },
           );
         }
@@ -2735,7 +2751,7 @@ impl ProgramState {
       let mut files: Vec<FileId> = self.files.keys().copied().collect();
       files.sort_by_key(|f| f.0);
       for file in files {
-        let exports = check::modules::exports_from_semantics(self, &semantics, file);
+        let exports = modules::exports_from_semantics(self, &semantics, file);
         if let Some(state) = self.files.get_mut(&file) {
           state.exports = exports;
         }
@@ -3270,6 +3286,26 @@ impl ProgramState {
                 );
               }
             }
+          }
+        }
+        Stmt::ExportAssignmentDecl(assign) => {
+          let span = loc_to_span(file, assign.loc);
+          let expr_name = match &assign.stx.expression.stx.as_ref() {
+            Expr::Id(id) => id.stx.name.clone(),
+            _ => String::new(),
+          };
+          sem_builder.add_export_assignment(expr_name.clone(), span.range);
+          if let Some(binding) = bindings.get(&expr_name) {
+            let entry = ExportEntry {
+              symbol: binding.symbol,
+              def: binding.def,
+              type_id: binding.type_id,
+            };
+            exports
+              .values
+              .entry("export=".to_string())
+              .or_insert(entry.clone());
+            exports.values.entry("default".to_string()).or_insert(entry);
           }
         }
         Stmt::Import(import_stmt) => {
@@ -4814,6 +4850,9 @@ impl ProgramState {
   }
 
   fn exports_of_file(&mut self, file: FileId) -> Exports {
+    if let Some(semantics) = self.semantics.clone() {
+      return modules::exports_from_semantics(self, &semantics, file);
+    }
     let Some(state) = self.files.get(&file).cloned() else {
       return Exports::default();
     };

@@ -5,6 +5,7 @@ use crate::ts::{
 use diagnostics::TextRange;
 use hir_js::{DefId, DefKind, ExportKind, FileKind as HirFileKind, ImportKind, LowerResult};
 use parse_js::ast::expr::pat::Pat;
+use parse_js::ast::expr::Expr;
 use parse_js::ast::import_export::{ExportNames, ImportNames};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
@@ -195,8 +196,12 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
       }
       Stmt::ExportAssignmentDecl(assign) => {
         has_module_syntax = true;
+        let expr = match assign.stx.expression.stx.as_ref() {
+          Expr::Id(id) => id.stx.name.clone(),
+          _ => String::new(),
+        };
         exports.push(Export::ExportAssignment {
-          expr: format!("{:?}", assign.stx.expression.stx),
+          expr,
           span: stmt_range,
         });
       }

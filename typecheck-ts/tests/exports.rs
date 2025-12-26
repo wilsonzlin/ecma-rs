@@ -89,6 +89,68 @@ fn default_export_has_type() {
 #[test]
 fn type_exports_propagate_through_reexports() {
   let mut host = MemoryHost::default();
+  host.insert(FileId(15), "export type Foo = { a: string };");
+  host.insert(FileId(16), "export type { Foo } from \"./types\";");
+  host.insert(FileId(17), "export type { Foo as Bar } from \"./middle\";");
+  host.link(FileId(16), "./types", FileId(15));
+  host.link(FileId(17), "./middle", FileId(16));
+
+  let program = Program::new(host, vec![FileId(17)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let exports = program.exports_of(FileId(17));
+  let bar = exports.types.get("Bar").expect("Bar type export");
+  let ty = bar.type_id.expect("type for Bar");
+  let rendered = program.display_type(ty).to_string();
+  assert!(
+    rendered.contains("a: string"),
+    "expected propagated type, got {rendered}"
+  );
+}
+
+#[test]
+fn export_assignment_exposed_through_default_and_export_equals() {
+  let mut host = MemoryHost::default();
+  host.insert(FileId(400), "const foo = 123; export = foo;");
+  host.insert(
+    FileId(401),
+    "import foo from \"./a\";\nexport const value = foo;",
+  );
+  host.link(FileId(401), "./a", FileId(400));
+
+  let program = Program::new(host, vec![FileId(401)]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let exports_a = program.exports_of(FileId(400));
+  let export_equals = exports_a
+    .values
+    .get("export=")
+    .expect("export= entry present");
+  let default_entry = exports_a
+    .values
+    .get("default")
+    .expect("default alias present");
+  assert_eq!(export_equals.symbol, default_entry.symbol);
+  let export_ty = export_equals.type_id.expect("type for export=");
+  assert_eq!(program.display_type(export_ty).to_string(), "123");
+
+  let exports_b = program.exports_of(FileId(401));
+  let value_entry = exports_b.values.get("value").expect("value export present");
+  let value_ty = value_entry.type_id.expect("type for value");
+  assert_eq!(program.display_type(value_ty).to_string(), "123");
+}
+
+#[test]
+fn type_only_exports_filtered() {
+  let mut host = MemoryHost::default();
   host.insert(FileId(20), "export type Foo = { a: string };");
   host.insert(FileId(21), "export type { Foo } from \"./types\";");
   host.link(FileId(21), "./types", FileId(20));

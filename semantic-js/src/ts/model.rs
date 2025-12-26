@@ -22,19 +22,18 @@
 //! - ambient module export/symbol maps addressable by module specifier strings.
 //!
 //! The binder currently focuses on module graph semantics and declaration
-//! merging. It does not model statement-level scopes, contextual type-only
-//! exports beyond the supplied `is_type_only` flags, or `export =` assignments
-//! (which are reported as diagnostics). Cross-file ambient augmentations are
-//! only represented through re-exports/imports rather than global name
-//! injection.
-//! Ambient module declarations (`declare module "foo" { }`) are bound into
-//! their own export/symbol maps; unimplemented features such as `export as
-//! namespace` and `export =` are reported deterministically via diagnostics.
+//! merging. It does not model statement-level scopes or contextual type-only
+//! exports beyond the supplied `is_type_only` flags. Cross-file ambient
+//! augmentations are only represented through re-exports/imports rather than
+//! global name injection. Ambient module declarations (`declare module "foo" {
+//! }`) are bound into their own export/symbol maps; `export as namespace` and
+//! `export =` export assignments are surfaced for consumers that need
+//! CommonJS/UMD interop.
 //!
 //! Binder diagnostics use the shared [`diagnostics`] crate with stable codes:
 //! - `BIND1001`: duplicate export
 //! - `BIND1002`: unresolved import/export or missing export
-//! - `BIND1003`: unsupported export assignment or exports in a script module
+//! - `BIND1003`: exports in a script module
 //!
 //! ## Determinism expectations
 //!
@@ -214,7 +213,7 @@ pub struct ExportAll {
 pub enum Export {
   Named(NamedExport),
   All(ExportAll),
-  /// `export =` assignments are tracked for diagnostics.
+  /// `export =` assignments expose a CommonJS-style export binding.
   ExportAssignment {
     expr: String,
     span: TextRange,
