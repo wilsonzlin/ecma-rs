@@ -17,6 +17,7 @@ const objConst = { value: 1 } as const;
 // expect-def-type: objConst = { readonly value: 1 }
 
 let contextual: { literal: 1 } = { literal: 1 };
+// expect-def-type: contextual = { literal: 1 }
 
 const arr = [1, 2];
 // expect-def-type: arr = number[]

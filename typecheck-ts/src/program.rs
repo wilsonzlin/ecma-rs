@@ -16,7 +16,8 @@ use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::{
-  TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
+  TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeTuple,
+  TypeTupleElement, TypeUnion,
 };
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
@@ -1854,6 +1855,10 @@ enum HirExprKind {
     alternate: Box<HirExpr>,
   },
   Object(Vec<HirObjectProperty>),
+  Satisfies {
+    expr: Box<HirExpr>,
+    typ: TypeId,
+  },
   TypeAssertion {
     expr: Box<HirExpr>,
     typ: Option<TypeId>,
@@ -2002,7 +2007,7 @@ impl TypeStore {
     if types.is_empty() {
       return builtin.never;
     }
-    types.sort_by(|a, b| a.0.cmp(&b.0));
+    types.sort_by(|a, b| self.compare_types(*a, *b));
     types.dedup();
     if types.len() == 1 {
       return types[0];
@@ -2050,6 +2055,71 @@ impl TypeStore {
       asserted,
       asserts,
     })
+  }
+
+  fn compare_types(&self, a: TypeId, b: TypeId) -> std::cmp::Ordering {
+    if a == b {
+      return std::cmp::Ordering::Equal;
+    }
+    let a_kind = self.kind(a);
+    let b_kind = self.kind(b);
+    let discr = self
+      .kind_discriminant(a_kind)
+      .cmp(&self.kind_discriminant(b_kind));
+    if discr != std::cmp::Ordering::Equal {
+      return discr;
+    }
+    match (a_kind, b_kind) {
+      (TypeKind::LiteralString(a), TypeKind::LiteralString(b)) => a.cmp(b),
+      (TypeKind::LiteralNumber(a), TypeKind::LiteralNumber(b)) => a.cmp(b),
+      (TypeKind::LiteralBoolean(a), TypeKind::LiteralBoolean(b)) => a.cmp(b),
+      (TypeKind::Tuple(a_elems, a_readonly), TypeKind::Tuple(b_elems, b_readonly)) => {
+        a_readonly.cmp(b_readonly).then_with(|| {
+          let mut idx = 0;
+          loop {
+            let left = a_elems.get(idx);
+            let right = b_elems.get(idx);
+            match (left, right) {
+              (Some(l), Some(r)) => {
+                let ord = self.compare_types(*l, *r);
+                if ord != std::cmp::Ordering::Equal {
+                  return ord;
+                }
+              }
+              (Some(_), None) => return std::cmp::Ordering::Greater,
+              (None, Some(_)) => return std::cmp::Ordering::Less,
+              (None, None) => return std::cmp::Ordering::Equal,
+            }
+            idx += 1;
+          }
+        })
+      }
+      (TypeKind::Array(a_elem), TypeKind::Array(b_elem)) => self.compare_types(*a_elem, *b_elem),
+      _ => a.0.cmp(&b.0),
+    }
+  }
+
+  fn kind_discriminant(&self, kind: &TypeKind) -> u8 {
+    match kind {
+      TypeKind::Any => 0,
+      TypeKind::Unknown => 1,
+      TypeKind::Never => 2,
+      TypeKind::Void => 3,
+      TypeKind::Number => 4,
+      TypeKind::String => 5,
+      TypeKind::Boolean => 6,
+      TypeKind::Null => 7,
+      TypeKind::Undefined => 8,
+      TypeKind::LiteralString(_) => 9,
+      TypeKind::LiteralNumber(_) => 10,
+      TypeKind::LiteralBoolean(_) => 11,
+      TypeKind::Tuple(_, _) => 12,
+      TypeKind::Array(_) => 13,
+      TypeKind::Union(_) => 14,
+      TypeKind::Function { .. } => 15,
+      TypeKind::Predicate { .. } => 16,
+      TypeKind::Object(_) => 17,
+    }
   }
 }
 
@@ -4323,6 +4393,12 @@ impl ProgramState {
           self.type_store.array(elem)
         }
       }
+      HirExprKind::Satisfies { expr, typ } => {
+        let (inner_ty, inner_facts) = self.check_expr(expr, env, result, file, Some(*typ));
+        facts = inner_facts;
+        check::assign::check_assignment(self, Some(expr), inner_ty, *typ, result, file);
+        inner_ty
+      }
       HirExprKind::TypeAssertion {
         expr,
         typ,
@@ -4995,6 +5071,14 @@ impl ProgramState {
         let elem = self.type_from_type_expr(element_type);
         self.type_store.array(elem)
       }
+      TypeExpr::TupleType(tuple) => {
+        let TypeTuple { elements, readonly } = tuple.stx.as_ref();
+        let elems: Vec<TypeId> = elements
+          .iter()
+          .map(|elem: &Node<TypeTupleElement>| self.type_from_type_expr(&elem.stx.type_expr))
+          .collect();
+        self.type_store.tuple(elems, *readonly)
+      }
       TypeExpr::FunctionType(func) => {
         let params = func
           .stx
@@ -5295,11 +5379,10 @@ impl BodyBuilder {
       }
       Expr::SatisfiesExpr(satisfies) => {
         let expr = self.lower_expr(*satisfies.stx.expression, state);
-        HirExprKind::TypeAssertion {
+        let typ = state.type_from_type_expr(&satisfies.stx.type_annotation);
+        HirExprKind::Satisfies {
           expr: Box::new(expr),
-          typ: None,
-          _const_assertion: true,
-          make_readonly: false,
+          typ,
         }
       }
       Expr::LitArr(arr) => {
