@@ -231,7 +231,7 @@ fn declare_module_libs_do_not_crash() {
 fn host_file_named_like_lib_does_not_collide() {
   let mut options = CompilerOptions::default();
   options.libs = vec![LibName::Es2020];
-  let key = FileKey::new("lib:es2020");
+  let key = FileKey::new("lib:lib.es2020.d.ts");
   let host = TestHost::new(options).with_file(key.clone(), "export const local = 1;");
   let program = Program::new(host, vec![key.clone()]);
   let mut ids_for_key = Vec::new();

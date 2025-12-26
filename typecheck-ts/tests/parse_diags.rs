@@ -1,6 +1,7 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{FileId, TextRange};
 use std::sync::Arc;
+use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::queries::parse;
 use typecheck_ts::{codes, FileKey, Host, HostError, Program};
 
@@ -24,7 +25,7 @@ fn reports_diagnostic_with_span_for_invalid_syntax() {
   let file = FileId(0);
   let source = "function missingBrace(";
 
-  let result = parse::parse(file, source);
+  let result = parse::parse(file, FileKind::Ts, source);
 
   assert!(result.ast.is_none());
   assert_eq!(result.diagnostics.len(), 1);

@@ -507,7 +507,7 @@ fn function_definition_exposes_signature() {
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition present");
-  let ty = program.type_of_def(add_def);
+  let ty = program.type_of_def_interned(add_def);
   let sigs = program.call_signatures(ty);
   assert_eq!(sigs.len(), 1);
   let sig = &sigs[0].signature;

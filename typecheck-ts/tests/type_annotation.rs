@@ -22,7 +22,7 @@ fn normalize(path: &Path) -> String {
   parts.join("/")
 }
 
-fn load_fixture(name: &str) -> (MemoryHost, FileKey) {
+fn load_fixture(name: &str) -> (MemoryHost, Vec<FileKey>) {
   let base = Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("tests")
     .join("litmus")
@@ -41,11 +41,13 @@ fn load_fixture(name: &str) -> (MemoryHost, FileKey) {
   }
   files.sort_by(|a, b| a.0.cmp(&b.0));
   let mut host = MemoryHost::default();
+  let mut roots = Vec::new();
   for (path, text) in files {
     let key = FileKey::new(path.clone());
     host.insert(key, Arc::from(text));
+    roots.push(FileKey::new(path));
   }
-  (host, FileKey::new("main.ts"))
+  (host, roots)
 }
 
 fn def_by_name(program: &mut Program, file: FileKey, name: &str) -> typecheck_ts::DefId {
@@ -59,8 +61,8 @@ fn def_by_name(program: &mut Program, file: FileKey, name: &str) -> typecheck_ts
 
 #[test]
 fn qualified_type_reference_resolves() {
-  let (host, main) = load_fixture("qualified_type_ref");
-  let mut program = Program::new(host.clone(), vec![main.clone()]);
+  let (host, roots) = load_fixture("qualified_type_ref");
+  let mut program = Program::new(host.clone(), roots.clone());
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -81,8 +83,8 @@ fn qualified_type_reference_resolves() {
 
 #[test]
 fn import_type_resolves_to_module_export() {
-  let (host, main) = load_fixture("import_type");
-  let mut program = Program::new(host.clone(), vec![main.clone()]);
+  let (host, roots) = load_fixture("import_type");
+  let mut program = Program::new(host.clone(), roots.clone());
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -103,8 +105,8 @@ fn import_type_resolves_to_module_export() {
 
 #[test]
 fn typeof_query_resolves_value_definition() {
-  let (host, main) = load_fixture("typeof_query");
-  let mut program = Program::new(host.clone(), vec![main.clone()]);
+  let (host, roots) = load_fixture("typeof_query");
+  let mut program = Program::new(host.clone(), roots.clone());
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
@@ -125,8 +127,8 @@ fn typeof_query_resolves_value_definition() {
 
 #[test]
 fn type_params_shadow_type_names() {
-  let (host, main) = load_fixture("type_param_shadow");
-  let mut program = Program::new(host.clone(), vec![main.clone()]);
+  let (host, roots) = load_fixture("type_param_shadow");
+  let mut program = Program::new(host.clone(), roots.clone());
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),

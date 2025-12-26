@@ -5,6 +5,7 @@ use crate::kind::TypeKind;
 use crate::shape::PropKey;
 use crate::shape::Property;
 use crate::store::TypeStore;
+use std::cmp::Ordering;
 use std::fmt;
 use std::sync::Arc;
 use unicode_ident::{is_xid_continue, is_xid_start};
@@ -196,7 +197,9 @@ impl<'a> TypeDisplay<'a> {
         write!(f, "[]")
       }
       TypeKind::Union(members) => {
-        let mut iter = members.iter().peekable();
+        let mut ordered = members.clone();
+        ordered.sort_by(|a, b| self.union_cmp(*a, *b));
+        let mut iter = ordered.iter().peekable();
         while let Some(member) = iter.next() {
           self.fmt_with_prec(*member, Precedence::Union, f)?;
           if iter.peek().is_some() {
@@ -384,6 +387,14 @@ impl<'a> TypeDisplay<'a> {
           write!(f, ")")
         }
       }
+    }
+  }
+
+  fn union_cmp(&self, a: TypeId, b: TypeId) -> Ordering {
+    match (self.store.type_kind(a), self.store.type_kind(b)) {
+      (TypeKind::Ref { .. }, TypeKind::Null | TypeKind::Undefined) => Ordering::Less,
+      (TypeKind::Null | TypeKind::Undefined, TypeKind::Ref { .. }) => Ordering::Greater,
+      _ => self.store.type_cmp(a, b),
     }
   }
 

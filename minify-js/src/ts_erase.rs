@@ -244,6 +244,7 @@ fn strip_stmt(
         None
       }
     }
+    Stmt::ExportAsNamespaceDecl(_) => None,
     Stmt::ImportEqualsDecl(decl) => {
       if decl.stx.export {
         unsupported_ts(

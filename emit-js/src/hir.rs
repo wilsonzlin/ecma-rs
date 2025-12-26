@@ -352,9 +352,9 @@ impl<'a> TopItem<'a> {
 }
 
 fn emit_var_def(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitResult {
-  let body_id = def
-    .body
-    .ok_or_else(|| EmitError::unsupported("variable missing body for emission"))?;
+  let Some(body_id) = def.body else {
+    return Ok(());
+  };
   let body = ctx
     .body(body_id)
     .ok_or_else(|| EmitError::unsupported("variable body not found"))?;
@@ -370,9 +370,9 @@ fn emit_var_def(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitRe
 }
 
 fn emit_function_decl(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitResult {
-  let body_id = def
-    .body
-    .ok_or_else(|| EmitError::unsupported("function missing body for emission"))?;
+  let Some(body_id) = def.body else {
+    return Ok(());
+  };
   let body = ctx
     .body(body_id)
     .ok_or_else(|| EmitError::unsupported("function body not found"))?;

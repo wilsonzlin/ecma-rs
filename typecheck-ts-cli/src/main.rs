@@ -141,7 +141,7 @@ struct TypeAtResult {
 struct SymbolAtResult {
   file: String,
   offset: u32,
-  symbol: u32,
+  symbol: u64,
   #[serde(skip_serializing_if = "Option::is_none")]
   name: Option<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -155,7 +155,7 @@ struct SymbolAtResult {
 
 #[derive(Serialize)]
 struct ExportEntryJson {
-  symbol: u32,
+  symbol: u64,
   #[serde(skip_serializing_if = "Option::is_none")]
   def: Option<u32>,
   #[serde(skip_serializing_if = "Option::is_none")]

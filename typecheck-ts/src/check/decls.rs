@@ -665,10 +665,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let Some(target_key) = host.resolve(from_key, &import.module) else {
       return self.store.primitive_ids().unknown;
     };
-    let Some(target_file) = self
-      .key_to_id
-      .and_then(|resolver| resolver(&target_key))
-    else {
+    let Some(target_file) = self.key_to_id.and_then(|resolver| resolver(&target_key)) else {
       return self.store.primitive_ids().unknown;
     };
 
@@ -717,12 +714,16 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         self.resolve_named_type(&resolved, file_override.unwrap_or(self.file))
       }
       TypeName::Qualified(path) => {
-        path
-          .last()
-          .and_then(|id| names.resolve(*id))
-          .and_then(|resolved| {
-            self.resolve_named_type(&resolved.to_string(), file_override.unwrap_or(self.file))
-          })
+        if let Some(last) = path.last().and_then(|id| names.resolve(*id)) {
+          let name = last.to_string();
+          if let Some(map) = self.def_by_name {
+            if let Some((_, def)) = map.iter().find(|((_, n), _)| n == &name) {
+              return Some(*def);
+            }
+          }
+          return self.resolve_named_type(&name, file_override.unwrap_or(self.file));
+        }
+        None
       }
       TypeName::Import(import) => import.module.as_ref().and_then(|module| {
         let name = import
