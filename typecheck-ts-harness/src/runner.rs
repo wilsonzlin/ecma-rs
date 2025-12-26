@@ -207,6 +207,21 @@ impl EngineDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestOptions {
+  pub harness: HarnessOptions,
+  pub rust: CompilerOptions,
+  pub tsc: Map<String, Value>,
+}
+
+impl TestOptions {
+  fn from_harness(harness: HarnessOptions) -> Self {
+    let rust = harness.to_compiler_options();
+    let tsc = harness.to_tsc_options_map();
+    Self { harness, rust, tsc }
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestResult {
   pub id: String,
   pub path: String,
@@ -214,6 +229,7 @@ pub struct TestResult {
   pub duration_ms: u128,
   pub rust: EngineDiagnostics,
   pub tsc: EngineDiagnostics,
+  pub options: TestOptions,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub query_stats: Option<QueryStats>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -469,6 +485,7 @@ fn build_skipped_result(case: &TestCase) -> TestResult {
     duration_ms: 0,
     rust: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
     tsc: EngineDiagnostics::skipped(Some("skipped by manifest".into())),
+    options: TestOptions::from_harness(case.options.clone()),
     query_stats: None,
     notes: case.notes.clone(),
     detail: None,
@@ -536,6 +553,9 @@ fn run_single_case(
   let span_tolerance = opts.span_tolerance;
   let update_snapshots = opts.update_snapshots;
   let collect_query_stats = opts.profile;
+  let test_options = TestOptions::from_harness(case.options.clone());
+  let timeout_options = test_options.clone();
+  let options_for_thread = test_options;
   std::thread::spawn(move || {
     let _entered = span_for_thread.enter();
     let result = execute_case(
@@ -548,6 +568,7 @@ fn run_single_case(
       update_snapshots,
       collect_query_stats,
       tsc_limiter,
+      options_for_thread,
     );
     let _ = tx.send(result);
   });
@@ -561,6 +582,7 @@ fn run_single_case(
       duration_ms: timeout.as_millis(),
       rust: EngineDiagnostics::skipped(None),
       tsc: EngineDiagnostics::skipped(None),
+      options: timeout_options,
       query_stats: None,
       notes: timeout_notes,
       detail: None,
@@ -580,6 +602,7 @@ fn execute_case(
   update_snapshots: bool,
   collect_query_stats: bool,
   tsc_limiter: Arc<ConcurrencyLimiter>,
+  options: TestOptions,
 ) -> TestResult {
   let start = Instant::now();
   if let Some(delay) = harness_sleep_for_case(&case.id) {
@@ -587,17 +610,15 @@ fn execute_case(
   }
   let notes = case.notes.clone();
   let file_set = HarnessFileSet::new(&case.deduped_files);
-  let harness_options = case.options.clone();
 
-  let (rust, query_stats) = run_rust_with_profile(&file_set, &harness_options, collect_query_stats);
-  let tsc_options = harness_options.to_tsc_options_map();
+  let (rust, query_stats) = run_rust_with_profile(&file_set, &options.rust, collect_query_stats);
 
   let mut tsc_raw: Option<Vec<TscDiagnostic>> = None;
   let tsc = match compare_mode {
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
     CompareMode::Tsc => {
       if tsc_available {
-        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
+        let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &options.tsc, &tsc_limiter);
         tsc_raw = raw;
         diag
       } else {
@@ -607,7 +628,7 @@ fn execute_case(
     CompareMode::Snapshot => {
       if update_snapshots {
         if tsc_available {
-          let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &tsc_options, &tsc_limiter);
+          let (diag, raw) = run_tsc_with_raw(&tsc_runner, &file_set, &options.tsc, &tsc_limiter);
           tsc_raw = raw;
           diag
         } else {
@@ -641,6 +662,7 @@ fn execute_case(
     duration_ms: start.elapsed().as_millis(),
     rust,
     tsc,
+    options,
     query_stats,
     notes,
     detail,
@@ -650,15 +672,15 @@ fn execute_case(
 }
 
 pub(crate) fn run_rust(file_set: &HarnessFileSet, options: &HarnessOptions) -> EngineDiagnostics {
-  run_rust_with_profile(file_set, options, false).0
+  let compiler_options = options.to_compiler_options();
+  run_rust_with_profile(file_set, &compiler_options, false).0
 }
 
 fn run_rust_with_profile(
   file_set: &HarnessFileSet,
-  options: &HarnessOptions,
+  compiler_options: &CompilerOptions,
   collect_profile: bool,
 ) -> (EngineDiagnostics, Option<QueryStats>) {
-  let compiler_options = options.to_compiler_options();
   let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
   let roots = file_set.root_files();
   let program = Program::new(host, roots);

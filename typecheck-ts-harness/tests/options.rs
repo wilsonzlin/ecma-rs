@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use typecheck_ts::lib_support::{LibName, ModuleKind, ScriptTarget};
 use typecheck_ts_harness::runner::EngineStatus;
 use typecheck_ts_harness::{
   build_filter, run_conformance, CompareMode, ConformanceOptions, FailOn, DEFAULT_EXTENSIONS,
@@ -96,5 +97,63 @@ fn strict_null_checks_directive_reaches_rust_checker() {
   assert!(
     disabled.rust.diagnostics.is_empty(),
     "expected no diagnostics when strictNullChecks is disabled for Rust checker"
+  );
+}
+
+#[test]
+fn exposes_applied_options_for_multi_file_fixture() {
+  let options = conformance_options(CompareMode::None);
+  let report = run_conformance(options).expect("run conformance");
+
+  let result = report
+    .results
+    .iter()
+    .find(|r| r.id.ends_with("options_passthrough.ts"))
+    .expect("options_passthrough fixture");
+
+  assert_eq!(result.options.harness.no_lib, Some(true));
+  assert_eq!(result.options.harness.lib, vec!["es2020"]);
+  assert_eq!(result.options.harness.types, vec!["example"]);
+  assert_eq!(
+    result.options.harness.module_resolution.as_deref(),
+    Some("node16")
+  );
+  assert_eq!(
+    result.options.harness.use_define_for_class_fields,
+    Some(false)
+  );
+  assert_eq!(
+    result.options.harness.no_unchecked_indexed_access,
+    Some(true)
+  );
+  assert_eq!(result.options.harness.declaration, Some(true));
+
+  assert!(result.options.rust.no_default_lib);
+  assert!(!result.options.rust.include_dom);
+  assert_eq!(result.options.rust.libs, vec![LibName::Es2020]);
+  assert_eq!(
+    result.options.rust.module_resolution.as_deref(),
+    Some("node16")
+  );
+  assert_eq!(result.options.rust.types, vec!["example".to_string()]);
+  assert_eq!(
+    result.options.rust.module,
+    Some(ModuleKind::NodeNext),
+    "module directive should apply program-wide"
+  );
+  assert_eq!(result.options.rust.target, ScriptTarget::Es2020);
+  assert!(!result.options.rust.use_define_for_class_fields);
+  assert!(result.options.rust.no_unchecked_indexed_access);
+  assert_eq!(
+    result
+      .options
+      .tsc
+      .get("moduleResolution")
+      .and_then(|v| v.as_str()),
+    Some("node16")
+  );
+  assert_eq!(
+    result.options.tsc.get("noLib").and_then(|v| v.as_bool()),
+    Some(true)
   );
 }

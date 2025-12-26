@@ -83,6 +83,18 @@ pub struct CompilerOptions {
   pub no_default_lib: bool,
   /// Explicit lib overrides (when non-empty this replaces the default target-derived set).
   pub libs: Vec<LibName>,
+  /// Whether to skip checking bundled and host-provided libs.
+  pub skip_lib_check: bool,
+  /// Whether to suppress emit; the checker never emits today, but we keep the flag for parity.
+  pub no_emit: bool,
+  /// Whether to suppress emit on error; unused for now but tracked for fidelity.
+  pub no_emit_on_error: bool,
+  /// Whether to produce declaration outputs; unused in the checker but surfaced for completeness.
+  pub declaration: bool,
+  /// Module resolution strategy as provided by the host (raw, lower-cased string).
+  pub module_resolution: Option<String>,
+  /// Explicitly included `@types` packages.
+  pub types: Vec<String>,
   pub strict_null_checks: bool,
   pub no_implicit_any: bool,
   pub strict_function_types: bool,
@@ -102,6 +114,12 @@ impl Default for CompilerOptions {
       include_dom: true,
       no_default_lib: false,
       libs: Vec::new(),
+      skip_lib_check: true,
+      no_emit: true,
+      no_emit_on_error: false,
+      declaration: false,
+      module_resolution: None,
+      types: Vec::new(),
       strict_null_checks: true,
       no_implicit_any: false,
       strict_function_types: true,

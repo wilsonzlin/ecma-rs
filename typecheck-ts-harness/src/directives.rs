@@ -118,6 +118,8 @@ pub struct HarnessOptions {
   pub exact_optional_property_types: Option<bool>,
   #[serde(skip_serializing_if = "Option::is_none")]
   pub no_unchecked_indexed_access: Option<bool>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub no_lib: Option<bool>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub lib: Vec<String>,
   #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,14 +152,17 @@ impl HarnessOptions {
         "noimplicitany" => options.no_implicit_any = parse_bool(value),
         "strictnullchecks" => options.strict_null_checks = parse_bool(value),
         "exactoptionalpropertytypes" => options.exact_optional_property_types = parse_bool(value),
-        "noundcheckedindexedaccess" => options.no_unchecked_indexed_access = parse_bool(value),
+        "nouncheckedindexedaccess" => options.no_unchecked_indexed_access = parse_bool(value),
+        "nolib" => options.no_lib = parse_bool(value),
         "lib" => options.lib = parse_list(value),
         "skiplibcheck" => options.skip_lib_check = parse_bool(value),
         "noemit" => options.no_emit = parse_bool(value),
         "usedefineforclassfields" => options.use_define_for_class_fields = parse_bool(value),
         "noemitonerror" => options.no_emit_on_error = parse_bool(value),
         "declaration" => options.declaration = parse_bool(value),
-        "moduleresolution" => options.module_resolution = value.map(str::to_string),
+        "moduleresolution" => {
+          options.module_resolution = value.map(|v| v.trim().to_ascii_lowercase())
+        }
         "types" => options.types = parse_list(value),
         _ => {}
       }
@@ -209,6 +214,24 @@ impl HarnessOptions {
     if let Some(value) = self.use_define_for_class_fields {
       opts.use_define_for_class_fields = value;
     }
+    if let Some(value) = self.skip_lib_check {
+      opts.skip_lib_check = value;
+    }
+    if let Some(value) = self.no_emit {
+      opts.no_emit = value;
+    }
+    if let Some(value) = self.no_emit_on_error {
+      opts.no_emit_on_error = value;
+    }
+    if let Some(value) = self.declaration {
+      opts.declaration = value;
+    }
+    if let Some(value) = self.module_resolution.as_ref() {
+      opts.module_resolution = Some(value.clone());
+    }
+    if !self.types.is_empty() {
+      opts.types = self.types.clone();
+    }
 
     if let Some(mode) = self.jsx.as_deref().and_then(parse_jsx_mode) {
       opts.jsx = Some(mode);
@@ -220,12 +243,14 @@ impl HarnessOptions {
         libs.push(parsed);
       }
     }
+    let no_lib = self.no_lib.unwrap_or(false);
     if !libs.is_empty() {
       opts.include_dom = libs.iter().any(|l| matches!(l, LibName::Dom));
       opts.libs = libs.clone();
       opts.no_default_lib = true;
     } else {
-      opts.include_dom = true;
+      opts.include_dom = !no_lib;
+      opts.no_default_lib |= no_lib;
     }
 
     opts
@@ -274,6 +299,9 @@ impl HarnessOptions {
       "useDefineForClassFields".to_string(),
       Value::Bool(compiler.use_define_for_class_fields),
     );
+    if let Some(value) = self.no_lib {
+      map.insert("noLib".to_string(), Value::Bool(value));
+    }
 
     if let Some(strict) = self.strict {
       map.insert("strict".to_string(), Value::Bool(strict));
@@ -551,6 +579,48 @@ mod tests {
     assert!(compiler.strict_null_checks);
     assert!(compiler.no_default_lib);
     assert_eq!(compiler.libs, vec![LibName::Dom, LibName::Es2015]);
+  }
+
+  #[test]
+  fn normalizes_no_unchecked_indexed_access_name() {
+    let directive =
+      parse_directive("// @noUncheckedIndexedAccess: true", 1).expect("directive should parse");
+    assert_eq!(directive.name, "nouncheckedindexedaccess");
+  }
+
+  #[test]
+  fn maps_additional_directives_including_no_lib() {
+    let directives = vec![
+      dir("nolib", None),
+      dir("lib", Some("es2020")),
+      dir("types", Some("foo bar")),
+      dir("declaration", None),
+      dir("moduleresolution", Some("Node16")),
+      dir("usedefineforclassfields", Some("false")),
+    ];
+
+    let options = HarnessOptions::from_directives(&directives);
+    let tsc = options.to_tsc_options_map();
+    let compiler = options.to_compiler_options();
+
+    assert_eq!(compiler.libs, vec![LibName::Es2020]);
+    assert!(compiler.no_default_lib);
+    assert!(!compiler.include_dom);
+    assert_eq!(compiler.types, vec!["foo".to_string(), "bar".to_string()]);
+    assert_eq!(
+      compiler.module_resolution.as_deref(),
+      Some("node16"),
+      "moduleResolution should be normalized"
+    );
+    assert!(!compiler.use_define_for_class_fields);
+    assert_eq!(tsc.get("noLib"), Some(&Value::Bool(true)));
+    assert_eq!(
+      tsc
+        .get("types")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>()),
+      Some(vec!["foo", "bar"])
+    );
   }
 
   #[test]

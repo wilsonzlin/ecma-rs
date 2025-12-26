@@ -61,6 +61,7 @@ pub use runner::ConformanceReport;
 pub use runner::JsonReport;
 pub use runner::OutcomeCounts;
 pub use runner::Summary;
+pub use runner::TestOptions;
 pub use runner::TestOutcome;
 pub use runner::TestResult;
 

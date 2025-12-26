@@ -112,7 +112,12 @@ impl TscRunner {
     loop {
       attempts += 1;
       match self.send(&request) {
-        Ok(diags) => return Ok(diags),
+        Ok(mut diags) => {
+          if diags.metadata.options.is_empty() {
+            diags.metadata.options = request.options.clone();
+          }
+          return Ok(diags);
+        }
         Err(err) => {
           if attempts >= 2 {
             return Err(err);
