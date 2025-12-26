@@ -3458,8 +3458,10 @@ impl ProgramState {
           .map(|e| self.check_expr(e, env, result, file, return_context).0)
           .unwrap_or(self.builtin.undefined);
         if let Some(expected) = return_context {
-          if let Some(expr) = expr {
-            check::assign::check_assignment(self, Some(expr), ty, expected, result, file);
+          if !matches!(self.type_store.kind(expected), TypeKind::Predicate { .. }) {
+            if let Some(expr) = expr {
+              check::assign::check_assignment(self, Some(expr), ty, expected, result, file);
+            }
           }
         }
         result.return_types.push(ty);
@@ -3874,13 +3876,24 @@ impl ProgramState {
           }
           match self.type_store.kind(ret).clone() {
             TypeKind::Predicate {
-              parameter: _parameter,
+              parameter,
               asserted,
               asserts,
             } => {
-              let arg_ty = arg_types.get(0).copied().unwrap_or(self.builtin.unknown);
-              if let Some(first_arg) = args.get(0) {
-                if let HirExprKind::Ident(name) = &first_arg.kind {
+              let target_idx = if parameter.is_empty() {
+                0
+              } else {
+                args
+                  .iter()
+                  .position(|arg| matches!(&arg.kind, HirExprKind::Ident(name) if name == &parameter))
+                  .unwrap_or(0)
+              };
+              let arg_ty = arg_types
+                .get(target_idx)
+                .copied()
+                .unwrap_or(self.builtin.unknown);
+              if let Some(arg_expr) = args.get(target_idx) {
+                if let HirExprKind::Ident(name) = &arg_expr.kind {
                   if let Some(asserted_ty) = asserted {
                     if asserts {
                       facts.assertions.insert(name.clone(), asserted_ty);

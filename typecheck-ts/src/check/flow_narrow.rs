@@ -277,6 +277,13 @@ pub fn narrow_by_in_check(ty: TypeId, prop: &str, store: &TypeStore) -> (TypeId,
         }
       }
     }
+    TypeKind::Array { .. } => {
+      yes.push(ty);
+    }
+    TypeKind::Ref { .. } => {
+      yes.push(ty);
+      no.push(ty);
+    }
     TypeKind::Object(obj) => {
       let shape = store.shape(store.object(obj).shape);
       let has_prop = shape.properties.iter().any(|p| match p.key {

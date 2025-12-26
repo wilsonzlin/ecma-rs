@@ -5,7 +5,8 @@ use diagnostics::FileId;
 use hir_js::{lower_from_source, Body, DefKind, LowerResult, NameId, NameInterner};
 use typecheck_ts::check::hir_body::check_body_with_env;
 use types_ts_interned::{
-  Param, PropData, PropKey, Property, Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeStore,
+  NameId as TypeNameId, Param, PropData, PropKey, Property, Shape, Signature, TypeDisplay, TypeId,
+  TypeKind, TypeStore,
 };
 
 fn name_id(names: &NameInterner, target: &str) -> NameId {
@@ -49,15 +50,28 @@ fn predicate_callable(
   asserted: TypeId,
   asserts: bool,
 ) -> TypeId {
+  predicate_callable_with_params(store, &[(None, param_ty)], asserted, asserts, None)
+}
+
+fn predicate_callable_with_params(
+  store: &Arc<TypeStore>,
+  params: &[(Option<TypeNameId>, TypeId)],
+  asserted: TypeId,
+  asserts: bool,
+  predicate_param: Option<TypeNameId>,
+) -> TypeId {
   let sig = Signature {
-    params: vec![Param {
-      name: None,
-      ty: param_ty,
-      optional: false,
-      rest: false,
-    }],
+    params: params
+      .iter()
+      .map(|(name, ty)| Param {
+        name: *name,
+        ty: *ty,
+        optional: false,
+        rest: false,
+      })
+      .collect(),
     ret: store.intern_type(TypeKind::Predicate {
-      parameter: None,
+      parameter: predicate_param,
       asserted: Some(asserted),
       asserts,
     }),
@@ -460,5 +474,90 @@ function onlyObjects(val: object | number) {
   let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
   assert_eq!(then_ty, "{}");
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn in_checks_cover_arrays() {
+  let src = r#"
+function onlyArrays(val: string[] | number) {
+  if ("length" in val) {
+    return val;
+  }
+  return val;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let body = body_of(&lowered, &lowered.names, "onlyArrays");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let arr = store.intern_type(TypeKind::Array {
+    ty: prim.string,
+    readonly: false,
+  });
+  initial.insert(
+    name_id(lowered.names.as_ref(), "val"),
+    store.union(vec![arr, prim.number]),
+  );
+
+  let res = check_body_with_env(
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  assert_eq!(then_ty, TypeDisplay::new(&store, arr).to_string());
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn predicate_targets_named_argument() {
+  let src = r#"
+function isStr(flag: number, candidate: string | number): candidate is string {
+  return typeof candidate === "string";
+}
+function pick(val: string | number) {
+  if (isStr(0, val)) {
+    return val;
+  }
+  return val;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let val_ty = store.union(vec![prim.string, prim.number]);
+  let candidate = store.intern_name("candidate");
+  let guard = predicate_callable_with_params(
+    &store,
+    &[
+      (Some(store.intern_name("flag")), prim.number),
+      (Some(candidate), val_ty),
+    ],
+    prim.string,
+    false,
+    Some(candidate),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "val"), val_ty);
+  initial.insert(name_id(lowered.names.as_ref(), "isStr"), guard);
+
+  let body = body_of(&lowered, &lowered.names, "pick");
+  let res = check_body_with_env(
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let then_ty = TypeDisplay::new(&store, res.return_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types[1]).to_string();
+  assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "number");
 }

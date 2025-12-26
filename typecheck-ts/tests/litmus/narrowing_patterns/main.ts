@@ -53,3 +53,17 @@ function shortCircuit(val: string | null) {
 }
 
 // expect-expr-type: narrowed; = string
+
+function isString(val: string | number): val is string {
+  return typeof val === "string";
+}
+
+function guardUse(input: string | number) {
+  if (isString(input)) {
+    const refined = input;
+    return refined;
+  }
+  return input;
+}
+
+// expect-expr-type: refined; = string

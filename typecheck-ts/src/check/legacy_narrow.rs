@@ -262,6 +262,9 @@ pub fn narrow_by_in_check(
         }
       }
     }
+    TypeKind::Array(_) => {
+      yes.push(ty);
+    }
     TypeKind::Object(obj) => {
       let has_prop = if obj.props.contains_key(prop) {
         true
