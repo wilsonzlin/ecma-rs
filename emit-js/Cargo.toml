@@ -8,6 +8,7 @@ license = "Apache-2.0"
 [dependencies]
 derive-visitor = "0.4.0"
 diagnostics = { path = "../diagnostics" }
+hir-js = { path = "../hir-js" }
 parse-js = { version = "0.24.1", path = "../parse-js", features = ["diagnostics"] }
 
 [dev-dependencies]

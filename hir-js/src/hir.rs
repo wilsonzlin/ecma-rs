@@ -473,6 +473,12 @@ pub struct Body {
   pub exprs: Vec<Expr>,
   pub stmts: Vec<Stmt>,
   pub pats: Vec<Pat>,
+  /// Statements that form the body in source order. Nested statements are
+  /// referenced by [`StmtKind`] variants.
+  pub root_stmts: Vec<StmtId>,
+  /// Metadata for function-like bodies. Only populated when `kind` is
+  /// [`BodyKind::Function`].
+  pub function: Option<FunctionData>,
   /// Reserved for the checker; filled in by later phases.
   pub expr_types: Option<Vec<()>>,
 }
@@ -485,6 +491,27 @@ pub enum BodyKind {
   Class,
   Initializer,
   Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+  pub pat: PatId,
+  pub default: Option<ExprId>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FunctionBody {
+  Block(Vec<StmtId>),
+  Expr(ExprId),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FunctionData {
+  pub params: Vec<Param>,
+  pub async_: bool,
+  pub generator: bool,
+  pub is_arrow: bool,
+  pub body: FunctionBody,
 }
 
 #[derive(Debug, Clone, PartialEq)]

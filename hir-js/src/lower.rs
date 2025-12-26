@@ -2,11 +2,11 @@ use crate::hir::{
   ArrayElement, ArrayLiteral, ArrayPat, ArrayPatElement, AssignOp, BinaryOp, Body, BodyKind,
   CallArg, CallExpr, CatchClause, DefData, Export, ExportAlias, ExportAll, ExportAssignment,
   ExportDefault, ExportDefaultValue, ExportKind, ExportNamed, ExportSpecifier, Expr, ExprKind,
-  FileKind, ForHead, ForInit, HirFile, Import, ImportBinding, ImportEquals, ImportEqualsTarget,
-  ImportEs, ImportKind, ImportNamed, JsxElement, JsxElementKind, Literal, LowerResult, MemberExpr,
-  ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Pat,
-  PatKind, Stmt, StmtKind, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp,
-  VarDecl, VarDeclKind, VarDeclarator,
+  FileKind, ForHead, ForInit, FunctionBody, FunctionData, HirFile, Import, ImportBinding,
+  ImportEquals, ImportEqualsTarget, ImportEs, ImportKind, ImportNamed, JsxElement, JsxElementKind,
+  Literal, LowerResult, MemberExpr, ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat,
+  ObjectPatProp, ObjectProperty, Param, Pat, PatKind, Stmt, StmtKind, SwitchCase, TemplateLiteral,
+  TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl, VarDeclKind, VarDeclarator,
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
@@ -115,7 +115,10 @@ enum DefSource<'a> {
   Function(&'a Node<FuncDecl>),
   ArrowFunction(&'a Node<ArrowFuncExpr>),
   FuncExpr(&'a Node<FuncExpr>),
-  Var(&'a AstVarDeclarator),
+  Var(&'a AstVarDeclarator, VarDeclKind),
+  Method(&'a Node<parse_js::ast::class_or_object::ClassOrObjMethod>),
+  Getter(&'a Node<parse_js::ast::class_or_object::ClassOrObjGetter>),
+  Setter(&'a Node<parse_js::ast::class_or_object::ClassOrObjSetter>),
   ExportDefaultExpr(&'a Node<ExportDefaultExprStmt>),
   ExportAssignment(&'a Node<ExportAssignmentDecl>),
 }
@@ -265,10 +268,13 @@ fn allocate_def_id(def_path: DefPath, allocated: &mut BTreeMap<u32, DefPath>) ->
 impl<'a> DefSource<'a> {
   fn body_kind(&self) -> Option<BodyKind> {
     match self {
-      DefSource::Function(_) | DefSource::ArrowFunction(_) | DefSource::FuncExpr(_) => {
-        Some(BodyKind::Function)
-      }
-      DefSource::Var(_) => Some(BodyKind::Initializer),
+      DefSource::Function(_)
+      | DefSource::ArrowFunction(_)
+      | DefSource::FuncExpr(_)
+      | DefSource::Method(_)
+      | DefSource::Getter(_)
+      | DefSource::Setter(_) => Some(BodyKind::Function),
+      DefSource::Var(..) => Some(BodyKind::Initializer),
       DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
       DefSource::None => None,
     }
@@ -279,7 +285,10 @@ impl<'a> DefSource<'a> {
       DefSource::Function(node) => Some(RawNode::from(*node)),
       DefSource::ArrowFunction(node) => Some(RawNode::from(*node)),
       DefSource::FuncExpr(node) => Some(RawNode::from(*node)),
-      DefSource::Var(_) => None,
+      DefSource::Var(_, _) => None,
+      DefSource::Method(node) => Some(RawNode::from(*node)),
+      DefSource::Getter(node) => Some(RawNode::from(*node)),
+      DefSource::Setter(node) => Some(RawNode::from(*node)),
       DefSource::ExportDefaultExpr(node) => Some(RawNode::from(*node)),
       DefSource::ExportAssignment(node) => Some(RawNode::from(*node)),
       DefSource::None => None,
@@ -471,6 +480,8 @@ fn empty_body(owner: DefId, kind: BodyKind) -> Body {
     exprs: Vec::new(),
     stmts: Vec::new(),
     pats: Vec::new(),
+    root_stmts: Vec::new(),
+    function: None,
     expr_types: None,
   }
 }
@@ -489,6 +500,7 @@ fn lower_body_from_source(
       owner,
       body_id,
       &decl.stx.function,
+      false,
       def_lookup,
       names,
       span_map,
@@ -498,6 +510,7 @@ fn lower_body_from_source(
       owner,
       body_id,
       &func.stx.func,
+      true,
       def_lookup,
       names,
       span_map,
@@ -507,22 +520,57 @@ fn lower_body_from_source(
       owner,
       body_id,
       &func.stx.func,
+      false,
       def_lookup,
       names,
       span_map,
       ctx,
     ),
-    DefSource::Var(decl) => lower_var_body(owner, decl, def_lookup, names, span_map, ctx),
+    DefSource::Method(method) => lower_function_body(
+      owner,
+      body_id,
+      &method.stx.func,
+      false,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    ),
+    DefSource::Getter(getter) => lower_function_body(
+      owner,
+      body_id,
+      &getter.stx.func,
+      false,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    ),
+    DefSource::Setter(setter) => lower_function_body(
+      owner,
+      body_id,
+      &setter.stx.func,
+      false,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    ),
+    DefSource::Var(decl, kind) => {
+      lower_var_body(owner, decl, *kind, def_lookup, names, span_map, ctx)
+    }
     DefSource::ExportDefaultExpr(expr) => {
       let mut builder = BodyBuilder::new(owner, BodyKind::TopLevel, def_lookup, names, span_map);
       let expr_id = lower_expr(&expr.stx.expression, &mut builder, ctx);
-      builder.alloc_stmt(ctx.to_range(expr.loc), StmtKind::Expr(expr_id));
+      let stmt_id = builder.alloc_stmt(ctx.to_range(expr.loc), StmtKind::Expr(expr_id));
+      builder.root_stmt(stmt_id);
       Some(builder.finish())
     }
     DefSource::ExportAssignment(assign) => {
       let mut builder = BodyBuilder::new(owner, BodyKind::TopLevel, def_lookup, names, span_map);
       let expr_id = lower_expr(&assign.stx.expression, &mut builder, ctx);
-      builder.alloc_stmt(ctx.to_range(assign.loc), StmtKind::Expr(expr_id));
+      let stmt_id = builder.alloc_stmt(ctx.to_range(assign.loc), StmtKind::Expr(expr_id));
+      builder.root_stmt(stmt_id);
       Some(builder.finish())
     }
     DefSource::None => None,
@@ -532,6 +580,7 @@ fn lower_body_from_source(
 fn lower_var_body(
   owner: DefId,
   decl: &AstVarDeclarator,
+  kind: VarDeclKind,
   def_lookup: &DefLookup,
   names: &mut NameInterner,
   span_map: &mut SpanMap,
@@ -543,13 +592,14 @@ fn lower_var_body(
     .initializer
     .as_ref()
     .map(|expr| lower_expr(expr, &mut builder, ctx));
-  builder.alloc_stmt(
+  let stmt_id = builder.alloc_stmt(
     ctx.to_range(decl.pattern.loc),
     StmtKind::Var(VarDecl {
-      kind: VarDeclKind::Var,
+      kind,
       declarators: vec![VarDeclarator { pat: pat_id, init }],
     }),
   );
+  builder.root_stmt(stmt_id);
   Some(builder.finish())
 }
 
@@ -557,31 +607,50 @@ fn lower_function_body(
   owner: DefId,
   body_id: BodyId,
   func: &Node<Func>,
+  is_arrow: bool,
   def_lookup: &DefLookup,
   names: &mut NameInterner,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
   let mut builder = BodyBuilder::new(owner, BodyKind::Function, def_lookup, names, span_map);
+  let mut params = Vec::new();
   for param in func.stx.parameters.iter() {
-    lower_pat(&param.stx.pattern.stx.pat, &mut builder, ctx);
-    if let Some(default) = &param.stx.default_value {
-      lower_expr(default, &mut builder, ctx);
-    }
+    let pat = lower_pat(&param.stx.pattern.stx.pat, &mut builder, ctx);
+    let default = param
+      .stx
+      .default_value
+      .as_ref()
+      .map(|default| lower_expr(default, &mut builder, ctx));
+    params.push(Param { pat, default });
   }
 
-  match &func.stx.body {
+  let body = match &func.stx.body {
     Some(FuncBody::Block(stmts)) => {
+      let mut stmt_ids = Vec::new();
       for stmt in stmts.iter() {
-        lower_stmt(stmt, &mut builder, ctx);
+        let id = lower_stmt(stmt, &mut builder, ctx);
+        builder.root_stmt(id);
+        stmt_ids.push(id);
       }
+      FunctionBody::Block(stmt_ids)
     }
     Some(FuncBody::Expression(expr)) => {
       let expr_id = lower_expr(expr, &mut builder, ctx);
-      builder.alloc_stmt(ctx.to_range(expr.loc), StmtKind::Return(Some(expr_id)));
+      let ret_stmt = builder.alloc_stmt(ctx.to_range(expr.loc), StmtKind::Return(Some(expr_id)));
+      builder.root_stmt(ret_stmt);
+      FunctionBody::Expr(expr_id)
     }
-    None => {}
-  }
+    None => FunctionBody::Block(Vec::new()),
+  };
+
+  builder.function = Some(FunctionData {
+    params,
+    async_: func.stx.async_,
+    generator: func.stx.generator,
+    is_arrow,
+    body,
+  });
 
   Some(builder.finish_with_id(body_id))
 }
@@ -1450,6 +1519,8 @@ struct BodyBuilder<'a> {
   exprs: Vec<Expr>,
   stmts: Vec<Stmt>,
   pats: Vec<Pat>,
+  root_stmts: Vec<StmtId>,
+  function: Option<FunctionData>,
   def_lookup: &'a DefLookup,
   names: &'a mut NameInterner,
   span_map: &'a mut SpanMap,
@@ -1469,6 +1540,8 @@ impl<'a> BodyBuilder<'a> {
       exprs: Vec::new(),
       stmts: Vec::new(),
       pats: Vec::new(),
+      root_stmts: Vec::new(),
+      function: None,
       def_lookup,
       names,
       span_map,
@@ -1495,6 +1568,10 @@ impl<'a> BodyBuilder<'a> {
     id
   }
 
+  fn root_stmt(&mut self, id: StmtId) {
+    self.root_stmts.push(id);
+  }
+
   fn finish_with_id(self, _body_id: BodyId) -> Body {
     self.finish()
   }
@@ -1506,6 +1583,8 @@ impl<'a> BodyBuilder<'a> {
       exprs: self.exprs,
       stmts: self.stmts,
       pats: self.pats,
+      root_stmts: self.root_stmts,
+      function: self.function,
       expr_types: None,
     }
   }
@@ -2129,13 +2208,18 @@ fn collect_namespace<'a>(
 fn collect_var_decl<'a>(
   var_decl: &'a Node<parse_js::ast::stmt::decl::VarDecl>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
-  _module_items: &mut Vec<ModuleItem<'a>>,
+  module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
   is_item: bool,
   ambient: bool,
   in_global: bool,
   ctx: &mut LoweringContext,
 ) {
+  let kind = match var_decl.stx.mode {
+    parse_js::ast::stmt::decl::VarDeclMode::Const => VarDeclKind::Const,
+    parse_js::ast::stmt::decl::VarDeclMode::Let => VarDeclKind::Let,
+    _ => VarDeclKind::Var,
+  };
   for declarator in var_decl.stx.declarators.iter() {
     let pat_names = collect_pat_names(&declarator.pattern.stx.pat, names, ctx);
     if pat_names.is_empty() {
@@ -2148,7 +2232,7 @@ fn collect_var_decl<'a>(
         is_item,
         ambient,
         in_global,
-        DefSource::Var(declarator),
+        DefSource::Var(declarator, kind),
       ));
     } else {
       for (id, span) in pat_names {
@@ -2160,9 +2244,22 @@ fn collect_var_decl<'a>(
           is_item,
           ambient,
           in_global,
-          DefSource::Var(declarator),
+          DefSource::Var(declarator, kind),
         ));
       }
+    }
+  }
+  for declarator in var_decl.stx.declarators.iter() {
+    if let Some(init) = &declarator.initializer {
+      collect_expr(
+        init,
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
   }
 }
@@ -2769,7 +2866,7 @@ fn collect_expr<'a>(
       use parse_js::ast::class_or_object::ObjMemberType;
       for member in obj.stx.members.iter() {
         match &member.stx.typ {
-          ObjMemberType::Valued { val, .. } => match val {
+          ObjMemberType::Valued { key, val } => match val {
             ClassOrObjVal::Prop(Some(expr)) => collect_expr(
               expr,
               descriptors,
@@ -2779,6 +2876,72 @@ fn collect_expr<'a>(
               in_global,
               ctx,
             ),
+            ClassOrObjVal::Getter(getter) => {
+              let (name_id, name_text) = obj_key_name(key, names);
+              descriptors.push(DefDescriptor::new(
+                DefKind::Method,
+                name_id,
+                name_text,
+                ctx.to_range(getter.loc),
+                false,
+                ambient,
+                in_global,
+                DefSource::Getter(getter),
+              ));
+              collect_func_params(
+                &getter.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
+            }
+            ClassOrObjVal::Setter(setter) => {
+              let (name_id, name_text) = obj_key_name(key, names);
+              descriptors.push(DefDescriptor::new(
+                DefKind::Method,
+                name_id,
+                name_text,
+                ctx.to_range(setter.loc),
+                false,
+                ambient,
+                in_global,
+                DefSource::Setter(setter),
+              ));
+              collect_func_params(
+                &setter.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
+            }
+            ClassOrObjVal::Method(method) => {
+              let (name_id, name_text) = obj_key_name(key, names);
+              descriptors.push(DefDescriptor::new(
+                DefKind::Method,
+                name_id,
+                name_text,
+                ctx.to_range(method.loc),
+                false,
+                ambient,
+                in_global,
+                DefSource::Method(method),
+              ));
+              collect_func_params(
+                &method.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
+            }
             _ => {}
           },
           ObjMemberType::Rest { val } => collect_expr(
@@ -2914,6 +3077,18 @@ fn collect_expr<'a>(
     }
     _ => {}
   }
+}
+
+fn obj_key_name(
+  key: &parse_js::ast::class_or_object::ClassOrObjKey,
+  names: &mut NameInterner,
+) -> (NameId, String) {
+  let name_id = match key {
+    parse_js::ast::class_or_object::ClassOrObjKey::Direct(direct) => names.intern(&direct.stx.key),
+    parse_js::ast::class_or_object::ClassOrObjKey::Computed(_) => names.intern("<computed>"),
+  };
+  let name_text = names.resolve(name_id).unwrap().to_string();
+  (name_id, name_text)
 }
 
 fn collect_exprs_from_pat<'a>(
