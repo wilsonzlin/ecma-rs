@@ -70,6 +70,7 @@ fn selects_literal_overload() {
     &relate,
     callable,
     &[click, handler],
+    None,
     &[],
     None,
     span(),
@@ -105,6 +106,7 @@ fn infers_generic_return_type() {
     &relate,
     callable,
     &[primitives.number],
+    None,
     &decls,
     None,
     span(),
@@ -137,6 +139,7 @@ fn reports_no_matching_overload_with_reasons() {
     &relate,
     callable,
     &[primitives.string],
+    None,
     &[],
     None,
     span(),
@@ -185,6 +188,7 @@ fn reports_ambiguous_call() {
     &relate,
     callable,
     &[primitives.string],
+    None,
     &[],
     None,
     span(),
@@ -234,7 +238,7 @@ fn prefers_union_compatible_overload() {
     overloads: vec![sig_string_id, sig_number_id, sig_union_id],
   });
 
-  let resolution = resolve_call(&store, &relate, callable, &[union], &[], None, span());
+  let resolution = resolve_call(&store, &relate, callable, &[union], None, &[], None, span());
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(sig_union_id));
@@ -283,6 +287,7 @@ fn prefers_fixed_arity_over_rest() {
     &relate,
     callable,
     &[primitives.string, primitives.string],
+    None,
     &[],
     None,
     span(),
@@ -328,6 +333,7 @@ fn prefers_non_generic_when_inference_is_unknown() {
     &relate,
     callable,
     &[primitives.any],
+    None,
     &decls,
     None,
     span(),
@@ -363,6 +369,7 @@ fn uses_contextual_return_for_generic_inference() {
     &relate,
     callable,
     &[primitives.any],
+    None,
     &decls,
     Some(primitives.number),
     span(),

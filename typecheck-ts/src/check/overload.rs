@@ -91,6 +91,10 @@ enum CandidateRejection {
     arg: TypeId,
     param: TypeId,
   },
+  ThisType {
+    expected: TypeId,
+    actual: Option<TypeId>,
+  },
 }
 
 #[derive(Debug)]
@@ -111,6 +115,7 @@ pub fn resolve_overloads(
   relate: &RelateCtx<'_>,
   callee: TypeId,
   args: &[TypeId],
+  this_arg: Option<TypeId>,
   type_params: &[TypeParamDecl],
   contextual_return: Option<TypeId>,
   span: Span,
@@ -191,6 +196,29 @@ pub fn resolve_overloads(
       });
       outcomes.push(outcome);
       continue;
+    }
+
+    if let Some(expected_this) = instantiated_sig.this_param {
+      match this_arg {
+        Some(actual_this) => {
+          if !relate.is_assignable(actual_this, expected_this) {
+            outcome.rejection = Some(CandidateRejection::ThisType {
+              expected: expected_this,
+              actual: Some(actual_this),
+            });
+            outcomes.push(outcome);
+            continue;
+          }
+        }
+        None => {
+          outcome.rejection = Some(CandidateRejection::ThisType {
+            expected: expected_this,
+            actual: None,
+          });
+          outcomes.push(outcome);
+          continue;
+        }
+      }
     }
 
     let (_assignable, specificity, mismatch) =
@@ -518,6 +546,17 @@ fn describe_rejection(store: &TypeStore, reason: &CandidateRejection) -> String 
       TypeDisplay::new(store, *arg),
       TypeDisplay::new(store, *param)
     ),
+    CandidateRejection::ThisType { expected, actual } => match actual {
+      Some(actual) => format!(
+        "`this` of type {} is not assignable to expected type {}",
+        TypeDisplay::new(store, *actual),
+        TypeDisplay::new(store, *expected)
+      ),
+      None => format!(
+        "call requires a `this` context of type {}",
+        TypeDisplay::new(store, *expected)
+      ),
+    },
   }
 }
 

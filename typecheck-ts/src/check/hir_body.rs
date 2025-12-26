@@ -35,6 +35,7 @@ use super::expr::resolve_call;
 use super::infer::{infer_type_arguments_from_contextual_signature, TypeParamDecl};
 use super::instantiate::Substituter;
 use super::overload;
+use super::relate_hooks;
 use super::type_expr::TypeLowerer;
 use crate::codes;
 
@@ -414,7 +415,7 @@ pub fn check_body(
     .collect();
 
   let body_range = body_range(body);
-  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  let relate = RelateCtx::with_hooks(Arc::clone(&store), store.options(), relate_hooks());
   let mut lowerer = TypeLowerer::new(Arc::clone(&store));
   lowerer.set_file(file);
   let mut checker = Checker {
@@ -580,6 +581,10 @@ impl<'a> Checker<'a> {
     }
     for param in func.stx.parameters.iter() {
       let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
+      let is_this = matches!(
+        param.stx.pattern.stx.pat.stx.as_ref(),
+        AstPat::Id(id) if id.stx.name == "this"
+      );
       let annotation = param
         .stx
         .type_annotation
@@ -589,6 +594,10 @@ impl<'a> Checker<'a> {
       if let Some(default) = &param.stx.default_value {
         let default_ty = self.check_expr_with_context(default, Some(ty));
         ty = self.store.union(vec![ty, default_ty]);
+      }
+      if is_this {
+        self.insert_binding("this".to_string(), ty, type_param_decls.clone());
+        continue;
       }
       if let Some(pat) = self.index.pats.get(&pat_span) {
         self.bind_pattern_with_type_params(pat, ty, type_param_decls.clone());
@@ -846,7 +855,10 @@ impl<'a> Checker<'a> {
           .store
           .intern_type(TypeKind::BigIntLiteral(parsed.into()))
       }
-      AstExpr::This(_) => self.store.primitive_ids().unknown,
+      AstExpr::This(_) => self
+        .lookup("this")
+        .map(|b| b.ty)
+        .unwrap_or(self.store.primitive_ids().unknown),
       AstExpr::Super(_) => self.store.primitive_ids().unknown,
       AstExpr::Unary(un) => self.check_unary(un.stx.operator, &un.stx.argument),
       AstExpr::UnaryPostfix(post) => match post.stx.operator {
@@ -862,8 +874,28 @@ impl<'a> Checker<'a> {
         self.store.union(vec![cons, alt])
       }
       AstExpr::Call(call) => {
-        let callee_ty = self.check_expr_with_context(&call.stx.callee, None);
-        let arg_contexts = self.contextual_argument_types(callee_ty, call.stx.arguments.len());
+        let (callee_ty, this_arg, arg_contexts) = match call.stx.callee.stx.as_ref() {
+          AstExpr::Member(mem) => {
+            let obj_ty = self.check_expr(&mem.stx.left);
+            let prop_ty = self.member_type(obj_ty, &mem.stx.right);
+            self.record_expr_type(call.stx.callee.loc, prop_ty);
+            let contexts = self.contextual_argument_types(prop_ty, call.stx.arguments.len());
+            (prop_ty, Some(obj_ty), contexts)
+          }
+          AstExpr::ComputedMember(mem) => {
+            let obj_ty = self.check_expr(&mem.stx.object);
+            let _ = self.check_expr(&mem.stx.member);
+            let prop_ty = self.member_type(obj_ty, "<computed>");
+            self.record_expr_type(call.stx.callee.loc, prop_ty);
+            let contexts = self.contextual_argument_types(prop_ty, call.stx.arguments.len());
+            (prop_ty, Some(obj_ty), contexts)
+          }
+          _ => {
+            let callee_ty = self.check_expr_with_context(&call.stx.callee, None);
+            let arg_contexts = self.contextual_argument_types(callee_ty, call.stx.arguments.len());
+            (callee_ty, None, arg_contexts)
+          }
+        };
         let arg_types: Vec<TypeId> = call
           .stx
           .arguments
@@ -888,6 +920,7 @@ impl<'a> Checker<'a> {
           &self.relate,
           callee_ty,
           &arg_types,
+          this_arg,
           &type_params,
           contextual,
           span,
@@ -1318,7 +1351,8 @@ impl<'a> Checker<'a> {
 
     self.scopes.push(Scope::default());
 
-    let mut param_types = Vec::new();
+    let mut this_param = None;
+    let mut params = Vec::new();
     for (idx, param) in func.stx.parameters.iter().enumerate() {
       let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
       let annotation = param
@@ -1334,10 +1368,24 @@ impl<'a> Checker<'a> {
         let default_ty = self.check_expr_with_context(default, Some(ty));
         ty = self.store.union(vec![ty, default_ty]);
       }
-      param_types.push(ty);
+      let is_this = matches!(
+        param.stx.pattern.stx.pat.stx.as_ref(),
+        AstPat::Id(id) if id.stx.name == "this"
+      );
+      if is_this && this_param.is_none() {
+        this_param = Some(ty);
+        self.insert_binding("this".to_string(), ty, type_param_decls.clone());
+        continue;
+      }
       if let Some(pat) = self.index.pats.get(&pat_span) {
         self.bind_pattern_with_type_params(pat, ty, type_param_decls.clone());
       }
+      params.push(SigParam {
+        name: None,
+        ty,
+        optional: param.stx.optional,
+        rest: param.stx.rest,
+      });
     }
 
     let contextual_ret = contextual_sig.as_ref().map(|sig| sig.ret);
@@ -1365,21 +1413,10 @@ impl<'a> Checker<'a> {
     let ret_ty = ret_ty.unwrap_or(prim.unknown);
 
     let mut sig = Signature {
-      params: func
-        .stx
-        .parameters
-        .iter()
-        .zip(param_types.iter())
-        .map(|(p, ty)| SigParam {
-          name: None,
-          ty: *ty,
-          optional: p.stx.optional,
-          rest: p.stx.rest,
-        })
-        .collect::<Vec<_>>(),
+      params,
       ret: ret_ty,
       type_params: type_param_ids.clone(),
-      this_param: None,
+      this_param,
     };
 
     if let Some(ctx_sig) = contextual_sig.as_ref() {

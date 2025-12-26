@@ -261,11 +261,12 @@ impl TypeLowerer {
     if let Some(params) = func.stx.type_parameters.as_ref() {
       type_param_ids = self.register_type_params(params);
     }
+    let (this_param, params) = self.lower_params(&func.stx.parameters);
     let sig = Signature {
-      params: self.lower_params(&func.stx.parameters),
+      params,
       ret: self.lower_type_expr(&func.stx.return_type),
       type_params: type_param_ids,
-      this_param: None,
+      this_param,
     };
     self.type_params = snapshot;
     let sig_id = self.store.intern_signature(sig);
@@ -280,11 +281,12 @@ impl TypeLowerer {
     if let Some(params) = cons.stx.type_parameters.as_ref() {
       type_param_ids = self.register_type_params(params);
     }
+    let (this_param, params) = self.lower_params(&cons.stx.parameters);
     let sig = Signature {
-      params: self.lower_params(&cons.stx.parameters),
+      params,
       ret: self.lower_type_expr(&cons.stx.return_type),
       type_params: type_param_ids,
-      this_param: None,
+      this_param,
     };
     self.type_params = snapshot;
     let sig_id = self.store.intern_signature(sig);
@@ -293,10 +295,18 @@ impl TypeLowerer {
     })
   }
 
-  fn lower_params(&mut self, params: &[Node<TypeFunctionParameter>]) -> Vec<Param> {
-    params
-      .iter()
-      .map(|p| Param {
+  fn lower_params(
+    &mut self,
+    params: &[Node<TypeFunctionParameter>],
+  ) -> (Option<TypeId>, Vec<Param>) {
+    let mut lowered = Vec::new();
+    let mut this_param = None;
+    for p in params.iter() {
+      if matches!(p.stx.name.as_deref(), Some("this")) && this_param.is_none() {
+        this_param = Some(self.lower_type_expr(&p.stx.type_expr));
+        continue;
+      }
+      lowered.push(Param {
         name: p
           .stx
           .name
@@ -305,8 +315,9 @@ impl TypeLowerer {
         ty: self.lower_type_expr(&p.stx.type_expr),
         optional: p.stx.optional,
         rest: p.stx.rest,
-      })
-      .collect()
+      });
+    }
+    (this_param, lowered)
   }
 
   fn lower_object_type(&mut self, obj: &Node<TypeObjectLiteral>) -> TypeId {
@@ -336,8 +347,9 @@ impl TypeLowerer {
           }
         }
         TypeMember::Constructor(cons) => {
+          let (this_param, params) = self.lower_params(&cons.stx.parameters);
           let sig = Signature {
-            params: self.lower_params(&cons.stx.parameters),
+            params,
             ret: cons
               .stx
               .return_type
@@ -345,7 +357,7 @@ impl TypeLowerer {
               .map(|t| self.lower_type_expr(t))
               .unwrap_or(self.store.primitive_ids().unknown),
             type_params: Vec::new(),
-            this_param: None,
+            this_param,
           };
           let sig_id = self.store.intern_signature(sig);
           shape.construct_signatures.push(sig_id);
@@ -355,8 +367,9 @@ impl TypeLowerer {
           if let Some(params) = call.stx.type_parameters.as_ref() {
             type_param_ids = self.register_type_params(params);
           }
+          let (this_param, params) = self.lower_params(&call.stx.parameters);
           let sig = Signature {
-            params: self.lower_params(&call.stx.parameters),
+            params,
             ret: call
               .stx
               .return_type
@@ -364,7 +377,7 @@ impl TypeLowerer {
               .map(|t| self.lower_type_expr(t))
               .unwrap_or(self.store.primitive_ids().unknown),
             type_params: type_param_ids,
-            this_param: None,
+            this_param,
           };
           let sig_id = self.store.intern_signature(sig);
           shape.call_signatures.push(sig_id);
@@ -430,8 +443,9 @@ impl TypeLowerer {
     if let Some(params) = method.stx.type_parameters.as_ref() {
       type_param_ids = self.register_type_params(params);
     }
+    let (this_param, params) = self.lower_params(&method.stx.parameters);
     let sig = Signature {
-      params: self.lower_params(&method.stx.parameters),
+      params,
       ret: method
         .stx
         .return_type
@@ -439,7 +453,7 @@ impl TypeLowerer {
         .map(|t| self.lower_type_expr(t))
         .unwrap_or(self.store.primitive_ids().unknown),
       type_params: type_param_ids,
-      this_param: None,
+      this_param,
     };
     let sig_id = self.store.intern_signature(sig);
     Some((

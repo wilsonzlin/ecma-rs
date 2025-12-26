@@ -3682,13 +3682,14 @@ impl ProgramState {
       let type_options = TypeOptions::from(&self.compiler_options);
       let primitives = store.primitive_ids();
       let expander = self.type_expander(store, body_caches.eval.clone());
+      let hooks = tti::RelateHooks {
+        expander: Some(&expander),
+        ..check::relate_hooks()
+      };
       let relate = tti::RelateCtx::with_hooks_and_cache(
         Arc::clone(store),
         type_options,
-        tti::RelateHooks {
-          expander: Some(&expander),
-          is_same_origin_private_member: None,
-        },
+        hooks,
         body_caches.relation.clone(),
       );
       for (idx, _) in body.expr_spans.iter().enumerate() {

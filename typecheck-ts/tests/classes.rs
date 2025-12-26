@@ -164,7 +164,11 @@ impl ClassEnv {
     let mut instance_shape_props: Vec<Property> = Vec::new();
     let mut static_shape_props: Vec<Property> = Vec::new();
     let mut instance_indexers = Vec::new();
+    let mut instance_call_sigs = Vec::new();
+    let mut instance_construct_sigs = Vec::new();
     let mut static_indexers = Vec::new();
+    let mut static_call_sigs = Vec::new();
+    let mut static_construct_sigs = Vec::new();
 
     let super_instance = decl.extends.as_ref().map(|b| b.instance);
     let super_static = decl.extends.as_ref().map(|b| b.static_type);
@@ -173,11 +177,15 @@ impl ClassEnv {
         let shape = self.store.shape(self.store.object(obj).shape);
         instance_shape_props.extend(shape.properties.clone());
         instance_indexers.extend(shape.indexers.clone());
+        instance_call_sigs.extend(shape.call_signatures.clone());
+        instance_construct_sigs.extend(shape.construct_signatures.clone());
       }
       if let TypeKind::Object(obj) = self.store.type_kind(base.static_type) {
         let shape = self.store.shape(self.store.object(obj).shape);
         static_shape_props.extend(shape.properties.clone());
         static_indexers.extend(shape.indexers.clone());
+        static_call_sigs.extend(shape.call_signatures.clone());
+        static_construct_sigs.extend(shape.construct_signatures.clone());
       }
     }
 
@@ -268,8 +276,10 @@ impl ClassEnv {
         type_params: Vec::new(),
         this_param: None,
       };
+      let ctor_sig_id = self.store.intern_signature(ctor_sig);
+      static_construct_sigs.push(ctor_sig_id);
       let ctor = self.store.intern_type(TypeKind::Callable {
-        overloads: vec![self.store.intern_signature(ctor_sig)],
+        overloads: vec![ctor_sig_id],
       });
       let prop = Property {
         key: PropKey::String(self.store.intern_name("constructor")),
@@ -288,8 +298,8 @@ impl ClassEnv {
 
     let instance_shape = self.store.intern_shape(types_ts_interned::Shape {
       properties: instance_shape_props,
-      call_signatures: Vec::new(),
-      construct_signatures: Vec::new(),
+      call_signatures: instance_call_sigs,
+      construct_signatures: instance_construct_sigs,
       indexers: instance_indexers,
     });
     let instance_ty = self
@@ -307,8 +317,8 @@ impl ClassEnv {
 
     let static_shape = self.store.intern_shape(types_ts_interned::Shape {
       properties: static_shape_props,
-      call_signatures: Vec::new(),
-      construct_signatures: Vec::new(),
+      call_signatures: static_call_sigs,
+      construct_signatures: static_construct_sigs,
       indexers: static_indexers,
     });
     let static_ty = self
@@ -491,4 +501,35 @@ fn methods_capture_implicit_this_type() {
     }
     other => panic!("expected function type, got {other:?}"),
   }
+}
+
+#[test]
+fn this_parameter_is_enforced_in_assignability() {
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let with_this = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(Signature {
+      params: Vec::new(),
+      ret: prim.number,
+      type_params: Vec::new(),
+      this_param: Some(prim.string),
+    })],
+  });
+  let without_this = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(Signature {
+      params: Vec::new(),
+      ret: prim.number,
+      type_params: Vec::new(),
+      this_param: None,
+    })],
+  });
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  assert!(
+    !relate.is_assignable(with_this, without_this),
+    "missing this parameter should make signatures incompatible"
+  );
+  assert!(
+    !relate.is_assignable(without_this, with_this),
+    "adding this parameter should change assignability"
+  );
 }

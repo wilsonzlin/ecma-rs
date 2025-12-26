@@ -319,19 +319,16 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     func: &hir_js::TypeFunction,
     names: &hir_js::NameInterner,
   ) -> Signature {
+    let (this_param, params) = self.lower_fn_params(&func.params, names);
     let mut type_params = Vec::new();
     for tp in func.type_params.iter() {
       type_params.push(self.alloc_type_param(*tp));
     }
     Signature {
-      params: func
-        .params
-        .iter()
-        .map(|p| self.lower_fn_param(p, names))
-        .collect(),
+      params,
       ret: self.lower_type_expr(func.ret, names),
       type_params,
-      this_param: None,
+      this_param,
     }
   }
 
@@ -363,10 +360,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   }
 
   fn lower_signature(&mut self, sig: &TypeSignature, names: &hir_js::NameInterner) -> Signature {
-    let mut sig_params = Vec::new();
-    for param in sig.params.iter() {
-      sig_params.push(self.lower_fn_param(param, names));
-    }
+    let (this_param, sig_params) = self.lower_fn_params(&sig.params, names);
     let ret = sig
       .return_type
       .map(|r| self.lower_type_expr(r, names))
@@ -379,8 +373,26 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       params: sig_params,
       ret,
       type_params,
-      this_param: None,
+      this_param,
     }
+  }
+
+  fn lower_fn_params(
+    &mut self,
+    params: &[TypeFnParam],
+    names: &hir_js::NameInterner,
+  ) -> (Option<TypeId>, Vec<Param>) {
+    let mut lowered = Vec::new();
+    let mut this_param = None;
+    for param in params.iter() {
+      let name = param.name.and_then(|n| names.resolve(n));
+      if matches!(name.as_deref(), Some("this")) && this_param.is_none() {
+        this_param = Some(self.lower_type_expr(param.ty, names));
+        continue;
+      }
+      lowered.push(self.lower_fn_param(param, names));
+    }
+    (this_param, lowered)
   }
 
   fn lower_fn_param(&mut self, param: &TypeFnParam, names: &hir_js::NameInterner) -> Param {
@@ -497,12 +509,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
       hir_js::PropertyName::Computed => return None,
     };
+    let (this_param, params) = self.lower_fn_params(&method.params, names);
     let sig = Signature {
-      params: method
-        .params
-        .iter()
-        .map(|p| self.lower_fn_param(p, names))
-        .collect(),
+      params,
       ret: method
         .return_type
         .map(|t| self.lower_type_expr(t, names))
@@ -512,7 +521,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         .iter()
         .map(|tp| self.alloc_type_param(*tp))
         .collect(),
-      this_param: None,
+      this_param,
     };
     let sig_id = self.store.intern_signature(sig);
     Some((

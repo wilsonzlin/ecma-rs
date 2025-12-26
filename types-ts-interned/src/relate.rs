@@ -1442,6 +1442,19 @@ impl<'a> RelateCtx<'a> {
           };
         }
       }
+      (Some(_), None) => {
+        return RelationResult {
+          result: false,
+          reason: self.join_reasons(
+            record,
+            key,
+            children,
+            false,
+            Some("this parameter".into()),
+            depth,
+          ),
+        }
+      }
       (None, Some(_)) => {
         return RelationResult {
           result: false,
