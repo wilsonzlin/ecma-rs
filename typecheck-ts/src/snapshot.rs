@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{
-  BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeId, TypeStore,
+  BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeStore,
 };
 use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId, TextRange};
 use types_ts_interned::{
-  TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
+  TypeId, TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.

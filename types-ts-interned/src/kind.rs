@@ -101,6 +101,15 @@ pub enum TypeKind {
     args: Vec<TypeId>,
   },
   TypeParam(TypeParamId),
+  Predicate {
+    /// Parameter being tested or asserted, when known.
+    parameter: Option<NameId>,
+    /// Type asserted when the predicate succeeds. `None` indicates an unknown
+    /// asserted type (treated as `boolean`).
+    asserted: Option<TypeId>,
+    /// Whether the predicate acts as an assertion function (throws on failure).
+    asserts: bool,
+  },
   Conditional {
     check: TypeId,
     extends: TypeId,
@@ -146,11 +155,12 @@ impl TypeKind {
       TypeKind::Callable { .. } => 23,
       TypeKind::Ref { .. } => 24,
       TypeKind::TypeParam(_) => 25,
-      TypeKind::Conditional { .. } => 26,
-      TypeKind::Mapped(_) => 27,
-      TypeKind::TemplateLiteral(_) => 28,
-      TypeKind::IndexedAccess { .. } => 29,
-      TypeKind::KeyOf(_) => 30,
+      TypeKind::Predicate { .. } => 26,
+      TypeKind::Conditional { .. } => 27,
+      TypeKind::Mapped(_) => 28,
+      TypeKind::TemplateLiteral(_) => 29,
+      TypeKind::IndexedAccess { .. } => 30,
+      TypeKind::KeyOf(_) => 31,
     }
   }
 }

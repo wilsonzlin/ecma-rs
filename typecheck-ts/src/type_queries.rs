@@ -24,6 +24,7 @@ pub enum TypeKindSummary {
   BigInt,
   Symbol,
   UniqueSymbol,
+  Predicate,
   BooleanLiteral(bool),
   NumberLiteral(OrderedFloat<f64>),
   StringLiteral(String),
@@ -406,6 +407,7 @@ fn summarize_kind(store: &TypeStore, ty: TypeId) -> TypeKindSummary {
     TypeKind::Callable { overloads } => TypeKindSummary::Callable {
       overloads: overloads.len(),
     },
+    TypeKind::Predicate { .. } => TypeKindSummary::Predicate,
     TypeKind::Ref { def, args } => TypeKindSummary::Ref {
       def,
       args: args.len(),

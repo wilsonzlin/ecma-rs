@@ -2,12 +2,14 @@
 
 pub(super) mod assign;
 pub(super) mod cfg;
+pub(super) mod flow_narrow;
 pub(crate) mod decls;
 pub(crate) mod expr;
 pub(super) mod flow;
 pub mod hir_body;
 pub(crate) mod infer;
 pub(crate) mod instantiate;
+pub(super) mod legacy_narrow;
 pub(super) mod modules;
 pub(super) mod narrow;
 pub(super) mod object_literal;

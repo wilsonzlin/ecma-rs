@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use typecheck_ts::{BodyId, FileId, Host, HostError, Program, Severity};
+use typecheck_ts::{BodyId, ExprId, FileId, Host, HostError, Program, Severity};
 
 #[derive(Clone)]
 struct FixtureHost {
@@ -355,20 +355,49 @@ fn resolve_expr_type(
       .filter_map(|def| program.body_of_def(def)),
   );
   let mut best: Option<(u32, typecheck_ts::TypeId)> = None;
+  for probe in [offset, offset.saturating_sub(1)] {
+    for body in candidates.iter().copied() {
+      let result = program.check_body(body);
+      if let Some((expr_id, ty)) = result.expr_at(probe) {
+        if let Some(span) = result.expr_span(expr_id) {
+          let width = span.end - span.start;
+          if best.map(|(w, _)| width < w).unwrap_or(true) {
+            best = Some((width, ty));
+          }
+        } else {
+          best = Some((u32::MAX, ty));
+        }
+      }
+    }
+    if best.is_some() {
+      break;
+    }
+  }
+  if let Some((_, ty)) = best {
+    return Some(ty);
+  }
+
+  // Fallback: choose the closest expression span if no exact match was found.
+  let mut nearest: Option<(u32, typecheck_ts::TypeId)> = None;
   for body in candidates {
     let result = program.check_body(body);
-    if let Some((expr_id, ty)) = result.expr_at(offset) {
-      if let Some(span) = result.expr_span(expr_id) {
-        let width = span.end - span.start;
-        if best.map(|(w, _)| width < w).unwrap_or(true) {
-          best = Some((width, ty));
-        }
+    for (idx, span) in result.expr_spans().iter().enumerate() {
+      let Some(ty) = result.expr_type(ExprId(idx as u32)) else {
+        continue;
+      };
+      let distance = if offset < span.start {
+        span.start - offset
+      } else if offset > span.end {
+        offset - span.end
       } else {
-        best = Some((u32::MAX, ty));
+        0
+      };
+      if nearest.map(|(d, _)| distance < d).unwrap_or(true) {
+        nearest = Some((distance, ty));
       }
     }
   }
-  best.map(|(_, ty)| ty)
+  nearest.map(|(_, ty)| ty)
 }
 
 fn assert_diagnostics(

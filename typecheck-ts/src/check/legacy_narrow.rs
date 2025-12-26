@@ -1,13 +1,21 @@
-//! Helpers for computing flow-sensitive narrowing facts.
+//! Legacy narrowing helpers used by the existing `Program` checker.
 //!
-//! The lightweight checker uses a bounded lattice of "facts" mapping variable
-//! names to narrowed [`TypeId`]s. Facts are merged at control-flow joins by
-//! taking the union of compatible types, ensuring convergence even in the
-//! presence of loops.
+//! This mirrors the pre-flow-analysis narrowing logic and operates on the
+//! simplified type representations defined in `program.rs`.
 
 use std::collections::HashMap;
 
 use crate::program::{BuiltinTypes, TypeId, TypeKind, TypeStore};
+
+/// Literal value used for equality-based narrowing.
+#[derive(Clone, Debug)]
+pub enum LiteralValue {
+  String(String),
+  Number(String),
+  Boolean(bool),
+  Null,
+  Undefined,
+}
 
 /// Narrowing facts produced by evaluating an expression in a boolean context.
 ///
@@ -49,6 +57,75 @@ impl Facts {
   }
 }
 
+/// Narrow by an equality comparison against a literal value.
+pub fn narrow_by_literal(
+  ty: TypeId,
+  lit: &LiteralValue,
+  store: &mut TypeStore,
+  builtin: &BuiltinTypes,
+) -> (TypeId, TypeId) {
+  match store.kind(ty).clone() {
+    TypeKind::Union(members) => {
+      let mut yes = Vec::new();
+      let mut no = Vec::new();
+      for member in members {
+        let (y, n) = narrow_by_literal(member, lit, store, builtin);
+        if y != builtin.never {
+          yes.push(y);
+        }
+        if n != builtin.never {
+          no.push(n);
+        }
+      }
+      (store.union(yes, builtin), store.union(no, builtin))
+    }
+    TypeKind::LiteralString(value) => match lit {
+      LiteralValue::String(target) if value == *target => (ty, builtin.never),
+      LiteralValue::String(_) => (builtin.never, ty),
+      _ => (builtin.never, ty),
+    },
+    TypeKind::String => match lit {
+      LiteralValue::String(target) => (
+        store.literal_string(target.clone()),
+        ty, /* cannot easily exclude a specific string literal */
+      ),
+      _ => (builtin.never, ty),
+    },
+    TypeKind::LiteralNumber(value) => match lit {
+      LiteralValue::Number(target) if value == *target => (ty, builtin.never),
+      LiteralValue::Number(_) => (builtin.never, ty),
+      _ => (builtin.never, ty),
+    },
+    TypeKind::Number => match lit {
+      LiteralValue::Number(target) => (
+        store.literal_number(target.clone()),
+        ty, /* same reasoning as string */
+      ),
+      _ => (builtin.never, ty),
+    },
+    TypeKind::LiteralBoolean(value) => match lit {
+      LiteralValue::Boolean(target) if value == *target => (ty, builtin.never),
+      LiteralValue::Boolean(_) => (builtin.never, ty),
+      _ => (builtin.never, ty),
+    },
+    TypeKind::Boolean => match lit {
+      LiteralValue::Boolean(target) => {
+        (store.literal_boolean(*target), ty /* can't exclude */)
+      }
+      _ => (builtin.never, ty),
+    },
+    TypeKind::Null => match lit {
+      LiteralValue::Null => (ty, builtin.never),
+      _ => (builtin.never, ty),
+    },
+    TypeKind::Undefined => match lit {
+      LiteralValue::Undefined => (ty, builtin.never),
+      _ => (builtin.never, ty),
+    },
+    _ => (builtin.never, ty),
+  }
+}
+
 /// Compute the truthy and falsy types for a given variable type.
 pub fn truthy_falsy_types(
   ty: TypeId,
@@ -73,9 +150,7 @@ pub fn truthy_falsy_types(
     }
     TypeKind::Null | TypeKind::Undefined => (builtin.never, ty),
     TypeKind::LiteralBoolean(false) => (builtin.never, ty),
-    TypeKind::LiteralNumber(n) if n.parse::<f64>().ok().map_or(false, |v| v == 0.0) => {
-      (builtin.never, ty)
-    }
+    TypeKind::LiteralNumber(n) if n == "0" => (builtin.never, ty),
     TypeKind::LiteralString(s) if s.is_empty() => (builtin.never, ty),
     _ => (ty, builtin.never),
   }
@@ -144,11 +219,10 @@ pub fn narrow_by_discriminant(
         }
       }
     }
-    TypeKind::Object(_) => match super::super::lookup_property_type(store, ty, prop, builtin) {
-      Some(prop_ty) => {
-        let prop_kind = store.kind(prop_ty).clone();
-        let matches = match prop_kind {
-          TypeKind::LiteralString(name) => name == value,
+    TypeKind::Object(obj) => {
+      if let Some(prop_data) = obj.props.get(prop) {
+        let matches = match store.kind(prop_data.typ) {
+          TypeKind::LiteralString(s) => s == value,
           TypeKind::String => true,
           _ => false,
         };
@@ -157,9 +231,10 @@ pub fn narrow_by_discriminant(
         } else {
           no.push(ty);
         }
+      } else {
+        no.push(ty);
       }
-      None => no.push(ty),
-    },
+    }
     _ => no.push(ty),
   }
 
@@ -187,8 +262,17 @@ pub fn narrow_by_in_check(
         }
       }
     }
-    TypeKind::Object(_) => {
-      if super::super::lookup_property_type(store, ty, prop, builtin).is_some() {
+    TypeKind::Object(obj) => {
+      let has_prop = if obj.props.contains_key(prop) {
+        true
+      } else if obj.string_index.is_some() {
+        true
+      } else if prop.parse::<usize>().is_ok() {
+        obj.number_index.is_some()
+      } else {
+        false
+      };
+      if has_prop {
         yes.push(ty);
       } else {
         no.push(ty);
@@ -200,7 +284,11 @@ pub fn narrow_by_in_check(
 }
 
 /// Narrow by an `instanceof` check, keeping only object-like members.
-pub fn narrow_by_instanceof(ty: TypeId, store: &mut TypeStore, builtin: &BuiltinTypes) -> (TypeId, TypeId) {
+pub fn narrow_by_instanceof(
+  ty: TypeId,
+  store: &mut TypeStore,
+  builtin: &BuiltinTypes,
+) -> (TypeId, TypeId) {
   match store.kind(ty).clone() {
     TypeKind::Union(members) => {
       let mut yes = Vec::new();

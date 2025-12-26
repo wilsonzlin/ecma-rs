@@ -268,6 +268,22 @@ impl<'a> TypeDisplay<'a> {
         Ok(())
       }
       TypeKind::TypeParam(id) => write!(f, "T{}", id.0),
+      TypeKind::Predicate {
+        asserted, asserts, ..
+      } => {
+        if let Some(asserted) = asserted {
+          let inner = TypeDisplay::new(self.store, asserted);
+          if asserts {
+            write!(f, "asserts {}", inner)
+          } else {
+            write!(f, "{}", inner)
+          }
+        } else if asserts {
+          write!(f, "asserts boolean")
+        } else {
+          write!(f, "boolean")
+        }
+      }
       TypeKind::Conditional {
         check,
         extends,

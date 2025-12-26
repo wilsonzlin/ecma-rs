@@ -793,6 +793,21 @@ impl TypeStore {
       ) => ar.cmp(&br).then_with(|| self.type_cmp(a, b)),
       (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) => a.0.cmp(&b.0),
       (
+        TypeKind::Predicate {
+          parameter: a_param,
+          asserted: a_asserted,
+          asserts: a_asserts,
+        },
+        TypeKind::Predicate {
+          parameter: b_param,
+          asserted: b_asserted,
+          asserts: b_asserts,
+        },
+      ) => a_param
+        .cmp(&b_param)
+        .then_with(|| self.option_type_cmp(a_asserted, b_asserted))
+        .then_with(|| a_asserts.cmp(&b_asserts)),
+      (
         TypeKind::Conditional {
           check: a_c,
           extends: a_e,
@@ -1122,6 +1137,13 @@ impl TypeStore {
         json!({ "kind": "array", "ty": ty.0.to_string(), "readonly": readonly })
       }
       TypeKind::TypeParam(id) => json!({ "kind": "type_param", "id": id.0 }),
+      TypeKind::Predicate {
+        asserted, asserts, ..
+      } => json!({
+        "kind": "predicate",
+        "asserted": asserted.map(|t| t.0.to_string()),
+        "asserts": asserts,
+      }),
       TypeKind::Conditional {
         check,
         extends,

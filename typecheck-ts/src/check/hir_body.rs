@@ -1,10 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use bumpalo::Bump;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
-use hir_js::{Body, BodyKind, ExprId, NameInterner, PatId};
-use ordered_float::OrderedFloat;
+use hir_js::{
+  ArrayElement, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr, NameId,
+  NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind, UnaryOp,
+};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
@@ -15,9 +17,17 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
+use ordered_float::OrderedFloat;
 use types_ts_interned::{
   ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature, TypeId, TypeKind,
   TypeStore,
+};
+
+use super::cfg::{BlockId, ControlFlowGraph};
+use super::flow::Env;
+use super::flow_narrow::{
+  narrow_by_asserted, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof, narrow_by_literal,
+  narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
 };
 
 use super::expr::resolve_call;
@@ -212,9 +222,7 @@ impl<'a> AstIndex<'a> {
   fn index_function(&mut self, func: &'a Node<Func>, file: FileId) {
     if let Some(body) = &func.stx.body {
       let body_span = match body {
-        FuncBody::Block(block) => {
-          span_for_stmt_list(&block, file).unwrap_or(loc_to_range(file, func.loc))
-        }
+        FuncBody::Block(block) => span_for_stmt_list(&block, file).unwrap_or(loc_to_range(file, func.loc)),
         FuncBody::Expression(expr) => loc_to_range(file, expr.loc),
       };
       self.functions.push(FunctionInfo { body_span, func });
@@ -447,9 +455,7 @@ pub fn check_body(
     }
   }
 
-  checker
-    .diagnostics
-    .extend(checker.lowerer.take_diagnostics());
+  checker.diagnostics.extend(checker.lowerer.take_diagnostics());
   BodyCheckResult {
     expr_types: checker.expr_types,
     pat_types: checker.pat_types,
@@ -509,10 +515,7 @@ impl<'a> Checker<'a> {
         let len = func.body_span.end.saturating_sub(func.body_span.start);
         let replace = match best {
           Some(existing) => {
-            let existing_len = existing
-              .body_span
-              .end
-              .saturating_sub(existing.body_span.start);
+            let existing_len = existing.body_span.end.saturating_sub(existing.body_span.start);
             len < existing_len
           }
           None => true,
@@ -547,9 +550,7 @@ impl<'a> Checker<'a> {
     }
     if let Some((pat_span, info)) = best {
       if let Some(init) = info.initializer {
-        let annotation = info
-          .type_annotation
-          .map(|ann| self.lowerer.lower_type_expr(ann));
+        let annotation = info.type_annotation.map(|ann| self.lowerer.lower_type_expr(ann));
         let init_ty = self.check_expr(init);
         let ty = annotation.unwrap_or(init_ty);
         if let Some(pat) = self.index.pats.get(&pat_span) {
@@ -573,7 +574,11 @@ impl<'a> Checker<'a> {
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
-      let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
+      let default_ty = param
+        .stx
+        .default_value
+        .as_ref()
+        .map(|d| self.check_expr(d));
       let mut ty = annotation.unwrap_or(self.store.primitive_ids().unknown);
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
@@ -584,10 +589,7 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn lower_type_params(
-    &mut self,
-    params: &[Node<parse_js::ast::type_expr::TypeParameter>],
-  ) -> Vec<TypeParamDecl> {
+  fn lower_type_params(&mut self, params: &[Node<parse_js::ast::type_expr::TypeParameter>]) -> Vec<TypeParamDecl> {
     let ids = self.lowerer.register_type_params(params);
     let mut decls = Vec::new();
     for (param, id) in params.iter().zip(ids.iter()) {
@@ -813,7 +815,9 @@ impl<'a> Checker<'a> {
       }
       AstExpr::LitStr(str_lit) => {
         let name = self.store.intern_name(str_lit.stx.value.clone());
-        self.store.intern_type(TypeKind::StringLiteral(name))
+        self
+          .store
+          .intern_type(TypeKind::StringLiteral(name))
       }
       AstExpr::LitBool(b) => self
         .store
@@ -858,14 +862,7 @@ impl<'a> Checker<'a> {
           .get(&callee_ty)
           .cloned()
           .unwrap_or_default();
-        let resolution = resolve_call(
-          &self.store,
-          &self.relate,
-          callee_ty,
-          &arg_types,
-          &type_params,
-          span,
-        );
+        let resolution = resolve_call(&self.store, &self.relate, callee_ty, &arg_types, &type_params, span);
         for diag in &resolution.diagnostics {
           self.diagnostics.push(diag.clone());
         }
@@ -874,11 +871,7 @@ impl<'a> Checker<'a> {
             let sig = self.store.signature(sig_id);
             let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
             let has_rest = sig.params.iter().any(|p| p.rest);
-            let max = if has_rest {
-              None
-            } else {
-              Some(sig.params.len())
-            };
+            let max = if has_rest { None } else { Some(sig.params.len()) };
             if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
               self.diagnostics.push(Diagnostic::error(
                 CODE_ARGUMENT_COUNT_MISMATCH,
@@ -913,10 +906,11 @@ impl<'a> Checker<'a> {
         } else {
           self.store.union(elems)
         };
-        self.store.intern_type(TypeKind::Array {
-          ty: elem_ty,
-          readonly: false,
-        })
+        self.store
+          .intern_type(TypeKind::Array {
+            ty: elem_ty,
+            readonly: false,
+          })
       }
       AstExpr::LitObj(obj) => self.object_literal_type(obj),
       AstExpr::Func(func) => self.function_type(&func.stx.func),
@@ -959,7 +953,10 @@ impl<'a> Checker<'a> {
           .map(|idx| idx.value_type)
           .unwrap_or(prim.unknown)
       }
-      TypeKind::Tuple(elems) => elems.get(0).map(|e| e.ty).unwrap_or(prim.unknown),
+      TypeKind::Tuple(elems) => elems
+        .get(0)
+        .map(|e| e.ty)
+        .unwrap_or(prim.unknown),
       _ => prim.unknown,
     }
   }
@@ -1199,9 +1196,9 @@ impl<'a> Checker<'a> {
     }
     if let Some(rest) = &arr.stx.rest {
       let rest_ty = match self.store.type_kind(value) {
-        TypeKind::Array { ty, readonly } => {
-          self.store.intern_type(TypeKind::Array { ty, readonly })
-        }
+        TypeKind::Array { ty, readonly } => self
+          .store
+          .intern_type(TypeKind::Array { ty, readonly }),
         TypeKind::Tuple(elems) => {
           let elems: Vec<TypeId> = elems.into_iter().map(|e| e.ty).collect();
           let elem_ty = if elems.is_empty() {
@@ -1209,15 +1206,19 @@ impl<'a> Checker<'a> {
           } else {
             self.store.union(elems)
           };
-          self.store.intern_type(TypeKind::Array {
-            ty: elem_ty,
-            readonly: false,
-          })
+          self
+            .store
+            .intern_type(TypeKind::Array {
+              ty: elem_ty,
+              readonly: false,
+            })
         }
-        _ => self.store.intern_type(TypeKind::Array {
-          ty: prim.unknown,
-          readonly: false,
-        }),
+        _ => self
+          .store
+          .intern_type(TypeKind::Array {
+            ty: prim.unknown,
+            readonly: false,
+          }),
       };
       self.bind_pattern_with_type_params(rest, rest_ty, type_params.clone());
     }
@@ -1307,9 +1308,9 @@ impl<'a> Checker<'a> {
       this_param: None,
     };
     let sig_id = self.store.intern_signature(sig);
-    let ty = self.store.intern_type(TypeKind::Callable {
-      overloads: vec![sig_id],
-    });
+    let ty = self
+      .store
+      .intern_type(TypeKind::Callable { overloads: vec![sig_id] });
     if !type_param_decls.is_empty() {
       self.function_type_params.insert(ty, type_param_decls);
     }
@@ -1364,7 +1365,9 @@ fn span_for_stmt_list(stmts: &[Node<Stmt>], file: FileId) -> Option<TextRange> {
     start = Some(start.map_or(range.start, |s| s.min(range.start)));
     end = Some(end.map_or(range.end, |e| e.max(range.end)));
   }
-  start.zip(end).map(|(s, e)| TextRange::new(s, e))
+  start
+    .zip(end)
+    .map(|(s, e)| TextRange::new(s, e))
 }
 
 fn body_range(body: &Body) -> TextRange {
@@ -1392,4 +1395,912 @@ fn body_range(body: &Body) -> TextRange {
 fn loc_to_range(_file: FileId, loc: Loc) -> TextRange {
   let (range, _) = loc.to_diagnostics_range_with_note();
   TextRange::new(range.start, range.end)
+}
+
+/// Flow-sensitive body checker built directly on `hir-js` bodies. This is a
+/// lightweight, statement-level analysis that uses a CFG plus a simple lattice
+/// of variable environments to drive narrowing.
+pub fn check_body_with_env(
+  body: &Body,
+  names: &NameInterner,
+  _file: FileId,
+  _source: &str,
+  store: Arc<TypeStore>,
+  initial: &HashMap<NameId, TypeId>,
+) -> BodyCheckResult {
+  let mut checker = FlowBodyChecker::new(body, names, Arc::clone(&store), initial);
+  checker.run(initial);
+  checker.into_result()
+}
+
+struct FlowBodyChecker<'a> {
+  body: &'a Body,
+  names: &'a NameInterner,
+  store: Arc<TypeStore>,
+  expr_types: Vec<TypeId>,
+  pat_types: Vec<TypeId>,
+  expr_spans: Vec<TextRange>,
+  pat_spans: Vec<TextRange>,
+  diagnostics: Vec<Diagnostic>,
+  return_types: Vec<TypeId>,
+  return_indices: HashMap<StmtId, usize>,
+}
+
+impl<'a> FlowBodyChecker<'a> {
+  fn new(body: &'a Body, names: &'a NameInterner, store: Arc<TypeStore>, initial: &HashMap<NameId, TypeId>) -> Self {
+    let prim = store.primitive_ids();
+    let expr_types = vec![prim.unknown; body.exprs.len()];
+    let mut pat_types = vec![prim.unknown; body.pats.len()];
+    for (idx, pat) in body.pats.iter().enumerate() {
+      if let PatKind::Ident(name) = pat.kind {
+        if let Some(ty) = initial.get(&name) {
+          pat_types[idx] = *ty;
+        }
+      }
+    }
+
+    let mut returns: Vec<(StmtId, u32)> = body
+      .stmts
+      .iter()
+      .enumerate()
+      .filter_map(|(idx, stmt)| {
+        if matches!(stmt.kind, StmtKind::Return(_)) {
+          Some((StmtId(idx as u32), stmt.span.start))
+        } else {
+          None
+        }
+      })
+      .collect();
+    returns.sort_by_key(|(_, start)| *start);
+    let mut return_indices = HashMap::new();
+    let mut return_types = Vec::new();
+    for (idx, (stmt_id, _)) in returns.into_iter().enumerate() {
+      return_indices.insert(stmt_id, idx);
+      return_types.push(prim.unknown);
+    }
+
+    let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
+    let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
+
+    Self {
+      body,
+      names,
+      store,
+      expr_types,
+      pat_types,
+      expr_spans,
+      pat_spans,
+      diagnostics: Vec::new(),
+      return_types,
+      return_indices,
+    }
+  }
+
+  fn into_result(self) -> BodyCheckResult {
+    BodyCheckResult {
+      expr_types: self.expr_types,
+      pat_types: self.pat_types,
+      expr_spans: self.expr_spans,
+      pat_spans: self.pat_spans,
+      diagnostics: self.diagnostics,
+      return_types: self.return_types,
+    }
+  }
+
+  fn run(&mut self, initial: &HashMap<NameId, TypeId>) {
+    let cfg = ControlFlowGraph::from_body(self.body);
+    let mut in_envs: Vec<Option<Env>> = vec![None; cfg.blocks.len()];
+    in_envs[cfg.entry.0] = Some(Env::with_initial(initial));
+    let mut worklist: VecDeque<BlockId> = VecDeque::new();
+    worklist.push_back(cfg.entry);
+
+    while let Some(block_id) = worklist.pop_front() {
+      let env = match in_envs[block_id.0].clone() {
+        Some(env) => env,
+        None => continue,
+      };
+      let outgoing = self.process_block(block_id, env, &cfg);
+      for (succ, out_env) in outgoing {
+        if let Some(existing) = in_envs[succ.0].as_mut() {
+          if existing.merge_from(&out_env, &self.store) {
+            worklist.push_back(succ);
+          }
+        } else {
+          in_envs[succ.0] = Some(out_env);
+          worklist.push_back(succ);
+        }
+      }
+    }
+  }
+
+  fn process_block(&mut self, block_id: BlockId, mut env: Env, cfg: &ControlFlowGraph) -> Vec<(BlockId, Env)> {
+    let block = &cfg.blocks[block_id.0];
+    if block.stmts.is_empty() {
+      return block.successors.iter().map(|succ| (*succ, env.clone())).collect();
+    }
+
+    let mut outgoing = Vec::new();
+    for stmt_id in block.stmts.iter() {
+      let stmt = &self.body.stmts[stmt_id.0 as usize];
+      match &stmt.kind {
+        StmtKind::Expr(expr) => {
+          let (_, facts) = self.eval_expr(*expr, &mut env);
+          env.apply_map(&facts.assertions);
+        }
+        StmtKind::Return(expr) => {
+          let ty = match expr {
+            Some(id) => self.eval_expr(*id, &mut env).0,
+            None => self.store.primitive_ids().undefined,
+          };
+          self.record_return(*stmt_id, ty);
+          // return/throw terminate flow; no successors.
+          return Vec::new();
+        }
+        StmtKind::Throw(expr) => {
+          let _ = self.eval_expr(*expr, &mut env);
+          return Vec::new();
+        }
+        StmtKind::Var(decl) => {
+          for declarator in decl.declarators.iter() {
+            let init_ty = declarator
+              .init
+              .map(|id| self.eval_expr(id, &mut env).0)
+              .unwrap_or_else(|| self.store.primitive_ids().unknown);
+            self.bind_pat(declarator.pat, init_ty, &mut env);
+          }
+        }
+        StmtKind::If {
+          test,
+          consequent: _,
+          alternate: _,
+        } => {
+          let facts = self.eval_expr(*test, &mut env).1;
+          let mut then_env = env.clone();
+          then_env.apply_facts(&facts);
+          let mut else_env = env.clone();
+          else_env.apply_falsy(&facts);
+
+          if let Some(succ) = block.successors.get(0) {
+            outgoing.push((*succ, then_env));
+          }
+          if let Some(succ) = block.successors.get(1) {
+            outgoing.push((*succ, else_env));
+          }
+          return outgoing;
+        }
+        StmtKind::While { test, .. } => {
+          let facts = self.eval_expr(*test, &mut env).1;
+          let mut body_env = env.clone();
+          body_env.apply_facts(&facts);
+          let mut after_env = env.clone();
+          after_env.apply_falsy(&facts);
+          if let Some(succ) = block.successors.get(0) {
+            outgoing.push((*succ, body_env));
+          }
+          if let Some(succ) = block.successors.get(1) {
+            outgoing.push((*succ, after_env));
+          }
+          return outgoing;
+        }
+        StmtKind::DoWhile { test, .. } => {
+          let facts = self.eval_expr(*test, &mut env).1;
+          let mut body_env = env.clone();
+          body_env.apply_facts(&facts);
+          let mut after_env = env.clone();
+          after_env.apply_falsy(&facts);
+          if let Some(succ) = block.successors.get(0) {
+            outgoing.push((*succ, body_env));
+          }
+          if let Some(succ) = block.successors.get(1) {
+            outgoing.push((*succ, after_env));
+          }
+          return outgoing;
+        }
+        StmtKind::For { init, test, .. } => {
+          if let Some(init) = init {
+            match init {
+              ForInit::Expr(expr_id) => {
+                let _ = self.eval_expr(*expr_id, &mut env);
+              }
+              ForInit::Var(var) => {
+                for declarator in var.declarators.iter() {
+                  let init_ty = declarator
+                    .init
+                    .map(|id| self.eval_expr(id, &mut env).0)
+                    .unwrap_or_else(|| self.store.primitive_ids().unknown);
+                  self.bind_pat(declarator.pat, init_ty, &mut env);
+                }
+              }
+            }
+          }
+          let facts = test
+            .map(|t| self.eval_expr(t, &mut env).1)
+            .unwrap_or_default();
+          let mut body_env = env.clone();
+          body_env.apply_facts(&facts);
+          let mut after_env = env.clone();
+          after_env.apply_falsy(&facts);
+          if let Some(succ) = block.successors.get(0) {
+            outgoing.push((*succ, body_env));
+          }
+          if let Some(succ) = block.successors.get(1) {
+            outgoing.push((*succ, after_env));
+          }
+          return outgoing;
+        }
+        StmtKind::ForIn { left, right, .. } => {
+          let right_ty = self.eval_expr(*right, &mut env).0;
+          match left {
+            ForHead::Pat(pat) => self.bind_pat(*pat, right_ty, &mut env),
+            ForHead::Var(var) => {
+              for declarator in var.declarators.iter() {
+                self.bind_pat(declarator.pat, right_ty, &mut env);
+              }
+            }
+          }
+          if let Some(succ) = block.successors.get(0) {
+            outgoing.push((*succ, env.clone()));
+          }
+          if let Some(succ) = block.successors.get(1) {
+            outgoing.push((*succ, env.clone()));
+          }
+          return outgoing;
+        }
+        StmtKind::Switch { discriminant, cases } => {
+          let discriminant_ty = self.eval_expr(*discriminant, &mut env).0;
+          for (idx, case) in cases.iter().enumerate() {
+            if let Some(succ) = block.successors.get(idx) {
+              let mut case_env = env.clone();
+              if let Some(test) = case.test {
+                let _ = self.eval_expr(test, &mut case_env);
+                self.apply_switch_narrowing(*discriminant, discriminant_ty, test, &mut case_env);
+              }
+              outgoing.push((*succ, case_env));
+            }
+          }
+          // If there is an implicit default edge (no default case), use the final successor.
+          if block.successors.len() > cases.len() {
+            if let Some(succ) = block.successors.last() {
+              outgoing.push((*succ, env.clone()));
+            }
+          }
+          return outgoing;
+        }
+        StmtKind::Try { block: _, catch, finally_block } => {
+          if let Some(succ) = block.successors.get(0) {
+            outgoing.push((*succ, env.clone()));
+          }
+          if let Some((idx, catch_clause)) = catch.as_ref().map(|c| (1, c)) {
+            let mut catch_env = env.clone();
+            if let Some(param) = catch_clause.param {
+              self.bind_pat(param, self.store.primitive_ids().unknown, &mut catch_env);
+            }
+            if let Some(succ) = block.successors.get(idx) {
+              outgoing.push((*succ, catch_env));
+            }
+          }
+          if let Some(_) = finally_block {
+            if let Some(pos) = catch.as_ref().map(|_| 2).or_else(|| Some(1)) {
+              if let Some(succ) = block.successors.get(pos) {
+                outgoing.push((*succ, env.clone()));
+              }
+            }
+          }
+          return outgoing;
+        }
+        _ => {}
+      }
+    }
+
+    if outgoing.is_empty() {
+      outgoing.extend(block.successors.iter().map(|succ| (*succ, env.clone())));
+    }
+    outgoing
+  }
+
+  fn record_return(&mut self, stmt: StmtId, ty: TypeId) {
+    let prim = self.store.primitive_ids();
+    let idx = *self
+      .return_indices
+      .entry(stmt)
+      .or_insert_with(|| {
+        self.return_types.push(prim.unknown);
+        self.return_types.len() - 1
+      });
+    let slot = self.return_types.get_mut(idx).unwrap();
+    if *slot == prim.unknown {
+      *slot = ty;
+    } else {
+      *slot = self.store.union(vec![*slot, ty]);
+    }
+  }
+
+  fn eval_expr(&mut self, expr_id: ExprId, env: &mut Env) -> (TypeId, Facts) {
+    let prim = self.store.primitive_ids();
+    let expr = &self.body.exprs[expr_id.0 as usize];
+    let mut facts = Facts::default();
+    let ty = match &expr.kind {
+      ExprKind::Ident(name) => {
+        let ty = env.get(*name).unwrap_or(prim.unknown);
+        let (truthy, falsy) = truthy_falsy_types(ty, &self.store);
+        facts.truthy.insert(*name, truthy);
+        facts.falsy.insert(*name, falsy);
+        ty
+      }
+      ExprKind::Literal(lit) => match lit {
+        hir_js::Literal::Number(num) => self
+          .store
+          .intern_type(TypeKind::NumberLiteral(num.parse::<f64>().unwrap_or(0.0).into())),
+        hir_js::Literal::String(s) => {
+          self.store.intern_type(TypeKind::StringLiteral(self.store.intern_name(s.clone())))
+        }
+        hir_js::Literal::Boolean(b) => self.store.intern_type(TypeKind::BooleanLiteral(*b)),
+        hir_js::Literal::Null => prim.null,
+        hir_js::Literal::Undefined => prim.undefined,
+        hir_js::Literal::BigInt(v) => {
+          self.store
+            .intern_type(TypeKind::BigIntLiteral(v.parse::<i128>().unwrap_or(0).into()))
+        }
+        hir_js::Literal::Regex(_) => prim.string,
+      },
+      ExprKind::Unary { op, expr } => match op {
+        UnaryOp::Not => {
+          let (_, inner_facts) = self.eval_expr(*expr, env);
+          facts.truthy = inner_facts.falsy;
+          facts.falsy = inner_facts.truthy;
+          facts.assertions = inner_facts.assertions;
+          prim.boolean
+        }
+        UnaryOp::Typeof => {
+          let _ = self.eval_expr(*expr, env);
+          prim.string
+        }
+        UnaryOp::Void => prim.undefined,
+        UnaryOp::Plus | UnaryOp::Minus | UnaryOp::BitNot => {
+          let _ = self.eval_expr(*expr, env);
+          prim.number
+        }
+        _ => prim.unknown,
+      },
+      ExprKind::Update { expr, .. } => {
+        let _ = self.eval_expr(*expr, env);
+        prim.number
+      }
+      ExprKind::Binary { op, left, right } => match op {
+        BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::NullishCoalescing => {
+          self.eval_logical(*op, *left, *right, env, &mut facts)
+        }
+        BinaryOp::Equality
+        | BinaryOp::Inequality
+        | BinaryOp::StrictEquality
+        | BinaryOp::StrictInequality => {
+          self.eval_equality(*op, *left, *right, env, &mut facts);
+          prim.boolean
+        }
+        BinaryOp::LessThan
+        | BinaryOp::LessEqual
+        | BinaryOp::GreaterThan
+        | BinaryOp::GreaterEqual => {
+          let _ = self.eval_expr(*left, env);
+          let _ = self.eval_expr(*right, env);
+          prim.boolean
+        }
+        BinaryOp::Add => {
+          let (l_ty, _) = self.eval_expr(*left, env);
+          let (r_ty, _) = self.eval_expr(*right, env);
+          match (self.store.type_kind(l_ty), self.store.type_kind(r_ty)) {
+            (TypeKind::String | TypeKind::StringLiteral(_), _) | (_, TypeKind::String | TypeKind::StringLiteral(_)) => {
+              prim.string
+            }
+            (TypeKind::Number | TypeKind::NumberLiteral(_), TypeKind::Number | TypeKind::NumberLiteral(_)) => prim.number,
+            _ => self.store.union(vec![l_ty, r_ty]),
+          }
+        }
+        BinaryOp::Subtract
+        | BinaryOp::Multiply
+        | BinaryOp::Divide
+        | BinaryOp::Remainder
+        | BinaryOp::Exponent
+        | BinaryOp::ShiftLeft
+        | BinaryOp::ShiftRight
+        | BinaryOp::ShiftRightUnsigned
+        | BinaryOp::BitOr
+        | BinaryOp::BitAnd
+        | BinaryOp::BitXor => {
+          let _ = self.eval_expr(*left, env);
+          let _ = self.eval_expr(*right, env);
+          prim.number
+        }
+        BinaryOp::Instanceof => {
+          let left_expr = *left;
+          let left_ty = self.eval_expr(left_expr, env).0;
+          let _ = self.eval_expr(*right, env);
+          if let Some(name) = self.ident_name(left_expr) {
+            let (yes, no) = narrow_by_instanceof(left_ty, &self.store);
+            facts.truthy.insert(name, yes);
+            facts.falsy.insert(name, no);
+          }
+          prim.boolean
+        }
+        BinaryOp::In => {
+          let _ = self.eval_expr(*left, env);
+          let right_ty = self.eval_expr(*right, env).0;
+          if let (Some(prop), Some(name)) = (self.literal_prop(*left), self.ident_name(*right)) {
+            let (yes, no) = narrow_by_in_check(right_ty, &prop, &self.store);
+            facts.truthy.insert(name, yes);
+            facts.falsy.insert(name, no);
+          }
+          prim.boolean
+        }
+        BinaryOp::Comma => {
+          let _ = self.eval_expr(*left, env);
+          self.eval_expr(*right, env).0
+        }
+      },
+      ExprKind::Assignment { target, value, .. } => {
+        let val_ty = self.eval_expr(*value, env).0;
+        self.bind_pat(*target, val_ty, env);
+        val_ty
+      }
+      ExprKind::Call(call) => self.eval_call(call, env, &mut facts),
+      ExprKind::Member(mem) => {
+        let obj_ty = self.eval_expr(mem.object, env).0;
+        self.member_type(obj_ty, &mem)
+      }
+      ExprKind::Conditional { test, consequent, alternate } => {
+        let cond_facts = self.eval_expr(*test, env).1;
+        let mut then_env = env.clone();
+        then_env.apply_facts(&cond_facts);
+        let mut else_env = env.clone();
+        else_env.apply_falsy(&cond_facts);
+        let then_ty = self.eval_expr(*consequent, &mut then_env).0;
+        let else_ty = self.eval_expr(*alternate, &mut else_env).0;
+        self.store.union(vec![then_ty, else_ty])
+      }
+      ExprKind::Array(arr) => {
+        let mut elem_tys = Vec::new();
+        for elem in arr.elements.iter() {
+          match elem {
+            ArrayElement::Expr(id) | ArrayElement::Spread(id) => {
+              elem_tys.push(self.eval_expr(*id, env).0);
+            }
+            ArrayElement::Empty => {}
+          }
+        }
+        let elem_ty = if elem_tys.is_empty() {
+          prim.unknown
+        } else {
+          self.store.union(elem_tys)
+        };
+        self
+          .store
+          .intern_type(TypeKind::Array {
+            ty: elem_ty,
+            readonly: false,
+          })
+      }
+      ExprKind::Object(obj) => self.object_type(obj, env),
+      ExprKind::FunctionExpr { .. } => prim.unknown,
+      ExprKind::ClassExpr { .. } => prim.unknown,
+      ExprKind::Template(_) => prim.string,
+      ExprKind::TaggedTemplate { .. } => prim.unknown,
+      ExprKind::Await { expr } => self.eval_expr(*expr, env).0,
+      ExprKind::Yield { expr, .. } => expr.map(|id| self.eval_expr(id, env).0).unwrap_or(prim.undefined),
+      ExprKind::TypeAssertion { expr } => self.eval_expr(*expr, env).0,
+      ExprKind::NonNull { expr } => self.eval_expr(*expr, env).0,
+      ExprKind::Satisfies { expr } => self.eval_expr(*expr, env).0,
+      _ => prim.unknown,
+    };
+
+    let slot = &mut self.expr_types[expr_id.0 as usize];
+    *slot = if *slot == prim.unknown {
+      ty
+    } else {
+      self.store.union(vec![*slot, ty])
+    };
+    (ty, facts)
+  }
+
+  fn eval_logical(
+    &mut self,
+    op: BinaryOp,
+    left: ExprId,
+    right: ExprId,
+    env: &mut Env,
+    out: &mut Facts,
+  ) -> TypeId {
+    let (left_ty, left_facts) = self.eval_expr(left, env);
+    match op {
+      BinaryOp::LogicalAnd => {
+        let mut right_env = env.clone();
+        right_env.apply_facts(&left_facts);
+        let (right_ty, right_facts) = self.eval_expr(right, &mut right_env);
+        out.merge(left_facts, &self.store);
+        out.merge(right_facts, &self.store);
+        self.store.union(vec![left_ty, right_ty])
+      }
+      BinaryOp::LogicalOr => {
+        let mut right_env = env.clone();
+        right_env.apply_falsy(&left_facts);
+        let (right_ty, right_facts) = self.eval_expr(right, &mut right_env);
+        out.merge(left_facts, &self.store);
+        out.merge(right_facts, &self.store);
+        self.store.union(vec![left_ty, right_ty])
+      }
+      BinaryOp::NullishCoalescing => {
+        let right_ty = self.eval_expr(right, env).0;
+        self.store.union(vec![left_ty, right_ty])
+      }
+      _ => {
+        let right_ty = self.eval_expr(right, env).0;
+        self.store.union(vec![left_ty, right_ty])
+      }
+    }
+  }
+
+  fn eval_equality(
+    &mut self,
+    op: BinaryOp,
+    left: ExprId,
+    right: ExprId,
+    env: &mut Env,
+    out: &mut Facts,
+  ) {
+    let left_ty = self.eval_expr(left, env).0;
+    let right_ty = self.eval_expr(right, env).0;
+    let negate = matches!(op, BinaryOp::Inequality | BinaryOp::StrictInequality);
+
+    let mut apply = |target: NameId, yes: TypeId, no: TypeId| {
+      if negate {
+        out.truthy.insert(target, no);
+        out.falsy.insert(target, yes);
+      } else {
+        out.truthy.insert(target, yes);
+        out.falsy.insert(target, no);
+      }
+    };
+
+    if let Some(target) = self.ident_name(left) {
+      if let Some(lit) = self.literal_value(right) {
+        let (yes, no) = narrow_by_literal(left_ty, &lit, &self.store);
+        apply(target, yes, no);
+        return;
+      }
+    }
+    if let Some(target) = self.ident_name(right) {
+      if let Some(lit) = self.literal_value(left) {
+        let (yes, no) = narrow_by_literal(right_ty, &lit, &self.store);
+        apply(target, yes, no);
+        return;
+      }
+    }
+
+    if let Some((target, prop, target_ty)) = self.discriminant_member(left) {
+      if let Some(LiteralValue::String(value)) = self.literal_value(right) {
+        let (yes, no) = narrow_by_discriminant(target_ty, &prop, &value, &self.store);
+        apply(target, yes, no);
+        return;
+      }
+    }
+    if let Some((target, prop, target_ty)) = self.discriminant_member(right) {
+      if let Some(LiteralValue::String(value)) = self.literal_value(left) {
+        let (yes, no) = narrow_by_discriminant(target_ty, &prop, &value, &self.store);
+        apply(target, yes, no);
+        return;
+      }
+    }
+
+    if let Some((target, target_ty, lit)) = self.typeof_comparison(left, right) {
+      let (yes, no) = narrow_by_typeof(target_ty, &lit, &self.store);
+      apply(target, yes, no);
+    }
+  }
+
+  fn eval_call(&mut self, call: &hir_js::CallExpr, env: &mut Env, out: &mut Facts) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let callee_ty = self.eval_expr(call.callee, env).0;
+    let arg_tys: Vec<TypeId> = call.args.iter().map(|arg| self.eval_expr(arg.expr, env).0).collect();
+    if let TypeKind::Callable { overloads } = self.store.type_kind(callee_ty) {
+      if let Some(sig_id) = overloads.first() {
+        let sig = self.store.signature(*sig_id);
+        if let TypeKind::Predicate {
+          asserted,
+          asserts,
+          ..
+        } = self.store.type_kind(sig.ret)
+        {
+          if let Some(asserted) = asserted {
+            if let Some(arg_expr) = call.args.first().map(|a| a.expr) {
+              if let Some(name) = self.ident_name(arg_expr) {
+                let arg_ty = arg_tys.first().copied().unwrap_or(prim.unknown);
+                let (yes, no) = narrow_by_asserted(arg_ty, asserted, &self.store);
+                if asserts {
+                  out.assertions.insert(name, yes);
+                } else {
+                  out.truthy.insert(name, yes);
+                  out.falsy.insert(name, no);
+                }
+              }
+            }
+          }
+          return if asserts { prim.undefined } else { prim.boolean };
+        }
+        return sig.ret;
+      }
+    }
+    prim.unknown
+  }
+
+  fn ident_name(&self, expr_id: ExprId) -> Option<NameId> {
+    match self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Ident(name) => Some(name),
+      _ => None,
+    }
+  }
+
+  fn literal_value(&self, expr_id: ExprId) -> Option<LiteralValue> {
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Literal(lit) => match lit {
+        hir_js::Literal::String(s) => Some(LiteralValue::String(s.clone())),
+        hir_js::Literal::Number(n) => Some(LiteralValue::Number(n.clone())),
+        hir_js::Literal::Boolean(b) => Some(LiteralValue::Boolean(*b)),
+        hir_js::Literal::Null => Some(LiteralValue::Null),
+        hir_js::Literal::Undefined => Some(LiteralValue::Undefined),
+        _ => None,
+      },
+      _ => None,
+    }
+  }
+
+  fn literal_prop(&self, expr_id: ExprId) -> Option<String> {
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Literal(hir_js::Literal::String(s)) => Some(s.clone()),
+      _ => None,
+    }
+  }
+
+  fn hir_name(&self, id: NameId) -> String {
+    self.names.resolve(id).map(|s| s.to_owned()).unwrap_or_default()
+  }
+
+  fn discriminant_member(&self, expr_id: ExprId) -> Option<(NameId, String, TypeId)> {
+    if let ExprKind::Member(MemberExpr { object, property, .. }) = &self.body.exprs[expr_id.0 as usize].kind {
+      if let Some(name) = self.ident_name(*object) {
+        let prop = match property {
+          ObjectKey::Ident(id) => Some(self.hir_name(*id)),
+          ObjectKey::String(s) => Some(s.clone()),
+          _ => None,
+        }?;
+        let obj_ty = self.expr_types[object.0 as usize];
+        return Some((name, prop, obj_ty));
+      }
+    }
+    None
+  }
+
+  fn typeof_comparison(&self, left: ExprId, right: ExprId) -> Option<(NameId, TypeId, String)> {
+    let left_expr = &self.body.exprs[left.0 as usize].kind;
+    let right_expr = &self.body.exprs[right.0 as usize].kind;
+    match (left_expr, right_expr) {
+      (ExprKind::Unary { op: UnaryOp::Typeof, expr }, ExprKind::Literal(hir_js::Literal::String(s))) => {
+        if let Some(name) = self.ident_name(*expr) {
+          return Some((name, self.expr_types[expr.0 as usize], s.clone()));
+        }
+      }
+      (ExprKind::Literal(hir_js::Literal::String(s)), ExprKind::Unary { op: UnaryOp::Typeof, expr }) => {
+        if let Some(name) = self.ident_name(*expr) {
+          return Some((name, self.expr_types[expr.0 as usize], s.clone()));
+        }
+      }
+      _ => {}
+    }
+    None
+  }
+
+  fn bind_pat(&mut self, pat_id: PatId, value_ty: TypeId, env: &mut Env) {
+    let pat = &self.body.pats[pat_id.0 as usize];
+    let prim = self.store.primitive_ids();
+    let slot = &mut self.pat_types[pat_id.0 as usize];
+    *slot = if *slot == prim.unknown {
+      value_ty
+    } else {
+      self.store.union(vec![*slot, value_ty])
+    };
+    match &pat.kind {
+      PatKind::Ident(name) => {
+        env.set(*name, value_ty);
+      }
+      PatKind::Assign { target, .. } => {
+        self.bind_pat(*target, value_ty, env);
+      }
+      PatKind::Rest(inner) => self.bind_pat(**inner, value_ty, env),
+      PatKind::Array(arr) => {
+        let element_ty = match self.store.type_kind(value_ty) {
+          TypeKind::Array { ty, .. } => ty,
+          TypeKind::Tuple(elems) => elems.first().map(|e| e.ty).unwrap_or(self.store.primitive_ids().unknown),
+          _ => self.store.primitive_ids().unknown,
+        };
+        for (idx, elem) in arr.elements.iter().enumerate() {
+          if let Some(elem) = elem {
+            let mut ty = element_ty;
+            if let TypeKind::Tuple(elems) = self.store.type_kind(value_ty) {
+              if let Some(specific) = elems.get(idx) {
+                ty = specific.ty;
+              }
+            }
+            if let Some(default) = elem.default_value {
+              let default_ty = self.eval_expr(default, env).0;
+              ty = self.store.union(vec![ty, default_ty]);
+            }
+            self.bind_pat(elem.pat, ty, env);
+          }
+        }
+        if let Some(rest) = arr.rest {
+          self.bind_pat(rest, value_ty, env);
+        }
+      }
+      PatKind::Object(obj) => {
+        for prop in obj.props.iter() {
+          let prop_name = match &prop.key {
+            ObjectKey::Ident(id) => Some(self.hir_name(*id)),
+            ObjectKey::String(s) => Some(s.clone()),
+            ObjectKey::Number(n) => Some(n.clone()),
+            _ => None,
+          };
+          let mut prop_ty = self.store.primitive_ids().unknown;
+          if let Some(name) = prop_name {
+            if let Some(found) = self.object_prop_type(value_ty, &name) {
+              prop_ty = found;
+            }
+          }
+          if let Some(default) = prop.default_value {
+            let default_ty = self.eval_expr(default, env).0;
+            prop_ty = self.store.union(vec![prop_ty, default_ty]);
+          }
+          self.bind_pat(prop.value, prop_ty, env);
+        }
+        if let Some(rest) = obj.rest {
+          self.bind_pat(rest, value_ty, env);
+        }
+      }
+      PatKind::AssignTarget(_) => {}
+    }
+  }
+
+  fn object_type(&mut self, obj: &ObjectLiteral, env: &mut Env) -> TypeId {
+    let mut shape = Shape::new();
+    for prop in obj.properties.iter() {
+      match prop {
+        ObjectProperty::KeyValue { key, value, .. } => {
+          let prop_key = match key {
+            ObjectKey::Ident(id) => PropKey::String(self.store.intern_name(self.hir_name(*id))),
+            ObjectKey::String(s) => PropKey::String(self.store.intern_name(s.clone())),
+            ObjectKey::Number(n) => PropKey::Number(n.parse::<i64>().unwrap_or(0)),
+            ObjectKey::Computed(_) => continue,
+          };
+          let ty = self.eval_expr(*value, env).0;
+          shape.properties.push(types_ts_interned::Property {
+            key: prop_key,
+            data: PropData {
+              ty,
+              optional: false,
+              readonly: false,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+        ObjectProperty::Getter { key, .. } | ObjectProperty::Setter { key, .. } => {
+          let prop_key = match key {
+            ObjectKey::Ident(id) => PropKey::String(self.store.intern_name(self.hir_name(*id))),
+            ObjectKey::String(s) => PropKey::String(self.store.intern_name(s.clone())),
+            ObjectKey::Number(n) => PropKey::Number(n.parse::<i64>().unwrap_or(0)),
+            ObjectKey::Computed(_) => continue,
+          };
+          shape.properties.push(types_ts_interned::Property {
+            key: prop_key,
+            data: PropData {
+              ty: self.store.primitive_ids().unknown,
+              optional: false,
+              readonly: false,
+              accessibility: None,
+              is_method: true,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+        ObjectProperty::Spread(expr) => {
+          let _ = self.eval_expr(*expr, env);
+        }
+      }
+    }
+    let shape_id = self.store.intern_shape(shape);
+    let obj_id = self.store.intern_object(ObjectType { shape: shape_id });
+    self.store.intern_type(TypeKind::Object(obj_id))
+  }
+
+  fn member_type(&mut self, obj: TypeId, mem: &MemberExpr) -> TypeId {
+    let ty = match &mem.property {
+      ObjectKey::Computed(expr) => {
+        let _ = self.eval_expr(*expr, &mut Env::new());
+        None
+      }
+      _ => self.object_prop_type(obj, &self.member_key(mem)),
+    };
+    ty.unwrap_or_else(|| self.store.primitive_ids().unknown)
+  }
+
+  fn member_key(&self, mem: &MemberExpr) -> String {
+    match &mem.property {
+      ObjectKey::Ident(id) => self.hir_name(*id),
+      ObjectKey::String(s) => s.clone(),
+      ObjectKey::Number(n) => n.clone(),
+      ObjectKey::Computed(_) => String::new(),
+    }
+  }
+
+  fn object_prop_type(&self, obj: TypeId, key: &str) -> Option<TypeId> {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(obj) {
+      TypeKind::Union(members) => {
+        let mut tys = Vec::new();
+        for member in members {
+          if let Some(prop_ty) = self.object_prop_type(member, key) {
+            tys.push(prop_ty);
+          }
+        }
+        if tys.is_empty() {
+          None
+        } else {
+          Some(self.store.union(tys))
+        }
+      }
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        for prop in shape.properties.iter() {
+          let matches = match prop.key {
+            PropKey::String(name) => self.store.name(name) == key,
+            PropKey::Number(num) => num.to_string() == key,
+            _ => false,
+          };
+          if matches {
+            return Some(prop.data.ty);
+          }
+        }
+        shape
+          .indexers
+          .first()
+          .map(|idx| idx.value_type)
+          .or(Some(prim.unknown))
+      }
+      TypeKind::Array { .. } if key == "length" => Some(prim.number),
+      TypeKind::Array { ty, .. } => Some(ty),
+      _ => None,
+    }
+  }
+
+  fn apply_switch_narrowing(
+    &mut self,
+    discriminant: ExprId,
+    discriminant_ty: TypeId,
+    test: ExprId,
+    env: &mut Env,
+  ) {
+    if let Some((target, prop, obj_ty)) = self.discriminant_member(discriminant) {
+      if let Some(LiteralValue::String(value)) = self.literal_value(test) {
+        let (yes, _) = narrow_by_discriminant(obj_ty, &prop, &value, &self.store);
+        env.set(target, yes);
+      }
+      return;
+    }
+    if let Some(name) = self.ident_name(discriminant) {
+      if let Some(lit) = self.literal_value(test) {
+        let (yes, _) = narrow_by_literal(discriminant_ty, &lit, &self.store);
+        env.set(name, yes);
+      }
+    }
+  }
 }

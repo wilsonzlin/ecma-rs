@@ -49,7 +49,7 @@ pub(crate) mod check;
 
 use check::caches::{CheckerCacheStats, CheckerCaches};
 use check::narrow::{
-  narrow_by_discriminant, narrow_by_in_check, narrow_by_typeof, truthy_falsy_types, Facts,
+  narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof, narrow_by_typeof, truthy_falsy_types, Facts,
 };
 
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
@@ -3689,10 +3689,37 @@ impl ProgramState {
           self.builtin.boolean
         }
         OperatorName::Instanceof => {
-          let (_lt, lf) = self.check_expr(left, env, result, file, None);
+          let (lt, lf) = self.check_expr(left, env, result, file, None);
           let (_rt, rf) = self.check_expr(right, env, result, file, None);
-          facts.merge(lf, &mut self.type_store, &self.builtin);
-          facts.merge(rf, &mut self.type_store, &self.builtin);
+          if let HirExprKind::Ident(name) = &left.kind {
+            let (yes, no) = narrow_by_instanceof(lt, &mut self.type_store, &self.builtin);
+            if yes != self.builtin.never {
+              facts.truthy.insert(name.clone(), yes);
+            }
+            if no != self.builtin.never {
+              facts.falsy.insert(name.clone(), no);
+            }
+          }
+          if !lf.assertions.is_empty() {
+            facts.merge(
+              Facts {
+                assertions: lf.assertions,
+                ..Default::default()
+              },
+              &mut self.type_store,
+              &self.builtin,
+            );
+          }
+          if !rf.assertions.is_empty() {
+            facts.merge(
+              Facts {
+                assertions: rf.assertions,
+                ..Default::default()
+              },
+              &mut self.type_store,
+              &self.builtin,
+            );
+          }
           self.builtin.boolean
         }
         OperatorName::In => {
@@ -4792,6 +4819,38 @@ impl BodyBuilder {
           body: body_stmts,
           span: loc_to_span(self.file, wh.loc).range,
         });
+      }
+      Stmt::Switch(sw) => {
+        let discriminant = self.lower_expr(sw.stx.test, state);
+        let mut current = Vec::new();
+        for branch in sw.stx.branches.into_iter().rev() {
+          let mut body = Vec::new();
+          for stmt in branch.stx.body {
+            self.lower_stmt_into(stmt, state, &mut body);
+          }
+          if let Some(test) = branch.stx.case {
+            let test_expr = self.lower_expr(test, state);
+            let start = discriminant.span.start.min(test_expr.span.start);
+            let end = discriminant.span.end.max(test_expr.span.end);
+            let cond = self.new_expr(
+              TextRange::new(start, end),
+              HirExprKind::Binary {
+                op: OperatorName::StrictEquality,
+                left: Box::new(discriminant.clone()),
+                right: Box::new(test_expr),
+              },
+            );
+            current = vec![HirStmt::If {
+              test: cond,
+              consequent: body,
+              alternate: current,
+              span: TextRange::new(start, end),
+            }];
+          } else {
+            current = body;
+          }
+        }
+        out.extend(current);
       }
       _ => {}
     }
