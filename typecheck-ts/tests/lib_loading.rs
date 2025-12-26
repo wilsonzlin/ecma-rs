@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
-use typecheck_ts::{FileId, Host, HostError, Program};
+use typecheck_ts::{FileId, Host, HostError, Program, TextRange};
 
 const PROMISE_DOM: &str = include_str!("fixtures/promise_dom.ts");
 
@@ -116,12 +116,10 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
     kind: FileKind::Js,
     text: Arc::from("var Provided = 1;"),
   };
+  let source = "const p = Promise;\nconst a = Array;\nconst value = Provided;";
   let host = TestHost::new(options)
     .with_lib(lib)
-    .with_file(
-      FileId(0),
-      "const p = Promise;\nconst a = Array;\nconst value = Provided;",
-    );
+    .with_file(FileId(0), source);
   let program = Program::new(host, vec![FileId(0)]);
   let diagnostics = program.check();
   assert!(
@@ -136,13 +134,23 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
       .any(|d| d.code.as_str() == codes::NO_LIBS_LOADED.as_str()),
     "ignoring non-.d.ts libs should surface missing libs: {diagnostics:?}"
   );
-  let unknown_identifiers = diagnostics
+  let unknown_identifiers: Vec<_> = diagnostics
     .iter()
     .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
-    .count();
+    .collect();
   assert!(
-    unknown_identifiers >= 3,
+    unknown_identifiers.len() >= 3,
     "expected unknown identifier diagnostics for Promise, Array, and Provided: {diagnostics:?}"
+  );
+  let provided_start = source
+    .find("Provided")
+    .expect("source should include Provided") as u32;
+  let provided_end = provided_start + "Provided".len() as u32;
+  assert!(
+    unknown_identifiers
+      .iter()
+      .any(|diag| diag.primary.range == TextRange::new(provided_start, provided_end)),
+    "expected unknown identifier diagnostic for Provided: {diagnostics:?}"
   );
 }
 

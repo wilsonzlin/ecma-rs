@@ -125,7 +125,8 @@ fn reports_constraint_violation() {
   assert_eq!(result.diagnostics.len(), 1);
   let diag = &result.diagnostics[0];
   assert_eq!(diag.param, t_param);
-  assert!(diag.message.contains("does not satisfy constraint"));
+  assert_eq!(diag.constraint, primitives.number);
+  assert_eq!(diag.actual, primitives.string);
 
   let expected = store.intersection(vec![primitives.string, primitives.number]);
   assert_eq!(result.substitutions.get(&t_param), Some(&expected));

@@ -51,6 +51,16 @@ impl Code {
     }
     diagnostic
   }
+
+  /// Construct a warning diagnostic tagged with this code and its expected
+  /// notes.
+  pub fn warning(&self, message: impl Into<String>, primary: Span) -> Diagnostic {
+    let mut diagnostic = Diagnostic::warning(self.id, message, primary);
+    for note in self.notes {
+      diagnostic.push_note(*note);
+    }
+    diagnostic
+  }
 }
 
 /// Sort labels inside each diagnostic and then the diagnostics themselves to
