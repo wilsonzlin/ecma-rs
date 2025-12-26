@@ -122,6 +122,7 @@ struct JsonQueries {
 
 #[derive(Serialize)]
 struct JsonOutput {
+  files: Vec<String>,
   diagnostics: Vec<Diagnostic>,
   queries: JsonQueries,
 }
@@ -272,6 +273,7 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
 
   if args.json {
     let output = JsonOutput {
+      files: host.file_names(),
       diagnostics: diagnostics.clone(),
       queries: JsonQueries {
         type_at,
@@ -451,11 +453,15 @@ impl DiskHost {
     state.id_to_path.get(file.0 as usize).cloned()
   }
 
-  fn display_name(&self, file: FileId) -> Option<String> {
+  fn name_for_id(&self, file: FileId) -> Option<String> {
     let state = self.state.lock().unwrap();
     state.id_to_name.get(file.0 as usize).cloned()
   }
 
+  fn file_names(&self) -> Vec<String> {
+    let state = self.state.lock().unwrap();
+    state.id_to_name.clone()
+  }
   fn snapshot(&self) -> HostSnapshot {
     let mut state = self.state.lock().unwrap();
     let paths = state.id_to_path.clone();
@@ -598,7 +604,7 @@ fn query_type_at(
     Some(ty) => {
       let typ = program.display_type(ty).to_string();
       let file = host
-        .display_name(file_id)
+        .name_for_id(file_id)
         .unwrap_or_else(|| path.to_string_lossy().to_string());
       Ok(Some(TypeAtResult { file, offset, typ }))
     }
@@ -622,7 +628,7 @@ fn query_symbol_at(
   let info = program.symbol_info(symbol);
   let (def, def_file, typ, name) = match info {
     Some(info) => {
-      let def_file = info.file.and_then(|id| host.display_name(id));
+      let def_file = info.file.and_then(|id| host.name_for_id(id));
       let typ = info.type_id.map(|id| program.display_type(id).to_string());
       (info.def.map(|d| d.0), def_file, typ, info.name)
     }
@@ -630,7 +636,7 @@ fn query_symbol_at(
   };
 
   let file = host
-    .display_name(file_id)
+    .name_for_id(file_id)
     .unwrap_or_else(|| path.to_string_lossy().to_string());
 
   Ok(Some(SymbolAtResult {
@@ -659,7 +665,7 @@ fn query_exports(
   insert_exports(&mut spaces.namespaces, exports.namespaces, program);
   let mut outer = BTreeMap::new();
   let file_name = host
-    .display_name(file_id)
+    .name_for_id(file_id)
     .unwrap_or_else(|| path.to_string_lossy().to_string());
   outer.insert(file_name, spaces);
   Ok(outer)

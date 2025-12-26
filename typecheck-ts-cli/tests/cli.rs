@@ -121,6 +121,14 @@ fn json_output_is_stable_and_parseable() {
   );
 
   let json: Value = serde_json::from_str(&output1).expect("valid JSON output");
+  let files = json
+    .get("files")
+    .and_then(|f| f.as_array())
+    .expect("files array");
+  assert!(
+    !files.is_empty(),
+    "expected at least one file name, got {json:?}"
+  );
   let diagnostics = json
     .get("diagnostics")
     .and_then(|d| d.as_array())

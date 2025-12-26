@@ -27,6 +27,7 @@
 //! ```
 
 pub mod files;
+pub mod paths;
 pub mod render;
 pub use files::SimpleFiles;
 

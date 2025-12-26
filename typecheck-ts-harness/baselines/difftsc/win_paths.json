@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "metadata": {
+    "typescript_version": null,
+    "options": {
+      "noEmit": true,
+      "skipLibCheck": true,
+      "pretty": false
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2345,
+      "file": "C:\\work\\input.ts",
+      "start": 48,
+      "end": 54,
+      "category": "error"
+    }
+  ]
+}
