@@ -1,11 +1,44 @@
-use crate::minify;
-use crate::{FileId, Severity, TopLevelMode};
-use parse_js::parse;
+use crate::{minify, minify_with_options, Dialect, FileId, MinifyOptions, Severity, TopLevelMode};
+use parse_js::ast::expr::jsx::JsxElemChild;
+use parse_js::ast::expr::Expr;
+use parse_js::ast::import_export::ImportNames;
+use parse_js::ast::node::Node;
+use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stx::TopLevel;
+use parse_js::{parse, parse_with_options, ParseOptions, SourceType};
 
 fn minified(mode: TopLevelMode, src: &str) -> String {
   let mut out = Vec::new();
   minify(mode, src, &mut out).unwrap();
   String::from_utf8(out).unwrap()
+}
+
+fn minified_program(
+  mode: TopLevelMode,
+  input_dialect: Dialect,
+  output_dialect: Dialect,
+  src: &str,
+) -> (String, Node<TopLevel>) {
+  let mut out = Vec::new();
+  minify_with_options(
+    MinifyOptions::new(mode).with_dialect(input_dialect),
+    src,
+    &mut out,
+  )
+  .unwrap();
+  let output = String::from_utf8(out).unwrap();
+  let parsed = parse_with_options(
+    &output,
+    ParseOptions {
+      dialect: output_dialect,
+      source_type: match mode {
+        TopLevelMode::Global => SourceType::Script,
+        TopLevelMode::Module => SourceType::Module,
+      },
+    },
+  )
+  .expect("output should parse as JavaScript");
+  (output, parsed)
 }
 
 #[test]
@@ -97,4 +130,91 @@ fn test_with_in_nested_scope_only_disables_that_scope() {
     result,
     "function a(){let a=1;function b(obj){let value=obj.v;with(obj){value;}return value;}return b({v:a})+a;}"
   );
+}
+
+#[test]
+fn erases_type_annotations_and_aliases() {
+  let src = r#"
+    type Alias = { foo: string };
+    interface Foo { bar: number }
+    const value: number = (foo as any) satisfies Alias ? 1 : 2;
+    function wrap<T>(item: T): T { return item; }
+  "#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 2);
+  match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(_) => {}
+    other => panic!("expected var decl, got {other:?}"),
+  }
+  match parsed.stx.body[1].stx.as_ref() {
+    Stmt::FunctionDecl(_) => {}
+    other => panic!("expected function decl, got {other:?}"),
+  }
+}
+
+#[test]
+fn erases_type_parameters_from_functions() {
+  let src = "const wrap = <T>(value: T): T => value; const result: string = wrap<string>(\"x\");";
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 2);
+}
+
+#[test]
+fn preserves_tsx_and_jsx_content() {
+  let src = r#"
+    import type { ReactNode } from "react";
+    const element: ReactNode = <div className="x">{value as number}</div>;
+  "#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Tsx, Dialect::Jsx, src);
+  assert_eq!(parsed.stx.body.len(), 1);
+  let decl = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected var decl, got {other:?}"),
+  };
+  let initializer = decl
+    .stx
+    .declarators
+    .first()
+    .and_then(|decl| decl.initializer.as_ref())
+    .expect("initializer should exist");
+  let jsx = match initializer.stx.as_ref() {
+    Expr::JsxElem(elem) => elem,
+    other => panic!("expected JSX element, got {other:?}"),
+  };
+  let expr_child = jsx
+    .stx
+    .children
+    .iter()
+    .find_map(|child| match child {
+      JsxElemChild::Expr(expr) => Some(expr),
+      _ => None,
+    })
+    .expect("expected jsx expression child");
+  match expr_child.stx.value.stx.as_ref() {
+    Expr::Id(_) => {}
+    other => panic!("type assertions should be erased from JSX expressions, got {other:?}"),
+  }
+}
+
+#[test]
+fn drops_type_only_imports() {
+  let src = r#"
+    import type { Foo } from "./types";
+    import { type Bar, baz } from "./mod";
+    export type { Foo as FooType };
+    export const value = baz;
+  "#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 2);
+  match parsed.stx.body[0].stx.as_ref() {
+    Stmt::Import(import) => {
+      assert_eq!(import.stx.module, "./mod");
+      match import.stx.names.as_ref() {
+        Some(ImportNames::Specific(names)) => assert_eq!(names.len(), 1),
+        other => panic!("expected single named import, got {other:?}"),
+      }
+    }
+    other => panic!("expected remaining value import, got {other:?}"),
+  }
+  assert!(matches!(parsed.stx.body[1].stx.as_ref(), Stmt::VarDecl(_)));
 }
