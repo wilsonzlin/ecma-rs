@@ -21,7 +21,7 @@ use parse_js::ast::type_expr::{
 };
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
-use parse_js::parse;
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
@@ -245,6 +245,23 @@ impl serde::Serialize for TypeDisplay {
   fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_str(&self.to_string())
   }
+}
+
+fn parse_file(file: FileId, kind: FileKind, source: &str) -> Result<Node<TopLevel>, Diagnostic> {
+  parse_with_options(
+    source,
+    ParseOptions {
+      dialect: match kind {
+        FileKind::Js => Dialect::Js,
+        FileKind::Ts => Dialect::Ts,
+        FileKind::Tsx => Dialect::Tsx,
+        FileKind::Jsx => Dialect::Jsx,
+        FileKind::Dts => Dialect::Dts,
+      },
+      source_type: SourceType::Module,
+    },
+  )
+  .map_err(|err| err.to_diagnostic(file))
 }
 
 fn display_type_from_state(
@@ -1445,6 +1462,7 @@ impl ProgramState {
         .file_kinds
         .entry(file)
         .or_insert_with(|| host.file_kind(file));
+      let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
       let text = self.load_text(file, host)?;
       let parse_span = QuerySpan::enter(
         query_span!(
@@ -1456,15 +1474,15 @@ impl ProgramState {
         ),
         None,
       );
-      let parsed = parse(&text);
+      let parsed = parse_file(file, file_kind, &text);
       if let Some(span) = parse_span {
         span.finish(None);
       }
       match parsed {
         Ok(ast) => {
-          let hir_kind = match self.file_kinds.get(&file) {
-            Some(FileKind::Dts) => hir_js::FileKind::Dts,
-            _ => hir_js::FileKind::Ts,
+          let hir_kind = match file_kind {
+            FileKind::Dts => hir_js::FileKind::Dts,
+            _ => HirFileKind::Ts,
           };
           let (lowered, mut lower_diags) = lower_file_with_diagnostics(file, hir_kind, &ast);
           self.hir_lowerings.insert(file, lowered);
@@ -1485,7 +1503,7 @@ impl ProgramState {
           }
         }
         Err(err) => {
-          self.diagnostics.push(err.to_diagnostic(file));
+          self.diagnostics.push(err);
         }
       }
     }
