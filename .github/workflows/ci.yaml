@@ -111,6 +111,52 @@ jobs:
           name: difftsc-report
           path: difftsc-report.json
 
+  difftsc-live-tsc:
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+    env:
+      TYPESCRIPT_VERSION: 5.5.4
+      RAYON_NUM_THREADS: 2
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: Install TypeScript (npm)
+        working-directory: ./typecheck-ts-harness
+        run: npm install --no-save --no-package-lock --ignore-scripts "typescript@${TYPESCRIPT_VERSION}"
+
+      - name: Show TypeScript version
+        working-directory: ./typecheck-ts-harness
+        run: node -p "require('typescript').version"
+
+      - name: Run difftsc against live tsc
+        run: >
+          cargo run -p typecheck-ts-harness --release --locked --jobs 2 --
+          difftsc
+          --suite typecheck-ts-harness/fixtures/difftsc
+          --compare-rust
+          --manifest typecheck-ts-harness/fixtures/difftsc/manifest.toml
+          --json
+          > difftsc-live-tsc.json
+
+      - name: Upload live difftsc report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: difftsc-live-tsc
+          path: difftsc-live-tsc.json
+
   test262-parser:
     runs-on: ubuntu-latest
     needs: lint-and-test

@@ -10,7 +10,7 @@ against `tsc`.
 git submodule update --init --recursive parse-js/tests/TypeScript
 
 # 2) Install Node prereqs (once)
-npm install typescript
+npm install typescript@5.5.4
 
 # 3) Run the Rust conformance harness
 cargo run -p typecheck-ts-harness --release -- conformance --filter "*/es2020/**" --shard 0/8
@@ -55,6 +55,9 @@ npm install typescript          # or pnpm/yarn; install anywhere on Node's resol
 node -p "require('typescript').version"
 ```
 
+- CI pins `typescript@5.5.4`; install the same version under
+  `typecheck-ts-harness/` for reproducible difftsc runs:
+  `npm install --no-save --no-package-lock --ignore-scripts --prefix typecheck-ts-harness typescript@5.5.4`.
 - Use `--node /path/to/node` if `node` is not on `PATH` or you want a specific
   runtime.
 - Missing Node:
@@ -200,3 +203,28 @@ the suite name (e.g. `difftsc/assignability`).
   1. Drop files under `fixtures/<suite>/...`
   2. Regenerate baselines: `cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/<suite> --update-baselines`
   3. Commit both fixtures and baselines.
+
+## CI: live `tsc` smoke run
+
+CI runs a small `fixtures/difftsc` suite against a pinned npm TypeScript to keep
+the Rust checker aligned with upstream diagnostics without relying on stored
+baselines. The workflow installs `typescript@5.5.4` and executes:
+
+```
+RAYON_NUM_THREADS=2 cargo run -p typecheck-ts-harness --release --locked --jobs 2 -- \
+  difftsc \
+  --suite typecheck-ts-harness/fixtures/difftsc \
+  --compare-rust \
+  --manifest typecheck-ts-harness/fixtures/difftsc/manifest.toml \
+  --json
+```
+
+- The suite is intentionally tiny to bound runtime.
+- `RAYON_NUM_THREADS` caps Rust-side parallelism; the harness reuses a single
+  `tsc` runner so upstream invocations stay serialized.
+- The JSON report artifact captures both `tsc` and Rust diagnostics for
+  mismatches.
+
+To reproduce locally, install the pinned TypeScript package next to the harness
+(`cd typecheck-ts-harness && npm install --no-save --no-package-lock --ignore-scripts typescript@5.5.4`)
+before running the command above.
