@@ -15,7 +15,7 @@ pub(crate) fn check_assignment(
   }
 
   if let Some(expr) = source_expr {
-    object_literal::check_excess_properties(state, expr, target_ty, result, file);
+    object_literal::legacy_check_excess_properties(state, expr, target_ty, result, file);
   }
 
   if state.is_assignable(source_ty, target_ty) {

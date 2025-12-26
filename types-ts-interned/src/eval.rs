@@ -501,6 +501,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
     let entries = self.mapped_entries(mapped.source, subst, depth + 1);
 
     let mut properties = Vec::new();
+    let mut indexers = Vec::new();
     for entry in entries {
       let key_tys = self.mapped_key_type_ids(&entry.key);
       let mut inner_subst = subst.clone();
@@ -519,9 +520,42 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
 
       let mut remapped_keys = self.remap_mapped_key(&mapped, &entry.key, &inner_subst, depth + 1);
       if remapped_keys.is_empty() {
-        if let Key::Literal(prop_key) = entry.key {
-          remapped_keys.push(prop_key);
+        let mut value_ty = value_ty;
+        if optional {
+          value_ty = self
+            .store
+            .union(vec![value_ty, self.store.primitive_ids().undefined]);
         }
+        match entry.key {
+          Key::String => {
+            indexers.push(crate::Indexer {
+              key_type: self.store.primitive_ids().string,
+              value_type: value_ty,
+              readonly,
+            });
+            continue;
+          }
+          Key::Number => {
+            indexers.push(crate::Indexer {
+              key_type: self.store.primitive_ids().number,
+              value_type: value_ty,
+              readonly,
+            });
+            continue;
+          }
+          Key::Symbol => {
+            indexers.push(crate::Indexer {
+              key_type: self.store.primitive_ids().symbol,
+              value_type: value_ty,
+              readonly,
+            });
+            continue;
+          }
+          Key::Literal(prop_key) => remapped_keys.push(prop_key),
+        }
+      }
+      if remapped_keys.is_empty() {
+        continue;
       }
 
       for prop_key in remapped_keys {
@@ -544,7 +578,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       properties,
       call_signatures: Vec::new(),
       construct_signatures: Vec::new(),
-      indexers: Vec::new(),
+      indexers,
     };
     let shape_id = self.store.intern_shape(shape);
     let obj = self
@@ -1003,16 +1037,39 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       }
     }
     for idxer in shape.indexers.iter() {
-      let matches = match (key, self.store.type_kind(idxer.key_type)) {
-        (Key::String, TypeKind::String) => true,
-        (Key::Number, TypeKind::Number) => true,
-        (Key::Literal(PropKey::String(_)), TypeKind::String) => true,
-        (Key::Literal(PropKey::Number(_)), TypeKind::Number) => true,
-        _ => false,
+      let matches = match key {
+        Key::Literal(prop_key) => self.indexer_accepts_key(prop_key, idxer.key_type),
+        Key::String => {
+          self.indexer_accepts_key(
+            &PropKey::String(self.store.intern_name(String::new())),
+            idxer.key_type,
+          ) || self.indexer_accepts_key(&PropKey::Number(0), idxer.key_type)
+        }
+        Key::Number => self.indexer_accepts_key(&PropKey::Number(0), idxer.key_type),
+        Key::Symbol => self.indexer_accepts_key(
+          &PropKey::Symbol(self.store.intern_name(String::new())),
+          idxer.key_type,
+        ),
       };
       if matches {
         hits.push(idxer.value_type);
       }
+    }
+  }
+
+  fn indexer_accepts_key(&self, key: &PropKey, idx_key: TypeId) -> bool {
+    match self.store.type_kind(idx_key) {
+      TypeKind::String | TypeKind::StringLiteral(_) => {
+        matches!(key, PropKey::String(_) | PropKey::Number(_))
+      }
+      TypeKind::Number | TypeKind::NumberLiteral(_) => matches!(key, PropKey::Number(_)),
+      TypeKind::Union(members) => members
+        .iter()
+        .any(|member| self.indexer_accepts_key(key, *member)),
+      TypeKind::Intersection(members) => members
+        .iter()
+        .any(|member| self.indexer_accepts_key(key, *member)),
+      _ => false,
     }
   }
 

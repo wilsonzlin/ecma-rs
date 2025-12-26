@@ -1,28 +1,195 @@
 use std::cmp::Ordering;
+use std::sync::Arc;
+
+use diagnostics::{Diagnostic, FileId, Label, Span, TextRange};
+use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+use parse_js::ast::expr::Expr as AstExpr;
+use parse_js::ast::node::Node;
+use parse_js::loc::Loc;
+use types_ts_interned::{TypeExpander, TypeId, TypeKind as InternedTypeKind, TypeStore};
 
 use super::super::{
-  BodyCheckResult, FileId, HirExpr, HirExprKind, HirObjectProperty, ObjectType, ProgramState, Span,
-  TypeId, TypeKind,
+  BodyCheckResult, HirExpr, HirExprKind, HirObjectProperty, ObjectType, ProgramState,
+  Span as HirSpan, TypeKind as LegacyTypeKind,
 };
 use crate::codes;
+use crate::type_queries::{PropertyKey, TypeQueries};
 
-pub(crate) fn is_fresh_object_literal(expr: &HirExpr) -> bool {
+/// Check for excess properties on a fresh object literal assignment using the
+/// interned type system. Diagnostics are returned for the caller to attach to
+/// their result.
+pub(crate) fn check_excess_properties(
+  store: &Arc<TypeStore>,
+  expander: &impl TypeExpander,
+  expr: &Node<AstExpr>,
+  target_type: TypeId,
+  file: FileId,
+) -> Vec<Diagnostic> {
+  let Some((object_span, props)) = collect_object_literal(file, expr) else {
+    return Vec::new();
+  };
+
+  if props.is_empty() {
+    return Vec::new();
+  }
+
+  // Avoid excess property checks when the target is clearly not object-like.
+  match store.type_kind(target_type) {
+    InternedTypeKind::Any | InternedTypeKind::Unknown => return Vec::new(),
+    InternedTypeKind::Object(_)
+    | InternedTypeKind::Union(_)
+    | InternedTypeKind::Intersection(_)
+    | InternedTypeKind::Ref { .. }
+    | InternedTypeKind::Mapped(_) => {}
+    _ => return Vec::new(),
+  }
+
+  let queries = TypeQueries::new(Arc::clone(store), expander);
+  let Some(extras) = find_excess_properties(&queries, store.as_ref(), target_type, &props) else {
+    return Vec::new();
+  };
+
+  extras
+    .into_iter()
+    .map(|prop| {
+      let mut diagnostic = codes::EXCESS_PROPERTY.error(
+        format!("excess property '{}' in object literal", prop.name),
+        Span::new(file, object_span),
+      );
+      if let Some(span) = prop.span {
+        diagnostic.push_label(Label::secondary(
+          Span::new(file, span),
+          format!("property '{}' is not allowed here", prop.name),
+        ));
+      }
+      diagnostic
+    })
+    .collect()
+}
+
+struct LiteralProp {
+  name: String,
+  span: Option<TextRange>,
+}
+
+fn collect_object_literal(
+  file: FileId,
+  expr: &Node<AstExpr>,
+) -> Option<(TextRange, Vec<LiteralProp>)> {
+  match expr.stx.as_ref() {
+    AstExpr::TypeAssertion(_) => return None,
+    AstExpr::LitObj(obj) => {
+      let mut props = Vec::new();
+      for member in obj.stx.members.iter() {
+        match &member.stx.typ {
+          ObjMemberType::Valued { key, val } => {
+            let ClassOrObjKey::Direct(direct) = key else {
+              continue;
+            };
+            if let ClassOrObjVal::Prop(_) = val {
+              props.push(LiteralProp {
+                name: direct.stx.key.clone(),
+                span: Some(loc_to_range(file, direct.loc)),
+              });
+            }
+          }
+          ObjMemberType::Shorthand { id } => props.push(LiteralProp {
+            name: id.stx.name.clone(),
+            span: Some(loc_to_range(file, id.loc)),
+          }),
+          ObjMemberType::Rest { .. } => {}
+        }
+      }
+      Some((loc_to_range(file, expr.loc), props))
+    }
+    _ => None,
+  }
+}
+
+fn find_excess_properties<'a, E: TypeExpander>(
+  queries: &TypeQueries<'_, E>,
+  store: &TypeStore,
+  target: TypeId,
+  props: &'a [LiteralProp],
+) -> Option<Vec<&'a LiteralProp>> {
+  match store.type_kind(target) {
+    InternedTypeKind::Any | InternedTypeKind::Unknown => None,
+    InternedTypeKind::Union(members) => {
+      let mut best: Option<Vec<&LiteralProp>> = None;
+      for member in members.iter() {
+        match find_excess_properties(queries, store, *member, props) {
+          None => return None,
+          Some(extras) => {
+            let replace = match &best {
+              None => true,
+              Some(current) => extras.len() < current.len(),
+            };
+            if replace {
+              best = Some(extras);
+            }
+          }
+        }
+      }
+      best
+    }
+    _ => {
+      if queries.properties_of(target).is_empty() && queries.indexers(target).is_empty() {
+        return None;
+      }
+      let mut extras = Vec::new();
+      for prop in props.iter() {
+        if !property_allowed(queries, target, &prop.name) {
+          extras.push(prop);
+        }
+      }
+      if extras.is_empty() {
+        None
+      } else {
+        Some(extras)
+      }
+    }
+  }
+}
+
+fn property_allowed<E: TypeExpander>(
+  queries: &TypeQueries<'_, E>,
+  target: TypeId,
+  name: &str,
+) -> bool {
+  let key = if let Ok(num) = name.parse::<i64>() {
+    PropertyKey::Number(num)
+  } else {
+    PropertyKey::String(name.to_string())
+  };
+  queries.property_type(target, key).is_some()
+}
+
+fn loc_to_range(_file: FileId, loc: Loc) -> TextRange {
+  let (range, _) = loc.to_diagnostics_range_with_note();
+  TextRange::new(range.start, range.end)
+}
+
+// Legacy helpers used by the pre-interned pipeline. These are retained for
+// compatibility with the existing `Program` implementation while the new
+// interned checker evolves.
+
+pub(crate) fn legacy_is_fresh_object_literal(expr: &HirExpr) -> bool {
   matches!(expr.kind, HirExprKind::Object(_))
 }
 
 /// Return the contextual type for a property on an object literal when the target type is known.
-pub(crate) fn contextual_property_type(
+pub(crate) fn legacy_contextual_property_type(
   state: &mut ProgramState,
   target: TypeId,
   name: &str,
 ) -> Option<TypeId> {
   match state.type_store.kind(target).clone() {
-    TypeKind::Any | TypeKind::Unknown => None,
-    TypeKind::Object(obj) => property_type_from_object(&obj, name),
-    TypeKind::Union(members) => {
+    LegacyTypeKind::Any | LegacyTypeKind::Unknown => None,
+    LegacyTypeKind::Object(obj) => legacy_property_type_from_object(&obj, name),
+    LegacyTypeKind::Union(members) => {
       let mut collected = Vec::new();
       for member in members {
-        if let Some(ty) = contextual_property_type(state, member, name) {
+        if let Some(ty) = legacy_contextual_property_type(state, member, name) {
           collected.push(ty);
         }
       }
@@ -36,14 +203,14 @@ pub(crate) fn contextual_property_type(
   }
 }
 
-pub(crate) fn check_excess_properties(
+pub(crate) fn legacy_check_excess_properties(
   state: &mut ProgramState,
   expr: &HirExpr,
   target_type: TypeId,
   result: &mut BodyCheckResult,
   file: FileId,
 ) {
-  if !is_fresh_object_literal(expr) {
+  if !legacy_is_fresh_object_literal(expr) {
     return;
   }
   let HirExprKind::Object(props) = &expr.kind else {
@@ -54,7 +221,7 @@ pub(crate) fn check_excess_properties(
     return;
   }
 
-  let Some(excess) = find_excess_properties(state, target_type, props) else {
+  let Some(excess) = legacy_find_excess_properties(state, target_type, props) else {
     return;
   };
 
@@ -69,7 +236,7 @@ pub(crate) fn check_excess_properties(
     let value = &prop.value;
     let mut diagnostic = codes::EXCESS_PROPERTY.error(
       format!("excess property '{}' in object literal", name),
-      Span {
+      HirSpan {
         file,
         range: value.span,
       },
@@ -81,7 +248,7 @@ pub(crate) fn check_excess_properties(
   }
 }
 
-fn property_type_from_object(obj: &ObjectType, name: &str) -> Option<TypeId> {
+fn legacy_property_type_from_object(obj: &ObjectType, name: &str) -> Option<TypeId> {
   if let Some(prop) = obj.props.get(name) {
     return Some(prop.typ);
   }
@@ -92,23 +259,23 @@ fn property_type_from_object(obj: &ObjectType, name: &str) -> Option<TypeId> {
   }
 }
 
-struct ExcessResult<'a> {
+struct LegacyExcessResult<'a> {
   extras: Vec<&'a HirObjectProperty>,
   allowed: Vec<String>,
 }
 
-fn find_excess_properties<'a>(
+fn legacy_find_excess_properties<'a>(
   state: &mut ProgramState,
   target_type: TypeId,
   props: &'a [HirObjectProperty],
-) -> Option<ExcessResult<'a>> {
+) -> Option<LegacyExcessResult<'a>> {
   match state.type_store.kind(target_type).clone() {
-    TypeKind::Any | TypeKind::Unknown => None,
-    TypeKind::Object(obj) => excess_against_object(&obj, props),
-    TypeKind::Union(members) => {
-      let mut best: Option<ExcessResult> = None;
+    LegacyTypeKind::Any | LegacyTypeKind::Unknown => None,
+    LegacyTypeKind::Object(obj) => legacy_excess_against_object(&obj, props),
+    LegacyTypeKind::Union(members) => {
+      let mut best: Option<LegacyExcessResult> = None;
       for member in members {
-        match find_excess_properties(state, member, props) {
+        match legacy_find_excess_properties(state, member, props) {
           None => return None,
           Some(res) => {
             let replace = match &best {
@@ -131,10 +298,10 @@ fn find_excess_properties<'a>(
   }
 }
 
-fn excess_against_object<'a>(
+fn legacy_excess_against_object<'a>(
   target: &ObjectType,
   props: &'a [HirObjectProperty],
-) -> Option<ExcessResult<'a>> {
+) -> Option<LegacyExcessResult<'a>> {
   if target.has_index_signature() || target.props.is_empty() {
     return None;
   }
@@ -144,21 +311,21 @@ fn excess_against_object<'a>(
     if prop.is_spread {
       continue;
     }
-    if !property_allowed(target, name) {
+    if !legacy_property_allowed(target, name) {
       extras.push(prop);
     }
   }
   if extras.is_empty() {
     None
   } else {
-    let mut allowed = allowed_keys(target);
+    let mut allowed = legacy_allowed_keys(target);
     allowed.sort();
     allowed.dedup();
-    Some(ExcessResult { extras, allowed })
+    Some(LegacyExcessResult { extras, allowed })
   }
 }
 
-fn property_allowed(target: &ObjectType, name: &str) -> bool {
+fn legacy_property_allowed(target: &ObjectType, name: &str) -> bool {
   if target.props.contains_key(name) {
     return true;
   }
@@ -169,6 +336,6 @@ fn property_allowed(target: &ObjectType, name: &str) -> bool {
   }
 }
 
-fn allowed_keys(target: &ObjectType) -> Vec<String> {
+fn legacy_allowed_keys(target: &ObjectType) -> Vec<String> {
   target.props.keys().cloned().collect()
 }

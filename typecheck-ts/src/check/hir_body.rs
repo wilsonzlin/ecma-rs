@@ -20,8 +20,8 @@ use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use parse_js::parse;
 use types_ts_interned::{
-  ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature, TupleElem, TypeId,
-  TypeKind, TypeStore,
+  ExpandedType, ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature,
+  TupleElem, TypeExpander, TypeId, TypeKind, TypeStore,
 };
 
 use super::cfg::{BlockId, ControlFlowGraph};
@@ -34,6 +34,7 @@ use super::flow_narrow::{
 use super::expr::resolve_call;
 use super::infer::{infer_type_arguments_from_contextual_signature, TypeParamDecl};
 use super::instantiate::Substituter;
+use super::object_literal;
 use super::overload;
 use super::relate_hooks;
 use super::type_expr::TypeLowerer;
@@ -48,6 +49,19 @@ pub struct BodyCheckResult {
   pub pat_spans: Vec<TextRange>,
   pub diagnostics: Vec<Diagnostic>,
   pub return_types: Vec<TypeId>,
+}
+
+struct NoopExpander;
+
+impl TypeExpander for NoopExpander {
+  fn expand(
+    &self,
+    _store: &TypeStore,
+    _def: types_ts_interned::DefId,
+    _args: &[TypeId],
+  ) -> Option<ExpandedType> {
+    None
+  }
 }
 
 #[derive(Default, Clone)]
@@ -1000,6 +1014,19 @@ impl<'a> Checker<'a> {
                 .diagnostics
                 .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
             }
+            let expander = NoopExpander;
+            for (idx, arg) in call.stx.arguments.iter().enumerate() {
+              if let Some(param_ty) = self.param_type_for_arg(&sig.params, idx) {
+                let diags = object_literal::check_excess_properties(
+                  &self.store,
+                  &expander,
+                  &arg.stx.value,
+                  param_ty,
+                  self.file,
+                );
+                self.diagnostics.extend(diags);
+              }
+            }
           }
         }
         resolution.return_type
@@ -1045,6 +1072,30 @@ impl<'a> Checker<'a> {
     let ty = self.apply_widening(ty, ctx);
     self.record_expr_type(expr.loc, ty);
     ty
+  }
+
+  fn param_type_for_arg(&self, params: &[SigParam], idx: usize) -> Option<TypeId> {
+    if let Some(param) = params.get(idx) {
+      return Some(self.unwrap_rest_type(param));
+    }
+    params.last().and_then(|param| {
+      if param.rest {
+        Some(self.unwrap_rest_type(param))
+      } else {
+        None
+      }
+    })
+  }
+
+  fn unwrap_rest_type(&self, param: &SigParam) -> TypeId {
+    if !param.rest {
+      return param.ty;
+    }
+    match self.store.type_kind(param.ty) {
+      TypeKind::Array { ty, .. } => ty,
+      TypeKind::Tuple(elems) => elems.first().map(|e| e.ty).unwrap_or(param.ty),
+      _ => param.ty,
+    }
   }
 
   fn member_type(&mut self, obj: TypeId, prop: &str) -> TypeId {
@@ -1441,6 +1492,15 @@ impl<'a> Checker<'a> {
     match left.stx.as_ref() {
       AstExpr::Id(id) => {
         if let Some(binding) = target_binding {
+          let expander = NoopExpander;
+          let diags = object_literal::check_excess_properties(
+            &self.store,
+            &expander,
+            right,
+            binding.ty,
+            self.file,
+          );
+          self.diagnostics.extend(diags);
           if !self.relate.is_assignable(value_ty, binding.ty) {
             self.diagnostics.push(codes::TYPE_MISMATCH.error(
               "assignment type mismatch",
@@ -1763,6 +1823,10 @@ impl<'a> Checker<'a> {
   }
 
   fn check_assignable(&mut self, expr: &Node<AstExpr>, src: TypeId, dst: TypeId) {
+    let expander = NoopExpander;
+    let diags =
+      object_literal::check_excess_properties(&self.store, &expander, expr, dst, self.file);
+    self.diagnostics.extend(diags);
     if !self.relate.is_assignable(src, dst) {
       self.diagnostics.push(codes::TYPE_MISMATCH.error(
         "type mismatch",

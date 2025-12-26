@@ -4269,8 +4269,9 @@ impl ProgramState {
           if prop.is_spread {
             continue;
           }
-          let expected = context
-            .and_then(|ctx| check::object_literal::contextual_property_type(self, ctx, &prop.name));
+          let expected = context.and_then(|ctx| {
+            check::object_literal::legacy_contextual_property_type(self, ctx, &prop.name)
+          });
           let (mut ty, _) = self.check_expr(&prop.value, env, result, file, expected.or(context));
           if expected.is_none() && context != Some(self.builtin.never) {
             ty = self.widen_literal(ty);

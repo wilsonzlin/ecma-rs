@@ -564,9 +564,21 @@ fn effective_type(prop: &PropertyEntry, store: &TypeStore) -> TypeId {
 }
 
 fn indexer_matches(key: &PropKey, idxer: &Indexer, store: &TypeStore) -> bool {
-  match (key, store.type_kind(idxer.key_type)) {
-    (PropKey::String(_), TypeKind::String) => true,
-    (PropKey::Number(_), TypeKind::Number) => true,
+  indexer_accepts_key(key, idxer.key_type, store)
+}
+
+fn indexer_accepts_key(key: &PropKey, idx_key: TypeId, store: &TypeStore) -> bool {
+  match store.type_kind(idx_key) {
+    TypeKind::String | TypeKind::StringLiteral(_) => {
+      matches!(key, PropKey::String(_) | PropKey::Number(_))
+    }
+    TypeKind::Number | TypeKind::NumberLiteral(_) => matches!(key, PropKey::Number(_)),
+    TypeKind::Union(members) => members
+      .iter()
+      .any(|member| indexer_accepts_key(key, *member, store)),
+    TypeKind::Intersection(members) => members
+      .iter()
+      .any(|member| indexer_accepts_key(key, *member, store)),
     _ => false,
   }
 }
