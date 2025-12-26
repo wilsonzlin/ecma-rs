@@ -7,7 +7,9 @@
 mod compiler_options;
 pub mod lib_env;
 
-pub use compiler_options::{CompilerOptions, JsxMode, LibName, LibSet, ModuleKind, ScriptTarget};
+pub use compiler_options::{
+  CacheMode, CacheOptions, CompilerOptions, JsxMode, LibName, LibSet, ModuleKind, ScriptTarget,
+};
 pub use lib_env::{LibManager, LoadedLibs};
 pub use types_ts_interned::TypeOptions;
 

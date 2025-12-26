@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use types_ts_interned::CacheStats as StoreCacheStats;
 
 /// Named query boundaries used for tracing and profiling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
@@ -15,6 +16,16 @@ pub enum QueryKind {
   Relation,
 }
 
+/// Buckets for cache statistics exposed by the checker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum CacheKind {
+  Relation,
+  Eval,
+  RefExpansion,
+  Instantiation,
+}
+
 /// Aggregate statistics for a single query kind.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QueryStat {
@@ -25,10 +36,22 @@ pub struct QueryStat {
   pub hit_rate: f64,
 }
 
+/// Aggregate statistics for a cache.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CacheStat {
+  pub hits: u64,
+  pub misses: u64,
+  pub insertions: u64,
+  pub evictions: u64,
+  pub hit_rate: f64,
+}
+
 /// Summary of query statistics across all recorded kinds.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct QueryStats {
   pub queries: BTreeMap<QueryKind, QueryStat>,
+  #[serde(default)]
+  pub caches: BTreeMap<CacheKind, CacheStat>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -39,14 +62,24 @@ struct QueryStatAccumulator {
   total_time_ms: f64,
 }
 
-/// Internal collector shared by the checker to accumulate per-query metrics.
+#[derive(Debug, Clone, Default)]
+struct CacheStatAccumulator {
+  hits: u64,
+  misses: u64,
+  insertions: u64,
+  evictions: u64,
+}
+
+/// Thread-safe accumulator shared by the checker and profiling harness to
+/// record query timings and cache activity.
 #[derive(Clone, Default)]
-pub(crate) struct QueryStatsCollector {
+pub struct QueryStatsCollector {
   inner: Arc<Mutex<BTreeMap<QueryKind, QueryStatAccumulator>>>,
+  caches: Arc<Mutex<BTreeMap<CacheKind, CacheStatAccumulator>>>,
 }
 
 impl QueryStatsCollector {
-  pub(crate) fn record(&self, kind: QueryKind, cache_hit: bool, duration: Duration) {
+  pub fn record(&self, kind: QueryKind, cache_hit: bool, duration: Duration) {
     let mut guard = self.inner.lock().unwrap();
     let entry = guard.entry(kind).or_default();
     entry.total += 1;
@@ -58,7 +91,17 @@ impl QueryStatsCollector {
     entry.total_time_ms += duration.as_secs_f64() * 1000.0;
   }
 
-  pub(crate) fn snapshot(&self) -> QueryStats {
+  /// Merge cache statistics from a single cache snapshot into the collector.
+  pub fn record_cache(&self, kind: CacheKind, stats: &StoreCacheStats) {
+    let mut guard = self.caches.lock().unwrap();
+    let entry = guard.entry(kind).or_default();
+    entry.hits += stats.hits;
+    entry.misses += stats.misses;
+    entry.insertions += stats.insertions;
+    entry.evictions += stats.evictions;
+  }
+
+  pub fn snapshot(&self) -> QueryStats {
     let guard = self.inner.lock().unwrap();
     let mut queries = BTreeMap::new();
     for (kind, acc) in guard.iter() {
@@ -77,7 +120,26 @@ impl QueryStatsCollector {
         },
       );
     }
-    QueryStats { queries }
+    let cache_guard = self.caches.lock().unwrap();
+    let mut caches = BTreeMap::new();
+    for (kind, acc) in cache_guard.iter() {
+      let lookups = acc.hits + acc.misses;
+      caches.insert(
+        *kind,
+        CacheStat {
+          hits: acc.hits,
+          misses: acc.misses,
+          insertions: acc.insertions,
+          evictions: acc.evictions,
+          hit_rate: if lookups == 0 {
+            0.0
+          } else {
+            acc.hits as f64 / lookups as f64
+          },
+        },
+      );
+    }
+    QueryStats { queries, caches }
   }
 }
 
@@ -96,9 +158,22 @@ impl QueryStats {
         entry.cache_hits as f64 / entry.total as f64
       };
     }
+    for (kind, stat) in other.caches.iter() {
+      let entry = self.caches.entry(*kind).or_default();
+      entry.hits += stat.hits;
+      entry.misses += stat.misses;
+      entry.insertions += stat.insertions;
+      entry.evictions += stat.evictions;
+      let lookups = entry.hits + entry.misses;
+      entry.hit_rate = if lookups == 0 {
+        0.0
+      } else {
+        entry.hits as f64 / lookups as f64
+      };
+    }
   }
 
   pub fn is_empty(&self) -> bool {
-    self.queries.is_empty()
+    self.queries.is_empty() && self.caches.is_empty()
   }
 }

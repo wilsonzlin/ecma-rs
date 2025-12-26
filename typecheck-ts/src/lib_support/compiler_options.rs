@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use types_ts_interned::CacheConfig;
+
 /// Target language level.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -88,6 +90,8 @@ pub struct CompilerOptions {
   pub no_unchecked_indexed_access: bool,
   pub use_define_for_class_fields: bool,
   pub jsx: Option<JsxMode>,
+  /// Cache sizing and sharing strategy for the checker.
+  pub cache: CacheOptions,
 }
 
 impl Default for CompilerOptions {
@@ -105,6 +109,63 @@ impl Default for CompilerOptions {
       no_unchecked_indexed_access: false,
       use_define_for_class_fields: true,
       jsx: None,
+      cache: CacheOptions::default(),
+    }
+  }
+}
+
+/// Strategy for sharing caches across bodies/files.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CacheMode {
+  /// Reuse the same caches across bodies for maximal hit rates.
+  Shared,
+  /// Create fresh caches for each body and drop them afterwards.
+  PerBody,
+}
+
+/// Cache sizing controls exposed through the host.
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CacheOptions {
+  pub max_relation_cache_entries: usize,
+  pub max_eval_cache_entries: usize,
+  pub max_instantiation_cache_entries: usize,
+  pub cache_shards: usize,
+  pub mode: CacheMode,
+}
+
+impl CacheOptions {
+  pub fn relation_config(&self) -> CacheConfig {
+    CacheConfig {
+      max_entries: self.max_relation_cache_entries,
+      shard_count: self.cache_shards,
+    }
+  }
+
+  pub fn eval_config(&self) -> CacheConfig {
+    CacheConfig {
+      max_entries: self.max_eval_cache_entries,
+      shard_count: self.cache_shards,
+    }
+  }
+
+  pub fn instantiation_config(&self) -> CacheConfig {
+    CacheConfig {
+      max_entries: self.max_instantiation_cache_entries,
+      shard_count: self.cache_shards,
+    }
+  }
+}
+
+impl Default for CacheOptions {
+  fn default() -> Self {
+    Self {
+      max_relation_cache_entries: CacheConfig::default().max_entries,
+      max_eval_cache_entries: CacheConfig::default().max_entries,
+      max_instantiation_cache_entries: CacheConfig::default().max_entries / 2,
+      cache_shards: CacheConfig::default().shard_count,
+      mode: CacheMode::Shared,
     }
   }
 }

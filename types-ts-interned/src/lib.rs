@@ -1,5 +1,6 @@
 #![deny(missing_debug_implementations)]
 
+mod cache;
 mod display;
 mod eval;
 #[cfg(feature = "fuzzing")]
@@ -12,7 +13,10 @@ mod shape;
 mod signature;
 mod store;
 
+pub use cache::{CacheConfig, CacheStats, ShardedCache};
 pub use display::TypeDisplay;
+pub use eval::EvaluatorCacheStats;
+pub use eval::EvaluatorCaches;
 pub use eval::ExpandedType;
 pub use eval::TypeEvaluator;
 pub use eval::TypeExpander;
@@ -36,6 +40,7 @@ pub use relate::ReasonNode;
 pub use relate::RelateCtx;
 pub use relate::RelateHooks;
 pub use relate::RelateTypeExpander;
+pub use relate::RelationCache;
 pub use relate::RelationKind;
 pub use relate::RelationMode;
 pub use relate::RelationResult;

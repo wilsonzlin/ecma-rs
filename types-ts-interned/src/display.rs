@@ -143,17 +143,13 @@ impl<'a> TypeDisplay<'a> {
       TypeKind::This => write!(f, "this"),
       TypeKind::Infer(param) => write!(f, "infer T{}", param.0),
       TypeKind::Tuple(elems) => {
-        let all_readonly = !elems.is_empty() && elems.iter().all(|elem| elem.readonly);
-        if all_readonly {
-          write!(f, "readonly ")?;
-        }
         write!(f, "[")?;
         let mut iter = elems.iter().peekable();
         while let Some(elem) = iter.next() {
           if elem.rest {
             write!(f, "...")?;
           }
-          if elem.readonly && !all_readonly {
+          if elem.readonly {
             write!(f, "readonly ")?;
           }
           self.fmt_with_prec(elem.ty, Precedence::Primary, f)?;

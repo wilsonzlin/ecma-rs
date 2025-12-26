@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId, TypeMemberKind,
-  TypeName, TypeParamId as HirTypeParamId, TypeSignature,
+  DefId as HirDefId, DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId,
+  TypeMemberKind, TypeName, TypeParamId as HirTypeParamId, TypeSignature,
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
@@ -23,6 +23,7 @@ pub struct HirDeclLowerer<'a, 'diag> {
   arenas: &'a TypeArenas,
   semantics: Option<&'a TsProgramSemantics>,
   file: FileId,
+  local_defs: HashMap<String, HirDefId>,
   diagnostics: &'diag mut Vec<Diagnostic>,
   type_params: HashMap<HirTypeParamId, TypeParamId>,
   type_param_names: HashMap<hir_js::NameId, TypeParamId>,
@@ -36,6 +37,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     arenas: &'a TypeArenas,
     semantics: Option<&'a TsProgramSemantics>,
     file: FileId,
+    local_defs: HashMap<String, HirDefId>,
     diagnostics: &'diag mut Vec<Diagnostic>,
     def_map: Option<&'a HashMap<DefId, DefId>>,
     def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
@@ -45,6 +47,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       arenas,
       semantics,
       file,
+      local_defs,
       diagnostics,
       type_params: HashMap::new(),
       type_param_names: HashMap::new(),
@@ -507,6 +510,23 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     };
 
     if let Some(name) = resolved {
+      if let Some(local) = self.local_defs.get(&name).copied() {
+        let mapped = self
+          .def_map
+          .and_then(|map| map.get(&local).copied())
+          .or_else(|| {
+            self
+              .def_by_name
+              .and_then(|map| map.get(&(self.file, name.clone())).copied())
+          })
+          .unwrap_or(local);
+        let args: Vec<_> = reference
+          .type_args
+          .iter()
+          .map(|a| self.lower_type_expr(*a, names))
+          .collect();
+        return self.store.intern_type(TypeKind::Ref { def: mapped, args });
+      }
       if let Some(sem) = self.semantics {
         if let Some(symbol) = sem.resolve_in_module(self.file, &name, Namespace::TYPE) {
           if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {

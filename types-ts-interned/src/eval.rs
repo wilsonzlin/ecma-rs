@@ -1,3 +1,4 @@
+use crate::cache::{CacheConfig, CacheStats, ShardedCache};
 use crate::ids::{DefId, ObjectId, TypeId, TypeParamId};
 use crate::kind::{MappedModifier, MappedType, TemplateLiteralType, TypeKind};
 use crate::shape::{PropData, PropKey, Property, Shape};
@@ -155,13 +156,45 @@ struct KeyInfo {
   readonly: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct EvaluatorCacheStats {
+  pub eval: CacheStats,
+  pub references: CacheStats,
+}
+
+#[derive(Clone, Debug)]
+pub struct EvaluatorCaches {
+  eval: Arc<ShardedCache<EvalKey, TypeId>>,
+  refs: Arc<ShardedCache<RefKey, TypeId>>,
+}
+
+impl EvaluatorCaches {
+  pub fn new(config: CacheConfig) -> Self {
+    Self {
+      eval: Arc::new(ShardedCache::new(config)),
+      refs: Arc::new(ShardedCache::new(config)),
+    }
+  }
+
+  pub fn stats(&self) -> EvaluatorCacheStats {
+    EvaluatorCacheStats {
+      eval: self.eval.stats(),
+      references: self.refs.stats(),
+    }
+  }
+
+  pub fn clear(&self) {
+    self.eval.clear();
+    self.refs.clear();
+  }
+}
+
 /// Evaluates and canonicalizes types with support for lazy reference expansion
 /// and TypeScript-style operators (conditional/mapped/template/indexed/keyof).
 pub struct TypeEvaluator<'a, E: TypeExpander> {
   store: Arc<TypeStore>,
   expander: &'a E,
-  eval_cache: AHashMap<EvalKey, TypeId>,
-  ref_cache: AHashMap<RefKey, TypeId>,
+  caches: EvaluatorCaches,
   eval_in_progress: AHashSet<EvalKey>,
   ref_in_progress: AHashSet<RefKey>,
   depth_limit: usize,
@@ -179,11 +212,22 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   const DEFAULT_DEPTH_LIMIT: usize = 64;
 
   pub fn new(store: Arc<TypeStore>, expander: &'a E) -> Self {
+    Self::with_caches(
+      store,
+      expander,
+      EvaluatorCaches::new(CacheConfig::default()),
+    )
+  }
+
+  pub fn with_cache_config(store: Arc<TypeStore>, expander: &'a E, config: CacheConfig) -> Self {
+    Self::with_caches(store, expander, EvaluatorCaches::new(config))
+  }
+
+  pub fn with_caches(store: Arc<TypeStore>, expander: &'a E, caches: EvaluatorCaches) -> Self {
     Self {
       store,
       expander,
-      eval_cache: AHashMap::new(),
-      ref_cache: AHashMap::new(),
+      caches,
       eval_in_progress: AHashSet::new(),
       ref_in_progress: AHashSet::new(),
       depth_limit: Self::DEFAULT_DEPTH_LIMIT,
@@ -193,6 +237,14 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
   pub fn with_depth_limit(mut self, limit: usize) -> Self {
     self.depth_limit = limit;
     self
+  }
+
+  pub fn cache_stats(&self) -> EvaluatorCacheStats {
+    self.caches.stats()
+  }
+
+  pub fn clear_caches(&self) {
+    self.caches.clear();
   }
 
   pub fn evaluate(&mut self, ty: TypeId) -> TypeId {
@@ -218,8 +270,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       ty,
       subst: subst.clone(),
     };
-    if let Some(cached) = self.eval_cache.get(&key) {
-      return *cached;
+    if let Some(cached) = self.caches.eval.get(&key) {
+      return cached;
     }
     if self.eval_in_progress.contains(&key) {
       return ty;
@@ -296,7 +348,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       other => self.store.intern_type(other),
     };
     self.eval_in_progress.remove(&key);
-    self.eval_cache.insert(key, result);
+    self.caches.eval.insert(key, result);
     result
   }
 
@@ -359,8 +411,8 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       def,
       args: evaluated_args.clone(),
     };
-    if let Some(cached) = self.ref_cache.get(&key) {
-      return *cached;
+    if let Some(cached) = self.caches.refs.get(&key) {
+      return cached;
     }
     if self.ref_in_progress.contains(&key) {
       return self.store.intern_type(TypeKind::Ref {
@@ -388,7 +440,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         })
       });
     self.ref_in_progress.remove(&key);
-    self.ref_cache.insert(key, expanded);
+    self.caches.refs.insert(key, expanded);
     expanded
   }
 

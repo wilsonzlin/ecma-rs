@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use types_ts_interned::{DefId, ShapeId};
 use types_ts_interned::{
-  ObjectType, Shape, Signature, SignatureId, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
+  CacheConfig, CacheStats, ObjectType, Shape, ShardedCache, Signature, SignatureId, TupleElem,
+  TypeId, TypeKind, TypeParamId, TypeStore,
 };
+use types_ts_interned::{DefId, ShapeId};
 
 /// Performs type parameter substitution over [`TypeKind`] trees.
 ///
@@ -211,12 +212,38 @@ impl Substituter {
 }
 
 /// Caches instantiations of a particular definition for repeated calls.
-#[derive(Default, Debug)]
+#[derive(Clone, Debug)]
 pub struct InstantiationCache {
-  signature_cache: HashMap<(DefId, Vec<TypeId>), SignatureId>,
+  signature_cache: Arc<ShardedCache<(DefId, Vec<TypeId>), SignatureId>>,
+}
+
+impl Default for InstantiationCache {
+  fn default() -> Self {
+    Self::with_config(CacheConfig::default())
+  }
 }
 
 impl InstantiationCache {
+  pub fn with_config(config: CacheConfig) -> Self {
+    Self {
+      signature_cache: Arc::new(ShardedCache::new(config)),
+    }
+  }
+
+  pub fn shared(cache: Arc<ShardedCache<(DefId, Vec<TypeId>), SignatureId>>) -> Self {
+    Self {
+      signature_cache: cache,
+    }
+  }
+
+  pub fn stats(&self) -> CacheStats {
+    self.signature_cache.stats()
+  }
+
+  pub fn clear(&self) {
+    self.signature_cache.clear();
+  }
+
   /// Instantiate a signature for a specific definition and type argument mapping,
   /// caching the result to avoid re-instantiating identical substitutions.
   pub fn instantiate_signature(
@@ -236,12 +263,13 @@ impl InstantiationCache {
           .unwrap_or(store.primitive_ids().unknown)
       })
       .collect();
-    if let Some(hit) = self.signature_cache.get(&(def, key_args.clone())) {
-      return *hit;
+    let cache_key = (def, key_args);
+    if let Some(hit) = self.signature_cache.get(&cache_key) {
+      return hit;
     }
     let mut substituter = Substituter::new(Arc::clone(store), subst.clone());
     let instantiated = substituter.substitute_signature(sig);
-    self.signature_cache.insert((def, key_args), instantiated);
+    self.signature_cache.insert(cache_key, instantiated);
     instantiated
   }
 }

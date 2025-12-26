@@ -153,6 +153,10 @@ pub mod check {
     pub use crate::program::check::infer::*;
   }
 
+  pub mod caches {
+    pub use crate::program::check::caches::*;
+  }
+
   pub mod instantiate {
     pub use crate::program::check::instantiate::*;
   }

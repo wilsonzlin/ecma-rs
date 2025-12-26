@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use ordered_float::OrderedFloat;
 use typecheck_ts::check::infer::{
   infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature, TypeParamDecl,
 };
 use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
-use types_ts_interned::{DefId, Param, Signature, TypeId, TypeKind, TypeParamId, TypeStore};
+use types_ts_interned::{
+  CacheConfig, DefId, Param, Signature, TypeId, TypeKind, TypeParamId, TypeStore,
+};
 
 fn param(name: &str, ty: TypeId, store: &Arc<TypeStore>) -> Param {
   Param {
@@ -263,6 +266,45 @@ fn caches_instantiations_for_same_def() {
   let first = cache.instantiate_signature(&store, DefId(1), &sig, &subst);
   let second = cache.instantiate_signature(&store, DefId(1), &sig, &subst);
   assert_eq!(first, second);
+}
+
+#[test]
+fn instantiation_cache_evictions_are_bounded_and_deterministic() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let t_param = TypeParamId(0);
+  let t_type = store.intern_type(TypeKind::TypeParam(t_param));
+
+  let sig = Signature {
+    params: vec![param("value", t_type, &store)],
+    ret: t_type,
+    type_params: vec![t_param],
+    this_param: None,
+  };
+
+  let mut cache = InstantiationCache::with_config(CacheConfig {
+    max_entries: 2,
+    shard_count: 1,
+  });
+
+  for def in 0..16 {
+    let mut subst = HashMap::new();
+    subst.insert(
+      t_param,
+      store.intern_type(TypeKind::NumberLiteral(OrderedFloat(def as f64))),
+    );
+    let _ = cache.instantiate_signature(&store, DefId(def), &sig, &subst);
+  }
+
+  let mut subst = HashMap::new();
+  subst.insert(t_param, primitives.string);
+  let first = cache.instantiate_signature(&store, DefId(99), &sig, &subst);
+  let second = cache.instantiate_signature(&store, DefId(99), &sig, &subst);
+  assert_eq!(first, second);
+
+  let stats = cache.stats();
+  assert!(stats.evictions > 0);
+  assert!(stats.hits + stats.misses > 0);
 }
 
 #[test]

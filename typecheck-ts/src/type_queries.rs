@@ -4,8 +4,8 @@ use std::sync::Arc;
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  Accessibility, DefId, Indexer, PropKey, Signature, SignatureId, TypeEvaluator, TypeExpander,
-  TypeId, TypeKind, TypeParamId, TypeStore,
+  Accessibility, DefId, EvaluatorCaches, Indexer, PropKey, Signature, SignatureId, TypeEvaluator,
+  TypeExpander, TypeId, TypeKind, TypeParamId, TypeStore,
 };
 
 /// Summary of a type's top-level shape without exposing the full `TypeKind`
@@ -86,15 +86,32 @@ pub struct IndexerInfo {
 pub struct TypeQueries<'a, E: TypeExpander> {
   store: Arc<TypeStore>,
   expander: &'a E,
+  caches: Option<EvaluatorCaches>,
 }
 
 impl<'a, E: TypeExpander> TypeQueries<'a, E> {
   pub fn new(store: Arc<TypeStore>, expander: &'a E) -> Self {
-    Self { store, expander }
+    Self {
+      store,
+      expander,
+      caches: None,
+    }
+  }
+
+  /// Construct queries backed by externally managed evaluator caches. When
+  /// shared caches are provided, successive calls will reuse the same cache
+  /// shards and maintain bounded memory according to the caller's cache
+  /// configuration.
+  pub fn with_caches(store: Arc<TypeStore>, expander: &'a E, caches: EvaluatorCaches) -> Self {
+    Self {
+      store,
+      expander,
+      caches: Some(caches),
+    }
   }
 
   fn with_ctx<R>(&self, f: impl FnOnce(&mut QueryCtx<'_, E>) -> R) -> R {
-    let mut ctx = QueryCtx::new(Arc::clone(&self.store), self.expander);
+    let mut ctx = QueryCtx::new(Arc::clone(&self.store), self.expander, self.caches.clone());
     f(&mut ctx)
   }
 
@@ -234,9 +251,13 @@ struct QueryCtx<'a, E: TypeExpander> {
 }
 
 impl<'a, E: TypeExpander> QueryCtx<'a, E> {
-  fn new(store: Arc<TypeStore>, expander: &'a E) -> Self {
+  fn new(store: Arc<TypeStore>, expander: &'a E, caches: Option<EvaluatorCaches>) -> Self {
+    let evaluator = match caches {
+      Some(caches) => TypeEvaluator::with_caches(Arc::clone(&store), expander, caches),
+      None => TypeEvaluator::new(Arc::clone(&store), expander),
+    };
     Self {
-      evaluator: TypeEvaluator::new(Arc::clone(&store), expander),
+      evaluator,
       store,
       shapes: HashMap::new(),
       computing: HashSet::new(),

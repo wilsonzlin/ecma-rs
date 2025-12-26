@@ -1,3 +1,4 @@
+use crate::cache::{CacheConfig, CacheStats, ShardedCache};
 use crate::eval::ExpandedType;
 use crate::eval::TypeEvaluator;
 use crate::eval::TypeExpander as EvalTypeExpander;
@@ -17,7 +18,6 @@ use crate::TypeOptions;
 use crate::TypeStore;
 use bitflags::bitflags;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
@@ -106,6 +106,45 @@ struct RelationKey {
   mode: RelationMode,
 }
 
+#[derive(Clone, Debug)]
+pub struct RelationCache {
+  inner: Arc<ShardedCache<RelationKey, bool>>,
+}
+
+impl Default for RelationCache {
+  fn default() -> Self {
+    Self::new(CacheConfig::default())
+  }
+}
+
+impl RelationCache {
+  pub fn new(config: CacheConfig) -> Self {
+    Self {
+      inner: Arc::new(ShardedCache::new(config)),
+    }
+  }
+
+  pub fn stats(&self) -> CacheStats {
+    self.inner.stats()
+  }
+
+  pub fn len(&self) -> usize {
+    self.inner.len()
+  }
+
+  fn get(&self, key: &RelationKey) -> Option<bool> {
+    self.inner.get(key)
+  }
+
+  fn insert(&self, key: RelationKey, value: bool) {
+    self.inner.insert(key, value);
+  }
+
+  pub fn clear(&self) {
+    self.inner.clear();
+  }
+}
+
 pub trait RelateTypeExpander {
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId>;
 }
@@ -130,7 +169,7 @@ pub struct RelateCtx<'a> {
   store: Arc<TypeStore>,
   pub options: TypeOptions,
   hooks: RelateHooks<'a>,
-  cache: RefCell<HashMap<RelationKey, bool>>,
+  cache: RelationCache,
   in_progress: RefCell<HashSet<RelationKey>>,
   reason_budget: RefCell<ReasonBudget>,
 }
@@ -153,14 +192,52 @@ impl<'a> RelateCtx<'a> {
   }
 
   pub fn with_hooks(store: Arc<TypeStore>, options: TypeOptions, hooks: RelateHooks<'a>) -> Self {
+    Self::with_hooks_and_cache(store, options, hooks, RelationCache::default())
+  }
+
+  pub fn with_cache(store: Arc<TypeStore>, options: TypeOptions, cache: RelationCache) -> Self {
+    Self::with_hooks_and_cache(store, options, RelateHooks::default(), cache)
+  }
+
+  pub fn with_cache_config(
+    store: Arc<TypeStore>,
+    options: TypeOptions,
+    cache: CacheConfig,
+  ) -> Self {
+    Self::with_hooks_and_cache(
+      store,
+      options,
+      RelateHooks::default(),
+      RelationCache::new(cache),
+    )
+  }
+
+  pub fn with_hooks_and_cache(
+    store: Arc<TypeStore>,
+    options: TypeOptions,
+    hooks: RelateHooks<'a>,
+    cache: RelationCache,
+  ) -> Self {
     Self {
       store,
       options,
       hooks,
-      cache: RefCell::new(HashMap::new()),
+      cache,
       in_progress: RefCell::new(HashSet::new()),
       reason_budget: RefCell::new(ReasonBudget::default()),
     }
+  }
+
+  pub fn cache_stats(&self) -> CacheStats {
+    self.cache.stats()
+  }
+
+  pub fn clear_cache(&self) {
+    self.cache.clear();
+  }
+
+  pub fn cache_len(&self) -> usize {
+    self.cache.len()
   }
 
   pub fn is_assignable(&self, src: TypeId, dst: TypeId) -> bool {
@@ -222,7 +299,7 @@ impl<'a> RelateCtx<'a> {
       kind,
       mode,
     };
-    if let Some(hit) = self.cache.borrow().get(&key).copied() {
+    if let Some(hit) = self.cache.get(&key) {
       return RelationResult {
         result: hit,
         reason: record
@@ -284,7 +361,7 @@ impl<'a> RelateCtx<'a> {
       }
     };
 
-    self.cache.borrow_mut().insert(key, outcome.result);
+    self.cache.insert(key, outcome.result);
     self.in_progress.borrow_mut().remove(&key);
     outcome
   }
