@@ -13,7 +13,6 @@ members = [
   "parse-js",
   "emit-js",
   "types-ts-interned",
-  "types-ts",
   "hir-js",
   "typecheck-ts",
   "test262",

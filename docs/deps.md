@@ -21,6 +21,7 @@ graph TD
     test262["test262"]
     typecheck_ts["typecheck-ts"]
     typecheck_ts_bench["typecheck-ts-bench"]
+    typecheck_ts_cli["typecheck-ts-cli"]
     typecheck_ts_harness["typecheck-ts-harness"]
     types_ts_interned["types-ts-interned"]
     emit_js --> diagnostics
@@ -62,6 +63,8 @@ graph TD
     typecheck_ts_bench --> semantic_js
     typecheck_ts_bench --> typecheck_ts
     typecheck_ts_bench --> types_ts_interned
+    typecheck_ts_cli --> diagnostics
+    typecheck_ts_cli --> typecheck_ts
     typecheck_ts_harness --> typecheck_ts
     types_ts_interned --> hir_js
 ```

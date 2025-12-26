@@ -90,8 +90,8 @@ other crates use this for structured errors and spans.
   independent of insertion order and safe under parallel requests.
 - Relation/normalization helpers: `RelateCtx`, `RelateHooks`, `RelationKind`,
   `TypeEvaluator`, `TypeExpander`, and `TypeDisplay`.
-- The legacy `types-ts` crate remains for historical reference; new development
-  should target the interned representation.
+- Single maintained type representation for the workspace; the former
+  placeholder `types-ts` crate was removed to avoid drift.
 
 ### typecheck-ts
 - Public facade for TypeScript checking. `Program::new(host, roots)` wires a
