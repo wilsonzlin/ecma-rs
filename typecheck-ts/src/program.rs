@@ -24,7 +24,7 @@ use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -2009,9 +2009,10 @@ impl ProgramState {
     let lib_ids: Vec<FileId> = libs.iter().map(|l| l.id).collect();
     let lib_id_set: HashSet<FileId> = lib_ids.iter().copied().collect();
     self.process_libs(&libs);
-    let mut queue: VecDeque<FileId> = roots.iter().copied().collect();
+    let mut queue: BTreeSet<FileId> = roots.iter().copied().collect();
     let mut seen: HashSet<FileId> = HashSet::new();
-    while let Some(file) = queue.pop_front() {
+    while let Some(&file) = queue.iter().next() {
+      queue.remove(&file);
       if cancelled.load(Ordering::Relaxed) {
         return Err(FatalError::Cancelled);
       }
@@ -2112,13 +2113,22 @@ impl ProgramState {
     let mut def_types = HashMap::new();
     let mut type_params = HashMap::new();
     let mut def_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
-    for (def_id, data) in self.def_data.iter() {
+    let mut def_entries: Vec<_> = self.def_data.iter().collect();
+    def_entries.sort_by_key(|(def_id, _)| def_id.0);
+    for (def_id, data) in def_entries {
       def_by_name
         .entry((data.file, data.name.clone()))
+        .and_modify(|existing| {
+          if def_id.0 < existing.0 {
+            *existing = *def_id;
+          }
+        })
         .or_insert(*def_id);
     }
 
-    for (file, lowered) in self.hir_lowered.iter() {
+    let mut lowered_files: Vec<_> = self.hir_lowered.iter().collect();
+    lowered_files.sort_by_key(|(file, _)| file.0);
+    for (file, lowered) in lowered_files {
       if cancelled.load(Ordering::Relaxed) {
         return Err(FatalError::Cancelled);
       }
@@ -2263,12 +2273,21 @@ impl ProgramState {
       return;
     }
     let mut globals = HashMap::new();
-    for (file, state) in self.files.iter() {
-      if self.file_kinds.get(file) != Some(&FileKind::Dts) {
+    let mut files: Vec<_> = self.files.keys().copied().collect();
+    files.sort_by_key(|f| f.0);
+    for file in files {
+      if self.file_kinds.get(&file) != Some(&FileKind::Dts) {
         continue;
       }
-      for (name, binding) in state.bindings.iter() {
-        globals.entry(name.clone()).or_insert(binding.clone());
+      let Some(state) = self.files.get(&file) else {
+        continue;
+      };
+      let mut bindings: Vec<_> = state.bindings.iter().collect();
+      bindings.sort_by(|a, b| a.0.cmp(b.0));
+      for (name, binding) in bindings {
+        globals
+          .entry(name.clone())
+          .or_insert_with(|| binding.clone());
       }
     }
     globals
@@ -2476,7 +2495,7 @@ impl ProgramState {
     file: FileId,
     ast: Node<TopLevel>,
     host: &Arc<dyn Host>,
-    queue: &mut VecDeque<FileId>,
+    queue: &mut BTreeSet<FileId>,
   ) {
     let top_body_id = self.alloc_body(file, None);
     let mut top_body = BodyBuilder::new(top_body_id, file);
@@ -2758,7 +2777,7 @@ impl ProgramState {
             .as_ref()
             .and_then(|module| host.resolve(file, module));
           if let Some(target) = resolved {
-            queue.push_back(target);
+            queue.insert(target);
           }
           match &export_list.stx.names {
             ExportNames::Specific(names) => {
@@ -2846,7 +2865,7 @@ impl ProgramState {
           let module = import_stmt.stx.module.clone();
           let resolved = host.resolve(file, &module);
           if let Some(target) = resolved {
-            queue.push_back(target);
+            queue.insert(target);
           }
           let mut import_default = None;
           let mut import_namespace = None;

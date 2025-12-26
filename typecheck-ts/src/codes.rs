@@ -67,10 +67,15 @@ impl Code {
 /// keep outputs deterministic regardless of traversal order.
 pub fn normalize_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
   for diagnostic in diagnostics.iter_mut() {
-    sort_labels(&mut diagnostic.labels);
-    diagnostic.notes.sort();
+    normalize_diagnostic(diagnostic);
   }
   sort_diagnostics(diagnostics);
+}
+
+/// Canonicalize label and note ordering within a single diagnostic.
+pub fn normalize_diagnostic(diagnostic: &mut Diagnostic) {
+  sort_labels(&mut diagnostic.labels);
+  diagnostic.notes.sort();
 }
 
 /// TC0001: No libraries were loaded.
