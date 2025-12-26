@@ -844,7 +844,7 @@ impl Program {
     offset: u32,
   ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
     self.with_analyzed_state(|state| {
-      state.ensure_symbols_for_file(file);
+      state.ensure_symbols_for_file(file, &self.host)?;
       Ok(state.symbol_at(file, offset))
     })
   }
@@ -2288,6 +2288,10 @@ struct ProgramState {
   semantics: Option<sem_ts::TsProgramSemantics>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
+  // Symbol tracking for IDE queries. `exports` indexes exported names and
+  // `local_to_global` canonicalizes bindings across import/export edges.
+  local_to_global: HashMap<(FileId, locals::SymbolId), semantic_js::SymbolId>,
+  exports: HashMap<FileId, HashMap<String, semantic_js::SymbolId>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   expr_span_maps: HashMap<FileId, SpanMap>,
   symbol_span_maps: HashMap<FileId, SpanIndex<semantic_js::SymbolId>>,
@@ -2341,6 +2345,8 @@ impl ProgramState {
       semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
+      local_to_global: HashMap::new(),
+      exports: HashMap::new(),
       symbol_occurrences: HashMap::new(),
       expr_span_maps: HashMap::new(),
       symbol_span_maps: HashMap::new(),
@@ -4925,111 +4931,230 @@ impl ProgramState {
     map
   }
 
-  fn ensure_symbols_for_file(&mut self, file: FileId) {
-    if let Some(state) = self.files.get(&file).cloned() {
-      if let Some(body) = state.top_body {
-        let _ = self.check_body(body);
-      }
-      for def in state.defs.iter() {
-        if let Some(body) = self.body_of_def(*def) {
-          let _ = self.check_body(body);
-        }
-      }
-    }
-  }
-
-  fn local_symbol_to_program(
+  fn ensure_symbols_for_file(
     &mut self,
     file: FileId,
-    symbol: locals::SymbolId,
-  ) -> Option<semantic_js::SymbolId> {
-    let locals = self.locals.get(&file)?;
-    let decl_span = locals.symbol(symbol).span?;
-    self.symbol_span_map_for_file(file)?.query(decl_span.start)
+    host: &Arc<dyn Host>,
+  ) -> Result<(), FatalError> {
+    if self.exports.contains_key(&file) {
+      return Ok(());
+    }
+    let file_key = self
+      .host_key(file)
+      .unwrap_or_else(|| FileKey::new(format!("file{}.ts", file.0)));
+    let text = host.file_text(&file_key)?;
+    let kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
+    let mut ast = match parse_file(file, kind, &text) {
+      Ok(ast) => ast,
+      Err(diag) => return Err(FatalError::Host(HostError::new(diag.message.clone()))),
+    };
+    let locals = locals::bind_ts_locals(&mut ast, file, true);
+    self.index_exports(file, &ast, &locals);
+    self.index_imports(file, &ast, &locals, host)?;
+    self.locals.insert(file, locals);
+    self.index_occurrences(file);
+    Ok(())
   }
 
-  fn symbol_at_using_locals(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
-    let (expr_span, type_expr_span, def_span) = {
-      let span_map = self.span_map_for_file(file)?;
-      (
-        span_map.expr_span_at_offset(offset),
-        span_map.type_expr_span_at_offset(offset),
-        span_map.def_span_at_offset(offset),
-      )
-    };
-    let mut best: Option<(u32, u32, semantic_js::SymbolId)> = None;
-    let consider = |range: TextRange,
-                    symbol: semantic_js::SymbolId,
-                    best: &mut Option<(u32, u32, semantic_js::SymbolId)>| {
-      let key = (range.len(), range.start, symbol);
-      let replace = best.map(|current| key < current).unwrap_or(true);
-      if replace {
-        *best = Some(key);
+  fn index_exports(
+    &mut self,
+    file: FileId,
+    ast: &Node<TopLevel>,
+    locals: &TsLocalSemantics,
+  ) {
+    let mut map = HashMap::new();
+    for stmt in ast.stx.body.iter() {
+      match stmt.stx.as_ref() {
+        Stmt::FunctionDecl(func) if func.stx.export || func.stx.export_default => {
+          if let Some(name) = func.stx.name.as_ref() {
+            if let Some(local) = self.local_for_span(locals, loc_to_span(file, name.loc).range) {
+              let symbol = self.alloc_symbol();
+              self.local_to_global.insert((file, local), symbol);
+              map.insert(name.stx.name.clone(), symbol);
+            }
+          }
+        }
+        Stmt::VarDecl(var) if var.stx.export => {
+          for declarator in var.stx.declarators.iter() {
+            if let Pat::Id(id) = declarator.pattern.stx.pat.stx.as_ref() {
+              if let Some(local) =
+                self.local_for_span(locals, loc_to_span(file, declarator.pattern.loc).range)
+              {
+                let symbol = self.alloc_symbol();
+                self.local_to_global.insert((file, local), symbol);
+                map.insert(id.stx.name.clone(), symbol);
+              }
+            }
+          }
+        }
+        Stmt::TypeAliasDecl(alias) if alias.stx.export => {
+          if let Some(local) = self
+            .find_local_by_name(locals, &alias.stx.name)
+            .or_else(|| {
+              locals
+                .symbols
+                .iter()
+                .find_map(|(id, data)| (locals.names.get(&data.name) == Some(&alias.stx.name)).then_some(*id))
+            })
+          {
+            let symbol = self.alloc_symbol();
+            self.local_to_global.insert((file, local), symbol);
+            map.insert(alias.stx.name.clone(), symbol);
+          }
+        }
+        _ => {}
       }
-    };
+    }
+    self.exports.insert(file, map);
+  }
 
-    if let Some(span) = expr_span {
-      if let Some(local) = self
-        .locals
-        .get(&file)
-        .and_then(|locals| locals.resolve_expr_span(span.range))
-      {
-        if let Some(symbol) = self.local_symbol_to_program(file, local) {
-          consider(span.range, symbol, &mut best);
+  fn index_imports(
+    &mut self,
+    file: FileId,
+    ast: &Node<TopLevel>,
+    locals: &TsLocalSemantics,
+    host: &Arc<dyn Host>,
+  ) -> Result<(), FatalError> {
+    for stmt in ast.stx.body.iter() {
+      if let Stmt::Import(import_stmt) = stmt.stx.as_ref() {
+        let module = import_stmt.stx.module.clone();
+        let Some(from_key) = self
+          .host_key(file)
+          .and_then(|file_key| host.resolve(&file_key, &module))
+        else {
+          continue;
+        };
+        let from = self.intern_host_key(from_key.clone());
+        self.ensure_symbols_for_file(from, host)?;
+        let exports = self
+          .exports
+          .get(&from)
+          .cloned()
+          .unwrap_or_else(HashMap::new);
+        if let Some(default_pat) = import_stmt.stx.default.as_ref() {
+          if let Pat::Id(_id) = default_pat.stx.pat.stx.as_ref() {
+            if let Some(local) =
+              self.local_for_span(locals, loc_to_span(file, default_pat.loc).range)
+            {
+              if let Some(symbol) = exports.get("default") {
+                self.local_to_global.insert((file, local), *symbol);
+              }
+            }
+          }
+        }
+        if let Some(names) = import_stmt.stx.names.as_ref() {
+          match names {
+            ImportNames::Specific(list) => {
+              for item in list.iter() {
+                let imported = item.stx.importable.as_str();
+                let alias_pat = &item.stx.alias;
+                if let Pat::Id(id) = alias_pat.stx.pat.stx.as_ref() {
+                  let key = alias_pat.loc;
+                  if let Some(local) =
+                    self.local_for_span(locals, loc_to_span(file, key).range)
+                  {
+                    let name = id.stx.name.clone();
+                    let original = if name == imported {
+                      imported.to_string()
+                    } else {
+                      imported.to_string()
+                    };
+                    if let Some(symbol) = exports.get(&original) {
+                      self.local_to_global.insert((file, local), *symbol);
+                    }
+                  }
+                }
+              }
+            }
+            ImportNames::All(pat) => {
+              if let Pat::Id(_id) = pat.stx.pat.stx.as_ref() {
+                // ignore namespace imports for now
+              }
+            }
+          }
         }
       }
     }
-
-    if let Some(span) = type_expr_span {
-      if let Some(local) = self
-        .locals
-        .get(&file)
-        .and_then(|locals| locals.resolve_type_span(span.range))
-      {
-        if let Some(symbol) = self.local_symbol_to_program(file, local) {
-          consider(span.range, symbol, &mut best);
-        }
-      }
-    }
-
-    if let Some(span) = def_span {
-      if let Some(symbol) = self.def_data.get(&span.id).map(|d| d.symbol) {
-        consider(span.range, symbol, &mut best);
-      }
-    }
-
-    best.map(|(_, _, symbol)| self.resolve_symbol(symbol))
+    Ok(())
   }
 
+  fn index_occurrences(&mut self, file: FileId) {
+    let Some(locals) = self.locals.get(&file) else {
+      return;
+    };
+    let mut occs = Vec::new();
+    for (id, data) in locals.symbols.iter() {
+      if let Some(span) = data.span {
+        let symbol = self
+          .local_to_global
+          .get(&(file, *id))
+          .copied()
+          .unwrap_or_else(|| semantic_js::SymbolId(id.0));
+        occs.push(SymbolOccurrence { range: span, symbol });
+      }
+    }
+    occs.sort_by_key(|o| (o.range.start, o.range.end, o.symbol.0));
+    occs.dedup_by(|a, b| a.range == b.range && a.symbol == b.symbol);
+    self.symbol_occurrences.insert(file, occs);
+  }
+
+  fn local_for_span(
+    &self,
+    locals: &TsLocalSemantics,
+    range: TextRange,
+  ) -> Option<locals::SymbolId> {
+    locals
+      .resolve_expr_span(range)
+      .or_else(|| locals.resolve_type_span(range))
+      .or_else(|| {
+        locals.symbols.iter().find_map(|(id, data)| {
+          data.span.and_then(|span| {
+            if span.start <= range.start && range.end <= span.end {
+              Some(*id)
+            } else {
+              None
+            }
+          })
+        })
+      })
+  }
+
+  fn find_local_by_name(
+    &self,
+    locals: &TsLocalSemantics,
+    name: &str,
+  ) -> Option<locals::SymbolId> {
+    locals
+      .symbols
+      .iter()
+      .find_map(|(id, data)| (locals.names.get(&data.name)? == name).then_some(*id))
+  }
   fn symbol_at(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
-    let symbol = self
-      .symbol_at_using_locals(file, offset)
-      .or_else(|| self.symbol_span_map_for_file(file)?.query(offset))?;
-    Some(self.resolve_symbol(symbol))
-  }
-
-  fn resolve_symbol(&mut self, symbol: semantic_js::SymbolId) -> semantic_js::SymbolId {
-    let import = self
-      .symbol_to_def
-      .get(&symbol)
-      .and_then(|def| self.def_data.get(def))
-      .and_then(|d| match &d.kind {
-        DefKind::Import(import) => Some(import.clone()),
-        _ => None,
-      });
-
-    if let Some(import) = import {
-      if let Some(resolved) = self.resolve_import_symbol(&import) {
-        return resolved;
+    let locals = self.locals.get(&file)?;
+    let expr = locals.resolve_expr_at_offset(offset);
+    let type_res = locals.resolve_type_at_offset(offset);
+    let pick_key = |(span, id): &(TextRange, locals::SymbolId)| {
+      (span.len(), span.start, span.end, id.0)
+    };
+    let resolved = match (expr, type_res) {
+      (Some(expr), Some(ty)) => {
+        if pick_key(&expr) <= pick_key(&ty) {
+          expr
+        } else {
+          ty
+        }
       }
-    }
-
-    symbol
-  }
-
-  fn resolve_import_symbol(&mut self, import: &ImportData) -> Option<semantic_js::SymbolId> {
-    let exports = self.exports_of_file(import.from);
-    exports.get(&import.original).map(|entry| entry.symbol)
+      (Some(expr), None) => expr,
+      (None, Some(ty)) => ty,
+      (None, None) => return None,
+    };
+    let (_, local_id) = resolved;
+    let canonical = self
+      .local_to_global
+      .get(&(file, local_id))
+      .copied()
+      .unwrap_or_else(|| semantic_js::SymbolId(local_id.0));
+    Some(canonical)
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
