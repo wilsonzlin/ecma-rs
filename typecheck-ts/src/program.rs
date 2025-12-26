@@ -17,7 +17,7 @@ use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::{
-  TypeArray, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
+  TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
@@ -31,11 +31,15 @@ use std::time::Instant;
 use tracing::debug_span;
 
 use crate::profile::QueryStats;
+use crate::type_queries::{
+  IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
+};
 use crate::{FatalError, HostError, Ice, IceContext};
 use types_ts_interned::{
-  Indexer, ObjectType as InternedObjectType, Param, PropData, PropKey, Property, Shape, Signature,
-  TupleElem, TypeDisplay as InternedTypeDisplay, TypeId as InternedTypeId,
-  TypeKind as InternedTypeKind, TypeStore as InternedTypeStore,
+  DefId as InternedDefId, ExpandedType, Indexer, ObjectType as InternedObjectType, Param, PropData,
+  PropKey, Property, Shape, Signature, TupleElem, TypeDisplay as InternedTypeDisplay,
+  TypeExpander, TypeId as InternedTypeId, TypeKind as InternedTypeKind,
+  TypeStore as InternedTypeStore,
 };
 
 #[path = "check/mod.rs"]
@@ -397,6 +401,25 @@ pub struct Program {
   state: std::sync::Mutex<ProgramState>,
 }
 
+struct ProgramTypeExpander<'a> {
+  program: &'a Program,
+}
+
+impl<'a> TypeExpander for ProgramTypeExpander<'a> {
+  fn expand(
+    &self,
+    _store: &InternedTypeStore,
+    def: InternedDefId,
+    _args: &[InternedTypeId],
+  ) -> Option<ExpandedType> {
+    let ty = self.program.type_of_def_interned(DefId(def.0));
+    Some(ExpandedType {
+      params: Vec::new(),
+      ty,
+    })
+  }
+}
+
 impl Program {
   /// Create a new program from a host and root file list.
   pub fn new(host: impl Host, roots: Vec<FileId>) -> Program {
@@ -718,6 +741,40 @@ impl Program {
     state.interned_store.type_kind(ty)
   }
 
+  fn with_type_queries<R>(&self, f: impl FnOnce(TypeQueries<'_, ProgramTypeExpander<'_>>) -> R) -> R {
+    let store = {
+      let state = self.lock_state();
+      state.interned_store.clone()
+    };
+    let expander = ProgramTypeExpander { program: self };
+    let queries = TypeQueries::new(store, &expander);
+    f(queries)
+  }
+
+  pub fn type_kind(&self, ty: InternedTypeId) -> TypeKindSummary {
+    self.with_type_queries(|queries| queries.type_kind(ty))
+  }
+
+  pub fn properties_of(&self, ty: InternedTypeId) -> Vec<PropertyInfo> {
+    self.with_type_queries(|queries| queries.properties_of(ty))
+  }
+
+  pub fn property_type(&self, ty: InternedTypeId, key: PropertyKey) -> Option<InternedTypeId> {
+    self.with_type_queries(|queries| queries.property_type(ty, key))
+  }
+
+  pub fn call_signatures(&self, ty: InternedTypeId) -> Vec<SignatureInfo> {
+    self.with_type_queries(|queries| queries.call_signatures(ty))
+  }
+
+  pub fn construct_signatures(&self, ty: InternedTypeId) -> Vec<SignatureInfo> {
+    self.with_type_queries(|queries| queries.construct_signatures(ty))
+  }
+
+  pub fn indexers(&self, ty: InternedTypeId) -> Vec<IndexerInfo> {
+    self.with_type_queries(|queries| queries.indexers(ty))
+  }
+
   /// Definitions declared in a file.
   pub fn definitions_in_file(&self, file: FileId) -> Vec<DefId> {
     match self.definitions_in_file_fallible(file) {
@@ -882,6 +939,7 @@ struct VarData {
 struct ImportData {
   from: FileId,
   original: String,
+  is_type_only: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1702,6 +1760,8 @@ impl ProgramState {
             },
           );
           self.record_def_symbol(def_id, symbol);
+          self.record_symbol(file, span.range, symbol);
+          let _ = self.type_from_type_expr(file, &alias.stx.type_expr);
           defs.push(def_id);
         }
         Stmt::InterfaceDecl(intf) => {
@@ -1720,6 +1780,7 @@ impl ProgramState {
             },
           );
           self.record_def_symbol(def_id, symbol);
+          self.record_symbol(file, span.range, symbol);
           defs.push(def_id);
         }
         Stmt::ExportDefaultExpr(node) => {
@@ -1894,9 +1955,11 @@ impl ProgramState {
                 kind: DefKind::Import(ImportData {
                   from: resolved.unwrap_or(file),
                   original: "default".to_string(),
+                  is_type_only: import_stmt.stx.type_only,
                 }),
               },
             );
+            self.record_def_symbol(def_id, symbol);
             defs.push(def_id);
             bindings.insert(
               alias_name.clone(),
@@ -1945,6 +2008,7 @@ impl ProgramState {
                     kind: DefKind::Import(ImportData {
                       from: resolved.unwrap_or(file),
                       original: name.clone(),
+                      is_type_only,
                     }),
                   },
                 );
@@ -1991,6 +2055,7 @@ impl ProgramState {
                   kind: DefKind::Import(ImportData {
                     from: resolved.unwrap_or(file),
                     original: "*".to_string(),
+                    is_type_only: import_stmt.stx.type_only,
                   }),
                 },
               );
@@ -2061,7 +2126,7 @@ impl ProgramState {
       let type_ann = declarator
         .type_annotation
         .as_ref()
-        .map(|t| self.type_from_type_expr(t));
+        .map(|t| self.type_from_type_expr(file, t));
       let symbol = self.alloc_symbol();
       let def_id = self.alloc_def_from_hir(file, span);
       self.record_symbol(file, loc_to_span(file, pat.loc).range, symbol);
@@ -2163,7 +2228,7 @@ impl ProgramState {
     let return_ann = func
       .return_type
       .as_ref()
-      .map(|t| self.type_from_type_expr(t));
+      .map(|t| self.type_from_type_expr(file, t));
     let body_id = func.body.as_ref().map(|_| self.alloc_body(file, Some(def)));
     if let Some(body) = body_id {
       match func.body.unwrap() {
@@ -2211,7 +2276,7 @@ impl ProgramState {
       .stx
       .type_annotation
       .as_ref()
-      .map(|t| self.type_from_type_expr(t));
+      .map(|t| self.type_from_type_expr(file, t));
     let symbol = self.alloc_symbol();
     self.record_symbol(file, loc_to_span(file, param.loc).range, symbol);
     Some(ParamData { name, typ, symbol })
@@ -3356,8 +3421,10 @@ impl ProgramState {
       semantics.as_ref(),
       file_id,
       &mut diags,
+      None,
+      None,
     );
-    let mut ty = lowerer.lower_type_info(&type_info, &names);
+    let (mut ty, _type_params) = lowerer.lower_type_info(&type_info, &names);
     self.diagnostics.append(&mut diags);
 
     if matches!(type_info, HirDefTypeInfo::Interface { .. }) {
@@ -3967,14 +4034,16 @@ impl ProgramState {
   }
 
   fn resolve_symbol(&mut self, symbol: semantic_js::SymbolId) -> semantic_js::SymbolId {
-    let import = self
-      .symbol_to_def
-      .get(&symbol)
-      .and_then(|def| self.def_data.get(def))
-      .and_then(|d| match &d.kind {
-        DefKind::Import(import) => Some(import.clone()),
-        _ => None,
-      });
+    let def = self.symbol_to_def.get(&symbol).copied();
+    let import = def.and_then(|def| {
+      self
+        .def_data
+        .get(&def)
+        .and_then(|d| match &d.kind {
+          DefKind::Import(import) => Some(import.clone()),
+          _ => None,
+        })
+    });
 
     if let Some(import) = import {
       if let Some(resolved) = self.resolve_import_symbol(&import) {
@@ -3986,6 +4055,39 @@ impl ProgramState {
   }
 
   fn resolve_import_symbol(&mut self, import: &ImportData) -> Option<semantic_js::SymbolId> {
+    if let Some(sem) = self.semantics.as_ref() {
+      let exports = sem.exports_of(sem_ts::FileId(import.from.0));
+      let symbols = sem.symbols();
+      let namespace = if import.is_type_only {
+        sem_ts::Namespace::TYPE
+      } else {
+        sem_ts::Namespace::VALUE
+      };
+      if let Some(group) = exports.get(&import.original) {
+        if let Some(symbol_id) = group.symbol_for(namespace, symbols) {
+          if let Some(mapped) = symbols
+            .symbol(symbol_id)
+            .decls_for(namespace)
+            .iter()
+            .find_map(|decl_id| {
+              let decl = symbols.decl(*decl_id);
+              let def = DefId(decl.def_id.0);
+              self.def_data.get(&def).map(|d| d.symbol)
+            })
+          {
+            return Some(mapped);
+          }
+          if let Some((_, def)) = self
+            .def_data
+            .iter()
+            .find(|(_, data)| data.file == import.from && data.name == import.original)
+          {
+            return Some(def.symbol);
+          }
+          return Some(semantic_js::SymbolId::from(symbol_id));
+        }
+      }
+    }
     let exports = self.exports_of_file(import.from);
     exports.get(&import.original).map(|entry| entry.symbol)
   }
@@ -4029,9 +4131,17 @@ impl ProgramState {
     })
   }
 
-  fn type_from_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeId {
+  fn type_from_type_expr(&mut self, file: FileId, expr: &Node<TypeExpr>) -> TypeId {
     match expr.stx.as_ref() {
       TypeExpr::Object(_) => self.builtin.object,
+      TypeExpr::TypeReference(reference) => {
+        let span = loc_to_span(file, expr.loc).range;
+        if let Some((def, symbol)) = self.resolve_type_reference(file, &reference.stx.name) {
+          self.record_symbol(file, span, symbol);
+          return self.type_store.alloc(TypeKind::Ref(def));
+        }
+        self.builtin.unknown
+      }
       TypeExpr::Number(_) => self.builtin.number,
       TypeExpr::String(_) => self.builtin.string,
       TypeExpr::Boolean(_) => self.builtin.boolean,
@@ -4043,12 +4153,15 @@ impl ProgramState {
       TypeExpr::Never(_) => self.builtin.never,
       TypeExpr::UnionType(union) => {
         let TypeUnion { types } = union.stx.as_ref();
-        let members = types.iter().map(|t| self.type_from_type_expr(t)).collect();
+        let members = types
+          .iter()
+          .map(|t| self.type_from_type_expr(file, t))
+          .collect();
         self.type_store.union(members, &self.builtin)
       }
       TypeExpr::ArrayType(arr) => {
         let TypeArray { element_type, .. } = arr.stx.as_ref();
-        let elem = self.type_from_type_expr(element_type);
+        let elem = self.type_from_type_expr(file, element_type);
         if arr.stx.readonly {
           self.type_store.readonly_array(elem)
         } else {
@@ -4058,7 +4171,7 @@ impl ProgramState {
       TypeExpr::TupleType(tuple) => {
         let mut elements = Vec::new();
         for el in tuple.stx.elements.iter() {
-          elements.push(self.type_from_type_expr(&el.stx.type_expr));
+          elements.push(self.type_from_type_expr(file, &el.stx.type_expr));
         }
         self.type_store.tuple(elements, tuple.stx.readonly)
       }
@@ -4067,9 +4180,9 @@ impl ProgramState {
           .stx
           .parameters
           .iter()
-          .map(|p| self.type_from_type_expr(&p.stx.type_expr))
+          .map(|p| self.type_from_type_expr(file, &p.stx.type_expr))
           .collect();
-        let ret = self.type_from_type_expr(&func.stx.return_type);
+        let ret = self.type_from_type_expr(file, &func.stx.return_type);
         self.type_store.function(params, ret)
       }
       TypeExpr::ConstructorType(cons) => {
@@ -4077,9 +4190,9 @@ impl ProgramState {
           .stx
           .parameters
           .iter()
-          .map(|p| self.type_from_type_expr(&p.stx.type_expr))
+          .map(|p| self.type_from_type_expr(file, &p.stx.type_expr))
           .collect();
-        let ret = self.type_from_type_expr(&cons.stx.return_type);
+        let ret = self.type_from_type_expr(file, &cons.stx.return_type);
         self.type_store.function(params, ret)
       }
       TypeExpr::ObjectType(obj) => {
@@ -4092,7 +4205,7 @@ impl ProgramState {
                   .stx
                   .type_annotation
                   .as_ref()
-                  .map(|t| self.type_from_type_expr(t))
+                  .map(|t| self.type_from_type_expr(file, t))
                   .unwrap_or(self.builtin.unknown);
                 object.props.insert(
                   name,
@@ -4110,13 +4223,13 @@ impl ProgramState {
                   .stx
                   .parameters
                   .iter()
-                  .map(|p| self.type_from_type_expr(&p.stx.type_expr))
+                  .map(|p| self.type_from_type_expr(file, &p.stx.type_expr))
                   .collect();
                 let ret = method
                   .stx
                   .return_type
                   .as_ref()
-                  .map(|t| self.type_from_type_expr(t))
+                  .map(|t| self.type_from_type_expr(file, t))
                   .unwrap_or(self.builtin.unknown);
                 let func_ty = self.type_store.function(params, ret);
                 object.props.insert(
@@ -4130,8 +4243,8 @@ impl ProgramState {
               }
             }
             TypeMember::IndexSignature(index) => {
-              let value = self.type_from_type_expr(&index.stx.type_annotation);
-              let param_type = self.type_from_type_expr(&index.stx.parameter_type);
+              let value = self.type_from_type_expr(file, &index.stx.type_annotation);
+              let param_type = self.type_from_type_expr(file, &index.stx.parameter_type);
               let param_kind = self.type_store.kind(param_type).clone();
               match param_kind {
                 TypeKind::Number => object.number_index = Some(value),
@@ -4144,7 +4257,7 @@ impl ProgramState {
         }
         self.type_store.object(object)
       }
-      TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(&inner.stx.type_expr),
+      TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(file, &inner.stx.type_expr),
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {
         TypeLiteral::Boolean(value) => self.type_store.literal_boolean(*value),
         TypeLiteral::Number(n) => self.type_store.literal_number(n.clone()),
@@ -4157,13 +4270,30 @@ impl ProgramState {
           .stx
           .type_annotation
           .as_ref()
-          .map(|t| self.type_from_type_expr(t));
+          .map(|t| self.type_from_type_expr(file, t));
         self
           .type_store
           .predicate(pred.stx.parameter_name.clone(), asserted, pred.stx.asserts)
       }
       _ => self.builtin.unknown,
     }
+  }
+
+  fn resolve_type_reference(
+    &self,
+    file: FileId,
+    name: &TypeEntityName,
+  ) -> Option<(DefId, semantic_js::SymbolId)> {
+    let ident = match name {
+      TypeEntityName::Identifier(name) => name,
+      _ => return None,
+    };
+    self
+      .def_data
+      .iter()
+      .filter(|(_, def)| def.file == file && def.name == *ident)
+      .min_by_key(|(id, def)| (type_namespace_priority(&def.kind), id.0))
+      .map(|(id, def)| (*id, def.symbol))
   }
 
   fn alloc_def(&mut self) -> DefId {
@@ -4222,6 +4352,15 @@ impl ProgramState {
   }
 }
 
+fn type_namespace_priority(kind: &DefKind) -> u8 {
+  match kind {
+    DefKind::TypeAlias | DefKind::Interface => 0,
+    DefKind::Import(import) if import.is_type_only => 1,
+    DefKind::Import(_) => 2,
+    _ => 3,
+  }
+}
+
 struct BodyBuilder {
   id: BodyId,
   file: FileId,
@@ -4270,7 +4409,7 @@ impl BodyBuilder {
           let typ = declarator
             .type_annotation
             .as_ref()
-            .map(|t| state.type_from_type_expr(t));
+            .map(|t| state.type_from_type_expr(self.file, t));
           let init = declarator
             .initializer
             .map(|expr| self.lower_expr(expr, state));
@@ -4435,7 +4574,7 @@ impl BodyBuilder {
           .stx
           .type_annotation
           .as_ref()
-          .map(|t| state.type_from_type_expr(t));
+          .map(|t| state.type_from_type_expr(self.file, t));
         HirExprKind::TypeAssertion {
           expr: Box::new(expr),
           typ,
@@ -4444,7 +4583,7 @@ impl BodyBuilder {
       }
       Expr::SatisfiesExpr(satisfies) => {
         let expr = self.lower_expr(*satisfies.stx.expression, state);
-        let typ = state.type_from_type_expr(&satisfies.stx.type_annotation);
+        let typ = state.type_from_type_expr(self.file, &satisfies.stx.type_annotation);
         HirExprKind::Satisfies {
           expr: Box::new(expr),
           typ,

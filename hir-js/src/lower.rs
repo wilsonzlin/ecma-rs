@@ -3137,7 +3137,7 @@ fn lower_module_items(
   names: &mut NameInterner,
   def_lookup: &DefLookup,
   defs: &[DefData],
-  def_index: &BTreeMap<DefId, usize>,
+  _def_index: &BTreeMap<DefId, usize>,
   bodies: &[Arc<Body>],
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
