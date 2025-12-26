@@ -34,7 +34,8 @@ use super::caches::BodyCaches;
 use super::expr::resolve_call;
 use super::infer::TypeParamDecl;
 use super::type_expr::{TypeLowerer, TypeResolver};
-use crate::{codes, BodyCheckResult, BodyId, DefId};
+pub use crate::BodyCheckResult;
+use crate::{codes, BodyId, DefId};
 
 #[derive(Default, Clone)]
 struct Scope {

@@ -142,6 +142,7 @@ pub use api::*;
 pub use error::*;
 pub use profile::*;
 pub use program::*;
+pub use program::BodyCheckResult;
 #[cfg(feature = "serde")]
 pub use snapshot::*;
 pub use type_queries::*;
