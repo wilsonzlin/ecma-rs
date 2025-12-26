@@ -1,6 +1,10 @@
+use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::thread::ThreadId;
 use std::time::Duration;
 use types_ts_interned::CacheStats as StoreCacheStats;
 
@@ -16,6 +20,31 @@ pub enum QueryKind {
   Relation,
 }
 
+impl QueryKind {
+  pub const ALL: [QueryKind; 6] = [
+    QueryKind::Parse,
+    QueryKind::LowerHir,
+    QueryKind::Bind,
+    QueryKind::TypeOfDef,
+    QueryKind::CheckBody,
+    QueryKind::Relation,
+  ];
+
+  pub const COUNT: usize = QueryKind::ALL.len();
+
+  #[inline]
+  pub fn index(self) -> usize {
+    match self {
+      QueryKind::Parse => 0,
+      QueryKind::LowerHir => 1,
+      QueryKind::Bind => 2,
+      QueryKind::TypeOfDef => 3,
+      QueryKind::CheckBody => 4,
+      QueryKind::Relation => 5,
+    }
+  }
+}
+
 /// Buckets for cache statistics exposed by the checker.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -24,6 +53,27 @@ pub enum CacheKind {
   Eval,
   RefExpansion,
   Instantiation,
+}
+
+impl CacheKind {
+  pub const ALL: [CacheKind; 4] = [
+    CacheKind::Relation,
+    CacheKind::Eval,
+    CacheKind::RefExpansion,
+    CacheKind::Instantiation,
+  ];
+
+  pub const COUNT: usize = CacheKind::ALL.len();
+
+  #[inline]
+  pub fn index(self) -> usize {
+    match self {
+      CacheKind::Relation => 0,
+      CacheKind::Eval => 1,
+      CacheKind::RefExpansion => 2,
+      CacheKind::Instantiation => 3,
+    }
+  }
 }
 
 /// Aggregate statistics for a single query kind.
@@ -59,7 +109,7 @@ struct QueryStatAccumulator {
   total: u64,
   cache_hits: u64,
   cache_misses: u64,
-  total_time_ms: f64,
+  total_time_ns: u128,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -70,48 +120,204 @@ struct CacheStatAccumulator {
   evictions: u64,
 }
 
+#[derive(Debug, Default)]
+struct QueryCounters {
+  total: AtomicU64,
+  cache_hits: AtomicU64,
+  cache_misses: AtomicU64,
+  total_time_ns: AtomicU64,
+  recorded: AtomicBool,
+}
+
+impl QueryCounters {
+  fn record(&self, cache_hit: bool, duration: Duration) {
+    self.total.fetch_add(1, Ordering::Relaxed);
+    if cache_hit {
+      self.cache_hits.fetch_add(1, Ordering::Relaxed);
+    } else {
+      self.cache_misses.fetch_add(1, Ordering::Relaxed);
+    }
+    let nanos = duration.as_nanos().min(u64::MAX as u128) as u64;
+    self.total_time_ns.fetch_add(nanos, Ordering::Relaxed);
+    self.recorded.store(true, Ordering::Relaxed);
+  }
+
+  fn snapshot(&self) -> (QueryStatAccumulator, bool) {
+    let total = self.total.load(Ordering::Relaxed);
+    let cache_hits = self.cache_hits.load(Ordering::Relaxed);
+    let cache_misses = self.cache_misses.load(Ordering::Relaxed);
+    let total_time_ns = self.total_time_ns.load(Ordering::Relaxed) as u128;
+    let recorded = self.recorded.load(Ordering::Relaxed);
+    (
+      QueryStatAccumulator {
+        total,
+        cache_hits,
+        cache_misses,
+        total_time_ns,
+      },
+      recorded || total > 0 || cache_hits > 0 || cache_misses > 0 || total_time_ns > 0,
+    )
+  }
+}
+
+#[derive(Debug, Default)]
+struct CacheCounters {
+  hits: AtomicU64,
+  misses: AtomicU64,
+  insertions: AtomicU64,
+  evictions: AtomicU64,
+  recorded: AtomicBool,
+}
+
+impl CacheCounters {
+  fn record(&self, stats: &StoreCacheStats) {
+    self.hits.fetch_add(stats.hits, Ordering::Relaxed);
+    self.misses.fetch_add(stats.misses, Ordering::Relaxed);
+    self
+      .insertions
+      .fetch_add(stats.insertions, Ordering::Relaxed);
+    self.evictions.fetch_add(stats.evictions, Ordering::Relaxed);
+    self.recorded.store(true, Ordering::Relaxed);
+  }
+
+  fn snapshot(&self) -> (CacheStatAccumulator, bool) {
+    let hits = self.hits.load(Ordering::Relaxed);
+    let misses = self.misses.load(Ordering::Relaxed);
+    let insertions = self.insertions.load(Ordering::Relaxed);
+    let evictions = self.evictions.load(Ordering::Relaxed);
+    let recorded = self.recorded.load(Ordering::Relaxed);
+    (
+      CacheStatAccumulator {
+        hits,
+        misses,
+        insertions,
+        evictions,
+      },
+      recorded || hits > 0 || misses > 0 || insertions > 0 || evictions > 0,
+    )
+  }
+}
+
+#[derive(Debug)]
+struct ThreadStats {
+  queries: [QueryCounters; QueryKind::COUNT],
+  caches: [CacheCounters; CacheKind::COUNT],
+}
+
+impl Default for ThreadStats {
+  fn default() -> Self {
+    ThreadStats {
+      queries: QueryKind::ALL.map(|_| QueryCounters::default()),
+      caches: CacheKind::ALL.map(|_| CacheCounters::default()),
+    }
+  }
+}
+
+#[derive(Debug)]
+struct CollectorInner {
+  id: usize,
+  threads: DashMap<ThreadId, Arc<ThreadStats>>,
+}
+
+impl CollectorInner {
+  fn new() -> Self {
+    static NEXT_COLLECTOR_ID: AtomicUsize = AtomicUsize::new(1);
+    CollectorInner {
+      id: NEXT_COLLECTOR_ID.fetch_add(1, Ordering::Relaxed),
+      threads: DashMap::new(),
+    }
+  }
+}
+
+thread_local! {
+  static LOCAL_STATS: RefCell<HashMap<usize, Arc<ThreadStats>>> = RefCell::new(HashMap::new());
+}
+
 /// Thread-safe accumulator shared by the checker and profiling harness to
-/// record query timings and cache activity.
-#[derive(Clone, Default)]
+/// record query timings and cache activity. Stats are sharded per thread to
+/// avoid contending on a single global lock during parallel execution.
+#[derive(Clone)]
 pub struct QueryStatsCollector {
-  inner: Arc<Mutex<BTreeMap<QueryKind, QueryStatAccumulator>>>,
-  caches: Arc<Mutex<BTreeMap<CacheKind, CacheStatAccumulator>>>,
+  inner: Arc<CollectorInner>,
+}
+
+impl Default for QueryStatsCollector {
+  fn default() -> Self {
+    QueryStatsCollector {
+      inner: Arc::new(CollectorInner::new()),
+    }
+  }
 }
 
 impl QueryStatsCollector {
+  fn thread_stats(&self) -> Arc<ThreadStats> {
+    LOCAL_STATS.with(|local| {
+      let mut local = local.borrow_mut();
+      if let Some(existing) = local.get(&self.inner.id) {
+        return existing.clone();
+      }
+      let stats = Arc::new(ThreadStats::default());
+      self
+        .inner
+        .threads
+        .insert(std::thread::current().id(), stats.clone());
+      local.insert(self.inner.id, stats.clone());
+      stats
+    })
+  }
+
   pub fn record(&self, kind: QueryKind, cache_hit: bool, duration: Duration) {
-    let mut guard = self.inner.lock().unwrap();
-    let entry = guard.entry(kind).or_default();
-    entry.total += 1;
-    if cache_hit {
-      entry.cache_hits += 1;
-    } else {
-      entry.cache_misses += 1;
-    }
-    entry.total_time_ms += duration.as_secs_f64() * 1000.0;
+    let stats = self.thread_stats();
+    let counters = &stats.queries[kind.index()];
+    counters.record(cache_hit, duration);
   }
 
   /// Merge cache statistics from a single cache snapshot into the collector.
   pub fn record_cache(&self, kind: CacheKind, stats: &StoreCacheStats) {
-    let mut guard = self.caches.lock().unwrap();
-    let entry = guard.entry(kind).or_default();
-    entry.hits += stats.hits;
-    entry.misses += stats.misses;
-    entry.insertions += stats.insertions;
-    entry.evictions += stats.evictions;
+    let thread_stats = self.thread_stats();
+    let counters = &thread_stats.caches[kind.index()];
+    counters.record(stats);
   }
 
   pub fn snapshot(&self) -> QueryStats {
-    let guard = self.inner.lock().unwrap();
+    let mut query_accums = QueryKind::ALL.map(|_| QueryStatAccumulator::default());
+    let mut cache_accums = CacheKind::ALL.map(|_| CacheStatAccumulator::default());
+    let mut query_present = QueryKind::ALL.map(|_| false);
+    let mut cache_present = CacheKind::ALL.map(|_| false);
+
+    for stats in self.inner.threads.iter() {
+      let stats = stats.value();
+      for (idx, counters) in stats.queries.iter().enumerate() {
+        let (snapshot, recorded) = counters.snapshot();
+        query_present[idx] |= recorded;
+        query_accums[idx].total += snapshot.total;
+        query_accums[idx].cache_hits += snapshot.cache_hits;
+        query_accums[idx].cache_misses += snapshot.cache_misses;
+        query_accums[idx].total_time_ns += snapshot.total_time_ns;
+      }
+      for (idx, counters) in stats.caches.iter().enumerate() {
+        let (snapshot, recorded) = counters.snapshot();
+        cache_present[idx] |= recorded;
+        cache_accums[idx].hits += snapshot.hits;
+        cache_accums[idx].misses += snapshot.misses;
+        cache_accums[idx].insertions += snapshot.insertions;
+        cache_accums[idx].evictions += snapshot.evictions;
+      }
+    }
+
     let mut queries = BTreeMap::new();
-    for (kind, acc) in guard.iter() {
+    for (idx, kind) in QueryKind::ALL.iter().enumerate() {
+      if !query_present[idx] {
+        continue;
+      }
+      let acc = &query_accums[idx];
       queries.insert(
         *kind,
         QueryStat {
           total: acc.total,
           cache_hits: acc.cache_hits,
           cache_misses: acc.cache_misses,
-          total_time_ms: acc.total_time_ms,
+          total_time_ms: acc.total_time_ns as f64 / 1_000_000.0,
           hit_rate: if acc.total == 0 {
             0.0
           } else {
@@ -120,9 +326,13 @@ impl QueryStatsCollector {
         },
       );
     }
-    let cache_guard = self.caches.lock().unwrap();
+
     let mut caches = BTreeMap::new();
-    for (kind, acc) in cache_guard.iter() {
+    for (idx, kind) in CacheKind::ALL.iter().enumerate() {
+      if !cache_present[idx] {
+        continue;
+      }
+      let acc = &cache_accums[idx];
       let lookups = acc.hits + acc.misses;
       caches.insert(
         *kind,
@@ -139,6 +349,7 @@ impl QueryStatsCollector {
         },
       );
     }
+
     QueryStats { queries, caches }
   }
 }
