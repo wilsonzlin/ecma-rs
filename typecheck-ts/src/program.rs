@@ -926,14 +926,45 @@ impl Program {
 
   pub fn type_at_fallible(&self, file: FileId, offset: u32) -> Result<Option<TypeId>, FatalError> {
     self.with_analyzed_state(|state| {
-      let (body, expr) = match state.expr_at(file, offset) {
-        Some(res) => res,
-        None => return Ok(None),
+      let mut best_containing: Option<(u32, u32, TypeId)> = None;
+      let mut best_empty: Option<(u32, u32, TypeId)> = None;
+      let update_best = |span: TextRange,
+                         ty: TypeId,
+                         best_containing: &mut Option<(u32, u32, TypeId)>,
+                         best_empty: &mut Option<(u32, u32, TypeId)>| {
+        let key = (span.len(), span.start, ty);
+        if span.start <= offset && offset < span.end {
+          let replace = best_containing.map(|best| key < best).unwrap_or(true);
+          if replace {
+            *best_containing = Some(key);
+          }
+        } else if span.is_empty() && span.start == offset {
+          let replace = best_empty.map(|best| key < best).unwrap_or(true);
+          if replace {
+            *best_empty = Some(key);
+          }
+        }
       };
-      let result = state.check_body(body);
-      Ok(Some(
-        result.expr_type(expr).unwrap_or(state.builtin.unknown),
-      ))
+
+      let body_ids: Vec<_> = state
+        .body_data
+        .values()
+        .filter(|data| data.file == file)
+        .map(|data| data.id)
+        .collect();
+      for body in body_ids {
+        let res = state.check_body(body);
+        for (idx, span) in res.expr_spans.iter().enumerate() {
+          let ty = res.expr_type(ExprId(idx as u32)).unwrap_or(state.builtin.unknown);
+          update_best(*span, ty, &mut best_containing, &mut best_empty);
+        }
+      }
+
+      let ty = best_containing
+        .or(best_empty)
+        .map(|(_, _, ty)| ty)
+        .or(Some(state.builtin.unknown));
+      Ok(ty)
     })
   }
 
@@ -5245,11 +5276,11 @@ impl ProgramState {
 
   fn span_of_expr(&mut self, body: BodyId, expr: ExprId) -> Option<Span> {
     let file = self.body_data.get(&body)?.file;
-    let span = self
-      .span_map_for_file(file)?
-      .expr_span(body, expr)
-      .map(|range| Span::new(file, range));
-    span
+    let res = self.check_body(body);
+    res
+      .expr_span(expr)
+      .or_else(|| res.expr_spans.get(expr.0 as usize).copied())
+      .map(|range| Span::new(file, range))
   }
 
   fn span_of_def(&mut self, def: DefId) -> Option<Span> {
@@ -5262,7 +5293,64 @@ impl ProgramState {
   }
 
   fn expr_at(&mut self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
-    self.span_map_for_file(file)?.expr_at_offset(offset)
+    if let Some((body, expr)) = self
+      .span_map_for_file(file)
+      .and_then(|map| map.expr_at_offset(offset))
+    {
+      if self
+        .body_data
+        .get(&body)
+        .map(|data| expr.0 < data.expr_spans.len() as u32)
+        .unwrap_or(false)
+      {
+        return Some((body, expr));
+      }
+    }
+
+    let mut best_containing: Option<(u32, u32, BodyId, ExprId)> = None;
+    let mut best_empty: Option<(u32, u32, BodyId, ExprId)> = None;
+    let update_best = |body: BodyId,
+                       expr: ExprId,
+                       span: TextRange,
+                       best_containing: &mut Option<(u32, u32, BodyId, ExprId)>,
+                       best_empty: &mut Option<(u32, u32, BodyId, ExprId)>| {
+      let len = span.len();
+      let key = (len, span.start, body, expr);
+      if span.start <= offset && offset < span.end {
+        let replace = best_containing.map(|best| key < best).unwrap_or(true);
+        if replace {
+          *best_containing = Some(key);
+        }
+      } else if span.is_empty() && span.start == offset {
+        let replace = best_empty.map(|best| key < best).unwrap_or(true);
+        if replace {
+          *best_empty = Some(key);
+        }
+      }
+    };
+
+    let body_ids: Vec<_> = self
+      .body_data
+      .values()
+      .filter(|data| data.file == file)
+      .map(|data| data.id)
+      .collect();
+    for body_id in body_ids {
+      let res = self.check_body(body_id);
+      for (idx, span) in res.expr_spans.iter().enumerate() {
+        update_best(
+          body_id,
+          ExprId(idx as u32),
+          *span,
+          &mut best_containing,
+          &mut best_empty,
+        );
+      }
+    }
+
+    best_containing
+      .or(best_empty)
+      .map(|(_, _, body, expr)| (body, expr))
   }
 
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {
