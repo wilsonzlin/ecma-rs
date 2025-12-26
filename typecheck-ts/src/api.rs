@@ -8,6 +8,5 @@
 pub use diagnostics::FileId;
 /// Canonical diagnostic model used throughout parsing, binding, and checking.
 pub use diagnostics::{Diagnostic, Label, Severity, Span, TextRange};
-
 /// Stable identifiers produced by lowering to HIR.
 pub use hir_js::{BodyId, DefId, ExprId, PatId};

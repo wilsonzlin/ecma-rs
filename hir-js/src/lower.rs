@@ -390,6 +390,7 @@ pub fn lower_file_with_diagnostics(
     &mut names,
     &def_lookup,
     &defs,
+    &id_to_index,
     &bodies,
     &mut span_map,
     &mut ctx,
@@ -3136,6 +3137,7 @@ fn lower_module_items(
   names: &mut NameInterner,
   def_lookup: &DefLookup,
   defs: &[DefData],
+  def_index: &BTreeMap<DefId, usize>,
   bodies: &[Arc<Body>],
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
@@ -3423,7 +3425,11 @@ fn lower_module_items(
               });
               next_export += 1;
             } else {
-              let Some(name_id) = defs.iter().find(|d| d.id == def).map(|d| d.path.name) else {
+              let Some(name_id) = def_index
+                .get(&def)
+                .and_then(|idx| defs.get(*idx))
+                .map(|d| d.path.name)
+              else {
                 continue;
               };
               push_named_export(
@@ -3460,7 +3466,11 @@ fn lower_module_items(
               });
               next_export += 1;
             } else {
-              let Some(name_id) = defs.iter().find(|d| d.id == def).map(|d| d.path.name) else {
+              let Some(name_id) = def_index
+                .get(&def)
+                .and_then(|idx| defs.get(*idx))
+                .map(|d| d.path.name)
+              else {
                 continue;
               };
               push_named_export(
