@@ -4,3 +4,6 @@ package-lock.json
 target/
 
 # Auto-generated test reports
+
+# Workspace lockfile is intentionally untracked
+Cargo.lock

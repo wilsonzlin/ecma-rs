@@ -22,8 +22,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # Cargo.lock is ignored in this repository. Generate it on the fly so we
-      # can use --locked for reproducible dependency resolution in CI.
+      # Cargo.lock is intentionally untracked for this library workspace.
+      # Generate it on the fly so we can use --locked for reproducible
+      # dependency resolution in CI.
       - name: Generate lockfile
         run: cargo generate-lockfile
 
