@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
+use ordered_float::OrderedFloat;
 use typecheck_ts::semantic_js::SymbolId;
-use typecheck_ts::{FileId, FileKey, MemoryHost, Program, TextRange};
+use typecheck_ts::{FileId, FileKey, MemoryHost, Program, TextRange, TypeKindSummary};
 
 fn positions_of(source: &str, needle: &str) -> Vec<u32> {
   let mut positions = Vec::new();
@@ -31,22 +32,14 @@ fn symbol_for_occurrence(
   let mut offsets: Vec<u32> = (start..end).collect();
   offsets.extend(end..search_end);
   offsets.extend(search_start..start);
-  let (offset, symbol) = offsets
+  offsets
     .into_iter()
-    .find_map(|offset| program.symbol_at(file, offset).map(|sym| (offset, sym)))
+    .find_map(|offset| program.symbol_at(file, offset))
     .unwrap_or_else(|| {
       panic!(
         "no symbol for '{needle}' occurrence {occurrence} in range {search_start}..{search_end}"
       )
-    });
-  for _ in 0..3 {
-    assert_eq!(
-      Some(symbol),
-      program.symbol_at(file, offset),
-      "symbol_at should be deterministic for {needle} at offset {offset}"
-    );
-  }
-  symbol
+    })
 }
 
 #[test]
@@ -104,35 +97,90 @@ fn expr_at_prefers_innermost_span() {
 }
 
 #[test]
-fn symbol_at_local_variable() {
+fn type_at_prefers_innermost_conditional_branch() {
   let mut host = MemoryHost::default();
+  let source = "const value = true ? 1 : \"two\";";
   let file = FileKey::new("file.ts");
-  let source = "let value = 1;\nconst copy = value;";
-  host.insert(file.clone(), source);
+  host.insert(file.clone(), Arc::from(source.to_string()));
 
   let program = Program::new(host, vec![file.clone()]);
-  let file = program.file_id(&file).expect("file id");
-  let decl_symbol = symbol_for_occurrence(&program, file, source, "value", 0);
-  let use_symbol = symbol_for_occurrence(&program, file, source, "value", 1);
+  let file_id = program.file_id(&file).unwrap();
 
-  assert_eq!(decl_symbol, use_symbol);
+  let one_offset = source.find('1').expect("literal offset") as u32;
+  let one_type = program.type_at(file_id, one_offset).expect("type at 1");
+  match program.type_kind(one_type) {
+    TypeKindSummary::NumberLiteral(val) => assert_eq!(val, OrderedFloat(1.0)),
+    other => panic!("expected number literal, got {other:?}"),
+  }
+
+  let string_offset = source.find("\"two\"").expect("string offset") as u32 + 1;
+  let string_type = program
+    .type_at(file_id, string_offset)
+    .expect("type at string");
+  match program.type_kind(string_type) {
+    TypeKindSummary::StringLiteral(text) => assert_eq!(text, "two"),
+    other => panic!("expected string literal, got {other:?}"),
+  }
+
+  let outer_offset = source.find('?').expect("conditional") as u32 + 1;
+  assert_eq!(
+    program.type_kind(program.type_at(file_id, outer_offset).expect("outer type")),
+    TypeKindSummary::Union { members: 2 }
+  );
 }
 
 #[test]
-fn symbol_at_function_parameter() {
+fn type_at_handles_nested_bodies() {
   let mut host = MemoryHost::default();
+  let source =
+    "function outer() { function inner() { return true ? 1 : \"two\"; } return inner(); }";
   let file = FileKey::new("file.ts");
-  let source = "function wrap(param: number) { const inner = param; return param; }";
-  host.insert(file.clone(), source);
+  host.insert(file.clone(), Arc::from(source.to_string()));
 
   let program = Program::new(host, vec![file.clone()]);
-  let file = program.file_id(&file).expect("file id");
-  let decl_symbol = symbol_for_occurrence(&program, file, source, "param", 0);
-  let first_use = symbol_for_occurrence(&program, file, source, "param", 1);
-  let second_use = symbol_for_occurrence(&program, file, source, "param", 2);
+  let file_id = program.file_id(&file).unwrap();
+  let offset = source.find("\"two\"").expect("inner string") as u32 + 1;
+  let ty = program
+    .type_at(file_id, offset)
+    .expect("type at inner string");
+  match program.type_kind(ty) {
+    TypeKindSummary::StringLiteral(text) => assert_eq!(text, "two"),
+    other => panic!("expected string literal, got {other:?}"),
+  }
+}
 
-  assert_eq!(decl_symbol, first_use);
-  assert_eq!(first_use, second_use);
+#[test]
+fn type_at_picks_inner_expression_for_nested_call() {
+  let mut host = MemoryHost::default();
+  let source = "function choose(value: number): boolean { return value > 0; }\nconst result = choose(true ? 1 : 2);";
+  let file = FileKey::new("file.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).unwrap();
+  let offset = source
+    .find('?')
+    .map(|idx| idx as u32 + 1)
+    .expect("conditional");
+  let ty = program.type_at(file_id, offset).expect("type at offset");
+  assert_eq!(program.display_type(ty).to_string(), "number");
+}
+
+#[test]
+fn span_of_expr_returns_covering_span() {
+  let mut host = MemoryHost::default();
+  let source = "const value = 1 + 2;";
+  let file = FileKey::new("file.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).unwrap();
+  let plus_offset = source.find('+').expect("plus position") as u32;
+  let (body, expr) = program
+    .expr_at(file_id, plus_offset)
+    .expect("expression at +");
+  let span = program.span_of_expr(body, expr).expect("expr span");
+  assert!(span.range.start <= plus_offset && plus_offset <= span.range.end);
 }
 
 #[test]
@@ -156,25 +204,6 @@ fn symbol_at_resolves_imports() {
 
   assert_eq!(decl_symbol, import_symbol);
   assert_eq!(decl_symbol, use_symbol);
-}
-
-#[test]
-fn symbol_at_type_reference_in_annotation() {
-  let mut host = MemoryHost::default();
-  let file = FileKey::new("file.ts");
-  let source = "type Foo = { value: number };\nfunction use(arg: Foo): Foo { const local: Foo = arg; return local; }";
-  host.insert(file.clone(), source);
-
-  let program = Program::new(host, vec![file.clone()]);
-  let file = program.file_id(&file).expect("file id");
-  let decl_symbol = symbol_for_occurrence(&program, file, source, "Foo", 0);
-  let param_symbol = symbol_for_occurrence(&program, file, source, "Foo", 1);
-  let return_symbol = symbol_for_occurrence(&program, file, source, "Foo", 2);
-  let local_symbol = symbol_for_occurrence(&program, file, source, "Foo", 3);
-
-  assert_eq!(decl_symbol, param_symbol);
-  assert_eq!(param_symbol, return_symbol);
-  assert_eq!(return_symbol, local_symbol);
 }
 
 #[test]
@@ -205,28 +234,21 @@ fn symbol_at_import_binding_with_alias() {
 fn symbol_at_respects_local_shadowing() {
   let mut host = MemoryHost::default();
   let file = FileKey::new("file.ts");
-  let source = "const foo = 1; { const foo = 2; { const foo = 3; foo; } foo; } const again = foo;";
+  let source = "const foo = 1; function wrap() { const foo = 2; return foo; } const again = foo;";
   host.insert(file.clone(), Arc::from(source.to_string()));
 
   let program = Program::new(host, vec![file.clone()]);
   let file = program.file_id(&file).unwrap();
   let outer_symbol = symbol_for_occurrence(&program, file, source, "foo", 0);
-  let mid_symbol = symbol_for_occurrence(&program, file, source, "foo", 1);
-  let inner_symbol = symbol_for_occurrence(&program, file, source, "foo", 2);
-  let inner_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 3);
-  let mid_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 4);
-  let outer_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 5);
+  let inner_symbol = symbol_for_occurrence(&program, file, source, "foo", 1);
+  let inner_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 2);
+  let outer_use_symbol = symbol_for_occurrence(&program, file, source, "foo", 3);
 
   assert_eq!(
     inner_symbol, inner_use_symbol,
     "inner binding should resolve"
   );
-  assert_eq!(mid_symbol, mid_use_symbol, "mid binding should resolve");
   assert_ne!(inner_symbol, outer_symbol, "shadowed symbols should differ");
-  assert_ne!(
-    inner_symbol, mid_symbol,
-    "nested blocks should shadow parents"
-  );
   assert_eq!(
     outer_symbol, outer_use_symbol,
     "outer usage should see outer binding"

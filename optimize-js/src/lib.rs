@@ -47,8 +47,8 @@ use serde::Serialize;
 use ssa::ssa_deconstruct::deconstruct_ssa;
 use ssa::ssa_insert_phis::insert_phis_for_ssa_construction;
 use ssa::ssa_rename::rename_targets_for_ssa_construction;
-use std::ops::Deref;
 use std::collections::BTreeMap;
+use std::ops::Deref;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -679,6 +679,7 @@ impl Program {
 
 #[cfg(test)]
 mod tests {
+  use super::SOURCE_FILE;
   use crate::cfg::cfg::Cfg;
   use crate::compile_source;
   use crate::il::inst::Inst;
@@ -687,7 +688,6 @@ mod tests {
   use crate::symbol::var_analysis::VarAnalysis;
   use crate::Program;
   use crate::TopLevelMode;
-  use super::SOURCE_FILE;
   use parse_js::parse;
   use serde_json::to_string;
   use std::collections::HashSet;

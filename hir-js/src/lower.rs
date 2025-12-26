@@ -408,7 +408,8 @@ pub fn lower_file_with_diagnostics(
     defs.push(def_data);
   }
 
-  let mut root_body_id = BodyId(BodyPath::new(DefId(file.0), BodyKind::TopLevel, 0).stable_hash_u32());
+  let mut root_body_id =
+    BodyId(BodyPath::new(DefId(file.0), BodyKind::TopLevel, 0).stable_hash_u32());
   while body_index.contains_key(&root_body_id) {
     root_body_id = BodyId(root_body_id.0.wrapping_add(1));
   }
@@ -601,9 +602,9 @@ fn lower_body_from_source(
       span_map,
       ctx,
     ),
-    DefSource::Var(decl, kind) => {
-      lower_var_body(owner, body_id, decl, *kind, def_lookup, names, span_map, ctx)
-    }
+    DefSource::Var(decl, kind) => lower_var_body(
+      owner, body_id, decl, *kind, def_lookup, names, span_map, ctx,
+    ),
     DefSource::ExportDefaultExpr(expr) => {
       let mut builder = BodyBuilder::new(
         owner,
@@ -3797,13 +3798,16 @@ fn lower_module_items(
         if let Some(def) = def_lookup.def_for_node(node) {
           if let Some(body_id) = def_lookup.body_for(def) {
             let expr_id = body_by_id(body_id, bodies, body_index)
-            .and_then(|b| b.exprs.len().checked_sub(1).map(|idx| ExprId(idx as u32)))
-            .unwrap_or(ExprId(0));
+              .and_then(|b| b.exprs.len().checked_sub(1).map(|idx| ExprId(idx as u32)))
+              .unwrap_or(ExprId(0));
             exports.push(Export {
               id: ExportId(next_export),
               span: item.span,
               kind: ExportKind::Default(ExportDefault {
-                value: ExportDefaultValue::Expr { expr: expr_id, body: body_id },
+                value: ExportDefaultValue::Expr {
+                  expr: expr_id,
+                  body: body_id,
+                },
               }),
             });
             next_export += 1;
@@ -3819,7 +3823,10 @@ fn lower_module_items(
             exports.push(Export {
               id: ExportId(next_export),
               span: item.span,
-              kind: ExportKind::Assignment(ExportAssignment { expr, body: body_id }),
+              kind: ExportKind::Assignment(ExportAssignment {
+                expr,
+                body: body_id,
+              }),
             });
             next_export += 1;
           }

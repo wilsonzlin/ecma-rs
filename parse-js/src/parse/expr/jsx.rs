@@ -257,7 +257,13 @@ impl<'a> Parser<'a> {
           } else {
             let value = self.expr(ctx, [TT::BraceClose]).unwrap_or_else(|_| {
               let loc = self.peek().loc;
-              Node::new(loc, IdExpr { name: String::new() }).into_wrapped()
+              Node::new(
+                loc,
+                IdExpr {
+                  name: String::new(),
+                },
+              )
+              .into_wrapped()
             });
             children.push(JsxElemChild::Expr(Node::new(
               value.loc,

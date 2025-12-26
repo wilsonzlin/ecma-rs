@@ -8,9 +8,9 @@ use diagnostics::Diagnostic;
 use hir_js::{
   AssignOp, BinaryOp, Body, BodyId, DefData, DefId, Export, ExportAll, ExportDefault,
   ExportDefaultValue, ExportKind, ExportNamed, Expr, ExprId, ExprKind, FunctionBody, FunctionData,
-  Import, ImportBinding, ImportEqualsTarget, ImportEs, ImportKind, Literal, LowerResult, MemberExpr,
-  NameId, ObjectKey, ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt, StmtId,
-  StmtKind, TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
+  Import, ImportBinding, ImportEqualsTarget, ImportEs, ImportKind, Literal, LowerResult,
+  MemberExpr, NameId, ObjectKey, ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt,
+  StmtId, StmtKind, TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
 };
 use parse_js::operator::{OperatorName, OPERATORS};
 
@@ -158,11 +158,7 @@ fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> Emit
     em.write_identifier(ctx.name(ns.local));
     wrote = true;
   }
-  let named_specifiers: Vec<_> = es
-    .named
-    .iter()
-    .filter(|s| !s.is_type_only)
-    .collect();
+  let named_specifiers: Vec<_> = es.named.iter().filter(|s| !s.is_type_only).collect();
   if !named_specifiers.is_empty() {
     if wrote {
       em.write_punct(",");

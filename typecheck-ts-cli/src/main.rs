@@ -515,10 +515,7 @@ impl SourceProvider for ProgramSourceSnapshot {
   }
 
   fn file_text(&self, file: FileId) -> Option<&str> {
-    self
-      .texts
-      .get(&file)
-      .map(|text| text.as_str())
+    self.texts.get(&file).map(|text| text.as_str())
   }
 }
 
@@ -674,7 +671,11 @@ fn query_type_at(
     Some(ty) => {
       let typ = program.display_type(ty).to_string();
       let file = host
-        .path_for_key(&program.file_key(file_id).unwrap_or_else(|| FileKey::new(path.display().to_string())))
+        .path_for_key(
+          &program
+            .file_key(file_id)
+            .unwrap_or_else(|| FileKey::new(path.display().to_string())),
+        )
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string());
       Ok(Some(TypeAtResult { file, offset, typ }))
@@ -714,7 +715,11 @@ fn query_symbol_at(
   };
 
   let file = host
-    .path_for_key(&program.file_key(file_id).unwrap_or_else(|| FileKey::new(path.display().to_string())))
+    .path_for_key(
+      &program
+        .file_key(file_id)
+        .unwrap_or_else(|| FileKey::new(path.display().to_string())),
+    )
     .map(|p| p.display().to_string())
     .unwrap_or_else(|| path.to_string_lossy().to_string());
 
@@ -755,7 +760,11 @@ fn query_exports(
   }
   let mut outer = BTreeMap::new();
   let file_name = host
-    .path_for_key(&program.file_key(file_id).unwrap_or_else(|| FileKey::new(path.display().to_string())))
+    .path_for_key(
+      &program
+        .file_key(file_id)
+        .unwrap_or_else(|| FileKey::new(path.display().to_string())),
+    )
     .map(|p| p.display().to_string())
     .unwrap_or_else(|| path.to_string_lossy().to_string());
   outer.insert(file_name, map);

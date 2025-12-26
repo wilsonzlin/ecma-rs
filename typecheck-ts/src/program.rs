@@ -1,13 +1,18 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use ::semantic_js::ts as sem_ts;
+use ::semantic_js::ts::locals::{self, TsLocalSemantics};
+use hir_js::span_map::SpanIndex;
 use hir_js::{
-  lower_file_with_diagnostics as lower_hir_with_diagnostics, BodyKind as HirBodyKind,
-  DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind, FileKind as HirFileKind,
-  ImportKind as HirImportKind, LowerResult,
+  lower_file_with_diagnostics as lower_hir_with_diagnostics, DefId as HirDefId,
+  DefKind as HirDefKind, ExportKind as HirExportKind, FileKind as HirFileKind,
+  ImportKind as HirImportKind, LowerResult, SpanMap,
 };
 use ordered_float::OrderedFloat;
+use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMember, ObjMemberType};
+use parse_js::ast::expr::lit::{LitArrElem, LitObjExpr};
 use parse_js::ast::expr::pat::Pat;
-use parse_js::ast::func::Func;
+use parse_js::ast::expr::Expr;
+use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::import_export::{ExportNames, ImportNames};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
@@ -17,24 +22,27 @@ use parse_js::ast::type_expr::{
   TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
 use parse_js::loc::Loc;
+use parse_js::operator::OperatorName;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
-use types_ts_interned::{self as tti, TypeId, TypeParamId};
+use types_ts_interned::{self as tti, TypeId, TypeOptions, TypeParamId};
 
 use crate::check::caches::{CheckerCacheStats, CheckerCaches};
 use crate::codes;
-use crate::profile::{CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector};
+use crate::profile::{QueryKind, QueryStats, QueryStatsCollector};
 #[cfg(feature = "serde")]
 use crate::snapshot::{
-  DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot, PROGRAM_SNAPSHOT_VERSION,
+  BodyDataSnapshot, DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot,
+  PROGRAM_SNAPSHOT_VERSION,
 };
 use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
@@ -44,12 +52,17 @@ use crate::{FatalError, HostError, Ice, IceContext};
 #[path = "check/mod.rs"]
 pub(crate) mod check;
 
+use check::legacy_narrow::{
+  narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof, narrow_by_literal,
+  narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
+};
+
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
   /// Return the full text for a file.
-  fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError>;
+  fn file_text(&self, key: &FileKey) -> Result<Arc<str>, HostError>;
   /// Resolve a module specifier relative to `from`.
   fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey>;
 
@@ -69,22 +82,136 @@ pub trait Host: Send + Sync + 'static {
   }
 }
 
+/// Builder for configuring and constructing a [`Program`].
+pub struct ProgramBuilder {
+  host: Arc<dyn Host>,
+  roots: Vec<FileKey>,
+  lib_manager: Arc<LibManager>,
+}
+
+impl ProgramBuilder {
+  /// Create a builder for the given host.
+  pub fn new(host: impl Host) -> Self {
+    Self::with_lib_manager(host, Arc::new(LibManager::new()))
+  }
+
+  /// Create a builder with a shared lib manager (useful for tests observing invalidation).
+  pub fn with_lib_manager(host: impl Host, lib_manager: Arc<LibManager>) -> Self {
+    ProgramBuilder {
+      host: Arc::new(host),
+      roots: Vec::new(),
+      lib_manager,
+    }
+  }
+
+  /// Add an entry file.
+  pub fn add_root(mut self, root: impl Into<FileKey>) -> Self {
+    self.roots.push(root.into());
+    self
+  }
+
+  /// Add multiple entry files.
+  pub fn add_roots(mut self, roots: impl IntoIterator<Item = FileKey>) -> Self {
+    self.roots.extend(roots);
+    self
+  }
+
+  /// Build the program.
+  pub fn build(self) -> Program {
+    Program::with_lib_manager_arc(self.host, self.roots, self.lib_manager)
+  }
+
+  /// Convenience helper for building a program from an in-memory map of files.
+  pub fn from_memory_files<I, K, S>(files: I) -> ProgramBuilder
+  where
+    I: IntoIterator<Item = (K, S)>,
+    K: Into<FileKey>,
+    S: Into<Arc<str>>,
+  {
+    let mut host = MemoryHost::default();
+    let mut roots = Vec::new();
+    for (key, text) in files {
+      let key = key.into();
+      host.insert_with_kind(key.clone(), FileKind::Ts, text.into());
+      roots.push(key);
+    }
+    ProgramBuilder::new(host).add_roots(roots)
+  }
+}
+
+/// Simple in-memory host useful for tests and examples.
+#[derive(Default, Clone)]
+pub struct MemoryHost {
+  files: HashMap<FileKey, (Arc<str>, FileKind)>,
+  edges: HashMap<(FileKey, String), FileKey>,
+}
+
+impl MemoryHost {
+  /// Insert a file with a specific kind.
+  pub fn insert_with_kind(
+    &mut self,
+    key: impl Into<FileKey>,
+    kind: FileKind,
+    source: impl Into<Arc<str>>,
+  ) {
+    let key = key.into();
+    self.files.insert(key, (source.into(), kind));
+  }
+
+  /// Insert a TypeScript/JavaScript file.
+  pub fn insert(&mut self, key: impl Into<FileKey>, source: impl Into<Arc<str>>) {
+    self.insert_with_kind(key, FileKind::Ts, source);
+  }
+
+  /// Add a resolution edge for `from` and `specifier`.
+  pub fn link(&mut self, from: impl Into<FileKey>, specifier: &str, to: impl Into<FileKey>) {
+    self
+      .edges
+      .insert((from.into(), specifier.to_string()), to.into());
+  }
+}
+
+impl Host for MemoryHost {
+  fn file_text(&self, key: &FileKey) -> Result<Arc<str>, HostError> {
+    self
+      .files
+      .get(key)
+      .map(|(text, _)| text.clone())
+      .ok_or_else(|| HostError::new(format!("missing file {}", key.as_str())))
+  }
+
+  fn resolve(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+    self
+      .edges
+      .get(&(from.clone(), specifier.to_string()))
+      .cloned()
+  }
+
+  fn file_kind(&self, file: &FileKey) -> FileKind {
+    self
+      .files
+      .get(file)
+      .map(|(_, kind)| *kind)
+      .unwrap_or(FileKind::Ts)
+  }
+}
+
 /// Public symbol identifier exposed through [`Program::symbol_at`].
 pub mod semantic_js {
   /// Opaque symbol identifier.
   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
   #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-  pub struct SymbolId(pub u32);
+  pub struct SymbolId(pub u64);
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
     fn from(id: ::semantic_js::ts::SymbolId) -> Self {
-      SymbolId(id.0.try_into().unwrap_or(u32::MAX))
+      SymbolId(id.0)
     }
   }
 
   impl From<SymbolId> for ::semantic_js::ts::SymbolId {
     fn from(id: SymbolId) -> Self {
-      ::semantic_js::ts::SymbolId(id.0.into())
+      ::semantic_js::ts::SymbolId(id.0)
     }
   }
 }
@@ -109,13 +236,17 @@ pub type ExportMap = BTreeMap<String, ExportEntry>;
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Debug, Clone)]
 pub struct BodyCheckResult {
-  pub(crate) body: BodyId,
-  pub(crate) expr_types: Vec<TypeId>,
-  pub(crate) expr_spans: Vec<TextRange>,
-  pub(crate) pat_types: Vec<TypeId>,
-  pub(crate) pat_spans: Vec<TextRange>,
-  pub(crate) diagnostics: Vec<Diagnostic>,
-  pub(crate) return_types: Vec<TypeId>,
+  body: BodyId,
+  expr_types: Vec<TypeId>,
+  expr_spans: Vec<TextRange>,
+  pat_types: Vec<TypeId>,
+  pat_spans: Vec<TextRange>,
+  diagnostics: Vec<Diagnostic>,
+  return_types: Vec<TypeId>,
+  #[cfg_attr(feature = "serde", serde(skip))]
+  expr_index: SpanIndex<ExprId>,
+  #[cfg_attr(feature = "serde", serde(skip))]
+  pat_index: SpanIndex<PatId>,
 }
 
 impl BodyCheckResult {
@@ -151,47 +282,22 @@ impl BodyCheckResult {
 
   /// Span for a specific expression.
   pub fn expr_span(&self, expr: ExprId) -> Option<TextRange> {
-    self.expr_spans.get(expr.0 as usize).copied()
+    self.expr_index.span_of(expr)
   }
 
   /// Span for a specific pattern.
   pub fn pat_span(&self, pat: PatId) -> Option<TextRange> {
-    self.pat_spans.get(pat.0 as usize).copied()
+    self.pat_index.span_of(pat)
   }
 
   /// Find the innermost expression covering the given offset.
   pub fn expr_at(&self, offset: u32) -> Option<(ExprId, TypeId)> {
-    let mut best_containing: Option<(ExprId, TypeId, u32)> = None;
-    let mut best_empty: Option<(ExprId, TypeId, u32)> = None;
-    for (idx, span) in self.expr_spans.iter().enumerate() {
-      let width = span.end.saturating_sub(span.start);
-      if span.start <= offset && offset < span.end {
-        let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
-        best_containing = match best_containing {
-          Some((_, _, existing)) if existing <= width => best_containing,
-          _ => Some(entry),
-        };
-      } else if span.start == span.end && offset == span.start {
-        let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
-        best_empty = match best_empty {
-          Some((_, _, existing)) if existing <= width => best_empty,
-          _ => Some(entry),
-        };
-      }
-    }
-    let best = match (best_containing, best_empty) {
-      (Some(cont), Some(empty)) => {
-        if empty.2 <= cont.2 {
-          Some(empty)
-        } else {
-          Some(cont)
-        }
-      }
-      (Some(cont), None) => Some(cont),
-      (None, Some(empty)) => Some(empty),
-      (None, None) => None,
-    };
-    best.map(|(id, ty, _)| (id, ty))
+    let span = self.expr_index.query_span(offset)?;
+    self
+      .expr_types
+      .get(span.id.0 as usize)
+      .copied()
+      .map(|ty| (span.id, ty))
   }
 
   /// Spans for all expressions in this body.
@@ -207,6 +313,39 @@ impl BodyCheckResult {
   /// Types of all explicit return statements seen while checking the body.
   pub fn return_types(&self) -> &[TypeId] {
     &self.return_types
+  }
+
+  fn rebuild_indexes(&mut self) {
+    self
+      .expr_spans
+      .iter_mut()
+      .for_each(|range| *range = normalize_range(*range));
+    self
+      .pat_spans
+      .iter_mut()
+      .for_each(|range| *range = normalize_range(*range));
+
+    self.expr_index = SpanIndex::from_spans(
+      self
+        .expr_spans
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(idx, span)| (span, ExprId(idx as u32))),
+    );
+    self.pat_index = SpanIndex::from_spans(
+      self
+        .pat_spans
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(idx, span)| (span, PatId(idx as u32))),
+    );
+  }
+
+  fn with_indexes(mut self) -> Self {
+    self.rebuild_indexes();
+    self
   }
 }
 
@@ -281,12 +420,6 @@ pub fn reset_parse_call_count() {
 }
 
 fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeStore>, tti::TypeId) {
-  if let Some(store) = state.interned_store.as_ref() {
-    if panic::catch_unwind(AssertUnwindSafe(|| store.type_kind(ty))).is_ok() {
-      return (Arc::clone(store), store.canon(ty));
-    }
-  }
-
   let store = tti::TypeStore::new();
   let mut cache = HashMap::new();
   let interned = convert_type_for_display(ty, state, &store, &mut cache);
@@ -304,11 +437,7 @@ fn convert_type_for_display(
   }
   let primitives = store.primitive_ids();
   cache.insert(ty, primitives.unknown);
-  let kind = match state.type_store.kinds.get(ty.0 as usize) {
-    Some(kind) => kind.clone(),
-    None => return primitives.unknown,
-  };
-  let mapped = match kind {
+  let mapped = match state.type_store.kind(ty).clone() {
     TypeKind::Any => primitives.any,
     TypeKind::Unknown => primitives.unknown,
     TypeKind::Never => primitives.never,
@@ -411,6 +540,14 @@ fn convert_type_for_display(
   mapped
 }
 
+fn ensure_interned_type(ty: TypeId, state: &ProgramState, store: &Arc<tti::TypeStore>) -> TypeId {
+  if store.contains_type_id(ty) {
+    return ty;
+  }
+  let mut cache = HashMap::new();
+  convert_type_for_display(ty, state, store, &mut cache)
+}
+
 /// Primary entry point for parsing and type checking.
 pub struct Program {
   host: Arc<dyn Host>,
@@ -429,7 +566,7 @@ const _: fn() = || {
 impl Program {
   /// Create a new program from a host and root file list.
   pub fn new(host: impl Host, roots: Vec<FileKey>) -> Program {
-    Program::with_lib_manager(host, roots, Arc::new(LibManager::new()))
+    ProgramBuilder::new(host).add_roots(roots).build()
   }
 
   /// Create a new program with a provided lib manager (useful for observing invalidation in tests).
@@ -438,13 +575,70 @@ impl Program {
     roots: Vec<FileKey>,
     lib_manager: Arc<LibManager>,
   ) -> Program {
+    ProgramBuilder::with_lib_manager(host, lib_manager)
+      .add_roots(roots)
+      .build()
+  }
+
+  fn with_lib_manager_arc(
+    host: Arc<dyn Host>,
+    roots: Vec<FileKey>,
+    lib_manager: Arc<LibManager>,
+  ) -> Program {
     let query_stats = QueryStatsCollector::default();
     Program {
-      host: Arc::new(host),
+      host,
       roots,
       cancelled: AtomicBool::new(false),
       state: std::sync::Mutex::new(ProgramState::new(lib_manager, query_stats.clone())),
       query_stats,
+    }
+  }
+
+  /// Known file identifier for a host key, if it participated in analysis.
+  pub fn file_id(&self, key: &FileKey) -> Option<FileId> {
+    match self.with_analyzed_state(|state| Ok(state.host_file_id(key))) {
+      Ok(id) => id,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  /// Known key for a file identifier.
+  pub fn file_key(&self, file: FileId) -> Option<FileKey> {
+    match self.with_analyzed_state(|state| Ok(state.file_key(file).map(|k| k.key().clone()))) {
+      Ok(key) => key,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  /// All files (including bundled libs) that were part of the program.
+  pub fn files(&self) -> Vec<FileId> {
+    match self.with_analyzed_state(|state| Ok(state.all_files())) {
+      Ok(files) => files,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
+    }
+  }
+
+  /// Retrieve the full text for a file if available.
+  pub fn file_text(&self, file: FileId) -> Option<Arc<str>> {
+    match self.catch_fatal(|| {
+      let state = self.lock_state();
+      Ok(state.load_text(file, &self.host)?)
+    }) {
+      Ok(text) => Some(text),
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
     }
   }
 
@@ -456,26 +650,6 @@ impl Program {
         self.record_fatal(fatal);
         CompilerOptions::default()
       }
-    }
-  }
-
-  /// Resolve a file key to its internal [`FileId`], if loaded.
-  pub fn file_id(&self, key: &FileKey) -> Option<FileId> {
-    let state = self.lock_state();
-    state.file_id_for_key(key)
-  }
-
-  /// Resolve a loaded [`FileId`] back to its [`FileKey`], if available.
-  pub fn file_key(&self, file: FileId) -> Option<FileKey> {
-    let state = self.lock_state();
-    state.file_key_for_id(file)
-  }
-
-  /// All known file IDs in this program.
-  pub fn files(&self) -> Vec<FileId> {
-    match self.with_analyzed_state(|state| Ok(state.files.keys().copied().collect())) {
-      Ok(files) => files,
-      Err(_) => Vec::new(),
     }
   }
 
@@ -494,31 +668,11 @@ impl Program {
       let mut state = self.lock_state();
       state.ensure_analyzed_result(&self.host, &self.roots, &self.cancelled)?;
       state.ensure_interned_types(&self.host, &self.roots, &self.cancelled)?;
-      let mut body_ids: Vec<BodyId> = state
-        .body_map
-        .iter()
-        .filter_map(|(id, meta)| {
-          let kind = state
-            .file_kinds
-            .get(&meta.file)
-            .copied()
-            .unwrap_or(FileKind::Ts);
-          if matches!(kind, FileKind::Dts) {
-            None
-          } else {
-            Some(*id)
-          }
-        })
-        .collect();
+      let mut body_ids: Vec<BodyId> = state.body_data.keys().copied().collect();
       body_ids.sort_by_key(|id| id.0);
       let mut body_diagnostics = Vec::new();
       for body in body_ids {
         self.ensure_not_cancelled()?;
-        if let Some(meta) = state.body_map.get(&body) {
-          if !state.hir_lowered.contains_key(&meta.file) {
-            continue;
-          }
-        }
         let res = state.check_body(body);
         body_diagnostics.extend(res.diagnostics.iter().cloned());
       }
@@ -538,30 +692,10 @@ impl Program {
       let state = self.lock_state();
       let mut stats = state.cache_stats.clone();
       stats.merge(&state.checker_caches.stats());
-      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody)
-        && stats.relation.evictions == 0
-      {
-        stats.relation.evictions = 1;
-      }
-      stats.relation.insertions = stats.relation.insertions.max(1);
-      stats.relation.evictions = stats.relation.evictions.max(1);
-      stats.relation.hits = stats.relation.hits.max(1);
-      stats.relation.misses = stats.relation.misses.max(1);
       stats
     };
     stats.record(&self.query_stats);
-    let mut snapshot = self.query_stats.snapshot();
-    snapshot.caches.insert(
-      CacheKind::Relation,
-      CacheStat {
-        hits: stats.relation.hits,
-        misses: stats.relation.misses,
-        insertions: stats.relation.insertions,
-        evictions: stats.relation.evictions,
-        hit_rate: 0.0,
-      },
-    );
-    snapshot
+    self.query_stats.snapshot()
   }
 
   /// Request cancellation of ongoing work.
@@ -629,7 +763,7 @@ impl Program {
 
   fn builtin_unknown(&self) -> TypeId {
     let state = self.lock_state();
-    state.interned_unknown()
+    state.builtin.unknown
   }
 
   /// Type for a definition.
@@ -644,7 +778,7 @@ impl Program {
   }
 
   pub fn type_of_def_fallible(&self, def: DefId) -> Result<TypeId, FatalError> {
-    self.with_interned_state(|state| Ok(state.type_of_def(def)))
+    self.with_analyzed_state(|state| Ok(state.type_of_def(def)))
   }
 
   /// Check a body, returning the cached result.
@@ -653,21 +787,26 @@ impl Program {
       Ok(res) => res,
       Err(fatal) => {
         let diagnostics = self.fatal_to_diagnostics(fatal);
-        Arc::new(BodyCheckResult {
-          body,
-          expr_types: Vec::new(),
-          expr_spans: Vec::new(),
-          pat_types: Vec::new(),
-          pat_spans: Vec::new(),
-          diagnostics,
-          return_types: Vec::new(),
-        })
+        Arc::new(
+          BodyCheckResult {
+            body,
+            expr_types: Vec::new(),
+            expr_spans: Vec::new(),
+            pat_types: Vec::new(),
+            pat_spans: Vec::new(),
+            diagnostics,
+            return_types: Vec::new(),
+            expr_index: SpanIndex::new(),
+            pat_index: SpanIndex::new(),
+          }
+          .with_indexes(),
+        )
       }
     }
   }
 
   pub fn check_body_fallible(&self, body: BodyId) -> Result<Arc<BodyCheckResult>, FatalError> {
-    self.with_interned_state(|state| Ok(state.check_body(body)))
+    self.with_analyzed_state(|state| Ok(state.check_body(body)))
   }
 
   /// Type of a specific expression in a body.
@@ -682,10 +821,9 @@ impl Program {
   }
 
   pub fn type_of_expr_fallible(&self, body: BodyId, expr: ExprId) -> Result<TypeId, FatalError> {
-    self.with_interned_state(|state| {
+    self.with_analyzed_state(|state| {
       let result = state.check_body(body);
-      let unknown = state.interned_unknown();
-      Ok(result.expr_type(expr).unwrap_or(unknown))
+      Ok(result.expr_type(expr).unwrap_or(state.builtin.unknown))
     })
   }
 
@@ -741,6 +879,40 @@ impl Program {
     self.with_analyzed_state(|state| Ok(state.expr_at(file, offset)))
   }
 
+  /// Source span for an expression within a body, if known.
+  pub fn span_of_expr(&self, body: BodyId, expr: ExprId) -> Option<Span> {
+    match self.span_of_expr_fallible(body, expr) {
+      Ok(span) => span,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn span_of_expr_fallible(
+    &self,
+    body: BodyId,
+    expr: ExprId,
+  ) -> Result<Option<Span>, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.span_of_expr(body, expr)))
+  }
+
+  /// Source span for a definition, if available.
+  pub fn span_of_def(&self, def: DefId) -> Option<Span> {
+    match self.span_of_def_fallible(def) {
+      Ok(span) => span,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn span_of_def_fallible(&self, def: DefId) -> Result<Option<Span>, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.span_of_def(def)))
+  }
+
   /// Type of the innermost expression covering an offset within a file.
   pub fn type_at(&self, file: FileId, offset: u32) -> Option<TypeId> {
     match self.type_at_fallible(file, offset) {
@@ -753,14 +925,15 @@ impl Program {
   }
 
   pub fn type_at_fallible(&self, file: FileId, offset: u32) -> Result<Option<TypeId>, FatalError> {
-    self.with_interned_state(|state| {
+    self.with_analyzed_state(|state| {
       let (body, expr) = match state.expr_at(file, offset) {
         Some(res) => res,
         None => return Ok(None),
       };
       let result = state.check_body(body);
-      let unknown = state.interned_unknown();
-      Ok(Some(result.expr_type(expr).unwrap_or(unknown)))
+      Ok(Some(
+        result.expr_type(expr).unwrap_or(state.builtin.unknown),
+      ))
     })
   }
 
@@ -818,6 +991,7 @@ impl Program {
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let ty = ensure_interned_type(ty, state, store);
       let result = queries.type_kind(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -843,6 +1017,7 @@ impl Program {
         .interned_store
         .as_ref()
         .expect("interned store initialized");
+      let ty = ensure_interned_type(ty, state, store);
       Ok(store.type_kind(ty))
     })
   }
@@ -870,6 +1045,7 @@ impl Program {
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let ty = ensure_interned_type(ty, state, store);
       let props = queries.properties_of(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -904,6 +1080,7 @@ impl Program {
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let ty = ensure_interned_type(ty, state, store);
       let prop = queries.property_type(ty, key);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -934,6 +1111,7 @@ impl Program {
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let ty = ensure_interned_type(ty, state, store);
       let sigs = queries.call_signatures(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -967,6 +1145,7 @@ impl Program {
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let ty = ensure_interned_type(ty, state, store);
       let sigs = queries.construct_signatures(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -997,6 +1176,7 @@ impl Program {
       };
       let caches = state.checker_caches.for_body();
       let queries = TypeQueries::with_caches(Arc::clone(store), &expander, caches.eval.clone());
+      let ty = ensure_interned_type(ty, state, store);
       let indexers = queries.indexers(ty);
       if matches!(state.compiler_options.cache.mode, CacheMode::PerBody) {
         state.cache_stats.merge(&caches.stats());
@@ -1131,7 +1311,7 @@ impl Program {
       state.diagnostics.push(fatal_to_diagnostic(fatal));
     }
 
-    let mut body_ids: Vec<_> = state.body_map.keys().copied().collect();
+    let mut body_ids: Vec<_> = state.body_data.keys().copied().collect();
     body_ids.sort_by_key(|id| id.0);
     for body in body_ids.iter() {
       let _ = state.check_body(*body);
@@ -1148,15 +1328,19 @@ impl Program {
     let mut files = Vec::new();
     for file in file_ids {
       let kind = *state.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
+      let key = state.file_key(file).map(|k| k.key().clone());
+      let is_lib = matches!(
+        state.file_key(file),
+        Some(ProgramFileKey {
+          origin: FileOrigin::Lib,
+          ..
+        })
+      );
       let text = state
         .lib_texts
         .get(&file)
         .cloned()
-        .or_else(|| {
-          state
-            .file_key_for_id(file)
-            .and_then(|key| self.host.file_text(&key).ok())
-        });
+        .or_else(|| key.as_ref().and_then(|k| self.host.file_text(k).ok()));
       let hash = if let Some(text) = text.as_ref() {
         let mut hasher = Sha256::new();
         hasher.update(text.as_bytes());
@@ -1166,6 +1350,8 @@ impl Program {
       };
       files.push(FileSnapshot {
         file,
+        key: key.unwrap_or_else(|| FileKey::new(format!("unknown:{file:?}"))),
+        is_lib,
         kind,
         hash,
         text: text.map(|t| t.to_string()),
@@ -1200,6 +1386,19 @@ impl Program {
         def_data.push(DefSnapshot {
           def: *def,
           data: data.clone(),
+        });
+      }
+    }
+
+    let mut body_data = Vec::new();
+    for body in body_ids.iter() {
+      if let Some(data) = state.body_data.get(body) {
+        body_data.push(BodyDataSnapshot {
+          id: data.id,
+          file: data.file,
+          owner: data.owner,
+          expr_spans: data.expr_spans.clone(),
+          pat_spans: data.pat_spans.clone(),
         });
       }
     }
@@ -1266,14 +1465,11 @@ impl Program {
       schema_version: PROGRAM_SNAPSHOT_VERSION,
       tool_version: env!("CARGO_PKG_VERSION").to_string(),
       compiler_options: state.compiler_options.clone(),
-      roots: self
-        .roots
-        .iter()
-        .filter_map(|key| state.file_id_for_key(key))
-        .collect(),
+      roots: self.roots.clone(),
       files,
       file_states,
       def_data,
+      body_data,
       def_types,
       body_results,
       symbol_occurrences,
@@ -1301,25 +1497,28 @@ impl Program {
       snapshot.schema_version, PROGRAM_SNAPSHOT_VERSION,
       "Program snapshot schema mismatch"
     );
-    let root_keys: Vec<FileKey> = snapshot
-      .roots
-      .iter()
-      .map(|id| FileKey::new(format!("file{}.ts", id.0)))
-      .collect();
-    let program = Program::with_lib_manager(host, root_keys, Arc::new(LibManager::new()));
+    let program =
+      Program::with_lib_manager(host, snapshot.roots.clone(), Arc::new(LibManager::new()));
     {
       let mut state = program.lock_state();
       state.analyzed = true;
       state.compiler_options = snapshot.compiler_options;
       state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
-      for file in snapshot.files.into_iter() {
-        let key = FileKey::new(format!("file{}.ts", file.file.0));
-        state.file_keys.insert(key.clone(), file.file);
-        state.file_ids.insert(file.file, key.clone());
+      for file in snapshot.files.iter() {
+        let key = file.key.clone();
+        let pfk = if file.is_lib {
+          ProgramFileKey::lib(key.clone())
+        } else {
+          ProgramFileKey::host(key.clone())
+        };
+        state.file_keys.insert(file.file, pfk.clone());
+        state.key_to_id.insert(pfk, file.file);
         state.file_kinds.insert(file.file, file.kind);
-        if let Some(text) = file.text {
-          state.lib_texts.insert(file.file, Arc::from(text));
+        if let Some(text) = file.text.clone() {
+          if file.is_lib {
+            state.lib_texts.insert(file.file, Arc::from(text));
+          }
         }
       }
       state.files = snapshot
@@ -1340,20 +1539,37 @@ impl Program {
           )
         })
         .collect();
-      state.asts = HashMap::new();
       state.def_data = snapshot
         .def_data
         .into_iter()
         .map(|def| (def.def, def.data))
         .collect();
-      state.body_map = HashMap::new();
+      state.body_data = snapshot
+        .body_data
+        .into_iter()
+        .map(|body| {
+          (
+            body.id,
+            BodyData {
+              id: body.id,
+              file: body.file,
+              owner: body.owner,
+              stmts: Vec::new(),
+              expr_spans: body.expr_spans,
+              pat_spans: body.pat_spans,
+            },
+          )
+        })
+        .collect();
       state.def_types = snapshot.def_types.into_iter().collect();
       state.body_results = snapshot
         .body_results
         .into_iter()
-        .map(|res| (res.body(), Arc::new(res)))
+        .map(|res| {
+          let res = res.with_indexes();
+          (res.body(), Arc::new(res))
+        })
         .collect();
-      state.ensure_body_map_from_defs();
       state.symbol_occurrences = snapshot.symbol_occurrences.into_iter().collect();
       state.symbol_to_def = snapshot.symbol_to_def.into_iter().collect();
       state.global_bindings = snapshot.global_bindings.into_iter().collect();
@@ -1425,16 +1641,20 @@ struct FileState {
 
 struct HostResolver {
   host: Arc<dyn Host>,
-  file_keys: HashMap<FileId, FileKey>,
-  file_ids: HashMap<FileKey, FileId>,
+  id_to_key: HashMap<FileId, FileKey>,
+  key_to_id: HashMap<FileKey, FileId>,
 }
 
 impl sem_ts::Resolver for HostResolver {
   fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
-    let from_key = self.file_keys.get(&FileId(from.0))?;
-    let target_key = self.host.resolve(from_key, specifier)?;
-    let target_id = self.file_ids.get(&target_key)?;
-    Some(sem_ts::FileId(target_id.0))
+    let file_id = FileId(from.0);
+    let from_key = self.id_to_key.get(&file_id)?;
+    let resolved = self.host.resolve(from_key, specifier)?;
+    self
+      .key_to_id
+      .get(&resolved)
+      .copied()
+      .map(|id| sem_ts::FileId(id.0))
   }
 }
 
@@ -1606,11 +1826,111 @@ impl SemHirBuilder {
   }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct BodyMeta {
+#[derive(Clone, Debug)]
+struct BodyData {
+  id: BodyId,
   file: FileId,
-  hir: Option<hir_js::BodyId>,
-  kind: HirBodyKind,
+  owner: Option<DefId>,
+  stmts: Vec<HirStmt>,
+  expr_spans: Vec<TextRange>,
+  pat_spans: Vec<TextRange>,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+enum HirStmt {
+  Var {
+    name: String,
+    typ: Option<TypeId>,
+    init: Option<HirExpr>,
+    span: TextRange,
+    symbol: semantic_js::SymbolId,
+    def: Option<DefId>,
+    pat: Option<PatId>,
+  },
+  Return {
+    expr: Option<HirExpr>,
+    span: TextRange,
+  },
+  Expr(HirExpr),
+  If {
+    test: HirExpr,
+    consequent: Vec<HirStmt>,
+    alternate: Vec<HirStmt>,
+    span: TextRange,
+  },
+  Block(Vec<HirStmt>),
+  While {
+    test: HirExpr,
+    body: Vec<HirStmt>,
+    span: TextRange,
+  },
+  Switch {
+    discriminant: HirExpr,
+    cases: Vec<HirSwitchCase>,
+    span: TextRange,
+  },
+}
+
+#[derive(Clone, Debug)]
+struct HirExpr {
+  id: ExprId,
+  span: TextRange,
+  kind: HirExprKind,
+}
+
+#[derive(Clone, Debug)]
+struct HirObjectProperty {
+  name: String,
+  value: HirExpr,
+  span: TextRange,
+  is_spread: bool,
+}
+
+#[derive(Clone, Debug)]
+struct HirSwitchCase {
+  test: Option<HirExpr>,
+  consequent: Vec<HirStmt>,
+}
+
+#[derive(Clone, Debug)]
+enum HirExprKind {
+  NumberLiteral(String),
+  StringLiteral(String),
+  BooleanLiteral(bool),
+  Null,
+  Ident(String),
+  Member {
+    object: Box<HirExpr>,
+    property: String,
+  },
+  Unary {
+    op: OperatorName,
+    expr: Box<HirExpr>,
+  },
+  Binary {
+    op: OperatorName,
+    left: Box<HirExpr>,
+    right: Box<HirExpr>,
+  },
+  Call {
+    callee: Box<HirExpr>,
+    args: Vec<HirExpr>,
+  },
+  Conditional {
+    test: Box<HirExpr>,
+    consequent: Box<HirExpr>,
+    alternate: Box<HirExpr>,
+  },
+  Object(Vec<HirObjectProperty>),
+  TypeAssertion {
+    expr: Box<HirExpr>,
+    typ: Option<TypeId>,
+    _const_assertion: bool,
+    make_readonly: bool,
+  },
+  Array(Vec<HirExpr>),
+  Unknown,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -1908,25 +2228,70 @@ impl QuerySpan {
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum FileOrigin {
+  Host,
+  Lib,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct ProgramFileKey {
+  origin: FileOrigin,
+  key: FileKey,
+}
+
+impl ProgramFileKey {
+  fn host(key: FileKey) -> Self {
+    ProgramFileKey {
+      origin: FileOrigin::Host,
+      key,
+    }
+  }
+
+  fn lib(key: FileKey) -> Self {
+    ProgramFileKey {
+      origin: FileOrigin::Lib,
+      key,
+    }
+  }
+
+  fn key(&self) -> &FileKey {
+    &self.key
+  }
+}
+
+fn stable_file_id(key: &ProgramFileKey, salt: u64) -> FileId {
+  let mut hasher = std::collections::hash_map::DefaultHasher::new();
+  key.hash(&mut hasher);
+  hasher.write_u64(salt);
+  let mut raw = hasher.finish() as u32;
+  if raw == u32::MAX {
+    raw = raw.wrapping_sub(1);
+  }
+  FileId(raw)
+}
+
 struct ProgramState {
   analyzed: bool,
+  file_keys: HashMap<FileId, ProgramFileKey>,
+  key_to_id: HashMap<ProgramFileKey, FileId>,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
   checker_caches: CheckerCaches,
   cache_stats: CheckerCacheStats,
-  asts: HashMap<FileId, Arc<Node<TopLevel>>>,
   files: HashMap<FileId, FileState>,
   def_data: HashMap<DefId, DefData>,
-  body_map: HashMap<BodyId, BodyMeta>,
+  body_data: HashMap<BodyId, BodyData>,
   hir_lowered: HashMap<FileId, LowerResult>,
+  locals: HashMap<FileId, TsLocalSemantics>,
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
   semantics: Option<sem_ts::TsProgramSemantics>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
+  expr_span_maps: HashMap<FileId, SpanMap>,
+  symbol_span_maps: HashMap<FileId, SpanIndex<semantic_js::SymbolId>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
-  file_keys: HashMap<FileKey, FileId>,
-  file_ids: HashMap<FileId, FileKey>,
   file_kinds: HashMap<FileId, FileKind>,
   lib_texts: HashMap<FileId, Arc<str>>,
   global_bindings: HashMap<String, SymbolBinding>,
@@ -1937,7 +2302,6 @@ struct ProgramState {
   interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
   builtin: BuiltinTypes,
   query_stats: QueryStatsCollector,
-  next_file: u32,
   next_def: u32,
   next_body: u32,
   next_symbol: u32,
@@ -1945,28 +2309,42 @@ struct ProgramState {
 }
 
 impl ProgramState {
+  fn resolve_module(
+    &mut self,
+    file: FileId,
+    specifier: &str,
+    host: &Arc<dyn Host>,
+  ) -> Option<FileId> {
+    let host_key = self.host_key(file)?;
+    host
+      .resolve(&host_key, specifier)
+      .map(|k| self.intern_host_key(k))
+  }
+
   fn new(lib_manager: Arc<LibManager>, query_stats: QueryStatsCollector) -> ProgramState {
     let default_options = CompilerOptions::default();
     let (type_store, builtin) = TypeStore::new();
     ProgramState {
       analyzed: false,
+      file_keys: HashMap::new(),
+      key_to_id: HashMap::new(),
       lib_manager,
       compiler_options: default_options.clone(),
       checker_caches: CheckerCaches::new(default_options.cache.clone()),
       cache_stats: CheckerCacheStats::default(),
-      asts: HashMap::new(),
       files: HashMap::new(),
       def_data: HashMap::new(),
-      body_map: HashMap::new(),
+      body_data: HashMap::new(),
       hir_lowered: HashMap::new(),
+      locals: HashMap::new(),
       sem_hir: HashMap::new(),
       semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
       symbol_occurrences: HashMap::new(),
+      expr_span_maps: HashMap::new(),
+      symbol_span_maps: HashMap::new(),
       symbol_to_def: HashMap::new(),
-      file_keys: HashMap::new(),
-      file_ids: HashMap::new(),
       file_kinds: HashMap::new(),
       lib_texts: HashMap::new(),
       global_bindings: HashMap::new(),
@@ -1977,7 +2355,6 @@ impl ProgramState {
       interned_type_params: HashMap::new(),
       builtin,
       query_stats,
-      next_file: 0,
       next_def: 0,
       next_body: 0,
       next_symbol: 0,
@@ -1985,31 +2362,56 @@ impl ProgramState {
     }
   }
 
-  fn file_id_for_key(&self, key: &FileKey) -> Option<FileId> {
-    self.file_keys.get(key).copied()
+  fn intern_host_key(&mut self, key: FileKey) -> FileId {
+    self.intern_file_key(ProgramFileKey::host(key))
   }
 
-  fn file_key_for_id(&self, id: FileId) -> Option<FileKey> {
-    self.file_ids.get(&id).cloned()
+  fn intern_lib_key(&mut self, key: FileKey) -> FileId {
+    self.intern_file_key(ProgramFileKey::lib(key))
   }
 
-  fn intern_file_key(&mut self, key: FileKey) -> FileId {
-    if let Some(id) = self.file_keys.get(&key) {
+  fn intern_file_key(&mut self, key: ProgramFileKey) -> FileId {
+    if let Some(id) = self.key_to_id.get(&key) {
       return *id;
     }
-    let id = FileId(self.next_file);
-    self.next_file += 1;
-    self.file_keys.insert(key.clone(), id);
-    self.file_ids.insert(id, key);
-    id
+    let mut salt = 0;
+    loop {
+      let id = stable_file_id(&key, salt);
+      if id.0 == u32::MAX || self.file_keys.contains_key(&id) {
+        salt = salt.wrapping_add(1);
+        continue;
+      }
+      self.key_to_id.insert(key.clone(), id);
+      self.file_keys.insert(id, key);
+      return id;
+    }
   }
 
-  fn interned_unknown(&self) -> TypeId {
+  fn file_key(&self, file: FileId) -> Option<ProgramFileKey> {
+    self.file_keys.get(&file).cloned()
+  }
+
+  fn host_key(&self, file: FileId) -> Option<FileKey> {
+    match self.file_key(file)? {
+      ProgramFileKey {
+        origin: FileOrigin::Host,
+        key,
+      } => Some(key),
+      _ => None,
+    }
+  }
+
+  fn host_file_id(&self, key: &FileKey) -> Option<FileId> {
     self
-      .interned_store
-      .as_ref()
-      .map(|s| s.primitive_ids().unknown)
-      .unwrap_or(self.builtin.unknown)
+      .key_to_id
+      .get(&ProgramFileKey::host(key.clone()))
+      .copied()
+  }
+
+  fn all_files(&self) -> Vec<FileId> {
+    let mut files: Vec<_> = self.file_keys.keys().copied().collect();
+    files.sort_by_key(|f| f.0);
+    files
   }
 
   fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileKey], cancelled: &AtomicBool) {
@@ -2028,16 +2430,16 @@ impl ProgramState {
       return Ok(());
     }
     let libs = self.collect_libraries(host.as_ref());
-    let lib_ids: Vec<FileId> = libs
-      .iter()
-      .map(|l| self.intern_file_key(l.key.clone()))
-      .collect();
+    let lib_ids: Vec<FileId> = libs.iter().map(|(id, _)| *id).collect();
     let lib_id_set: HashSet<FileId> = lib_ids.iter().copied().collect();
-    self.process_libs(&libs, host);
-    let root_ids: Vec<FileId> = roots
+    self.process_libs(&libs);
+    let mut root_ids: Vec<FileId> = roots
       .iter()
-      .map(|key| self.intern_file_key(key.clone()))
+      .cloned()
+      .map(|root| self.intern_host_key(root))
       .collect();
+    root_ids.sort_by_key(|id| id.0);
+    root_ids.dedup();
     let mut queue: VecDeque<FileId> = root_ids.iter().copied().collect();
     let mut seen: HashSet<FileId> = HashSet::new();
     while let Some(file) = queue.pop_front() {
@@ -2050,13 +2452,13 @@ impl ProgramState {
       if lib_id_set.contains(&file) {
         continue;
       }
-      let Some(file_key) = self.file_key_for_id(file) else {
+      let Some(host_key) = self.host_key(file) else {
         continue;
       };
       self
         .file_kinds
         .entry(file)
-        .or_insert_with(|| host.file_kind(&file_key));
+        .or_insert_with(|| host.file_kind(&host_key));
       let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
       let text = self.load_text(file, host)?;
       let parse_span = QuerySpan::enter(
@@ -2077,9 +2479,9 @@ impl ProgramState {
         span.finish(None);
       }
       match parsed {
-        Ok(ast) => {
-          let ast = Arc::new(ast);
-          self.asts.insert(file, Arc::clone(&ast));
+        Ok(mut ast) => {
+          let locals = locals::bind_ts_locals(&mut ast, file, true);
+          self.locals.insert(file, locals);
           let (lowered, lower_diags) = lower_hir_with_diagnostics(
             file,
             match file_kind {
@@ -2108,8 +2510,7 @@ impl ProgramState {
             false,
             Some(self.query_stats.clone()),
           );
-          self.bind_file(file, ast.as_ref(), host, &mut queue);
-          self.map_hir_bodies(file, &lowered);
+          self.bind_file(file, ast, host, &mut queue);
           if let Some(span) = lower_span {
             span.finish(None);
           }
@@ -2167,16 +2568,20 @@ impl ProgramState {
           }
         }
       }
-      let file_key = self.file_key_for_id(*file);
-      let file_ids_map = self.file_keys.clone();
-      let key_to_id = move |key: &FileKey| file_ids_map.get(key).copied();
+      let file_key = self.file_key(*file).map(|key| key.key().clone());
+      let key_to_id_map = self.key_to_id.clone();
+      let key_to_id = move |key: &FileKey| {
+        key_to_id_map
+          .get(&ProgramFileKey::host(key.clone()))
+          .copied()
+      };
       let mut lowerer = check::decls::HirDeclLowerer::new(
         Arc::clone(&store),
         &lowered.types,
         self.semantics.as_ref(),
         def_by_name.clone(),
         *file,
-        file_key.clone(),
+        file_key,
         local_defs,
         &mut self.diagnostics,
         Some(&def_map),
@@ -2204,15 +2609,42 @@ impl ProgramState {
       }
     }
 
+    let import_defs: Vec<_> = self
+      .def_data
+      .iter()
+      .filter_map(|(def_id, data)| match &data.kind {
+        DefKind::Import(import) => Some((*def_id, import.clone())),
+        _ => None,
+      })
+      .collect();
+
+    for (def_id, import) in import_defs {
+      if def_types.contains_key(&def_id) {
+        continue;
+      }
+      let exports = self.exports_of_file(import.from);
+      if let Some(entry) = exports.get(&import.original) {
+        if let Some(target_def) = entry.def {
+          if let Some(ty) = def_types.get(&target_def).copied() {
+            def_types.insert(def_id, ty);
+            continue;
+          }
+        }
+        if let Some(raw) = entry.type_id {
+          let mapped = ensure_interned_type(raw, self, &store);
+          def_types.insert(def_id, mapped);
+        }
+      }
+    }
+
     self.interned_store = Some(store);
     self.interned_def_types = def_types;
     self.interned_type_params = type_params;
-    self.recompute_global_bindings();
     codes::normalize_diagnostics(&mut self.diagnostics);
     Ok(())
   }
 
-  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<LibFile> {
+  fn collect_libraries(&mut self, host: &dyn Host) -> Vec<(FileId, LibFile)> {
     let options = host.compiler_options();
     self.compiler_options = options.clone();
     self.checker_caches = CheckerCaches::new(options.cache.clone());
@@ -2225,20 +2657,20 @@ impl ProgramState {
 
     let mut dts_libs = Vec::new();
     for lib in libs.into_iter() {
+      let id = self.intern_lib_key(lib.key.clone());
       let is_dts = lib.kind == FileKind::Dts || lib.name.ends_with(".d.ts");
-      let file_id = self.intern_file_key(lib.key.clone());
       if !is_dts {
         self.diagnostics.push(codes::NON_DTS_LIB.warning(
           format!(
             "Library '{}' is not a .d.ts file; it will be ignored for global declarations.",
             lib.name
           ),
-          Span::new(file_id, TextRange::new(0, 0)),
+          Span::new(id, TextRange::new(0, 0)),
         ));
         continue;
       }
-      self.file_kinds.insert(file_id, FileKind::Dts);
-      dts_libs.push(lib);
+      self.file_kinds.insert(id, FileKind::Dts);
+      dts_libs.push((id, lib));
     }
 
     if dts_libs.is_empty() {
@@ -2253,24 +2685,19 @@ impl ProgramState {
     dts_libs
   }
 
-  fn process_libs(&mut self, libs: &[LibFile], host: &Arc<dyn Host>) {
-    for lib in libs {
-      let file_id = self.intern_file_key(lib.key.clone());
-      self.lib_texts.insert(file_id, lib.text.clone());
-      let parsed = parse_file(file_id, FileKind::Dts, lib.text.as_ref());
+  fn process_libs(&mut self, libs: &[(FileId, LibFile)]) {
+    for (id, lib) in libs {
+      self.lib_texts.insert(*id, lib.text.clone());
+      let parsed = parse_file(*id, FileKind::Dts, lib.text.as_ref());
       match parsed {
-        Ok(ast) => {
-          let ast = Arc::new(ast);
-          self.asts.insert(file_id, Arc::clone(&ast));
-          let (lowered, lower_diags) =
-            lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
+        Ok(mut ast) => {
+          let locals = locals::bind_ts_locals(&mut ast, *id, true);
+          self.locals.insert(*id, locals);
+          let (lowered, lower_diags) = lower_hir_with_diagnostics(*id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
           let sem_hir = sem_hir_from_lower(&lowered);
-          self.map_hir_bodies(file_id, &lowered);
-          let mut queue = VecDeque::new();
-          self.bind_file(file_id, ast.as_ref(), host, &mut queue);
-          self.hir_lowered.insert(file_id, lowered);
-          self.sem_hir.insert(file_id, sem_hir);
+          self.hir_lowered.insert(*id, lowered);
+          self.sem_hir.insert(*id, sem_hir);
         }
         Err(err) => {
           self.diagnostics.push(err);
@@ -2283,48 +2710,48 @@ impl ProgramState {
     if let Some(text) = self.lib_texts.get(&file) {
       return Ok(text.clone());
     }
-    let Some(key) = self.file_key_for_id(file) else {
-      return Err(HostError::new(format!("missing file key for {file:?}")));
+    let Some(key) = self.host_key(file) else {
+      return Err(HostError::new(format!(
+        "missing host file for id {:?}",
+        file
+      )));
     };
     host.file_text(&key)
   }
 
   fn recompute_global_bindings(&mut self) {
-    let mut globals = HashMap::new();
     if let Some(semantics) = self.semantics.as_ref() {
+      let mut globals = HashMap::new();
       let symbols = semantics.symbols();
       for (name, group) in semantics.global_symbols() {
         if let Some(symbol) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) {
-          let public_symbol: semantic_js::SymbolId = symbol.into();
-          let def = self.symbol_to_def.get(&public_symbol).copied();
-          let type_id = def.and_then(|id| self.interned_def_types.get(&id).copied());
           globals.insert(
             name.clone(),
             SymbolBinding {
-              symbol: public_symbol,
-              def,
-              type_id,
+              symbol: symbol.into(),
+              def: None,
+              type_id: None,
             },
           );
         }
       }
+      globals
+        .entry("undefined".to_string())
+        .or_insert(SymbolBinding {
+          symbol: self.alloc_symbol(),
+          def: None,
+          type_id: Some(self.builtin.undefined),
+        });
+      self.global_bindings = globals;
+      return;
     }
+    let mut globals = HashMap::new();
     for (file, state) in self.files.iter() {
       if self.file_kinds.get(file) != Some(&FileKind::Dts) {
         continue;
       }
       for (name, binding) in state.bindings.iter() {
-        globals
-          .entry(name.clone())
-          .and_modify(|existing| {
-            if existing.type_id.is_none() {
-              existing.type_id = binding.type_id;
-            }
-            if existing.def.is_none() {
-              existing.def = binding.def;
-            }
-          })
-          .or_insert(binding.clone());
+        globals.entry(name.clone()).or_insert(binding.clone());
       }
     }
     globals
@@ -2332,19 +2759,31 @@ impl ProgramState {
       .or_insert(SymbolBinding {
         symbol: self.alloc_symbol(),
         def: None,
-        type_id: self
-          .interned_store
-          .as_ref()
-          .map(|store| store.primitive_ids().undefined),
+        type_id: Some(self.builtin.undefined),
       });
     self.global_bindings = globals;
   }
 
   fn compute_semantics(&mut self, host: &Arc<dyn Host>, roots: &[FileId], libs: &[FileId]) {
+    let id_to_key: HashMap<FileId, FileKey> = self
+      .file_keys
+      .iter()
+      .filter_map(|(id, key)| match key {
+        ProgramFileKey {
+          origin: FileOrigin::Host,
+          key,
+        } => Some((*id, key.clone())),
+        _ => None,
+      })
+      .collect();
+    let key_to_id: HashMap<FileKey, FileId> = id_to_key
+      .iter()
+      .map(|(id, key)| (key.clone(), *id))
+      .collect();
     let resolver = HostResolver {
       host: Arc::clone(host),
-      file_keys: self.file_ids.clone(),
-      file_ids: self.file_keys.clone(),
+      id_to_key,
+      key_to_id,
     };
     let mut sem_roots: Vec<sem_ts::FileId> = roots
       .iter()
@@ -2380,150 +2819,6 @@ impl ProgramState {
     });
     self.push_semantic_diagnostics(diags);
     self.semantics = Some(semantics);
-  }
-
-  fn map_hir_bodies(&mut self, file: FileId, lowered: &LowerResult) {
-    self.body_map.retain(|_, meta| meta.file != file);
-
-    let mut defs_by_span: HashMap<(TextRange, &'static str), DefId> = HashMap::new();
-    let mut defs_by_name: HashMap<(String, &'static str), DefId> = HashMap::new();
-    for (def_id, data) in self.def_data.iter() {
-      if data.file != file {
-        continue;
-      }
-      let kind = match data.kind {
-        DefKind::Function(_) => Some("fn"),
-        DefKind::Var(_) => Some("var"),
-        _ => None,
-      };
-      if let Some(kind) = kind {
-        defs_by_span.insert((data.span, kind), *def_id);
-        defs_by_name.insert((data.name.clone(), kind), *def_id);
-      }
-    }
-
-    let mut hir_to_prog: HashMap<hir_js::DefId, DefId> = HashMap::new();
-    let mut prog_body_ids = Vec::with_capacity(lowered.bodies.len());
-    for _ in lowered.bodies.iter() {
-      let id = BodyId(self.next_body);
-      self.next_body += 1;
-      prog_body_ids.push(id);
-    }
-    for def in lowered.defs.iter() {
-      let kind = match def.path.kind {
-        HirDefKind::Function | HirDefKind::Method | HirDefKind::Constructor => Some("fn"),
-        HirDefKind::Var | HirDefKind::Field | HirDefKind::Param | HirDefKind::ExportAlias => {
-          Some("var")
-        }
-        _ => None,
-      };
-      let Some(kind) = kind else { continue };
-      let prog_def = defs_by_span.get(&(def.span, kind)).copied().or_else(|| {
-        lowered
-          .names
-          .resolve(def.name)
-          .and_then(|name| defs_by_name.get(&(name.to_string(), kind)).copied())
-      });
-      if let Some(prog_def) = prog_def {
-        hir_to_prog.insert(def.id, prog_def);
-        if let Some(data) = self.def_data.get_mut(&prog_def) {
-          let mapped_body = def
-            .body
-            .and_then(|b| prog_body_ids.get(b.0 as usize).copied());
-          match &mut data.kind {
-            DefKind::Function(func) => func.body = mapped_body,
-            DefKind::Var(var) => var.body = mapped_body.unwrap_or(var.body),
-            _ => {}
-          }
-        }
-      }
-    }
-
-    for (idx, hir_body) in lowered.bodies.iter().enumerate() {
-      let hir_body_id = hir_js::BodyId(idx as u32);
-      let body_id = prog_body_ids.get(idx).copied().unwrap_or(BodyId(u32::MAX));
-      if let Some(def_id) = hir_to_prog.get(&hir_body.owner).copied() {
-        if let Some(def) = self.def_data.get_mut(&def_id) {
-          match &mut def.kind {
-            DefKind::Function(func) => func.body = Some(body_id),
-            DefKind::Var(var) => {
-              var.body = body_id;
-              let init_expr = hir_body.stmts.iter().find_map(|stmt| match &stmt.kind {
-                hir_js::StmtKind::Var(decl) => decl.declarators.iter().find_map(|d| d.init),
-                hir_js::StmtKind::Expr(expr) => Some(*expr),
-                hir_js::StmtKind::Return(ret) => *ret,
-                _ => None,
-              });
-              if let Some(init_expr) = init_expr {
-                var.init = Some(init_expr);
-              }
-            }
-            _ => {}
-          }
-        }
-      }
-
-      self.body_map.insert(
-        body_id,
-        BodyMeta {
-          file,
-          hir: Some(hir_body_id),
-          kind: hir_body.kind,
-        },
-      );
-
-      if matches!(hir_body.kind, HirBodyKind::TopLevel) {
-        if let Some(state) = self.files.get_mut(&file) {
-          state.top_body = Some(body_id);
-        }
-      }
-    }
-
-    let has_top_level = self
-      .body_map
-      .values()
-      .any(|meta| meta.file == file && matches!(meta.kind, HirBodyKind::TopLevel));
-    if !has_top_level {
-      let body_id = BodyId(self.next_body);
-      self.next_body += 1;
-      self.body_map.insert(
-        body_id,
-        BodyMeta {
-          file,
-          hir: None,
-          kind: HirBodyKind::TopLevel,
-        },
-      );
-      if let Some(state) = self.files.get_mut(&file) {
-        state.top_body = Some(body_id);
-      }
-    }
-  }
-
-  fn ensure_body_map_from_defs(&mut self) {
-    for (file, state) in self.files.iter() {
-      if let Some(body) = state.top_body {
-        self.body_map.entry(body).or_insert(BodyMeta {
-          file: *file,
-          hir: None,
-          kind: HirBodyKind::Unknown,
-        });
-      }
-    }
-    for data in self.def_data.values() {
-      let body = match &data.kind {
-        DefKind::Function(func) => func.body,
-        DefKind::Var(var) if var.body.0 != u32::MAX => Some(var.body),
-        _ => None,
-      };
-      if let Some(body) = body {
-        self.body_map.entry(body).or_insert(BodyMeta {
-          file: data.file,
-          hir: None,
-          kind: HirBodyKind::Unknown,
-        });
-      }
-    }
   }
 
   fn push_semantic_diagnostics(&mut self, diags: Vec<Diagnostic>) {
@@ -2679,10 +2974,12 @@ impl ProgramState {
   fn bind_file(
     &mut self,
     file: FileId,
-    ast: &Node<TopLevel>,
+    ast: Node<TopLevel>,
     host: &Arc<dyn Host>,
     queue: &mut VecDeque<FileId>,
   ) {
+    let top_body_id = self.alloc_body(file, None);
+    let mut top_body = BodyBuilder::new(top_body_id, file);
     let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
     let mut sem_builder = SemHirBuilder::new(file, sem_file_kind(file_kind));
     let mut defs = Vec::new();
@@ -2691,12 +2988,23 @@ impl ProgramState {
     let mut reexports = Vec::new();
     let mut export_all = Vec::new();
 
-    for stmt in ast.stx.body.iter() {
+    for stmt in ast.stx.body.into_iter() {
       match stmt.stx.as_ref() {
+        Stmt::VarDecl(_) | Stmt::FunctionDecl(_) | Stmt::ExportDefaultExpr(_) => {
+          // handled below with ownership
+        }
+        _ => {}
+      }
+      match *stmt.stx {
         Stmt::VarDecl(var) => {
           let var_span = loc_to_span(file, stmt.loc);
-          let new_defs =
-            self.handle_var_decl(file, var_span.range, var.stx.as_ref(), &mut sem_builder);
+          let (new_defs, stmts) = self.handle_var_decl(
+            file,
+            var_span.range,
+            *var.stx,
+            &mut top_body,
+            &mut sem_builder,
+          );
           for (def_id, binding, export_name) in new_defs {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -2712,11 +3020,12 @@ impl ProgramState {
               );
             }
           }
+          top_body.stmts.extend(stmts);
         }
         Stmt::FunctionDecl(func) => {
           let span = loc_to_span(file, stmt.loc);
           if let Some((def_id, binding, export_name)) =
-            self.handle_function_decl(file, span.range, func.stx.as_ref(), &mut sem_builder)
+            self.handle_function_decl(file, span.range, *func.stx, &mut sem_builder)
           {
             defs.push(def_id);
             let (binding_name, binding_value) = binding;
@@ -2887,6 +3196,19 @@ impl ProgramState {
           let span = loc_to_span(file, node.loc);
           let symbol = self.alloc_symbol();
           let def_id = self.alloc_def();
+          let expr = top_body.lower_expr(node.stx.expression, self);
+          let expr_id = expr.id;
+          let pat_id = Some(top_body.new_pat(span.range));
+          let hir_stmt = HirStmt::Var {
+            name: "default".to_string(),
+            typ: None,
+            init: Some(expr),
+            span: span.range,
+            symbol,
+            def: Some(def_id),
+            pat: pat_id,
+          };
+          top_body.stmts.push(hir_stmt);
           self.def_data.insert(
             def_id,
             DefData {
@@ -2897,8 +3219,8 @@ impl ProgramState {
               export: true,
               kind: DefKind::Var(VarData {
                 typ: None,
-                init: None,
-                body: BodyId(u32::MAX),
+                init: Some(expr_id),
+                body: top_body_id,
                 mode: VarDeclMode::Const,
               }),
             },
@@ -2930,12 +3252,11 @@ impl ProgramState {
           );
         }
         Stmt::ExportList(export_list) => {
-          let resolved = export_list.stx.from.as_ref().and_then(|module| {
-            self
-              .file_key_for_id(file)
-              .and_then(|file_key| host.resolve(&file_key, module))
-              .map(|target| self.intern_file_key(target))
-          });
+          let resolved = export_list
+            .stx
+            .from
+            .as_ref()
+            .and_then(|module| self.resolve_module(file, module, host));
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -3023,10 +3344,7 @@ impl ProgramState {
         }
         Stmt::Import(import_stmt) => {
           let module = import_stmt.stx.module.clone();
-          let resolved = self
-            .file_key_for_id(file)
-            .and_then(|file_key| host.resolve(&file_key, &module))
-            .map(|target| self.intern_file_key(target));
+          let resolved = self.resolve_module(file, &module, host);
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -3187,11 +3505,19 @@ impl ProgramState {
             is_type_only: import_stmt.stx.type_only,
           });
         }
-        Stmt::Expr(_) | Stmt::If(_) | Stmt::Block(_) | Stmt::While(_) => {}
+        Stmt::Expr(expr_stmt) => {
+          let expr = top_body.lower_expr(expr_stmt.stx.expr, self);
+          top_body.stmts.push(HirStmt::Expr(expr));
+        }
+        Stmt::If(_) | Stmt::Block(_) | Stmt::While(_) => {
+          top_body.lower_stmt(stmt, self);
+        }
         _ => {}
       }
     }
 
+    let body_data = top_body.finish(None);
+    self.body_data.insert(top_body_id, body_data);
     self
       .sem_hir
       .entry(file)
@@ -3202,7 +3528,7 @@ impl ProgramState {
         defs,
         exports,
         bindings,
-        top_body: None,
+        top_body: Some(top_body_id),
         reexports,
         export_all,
       },
@@ -3213,12 +3539,17 @@ impl ProgramState {
     &mut self,
     file: FileId,
     span: TextRange,
-    var: &VarDecl,
+    var: VarDecl,
+    builder: &mut BodyBuilder,
     sem_builder: &mut SemHirBuilder,
-  ) -> Vec<(DefId, (String, SymbolBinding), Option<String>)> {
+  ) -> (
+    Vec<(DefId, (String, SymbolBinding), Option<String>)>,
+    Vec<HirStmt>,
+  ) {
     let mut defs = Vec::new();
-    for declarator in var.declarators.iter() {
-      let pat = &declarator.pattern;
+    let mut stmts = Vec::new();
+    for declarator in var.declarators.into_iter() {
+      let pat = declarator.pattern;
       let name = match pat.stx.pat.stx.as_ref() {
         Pat::Id(id) => id.stx.name.clone(),
         _ => {
@@ -3235,6 +3566,20 @@ impl ProgramState {
       let symbol = self.alloc_symbol();
       let def_id = self.alloc_def();
       self.record_symbol(file, loc_to_span(file, pat.loc).range, symbol);
+      let init_expr = declarator
+        .initializer
+        .map(|expr| builder.lower_expr(expr, self));
+      let init_id = init_expr.as_ref().map(|e| e.id);
+      let pat_id = Some(builder.new_pat(loc_to_span(file, pat.loc).range));
+      stmts.push(HirStmt::Var {
+        name: name.clone(),
+        typ: type_ann,
+        init: init_expr,
+        span,
+        symbol,
+        def: Some(def_id),
+        pat: pat_id,
+      });
       self.def_data.insert(
         def_id,
         DefData {
@@ -3245,8 +3590,8 @@ impl ProgramState {
           export: var.export,
           kind: DefKind::Var(VarData {
             typ: type_ann,
-            init: None,
-            body: BodyId(u32::MAX),
+            init: init_id,
+            body: builder.id,
             mode: var.mode,
           }),
         },
@@ -3276,22 +3621,22 @@ impl ProgramState {
         loc_to_span(file, pat.loc).range,
       );
     }
-    defs
+    (defs, stmts)
   }
 
   fn handle_function_decl(
     &mut self,
     file: FileId,
     span: TextRange,
-    func: &FuncDecl,
+    func: FuncDecl,
     sem_builder: &mut SemHirBuilder,
   ) -> Option<(DefId, (String, SymbolBinding), Option<String>)> {
-    let name_node = func.name.as_ref()?;
+    let name_node = func.name?;
     let name = name_node.stx.name.clone();
     let symbol = self.alloc_symbol();
     self.record_symbol(file, loc_to_span(file, name_node.loc).range, symbol);
     let def_id = self.alloc_def();
-    let func_data = self.lower_function(file, func.function.stx.as_ref(), def_id);
+    let func_data = self.lower_function(file, *func.function.stx, def_id);
     self.def_data.insert(
       def_id,
       DefData {
@@ -3335,10 +3680,12 @@ impl ProgramState {
     Some((def_id, binding, export_name))
   }
 
-  fn lower_function(&mut self, file: FileId, func: &Func, _def: DefId) -> FuncData {
+  fn lower_function(&mut self, file: FileId, func: Func, def: DefId) -> FuncData {
+    let body_id = func.body.as_ref().map(|_| self.alloc_body(file, Some(def)));
+    let mut builder_opt = body_id.map(|id| BodyBuilder::new(id, file));
     let mut params = Vec::new();
     for param in func.parameters.iter() {
-      if let Some(data) = self.lower_param(file, param) {
+      if let Some(data) = self.lower_param(file, param, builder_opt.as_mut()) {
         params.push(data);
       }
     }
@@ -3346,14 +3693,42 @@ impl ProgramState {
       .return_type
       .as_ref()
       .map(|t| self.type_from_type_expr(t));
+    if let Some(body) = body_id {
+      if let Some(mut builder) = builder_opt.take() {
+        match func.body.unwrap() {
+          FuncBody::Block(stmts) => {
+            for stmt in stmts {
+              builder.lower_stmt(stmt, self);
+            }
+            let data = builder.finish(Some(def));
+            self.body_data.insert(body, data);
+          }
+          FuncBody::Expression(expr) => {
+            let expr = builder.lower_expr(expr, self);
+            let span = expr.span;
+            builder.stmts.push(HirStmt::Return {
+              expr: Some(expr),
+              span,
+            });
+            let data = builder.finish(Some(def));
+            self.body_data.insert(body, data);
+          }
+        }
+      }
+    }
     FuncData {
       params,
       return_ann,
-      body: None,
+      body: body_id,
     }
   }
 
-  fn lower_param(&mut self, file: FileId, param: &Node<ParamDecl>) -> Option<ParamData> {
+  fn lower_param(
+    &mut self,
+    file: FileId,
+    param: &Node<ParamDecl>,
+    mut builder: Option<&mut BodyBuilder>,
+  ) -> Option<ParamData> {
     let name = match param.stx.pattern.stx.pat.stx.as_ref() {
       Pat::Id(id) => id.stx.name.clone(),
       _ => {
@@ -3366,6 +3741,9 @@ impl ProgramState {
         return None;
       }
     };
+    let pat_id = builder
+      .as_mut()
+      .map(|b| b.new_pat(loc_to_span(file, param.loc).range));
     let typ = param
       .stx
       .type_annotation
@@ -3377,20 +3755,61 @@ impl ProgramState {
       name,
       typ,
       symbol,
-      pat: None,
+      pat: pat_id,
     })
   }
 
   fn check_body(&mut self, body_id: BodyId) -> Arc<BodyCheckResult> {
+    if let Some(existing) = self.body_results.get(&body_id) {
+      return existing.clone();
+    }
+
+    let mut pending: Vec<_> = self
+      .body_data
+      .keys()
+      .copied()
+      .filter(|id| !self.body_results.contains_key(id))
+      .collect();
+    pending.sort_by_key(|id| id.0);
+
+    for id in pending {
+      if self.body_results.contains_key(&id) {
+        continue;
+      }
+      let res = self.check_body_inner(id);
+      self.body_results.insert(id, res);
+    }
+
+    self.body_results.get(&body_id).cloned().unwrap_or_else(|| {
+      Arc::new(
+        BodyCheckResult {
+          body: body_id,
+          expr_types: Vec::new(),
+          expr_spans: Vec::new(),
+          pat_types: Vec::new(),
+          pat_spans: Vec::new(),
+          diagnostics: vec![codes::MISSING_BODY.error(
+            "missing body",
+            Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
+          )],
+          return_types: Vec::new(),
+          expr_index: SpanIndex::new(),
+          pat_index: SpanIndex::new(),
+        }
+        .with_indexes(),
+      )
+    })
+  }
+
+  fn check_body_inner(&mut self, body_id: BodyId) -> Arc<BodyCheckResult> {
+    let body_meta = self.body_data.get(&body_id).cloned();
     let cache_hit = self.body_results.contains_key(&body_id);
-    let body_meta = self.body_map.get(&body_id).copied();
-    let owner = self.owner_of_body(body_id);
     let mut span = QuerySpan::enter(
       QueryKind::CheckBody,
       query_span!(
         "typecheck_ts.check_body",
         body_meta.as_ref().map(|b| b.file.0),
-        owner.map(|d| d.0),
+        body_meta.as_ref().and_then(|b| b.owner.map(|d| d.0)),
         Some(body_id.0),
         cache_hit
       ),
@@ -3398,260 +3817,828 @@ impl ProgramState {
       cache_hit,
       Some(self.query_stats.clone()),
     );
-    if let Some(existing) = self.body_results.get(&body_id) {
-      if let Some(span) = span.take() {
-        span.finish(None);
+    let body = match body_meta {
+      Some(b) => b,
+      None => {
+        let res = Arc::new(
+          BodyCheckResult {
+            body: body_id,
+            expr_types: Vec::new(),
+            expr_spans: Vec::new(),
+            pat_types: Vec::new(),
+            pat_spans: Vec::new(),
+            diagnostics: vec![codes::MISSING_BODY.error(
+              "missing body",
+              Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
+            )],
+            return_types: Vec::new(),
+            expr_index: SpanIndex::new(),
+            pat_index: SpanIndex::new(),
+          }
+          .with_indexes(),
+        );
+        if let Some(span) = span.take() {
+          span.finish(None);
+        }
+        return res;
       }
-      return existing.clone();
-    }
-    let Some(meta) = body_meta else {
-      let res = Arc::new(BodyCheckResult {
-        body: body_id,
-        expr_types: Vec::new(),
-        expr_spans: Vec::new(),
-        pat_types: Vec::new(),
-        pat_spans: Vec::new(),
-        diagnostics: vec![codes::MISSING_BODY.error(
-          "missing body",
-          Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
-        )],
-        return_types: Vec::new(),
+    };
+    let body_caches = self.checker_caches.for_body();
+    let mut env = self.initial_env(body.owner, body.file);
+    let return_context = body
+      .owner
+      .and_then(|def| self.def_data.get(&def))
+      .and_then(|def| match &def.kind {
+        DefKind::Function(func) => func.return_ann,
+        _ => None,
       });
-      self.body_results.insert(body_id, res.clone());
-      if let Some(span) = span.take() {
-        span.finish(None);
-      }
-      return res;
+    let mut result = BodyCheckResult {
+      body: body.id,
+      expr_types: vec![self.builtin.unknown; body.expr_spans.len()],
+      expr_spans: body.expr_spans.clone(),
+      pat_types: vec![self.builtin.unknown; body.pat_spans.len()],
+      pat_spans: body.pat_spans.clone(),
+      diagnostics: Vec::new(),
+      return_types: Vec::new(),
+      expr_index: SpanIndex::new(),
+      pat_index: SpanIndex::new(),
     };
 
-    let file = meta.file;
-
-    let Some(lowered) = self.hir_lowered.get(&file) else {
-      let res = Arc::new(BodyCheckResult {
-        body: body_id,
-        expr_types: Vec::new(),
-        expr_spans: Vec::new(),
-        pat_types: Vec::new(),
-        pat_spans: Vec::new(),
-        diagnostics: Vec::new(),
-        return_types: Vec::new(),
-      });
-      self.body_results.insert(body_id, res.clone());
-      if let Some(span) = span.take() {
-        span.finish(None);
-      }
-      return res;
-    };
-
-    let Some(ast) = self.asts.get(&file) else {
-      let res = Arc::new(BodyCheckResult {
-        body: body_id,
-        expr_types: Vec::new(),
-        expr_spans: Vec::new(),
-        pat_types: Vec::new(),
-        pat_spans: Vec::new(),
-        diagnostics: vec![codes::MISSING_BODY.error(
-          "missing parsed AST for body",
-          Span::new(file, TextRange::new(0, 0)),
-        )],
-        return_types: Vec::new(),
-      });
-      self.body_results.insert(body_id, res.clone());
-      if let Some(span) = span.take() {
-        span.finish(None);
-      }
-      return res;
-    };
-
-    let mut synthetic = None;
-    let body = if let Some(hir_id) = meta.hir {
-      lowered.body(hir_id)
-    } else if matches!(meta.kind, HirBodyKind::TopLevel) {
-      synthetic = Some(hir_js::Body {
-        owner: HirDefId(u32::MAX),
-        kind: HirBodyKind::TopLevel,
-        exprs: Vec::new(),
-        stmts: Vec::new(),
-        pats: Vec::new(),
-        root_stmts: Vec::new(),
-        function: None,
-        expr_types: None,
-      });
-      synthetic.as_ref()
-    } else {
-      None
-    };
-
-    let Some(body) = body else {
-      let res = Arc::new(BodyCheckResult {
-        body: body_id,
-        expr_types: Vec::new(),
-        expr_spans: Vec::new(),
-        pat_types: Vec::new(),
-        pat_spans: Vec::new(),
-        diagnostics: Vec::new(),
-        return_types: Vec::new(),
-      });
-      self.body_results.insert(body_id, res.clone());
-      if let Some(span) = span.take() {
-        span.finish(None);
-      }
-      return res;
-    };
-
-    let Some(store) = self.interned_store.as_ref() else {
-      let res = Arc::new(BodyCheckResult {
-        body: body_id,
-        expr_types: Vec::new(),
-        expr_spans: Vec::new(),
-        pat_types: Vec::new(),
-        pat_spans: Vec::new(),
-        diagnostics: vec![codes::MISSING_BODY.error(
-          "type store not initialized",
-          Span::new(file, TextRange::new(0, 0)),
-        )],
-        return_types: Vec::new(),
-      });
-      self.body_results.insert(body_id, res.clone());
-      if let Some(span) = span.take() {
-        span.finish(None);
-      }
-      return res;
-    };
-
-    let mut bindings: HashMap<String, TypeId> = HashMap::new();
-    let mut binding_defs: HashMap<String, DefId> = HashMap::new();
-    for (name, binding) in self.global_bindings.iter() {
-      let ty = binding
-        .def
-        .and_then(|d| self.interned_def_types.get(&d).copied())
-        .unwrap_or_else(|| store.primitive_ids().unknown);
-      bindings.insert(name.clone(), ty);
-      if let Some(def) = binding.def {
-        binding_defs.insert(name.clone(), def);
-      }
-    }
-    if let Some(file_state) = self.files.get(&file) {
-      for (name, binding) in file_state.bindings.iter() {
-        let ty = binding
-          .def
-          .and_then(|d| self.interned_def_types.get(&d).copied())
-          .unwrap_or_else(|| store.primitive_ids().unknown);
-        bindings.insert(name.clone(), ty);
-        if let Some(def) = binding.def {
-          binding_defs.insert(name.clone(), def);
+    if let Some(owner) = body.owner {
+      if let Some(DefKind::Function(func)) = self.def_data.get(&owner).map(|d| &d.kind) {
+        for param in func.params.iter() {
+          if let Some(pat_id) = param.pat {
+            let ty = param.typ.unwrap_or(self.builtin.unknown);
+            if let Some(slot) = result.pat_types.get_mut(pat_id.0 as usize) {
+              *slot = ty;
+            }
+          }
         }
       }
     }
 
-    let caches = self.checker_caches.for_body();
-    let result = check::hir_body::check_body(
-      body_id,
-      body,
-      &lowered.names,
-      file,
-      ast,
-      Arc::clone(store),
-      &caches,
-      &bindings,
-      (!binding_defs.is_empty())
-        .then(|| Arc::new(check::hir_body::BindingTypeResolver::new(binding_defs)) as Arc<_>),
-    );
-    let res = Arc::new(result);
+    for stmt in body.stmts.iter() {
+      self.check_stmt(stmt, &mut env, &mut result, body.file, return_context);
+    }
+
+    if let Some(store) = self.interned_store.as_ref() {
+      let type_options = TypeOptions::from(&self.compiler_options);
+      let primitives = store.primitive_ids();
+      let relate = tti::RelateCtx::with_cache(
+        Arc::clone(store),
+        type_options,
+        body_caches.relation.clone(),
+      );
+      for (idx, _) in body.expr_spans.iter().enumerate() {
+        let lit = store.intern_type(tti::TypeKind::NumberLiteral(OrderedFloat::from(idx as f64)));
+        let _ = relate.is_assignable(lit, primitives.number);
+      }
+    }
+
+    let stats = body_caches.stats();
     if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
-      let mut stats = caches.stats();
-      if stats.relation.evictions == 0 {
-        let max = self.compiler_options.cache.max_relation_cache_entries as u64;
-        if max > 0 && stats.relation.insertions > max {
-          stats.relation.evictions = stats.relation.insertions - max;
-        } else {
-          stats.relation.evictions = 1;
-        }
-      }
       self.cache_stats.merge(&stats);
     }
-    self.body_results.insert(body_id, res.clone());
+
+    result.rebuild_indexes();
+    codes::normalize_diagnostics(&mut result.diagnostics);
+    let res = Arc::new(result);
     if let Some(span) = span.take() {
       span.finish(None);
     }
     res
   }
 
-  fn import_interned_type(&mut self, ty: TypeId) -> TypeId {
-    let Some(store) = self.interned_store.as_ref().cloned() else {
-      return self.builtin.unknown;
-    };
-    use tti::TypeKind as InternedKind;
-    match store.type_kind(ty) {
-      InternedKind::Any => self.builtin.any,
-      InternedKind::Unknown => self.builtin.unknown,
-      InternedKind::Never => self.builtin.never,
-      InternedKind::Void => self.builtin.void,
-      InternedKind::Null => self.builtin.null,
-      InternedKind::Undefined => self.builtin.undefined,
-      InternedKind::Boolean => self.builtin.boolean,
-      InternedKind::Number => self.builtin.number,
-      InternedKind::String => self.builtin.string,
-      InternedKind::BooleanLiteral(value) => self.type_store.literal_boolean(value),
-      InternedKind::NumberLiteral(value) => self.type_store.literal_number(value.to_string()),
-      InternedKind::StringLiteral(name) => {
-        let name = store.name(name);
-        self.type_store.literal_string(name)
-      }
-      InternedKind::Tuple(elems) => {
-        let readonly = elems.iter().all(|elem| elem.readonly);
-        let members: Vec<_> = elems
-          .iter()
-          .map(|elem| self.import_interned_type(elem.ty))
-          .collect();
-        self.type_store.tuple(members, readonly)
-      }
-      InternedKind::Array { ty, .. } => {
-        let inner = self.import_interned_type(ty);
-        self.type_store.array(inner)
-      }
-      InternedKind::Union(types) => {
-        let mapped: Vec<_> = types
-          .iter()
-          .map(|t| self.import_interned_type(*t))
-          .collect();
-        self.type_store.union(mapped, &self.builtin)
-      }
-      InternedKind::Object(obj) => {
-        let obj = store.object(obj);
-        let shape = store.shape(obj.shape);
-        let mut legacy = ObjectType::empty();
-        for prop in shape.properties {
-          let name = match prop.key {
-            tti::PropKey::String(id) | tti::PropKey::Symbol(id) => Some(store.name(id)),
-            tti::PropKey::Number(num) => Some(num.to_string()),
-          };
-          if let Some(name) = name {
-            legacy.props.insert(
-              name,
-              ObjectProperty {
-                typ: self.import_interned_type(prop.data.ty),
-                optional: prop.data.optional,
-                readonly: prop.data.readonly,
-              },
-            );
+  fn check_stmt(
+    &mut self,
+    stmt: &HirStmt,
+    env: &mut HashMap<String, SymbolBinding>,
+    result: &mut BodyCheckResult,
+    file: FileId,
+    return_context: Option<TypeId>,
+  ) {
+    match stmt {
+      HirStmt::Var {
+        name,
+        typ,
+        init,
+        span,
+        symbol,
+        def,
+        pat,
+      } => {
+        let init_checked = init
+          .as_ref()
+          .map(|e| self.check_expr(e, env, result, file, *typ));
+        let init_ty = init_checked.map(|(ty, facts)| {
+          self.apply_fact_map(env, &facts.assertions);
+          ty
+        });
+        let declared = if let Some(annotated) = *typ {
+          if let (Some(expr), Some(source_ty)) = (init.as_ref(), init_ty) {
+            self.check_assignment(Some(expr), source_ty, annotated, result, file);
+          }
+          annotated
+        } else if let Some(init_ty) = init_ty {
+          init_ty
+        } else {
+          self.builtin.unknown
+        };
+        let declared = if let Some(def_id) = def {
+          if let Some(DefKind::Var(var_data)) = self.def_data.get(def_id).map(|d| &d.kind) {
+            if var_data.typ.is_none() && var_data.mode != VarDeclMode::Const {
+              self.widen_literal(declared)
+            } else {
+              declared
+            }
+          } else {
+            declared
+          }
+        } else {
+          declared
+        };
+        if let Some(def_id) = def {
+          self.def_types.insert(*def_id, declared);
+        }
+        env.insert(
+          name.clone(),
+          SymbolBinding {
+            symbol: *symbol,
+            def: *def,
+            type_id: Some(declared),
+          },
+        );
+        self.record_symbol(file, *span, *symbol);
+        if let Some(pat_id) = pat {
+          if let Some(slot) = result.pat_types.get_mut(pat_id.0 as usize) {
+            *slot = declared;
           }
         }
-        for indexer in shape.indexers {
-          let value = self.import_interned_type(indexer.value_type);
-          match store.type_kind(indexer.key_type) {
-            InternedKind::String => legacy.string_index = Some(value),
-            InternedKind::Number => legacy.number_index = Some(value),
-            _ => {}
+      }
+      HirStmt::Return { expr, .. } => {
+        let ty = expr
+          .as_ref()
+          .map(|e| self.check_expr(e, env, result, file, return_context).0)
+          .unwrap_or(self.builtin.undefined);
+        if let Some(expected) = return_context {
+          if let Some(expr) = expr {
+            self.check_assignment(Some(expr), ty, expected, result, file);
           }
         }
-        self.type_store.object(legacy)
+        result.return_types.push(ty);
       }
-      InternedKind::Predicate { asserted, .. } => asserted
-        .map(|ty| self.import_interned_type(ty))
-        .unwrap_or(self.builtin.boolean),
-      _ => self.builtin.unknown,
+      HirStmt::Expr(expr) => {
+        let (_, facts) = self.check_expr(expr, env, result, file, None);
+        self.apply_fact_map(env, &facts.assertions);
+      }
+      HirStmt::If {
+        test,
+        consequent,
+        alternate,
+        ..
+      } => {
+        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
+        let mut then_env = env.clone();
+        self.apply_fact_map(&mut then_env, &cond_facts.truthy);
+        self.apply_fact_map(&mut then_env, &cond_facts.assertions);
+        let mut else_env = env.clone();
+        self.apply_fact_map(&mut else_env, &cond_facts.falsy);
+        self.apply_fact_map(&mut else_env, &cond_facts.assertions);
+
+        for stmt in consequent {
+          self.check_stmt(stmt, &mut then_env, result, file, return_context);
+        }
+        for stmt in alternate {
+          self.check_stmt(stmt, &mut else_env, result, file, return_context);
+        }
+
+        let then_returns = self.branch_returns(consequent);
+        let else_returns = self.branch_returns(alternate);
+        *env = match (then_returns, else_returns) {
+          (true, false) => else_env,
+          (false, true) => then_env,
+          (true, true) => env.clone(),
+          _ => self.merge_envs(&then_env, &else_env),
+        };
+      }
+      HirStmt::Block(stmts) => {
+        for stmt in stmts {
+          self.check_stmt(stmt, env, result, file, return_context);
+        }
+      }
+      HirStmt::While { test, body, .. } => {
+        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
+        let mut body_env = env.clone();
+        self.apply_fact_map(&mut body_env, &cond_facts.truthy);
+        self.apply_fact_map(&mut body_env, &cond_facts.assertions);
+        for stmt in body {
+          self.check_stmt(stmt, &mut body_env, result, file, return_context);
+        }
+        let mut merged = self.merge_envs(env, &body_env);
+        self.apply_fact_map(&mut merged, &cond_facts.falsy);
+        *env = merged;
+      }
+      HirStmt::Switch {
+        discriminant,
+        cases,
+        ..
+      } => {
+        let (disc_ty, _) = self.check_expr(discriminant, env, result, file, None);
+        let mut merged_env: Option<HashMap<String, SymbolBinding>> = None;
+        let has_default = cases.iter().any(|case| case.test.is_none());
+        for case in cases {
+          let mut case_env = env.clone();
+          if let Some(test) = &case.test {
+            let _ = self.check_expr(test, &mut case_env, result, file, None);
+            self.apply_switch_narrowing(discriminant, disc_ty, test, &mut case_env, result, file);
+          }
+          for stmt in case.consequent.iter() {
+            self.check_stmt(stmt, &mut case_env, result, file, return_context);
+          }
+          merged_env = Some(match merged_env {
+            Some(existing) => self.merge_envs(&existing, &case_env),
+            None => case_env,
+          });
+        }
+        if !has_default {
+          merged_env = Some(match merged_env {
+            Some(existing) => self.merge_envs(&existing, env),
+            None => env.clone(),
+          });
+        }
+        if let Some(new_env) = merged_env {
+          *env = new_env;
+        }
+      }
     }
+  }
+
+  fn check_expr(
+    &mut self,
+    expr: &HirExpr,
+    env: &mut HashMap<String, SymbolBinding>,
+    result: &mut BodyCheckResult,
+    file: FileId,
+    context: Option<TypeId>,
+  ) -> (TypeId, Facts) {
+    let mut facts = Facts::default();
+    let ty = match &expr.kind {
+      HirExprKind::NumberLiteral(value) => self.type_store.literal_number(value.clone()),
+      HirExprKind::StringLiteral(value) => self.type_store.literal_string(value.clone()),
+      HirExprKind::BooleanLiteral(value) => self.type_store.literal_boolean(*value),
+      HirExprKind::Null => self.builtin.null,
+      HirExprKind::Ident(name) => {
+        let mut ty = self.builtin.unknown;
+        if let Some(binding) = env.get(name).cloned() {
+          self.record_symbol(file, expr.span, binding.symbol);
+          if let Some(t) = binding.type_id {
+            ty = t;
+          } else if let Some(def_id) = binding.def {
+            let resolved = self.type_of_def(def_id);
+            ty = resolved;
+          }
+        } else {
+          result.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+            format!("Cannot find name '{name}'."),
+            Span::new(file, expr.span),
+          ));
+        }
+        if let Some(binding) = env.get_mut(name) {
+          if binding.type_id.is_none() {
+            binding.type_id = Some(ty);
+          }
+        }
+        let (truthy, falsy) = truthy_falsy_types(ty, &mut self.type_store, &self.builtin);
+        if truthy != self.builtin.never {
+          facts.truthy.insert(name.clone(), truthy);
+        }
+        if falsy != self.builtin.never {
+          facts.falsy.insert(name.clone(), falsy);
+        }
+        ty
+      }
+      HirExprKind::Member { object, property } => {
+        let (obj_ty, _) = self.check_expr(object, env, result, file, None);
+        let lookup_prop = |obj: &ObjectType| {
+          if let Some(prop) = obj.props.get(property) {
+            Some(prop.typ)
+          } else if property.parse::<usize>().is_ok() {
+            obj.number_index.or(obj.string_index)
+          } else {
+            obj.string_index
+          }
+        };
+        match self.type_store.kind(obj_ty) {
+          TypeKind::Object(obj) => lookup_prop(obj).unwrap_or(self.builtin.unknown),
+          TypeKind::Union(members) => {
+            let members = members.clone();
+            let mut collected = Vec::new();
+            for member in members {
+              if let TypeKind::Object(obj) = self.type_store.kind(member) {
+                if let Some(t) = lookup_prop(obj) {
+                  collected.push(t);
+                }
+              }
+            }
+            if collected.is_empty() {
+              self.builtin.unknown
+            } else {
+              self.type_store.union(collected, &self.builtin)
+            }
+          }
+          _ => self.builtin.unknown,
+        }
+      }
+      HirExprKind::Unary { op, expr: inner } => match op {
+        OperatorName::LogicalNot => {
+          let (_inner_ty, inner_facts) = self.check_expr(inner, env, result, file, None);
+          facts.truthy = inner_facts.falsy;
+          facts.falsy = inner_facts.truthy;
+          facts.assertions = inner_facts.assertions;
+          self.builtin.boolean
+        }
+        OperatorName::Typeof => self.type_store.literal_string("string".to_string()),
+        _ => {
+          let _ = self.check_expr(inner, env, result, file, None);
+          self.builtin.unknown
+        }
+      },
+      HirExprKind::Binary { op, left, right } => match op {
+        OperatorName::LogicalAnd => {
+          let (lt, lf) = self.check_expr(left, env, result, file, None);
+          let mut right_env = env.clone();
+          self.apply_fact_map(&mut right_env, &lf.truthy);
+          self.apply_fact_map(&mut right_env, &lf.assertions);
+          let (rt, rf) = self.check_expr(right, &mut right_env, result, file, None);
+
+          let rf_truthy = rf.truthy;
+          let rf_falsy = rf.falsy;
+          let rf_assertions = rf.assertions;
+
+          facts.truthy = rf_truthy;
+          facts.falsy = lf.falsy;
+          facts.assertions = lf.assertions;
+          facts.merge(
+            Facts {
+              falsy: rf_falsy,
+              assertions: rf_assertions,
+              ..Default::default()
+            },
+            &mut self.type_store,
+            &self.builtin,
+          );
+
+          self.type_store.union(vec![lt, rt], &self.builtin)
+        }
+        OperatorName::LogicalOr => {
+          let (lt, lf) = self.check_expr(left, env, result, file, None);
+          let mut right_env = env.clone();
+          self.apply_fact_map(&mut right_env, &lf.falsy);
+          self.apply_fact_map(&mut right_env, &lf.assertions);
+          let (rt, rf) = self.check_expr(right, &mut right_env, result, file, None);
+
+          facts.truthy = lf.truthy;
+          facts.merge(
+            Facts {
+              truthy: rf.truthy,
+              ..Default::default()
+            },
+            &mut self.type_store,
+            &self.builtin,
+          );
+          facts.falsy = rf.falsy;
+          facts.assertions = lf.assertions;
+          facts.merge(
+            Facts {
+              assertions: rf.assertions,
+              ..Default::default()
+            },
+            &mut self.type_store,
+            &self.builtin,
+          );
+
+          self.type_store.union(vec![lt, rt], &self.builtin)
+        }
+        OperatorName::Equality | OperatorName::StrictEquality => {
+          let (_lt, lfacts) = self.check_expr(left, env, result, file, None);
+          let (_rt, rfacts) = self.check_expr(right, env, result, file, None);
+          // typeof x === "string"
+          if let HirExprKind::Unary {
+            op: OperatorName::Typeof,
+            expr: inner,
+          } = &left.kind
+          {
+            if let HirExprKind::StringLiteral(value) = &right.kind {
+              let (inner_ty, _) = self.check_expr(inner, env, result, file, None);
+              if let HirExprKind::Ident(name) = &inner.kind {
+                let (yes, no) = narrow_by_typeof(
+                  inner_ty,
+                  value.as_str(),
+                  &mut self.type_store,
+                  &self.builtin,
+                );
+                if yes != self.builtin.never {
+                  facts.truthy.insert(name.clone(), yes);
+                }
+                if no != self.builtin.never {
+                  facts.falsy.insert(name.clone(), no);
+                }
+              }
+            }
+          }
+          // discriminant check x.kind === "foo"
+          if let HirExprKind::Member { object, property } = &left.kind {
+            if let HirExprKind::StringLiteral(value) = &right.kind {
+              let (obj_ty, _) = self.check_expr(object, env, result, file, None);
+              if let HirExprKind::Ident(obj_name) = &object.kind {
+                let (yes, no) = narrow_by_discriminant(
+                  obj_ty,
+                  property,
+                  value,
+                  &mut self.type_store,
+                  &self.builtin,
+                );
+                if yes != self.builtin.never {
+                  facts.truthy.insert(obj_name.clone(), yes);
+                }
+                if no != self.builtin.never {
+                  facts.falsy.insert(obj_name.clone(), no);
+                }
+              }
+            }
+          }
+          // symmetric case
+          if let HirExprKind::Member { object, property } = &right.kind {
+            if let HirExprKind::StringLiteral(value) = &left.kind {
+              let (obj_ty, _) = self.check_expr(object, env, result, file, None);
+              if let HirExprKind::Ident(obj_name) = &object.kind {
+                let (yes, no) = narrow_by_discriminant(
+                  obj_ty,
+                  property,
+                  value,
+                  &mut self.type_store,
+                  &self.builtin,
+                );
+                if yes != self.builtin.never {
+                  facts.truthy.insert(obj_name.clone(), yes);
+                }
+                if no != self.builtin.never {
+                  facts.falsy.insert(obj_name.clone(), no);
+                }
+              }
+            }
+          }
+          facts.merge(lfacts, &mut self.type_store, &self.builtin);
+          facts.merge(rfacts, &mut self.type_store, &self.builtin);
+          self.builtin.boolean
+        }
+        OperatorName::Instanceof => {
+          let (lt, lf) = self.check_expr(left, env, result, file, None);
+          let (_rt, rf) = self.check_expr(right, env, result, file, None);
+          facts.merge(lf, &mut self.type_store, &self.builtin);
+          facts.merge(rf, &mut self.type_store, &self.builtin);
+          if let HirExprKind::Ident(name) = &left.kind {
+            let (yes, no) = narrow_by_instanceof(lt, &mut self.type_store, &self.builtin);
+            if yes != self.builtin.never {
+              facts.truthy.insert(name.clone(), yes);
+            }
+            if no != self.builtin.never {
+              facts.falsy.insert(name.clone(), no);
+            }
+          }
+          self.builtin.boolean
+        }
+        OperatorName::In => {
+          let (_lt, lf) = self.check_expr(left, env, result, file, None);
+          let (rt, rf) = self.check_expr(right, env, result, file, None);
+          if let HirExprKind::StringLiteral(prop) = &left.kind {
+            if let HirExprKind::Ident(name) = &right.kind {
+              let (yes, no) = narrow_by_in_check(rt, prop, &mut self.type_store, &self.builtin);
+              if yes != self.builtin.never {
+                facts.truthy.insert(name.clone(), yes);
+              }
+              if no != self.builtin.never {
+                facts.falsy.insert(name.clone(), no);
+              }
+            }
+          }
+          facts.merge(lf, &mut self.type_store, &self.builtin);
+          facts.merge(rf, &mut self.type_store, &self.builtin);
+          self.builtin.boolean
+        }
+        _ => {
+          let (left_ty, lfacts) = self.check_expr(left, env, result, file, None);
+          let (right_ty, rfacts) = self.check_expr(right, env, result, file, None);
+          facts.merge(lfacts, &mut self.type_store, &self.builtin);
+          facts.merge(rfacts, &mut self.type_store, &self.builtin);
+          match op {
+            OperatorName::Addition => {
+              let left_kind = self.type_store.kind(left_ty);
+              let right_kind = self.type_store.kind(right_ty);
+              let left_is_string =
+                matches!(left_kind, TypeKind::String | TypeKind::LiteralString(_));
+              let right_is_string =
+                matches!(right_kind, TypeKind::String | TypeKind::LiteralString(_));
+              let left_is_number =
+                matches!(left_kind, TypeKind::Number | TypeKind::LiteralNumber(_));
+              let right_is_number =
+                matches!(right_kind, TypeKind::Number | TypeKind::LiteralNumber(_));
+              if left_is_string || right_is_string {
+                self.builtin.string
+              } else if left_is_number && right_is_number {
+                self.builtin.number
+              } else {
+                self
+                  .type_store
+                  .union(vec![left_ty, right_ty], &self.builtin)
+              }
+            }
+            OperatorName::Subtraction
+            | OperatorName::Multiplication
+            | OperatorName::Division
+            | OperatorName::Remainder
+            | OperatorName::BitwiseAnd
+            | OperatorName::BitwiseOr
+            | OperatorName::BitwiseXor
+            | OperatorName::BitwiseLeftShift
+            | OperatorName::BitwiseRightShift
+            | OperatorName::BitwiseUnsignedRightShift => self.builtin.number,
+            OperatorName::GreaterThan
+            | OperatorName::GreaterThanOrEqual
+            | OperatorName::LessThan
+            | OperatorName::LessThanOrEqual => self.builtin.boolean,
+            OperatorName::Inequality | OperatorName::StrictInequality => self.builtin.boolean,
+            _ => self.builtin.unknown,
+          }
+        }
+      },
+      HirExprKind::Call { callee, args } => {
+        let (callee_ty, _) = self.check_expr(callee, env, result, file, None);
+        if let TypeKind::Function { params, ret } = self.type_store.kind(callee_ty).clone() {
+          if params.len() != args.len() {
+            result
+              .diagnostics
+              .push(codes::ARGUMENT_COUNT_MISMATCH.error(
+                "argument count mismatch",
+                Span {
+                  file,
+                  range: expr.span,
+                },
+              ));
+          }
+          let mut arg_types = Vec::new();
+          for (idx, arg) in args.iter().enumerate() {
+            let expected = params.get(idx).copied();
+            let (arg_ty, _) = self.check_expr(arg, env, result, file, expected);
+            arg_types.push(arg_ty);
+            if let Some(expected) = expected {
+              self.check_assignment(Some(arg), arg_ty, expected, result, file);
+            }
+          }
+          match self.type_store.kind(ret).clone() {
+            TypeKind::Predicate {
+              parameter: _parameter,
+              asserted,
+              asserts,
+            } => {
+              let arg_ty = arg_types.get(0).copied().unwrap_or(self.builtin.unknown);
+              if let Some(first_arg) = args.get(0) {
+                if let HirExprKind::Ident(name) = &first_arg.kind {
+                  if let Some(asserted_ty) = asserted {
+                    if asserts {
+                      facts.assertions.insert(name.clone(), asserted_ty);
+                    } else {
+                      facts.truthy.insert(name.clone(), asserted_ty);
+                      let complement = match self.type_store.kind(arg_ty).clone() {
+                        TypeKind::Union(members) => {
+                          let remaining: Vec<_> =
+                            members.into_iter().filter(|m| *m != asserted_ty).collect();
+                          self.type_store.union(remaining, &self.builtin)
+                        }
+                        _ => {
+                          if arg_ty == asserted_ty {
+                            self.builtin.never
+                          } else {
+                            arg_ty
+                          }
+                        }
+                      };
+                      if complement != self.builtin.never {
+                        facts.falsy.insert(name.clone(), complement);
+                      }
+                    }
+                  }
+                }
+              }
+              if asserts {
+                self.builtin.void
+              } else {
+                self.builtin.boolean
+              }
+            }
+            _ => ret,
+          }
+        } else {
+          self.builtin.unknown
+        }
+      }
+      HirExprKind::Conditional {
+        test,
+        consequent,
+        alternate,
+      } => {
+        let (_, cond_facts) = self.check_expr(test, env, result, file, None);
+        let mut then_env = env.clone();
+        self.apply_fact_map(&mut then_env, &cond_facts.truthy);
+        self.apply_fact_map(&mut then_env, &cond_facts.assertions);
+        let mut else_env = env.clone();
+        self.apply_fact_map(&mut else_env, &cond_facts.falsy);
+        self.apply_fact_map(&mut else_env, &cond_facts.assertions);
+        let (cons_ty, cons_facts) =
+          self.check_expr(consequent, &mut then_env, result, file, context);
+        let (alt_ty, alt_facts) = self.check_expr(alternate, &mut else_env, result, file, context);
+        facts.merge(cons_facts, &mut self.type_store, &self.builtin);
+        facts.merge(alt_facts, &mut self.type_store, &self.builtin);
+        self.type_store.union(vec![cons_ty, alt_ty], &self.builtin)
+      }
+      HirExprKind::Object(props) => {
+        let mut obj = ObjectType::empty();
+        for prop in props.iter() {
+          if prop.is_spread {
+            continue;
+          }
+          let expected = context.and_then(|ctx| {
+            lookup_property_type(&mut self.type_store, ctx, &prop.name, &self.builtin)
+          });
+          let (mut ty, _) = self.check_expr(&prop.value, env, result, file, expected.or(context));
+          if expected.is_none() && context != Some(self.builtin.never) {
+            ty = self.widen_literal(ty);
+          }
+          if let Some(expected) = expected {
+            self.check_assignment(Some(&prop.value), ty, expected, result, file);
+          }
+          obj.props.insert(
+            prop.name.clone(),
+            ObjectProperty {
+              typ: ty,
+              optional: false,
+              readonly: false,
+            },
+          );
+        }
+        self.type_store.object(obj)
+      }
+      HirExprKind::Array(values) => {
+        let mut tys = Vec::new();
+        for v in values {
+          let (elem, _) = self.check_expr(v, env, result, file, context);
+          let widened = if context == Some(self.builtin.never) || context.is_some() {
+            elem
+          } else {
+            self.widen_literal(elem)
+          };
+          tys.push(widened);
+        }
+        if context == Some(self.builtin.never) {
+          self.type_store.tuple(tys, true)
+        } else {
+          let elem = self.type_store.union(tys, &self.builtin);
+          self.type_store.array(elem)
+        }
+      }
+      HirExprKind::TypeAssertion {
+        expr,
+        typ,
+        _const_assertion,
+        make_readonly,
+      } => {
+        let (inner_ty, inner_facts) = self.check_expr(
+          expr,
+          env,
+          result,
+          file,
+          _const_assertion.then_some(self.builtin.never),
+        );
+        facts = inner_facts;
+        let ty = (*typ).unwrap_or(inner_ty);
+        if *make_readonly {
+          self.make_readonly(ty)
+        } else {
+          ty
+        }
+      }
+      HirExprKind::Unknown => self.builtin.unknown,
+    };
+    if let Some(slot) = result.expr_types.get_mut(expr.id.0 as usize) {
+      *slot = ty;
+    }
+    (ty, facts)
+  }
+
+  fn apply_fact_map(
+    &mut self,
+    env: &mut HashMap<String, SymbolBinding>,
+    facts: &HashMap<String, TypeId>,
+  ) {
+    for (name, ty) in facts.iter() {
+      if let Some(binding) = env.get_mut(name) {
+        binding.type_id = Some(*ty);
+      }
+    }
+  }
+
+  fn literal_value_from_expr(&self, expr: &HirExpr) -> Option<LiteralValue> {
+    match &expr.kind {
+      HirExprKind::StringLiteral(s) => Some(LiteralValue::String(s.clone())),
+      HirExprKind::NumberLiteral(n) => Some(LiteralValue::Number(n.clone())),
+      HirExprKind::BooleanLiteral(b) => Some(LiteralValue::Boolean(*b)),
+      HirExprKind::Null => Some(LiteralValue::Null),
+      _ => None,
+    }
+  }
+
+  fn apply_switch_narrowing(
+    &mut self,
+    discriminant: &HirExpr,
+    discriminant_ty: TypeId,
+    test: &HirExpr,
+    env: &mut HashMap<String, SymbolBinding>,
+    result: &mut BodyCheckResult,
+    file: FileId,
+  ) {
+    if let HirExprKind::Member { object, property } = &discriminant.kind {
+      if let HirExprKind::Ident(obj_name) = &object.kind {
+        let (obj_ty, _) = self.check_expr(object, env, result, file, None);
+        if let Some(LiteralValue::String(value)) = self.literal_value_from_expr(test) {
+          let (yes, _) = narrow_by_discriminant(
+            obj_ty,
+            property,
+            &value,
+            &mut self.type_store,
+            &self.builtin,
+          );
+          if yes != self.builtin.never {
+            if let Some(binding) = env.get_mut(obj_name) {
+              binding.type_id = Some(yes);
+            }
+          }
+        }
+        return;
+      }
+    }
+    if let HirExprKind::Ident(name) = &discriminant.kind {
+      if let Some(lit) = self.literal_value_from_expr(test) {
+        let (yes, _) =
+          narrow_by_literal(discriminant_ty, &lit, &mut self.type_store, &self.builtin);
+        if yes != self.builtin.never {
+          if let Some(binding) = env.get_mut(name) {
+            binding.type_id = Some(yes);
+          }
+        }
+      }
+    }
+  }
+
+  fn merge_envs(
+    &mut self,
+    left: &HashMap<String, SymbolBinding>,
+    right: &HashMap<String, SymbolBinding>,
+  ) -> HashMap<String, SymbolBinding> {
+    let mut merged = left.clone();
+    for (name, binding) in right.iter() {
+      merged
+        .entry(name.clone())
+        .and_modify(|existing| {
+          existing.type_id = match (existing.type_id, binding.type_id) {
+            (Some(a), Some(b)) => Some(self.type_store.union(vec![a, b], &self.builtin)),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+          };
+        })
+        .or_insert_with(|| binding.clone());
+    }
+    merged
+  }
+
+  fn branch_returns(&self, stmts: &[HirStmt]) -> bool {
+    stmts.iter().any(|stmt| match stmt {
+      HirStmt::Return { .. } => true,
+      HirStmt::Block(inner) => self.branch_returns(inner),
+      HirStmt::If {
+        consequent,
+        alternate,
+        ..
+      } => self.branch_returns(consequent) && self.branch_returns(alternate),
+      HirStmt::Switch { cases, .. } => {
+        let has_default = cases.iter().any(|case| case.test.is_none());
+        has_default
+          && cases
+            .iter()
+            .all(|case| self.branch_returns(&case.consequent))
+      }
+      _ => false,
+    })
   }
 
   fn widen_literal(&self, ty: TypeId) -> TypeId {
@@ -3661,6 +4648,167 @@ impl ProgramState {
       TypeKind::LiteralBoolean(_) => self.builtin.boolean,
       _ => ty,
     }
+  }
+
+  fn make_readonly(&mut self, ty: TypeId) -> TypeId {
+    match self.type_store.kind(ty).clone() {
+      TypeKind::Object(mut obj) => {
+        for prop in obj.props.values_mut() {
+          prop.typ = self.make_readonly(prop.typ);
+          prop.readonly = true;
+        }
+        if let Some(idx) = obj.string_index {
+          obj.string_index = Some(self.make_readonly(idx));
+        }
+        if let Some(idx) = obj.number_index {
+          obj.number_index = Some(self.make_readonly(idx));
+        }
+        self.type_store.object(obj)
+      }
+      TypeKind::Tuple(elems, _readonly) => {
+        let mapped: Vec<_> = elems.into_iter().map(|e| self.make_readonly(e)).collect();
+        self.type_store.tuple(mapped, true)
+      }
+      TypeKind::Array(elem) => {
+        let elem = self.make_readonly(elem);
+        self.type_store.array(elem)
+      }
+      TypeKind::Union(types) => {
+        let mapped: Vec<_> = types.into_iter().map(|t| self.make_readonly(t)).collect();
+        self.type_store.union(mapped, &self.builtin)
+      }
+      _ => ty,
+    }
+  }
+
+  fn check_assignment(
+    &mut self,
+    expr: Option<&HirExpr>,
+    src: TypeId,
+    dst: TypeId,
+    result: &mut BodyCheckResult,
+    file: FileId,
+  ) {
+    if self.is_assignable(src, dst) {
+      return;
+    }
+    let range = expr.map(|e| e.span).unwrap_or(TextRange::new(0, 0));
+    let diag = codes::TYPE_MISMATCH.error("type mismatch", Span::new(file, range));
+    result.diagnostics.push(diag);
+  }
+
+  fn is_assignable(&self, src: TypeId, dst: TypeId) -> bool {
+    if src == dst || dst == self.builtin.any || src == self.builtin.never {
+      return true;
+    }
+    if !self.compiler_options.strict_null_checks {
+      let src_kind = self.type_store.kind(src);
+      let dst_kind = self.type_store.kind(dst);
+      if matches!(src_kind, TypeKind::Null | TypeKind::Undefined)
+        || matches!(dst_kind, TypeKind::Null | TypeKind::Undefined)
+      {
+        return true;
+      }
+    }
+    let src_kind = self.type_store.kind(src).clone();
+    let dst_kind = self.type_store.kind(dst).clone();
+    match (src_kind, dst_kind) {
+      (TypeKind::Undefined, TypeKind::Void) | (TypeKind::Void, TypeKind::Undefined) => true,
+      (TypeKind::LiteralNumber(_), TypeKind::Number) => true,
+      (TypeKind::LiteralString(_), TypeKind::String) => true,
+      (TypeKind::LiteralBoolean(_), TypeKind::Boolean) => true,
+      (TypeKind::Union(members), _) => members.iter().all(|m| self.is_assignable(*m, dst)),
+      (_, TypeKind::Union(members)) => members.iter().any(|m| self.is_assignable(src, *m)),
+      (TypeKind::Array(source_elem), TypeKind::Array(target_elem)) => {
+        self.is_assignable(source_elem, target_elem)
+      }
+      (TypeKind::Tuple(source_elems, source_readonly), TypeKind::Array(target_elem)) => {
+        if source_readonly {
+          return false;
+        }
+        source_elems
+          .iter()
+          .copied()
+          .all(|elem| self.is_assignable(elem, target_elem))
+      }
+      (
+        TypeKind::Tuple(source_elems, source_readonly),
+        TypeKind::Tuple(target_elems, target_readonly),
+      ) => {
+        if !target_readonly && source_readonly {
+          return false;
+        }
+        if source_elems.len() != target_elems.len() {
+          return false;
+        }
+        source_elems
+          .iter()
+          .zip(target_elems.iter())
+          .all(|(s, t)| self.is_assignable(*s, *t))
+      }
+      (TypeKind::Object(source_obj), TypeKind::Object(target_obj)) => {
+        for (name, target_prop) in target_obj.props.iter() {
+          match source_obj.props.get(name) {
+            Some(source_prop) => {
+              if !self.is_assignable(source_prop.typ, target_prop.typ) {
+                return false;
+              }
+            }
+            None => {
+              let via_index = if name.parse::<usize>().is_ok() {
+                source_obj.number_index.or(source_obj.string_index)
+              } else {
+                source_obj.string_index
+              };
+              let Some(index_ty) = via_index else {
+                return false;
+              };
+              if !self.is_assignable(index_ty, target_prop.typ) {
+                return false;
+              }
+            }
+          }
+        }
+        if let Some(target_index) = target_obj.string_index {
+          if let Some(source_index) = source_obj.string_index {
+            if !self.is_assignable(source_index, target_index) {
+              return false;
+            }
+          }
+        }
+        if let Some(target_index) = target_obj.number_index {
+          if let Some(source_index) = source_obj.number_index.or(source_obj.string_index) {
+            if !self.is_assignable(source_index, target_index) {
+              return false;
+            }
+          }
+        }
+        true
+      }
+      _ => false,
+    }
+  }
+
+  fn initial_env(&self, owner: Option<DefId>, file: FileId) -> HashMap<String, SymbolBinding> {
+    let mut env = self.global_bindings.clone();
+    if let Some(file_env) = self.files.get(&file).map(|f| f.bindings.clone()) {
+      env.extend(file_env);
+    }
+    if let Some(def) = owner {
+      if let Some(DefKind::Function(func)) = self.def_data.get(&def).map(|d| &d.kind) {
+        for param in func.params.iter() {
+          env.insert(
+            param.name.clone(),
+            SymbolBinding {
+              symbol: param.symbol,
+              def: None,
+              type_id: param.typ,
+            },
+          );
+        }
+      }
+    }
+    env
   }
 
   fn type_of_def(&mut self, def: DefId) -> TypeId {
@@ -3698,17 +4846,7 @@ impl ProgramState {
           t
         } else if let Some(init) = var.init {
           let res = self.check_body(var.body);
-          if let Some(init_ty) = res.expr_type(init) {
-            if let Some(store) = self.interned_store.as_ref() {
-              self
-                .interned_def_types
-                .entry(def)
-                .or_insert_with(|| store.canon(init_ty));
-            }
-            self.import_interned_type(init_ty)
-          } else {
-            self.builtin.unknown
-          }
+          res.expr_type(init).unwrap_or(self.builtin.unknown)
         } else {
           self.builtin.unknown
         };
@@ -3757,18 +4895,11 @@ impl ProgramState {
       if res.return_types.is_empty() {
         self.builtin.void
       } else {
-        if let Some(store) = self.interned_store.as_ref() {
-          let interned = store.union(res.return_types.clone());
-          self
-            .interned_def_types
-            .entry(def)
-            .or_insert_with(|| store.canon(interned));
-        }
-        let mut widened = Vec::new();
-        for ty in res.return_types.iter() {
-          let imported = self.import_interned_type(*ty);
-          widened.push(self.widen_literal(imported));
-        }
+        let widened: Vec<_> = res
+          .return_types
+          .iter()
+          .map(|ty| self.widen_literal(*ty))
+          .collect();
         self.type_store.union(widened, &self.builtin)
       }
     } else {
@@ -3780,9 +4911,6 @@ impl ProgramState {
   }
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
-    if let Some(semantics) = self.semantics.clone() {
-      return check::modules::exports_from_semantics(self, &semantics, file);
-    }
     let Some(state) = self.files.get(&file).cloned() else {
       return ExportMap::new();
     };
@@ -3810,31 +4938,73 @@ impl ProgramState {
     }
   }
 
-  fn symbol_at(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
-    let occurrences = self.symbol_occurrences.get(&file)?;
-    let mut best_containing: Option<(u32, u32, semantic_js::SymbolId)> = None;
-    let mut best_empty: Option<(u32, u32, semantic_js::SymbolId)> = None;
+  fn local_symbol_to_program(
+    &mut self,
+    file: FileId,
+    symbol: locals::SymbolId,
+  ) -> Option<semantic_js::SymbolId> {
+    let locals = self.locals.get(&file)?;
+    let decl_span = locals.symbol(symbol).span?;
+    self.symbol_span_map_for_file(file)?.query(decl_span.start)
+  }
 
-    for occurrence in occurrences.iter() {
-      let range = occurrence.range;
-      let len = range.len();
-      let key = (len, range.start, occurrence.symbol);
-      if range.start <= offset && offset < range.end {
-        let replace = best_containing.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_containing = Some(key);
-        }
-      } else if range.start == range.end && offset == range.start {
-        let replace = best_empty.map(|best| key < best).unwrap_or(true);
-        if replace {
-          best_empty = Some(key);
+  fn symbol_at_using_locals(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
+    let (expr_span, type_expr_span, def_span) = {
+      let span_map = self.span_map_for_file(file)?;
+      (
+        span_map.expr_span_at_offset(offset),
+        span_map.type_expr_span_at_offset(offset),
+        span_map.def_span_at_offset(offset),
+      )
+    };
+    let mut best: Option<(u32, u32, semantic_js::SymbolId)> = None;
+    let consider = |range: TextRange,
+                    symbol: semantic_js::SymbolId,
+                    best: &mut Option<(u32, u32, semantic_js::SymbolId)>| {
+      let key = (range.len(), range.start, symbol);
+      let replace = best.map(|current| key < current).unwrap_or(true);
+      if replace {
+        *best = Some(key);
+      }
+    };
+
+    if let Some(span) = expr_span {
+      if let Some(local) = self
+        .locals
+        .get(&file)
+        .and_then(|locals| locals.resolve_expr_span(span.range))
+      {
+        if let Some(symbol) = self.local_symbol_to_program(file, local) {
+          consider(span.range, symbol, &mut best);
         }
       }
     }
 
-    let symbol = best_containing
-      .or(best_empty)
-      .map(|(_, _, symbol)| symbol)?;
+    if let Some(span) = type_expr_span {
+      if let Some(local) = self
+        .locals
+        .get(&file)
+        .and_then(|locals| locals.resolve_type_span(span.range))
+      {
+        if let Some(symbol) = self.local_symbol_to_program(file, local) {
+          consider(span.range, symbol, &mut best);
+        }
+      }
+    }
+
+    if let Some(span) = def_span {
+      if let Some(symbol) = self.def_data.get(&span.id).map(|d| d.symbol) {
+        consider(span.range, symbol, &mut best);
+      }
+    }
+
+    best.map(|(_, _, symbol)| self.resolve_symbol(symbol))
+  }
+
+  fn symbol_at(&mut self, file: FileId, offset: u32) -> Option<semantic_js::SymbolId> {
+    let symbol = self
+      .symbol_at_using_locals(file, offset)
+      .or_else(|| self.symbol_span_map_for_file(file)?.query(offset))?;
     Some(self.resolve_symbol(symbol))
   }
 
@@ -3860,26 +5030,6 @@ impl ProgramState {
   fn resolve_import_symbol(&mut self, import: &ImportData) -> Option<semantic_js::SymbolId> {
     let exports = self.exports_of_file(import.from);
     exports.get(&import.original).map(|entry| entry.symbol)
-  }
-
-  fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
-    let Some(kind) = self.def_data.get(&def).map(|d| &d.kind) else {
-      return 3;
-    };
-    match ns {
-      sem_ts::Namespace::VALUE => match kind {
-        DefKind::Function(_) => 0,
-        DefKind::Var(_) => 1,
-        _ => 2,
-      },
-      sem_ts::Namespace::NAMESPACE => 2,
-      sem_ts::Namespace::TYPE => match kind {
-        DefKind::Interface(_) => 0,
-        DefKind::TypeAlias(_) => 1,
-        _ => 2,
-      },
-      _ => 3,
-    }
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
@@ -3917,64 +5067,105 @@ impl ProgramState {
     })
   }
 
-  fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
-    let mut best_containing: Option<(u32, u32, BodyId, ExprId)> = None;
-    let mut best_empty: Option<(u32, u32, BodyId, ExprId)> = None;
+  fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
+    let Some(kind) = self.def_data.get(&def).map(|d| &d.kind) else {
+      return 3;
+    };
+    match ns {
+      sem_ts::Namespace::VALUE => match kind {
+        DefKind::Function(_) => 0,
+        _ => 2,
+      },
+      sem_ts::Namespace::NAMESPACE => match kind {
+        DefKind::Function(_) => 1,
+        _ => 2,
+      },
+      sem_ts::Namespace::TYPE => match kind {
+        DefKind::Interface(_) => 0,
+        DefKind::TypeAlias(_) => 1,
+        _ => 2,
+      },
+      _ => 3,
+    }
+  }
 
-    let update_best = |body: BodyId,
-                       expr: ExprId,
-                       span: TextRange,
-                       best_containing: &mut Option<(u32, u32, BodyId, ExprId)>,
-                       best_empty: &mut Option<(u32, u32, BodyId, ExprId)>| {
-      let len = span.len();
-      let key = (len, span.start, body, expr);
-      if span.start <= offset && offset < span.end {
-        let replace = best_containing.map(|best| key < best).unwrap_or(true);
-        if replace {
-          *best_containing = Some(key);
+  fn span_map_for_file(&mut self, file: FileId) -> Option<&SpanMap> {
+    if !self.expr_span_maps.contains_key(&file) {
+      let mut map = SpanMap::new();
+      let mut bodies: Vec<_> = self
+        .body_data
+        .values()
+        .filter(|body| body.file == file)
+        .collect();
+      bodies.sort_by_key(|body| body.id.0);
+      for body in bodies {
+        for (idx, span) in body.expr_spans.iter().enumerate() {
+          map.add_expr(normalize_range(*span), body.id, ExprId(idx as u32));
         }
-      } else if span.start == span.end && offset == span.start {
-        let replace = best_empty.map(|best| key < best).unwrap_or(true);
-        if replace {
-          *best_empty = Some(key);
+        for (idx, span) in body.pat_spans.iter().enumerate() {
+          map.add_pat(normalize_range(*span), body.id, PatId(idx as u32));
         }
       }
-    };
-
-    for (body_id, meta) in self.body_map.iter().filter(|(_, meta)| meta.file == file) {
-      if let Some(result) = self.body_results.get(body_id) {
-        for (idx, span) in result.expr_spans().iter().enumerate() {
-          update_best(
-            *body_id,
-            ExprId(idx as u32),
-            *span,
-            &mut best_containing,
-            &mut best_empty,
+      let mut defs: Vec<_> = self
+        .def_data
+        .iter()
+        .filter(|(_, def)| def.file == file)
+        .collect();
+      defs.sort_by_key(|(id, _)| id.0);
+      for (def_id, def) in defs {
+        map.add_def(normalize_range(def.span), *def_id);
+      }
+      if let Some(lowered) = self.hir_lowered.get(&file) {
+        for (idx, type_expr) in lowered.types.type_exprs.iter().enumerate() {
+          map.add_type_expr(
+            normalize_range(type_expr.span),
+            hir_js::ids::TypeExprId(idx as u32),
           );
         }
-        continue;
       }
+      map.finalize();
+      self.expr_span_maps.insert(file, map);
+    }
+    self.expr_span_maps.get(&file)
+  }
 
-      if let Some(hir_id) = meta.hir {
-        if let Some(lowered) = self.hir_lowered.get(&meta.file) {
-          if let Some(body) = lowered.body(hir_id) {
-            for (idx, expr) in body.exprs.iter().enumerate() {
-              update_best(
-                *body_id,
-                ExprId(idx as u32),
-                expr.span,
-                &mut best_containing,
-                &mut best_empty,
-              );
-            }
-          }
+  fn symbol_span_map_for_file(
+    &mut self,
+    file: FileId,
+  ) -> Option<&SpanIndex<semantic_js::SymbolId>> {
+    if !self.symbol_span_maps.contains_key(&file) {
+      let mut map = SpanIndex::new();
+      if let Some(occurrences) = self.symbol_occurrences.get(&file) {
+        for occurrence in occurrences.iter() {
+          map.add(normalize_range(occurrence.range), occurrence.symbol);
         }
       }
+      map.finalize();
+      self.symbol_span_maps.insert(file, map);
     }
+    self.symbol_span_maps.get(&file)
+  }
 
-    best_containing
-      .or(best_empty)
-      .map(|(_, _, body, expr)| (body, expr))
+  fn span_of_expr(&mut self, body: BodyId, expr: ExprId) -> Option<Span> {
+    let file = self.body_data.get(&body)?.file;
+    let span = self
+      .span_map_for_file(file)?
+      .expr_span(body, expr)
+      .map(|range| Span::new(file, range));
+    span
+  }
+
+  fn span_of_def(&mut self, def: DefId) -> Option<Span> {
+    let (file, fallback) = self.def_data.get(&def).map(|d| (d.file, d.span))?;
+    let range = self
+      .span_map_for_file(file)
+      .and_then(|map| map.def_span(def))
+      .unwrap_or(fallback);
+    Some(Span::new(file, range))
+  }
+
+  fn expr_at(&mut self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
+    self.span_map_for_file(file)?.expr_at_offset(offset)
   }
 
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {
@@ -3985,17 +5176,6 @@ impl ProgramState {
       DefKind::Interface(_) => None,
       DefKind::TypeAlias(_) => None,
     })
-  }
-
-  fn owner_of_body(&self, body: BodyId) -> Option<DefId> {
-    for (def_id, data) in self.def_data.iter() {
-      match &data.kind {
-        DefKind::Function(func) if func.body == Some(body) => return Some(*def_id),
-        DefKind::Var(var) if var.body == body => return Some(*def_id),
-        _ => {}
-      }
-    }
-    None
   }
 
   fn object_type_from_members(&mut self, members: &[Node<TypeMember>]) -> ObjectType {
@@ -4162,8 +5342,27 @@ impl ProgramState {
     id
   }
 
+  fn alloc_body(&mut self, file: FileId, owner: Option<DefId>) -> BodyId {
+    let id = BodyId(self.next_body);
+    self.next_body += 1;
+    if !self.body_data.contains_key(&id) {
+      self.body_data.insert(
+        id,
+        BodyData {
+          id,
+          file,
+          owner,
+          stmts: Vec::new(),
+          expr_spans: Vec::new(),
+          pat_spans: Vec::new(),
+        },
+      );
+    }
+    id
+  }
+
   fn alloc_symbol(&mut self) -> semantic_js::SymbolId {
-    let id = semantic_js::SymbolId(self.next_symbol);
+    let id = semantic_js::SymbolId(self.next_symbol.into());
     self.next_symbol += 1;
     id
   }
@@ -4361,6 +5560,342 @@ fn map_export_from_lower(
   }
 }
 
+struct BodyBuilder {
+  id: BodyId,
+  file: FileId,
+  stmts: Vec<HirStmt>,
+  expr_spans: Vec<TextRange>,
+  pat_spans: Vec<TextRange>,
+}
+
+impl BodyBuilder {
+  fn new(id: BodyId, file: FileId) -> BodyBuilder {
+    BodyBuilder {
+      id,
+      file,
+      stmts: Vec::new(),
+      expr_spans: Vec::new(),
+      pat_spans: Vec::new(),
+    }
+  }
+
+  fn new_expr(&mut self, span: TextRange, kind: HirExprKind) -> HirExpr {
+    let id = ExprId(self.expr_spans.len() as u32);
+    self.expr_spans.push(span);
+    HirExpr { id, span, kind }
+  }
+
+  fn new_pat(&mut self, span: TextRange) -> PatId {
+    let id = PatId(self.pat_spans.len() as u32);
+    self.pat_spans.push(span);
+    id
+  }
+
+  fn lower_stmt_into(
+    &mut self,
+    stmt: Node<Stmt>,
+    state: &mut ProgramState,
+    out: &mut Vec<HirStmt>,
+  ) {
+    match *stmt.stx {
+      Stmt::VarDecl(var) => {
+        let stmt_span = loc_to_span(self.file, stmt.loc).range;
+        for declarator in var.stx.declarators.into_iter() {
+          let pat = declarator.pattern;
+          let name = match pat.stx.pat.stx.as_ref() {
+            Pat::Id(id) => id.stx.name.clone(),
+            _ => {
+              state.diagnostics.push(
+                codes::UNSUPPORTED_PATTERN
+                  .error("unsupported pattern", loc_to_span(self.file, pat.loc)),
+              );
+              continue;
+            }
+          };
+          let typ = declarator
+            .type_annotation
+            .as_ref()
+            .map(|t| state.type_from_type_expr(t));
+          let pat_id = Some(self.new_pat(loc_to_span(self.file, pat.loc).range));
+          let init = declarator
+            .initializer
+            .map(|expr| self.lower_expr(expr, state));
+          let symbol = state.alloc_symbol();
+          state.record_symbol(self.file, loc_to_span(self.file, pat.loc).range, symbol);
+          out.push(HirStmt::Var {
+            name,
+            typ,
+            init,
+            span: stmt_span,
+            symbol,
+            def: None,
+            pat: pat_id,
+          });
+        }
+      }
+      Stmt::Return(ret) => {
+        let expr = ret.stx.value.map(|e| self.lower_expr(e, state));
+        out.push(HirStmt::Return {
+          expr,
+          span: loc_to_span(self.file, ret.loc).range,
+        });
+      }
+      Stmt::Expr(expr_stmt) => {
+        let expr = self.lower_expr(expr_stmt.stx.expr, state);
+        out.push(HirStmt::Expr(expr));
+      }
+      Stmt::Block(block) => {
+        let mut inner = Vec::new();
+        for stmt in block.stx.body {
+          self.lower_stmt_into(stmt, state, &mut inner);
+        }
+        out.push(HirStmt::Block(inner));
+      }
+      Stmt::If(if_stmt) => {
+        let test = self.lower_expr(if_stmt.stx.test, state);
+        let mut consequent = Vec::new();
+        self.lower_stmt_into(if_stmt.stx.consequent, state, &mut consequent);
+        let mut alternate_vec = Vec::new();
+        if let Some(alt) = if_stmt.stx.alternate {
+          self.lower_stmt_into(alt, state, &mut alternate_vec);
+        }
+        out.push(HirStmt::If {
+          test,
+          consequent,
+          alternate: alternate_vec,
+          span: loc_to_span(self.file, if_stmt.loc).range,
+        });
+      }
+      Stmt::While(wh) => {
+        let test = self.lower_expr(wh.stx.condition, state);
+        let mut body_stmts = Vec::new();
+        self.lower_stmt_into(wh.stx.body, state, &mut body_stmts);
+        out.push(HirStmt::While {
+          test,
+          body: body_stmts,
+          span: loc_to_span(self.file, wh.loc).range,
+        });
+      }
+      Stmt::Switch(sw) => {
+        let discriminant = self.lower_expr(sw.stx.test, state);
+        let mut cases = Vec::new();
+        for branch in sw.stx.branches {
+          let test = branch.stx.case.map(|expr| self.lower_expr(expr, state));
+          let mut consequent = Vec::new();
+          for stmt in branch.stx.body {
+            self.lower_stmt_into(stmt, state, &mut consequent);
+          }
+          cases.push(HirSwitchCase { test, consequent });
+        }
+        out.push(HirStmt::Switch {
+          discriminant,
+          cases,
+          span: loc_to_span(self.file, sw.loc).range,
+        });
+      }
+      _ => {}
+    }
+  }
+
+  fn lower_stmt(&mut self, stmt: Node<Stmt>, state: &mut ProgramState) {
+    let mut out = Vec::new();
+    self.lower_stmt_into(stmt, state, &mut out);
+    self.stmts.extend(out);
+  }
+
+  fn lower_expr(&mut self, expr: Node<Expr>, state: &mut ProgramState) -> HirExpr {
+    let mut span = loc_to_span(self.file, expr.loc).range;
+    let kind = match *expr.stx {
+      Expr::LitNum(num) => HirExprKind::NumberLiteral(num.stx.value.to_string()),
+      Expr::LitStr(s) => HirExprKind::StringLiteral(s.stx.value),
+      Expr::LitBool(b) => HirExprKind::BooleanLiteral(b.stx.value),
+      Expr::LitNull(_) => HirExprKind::Null,
+      Expr::Id(id) => {
+        let name = id.stx.name.clone();
+        let expected_end = span
+          .start
+          .saturating_add(name.len().min(u32::MAX as usize) as u32);
+        if expected_end <= span.end {
+          span.end = expected_end;
+        }
+        if span.len() == 0 {
+          span.start = span
+            .start
+            .saturating_sub(name.len().min(u32::MAX as usize) as u32);
+        }
+        HirExprKind::Ident(name)
+      }
+      Expr::Member(mem) => {
+        let object = self.lower_expr(mem.stx.left, state);
+        HirExprKind::Member {
+          object: Box::new(object),
+          property: mem.stx.right,
+        }
+      }
+      Expr::Unary(unary) => {
+        let arg = self.lower_expr(unary.stx.argument, state);
+        HirExprKind::Unary {
+          op: unary.stx.operator,
+          expr: Box::new(arg),
+        }
+      }
+      Expr::Binary(bin) => {
+        let left = self.lower_expr(bin.stx.left, state);
+        let right = self.lower_expr(bin.stx.right, state);
+        HirExprKind::Binary {
+          op: bin.stx.operator,
+          left: Box::new(left),
+          right: Box::new(right),
+        }
+      }
+      Expr::Call(call) => {
+        let callee = self.lower_expr(call.stx.callee, state);
+        let mut args = Vec::new();
+        for arg in call.stx.arguments.into_iter() {
+          args.push(self.lower_expr(arg.stx.value, state));
+        }
+        HirExprKind::Call {
+          callee: Box::new(callee),
+          args,
+        }
+      }
+      Expr::Cond(cond) => {
+        let test = self.lower_expr(cond.stx.test, state);
+        let cons = self.lower_expr(cond.stx.consequent, state);
+        let alt = self.lower_expr(cond.stx.alternate, state);
+        HirExprKind::Conditional {
+          test: Box::new(test),
+          consequent: Box::new(cons),
+          alternate: Box::new(alt),
+        }
+      }
+      Expr::SatisfiesExpr(satisfies) => {
+        let expr = self.lower_expr(*satisfies.stx.expression, state);
+        HirExprKind::TypeAssertion {
+          expr: Box::new(expr),
+          typ: None,
+          _const_assertion: true,
+          make_readonly: false,
+        }
+      }
+      Expr::LitArr(arr) => {
+        let mut values = Vec::new();
+        for el in arr.stx.elements.into_iter() {
+          match el {
+            LitArrElem::Single(expr) => values.push(self.lower_expr(expr, state)),
+            LitArrElem::Rest(expr) => values.push(self.lower_expr(expr, state)),
+            LitArrElem::Empty => {}
+          }
+        }
+        HirExprKind::Array(values)
+      }
+      Expr::LitObj(obj) => {
+        HirExprKind::Object(lower_object_literal(self.file, *obj.stx, state, self))
+      }
+      Expr::LitTemplate(tmpl) => {
+        let mut text = String::new();
+        for part in tmpl.stx.parts.iter() {
+          if let parse_js::ast::expr::lit::LitTemplatePart::String(s) = part {
+            text.push_str(s);
+          }
+        }
+        HirExprKind::StringLiteral(text)
+      }
+      Expr::TypeAssertion(assert) => {
+        let expr = self.lower_expr(*assert.stx.expression, state);
+        let typ = assert
+          .stx
+          .type_annotation
+          .as_ref()
+          .map(|t| state.type_from_type_expr(t));
+        HirExprKind::TypeAssertion {
+          expr: Box::new(expr),
+          typ,
+          _const_assertion: assert.stx.const_assertion,
+          make_readonly: assert.stx.const_assertion,
+        }
+      }
+      _ => HirExprKind::Unknown,
+    };
+
+    let id = ExprId(self.expr_spans.len() as u32);
+    self.expr_spans.push(span);
+    HirExpr { id, span, kind }
+  }
+
+  fn finish(mut self, owner: Option<DefId>) -> BodyData {
+    BodyData {
+      id: self.id,
+      file: self.file,
+      owner,
+      stmts: self.stmts.drain(..).collect(),
+      expr_spans: self.expr_spans,
+      pat_spans: self.pat_spans,
+    }
+  }
+}
+
+fn lower_object_literal(
+  file: FileId,
+  obj: LitObjExpr,
+  state: &mut ProgramState,
+  builder: &mut BodyBuilder,
+) -> Vec<HirObjectProperty> {
+  let mut props = Vec::new();
+  for member in obj.members.into_iter() {
+    let member_span = loc_to_span(file, member.loc).range;
+    match *member.stx {
+      ObjMember {
+        typ: ObjMemberType::Valued { key, val },
+      } => {
+        let key_name = match key {
+          ClassOrObjKey::Direct(direct) => direct.stx.key,
+          ClassOrObjKey::Computed(_) => {
+            // Skip complex computed keys for now.
+            continue;
+          }
+        };
+        if let ClassOrObjVal::Prop(Some(expr)) = val {
+          let value = builder.lower_expr(expr, state);
+          props.push(HirObjectProperty {
+            name: key_name,
+            value,
+            span: member_span,
+            is_spread: false,
+          });
+        }
+      }
+      ObjMember {
+        typ: ObjMemberType::Shorthand { id },
+      } => {
+        let name = id.stx.name.clone();
+        let expr = builder.new_expr(
+          loc_to_span(file, id.loc).range,
+          HirExprKind::Ident(name.clone()),
+        );
+        props.push(HirObjectProperty {
+          name,
+          value: expr,
+          span: member_span,
+          is_spread: false,
+        });
+      }
+      ObjMember {
+        typ: ObjMemberType::Rest { val },
+      } => {
+        let expr = builder.lower_expr(val, state);
+        props.push(HirObjectProperty {
+          name: "...".to_string(),
+          value: expr,
+          span: member_span,
+          is_spread: true,
+        });
+      }
+    }
+  }
+  props
+}
+
 fn type_member_name(key: &TypePropertyKey) -> Option<String> {
   match key {
     TypePropertyKey::Identifier(name) => Some(name.clone()),
@@ -4397,6 +5932,18 @@ fn span_from_context(ctx: &IceContext, placeholder: Span) -> Span {
     .file
     .map(|file| Span::new(file, TextRange::new(0, 0)))
     .unwrap_or(placeholder)
+}
+
+fn normalize_range(range: TextRange) -> TextRange {
+  if range.start < range.end {
+    return range;
+  }
+  let start = range.start.saturating_sub(1);
+  let mut end = range.end.max(range.start);
+  if end <= start {
+    end = start.saturating_add(1);
+  }
+  TextRange::new(start, end)
 }
 
 fn loc_to_span(file: FileId, loc: Loc) -> Span {

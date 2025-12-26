@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use typecheck_ts::codes;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibName};
-use typecheck_ts::{FileKey, Host, HostError, Program, TextRange};
+use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
 
+const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
 const PROMISE_DOM: &str = include_str!("fixtures/promise_dom.ts");
 
 #[derive(Default)]
@@ -92,7 +93,8 @@ fn missing_libs_emit_unknown_global_diagnostics() {
   let mut options = CompilerOptions::default();
   options.no_default_lib = true;
   let entry = FileKey::new("entry.ts");
-  let host = TestHost::new(options).with_file(entry.clone(), "const p = Promise;\nconst a = Array;");
+  let host =
+    TestHost::new(options).with_file(entry.clone(), "const p = Promise;\nconst a = Array;");
   let program = Program::new(host, vec![entry]);
   let diagnostics = program.check();
   assert!(
@@ -256,13 +258,79 @@ fn imported_type_alias_resolves_interned_type() {
       FileKey::new("entry.ts"),
       "import type { Foo } from \"./types\"; type Bar = Foo;",
     )
-    .link(FileKey::new("entry.ts"), "./types", FileKey::new("types.ts"));
+    .link(
+      FileKey::new("entry.ts"),
+      "./types",
+      FileKey::new("types.ts"),
+    );
 
   let program = Program::new(host, vec![FileKey::new("entry.ts")]);
   let diagnostics = program.check();
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn bundled_lib_types_expose_promise_and_array_shapes() {
+  let entry = FileKey::new("libs.ts");
+  let host = TestHost::new(CompilerOptions::default()).with_file(entry.clone(), PROMISE_ARRAY_TYPES);
+  let program = Program::new(host, vec![entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected libs to satisfy Promise/Array references: {diagnostics:?}"
+  );
+
+  let file_id = program.file_id(&entry).expect("file id for libs");
+  let defs = program.definitions_in_file(file_id);
+  let find_def = |name: &str| {
+    defs
+      .iter()
+      .copied()
+      .find(|def| program.def_name(*def).as_deref() == Some(name))
+      .unwrap_or_else(|| panic!("definition {name} not found"))
+  };
+  let promise_def = find_def("UsesPromise");
+  let array_def = find_def("UsesArray");
+
+  let promise_ty = program.type_of_def_interned(promise_def);
+  let array_ty = program.type_of_def_interned(array_def);
+  println!("promise kind {:?}", program.type_kind(promise_ty));
+  println!("array kind {:?}", program.type_kind(array_ty));
+  assert_ne!(
+    program.type_kind(promise_ty),
+    TypeKindSummary::Unknown,
+    "Promise type should not collapse to unknown"
+  );
+  assert_ne!(
+    program.type_kind(array_ty),
+    TypeKindSummary::Unknown,
+    "Array type should not collapse to unknown"
+  );
+
+  let then_prop = program.property_type(promise_ty, PropertyKey::String("then".to_string()));
+  println!(
+    "then prop {:?}",
+    then_prop
+      .as_ref()
+      .map(|ty| program.display_type(*ty).to_string())
+  );
+  assert!(
+    then_prop.is_some(),
+    "Promise lib surface should expose then property"
+  );
+  let length_prop = program.property_type(array_ty, PropertyKey::String("length".to_string()));
+  println!(
+    "length prop {:?}",
+    length_prop
+      .as_ref()
+      .map(|ty| program.display_type(*ty).to_string())
+  );
+  assert!(
+    length_prop.is_some(),
+    "Array lib surface should expose length property"
   );
 }
 

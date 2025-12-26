@@ -7,7 +7,7 @@ use crate::ids::PatId;
 use crate::ids::TypeExprId;
 use diagnostics::TextRange;
 use std::cmp::Ordering;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// An index of expression, definition, and type expression spans that supports
 /// deterministic, logarithmic lookups for the innermost span that contains an
@@ -136,40 +136,92 @@ impl SpanMap {
       .query_span(offset)
       .map(|span| (span.id, span.range))
   }
+
+  pub fn expr_span(&self, body: BodyId, expr: ExprId) -> Option<TextRange> {
+    self.exprs.span_of((body, expr))
+  }
+
+  pub fn def_span(&self, def: DefId) -> Option<TextRange> {
+    self.defs.span_of(def)
+  }
+
+  pub fn type_expr_span(&self, type_expr: TypeExprId) -> Option<TextRange> {
+    self.type_exprs.span_of(type_expr)
+  }
+
+  pub fn pat_span(&self, body: BodyId, pat: PatId) -> Option<TextRange> {
+    self.pats.span_of((body, pat))
+  }
+
+  pub fn import_specifier_span(&self, id: ImportSpecifierId) -> Option<TextRange> {
+    self.import_specifiers.span_of(id)
+  }
+
+  pub fn export_specifier_span(&self, id: ExportSpecifierId) -> Option<TextRange> {
+    self.export_specifiers.span_of(id)
+  }
 }
 
 /// Deterministic interval index for a set of spans keyed by `T`.
 #[derive(Debug, Clone, PartialEq)]
-struct SpanIndex<T> {
+pub struct SpanIndex<T> {
   spans: Vec<SpanEntry<T>>,
   segments: Vec<Segment<T>>,
   empties: Vec<ActiveSpan<T>>,
+  by_id: BTreeMap<T, ActiveSpan<T>>,
 }
 
 impl<T> SpanIndex<T> {
-  fn new() -> Self {
+  pub fn new() -> Self {
     Self {
       spans: Vec::new(),
       segments: Vec::new(),
       empties: Vec::new(),
+      by_id: BTreeMap::new(),
     }
   }
 
-  fn add(&mut self, range: TextRange, id: T)
+  pub fn add(&mut self, range: TextRange, id: T)
   where
-    T: Copy,
+    T: Copy + Ord,
   {
     let span = ActiveSpan { range, id };
+    self.record_by_id(span);
     if range.is_empty() {
       self.empties.push(span);
     } else {
       self.spans.push(SpanEntry { range, id });
     }
   }
+
+  fn record_by_id(&mut self, span: ActiveSpan<T>)
+  where
+    T: Copy + Ord,
+  {
+    self
+      .by_id
+      .entry(span.id)
+      .and_modify(|best| {
+        if span < *best {
+          *best = span;
+        }
+      })
+      .or_insert(span);
+  }
 }
 
 impl<T: Copy + Ord> SpanIndex<T> {
-  fn finalize(&mut self) {
+  /// Build an index from a set of spans in a single pass.
+  pub fn from_spans(spans: impl IntoIterator<Item = (TextRange, T)>) -> Self {
+    let mut index = SpanIndex::new();
+    for (range, id) in spans {
+      index.add(range, id);
+    }
+    index.finalize();
+    index
+  }
+
+  pub fn finalize(&mut self) {
     self
       .spans
       .sort_by(|a, b| (a.range.start, a.range.end, a.id).cmp(&(b.range.start, b.range.end, b.id)));
@@ -177,27 +229,40 @@ impl<T: Copy + Ord> SpanIndex<T> {
     self.empties.sort();
   }
 
-  fn query(&self, offset: u32) -> Option<T> {
+  pub fn query(&self, offset: u32) -> Option<T> {
     self.query_span(offset).map(|span| span.id)
   }
 
-  fn query_span(&self, offset: u32) -> Option<ActiveSpan<T>> {
+  pub fn query_span(&self, offset: u32) -> Option<SpanResult<T>> {
     let idx = self.segments.partition_point(|seg| seg.end <= offset);
-    let seg = self.segments.get(idx);
-    let mut best = seg.filter(|seg| offset >= seg.start).map(|seg| seg.best);
+    let best_non_empty = self
+      .segments
+      .get(idx)
+      .and_then(|seg| (offset >= seg.start).then_some(seg.best));
+
     let start_idx = self
       .empties
       .partition_point(|span| span.range.start < offset);
+    let mut best_empty: Option<ActiveSpan<T>> = None;
     for span in self.empties.iter().skip(start_idx) {
       if span.range.start != offset {
         break;
       }
-      let replace = best.map(|b| span < &b).unwrap_or(true);
+      let replace = best_empty.map(|best| span < &best).unwrap_or(true);
       if replace {
-        best = Some(*span);
+        best_empty = Some(*span);
       }
     }
-    best
+    match (best_non_empty, best_empty) {
+      (None, None) => None,
+      (Some(best), None) => Some(best.into()),
+      (None, Some(empty)) => Some(empty.into()),
+      (Some(best), Some(empty)) => Some(std::cmp::min(best, empty).into()),
+    }
+  }
+
+  pub fn span_of(&self, id: T) -> Option<TextRange> {
+    self.by_id.get(&id).map(|span| span.range)
   }
 }
 
@@ -205,6 +270,13 @@ impl<T> Default for SpanIndex<T> {
   fn default() -> Self {
     Self::new()
   }
+}
+
+/// Span and identifier returned from span map queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpanResult<T> {
+  pub range: TextRange,
+  pub id: T,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -217,6 +289,15 @@ struct SpanEntry<T> {
 struct ActiveSpan<T> {
   range: TextRange,
   id: T,
+}
+
+impl<T> From<ActiveSpan<T>> for SpanResult<T> {
+  fn from(value: ActiveSpan<T>) -> Self {
+    SpanResult {
+      range: value.range,
+      id: value.id,
+    }
+  }
 }
 
 impl<T: Copy> ActiveSpan<T> {
@@ -367,6 +448,21 @@ mod tests {
   use diagnostics::TextRange;
   use std::time::Instant;
 
+  use super::SpanIndex;
+
+  #[test]
+  fn selects_innermost_span_for_offset() {
+    let index = SpanIndex::from_spans([
+      (TextRange::new(0, 10), 0u32),
+      (TextRange::new(2, 8), 1u32),
+      (TextRange::new(4, 6), 2u32),
+    ]);
+
+    let result = index.query_span(5).expect("span at offset");
+    assert_eq!(result.id, 2);
+    assert_eq!(result.range, TextRange::new(4, 6));
+  }
+
   #[test]
   fn prefers_inner_expr() {
     let mut map = SpanMap::new();
@@ -377,12 +473,36 @@ mod tests {
   }
 
   #[test]
+  fn prefers_empty_span_at_offset() {
+    let mut map = SpanMap::new();
+    map.add_expr(TextRange::new(0, 10), BodyId(0), ExprId(0));
+    map.add_expr(TextRange::new(5, 5), BodyId(0), ExprId(1));
+    map.finalize();
+
+    assert_eq!(map.expr_at_offset(5), Some((BodyId(0), ExprId(1))));
+    let ((body, id), span) = map.expr_span_at_offset(5).expect("span for empty expr");
+    assert_eq!(body, BodyId(0));
+    assert_eq!(id, ExprId(1));
+    assert_eq!(span, TextRange::new(5, 5));
+  }
+
+  #[test]
   fn def_lookup_is_stable() {
     let mut map = SpanMap::new();
     map.add_def(TextRange::new(0, 5), DefId(0));
     map.add_def(TextRange::new(0, 4), DefId(1));
     map.finalize();
     assert_eq!(map.def_at_offset(1), Some(DefId(1)));
+  }
+
+  #[test]
+  fn span_lookup_prefers_inner_range_for_id() {
+    let mut index = SpanIndex::new();
+    index.add(TextRange::new(0, 10), ExprId(0));
+    index.add(TextRange::new(2, 5), ExprId(0));
+    index.finalize();
+
+    assert_eq!(index.span_of(ExprId(0)), Some(TextRange::new(2, 5)));
   }
 
   #[test]
@@ -441,6 +561,36 @@ mod tests {
     assert_eq!(
       map.export_specifier_at_offset(9),
       Some(ExportSpecifierId(3))
+    );
+  }
+
+  #[test]
+  fn expr_lookup_reports_body() {
+    let mut map = SpanMap::new();
+    map.add_expr(TextRange::new(0, 10), BodyId(0), ExprId(0));
+    map.add_expr(TextRange::new(2, 4), BodyId(1), ExprId(0));
+    map.finalize();
+
+    let ((body, expr), span) = map.expr_span_at_offset(3).expect("expr with body");
+    assert_eq!(body, BodyId(1));
+    assert_eq!(expr, ExprId(0));
+    assert_eq!(span, TextRange::new(2, 4));
+  }
+
+  #[test]
+  fn expr_span_lookup_uses_body() {
+    let mut map = SpanMap::new();
+    map.add_expr(TextRange::new(0, 10), BodyId(0), ExprId(0));
+    map.add_expr(TextRange::new(0, 10), BodyId(1), ExprId(0));
+    map.finalize();
+
+    assert_eq!(
+      map.expr_span(BodyId(1), ExprId(0)),
+      Some(TextRange::new(0, 10))
+    );
+    assert_eq!(
+      map.expr_span(BodyId(0), ExprId(0)),
+      Some(TextRange::new(0, 10))
     );
   }
 }

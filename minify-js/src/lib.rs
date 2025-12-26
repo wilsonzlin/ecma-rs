@@ -1,8 +1,6 @@
 pub use diagnostics::{Diagnostic, FileId, Severity, Span, TextRange};
 #[cfg(feature = "emit-minify")]
-use emit_js::{
-  emit_hir_file_diagnostic, emit_top_level_diagnostic, EmitOptions,
-};
+use emit_js::{emit_hir_file_diagnostic, emit_top_level_diagnostic, EmitOptions};
 #[cfg(feature = "emit-minify")]
 use hir_js::{lower_file, FileKind};
 #[cfg(feature = "emit-minify")]
@@ -148,10 +146,14 @@ pub fn minify_with_options(
     };
     let emit_opts = EmitOptions::minified();
     let emitted = if hir_can_emit(&top_level_node) {
-      match emit_hir_file_diagnostic(&lower_file(file, file_kind, &top_level_node), emit_opts.clone()) {
+      match emit_hir_file_diagnostic(
+        &lower_file(file, file_kind, &top_level_node),
+        emit_opts.clone(),
+      ) {
         Ok(code) => code,
-        Err(_) => emit_top_level_diagnostic(file, &top_level_node, emit_opts)
-          .map_err(|diag| vec![diag])?,
+        Err(_) => {
+          emit_top_level_diagnostic(file, &top_level_node, emit_opts).map_err(|diag| vec![diag])?
+        }
       }
     } else {
       emit_top_level_diagnostic(file, &top_level_node, emit_opts).map_err(|diag| vec![diag])?

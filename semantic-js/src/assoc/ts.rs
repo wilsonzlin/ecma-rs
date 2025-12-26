@@ -5,8 +5,8 @@
 
 use super::SpanKey;
 use crate::ts::locals::{ScopeId, SymbolId};
-use diagnostics::TextRange;
 use derive_visitor::{Drive, DriveMut};
+use diagnostics::TextRange;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::loc::Loc;

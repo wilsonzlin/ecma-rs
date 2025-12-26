@@ -709,11 +709,9 @@ fn binder_is_deterministic_across_orders_and_threads() {
   let mut a = HirFile::module(file_a);
   a.decls
     .push(mk_decl(0, "Foo", DeclKind::Function, Exported::Named));
-  a
-    .decls
+  a.decls
     .push(mk_decl(1, "Foo", DeclKind::Namespace, Exported::Named));
-  a
-    .decls
+  a.decls
     .push(mk_decl(2, "TypeOnly", DeclKind::Interface, Exported::Named));
 
   let mut b = HirFile::module(file_b);
@@ -788,8 +786,9 @@ fn binder_is_deterministic_across_orders_and_threads() {
   let roots = vec![file_a, file_b, file_c];
 
   let baseline_resolver = StaticResolver::new(resolver_map.clone());
-  let (baseline, diags) =
-    bind_ts_program(&roots, &baseline_resolver, |f| files.get(&f).unwrap().clone());
+  let (baseline, diags) = bind_ts_program(&roots, &baseline_resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
   assert!(diags.is_empty());
   let baseline_exports = export_snapshot(&baseline, &roots);
   let baseline_symbols = symbol_table_snapshot(baseline.symbols());
@@ -811,10 +810,12 @@ fn binder_is_deterministic_across_orders_and_threads() {
       let resolver_map = resolver_map.clone();
       thread::spawn(move || {
         let resolver = StaticResolver::new((*resolver_map).clone());
-        let (sem, diags) =
-          bind_ts_program(&order, &resolver, |f| files.get(&f).unwrap().clone());
+        let (sem, diags) = bind_ts_program(&order, &resolver, |f| files.get(&f).unwrap().clone());
         assert!(diags.is_empty());
-        (export_snapshot(&sem, &order), symbol_table_snapshot(sem.symbols()))
+        (
+          export_snapshot(&sem, &order),
+          symbol_table_snapshot(sem.symbols()),
+        )
       })
     })
     .collect();
