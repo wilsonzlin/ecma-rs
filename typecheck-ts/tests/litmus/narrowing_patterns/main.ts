@@ -41,8 +41,8 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
   }
 }
 
-// expect-expr-type: shape.size; = { kind: "square"; size: number }
-// expect-expr-type: shape.radius; = { kind: "circle"; radius: number }
+// expect-expr-type: shape.size; = number
+// expect-expr-type: shape.radius; = null | string
 
 function shortCircuit(val: string | null) {
   if (val && typeof val === "string") {

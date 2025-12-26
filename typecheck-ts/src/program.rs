@@ -49,8 +49,9 @@ use crate::{FatalError, HostError, Ice, IceContext};
 #[path = "check/mod.rs"]
 pub(crate) mod check;
 
-use check::narrow::{
-  narrow_by_discriminant, narrow_by_in_check, narrow_by_typeof, truthy_falsy_types, Facts,
+use check::legacy_narrow::{
+  narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof, narrow_by_typeof,
+  truthy_falsy_types, Facts,
 };
 
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
@@ -3676,10 +3677,20 @@ impl ProgramState {
           self.builtin.boolean
         }
         OperatorName::Instanceof => {
-          let (_lt, lf) = self.check_expr(left, env, result, file, None);
+          let (lt, lf) = self.check_expr(left, env, result, file, None);
           let (_rt, rf) = self.check_expr(right, env, result, file, None);
           facts.merge(lf, &mut self.type_store, &self.builtin);
           facts.merge(rf, &mut self.type_store, &self.builtin);
+          if let HirExprKind::Ident(name) = &left.kind {
+            let (yes, no) =
+              narrow_by_instanceof(lt, &mut self.type_store, &self.builtin);
+            if yes != self.builtin.never {
+              facts.truthy.insert(name.clone(), yes);
+            }
+            if no != self.builtin.never {
+              facts.falsy.insert(name.clone(), no);
+            }
+          }
           self.builtin.boolean
         }
         OperatorName::In => {

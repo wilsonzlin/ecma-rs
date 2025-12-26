@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 
 use super::super::{
-  FileId, HirExpr, HirExprKind, HirObjectProperty, ObjectType, ProgramState, Span, TypeId, TypeKind,
+  BodyCheckResult, FileId, HirExpr, HirExprKind, HirObjectProperty, ObjectType, ProgramState, Span,
+  TypeId, TypeKind,
 };
-use super::body::BodyCheckOutput;
 use crate::codes;
 
 pub(crate) fn is_fresh_object_literal(expr: &HirExpr) -> bool {
@@ -39,9 +39,8 @@ pub(crate) fn contextual_property_type(
 pub(crate) fn check_excess_properties(
   state: &mut ProgramState,
   expr: &HirExpr,
-  _source_type: TypeId,
   target_type: TypeId,
-  result: &mut BodyCheckOutput,
+  result: &mut BodyCheckResult,
   file: FileId,
 ) {
   if !is_fresh_object_literal(expr) {
@@ -69,7 +68,7 @@ pub(crate) fn check_excess_properties(
     let name = &prop.name;
     let value = &prop.value;
     let mut diagnostic = codes::EXCESS_PROPERTY.error(
-      format!("excess property '{name}' in object literal"),
+      format!("excess property '{}' in object literal", name),
       Span {
         file,
         range: value.span,
