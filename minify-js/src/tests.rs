@@ -1,4 +1,9 @@
 use crate::{minify, minify_with_options, Dialect, FileId, MinifyOptions, Severity, TopLevelMode};
+#[cfg(feature = "emit-minify")]
+use crate::{
+  clear_last_emit_backend_for_tests, force_hir_emit_failure_for_tests, last_emit_backend_for_tests,
+  EmitBackend,
+};
 use parse_js::ast::expr::jsx::JsxElemChild;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::import_export::ImportNames;
@@ -39,6 +44,18 @@ fn minified_program(
   )
   .expect("output should parse as JavaScript");
   (output, parsed)
+}
+
+#[cfg(feature = "emit-minify")]
+fn minified_with_backend_options(
+  options: MinifyOptions,
+  src: &str,
+) -> (String, EmitBackend) {
+  clear_last_emit_backend_for_tests();
+  let mut out = Vec::new();
+  minify_with_options(options, src, &mut out).unwrap();
+  let backend = last_emit_backend_for_tests().expect("emitter backend should be recorded");
+  (String::from_utf8(out).unwrap(), backend)
 }
 
 #[test]
@@ -92,6 +109,25 @@ fn test_minify_determinism() {
   let first = minified(TopLevelMode::Module, src);
   let second = minified(TopLevelMode::Module, src);
   assert_eq!(first, second);
+}
+
+#[cfg(feature = "emit-minify")]
+#[test]
+fn hir_emitter_matches_ast_output() {
+  let options = MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js);
+  let src = "function wrap(value){return value+1;} const result=wrap(2); const doubled=wrap(result);";
+  let (hir_output, hir_backend) = minified_with_backend_options(options, src);
+  assert_eq!(hir_backend, EmitBackend::Hir);
+
+  force_hir_emit_failure_for_tests();
+  let (ast_output, ast_backend) = minified_with_backend_options(
+    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
+    src,
+  );
+  assert_eq!(ast_backend, EmitBackend::Ast);
+  assert_eq!(hir_output, ast_output);
+
+  parse(&hir_output).expect("HIR-emitted output should remain parseable");
 }
 
 #[test]

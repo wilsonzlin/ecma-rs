@@ -14,6 +14,8 @@ use rename::{apply_renames, assign_names, collect_usages};
 use semantic_js::js::bind_js;
 pub use semantic_js::js::TopLevelMode;
 use ts_erase::erase_types;
+#[cfg(all(test, feature = "emit-minify"))]
+use std::cell::Cell;
 
 pub use parse_js::Dialect;
 mod rename;
@@ -22,9 +24,72 @@ mod tests;
 mod ts_erase;
 
 #[cfg(feature = "emit-minify")]
-fn hir_can_emit(top: &Node<TopLevel>) -> bool {
-  let _ = top;
-  false
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum EmitBackend {
+  Hir,
+  Ast,
+}
+
+#[cfg(all(test, feature = "emit-minify"))]
+thread_local! {
+  static LAST_EMIT_BACKEND: Cell<Option<EmitBackend>> = Cell::new(None);
+  static FORCE_HIR_FAILURE: Cell<bool> = Cell::new(false);
+}
+
+#[cfg(all(test, feature = "emit-minify"))]
+fn set_last_emit_backend(backend: EmitBackend) {
+  LAST_EMIT_BACKEND.with(|cell| cell.set(Some(backend)));
+}
+
+#[cfg(all(test, feature = "emit-minify"))]
+pub(crate) fn clear_last_emit_backend_for_tests() {
+  LAST_EMIT_BACKEND.with(|cell| cell.set(None));
+}
+
+#[cfg(all(test, feature = "emit-minify"))]
+pub(crate) fn last_emit_backend_for_tests() -> Option<EmitBackend> {
+  LAST_EMIT_BACKEND.with(|cell| cell.get())
+}
+
+#[cfg(all(test, feature = "emit-minify"))]
+pub(crate) fn force_hir_emit_failure_for_tests() {
+  FORCE_HIR_FAILURE.with(|flag| flag.set(true));
+}
+
+#[cfg(feature = "emit-minify")]
+fn emit_minified(
+  file: FileId,
+  file_kind: FileKind,
+  top_level_node: &Node<TopLevel>,
+  emit_opts: &EmitOptions,
+) -> Result<(String, EmitBackend), Vec<Diagnostic>> {
+  #[cfg(all(test, feature = "emit-minify"))]
+  let force_failure = FORCE_HIR_FAILURE.with(|flag| flag.replace(false));
+  #[cfg(not(all(test, feature = "emit-minify")))]
+  let force_failure = false;
+
+  let lowered = lower_file(file, file_kind, top_level_node);
+  let hir_output = if force_failure {
+    None
+  } else {
+    emit_hir_file_diagnostic(&lowered, emit_opts.clone()).ok()
+  };
+
+  let ast_output = emit_top_level_diagnostic(file, top_level_node, emit_opts.clone())
+    .map_err(|diag| vec![diag])?;
+
+  // Prefer the HIR emitter when it can faithfully reproduce the AST output,
+  // but always fall back to the AST emitter to avoid silently dropping
+  // unsupported constructs while still exercising the HIR path.
+  let (emitted, backend) = match hir_output {
+    Some(code) if code == ast_output => (code, EmitBackend::Hir),
+    _ => (ast_output, EmitBackend::Ast),
+  };
+
+  #[cfg(all(test, feature = "emit-minify"))]
+  set_last_emit_backend(backend);
+
+  Ok((emitted, backend))
 }
 
 /// Minifies UTF-8 JavaScript or TypeScript code.
@@ -91,6 +156,9 @@ pub fn minify_with_options(
   source: &str,
   output: &mut Vec<u8>,
 ) -> Result<(), Vec<Diagnostic>> {
+  #[cfg(all(test, feature = "emit-minify"))]
+  clear_last_emit_backend_for_tests();
+
   let file = FileId(0);
   let parse_dialects = match options.dialect {
     Some(dialect) => vec![dialect],
@@ -145,19 +213,7 @@ pub fn minify_with_options(
       Dialect::Dts => FileKind::Dts,
     };
     let emit_opts = EmitOptions::minified();
-    let emitted = if hir_can_emit(&top_level_node) {
-      match emit_hir_file_diagnostic(
-        &lower_file(file, file_kind, &top_level_node),
-        emit_opts.clone(),
-      ) {
-        Ok(code) => code,
-        Err(_) => {
-          emit_top_level_diagnostic(file, &top_level_node, emit_opts).map_err(|diag| vec![diag])?
-        }
-      }
-    } else {
-      emit_top_level_diagnostic(file, &top_level_node, emit_opts).map_err(|diag| vec![diag])?
-    };
+    let (emitted, _) = emit_minified(file, file_kind, &top_level_node, &emit_opts)?;
     output.clear();
     output.extend_from_slice(emitted.as_bytes());
     return Ok(());
