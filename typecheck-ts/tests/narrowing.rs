@@ -436,6 +436,70 @@ fn narrows_discriminants() {
 }
 
 #[test]
+fn narrows_numeric_discriminants() {
+  let src = "function f(x: { kind: 0, v: string } | { kind: 1, v: number }) { if (x.kind === 0) { return x.v; } else { return x.v; } }";
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let zero = store.intern_type(TypeKind::NumberLiteral(0.0.into()));
+  let one = store.intern_type(TypeKind::NumberLiteral(1.0.into()));
+  let zero_obj = obj_type(&store, &[("kind", zero), ("v", prim.string)]);
+  let one_obj = obj_type(&store, &[("kind", one), ("v", prim.number)]);
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![zero_obj, one_obj]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn narrows_boolean_discriminants() {
+  let src = "function f(x: { kind: true, v: string } | { kind: false, v: number }) { if (x.kind === true) { return x.v; } else { return x.v; } }";
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let true_kind = store.intern_type(TypeKind::BooleanLiteral(true));
+  let false_kind = store.intern_type(TypeKind::BooleanLiteral(false));
+  let true_obj = obj_type(&store, &[("kind", true_kind), ("v", prim.string)]);
+  let false_obj = obj_type(&store, &[("kind", false_kind), ("v", prim.number)]);
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![true_obj, false_obj]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
 fn optional_chain_discriminant_narrows() {
   let src = r#"
 function f(x: {kind:"a"}|{kind:"b"}|null) {

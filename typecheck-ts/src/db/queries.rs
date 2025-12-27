@@ -31,7 +31,6 @@ use crate::symbols::SymbolBinding;
 use crate::FileKey;
 use crate::SymbolOccurrence;
 use crate::{BodyId, DefId, ExprId, TypeId};
-use salsa::Setter;
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
   db.file_input_by_key(key)
@@ -584,6 +583,7 @@ pub mod body_check {
         (!binding_defs.is_empty())
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
+        None,
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {

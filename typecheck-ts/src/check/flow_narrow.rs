@@ -409,11 +409,11 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
   }
 }
 
-/// Narrow by a discriminant property check (e.g. `x.kind === "foo"`).
+/// Narrow by a discriminant property check (e.g. `x.kind === "foo"` or `x.kind === 1`).
 pub fn narrow_by_discriminant(
   ty: TypeId,
   prop: &str,
-  value: &str,
+  value: &LiteralValue,
   store: &TypeStore,
 ) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
@@ -433,27 +433,10 @@ pub fn narrow_by_discriminant(
     }
     TypeKind::Object(obj) => {
       let shape = store.shape(store.object(obj).shape);
-      let mut matched = false;
-      for property in shape.properties.iter() {
-        match store.type_kind(property.data.ty) {
-          TypeKind::StringLiteral(name_id) => {
-            if matches!(property.key, types_ts_interned::PropKey::String(name) if store.name(name) == prop)
-              && store.name(name_id) == value
-            {
-              matched = true;
-              break;
-            }
-          }
-          TypeKind::String => {
-            if matches!(property.key, types_ts_interned::PropKey::String(name) if store.name(name) == prop)
-            {
-              matched = true;
-              break;
-            }
-          }
-          _ => {}
-        }
-      }
+      let matched = shape.properties.iter().any(|property| {
+        matches!(property.key, types_ts_interned::PropKey::String(name) if store.name(name) == prop)
+          && matches_discriminant_value(property.data.ty, value, store)
+      });
       if matched {
         yes.push(ty);
       } else {
@@ -470,7 +453,7 @@ pub fn narrow_by_discriminant(
 pub fn narrow_by_discriminant_path(
   ty: TypeId,
   path: &[PathSegment],
-  value: &str,
+  value: &LiteralValue,
   store: &TypeStore,
 ) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
@@ -516,7 +499,7 @@ pub fn narrow_by_discriminant_path(
 fn matches_discriminant_path(
   ty: TypeId,
   path: &[PathSegment],
-  value: &str,
+  value: &LiteralValue,
   store: &TypeStore,
 ) -> bool {
   if path.is_empty() {
@@ -565,14 +548,20 @@ fn matches_discriminant_path(
   }
 }
 
-fn matches_discriminant_value(ty: TypeId, value: &str, store: &TypeStore) -> bool {
+fn matches_discriminant_value(ty: TypeId, value: &LiteralValue, store: &TypeStore) -> bool {
   match store.type_kind(ty) {
     TypeKind::Union(members) => members
       .iter()
       .any(|member| matches_discriminant_value(*member, value, store)),
-    TypeKind::StringLiteral(name) => store.name(name) == value,
-    TypeKind::String => true,
-    _ => false,
+    kind => match (kind, value) {
+      (TypeKind::StringLiteral(name_id), LiteralValue::String(target)) => store.name(name_id) == *target,
+      (TypeKind::String, LiteralValue::String(_)) => true,
+      (TypeKind::NumberLiteral(num), LiteralValue::Number(target)) => num.0.to_string() == *target,
+      (TypeKind::Number, LiteralValue::Number(_)) => true,
+      (TypeKind::BooleanLiteral(lit), LiteralValue::Boolean(target)) => lit == *target,
+      (TypeKind::Boolean, LiteralValue::Boolean(_)) => true,
+      _ => false,
+    },
   }
 }
 

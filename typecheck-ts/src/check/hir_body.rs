@@ -3359,15 +3359,15 @@ impl<'a> FlowBodyChecker<'a> {
     }
 
     if let Some((target, prop, target_ty)) = self.discriminant_member(left) {
-      if let Some(LiteralValue::String(value)) = self.literal_value(right) {
-        let (yes, no) = narrow_by_discriminant(target_ty, &prop, &value, &self.store);
+      if let Some(lit) = self.literal_value(right) {
+        let (yes, no) = narrow_by_discriminant(target_ty, &prop, &lit, &self.store);
         apply(target, yes, no);
         return;
       }
     }
     if let Some((target, prop, target_ty)) = self.discriminant_member(right) {
-      if let Some(LiteralValue::String(value)) = self.literal_value(left) {
-        let (yes, no) = narrow_by_discriminant(target_ty, &prop, &value, &self.store);
+      if let Some(lit) = self.literal_value(left) {
+        let (yes, no) = narrow_by_discriminant(target_ty, &prop, &lit, &self.store);
         apply(target, yes, no);
         return;
       }
@@ -4328,9 +4328,7 @@ impl<'a> FlowBodyChecker<'a> {
         Some(narrow_by_literal(ty, &lit, &self.store))
       }
       SwitchDiscriminant::Member { prop, .. } => match self.literal_value(test) {
-        Some(LiteralValue::String(value)) => {
-          Some(narrow_by_discriminant(ty, prop, &value, &self.store))
-        }
+        Some(lit) => Some(narrow_by_discriminant(ty, prop, &lit, &self.store)),
         _ => None,
       },
       SwitchDiscriminant::Typeof { .. } => match self.literal_value(test) {
