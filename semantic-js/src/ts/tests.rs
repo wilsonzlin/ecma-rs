@@ -172,6 +172,8 @@ fn reexport_chain_uses_original_symbols() {
     specifier: "b".to_string(),
     is_type_only: false,
     specifier_span: span(12),
+    alias: None,
+    alias_span: None,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -214,6 +216,59 @@ fn reexport_chain_uses_original_symbols() {
 }
 
 #[test]
+fn export_all_as_namespace_adds_only_alias() {
+  let file_a = FileId(400);
+  let file_b = FileId(401);
+
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "foo", DeclKind::Var, Exported::Named));
+
+  let mut b = HirFile::module(file_b);
+  b.exports.push(Export::All(ExportAll {
+    specifier: "a".to_string(),
+    is_type_only: false,
+    specifier_span: span(10),
+    alias: Some("NS".to_string()),
+    alias_span: Some(span(11)),
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports_b = semantics.exports_of(file_b);
+  assert!(exports_b.contains_key("NS"));
+  assert!(!exports_b.contains_key("foo"));
+
+  let symbols = semantics.symbols();
+  let ns_group = exports_b.get("NS").expect("namespace alias exported");
+  let mask = ns_group.namespaces(symbols);
+  assert!(mask.contains(Namespace::VALUE));
+  assert!(mask.contains(Namespace::TYPE));
+  assert!(mask.contains(Namespace::NAMESPACE));
+  let ns_symbol = ns_group
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("value namespace present");
+  match &symbols.symbol(ns_symbol).origin {
+    SymbolOrigin::Import { source, imported } => {
+      assert_eq!(source, &ImportSource::File(file_a));
+      assert_eq!(imported, "*");
+    }
+    other => panic!("expected import origin, got {:?}", other),
+  }
+}
+
+#[test]
 fn circular_export_is_cycle_safe() {
   let file_a = FileId(10);
   let file_b = FileId(11);
@@ -225,6 +280,8 @@ fn circular_export_is_cycle_safe() {
     specifier: "b".to_string(),
     is_type_only: false,
     specifier_span: span(20),
+    alias: None,
+    alias_span: None,
   }));
 
   let mut b = HirFile::module(file_b);
@@ -234,6 +291,8 @@ fn circular_export_is_cycle_safe() {
     specifier: "a".to_string(),
     is_type_only: false,
     specifier_span: span(21),
+    alias: None,
+    alias_span: None,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -512,6 +571,8 @@ fn unresolved_import_export_have_spans() {
     specifier: "missing".to_string(),
     is_type_only: false,
     specifier_span: export_span,
+    alias: None,
+    alias_span: None,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
@@ -606,12 +667,12 @@ fn resolve_imports_point_to_origin_module() {
   let import_symbol = semantics
     .resolve_in_module(file_b, "Foo", Namespace::VALUE)
     .expect("import binding present");
-  match semantics.symbols().symbol(import_symbol).origin {
-    SymbolOrigin::Import { from, ref imported } => {
-      assert_eq!(from, Some(file_a));
+  match &semantics.symbols().symbol(import_symbol).origin {
+    SymbolOrigin::Import { source, imported } => {
+      assert_eq!(source, &ImportSource::File(file_a));
       assert_eq!(imported, "Foo");
     }
-    ref other => panic!("expected import origin, got {:?}", other),
+    other => panic!("expected import origin, got {:?}", other),
   }
 
   let origin_symbol = semantics
@@ -620,6 +681,54 @@ fn resolve_imports_point_to_origin_module() {
   let origin_decls = semantics.symbol_decls(origin_symbol, Namespace::VALUE);
   assert_eq!(origin_decls.len(), 1);
   assert_eq!(semantics.symbols().decl(origin_decls[0]).file, file_a);
+}
+
+#[test]
+fn import_equals_require_binds_namespace_origin() {
+  let file_a = FileId(70);
+  let file_b = FileId(71);
+
+  let a = HirFile::module(file_a);
+
+  let mut b = HirFile::module(file_b);
+  b.decls
+    .push(mk_decl(0, "Foo", DeclKind::ImportBinding, Exported::No));
+  b.import_equals.push(ImportEquals {
+    local: "Foo".to_string(),
+    local_span: span(1),
+    target: ImportEqualsTarget::Require {
+      specifier: "a".to_string(),
+      specifier_span: span(2),
+    },
+    is_exported: false,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let import_symbol = semantics
+    .resolve_in_module(file_b, "Foo", Namespace::VALUE)
+    .expect("import equals binding present");
+  let import_data = semantics.symbols().symbol(import_symbol);
+  assert!(import_data.namespaces.contains(Namespace::VALUE));
+  assert!(import_data.namespaces.contains(Namespace::TYPE));
+  assert!(import_data.namespaces.contains(Namespace::NAMESPACE));
+  match &import_data.origin {
+    SymbolOrigin::Import { source, imported } => {
+      assert_eq!(source, &ImportSource::File(file_a));
+      assert_eq!(imported, "*");
+    }
+    other => panic!("expected import origin, got {:?}", other),
+  }
 }
 
 #[test]
@@ -748,9 +857,9 @@ fn type_only_imports_skip_value_namespace() {
   let type_symbol = semantics
     .resolve_in_module(file_b, "Foo", Namespace::TYPE)
     .expect("type-only import resolves in type namespace");
-  match semantics.symbols().symbol(type_symbol).origin {
-    SymbolOrigin::Import { from, .. } => assert_eq!(from, Some(file_a)),
-    ref other => panic!("expected import origin, got {:?}", other),
+  match &semantics.symbols().symbol(type_symbol).origin {
+    SymbolOrigin::Import { source, .. } => assert_eq!(source, &ImportSource::File(file_a)),
+    other => panic!("expected import origin, got {:?}", other),
   }
 }
 
@@ -766,6 +875,8 @@ fn resolve_export_handles_export_star_cycles() {
     specifier: "b".to_string(),
     is_type_only: false,
     specifier_span: span(80),
+    alias: None,
+    alias_span: None,
   }));
 
   let mut b = HirFile::module(file_b);
@@ -775,6 +886,8 @@ fn resolve_export_handles_export_star_cycles() {
     specifier: "a".to_string(),
     is_type_only: false,
     specifier_span: span(81),
+    alias: None,
+    alias_span: None,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -866,6 +979,8 @@ fn binder_is_deterministic_across_orders_and_threads() {
     specifier: "b".to_string(),
     is_type_only: false,
     specifier_span: span(17),
+    alias: None,
+    alias_span: None,
   }));
   c.exports.push(Export::Named(NamedExport {
     specifier: Some("a".to_string()),
@@ -1257,6 +1372,7 @@ fn ambient_modules_collect_exports() {
     name_span: span(100),
     decls: vec![decl],
     imports: Vec::new(),
+    import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),
@@ -1315,7 +1431,7 @@ fn export_assignment_reports_span() {
 
   assert_eq!(diags.len(), 1);
   let diag = &diags[0];
-  assert_eq!(diag.code, "BIND1003");
+  assert_eq!(diag.code, "BIND1002");
   assert_eq!(diag.primary.file, file);
   assert_eq!(diag.primary.range, span(10));
 }
@@ -1324,7 +1440,6 @@ fn export_assignment_reports_span() {
 fn export_as_namespace_reports_diagnostic() {
   let file = FileId(95);
   let mut hir = HirFile::module(file);
-  hir.file_kind = FileKind::Dts;
   hir.export_as_namespace.push(ExportAsNamespace {
     name: "Foo".to_string(),
     span: span(20),
@@ -1342,6 +1457,80 @@ fn export_as_namespace_reports_diagnostic() {
 }
 
 #[test]
+fn dts_export_as_namespace_creates_global_symbol() {
+  let file = FileId(116);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+  hir
+    .decls
+    .push(mk_decl(0, "value", DeclKind::Var, Exported::Named));
+  hir.export_as_namespace.push(ExportAsNamespace {
+    name: "Foo".to_string(),
+    span: span(30),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert!(diags.is_empty());
+
+  let globals = semantics.global_symbols();
+  assert!(globals.contains_key("Foo"));
+  let symbols = semantics.symbols();
+  let group = globals.get("Foo").unwrap();
+  let mask = group.namespaces(symbols);
+  assert!(mask.contains(Namespace::VALUE));
+  assert!(mask.contains(Namespace::NAMESPACE));
+  assert!(mask.contains(Namespace::TYPE));
+  let sym = group.symbol_for(Namespace::VALUE, symbols).unwrap();
+  match &symbols.symbol(sym).origin {
+    SymbolOrigin::Import { source, imported } => {
+      assert_eq!(source, &ImportSource::File(file));
+      assert_eq!(imported, "*");
+    }
+    other => panic!("expected import origin, got {:?}", other),
+  }
+}
+
+#[test]
+fn export_as_namespace_conflict_reports_diagnostic() {
+  let file_a = FileId(117);
+  let file_b = FileId(118);
+
+  let mut a = HirFile::module(file_a);
+  a.file_kind = FileKind::Dts;
+  a.export_as_namespace.push(ExportAsNamespace {
+    name: "Foo".to_string(),
+    span: span(40),
+  });
+
+  let mut b = HirFile::module(file_b);
+  b.file_kind = FileKind::Dts;
+  b.export_as_namespace.push(ExportAsNamespace {
+    name: "Foo".to_string(),
+    span: span(41),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> =
+    maplit::hashmap! { file_a => Arc::new(a), file_b => Arc::new(b) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file_a, file_b], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
+
+  assert!(semantics.global_symbols().contains_key("Foo"));
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1006");
+  assert_eq!(diag.primary.file, file_b);
+  assert_eq!(diag.primary.range, span(41));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.file, file_a);
+  assert_eq!(diag.labels[0].span.range, span(40));
+}
+
+#[test]
 fn ambient_module_fragments_merge_exports() {
   let file = FileId(96);
   let mut hir = HirFile::module(file);
@@ -1352,6 +1541,7 @@ fn ambient_module_fragments_merge_exports() {
     name_span: span(0),
     decls: Vec::new(),
     imports: Vec::new(),
+    import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),
@@ -1398,6 +1588,7 @@ fn ambient_module_interfaces_merge_deterministically() {
     name_span: span(0),
     decls: Vec::new(),
     imports: Vec::new(),
+    import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),
@@ -1433,6 +1624,145 @@ fn ambient_module_interfaces_merge_deterministically() {
   assert!(decls
     .windows(2)
     .all(|w| symbols.decl(w[0]).order < symbols.decl(w[1]).order));
+}
+
+#[test]
+fn ambient_module_import_reexports_without_resolver_mapping() {
+  let file = FileId(120);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+
+  let mut decl = mk_decl(0, "x", DeclKind::Var, Exported::No);
+  decl.is_ambient = true;
+  let ambient = AmbientModule {
+    name: "pkg".to_string(),
+    name_span: span(0),
+    decls: vec![decl],
+    imports: Vec::new(),
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  };
+  hir.ambient_modules.push(ambient);
+
+  hir.imports.push(Import {
+    specifier: "pkg".to_string(),
+    specifier_span: span(10),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "x".to_string(),
+      local: "x".to_string(),
+      is_type_only: false,
+      imported_span: span(11),
+      local_span: span(12),
+    }],
+    is_type_only: false,
+  });
+  hir.exports.push(Export::Named(NamedExport {
+    specifier: None,
+    specifier_span: None,
+    items: vec![ExportSpecifier {
+      local: "x".to_string(),
+      exported: None,
+      local_span: span(13),
+      exported_span: None,
+    }],
+    is_type_only: false,
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(
+    diags.is_empty(),
+    "expected no diagnostics for ambient module import, got {:?}",
+    diags
+  );
+
+  let symbols = semantics.symbols();
+  let ambient_symbol = semantics
+    .exports_of_ambient_module("pkg")
+    .and_then(|exports| exports.get("x"))
+    .and_then(|group| group.symbol_for(Namespace::VALUE, symbols))
+    .expect("ambient export available");
+  let reexported = semantics
+    .exports_of(file)
+    .get("x")
+    .and_then(|group| group.symbol_for(Namespace::VALUE, symbols))
+    .expect("module exports imported symbol");
+  assert_eq!(ambient_symbol, reexported);
+
+  let import_symbol = semantics
+    .resolve_in_module(file, "x", Namespace::VALUE)
+    .expect("import binding present");
+  match &semantics.symbols().symbol(import_symbol).origin {
+    SymbolOrigin::Import { source, imported } => {
+      assert_eq!(source, &ImportSource::AmbientModule("pkg".to_string()));
+      assert_eq!(imported, "x");
+    }
+    other => panic!("expected ambient import origin, got {:?}", other),
+  }
+}
+
+#[test]
+fn ambient_module_reexport_chain() {
+  let file_pkg = FileId(121);
+  let file_reexport = FileId(122);
+
+  let mut pkg = HirFile::module(file_pkg);
+  pkg.file_kind = FileKind::Dts;
+  let mut decl = mk_decl(0, "foo", DeclKind::Function, Exported::No);
+  decl.is_ambient = true;
+  pkg.ambient_modules.push(AmbientModule {
+    name: "pkg".to_string(),
+    name_span: span(0),
+    decls: vec![decl],
+    imports: Vec::new(),
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  });
+
+  let mut reexport = HirFile::module(file_reexport);
+  reexport.exports.push(Export::Named(NamedExport {
+    specifier: Some("pkg".to_string()),
+    specifier_span: Some(span(20)),
+    items: vec![ExportSpecifier {
+      local: "foo".to_string(),
+      exported: None,
+      local_span: span(21),
+      exported_span: None,
+    }],
+    is_type_only: false,
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_pkg => Arc::new(pkg),
+    file_reexport => Arc::new(reexport),
+  };
+  let resolver = StaticResolver::new(HashMap::new());
+
+  let (semantics, diags) = bind_ts_program(&[file_pkg, file_reexport], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
+  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+
+  let symbols = semantics.symbols();
+  let ambient_symbol = semantics
+    .exports_of_ambient_module("pkg")
+    .and_then(|exports| exports.get("foo"))
+    .and_then(|group| group.symbol_for(Namespace::VALUE, symbols))
+    .expect("ambient export present");
+  let reexported_symbol = semantics
+    .exports_of(file_reexport)
+    .get("foo")
+    .and_then(|group| group.symbol_for(Namespace::VALUE, symbols))
+    .expect("re-export present");
+  assert_eq!(ambient_symbol, reexported_symbol);
 }
 
 fn body_by_name<'a>(
@@ -1490,11 +1820,11 @@ fn locals_imports_use_expected_namespaces() {
 
   assert_eq!(
     symbol_named("foo").namespaces,
-    Namespace::VALUE | Namespace::TYPE
+    Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
   );
   assert_eq!(
     symbol_named("baz").namespaces,
-    Namespace::VALUE | Namespace::TYPE
+    Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
   );
   assert_eq!(symbol_named("bar").namespaces, Namespace::TYPE);
   assert_eq!(

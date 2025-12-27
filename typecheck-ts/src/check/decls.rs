@@ -9,7 +9,7 @@ use hir_js::{
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
-use semantic_js::ts::{Namespace, SymbolOrigin, SymbolOwner, TsProgramSemantics};
+use semantic_js::ts::{ImportSource, Namespace, SymbolOrigin, SymbolOwner, TsProgramSemantics};
 use types_ts_interned::{
   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
   Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
@@ -875,7 +875,10 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   ) -> Option<FileId> {
     let sym = sem.symbols().symbol(symbol);
     match &sym.origin {
-      SymbolOrigin::Import { from, .. } => from.clone(),
+      SymbolOrigin::Import { source, .. } => match source {
+        ImportSource::File(from) => Some(*from),
+        _ => None,
+      },
       _ => match &sym.owner {
         SymbolOwner::Module(file) => Some(*file),
         _ => None,

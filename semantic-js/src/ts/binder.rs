@@ -51,19 +51,19 @@ enum ExportSpec {
     span: Span,
   },
   ReExport {
-    from: Option<FileId>,
+    from: ImportSource,
     name: String,
     exported_as: String,
     type_only: bool,
     span: Span,
   },
   ExportAll {
-    from: Option<FileId>,
+    from: ImportSource,
     type_only: bool,
     span: Span,
   },
   ExportAllAlias {
-    from: Option<FileId>,
+    from: ImportSource,
     exported_as: String,
     type_only: bool,
     span: Span,
@@ -253,6 +253,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       &hir.import_equals,
       &hir.exports,
       &hir.export_as_namespace,
+      &hir.ambient_modules,
       &mut deps,
     );
 
@@ -290,6 +291,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       &module.import_equals,
       &module.exports,
       &module.export_as_namespace,
+      &module.ambient_modules,
       &mut deps,
     );
 
@@ -315,6 +317,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     import_equals: &[ImportEquals],
     exports: &[Export],
     export_as_namespace: &[ExportAsNamespace],
+    ambient_modules: &[AmbientModule],
     deps: &mut Vec<FileId>,
   ) {
     let mut has_exports = false;
@@ -418,14 +421,15 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         &import.specifier,
         Span::new(file_id, import.specifier_span),
         true,
+        ambient_modules,
       );
-      if let Some(t) = target {
-        deps.push(t);
+      if let ImportSource::File(t) = &target {
+        deps.push(*t);
       }
       if let Some(default) = &import.default {
         let entry = ImportEntry {
           local: default.local.clone(),
-          from: target,
+          source: target.clone(),
           imported: ImportItem::Default,
           type_only: import.is_type_only || default.is_type_only,
           def_id: import_def_ids.get(&default.local).copied(),
@@ -436,7 +440,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       if let Some(ns) = &import.namespace {
         let entry = ImportEntry {
           local: ns.local.clone(),
-          from: target,
+          source: target.clone(),
           imported: ImportItem::Namespace,
           type_only: import.is_type_only || ns.is_type_only,
           def_id: import_def_ids.get(&ns.local).copied(),
@@ -447,7 +451,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       for named in &import.named {
         let entry = ImportEntry {
           local: named.local.clone(),
-          from: target,
+          source: target.clone(),
           imported: ImportItem::Named(named.imported.clone()),
           type_only: import.is_type_only || named.is_type_only,
           def_id: import_def_ids.get(&named.local).copied(),
@@ -468,13 +472,14 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             specifier,
             Span::new(file_id, *specifier_span),
             true,
+            ambient_modules,
           );
-          if let Some(t) = target {
-            deps.push(t);
+          if let ImportSource::File(t) = &target {
+            deps.push(*t);
           }
           let entry = ImportEntry {
             local: import.local.clone(),
-            from: target,
+            source: target.clone(),
             imported: ImportItem::Namespace,
             type_only: false,
             def_id: import_def_ids.get(&import.local).copied(),
@@ -530,9 +535,15 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             .unwrap_or_else(|| TextRange::new(0, 0));
           let target = match (named.specifier.as_ref(), Some(span_range)) {
             (Some(spec), Some(span)) => {
-              let resolved = self.resolve_spec(file_id, spec, Span::new(file_id, span), false);
-              if let Some(t) = resolved {
-                deps.push(t);
+              let resolved = self.resolve_spec(
+                file_id,
+                spec,
+                Span::new(file_id, span),
+                false,
+                ambient_modules,
+              );
+              if let ImportSource::File(t) = &resolved {
+                deps.push(*t);
               }
               Some(resolved)
             }
@@ -552,7 +563,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
               let span = Span::new(file_id, item.exported_span.unwrap_or(item.local_span));
               first_export_span.get_or_insert(span);
               state.export_specs.push(ExportSpec::ReExport {
-                from: target.flatten(),
+                from: target.clone().expect("re-export has specifier"),
                 name: item.local.clone(),
                 exported_as: item.exported.clone().unwrap_or_else(|| item.local.clone()),
                 type_only: named.is_type_only,
@@ -566,22 +577,23 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         Export::All(all) => {
           let spec_span = Span::new(file_id, all.specifier_span);
           first_export_span.get_or_insert(spec_span);
-          let target = self.resolve_spec(file_id, &all.specifier, spec_span, false);
-          if let Some(t) = target {
-            deps.push(t);
+          let target =
+            self.resolve_spec(file_id, &all.specifier, spec_span, false, ambient_modules);
+          if let ImportSource::File(t) = &target {
+            deps.push(*t);
           }
           if let Some(alias) = &all.alias {
             let alias_span = Span::new(file_id, all.alias_span.unwrap_or(all.specifier_span));
             first_export_span.get_or_insert(alias_span);
             state.export_specs.push(ExportSpec::ExportAllAlias {
-              from: target,
+              from: target.clone(),
               exported_as: alias.clone(),
               type_only: all.is_type_only,
               span: alias_span,
             });
           } else {
             state.export_specs.push(ExportSpec::ExportAll {
-              from: target,
+              from: target.clone(),
               type_only: all.is_type_only,
               span: spec_span,
             });
@@ -758,7 +770,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       namespaces,
       &mut self.symbols,
       SymbolOrigin::Import {
-        from: Some(state.file_id),
+        source: ImportSource::File(state.file_id),
         imported: "*".to_string(),
       },
       &SymbolOwner::Global,
@@ -773,7 +785,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     entry: &ImportEntry,
   ) {
     if let Some(existing) = state.imports.get(&entry.local) {
-      let same_from = existing.from == entry.from;
+      let same_from = existing.source == entry.source;
       let same_item = existing.imported == entry.imported;
       if !(same_from && same_item) {
         let previous = Span::new(file, existing.local_span);
@@ -816,7 +828,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       namespaces,
       &mut self.symbols,
       SymbolOrigin::Import {
-        from: entry.from,
+        source: entry.source.clone(),
         imported: match &entry.imported {
           ImportItem::Named(n) => n.clone(),
           ImportItem::Default => "default".to_string(),
@@ -833,19 +845,25 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     spec: &str,
     span: Span,
     is_import: bool,
-  ) -> Option<FileId> {
-    let resolved = self.resolver.resolve(from, spec);
-    if resolved.is_none() {
-      let message = format!(
-        "unresolved {}: {}",
-        if is_import { "import" } else { "export" },
-        spec
-      );
-      self
-        .diagnostics
-        .push(Diagnostic::error("BIND1002", message, span));
+    ambient_modules: &[AmbientModule],
+  ) -> ImportSource {
+    if let Some(resolved) = self.resolver.resolve(from, spec) {
+      return ImportSource::File(resolved);
     }
-    resolved
+
+    if self.ambient_modules.contains_key(spec) || has_ambient_module_named(spec, ambient_modules) {
+      return ImportSource::AmbientModule(spec.to_string());
+    }
+
+    let message = format!(
+      "unresolved {}: {}",
+      if is_import { "import" } else { "export" },
+      spec
+    );
+    self
+      .diagnostics
+      .push(Diagnostic::error("BIND1002", message, span));
+    ImportSource::Unresolved(spec.to_string())
   }
 
   fn exports_for(&mut self, file: FileId) -> ExportMap {
@@ -887,7 +905,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           } => {
             self.add_reexport(
               &module,
-              *from,
+              from,
               name,
               exported_as,
               *type_only,
@@ -903,7 +921,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           } => {
             self.add_export_all(
               &module,
-              *from,
+              from,
               *type_only,
               *span,
               &mut map,
@@ -918,7 +936,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           } => {
             self.add_export_all_alias(
               &module,
-              *from,
+              from,
               exported_as,
               *type_only,
               *span,
@@ -987,7 +1005,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           } => {
             self.add_reexport(
               &module,
-              *from,
+              from,
               name,
               exported_as,
               *type_only,
@@ -1003,7 +1021,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           } => {
             self.add_export_all(
               &module,
-              *from,
+              from,
               *type_only,
               *span,
               &mut map,
@@ -1018,7 +1036,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           } => {
             self.add_export_all_alias(
               &module,
-              *from,
+              from,
               exported_as,
               *type_only,
               *span,
@@ -1048,6 +1066,14 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     map
   }
 
+  fn exports_for_source(&mut self, source: &ImportSource) -> Option<ExportMap> {
+    match source {
+      ImportSource::File(file) => Some(self.exports_for(*file)),
+      ImportSource::AmbientModule(spec) => Some(self.exports_for_ambient(spec)),
+      ImportSource::Unresolved(_) => None,
+    }
+  }
+
   fn add_local_export(
     &mut self,
     module: &ModuleState,
@@ -1059,38 +1085,37 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
   ) {
     if let Some(import) = module.imports.get(name) {
-      if let Some(from) = import.from {
-        if matches!(import.imported, ImportItem::Namespace) {
-          if let Some(group) = module.symbols.get(name) {
-            let filtered = filter_group(
-              group.clone(),
-              if type_only || import.type_only {
-                Namespace::TYPE
-              } else {
-                Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
-              },
-              &self.symbols,
+      if matches!(import.imported, ImportItem::Namespace) {
+        if let Some(group) = module.symbols.get(name) {
+          let filtered = filter_group(
+            group.clone(),
+            if type_only || import.type_only {
+              Namespace::TYPE
+            } else {
+              Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+            },
+            &self.symbols,
+          );
+          if let Some(group) = filtered {
+            insert_export(
+              map,
+              export_spans,
+              exported_as,
+              origin_span,
+              group,
+              &mut self.symbols,
+              &mut self.diagnostics,
             );
-            if let Some(group) = filtered {
-              insert_export(
-                map,
-                export_spans,
-                exported_as,
-                origin_span,
-                group,
-                &mut self.symbols,
-                &mut self.diagnostics,
-              );
-              return;
-            }
+            return;
           }
-        } else {
-          let target_name = match &import.imported {
-            ImportItem::Named(n) => n.clone(),
-            ImportItem::Default => "default".to_string(),
-            ImportItem::Namespace => unreachable!("handled above"),
-          };
-          let target_exports = self.exports_for(from);
+        }
+      } else {
+        let target_name = match &import.imported {
+          ImportItem::Named(n) => n.clone(),
+          ImportItem::Default => "default".to_string(),
+          ImportItem::Namespace => unreachable!("handled above"),
+        };
+        if let Some(target_exports) = self.exports_for_source(&import.source) {
           if let Some(entry) = target_exports.get(&target_name) {
             let filtered = filter_group(
               entry.clone(),
@@ -1113,7 +1138,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
               );
               return;
             }
-          } else {
+          } else if !matches!(import.source, ImportSource::Unresolved(_)) {
             self.diagnostics.push(Diagnostic::error(
               "BIND1002",
               format!("cannot find export '{}' in module", target_name),
@@ -1164,7 +1189,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   fn add_reexport(
     &mut self,
     _module: &ModuleState,
-    from: Option<FileId>,
+    from: &ImportSource,
     name: &str,
     exported_as: &str,
     type_only: bool,
@@ -1172,8 +1197,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     map: &mut ExportMap,
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
   ) {
-    if let Some(target) = from {
-      let target_exports = self.exports_for(target);
+    if let Some(target_exports) = self.exports_for_source(from) {
       if let Some(entry) = target_exports.get(name) {
         if let Some(group) = filter_group(
           entry.clone(),
@@ -1194,7 +1218,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             &mut self.diagnostics,
           );
         }
-      } else {
+      } else if !matches!(from, ImportSource::Unresolved(_)) {
         self.diagnostics.push(Diagnostic::error(
           "BIND1002",
           format!("cannot re-export '{}': not found", name),
@@ -1207,14 +1231,13 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   fn add_export_all(
     &mut self,
     _module: &ModuleState,
-    from: Option<FileId>,
+    from: &ImportSource,
     type_only: bool,
     origin_span: Span,
     map: &mut ExportMap,
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
   ) {
-    if let Some(target) = from {
-      let target_exports = self.exports_for(target);
+    if let Some(target_exports) = self.exports_for_source(from) {
       for (name, entry) in target_exports.iter() {
         if name == "default" {
           continue;
@@ -1245,38 +1268,41 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   fn add_export_all_alias(
     &mut self,
     module: &ModuleState,
-    from: Option<FileId>,
+    from: &ImportSource,
     exported_as: &str,
     type_only: bool,
     origin_span: Span,
     map: &mut ExportMap,
     export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
   ) {
-    if let Some(target) = from {
-      let namespaces = if type_only {
-        Namespace::TYPE
-      } else {
-        Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
-      };
-      let sym = self.symbols.alloc_symbol(
-        &module.owner,
-        exported_as,
-        namespaces,
-        SymbolOrigin::Import {
-          from: Some(target),
-          imported: "*".to_string(),
-        },
-      );
-      insert_export(
-        map,
-        export_spans,
-        exported_as,
-        origin_span,
-        SymbolGroup::merged(sym),
-        &mut self.symbols,
-        &mut self.diagnostics,
-      );
-    }
+    let namespaces = if type_only {
+      Namespace::TYPE
+    } else {
+      Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+    };
+    let origin_source = match from {
+      ImportSource::File(target) => ImportSource::File(*target),
+      ImportSource::AmbientModule(spec) => ImportSource::AmbientModule(spec.clone()),
+      ImportSource::Unresolved(_) => return,
+    };
+    let sym = self.symbols.alloc_symbol(
+      &module.owner,
+      exported_as,
+      namespaces,
+      SymbolOrigin::Import {
+        source: origin_source,
+        imported: "*".to_string(),
+      },
+    );
+    insert_export(
+      map,
+      export_spans,
+      exported_as,
+      origin_span,
+      SymbolGroup::merged(sym),
+      &mut self.symbols,
+      &mut self.diagnostics,
+    );
   }
 
   fn add_export_assignment(
@@ -1318,6 +1344,13 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       origin_span,
     ));
   }
+}
+
+fn has_ambient_module_named(specifier: &str, modules: &[AmbientModule]) -> bool {
+  modules.iter().any(|m| {
+    m.name == specifier
+      || (!m.ambient_modules.is_empty() && has_ambient_module_named(specifier, &m.ambient_modules))
+  })
 }
 
 fn add_decl_to_groups(
