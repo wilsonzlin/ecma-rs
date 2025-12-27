@@ -1,3 +1,4 @@
+use salsa::Setter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
@@ -571,6 +572,12 @@ pub mod body_check {
 
       let caches = ctx.checker_caches.for_body();
       let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
+      let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
+        function_expr_span(self, body_id)
+          .and_then(|span| contextual_callable_for_body(self, body_id, span))
+      } else {
+        None
+      };
       let mut result = check_body_with_expander(
         body_id,
         body,
@@ -583,7 +590,7 @@ pub mod body_check {
         (!binding_defs.is_empty())
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
-        None,
+        contextual_fn_ty,
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
@@ -899,6 +906,75 @@ pub mod body_check {
       current = ctx.body_parents.get(&parent).copied();
     }
     let _ = unknown;
+  }
+
+  fn function_expr_span(db: &BodyCheckDb, body_id: BodyId) -> Option<TextRange> {
+    let ctx = &db.context;
+    let mut visited = HashSet::new();
+    let mut current = ctx.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let Some(meta) = db.bc_body_info(parent) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(hir_body_id) = meta.hir else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(lowered) = db.bc_lower_hir(meta.file) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(parent_body) = lowered.body(hir_body_id) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      for expr in parent_body.exprs.iter() {
+        if let hir_js::ExprKind::FunctionExpr { body, .. } = expr.kind {
+          if body == body_id {
+            return Some(expr.span);
+          }
+        }
+      }
+      current = ctx.body_parents.get(&parent).copied();
+    }
+    None
+  }
+
+  fn contextual_callable_for_body(
+    db: &BodyCheckDb,
+    body_id: BodyId,
+    func_span: TextRange,
+  ) -> Option<TypeId> {
+    let store = &db.context.store;
+    let mut visited = HashSet::new();
+    let mut current = db.context.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let parent_result = db.check_body(parent);
+      for (idx, span) in parent_result.expr_spans.iter().enumerate() {
+        if *span != func_span {
+          continue;
+        }
+        if let Some(ty) = parent_result.expr_types.get(idx).copied() {
+          if store.contains_type_id(ty)
+            && matches!(
+              store.type_kind(ty),
+              types_ts_interned::TypeKind::Callable { .. }
+            )
+          {
+            return Some(ty);
+          }
+        }
+      }
+      current = db.context.body_parents.get(&parent).copied();
+    }
+    None
   }
 }
 impl Eq for LowerResultWithDiagnostics {}

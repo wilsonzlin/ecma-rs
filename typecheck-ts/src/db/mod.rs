@@ -8,12 +8,13 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use salsa::Setter;
+
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::profile::QueryStatsCollector;
 use crate::FileKey;
 use crate::{BodyCheckResult, BodyId, DefId};
 use diagnostics::FileId;
-use salsa::Setter;
 
 pub mod expander;
 mod inputs;

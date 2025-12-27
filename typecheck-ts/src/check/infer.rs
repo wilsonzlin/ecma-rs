@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::instantiate::Substituter;
-use types_ts_interned::{Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore};
+use types_ts_interned::{
+  Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+};
 
 /// Diagnostic emitted when inference fails to satisfy a constraint.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,7 +32,7 @@ pub fn infer_type_arguments_for_call(
   args: &[TypeId],
   contextual_return: Option<TypeId>,
 ) -> InferenceResult {
-  let mut decls: HashMap<TypeParamId, TypeParamDecl> = sig
+  let decls: HashMap<TypeParamId, TypeParamDecl> = sig
     .type_params
     .iter()
     .map(|decl| (decl.id, decl.clone()))
@@ -57,7 +59,7 @@ pub fn infer_type_arguments_from_contextual_signature(
   contextual_sig: &Signature,
   actual_sig: &Signature,
 ) -> InferenceResult {
-  let mut decls: HashMap<TypeParamId, TypeParamDecl> = contextual_sig
+  let decls: HashMap<TypeParamId, TypeParamDecl> = contextual_sig
     .type_params
     .iter()
     .map(|decl| (decl.id, decl.clone()))
@@ -65,11 +67,7 @@ pub fn infer_type_arguments_from_contextual_signature(
 
   let mut ctx = InferenceContext::new(Arc::clone(store), decls);
   ctx.constrain_signature(contextual_sig, actual_sig, Variance::Covariant);
-  let order: Vec<TypeParamId> = contextual_sig
-    .type_params
-    .iter()
-    .map(|tp| tp.id)
-    .collect();
+  let order: Vec<TypeParamId> = contextual_sig.type_params.iter().map(|tp| tp.id).collect();
   ctx.solve(&order)
 }
 

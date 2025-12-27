@@ -3193,10 +3193,10 @@ impl ProgramState {
     if let Some(semantics) = self.semantics.as_ref() {
       let symbols = semantics.symbols();
       let mut seen_symbols = HashSet::new();
-      for (def_id, _data) in self
+      for def_id in self
         .def_data
         .iter()
-        .filter(|(_, data)| matches!(data.kind, DefKind::Function(_)))
+        .filter_map(|(def_id, data)| matches!(data.kind, DefKind::Function(_)).then_some(def_id))
       {
         let Some(symbol) = semantics.symbol_for_def(sem_ts::DefId(def_id.0), sem_ts::Namespace::VALUE) else {
           continue;
