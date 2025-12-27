@@ -19,8 +19,7 @@ use crate::db::inputs::{
 };
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
-use crate::db::types::SharedTypeStore;
-use crate::db::{symbols, Db, ModuleKey};
+use crate::db::{symbols, types::SharedTypeStore, Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::parse_metrics;
 use crate::profile::QueryKind;
@@ -218,14 +217,18 @@ pub trait GlobalBindingsDb {
 }
 
 fn deterministic_symbol_id(name: &str) -> SymbolId {
-  // FNV-1a 64-bit with fold-down to `u32` for stability across runs.
+  // Keep globals deterministic and separated from binder-assigned IDs by hashing
+  // with a fixed discriminant.
   let mut hash: u64 = 0xcbf29ce484222325;
+  for byte in b"typecheck-ts::global_symbol" {
+    hash ^= *byte as u64;
+    hash = hash.wrapping_mul(0x100000001b3);
+  }
   for byte in name.as_bytes() {
     hash ^= *byte as u64;
     hash = hash.wrapping_mul(0x100000001b3);
   }
-  let folded = hash ^ (hash >> 32);
-  SymbolId(folded as u32)
+  SymbolId(hash)
 }
 
 /// Global value bindings derived from TS semantics, `.d.ts` files, and builtin

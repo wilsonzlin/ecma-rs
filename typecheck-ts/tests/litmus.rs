@@ -269,6 +269,19 @@ fn run_fixture(path: &Path) {
   }
   if path.ends_with("narrowing_patterns") {
     let snap = program.snapshot();
+    let main = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main) {
+      println!("DEBUG narrowing_patterns def types:");
+      for (def, ty) in snap.def_types.iter() {
+        if let Some(data) = snap.def_data.iter().find(|d| d.def == *def) {
+          if data.data.file == file
+            && (data.data.name == "assertNumber" || data.data.name == "useAssert")
+          {
+            println!("  {} => {}", data.data.name, program.display_type(*ty));
+          }
+        }
+      }
+    }
     if let Some(err) = snap.def_data.iter().find(|d| d.data.name == "Error") {
       let ty = snap
         .def_types
@@ -536,6 +549,9 @@ fn resolve_expr_type(
   file: FileId,
   offset: u32,
 ) -> Option<typecheck_ts::TypeId> {
+  if let Some(ty) = program.type_at(file, offset) {
+    return Some(ty);
+  }
   let mut candidates: Vec<BodyId> = program
     .definitions_in_file(file)
     .into_iter()

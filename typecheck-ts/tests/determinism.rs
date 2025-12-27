@@ -279,6 +279,36 @@ fn outputs_remain_deterministic() {
   run_parallel_bodies(&baseline_program, &baseline_bodies);
   let baseline = snapshot_program(&baseline_program, &files);
   let repeat = snapshot_program(&baseline_program, &files);
+  if repeat != baseline {
+    eprintln!("baseline def types:");
+    for (def, ty) in baseline.def_types.iter() {
+      let name = baseline_program
+        .def_name(*def)
+        .unwrap_or_else(|| "<unknown>".to_string());
+      eprintln!("{def:?} {name}: {ty:?}");
+    }
+    eprintln!("repeat def types:");
+    for (def, ty) in repeat.def_types.iter() {
+      let name = baseline_program
+        .def_name(*def)
+        .unwrap_or_else(|| "<unknown>".to_string());
+      eprintln!("{def:?} {name}: {ty:?}");
+    }
+    eprintln!("baseline exports:");
+    for (file, exports) in baseline.exports.iter() {
+      eprintln!("file {file:?}");
+      for (name, entry) in exports.iter() {
+        eprintln!("  {name}: {:?}", entry.type_id);
+      }
+    }
+    eprintln!("repeat exports:");
+    for (file, exports) in repeat.exports.iter() {
+      eprintln!("file {file:?}");
+      for (name, entry) in exports.iter() {
+        eprintln!("  {name}: {:?}", entry.type_id);
+      }
+    }
+  }
   assert_eq!(
     repeat, baseline,
     "same program should remain stable across multiple checks"

@@ -10,7 +10,10 @@ use types_ts_interned::{
 };
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.
-pub const PROGRAM_SNAPSHOT_VERSION: u32 = 10;
+///
+/// Version 11 invalidates snapshots that used the old 32-bit public `SymbolId`
+/// representation; symbol identifiers are now serialized as full `u64` values.
+pub const PROGRAM_SNAPSHOT_VERSION: u32 = 11;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
 /// to allow offline reconstruction. Snapshots are hybrid: when `text` is `None`
@@ -104,5 +107,4 @@ pub struct ProgramSnapshot {
   pub builtin: BuiltinTypes,
   pub next_def: u32,
   pub next_body: u32,
-  pub next_symbol: u32,
 }

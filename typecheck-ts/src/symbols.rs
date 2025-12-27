@@ -4,23 +4,23 @@ use diagnostics::TextRange;
 use serde::{Deserialize, Serialize};
 
 /// Public symbol identifier exposed through [`Program::symbol_at`] and
-/// `global_bindings` helpers. This mirrors `semantic-js`'s [`SymbolId`] but uses
-/// a smaller, stable `u32` for the public surface.
+/// `global_bindings` helpers. This mirrors `semantic-js`'s [`SymbolId`] and
+/// keeps the full 64-bit range to avoid truncation or collisions.
 pub mod semantic_js {
   /// Opaque symbol identifier.
   #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
   #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-  pub struct SymbolId(pub u32);
+  pub struct SymbolId(pub u64);
 
   impl From<::semantic_js::ts::SymbolId> for SymbolId {
     fn from(id: ::semantic_js::ts::SymbolId) -> Self {
-      SymbolId(id.0.try_into().unwrap_or(u32::MAX))
+      SymbolId(id.0)
     }
   }
 
   impl From<SymbolId> for ::semantic_js::ts::SymbolId {
     fn from(id: SymbolId) -> Self {
-      ::semantic_js::ts::SymbolId(id.0.into())
+      ::semantic_js::ts::SymbolId(id.0)
     }
   }
 }

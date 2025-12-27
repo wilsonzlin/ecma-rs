@@ -74,7 +74,6 @@ fn selects_literal_overload() {
     None,
     None,
     span(),
-    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -109,7 +108,6 @@ fn infers_generic_return_type() {
     None,
     None,
     span(),
-    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -142,7 +140,6 @@ fn reports_no_matching_overload_with_reasons() {
     None,
     None,
     span(),
-    None,
   );
 
   assert!(resolution.signature.is_none());
@@ -191,7 +188,6 @@ fn reports_ambiguous_call() {
     None,
     None,
     span(),
-    None,
   );
 
   assert!(resolution.signature.is_none());
@@ -251,7 +247,6 @@ fn enforces_constraints_for_structurally_identical_generics() {
     None,
     None,
     span(),
-    None,
   );
   assert!(string_resolution.signature.is_none());
   assert_eq!(string_resolution.diagnostics.len(), 1);
@@ -268,7 +263,6 @@ fn enforces_constraints_for_structurally_identical_generics() {
     None,
     None,
     span(),
-    None,
   );
   assert!(number_resolution.signature.is_none());
   assert_eq!(number_resolution.diagnostics.len(), 1);
@@ -302,7 +296,7 @@ fn applies_default_type_argument_from_interned_signature() {
     Some(primitives.string)
   );
 
-  let resolution = resolve_call(&store, &relate, callable, &[], None, None, span(), None);
+  let resolution = resolve_call(&store, &relate, callable, &[], None, None, span());
   assert!(resolution.diagnostics.is_empty());
   let instantiated = resolution
     .signature
@@ -357,7 +351,6 @@ fn prefers_union_compatible_overload() {
     None,
     None,
     span(),
-    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -410,7 +403,6 @@ fn prefers_fixed_arity_over_rest() {
     None,
     None,
     span(),
-    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -455,7 +447,6 @@ fn prefers_non_generic_when_inference_is_unknown() {
     None,
     None,
     span(),
-    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -490,7 +481,6 @@ fn uses_contextual_return_for_generic_inference() {
     None,
     Some(primitives.number),
     span(),
-    None,
   );
 
   assert!(resolution.diagnostics.is_empty());

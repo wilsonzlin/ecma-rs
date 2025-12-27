@@ -3,10 +3,7 @@ use std::sync::Arc;
 use diagnostics::Span;
 use types_ts_interned::{RelateCtx, TypeId, TypeStore};
 
-use super::overload::{
-  resolve_construct as resolve_construct_overloads, resolve_overloads, CallResolution,
-  OverloadContext,
-};
+use super::overload::{resolve_construct as resolve_construct_overloads, resolve_overloads, CallResolution};
 
 /// Resolve a call expression against a callable type.
 pub fn resolve_call(
@@ -17,7 +14,6 @@ pub fn resolve_call(
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
   span: Span,
-  context: Option<&mut dyn OverloadContext>,
 ) -> CallResolution {
   resolve_overloads(
     store,
@@ -27,7 +23,7 @@ pub fn resolve_call(
     this_arg,
     contextual_return,
     span,
-    context,
+    None,
   )
 }
 
@@ -40,7 +36,6 @@ pub fn resolve_construct(
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
   span: Span,
-  context: Option<&mut dyn OverloadContext>,
 ) -> CallResolution {
   resolve_construct_overloads(
     store,
@@ -50,6 +45,5 @@ pub fn resolve_construct(
     this_arg,
     contextual_return,
     span,
-    context,
   )
 }

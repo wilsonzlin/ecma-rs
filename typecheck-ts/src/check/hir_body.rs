@@ -1165,7 +1165,6 @@ impl<'a> Checker<'a> {
           this_arg,
           self.expr_context.expected,
           span,
-          None,
         );
         for diag in &resolution.diagnostics {
           self.diagnostics.push(diag.clone());
@@ -3768,7 +3767,6 @@ impl<'a> FlowBodyChecker<'a> {
       None,
       None,
       span,
-      None,
     );
     self.diagnostics.extend(resolution.diagnostics.into_iter());
     let mut ret_ty = resolution.return_type;

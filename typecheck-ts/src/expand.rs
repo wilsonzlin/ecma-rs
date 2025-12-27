@@ -39,13 +39,13 @@ impl RefRecursionGuard {
   }
 
   pub(crate) fn begin(&self, key: &RefKey) -> bool {
-    let id = std::thread::current().id();
-    self.in_progress.lock().unwrap().insert((id, key.clone()))
+    let thread_key = (std::thread::current().id(), key.clone());
+    self.in_progress.lock().unwrap().insert(thread_key)
   }
 
   pub(crate) fn end(&self, key: &RefKey) {
-    let id = std::thread::current().id();
-    self.in_progress.lock().unwrap().remove(&(id, key.clone()));
+    let thread_key = (std::thread::current().id(), key.clone());
+    self.in_progress.lock().unwrap().remove(&thread_key);
   }
 }
 

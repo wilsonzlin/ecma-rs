@@ -18,6 +18,25 @@ fn debug_narrowing() {
   let program = Program::new(host, vec![key.clone()]);
   program.check();
   let file_id = program.file_id(&key).expect("file id");
+  for def in program.definitions_in_file(file_id) {
+    if let Some(name) = program.def_name(def) {
+      if name == "assertNumber" || name == "useAssert" {
+        let ty = program.type_of_def(def);
+        println!("DEBUG def {} => {}", name, program.display_type(ty));
+      }
+    }
+  }
+  let snap = program.snapshot();
+  for entry in snap.def_data.iter() {
+    if entry.data.file == file_id
+      && (entry.data.name == "assertNumber" || entry.data.name == "useAssert")
+    {
+      println!(
+        "DEBUG snapshot def {:?} kind {:?}",
+        entry.def, entry.data.kind
+      );
+    }
+  }
   let ast = parse_with_options(
     program.file_text(file_id).as_deref().expect("text"),
     ParseOptions {

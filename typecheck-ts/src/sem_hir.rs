@@ -68,6 +68,7 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
     })
     .filter_map(|export| map_export_from_lower(export, &resolve_name))
     .collect();
+  let import_equals = Vec::new();
   let module_kind = if imports.is_empty()
     && import_equals.is_empty()
     && exports.is_empty()
