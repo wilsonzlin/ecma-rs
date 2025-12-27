@@ -99,28 +99,93 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
 
 #[salsa::tracked]
 fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
-  let specs = module_specifiers_for(db, file);
+  unresolved_module_diagnostics_for(db, file)
+}
+
+#[salsa::tracked]
+fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
   };
-  let mut spans = HashMap::new();
-  for (spec, span) in collect_module_specifiers(lowered).into_iter() {
-    spans.entry(spec).or_insert(span);
-  }
-
   let mut diagnostics = Vec::new();
-  for spec in specs.iter() {
-    if module_resolve(db, file.file_id(db), Arc::clone(spec)).is_none() {
-      if let Some(span) = spans.get(spec) {
-        diagnostics.push(codes::UNRESOLVED_MODULE.error(
-          format!("module {} could not be resolved", spec),
-          Span::new(file.file_id(db), *span),
-        ));
+  let file_id = file.file_id(db);
+  let source = file_text_for(db, file);
+  let refine_spec_span =
+    |spec: &hir_js::ModuleSpecifier| -> TextRange {
+      if (spec.span.end as usize) <= source.len() {
+        if let Some(segment) = source.get(spec.span.start as usize..spec.span.end as usize) {
+          for quote in ['"', '\'', '`'] {
+            let needle = format!("{quote}{}{quote}", spec.value);
+            if let Some(idx) = segment.find(&needle) {
+              let start = spec.span.start + idx as u32;
+              let end = start + needle.len() as u32;
+              return TextRange::new(start, end);
+            }
+          }
+        }
+      }
+      spec.span
+    };
+  let mut seen = BTreeSet::new();
+  let mut check_specifier =
+    |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
+      db,
+      file_id,
+      Arc::<str>::from(spec.value.clone()),
+    ) {
+      Some(_) => {}
+      None => {
+        let range = refine_spec_span(spec);
+        let key = (range.start, range.end, spec.value.clone());
+        if !seen.insert(key) {
+          return;
+        }
+        let mut diag = codes::UNRESOLVED_MODULE.error(
+          format!("unresolved module specifier \"{}\"", spec.value),
+          Span::new(file_id, range),
+        );
+        diag.push_note(format!("module specifier: \"{}\"", spec.value));
+        diags.push(diag);
+      }
+    };
+
+  for import in lowered.hir.imports.iter() {
+    match &import.kind {
+      hir_js::ImportKind::Es(es) => {
+        check_specifier(&es.specifier, &mut diagnostics);
+      }
+      hir_js::ImportKind::ImportEquals(eq) => {
+        if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
+          check_specifier(module, &mut diagnostics);
+        }
       }
     }
   }
-  diagnostics.sort();
+
+  for export in lowered.hir.exports.iter() {
+    match &export.kind {
+      ExportKind::Named(named) => {
+        if let Some(source) = named.source.as_ref() {
+          check_specifier(source, &mut diagnostics);
+        }
+      }
+      ExportKind::ExportAll(all) => {
+        check_specifier(&all.source, &mut diagnostics);
+      }
+      ExportKind::Default(_) | ExportKind::Assignment(_) => {}
+    }
+  }
+
+  diagnostics.sort_by(|a, b| {
+    a.primary
+      .range
+      .start
+      .cmp(&b.primary.range.start)
+      .then_with(|| a.primary.range.end.cmp(&b.primary.range.end))
+      .then_with(|| a.code.as_str().cmp(b.code.as_str()))
+      .then_with(|| a.message.cmp(&b.message))
+  });
   diagnostics.dedup();
   Arc::from(diagnostics.into_boxed_slice())
 }
@@ -1220,8 +1285,12 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
   }
   for arenas in lowered.types.values() {
     for ty in arenas.type_exprs.iter() {
-      if let hir_js::TypeExprKind::Import(import) = &ty.kind {
-        specs.push((Arc::from(import.module.clone()), ty.span));
+      if let hir_js::TypeExprKind::TypeRef(type_ref) = &ty.kind {
+        if let hir_js::TypeName::Import(import) = &type_ref.name {
+          if let Some(module) = &import.module {
+            specs.push((Arc::from(module.clone()), ty.span));
+          }
+        }
       }
     }
   }
@@ -2122,11 +2191,13 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
   let files = all_files(db);
   let mut parse_diags = Vec::new();
   let mut lower_diags = Vec::new();
+  let mut module_diags = Vec::new();
   for file in files.iter() {
     let parsed = parse(db, *file);
     parse_diags.extend(parsed.diagnostics.into_iter());
     let lowered = lower_hir(db, *file);
     lower_diags.extend(lowered.diagnostics.into_iter());
+    module_diags.extend(unresolved_module_diagnostics(db, *file).iter().cloned());
   }
   let semantics = ts_semantics(db);
   let mut body_diags = Vec::new();
@@ -2137,10 +2208,19 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
     body_diags.extend(body_diagnostics_from_results(db, *body).iter().cloned());
   }
   body_diags.extend(extra_diagnostics_for(db).iter().cloned());
+  // Drop binder-level unresolved import diagnostics (`BIND1002`) in favor of the
+  // module-resolution-based `UNRESOLVED_MODULE` diagnostics, which carry spans
+  // targeting the specifier literal.
+  let semantic_diags = semantics
+    .diagnostics
+    .iter()
+    .filter(|diag| diag.code.as_str() != "BIND1002")
+    .cloned()
+    .chain(module_diags.into_iter());
   aggregate_program_diagnostics(
     parse_diags,
     lower_diags,
-    semantics.diagnostics.iter().cloned(),
+    semantic_diags,
     body_diags,
   )
 }
