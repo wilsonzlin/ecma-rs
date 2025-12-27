@@ -61,19 +61,23 @@ impl Host for SimpleHost {
   }
 }
 
-fn fixture_path() -> PathBuf {
-  Path::new(env!("CARGO_MANIFEST_DIR"))
+fn lib_env_fixture(name: &str) -> VirtualFile {
+  let path = Path::new(env!("CARGO_MANIFEST_DIR"))
     .join("fixtures")
     .join("lib_env")
-    .join("promise.ts")
+    .join(name);
+  VirtualFile {
+    name: name.to_string(),
+    content: fs::read_to_string(path).expect("read fixture"),
+  }
 }
 
 fn promise_fixture() -> VirtualFile {
-  let path = fixture_path();
-  VirtualFile {
-    name: "promise.ts".to_string(),
-    content: fs::read_to_string(path).expect("read fixture"),
-  }
+  lib_env_fixture("promise.ts")
+}
+
+fn global_types_fixture() -> VirtualFile {
+  lib_env_fixture("a.ts")
 }
 
 fn run_rust(files: Vec<VirtualFile>, options: CompilerOptions) -> Vec<typecheck_ts::Diagnostic> {
@@ -170,6 +174,37 @@ fn promise_reports_unknown_without_libs() {
         .any(|d| d.message.as_deref().unwrap_or_default().contains("Promise")),
       "expected tsc to report missing Promise, got {:?}",
       tsc.diagnostics
+    );
+  }
+}
+
+#[test]
+fn default_libs_resolve_global_types() {
+  let fixture = global_types_fixture();
+  let host = SimpleHost::new(vec![fixture.clone()], CompilerOptions::default());
+  let roots = host.roots();
+  let program = Program::new(host, roots);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics for libs, got {diagnostics:?}"
+  );
+
+  let file_id = program
+    .file_id(&FileKey::new(fixture.name.clone()))
+    .expect("file id");
+  let defs = program.definitions_in_file(file_id);
+  assert!(
+    !defs.is_empty(),
+    "expected definitions for {}, found none",
+    fixture.name
+  );
+  for def in defs {
+    let ty = program.type_of_def_interned(def);
+    let summary = program.type_kind(ty);
+    assert!(
+      !matches!(summary, typecheck_ts::TypeKindSummary::Unknown),
+      "expected known type for def {def:?}"
     );
   }
 }

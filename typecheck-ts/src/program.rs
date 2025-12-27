@@ -1,6 +1,7 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
+use ::semantic_js::ts as sem_ts;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
   BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
@@ -20,7 +21,6 @@ use parse_js::ast::type_expr::{
   TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
 use parse_js::loc::Loc;
-use ::semantic_js::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
@@ -36,7 +36,7 @@ use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
-use crate::db::{self, Db, GlobalBindingsDb};
+use crate::db::{self, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileRegistry;
 use crate::profile::{
@@ -2022,11 +2022,38 @@ impl ProgramTypeResolver {
     Self::matches_namespace(kind, ns).then_some(def)
   }
 
+  fn global_symbol(&self, name: &str, ns: sem_ts::Namespace) -> Option<sem_ts::SymbolId> {
+    self
+      .semantics
+      .global_symbols()
+      .get(name)
+      .and_then(|group| group.symbol_for(ns, self.semantics.symbols()))
+  }
+
+  fn symbol_owner_file(&self, symbol: sem_ts::SymbolId) -> Option<sem_ts::FileId> {
+    let sym = self.semantics.symbols().symbol(symbol);
+    match &sym.origin {
+      sem_ts::SymbolOrigin::Import { source, .. } => match source {
+        sem_ts::ImportSource::File(file) => Some(*file),
+        _ => None,
+      },
+      _ => match &sym.owner {
+        sem_ts::SymbolOwner::Module(file) => Some(*file),
+        _ => None,
+      },
+    }
+  }
+
   fn resolve_symbol_in_module(&self, name: &str, ns: sem_ts::Namespace) -> Option<DefId> {
     let resolved = self
       .semantics
       .resolve_in_module(sem_ts::FileId(self.current_file.0), name, ns)
-      .and_then(|symbol| self.pick_decl(symbol, ns));
+      .and_then(|symbol| self.pick_decl(symbol, ns))
+      .or_else(|| {
+        self
+          .global_symbol(name, ns)
+          .and_then(|symbol| self.pick_decl(symbol, ns))
+      });
     resolved.or_else(|| self.resolve_local(name, ns))
   }
 
@@ -2038,12 +2065,19 @@ impl ProgramTypeResolver {
     if path.len() < 2 {
       return None;
     }
-    let symbol = self.semantics.resolve_in_module(
-      sem_ts::FileId(self.current_file.0),
-      &path[0],
-      sem_ts::Namespace::NAMESPACE,
-    )?;
-    let Some(mut module) = self.import_origin_file(symbol) else {
+    let symbol = self
+      .semantics
+      .resolve_in_module(
+        sem_ts::FileId(self.current_file.0),
+        &path[0],
+        sem_ts::Namespace::NAMESPACE,
+      )
+      .or_else(|| self.global_symbol(&path[0], sem_ts::Namespace::NAMESPACE))
+      .or_else(|| self.global_symbol(&path[0], final_ns))?;
+    let Some(mut module) = self
+      .import_origin_file(symbol)
+      .or_else(|| self.symbol_owner_file(symbol))
+    else {
       return None;
     };
     self.resolve_export_path(&path[1..], &mut module, final_ns)
@@ -2620,7 +2654,11 @@ impl DeclTypeResolver {
     for ((_, name), def) in defs.iter() {
       by_name.entry(name.clone()).or_insert(*def);
     }
-    DeclTypeResolver { file, defs, by_name }
+    DeclTypeResolver {
+      file,
+      defs,
+      by_name,
+    }
   }
 
   fn resolve_name(&self, name: &str) -> Option<DefId> {
