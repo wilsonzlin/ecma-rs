@@ -25,6 +25,7 @@ use parse_js::ast::expr::pat::ArrPat;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::ObjPat;
 use parse_js::ast::expr::pat::Pat as AstPat;
+use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::ArrowFuncExpr;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::expr::FuncExpr;
@@ -119,6 +120,7 @@ enum DefSource<'a> {
   Method(&'a Node<parse_js::ast::class_or_object::ClassOrObjMethod>),
   Getter(&'a Node<parse_js::ast::class_or_object::ClassOrObjGetter>),
   Setter(&'a Node<parse_js::ast::class_or_object::ClassOrObjSetter>),
+  Class(&'a Node<ClassExpr>),
   ExportDefaultExpr(&'a Node<ExportDefaultExprStmt>),
   ExportAssignment(&'a Node<ExportAssignmentDecl>),
 }
@@ -276,6 +278,7 @@ impl<'a> DefSource<'a> {
       | DefSource::Setter(_) => Some(BodyKind::Function),
       DefSource::Var(..) => Some(BodyKind::Initializer),
       DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
+      DefSource::Class(_) => None,
       DefSource::None => None,
     }
   }
@@ -289,6 +292,7 @@ impl<'a> DefSource<'a> {
       DefSource::Method(node) => Some(RawNode::from(*node)),
       DefSource::Getter(node) => Some(RawNode::from(*node)),
       DefSource::Setter(node) => Some(RawNode::from(*node)),
+      DefSource::Class(node) => Some(RawNode::from(*node)),
       DefSource::ExportDefaultExpr(node) => Some(RawNode::from(*node)),
       DefSource::ExportAssignment(node) => Some(RawNode::from(*node)),
       DefSource::None => None,
@@ -633,6 +637,7 @@ fn lower_body_from_source(
       builder.root_stmt(stmt_id);
       Some(builder.finish())
     }
+    DefSource::Class(_) => None,
     DefSource::None => None,
   }
 }
@@ -2872,7 +2877,7 @@ fn collect_expr<'a>(
         false,
         ambient,
         in_global,
-        DefSource::None,
+        DefSource::Class(class_expr),
       ));
     }
     AstExpr::Cond(cond) => {
@@ -3056,6 +3061,15 @@ fn collect_expr<'a>(
                 in_global,
                 ctx,
               );
+              collect_func_body(
+                &getter.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
             }
             ClassOrObjVal::Setter(setter) => {
               let (name_id, name_text) = obj_key_name(key, names);
@@ -3078,6 +3092,15 @@ fn collect_expr<'a>(
                 in_global,
                 ctx,
               );
+              collect_func_body(
+                &setter.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
             }
             ClassOrObjVal::Method(method) => {
               let (name_id, name_text) = obj_key_name(key, names);
@@ -3092,6 +3115,15 @@ fn collect_expr<'a>(
                 DefSource::Method(method),
               ));
               collect_func_params(
+                &method.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
+              collect_func_body(
                 &method.stx.func,
                 descriptors,
                 module_items,

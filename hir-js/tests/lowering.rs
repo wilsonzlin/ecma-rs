@@ -408,6 +408,51 @@ fn lowers_computed_object_keys() {
 }
 
 #[test]
+fn collects_nested_defs_in_object_literal_methods() {
+  let source = "const obj = { m(){ const inner = () => class {}; return inner; } };";
+  let ast = parse(source).expect("parse");
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(10), FileKind::Ts, &ast);
+
+  assert!(diagnostics.is_empty());
+
+  let method_def = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Method && result.names.resolve(def.path.name) == Some("m"))
+    .expect("object literal method");
+
+  let method_body_id = method_def.body.expect("method body id");
+  let method_body = result.body(method_body_id).expect("method body");
+
+  let (arrow_expr_id, arrow_body_id) = method_body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match &expr.kind {
+      ExprKind::FunctionExpr {
+        is_arrow: true,
+        body,
+        ..
+      } => Some((ExprId(idx as u32), *body)),
+      _ => None,
+    })
+    .expect("arrow function expression for inner binding");
+
+  assert!(matches!(
+    method_body.exprs[arrow_expr_id.0 as usize].kind,
+    ExprKind::FunctionExpr { .. }
+  ));
+
+  let arrow_body = result.body(arrow_body_id).expect("arrow function body");
+  let class_expr = arrow_body
+    .exprs
+    .iter()
+    .find(|expr| matches!(expr.kind, ExprKind::ClassExpr { .. }))
+    .expect("class expression inside arrow function");
+  assert!(matches!(class_expr.kind, ExprKind::ClassExpr { .. }));
+}
+
+#[test]
 fn lowers_imports_and_exports() {
   let source = r#"
     import defaultName, { foo as bar, type Baz } from "mod";
