@@ -36,7 +36,9 @@ use self::check::relate_hooks;
 use crate::codes;
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileRegistry;
-use crate::profile::{CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector};
+use crate::profile::{
+  CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector, QueryTimer,
+};
 use crate::sem_hir::sem_hir_from_lower;
 #[cfg(feature = "serde")]
 use crate::snapshot::{
@@ -682,33 +684,34 @@ impl Program {
 
   /// Return collected query and cache statistics for this program.
   pub fn query_stats(&self) -> QueryStats {
-    let stats = {
+    let (cache_stats, mut snapshot) = {
       let state = self.lock_state();
-      let mut stats = state.cache_stats.clone();
-      stats.merge(&state.checker_caches.stats());
-      if matches!(state.compiler_options.cache.mode, CacheMode::PerBody)
-        && stats.relation.evictions == 0
-      {
-        stats.relation.evictions = 1;
-      }
-      stats.relation.insertions = stats.relation.insertions.max(1);
-      stats.relation.evictions = stats.relation.evictions.max(1);
-      stats.relation.hits = stats.relation.hits.max(1);
-      stats.relation.misses = stats.relation.misses.max(1);
-      stats
+      let mut caches = state.cache_stats.clone();
+      caches.merge(&state.checker_caches.stats());
+      (caches, self.query_stats.snapshot())
     };
-    stats.record(&self.query_stats);
-    let mut snapshot = self.query_stats.snapshot();
-    snapshot.caches.insert(
-      CacheKind::Relation,
-      CacheStat {
-        hits: stats.relation.hits,
-        misses: stats.relation.misses,
-        insertions: stats.relation.insertions,
-        evictions: stats.relation.evictions,
-        hit_rate: 0.0,
-      },
-    );
+
+    let mut insert_cache = |kind: CacheKind, raw: &types_ts_interned::CacheStats| {
+      let lookups = raw.hits + raw.misses;
+      let stat = CacheStat {
+        hits: raw.hits,
+        misses: raw.misses,
+        insertions: raw.insertions,
+        evictions: raw.evictions,
+        hit_rate: if lookups == 0 {
+          0.0
+        } else {
+          raw.hits as f64 / lookups as f64
+        },
+      };
+      snapshot.caches.insert(kind, stat);
+    };
+
+    insert_cache(CacheKind::Relation, &cache_stats.relation);
+    insert_cache(CacheKind::Eval, &cache_stats.eval);
+    insert_cache(CacheKind::RefExpansion, &cache_stats.ref_expansion);
+    insert_cache(CacheKind::Instantiation, &cache_stats.instantiation);
+
     snapshot
   }
 
@@ -2430,10 +2433,8 @@ macro_rules! query_span {
 struct QuerySpan {
   span: tracing::Span,
   start: Instant,
-  kind: QueryKind,
-  cache_hit: bool,
   span_enabled: bool,
-  query_stats: Option<QueryStatsCollector>,
+  timer: Option<QueryTimer>,
 }
 
 impl QuerySpan {
@@ -2448,6 +2449,8 @@ impl QuerySpan {
     if !span_enabled && query_stats.is_none() {
       return None;
     }
+    let start = Instant::now();
+    let timer = query_stats.map(|stats| stats.timer_with_start(kind, cache_hit, start));
     if span_enabled {
       if let Some(ty) = type_id {
         span.record("type_id", ty.0);
@@ -2457,18 +2460,16 @@ impl QuerySpan {
     }
     Some(QuerySpan {
       span,
-      start: Instant::now(),
-      kind,
-      cache_hit,
+      start,
       span_enabled,
-      query_stats,
+      timer,
     })
   }
 
   fn finish(self, type_id: Option<TypeId>) {
     let duration = self.start.elapsed();
-    if let Some(stats) = &self.query_stats {
-      stats.record(self.kind, self.cache_hit, duration);
+    if let Some(timer) = self.timer {
+      timer.finish_with_duration(duration);
     }
     if self.span_enabled {
       if let Some(ty) = type_id {

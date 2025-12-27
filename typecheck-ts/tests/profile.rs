@@ -1,7 +1,7 @@
 use std::thread;
 use std::time::Duration;
 
-use typecheck_ts::{CacheKind, QueryKind, QueryStatsCollector};
+use typecheck_ts::{CacheKind, FileKey, MemoryHost, Program, QueryKind, QueryStatsCollector};
 use types_ts_interned::CacheStats;
 
 #[test]
@@ -85,4 +85,31 @@ fn query_stats_aggregate_across_threads() {
     cache_keys, sorted_cache_keys,
     "cache keys should be deterministic"
   );
+}
+
+#[test]
+fn program_records_query_stats_after_check() {
+  let mut host = MemoryHost::new();
+  let file = FileKey::new("index.ts");
+  host.insert(
+    file.clone(),
+    "export function add(a: number, b: number) { return a + b; }",
+  );
+  let program = Program::new(host, vec![file.clone()]);
+  let diagnostics = program.check();
+  assert!(diagnostics.is_empty(), "unexpected diagnostics {diagnostics:?}");
+
+  let stats = program.query_stats();
+  for kind in [
+    QueryKind::Parse,
+    QueryKind::LowerHir,
+    QueryKind::CheckBody,
+    QueryKind::TypeOfDef,
+  ] {
+    let entry = stats.queries.get(&kind).cloned().unwrap_or_default();
+    assert!(
+      entry.total > 0,
+      "expected stats for {kind:?} to be recorded"
+    );
+  }
 }

@@ -1,11 +1,12 @@
 use dashmap::DashMap;
+use salsa::{DatabaseKeyIndex, Event, EventKind};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::ThreadId;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use types_ts_interned::CacheStats as StoreCacheStats;
 
 /// Named query boundaries used for tracing and profiling.
@@ -279,6 +280,22 @@ impl QueryStatsCollector {
     counters.record(stats);
   }
 
+  /// Start a new timer that will record a query duration when dropped.
+  pub fn timer(&self, kind: QueryKind, cache_hit: bool) -> QueryTimer {
+    QueryTimer::new(self.clone(), kind, cache_hit)
+  }
+
+  /// Start a new timer using an explicit start instant. Useful when the caller
+  /// already captured a timestamp (e.g. from salsa events).
+  pub fn timer_with_start(
+    &self,
+    kind: QueryKind,
+    cache_hit: bool,
+    start: Instant,
+  ) -> QueryTimer {
+    QueryTimer::with_start(self.clone(), kind, cache_hit, start)
+  }
+
   pub fn snapshot(&self) -> QueryStats {
     let mut query_accums = QueryKind::ALL.map(|_| QueryStatAccumulator::default());
     let mut cache_accums = CacheKind::ALL.map(|_| CacheStatAccumulator::default());
@@ -351,6 +368,137 @@ impl QueryStatsCollector {
     }
 
     QueryStats { queries, caches }
+  }
+}
+
+/// RAII helper that records a single query duration into a
+/// [`QueryStatsCollector`] when dropped.
+#[derive(Clone)]
+pub struct QueryTimer {
+  collector: QueryStatsCollector,
+  kind: QueryKind,
+  cache_hit: bool,
+  start: Instant,
+  finished: bool,
+}
+
+impl QueryTimer {
+  pub fn new(collector: QueryStatsCollector, kind: QueryKind, cache_hit: bool) -> Self {
+    QueryTimer {
+      collector,
+      kind,
+      cache_hit,
+      start: Instant::now(),
+      finished: false,
+    }
+  }
+
+  pub fn with_start(
+    collector: QueryStatsCollector,
+    kind: QueryKind,
+    cache_hit: bool,
+    start: Instant,
+  ) -> Self {
+    QueryTimer {
+      collector,
+      kind,
+      cache_hit,
+      start,
+      finished: false,
+    }
+  }
+
+  /// Explicitly finish the timer with the provided duration. Dropping the timer
+  /// without calling this will record using the elapsed time since creation.
+  pub fn finish_with_duration(mut self, duration: Duration) {
+    if self.finished {
+      return;
+    }
+    self
+      .collector
+      .record(self.kind, self.cache_hit, duration);
+    self.finished = true;
+  }
+}
+
+impl Drop for QueryTimer {
+  fn drop(&mut self) {
+    if self.finished {
+      return;
+    }
+    let duration = self.start.elapsed();
+    self
+      .collector
+      .record(self.kind, self.cache_hit, duration);
+    self.finished = true;
+  }
+}
+
+/// Adapter that bridges salsa query events into the existing profiling
+/// collector. Cache hits are recorded from `DidValidateMemoizedValue` events,
+/// while [`QueryTimer`]s can be requested when a query executes to record
+/// durations without adding contention.
+#[derive(Clone)]
+pub struct SalsaEventAdapter {
+  collector: QueryStatsCollector,
+  mapper: Arc<dyn Fn(DatabaseKeyIndex) -> Option<QueryKind> + Send + Sync>,
+  starts: DashMap<(ThreadId, DatabaseKeyIndex), (QueryKind, Instant)>,
+}
+
+impl SalsaEventAdapter {
+  pub fn new(
+    collector: QueryStatsCollector,
+    mapper: impl Fn(DatabaseKeyIndex) -> Option<QueryKind> + Send + Sync + 'static,
+  ) -> Self {
+    SalsaEventAdapter {
+      collector,
+      mapper: Arc::new(mapper),
+      starts: DashMap::default(),
+    }
+  }
+
+  /// Handle a salsa event emitted from [`salsa::Database::salsa_event`]. Cache
+  /// hits are recorded immediately. `WillExecute` events register a start time
+  /// so the eventual query body can retrieve a [`QueryTimer`] with
+  /// [`SalsaEventAdapter::start_query`].
+  pub fn on_event(&self, event: &Event) {
+    match &event.kind {
+      EventKind::DidValidateMemoizedValue { database_key } => {
+        if let Some(kind) = (self.mapper)(*database_key) {
+          self
+            .collector
+            .record(kind, true, Duration::ZERO);
+        }
+      }
+      EventKind::WillExecute { database_key } => {
+        if let Some(kind) = (self.mapper)(*database_key) {
+          let thread_id = std::thread::current().id();
+          self
+            .starts
+            .insert((thread_id, *database_key), (kind, Instant::now()));
+        }
+      }
+      _ => {}
+    }
+  }
+
+  /// Obtain a query timer for an executing salsa query. This should be called
+  /// from inside the query function; it reuses the start time recorded from the
+  /// corresponding `WillExecute` event when available.
+  pub fn start_query(&self, key: DatabaseKeyIndex) -> Option<QueryTimer> {
+    let thread_id = std::thread::current().id();
+    let now = Instant::now();
+    let (kind, start) = self
+      .starts
+      .remove(&(thread_id, key))
+      .map(|(_, data)| data)
+      .or_else(|| (self.mapper)(key).map(|kind| (kind, now)))?;
+    Some(QueryTimer::with_start(
+      self.collector.clone(),
+      kind,
+      false,
+      start,
+    ))
   }
 }
 
