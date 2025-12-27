@@ -12,7 +12,7 @@ use types_ts_interned::{
 };
 
 const FILE_ID: FileId = FileId(0);
-use crate::util::{binding_for_name, body_of, parse_lower_with_locals};
+use crate::util::{binding_for_name, binding_for_pat, body_of, parse_lower_with_locals};
 
 fn obj_type(store: &Arc<TypeStore>, props: &[(&str, TypeId)]) -> TypeId {
   let mut shape = Shape::new();
@@ -75,7 +75,7 @@ fn predicate_callable_with_params(
   })
 }
 
-fn param_binding(body: &Body, bindings: &FlowBindings, index: usize) -> FlowBindingId {
+fn param_binding(parsed: &crate::util::Parsed, body: &Body, index: usize) -> FlowBindingId {
   let pat = body
     .function
     .as_ref()
@@ -84,9 +84,7 @@ fn param_binding(body: &Body, bindings: &FlowBindings, index: usize) -> FlowBind
     .get(index)
     .expect("parameter exists")
     .pat;
-  bindings
-    .binding_for_pat(pat)
-    .expect("binding for parameter")
+  binding_for_pat(body, &parsed.semantics, pat).expect("binding for parameter")
 }
 
 fn flow_context<'a>(
@@ -127,7 +125,7 @@ fn narrows_truthiness() {
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
-  let param_binding = param_binding(body, &bindings, 0);
+  let param_binding = param_binding(&parsed, body, 0);
   initial.insert(param_binding, store.union(vec![prim.string, prim.null]));
   for (idx, expr) in body.exprs.iter().enumerate() {
     if let hir_js::ExprKind::Ident(name) = &expr.kind {
@@ -150,11 +148,11 @@ fn narrows_truthiness() {
 fn boolean_truthiness_splits_literals() {
   let src = "function f(flag: boolean) { if (flag) { return flag; } else { return flag; } }";
   let parsed = parse_lower_with_locals(src);
-  let (body_id, body, bindings) = flow_context(&parsed, "f");
+  let (body_id, body, _bindings) = flow_context(&parsed, "f");
   let store = TypeStore::new();
   let mut initial = HashMap::new();
   initial.insert(
-    param_binding(body, &bindings, 0),
+    param_binding(&parsed, body, 0),
     store.primitive_ids().boolean,
   );
 
@@ -175,12 +173,12 @@ fn boolean_truthiness_splits_literals() {
 fn narrows_typeof_checks() {
   let src = "function f(x: string | number) { if (typeof x === \"string\") { return x; } else { return x; } }";
   let parsed = parse_lower_with_locals(src);
-  let (body_id, body, bindings) = flow_context(&parsed, "f");
+  let (body_id, body, _bindings) = flow_context(&parsed, "f");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
   initial.insert(
-    param_binding(body, &bindings, 0),
+    param_binding(&parsed, body, 0),
     store.union(vec![prim.string, prim.number]),
   );
   let res = run_flow(&parsed, body_id, body, &store, &initial);
@@ -195,7 +193,7 @@ fn narrows_typeof_checks() {
 fn typeof_function_narrows_callables() {
   let src = "function pick(x) { if (typeof x === \"function\") { return x; } return x; }";
   let parsed = parse_lower_with_locals(src);
-  let (body_id, body, bindings) = flow_context(&parsed, "pick");
+  let (body_id, body, _bindings) = flow_context(&parsed, "pick");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
 
@@ -213,7 +211,7 @@ fn typeof_function_narrows_callables() {
 
   let mut initial = HashMap::new();
   initial.insert(
-    param_binding(body, &bindings, 0),
+    param_binding(&parsed, body, 0),
     store.union(vec![callable, prim.number]),
   );
 
@@ -229,7 +227,7 @@ fn typeof_function_narrows_callables() {
 fn narrows_discriminants() {
   let src = "function g(x: { kind: \"foo\", value: string } | { kind: \"bar\", value: number }) { if (x.kind === \"foo\") { return x.value; } else { return x.value; } }";
   let parsed = parse_lower_with_locals(src);
-  let (body_id, body, bindings) = flow_context(&parsed, "g");
+  let (body_id, body, _bindings) = flow_context(&parsed, "g");
   let store = TypeStore::new();
   let mut initial = HashMap::new();
   let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
@@ -243,7 +241,7 @@ fn narrows_discriminants() {
     &[("kind", bar), ("value", store.primitive_ids().number)],
   );
   initial.insert(
-    param_binding(body, &bindings, 0),
+    param_binding(&parsed, body, 0),
     store.union(vec![foo_obj, bar_obj]),
   );
   let res = run_flow(&parsed, body_id, body, &store, &initial);
@@ -273,7 +271,7 @@ function test(x: string | number) {
   let mut initial = HashMap::new();
   let x_ty = store.union(vec![prim.string, prim.number]);
   let (body_id, body, bindings) = flow_context(&parsed, "test");
-  initial.insert(param_binding(body, &bindings, 0), x_ty);
+  initial.insert(param_binding(&parsed, body, 0), x_ty);
   let guard_ty = predicate_callable(&store, x_ty, prim.string, false);
   let guard_binding =
     binding_for_name(body, &bindings, &parsed.semantics, "isStr").expect("guard binding");
@@ -307,7 +305,7 @@ function useIt(val: string | number) {
   let mut initial = HashMap::new();
 
   let (body_id, body, bindings) = flow_context(&parsed, "useIt");
-  let val_id = param_binding(body, &bindings, 0);
+  let val_id = param_binding(&parsed, body, 0);
   initial.insert(val_id, store.union(vec![prim.string, prim.number]));
 
   let assert_name =
@@ -338,7 +336,7 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
 }
 "#;
   let parsed = parse_lower_with_locals(src);
-  let (body_id, body, bindings) = flow_context(&parsed, "area");
+  let (body_id, body, _bindings) = flow_context(&parsed, "area");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let square = obj_type(
@@ -363,7 +361,7 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
   );
   let mut initial = HashMap::new();
   initial.insert(
-    param_binding(body, &bindings, 0),
+    param_binding(&parsed, body, 0),
     store.union(vec![square, circle]),
   );
   let res = run_flow(&parsed, body_id, body, &store, &initial);
@@ -384,12 +382,12 @@ function f(x: string | null) {
 }
 "#;
   let parsed = parse_lower_with_locals(src);
-  let (body_id, body, bindings) = flow_context(&parsed, "f");
+  let (body_id, body, _bindings) = flow_context(&parsed, "f");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
   initial.insert(
-    param_binding(body, &bindings, 0),
+    param_binding(&parsed, body, 0),
     store.union(vec![prim.string, prim.null]),
   );
   let res = run_flow(&parsed, body_id, body, &store, &initial);
@@ -420,9 +418,9 @@ function onlyObjects(val: object | number) {
   let store = TypeStore::new();
   let prim = store.primitive_ids();
 
-  let (pick_body_id, pick_body, pick_bindings) = flow_context(&parsed, "pick");
+  let (pick_body_id, pick_body, _pick_bindings) = flow_context(&parsed, "pick");
   let mut pick_env = HashMap::new();
-  let pick_param = param_binding(pick_body, &pick_bindings, 0);
+  let pick_param = param_binding(&parsed, pick_body, 0);
   let val_obj = obj_type(&store, &[("value", prim.string)]);
   let other_obj = obj_type(&store, &[("other", prim.number)]);
   pick_env.insert(pick_param, store.union(vec![val_obj, other_obj]));
@@ -432,10 +430,10 @@ function onlyObjects(val: object | number) {
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "number");
 
-  let (obj_body_id, obj_body, obj_bindings) = flow_context(&parsed, "onlyObjects");
+  let (obj_body_id, obj_body, _obj_bindings) = flow_context(&parsed, "onlyObjects");
   let mut obj_env = HashMap::new();
   obj_env.insert(
-    param_binding(obj_body, &obj_bindings, 0),
+    param_binding(&parsed, obj_body, 0),
     store.union(vec![obj_type(&store, &[]), prim.number]),
   );
   let res = run_flow(&parsed, obj_body_id, obj_body, &store, &obj_env);
@@ -456,7 +454,7 @@ function onlyArrays(val: string[] | number) {
 }
 "#;
   let parsed = parse_lower_with_locals(src);
-  let (body_id, body, bindings) = flow_context(&parsed, "onlyArrays");
+  let (body_id, body, _bindings) = flow_context(&parsed, "onlyArrays");
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
@@ -465,7 +463,7 @@ function onlyArrays(val: string[] | number) {
     readonly: false,
   });
   initial.insert(
-    param_binding(body, &bindings, 0),
+    param_binding(&parsed, body, 0),
     store.union(vec![arr, prim.number]),
   );
 
@@ -506,7 +504,7 @@ function pick(val: string | number) {
     Some(candidate),
   );
   let (body_id, body, bindings) = flow_context(&parsed, "pick");
-  initial.insert(param_binding(body, &bindings, 0), val_ty);
+  initial.insert(param_binding(&parsed, body, 0), val_ty);
   let guard_binding =
     binding_for_name(body, &bindings, &parsed.semantics, "isStr").expect("guard binding");
   initial.insert(guard_binding, guard);

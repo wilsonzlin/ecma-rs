@@ -3686,7 +3686,7 @@ impl ProgramState {
             &ast,
           );
           self.hir_lowered.insert(file, lowered.clone());
-          let sem_hir = sem_hir_from_lower(&lowered);
+          let sem_hir = sem_hir_from_lower(ast.as_ref(), &lowered);
           let lower_span = QuerySpan::enter(
             QueryKind::LowerHir,
             query_span!(
@@ -4182,7 +4182,7 @@ impl ProgramState {
           let _ = lower_diags;
           let mut queue = VecDeque::new();
           let bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, &mut queue);
-          let sem_hir = sem_hir_from_lower(&lowered);
+          let sem_hir = sem_hir_from_lower(ast.as_ref(), &lowered);
           self.hir_lowered.insert(file_id, lowered.clone());
           let merged_sem_hir = ProgramState::merge_sem_hir(sem_hir, bound_sem_hir);
           self.sem_hir.insert(file_id, merged_sem_hir);

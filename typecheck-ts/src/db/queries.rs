@@ -593,8 +593,7 @@ pub mod body_check {
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
-        let (locals, _) =
-          ::semantic_js::ts::locals::bind_ts_locals_tables(&*ast, meta.file, true);
+        let (locals, _) = ::semantic_js::ts::locals::bind_ts_locals_tables(&*ast, meta.file, true);
         let flow_bindings = FlowBindings::new(body, &locals);
 
         let mut initial_env: HashMap<_, _> = HashMap::new();
@@ -1147,9 +1146,10 @@ fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
 
 #[salsa::tracked]
 fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
+  let parsed = parse_for(db, file);
   let lowered = lower_hir_for(db, file);
-  if let Some(lowered) = lowered.lowered.as_ref() {
-    sem_hir_from_lower(lowered)
+  if let (Some(ast), Some(lowered)) = (parsed.ast.as_ref(), lowered.lowered.as_ref()) {
+    sem_hir_from_lower(ast, lowered)
   } else {
     empty_sem_hir(file.file_id(db), lowered.file_kind)
   }
