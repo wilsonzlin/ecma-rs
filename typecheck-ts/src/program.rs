@@ -638,6 +638,11 @@ impl Program {
   /// Clear any pending cancellation request so new work can proceed.
   pub fn clear_cancellation(&self) {
     self.cancelled.store(false, Ordering::Relaxed);
+    let (overrides, options) = {
+      let state = self.lock_state();
+      (state.file_overrides.clone(), state.compiler_options.clone())
+    };
+    self.reset_state(overrides, options);
   }
 
   fn ensure_not_cancelled(&self) -> Result<(), FatalError> {
@@ -1922,6 +1927,7 @@ impl Program {
       let mut state = program.lock_state();
       state.analyzed = true;
       state.checked = true;
+      state.interning = false;
       state.compiler_options = snapshot.compiler_options;
       state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
@@ -2913,6 +2919,7 @@ struct ProgramState {
   next_def: u32,
   next_body: u32,
   type_stack: Vec<DefId>,
+  interning: bool,
 }
 
 impl GlobalBindingsDb for ProgramState {
@@ -3009,6 +3016,7 @@ impl ProgramState {
       next_def: 0,
       next_body: 0,
       type_stack: Vec::new(),
+      interning: false,
     }
   }
 
@@ -3821,276 +3829,286 @@ impl ProgramState {
     host: &Arc<dyn Host>,
     roots: &[FileKey],
   ) -> Result<(), FatalError> {
-    if self.interned_store.is_some() && self.interned_def_types.len() >= self.def_data.len() {
-      self.rebuild_callable_overloads();
-      self.merge_callable_overload_types();
+    if self.interning {
       return Ok(());
     }
-    self.ensure_analyzed_result(host, roots)?;
-    self.check_cancelled()?;
-    self.rebuild_callable_overloads();
-
-    let store = self.interned_store.clone().unwrap_or_else(|| {
-      let store = tti::TypeStore::with_options((&self.compiler_options).into());
-      self.interned_store = Some(Arc::clone(&store));
-      store
-    });
-    self.interned_def_types.clear();
-    self.interned_type_params.clear();
-    let mut def_types = HashMap::new();
-    let mut type_params = HashMap::new();
-    let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
-    let def_by_name = self.canonical_defs()?;
-
-    let mut lowered_entries: Vec<_> = self
-      .hir_lowered
-      .iter()
-      .map(|(file, lowered)| (*file, lowered.clone()))
-      .collect();
-    lowered_entries.sort_by_key(|(file, _)| file.0);
-    for (file, lowered) in lowered_entries.iter() {
+    self.interning = true;
+    let result = (|| -> Result<(), FatalError> {
+      if self.interned_store.is_some() && self.interned_def_types.len() >= self.def_data.len() {
+        self.rebuild_callable_overloads();
+        self.merge_callable_overload_types();
+        return Ok(());
+      }
+      self.ensure_analyzed_result(host, roots)?;
       self.check_cancelled()?;
-      let mut def_map: HashMap<DefId, DefId> = HashMap::new();
-      let mut local_defs: HashMap<String, HirDefId> = HashMap::new();
-      for def in lowered.defs.iter() {
-        if let Some(name) = lowered.names.resolve(def.name) {
-          local_defs.insert(name.to_string(), def.id);
-          if let Some(mapped) = def_by_name.get(&(*file, name.to_string())) {
-            def_map.insert(def.id, *mapped);
-          }
-        }
-      }
-      let file_key = self.file_key_for_id(*file);
-      let registry = self.file_registry.clone();
-      let key_to_id = move |key: &FileKey| registry.lookup_id(key);
-      let mut lowerer = check::decls::HirDeclLowerer::new(
-        Arc::clone(&store),
-        &lowered.types,
-        self.semantics.as_deref(),
-        def_by_name.clone(),
-        *file,
-        file_key.clone(),
-        local_defs,
-        &mut self.diagnostics,
-        Some(&def_map),
-        Some(&def_by_name),
-        Some(host.as_ref()),
-        Some(&key_to_id),
-        None,
-      );
-      for def in lowered.defs.iter() {
-        let Some(info) = def.type_info.as_ref() else {
-          continue;
-        };
-        let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
-        let target_def = def_map.get(&def.id).copied().or_else(|| {
-          lowered
-            .names
-            .resolve(def.name)
-            .and_then(|n| def_by_name.get(&(*file, n.to_string())).copied())
-        });
-        if let Some(mapped) = target_def {
-          let ty = if let Some(existing) = def_types.get(&mapped) {
-            ProgramState::merge_interned_decl_types(&store, *existing, ty)
-          } else {
-            ty
-          };
-          def_types.insert(mapped, ty);
-          if !params.is_empty() {
-            type_params.insert(mapped, params);
-          }
-        }
-      }
-    }
+      self.rebuild_callable_overloads();
 
-    for (file, lowered) in lowered_entries.iter() {
-      self.check_cancelled()?;
-      let Some(ast) = self.asts.get(file).cloned() else {
-        continue;
-      };
-      let class_infos = class_typing::type_classes_in_file(
-        Arc::clone(&store),
-        &ast,
-        lowered,
-        *file,
-        &def_by_name,
-        &mut self.diagnostics,
-      );
-      for class in class_infos {
-        let ty = if let Some(existing) = def_types.get(&class.def) {
-          ProgramState::merge_interned_decl_types(&store, *existing, class.instance)
-        } else {
-          class.instance
-        };
-        def_types.insert(class.def, ty);
-        if !class.type_params.is_empty() {
-          type_params.insert(class.def, class.type_params);
-        }
-        let legacy = self.import_interned_type(class.instance);
-        self.def_types.insert(class.def, legacy);
-        if let (Some(name), Some(def_data)) = (class.name.as_ref(), self.def_data.get(&class.def)) {
-          if let Some(file_state) = self.files.get_mut(&def_data.file) {
-            file_state.bindings.insert(
-              name.clone(),
-              SymbolBinding {
-                symbol: def_data.symbol,
-                def: Some(class.def),
-                type_id: Some(legacy),
-              },
-            );
-          }
-        }
-      }
-    }
+      let store = self.interned_store.clone().unwrap_or_else(|| {
+        let store = tti::TypeStore::with_options((&self.compiler_options).into());
+        self.interned_store = Some(Arc::clone(&store));
+        store
+      });
+      self.interned_def_types.clear();
+      self.interned_type_params.clear();
+      let mut def_types = HashMap::new();
+      let mut type_params = HashMap::new();
+      let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
+      let def_by_name = self.canonical_defs()?;
 
-    self.collect_function_decl_types(&store, &def_by_name, &mut def_types, &mut type_params);
-    self.collect_var_decl_types(&store, &def_by_name, &mut def_types);
-
-    let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
-    for (file, lowered) in lowered_entries.into_iter() {
-      for ns_def in lowered
-        .defs
+      let mut lowered_entries: Vec<_> = self
+        .hir_lowered
         .iter()
-        .filter(|d| matches!(d.path.kind, HirDefKind::Namespace | HirDefKind::Module))
-      {
-        let Some(ns_name) = lowered.names.resolve(ns_def.name) else {
+        .map(|(file, lowered)| (*file, lowered.clone()))
+        .collect();
+      lowered_entries.sort_by_key(|(file, _)| file.0);
+      for (file, lowered) in lowered_entries.iter() {
+        self.check_cancelled()?;
+        let mut def_map: HashMap<DefId, DefId> = HashMap::new();
+        let mut local_defs: HashMap<String, HirDefId> = HashMap::new();
+        for def in lowered.defs.iter() {
+          if let Some(name) = lowered.names.resolve(def.name) {
+            local_defs.insert(name.to_string(), def.id);
+            if let Some(mapped) = def_by_name.get(&(*file, name.to_string())) {
+              def_map.insert(def.id, *mapped);
+            }
+          }
+        }
+        let file_key = self.file_key_for_id(*file);
+        let registry = self.file_registry.clone();
+        let key_to_id = move |key: &FileKey| registry.lookup_id(key);
+        let mut lowerer = check::decls::HirDeclLowerer::new(
+          Arc::clone(&store),
+          &lowered.types,
+          self.semantics.as_deref(),
+          def_by_name.clone(),
+          *file,
+          file_key.clone(),
+          local_defs,
+          &mut self.diagnostics,
+          Some(&def_map),
+          Some(&def_by_name),
+          Some(host.as_ref()),
+          Some(&key_to_id),
+          None,
+        );
+        for def in lowered.defs.iter() {
+          let Some(info) = def.type_info.as_ref() else {
+            continue;
+          };
+          let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
+          let target_def = def_map.get(&def.id).copied().or_else(|| {
+            lowered
+              .names
+              .resolve(def.name)
+              .and_then(|n| def_by_name.get(&(*file, n.to_string())).copied())
+          });
+          if let Some(mapped) = target_def {
+            let ty = if let Some(existing) = def_types.get(&mapped) {
+              ProgramState::merge_interned_decl_types(&store, *existing, ty)
+            } else {
+              ty
+            };
+            def_types.insert(mapped, ty);
+            if !params.is_empty() {
+              type_params.insert(mapped, params);
+            }
+          }
+        }
+      }
+
+      for (file, lowered) in lowered_entries.iter() {
+        self.check_cancelled()?;
+        let Some(ast) = self.asts.get(file).cloned() else {
           continue;
         };
-        let mut members = Vec::new();
-        for member in lowered.defs.iter() {
-          if member.id == ns_def.id {
+        let class_infos = class_typing::type_classes_in_file(
+          Arc::clone(&store),
+          &ast,
+          lowered,
+          *file,
+          &def_by_name,
+          &mut self.diagnostics,
+        );
+        for class in class_infos {
+          let ty = if let Some(existing) = def_types.get(&class.def) {
+            ProgramState::merge_interned_decl_types(&store, *existing, class.instance)
+          } else {
+            class.instance
+          };
+          def_types.insert(class.def, ty);
+          if !class.type_params.is_empty() {
+            type_params.insert(class.def, class.type_params);
+          }
+          let legacy = self.import_interned_type(class.instance);
+          self.def_types.insert(class.def, legacy);
+          if let (Some(name), Some(def_data)) = (class.name.as_ref(), self.def_data.get(&class.def))
+          {
+            if let Some(file_state) = self.files.get_mut(&def_data.file) {
+              file_state.bindings.insert(
+                name.clone(),
+                SymbolBinding {
+                  symbol: def_data.symbol,
+                  def: Some(class.def),
+                  type_id: Some(legacy),
+                },
+              );
+            }
+          }
+        }
+      }
+
+      self.collect_function_decl_types(&store, &def_by_name, &mut def_types, &mut type_params);
+      self.collect_var_decl_types(&store, &def_by_name, &mut def_types);
+
+      let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
+      for (file, lowered) in lowered_entries.into_iter() {
+        for ns_def in lowered
+          .defs
+          .iter()
+          .filter(|d| matches!(d.path.kind, HirDefKind::Namespace | HirDefKind::Module))
+        {
+          let Some(ns_name) = lowered.names.resolve(ns_def.name) else {
+            continue;
+          };
+          let mut members = Vec::new();
+          for member in lowered.defs.iter() {
+            if member.id == ns_def.id {
+              continue;
+            }
+            if member.span.start >= ns_def.span.start && member.span.end <= ns_def.span.end {
+              if let Some(name) = lowered.names.resolve(member.name) {
+                members.push(name.to_string());
+              }
+            }
+          }
+          members.sort();
+          members.dedup();
+          if members.is_empty() {
             continue;
           }
-          if member.span.start >= ns_def.span.start && member.span.end <= ns_def.span.end {
-            if let Some(name) = lowered.names.resolve(member.name) {
-              members.push(name.to_string());
-            }
+          namespace_members.push((file, ns_name.to_string(), members));
+        }
+      }
+      namespace_members.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
+      for (file, ns_name, members) in namespace_members.into_iter() {
+        let key = (file, ns_name);
+        namespace_types
+          .entry(key)
+          .and_modify(|(existing_interned, existing_store)| {
+            *existing_interned =
+              ProgramState::build_namespace_object_type(&store, Some(*existing_interned), &members);
+            *existing_store =
+              self.build_namespace_type_store_object(Some(*existing_store), &members);
+          })
+          .or_insert_with(|| {
+            let interned = ProgramState::build_namespace_object_type(&store, None, &members);
+            let store_ty = self.build_namespace_type_store_object(None, &members);
+            (interned, store_ty)
+          });
+      }
+
+      if !namespace_types.is_empty() {
+        let mut ns_entries: Vec<_> = namespace_types.into_iter().collect();
+        ns_entries.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
+        self.namespace_object_types = ns_entries.iter().cloned().collect();
+        for ((file, name), (interned, store_ty)) in ns_entries.into_iter() {
+          if let Some(def) = self.find_namespace_def(file, &name) {
+            self
+              .interned_def_types
+              .entry(def)
+              .and_modify(|existing| {
+                *existing = ProgramState::merge_interned_decl_types(&store, *existing, interned);
+              })
+              .or_insert(interned);
+            self.def_types.entry(def).or_insert(store_ty);
           }
         }
-        members.sort();
-        members.dedup();
-        if members.is_empty() {
-          continue;
-        }
-        namespace_members.push((file, ns_name.to_string(), members));
       }
-    }
-    namespace_members.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
-    for (file, ns_name, members) in namespace_members.into_iter() {
-      let key = (file, ns_name);
-      namespace_types
-        .entry(key)
-        .and_modify(|(existing_interned, existing_store)| {
-          *existing_interned =
-            ProgramState::build_namespace_object_type(&store, Some(*existing_interned), &members);
-          *existing_store = self.build_namespace_type_store_object(Some(*existing_store), &members);
-        })
-        .or_insert_with(|| {
-          let interned = ProgramState::build_namespace_object_type(&store, None, &members);
-          let store_ty = self.build_namespace_type_store_object(None, &members);
-          (interned, store_ty)
-        });
-    }
 
-    if !namespace_types.is_empty() {
-      let mut ns_entries: Vec<_> = namespace_types.into_iter().collect();
-      ns_entries.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
-      self.namespace_object_types = ns_entries.iter().cloned().collect();
-      for ((file, name), (interned, store_ty)) in ns_entries.into_iter() {
-        if let Some(def) = self.find_namespace_def(file, &name) {
-          self
-            .interned_def_types
-            .entry(def)
-            .and_modify(|existing| {
-              *existing = ProgramState::merge_interned_decl_types(&store, *existing, interned);
-            })
-            .or_insert(interned);
-          self.def_types.entry(def).or_insert(store_ty);
-        }
-      }
-    }
-
-    let mut missing_defs: Vec<_> = self
-      .def_data
-      .keys()
-      .copied()
-      .filter(|def_id| {
-        def_types.get(def_id).map_or(true, |ty| {
-          matches!(store.type_kind(*ty), tti::TypeKind::Unknown)
-        })
-      })
-      .collect();
-    missing_defs.sort_by_key(|d| d.0);
-    for def_id in missing_defs {
-      let store_ty = match self.def_types.get(&def_id).copied() {
-        Some(ty) => ty,
-        None => {
-          self.type_of_def(def_id)?;
-          self
-            .def_types
-            .get(&def_id)
-            .copied()
-            .unwrap_or(self.builtin.unknown)
-        }
-      };
-      let mut cache = HashMap::new();
-      let interned = convert_type_for_display(store_ty, self, &store, &mut cache);
-      def_types.insert(def_id, store.canon(interned));
-    }
-
-    let mut retries = 0;
-    loop {
-      let mut unknown_defs: Vec<_> = self
-        .def_types
-        .iter()
-        .filter_map(|(def, ty)| {
-          let mut visited = HashSet::new();
-          self
-            .type_contains_unknown(*ty, &mut visited)
-            .then_some(*def)
+      let mut missing_defs: Vec<_> = self
+        .def_data
+        .keys()
+        .copied()
+        .filter(|def_id| {
+          def_types.get(def_id).map_or(true, |ty| {
+            matches!(store.type_kind(*ty), tti::TypeKind::Unknown)
+          })
         })
         .collect();
-      if unknown_defs.is_empty() || retries >= 3 {
-        break;
+      missing_defs.sort_by_key(|d| d.0);
+      for def_id in missing_defs {
+        let store_ty = match self.def_types.get(&def_id).copied() {
+          Some(ty) => ty,
+          None => {
+            self.type_of_def(def_id)?;
+            self
+              .def_types
+              .get(&def_id)
+              .copied()
+              .unwrap_or(self.builtin.unknown)
+          }
+        };
+        let mut cache = HashMap::new();
+        let interned = convert_type_for_display(store_ty, self, &store, &mut cache);
+        def_types.insert(def_id, store.canon(interned));
       }
-      retries += 1;
-      unknown_defs.sort_by_key(|d| d.0);
-      for def in unknown_defs {
-        self.def_types.remove(&def);
-        self.interned_def_types.remove(&def);
-        let _ = self.type_of_def(def)?;
-      }
-    }
 
-    self.interned_store = Some(store);
-    self.interned_def_types = def_types;
-    self.interned_type_params = type_params;
-    self.body_results.clear();
-    for (def, interned_ty) in self.interned_def_types.clone() {
-      let legacy_ty = self
-        .def_types
-        .get(&def)
-        .copied()
-        .unwrap_or_else(|| self.import_interned_type(interned_ty));
-      self.def_types.entry(def).or_insert(legacy_ty);
-      if let Some(def_data) = self.def_data.get(&def) {
-        if let Some(file_state) = self.files.get_mut(&def_data.file) {
-          if let Some(binding) = file_state.bindings.get_mut(&def_data.name) {
-            let needs_type = binding.type_id.map_or(true, |ty| {
-              matches!(self.type_store.kind(ty), TypeKind::Unknown)
-            });
-            if needs_type {
-              binding.type_id = Some(legacy_ty);
+      let mut retries = 0;
+      loop {
+        let mut unknown_defs: Vec<_> = self
+          .def_types
+          .iter()
+          .filter_map(|(def, ty)| {
+            let mut visited = HashSet::new();
+            self
+              .type_contains_unknown(*ty, &mut visited)
+              .then_some(*def)
+          })
+          .collect();
+        if unknown_defs.is_empty() || retries >= 3 {
+          break;
+        }
+        retries += 1;
+        unknown_defs.sort_by_key(|d| d.0);
+        for def in unknown_defs {
+          self.def_types.remove(&def);
+          self.interned_def_types.remove(&def);
+          let _ = self.type_of_def(def)?;
+        }
+      }
+
+      self.interned_store = Some(store);
+      self.interned_def_types = def_types;
+      self.interned_type_params = type_params;
+      self.body_results.clear();
+      for (def, interned_ty) in self.interned_def_types.clone() {
+        let legacy_ty = self
+          .def_types
+          .get(&def)
+          .copied()
+          .unwrap_or_else(|| self.import_interned_type(interned_ty));
+        self.def_types.entry(def).or_insert(legacy_ty);
+        if let Some(def_data) = self.def_data.get(&def) {
+          if let Some(file_state) = self.files.get_mut(&def_data.file) {
+            if let Some(binding) = file_state.bindings.get_mut(&def_data.name) {
+              let needs_type = binding.type_id.map_or(true, |ty| {
+                matches!(self.type_store.kind(ty), TypeKind::Unknown)
+              });
+              if needs_type {
+                binding.type_id = Some(legacy_ty);
+              }
             }
           }
         }
       }
-    }
-    self.merge_callable_overload_types();
-    self.merge_namespace_value_types()?;
-    self.recompute_global_bindings();
-    codes::normalize_diagnostics(&mut self.diagnostics);
-    Ok(())
+      self.merge_callable_overload_types();
+      self.merge_namespace_value_types()?;
+      self.recompute_global_bindings();
+      codes::normalize_diagnostics(&mut self.diagnostics);
+      Ok(())
+    })();
+    self.interning = false;
+    result
   }
 
   fn collect_function_decl_types(

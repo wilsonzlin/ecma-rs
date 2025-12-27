@@ -3,7 +3,9 @@ use std::sync::Arc;
 use diagnostics::Span;
 use types_ts_interned::{RelateCtx, TypeId, TypeStore};
 
-use super::overload::{resolve_construct as resolve_construct_overloads, resolve_overloads, CallResolution};
+use super::overload::{
+  resolve_construct as resolve_construct_overloads, resolve_overloads, CallResolution,
+};
 
 /// Resolve a call expression against a callable type.
 pub fn resolve_call(
