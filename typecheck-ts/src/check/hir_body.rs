@@ -2710,7 +2710,9 @@ impl<'a> FlowBodyChecker<'a> {
     let ty = match &expr.kind {
       ExprKind::Ident(name) => {
         let key = FlowKey::root(*name);
-        let ty = env.get_path(&key).unwrap_or(prim.unknown);
+        let ty = self
+          .store
+          .canon(env.get_path(&key).unwrap_or(prim.unknown));
         let (truthy, falsy) = truthy_falsy_types(ty, &self.store);
         facts.truthy.insert(key.clone(), truthy);
         facts.falsy.insert(key, falsy);

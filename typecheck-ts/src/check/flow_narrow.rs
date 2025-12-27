@@ -292,7 +292,9 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
       }
       (store.union(truthy), store.union(falsy))
     }
-    TypeKind::Null | TypeKind::Undefined => (primitives.never, ty),
+    TypeKind::Never => (primitives.never, primitives.never),
+    TypeKind::Any | TypeKind::Unknown => (ty, ty),
+    TypeKind::Null | TypeKind::Undefined | TypeKind::Void => (primitives.never, ty),
     TypeKind::BooleanLiteral(false) => (primitives.never, ty),
     TypeKind::BooleanLiteral(true) => (ty, primitives.never),
     TypeKind::NumberLiteral(num) => {
@@ -309,12 +311,37 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
         (ty, primitives.never)
       }
     }
-    TypeKind::StringLiteral(id) if store.name(id).is_empty() => (primitives.never, ty),
+    TypeKind::StringLiteral(id) => {
+      if store.name(id).is_empty() {
+        (primitives.never, ty)
+      } else {
+        (ty, primitives.never)
+      }
+    }
+    TypeKind::Number | TypeKind::BigInt | TypeKind::String | TypeKind::TemplateLiteral(_) => {
+      // TypeScript keeps plain primitives in both branches because values like
+      // 0, 0n, or "" are still possible in falsy paths.
+      (ty, ty)
+    }
     TypeKind::Boolean => (
       store.intern_type(TypeKind::BooleanLiteral(true)),
       store.intern_type(TypeKind::BooleanLiteral(false)),
     ),
-    _ => (ty, primitives.never),
+    TypeKind::Symbol | TypeKind::UniqueSymbol => (ty, primitives.never),
+    TypeKind::Object(_)
+    | TypeKind::Array { .. }
+    | TypeKind::Tuple(_)
+    | TypeKind::Callable { .. } => (ty, primitives.never),
+    TypeKind::Ref { .. }
+    | TypeKind::TypeParam(_)
+    | TypeKind::Infer { .. }
+    | TypeKind::Intersection(_)
+    | TypeKind::Conditional { .. }
+    | TypeKind::Mapped(_)
+    | TypeKind::IndexedAccess { .. }
+    | TypeKind::KeyOf(_)
+    | TypeKind::This
+    | TypeKind::Predicate { .. } => (ty, ty),
   }
 }
 

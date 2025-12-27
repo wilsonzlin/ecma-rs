@@ -186,6 +186,7 @@ fn type_at_prefers_inner_identifier_in_nested_arrows() {
     }
   }
   let span = program.span_of_expr(body, expr).expect("span of expr");
+  println!("expr id {:?}", expr);
   assert_eq!(
     &source[span.range.start as usize..span.range.end as usize],
     "value",

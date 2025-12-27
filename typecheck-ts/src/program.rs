@@ -6068,7 +6068,16 @@ impl ProgramState {
         HirPatKind::Ident(name_id) => {
           if let Some(name) = names.resolve(*name_id) {
             if ty != state.builtin.unknown {
-              bindings.entry(name.to_string()).or_insert(ty);
+              bindings
+                .entry(name.to_string())
+                .and_modify(|existing| {
+                  if let Some(store) = state.interned_store.as_ref() {
+                    if matches!(store.type_kind(*existing), tti::TypeKind::Unknown) {
+                      *existing = ty;
+                    }
+                  }
+                })
+                .or_insert(ty);
             }
             if let Some(def_id) = state
               .def_data
@@ -6473,10 +6482,12 @@ impl ProgramState {
         def_kinds,
         self.file_registry.clone(),
         file,
-        binding_defs,
+        binding_defs.clone(),
       )) as Arc<_>)
     } else if !binding_defs.is_empty() {
-      Some(Arc::new(check::hir_body::BindingTypeResolver::new(binding_defs)) as Arc<_>)
+      Some(Arc::new(check::hir_body::BindingTypeResolver::new(
+        binding_defs.clone(),
+      )) as Arc<_>)
     } else {
       None
     };
@@ -6580,12 +6591,30 @@ impl ProgramState {
         result.diagnostics = flow_result.diagnostics;
       }
     }
+    for (idx, expr) in body.exprs.iter().enumerate() {
+      if result.expr_types.get(idx) == Some(&prim.unknown) {
+        if let hir_js::ExprKind::Ident(name_id) = expr.kind {
+          if let Some(name) = lowered.names.resolve(name_id) {
+            if let Some(mut ty) = bindings.get(name).copied() {
+              if ty == prim.unknown {
+                if let Some(def) = binding_defs.get(name) {
+                  if let Some(mapped) = map_def_ty(self, &store, &mut convert_cache, *def) {
+                    ty = mapped;
+                  }
+                }
+              }
+              result.expr_types[idx] = ty;
+          }
+        }
+      }
+    }
     if let Err(err) = self.check_cancelled() {
       if let Some(span) = span.take() {
         span.finish(None);
       }
       self.current_file = prev_file;
       return Err(err);
+    }
     }
     let res = Arc::new(result);
     if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
