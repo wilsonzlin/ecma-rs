@@ -113,6 +113,62 @@ fn narrows_truthiness() {
 }
 
 #[test]
+fn loose_nullish_comparison_narrows_non_nullish() {
+  let src = "function f(x: string | null | undefined) { if (x != null) return x; return x; }";
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null, prim.undefined]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "null | undefined");
+}
+
+#[test]
+fn strict_undefined_comparison_narrows() {
+  let src = "function f(x: string | undefined) { if (x === undefined) return x; return x; }";
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.undefined]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "undefined");
+  assert_eq!(else_ty, "string");
+}
+
+#[test]
 fn boolean_truthiness_splits_literals() {
   let src = "function f(flag: boolean) { if (flag) { return flag; } else { return flag; } }";
   let lowered = lower_from_source(src).expect("lower");
@@ -391,6 +447,36 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "number");
   assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn non_null_guard_allows_member_access() {
+  let src = "function f(x: {a:number} | null) { if (x != null) return x.a; return 0 }";
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let obj = obj_type(&store, &[("a", prim.number)]);
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![obj, prim.null]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "number");
+  assert_eq!(else_ty, "0");
 }
 
 #[test]

@@ -1,7 +1,7 @@
 //! Narrowing helpers used by the flow-sensitive body checker.
 use std::collections::HashMap;
 
-use hir_js::NameId;
+use hir_js::{BinaryOp, NameId};
 use num_bigint::BigInt;
 use types_ts_interned::{TypeId, TypeKind, TypeStore};
 
@@ -53,6 +53,60 @@ pub enum LiteralValue {
   Boolean(bool),
   Null,
   Undefined,
+}
+
+/// Narrow by a nullish equality/inequality comparison.
+pub fn narrow_by_nullish_equality(
+  ty: TypeId,
+  op_kind: BinaryOp,
+  lit: &LiteralValue,
+  store: &TypeStore,
+) -> (TypeId, TypeId) {
+  let primitives = store.primitive_ids();
+  if !matches!(lit, LiteralValue::Null | LiteralValue::Undefined) {
+    return (primitives.never, ty);
+  }
+  if !matches!(
+    op_kind,
+    BinaryOp::Equality | BinaryOp::Inequality | BinaryOp::StrictEquality | BinaryOp::StrictInequality
+  ) {
+    return (primitives.never, ty);
+  }
+  let loose = matches!(op_kind, BinaryOp::Equality | BinaryOp::Inequality);
+  let matches_literal = |kind: &TypeKind| match lit {
+    LiteralValue::Null => {
+      matches!(kind, TypeKind::Null) || (loose && matches!(kind, TypeKind::Undefined))
+    }
+    LiteralValue::Undefined => {
+      matches!(kind, TypeKind::Undefined) || (loose && matches!(kind, TypeKind::Null))
+    }
+    _ => false,
+  };
+
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => {
+      let mut yes = Vec::new();
+      let mut no = Vec::new();
+      for member in members {
+        let (y, n) = narrow_by_nullish_equality(member, op_kind, lit, store);
+        if y != primitives.never {
+          yes.push(y);
+        }
+        if n != primitives.never {
+          no.push(n);
+        }
+      }
+      (store.union(yes), store.union(no))
+    }
+    kind => {
+      let matches = matches_literal(&kind);
+      if matches {
+        (ty, primitives.never)
+      } else {
+        (primitives.never, ty)
+      }
+    }
+  }
 }
 
 /// Narrow by an equality comparison with a literal value.

@@ -29,7 +29,8 @@ use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::Env;
 use super::flow_narrow::{
   narrow_by_asserted, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
-  narrow_by_literal, narrow_by_typeof, truthy_falsy_types, Facts, LiteralValue,
+  narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof, truthy_falsy_types, Facts,
+  LiteralValue,
 };
 
 use super::caches::BodyCaches;
@@ -2521,7 +2522,16 @@ impl<'a> FlowBodyChecker<'a> {
         .map(|id| self.eval_expr(id, env).0)
         .unwrap_or(prim.undefined),
       ExprKind::TypeAssertion { expr } => self.eval_expr(*expr, env).0,
-      ExprKind::NonNull { expr } => self.eval_expr(*expr, env).0,
+      ExprKind::NonNull { expr } => {
+        let inner_ty = self.eval_expr(*expr, env).0;
+        let (_, nonnull) = narrow_by_nullish_equality(
+          inner_ty,
+          BinaryOp::Equality,
+          &LiteralValue::Null,
+          &self.store,
+        );
+        nonnull
+      }
       ExprKind::Satisfies { expr } => {
         let prev = self.widen_object_literals;
         self.widen_object_literals = false;
@@ -2600,17 +2610,25 @@ impl<'a> FlowBodyChecker<'a> {
       }
     };
 
+    let mut apply_literal_narrow = |target: NameId, target_ty: TypeId, lit: &LiteralValue| {
+      if matches!(lit, LiteralValue::Null | LiteralValue::Undefined) {
+        let (yes, no) = narrow_by_nullish_equality(target_ty, op, lit, &self.store);
+        apply(target, yes, no);
+      } else {
+        let (yes, no) = narrow_by_literal(target_ty, lit, &self.store);
+        apply(target, yes, no);
+      }
+    };
+
     if let Some(target) = self.ident_name(left) {
       if let Some(lit) = self.literal_value(right) {
-        let (yes, no) = narrow_by_literal(left_ty, &lit, &self.store);
-        apply(target, yes, no);
+        apply_literal_narrow(target, left_ty, &lit);
         return;
       }
     }
     if let Some(target) = self.ident_name(right) {
       if let Some(lit) = self.literal_value(left) {
-        let (yes, no) = narrow_by_literal(right_ty, &lit, &self.store);
-        apply(target, yes, no);
+        apply_literal_narrow(target, right_ty, &lit);
         return;
       }
     }
@@ -2693,6 +2711,9 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn literal_value(&self, expr_id: ExprId) -> Option<LiteralValue> {
     match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Ident(name) if self.hir_name(*name) == "undefined" => {
+        Some(LiteralValue::Undefined)
+      }
       ExprKind::Literal(lit) => match lit {
         hir_js::Literal::String(s) => Some(LiteralValue::String(s.clone())),
         hir_js::Literal::Number(n) => Some(LiteralValue::Number(n.clone())),
