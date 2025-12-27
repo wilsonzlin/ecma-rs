@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use typecheck_ts::codes;
-use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibName};
+use typecheck_ts::db::{Database, FileOrigin};
+use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile, LibManager, LibName};
 use typecheck_ts::{FileKey, Host, HostError, Program, PropertyKey, TextRange, TypeKindSummary};
 
 const PROMISE_ARRAY_TYPES: &str = include_str!("fixtures/promise_array_types.ts");
@@ -345,5 +346,76 @@ fn bundled_libs_enable_dom_and_promise_fixture() {
   assert!(
     diagnostics.is_empty(),
     "expected bundled libs to typecheck Promise/DOM fixture, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn lib_query_invalidation_when_options_change() {
+  let manager = Arc::new(LibManager::new());
+  let mut db = Database::with_lib_manager(Arc::clone(&manager));
+
+  let _ = db.lib_files();
+  assert_eq!(
+    manager.load_count(),
+    1,
+    "initial lib loading should consult the lib manager"
+  );
+
+  let mut options = CompilerOptions::default();
+  options.include_dom = false;
+  db.inputs.set_compiler_options(options);
+  let _ = db.lib_files();
+  assert_eq!(
+    manager.load_count(),
+    2,
+    "changing compiler options should invalidate lib selection"
+  );
+}
+
+#[test]
+fn lib_queries_merge_libs_into_all_files() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let mut db = Database::new();
+  db.inputs.set_compiler_options(options);
+  let source = db.intern_file(FileKey::new("entry.ts"), FileOrigin::Source);
+  db.inputs.set_reachable_files(Arc::from([source]));
+
+  let lib = LibFile {
+    key: FileKey::new("custom.d.ts"),
+    name: Arc::from("custom.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from("declare const Provided: number;"),
+  };
+  let lib_text = Arc::clone(&lib.text);
+  db.inputs.set_host_libs(vec![lib.clone()]);
+
+  let libs = db.lib_files();
+  assert_eq!(
+    libs.len(),
+    1,
+    "host libs should be loaded when default libs are disabled"
+  );
+  let lib_file = db
+    .lib_file_ids()
+    .into_iter()
+    .next()
+    .expect("lib files should receive file ids");
+  let all_files = db.all_files();
+  assert!(
+    all_files.iter().any(|id| *id == source),
+    "reachable source files should be preserved"
+  );
+  assert!(
+    all_files.iter().any(|id| *id == lib_file),
+    "library files should be merged in"
+  );
+  assert_eq!(all_files.len(), 2, "all_files should de-duplicate entries");
+
+  db.inputs.set_file_text(source, Arc::from("/* source */"));
+  assert_eq!(
+    db.effective_file_text(lib_file).as_deref(),
+    Some(lib_text.as_ref()),
+    "lib file text should come from the lib entry instead of the host"
   );
 }

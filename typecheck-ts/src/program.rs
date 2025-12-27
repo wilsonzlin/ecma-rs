@@ -49,6 +49,7 @@ use crate::{FatalError, HostError, Ice, IceContext};
 #[path = "check/mod.rs"]
 pub(crate) mod check;
 
+use crate::lib_support::lib_env::{collect_libs, validate_libs};
 use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
 
 /// Environment provider for [`Program`].
@@ -3266,37 +3267,16 @@ impl ProgramState {
     self.compiler_options = options.clone();
     self.checker_caches = CheckerCaches::new(options.cache.clone());
     self.cache_stats = CheckerCacheStats::default();
-    let mut libs = host.lib_files();
-    if !options.no_default_lib {
-      let bundled = self.lib_manager.bundled_libs(&options);
-      libs.extend(bundled.files);
-    }
+    let libs = collect_libs(&options, host.lib_files(), &self.lib_manager);
+    let validated = validate_libs(libs, |lib| {
+      self.intern_file_key(lib.key.clone(), FileOrigin::Lib)
+    });
+    self.diagnostics.extend(validated.diagnostics.into_iter());
 
     let mut dts_libs = Vec::new();
-    for lib in libs.into_iter() {
-      let is_dts = lib.kind == FileKind::Dts || lib.name.ends_with(".d.ts");
-      let file_id = self.intern_file_key(lib.key.clone(), FileOrigin::Lib);
-      if !is_dts {
-        self.diagnostics.push(codes::NON_DTS_LIB.warning(
-          format!(
-            "Library '{}' is not a .d.ts file; it will be ignored for global declarations.",
-            lib.name
-          ),
-          Span::new(file_id, TextRange::new(0, 0)),
-        ));
-        continue;
-      }
+    for (lib, file_id) in validated.libs.into_iter() {
       self.file_kinds.insert(file_id, FileKind::Dts);
       dts_libs.push(lib);
-    }
-
-    if dts_libs.is_empty() {
-      self
-        .diagnostics
-        .push(codes::NO_LIBS_LOADED.error(
-          "No library files were loaded. Provide libs via the host or enable the bundled-libs feature / disable no_default_lib.",
-          Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
-        ));
     }
 
     dts_libs

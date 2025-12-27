@@ -1,3 +1,4 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -5,7 +6,9 @@ use diagnostics::{Diagnostic, FileId};
 use hir_js::{lower_file_with_diagnostics, FileKind as HirFileKind, LowerResult};
 use semantic_js::ts as sem_ts;
 
-use crate::lib_support::FileKind;
+use crate::db::inputs::{FileOrigin, Inputs};
+use crate::lib_support::lib_env::{collect_libs, validate_libs};
+use crate::lib_support::{FileKind, LibFile, LibManager};
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
 
@@ -118,5 +121,179 @@ fn map_hir_file_kind(kind: FileKind) -> HirFileKind {
     FileKind::Ts => HirFileKind::Ts,
     FileKind::Tsx => HirFileKind::Tsx,
     FileKind::Jsx => HirFileKind::Jsx,
+  }
+}
+
+#[derive(Clone, Debug, Default)]
+struct Cached<T> {
+  value: Option<T>,
+  revision: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+struct LibFilesState {
+  value: Option<Arc<[LibFile]>>,
+  revision: u64,
+  diagnostics: Vec<Diagnostic>,
+  lib_ids: Vec<FileId>,
+  lib_texts: HashMap<FileId, Arc<str>>,
+}
+
+/// Derived queries for lib loading and file aggregation.
+#[derive(Clone, Debug)]
+pub struct Database {
+  pub inputs: Inputs,
+  lib_manager: Arc<LibManager>,
+  lib_files: LibFilesState,
+  all_files: Cached<Arc<[FileId]>>,
+  effective_file_text: HashMap<FileId, Cached<Arc<str>>>,
+}
+
+impl Database {
+  /// Create a new database with a fresh [`LibManager`].
+  pub fn new() -> Self {
+    Self::with_lib_manager(Arc::new(LibManager::new()))
+  }
+
+  /// Create a database backed by a specific [`LibManager`].
+  pub fn with_lib_manager(lib_manager: Arc<LibManager>) -> Self {
+    Database {
+      inputs: Inputs::default(),
+      lib_manager,
+      lib_files: LibFilesState::default(),
+      all_files: Cached::default(),
+      effective_file_text: HashMap::new(),
+    }
+  }
+
+  /// Access the lib manager backing this database.
+  pub fn lib_manager(&self) -> &LibManager {
+    &self.lib_manager
+  }
+
+  /// Intern a file key with the provided origin.
+  pub fn intern_file(&mut self, key: crate::FileKey, origin: FileOrigin) -> FileId {
+    self.inputs.intern_file(key, origin)
+  }
+
+  fn compute_lib_files(&mut self) -> Arc<[LibFile]> {
+    let dep_rev = std::cmp::max(
+      self.inputs.compiler_options_revision(),
+      self.inputs.host_libs_revision(),
+    );
+    if let Some(value) = self.lib_files.value.as_ref() {
+      if self.lib_files.revision == dep_rev {
+        return Arc::clone(value);
+      }
+    }
+
+    let options = self.inputs.compiler_options().clone();
+    let host_libs = self.inputs.host_libs().as_ref().to_vec();
+    let libs = collect_libs(&options, host_libs, &self.lib_manager);
+    let validated = validate_libs(libs, |lib| {
+      self.inputs.intern_file(lib.key.clone(), FileOrigin::Lib)
+    });
+
+    let mut lib_ids = Vec::new();
+    let mut lib_texts = HashMap::new();
+    let mut dts_libs = Vec::new();
+    for (lib, file_id) in validated.libs.into_iter() {
+      lib_ids.push(file_id);
+      lib_texts.insert(file_id, Arc::clone(&lib.text));
+      self.inputs.set_file_kind(file_id, FileKind::Dts);
+      dts_libs.push(lib);
+    }
+    let value = Arc::from(dts_libs.into_boxed_slice());
+
+    self.lib_files = LibFilesState {
+      value: Some(Arc::clone(&value)),
+      revision: dep_rev,
+      diagnostics: validated.diagnostics,
+      lib_ids,
+      lib_texts,
+    };
+    value
+  }
+
+  /// Libraries to include alongside reachable source files.
+  pub fn lib_files(&mut self) -> Arc<[LibFile]> {
+    self.compute_lib_files()
+  }
+
+  /// Diagnostics produced while loading libraries.
+  pub fn lib_diagnostics(&mut self) -> &[Diagnostic] {
+    self.compute_lib_files();
+    &self.lib_files.diagnostics
+  }
+
+  /// IDs for all known libraries, in a deterministic order.
+  pub fn lib_file_ids(&mut self) -> Vec<FileId> {
+    self.compute_lib_files();
+    self.lib_files.lib_ids.clone()
+  }
+
+  /// All files that may participate in checking, including libraries.
+  pub fn all_files(&mut self) -> Arc<[FileId]> {
+    let lib_revision = {
+      self.compute_lib_files();
+      self.lib_files.revision
+    };
+    let dep_rev = std::cmp::max(self.inputs.reachable_files_revision(), lib_revision);
+    if let Some(value) = self.all_files.value.as_ref() {
+      if self.all_files.revision == dep_rev {
+        return Arc::clone(value);
+      }
+    }
+
+    let mut seen = HashSet::new();
+    let mut ordered = Vec::new();
+
+    for file in self.inputs.reachable_files().iter().copied() {
+      if seen.insert(file) {
+        ordered.push(file);
+      }
+    }
+
+    for file in self.lib_files.lib_ids.iter().copied() {
+      if seen.insert(file) {
+        ordered.push(file);
+      }
+    }
+
+    let value = Arc::from(ordered.into_boxed_slice());
+    self.all_files = Cached {
+      value: Some(Arc::clone(&value)),
+      revision: dep_rev,
+    };
+    value
+  }
+
+  /// Source text for a file, preferring lib contents when applicable.
+  pub fn effective_file_text(&mut self, file: FileId) -> Option<Arc<str>> {
+    let lib_revision = {
+      self.compute_lib_files();
+      self.lib_files.revision
+    };
+    let dep_rev = std::cmp::max(lib_revision, self.inputs.file_text_revision(file));
+    if let Some(cached) = self.effective_file_text.get(&file) {
+      if cached.revision == dep_rev {
+        return cached.value.clone();
+      }
+    }
+
+    let text = if let Some(text) = self.lib_files.lib_texts.get(&file) {
+      Some(Arc::clone(text))
+    } else {
+      self.inputs.file_text(file).cloned()
+    };
+
+    self.effective_file_text.insert(
+      file,
+      Cached {
+        value: text.clone(),
+        revision: dep_rev,
+      },
+    );
+    text
   }
 }

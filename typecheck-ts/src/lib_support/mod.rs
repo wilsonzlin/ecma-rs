@@ -32,7 +32,7 @@ pub enum FileKind {
 }
 
 /// A library file that can be loaded before user source files.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LibFile {
   pub key: FileKey,
   pub name: Arc<str>,
