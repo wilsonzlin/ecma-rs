@@ -1,5 +1,5 @@
 use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
-use semantic_js::ts as sem_ts;
+use ::semantic_js::ts as sem_ts;
 
 /// Build [`ExportMap`] for a file using `semantic-js` binder output.
 pub(crate) fn exports_from_semantics(

@@ -1475,3 +1475,121 @@ fn member_access_on_union_unions_property_types() {
   let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   assert_eq!(ty, "number | string");
 }
+
+#[test]
+fn narrows_property_nullish_guard() {
+  let src = r#"
+function pick(x: { value: string | null }) {
+  if (x.value != null) {
+    return x.value;
+  }
+  return x.value;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "pick");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let value_ty = store.union(vec![prim.string, prim.null]);
+  let obj = obj_type(&store, &[("value", value_ty)]);
+  initial.insert(name_id(lowered.names.as_ref(), "x"), obj);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "null");
+}
+
+#[test]
+fn bracket_discriminant_narrows() {
+  let src = r#"
+function pick(x: { ["kind"]: "foo", value: string } | { ["kind"]: "bar", value: number }) {
+  if (x["kind"] === "foo") {
+    return x.value;
+  }
+  return x.value;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "pick");
+  let store = TypeStore::new();
+  let mut initial = HashMap::new();
+  let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
+  let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
+  let foo_obj = obj_type(
+    &store,
+    &[("kind", foo), ("value", store.primitive_ids().string)],
+  );
+  let bar_obj = obj_type(
+    &store,
+    &[("kind", bar), ("value", store.primitive_ids().number)],
+  );
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![foo_obj, bar_obj]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn assignment_invalidates_paths() {
+  let src = r#"
+function reset(x: { value: string } | number) {
+  if (typeof x === "object") {
+    if (x.value) {
+      x.value;
+    }
+    x = 1;
+    return x.value;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "reset");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let obj = obj_type(&store, &[("value", prim.string)]);
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![obj, prim.number]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "unknown");
+  assert_eq!(else_ty, "number");
+}

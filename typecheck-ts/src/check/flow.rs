@@ -7,10 +7,48 @@ use types_ts_interned::{TypeId, TypeStore};
 
 use super::flow_narrow::Facts;
 
+/// Segment within an access path (currently limited to static property keys).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum PathSegment {
+  String(String),
+  Number(String),
+}
+
+/// Canonical key for flow facts and environment entries. Tracks a root local and
+/// zero or more property segments (e.g. `x`, `x.kind`, `x.meta.kind`).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FlowKey {
+  pub root: NameId,
+  pub segments: Vec<PathSegment>,
+}
+
+impl FlowKey {
+  pub fn root(root: NameId) -> Self {
+    Self {
+      root,
+      segments: Vec::new(),
+    }
+  }
+
+  pub fn with_segment(&self, segment: PathSegment) -> Self {
+    let mut segments = self.segments.clone();
+    segments.push(segment);
+    FlowKey {
+      root: self.root,
+      segments,
+    }
+  }
+
+  /// Returns true if `self` is a prefix (including exact match) of `other`.
+  pub fn is_prefix_of(&self, other: &FlowKey) -> bool {
+    self.root == other.root && other.segments.starts_with(&self.segments)
+  }
+}
+
 /// Per-point variable environment used during flow-sensitive checks.
 #[derive(Clone, Debug, Default)]
 pub struct Env {
-  vars: HashMap<NameId, TypeId>,
+  vars: HashMap<FlowKey, TypeId>,
 }
 
 impl Env {
@@ -22,37 +60,64 @@ impl Env {
 
   pub fn with_initial(initial: &HashMap<NameId, TypeId>) -> Self {
     let mut env = Env::new();
-    env.vars.extend(initial.iter().map(|(k, v)| (*k, *v)));
+    env
+      .vars
+      .extend(initial.iter().map(|(k, v)| (FlowKey::root(*k), *v)));
     env
   }
 
-  pub fn get(&self, name: NameId) -> Option<TypeId> {
-    self.vars.get(&name).copied()
+  pub fn get_var(&self, name: NameId) -> Option<TypeId> {
+    self.get_path(&FlowKey::root(name))
   }
 
-  pub fn set(&mut self, name: NameId, ty: TypeId) {
-    self.vars.insert(name, ty);
+  pub fn set_var(&mut self, name: NameId, ty: TypeId) {
+    let key = FlowKey::root(name);
+    self.invalidate_prefix(&key);
+    self.vars.insert(key, ty);
+  }
+
+  pub fn get_path(&self, path: &FlowKey) -> Option<TypeId> {
+    self.vars.get(path).copied()
+  }
+
+  pub fn set_path(&mut self, path: FlowKey, ty: TypeId) {
+    self.invalidate_prefix(&path);
+    self.vars.insert(path, ty);
+  }
+
+  pub fn invalidate_prefix(&mut self, prefix: &FlowKey) {
+    self.vars.retain(|key, _| !prefix.is_prefix_of(key));
+  }
+
+  pub fn invalidate_all(&mut self) {
+    self.vars.clear();
   }
 
   /// Remove any tracked information for a variable, clearing previous narrowings.
   pub fn invalidate(&mut self, name: NameId) {
-    self.vars.remove(&name);
+    self.invalidate_prefix(&FlowKey::root(name));
   }
 
   /// Clear any tracked property narrowings rooted at `name`. Currently there are
   /// no separate property entries, but this hook is used to invalidate access
   /// paths when writes occur.
-  pub fn clear_properties_of(&mut self, _name: NameId) {}
+  pub fn clear_properties_of(&mut self, name: NameId) {
+    self
+      .vars
+      .retain(|key, _| key.root != name || key.segments.is_empty());
+  }
 
   /// Clear all tracked property-specific narrowings.
-  pub fn clear_all_properties(&mut self) {}
+  pub fn clear_all_properties(&mut self) {
+    self.vars.retain(|key, _| key.segments.is_empty());
+  }
 
   pub fn apply_facts(&mut self, facts: &Facts) {
     for (name, ty) in facts.truthy.iter() {
-      self.vars.insert(*name, *ty);
+      self.vars.insert(name.clone(), *ty);
     }
     for (name, ty) in facts.assertions.iter() {
-      self.vars.insert(*name, *ty);
+      self.vars.insert(name.clone(), *ty);
     }
   }
 
@@ -60,16 +125,16 @@ impl Env {
   /// that hold regardless of branch.
   pub fn apply_falsy(&mut self, facts: &Facts) {
     for (name, ty) in facts.falsy.iter() {
-      self.vars.insert(*name, *ty);
+      self.vars.insert(name.clone(), *ty);
     }
     for (name, ty) in facts.assertions.iter() {
-      self.vars.insert(*name, *ty);
+      self.vars.insert(name.clone(), *ty);
     }
   }
 
-  pub fn apply_map(&mut self, facts: &HashMap<NameId, TypeId>) {
+  pub fn apply_map(&mut self, facts: &HashMap<FlowKey, TypeId>) {
     for (name, ty) in facts.iter() {
-      self.vars.insert(*name, *ty);
+      self.vars.insert(name.clone(), *ty);
     }
   }
 
@@ -92,7 +157,7 @@ impl Env {
           }
         }
         None => {
-          self.vars.insert(*name, *ty);
+          self.vars.insert(name.clone(), *ty);
           changed = true;
         }
       }

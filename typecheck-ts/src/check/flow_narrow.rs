@@ -1,9 +1,11 @@
 //! Narrowing helpers used by the flow-sensitive body checker.
 use std::collections::HashMap;
 
-use hir_js::{BinaryOp, NameId};
+use hir_js::BinaryOp;
 use num_bigint::BigInt;
 use types_ts_interned::{RelateCtx, TypeId, TypeKind, TypeStore};
+
+use super::flow::{FlowKey, PathSegment};
 
 /// Narrowing facts produced by evaluating an expression in a boolean context.
 ///
@@ -13,9 +15,9 @@ use types_ts_interned::{RelateCtx, TypeId, TypeKind, TypeStore};
 ///   successfully (used for assertion functions).
 #[derive(Clone, Debug, Default)]
 pub struct Facts {
-  pub truthy: HashMap<NameId, TypeId>,
-  pub falsy: HashMap<NameId, TypeId>,
-  pub assertions: HashMap<NameId, TypeId>,
+  pub truthy: HashMap<FlowKey, TypeId>,
+  pub falsy: HashMap<FlowKey, TypeId>,
+  pub assertions: HashMap<FlowKey, TypeId>,
 }
 
 impl Facts {
@@ -102,43 +104,42 @@ pub fn or_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
 }
 
 fn apply_sequence(
-  first: &HashMap<NameId, TypeId>,
-  second: &HashMap<NameId, TypeId>,
-) -> HashMap<NameId, TypeId> {
+  first: &HashMap<FlowKey, TypeId>,
+  second: &HashMap<FlowKey, TypeId>,
+) -> HashMap<FlowKey, TypeId> {
   let mut result = first.clone();
   for (name, ty) in second.iter() {
-    result.insert(*name, *ty);
+    result.insert(name.clone(), *ty);
   }
   result
 }
 
 fn join_alternatives(
-  first: &HashMap<NameId, TypeId>,
-  second: &HashMap<NameId, TypeId>,
+  first: &HashMap<FlowKey, TypeId>,
+  second: &HashMap<FlowKey, TypeId>,
   store: &TypeStore,
-) -> HashMap<NameId, TypeId> {
+) -> HashMap<FlowKey, TypeId> {
   let mut result = HashMap::new();
   for (name, ty) in first.iter() {
     if let Some(other) = second.get(name) {
-      result.insert(*name, store.union(vec![*ty, *other]));
+      result.insert(name.clone(), store.union(vec![*ty, *other]));
     }
   }
   result
 }
 
 fn merge_assertions(
-  left: HashMap<NameId, TypeId>,
-  right: HashMap<NameId, TypeId>,
+  mut left: HashMap<FlowKey, TypeId>,
+  right: HashMap<FlowKey, TypeId>,
   store: &TypeStore,
-) -> HashMap<NameId, TypeId> {
-  let mut result = left;
+) -> HashMap<FlowKey, TypeId> {
   for (name, ty) in right {
-    result
+    left
       .entry(name)
       .and_modify(|existing| *existing = store.union(vec![*existing, ty]))
       .or_insert(ty);
   }
-  result
+  left
 }
 
 /// Literal value used for equality-based narrowing.
@@ -342,11 +343,6 @@ pub fn narrow_non_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
   }
 }
 
-/// Split a type into its non-nullish and nullish components.
-pub fn split_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
-  narrow_non_nullish(ty, store)
-}
-
 /// Narrow a variable by a typeof comparison (e.g. `typeof x === "string"`).
 pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
@@ -441,6 +437,116 @@ pub fn narrow_by_discriminant(
   }
 
   (store.union(yes), store.union(no))
+}
+
+/// Narrow by a discriminant property along a path (e.g. `x.meta.kind === "foo"`).
+pub fn narrow_by_discriminant_path(
+  ty: TypeId,
+  path: &[PathSegment],
+  value: &str,
+  store: &TypeStore,
+) -> (TypeId, TypeId) {
+  let primitives = store.primitive_ids();
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => {
+      let mut yes = Vec::new();
+      let mut no = Vec::new();
+      for member in members {
+        let (t, f) = narrow_by_discriminant_path(member, path, value, store);
+        if t != primitives.never {
+          yes.push(t);
+        }
+        if f != primitives.never {
+          no.push(f);
+        }
+      }
+      (store.union(yes), store.union(no))
+    }
+    TypeKind::Intersection(members) => {
+      let mut yes = Vec::new();
+      let mut no = Vec::new();
+      for member in members {
+        let (t, f) = narrow_by_discriminant_path(member, path, value, store);
+        if t != primitives.never {
+          yes.push(t);
+        }
+        if f != primitives.never {
+          no.push(f);
+        }
+      }
+      (store.union(yes), store.union(no))
+    }
+    _ => {
+      if matches_discriminant_path(ty, path, value, store) {
+        (ty, primitives.never)
+      } else {
+        (primitives.never, ty)
+      }
+    }
+  }
+}
+
+fn matches_discriminant_path(
+  ty: TypeId,
+  path: &[PathSegment],
+  value: &str,
+  store: &TypeStore,
+) -> bool {
+  if path.is_empty() {
+    return false;
+  }
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => members
+      .iter()
+      .any(|member| matches_discriminant_path(*member, path, value, store)),
+    TypeKind::Intersection(members) => members
+      .iter()
+      .any(|member| matches_discriminant_path(*member, path, value, store)),
+    TypeKind::Object(obj) => {
+      let object = store.object(obj);
+      let shape = store.shape(object.shape);
+      let Some(first) = path.first() else {
+        return false;
+      };
+      let prop_ty = shape
+        .properties
+        .iter()
+        .find_map(|prop| match (&prop.key, first) {
+          (types_ts_interned::PropKey::String(name), PathSegment::String(seg))
+            if store.name(*name) == *seg =>
+          {
+            Some(prop.data.ty)
+          }
+          (types_ts_interned::PropKey::Number(num), PathSegment::Number(seg))
+            if num.to_string() == *seg =>
+          {
+            Some(prop.data.ty)
+          }
+          _ => None,
+        });
+      let prop_ty = prop_ty.or_else(|| shape.indexers.first().map(|idx| idx.value_type));
+      let Some(prop_ty) = prop_ty else {
+        return false;
+      };
+      if path.len() == 1 {
+        matches_discriminant_value(prop_ty, value, store)
+      } else {
+        matches_discriminant_path(prop_ty, &path[1..], value, store)
+      }
+    }
+    _ => false,
+  }
+}
+
+fn matches_discriminant_value(ty: TypeId, value: &str, store: &TypeStore) -> bool {
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => members
+      .iter()
+      .any(|member| matches_discriminant_value(*member, value, store)),
+    TypeKind::StringLiteral(name) => store.name(name) == value,
+    TypeKind::String => true,
+    _ => false,
+  }
 }
 
 /// Narrow by an `in` check (`"prop" in x`).
@@ -598,5 +704,32 @@ fn matches_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> bool {
     TypeKind::Object(_) => matches!(store.type_kind(ty), TypeKind::Object(_)),
     TypeKind::Ref { .. } => matches!(store.type_kind(ty), TypeKind::Ref { .. }),
     _ => false,
+  }
+}
+
+/// Split a type into non-nullish and nullish parts.
+pub fn split_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
+  let primitives = store.primitive_ids();
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => {
+      let mut present = Vec::new();
+      let mut nullish = Vec::new();
+      for member in members {
+        match store.type_kind(member) {
+          TypeKind::Null | TypeKind::Undefined => nullish.push(member),
+          _ => present.push(member),
+        }
+      }
+      (
+        store.union(present),
+        if nullish.is_empty() {
+          primitives.never
+        } else {
+          store.union(nullish)
+        },
+      )
+    }
+    TypeKind::Null | TypeKind::Undefined => (primitives.never, ty),
+    _ => (ty, primitives.never),
   }
 }
