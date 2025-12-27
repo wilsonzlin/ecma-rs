@@ -3169,12 +3169,14 @@ impl ProgramState {
     if let Some(semantics) = self.semantics.as_ref() {
       let symbols = semantics.symbols();
       let mut seen_symbols = HashSet::new();
-      for data in self
+      for (def_id, data) in self
         .def_data
-        .values()
-        .filter(|data| matches!(data.kind, DefKind::Function(_)))
+        .iter()
+        .filter(|(_, data)| matches!(data.kind, DefKind::Function(_)))
       {
-        let symbol: sem_ts::SymbolId = data.symbol.into();
+        let Some(symbol) = semantics.symbol_for_def(*def_id, sem_ts::Namespace::VALUE) else {
+          continue;
+        };
         if !seen_symbols.insert(symbol) {
           continue;
         }
