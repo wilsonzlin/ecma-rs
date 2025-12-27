@@ -520,6 +520,31 @@ impl Program {
     }
   }
 
+  /// Override the compiler options for subsequent queries.
+  pub fn set_compiler_options(&mut self, options: CompilerOptions) {
+    let overrides = {
+      let state = self.lock_state();
+      state.file_overrides.clone()
+    };
+    self.reset_state(overrides, options);
+  }
+
+  /// Override the text for a specific file and invalidate cached results.
+  pub fn set_file_text(&mut self, file: FileId, text: Arc<str>) {
+    let Some(key) = ({
+      let state = self.lock_state();
+      state.file_key_for_id(file)
+    }) else {
+      return;
+    };
+    let (overrides, options) = {
+      let mut state = self.lock_state();
+      state.file_overrides.insert(key.clone(), text);
+      (state.file_overrides.clone(), state.compiler_options.clone())
+    };
+    self.reset_state(overrides, options);
+  }
+
   /// Resolve a file key to its internal [`FileId`], if loaded.
   pub fn file_id(&self, key: &FileKey) -> Option<FileId> {
     match self.with_analyzed_state(|state| Ok(state.file_id_for_key(key))) {
@@ -740,6 +765,23 @@ impl Program {
     let diag = fatal_to_diagnostic(fatal);
     let mut state = self.lock_state();
     state.diagnostics.push(diag);
+  }
+
+  fn reset_state(&self, overrides: HashMap<FileKey, Arc<str>>, compiler_options: CompilerOptions) {
+    let lib_manager = {
+      let state = self.lock_state();
+      state.lib_manager.clone()
+    };
+    let mut new_state = ProgramState::new(lib_manager, self.query_stats.clone());
+    new_state.file_overrides = overrides;
+    new_state.compiler_options = compiler_options;
+    let mut roots = self.roots.clone();
+    roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    for key in roots.into_iter() {
+      new_state.intern_file_key(key, FileOrigin::Source);
+    }
+    let mut state = self.lock_state();
+    *state = new_state;
   }
 
   fn fatal_to_diagnostics(&self, fatal: FatalError) -> Vec<Diagnostic> {
@@ -2420,6 +2462,7 @@ struct ProgramState {
   analyzed: bool,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
+  file_overrides: HashMap<FileKey, Arc<str>>,
   checker_caches: CheckerCaches,
   cache_stats: CheckerCacheStats,
   asts: HashMap<FileId, Arc<Node<TopLevel>>>,
@@ -2464,6 +2507,7 @@ impl ProgramState {
       analyzed: false,
       lib_manager,
       compiler_options: default_options.clone(),
+      file_overrides: HashMap::new(),
       checker_caches: CheckerCaches::new(default_options.cache.clone()),
       cache_stats: CheckerCacheStats::default(),
       asts: HashMap::new(),
@@ -3282,12 +3326,15 @@ impl ProgramState {
   }
 
   fn load_text(&self, file: FileId, host: &Arc<dyn Host>) -> Result<Arc<str>, HostError> {
-    if let Some(text) = self.lib_texts.get(&file) {
-      return Ok(text.clone());
-    }
     let Some(key) = self.file_key_for_id(file) else {
       return Err(HostError::new(format!("missing file key for {file:?}")));
     };
+    if let Some(text) = self.file_overrides.get(&key) {
+      return Ok(text.clone());
+    }
+    if let Some(text) = self.lib_texts.get(&file) {
+      return Ok(text.clone());
+    }
     host.file_text(&key)
   }
 
