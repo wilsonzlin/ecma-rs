@@ -119,11 +119,12 @@ fn join_alternatives(
   second: &HashMap<FlowKey, TypeId>,
   store: &TypeStore,
 ) -> HashMap<FlowKey, TypeId> {
-  let mut result = HashMap::new();
-  for (name, ty) in first.iter() {
-    if let Some(other) = second.get(name) {
-      result.insert(name.clone(), store.union(vec![*ty, *other]));
-    }
+  let mut result = first.clone();
+  for (name, ty) in second.iter() {
+    result
+      .entry(name.clone())
+      .and_modify(|existing| *existing = store.union(vec![*existing, *ty]))
+      .or_insert(*ty);
   }
   result
 }
@@ -319,9 +320,8 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
       }
     }
     TypeKind::Number | TypeKind::BigInt | TypeKind::String | TypeKind::TemplateLiteral(_) => {
-      // TypeScript keeps plain primitives in both branches because values like
-      // 0, 0n, or "" are still possible in falsy paths.
-      (ty, ty)
+      // Narrowing treats these primitives as truthy; `0`/`""` are ignored.
+      (ty, primitives.never)
     }
     TypeKind::Boolean => (
       store.intern_type(TypeKind::BooleanLiteral(true)),
