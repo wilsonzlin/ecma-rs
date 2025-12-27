@@ -5,6 +5,8 @@ use crate::ids::ExprId;
 use crate::ids::ImportSpecifierId;
 use crate::ids::PatId;
 use crate::ids::TypeExprId;
+use crate::ids::TypeMemberId;
+use crate::ids::TypeParamId;
 use diagnostics::TextRange;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,6 +19,8 @@ pub struct SpanMap {
   exprs: SpanIndex<(BodyId, ExprId)>,
   defs: SpanIndex<DefId>,
   type_exprs: SpanIndex<TypeExprId>,
+  type_members: SpanIndex<TypeMemberId>,
+  type_params: SpanIndex<TypeParamId>,
   pats: SpanIndex<(BodyId, PatId)>,
   import_specifiers: SpanIndex<ImportSpecifierId>,
   export_specifiers: SpanIndex<ExportSpecifierId>,
@@ -39,6 +43,14 @@ impl SpanMap {
     self.type_exprs.add(range, id);
   }
 
+  pub fn add_type_member(&mut self, range: TextRange, id: TypeMemberId) {
+    self.type_members.add(range, id);
+  }
+
+  pub fn add_type_param(&mut self, range: TextRange, id: TypeParamId) {
+    self.type_params.add(range, id);
+  }
+
   pub fn add_pat(&mut self, range: TextRange, body: BodyId, id: PatId) {
     self.pats.add(range, (body, id));
   }
@@ -56,6 +68,8 @@ impl SpanMap {
     self.exprs.finalize();
     self.defs.finalize();
     self.type_exprs.finalize();
+    self.type_members.finalize();
+    self.type_params.finalize();
     self.pats.finalize();
     self.import_specifiers.finalize();
     self.export_specifiers.finalize();
@@ -77,6 +91,22 @@ impl SpanMap {
 
   pub fn type_expr_span_at_offset(&self, offset: u32) -> Option<SpanResult<TypeExprId>> {
     self.type_exprs.query_span(offset)
+  }
+
+  pub fn type_member_at_offset(&self, offset: u32) -> Option<TypeMemberId> {
+    self.type_members.query(offset)
+  }
+
+  pub fn type_member_span_at_offset(&self, offset: u32) -> Option<SpanResult<TypeMemberId>> {
+    self.type_members.query_span(offset)
+  }
+
+  pub fn type_param_at_offset(&self, offset: u32) -> Option<TypeParamId> {
+    self.type_params.query(offset)
+  }
+
+  pub fn type_param_span_at_offset(&self, offset: u32) -> Option<SpanResult<TypeParamId>> {
+    self.type_params.query_span(offset)
   }
 
   pub fn pat_at_offset(&self, offset: u32) -> Option<(BodyId, PatId)> {
@@ -129,6 +159,14 @@ impl SpanMap {
 
   pub fn type_expr_span(&self, type_expr: TypeExprId) -> Option<TextRange> {
     self.type_exprs.span_of(type_expr)
+  }
+
+  pub fn type_member_span(&self, type_member: TypeMemberId) -> Option<TextRange> {
+    self.type_members.span_of(type_member)
+  }
+
+  pub fn type_param_span(&self, type_param: TypeParamId) -> Option<TextRange> {
+    self.type_params.span_of(type_param)
   }
 
   pub fn pat_span(&self, body: BodyId, pat: PatId) -> Option<TextRange> {

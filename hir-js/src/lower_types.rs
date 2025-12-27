@@ -319,12 +319,15 @@ impl<'a> TypeLowerer<'a> {
   fn alloc_type_member(&mut self, span: TextRange, kind: TypeMemberKind) -> TypeMemberId {
     let id = TypeMemberId(self.type_members.len() as u32);
     self.type_members.push(HirTypeMember { span, kind });
+    self.span_map.add_type_member(span, id);
     id
   }
 
   fn alloc_type_param(&mut self, param: TypeParam) -> TypeParamId {
     let id = TypeParamId(self.type_params.len() as u32);
+    let span = param.span;
     self.type_params.push(param);
+    self.span_map.add_type_param(span, id);
     id
   }
 

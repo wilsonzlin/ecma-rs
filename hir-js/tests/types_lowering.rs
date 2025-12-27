@@ -9,6 +9,7 @@ use hir_js::FileKind;
 use hir_js::PropertyName;
 use hir_js::TypeExprKind;
 use hir_js::TypeMappedModifier;
+use hir_js::TypeMemberKind;
 use hir_js::TypeName;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
@@ -214,6 +215,55 @@ fn lowers_template_literal_and_indexed_access_types() {
     .type_expr_at_offset(span.start)
     .expect("span lookup");
   assert_eq!(mapped, tmpl_expr);
+}
+
+#[test]
+fn span_map_can_locate_type_member() {
+  let result = lower_from_source("interface Foo { a: string; b(): number; }").expect("lower");
+  let def = result
+    .defs
+    .iter()
+    .find(|def| result.names.resolve(def.name).unwrap() == "Foo")
+    .expect("interface definition");
+  let members = match def.type_info.as_ref().expect("type info present") {
+    DefTypeInfo::Interface { members, .. } => members,
+    other => panic!("expected interface, found {other:?}"),
+  };
+  let member_id = members
+    .iter()
+    .copied()
+    .find(|id| match &result.types.type_members[id.0 as usize].kind {
+      TypeMemberKind::Property(prop) => match prop.name {
+        PropertyName::Ident(id) => result.names.resolve(id).unwrap() == "a",
+        _ => false,
+      },
+      _ => false,
+    })
+    .expect("property member");
+
+  let span = result.types.type_members[member_id.0 as usize].span;
+  let found = result
+    .hir
+    .span_map
+    .type_member_at_offset(span.start)
+    .expect("member at offset");
+  assert_eq!(found, member_id);
+}
+
+#[test]
+fn span_map_can_locate_type_param() {
+  let result = lower_from_source("type T<A extends string> = A;").expect("lower");
+  let (_, type_params) = type_alias(&result, "T");
+  assert_eq!(type_params.len(), 1);
+  let type_param_id = type_params[0];
+
+  let span = result.types.type_params[type_param_id.0 as usize].span;
+  let found = result
+    .hir
+    .span_map
+    .type_param_at_offset(span.start)
+    .expect("type param at offset");
+  assert_eq!(found, type_param_id);
 }
 
 #[test]
