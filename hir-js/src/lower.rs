@@ -469,7 +469,7 @@ pub fn lower_file_with_diagnostics(
     let dis = disambiguators
       .entry((parent, desc.kind, desc.name))
       .or_insert(0);
-    let def_path = DefPath::new(file, desc.kind, desc.name, *dis, parent);
+    let def_path = DefPath::new(file, parent, desc.kind, desc.name, *dis);
     *dis += 1;
     let def_id = allocate_def_id(def_path, &mut allocated_def_ids);
     let body = desc.source.body_kind().map(|kind| {
@@ -2202,6 +2202,7 @@ fn collect_stmt<'a>(
       };
       let name_id = names.intern(&name_text);
       let decl_ambient = ambient || module.stx.declare;
+      let exported = module.stx.export || parent.is_some();
       let module_raw = RawNode::from(module);
       let mut desc = DefDescriptor::new(
         DefKind::Module,
@@ -2215,7 +2216,7 @@ fn collect_stmt<'a>(
       );
       desc.parent = parent;
       desc.node = Some(module_raw);
-      desc.is_exported = module.stx.export;
+      desc.is_exported = exported;
       desc.type_source = Some(TypeSource::Module(module));
       descriptors.push(desc);
       if module.stx.export {
@@ -2248,9 +2249,15 @@ fn collect_stmt<'a>(
             );
           }
         });
+        let members_exported_by_default =
+          decl_ambient || matches!(module.stx.name, ModuleName::String(_));
         for desc in descriptors.iter_mut().skip(body_start) {
           if desc.parent.is_none() {
             desc.parent = Some(module_raw);
+          }
+          // Ambient modules export their declarations without `export` modifiers.
+          if desc.parent == Some(module_raw) && members_exported_by_default {
+            desc.is_exported = true;
           }
         }
       }
@@ -2913,6 +2920,7 @@ fn collect_namespace<'a>(
   let span = ctx.to_range(ns.loc);
   let text = names.resolve(name_id).unwrap().to_string();
   let ns_raw = RawNode::from(ns);
+  let parent = ctx.current_parent();
   let mut desc = DefDescriptor::new(
     DefKind::Namespace,
     name_id,
@@ -2923,9 +2931,11 @@ fn collect_namespace<'a>(
     in_global,
     DefSource::None,
   );
-  desc.parent = ctx.current_parent();
+  desc.parent = parent;
   desc.node = Some(ns_raw);
-  desc.is_exported = ns.stx.export;
+  // Nested namespaces (e.g. `namespace A.B {}`) are implicitly exported from
+  // their containing namespace or module.
+  desc.is_exported = ns.stx.export || parent.is_some();
   desc.type_source = Some(TypeSource::Namespace(ns));
   descriptors.push(desc);
   let body_start = descriptors.len();

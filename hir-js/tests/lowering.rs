@@ -1130,6 +1130,94 @@ fn nested_exports_do_not_create_file_exports() {
 }
 
 #[test]
+fn namespace_members_have_parent_and_export_flag() {
+  let source = r#"export namespace NS { export const x = 1; export function f(){} namespace Inner { export interface I {} } }"#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+
+  let find_def = |kind: DefKind, name: &str| -> &hir_js::DefData {
+    result
+      .defs
+      .iter()
+      .find(|def| def.path.kind == kind && result.names.resolve(def.name) == Some(name))
+      .unwrap_or_else(|| panic!("expected {name} {kind:?} definition"))
+  };
+
+  let ns = find_def(DefKind::Namespace, "NS");
+  let x = find_def(DefKind::Var, "x");
+  assert_eq!(x.parent, Some(ns.id), "x should belong to NS");
+  assert!(x.is_exported, "x should be marked exported from NS");
+
+  let f = find_def(DefKind::Function, "f");
+  assert_eq!(f.parent, Some(ns.id), "f should belong to NS");
+  assert!(f.is_exported, "f should be marked exported from NS");
+
+  let inner = find_def(DefKind::Namespace, "Inner");
+  assert_eq!(inner.parent, Some(ns.id), "Inner should belong to NS");
+  assert!(
+    inner.is_exported,
+    "Inner should be treated as exported from NS for namespace membership"
+  );
+
+  let interface = find_def(DefKind::Interface, "I");
+  assert_eq!(
+    interface.parent,
+    Some(inner.id),
+    "I should belong to the Inner namespace"
+  );
+  assert!(
+    interface.is_exported,
+    "I should be marked exported from Inner namespace"
+  );
+}
+
+#[test]
+fn namespace_member_ids_stable_under_unrelated_edits() {
+  let base = lower_from_source_with_kind(
+    FileKind::Ts,
+    r#"export namespace NS { export const x = 1; export function f(){} namespace Inner { export interface I {} } }"#,
+  )
+  .expect("lower base");
+
+  let with_noise = lower_from_source_with_kind(
+    FileKind::Ts,
+    r#"
+const noise = 0;
+export namespace NS { export const x = 1; export function f(){} namespace Inner { export interface I {} } }
+function extra() {}
+"#,
+  )
+  .expect("lower variant");
+
+  let targets = [
+    (DefKind::Namespace, "NS"),
+    (DefKind::Var, "x"),
+    (DefKind::Function, "f"),
+    (DefKind::Namespace, "Inner"),
+    (DefKind::Interface, "I"),
+  ];
+
+  for (kind, name) in targets {
+    let def = base
+      .defs
+      .iter()
+      .find(|def| def.path.kind == kind && base.names.resolve(def.name) == Some(name))
+      .unwrap_or_else(|| panic!("expected {name} {kind:?} definition"));
+    let base_path = def.path;
+    let variant_id = with_noise
+      .hir
+      .def_paths
+      .get(&base_path)
+      .copied()
+      .unwrap_or_else(|| panic!("missing def path for {}", name));
+    assert_eq!(
+      variant_id, def.id,
+      "DefId changed for {} after unrelated edits",
+      name
+    );
+  }
+}
+
+#[test]
 fn lowers_control_flow_statements() {
   let source = r#"
     function demo(items) {

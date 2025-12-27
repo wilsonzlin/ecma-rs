@@ -182,8 +182,9 @@ pub struct DefData {
   pub is_static: bool,
   pub is_ambient: bool,
   pub in_global: bool,
-  /// Whether this definition was marked `export`, including declarations inside
-  /// namespace and module blocks (not just top-level exports).
+  /// Whether this definition is exported from its containing scope, including
+  /// explicit `export` modifiers and implicit exports from namespaces/modules
+  /// (e.g. ambient modules or nested namespaces).
   pub is_exported: bool,
   pub is_default_export: bool,
   pub body: Option<BodyId>,
