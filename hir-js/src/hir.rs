@@ -491,10 +491,16 @@ pub struct Body {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum BodyKind {
+  /// Root body for a file or module.
   TopLevel,
+  /// Executable body of a function-like item (functions, methods, accessors).
   Function,
+  /// Body attached to a class definition. Root statements correspond to static
+  /// initialization blocks.
   Class,
+  /// Body synthesized for initializer expressions (e.g. `const x = 1;`).
   Initializer,
+  /// Catch-all for unsupported or unknown body sources.
   Unknown,
 }
 

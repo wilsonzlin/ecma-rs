@@ -20,13 +20,14 @@ use diagnostics::Diagnostic;
 use diagnostics::FileId;
 use diagnostics::Span;
 use diagnostics::TextRange;
+use parse_js::ast::class_or_object::ClassOrObjVal;
 use parse_js::ast::expr::jsx;
 use parse_js::ast::expr::pat::ArrPat;
 use parse_js::ast::expr::pat::ClassOrFuncName;
 use parse_js::ast::expr::pat::ObjPat;
 use parse_js::ast::expr::pat::Pat as AstPat;
-use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::ArrowFuncExpr;
+use parse_js::ast::expr::ClassExpr;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::expr::FuncExpr;
 use parse_js::ast::func::Func;
@@ -116,11 +117,12 @@ enum DefSource<'a> {
   Function(&'a Node<FuncDecl>),
   ArrowFunction(&'a Node<ArrowFuncExpr>),
   FuncExpr(&'a Node<FuncExpr>),
+  ClassDecl(&'a Node<ClassDecl>),
+  ClassExpr(&'a Node<ClassExpr>),
   Var(&'a AstVarDeclarator, VarDeclKind),
   Method(&'a Node<parse_js::ast::class_or_object::ClassOrObjMethod>),
   Getter(&'a Node<parse_js::ast::class_or_object::ClassOrObjGetter>),
   Setter(&'a Node<parse_js::ast::class_or_object::ClassOrObjSetter>),
-  Class(&'a Node<ClassExpr>),
   ExportDefaultExpr(&'a Node<ExportDefaultExprStmt>),
   ExportAssignment(&'a Node<ExportAssignmentDecl>),
 }
@@ -277,8 +279,8 @@ impl<'a> DefSource<'a> {
       | DefSource::Getter(_)
       | DefSource::Setter(_) => Some(BodyKind::Function),
       DefSource::Var(..) => Some(BodyKind::Initializer),
+      DefSource::ClassDecl(_) | DefSource::ClassExpr(_) => Some(BodyKind::Class),
       DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
-      DefSource::Class(_) => None,
       DefSource::None => None,
     }
   }
@@ -288,11 +290,12 @@ impl<'a> DefSource<'a> {
       DefSource::Function(node) => Some(RawNode::from(*node)),
       DefSource::ArrowFunction(node) => Some(RawNode::from(*node)),
       DefSource::FuncExpr(node) => Some(RawNode::from(*node)),
+      DefSource::ClassDecl(node) => Some(RawNode::from(*node)),
+      DefSource::ClassExpr(node) => Some(RawNode::from(*node)),
       DefSource::Var(_, _) => None,
       DefSource::Method(node) => Some(RawNode::from(*node)),
       DefSource::Getter(node) => Some(RawNode::from(*node)),
       DefSource::Setter(node) => Some(RawNode::from(*node)),
-      DefSource::Class(node) => Some(RawNode::from(*node)),
       DefSource::ExportDefaultExpr(node) => Some(RawNode::from(*node)),
       DefSource::ExportAssignment(node) => Some(RawNode::from(*node)),
       DefSource::None => None,
@@ -576,6 +579,24 @@ fn lower_body_from_source(
       span_map,
       ctx,
     ),
+    DefSource::ClassDecl(class) => Some(lower_class_body(
+      owner,
+      body_id,
+      &class.stx.members,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    )),
+    DefSource::ClassExpr(class) => Some(lower_class_body(
+      owner,
+      body_id,
+      &class.stx.members,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    )),
     DefSource::Method(method) => lower_function_body(
       owner,
       body_id,
@@ -637,7 +658,6 @@ fn lower_body_from_source(
       builder.root_stmt(stmt_id);
       Some(builder.finish())
     }
-    DefSource::Class(_) => None,
     DefSource::None => None,
   }
 }
@@ -733,6 +753,31 @@ fn lower_function_body(
   });
 
   Some(builder.finish_with_id(body_id))
+}
+
+fn lower_class_body(
+  owner: DefId,
+  body_id: BodyId,
+  members: &[Node<parse_js::ast::class_or_object::ClassMember>],
+  def_lookup: &DefLookup,
+  names: &mut NameInterner,
+  span_map: &mut SpanMap,
+  ctx: &mut LoweringContext,
+) -> Body {
+  let mut builder = BodyBuilder::new(owner, body_id, BodyKind::Class, def_lookup, names, span_map);
+  for member in members {
+    if let ClassOrObjVal::StaticBlock(block) = &member.stx.val {
+      let mut block_stmts = Vec::new();
+      for stmt in block.stx.body.iter() {
+        let stmt_id = lower_stmt(stmt, &mut builder, ctx);
+        block_stmts.push(stmt_id);
+      }
+      let stmt_id = builder.alloc_stmt(ctx.to_range(block.loc), StmtKind::Block(block_stmts));
+      builder.root_stmt(stmt_id);
+    }
+  }
+
+  builder.finish_with_id(body_id)
 }
 
 fn lower_stmt(
@@ -1801,7 +1846,7 @@ fn collect_stmt<'a>(
         is_item,
         decl_ambient,
         in_global,
-        DefSource::None,
+        DefSource::ClassDecl(class_decl),
       );
       desc.is_exported = class_decl.stx.export;
       desc.is_default_export = class_decl.stx.export_default;
@@ -2877,7 +2922,7 @@ fn collect_expr<'a>(
         false,
         ambient,
         in_global,
-        DefSource::Class(class_expr),
+        DefSource::ClassExpr(class_expr),
       ));
     }
     AstExpr::Cond(cond) => {

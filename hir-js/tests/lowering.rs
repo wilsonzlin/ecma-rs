@@ -2,6 +2,8 @@ use diagnostics::FileId;
 use hir_js::lower_file;
 use hir_js::lower_file_with_diagnostics;
 use hir_js::lower_from_source_with_kind;
+use hir_js::BodyId;
+use hir_js::BodyKind;
 use hir_js::DefKind;
 use hir_js::ExportDefaultValue;
 use hir_js::ExportKind;
@@ -174,6 +176,82 @@ fn body_ids_survive_unrelated_insertions() {
 }
 
 #[test]
+fn lowers_class_decl_as_decl_stmt() {
+  let ast = parse("class C {}").expect("parse");
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(7), FileKind::Ts, &ast);
+  assert!(diagnostics.is_empty());
+
+  let body = result.body(result.root_body()).expect("root body");
+  let def_id = body
+    .stmts
+    .iter()
+    .find_map(|stmt| match stmt.kind {
+      StmtKind::Decl(def) => Some(def),
+      _ => None,
+    })
+    .expect("class declaration lowered as decl stmt");
+  let def = result.def(def_id).expect("class def");
+  assert_eq!(def.path.kind, DefKind::Class);
+  let class_body = def.body.expect("class body id");
+  let class_body_data = result.body(class_body).expect("class body");
+  assert_eq!(class_body_data.kind, BodyKind::Class);
+}
+
+#[test]
+fn lowers_class_expr() {
+  let ast = parse("const x = class Named {}").expect("parse");
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(8), FileKind::Ts, &ast);
+  assert!(diagnostics.is_empty());
+
+  let body = result.body(result.root_body()).expect("root body");
+  let (def_id, body_id, name) = body
+    .exprs
+    .iter()
+    .find_map(|expr| match &expr.kind {
+      ExprKind::ClassExpr { def, body, name } => Some((*def, *body, *name)),
+      _ => None,
+    })
+    .expect("class expression present");
+
+  let def = result.def(def_id).expect("class def");
+  assert_eq!(def.path.kind, DefKind::Class);
+  assert_eq!(def.body, Some(body_id));
+  assert_ne!(body_id, BodyId(u32::MAX));
+  assert!(result.body(body_id).is_some());
+  assert_eq!(name.and_then(|n| result.names.resolve(n)), Some("Named"));
+}
+
+#[test]
+fn export_default_class_has_ids() {
+  let ast = parse("export default class {}").expect("parse");
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(9), FileKind::Ts, &ast);
+  assert!(diagnostics.is_empty());
+
+  let export_value = result
+    .hir
+    .exports
+    .iter()
+    .find_map(|export| match &export.kind {
+      ExportKind::Default(default) => Some(&default.value),
+      _ => None,
+    })
+    .expect("default export present");
+
+  let (def, body, name) = match export_value {
+    ExportDefaultValue::Class { def, body, name } => (*def, *body, name),
+    other => panic!("expected class default export, got {:?}", other),
+  };
+
+  let def_data = result.def(def).expect("class def");
+  assert_eq!(def_data.path.kind, DefKind::Class);
+  assert_eq!(def_data.body, Some(body));
+  assert_ne!(body, BodyId(u32::MAX));
+  let class_body = result.body(body).expect("class body");
+  assert_eq!(class_body.kind, BodyKind::Class);
+  assert!(name.is_none());
+}
+
+#[test]
 fn name_ids_stay_stable_when_unrelated_names_are_introduced() {
   let base = "function f() {}\nconst tail = 1;";
   let with_extra = "const earlier = 0;\nfunction f() {}\nconst tail = 1;";
@@ -221,7 +299,7 @@ fn expr_at_offset_prefers_inner_expression() {
       ExprKind::Binary { left, .. } => Some((ExprId(idx as u32), body.exprs[left.0 as usize].span)),
       _ => None,
     })
-  .expect("binary expression present");
+    .expect("binary expression present");
 
   let offset = left_span.start;
   let expected = result
@@ -243,7 +321,11 @@ fn expr_at_offset_prefers_inner_expression() {
           idx as u32,
           expr.span.end,
         );
-        if best.as_ref().map(|(current, _)| rank < *current).unwrap_or(true) {
+        if best
+          .as_ref()
+          .map(|(current, _)| rank < *current)
+          .unwrap_or(true)
+        {
           best = Some((rank, ExprId(idx as u32)));
         }
       }
@@ -259,7 +341,11 @@ fn expr_at_offset_prefers_inner_expression() {
             idx as u32,
             expr.span.end,
           );
-          if best.as_ref().map(|(current, _)| rank < *current).unwrap_or(true) {
+          if best
+            .as_ref()
+            .map(|(current, _)| rank < *current)
+            .unwrap_or(true)
+          {
             best = Some((rank, ExprId(idx as u32)));
           }
         }
@@ -277,8 +363,9 @@ fn expr_at_offset_prefers_inner_expression() {
   assert_eq!(mapped, expected);
 
   let binary_span = body.exprs[binary_id.0 as usize].span;
-  let (mapped_body, mapped_binary) =
-    map.expr_at_offset(binary_span.start).expect("mapped binary expr");
+  let (mapped_body, mapped_binary) = map
+    .expr_at_offset(binary_span.start)
+    .expect("mapped binary expr");
   let mapped_body_data = result.body(mapped_body).expect("body");
   assert!(mapped_body_data.exprs[mapped_binary.0 as usize].span.len() <= binary_span.len());
 }
@@ -418,7 +505,9 @@ fn collects_nested_defs_in_object_literal_methods() {
   let method_def = result
     .defs
     .iter()
-    .find(|def| def.path.kind == DefKind::Method && result.names.resolve(def.path.name) == Some("m"))
+    .find(|def| {
+      def.path.kind == DefKind::Method && result.names.resolve(def.path.name) == Some("m")
+    })
     .expect("object literal method");
 
   let method_body_id = method_def.body.expect("method body id");
