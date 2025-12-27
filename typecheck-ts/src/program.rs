@@ -1557,6 +1557,10 @@ impl Program {
             state.var_initializer(def).map(|init| init.body)
           }
         }
+        DefKind::Class(class) => class.body,
+        DefKind::Enum(en) => en.body,
+        DefKind::Namespace(ns) => ns.body,
+        DefKind::Module(module) => module.body,
         DefKind::Import(_) => None,
         DefKind::Interface(_) => None,
         DefKind::TypeAlias(_) => None,
@@ -1792,8 +1796,11 @@ impl Program {
         HashMap::new()
       }
     };
-    let mut canonical_defs: Vec<_> = canonical_defs_map.into_iter().collect();
-    canonical_defs.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
+    let mut canonical_defs: Vec<_> = canonical_defs_map
+      .into_iter()
+      .map(|((file, name, ns), def)| ((file, name, ns.bits()), def))
+      .collect();
+    canonical_defs.sort_by(|a, b| (a.0 .0, &a.0 .1, a.0 .2).cmp(&(b.0 .0, &b.0 .1, b.0 .2)));
 
     let mut namespace_types: Vec<_> = state
       .namespace_object_types
@@ -2038,6 +2045,10 @@ pub struct DefData {
 pub enum DefKind {
   Function(FuncData),
   Var(VarData),
+  Class(ClassData),
+  Enum(EnumData),
+  Namespace(NamespaceData),
+  Module(ModuleData),
   Import(ImportData),
   Interface(InterfaceData),
   TypeAlias(TypeAliasData),
@@ -2097,6 +2108,43 @@ pub struct TypeAliasData {
   pub typ: TypeId,
 }
 
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct ClassData {
+  pub body: Option<BodyId>,
+  pub instance_type: Option<TypeId>,
+  pub static_type: Option<TypeId>,
+  pub declare: bool,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct EnumData {
+  pub body: Option<BodyId>,
+  pub is_const: bool,
+  pub value_type: Option<TypeId>,
+  pub type_type: Option<TypeId>,
+  pub declare: bool,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct NamespaceData {
+  pub body: Option<BodyId>,
+  pub value_type: Option<TypeId>,
+  pub type_type: Option<TypeId>,
+  pub declare: bool,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub struct ModuleData {
+  pub body: Option<BodyId>,
+  pub value_type: Option<TypeId>,
+  pub type_type: Option<TypeId>,
+  pub declare: bool,
+}
+
 #[derive(Clone)]
 struct ProgramTypeResolver {
   semantics: Arc<sem_ts::TsProgramSemantics>,
@@ -2127,23 +2175,7 @@ impl ProgramTypeResolver {
   }
 
   fn matches_namespace(kind: &DefKind, ns: sem_ts::Namespace) -> bool {
-    if ns.contains(sem_ts::Namespace::VALUE) {
-      return matches!(
-        kind,
-        DefKind::Function(_) | DefKind::Var(_) | DefKind::Import(_)
-      );
-    }
-    if ns.contains(sem_ts::Namespace::TYPE) {
-      return matches!(
-        kind,
-        DefKind::Interface(_) | DefKind::TypeAlias(_) | DefKind::Import(_)
-      );
-    }
-    if ns.contains(sem_ts::Namespace::NAMESPACE) {
-      return matches!(kind, DefKind::Var(var) if var.body.0 == u32::MAX)
-        || matches!(kind, DefKind::Import(_));
-    }
-    false
+    ProgramState::def_namespaces(kind).contains(ns)
   }
 
   fn resolve_local(&self, name: &str, ns: sem_ts::Namespace) -> Option<DefId> {
@@ -2269,24 +2301,27 @@ impl ProgramTypeResolver {
     }
     if ns.contains(sem_ts::Namespace::VALUE) {
       return match kind {
-        DefKind::Function(_) => 0,
+        DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
         DefKind::Var(var) if var.body.0 != u32::MAX => 1,
-        DefKind::Import(_) => 2,
-        DefKind::Var(_) => 3,
-        DefKind::Interface(_) | DefKind::TypeAlias(_) => 4,
+        DefKind::Namespace(_) | DefKind::Module(_) => 2,
+        DefKind::Import(_) => 3,
+        DefKind::Var(_) => 4,
+        DefKind::Interface(_) | DefKind::TypeAlias(_) => 5,
       };
     }
     if ns.contains(sem_ts::Namespace::TYPE) {
       return match kind {
         DefKind::Interface(_) => 0,
         DefKind::TypeAlias(_) => 1,
-        DefKind::Import(_) => 2,
-        _ => 3,
+        DefKind::Class(_) => 2,
+        DefKind::Enum(_) => 3,
+        DefKind::Import(_) => 4,
+        _ => 5,
       };
     }
     if ns.contains(sem_ts::Namespace::NAMESPACE) {
       return match kind {
-        DefKind::Var(var) if var.body.0 == u32::MAX => 0,
+        DefKind::Namespace(_) | DefKind::Module(_) => 0,
         DefKind::Import(_) => 1,
         _ => 2,
       };
@@ -2438,6 +2473,10 @@ struct BodyMeta {
 enum DefMatchKind {
   Function,
   Var,
+  Class,
+  Enum,
+  Namespace,
+  Module,
   Interface,
   TypeAlias,
   Import,
@@ -2448,6 +2487,10 @@ fn match_kind_from_def(kind: &DefKind) -> DefMatchKind {
   match kind {
     DefKind::Function(_) => DefMatchKind::Function,
     DefKind::Var(_) => DefMatchKind::Var,
+    DefKind::Class(_) => DefMatchKind::Class,
+    DefKind::Enum(_) => DefMatchKind::Enum,
+    DefKind::Namespace(_) => DefMatchKind::Namespace,
+    DefKind::Module(_) => DefMatchKind::Module,
     DefKind::Import(_) => DefMatchKind::Import,
     DefKind::Interface(_) => DefMatchKind::Interface,
     DefKind::TypeAlias(_) => DefMatchKind::TypeAlias,
@@ -2458,12 +2501,13 @@ fn match_kind_from_hir(kind: HirDefKind) -> DefMatchKind {
   match kind {
     HirDefKind::Function | HirDefKind::Method | HirDefKind::Constructor => DefMatchKind::Function,
     HirDefKind::ImportBinding => DefMatchKind::Import,
-    HirDefKind::Var
-    | HirDefKind::Field
-    | HirDefKind::Param
-    | HirDefKind::ExportAlias
-    | HirDefKind::Namespace
-    | HirDefKind::Module => DefMatchKind::Var,
+    HirDefKind::Class => DefMatchKind::Class,
+    HirDefKind::Enum => DefMatchKind::Enum,
+    HirDefKind::Namespace => DefMatchKind::Namespace,
+    HirDefKind::Module => DefMatchKind::Module,
+    HirDefKind::Var | HirDefKind::Field | HirDefKind::Param | HirDefKind::ExportAlias => {
+      DefMatchKind::Var
+    }
     HirDefKind::Interface => DefMatchKind::Interface,
     HirDefKind::TypeAlias => DefMatchKind::TypeAlias,
     _ => DefMatchKind::Other,
@@ -3106,30 +3150,51 @@ impl ProgramState {
     }
   }
 
+  fn def_namespaces(kind: &DefKind) -> sem_ts::Namespace {
+    match kind {
+      DefKind::Function(_) | DefKind::Var(_) => sem_ts::Namespace::VALUE,
+      DefKind::Class(_) | DefKind::Enum(_) => sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE,
+      DefKind::Interface(_) => sem_ts::Namespace::TYPE,
+      DefKind::TypeAlias(_) => sem_ts::Namespace::TYPE,
+      DefKind::Namespace(_) | DefKind::Module(_) => {
+        sem_ts::Namespace::VALUE | sem_ts::Namespace::NAMESPACE
+      }
+      DefKind::Import(_) => {
+        sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE | sem_ts::Namespace::NAMESPACE
+      }
+    }
+  }
+
   fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
     let Some(data) = self.def_data.get(&def) else {
       return u8::MAX;
     };
+    if !Self::def_namespaces(&data.kind).contains(ns) {
+      return u8::MAX;
+    }
     if ns.contains(sem_ts::Namespace::VALUE) {
       return match &data.kind {
-        DefKind::Function(_) => 0,
+        DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
         DefKind::Var(var) if var.body.0 != u32::MAX => 1,
-        DefKind::Import(_) => 2,
-        DefKind::Var(_) => 3,
-        DefKind::Interface(_) | DefKind::TypeAlias(_) => 4,
+        DefKind::Namespace(_) | DefKind::Module(_) => 2,
+        DefKind::Import(_) => 3,
+        DefKind::Var(_) => 4,
+        DefKind::Interface(_) | DefKind::TypeAlias(_) => 5,
       };
     }
     if ns.contains(sem_ts::Namespace::TYPE) {
       return match &data.kind {
         DefKind::Interface(_) => 0,
         DefKind::TypeAlias(_) => 1,
-        DefKind::Import(_) => 2,
-        _ => 3,
+        DefKind::Class(_) => 2,
+        DefKind::Enum(_) => 3,
+        DefKind::Import(_) => 4,
+        _ => 5,
       };
     }
     if ns.contains(sem_ts::Namespace::NAMESPACE) {
       return match &data.kind {
-        DefKind::Var(var) if var.body.0 == u32::MAX => 0,
+        DefKind::Namespace(_) | DefKind::Module(_) => 0,
         DefKind::Import(_) => 1,
         _ => 2,
       };
@@ -3165,40 +3230,48 @@ impl ProgramState {
     best.map(|(_, id)| id)
   }
 
-  fn canonical_defs(&mut self) -> Result<HashMap<(FileId, String), DefId>, FatalError> {
+  fn canonical_defs(
+    &mut self,
+  ) -> Result<HashMap<(FileId, String, sem_ts::Namespace), DefId>, FatalError> {
     let mut def_entries: Vec<_> = self
       .def_data
       .iter()
       .map(|(id, data)| (*id, data.clone()))
       .collect();
     def_entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
-    let mut def_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
+    let mut def_by_name: HashMap<(FileId, String, sem_ts::Namespace), DefId> = HashMap::new();
     for (def_id, data) in def_entries {
-      let key = (data.file, data.name.clone());
-      let ns = match data.kind {
-        DefKind::Interface(_) | DefKind::TypeAlias(_) => sem_ts::Namespace::TYPE,
-        _ => sem_ts::Namespace::VALUE,
-      };
-      let mut mapped_def = def_id;
-      if let DefKind::Import(import) = &data.kind {
-        if let Some(target) = self
-          .exports_of_file(import.from)?
-          .get(&import.original)
-          .and_then(|entry| entry.def)
-        {
-          mapped_def = target;
+      let namespaces = Self::def_namespaces(&data.kind);
+      for ns in [
+        sem_ts::Namespace::VALUE,
+        sem_ts::Namespace::TYPE,
+        sem_ts::Namespace::NAMESPACE,
+      ] {
+        if !namespaces.contains(ns) {
+          continue;
         }
-      }
-      def_by_name
-        .entry(key)
-        .and_modify(|existing| {
-          let current = self.def_priority(*existing, ns);
-          let new_pri = self.def_priority(mapped_def, ns);
-          if new_pri < current || (new_pri == current && mapped_def < *existing) {
-            *existing = mapped_def;
+        let key = (data.file, data.name.clone(), ns);
+        let mut mapped_def = def_id;
+        if let DefKind::Import(import) = &data.kind {
+          if let Some(target) = self
+            .exports_of_file(import.from)?
+            .get(&import.original)
+            .and_then(|entry| entry.def)
+          {
+            mapped_def = target;
           }
-        })
-        .or_insert(mapped_def);
+        }
+        def_by_name
+          .entry(key)
+          .and_modify(|existing| {
+            let current = self.def_priority(*existing, ns);
+            let new_pri = self.def_priority(mapped_def, ns);
+            if new_pri < current || (new_pri == current && mapped_def < *existing) {
+              *existing = mapped_def;
+            }
+          })
+          .or_insert(mapped_def);
+      }
     }
     Ok(def_by_name)
   }
@@ -3433,7 +3506,7 @@ impl ProgramState {
       .def_data
       .iter()
       .find_map(|(id, data)| match &data.kind {
-        DefKind::Var(var) if data.file == file && data.name == name && var.body.0 == u32::MAX => {
+        DefKind::Namespace(_) | DefKind::Module(_) if data.file == file && data.name == name => {
           Some(*id)
         }
         _ => None,
@@ -3450,27 +3523,25 @@ impl ProgramState {
     let mut def_entries: Vec<_> = self.def_data.iter().collect();
     def_entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
     for (def_id, data) in def_entries.iter().copied() {
-      if let DefKind::Var(var) = &data.kind {
-        if var.body.0 == u32::MAX {
-          let members: Vec<DefId> = def_entries
-            .iter()
-            .copied()
-            .filter_map(|(member_id, member)| {
-              if member.file != data.file || member_id == def_id {
-                return None;
-              }
-              if member.span.start < data.span.start || member.span.end > data.span.end {
-                return None;
-              }
-              Some(*member_id)
-            })
-            .collect();
-          namespace_groups
-            .entry((data.file, data.name.clone()))
-            .or_default()
-            .push(*def_id);
-          namespaces.push((data.file, data.name.clone(), members));
-        }
+      if matches!(data.kind, DefKind::Namespace(_) | DefKind::Module(_)) {
+        let members: Vec<DefId> = def_entries
+          .iter()
+          .copied()
+          .filter_map(|(member_id, member)| {
+            if member.file != data.file || member_id == def_id {
+              return None;
+            }
+            if member.span.start < data.span.start || member.span.end > data.span.end {
+              return None;
+            }
+            Some(*member_id)
+          })
+          .collect();
+        namespace_groups
+          .entry((data.file, data.name.clone()))
+          .or_default()
+          .push(*def_id);
+        namespaces.push((data.file, data.name.clone(), members));
       }
     }
     namespaces.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
@@ -3531,6 +3602,19 @@ impl ProgramState {
         for def_id in defs.iter() {
           self.def_types.insert(*def_id, store_ty);
           self.interned_def_types.insert(*def_id, interned);
+          if let Some(def_data) = self.def_data.get_mut(def_id) {
+            match &mut def_data.kind {
+              DefKind::Namespace(ns) => {
+                ns.value_type = Some(store_ty);
+                ns.type_type = Some(store_ty);
+              }
+              DefKind::Module(ns) => {
+                ns.value_type = Some(store_ty);
+                ns.type_type = Some(store_ty);
+              }
+              _ => {}
+            }
+          }
         }
       }
     }
@@ -3549,7 +3633,11 @@ impl ProgramState {
         .def_data
         .iter()
         .find_map(|(id, data)| match &data.kind {
-          DefKind::Function(_) if data.file == file && data.name == name => Some(*id),
+          DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_)
+            if data.file == file && data.name == name =>
+          {
+            Some(*id)
+          }
           DefKind::Var(var) if data.file == file && data.name == name && var.body.0 != u32::MAX => {
             Some(*id)
           }
@@ -3755,6 +3843,44 @@ impl ProgramState {
     let mut type_params = HashMap::new();
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let def_by_name = self.canonical_defs()?;
+    let hir_namespaces = |kind: HirDefKind| -> sem_ts::Namespace {
+      match kind {
+        HirDefKind::Class => sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE,
+        HirDefKind::Enum => sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE,
+        HirDefKind::Interface | HirDefKind::TypeAlias => sem_ts::Namespace::TYPE,
+        HirDefKind::Namespace | HirDefKind::Module => {
+          sem_ts::Namespace::VALUE | sem_ts::Namespace::NAMESPACE
+        }
+        HirDefKind::ImportBinding => {
+          sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE | sem_ts::Namespace::NAMESPACE
+        }
+        _ => sem_ts::Namespace::VALUE,
+      }
+    };
+    let ns_priority = |ns: &sem_ts::Namespace| {
+      if ns.contains(sem_ts::Namespace::TYPE) {
+        0
+      } else if ns.contains(sem_ts::Namespace::VALUE) {
+        1
+      } else {
+        2
+      }
+    };
+    let mut ordered_defs: Vec<_> = def_by_name.iter().collect();
+    ordered_defs.sort_by(|a, b| {
+      let ((file_a, name_a, ns_a), _) = a;
+      let ((file_b, name_b, ns_b), _) = b;
+      (file_a.0, name_a, ns_priority(ns_a), ns_a.bits()).cmp(&(
+        file_b.0,
+        name_b,
+        ns_priority(ns_b),
+        ns_b.bits(),
+      ))
+    });
+    let mut flat_defs: HashMap<(FileId, String), DefId> = HashMap::new();
+    for ((file, name, _), def_id) in ordered_defs.into_iter() {
+      flat_defs.entry((*file, name.clone())).or_insert(*def_id);
+    }
 
     let mut lowered_entries: Vec<_> = self
       .hir_lowered
@@ -3769,8 +3895,12 @@ impl ProgramState {
       for def in lowered.defs.iter() {
         if let Some(name) = lowered.names.resolve(def.name) {
           local_defs.insert(name.to_string(), def.id);
-          if let Some(mapped) = def_by_name.get(&(*file, name.to_string())) {
-            def_map.insert(def.id, *mapped);
+          let namespaces = hir_namespaces(def.path.kind);
+          let mapped = namespaces
+            .iter_bits()
+            .find_map(|ns| def_by_name.get(&(*file, name.to_string(), ns)).copied());
+          if let Some(mapped) = mapped {
+            def_map.insert(def.id, mapped);
           }
         }
       }
@@ -3781,13 +3911,13 @@ impl ProgramState {
         Arc::clone(&store),
         &lowered.types,
         self.semantics.as_deref(),
-        def_by_name.clone(),
+        flat_defs.clone(),
         *file,
         file_key.clone(),
         local_defs,
         &mut self.diagnostics,
         Some(&def_map),
-        Some(&def_by_name),
+        Some(&flat_defs),
         Some(host.as_ref()),
         Some(&key_to_id),
       );
@@ -3797,10 +3927,13 @@ impl ProgramState {
         };
         let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
         let target_def = def_map.get(&def.id).copied().or_else(|| {
-          lowered
-            .names
-            .resolve(def.name)
-            .and_then(|n| def_by_name.get(&(*file, n.to_string())).copied())
+          lowered.names.resolve(def.name).and_then(|n| {
+            let name = n.to_string();
+            let namespaces = hir_namespaces(def.path.kind);
+            namespaces
+              .iter_bits()
+              .find_map(|ns| def_by_name.get(&(*file, name.clone(), ns)).copied())
+          })
         });
         if let Some(mapped) = target_def {
           let ty = if let Some(existing) = def_types.get(&mapped) {
@@ -3816,7 +3949,7 @@ impl ProgramState {
       }
     }
 
-    self.collect_function_decl_types(&store, &def_by_name, &mut def_types, &mut type_params);
+    self.collect_function_decl_types(&store, &flat_defs, &mut def_types, &mut type_params);
 
     let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
     for (file, lowered) in lowered_entries.into_iter() {
@@ -3869,7 +4002,10 @@ impl ProgramState {
       ns_entries.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
       self.namespace_object_types = ns_entries.iter().cloned().collect();
       for ((file, name), (interned, store_ty)) in ns_entries.into_iter() {
-        if let Some(def) = def_by_name.get(&(file, name)).copied() {
+        let mapped = [sem_ts::Namespace::NAMESPACE, sem_ts::Namespace::VALUE]
+          .into_iter()
+          .find_map(|ns| def_by_name.get(&(file, name.clone(), ns)).copied());
+        if let Some(def) = mapped {
           self
             .interned_def_types
             .entry(def)
@@ -4502,6 +4638,26 @@ impl ProgramState {
               var.body = body;
             }
           }
+          DefKind::Class(class) => {
+            class.body = def.body;
+            class.declare |= def.is_ambient;
+          }
+          DefKind::Enum(en) => {
+            en.body = def.body;
+            en.declare |= def.is_ambient;
+          }
+          DefKind::Namespace(ns) => {
+            if def.body.is_some() {
+              ns.body = def.body;
+            }
+            ns.declare |= def.is_ambient;
+          }
+          DefKind::Module(ns) => {
+            if def.body.is_some() {
+              ns.body = def.body;
+            }
+            ns.declare |= def.is_ambient;
+          }
           _ => {}
         }
         if let Some(ty) = self.def_types.get(&old_id).copied() {
@@ -4521,6 +4677,31 @@ impl ProgramState {
             params: Vec::new(),
             return_ann: None,
             body: def.body,
+          }),
+          DefMatchKind::Class => DefKind::Class(ClassData {
+            body: def.body,
+            instance_type: None,
+            static_type: None,
+            declare: def.is_ambient,
+          }),
+          DefMatchKind::Enum => DefKind::Enum(EnumData {
+            body: def.body,
+            is_const: false,
+            value_type: None,
+            type_type: None,
+            declare: def.is_ambient,
+          }),
+          DefMatchKind::Namespace => DefKind::Namespace(NamespaceData {
+            body: def.body,
+            value_type: None,
+            type_type: None,
+            declare: def.is_ambient,
+          }),
+          DefMatchKind::Module => DefKind::Module(ModuleData {
+            body: def.body,
+            value_type: None,
+            type_type: None,
+            declare: def.is_ambient,
           }),
           DefMatchKind::Interface => DefKind::Interface(InterfaceData {
             typ: self.builtin.unknown,
@@ -4774,8 +4955,10 @@ impl ProgramState {
           hir_js::ExportDefaultValue::Class { def, body, .. }
           | hir_js::ExportDefaultValue::Function { def, body, .. } => {
             if let Some(data) = self.def_data.get_mut(def) {
-              if let DefKind::Function(func) = &mut data.kind {
-                func.body = Some(*body);
+              match &mut data.kind {
+                DefKind::Function(func) => func.body = Some(*body),
+                DefKind::Class(class) => class.body = Some(*body),
+                _ => {}
               }
             }
             self.body_parents.insert(*body, lowered.root_body());
@@ -4807,6 +4990,10 @@ impl ProgramState {
       let body = match &data.kind {
         DefKind::Function(func) => func.body,
         DefKind::Var(var) if var.body.0 != u32::MAX => Some(var.body),
+        DefKind::Class(class) => class.body,
+        DefKind::Enum(en) => en.body,
+        DefKind::Namespace(ns) => ns.body,
+        DefKind::Module(ns) => ns.body,
         _ => None,
       };
       if let Some(body) = body {
@@ -5533,11 +5720,11 @@ impl ProgramState {
               span: span.range,
               symbol,
               export: ns.stx.export,
-              kind: DefKind::Var(VarData {
-                typ: None,
-                init: None,
-                body: BodyId(u32::MAX),
-                mode: VarDeclMode::Var,
+              kind: DefKind::Namespace(NamespaceData {
+                body: None,
+                value_type: None,
+                type_type: None,
+                declare: ns.stx.declare,
               }),
             },
           );
@@ -5579,11 +5766,11 @@ impl ProgramState {
               span: span.range,
               symbol,
               export: module.stx.export,
-              kind: DefKind::Var(VarData {
-                typ: None,
-                init: None,
-                body: BodyId(u32::MAX),
-                mode: VarDeclMode::Var,
+              kind: DefKind::Module(ModuleData {
+                body: None,
+                value_type: None,
+                type_type: None,
+                declare: module.stx.declare,
               }),
             },
           );
@@ -6880,13 +7067,13 @@ impl ProgramState {
           }
         }
       }
-    }
-    if let Err(err) = self.check_cancelled() {
-      if let Some(span) = span.take() {
-        span.finish(None);
+      if let Err(err) = self.check_cancelled() {
+        if let Some(span) = span.take() {
+          span.finish(None);
+        }
+        self.current_file = prev_file;
+        return Err(err);
       }
-      self.current_file = prev_file;
-      return Err(err);
     }
     let res = Arc::new(result);
     if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
@@ -7272,15 +7459,16 @@ impl ProgramState {
         DefKind::Function(func) => self.function_type(def, func)?,
         DefKind::Var(var) => {
           let init = self.var_initializer(def);
-          let decl_kind = init
-            .as_ref()
-            .map(|init| init.decl_kind)
-            .unwrap_or_else(|| match var.mode {
-              VarDeclMode::Var => HirVarDeclKind::Var,
-              VarDeclMode::Let => HirVarDeclKind::Let,
-              VarDeclMode::Const => HirVarDeclKind::Const,
-              VarDeclMode::Using | VarDeclMode::AwaitUsing => HirVarDeclKind::Var,
-            });
+          let decl_kind =
+            init
+              .as_ref()
+              .map(|init| init.decl_kind)
+              .unwrap_or_else(|| match var.mode {
+                VarDeclMode::Var => HirVarDeclKind::Var,
+                VarDeclMode::Let => HirVarDeclKind::Let,
+                VarDeclMode::Const => HirVarDeclKind::Const,
+                VarDeclMode::Using | VarDeclMode::AwaitUsing => HirVarDeclKind::Var,
+              });
           let mut init_span_for_const = None;
           let mut inferred = if let Some(t) = var.typ {
             t
@@ -7370,6 +7558,62 @@ impl ProgramState {
           }
           ty
         }
+        DefKind::Class(class) => {
+          if let Some(store) = self.interned_store.as_ref() {
+            if let Some(instance_type) = class.instance_type {
+              let mut cache = HashMap::new();
+              let interned = store.canon(convert_type_for_display(
+                instance_type,
+                self,
+                store,
+                &mut cache,
+              ));
+              self.interned_def_types.entry(def).or_insert(interned);
+            }
+          }
+          class.static_type.unwrap_or(self.builtin.unknown)
+        }
+        DefKind::Enum(en) => {
+          if let Some(store) = self.interned_store.as_ref() {
+            if let Some(enum_type) = en.type_type {
+              let mut cache = HashMap::new();
+              let interned =
+                store.canon(convert_type_for_display(enum_type, self, store, &mut cache));
+              self.interned_def_types.entry(def).or_insert(interned);
+            }
+          }
+          en.value_type.unwrap_or(self.builtin.unknown)
+        }
+        DefKind::Namespace(ns) => {
+          if let Some((ns_interned, ns_store)) = ns_entry {
+            self.def_types.insert(def, ns_store);
+            self.interned_def_types.entry(def).or_insert(ns_interned);
+            if let Some(data) = self.def_data.get_mut(&def) {
+              if let DefKind::Namespace(ns_data) = &mut data.kind {
+                ns_data.value_type = Some(ns_store);
+                ns_data.type_type = Some(ns_store);
+              }
+            }
+            ns_store
+          } else {
+            ns.value_type.unwrap_or(self.builtin.unknown)
+          }
+        }
+        DefKind::Module(ns) => {
+          if let Some((ns_interned, ns_store)) = ns_entry {
+            self.def_types.insert(def, ns_store);
+            self.interned_def_types.entry(def).or_insert(ns_interned);
+            if let Some(data) = self.def_data.get_mut(&def) {
+              if let DefKind::Module(ns_data) = &mut data.kind {
+                ns_data.value_type = Some(ns_store);
+                ns_data.type_type = Some(ns_store);
+              }
+            }
+            ns_store
+          } else {
+            ns.value_type.unwrap_or(self.builtin.unknown)
+          }
+        }
         DefKind::Import(import) => {
           let exports = self.exports_of_file(import.from)?;
           if let Some(entry) = exports.get(&import.original) {
@@ -7425,7 +7669,7 @@ impl ProgramState {
         }
         if let Some((ns_interned, _ns_store)) = ns_entry {
           match def_data.kind {
-            DefKind::Function(_) | DefKind::Var(_) => {
+            DefKind::Function(_) | DefKind::Var(_) | DefKind::Class(_) | DefKind::Enum(_) => {
               if let Some(store) = self.interned_store.as_ref() {
                 let merged = if let Some(existing) = self.interned_def_types.get(&def).copied() {
                   store.intersection(vec![existing, ns_interned])
@@ -7616,6 +7860,10 @@ impl ProgramState {
           self.var_initializer(def).map(|init| init.body)
         }
       }
+      DefKind::Class(class) => class.body,
+      DefKind::Enum(en) => en.body,
+      DefKind::Namespace(ns) => ns.body,
+      DefKind::Module(ns) => ns.body,
       DefKind::Import(_) => None,
       DefKind::Interface(_) => None,
       DefKind::TypeAlias(_) => None,
@@ -7638,6 +7886,10 @@ impl ProgramState {
             }
           }
         }
+        DefKind::Class(class) if class.body == Some(body) => return Some(*def_id),
+        DefKind::Enum(en) if en.body == Some(body) => return Some(*def_id),
+        DefKind::Namespace(ns) if ns.body == Some(body) => return Some(*def_id),
+        DefKind::Module(ns) if ns.body == Some(body) => return Some(*def_id),
         _ => {}
       }
     }

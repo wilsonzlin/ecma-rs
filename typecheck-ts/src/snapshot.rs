@@ -11,7 +11,7 @@ use types_ts_interned::{
 };
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.
-pub const PROGRAM_SNAPSHOT_VERSION: u32 = 8;
+pub const PROGRAM_SNAPSHOT_VERSION: u32 = 9;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
 /// to allow offline reconstruction. Snapshots are hybrid: when `text` is `None`
@@ -59,7 +59,7 @@ pub struct ProgramSnapshot {
   pub file_states: Vec<FileStateSnapshot>,
   pub def_data: Vec<DefSnapshot>,
   pub def_types: Vec<(DefId, TypeId)>,
-  pub canonical_defs: Vec<((FileId, String), DefId)>,
+  pub canonical_defs: Vec<((FileId, String, u8), DefId)>,
   pub namespace_types: Vec<(DefId, TypeId)>,
   pub body_results: Vec<BodyCheckResult>,
   pub symbol_occurrences: Vec<(FileId, Vec<SymbolOccurrence>)>,
