@@ -29,15 +29,9 @@ use types_ts_interned::{
 use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::Env;
 use super::flow_narrow::{
-<<<<<<< HEAD
   narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
   narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof, narrow_non_nullish,
   truthy_falsy_types, Facts, LiteralValue,
-=======
-  narrow_by_asserted, narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check,
-  narrow_by_instanceof, narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof,
-  narrow_non_nullish, truthy_falsy_types, Facts, LiteralValue,
->>>>>>> 9ffa22f (feat: narrow equality between references)
 };
 
 use super::caches::BodyCaches;
@@ -2069,12 +2063,8 @@ struct FlowBodyChecker<'a> {
   body: &'a Body,
   names: &'a NameInterner,
   store: Arc<TypeStore>,
-<<<<<<< HEAD
   file: FileId,
-  relate: RelateCtx<'static>,
-=======
   relate: RelateCtx<'a>,
->>>>>>> 9ffa22f (feat: narrow equality between references)
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
@@ -2174,22 +2164,15 @@ impl<'a> FlowBodyChecker<'a> {
 
     let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
     let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
-<<<<<<< HEAD
-    let relate = RelateCtx::new(Arc::clone(&store), store.options());
-=======
     let relate =
       RelateCtx::with_hooks(Arc::clone(&store), store.options(), super::relate_hooks());
->>>>>>> 9ffa22f (feat: narrow equality between references)
 
     Self {
       body_id,
       body,
       names,
       store,
-<<<<<<< HEAD
       file,
-=======
->>>>>>> 9ffa22f (feat: narrow equality between references)
       relate,
       expr_types,
       pat_types,

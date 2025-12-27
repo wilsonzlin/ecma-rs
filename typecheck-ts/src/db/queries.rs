@@ -431,11 +431,6 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
       }
     }
   }
-  for import_equals in lowered.hir.import_equals.iter() {
-    if let hir_js::ImportEqualsTarget::Module(module) = &import_equals.target {
-      specs.push((Arc::from(module.value.clone()), module.span));
-    }
-  }
   for export in lowered.hir.exports.iter() {
     match &export.kind {
       ExportKind::Named(named) => {
