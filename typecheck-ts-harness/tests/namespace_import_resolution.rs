@@ -40,10 +40,7 @@ fn resolves_qualified_types_through_namespace_imports() {
   let key_re = FileKey::new("re.ts");
   let key_a = FileKey::new("a.ts");
 
-  host.insert(
-    key_m.clone(),
-    "export interface Foo {\n  x: number;\n}\n",
-  );
+  host.insert(key_m.clone(), "export interface Foo {\n  x: number;\n}\n");
   host.insert(key_re.clone(), "export * from \"./m\";\n");
   host.insert(
     key_a.clone(),

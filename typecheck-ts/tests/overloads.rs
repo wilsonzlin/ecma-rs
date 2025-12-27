@@ -296,17 +296,11 @@ fn applies_default_type_argument_from_interned_signature() {
     Some(primitives.string)
   );
 
-  let resolution = resolve_call(
-    &store,
-    &relate,
-    callable,
-    &[],
-    None,
-    None,
-    span(),
-  );
+  let resolution = resolve_call(&store, &relate, callable, &[], None, None, span());
   assert!(resolution.diagnostics.is_empty());
-  let instantiated = resolution.signature.expect("expected an instantiated signature");
+  let instantiated = resolution
+    .signature
+    .expect("expected an instantiated signature");
   let instantiated_sig = store.signature(instantiated);
   assert!(instantiated_sig.type_params.is_empty());
   assert_eq!(instantiated_sig.ret, primitives.string);

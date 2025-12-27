@@ -323,7 +323,8 @@ impl<'a> RelateCtx<'a> {
       RelationKind::Comparable => {
         let src_kind = self.store.type_kind(src);
         let dst_kind = self.store.type_kind(dst);
-        if matches!(src_kind, TypeKind::TypeParam(_)) || matches!(dst_kind, TypeKind::TypeParam(_)) {
+        if matches!(src_kind, TypeKind::TypeParam(_)) || matches!(dst_kind, TypeKind::TypeParam(_))
+        {
           let res = matches!(
             (&src_kind, &dst_kind),
             (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) if a == b

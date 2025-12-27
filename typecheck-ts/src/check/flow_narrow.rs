@@ -554,7 +554,9 @@ fn matches_discriminant_value(ty: TypeId, value: &LiteralValue, store: &TypeStor
       .iter()
       .any(|member| matches_discriminant_value(*member, value, store)),
     kind => match (kind, value) {
-      (TypeKind::StringLiteral(name_id), LiteralValue::String(target)) => store.name(name_id) == *target,
+      (TypeKind::StringLiteral(name_id), LiteralValue::String(target)) => {
+        store.name(name_id) == *target
+      }
       (TypeKind::String, LiteralValue::String(_)) => true,
       (TypeKind::NumberLiteral(num), LiteralValue::Number(target)) => num.0.to_string() == *target,
       (TypeKind::Number, LiteralValue::Number(_)) => true,

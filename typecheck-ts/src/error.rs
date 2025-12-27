@@ -4,7 +4,7 @@ use crate::{BodyId, DefId, FileId};
 
 /// Error returned by a [`Host`](crate::Host).
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Error, Clone)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 #[error("{message}")]
 pub struct HostError {
   pub(crate) message: String,
@@ -20,7 +20,7 @@ impl HostError {
 }
 
 /// Context associated with an internal compiler error.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IceContext {
   pub file: Option<FileId>,
   pub def: Option<DefId>,
@@ -28,7 +28,7 @@ pub struct IceContext {
 }
 
 /// Internal compiler error raised when the checker encounters an invariant violation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ice {
   pub message: String,
   pub context: IceContext,
@@ -59,7 +59,7 @@ impl Ice {
 }
 
 /// Fatal, unrecoverable error during checking.
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum FatalError {
   #[error("host error: {0}")]
   Host(#[from] HostError),

@@ -5,6 +5,7 @@ use diagnostics::{Diagnostic, FileId};
 
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::BodyId;
+use crate::FatalError;
 use crate::FileKey;
 
 /// Wrapper around an atomic cancellation flag that can participate in salsa's
@@ -69,6 +70,7 @@ pub struct FileInput {
   pub key: FileKey,
   pub kind: FileKind,
   pub text: Arc<str>,
+  pub error: Option<FatalError>,
 }
 
 #[salsa::input]

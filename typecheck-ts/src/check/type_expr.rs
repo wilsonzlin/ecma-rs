@@ -137,7 +137,11 @@ impl TypeLowerer {
       .zip(ids.iter())
       .map(|(param, id)| TypeParamDecl {
         id: *id,
-        constraint: param.stx.constraint.as_ref().map(|c| self.lower_type_expr(c)),
+        constraint: param
+          .stx
+          .constraint
+          .as_ref()
+          .map(|c| self.lower_type_expr(c)),
         default: param.stx.default.as_ref().map(|d| self.lower_type_expr(d)),
       })
       .collect()

@@ -30,9 +30,7 @@ fn resolves_types_from_namespace_imports_through_reexports() {
     "resolved type for v should not be unknown"
   );
   let offset = a_src.find("x;").expect("marker offset") as u32;
-  let ty = program
-    .type_at(file_id, offset)
-    .expect("type at v.x");
+  let ty = program.type_at(file_id, offset).expect("type at v.x");
   assert_eq!(program.display_type(ty).to_string(), "number");
 }
 

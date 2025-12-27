@@ -35,10 +35,8 @@ fn smoke_parallel_database_usage() {
       assert_eq!(queries::roots(&snap), root_clone);
       assert_eq!(queries::compiler_options(&snap), options_clone);
       assert_eq!(queries::file_kind(&snap, FileId(0)), FileKind::Ts);
-      assert_eq!(
-        &*queries::file_text(&snap, FileId(0)),
-        "export const value = 1;"
-      );
+      let text = queries::file_text(&snap, FileId(0)).expect("file text");
+      assert_eq!(&*text, "export const value = 1;");
       assert_eq!(
         queries::module_resolve(&snap, FileId(0), Arc::<str>::from("./missing")),
         None

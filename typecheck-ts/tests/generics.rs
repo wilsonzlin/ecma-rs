@@ -34,12 +34,7 @@ fn infers_identity_function() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_for_call(
-    &store,
-    &sig,
-    &[primitives.number],
-    None,
-  );
+  let result = infer_type_arguments_for_call(&store, &sig, &[primitives.number], None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 
@@ -227,12 +222,7 @@ fn infers_from_contravariant_function_parameter() {
     overloads: vec![store.intern_signature(actual_cb_sig)],
   });
 
-  let result = infer_type_arguments_for_call(
-    &store,
-    &generic_sig,
-    &[actual_cb],
-    None,
-  );
+  let result = infer_type_arguments_for_call(&store, &generic_sig, &[actual_cb], None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 
@@ -327,11 +317,7 @@ fn infers_from_contextual_signature_return_type() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_from_contextual_signature(
-    &store,
-    &contextual_sig,
-    &actual_sig,
-  );
+  let result = infer_type_arguments_from_contextual_signature(&store, &contextual_sig, &actual_sig);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 }
@@ -357,11 +343,7 @@ fn infers_from_contextual_signature_parameter() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_from_contextual_signature(
-    &store,
-    &contextual_sig,
-    &actual_sig,
-  );
+  let result = infer_type_arguments_from_contextual_signature(&store, &contextual_sig, &actual_sig);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
 }
@@ -380,12 +362,8 @@ fn infers_from_contextual_return_in_call() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_for_call(
-    &store,
-    &sig,
-    &[primitives.unknown],
-    Some(primitives.string),
-  );
+  let result =
+    infer_type_arguments_for_call(&store, &sig, &[primitives.unknown], Some(primitives.string));
 
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));

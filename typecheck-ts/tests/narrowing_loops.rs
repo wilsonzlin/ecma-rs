@@ -76,7 +76,15 @@ fn for_init_runs_once() {
     store.union(vec![prim.string, prim.number]),
   );
 
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+  );
   let returns = res.return_types();
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "string");
   assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
@@ -105,7 +113,15 @@ fn do_while_body_executes_before_test() {
     store.union(vec![prim.string, prim.number]),
   );
 
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+  );
   let returns = res.return_types();
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "number");
   assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
