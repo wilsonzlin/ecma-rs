@@ -7,7 +7,7 @@ use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
   BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
   ExprKind as HirExprKind, FileKind as HirFileKind, LowerResult, NameId, PatId as HirPatId,
-  PatKind as HirPatKind,
+  PatKind as HirPatKind, VarDeclKind as HirVarDeclKind,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::expr::pat::Pat;
@@ -37,6 +37,7 @@ use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
+use crate::db::queries::{var_initializer_in_file, VarInit};
 use crate::db::{self, BodyCheckContext, BodyCheckDb, BodyInfo, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileRegistry;
@@ -1419,6 +1420,21 @@ impl Program {
     }
   }
 
+  /// Locate the initializer for a variable definition, if any.
+  pub fn var_initializer(&self, def: DefId) -> Option<VarInit> {
+    match self.var_initializer_fallible(def) {
+      Ok(init) => init,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  pub fn var_initializer_fallible(&self, def: DefId) -> Result<Option<VarInit>, FatalError> {
+    self.with_analyzed_state(|state| Ok(state.var_initializer(def)))
+  }
+
   /// Span for an expression, if available.
   pub fn expr_span(&self, body: BodyId, expr: ExprId) -> Option<Span> {
     match self.with_analyzed_state(|state| {
@@ -1517,7 +1533,13 @@ impl Program {
     self.with_analyzed_state(|state| {
       Ok(state.def_data.get(&def).and_then(|d| match &d.kind {
         DefKind::Function(func) => func.body,
-        DefKind::Var(var) => (var.body.0 != u32::MAX).then_some(var.body),
+        DefKind::Var(var) => {
+          if var.body.0 != u32::MAX {
+            Some(var.body)
+          } else {
+            state.var_initializer(def).map(|init| init.body)
+          }
+        }
         DefKind::Import(_) => None,
         DefKind::Interface(_) => None,
         DefKind::TypeAlias(_) => None,
@@ -3169,7 +3191,7 @@ impl ProgramState {
     if let Some(semantics) = self.semantics.as_ref() {
       let symbols = semantics.symbols();
       let mut seen_symbols = HashSet::new();
-      for (def_id, data) in self
+      for (def_id, _data) in self
         .def_data
         .iter()
         .filter(|(_, data)| matches!(data.kind, DefKind::Function(_)))
@@ -7074,6 +7096,22 @@ impl ProgramState {
       .unwrap_or(false)
   }
 
+  fn var_initializer(&self, def: DefId) -> Option<VarInit> {
+    if let Some(init) = crate::db::var_initializer(&self.typecheck_db, def) {
+      return Some(init);
+    }
+
+    let def_data = self.def_data.get(&def)?;
+    let lowered = self.hir_lowered.get(&def_data.file)?;
+    let hir_def = lowered.def(def)?;
+    let def_name = lowered.names.resolve(hir_def.path.name);
+    if !matches!(hir_def.path.kind, HirDefKind::Var) && def_name != Some("default") {
+      return None;
+    }
+    let def_name = def_name.or_else(|| Some(def_data.name.as_str()));
+    var_initializer_in_file(lowered, def, hir_def.span, def_name)
+  }
+
   fn type_of_def(&mut self, def: DefId) -> Result<TypeId, FatalError> {
     self.check_cancelled()?;
     let cache_hit = self.def_types.contains_key(&def);
@@ -7129,14 +7167,24 @@ impl ProgramState {
       let ty = match def_data.kind.clone() {
         DefKind::Function(func) => self.function_type(def, func)?,
         DefKind::Var(var) => {
+          let init = self.var_initializer(def);
+          let decl_kind = init
+            .as_ref()
+            .map(|init| init.decl_kind)
+            .unwrap_or_else(|| match var.mode {
+              VarDeclMode::Var => HirVarDeclKind::Var,
+              VarDeclMode::Let => HirVarDeclKind::Let,
+              VarDeclMode::Const => HirVarDeclKind::Const,
+              VarDeclMode::Using | VarDeclMode::AwaitUsing => HirVarDeclKind::Var,
+            });
           let mut init_span_for_const = None;
           let mut inferred = if let Some(t) = var.typ {
             t
-          } else if let Some(init) = var.init {
-            self.body_results.remove(&var.body);
-            let res = self.check_body(var.body)?;
-            init_span_for_const = res.expr_span(init);
-            if let Some(init_ty) = res.expr_type(init) {
+          } else if let Some(init) = init {
+            self.body_results.remove(&init.body);
+            let res = self.check_body(init.body)?;
+            init_span_for_const = res.expr_span(init.expr);
+            if let Some(init_ty) = res.expr_type(init.expr) {
               if let Some(store) = self.interned_store.as_ref() {
                 let init_ty = store.canon(init_ty);
                 self
@@ -7156,7 +7204,7 @@ impl ProgramState {
           } else {
             self.builtin.unknown
           };
-          if var.mode == VarDeclMode::Const {
+          if matches!(decl_kind, HirVarDeclKind::Const) {
             if let Some(init_span) = init_span_for_const {
               if let Some(file_body) = self.files.get(&def_data.file).and_then(|f| f.top_body) {
                 let res = self.check_body(file_body)?;
@@ -7185,9 +7233,8 @@ impl ProgramState {
               }
             }
           }
-          let init_is_satisfies = var
-            .init
-            .map(|init| self.init_is_satisfies(var.body, init))
+          let init_is_satisfies = init
+            .map(|init| self.init_is_satisfies(init.body, init.expr))
             .unwrap_or(false);
           if var.typ.is_none() && !init_is_satisfies {
             inferred = self.widen_array_elements(inferred);
@@ -7197,7 +7244,7 @@ impl ProgramState {
               inferred = self.widen_object_literal(inferred);
             }
           }
-          let ty = if var.mode == VarDeclMode::Const {
+          let ty = if matches!(decl_kind, HirVarDeclKind::Const) {
             inferred
           } else {
             self.widen_literal(inferred)
@@ -7458,7 +7505,13 @@ impl ProgramState {
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {
     self.def_data.get(&def).and_then(|d| match &d.kind {
       DefKind::Function(func) => func.body,
-      DefKind::Var(var) => Some(var.body),
+      DefKind::Var(var) => {
+        if var.body.0 != u32::MAX {
+          Some(var.body)
+        } else {
+          self.var_initializer(def).map(|init| init.body)
+        }
+      }
       DefKind::Import(_) => None,
       DefKind::Interface(_) => None,
       DefKind::TypeAlias(_) => None,
@@ -7469,7 +7522,18 @@ impl ProgramState {
     for (def_id, data) in self.def_data.iter() {
       match &data.kind {
         DefKind::Function(func) if func.body == Some(body) => return Some(*def_id),
-        DefKind::Var(var) if var.body == body => return Some(*def_id),
+        DefKind::Var(var) => {
+          if var.body == body {
+            return Some(*def_id);
+          }
+          if var.body.0 == u32::MAX {
+            if let Some(init) = self.var_initializer(*def_id) {
+              if init.body == body {
+                return Some(*def_id);
+              }
+            }
+          }
+        }
         _ => {}
       }
     }

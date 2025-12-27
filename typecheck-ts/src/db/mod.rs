@@ -27,13 +27,13 @@ pub use queries::body_check::{
 };
 pub use queries::{
   aggregate_diagnostics, aggregate_program_diagnostics, all_files, body_file, body_parent,
-  body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, def_file,
-  def_to_file, expr_at, file_kind, file_span_index, file_text, global_bindings, local_symbol_info,
-  lower_hir, module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse,
-  parse_query_count, program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir,
-  span_of_def, span_of_expr, symbol_occurrences, ts_semantics, type_at, DeclInfo, DeclKind,
+  body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, def_file, def_to_file,
+  expr_at, file_kind, file_span_index, file_text, global_bindings, local_symbol_info, lower_hir,
+  module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse, parse_query_count,
+  program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir, span_of_def,
+  span_of_expr, symbol_occurrences, ts_semantics, type_at, var_initializer, DeclInfo, DeclKind,
   GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore, TsSemantics,
-  TypeDatabase, TypeSemantics, TypesDatabase,
+  TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;
 

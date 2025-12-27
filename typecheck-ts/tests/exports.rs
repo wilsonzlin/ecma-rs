@@ -100,6 +100,81 @@ fn default_export_has_type() {
 }
 
 #[test]
+fn export_const_initializer_infers_type() {
+  let mut host = MemoryHost::default();
+  let entry = FileKey::new("index.ts");
+  let math = FileKey::new("math.ts");
+  host.insert(
+    entry.clone(),
+    "import { add } from \"./math\";\nexport const total = add(1, 2);",
+  );
+  host.insert(
+    math.clone(),
+    "export function add(a: number, b: number): number { return a + b; }",
+  );
+  host.link(entry.clone(), "./math", math.clone());
+
+  let program = Program::new(host, vec![entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_id = program.file_id(&entry).expect("file id");
+  let exports = program.exports_of(file_id);
+  let total = exports.get("total").expect("total export");
+  let ty = total.type_id.expect("type for total");
+  assert_eq!(program.display_type(ty).to_string(), "number");
+}
+
+#[test]
+fn shadowed_bindings_map_to_distinct_initializers() {
+  let mut host = MemoryHost::default();
+  let key = FileKey::new("shadow.ts");
+  let source =
+    "function outer() { const value = 2; return value; }\nconst value = 1;\nexport { outer, value };";
+  host.insert(key.clone(), source);
+
+  let program = Program::new(host, vec![key.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_id = program.file_id(&key).expect("file id");
+  let mut values: Vec<_> = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .filter(|def| program.def_name(*def) == Some("value".to_string()))
+    .filter_map(|def| program.def_span(def).map(|span| (def, span.range.start)))
+    .collect();
+  assert_eq!(values.len(), 2, "expected two value definitions");
+  values.sort_by_key(|(_, start)| *start);
+
+  let inner_def = values[0].0;
+  let outer_def = values[1].0;
+  let inner_init = program
+    .var_initializer(inner_def)
+    .expect("initializer for inner value");
+  let outer_init = program
+    .var_initializer(outer_def)
+    .expect("initializer for outer value");
+  assert_ne!(inner_init.body, outer_init.body);
+  let inner_span = program
+    .expr_span(inner_init.body, inner_init.expr)
+    .expect("inner expr span");
+  let outer_span = program
+    .expr_span(outer_init.body, outer_init.expr)
+    .expect("outer expr span");
+  let inner_text = &source[inner_span.range.start as usize..inner_span.range.end as usize];
+  let outer_text = &source[outer_span.range.start as usize..outer_span.range.end as usize];
+  assert_eq!(inner_text, "2");
+  assert_eq!(outer_text, "1");
+}
+
+#[test]
 fn default_export_expr_resolves_for_default_imports() {
   let mut host = MemoryHost::default();
   let key_module = fk(300);

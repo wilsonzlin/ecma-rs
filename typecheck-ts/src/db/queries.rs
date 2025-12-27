@@ -6,8 +6,8 @@ use salsa::Setter;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  lower_file_with_diagnostics, ExportDefaultValue, ExportKind, ExprKind, FileKind as HirFileKind,
-  LowerResult, ObjectProperty, StmtKind,
+  lower_file_with_diagnostics, DefKind, ExportDefaultValue, ExportKind, ExprId, ExprKind,
+  FileKind as HirFileKind, LowerResult, ObjectProperty, PatId, PatKind, StmtKind, VarDeclKind,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
@@ -30,7 +30,7 @@ use crate::semantic_js::SymbolId;
 use crate::symbols::SymbolBinding;
 use crate::FileKey;
 use crate::SymbolOccurrence;
-use crate::{BodyId, DefId, ExprId, TypeId};
+use crate::{BodyId, DefId, TypeId};
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
   db.file_input_by_key(key)
@@ -1460,6 +1460,132 @@ pub fn body_file(db: &dyn Db, body: BodyId) -> Option<FileId> {
 pub fn body_parent(db: &dyn Db, body: BodyId) -> Option<BodyId> {
   let file = body_file(db, body)?;
   body_parents_in_file(db, file).get(&body).copied()
+}
+
+/// Mapping from a definition to its initializer expression within HIR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VarInit {
+  /// Body containing the variable declarator.
+  pub body: BodyId,
+  /// Expression representing the initializer.
+  pub expr: ExprId,
+  /// Decl kind (`var`/`let`/`const`) of the declarator.
+  pub decl_kind: VarDeclKind,
+  /// Pattern bound by the declarator, if available.
+  pub pat: Option<PatId>,
+  /// Span covering the binding pattern, if available.
+  pub span: Option<TextRange>,
+}
+
+fn span_distance(a: TextRange, b: TextRange) -> u64 {
+  let start = a.start.abs_diff(b.start) as u64;
+  let end = a.end.abs_diff(b.end) as u64;
+  start.saturating_add(end)
+}
+
+pub fn var_initializer(db: &dyn Db, def: DefId) -> Option<VarInit> {
+  let file = def_file(db, def)?;
+  let lowered = lower_hir(db, file);
+  let lowered = lowered.lowered.as_deref()?;
+  let hir_def = lowered.def(def)?;
+  let def_span = hir_def.span;
+  let def_name = lowered.names.resolve(hir_def.path.name);
+  var_initializer_in_file(lowered, def, def_span, def_name)
+}
+
+pub(crate) fn var_initializer_in_file(
+  lowered: &LowerResult,
+  def: DefId,
+  def_span: TextRange,
+  def_name: Option<&str>,
+) -> Option<VarInit> {
+  let hir_def = lowered.def(def)?;
+  match hir_def.path.kind {
+    DefKind::Var => {}
+    DefKind::Field | DefKind::Param => return None,
+    _ if def_name != Some("default") => return None,
+    _ => {}
+  }
+
+  let mut best: Option<(u64, (usize, usize, usize), VarInit)> = None;
+
+  for (body_order, (body_id, _)) in lowered.body_index.iter().enumerate() {
+    let body = lowered.body(*body_id)?;
+    for (stmt_idx, stmt) in body.stmts.iter().enumerate() {
+      let decl = match &stmt.kind {
+        StmtKind::Var(decl) => decl,
+        _ => continue,
+      };
+      for (decl_idx, declarator) in decl.declarators.iter().enumerate() {
+        let Some(expr) = declarator.init else {
+          continue;
+        };
+        let pat = declarator.pat;
+        let pat_span = body.pats.get(pat.0 as usize).map(|p| p.span);
+        if let Some(span) = pat_span {
+          if span == def_span {
+            return Some(VarInit {
+              body: *body_id,
+              expr,
+              decl_kind: decl.kind,
+              pat: Some(pat),
+              span: Some(span),
+            });
+          }
+        }
+        if let (Some(name), Some(span)) = (def_name, pat_span) {
+          let pat_name = match body.pats.get(pat.0 as usize).map(|p| &p.kind) {
+            Some(PatKind::Ident(name_id)) => lowered.names.resolve(*name_id),
+            _ => None,
+          };
+          if pat_name == Some(name) {
+            let dist = span_distance(span, def_span);
+            let key = (dist, (body_order, stmt_idx, decl_idx));
+            let candidate = VarInit {
+              body: *body_id,
+              expr,
+              decl_kind: decl.kind,
+              pat: Some(pat),
+              span: Some(span),
+            };
+            let replace = best
+              .as_ref()
+              .map(|current| key < (current.0, current.1))
+              .unwrap_or(true);
+            if replace {
+              best = Some((dist, (body_order, stmt_idx, decl_idx), candidate));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if let Some((_, _, init)) = best {
+    return Some(init);
+  }
+
+  if def_name == Some("default") {
+    for export in lowered.hir.exports.iter() {
+      if let ExportKind::Default(default) = &export.kind {
+        if let ExportDefaultValue::Expr { expr, body } = &default.value {
+          if export.span == def_span
+            || (export.span.start <= def_span.start && def_span.end <= export.span.end)
+          {
+            return Some(VarInit {
+              body: *body,
+              expr: *expr,
+              decl_kind: VarDeclKind::Const,
+              pat: None,
+              span: Some(export.span),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  None
 }
 
 #[salsa::input]
