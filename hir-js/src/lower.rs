@@ -91,6 +91,17 @@ impl LoweringContext {
     ));
   }
 
+  fn warn_non_module_export(&mut self, range: TextRange, message: impl Into<String>) {
+    self.diagnostics.push(Diagnostic::warning(
+      "LOWER0003",
+      message,
+      Span {
+        file: self.file,
+        range,
+      },
+    ));
+  }
+
   fn into_diagnostics(self) -> Vec<Diagnostic> {
     self.diagnostics
   }
@@ -1803,6 +1814,7 @@ fn collect_top_level<'a>(
       module_items,
       names,
       true,
+      true,
       ambient,
       false,
       ctx,
@@ -1815,6 +1827,7 @@ fn collect_stmt<'a>(
   descriptors: &mut Vec<DefDescriptor<'a>>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
+  module_item: bool,
   is_item: bool,
   ambient: bool,
   in_global: bool,
@@ -1838,15 +1851,22 @@ fn collect_stmt<'a>(
       desc.is_exported = func.stx.export;
       desc.is_default_export = func.stx.export_default;
       if desc.is_exported || desc.is_default_export {
-        module_items.push(ModuleItem {
-          span,
-          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-            default: desc.is_default_export,
-            type_only: false,
+        if module_item {
+          module_items.push(ModuleItem {
             span,
-            kind: ExportedDeclKind::Func(func),
-          }),
-        });
+            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+              default: desc.is_default_export,
+              type_only: false,
+              span,
+              kind: ExportedDeclKind::Func(func),
+            }),
+          });
+        } else if desc.is_default_export {
+          ctx.warn_non_module_export(
+            span,
+            "export default is only allowed at the module top level",
+          );
+        }
       }
       descriptors.push(desc);
       collect_func_params(
@@ -1884,15 +1904,22 @@ fn collect_stmt<'a>(
       desc.is_exported = class_decl.stx.export;
       desc.is_default_export = class_decl.stx.export_default;
       if desc.is_exported || desc.is_default_export {
-        module_items.push(ModuleItem {
-          span,
-          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-            default: desc.is_default_export,
-            type_only: false,
+        if module_item {
+          module_items.push(ModuleItem {
             span,
-            kind: ExportedDeclKind::Class(class_decl),
-          }),
-        });
+            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+              default: desc.is_default_export,
+              type_only: false,
+              span,
+              kind: ExportedDeclKind::Class(class_decl),
+            }),
+          });
+        } else if desc.is_default_export {
+          ctx.warn_non_module_export(
+            span,
+            "export default is only allowed at the module top level",
+          );
+        }
       }
       descriptors.push(desc);
     }
@@ -1902,21 +1929,24 @@ fn collect_stmt<'a>(
         descriptors,
         module_items,
         names,
+        module_item,
         is_item,
         ambient,
         in_global,
         ctx,
       );
       if var_decl.stx.export {
-        module_items.push(ModuleItem {
-          span,
-          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-            default: false,
-            type_only: false,
+        if module_item {
+          module_items.push(ModuleItem {
             span,
-            kind: ExportedDeclKind::Var(var_decl),
-          }),
-        });
+            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+              default: false,
+              type_only: false,
+              span,
+              kind: ExportedDeclKind::Var(var_decl),
+            }),
+          });
+        }
       }
     }
     AstStmt::NamespaceDecl(ns) => {
@@ -1926,21 +1956,24 @@ fn collect_stmt<'a>(
         descriptors,
         module_items,
         names,
+        module_item,
         is_item,
         decl_ambient,
         in_global,
         ctx,
       );
       if ns.stx.export {
-        module_items.push(ModuleItem {
-          span,
-          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-            default: false,
-            type_only: false,
+        if module_item {
+          module_items.push(ModuleItem {
             span,
-            kind: ExportedDeclKind::Namespace(ns),
-          }),
-        });
+            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+              default: false,
+              type_only: false,
+              span,
+              kind: ExportedDeclKind::Namespace(ns),
+            }),
+          });
+        }
       }
     }
     AstStmt::ModuleDecl(module) => {
@@ -1963,15 +1996,17 @@ fn collect_stmt<'a>(
       desc.is_exported = module.stx.export;
       descriptors.push(desc);
       if module.stx.export {
-        module_items.push(ModuleItem {
-          span,
-          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-            default: false,
-            type_only: false,
+        if module_item {
+          module_items.push(ModuleItem {
             span,
-            kind: ExportedDeclKind::Module(module),
-          }),
-        });
+            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+              default: false,
+              type_only: false,
+              span,
+              kind: ExportedDeclKind::Module(module),
+            }),
+          });
+        }
       }
       if let Some(body) = &module.stx.body {
         for st in body.iter() {
@@ -1980,6 +2015,7 @@ fn collect_stmt<'a>(
             descriptors,
             module_items,
             names,
+            false,
             false,
             decl_ambient,
             in_global,
@@ -1990,7 +2026,17 @@ fn collect_stmt<'a>(
     }
     AstStmt::GlobalDecl(global) => {
       for st in global.stx.body.iter() {
-        collect_stmt(st, descriptors, module_items, names, true, true, true, ctx);
+        collect_stmt(
+          st,
+          descriptors,
+          module_items,
+          names,
+          false,
+          true,
+          true,
+          true,
+          ctx,
+        );
       }
     }
     AstStmt::InterfaceDecl(intf) => {
@@ -2010,7 +2056,7 @@ fn collect_stmt<'a>(
       desc.type_source = Some(TypeSource::Interface(intf));
       desc.is_exported = intf.stx.export;
       descriptors.push(desc);
-      if intf.stx.export {
+      if intf.stx.export && module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2039,7 +2085,7 @@ fn collect_stmt<'a>(
       desc.type_source = Some(TypeSource::TypeAlias(ta));
       desc.is_exported = ta.stx.export;
       descriptors.push(desc);
-      if ta.stx.export {
+      if ta.stx.export && module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2097,7 +2143,7 @@ fn collect_stmt<'a>(
         }
       }
       descriptors.push(desc);
-      if en.stx.export {
+      if en.stx.export && module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2110,10 +2156,12 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::Import(stmt_import) => {
-      module_items.push(ModuleItem {
-        span,
-        kind: ModuleItemKind::Import(stmt_import),
-      });
+      if module_item {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::Import(stmt_import),
+        });
+      }
       if let Some(default) = &stmt_import.stx.default {
         let pat_names = collect_pat_names(&default.stx.pat, names, ctx);
         for (id, span) in pat_names {
@@ -2167,10 +2215,17 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::ExportList(export) => {
-      module_items.push(ModuleItem {
-        span,
-        kind: ModuleItemKind::ExportList(export),
-      });
+      if module_item {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportList(export),
+        });
+      } else {
+        ctx.warn_non_module_export(
+          span,
+          "export statements are only allowed at the module top level",
+        );
+      }
     }
     AstStmt::ExportDefaultExpr(expr) => {
       let name_id = names.intern("default");
@@ -2186,14 +2241,21 @@ fn collect_stmt<'a>(
       );
       desc.is_default_export = true;
       descriptors.push(desc);
-      module_items.push(ModuleItem {
-        span,
-        kind: ModuleItemKind::ExportDefaultExpr(expr),
-      });
+      if module_item {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportDefaultExpr(expr),
+        });
+      } else {
+        ctx.warn_non_module_export(
+          span,
+          "export default is only allowed at the module top level",
+        );
+      }
     }
     AstStmt::AmbientVarDecl(av) => {
       let name_id = names.intern(&av.stx.name);
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::Var,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
@@ -2202,8 +2264,10 @@ fn collect_stmt<'a>(
         true,
         in_global,
         DefSource::None,
-      ));
-      if av.stx.export {
+      );
+      desc.is_exported = av.stx.export;
+      descriptors.push(desc);
+      if av.stx.export && module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2217,7 +2281,7 @@ fn collect_stmt<'a>(
     }
     AstStmt::AmbientFunctionDecl(af) => {
       let name_id = names.intern(&af.stx.name);
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::Function,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
@@ -2226,9 +2290,11 @@ fn collect_stmt<'a>(
         true,
         in_global,
         DefSource::None,
-      ));
+      );
+      desc.is_exported = af.stx.export;
+      descriptors.push(desc);
       collect_func_params_from_parts(&af.stx.parameters, descriptors, names, true, in_global, ctx);
-      if af.stx.export {
+      if af.stx.export && module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2242,7 +2308,7 @@ fn collect_stmt<'a>(
     }
     AstStmt::AmbientClassDecl(ac) => {
       let name_id = names.intern(&ac.stx.name);
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::Class,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
@@ -2251,8 +2317,10 @@ fn collect_stmt<'a>(
         true,
         in_global,
         DefSource::None,
-      ));
-      if ac.stx.export {
+      );
+      desc.is_exported = ac.stx.export;
+      descriptors.push(desc);
+      if ac.stx.export && module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2265,22 +2333,30 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::ImportTypeDecl(import_type) => {
-      module_items.push(ModuleItem {
-        span,
-        kind: ModuleItemKind::ImportType(import_type),
-      });
+      if module_item {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ImportType(import_type),
+        });
+      }
     }
     AstStmt::ExportTypeDecl(export_type) => {
-      module_items.push(ModuleItem {
-        span,
-        kind: ModuleItemKind::ExportType(export_type),
-      });
+      if module_item {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportType(export_type),
+        });
+      } else {
+        ctx.warn_non_module_export(span, "export type is only allowed at the module top level");
+      }
     }
     AstStmt::ImportEqualsDecl(ie) => {
-      module_items.push(ModuleItem {
-        span,
-        kind: ModuleItemKind::ImportEquals(ie),
-      });
+      if module_item {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ImportEquals(ie),
+        });
+      }
       let name_id = names.intern(&ie.stx.name);
       descriptors.push(DefDescriptor::new(
         DefKind::ImportBinding,
@@ -2307,10 +2383,17 @@ fn collect_stmt<'a>(
       );
       desc.is_exported = true;
       descriptors.push(desc);
-      module_items.push(ModuleItem {
-        span,
-        kind: ModuleItemKind::ExportAssignment(assign),
-      });
+      if module_item {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportAssignment(assign),
+        });
+      } else {
+        ctx.warn_non_module_export(
+          span,
+          "export assignment is only allowed at the module top level",
+        );
+      }
     }
     AstStmt::ForIn(for_in) => {
       collect_for_lhs(
@@ -2336,6 +2419,7 @@ fn collect_stmt<'a>(
         descriptors,
         module_items,
         names,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2365,6 +2449,7 @@ fn collect_stmt<'a>(
         descriptors,
         module_items,
         names,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2376,6 +2461,7 @@ fn collect_stmt<'a>(
         descriptors,
         module_items,
         names,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2389,6 +2475,7 @@ fn collect_namespace<'a>(
   descriptors: &mut Vec<DefDescriptor<'a>>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
+  _module_item: bool,
   is_item: bool,
   ambient: bool,
   in_global: bool,
@@ -2397,7 +2484,7 @@ fn collect_namespace<'a>(
   let name_id = names.intern(&ns.stx.name);
   let span = ctx.to_range(ns.loc);
   let text = names.resolve(name_id).unwrap().to_string();
-  descriptors.push(DefDescriptor::new(
+  let mut desc = DefDescriptor::new(
     DefKind::Namespace,
     name_id,
     text,
@@ -2406,7 +2493,9 @@ fn collect_namespace<'a>(
     ambient,
     in_global,
     DefSource::None,
-  ));
+  );
+  desc.is_exported = ns.stx.export;
+  descriptors.push(desc);
   match &ns.stx.body {
     NamespaceBody::Block(stmts) => {
       for st in stmts.iter() {
@@ -2415,6 +2504,7 @@ fn collect_namespace<'a>(
           descriptors,
           module_items,
           names,
+          false,
           false,
           ambient,
           in_global,
@@ -2429,6 +2519,7 @@ fn collect_namespace<'a>(
         module_items,
         names,
         false,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2442,6 +2533,7 @@ fn collect_var_decl<'a>(
   descriptors: &mut Vec<DefDescriptor<'a>>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
+  _module_item: bool,
   is_item: bool,
   ambient: bool,
   in_global: bool,
@@ -2456,7 +2548,7 @@ fn collect_var_decl<'a>(
     let pat_names = collect_pat_names(&declarator.pattern.stx.pat, names, ctx);
     if pat_names.is_empty() {
       let anon = names.intern("<anon>");
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::Var,
         anon,
         names.resolve(anon).unwrap().to_string(),
@@ -2465,10 +2557,12 @@ fn collect_var_decl<'a>(
         ambient,
         in_global,
         DefSource::Var(declarator, kind),
-      ));
+      );
+      desc.is_exported = var_decl.stx.export;
+      descriptors.push(desc);
     } else {
       for (id, span) in pat_names {
-        descriptors.push(DefDescriptor::new(
+        let mut desc = DefDescriptor::new(
           DefKind::Var,
           id,
           names.resolve(id).unwrap().to_string(),
@@ -2477,7 +2571,9 @@ fn collect_var_decl<'a>(
           ambient,
           in_global,
           DefSource::Var(declarator, kind),
-        ));
+        );
+        desc.is_exported = var_decl.stx.export;
+        descriptors.push(desc);
       }
     }
 
@@ -2542,6 +2638,7 @@ fn walk_stmt_children<'a>(
   descriptors: &mut Vec<DefDescriptor<'a>>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
+  _module_item: bool,
   ambient: bool,
   in_global: bool,
   ctx: &mut LoweringContext,
@@ -2577,6 +2674,7 @@ fn walk_stmt_children<'a>(
         module_items,
         names,
         false,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2587,6 +2685,7 @@ fn walk_stmt_children<'a>(
           descriptors,
           module_items,
           names,
+          false,
           false,
           ambient,
           in_global,
@@ -2601,6 +2700,7 @@ fn walk_stmt_children<'a>(
           descriptors,
           module_items,
           names,
+          false,
           false,
           ambient,
           in_global,
@@ -2624,6 +2724,7 @@ fn walk_stmt_children<'a>(
         module_items,
         names,
         false,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2645,6 +2746,7 @@ fn walk_stmt_children<'a>(
         module_items,
         names,
         false,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2660,6 +2762,7 @@ fn walk_stmt_children<'a>(
           descriptors,
           module_items,
           names,
+          false,
           false,
           ambient,
           in_global,
@@ -2694,6 +2797,7 @@ fn walk_stmt_children<'a>(
         descriptors,
         module_items,
         names,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2723,6 +2827,7 @@ fn walk_stmt_children<'a>(
         descriptors,
         module_items,
         names,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2752,6 +2857,7 @@ fn walk_stmt_children<'a>(
         descriptors,
         module_items,
         names,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2786,6 +2892,7 @@ fn walk_stmt_children<'a>(
             module_items,
             names,
             false,
+            false,
             ambient,
             in_global,
             ctx,
@@ -2799,6 +2906,7 @@ fn walk_stmt_children<'a>(
         descriptors,
         module_items,
         names,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2814,6 +2922,7 @@ fn walk_stmt_children<'a>(
             module_items,
             names,
             false,
+            false,
             ambient,
             in_global,
             ctx,
@@ -2826,6 +2935,7 @@ fn walk_stmt_children<'a>(
           descriptors,
           module_items,
           names,
+          false,
           ambient,
           in_global,
           ctx,
@@ -2848,6 +2958,7 @@ fn walk_stmt_children<'a>(
         module_items,
         names,
         false,
+        false,
         ambient,
         in_global,
         ctx,
@@ -2862,6 +2973,7 @@ fn collect_block<'a>(
   descriptors: &mut Vec<DefDescriptor<'a>>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
+  _module_item: bool,
   ambient: bool,
   in_global: bool,
   ctx: &mut LoweringContext,
@@ -2872,6 +2984,7 @@ fn collect_block<'a>(
       descriptors,
       module_items,
       names,
+      false,
       false,
       ambient,
       in_global,
@@ -2885,6 +2998,7 @@ fn collect_for_body<'a>(
   descriptors: &mut Vec<DefDescriptor<'a>>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
+  _module_item: bool,
   ambient: bool,
   in_global: bool,
   ctx: &mut LoweringContext,
@@ -2895,6 +3009,7 @@ fn collect_for_body<'a>(
       descriptors,
       module_items,
       names,
+      false,
       false,
       ambient,
       in_global,
@@ -3549,6 +3664,7 @@ fn collect_func_body<'a>(
           descriptors,
           module_items,
           names,
+          false,
           false,
           ambient,
           in_global,

@@ -757,6 +757,50 @@ fn lowers_imports_and_exports() {
 }
 
 #[test]
+fn nested_exports_do_not_create_file_exports() {
+  let source = r#"export namespace NS { export const x = 1; export function f() {} }"#;
+  let ast = parse(source).expect("parse");
+  let result = lower_file(FileId(10), FileKind::Ts, &ast);
+
+  assert_eq!(
+    result.hir.exports.len(),
+    1,
+    "only the namespace itself should be a file-level export"
+  );
+
+  let exported_names: Vec<_> = result
+    .hir
+    .exports
+    .iter()
+    .flat_map(|export| match &export.kind {
+      ExportKind::Named(named) => named
+        .specifiers
+        .iter()
+        .map(|spec| result.names.resolve(spec.exported))
+        .collect::<Vec<_>>(),
+      _ => Vec::new(),
+    })
+    .collect();
+  assert_eq!(
+    exported_names,
+    vec![Some("NS")],
+    "nested exports should not be treated as file-level exports"
+  );
+
+  for name in ["x", "f"] {
+    let def = result
+      .defs
+      .iter()
+      .find(|def| result.names.resolve(def.path.name) == Some(name))
+      .unwrap_or_else(|| panic!("expected {} definition", name));
+    assert!(
+      def.is_exported,
+      "{name} should remain exported from its namespace"
+    );
+  }
+}
+
+#[test]
 fn lowers_control_flow_statements() {
   let source = r#"
     function demo(items) {
