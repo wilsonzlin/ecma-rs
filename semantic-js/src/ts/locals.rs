@@ -1,5 +1,5 @@
 use super::model::{Namespace, SymbolId, TsProgramSemantics};
-use crate::assoc::ts::{declared_symbol, scope_id, DeclaredSymbol, ResolvedSymbol, ScopeInfo};
+use crate::assoc::ts::{self, declared_symbol, scope_id, DeclaredSymbol, ResolvedSymbol, ScopeInfo};
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::{FileId, TextRange};
@@ -411,6 +411,42 @@ pub fn bind_ts_locals(top: &mut Node<TopLevel>, file: FileId, is_module: bool) -
     (resolve.expr_resolutions, resolve.type_resolutions)
   };
   builder.into_semantics(expr_resolutions, type_resolutions)
+}
+
+/// Build deterministic TS locals while storing attachments in side tables instead
+/// of mutating [`NodeAssocData`].
+pub fn bind_ts_locals_tables(
+  top: &Node<TopLevel>,
+  file: FileId,
+  is_module: bool,
+) -> (TsLocalSemantics, ts::TsAssocTables) {
+  let kind = if is_module {
+    ScopeKind::Module
+  } else {
+    ScopeKind::Script
+  };
+  let root_span = TextRange::new(top.loc.0 as u32, top.loc.1 as u32);
+  let (builder, root) = SemanticsBuilder::new(file, kind, root_span);
+  let (builder, tables) = {
+    let mut decl = DeclareTablesPass::new(builder, root);
+    decl.walk_top(top);
+    decl.finish()
+  };
+
+  let (expr_resolutions, type_resolutions, tables) = {
+    let mut resolve = ResolveTablesPass::new(&builder, root, tables);
+    resolve.walk_top(top);
+    (
+      resolve.expr_resolutions,
+      resolve.type_resolutions,
+      resolve.tables,
+    )
+  };
+
+  (
+    builder.into_semantics(expr_resolutions, type_resolutions),
+    tables,
+  )
 }
 
 struct DeclarePass {
@@ -1084,24 +1120,17 @@ impl DeclarePass {
     let base_ns = if import.stx.type_only {
       Namespace::TYPE
     } else {
-      Namespace::VALUE | Namespace::TYPE
+      Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
     };
     if let Some(default) = &mut import.stx.default {
       self.walk_pat_decl(default, base_ns);
     }
     if let Some(names) = &mut import.stx.names {
       match names {
-        ImportNames::All(pat) => {
-          let ns = if import.stx.type_only {
-            Namespace::TYPE
-          } else {
-            Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
-          };
-          self.walk_pat_decl(pat, ns);
-        }
+        ImportNames::All(pat) => self.walk_pat_decl(pat, base_ns),
         ImportNames::Specific(list) => {
           for item in list.iter_mut() {
-            let ns = if import.stx.type_only || item.stx.type_only {
+            let ns = if item.stx.type_only {
               Namespace::TYPE
             } else {
               base_ns
@@ -1708,6 +1737,1288 @@ impl<'a> ResolvePass<'a> {
 
   fn walk_import_name(&mut self, name: &mut Node<ImportName>) {
     self.walk_pat_decl(&mut name.stx.alias);
+  }
+}
+
+struct DeclareTablesPass {
+  builder: SemanticsBuilder,
+  scope_stack: Vec<ScopeId>,
+  decl_target: Vec<DeclTarget>,
+  tables: ts::TsAssocTables,
+}
+
+impl DeclareTablesPass {
+  fn new(builder: SemanticsBuilder, root: ScopeId) -> Self {
+    Self {
+      builder,
+      scope_stack: vec![root],
+      decl_target: vec![DeclTarget::Lexical],
+      tables: ts::TsAssocTables::default(),
+    }
+  }
+
+  fn current_scope(&self) -> ScopeId {
+    *self.scope_stack.last().unwrap()
+  }
+
+  fn push_scope(&mut self, kind: ScopeKind, span: TextRange) {
+    let parent = self.current_scope();
+    let id = self.builder.alloc_scope(parent, kind, span);
+    self.scope_stack.push(id);
+  }
+
+  fn pop_scope(&mut self) {
+    self.scope_stack.pop();
+  }
+
+  fn mark_scope<T: Drive + DriveMut>(&mut self, node: &Node<T>) {
+    self.tables.record_scope(node.loc, self.current_scope());
+  }
+
+  fn enter_decl_target(&mut self, target: DeclTarget) {
+    self.decl_target.push(target);
+  }
+
+  fn exit_decl_target(&mut self) {
+    self.decl_target.pop();
+  }
+
+  fn hoist_scope(&self) -> ScopeId {
+    self
+      .scope_stack
+      .iter()
+      .rev()
+      .copied()
+      .find(|scope| {
+        self
+          .builder
+          .scopes
+          .get(scope)
+          .map(|s| s.kind.is_hoist_target())
+          .unwrap_or(false)
+      })
+      .unwrap_or_else(|| self.current_scope())
+  }
+
+  fn declare(&mut self, name: &str, namespaces: Namespace, span: TextRange) -> SymbolId {
+    let scope = match self
+      .decl_target
+      .last()
+      .copied()
+      .unwrap_or(DeclTarget::Lexical)
+    {
+      DeclTarget::Lexical => self.current_scope(),
+      DeclTarget::Hoisted => self.hoist_scope(),
+    };
+    let sym = self.builder.declare(scope, name, namespaces, Some(span));
+    self.tables.record_declared_symbol(span, sym);
+    sym
+  }
+
+  fn walk_top(&mut self, top: &Node<TopLevel>) {
+    self.mark_scope(top);
+    for stmt in top.stx.body.iter() {
+      self.walk_stmt(stmt);
+    }
+  }
+
+  fn walk_stmt(&mut self, stmt: &Node<AstStmt>) {
+    self.mark_scope(stmt);
+    match &*stmt.stx {
+      AstStmt::Block(block) => {
+        self.push_scope(ScopeKind::Block, range_of(block));
+        self.walk_block(block);
+        self.pop_scope();
+      }
+      AstStmt::VarDecl(var) => self.walk_var_decl(var),
+      AstStmt::FunctionDecl(func) => {
+        if let Some(name) = &func.stx.name {
+          self.declare(
+            &name.stx.name,
+            Namespace::VALUE,
+            span_for_name(name.loc, &name.stx.name),
+          );
+        }
+        self.walk_func(&func.stx.function);
+      }
+      AstStmt::ClassDecl(class) => {
+        if let Some(name) = &class.stx.name {
+          self.declare(
+            &name.stx.name,
+            Namespace::VALUE | Namespace::TYPE,
+            span_for_name(name.loc, &name.stx.name),
+          );
+        }
+        self.push_scope(ScopeKind::Class, range_of(class));
+        for member in class.stx.members.iter() {
+          self.mark_scope(member);
+        }
+        self.pop_scope();
+      }
+      AstStmt::Expr(expr) => self.walk_expr(&expr.stx.expr),
+      AstStmt::Return(ret) => {
+        if let Some(v) = &ret.stx.value {
+          self.walk_expr(v);
+        }
+      }
+      AstStmt::If(if_stmt) => {
+        self.walk_expr(&if_stmt.stx.test);
+        self.walk_stmt(&if_stmt.stx.consequent);
+        if let Some(alt) = &if_stmt.stx.alternate {
+          self.walk_stmt(alt);
+        }
+      }
+      AstStmt::ForTriple(triple) => self.walk_for_triple(triple),
+      AstStmt::ForIn(for_in) => self.walk_for_in(for_in),
+      AstStmt::ForOf(for_of) => self.walk_for_of(for_of),
+      AstStmt::Try(tr) => {
+        self.walk_block_stmt(&tr.stx.wrapped);
+        if let Some(catch) = &tr.stx.catch {
+          self.walk_catch(catch);
+        }
+        if let Some(finally) = &tr.stx.finally {
+          self.walk_block_stmt(finally);
+        }
+      }
+      AstStmt::Switch(sw) => {
+        self.walk_expr(&sw.stx.test);
+        for branch in sw.stx.branches.iter() {
+          if let Some(case) = &branch.stx.case {
+            self.walk_expr(case);
+          }
+          self.push_scope(ScopeKind::Block, range_of(branch));
+          for stmt in branch.stx.body.iter() {
+            self.walk_stmt(stmt);
+          }
+          self.pop_scope();
+        }
+      }
+      AstStmt::With(w) => {
+        self.walk_expr(&w.stx.object);
+        self.walk_stmt(&w.stx.body);
+      }
+      AstStmt::Label(label) => self.walk_stmt(&label.stx.statement),
+      AstStmt::InterfaceDecl(intf) => {
+        self.declare(
+          &intf.stx.name,
+          Namespace::TYPE,
+          span_for_name(intf.loc, &intf.stx.name),
+        );
+        if let Some(params) = &intf.stx.type_parameters {
+          self.push_scope(ScopeKind::TypeParams, to_range(intf.loc));
+          for param in params.iter() {
+            self.walk_type_param(param);
+          }
+          self.pop_scope();
+        }
+        for ext in intf.stx.extends.iter() {
+          self.walk_type_expr(ext);
+        }
+      }
+      AstStmt::TypeAliasDecl(alias) => {
+        self.declare(
+          &alias.stx.name,
+          Namespace::TYPE,
+          span_for_name(alias.loc, &alias.stx.name),
+        );
+        if let Some(params) = &alias.stx.type_parameters {
+          self.push_scope(ScopeKind::TypeParams, to_range(alias.loc));
+          for param in params.iter() {
+            self.walk_type_param(param);
+          }
+          self.walk_type_expr(&alias.stx.type_expr);
+          self.pop_scope();
+        } else {
+          self.walk_type_expr(&alias.stx.type_expr);
+        }
+      }
+      AstStmt::NamespaceDecl(ns) => self.walk_namespace(ns),
+      AstStmt::ModuleDecl(module) => self.walk_module(module),
+      AstStmt::Import(import) => self.walk_import(import),
+      _ => {}
+    }
+  }
+
+  fn walk_block_stmt(&mut self, block: &Node<BlockStmt>) {
+    self.push_scope(ScopeKind::Block, range_of(block));
+    self.walk_block(block);
+    self.pop_scope();
+  }
+
+  fn walk_block(&mut self, block: &Node<BlockStmt>) {
+    self.mark_scope(block);
+    for stmt in block.stx.body.iter() {
+      self.walk_stmt(stmt);
+    }
+  }
+
+  fn walk_catch(&mut self, catch: &Node<CatchBlock>) {
+    self.push_scope(ScopeKind::Block, range_of(catch));
+    self.mark_scope(catch);
+    self.enter_decl_target(DeclTarget::Lexical);
+    if let Some(param) = &catch.stx.parameter {
+      self.walk_pat_decl(param, Namespace::VALUE);
+    }
+    for stmt in catch.stx.body.iter() {
+      self.walk_stmt(stmt);
+    }
+    self.exit_decl_target();
+    self.pop_scope();
+  }
+
+  fn walk_for_body(&mut self, body: &Node<ForBody>) {
+    self.push_scope(ScopeKind::Block, range_of(body));
+    self.mark_scope(body);
+    for stmt in body.stx.body.iter() {
+      self.walk_stmt(stmt);
+    }
+    self.pop_scope();
+  }
+
+  fn walk_for_triple(&mut self, triple: &Node<ForTripleStmt>) {
+    self.mark_scope(triple);
+    match &triple.stx.init {
+      ForTripleStmtInit::Expr(e) => self.walk_expr(e),
+      ForTripleStmtInit::Decl(d) => self.walk_var_decl(d),
+      ForTripleStmtInit::None => {}
+    }
+    if let Some(cond) = &triple.stx.cond {
+      self.walk_expr(cond);
+    }
+    if let Some(post) = &triple.stx.post {
+      self.walk_expr(post);
+    }
+    self.walk_for_body(&triple.stx.body);
+  }
+
+  fn walk_for_in(&mut self, for_in: &Node<ForInStmt>) {
+    self.mark_scope(for_in);
+    match &for_in.stx.lhs {
+      ForInOfLhs::Assign(pat) => self.walk_pat(pat, false, Namespace::VALUE),
+      ForInOfLhs::Decl((mode, decl)) => {
+        let target = if *mode == VarDeclMode::Var {
+          DeclTarget::Hoisted
+        } else {
+          DeclTarget::Lexical
+        };
+        self.enter_decl_target(target);
+        self.walk_pat_decl(decl, Namespace::VALUE);
+        self.exit_decl_target();
+      }
+    }
+    self.walk_expr(&for_in.stx.rhs);
+    self.walk_for_body(&for_in.stx.body);
+  }
+
+  fn walk_for_of(&mut self, for_of: &Node<ForOfStmt>) {
+    self.mark_scope(for_of);
+    match &for_of.stx.lhs {
+      ForInOfLhs::Assign(pat) => self.walk_pat(pat, false, Namespace::VALUE),
+      ForInOfLhs::Decl((mode, decl)) => {
+        let target = if *mode == VarDeclMode::Var {
+          DeclTarget::Hoisted
+        } else {
+          DeclTarget::Lexical
+        };
+        self.enter_decl_target(target);
+        self.walk_pat_decl(decl, Namespace::VALUE);
+        self.exit_decl_target();
+      }
+    }
+    self.walk_expr(&for_of.stx.rhs);
+    self.walk_for_body(&for_of.stx.body);
+  }
+
+  fn walk_var_decl(&mut self, var: &Node<VarDecl>) {
+    self.mark_scope(var);
+    let target = if var.stx.mode == VarDeclMode::Var {
+      DeclTarget::Hoisted
+    } else {
+      DeclTarget::Lexical
+    };
+    self.enter_decl_target(target);
+    for decl in var.stx.declarators.iter() {
+      self.walk_pat_decl(&decl.pattern, Namespace::VALUE);
+      if let Some(init) = &decl.initializer {
+        self.walk_expr(init);
+      }
+      if let Some(annot) = &decl.type_annotation {
+        self.walk_type_expr(annot);
+      }
+    }
+    self.exit_decl_target();
+  }
+
+  fn walk_pat_decl(
+    &mut self,
+    decl: &Node<parse_js::ast::stmt::decl::PatDecl>,
+    namespaces: Namespace,
+  ) {
+    self.mark_scope(decl);
+    self.walk_pat(&decl.stx.pat, true, namespaces);
+  }
+
+  fn walk_pat(&mut self, pat: &Node<AstPat>, in_decl: bool, namespaces: Namespace) {
+    self.mark_scope(pat);
+    match &*pat.stx {
+      AstPat::Id(id) => {
+        if in_decl {
+          self.declare(
+            &id.stx.name,
+            namespaces,
+            span_for_name(pat.loc, &id.stx.name),
+          );
+        }
+      }
+      AstPat::Arr(arr) => self.walk_arr_pat(arr, in_decl, namespaces),
+      AstPat::Obj(obj) => self.walk_obj_pat(obj, in_decl, namespaces),
+      AstPat::AssignTarget(expr) => self.walk_expr(expr),
+    }
+  }
+
+  fn walk_arr_pat(&mut self, pat: &Node<ArrPat>, in_decl: bool, namespaces: Namespace) {
+    self.mark_scope(pat);
+    for elem in pat.stx.elements.iter().flatten() {
+      self.walk_pat(&elem.target, in_decl, namespaces);
+      if let Some(default) = &elem.default_value {
+        self.walk_expr(default);
+      }
+    }
+    if let Some(rest) = &pat.stx.rest {
+      self.walk_pat(rest, in_decl, namespaces);
+    }
+  }
+
+  fn walk_obj_pat(&mut self, pat: &Node<ObjPat>, in_decl: bool, namespaces: Namespace) {
+    self.mark_scope(pat);
+    for prop in pat.stx.properties.iter() {
+      self.walk_pat(&prop.stx.target, in_decl, namespaces);
+      if let Some(default) = &prop.stx.default_value {
+        self.walk_expr(default);
+      }
+    }
+    if let Some(rest) = &pat.stx.rest {
+      self.walk_pat(rest, in_decl, namespaces);
+    }
+  }
+
+  fn walk_expr(&mut self, expr: &Node<AstExpr>) {
+    self.mark_scope(expr);
+    match &*expr.stx {
+      AstExpr::Binary(bin) => {
+        self.walk_expr(&bin.stx.left);
+        self.walk_expr(&bin.stx.right);
+      }
+      AstExpr::Call(call) => {
+        self.walk_expr(&call.stx.callee);
+        for arg in call.stx.arguments.iter() {
+          self.walk_expr(&arg.stx.value);
+        }
+      }
+      AstExpr::Member(mem) => self.walk_expr(&mem.stx.left),
+      AstExpr::Cond(cond) => {
+        self.walk_expr(&cond.stx.test);
+        self.walk_expr(&cond.stx.consequent);
+        self.walk_expr(&cond.stx.alternate);
+      }
+      AstExpr::Func(func) => self.walk_func(&func.stx.func),
+      AstExpr::ArrowFunc(arrow) => self.walk_func(&arrow.stx.func),
+      AstExpr::Class(class) => {
+        self.push_scope(ScopeKind::Class, range_of(class));
+        if let Some(name) = &class.stx.name {
+          self.declare(
+            &name.stx.name,
+            Namespace::VALUE | Namespace::TYPE,
+            to_range(name.loc),
+          );
+        }
+        self.pop_scope();
+      }
+      AstExpr::ArrPat(arr) => self.walk_arr_pat(arr, false, Namespace::VALUE),
+      AstExpr::ObjPat(obj) => self.walk_obj_pat(obj, false, Namespace::VALUE),
+      AstExpr::TaggedTemplate(tag) => {
+        self.walk_expr(&tag.stx.function);
+        for part in tag.stx.parts.iter() {
+          if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
+            self.walk_expr(expr);
+          }
+        }
+      }
+      AstExpr::LitArr(arr) => {
+        for elem in arr.stx.elements.iter() {
+          match elem {
+            parse_js::ast::expr::lit::LitArrElem::Single(e)
+            | parse_js::ast::expr::lit::LitArrElem::Rest(e) => self.walk_expr(e),
+            parse_js::ast::expr::lit::LitArrElem::Empty => {}
+          }
+        }
+      }
+      AstExpr::LitObj(obj) => {
+        for member in obj.stx.members.iter() {
+          self.mark_scope(member);
+        }
+      }
+      AstExpr::Unary(unary) => self.walk_expr(&unary.stx.argument),
+      AstExpr::UnaryPostfix(post) => self.walk_expr(&post.stx.argument),
+      AstExpr::ComputedMember(mem) => {
+        self.walk_expr(&mem.stx.object);
+        self.walk_expr(&mem.stx.member);
+      }
+      _ => {}
+    }
+  }
+
+  fn walk_func(&mut self, func: &Node<Func>) {
+    self.push_scope(ScopeKind::Function, range_of(func));
+    self.mark_scope(func);
+    self.enter_decl_target(DeclTarget::Hoisted);
+    if let Some(params) = &func.stx.type_parameters {
+      for param in params.iter() {
+        self.walk_type_param(param);
+      }
+    }
+    for param in func.stx.parameters.iter() {
+      self.walk_pat_decl(&param.stx.pattern, Namespace::VALUE);
+      if let Some(default) = &param.stx.default_value {
+        self.walk_expr(default);
+      }
+      if let Some(ty) = &param.stx.type_annotation {
+        self.walk_type_expr(ty);
+      }
+    }
+    if let Some(ret) = &func.stx.return_type {
+      self.walk_type_expr(ret);
+    }
+    if let Some(body) = &func.stx.body {
+      match body {
+        FuncBody::Block(stmts) => {
+          for stmt in stmts.iter() {
+            self.walk_stmt(stmt);
+          }
+        }
+        FuncBody::Expression(expr) => self.walk_expr(expr),
+      }
+    }
+    self.exit_decl_target();
+    self.pop_scope();
+  }
+
+  fn walk_type_param(&mut self, param: &Node<parse_js::ast::type_expr::TypeParameter>) {
+    self.mark_scope(param);
+    self.declare(
+      &param.stx.name,
+      Namespace::TYPE,
+      span_for_name(param.loc, &param.stx.name),
+    );
+    if let Some(constraint) = &param.stx.constraint {
+      self.walk_type_expr(constraint);
+    }
+    if let Some(default) = &param.stx.default {
+      self.walk_type_expr(default);
+    }
+  }
+
+  fn walk_type_expr(&mut self, ty: &Node<TypeExpr>) {
+    self.mark_scope(ty);
+    match &*ty.stx {
+      TypeExpr::TypeReference(reference) => self.walk_type_reference(reference),
+      TypeExpr::ArrayType(arr) => self.walk_type_expr(&arr.stx.element_type),
+      TypeExpr::UnionType(union) => {
+        for t in union.stx.types.iter() {
+          self.walk_type_expr(t);
+        }
+      }
+      TypeExpr::IntersectionType(inter) => {
+        for t in inter.stx.types.iter() {
+          self.walk_type_expr(t);
+        }
+      }
+      TypeExpr::ParenthesizedType(par) => self.walk_type_expr(&par.stx.type_expr),
+      TypeExpr::FunctionType(func) => self.walk_type_function(func),
+      TypeExpr::ConstructorType(func) => self.walk_constructor_type(func),
+      TypeExpr::TupleType(tuple) => {
+        for elem in tuple.stx.elements.iter() {
+          self.walk_type_expr(&elem.stx.type_expr);
+        }
+      }
+      TypeExpr::ObjectType(obj) => {
+        for member in obj.stx.members.iter() {
+          self.mark_scope(member);
+        }
+      }
+      TypeExpr::TypeQuery(query) => {
+        self.resolve_type_entity_name(&query.stx.expr_name);
+      }
+      TypeExpr::KeyOfType(k) => self.walk_type_expr(&k.stx.type_expr),
+      TypeExpr::IndexedAccessType(idx) => {
+        self.walk_type_expr(&idx.stx.object_type);
+        self.walk_type_expr(&idx.stx.index_type);
+      }
+      TypeExpr::ConditionalType(cond) => {
+        self.walk_type_expr(&cond.stx.check_type);
+        self.walk_type_expr(&cond.stx.extends_type);
+        self.walk_type_expr(&cond.stx.true_type);
+        self.walk_type_expr(&cond.stx.false_type);
+      }
+      TypeExpr::MappedType(mapped) => {
+        self.push_scope(ScopeKind::TypeParams, to_range(mapped.loc));
+        self.declare(
+          &mapped.stx.type_parameter,
+          Namespace::TYPE,
+          span_for_name(mapped.loc, &mapped.stx.type_parameter),
+        );
+        self.walk_type_expr(&mapped.stx.constraint);
+        if let Some(name) = &mapped.stx.name_type {
+          self.walk_type_expr(name);
+        }
+        self.walk_type_expr(&mapped.stx.type_expr);
+        self.pop_scope();
+      }
+      TypeExpr::TemplateLiteralType(tmpl) => {
+        for span in tmpl.stx.spans.iter() {
+          self.walk_type_expr(&span.stx.type_expr);
+        }
+      }
+      TypeExpr::TypePredicate(pred) => {
+        if let Some(annot) = &pred.stx.type_annotation {
+          self.walk_type_expr(annot);
+        }
+      }
+      TypeExpr::InferType(infer) => {
+        self.declare(
+          &infer.stx.type_parameter,
+          Namespace::TYPE,
+          span_for_name(infer.loc, &infer.stx.type_parameter),
+        );
+        if let Some(cons) = &infer.stx.constraint {
+          self.walk_type_expr(cons);
+        }
+      }
+      TypeExpr::ImportType(import) => {
+        if let Some(qual) = &import.stx.qualifier {
+          self.resolve_type_entity_name(qual);
+        }
+        if let Some(args) = &import.stx.type_arguments {
+          for arg in args.iter() {
+            self.walk_type_expr(arg);
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn walk_type_function(&mut self, func: &Node<TypeFunction>) {
+    self.push_scope(ScopeKind::TypeParams, range_of(func));
+    self.mark_scope(func);
+    if let Some(params) = &func.stx.type_parameters {
+      for param in params.iter() {
+        self.walk_type_param(param);
+      }
+    }
+    for param in func.stx.parameters.iter() {
+      self.walk_type_expr(&param.stx.type_expr);
+    }
+    self.walk_type_expr(&func.stx.return_type);
+    self.pop_scope();
+  }
+
+  fn walk_constructor_type(&mut self, func: &Node<TypeConstructor>) {
+    self.push_scope(ScopeKind::TypeParams, range_of(func));
+    self.mark_scope(func);
+    if let Some(params) = &func.stx.type_parameters {
+      for param in params.iter() {
+        self.walk_type_param(param);
+      }
+    }
+    for param in func.stx.parameters.iter() {
+      self.walk_type_expr(&param.stx.type_expr);
+    }
+    self.walk_type_expr(&func.stx.return_type);
+    self.pop_scope();
+  }
+
+  fn walk_type_reference(&mut self, reference: &Node<TypeReference>) {
+    self.mark_scope(reference);
+    if let Some(args) = &reference.stx.type_arguments {
+      for arg in args.iter() {
+        self.walk_type_expr(arg);
+      }
+    }
+  }
+
+  fn resolve_type_entity_name(&mut self, name: &TypeEntityName) {
+    if let TypeEntityName::Qualified(q) = name {
+      self.resolve_type_entity_name(&q.left);
+    }
+  }
+
+  fn walk_namespace(&mut self, ns: &Node<NamespaceDecl>) {
+    self.declare(
+      &ns.stx.name,
+      Namespace::VALUE | Namespace::NAMESPACE,
+      span_for_name(ns.loc, &ns.stx.name),
+    );
+    match &ns.stx.body {
+      parse_js::ast::ts_stmt::NamespaceBody::Block(body) => {
+        self.push_scope(ScopeKind::Block, to_range(ns.loc));
+        self.mark_scope(ns);
+        for stmt in body.iter() {
+          self.walk_stmt(stmt);
+        }
+        self.pop_scope();
+      }
+      parse_js::ast::ts_stmt::NamespaceBody::Namespace(inner) => self.walk_namespace(inner),
+    }
+  }
+
+  fn walk_module(&mut self, module: &Node<ModuleDecl>) {
+    let name = match &module.stx.name {
+      parse_js::ast::ts_stmt::ModuleName::Identifier(id) => id.as_str(),
+      parse_js::ast::ts_stmt::ModuleName::String(s) => s.as_str(),
+    };
+    self.declare(
+      name,
+      Namespace::VALUE | Namespace::NAMESPACE,
+      span_for_name(module.loc, name),
+    );
+    if let Some(body) = &module.stx.body {
+      self.push_scope(ScopeKind::Module, to_range(module.loc));
+      self.mark_scope(module);
+      for stmt in body.iter() {
+        self.walk_stmt(stmt);
+      }
+      self.pop_scope();
+    }
+  }
+
+  fn walk_import(&mut self, import: &Node<parse_js::ast::stmt::ImportStmt>) {
+    self.mark_scope(import);
+    let base_ns = if import.stx.type_only {
+      Namespace::TYPE
+    } else {
+      Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+    };
+    if let Some(default) = &import.stx.default {
+      self.walk_pat_decl(default, base_ns);
+    }
+    if let Some(names) = &import.stx.names {
+      match names {
+        ImportNames::All(pat) => self.walk_pat_decl(pat, base_ns),
+        ImportNames::Specific(list) => {
+          for item in list.iter() {
+            let ns = if item.stx.type_only {
+              Namespace::TYPE
+            } else {
+              base_ns
+            };
+            self.walk_import_name(item, ns);
+          }
+        }
+      }
+    }
+  }
+
+  fn walk_import_name(&mut self, name: &Node<ImportName>, ns: Namespace) {
+    self.mark_scope(name);
+    self.walk_pat_decl(&name.stx.alias, ns);
+    if let AstPat::Id(id) = &*name.stx.alias.stx.pat.stx {
+      self.declare(&id.stx.name, ns, to_range(name.loc));
+    }
+  }
+
+  fn finish(self) -> (SemanticsBuilder, ts::TsAssocTables) {
+    (self.builder, self.tables)
+  }
+}
+
+struct ResolveTablesPass<'a> {
+  builder: &'a SemanticsBuilder,
+  scope_stack: Vec<ScopeId>,
+  expr_resolutions: BTreeMap<TextRange, SymbolId>,
+  type_resolutions: BTreeMap<TextRange, SymbolId>,
+  tables: ts::TsAssocTables,
+}
+
+impl<'a> ResolveTablesPass<'a> {
+  fn new(builder: &'a SemanticsBuilder, root: ScopeId, tables: ts::TsAssocTables) -> Self {
+    Self {
+      builder,
+      scope_stack: vec![root],
+      expr_resolutions: BTreeMap::new(),
+      type_resolutions: BTreeMap::new(),
+      tables,
+    }
+  }
+
+  fn current_scope(&self) -> ScopeId {
+    *self.scope_stack.last().unwrap()
+  }
+
+  fn push_scope_for_node<T: Drive + DriveMut>(&mut self, node: &Node<T>) {
+    if let Some(id) = ts::scope_id_in_tables(&self.tables, node.loc) {
+      if self.scope_stack.last().copied() != Some(id) {
+        self.scope_stack.push(id);
+      }
+    }
+  }
+
+  fn pop_scope_for_node<T: Drive + DriveMut>(&mut self, node: &Node<T>) {
+    if let Some(id) = ts::scope_id_in_tables(&self.tables, node.loc) {
+      if self.scope_stack.last().copied() == Some(id) {
+        self.scope_stack.pop();
+      }
+    }
+  }
+
+  fn walk_top(&mut self, top: &Node<TopLevel>) {
+    self.push_scope_for_node(top);
+    for stmt in top.stx.body.iter() {
+      self.walk_stmt(stmt);
+    }
+    self.pop_scope_for_node(top);
+  }
+
+  fn walk_stmt(&mut self, stmt: &Node<AstStmt>) {
+    self.push_scope_for_node(stmt);
+    match &*stmt.stx {
+      AstStmt::Block(block) => {
+        self.walk_block(block);
+      }
+      AstStmt::VarDecl(var) => {
+        for decl in var.stx.declarators.iter() {
+          self.walk_pat_decl(&decl.pattern);
+          if let Some(annot) = &decl.type_annotation {
+            self.walk_type_expr(annot);
+          }
+          if let Some(init) = &decl.initializer {
+            self.walk_expr(init);
+          }
+        }
+      }
+      AstStmt::FunctionDecl(func) => {
+        if let Some(name) = &func.stx.name {
+          let span = span_for_name(name.loc, &name.stx.name);
+          if let Some(sym) = ts::declared_symbol_in_tables(&self.tables, span) {
+            self.expr_resolutions.insert(span, sym);
+            self.tables.record_expr_resolution(span, sym);
+          }
+        }
+        self.walk_func(&func.stx.function);
+      }
+      AstStmt::ClassDecl(class) => {
+        if let Some(name) = &class.stx.name {
+          let span = span_for_name(name.loc, &name.stx.name);
+          if let Some(sym) = ts::declared_symbol_in_tables(&self.tables, span) {
+            self.expr_resolutions.insert(span, sym);
+            self.tables.record_expr_resolution(span, sym);
+          }
+        }
+        for member in class.stx.members.iter() {
+          self.push_scope_for_node(member);
+          self.pop_scope_for_node(member);
+        }
+      }
+      AstStmt::Expr(expr) => self.walk_expr(&expr.stx.expr),
+      AstStmt::Return(ret) => {
+        if let Some(v) = &ret.stx.value {
+          self.walk_expr(v);
+        }
+      }
+      AstStmt::If(if_stmt) => {
+        self.walk_expr(&if_stmt.stx.test);
+        self.walk_stmt(&if_stmt.stx.consequent);
+        if let Some(alt) = &if_stmt.stx.alternate {
+          self.walk_stmt(alt);
+        }
+      }
+      AstStmt::ForTriple(triple) => {
+        match &triple.stx.init {
+          ForTripleStmtInit::Expr(e) => self.walk_expr(e),
+          ForTripleStmtInit::Decl(d) => {
+            for decl in d.stx.declarators.iter() {
+              self.walk_pat_decl(&decl.pattern);
+              if let Some(init) = &decl.initializer {
+                self.walk_expr(init);
+              }
+            }
+          }
+          ForTripleStmtInit::None => {}
+        }
+        if let Some(cond) = &triple.stx.cond {
+          self.walk_expr(cond);
+        }
+        if let Some(post) = &triple.stx.post {
+          self.walk_expr(post);
+        }
+        self.walk_for_body(&triple.stx.body);
+      }
+      AstStmt::ForIn(for_in) => {
+        match &for_in.stx.lhs {
+          ForInOfLhs::Assign(pat) => self.walk_pat(pat),
+          ForInOfLhs::Decl((_, decl)) => self.walk_pat_decl(decl),
+        }
+        self.walk_expr(&for_in.stx.rhs);
+        self.walk_for_body(&for_in.stx.body);
+      }
+      AstStmt::ForOf(for_of) => {
+        match &for_of.stx.lhs {
+          ForInOfLhs::Assign(pat) => self.walk_pat(pat),
+          ForInOfLhs::Decl((_, decl)) => self.walk_pat_decl(decl),
+        }
+        self.walk_expr(&for_of.stx.rhs);
+        self.walk_for_body(&for_of.stx.body);
+      }
+      AstStmt::Try(tr) => {
+        self.walk_block_stmt(&tr.stx.wrapped);
+        if let Some(catch) = &tr.stx.catch {
+          if let Some(param) = &catch.stx.parameter {
+            self.walk_pat_decl(param);
+          }
+          for stmt in catch.stx.body.iter() {
+            self.walk_stmt(stmt);
+          }
+        }
+        if let Some(finally) = &tr.stx.finally {
+          self.walk_block_stmt(finally);
+        }
+      }
+      AstStmt::Switch(sw) => {
+        self.walk_expr(&sw.stx.test);
+        for branch in sw.stx.branches.iter() {
+          if let Some(case) = &branch.stx.case {
+            self.walk_expr(case);
+          }
+          for stmt in branch.stx.body.iter() {
+            self.walk_stmt(stmt);
+          }
+        }
+      }
+      AstStmt::With(w) => {
+        self.walk_expr(&w.stx.object);
+        self.walk_stmt(&w.stx.body);
+      }
+      AstStmt::InterfaceDecl(intf) => {
+        let span = span_for_name(intf.loc, &intf.stx.name);
+        if let Some(sym) = ts::declared_symbol_in_tables(&self.tables, span) {
+          self.expr_resolutions.insert(span, sym);
+          self.tables.record_expr_resolution(span, sym);
+        }
+        for ext in intf.stx.extends.iter() {
+          self.walk_type_expr(ext);
+        }
+      }
+      AstStmt::TypeAliasDecl(alias) => {
+        let span = span_for_name(alias.loc, &alias.stx.name);
+        if let Some(sym) = ts::declared_symbol_in_tables(&self.tables, span) {
+          self.expr_resolutions.insert(span, sym);
+          self.tables.record_expr_resolution(span, sym);
+        }
+        self.walk_type_expr(&alias.stx.type_expr);
+      }
+      AstStmt::NamespaceDecl(ns) => match &ns.stx.body {
+        parse_js::ast::ts_stmt::NamespaceBody::Block(body) => {
+          for stmt in body.iter() {
+            self.walk_stmt(stmt);
+          }
+        }
+        parse_js::ast::ts_stmt::NamespaceBody::Namespace(inner) => self.walk_namespace(inner),
+      },
+      AstStmt::ModuleDecl(module) => {
+        if let Some(body) = &module.stx.body {
+          for stmt in body.iter() {
+            self.walk_stmt(stmt);
+          }
+        }
+      }
+      AstStmt::Import(import) => {
+        if let Some(default) = &import.stx.default {
+          self.walk_pat_decl(default);
+        }
+        if let Some(names) = &import.stx.names {
+          match names {
+            ImportNames::All(pat) => self.walk_pat_decl(pat),
+            ImportNames::Specific(list) => {
+              for item in list.iter() {
+                self.walk_import_name(item);
+              }
+            }
+          }
+        }
+      }
+      _ => {}
+    }
+    self.pop_scope_for_node(stmt);
+  }
+
+  fn walk_namespace(&mut self, ns: &Node<NamespaceDecl>) {
+    self.push_scope_for_node(ns);
+    match &ns.stx.body {
+      parse_js::ast::ts_stmt::NamespaceBody::Block(body) => {
+        for stmt in body.iter() {
+          self.walk_stmt(stmt);
+        }
+      }
+      parse_js::ast::ts_stmt::NamespaceBody::Namespace(inner) => self.walk_namespace(inner),
+    }
+    self.pop_scope_for_node(ns);
+  }
+
+  fn walk_block_stmt(&mut self, block: &Node<BlockStmt>) {
+    self.push_scope_for_node(block);
+    for stmt in block.stx.body.iter() {
+      self.walk_stmt(stmt);
+    }
+    self.pop_scope_for_node(block);
+  }
+
+  fn walk_block(&mut self, block: &Node<BlockStmt>) {
+    for stmt in block.stx.body.iter() {
+      self.walk_stmt(stmt);
+    }
+  }
+
+  fn walk_for_body(&mut self, body: &Node<ForBody>) {
+    self.push_scope_for_node(body);
+    for stmt in body.stx.body.iter() {
+      self.walk_stmt(stmt);
+    }
+    self.pop_scope_for_node(body);
+  }
+
+  fn walk_pat_decl(&mut self, decl: &Node<parse_js::ast::stmt::decl::PatDecl>) {
+    self.walk_pat(&decl.stx.pat);
+  }
+
+  fn walk_pat(&mut self, pat: &Node<AstPat>) {
+    match &*pat.stx {
+      AstPat::Id(id) => {
+        let span = span_for_name(pat.loc, &id.stx.name);
+        if let Some(sym) = ts::declared_symbol_in_tables(&self.tables, span) {
+          self.expr_resolutions.insert(span, sym);
+          self.tables.record_expr_resolution(span, sym);
+        } else {
+          let sym = self
+            .builder
+            .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+          if let Some(sym) = sym {
+            self.expr_resolutions.insert(span, sym);
+            self.tables.record_expr_resolution(span, sym);
+          }
+        }
+      }
+      AstPat::Arr(arr) => {
+        for elem in arr.stx.elements.iter().flatten() {
+          self.walk_pat(&elem.target);
+          if let Some(default) = &elem.default_value {
+            self.walk_expr(default);
+          }
+        }
+        if let Some(rest) = &arr.stx.rest {
+          self.walk_pat(rest);
+        }
+      }
+      AstPat::Obj(obj) => {
+        for prop in obj.stx.properties.iter() {
+          self.walk_pat(&prop.stx.target);
+          if let Some(default) = &prop.stx.default_value {
+            self.walk_expr(default);
+          }
+        }
+        if let Some(rest) = &obj.stx.rest {
+          self.walk_pat(rest);
+        }
+      }
+      AstPat::AssignTarget(expr) => self.walk_expr(expr),
+    }
+  }
+
+  fn walk_arr_pat_expr(&mut self, pat: &Node<ArrPat>) {
+    for elem in pat.stx.elements.iter().flatten() {
+      self.walk_pat(&elem.target);
+      if let Some(default) = &elem.default_value {
+        self.walk_expr(default);
+      }
+    }
+    if let Some(rest) = &pat.stx.rest {
+      self.walk_pat(rest);
+    }
+  }
+
+  fn walk_obj_pat_expr(&mut self, pat: &Node<ObjPat>) {
+    for prop in pat.stx.properties.iter() {
+      self.walk_pat(&prop.stx.target);
+      if let Some(default) = &prop.stx.default_value {
+        self.walk_expr(default);
+      }
+    }
+    if let Some(rest) = &pat.stx.rest {
+      self.walk_pat(rest);
+    }
+  }
+
+  fn walk_expr(&mut self, expr: &Node<AstExpr>) {
+    match &*expr.stx {
+      AstExpr::Id(id) => {
+        let span = span_for_name(expr.loc, &id.stx.name);
+        let sym = self
+          .builder
+          .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+        if let Some(sym) = sym {
+          self.expr_resolutions.insert(span, sym);
+          self.tables.record_expr_resolution(span, sym);
+        }
+      }
+      AstExpr::Binary(bin) => {
+        self.walk_expr(&bin.stx.left);
+        self.walk_expr(&bin.stx.right);
+      }
+      AstExpr::Call(call) => {
+        self.walk_expr(&call.stx.callee);
+        for arg in call.stx.arguments.iter() {
+          self.walk_expr(&arg.stx.value);
+        }
+      }
+      AstExpr::Member(mem) => self.walk_expr(&mem.stx.left),
+      AstExpr::Cond(cond) => {
+        self.walk_expr(&cond.stx.test);
+        self.walk_expr(&cond.stx.consequent);
+        self.walk_expr(&cond.stx.alternate);
+      }
+      AstExpr::Func(func) => self.walk_func(&func.stx.func),
+      AstExpr::ArrowFunc(arrow) => self.walk_func(&arrow.stx.func),
+      AstExpr::Class(class) => {
+        if let Some(name) = &class.stx.name {
+          let span = to_range(name.loc);
+          let sym = self
+            .builder
+            .resolve(self.current_scope(), &name.stx.name, Namespace::VALUE);
+          if let Some(sym) = sym {
+            self.expr_resolutions.insert(span, sym);
+            self.tables.record_expr_resolution(span, sym);
+          }
+        }
+      }
+      AstExpr::ArrPat(arr) => self.walk_arr_pat_expr(arr),
+      AstExpr::ObjPat(obj) => self.walk_obj_pat_expr(obj),
+      AstExpr::TaggedTemplate(tag) => {
+        self.walk_expr(&tag.stx.function);
+        for part in tag.stx.parts.iter() {
+          if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
+            self.walk_expr(expr);
+          }
+        }
+      }
+      AstExpr::LitArr(arr) => {
+        for elem in arr.stx.elements.iter() {
+          match elem {
+            parse_js::ast::expr::lit::LitArrElem::Single(e)
+            | parse_js::ast::expr::lit::LitArrElem::Rest(e) => self.walk_expr(e),
+            parse_js::ast::expr::lit::LitArrElem::Empty => {}
+          }
+        }
+      }
+      AstExpr::LitObj(obj) => {
+        for member in obj.stx.members.iter() {
+          self.push_scope_for_node(member);
+          self.pop_scope_for_node(member);
+        }
+      }
+      AstExpr::Unary(unary) => self.walk_expr(&unary.stx.argument),
+      AstExpr::UnaryPostfix(post) => self.walk_expr(&post.stx.argument),
+      AstExpr::ComputedMember(mem) => {
+        self.walk_expr(&mem.stx.object);
+        self.walk_expr(&mem.stx.member);
+      }
+      _ => {}
+    }
+  }
+
+  fn walk_func(&mut self, func: &Node<Func>) {
+    self.push_scope_for_node(func);
+    if let Some(params) = &func.stx.type_parameters {
+      for param in params.iter() {
+        self.walk_type_param(param);
+      }
+    }
+    for param in func.stx.parameters.iter() {
+      self.walk_pat_decl(&param.stx.pattern);
+      if let Some(default) = &param.stx.default_value {
+        self.walk_expr(default);
+      }
+      if let Some(ty) = &param.stx.type_annotation {
+        self.walk_type_expr(ty);
+      }
+    }
+    if let Some(ret) = &func.stx.return_type {
+      self.walk_type_expr(ret);
+    }
+    if let Some(body) = &func.stx.body {
+      match body {
+        FuncBody::Block(stmts) => {
+          for stmt in stmts.iter() {
+            self.walk_stmt(stmt);
+          }
+        }
+        FuncBody::Expression(expr) => self.walk_expr(expr),
+      }
+    }
+    self.pop_scope_for_node(func);
+  }
+
+  fn walk_type_param(&mut self, param: &Node<parse_js::ast::type_expr::TypeParameter>) {
+    self.push_scope_for_node(param);
+    let span = span_for_name(param.loc, &param.stx.name);
+    if let Some(sym) = ts::declared_symbol_in_tables(&self.tables, span) {
+      self.expr_resolutions.insert(span, sym);
+      self.tables.record_expr_resolution(span, sym);
+    }
+    if let Some(constraint) = &param.stx.constraint {
+      self.walk_type_expr(constraint);
+    }
+    if let Some(default) = &param.stx.default {
+      self.walk_type_expr(default);
+    }
+    self.pop_scope_for_node(param);
+  }
+
+  fn walk_type_expr(&mut self, ty: &Node<TypeExpr>) {
+    match &*ty.stx {
+      TypeExpr::TypeReference(reference) => {
+        let span = to_range(ty.loc);
+        if let Some(sym) = self.resolve_type_reference(reference) {
+          self.type_resolutions.insert(span, sym);
+          self.tables.record_type_resolution(span, sym);
+        }
+        if let Some(args) = &reference.stx.type_arguments {
+          for arg in args.iter() {
+            self.walk_type_expr(arg);
+          }
+        }
+      }
+      TypeExpr::ArrayType(arr) => self.walk_type_expr(&arr.stx.element_type),
+      TypeExpr::UnionType(union) => {
+        for t in union.stx.types.iter() {
+          self.walk_type_expr(t);
+        }
+      }
+      TypeExpr::IntersectionType(inter) => {
+        for t in inter.stx.types.iter() {
+          self.walk_type_expr(t);
+        }
+      }
+      TypeExpr::ParenthesizedType(par) => self.walk_type_expr(&par.stx.type_expr),
+      TypeExpr::FunctionType(func) => self.walk_type_function(func),
+      TypeExpr::ConstructorType(func) => self.walk_constructor_type(func),
+      TypeExpr::TupleType(tuple) => {
+        for elem in tuple.stx.elements.iter() {
+          self.walk_type_expr(&elem.stx.type_expr);
+        }
+      }
+      TypeExpr::ObjectType(obj) => {
+        for member in obj.stx.members.iter() {
+          self.push_scope_for_node(member);
+          self.pop_scope_for_node(member);
+        }
+      }
+      TypeExpr::TypeQuery(query) => {
+        if let Some(sym) = self.resolve_type_entity_name(&query.stx.expr_name) {
+          let span = to_range(ty.loc);
+          self.type_resolutions.insert(span, sym);
+          self.tables.record_type_resolution(span, sym);
+        }
+      }
+      TypeExpr::KeyOfType(k) => self.walk_type_expr(&k.stx.type_expr),
+      TypeExpr::IndexedAccessType(idx) => {
+        self.walk_type_expr(&idx.stx.object_type);
+        self.walk_type_expr(&idx.stx.index_type);
+      }
+      TypeExpr::ConditionalType(cond) => {
+        self.walk_type_expr(&cond.stx.check_type);
+        self.walk_type_expr(&cond.stx.extends_type);
+        self.walk_type_expr(&cond.stx.true_type);
+        self.walk_type_expr(&cond.stx.false_type);
+      }
+      TypeExpr::MappedType(mapped) => {
+        self.walk_type_expr(&mapped.stx.constraint);
+        if let Some(name) = &mapped.stx.name_type {
+          self.walk_type_expr(name);
+        }
+        self.walk_type_expr(&mapped.stx.type_expr);
+      }
+      TypeExpr::TemplateLiteralType(tmpl) => {
+        for span in tmpl.stx.spans.iter() {
+          self.walk_type_expr(&span.stx.type_expr);
+        }
+      }
+      TypeExpr::TypePredicate(pred) => {
+        if let Some(annot) = &pred.stx.type_annotation {
+          self.walk_type_expr(annot);
+        }
+      }
+      TypeExpr::InferType(infer) => {
+        if let Some(cons) = &infer.stx.constraint {
+          self.walk_type_expr(cons);
+        }
+      }
+      TypeExpr::ImportType(import) => {
+        if let Some(qual) = &import.stx.qualifier {
+          if let Some(sym) = self.resolve_type_entity_name(qual) {
+            let span = to_range(ty.loc);
+            self.type_resolutions.insert(span, sym);
+            self.tables.record_type_resolution(span, sym);
+          }
+        }
+        if let Some(args) = &import.stx.type_arguments {
+          for arg in args.iter() {
+            self.walk_type_expr(arg);
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn resolve_type_reference(&self, reference: &Node<TypeReference>) -> Option<SymbolId> {
+    match &reference.stx.name {
+      TypeEntityName::Identifier(name) => {
+        self
+          .builder
+          .resolve(self.current_scope(), name.as_str(), Namespace::TYPE)
+      }
+      TypeEntityName::Qualified(q) => self.resolve_type_entity_name(&q.left),
+      TypeEntityName::Import(_) => None,
+    }
+  }
+
+  fn resolve_type_entity_name(&self, name: &TypeEntityName) -> Option<SymbolId> {
+    match name {
+      TypeEntityName::Identifier(name) => {
+        self
+          .builder
+          .resolve(self.current_scope(), name.as_str(), Namespace::TYPE)
+      }
+      TypeEntityName::Qualified(q) => self.resolve_type_entity_name(&q.left),
+      TypeEntityName::Import(_) => None,
+    }
+  }
+
+  fn walk_type_function(&mut self, func: &Node<TypeFunction>) {
+    for param in func.stx.parameters.iter() {
+      self.walk_type_expr(&param.stx.type_expr);
+    }
+    self.walk_type_expr(&func.stx.return_type);
+  }
+
+  fn walk_constructor_type(&mut self, func: &Node<TypeConstructor>) {
+    for param in func.stx.parameters.iter() {
+      self.walk_type_expr(&param.stx.type_expr);
+    }
+    self.walk_type_expr(&func.stx.return_type);
+  }
+
+  fn walk_import_name(&mut self, name: &Node<ImportName>) {
+    self.walk_pat_decl(&name.stx.alias);
   }
 }
 
