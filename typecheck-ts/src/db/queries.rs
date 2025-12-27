@@ -1,8 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use diagnostics::{Diagnostic, FileId};
+use diagnostics::{sort_diagnostics, Diagnostic, FileId};
 use hir_js::{lower_file_with_diagnostics, FileKind as HirFileKind, LowerResult};
 use semantic_js::ts as sem_ts;
 
@@ -44,6 +44,31 @@ pub fn reset_parse_query_count() {
   PARSE_QUERY_CALLS.store(0, Ordering::Relaxed);
 }
 
+#[derive(Clone)]
+pub struct TsSemantics {
+  pub semantics: Arc<sem_ts::TsProgramSemantics>,
+  pub diagnostics: Arc<Vec<Diagnostic>>,
+}
+
+impl PartialEq for TsSemantics {
+  fn eq(&self, other: &Self) -> bool {
+    // Binder outputs are compared by identity; any dependency change rebuilds
+    // semantics.
+    Arc::ptr_eq(&self.semantics, &other.semantics) && self.diagnostics == other.diagnostics
+  }
+}
+
+impl Eq for TsSemantics {}
+
+impl std::fmt::Debug for TsSemantics {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("TsSemantics")
+      .field("semantics", &self.semantics)
+      .field("diagnostics", &self.diagnostics)
+      .finish()
+  }
+}
+
 #[salsa::query_group(TypecheckStorage)]
 pub trait TypecheckDatabase: salsa::Database {
   /// Full UTF-8 source text for a file.
@@ -54,6 +79,14 @@ pub trait TypecheckDatabase: salsa::Database {
   #[salsa::input]
   fn file_kind(&self, file: FileId) -> FileKind;
 
+  /// Root files for module graph traversal and semantics.
+  #[salsa::input]
+  fn roots(&self) -> Arc<Vec<FileId>>;
+
+  /// Host-provided module resolution.
+  #[salsa::input]
+  fn module_resolve(&self, from: FileId, specifier: Arc<str>) -> Option<FileId>;
+
   /// Parse source text into a `parse-js` AST with diagnostics.
   fn parse(&self, file: FileId) -> parser::ParseResult;
 
@@ -62,6 +95,13 @@ pub trait TypecheckDatabase: salsa::Database {
 
   /// Semantic HIR derived from lowered HIR, suitable for binding and checking.
   fn sem_hir(&self, file: FileId) -> sem_ts::HirFile;
+
+  /// All reachable files starting from [`roots`], following imports and
+  /// re-exports.
+  fn all_files(&self) -> Arc<Vec<FileId>>;
+
+  /// Semantic binding result across all files, including diagnostics.
+  fn ts_semantics(&self) -> Arc<TsSemantics>;
 }
 
 pub fn parse(db: &dyn TypecheckDatabase, file: FileId) -> parser::ParseResult {
@@ -95,6 +135,81 @@ pub fn sem_hir(db: &dyn TypecheckDatabase, file: FileId) -> sem_ts::HirFile {
     sem_hir_from_lower(lowered)
   } else {
     empty_sem_hir(file, lowered.file_kind)
+  }
+}
+
+pub fn all_files(db: &dyn TypecheckDatabase) -> Arc<Vec<FileId>> {
+  let mut visited = BTreeSet::new();
+  let mut queue: VecDeque<FileId> = db.roots().iter().copied().collect();
+  while let Some(file) = queue.pop_front() {
+    if !visited.insert(file) {
+      continue;
+    }
+    let sem_hir = db.sem_hir(file);
+    for import in sem_hir.imports.iter() {
+      if let Some(target) = db.module_resolve(file, Arc::<str>::from(import.specifier.as_str())) {
+        queue.push_back(target);
+      }
+    }
+    for export in sem_hir.exports.iter() {
+      match export {
+        sem_ts::Export::Named(named) => {
+          if let Some(specifier) = named.specifier.as_ref() {
+            if let Some(target) = db.module_resolve(file, Arc::<str>::from(specifier.as_str())) {
+              queue.push_back(target);
+            }
+          }
+        }
+        sem_ts::Export::All(all) => {
+          if let Some(target) = db.module_resolve(file, Arc::<str>::from(all.specifier.as_str())) {
+            queue.push_back(target);
+          }
+        }
+        sem_ts::Export::ExportAssignment { .. } => {}
+      }
+    }
+  }
+  Arc::new(visited.into_iter().collect())
+}
+
+pub fn ts_semantics(db: &dyn TypecheckDatabase) -> Arc<TsSemantics> {
+  let files = db.all_files();
+  let mut diagnostics = Vec::new();
+  let mut sem_hirs: HashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = HashMap::new();
+  for file in files.iter() {
+    let lowered = db.lower_hir(*file);
+    diagnostics.extend(lowered.diagnostics.iter().cloned());
+    sem_hirs.insert(sem_ts::FileId(file.0), Arc::new(db.sem_hir(*file)));
+  }
+
+  let mut roots: Vec<_> = db.roots().iter().map(|f| sem_ts::FileId(f.0)).collect();
+  roots.sort();
+  roots.dedup();
+  let resolver = DbResolver { db };
+  let (semantics, mut bind_diags) = sem_ts::bind_ts_program(&roots, &resolver, |file| {
+    sem_hirs
+      .get(&file)
+      .cloned()
+      .unwrap_or_else(|| Arc::new(empty_sem_hir(FileId(file.0), db.file_kind(FileId(file.0)))))
+  });
+  diagnostics.append(&mut bind_diags);
+  sort_diagnostics(&mut diagnostics);
+  Arc::new(TsSemantics {
+    semantics: Arc::new(semantics),
+    diagnostics: Arc::new(diagnostics),
+  })
+}
+
+struct DbResolver<'db> {
+  db: &'db dyn TypecheckDatabase,
+}
+
+impl<'db> sem_ts::Resolver for DbResolver<'db> {
+  fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
+    self
+      .db
+      .module_resolve(FileId(from.0), Arc::<str>::from(specifier))
+      .map(|id| sem_ts::FileId(id.0))
   }
 }
 

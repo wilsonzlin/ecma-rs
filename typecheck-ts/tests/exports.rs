@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use typecheck_ts::{codes, FileId, FileKey, Host, HostError, Program, TextRange};
+use typecheck_ts::{codes, FileKey, Host, HostError, Program, TextRange};
 
 fn fk(id: u32) -> FileKey {
   FileKey::new(format!("file{id}.ts"))

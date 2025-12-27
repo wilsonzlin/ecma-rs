@@ -6,8 +6,8 @@ mod queries;
 
 pub use inputs::{FileOrigin, Inputs};
 pub use queries::{
-  lower_hir, parse, parse_query_count, reset_parse_query_count, sem_hir, Database,
-  LowerResultWithDiagnostics, TypecheckDatabase, TypecheckStorage,
+  all_files, lower_hir, parse, parse_query_count, reset_parse_query_count, sem_hir, ts_semantics,
+  Database, LowerResultWithDiagnostics, TsSemantics, TypecheckDatabase, TypecheckStorage,
 };
 
 /// Concrete database implementing the `TypecheckDatabase` query group.
