@@ -396,6 +396,18 @@ fn mapped_type_as_clause_is_preserved() {
 }
 
 #[test]
+fn mapped_type_over_literal_union_preserves_keys() {
+  let alias = parse_type_alias(r#"type Keys = { [K in "a" | "b"]: number };"#);
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store.clone());
+  let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+  assert_eq!(
+    store.display(ty).to_string(),
+    "{ [K in \"a\" | \"b\"]: number }"
+  );
+}
+
+#[test]
 fn eval_template_literal_distribution() {
   let store = TypeStore::new();
   let span_ty = store.union(vec![
@@ -519,4 +531,156 @@ fn hir_alias_reference_expands_through_evaluator() {
   let mut evaluator = TypeEvaluator::new(store.clone(), &expander);
   let expanded = evaluator.evaluate(value_ty);
   assert_eq!(store.display(expanded).to_string(), "string[]");
+}
+
+#[test]
+fn method_type_params_do_not_leak_and_preserve_outer_bindings() {
+  let alias = parse_type_alias("type Outer<T> = { method<U>(x: T, y: U): T };");
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store.clone());
+  let outer_t = *lowerer
+    .register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]))
+    .first()
+    .expect("outer type param");
+  let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+
+  let TypeKind::Object(obj) = store.type_kind(ty) else {
+    panic!("expected object, got {:?}", store.type_kind(ty));
+  };
+  let shape = store.shape(store.object(obj).shape);
+  let method = shape
+    .properties
+    .iter()
+    .find(|prop| matches!(prop.key, PropKey::String(name) if store.name(name) == "method"))
+    .expect("method property");
+  let TypeKind::Callable { overloads } = store.type_kind(method.data.ty) else {
+    panic!(
+      "expected callable method, got {:?}",
+      store.type_kind(method.data.ty)
+    );
+  };
+  assert_eq!(overloads.len(), 1);
+  let sig = store.signature(overloads[0]);
+
+  assert_eq!(sig.type_params.len(), 1);
+  let inner_u = sig.type_params[0];
+  assert_ne!(inner_u, outer_t);
+
+  let first_param = sig.params.first().expect("first param");
+  assert_eq!(
+    store.type_kind(first_param.ty),
+    TypeKind::TypeParam(outer_t)
+  );
+
+  let second_param = sig.params.get(1).expect("second param");
+  assert_eq!(
+    store.type_kind(second_param.ty),
+    TypeKind::TypeParam(inner_u)
+  );
+
+  assert_eq!(store.type_kind(sig.ret), TypeKind::TypeParam(outer_t));
+}
+
+#[test]
+fn nested_function_type_params_shadow_outer() {
+  let alias = parse_type_alias("type X<T> = (fn: <T>(arg: T) => T) => T;");
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store.clone());
+  let outer_t = *lowerer
+    .register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]))
+    .first()
+    .expect("outer type param");
+  let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+
+  let TypeKind::Callable { overloads } = store.type_kind(ty) else {
+    panic!("expected callable, got {:?}", store.type_kind(ty));
+  };
+  let outer_sig = store.signature(overloads[0]);
+  assert_eq!(store.type_kind(outer_sig.ret), TypeKind::TypeParam(outer_t));
+
+  let param_ty = outer_sig.params.first().expect("fn param").ty;
+  let TypeKind::Callable {
+    overloads: inner_overloads,
+  } = store.type_kind(param_ty)
+  else {
+    panic!(
+      "expected callable param, got {:?}",
+      store.type_kind(param_ty)
+    );
+  };
+  let inner_sig = store.signature(inner_overloads[0]);
+  assert_eq!(inner_sig.type_params.len(), 1);
+  let inner_t = inner_sig.type_params[0];
+  assert_ne!(inner_t, outer_t);
+  let inner_param_ty = inner_sig.params.first().expect("inner param").ty;
+  assert_eq!(
+    store.type_kind(inner_param_ty),
+    TypeKind::TypeParam(inner_t)
+  );
+  assert_eq!(store.type_kind(inner_sig.ret), TypeKind::TypeParam(inner_t));
+}
+
+#[test]
+fn infer_type_params_are_scoped_to_conditional_types() {
+  let alias = parse_type_alias("type C<T> = T extends infer U ? U : never;");
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store.clone());
+  let outer_t = *lowerer
+    .register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]))
+    .first()
+    .expect("outer type param");
+  let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+
+  let TypeKind::Conditional {
+    extends,
+    true_ty,
+    false_ty,
+    ..
+  } = store.type_kind(ty)
+  else {
+    panic!("expected conditional type");
+  };
+
+  let infer_param = match store.type_kind(extends) {
+    TypeKind::Infer { param, constraint } => {
+      assert!(constraint.is_none());
+      param
+    }
+    other => panic!("expected infer, got {:?}", other),
+  };
+  assert_eq!(store.type_kind(true_ty), TypeKind::TypeParam(infer_param));
+  assert_eq!(store.type_kind(false_ty), TypeKind::Never);
+
+  assert_eq!(lowerer.type_param_id("T"), Some(outer_t));
+  assert_eq!(lowerer.type_param_id("U"), None);
+}
+
+#[test]
+fn infer_type_params_shadow_outer_and_arent_visible_in_false_branch() {
+  let alias = parse_type_alias("type S<T> = T extends infer T ? T : T;");
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store.clone());
+  let outer_t = *lowerer
+    .register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]))
+    .first()
+    .expect("outer type param");
+  let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
+
+  let TypeKind::Conditional {
+    extends,
+    true_ty,
+    false_ty,
+    ..
+  } = store.type_kind(ty)
+  else {
+    panic!("expected conditional type");
+  };
+
+  let infer_param = match store.type_kind(extends) {
+    TypeKind::Infer { param, .. } => param,
+    other => panic!("expected infer in extends, got {:?}", other),
+  };
+  assert_ne!(infer_param, outer_t);
+  assert_eq!(store.type_kind(true_ty), TypeKind::TypeParam(infer_param));
+  assert_eq!(store.type_kind(false_ty), TypeKind::TypeParam(outer_t));
 }

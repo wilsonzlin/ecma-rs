@@ -52,7 +52,7 @@ pub struct LoweredPredicate {
 /// Lowers `parse-js` [`TypeExpr`] nodes into interned type representations.
 pub struct TypeLowerer {
   store: Arc<TypeStore>,
-  type_params: AHashMap<String, TypeParamId>,
+  type_param_scopes: Vec<AHashMap<String, TypeParamId>>,
   next_type_param: u32,
   resolver: Option<Arc<dyn TypeResolver>>,
   file: Option<FileId>,
@@ -63,7 +63,7 @@ pub struct TypeLowerer {
 impl fmt::Debug for TypeLowerer {
   fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
     f.debug_struct("TypeLowerer")
-      .field("type_params", &self.type_params)
+      .field("type_param_scopes", &self.type_param_scopes)
       .field("next_type_param", &self.next_type_param)
       .field("diagnostics", &self.diagnostics)
       .field("predicates", &self.predicates)
@@ -75,7 +75,7 @@ impl TypeLowerer {
   pub fn new(store: Arc<TypeStore>) -> Self {
     Self {
       store,
-      type_params: AHashMap::new(),
+      type_param_scopes: vec![AHashMap::new()],
       next_type_param: 0,
       resolver: None,
       file: None,
@@ -124,7 +124,7 @@ impl TypeLowerer {
   }
 
   pub fn type_param_id(&self, name: &str) -> Option<TypeParamId> {
-    self.type_params.get(name).copied()
+    self.lookup_type_param(name)
   }
 
   pub fn register_type_params(&mut self, params: &[Node<TypeParameter>]) -> Vec<TypeParamId> {
@@ -138,8 +138,32 @@ impl TypeLowerer {
   fn alloc_type_param(&mut self, name: String) -> TypeParamId {
     let id = TypeParamId(self.next_type_param);
     self.next_type_param += 1;
-    self.type_params.insert(name, id);
+    self
+      .type_param_scopes
+      .last_mut()
+      .expect("type parameter scope stack should not be empty")
+      .insert(name, id);
     id
+  }
+
+  pub(crate) fn push_type_param_scope(&mut self) {
+    self.type_param_scopes.push(AHashMap::new());
+  }
+
+  pub(crate) fn pop_type_param_scope(&mut self) {
+    self
+      .type_param_scopes
+      .pop()
+      .expect("type parameter scope stack underflow");
+  }
+
+  fn lookup_type_param(&self, name: &str) -> Option<TypeParamId> {
+    for scope in self.type_param_scopes.iter().rev() {
+      if let Some(id) = scope.get(name) {
+        return Some(*id);
+      }
+    }
+    None
   }
 
   pub fn lower_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeId {
@@ -256,7 +280,7 @@ impl TypeLowerer {
   }
 
   fn lower_function_type(&mut self, func: &Node<TypeFunction>) -> TypeId {
-    let snapshot = self.type_params.clone();
+    self.push_type_param_scope();
     let mut type_param_ids = Vec::new();
     if let Some(params) = func.stx.type_parameters.as_ref() {
       type_param_ids = self.register_type_params(params);
@@ -268,7 +292,7 @@ impl TypeLowerer {
       type_params: type_param_ids,
       this_param,
     };
-    self.type_params = snapshot;
+    self.pop_type_param_scope();
     let sig_id = self.store.intern_signature(sig);
     self.store.intern_type(TypeKind::Callable {
       overloads: vec![sig_id],
@@ -276,7 +300,7 @@ impl TypeLowerer {
   }
 
   fn lower_constructor_type(&mut self, cons: &Node<TypeConstructor>) -> TypeId {
-    let snapshot = self.type_params.clone();
+    self.push_type_param_scope();
     let mut type_param_ids = Vec::new();
     if let Some(params) = cons.stx.type_parameters.as_ref() {
       type_param_ids = self.register_type_params(params);
@@ -288,7 +312,7 @@ impl TypeLowerer {
       type_params: type_param_ids,
       this_param,
     };
-    self.type_params = snapshot;
+    self.pop_type_param_scope();
     let sig_id = self.store.intern_signature(sig);
     self.store.intern_type(TypeKind::Callable {
       overloads: vec![sig_id],
@@ -347,6 +371,11 @@ impl TypeLowerer {
           }
         }
         TypeMember::Constructor(cons) => {
+          self.push_type_param_scope();
+          let mut type_param_ids = Vec::new();
+          if let Some(params) = cons.stx.type_parameters.as_ref() {
+            type_param_ids = self.register_type_params(params);
+          }
           let (this_param, params) = self.lower_params(&cons.stx.parameters);
           let sig = Signature {
             params,
@@ -356,13 +385,15 @@ impl TypeLowerer {
               .as_ref()
               .map(|t| self.lower_type_expr(t))
               .unwrap_or(self.store.primitive_ids().unknown),
-            type_params: Vec::new(),
+            type_params: type_param_ids,
             this_param,
           };
+          self.pop_type_param_scope();
           let sig_id = self.store.intern_signature(sig);
           shape.construct_signatures.push(sig_id);
         }
         TypeMember::CallSignature(call) => {
+          self.push_type_param_scope();
           let mut type_param_ids = Vec::new();
           if let Some(params) = call.stx.type_parameters.as_ref() {
             type_param_ids = self.register_type_params(params);
@@ -379,6 +410,7 @@ impl TypeLowerer {
             type_params: type_param_ids,
             this_param,
           };
+          self.pop_type_param_scope();
           let sig_id = self.store.intern_signature(sig);
           shape.call_signatures.push(sig_id);
         }
@@ -439,6 +471,7 @@ impl TypeLowerer {
       TypePropertyKey::Computed(_) => return None,
     };
 
+    self.push_type_param_scope();
     let mut type_param_ids = Vec::new();
     if let Some(params) = method.stx.type_parameters.as_ref() {
       type_param_ids = self.register_type_params(params);
@@ -455,6 +488,7 @@ impl TypeLowerer {
       type_params: type_param_ids,
       this_param,
     };
+    self.pop_type_param_scope();
     let sig_id = self.store.intern_signature(sig);
     Some((
       key,
@@ -472,15 +506,13 @@ impl TypeLowerer {
       false_type,
     } = cond.stx.as_ref();
 
-    let prev_params = self.type_params.clone();
-    let prev_next_param = self.next_type_param;
     let distributive = self.is_naked_type_param(check_type);
+    self.push_type_param_scope();
     let check = self.lower_type_expr(check_type);
     let extends = self.lower_type_expr(extends_type);
     let true_ty = self.lower_type_expr(true_type);
+    self.pop_type_param_scope();
     let false_ty = self.lower_type_expr(false_type);
-    self.type_params = prev_params;
-    self.next_type_param = prev_next_param;
     self.store.intern_type(TypeKind::Conditional {
       check,
       extends,
@@ -495,7 +527,7 @@ impl TypeLowerer {
       TypeExpr::TypeReference(reference) if reference.stx.type_arguments.is_none() => {
         matches!(
           reference.stx.name,
-          TypeEntityName::Identifier(ref name) if self.type_params.contains_key(name)
+          TypeEntityName::Identifier(ref name) if self.lookup_type_param(name).is_some()
         )
       }
       _ => false,
@@ -512,7 +544,7 @@ impl TypeLowerer {
       type_expr,
     } = mapped.stx.as_ref();
 
-    let prev = self.type_params.clone();
+    self.push_type_param_scope();
     let param_id = self.alloc_type_param(type_parameter.clone());
 
     let source = self.lower_type_expr(constraint);
@@ -529,7 +561,7 @@ impl TypeLowerer {
       as_type: remap,
     }));
 
-    self.type_params = prev;
+    self.pop_type_param_scope();
     result
   }
 
@@ -559,7 +591,7 @@ impl TypeLowerer {
     let type_args = self.lower_type_arguments(&reference.stx.type_arguments);
     match &reference.stx.name {
       TypeEntityName::Identifier(name) => {
-        if let Some(id) = self.type_params.get(name).copied() {
+        if let Some(id) = self.lookup_type_param(name) {
           if !type_args.is_empty() {
             self.push_diag(
               reference.loc,
@@ -659,10 +691,11 @@ impl TypeLowerer {
   }
 
   fn lower_infer_type(&mut self, infer: &Node<TypeInfer>) -> TypeId {
-    let id = match self.type_params.get(&infer.stx.type_parameter) {
-      Some(id) => *id,
-      None => self.alloc_type_param(infer.stx.type_parameter.clone()),
-    };
+    let id = self
+      .type_param_scopes
+      .last()
+      .and_then(|scope| scope.get(&infer.stx.type_parameter).copied())
+      .unwrap_or_else(|| self.alloc_type_param(infer.stx.type_parameter.clone()));
     let constraint = infer
       .stx
       .constraint

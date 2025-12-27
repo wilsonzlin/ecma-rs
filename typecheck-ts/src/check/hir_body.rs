@@ -608,14 +608,24 @@ impl<'a> Checker<'a> {
     }
     if let Some(func) = best {
       let prev_return = self.expected_return;
+      let mut type_param_decls = Vec::new();
+      let mut has_type_params = false;
+      if let Some(params) = func.func.stx.type_parameters.as_ref() {
+        self.lowerer.push_type_param_scope();
+        has_type_params = true;
+        type_param_decls = self.lower_type_params(params);
+      }
       self.expected_return = func
         .func
         .stx
         .return_type
         .as_ref()
         .map(|ret| self.lowerer.lower_type_expr(ret));
-      self.bind_params(func.func);
+      self.bind_params(func.func, &type_param_decls);
       self.check_function_body(func.func);
+      if has_type_params {
+        self.lowerer.pop_type_param_scope();
+      }
       self.expected_return = prev_return;
       return true;
     }
@@ -653,11 +663,7 @@ impl<'a> Checker<'a> {
     false
   }
 
-  fn bind_params(&mut self, func: &Node<Func>) {
-    let mut type_param_decls = Vec::new();
-    if let Some(params) = func.stx.type_parameters.as_ref() {
-      type_param_decls = self.lower_type_params(params);
-    }
+  fn bind_params(&mut self, func: &Node<Func>, type_param_decls: &[TypeParamDecl]) {
     for param in func.stx.parameters.iter() {
       let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
       let annotation = param
@@ -671,7 +677,7 @@ impl<'a> Checker<'a> {
         ty = self.store.union(vec![ty, default]);
       }
       if let Some(pat) = self.index.pats.get(&pat_span) {
-        self.bind_pattern_with_type_params(pat, ty, type_param_decls.clone());
+        self.bind_pattern_with_type_params(pat, ty, type_param_decls.to_vec());
       }
     }
   }
@@ -1658,7 +1664,10 @@ impl<'a> Checker<'a> {
   fn function_type(&mut self, func: &Node<Func>) -> TypeId {
     let mut type_param_decls = Vec::new();
     let mut type_params_ids = Vec::new();
+    let mut has_type_params = false;
     if let Some(params) = func.stx.type_parameters.as_ref() {
+      self.lowerer.push_type_param_scope();
+      has_type_params = true;
       type_param_decls = self.lower_type_params(params);
       type_params_ids = type_param_decls.iter().map(|d| d.id).collect();
     }
@@ -1702,6 +1711,9 @@ impl<'a> Checker<'a> {
     });
     if !type_param_decls.is_empty() {
       self.function_type_params.insert(ty, type_param_decls);
+    }
+    if has_type_params {
+      self.lowerer.pop_type_param_scope();
     }
     ty
   }
