@@ -26,7 +26,7 @@ use types_ts_interned::{
   TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamDecl, TypeStore,
 };
 
-use super::cfg::{BlockId, ControlFlowGraph};
+use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
 use super::flow::{BindingKey, Env, FlowKey, InitState};
 use super::flow_narrow::{
   narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
@@ -2687,6 +2687,85 @@ impl<'a> FlowBodyChecker<'a> {
     cfg: &ControlFlowGraph,
   ) -> Vec<(BlockId, Env)> {
     let block = &cfg.blocks[block_id.0];
+
+    match &block.kind {
+      BlockKind::ForInit { init } => {
+        if let Some(init) = init {
+          match init {
+            ForInit::Expr(expr_id) => {
+              let (_, facts) = self.eval_expr(*expr_id, &mut env);
+              env.apply_map(&facts.assertions);
+            }
+            ForInit::Var(var) => {
+              for declarator in var.declarators.iter() {
+                let init_ty = declarator
+                  .init
+                  .map(|id| self.eval_expr(id, &mut env).0)
+                  .unwrap_or_else(|| self.store.primitive_ids().unknown);
+                self.bind_pat(declarator.pat, init_ty, &mut env);
+                let state = if declarator.init.is_some() {
+                  InitState::Assigned
+                } else {
+                  InitState::Unassigned
+                };
+                self.mark_pat_state(declarator.pat, &mut env, state);
+              }
+            }
+          }
+        }
+        return block
+          .successors
+          .iter()
+          .map(|succ| (*succ, env.clone()))
+          .collect();
+      }
+      BlockKind::ForTest { test } => {
+        let facts = test
+          .map(|t| self.eval_expr(t, &mut env).1)
+          .unwrap_or_default();
+        let mut then_env = env.clone();
+        then_env.apply_facts(&facts);
+        let mut else_env = env.clone();
+        else_env.apply_falsy(&facts);
+
+        let mut outgoing = Vec::new();
+        if let Some(succ) = block.successors.get(0) {
+          outgoing.push((*succ, then_env));
+        }
+        if let Some(succ) = block.successors.get(1) {
+          outgoing.push((*succ, else_env));
+        }
+        return outgoing;
+      }
+      BlockKind::ForUpdate { update } => {
+        if let Some(expr_id) = update {
+          let (_, facts) = self.eval_expr(*expr_id, &mut env);
+          env.apply_map(&facts.assertions);
+        }
+        return block
+          .successors
+          .iter()
+          .map(|succ| (*succ, env.clone()))
+          .collect();
+      }
+      BlockKind::DoWhileTest { test } => {
+        let facts = self.eval_expr(*test, &mut env).1;
+        let mut body_env = env.clone();
+        body_env.apply_facts(&facts);
+        let mut after_env = env.clone();
+        after_env.apply_falsy(&facts);
+        let mut outgoing = Vec::new();
+        if let Some(succ) = block.successors.get(0) {
+          outgoing.push((*succ, body_env));
+        }
+        if let Some(succ) = block.successors.get(1) {
+          outgoing.push((*succ, after_env));
+        }
+        return outgoing;
+      }
+      BlockKind::Normal => {}
+    }
+
     if block.stmts.is_empty() {
       return block
         .successors
@@ -2764,57 +2843,11 @@ impl<'a> FlowBodyChecker<'a> {
           }
           return outgoing;
         }
-        StmtKind::DoWhile { test, .. } => {
-          let facts = self.eval_expr(*test, &mut env).1;
-          let mut body_env = env.clone();
-          body_env.apply_facts(&facts);
-          let mut after_env = env.clone();
-          after_env.apply_falsy(&facts);
-          if let Some(succ) = block.successors.get(0) {
-            outgoing.push((*succ, body_env));
-          }
-          if let Some(succ) = block.successors.get(1) {
-            outgoing.push((*succ, after_env));
-          }
-          return outgoing;
+        StmtKind::DoWhile { .. } => {
+          unreachable!("do...while statements are lowered into synthetic blocks");
         }
-        StmtKind::For { init, test, .. } => {
-          if let Some(init) = init {
-            match init {
-              ForInit::Expr(expr_id) => {
-                let _ = self.eval_expr(*expr_id, &mut env);
-              }
-              ForInit::Var(var) => {
-                for declarator in var.declarators.iter() {
-                  let init_ty = declarator
-                    .init
-                    .map(|id| self.eval_expr(id, &mut env).0)
-                    .unwrap_or_else(|| self.store.primitive_ids().unknown);
-                  self.bind_pat(declarator.pat, init_ty, &mut env);
-                  let state = if declarator.init.is_some() {
-                    InitState::Assigned
-                  } else {
-                    InitState::Unassigned
-                  };
-                  self.mark_pat_state(declarator.pat, &mut env, state);
-                }
-              }
-            }
-          }
-          let facts = test
-            .map(|t| self.eval_expr(t, &mut env).1)
-            .unwrap_or_default();
-          let mut body_env = env.clone();
-          body_env.apply_facts(&facts);
-          let mut after_env = env.clone();
-          after_env.apply_falsy(&facts);
-          if let Some(succ) = block.successors.get(0) {
-            outgoing.push((*succ, body_env));
-          }
-          if let Some(succ) = block.successors.get(1) {
-            outgoing.push((*succ, after_env));
-          }
-          return outgoing;
+        StmtKind::For { .. } => {
+          unreachable!("for statements are lowered into synthetic blocks");
         }
         StmtKind::ForIn { left, right, .. } => {
           let right_ty = self.eval_expr(*right, &mut env).0;
@@ -3085,8 +3118,7 @@ impl<'a> FlowBodyChecker<'a> {
           let _ = self.eval_expr(*left, env);
           let right_ty = self.eval_expr(*right, env).0;
           if let (Some(prop), Some(name)) = (self.literal_prop(*left), self.ident_name(*right)) {
-            let (yes, no) =
-              narrow_by_in_check(right_ty, &prop, &self.store, self.ref_expander);
+            let (yes, no) = narrow_by_in_check(right_ty, &prop, &self.store, self.ref_expander);
             let key = FlowKey::root(name);
             facts.truthy.insert(key.clone(), yes);
             facts.falsy.insert(key, no);

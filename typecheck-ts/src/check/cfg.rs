@@ -6,7 +6,7 @@
 //! used by the lightweight checker (conditionals, switches, and loops).
 
 use hir_js::hir::{CatchClause, SwitchCase};
-use hir_js::{Body, NameId, StmtId, StmtKind};
+use hir_js::{Body, ExprId, ForInit, NameId, StmtId, StmtKind};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -25,8 +25,31 @@ pub struct Edge {
 #[derive(Clone, Debug, Default)]
 pub struct BasicBlock {
   pub id: BlockId,
+  pub kind: BlockKind,
   pub stmts: Vec<StmtId>,
   pub successors: Vec<BlockId>,
+}
+
+/// Specialized actions performed on entry to a block before executing any
+/// contained statements.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BlockKind {
+  /// Standard block that only executes its statements.
+  Normal,
+  /// `for` initializer executed once before entering the loop test.
+  ForInit { init: Option<ForInit> },
+  /// `for` test that branches to the body (true) or after the loop (false).
+  ForTest { test: Option<ExprId> },
+  /// `for` update executed at the end of each iteration.
+  ForUpdate { update: Option<ExprId> },
+  /// `do...while` test executed after the body.
+  DoWhileTest { test: ExprId },
+}
+
+impl Default for BlockKind {
+  fn default() -> Self {
+    BlockKind::Normal
+  }
 }
 
 /// Control-flow graph with entry/exit blocks.
@@ -84,8 +107,8 @@ impl fmt::Display for ControlFlowGraph {
     for block in &self.blocks {
       writeln!(
         f,
-        "  {:?}: stmts={:?} succ={:?}",
-        block.id, block.stmts, block.successors
+        "  {:?}: kind={:?} stmts={:?} succ={:?}",
+        block.id, block.kind, block.stmts, block.successors
       )?;
     }
     Ok(())
@@ -235,10 +258,13 @@ impl<'a> CfgBuilder<'a> {
       } => self.build_if(stmt_id, *consequent, alternate.as_ref(), preds),
       StmtKind::Switch { cases, .. } => self.build_switch(stmt_id, cases, preds, None),
       StmtKind::While { body, .. } => self.build_while(stmt_id, *body, preds, None),
-      StmtKind::DoWhile { body, .. } => self.build_do_while(stmt_id, *body, preds, None),
-      StmtKind::For { body, update, .. } => {
-        self.build_for(stmt_id, *body, update.is_some(), preds, None)
-      }
+      StmtKind::DoWhile { body, test } => self.build_do_while(stmt_id, *body, *test, preds, None),
+      StmtKind::For {
+        body,
+        init,
+        test,
+        update,
+      } => self.build_for(stmt_id, *body, init.clone(), *test, *update, preds, None),
       StmtKind::ForIn { body, .. } => self.build_for_in(stmt_id, *body, preds, None),
       StmtKind::Block(stmts) => {
         let block = self.add_stmt_block(stmt_id);
@@ -431,11 +457,13 @@ impl<'a> CfgBuilder<'a> {
     &mut self,
     stmt_id: StmtId,
     body: StmtId,
+    test: ExprId,
     preds: Vec<BlockId>,
     label: Option<NameId>,
   ) -> BuildResult {
     let after = self.cfg.add_block();
     let test_block = self.add_stmt_block(stmt_id);
+    self.cfg.blocks[test_block.0].kind = BlockKind::DoWhileTest { test };
     self.breakables.push(BreakableContext {
       label,
       break_target: after,
@@ -459,37 +487,44 @@ impl<'a> CfgBuilder<'a> {
 
   fn build_for(
     &mut self,
-    stmt_id: StmtId,
+    _stmt_id: StmtId,
     body: StmtId,
-    has_update: bool,
+    init: Option<ForInit>,
+    test: Option<ExprId>,
+    update: Option<ExprId>,
     preds: Vec<BlockId>,
     label: Option<NameId>,
   ) -> BuildResult {
-    let header = self.add_stmt_block(stmt_id);
-    self.connect(&preds, header);
+    let init_block = self.cfg.add_block();
+    self.cfg.blocks[init_block.0].kind = BlockKind::ForInit { init };
+    self.connect(&preds, init_block);
+
+    let test_block = self.cfg.add_block();
+    self.cfg.blocks[test_block.0].kind = BlockKind::ForTest { test };
+
+    let update_block = self.cfg.add_block();
+    self.cfg.blocks[update_block.0].kind = BlockKind::ForUpdate { update };
+    self.cfg.add_edge(update_block, test_block);
 
     let after = self.cfg.add_block();
-    let continue_target = if has_update {
-      let update_block = self.cfg.add_block();
-      self.cfg.add_edge(update_block, header);
-      update_block
-    } else {
-      header
-    };
     self.breakables.push(BreakableContext {
       label,
       break_target: after,
-      continue_target: Some(continue_target),
+      continue_target: Some(update_block),
       implicit_break: true,
     });
-    let body_res = self.build_stmt(body, vec![header]);
-    self.connect(&body_res.exits, continue_target);
+    let body_res = self.build_stmt(body, vec![test_block]);
+    self.connect(&body_res.exits, update_block);
     self.breakables.pop();
 
-    self.cfg.add_edge(header, after);
+    if let Some(entry) = body_res.entry {
+      self.cfg.add_edge(test_block, entry);
+    }
+    self.cfg.add_edge(init_block, test_block);
+    self.cfg.add_edge(test_block, after);
 
     BuildResult {
-      entry: Some(header),
+      entry: Some(init_block),
       exits: vec![after],
     }
   }
@@ -572,13 +607,21 @@ impl<'a> CfgBuilder<'a> {
       StmtKind::While { body, .. } => {
         self.build_while(body_id, *body, vec![label_block], Some(label))
       }
-      StmtKind::DoWhile { body, .. } => {
-        self.build_do_while(body_id, *body, vec![label_block], Some(label))
+      StmtKind::DoWhile { body, test, .. } => {
+        self.build_do_while(body_id, *body, *test, vec![label_block], Some(label))
       }
-      StmtKind::For { body, update, .. } => self.build_for(
+      StmtKind::For {
+        body,
+        init,
+        test,
+        update,
+        ..
+      } => self.build_for(
         body_id,
         *body,
-        update.is_some(),
+        init.clone(),
+        *test,
+        *update,
         vec![label_block],
         Some(label),
       ),
