@@ -77,6 +77,73 @@ fn infers_basic_literals_and_identifiers() {
 }
 
 #[test]
+fn local_variable_widening_respects_decl_mode() {
+  let source = "function f() { let x = 1; const y = 1; return x + y; }";
+  let lowered = lower_from_source(source).expect("lower");
+  let (body_id, body) = lowered
+    .bodies
+    .iter()
+    .enumerate()
+    .find(|(_, b)| matches!(b.kind, BodyKind::Function))
+    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
+    .expect("function body");
+  let ast = parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse");
+  let store = TypeStore::new();
+  let caches = CheckerCaches::new(Default::default()).for_body();
+  let bindings = HashMap::new();
+  let result = check_body(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    &ast,
+    Arc::clone(&store),
+    &caches,
+    &bindings,
+    None,
+  );
+
+  let mut x_ty = None;
+  let mut y_ty = None;
+  let mut seen = Vec::new();
+  for (span, ty) in result.pat_spans().iter().zip(result.pat_types()) {
+    let mut text = source
+      .get(span.start as usize..span.end as usize)
+      .unwrap_or_default()
+      .trim()
+      .to_string();
+    if let Some(stripped) = text.strip_suffix('=') {
+      text = stripped.trim_end().to_string();
+    }
+    seen.push((text.clone(), *ty));
+    match text.as_str() {
+      "x" => x_ty = Some(*ty),
+      "y" => y_ty = Some(*ty),
+      _ => {}
+    }
+  }
+
+  let x_ty = x_ty.unwrap_or_else(|| panic!("binding for x; seen {:?}", seen));
+  let y_ty = y_ty.unwrap_or_else(|| panic!("binding for y; seen {:?}", seen));
+
+  assert!(
+    matches!(store.type_kind(x_ty), TypeKind::Number),
+    "let binding should widen literal initializer"
+  );
+  assert!(
+    matches!(store.type_kind(y_ty), TypeKind::NumberLiteral(_)),
+    "const binding should preserve literal initializer"
+  );
+}
+
+#[test]
 fn expression_spans_match_body_indices() {
   let source = "function g(x: number) { const y = x + 1; return y; }";
   let lowered = lower_from_source(source).expect("lower");

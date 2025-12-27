@@ -15,7 +15,7 @@ use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
-use parse_js::ast::stmt::decl::{ParamDecl, VarDecl};
+use parse_js::ast::stmt::decl::{ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::ts_stmt::{NamespaceBody, NamespaceDecl};
 use parse_js::loc::Loc;
@@ -101,7 +101,7 @@ struct AstIndex<'a> {
 
 #[derive(Clone, Copy)]
 struct VarInfo<'a> {
-  _decl: &'a Node<VarDecl>,
+  decl: &'a Node<VarDecl>,
   initializer: Option<&'a Node<AstExpr>>,
   type_annotation: Option<&'a Node<parse_js::ast::type_expr::TypeExpr>>,
 }
@@ -253,7 +253,7 @@ impl<'a> AstIndex<'a> {
       self.vars.insert(
         pat_span,
         VarInfo {
-          _decl: decl,
+          decl,
           initializer: declarator.initializer.as_ref(),
           type_annotation: declarator.type_annotation.as_ref(),
         },
@@ -670,8 +670,12 @@ impl<'a> Checker<'a> {
         let annotation = info
           .type_annotation
           .map(|ann| self.lowerer.lower_type_expr(ann));
-        let init_ty = self.check_expr(init);
-        let ty = annotation.unwrap_or(init_ty);
+        let init_ty = self.initializer_type(init, annotation);
+        let mut ty = annotation.unwrap_or(init_ty);
+        if annotation.is_none() {
+          let init_is_satisfies = matches!(init.stx.as_ref(), AstExpr::SatisfiesExpr(_));
+          ty = self.widen_inferred_binding_type(ty, info.decl.stx.mode, init_is_satisfies);
+        }
         if let Some(pat) = self.index.pats.get(&pat_span) {
           self.bind_pattern(pat, ty);
         }
@@ -927,27 +931,172 @@ impl<'a> Checker<'a> {
 
   fn check_var_decl(&mut self, decl: &Node<VarDecl>) {
     let prim = self.store.primitive_ids();
+    let mode = decl.stx.mode;
     for declarator in decl.stx.declarators.iter() {
-      let init_ty = if self.check_var_assignments {
-        declarator
-          .initializer
-          .as_ref()
-          .map(|i| self.check_expr(i))
-          .unwrap_or(prim.unknown)
-      } else {
-        prim.unknown
-      };
       let annot_ty = declarator
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
-      let final_ty = annot_ty.unwrap_or(init_ty);
+      let init_is_satisfies = declarator
+        .initializer
+        .as_ref()
+        .map(|init| matches!(init.stx.as_ref(), AstExpr::SatisfiesExpr(_)))
+        .unwrap_or(false);
+      let init_ty = if self.check_var_assignments {
+        declarator
+          .initializer
+          .as_ref()
+          .map(|i| self.initializer_type(i, annot_ty))
+          .unwrap_or(prim.unknown)
+      } else {
+        prim.unknown
+      };
       if self.check_var_assignments {
         if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
           self.check_assignable(init, init_ty, ann);
         }
       }
-      self.check_pat(&declarator.pattern.stx.pat, final_ty);
+      let mut ty = annot_ty.unwrap_or(init_ty);
+      if annot_ty.is_none() && self.check_var_assignments {
+        ty = self.widen_inferred_binding_type(ty, mode, init_is_satisfies);
+      }
+      self.check_pat(&declarator.pattern.stx.pat, ty);
+    }
+  }
+
+  fn initializer_type(
+    &mut self,
+    init: &Node<AstExpr>,
+    annotation: Option<TypeId>,
+  ) -> TypeId {
+    let prev = self.widen_object_literals;
+    if annotation.is_some() {
+      self.widen_object_literals = false;
+    }
+    let init_ty = self.check_expr(init);
+    self.widen_object_literals = prev;
+    if let Some(expected) = annotation {
+      let contextual = self.contextual_arg_type(init_ty, expected);
+      if contextual != init_ty {
+        self.record_expr_type(init.loc, contextual);
+      }
+      contextual
+    } else {
+      init_ty
+    }
+  }
+
+  fn widen_inferred_binding_type(
+    &self,
+    ty: TypeId,
+    mode: VarDeclMode,
+    skip_containers: bool,
+  ) -> TypeId {
+    let mut widened = ty;
+    if !skip_containers {
+      widened = self.widen_array_elements(widened);
+      widened = self.widen_object_literal(widened);
+    }
+    if !matches!(mode, VarDeclMode::Const) {
+      widened = self.widen_literal(widened);
+    }
+    widened
+  }
+
+  fn widen_literal(&self, ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::NumberLiteral(_) => prim.number,
+      TypeKind::StringLiteral(_) => prim.string,
+      TypeKind::BooleanLiteral(_) => prim.boolean,
+      _ => ty,
+    }
+  }
+
+  fn widen_union_literals(&self, ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::NumberLiteral(_) => prim.number,
+      TypeKind::StringLiteral(_) => prim.string,
+      TypeKind::BooleanLiteral(_) => prim.boolean,
+      TypeKind::Union(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_union_literals(m))
+          .collect();
+        self.store.union(mapped)
+      }
+      TypeKind::Array { ty, readonly } => {
+        let widened = self.widen_union_literals(ty);
+        self
+          .store
+          .intern_type(TypeKind::Array { ty: widened, readonly })
+      }
+      _ => ty,
+    }
+  }
+
+  fn widen_array_elements(&self, ty: TypeId) -> TypeId {
+    match self.store.type_kind(ty) {
+      TypeKind::Array { ty, readonly } => {
+        let widened = self.widen_union_literals(ty);
+        self
+          .store
+          .intern_type(TypeKind::Array { ty: widened, readonly })
+      }
+      _ => ty,
+    }
+  }
+
+  fn widen_object_literal(&self, ty: TypeId) -> TypeId {
+    match self.store.type_kind(ty) {
+      TypeKind::Object(obj_id) => {
+        let obj = self.store.object(obj_id);
+        let mut shape = self.store.shape(obj.shape);
+        let mut changed = false;
+        for prop in shape.properties.iter_mut() {
+          if prop.data.readonly {
+            continue;
+          }
+          let widened = self.widen_union_literals(prop.data.ty);
+          if widened != prop.data.ty {
+            prop.data.ty = widened;
+            changed = true;
+          }
+        }
+        for idx in shape.indexers.iter_mut() {
+          if idx.readonly {
+            continue;
+          }
+          let widened = self.widen_union_literals(idx.value_type);
+          if widened != idx.value_type {
+            idx.value_type = widened;
+            changed = true;
+          }
+        }
+        if changed {
+          let shape_id = self.store.intern_shape(shape);
+          let obj_id = self.store.intern_object(ObjectType { shape: shape_id });
+          self.store.intern_type(TypeKind::Object(obj_id))
+        } else {
+          ty
+        }
+      }
+      TypeKind::Union(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_literal(m))
+          .collect();
+        self.store.union(mapped)
+      }
+      TypeKind::Intersection(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_literal(m))
+          .collect();
+        self.store.intersection(mapped)
+      }
+      _ => ty,
     }
   }
 
