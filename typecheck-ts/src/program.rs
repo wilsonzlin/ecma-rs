@@ -6,7 +6,7 @@ use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
   BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
   ExprKind as HirExprKind, FileKind as HirFileKind, LowerResult, NameId, PatId as HirPatId,
-  PatKind as HirPatKind, StmtKind as HirStmtKind,
+  PatKind as HirPatKind,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::expr::pat::Pat;
@@ -530,17 +530,20 @@ impl Program {
     }
   }
 
-  /// All known file IDs in this program.
-  pub fn files(&self) -> Vec<FileId> {
-    match self.with_analyzed_state(|state| Ok(state.files.keys().copied().collect())) {
-      Ok(files) => files,
-      Err(_) => Vec::new(),
+  /// Reachable files starting from the program roots using module resolution.
+  pub fn reachable_files(&self) -> Vec<FileId> {
+    match self.with_analyzed_state(|state| Ok(crate::db::reachable_files(&state.typecheck_db))) {
+      Ok(files) => files.as_ref().clone(),
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
     }
   }
 
-  /// Files reachable from the program roots, including dependencies.
-  pub fn reachable_files(&self) -> Vec<FileId> {
-    match self.with_analyzed_state(|state| Ok((*state.typecheck_db.reachable_files()).clone())) {
+  /// All known file IDs in this program.
+  pub fn files(&self) -> Vec<FileId> {
+    match self.with_analyzed_state(|state| Ok(state.files.keys().copied().collect())) {
       Ok(files) => files,
       Err(_) => Vec::new(),
     }
@@ -778,9 +781,40 @@ impl Program {
     offset: u32,
   ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
     self.with_analyzed_state(|state| {
-      state.ensure_symbols_for_file(file)?;
-      state.symbol_at(file, offset)
+      let occurrences = crate::db::symbol_occurrences(&state.typecheck_db, file);
+      Ok(Self::symbol_from_occurrences(&occurrences, offset))
     })
+  }
+
+  fn symbol_from_occurrences(
+    occurrences: &[SymbolOccurrence],
+    offset: u32,
+  ) -> Option<semantic_js::SymbolId> {
+    let pivot = occurrences.partition_point(|occ| occ.range.start <= offset);
+    let mut best_containing: Option<(u32, u32, u32, semantic_js::SymbolId)> = None;
+    let mut best_empty: Option<(u32, u32, u32, semantic_js::SymbolId)> = None;
+
+    for occ in occurrences[..pivot].iter().rev() {
+      let range = occ.range;
+      let len = range.len();
+      let key = (len, range.start, range.end, occ.symbol);
+      if range.start <= offset && offset < range.end {
+        if best_containing
+          .map(|existing| key < existing)
+          .unwrap_or(true)
+        {
+          best_containing = Some(key);
+        }
+      } else if range.start == range.end && range.start == offset {
+        if best_empty.map(|existing| key < existing).unwrap_or(true) {
+          best_empty = Some(key);
+        }
+      }
+    }
+
+    best_containing
+      .or(best_empty)
+      .map(|(_, _, _, symbol)| symbol)
   }
 
   /// Symbol metadata if available (def, file, type, name).
@@ -1394,15 +1428,18 @@ impl Program {
 
   /// Raw symbol occurrences for debugging.
   pub fn debug_symbol_occurrences(&self, file: FileId) -> Vec<(TextRange, semantic_js::SymbolId)> {
-    let state = self.lock_state();
-    state
-      .symbol_occurrences
-      .get(&file)
-      .cloned()
-      .unwrap_or_default()
-      .into_iter()
-      .map(|occ| (occ.range, occ.symbol))
-      .collect()
+    match self
+      .with_analyzed_state(|state| Ok(crate::db::symbol_occurrences(&state.typecheck_db, file)))
+    {
+      Ok(occurrences) => occurrences
+        .iter()
+        .map(|occ| (occ.range, occ.symbol))
+        .collect(),
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
+    }
   }
 
   /// Friendly name for a definition.
@@ -1615,16 +1652,13 @@ impl Program {
     body_results.sort_by_key(|(id, _)| id.0);
     let body_results: Vec<_> = body_results.into_iter().map(|(_, res)| res).collect();
 
-    let mut symbol_occurrences: Vec<_> = state
-      .symbol_occurrences
-      .iter()
-      .map(|(file, occs)| {
-        let mut occs = occs.clone();
-        occs.sort_by_key(|occ| (occ.range.start, occ.range.end, occ.symbol.0));
-        (*file, occs)
-      })
-      .collect();
-    symbol_occurrences.sort_by_key(|(file, _)| file.0);
+    let mut symbol_occurrences = Vec::new();
+    let mut symbol_files: Vec<_> = state.file_kinds.keys().copied().collect();
+    symbol_files.sort_by_key(|file| file.0);
+    for file in symbol_files {
+      let occs = crate::db::symbol_occurrences(&state.typecheck_db, file);
+      symbol_occurrences.push((file, occs.iter().cloned().collect()));
+    }
 
     let mut symbol_to_def: Vec<_> = state
       .symbol_to_def
@@ -1802,7 +1836,6 @@ impl Program {
         .map(|res| (res.body(), Arc::new(res)))
         .collect();
       state.ensure_body_map_from_defs();
-      state.symbol_occurrences = snapshot.symbol_occurrences.into_iter().collect();
       state.symbol_to_def = snapshot.symbol_to_def.into_iter().collect();
       state.global_bindings = Arc::new(snapshot.global_bindings.into_iter().collect());
       state.diagnostics = snapshot.diagnostics;
@@ -2700,7 +2733,6 @@ struct ProgramState {
   semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
-  symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
   file_registry: FileRegistry,
   file_kinds: HashMap<FileId, FileKind>,
@@ -2795,7 +2827,6 @@ impl ProgramState {
       semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
-      symbol_occurrences: HashMap::new(),
       symbol_to_def: HashMap::new(),
       file_registry: FileRegistry::new(),
       file_kinds: HashMap::new(),
@@ -3242,7 +3273,18 @@ impl ProgramState {
       self.sync_typecheck_roots();
       return Ok(());
     }
+    let mut db_roots: Vec<_> = roots.to_vec();
+    db_roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    self
+      .typecheck_db
+      .set_roots(Arc::from(db_roots.into_boxed_slice()));
+    self
+      .typecheck_db
+      .set_cancellation_flag(Arc::clone(&self.cancelled));
     let libs = self.collect_libraries(host.as_ref());
+    self
+      .typecheck_db
+      .set_compiler_options(self.compiler_options.clone());
     let lib_ids: Vec<FileId> = libs
       .iter()
       .map(|l| self.intern_file_key(l.key.clone(), FileOrigin::Lib))
@@ -3908,6 +3950,23 @@ impl ProgramState {
       return Ok(text.clone());
     }
     host.file_text(&key)
+  }
+
+  fn record_module_resolution(
+    &mut self,
+    from: FileId,
+    specifier: &str,
+    host: &Arc<dyn Host>,
+  ) -> Option<FileId> {
+    let spec: Arc<str> = Arc::from(specifier.to_string());
+    let resolved = self
+      .file_key_for_id(from)
+      .and_then(|from_key| host.resolve(&from_key, specifier))
+      .map(|target_key| self.intern_file_key(target_key, FileOrigin::Source));
+    self
+      .typecheck_db
+      .set_module_resolution(from, spec, resolved);
+    resolved
   }
 
   fn set_salsa_inputs(&mut self, file: FileId, kind: FileKind, text: Arc<str>) {
@@ -4684,11 +4743,10 @@ impl ProgramState {
   ) {
     match expr.stx.as_ref() {
       TypeExpr::ImportType(import) => {
-        if let Some(file_key) = self.file_key_for_id(file) {
-          if let Some(target_key) = host.resolve(&file_key, &import.stx.module_specifier) {
-            let target = self.intern_file_key(target_key, FileOrigin::Source);
-            queue.push_back(target);
-          }
+        if let Some(target) =
+          self.record_module_resolution(file, &import.stx.module_specifier, host)
+        {
+          queue.push_back(target);
         }
         if let Some(args) = import.stx.type_arguments.as_ref() {
           for arg in args {
@@ -5229,12 +5287,11 @@ impl ProgramState {
           );
         }
         Stmt::ExportList(export_list) => {
-          let resolved = export_list.stx.from.as_ref().and_then(|module| {
-            self
-              .file_key_for_id(file)
-              .and_then(|file_key| host.resolve(&file_key, module))
-              .map(|target| self.intern_file_key(target, FileOrigin::Source))
-          });
+          let resolved = export_list
+            .stx
+            .from
+            .as_ref()
+            .and_then(|module| self.record_module_resolution(file, module, host));
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -5322,10 +5379,7 @@ impl ProgramState {
         }
         Stmt::Import(import_stmt) => {
           let module = import_stmt.stx.module.clone();
-          let resolved = self
-            .file_key_for_id(file)
-            .and_then(|file_key| host.resolve(&file_key, &module))
-            .map(|target| self.intern_file_key(target, FileOrigin::Source));
+          let resolved = self.record_module_resolution(file, &module, host);
           if let Some(target) = resolved {
             queue.push_back(target);
           }
@@ -6868,1354 +6922,75 @@ impl ProgramState {
     Ok(map)
   }
 
-  fn ensure_symbols_for_file(&mut self, file: FileId) -> Result<(), FatalError> {
-    if let Some(state) = self.files.get(&file).cloned() {
-      let mut bodies_to_cover = Vec::new();
-      if let Some(body) = state.top_body {
-        bodies_to_cover.push(body);
-      }
-      for def in state.defs.iter() {
-        if let Some(body) = self.body_of_def(*def) {
-          bodies_to_cover.push(body);
-        }
-      }
-      for body in bodies_to_cover.iter().copied() {
-        self.check_body(body)?;
-      }
-      for body in bodies_to_cover.iter().copied() {
-        if let Some(result) = self.body_results.get(&body) {
-          let spans: Vec<_> = result.pat_spans().to_vec();
-          for span in spans {
-            let exists = {
-              let occs = self.symbol_occurrences.entry(file).or_default();
-              occs.iter().any(|occ| occ.range == span)
-            };
-            if exists {
-              continue;
-            }
-            let symbol = self.alloc_symbol();
-            self
-              .symbol_occurrences
-              .entry(file)
-              .or_default()
-              .push(SymbolOccurrence {
-                range: span,
-                symbol,
-              });
-          }
-        }
-      }
-      self.record_type_references(file, &state.bindings);
-    }
-    Ok(())
-  }
-
-  fn record_type_references(&mut self, file: FileId, bindings: &HashMap<String, SymbolBinding>) {
-    let Some(ast) = self.asts.get(&file).cloned() else {
-      return;
-    };
-    for stmt in ast.stx.body.iter() {
-      self.record_type_annotations_in_stmt(file, bindings, stmt);
-    }
-  }
-
-  fn record_type_annotations_in_stmt(
-    &mut self,
-    file: FileId,
-    bindings: &HashMap<String, SymbolBinding>,
-    stmt: &Node<Stmt>,
-  ) {
-    match stmt.stx.as_ref() {
-      Stmt::TypeAliasDecl(alias) => {
-        self.record_type_expr_symbols(file, &alias.stx.type_expr, bindings);
-      }
-      Stmt::FunctionDecl(func) => {
-        for param in func.stx.function.stx.parameters.iter() {
-          if let Some(ann) = param.stx.type_annotation.as_ref() {
-            self.record_type_expr_symbols(file, ann, bindings);
-          }
-        }
-        if let Some(ret) = func.stx.function.stx.return_type.as_ref() {
-          self.record_type_expr_symbols(file, ret, bindings);
-        }
-        if let Some(body) = func.stx.function.stx.body.as_ref() {
-          if let parse_js::ast::func::FuncBody::Block(stmts) = body {
-            for stmt in stmts.iter() {
-              self.record_type_annotations_in_stmt(file, bindings, stmt);
-            }
-          }
-        }
-      }
-      Stmt::VarDecl(var) => {
-        for decl in var.stx.declarators.iter() {
-          if let Some(ann) = decl.type_annotation.as_ref() {
-            self.record_type_expr_symbols(file, ann, bindings);
-          }
-        }
-      }
-      Stmt::Block(block) => {
-        for stmt in block.stx.body.iter() {
-          self.record_type_annotations_in_stmt(file, bindings, stmt);
-        }
-      }
-      _ => {}
-    }
-  }
-
-  fn record_type_expr_symbols(
-    &mut self,
-    file: FileId,
-    expr: &Node<TypeExpr>,
-    bindings: &HashMap<String, SymbolBinding>,
-  ) {
-    match expr.stx.as_ref() {
-      TypeExpr::TypeReference(reference) => {
-        if let TypeEntityName::Identifier(name) = &reference.stx.name {
-          if let Some(binding) = bindings.get(name) {
-            let span = loc_to_span(file, reference.loc).range;
-            if self
-              .symbol_occurrences
-              .get(&file)
-              .map(|occs| occs.iter().any(|occ| occ.range == span))
-              .unwrap_or(false)
-            {
-              // Already recorded.
-              return;
-            }
-            self.record_symbol(file, span, binding.symbol);
-          }
-        }
-        if let Some(args) = reference.stx.type_arguments.as_ref() {
-          for arg in args.iter() {
-            self.record_type_expr_symbols(file, arg, bindings);
-          }
-        }
-      }
-      TypeExpr::ArrayType(arr) => {
-        self.record_type_expr_symbols(file, &arr.stx.element_type, bindings);
-      }
-      TypeExpr::TupleType(tuple) => {
-        for elem in tuple.stx.elements.iter() {
-          self.record_type_expr_symbols(file, &elem.stx.type_expr, bindings);
-        }
-      }
-      TypeExpr::UnionType(union) => {
-        for member in union.stx.types.iter() {
-          self.record_type_expr_symbols(file, member, bindings);
-        }
-      }
-      TypeExpr::IntersectionType(inter) => {
-        for member in inter.stx.types.iter() {
-          self.record_type_expr_symbols(file, member, bindings);
-        }
-      }
-      TypeExpr::ParenthesizedType(inner) => {
-        self.record_type_expr_symbols(file, &inner.stx.type_expr, bindings);
-      }
-      TypeExpr::ObjectType(obj) => {
-        for member in obj.stx.members.iter() {
-          match member.stx.as_ref() {
-            TypeMember::Property(prop) => {
-              if let Some(ann) = prop.stx.type_annotation.as_ref() {
-                self.record_type_expr_symbols(file, ann, bindings);
-              }
-            }
-            TypeMember::Method(method) => {
-              for param in method.stx.parameters.iter() {
-                self.record_type_expr_symbols(file, &param.stx.type_expr, bindings);
-              }
-              if let Some(ret) = method.stx.return_type.as_ref() {
-                self.record_type_expr_symbols(file, ret, bindings);
-              }
-            }
-            TypeMember::CallSignature(sig) => {
-              for param in sig.stx.parameters.iter() {
-                self.record_type_expr_symbols(file, &param.stx.type_expr, bindings);
-              }
-              if let Some(ret) = sig.stx.return_type.as_ref() {
-                self.record_type_expr_symbols(file, ret, bindings);
-              }
-            }
-            TypeMember::Constructor(sig) => {
-              for param in sig.stx.parameters.iter() {
-                self.record_type_expr_symbols(file, &param.stx.type_expr, bindings);
-              }
-              if let Some(ret) = sig.stx.return_type.as_ref() {
-                self.record_type_expr_symbols(file, ret, bindings);
-              }
-            }
-            TypeMember::IndexSignature(index) => {
-              self.record_type_expr_symbols(file, &index.stx.parameter_type, bindings);
-              self.record_type_expr_symbols(file, &index.stx.type_annotation, bindings);
-            }
-            _ => {}
-          }
-        }
-      }
-      _ => {}
-    }
-  }
-
-  fn symbol_at(
-    &mut self,
-    file: FileId,
-    offset: u32,
-  ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
-    if let Some(occurrences) = self.symbol_occurrences.get(&file) {
-      let mut best_containing: Option<(u32, u32, semantic_js::SymbolId)> = None;
-      let mut best_empty: Option<(u32, u32, semantic_js::SymbolId)> = None;
-
-      for occurrence in occurrences.iter() {
-        let range = occurrence.range;
-        let len = range.len();
-        let key = (len, range.start, occurrence.symbol);
-        if range.start <= offset && offset < range.end {
-          let replace = best_containing.map(|best| key < best).unwrap_or(true);
-          if replace {
-            best_containing = Some(key);
-          }
-        } else if range.start == range.end && offset == range.start {
-          let replace = best_empty.map(|best| key < best).unwrap_or(true);
-          if replace {
-            best_empty = Some(key);
-          }
-        }
-      }
-
-      if let Some(symbol) = best_containing
-        .or(best_empty)
-        .map(|(_, _, symbol)| symbol)
-        .map(|symbol| self.resolve_symbol(symbol))
-        .transpose()?
-      {
-        return Ok(Some(symbol));
-      }
-    }
-
-    let (body, expr) = match self.expr_at(file, offset) {
-      Some(res) => res,
-      None => return Ok(None),
-    };
-    let meta = match self.body_map.get(&body).copied() {
-      Some(meta) => meta,
-      None => return Ok(None),
-    };
-    let lowered = match self.hir_lowered.get(&meta.file).cloned() {
-      Some(lowered) => lowered,
-      None => return Ok(None),
-    };
-    let resolved = self
-      .resolve_symbol_in_body(file, &lowered, body, meta, expr)
-      .map(|symbol| self.resolve_symbol(symbol))
-      .transpose()?;
-    Ok(resolved)
-  }
-
-  fn resolve_symbol(
-    &mut self,
-    symbol: semantic_js::SymbolId,
-  ) -> Result<semantic_js::SymbolId, FatalError> {
-    let import = self
-      .symbol_to_def
-      .get(&symbol)
-      .and_then(|def| self.def_data.get(def))
-      .and_then(|d| match &d.kind {
-        DefKind::Import(import) => Some(import.clone()),
-        _ => None,
-      });
-
-    if let Some(import) = import {
-      if let Some(resolved) = self.resolve_import_symbol(&import)? {
-        return Ok(resolved);
-      }
-    }
-
-    Ok(symbol)
-  }
-
-  fn resolve_import_symbol(
-    &mut self,
-    import: &ImportData,
-  ) -> Result<Option<semantic_js::SymbolId>, FatalError> {
-    let exports = self.exports_of_file(import.from)?;
-    Ok(exports.get(&import.original).map(|entry| entry.symbol))
-  }
-
-  fn resolve_symbol_in_body(
-    &mut self,
-    file: FileId,
-    lowered: &LowerResult,
-    prog_body: BodyId,
-    meta: BodyMeta,
-    target_expr: hir_js::ExprId,
-  ) -> Option<semantic_js::SymbolId> {
-    let hir_body = meta.hir?;
-    let body = lowered.body(hir_body)?;
-    let target_span = body.exprs.get(target_expr.0 as usize)?.span;
-
-    let mut def_symbols: HashMap<TextRange, semantic_js::SymbolId> = self
-      .def_data
-      .values()
-      .filter(|d| d.file == file)
-      .map(|d| (d.span, d.symbol))
-      .collect();
-
-    let mut initial_scope: HashMap<String, semantic_js::SymbolId> = HashMap::new();
-    if let Some(state) = self.files.get(&file) {
-      for (name, binding) in state.bindings.iter() {
-        initial_scope.insert(name.clone(), binding.symbol);
-      }
-    }
-    for (name, binding) in self.global_bindings.iter() {
-      initial_scope.entry(name.clone()).or_insert(binding.symbol);
-    }
-
-    fn lookup(
-      scopes: &[HashMap<String, semantic_js::SymbolId>],
-      name: &str,
-    ) -> Option<semantic_js::SymbolId> {
-      for scope in scopes.iter().rev() {
-        if let Some(symbol) = scope.get(name) {
-          return Some(*symbol);
-        }
-      }
-      None
-    }
-
-    fn bind_pat(
-      state: &mut ProgramState,
-      body: &hir_js::Body,
-      names: &hir_js::NameInterner,
-      pat_id: HirPatId,
-      scopes: &mut Vec<HashMap<String, semantic_js::SymbolId>>,
-      def_symbols: &mut HashMap<TextRange, semantic_js::SymbolId>,
-      file: FileId,
-    ) {
-      let Some(pat) = body.pats.get(pat_id.0 as usize) else {
-        return;
-      };
-      match &pat.kind {
-        HirPatKind::Ident(name_id) => {
-          if let Some(name) = names.resolve(*name_id) {
-            let symbol = def_symbols
-              .get(&pat.span)
-              .copied()
-              .or_else(|| {
-                state.symbol_occurrences.get(&file).and_then(|occs| {
-                  occs
-                    .iter()
-                    .find(|occ| occ.range == pat.span)
-                    .map(|occ| occ.symbol)
-                })
-              })
-              .unwrap_or_else(|| state.alloc_symbol());
-            if let Some(scope) = scopes.last_mut() {
-              scope.insert(name.to_string(), symbol);
-            }
-            def_symbols.insert(pat.span, symbol);
-            state.record_symbol(file, pat.span, symbol);
-          }
-        }
-        HirPatKind::Array(arr) => {
-          for elem in arr.elements.iter().flatten() {
-            bind_pat(state, body, names, elem.pat, scopes, def_symbols, file);
-          }
-          if let Some(rest) = arr.rest {
-            bind_pat(state, body, names, rest, scopes, def_symbols, file);
-          }
-        }
-        HirPatKind::Object(obj) => {
-          for prop in obj.props.iter() {
-            bind_pat(state, body, names, prop.value, scopes, def_symbols, file);
-          }
-          if let Some(rest) = obj.rest {
-            bind_pat(state, body, names, rest, scopes, def_symbols, file);
-          }
-        }
-        HirPatKind::Rest(inner) => {
-          bind_pat(state, body, names, **inner, scopes, def_symbols, file);
-        }
-        HirPatKind::Assign { target, .. } => {
-          bind_pat(state, body, names, *target, scopes, def_symbols, file);
-        }
-        HirPatKind::AssignTarget(_) => {}
-      }
-    }
-
-    fn walk_expr(
-      state: &mut ProgramState,
-      lowered: &LowerResult,
-      body: &hir_js::Body,
-      names: &hir_js::NameInterner,
-      expr_id: hir_js::ExprId,
-      target: hir_js::ExprId,
-      target_span: TextRange,
-      scopes: &mut Vec<HashMap<String, semantic_js::SymbolId>>,
-      def_symbols: &mut HashMap<TextRange, semantic_js::SymbolId>,
-      file: FileId,
-    ) -> Option<semantic_js::SymbolId> {
-      let Some(expr) = body.exprs.get(expr_id.0 as usize) else {
-        return None;
-      };
-      if expr_id == target {
-        if let HirExprKind::Ident(name_id) = expr.kind {
-          if let Some(name) = names.resolve(name_id) {
-            if let Some(symbol) = lookup(scopes, name) {
-              let occs = state.symbol_occurrences.entry(file).or_default();
-              if !occs
-                .iter()
-                .any(|occ| occ.range == target_span && occ.symbol == symbol)
-              {
-                occs.push(SymbolOccurrence {
-                  range: target_span,
-                  symbol,
-                });
-              }
-              return Some(symbol);
-            }
-          }
-        }
-      }
-      match &expr.kind {
-        HirExprKind::Ident(_) | HirExprKind::This | HirExprKind::Super => None,
-        HirExprKind::Literal(_) => None,
-        HirExprKind::Unary { expr, .. } => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *expr,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        ),
-        HirExprKind::Update { expr, .. } => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *expr,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        ),
-        HirExprKind::Binary { left, right, .. } => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *left,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        )
-        .or_else(|| {
-          walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            *right,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }),
-        HirExprKind::Assignment {
-          target: pat, value, ..
-        } => {
-          bind_pat(state, body, names, *pat, scopes, def_symbols, file);
-          walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            *value,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }
-        HirExprKind::Call(call) => {
-          let mut found = walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            call.callee,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          );
-          if found.is_some() {
-            return found;
-          }
-          for arg in call.args.iter() {
-            found = walk_expr(
-              state,
-              lowered,
-              body,
-              names,
-              arg.expr,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            );
-            if found.is_some() {
-              return found;
-            }
-          }
-          found
-        }
-        HirExprKind::Member(member) => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          member.object,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        ),
-        HirExprKind::Conditional {
-          test,
-          consequent,
-          alternate,
-        } => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *test,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        )
-        .or_else(|| {
-          walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            *consequent,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        })
-        .or_else(|| {
-          walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            *alternate,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }),
-        HirExprKind::Array(array) => {
-          for element in array.elements.iter() {
-            let expr = match element {
-              hir_js::ArrayElement::Expr(expr) | hir_js::ArrayElement::Spread(expr) => Some(*expr),
-              hir_js::ArrayElement::Empty => None,
-            };
-            if let Some(expr) = expr {
-              if let Some(found) = walk_expr(
-                state,
-                lowered,
-                body,
-                names,
-                expr,
-                target,
-                target_span,
-                scopes,
-                def_symbols,
-                file,
-              ) {
-                return Some(found);
-              }
-            }
-          }
-          None
-        }
-        HirExprKind::Object(obj) => {
-          for prop in obj.properties.iter() {
-            match prop {
-              hir_js::ObjectProperty::KeyValue { value, .. } => {
-                if let Some(found) = walk_expr(
-                  state,
-                  lowered,
-                  body,
-                  names,
-                  *value,
-                  target,
-                  target_span,
-                  scopes,
-                  def_symbols,
-                  file,
-                ) {
-                  return Some(found);
-                }
-              }
-              hir_js::ObjectProperty::Spread(expr) => {
-                if let Some(found) = walk_expr(
-                  state,
-                  lowered,
-                  body,
-                  names,
-                  *expr,
-                  target,
-                  target_span,
-                  scopes,
-                  def_symbols,
-                  file,
-                ) {
-                  return Some(found);
-                }
-              }
-              hir_js::ObjectProperty::Getter { .. } | hir_js::ObjectProperty::Setter { .. } => {}
-            }
-          }
-          None
-        }
-        HirExprKind::Template(tmpl) => {
-          for span in tmpl.spans.iter() {
-            if let Some(found) = walk_expr(
-              state,
-              lowered,
-              body,
-              names,
-              span.expr,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            ) {
-              return Some(found);
-            }
-          }
-          None
-        }
-        HirExprKind::FunctionExpr { .. } | HirExprKind::ClassExpr { .. } => None,
-        _ => None,
-      }
-    }
-
-    fn walk_stmt(
-      state: &mut ProgramState,
-      lowered: &LowerResult,
-      body: &hir_js::Body,
-      names: &hir_js::NameInterner,
-      stmt_id: hir_js::StmtId,
-      target: hir_js::ExprId,
-      target_span: TextRange,
-      scopes: &mut Vec<HashMap<String, semantic_js::SymbolId>>,
-      def_symbols: &mut HashMap<TextRange, semantic_js::SymbolId>,
-      file: FileId,
-    ) -> Option<semantic_js::SymbolId> {
-      let Some(stmt) = body.stmts.get(stmt_id.0 as usize) else {
-        return None;
-      };
-      match &stmt.kind {
-        HirStmtKind::Expr(expr) => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *expr,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        ),
-        HirStmtKind::Return(expr) => expr.and_then(|e| {
-          walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            e,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }),
-        HirStmtKind::Block(stmts) => {
-          scopes.push(HashMap::new());
-          for stmt in stmts.iter() {
-            if let Some(found) = walk_stmt(
-              state,
-              lowered,
-              body,
-              names,
-              *stmt,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            ) {
-              scopes.pop();
-              return Some(found);
-            }
-          }
-          scopes.pop();
-          None
-        }
-        HirStmtKind::If {
-          test,
-          consequent,
-          alternate,
-        } => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *test,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        )
-        .or_else(|| {
-          walk_stmt(
-            state,
-            lowered,
-            body,
-            names,
-            *consequent,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        })
-        .or_else(|| {
-          alternate.and_then(|alt| {
-            walk_stmt(
-              state,
-              lowered,
-              body,
-              names,
-              alt,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            )
-          })
-        }),
-        HirStmtKind::While { test, body: inner } => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *test,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        )
-        .or_else(|| {
-          walk_stmt(
-            state,
-            lowered,
-            body,
-            names,
-            *inner,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }),
-        HirStmtKind::DoWhile { body: inner, test } => walk_stmt(
-          state,
-          lowered,
-          body,
-          names,
-          *inner,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        )
-        .or_else(|| {
-          walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            *test,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }),
-        HirStmtKind::For {
-          init,
-          test,
-          update,
-          body: inner,
-        } => {
-          if let Some(init) = init {
-            match init {
-              hir_js::ForInit::Expr(expr) => {
-                if let Some(found) = walk_expr(
-                  state,
-                  lowered,
-                  body,
-                  names,
-                  *expr,
-                  target,
-                  target_span,
-                  scopes,
-                  def_symbols,
-                  file,
-                ) {
-                  return Some(found);
-                }
-              }
-              hir_js::ForInit::Var(var) => {
-                for decl in var.declarators.iter() {
-                  bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
-                  if let Some(init) = decl.init {
-                    if let Some(found) = walk_expr(
-                      state,
-                      lowered,
-                      body,
-                      names,
-                      init,
-                      target,
-                      target_span,
-                      scopes,
-                      def_symbols,
-                      file,
-                    ) {
-                      return Some(found);
-                    }
-                  }
-                }
-              }
-            }
-          }
-          if let Some(test) = test {
-            if let Some(found) = walk_expr(
-              state,
-              lowered,
-              body,
-              names,
-              *test,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            ) {
-              return Some(found);
-            }
-          }
-          if let Some(update) = update {
-            if let Some(found) = walk_expr(
-              state,
-              lowered,
-              body,
-              names,
-              *update,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            ) {
-              return Some(found);
-            }
-          }
-          walk_stmt(
-            state,
-            lowered,
-            body,
-            names,
-            *inner,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }
-        HirStmtKind::ForIn {
-          left,
-          right,
-          body: inner,
-          ..
-        } => {
-          match left {
-            hir_js::ForHead::Pat(pat) => {
-              bind_pat(state, body, names, *pat, scopes, def_symbols, file)
-            }
-            hir_js::ForHead::Var(var) => {
-              for decl in var.declarators.iter() {
-                bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
-              }
-            }
-          }
-          if let Some(found) = walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            *right,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          ) {
-            return Some(found);
-          }
-          walk_stmt(
-            state,
-            lowered,
-            body,
-            names,
-            *inner,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }
-        HirStmtKind::Switch {
-          discriminant,
-          cases,
-        } => {
-          if let Some(found) = walk_expr(
-            state,
-            lowered,
-            body,
-            names,
-            *discriminant,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          ) {
-            return Some(found);
-          }
-          for case in cases.iter() {
-            if let Some(test) = case.test {
-              if let Some(found) = walk_expr(
-                state,
-                lowered,
-                body,
-                names,
-                test,
-                target,
-                target_span,
-                scopes,
-                def_symbols,
-                file,
-              ) {
-                return Some(found);
-              }
-            }
-            for stmt in case.consequent.iter() {
-              if let Some(found) = walk_stmt(
-                state,
-                lowered,
-                body,
-                names,
-                *stmt,
-                target,
-                target_span,
-                scopes,
-                def_symbols,
-                file,
-              ) {
-                return Some(found);
-              }
-            }
-          }
-          None
-        }
-        HirStmtKind::Try {
-          block,
-          catch,
-          finally_block,
-        } => {
-          if let Some(found) = walk_stmt(
-            state,
-            lowered,
-            body,
-            names,
-            *block,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          ) {
-            return Some(found);
-          }
-          if let Some(catch) = catch {
-            if let Some(param) = catch.param {
-              bind_pat(state, body, names, param, scopes, def_symbols, file);
-            }
-            if let Some(found) = walk_stmt(
-              state,
-              lowered,
-              body,
-              names,
-              catch.body,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            ) {
-              return Some(found);
-            }
-          }
-          if let Some(finally_block) = finally_block {
-            return walk_stmt(
-              state,
-              lowered,
-              body,
-              names,
-              *finally_block,
-              target,
-              target_span,
-              scopes,
-              def_symbols,
-              file,
-            );
-          }
-          None
-        }
-        HirStmtKind::Throw(expr) => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *expr,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        ),
-        HirStmtKind::Var(var) => {
-          for decl in var.declarators.iter() {
-            bind_pat(state, body, names, decl.pat, scopes, def_symbols, file);
-            if let Some(init) = decl.init {
-              if let Some(found) = walk_expr(
-                state,
-                lowered,
-                body,
-                names,
-                init,
-                target,
-                target_span,
-                scopes,
-                def_symbols,
-                file,
-              ) {
-                return Some(found);
-              }
-            }
-          }
-          None
-        }
-        HirStmtKind::Labeled { body: inner, .. } => walk_stmt(
-          state,
-          lowered,
-          body,
-          names,
-          *inner,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        ),
-        HirStmtKind::With {
-          object,
-          body: inner,
-        } => walk_expr(
-          state,
-          lowered,
-          body,
-          names,
-          *object,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        )
-        .or_else(|| {
-          walk_stmt(
-            state,
-            lowered,
-            body,
-            names,
-            *inner,
-            target,
-            target_span,
-            scopes,
-            def_symbols,
-            file,
-          )
-        }),
-        HirStmtKind::Decl(def_id) => {
-          if let Some(def) = lowered.def(*def_id) {
-            if let Some(name) = names.resolve(def.name) {
-              let symbol = def_symbols
-                .get(&def.span)
-                .copied()
-                .or_else(|| {
-                  state.symbol_occurrences.get(&file).and_then(|occs| {
-                    occs
-                      .iter()
-                      .find(|occ| occ.range == def.span)
-                      .map(|occ| occ.symbol)
-                  })
-                })
-                .unwrap_or_else(|| state.alloc_symbol());
-              if let Some(scope) = scopes.last_mut() {
-                scope.insert(name.to_string(), symbol);
-              }
-              def_symbols.insert(def.span, symbol);
-              state.record_symbol(file, def.span, symbol);
-            }
-          }
-          None
-        }
-        HirStmtKind::Empty | HirStmtKind::Break(_) | HirStmtKind::Continue(_) => None,
-      }
-    }
-
-    fn walk_body(
-      state: &mut ProgramState,
-      lowered: &LowerResult,
-      body_id: hir_js::BodyId,
-      target: hir_js::ExprId,
-      target_span: TextRange,
-      scopes: &mut Vec<HashMap<String, semantic_js::SymbolId>>,
-      def_symbols: &mut HashMap<TextRange, semantic_js::SymbolId>,
-      file: FileId,
-    ) -> Option<semantic_js::SymbolId> {
-      let Some(body) = lowered.body(body_id) else {
-        return None;
-      };
-      let names = lowered.names.as_ref();
-      if matches!(body.kind, HirBodyKind::Function) {
-        if let Some(func) = body.function.as_ref() {
-          for param in func.params.iter() {
-            bind_pat(state, body, names, param.pat, scopes, def_symbols, file);
-          }
-        }
-      }
-      let stmts_to_visit: Vec<hir_js::StmtId> = if body.root_stmts.is_empty() {
-        let mut referenced: HashSet<hir_js::StmtId> = HashSet::new();
-        for stmt in body.stmts.iter() {
-          match &stmt.kind {
-            HirStmtKind::Block(stmts) => referenced.extend(stmts.iter().copied()),
-            HirStmtKind::If {
-              consequent,
-              alternate,
-              ..
-            } => {
-              referenced.insert(*consequent);
-              if let Some(alt) = alternate {
-                referenced.insert(*alt);
-              }
-            }
-            HirStmtKind::While { body, .. }
-            | HirStmtKind::DoWhile { body, .. }
-            | HirStmtKind::For { body, .. }
-            | HirStmtKind::Labeled { body, .. }
-            | HirStmtKind::With { body, .. } => {
-              referenced.insert(*body);
-            }
-            HirStmtKind::ForIn { body, .. } => {
-              referenced.insert(*body);
-            }
-            HirStmtKind::Switch { cases, .. } => {
-              for case in cases.iter() {
-                referenced.extend(case.consequent.iter().copied());
-              }
-            }
-            HirStmtKind::Try {
-              block,
-              catch,
-              finally_block,
-            } => {
-              referenced.insert(*block);
-              if let Some(catch) = catch {
-                referenced.insert(catch.body);
-              }
-              if let Some(finally_block) = finally_block {
-                referenced.insert(*finally_block);
-              }
-            }
-            _ => {}
-          }
-        }
-        let mut roots: Vec<_> = (0..body.stmts.len())
-          .map(|idx| hir_js::StmtId(idx as u32))
-          .filter(|id| !referenced.contains(id))
-          .collect();
-        roots.sort_by_key(|id| {
-          body
-            .stmts
-            .get(id.0 as usize)
-            .map(|s| s.span.start)
-            .unwrap_or(0)
-        });
-        roots
-      } else {
-        body.root_stmts.clone()
-      };
-      for stmt in stmts_to_visit.iter() {
-        if let Some(found) = walk_stmt(
-          state,
-          lowered,
-          body,
-          names,
-          *stmt,
-          target,
-          target_span,
-          scopes,
-          def_symbols,
-          file,
-        ) {
-          return Some(found);
-        }
-      }
-      walk_expr(
-        state,
-        lowered,
-        body,
-        names,
-        target,
-        target,
-        target_span,
-        scopes,
-        def_symbols,
-        file,
-      )
-    }
-
-    let mut scopes = vec![initial_scope];
-    let mut parent_chain = Vec::new();
-    let mut current = self.body_parents.get(&prog_body).copied();
-    let mut visited = HashSet::new();
-    while let Some(parent) = current {
-      if !visited.insert(parent) {
-        break;
-      }
-      parent_chain.push(parent);
-      current = self.body_parents.get(&parent).copied();
-    }
-    for parent in parent_chain.into_iter().rev() {
-      let Some(meta) = self.body_map.get(&parent).copied() else {
-        continue;
-      };
-      let Some(hir_id) = meta.hir else {
-        continue;
-      };
-      let Some(lowered) = self.hir_lowered.get(&meta.file).cloned() else {
-        continue;
-      };
-      let Some(body) = lowered.body(hir_id) else {
-        continue;
-      };
-      let names = lowered.names.clone();
-      scopes.push(HashMap::new());
-      for (idx, _) in body.pats.iter().enumerate() {
-        bind_pat(
-          self,
-          body,
-          &names,
-          HirPatId(idx as u32),
-          &mut scopes,
-          &mut def_symbols,
-          meta.file,
-        );
-      }
-    }
-    walk_body(
-      self,
-      lowered,
-      hir_body,
-      target_expr,
-      target_span,
-      &mut scopes,
-      &mut def_symbols,
-      file,
-    )
-  }
-
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
+    let mut files: Vec<_> = self.file_kinds.keys().copied().collect();
+    files.sort_by_key(|file| file.0);
+    for file in files {
+      let locals = crate::db::local_symbol_info(&self.typecheck_db, file);
+      if let Some(local) = locals.get(&symbol) {
+        return Some(SymbolInfo {
+          symbol,
+          def: None,
+          file: Some(local.file),
+          type_id: None,
+          name: Some(local.name.clone()),
+          span: local.span,
+        });
+      }
+    }
+
     let binding = self
       .global_bindings
       .iter()
       .find(|(_, binding)| binding.symbol == symbol);
 
-    let def = self
+    let mut def = self
       .symbol_to_def
       .get(&symbol)
       .copied()
       .or_else(|| binding.as_ref().and_then(|(_, b)| b.def));
-    let type_id = def
-      .and_then(|def_id| self.def_types.get(&def_id).copied())
-      .or_else(|| binding.as_ref().and_then(|(_, b)| b.type_id));
+    let mut file = def.and_then(|def_id| self.def_data.get(&def_id).map(|data| data.file));
+    let mut span = def.and_then(|def_id| self.def_data.get(&def_id).map(|data| data.span));
     let mut name = def
       .and_then(|def_id| self.def_data.get(&def_id).map(|data| data.name.clone()))
       .or_else(|| binding.as_ref().map(|(name, _)| name.to_string()));
-    let file = def.and_then(|def_id| self.def_data.get(&def_id).map(|data| data.file));
+    let mut type_id = def
+      .and_then(|def_id| self.def_types.get(&def_id).copied())
+      .or_else(|| binding.as_ref().and_then(|(_, b)| b.type_id));
 
-    if def.is_none() && type_id.is_none() && name.is_none() {
+    if def.is_none() {
+      if let Some(semantics) = self.semantics.as_ref() {
+        let sem_symbol: sem_ts::SymbolId = symbol.into();
+        let sym_data = semantics.symbols().symbol(sem_symbol);
+        for ns in [
+          sem_ts::Namespace::VALUE,
+          sem_ts::Namespace::TYPE,
+          sem_ts::Namespace::NAMESPACE,
+        ] {
+          if !sym_data.namespaces.contains(ns) {
+            continue;
+          }
+          if let Some(decl_id) = semantics.symbol_decls(sem_symbol, ns).first() {
+            let decl = semantics.symbols().decl(*decl_id);
+            def = Some(decl.def_id);
+            file = Some(decl.file);
+            if name.is_none() {
+              name = Some(sym_data.name.clone());
+            }
+            if type_id.is_none() {
+              type_id = self.def_types.get(&decl.def_id).copied();
+            }
+            break;
+          }
+        }
+      }
+    }
+
+    if span.is_none() {
+      span = def.and_then(|def_id| self.def_data.get(&def_id).map(|data| data.span));
+    }
+
+    if def.is_none() && type_id.is_none() && name.is_none() && file.is_none() {
       return None;
     }
     if name.is_none() {
@@ -8228,6 +7003,7 @@ impl ProgramState {
       file,
       type_id,
       name,
+      span,
     })
   }
 
@@ -8577,11 +7353,7 @@ impl ProgramState {
   }
 
   fn record_symbol(&mut self, file: FileId, range: TextRange, symbol: semantic_js::SymbolId) {
-    self
-      .symbol_occurrences
-      .entry(file)
-      .or_default()
-      .push(SymbolOccurrence { range, symbol });
+    let _ = (file, range, symbol);
   }
 }
 

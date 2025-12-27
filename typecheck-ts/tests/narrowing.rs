@@ -471,14 +471,8 @@ function f(
 
   let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
   let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
-  let foo_obj = obj_type(
-    &store,
-    &[("kind", foo), ("value", prim.string)],
-  );
-  let bar_obj = obj_type(
-    &store,
-    &[("kind", bar), ("value", prim.number)],
-  );
+  let foo_obj = obj_type(&store, &[("kind", foo), ("value", prim.string)]);
+  let bar_obj = obj_type(&store, &[("kind", bar), ("value", prim.number)]);
 
   let mut initial = HashMap::new();
   initial.insert(
@@ -1473,7 +1467,15 @@ fn nullish_coalescing_narrows_member_base() {
     .exprs
     .iter()
     .enumerate()
-    .find(|(_, expr)| matches!(expr.kind, ExprKind::Binary { op: BinaryOp::NullishCoalescing, .. }))
+    .find(|(_, expr)| {
+      matches!(
+        expr.kind,
+        ExprKind::Binary {
+          op: BinaryOp::NullishCoalescing,
+          ..
+        }
+      )
+    })
     .map(|(idx, _)| ExprId(idx as u32))
     .expect("nullish expression");
 

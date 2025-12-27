@@ -8,6 +8,7 @@ use hir_js::{
   lower_file_with_diagnostics, ExportDefaultValue, ExportKind, ExprKind, FileKind as HirFileKind,
   LowerResult, ObjectProperty, StmtKind,
 };
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
 use types_ts_interned::{PrimitiveIds, TypeStore};
 
@@ -16,7 +17,8 @@ use crate::db::inputs::{
   CancellationToken, CancelledInput, CompilerOptionsInput, FileInput, ModuleResolutionInput,
   RootsInput,
 };
-use crate::db::{Db, ModuleKey};
+use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
+use crate::db::{symbols, Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::parse_metrics;
 use crate::profile::QueryKind;
@@ -25,6 +27,7 @@ use crate::sem_hir::sem_hir_from_lower;
 use crate::semantic_js::SymbolId;
 use crate::symbols::SymbolBinding;
 use crate::FileKey;
+use crate::SymbolOccurrence;
 use crate::{BodyId, DefId, TypeId};
 use salsa::Setter;
 
@@ -286,6 +289,36 @@ fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
   }
 }
 
+#[salsa::tracked]
+fn symbol_index_for(db: &dyn Db, file: FileInput) -> SymbolIndex {
+  let file_id = file.file_id(db);
+  let kind = file.kind(db);
+  let parsed = parse_for(db, file);
+  if parsed.ast.is_none() {
+    return SymbolIndex::empty();
+  }
+  let source = file_text_for(db, file);
+  let dialect = match kind {
+    FileKind::Js => Dialect::Js,
+    FileKind::Ts => Dialect::Ts,
+    FileKind::Tsx => Dialect::Tsx,
+    FileKind::Jsx => Dialect::Jsx,
+    FileKind::Dts => Dialect::Dts,
+  };
+  let ast = match parse_with_options(
+    &source,
+    ParseOptions {
+      dialect,
+      source_type: SourceType::Module,
+    },
+  ) {
+    Ok(ast) => ast,
+    Err(_) => return SymbolIndex::empty(),
+  };
+  let semantics = ts_semantics_for(db);
+  symbols::symbol_index_for_file(file_id, kind, ast, Some(semantics.semantics.as_ref()))
+}
+
 fn empty_sem_hir(file: FileId, kind: FileKind) -> sem_ts::HirFile {
   sem_ts::HirFile {
     file_id: sem_ts::FileId(file.0),
@@ -528,6 +561,20 @@ pub fn sem_hir(db: &dyn Db, file: FileId) -> sem_ts::HirFile {
     .file_input(file)
     .expect("file must be seeded before computing sem HIR");
   sem_hir_for(db, handle)
+}
+
+pub fn symbol_occurrences(db: &dyn Db, file: FileId) -> Arc<[SymbolOccurrence]> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before computing symbol occurrences");
+  symbol_index_for(db, handle).occurrences
+}
+
+pub fn local_symbol_info(db: &dyn Db, file: FileId) -> Arc<BTreeMap<SymbolId, LocalSymbolInfo>> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before computing symbol info");
+  symbol_index_for(db, handle).locals
 }
 
 /// Host-provided module resolution result.

@@ -199,6 +199,16 @@ impl TsLocalSemantics {
   pub fn resolve_type_at_offset(&self, offset: u32) -> Option<(TextRange, SymbolId)> {
     resolve_span_at_offset(&self.type_resolutions, offset)
   }
+
+  /// All expression resolutions recorded for the file, sorted by span.
+  pub fn expr_resolutions(&self) -> impl Iterator<Item = (&TextRange, &SymbolId)> {
+    self.expr_resolutions.iter()
+  }
+
+  /// All type resolutions recorded for the file, sorted by span.
+  pub fn type_resolutions(&self) -> impl Iterator<Item = (&TextRange, &SymbolId)> {
+    self.type_resolutions.iter()
+  }
 }
 
 fn resolve_span_at_offset(

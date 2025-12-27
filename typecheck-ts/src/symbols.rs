@@ -27,7 +27,7 @@ pub mod semantic_js {
 
 /// Recorded occurrence of a symbol within a span.
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SymbolOccurrence {
   pub range: TextRange,
   pub symbol: semantic_js::SymbolId,
@@ -52,4 +52,5 @@ pub struct SymbolInfo {
   pub file: Option<FileId>,
   pub type_id: Option<TypeId>,
   pub name: Option<String>,
+  pub span: Option<TextRange>,
 }
