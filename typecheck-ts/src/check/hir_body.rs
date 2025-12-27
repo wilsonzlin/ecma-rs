@@ -28,9 +28,15 @@ use types_ts_interned::{
 use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::Env;
 use super::flow_narrow::{
+<<<<<<< HEAD
   narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
   narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof, narrow_non_nullish,
   truthy_falsy_types, Facts, LiteralValue,
+=======
+  narrow_by_asserted, narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check,
+  narrow_by_instanceof, narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof,
+  narrow_non_nullish, truthy_falsy_types, Facts, LiteralValue,
+>>>>>>> 9ffa22f (feat: narrow equality between references)
 };
 
 use super::caches::BodyCaches;
@@ -2024,13 +2030,50 @@ pub fn check_body_with_env(
   checker.into_result()
 }
 
+enum Reference {
+  Ident { name: NameId, ty: TypeId },
+  Member {
+    base: NameId,
+    prop: String,
+    base_ty: TypeId,
+    prop_ty: TypeId,
+  },
+}
+
+impl Reference {
+  fn target(&self) -> NameId {
+    match self {
+      Reference::Ident { name, .. } => *name,
+      Reference::Member { base, .. } => *base,
+    }
+  }
+
+  fn target_ty(&self) -> TypeId {
+    match self {
+      Reference::Ident { ty, .. } => *ty,
+      Reference::Member { base_ty, .. } => *base_ty,
+    }
+  }
+
+  fn value_ty(&self) -> TypeId {
+    match self {
+      Reference::Ident { ty, .. } => *ty,
+      Reference::Member { prop_ty, .. } => *prop_ty,
+    }
+  }
+}
+
 struct FlowBodyChecker<'a> {
   body_id: BodyId,
   body: &'a Body,
   names: &'a NameInterner,
   store: Arc<TypeStore>,
+<<<<<<< HEAD
   file: FileId,
   relate: RelateCtx<'static>,
+=======
+  relate: RelateCtx<'a>,
+>>>>>>> 9ffa22f (feat: narrow equality between references)
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
@@ -2096,14 +2139,22 @@ impl<'a> FlowBodyChecker<'a> {
 
     let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
     let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
+<<<<<<< HEAD
     let relate = RelateCtx::new(Arc::clone(&store), store.options());
+=======
+    let relate =
+      RelateCtx::with_hooks(Arc::clone(&store), store.options(), super::relate_hooks());
+>>>>>>> 9ffa22f (feat: narrow equality between references)
 
     Self {
       body_id,
       body,
       names,
       store,
+<<<<<<< HEAD
       file,
+=======
+>>>>>>> 9ffa22f (feat: narrow equality between references)
       relate,
       expr_types,
       pat_types,
@@ -2744,6 +2795,23 @@ impl<'a> FlowBodyChecker<'a> {
       }
     }
 
+    if !negate {
+      if let (Some(left_ref), Some(right_ref)) =
+        (self.reference_from_expr(left, left_ty), self.reference_from_expr(right, right_ty))
+      {
+        let left_yes = self.narrow_reference_against(&left_ref, right_ref.value_ty());
+        let right_yes = self.narrow_reference_against(&right_ref, left_ref.value_ty());
+        if left_ref.target() == right_ref.target() {
+          let combined = self.store.intersection(vec![left_yes, right_yes]);
+          apply(left_ref.target(), combined, left_ref.target_ty());
+        } else {
+          apply(left_ref.target(), left_yes, left_ref.target_ty());
+          apply(right_ref.target(), right_yes, right_ref.target_ty());
+        }
+        return;
+      }
+    }
+
     if let Some((target, target_ty, lit)) = self.typeof_comparison(left, right) {
       let (yes, no) = narrow_by_typeof(target_ty, &lit, &self.store);
       apply(target, yes, no);
@@ -3080,7 +3148,6 @@ impl<'a> FlowBodyChecker<'a> {
     }
     None
   }
-
   fn assignment_expr_info(
     &mut self,
     expr_id: ExprId,
@@ -3121,6 +3188,76 @@ impl<'a> FlowBodyChecker<'a> {
       PatKind::Rest(inner) => self.assignment_target_info(**inner, env),
       PatKind::AssignTarget(expr) => self.assignment_expr_info(*expr, env),
       _ => (prim.unknown, None, false),
+    }
+  }
+
+  fn reference_from_expr(&self, expr_id: ExprId, expr_ty: TypeId) -> Option<Reference> {
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Ident(name) => Some(Reference::Ident { name: *name, ty: expr_ty }),
+      ExprKind::Member(mem) => {
+        let base = self.ident_name(mem.object)?;
+        let prop = match &mem.property {
+          ObjectKey::Ident(id) => self.hir_name(*id),
+          ObjectKey::String(s) => s.clone(),
+          ObjectKey::Number(n) => n.clone(),
+          ObjectKey::Computed(_) => return None,
+        };
+        let base_ty = self.expr_types[mem.object.0 as usize];
+        Some(Reference::Member {
+          base,
+          prop,
+          base_ty,
+          prop_ty: expr_ty,
+        })
+      }
+      _ => None,
+    }
+  }
+
+  fn narrow_reference_against(&self, reference: &Reference, other_value_ty: TypeId) -> TypeId {
+    match reference {
+      Reference::Ident { ty, .. } => {
+        let (yes, _) = narrow_by_assignability(*ty, other_value_ty, &self.store, &self.relate);
+        yes
+      }
+      Reference::Member {
+        base_ty, prop, ..
+      } => self.narrow_object_by_prop_assignability(*base_ty, prop, other_value_ty),
+    }
+  }
+
+  fn narrow_object_by_prop_assignability(
+    &self,
+    obj_ty: TypeId,
+    prop: &str,
+    required_prop_ty: TypeId,
+  ) -> TypeId {
+    let prim = self.store.primitive_ids();
+    if required_prop_ty == prim.never {
+      return prim.never;
+    }
+    match self.store.type_kind(obj_ty) {
+      TypeKind::Union(members) => {
+        let mut narrowed = Vec::new();
+        for member in members {
+          let filtered = self.narrow_object_by_prop_assignability(member, prop, required_prop_ty);
+          if filtered != prim.never {
+            narrowed.push(filtered);
+          }
+        }
+        self.store.union(narrowed)
+      }
+      _ => {
+        if let Some(prop_ty) = self.object_prop_type(obj_ty, prop) {
+          let (overlap, _) =
+            narrow_by_assignability(prop_ty, required_prop_ty, &self.store, &self.relate);
+          if overlap != prim.never {
+            return obj_ty;
+          }
+          return prim.never;
+        }
+        obj_ty
+      }
     }
   }
 

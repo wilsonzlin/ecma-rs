@@ -435,10 +435,11 @@ pub fn narrow_by_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> (T
   }
 }
 
-/// Narrow a type by retaining members assignable to the asserted target.
+/// Narrow a type by retaining members assignable to the target while keeping a
+/// conservative remainder for the falsy branch.
 pub fn narrow_by_assignability(
   ty: TypeId,
-  asserted: TypeId,
+  target: TypeId,
   store: &TypeStore,
   relate: &RelateCtx<'_>,
 ) -> (TypeId, TypeId) {
@@ -448,7 +449,7 @@ pub fn narrow_by_assignability(
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        let (y, n) = narrow_by_assignability(member, asserted, store, relate);
+        let (y, n) = narrow_by_assignability(member, target, store, relate);
         if y != primitives.never {
           yes.push(y);
         }
@@ -459,8 +460,10 @@ pub fn narrow_by_assignability(
       (store.union(yes), store.union(no))
     }
     _ => {
-      if relate.is_assignable(ty, asserted) {
+      if relate.is_assignable(ty, target) {
         (ty, primitives.never)
+      } else if relate.is_assignable(target, ty) {
+        (target, ty)
       } else {
         (primitives.never, ty)
       }

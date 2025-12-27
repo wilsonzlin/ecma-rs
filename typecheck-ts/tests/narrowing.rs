@@ -376,6 +376,89 @@ fn optional_member_adds_undefined() {
 }
 
 #[test]
+fn equality_between_refs_narrows_to_common_types() {
+  let src = "function f(x: string | number, y: string) { if (x === y) { return x; } return x; }";
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.number]),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "y"), prim.string);
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "number | string");
+}
+
+#[test]
+fn equality_between_members_narrows_discriminants() {
+  let src = r#"
+function f(
+  x: { kind: "foo", value: string } | { kind: "bar", value: number },
+  y: { kind: "foo" },
+) {
+  if (x.kind === y.kind) {
+    return x.kind;
+  }
+  return x.kind;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+
+  let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
+  let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
+  let foo_obj = obj_type(
+    &store,
+    &[("kind", foo), ("value", prim.string)],
+  );
+  let bar_obj = obj_type(
+    &store,
+    &[("kind", bar), ("value", prim.number)],
+  );
+
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![foo_obj, bar_obj]),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "y"), foo_obj);
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, "\"foo\"");
+  assert_eq!(else_ty, "\"bar\" | \"foo\"");
+}
+
+#[test]
 fn user_defined_type_guards() {
   let src = r#"
 function isStr(x: string | number): x is string {
