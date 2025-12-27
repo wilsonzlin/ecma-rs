@@ -2061,12 +2061,38 @@ impl ProgramTypeResolver {
     }
   }
 
+  fn matches_namespace(kind: &DefKind, ns: sem_ts::Namespace) -> bool {
+    if ns.contains(sem_ts::Namespace::VALUE) {
+      return matches!(
+        kind,
+        DefKind::Function(_) | DefKind::Var(_) | DefKind::Import(_)
+      );
+    }
+    if ns.contains(sem_ts::Namespace::TYPE) {
+      return matches!(
+        kind,
+        DefKind::Interface(_) | DefKind::TypeAlias(_) | DefKind::Import(_)
+      );
+    }
+    if ns.contains(sem_ts::Namespace::NAMESPACE) {
+      return matches!(kind, DefKind::Var(var) if var.body.0 == u32::MAX)
+        || matches!(kind, DefKind::Import(_));
+    }
+    false
+  }
+
+  fn resolve_local(&self, name: &str, ns: sem_ts::Namespace) -> Option<DefId> {
+    let def = self.local_defs.get(name).copied()?;
+    let kind = self.def_kinds.get(&def)?;
+    Self::matches_namespace(kind, ns).then_some(def)
+  }
+
   fn resolve_symbol_in_module(&self, name: &str, ns: sem_ts::Namespace) -> Option<DefId> {
     let resolved = self
       .semantics
       .resolve_in_module(sem_ts::FileId(self.current_file.0), name, ns)
       .and_then(|symbol| self.pick_decl(symbol, ns));
-    resolved.or_else(|| self.local_defs.get(name).copied())
+    resolved.or_else(|| self.resolve_local(name, ns))
   }
 
   fn resolve_namespace_import_path(
@@ -2116,6 +2142,12 @@ impl ProgramTypeResolver {
     for (idx, decl_id) in self.semantics.symbol_decls(symbol, ns).iter().enumerate() {
       let decl = symbols.decl(*decl_id);
       let def = decl.def_id;
+      let Some(kind) = self.def_kinds.get(&def) else {
+        continue;
+      };
+      if !Self::matches_namespace(kind, ns) {
+        continue;
+      }
       let pri = self.def_priority(def, ns);
       best = match best {
         Some((best_pri, best_idx, best_def))
@@ -2133,6 +2165,9 @@ impl ProgramTypeResolver {
     let Some(kind) = self.def_kinds.get(&def) else {
       return u8::MAX;
     };
+    if !Self::matches_namespace(kind, ns) {
+      return u8::MAX;
+    }
     if ns.contains(sem_ts::Namespace::VALUE) {
       return match kind {
         DefKind::Function(_) => 0,
