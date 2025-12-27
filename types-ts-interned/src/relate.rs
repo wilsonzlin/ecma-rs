@@ -321,21 +321,41 @@ impl<'a> RelateCtx<'a> {
     let outcome = match kind {
       RelationKind::Assignable => self.assignable(src, dst, mode, record, depth),
       RelationKind::Comparable => {
-        let forward = self.assignable(src, dst, mode, record, depth + 1);
-        if !forward.result {
-          forward
-        } else {
-          let backward = self.assignable(dst, src, mode, record, depth + 1);
+        let src_kind = self.store.type_kind(src);
+        let dst_kind = self.store.type_kind(dst);
+        if matches!(src_kind, TypeKind::TypeParam(_)) || matches!(dst_kind, TypeKind::TypeParam(_)) {
+          let res = matches!(
+            (&src_kind, &dst_kind),
+            (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) if a == b
+          );
           RelationResult {
-            result: backward.result,
+            result: res,
             reason: self.join_reasons(
               record,
               key,
-              vec![forward.reason, backward.reason],
-              backward.result,
-              Some("comparable".into()),
+              Vec::new(),
+              res,
+              Some("type parameter comparable".into()),
               depth,
             ),
+          }
+        } else {
+          let forward = self.assignable(src, dst, mode, record, depth + 1);
+          if !forward.result {
+            forward
+          } else {
+            let backward = self.assignable(dst, src, mode, record, depth + 1);
+            RelationResult {
+              result: backward.result,
+              reason: self.join_reasons(
+                record,
+                key,
+                vec![forward.reason, backward.reason],
+                backward.result,
+                Some("comparable".into()),
+                depth,
+              ),
+            }
           }
         }
       }
@@ -835,6 +855,12 @@ impl<'a> RelateCtx<'a> {
   fn assignable_special(&self, src: &TypeKind, dst: &TypeKind) -> Option<bool> {
     let opts = &self.options;
     match (src, dst) {
+      (TypeKind::TypeParam(a), TypeKind::TypeParam(b)) => Some(a == b),
+      // Unresolved type parameters are treated conservatively as `unknown` to
+      // avoid spurious incompatibilities during overload checking. They accept
+      // any source but are only assignable to top types when used as sources.
+      (_, TypeKind::TypeParam(_)) => Some(true),
+      (TypeKind::TypeParam(_), _) => Some(matches!(dst, TypeKind::Any | TypeKind::Unknown)),
       (TypeKind::Any, _) | (_, TypeKind::Any) => Some(true),
       (TypeKind::Unknown, TypeKind::Unknown) => Some(true),
       (_, TypeKind::Unknown) => Some(true),

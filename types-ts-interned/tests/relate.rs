@@ -70,6 +70,26 @@ fn primitives_and_special_types() {
 }
 
 #[test]
+fn type_params_treated_as_unknown() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let tp_a = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let tp_b = store.intern_type(TypeKind::TypeParam(TypeParamId(1)));
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  assert!(ctx.is_assignable(primitives.number, tp_a));
+  assert!(ctx.is_assignable(primitives.unknown, tp_a));
+  assert!(ctx.is_assignable(primitives.any, tp_a));
+  assert!(ctx.is_assignable(tp_a, primitives.unknown));
+  assert!(ctx.is_assignable(tp_a, primitives.any));
+  assert!(ctx.is_assignable(tp_a, tp_a));
+  assert!(!ctx.is_assignable(tp_a, primitives.number));
+  assert!(!ctx.is_assignable(tp_a, tp_b));
+  assert!(!ctx.is_comparable(tp_a, primitives.unknown));
+  assert!(ctx.is_comparable(tp_a, tp_a));
+}
+
+#[test]
 fn strict_null_checks_propagate_through_objects() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

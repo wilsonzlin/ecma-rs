@@ -472,6 +472,13 @@ fn check_arguments(
       // Prefer fixed parameters over rest matches when both are applicable.
       specificity += 1;
     }
+    if matches!(store.type_kind(expected.ty), TypeKind::TypeParam(_)) {
+      // Unsolved type parameters are treated like `unknown` for compatibility,
+      // but they should make the candidate less specific than one with a
+      // concrete parameter type.
+      specificity += 2;
+      continue;
+    }
     if matches!(
       (store.type_kind(*arg), store.type_kind(expected.ty)),
       (TypeKind::Any | TypeKind::Unknown, _) | (_, TypeKind::Any | TypeKind::Unknown)

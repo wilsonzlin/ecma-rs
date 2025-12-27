@@ -1,0 +1,92 @@
+use typecheck_ts::{codes, FileId, FileKey, MemoryHost, Program};
+
+fn run_single_file(source: &str) -> (Program, FileId, Vec<diagnostics::Diagnostic>) {
+  let mut host = MemoryHost::new();
+  let file = FileKey::new("input.ts");
+  host.insert(file.clone(), source);
+  let program = Program::new(host, vec![file]);
+  let file_id = program.file_id(&FileKey::new("input.ts")).unwrap();
+  let diagnostics = program.check();
+  (program, file_id, diagnostics)
+}
+
+#[test]
+fn unresolved_type_param_treated_conservatively() {
+  const SOURCE: &str = "function make<T>(): T;\nconst x = make();\n// property access should not trigger overload mismatch\nx.toFixed();\n";
+  let (program, file_id, diagnostics) = run_single_file(SOURCE);
+
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|d| d.code == codes::NO_OVERLOAD.as_str()),
+    "call to `make` should not fail overload resolution: {diagnostics:?}"
+  );
+  let call_offset = SOURCE.find("make()").expect("call present") as u32;
+  let call_type = program
+    .type_at(file_id, call_offset)
+    .expect("type_at available");
+  let call_type_str = program.display_type(call_type).to_string();
+  assert!(
+    call_type_str.contains("unknown"),
+    "unresolved generic call should produce an unknown-like result, got {call_type_str}"
+  );
+}
+
+#[test]
+fn conflicting_type_arguments_still_error() {
+  let store = std::sync::Arc::new(types_ts_interned::TypeStore::new());
+  let primitives = store.primitive_ids();
+  let tp = types_ts_interned::TypeParamId(0);
+  let param_ty = store.intern_type(types_ts_interned::TypeKind::TypeParam(tp));
+  let sig = types_ts_interned::Signature {
+    params: vec![
+      types_ts_interned::Param {
+        name: None,
+        ty: param_ty,
+        optional: false,
+        rest: false,
+      },
+      types_ts_interned::Param {
+        name: None,
+        ty: param_ty,
+        optional: false,
+        rest: false,
+      },
+    ],
+    ret: param_ty,
+    type_params: vec![tp],
+    this_param: None,
+  };
+  let sig_id = store.intern_signature(sig);
+  let callable = store.intern_type(types_ts_interned::TypeKind::Callable {
+    overloads: vec![sig_id],
+  });
+  let relate = types_ts_interned::RelateCtx::new(
+    std::sync::Arc::clone(&store),
+    types_ts_interned::TypeOptions::default(),
+  );
+  let span = diagnostics::Span {
+    file: FileId(0),
+    range: diagnostics::TextRange::new(0, 0),
+  };
+  let resolution = typecheck_ts::check::overload::resolve_overloads(
+    &store,
+    &relate,
+    callable,
+    &[primitives.number, primitives.string],
+    None,
+    &[typecheck_ts::check::infer::TypeParamDecl::new(tp)],
+    None,
+    span,
+  );
+
+  assert!(
+    !resolution.diagnostics.is_empty(),
+    "call with conflicting type arguments should produce an error: {:?}",
+    resolution
+      .diagnostics
+      .iter()
+      .map(|d| d.message.clone())
+      .collect::<Vec<_>>()
+  );
+}
