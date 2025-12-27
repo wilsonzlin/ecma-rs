@@ -18,9 +18,8 @@ pub fn lower_decl_types(
   lowered: &LowerResult,
   semantics: Option<&TsProgramSemantics>,
   defs: Arc<HashMap<(FileId, String), DefId>>,
-  def_by_name: &HashMap<(FileId, String), DefId>,
   file: FileId,
-  module_resolver: Option<Arc<dyn Fn(FileId, &str) -> Option<FileId> + Send + '_>>,
+  module_resolver: Option<Arc<dyn Fn(FileId, &str) -> Option<FileId> + Send + Sync + '_>>,
 ) -> DeclTypes {
   let mut def_map = HashMap::new();
   let mut local_defs = HashMap::new();
@@ -28,7 +27,7 @@ pub fn lower_decl_types(
     if let Some(name) = lowered.names.resolve(def.name) {
       let name = name.to_string();
       local_defs.insert(name.clone(), def.id);
-      if let Some(mapped) = def_by_name.get(&(file, name.clone())) {
+      if let Some(mapped) = defs.get(&(file, name.clone())) {
         def_map.insert(def.id, *mapped);
       }
     }
@@ -53,17 +52,17 @@ pub fn lower_decl_types(
     let Some(info) = def.type_info.as_ref() else {
       continue;
     };
-    let (ty, params) = lowerer.lower_type_info(info, &lowered.names);
-    let target_def = def_map
-      .get(&def.id)
-      .copied()
-      .or_else(|| {
-        lowered
-          .names
-          .resolve(def.name)
-          .and_then(|name| def_by_name.get(&(file, name.to_string())).copied())
-      })
-      .unwrap_or(def.id);
+    let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
+      let target_def = def_map
+        .get(&def.id)
+        .copied()
+        .or_else(|| {
+          lowered
+            .names
+            .resolve(def.name)
+            .and_then(|name| defs.get(&(file, name.to_string())).copied())
+        })
+        .unwrap_or(def.id);
     decls
       .types
       .entry(target_def)

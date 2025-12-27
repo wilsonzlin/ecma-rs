@@ -3311,6 +3311,7 @@ impl ProgramState {
     let mut type_params = HashMap::new();
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let def_by_name = self.canonical_defs();
+    let shared_defs = Arc::new(def_by_name.clone());
     let mut binding_value_overrides: Vec<(FileId, String, tti::TypeId)> = Vec::new();
 
     enum EnumMemberInit {
@@ -3401,28 +3402,33 @@ impl ProgramState {
           }
         }
       }
-      let file_key = self.file_key_for_id(file);
-      let file_ids_map = self.file_keys.clone();
-      let key_to_id = move |key: &FileKey| file_ids_map.get(key).copied();
+      let resolver_host = Arc::clone(host);
+      let id_to_key = self.file_ids.clone();
+      let key_to_id = self.file_keys.clone();
+      let module_resolver = Arc::new(move |from: FileId, spec: &str| {
+        let Some(from_key) = id_to_key.get(&from) else {
+          return None;
+        };
+        let Some(target_key) = resolver_host.resolve(from_key, spec) else {
+          return None;
+        };
+        key_to_id.get(&target_key).copied()
+      });
       let mut lowerer = check::decls::HirDeclLowerer::new(
         Arc::clone(&store),
         &lowered.types,
         self.semantics.as_ref(),
-        def_by_name.clone(),
+        Arc::clone(&shared_defs),
         file,
-        file_key.clone(),
         local_defs,
-        &mut self.diagnostics,
-        Some(&def_map),
-        Some(&def_by_name),
-        Some(host.as_ref()),
-        Some(&key_to_id),
+        def_map.clone(),
+        Some(module_resolver),
       );
       for def in lowered.defs.iter() {
         let Some(info) = def.type_info.as_ref() else {
           continue;
         };
-        let (ty, params) = lowerer.lower_type_info(info, &lowered.names);
+        let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
         let target_def = def_map.get(&def.id).copied().or_else(|| {
           lowered
             .names
@@ -3441,6 +3447,7 @@ impl ProgramState {
           }
         }
       }
+      self.diagnostics.extend(lowerer.into_diagnostics());
 
       let mut enum_decls = Vec::new();
       if let Some(ast) = self.asts.get(&file) {

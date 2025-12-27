@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::{codes, FileKey, Host};
+use crate::codes;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   DefId as HirDefId, DefTypeInfo, TypeArenas, TypeArenasByDef, TypeExprId, TypeExprKind,
@@ -17,38 +17,31 @@ use types_ts_interned::{
 };
 
 /// Lower HIR type expressions and declarations into interned types.
-pub struct HirDeclLowerer<'a, 'diag> {
+pub struct HirDeclLowerer<'a> {
   store: Arc<TypeStore>,
   arenas: &'a TypeArenasByDef,
   current_arenas: Option<&'a TypeArenas>,
   semantics: Option<&'a TsProgramSemantics>,
-  defs: HashMap<(FileId, String), DefId>,
+  defs: Arc<HashMap<(FileId, String), DefId>>,
   file: FileId,
-  file_key: Option<FileKey>,
   local_defs: HashMap<String, HirDefId>,
-  diagnostics: &'diag mut Vec<Diagnostic>,
+  diagnostics: Vec<Diagnostic>,
   type_params: HashMap<HirTypeParamId, TypeParamId>,
   type_param_names: HashMap<hir_js::NameId, TypeParamId>,
-  def_map: Option<&'a HashMap<DefId, DefId>>,
-  def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
-  host: Option<&'a dyn Host>,
-  key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
+  def_map: HashMap<DefId, DefId>,
+  module_resolver: Option<Arc<dyn Fn(FileId, &str) -> Option<FileId> + Send + Sync + 'a>>,
 }
 
-impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
+impl<'a> HirDeclLowerer<'a> {
   pub fn new(
     store: Arc<TypeStore>,
     arenas: &'a TypeArenasByDef,
     semantics: Option<&'a TsProgramSemantics>,
-    defs: HashMap<(FileId, String), DefId>,
+    defs: Arc<HashMap<(FileId, String), DefId>>,
     file: FileId,
-    file_key: Option<FileKey>,
     local_defs: HashMap<String, HirDefId>,
-    diagnostics: &'diag mut Vec<Diagnostic>,
-    def_map: Option<&'a HashMap<DefId, DefId>>,
-    def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
-    host: Option<&'a dyn Host>,
-    key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
+    def_map: HashMap<DefId, DefId>,
+    module_resolver: Option<Arc<dyn Fn(FileId, &str) -> Option<FileId> + Send + Sync + 'a>>,
   ) -> Self {
     Self {
       store,
@@ -56,17 +49,18 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       semantics,
       defs,
       file,
-      file_key,
       local_defs,
-      diagnostics,
+      diagnostics: Vec::new(),
       type_params: HashMap::new(),
       type_param_names: HashMap::new(),
       current_arenas: None,
       def_map,
-      def_by_name,
-      host,
-      key_to_id,
+      module_resolver,
     }
+  }
+
+  pub fn into_diagnostics(self) -> Vec<Diagnostic> {
+    self.diagnostics
   }
 
   fn arenas(&self) -> &TypeArenas {
@@ -436,13 +430,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     params
       .iter()
       .filter_map(|id| {
-        let (constraint, default) = {
+        let (constraint_id, default_id) = {
           let data = self.arenas().type_params.get(id.0 as usize)?;
           (data.constraint, data.default)
         };
         let mapped = *self.type_params.get(id)?;
-        let constraint = constraint.map(|c| self.lower_type_expr(c, names));
-        let default = default.map(|d| self.lower_type_expr(d, names));
+        let constraint = constraint_id.map(|c| self.lower_type_expr(c, names));
+        let default = default_id.map(|d| self.lower_type_expr(d, names));
         Some(TypeParamDecl {
           id: mapped,
           constraint,
@@ -734,17 +728,11 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     import: &hir_js::TypeImport,
     names: &hir_js::NameInterner,
   ) -> TypeId {
-    let Some(host) = self.host else {
+    let Some(resolver) = self.module_resolver.as_ref() else {
       return self.store.primitive_ids().unknown;
     };
 
-    let Some(from_key) = self.file_key.as_ref() else {
-      return self.store.primitive_ids().unknown;
-    };
-    let Some(target_key) = host.resolve(from_key, &import.module) else {
-      return self.store.primitive_ids().unknown;
-    };
-    let Some(target_file) = self.key_to_id.and_then(|resolver| resolver(&target_key)) else {
+    let Some(target_file) = resolver(self.file, &import.module) else {
       return self.store.primitive_ids().unknown;
     };
 
@@ -767,9 +755,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
 
     if let Some(name) = qualifier_name.map(|n| n.to_string()) {
       if let Some(def) = self
-        .def_by_name
-        .and_then(|map| map.get(&(target_file, name.clone())).copied())
-        .or_else(|| self.defs.get(&(target_file, name.clone())).copied())
+        .defs
+        .get(&(target_file, name.clone()))
+        .copied()
       {
         return self.store.intern_type(TypeKind::Ref {
           def,
@@ -779,6 +767,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
 
     self.store.primitive_ids().unknown
+  }
+
+  fn resolve_import_target(&self, from: FileId, module: &str) -> Option<FileId> {
+    self
+      .module_resolver
+      .as_ref()
+      .and_then(|resolver| resolver(from, module))
   }
 
   fn resolve_type_name(
@@ -809,9 +804,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           .and_then(|segments| segments.last())
           .and_then(|id| names.resolve(*id))
           .map(|s| s.to_string())?;
-        let from_key = self.file_key.as_ref()?;
-        let target_key = self.host.and_then(|h| h.resolve(from_key, module))?;
-        let target_file = self.key_to_id.and_then(|resolver| resolver(&target_key))?;
+        let target_file = self.resolve_import_target(file_override.unwrap_or(self.file), module)?;
         self.resolve_named_type(&name, target_file)
       }),
       TypeName::ImportExpr => None,
@@ -846,9 +839,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           .and_then(|segments| segments.last())
           .and_then(|id| names.resolve(*id))
           .map(|s| s.to_string())?;
-        let from_key = self.file_key.as_ref()?;
-        let target_key = self.host.and_then(|h| h.resolve(from_key, module))?;
-        let target_file = self.key_to_id.and_then(|resolver| resolver(&target_key))?;
+        let target_file = self.resolve_import_target(file_override.unwrap_or(self.file), module)?;
         self.resolve_named_value(&name, target_file)
       }),
       TypeName::ImportExpr => None,
@@ -860,25 +851,15 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       if let Some(local) = self.local_defs.get(name).copied() {
         return self
           .def_map
-          .and_then(|map| map.get(&local).copied())
-          .or_else(|| {
-            self
-              .def_by_name
-              .and_then(|map| map.get(&(self.file, name.to_string())).copied())
-          })
+          .get(&local)
+          .copied()
+          .or_else(|| self.defs.get(&(self.file, name.to_string())).copied())
           .or(Some(local));
       }
     }
 
     if let Some(def) = self.defs.get(&(file, name.to_string())) {
       return Some(*def);
-    }
-
-    if let Some(def) = self
-      .def_by_name
-      .and_then(|map| map.get(&(file, name.to_string())).copied())
-    {
-      return Some(def);
     }
 
     if let Some(sem) = self.semantics {
@@ -888,13 +869,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           let target = DefId(decl_data.def_id.0);
           return self
             .def_map
-            .and_then(|map| map.get(&target).copied())
+            .get(&target)
+            .copied()
             .or_else(|| {
-              self.def_by_name.and_then(|map| {
-                map
-                  .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
-                  .copied()
-              })
+              self
+                .defs
+                .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
+                .copied()
             })
             .or(Some(target));
         }
@@ -921,25 +902,15 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       if let Some(local) = self.local_defs.get(name).copied() {
         return self
           .def_map
-          .and_then(|map| map.get(&local).copied())
-          .or_else(|| {
-            self
-              .def_by_name
-              .and_then(|map| map.get(&(self.file, owned.clone())).copied())
-          })
+          .get(&local)
+          .copied()
+          .or_else(|| self.defs.get(&(self.file, owned.clone())).copied())
           .or(Some(local));
       }
     }
 
     if let Some(def) = self.defs.get(&(file, owned.clone())) {
       return Some(*def);
-    }
-
-    if let Some(def) = self
-      .def_by_name
-      .and_then(|map| map.get(&(file, owned.clone())).copied())
-    {
-      return Some(def);
     }
 
     if let Some(sem) = self.semantics {
@@ -1090,17 +1061,19 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let def = DefId(decl_data.def_id.0);
     self
       .def_map
-      .and_then(|map| map.get(&def).copied())
+      .get(&def)
+      .copied()
       .or_else(|| {
         self
-          .def_by_name
-          .and_then(|map| map.get(&(decl_data.file, decl_data.name.clone())).copied())
+          .defs
+          .get(&(decl_data.file, decl_data.name.clone()))
+          .copied()
       })
       .or(Some(def))
   }
 }
 
-impl<'a, 'diag> std::fmt::Debug for HirDeclLowerer<'a, 'diag> {
+impl<'a> std::fmt::Debug for HirDeclLowerer<'a> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("HirDeclLowerer")
       .field("file", &self.file)

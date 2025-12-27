@@ -27,11 +27,9 @@ use crate::parse_metrics;
 use crate::profile::QueryKind;
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
-use crate::semantic_js::SymbolId;
-use crate::symbols::SymbolBinding;
+use crate::symbols::{semantic_js::SymbolId, SymbolBinding, SymbolOccurrence};
 use crate::FileKey;
-use crate::SymbolOccurrence;
-use crate::{BodyId, DefId, ExprId, TypeId};
+use crate::{BodyId, DefId};
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
   db.file_input_by_key(key)
@@ -264,7 +262,8 @@ pub mod body_check {
   use crate::lib_support::{CacheMode, CacheOptions};
   use crate::profile::{QueryKind, QueryStatsCollector};
   use crate::program::check::relate_hooks;
-  use crate::{BodyCheckResult, BodyId, DefId, PatId, SymbolBinding, TypeId};
+  use crate::symbols::SymbolBinding;
+  use crate::{BodyCheckResult, BodyId, DefId, PatId, TypeId};
 
   #[derive(Clone)]
   pub struct ArcAst(Arc<Node<TopLevel>>);
@@ -1039,8 +1038,7 @@ fn decl_types_in_file_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
     store,
     lowered_hir,
     Some(&semantics.semantics),
-    def_by_name.clone(),
-    def_by_name.as_ref(),
+    def_by_name,
     file_id,
     Some(resolver),
   );
