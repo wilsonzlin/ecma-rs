@@ -138,6 +138,7 @@ pub mod db;
 mod error;
 mod expand;
 mod files;
+mod parse_metrics;
 mod profile;
 mod program;
 mod sem_hir;
@@ -148,6 +149,7 @@ mod type_queries;
 
 pub use api::*;
 pub use error::*;
+pub use parse_metrics::{parse_call_count, reset_parse_call_count};
 pub use profile::*;
 pub use program::BodyCheckResult;
 pub use program::*;

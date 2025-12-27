@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
@@ -10,13 +10,14 @@ use hir_js::{
 use semantic_js::ts as sem_ts;
 use types_ts_interned::PrimitiveIds;
 
+use crate::codes;
 use crate::db::inputs::{
   CancellationToken, CancelledInput, CompilerOptionsInput, FileInput, ModuleResolutionInput,
   RootsInput,
 };
 use crate::db::{Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
-use crate::codes;
+use crate::parse_metrics;
 use crate::profile::QueryKind;
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
@@ -232,14 +233,12 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
 
 impl Eq for LowerResultWithDiagnostics {}
 
-static PARSE_QUERY_CALLS: AtomicUsize = AtomicUsize::new(0);
-
 pub fn parse_query_count() -> usize {
-  PARSE_QUERY_CALLS.load(Ordering::Relaxed)
+  parse_metrics::parse_call_count()
 }
 
 pub fn reset_parse_query_count() {
-  PARSE_QUERY_CALLS.store(0, Ordering::Relaxed);
+  parse_metrics::reset_parse_call_count();
 }
 
 #[salsa::tracked]
@@ -247,7 +246,7 @@ fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
   let _timer = db
     .profiler()
     .map(|profiler| profiler.timer(QueryKind::Parse, false));
-  PARSE_QUERY_CALLS.fetch_add(1, Ordering::Relaxed);
+  parse_metrics::record_parse_call();
   let kind = file.kind(db);
   let source = file.text(db);
   parser::parse(file.file_id(db), kind, &source)

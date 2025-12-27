@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::panic::{self, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tracing::debug_span;
@@ -258,16 +258,6 @@ impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
     let params = self.type_params.get(&def).cloned().unwrap_or_else(Vec::new);
     Some(tti::ExpandedType { params, ty })
   }
-}
-
-static PARSE_CALLS: AtomicUsize = AtomicUsize::new(0);
-
-pub fn parse_call_count() -> usize {
-  PARSE_CALLS.load(Ordering::Relaxed)
-}
-
-pub fn reset_parse_call_count() {
-  PARSE_CALLS.store(0, Ordering::Relaxed);
 }
 
 fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeStore>, tti::TypeId) {
@@ -3728,7 +3718,6 @@ impl ProgramState {
     kind: FileKind,
     text: Arc<str>,
   ) -> Result<Arc<Node<TopLevel>>, Diagnostic> {
-    PARSE_CALLS.fetch_add(1, Ordering::Relaxed);
     self.set_salsa_inputs(file, kind, Arc::clone(&text));
     let result = db::parse(&self.typecheck_db, file);
     match result.ast {
