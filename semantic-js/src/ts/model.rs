@@ -220,6 +220,20 @@ pub struct ImportNamed {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportEquals {
+  pub local: String,
+  pub local_span: TextRange,
+  pub target: ImportEqualsTarget,
+  pub is_exported: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImportEqualsTarget {
+  Require { specifier: String, specifier_span: TextRange },
+  EntityName { path: Vec<String>, span: TextRange },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExportSpecifier {
   pub local: String,
   pub exported: Option<String>,
@@ -267,6 +281,7 @@ pub struct AmbientModule {
   pub name_span: TextRange,
   pub decls: Vec<Decl>,
   pub imports: Vec<Import>,
+  pub import_equals: Vec<ImportEquals>,
   pub exports: Vec<Export>,
   pub export_as_namespace: Vec<ExportAsNamespace>,
   pub ambient_modules: Vec<AmbientModule>,
@@ -279,6 +294,7 @@ pub struct HirFile {
   pub file_kind: FileKind,
   pub decls: Vec<Decl>,
   pub imports: Vec<Import>,
+  pub import_equals: Vec<ImportEquals>,
   pub exports: Vec<Export>,
   pub export_as_namespace: Vec<ExportAsNamespace>,
   pub ambient_modules: Vec<AmbientModule>,
@@ -292,6 +308,7 @@ impl HirFile {
       file_kind: FileKind::Ts,
       decls: Vec::new(),
       imports: Vec::new(),
+      import_equals: Vec::new(),
       exports: Vec::new(),
       export_as_namespace: Vec::new(),
       ambient_modules: Vec::new(),
@@ -305,6 +322,7 @@ impl HirFile {
       file_kind: FileKind::Ts,
       decls: Vec::new(),
       imports: Vec::new(),
+      import_equals: Vec::new(),
       exports: Vec::new(),
       export_as_namespace: Vec::new(),
       ambient_modules: Vec::new(),

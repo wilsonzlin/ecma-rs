@@ -1,6 +1,7 @@
 use crate::ts::{
   Decl, DeclKind, Export, ExportAll, ExportAsNamespace, ExportSpecifier, Exported, FileKind,
-  HirFile, Import, ImportDefault, ImportNamed, ImportNamespace, ModuleKind, NamedExport,
+  HirFile, Import, ImportDefault, ImportEquals, ImportEqualsTarget, ImportNamed, ImportNamespace,
+  ModuleKind, NamedExport,
 };
 use diagnostics::TextRange;
 use hir_js::{DefId, DefKind, ExportKind, FileKind as HirFileKind, ImportKind, LowerResult};
@@ -10,6 +11,7 @@ use parse_js::ast::import_export::{ExportNames, ImportNames};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
+use parse_js::ast::ts_stmt::ImportEqualsRhs;
 use parse_js::loc::Loc;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -21,6 +23,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
   let file_id = lower.hir.file;
   let mut imports = Vec::new();
+  let mut import_equals = Vec::new();
   let mut exports = Vec::new();
   let mut exported: HashMap<DefId, Exported> = HashMap::new();
   let mut export_as_namespace = Vec::new();
@@ -47,7 +50,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
       .get(&range)
       .and_then(|import| match &import.kind {
         ImportKind::Es(es) => Some(es.specifier.span),
-        ImportKind::ImportEquals(_) => None,
+        ImportKind::ImportEquals(eq) => match &eq.target {
+          hir_js::ImportEqualsTarget::Module(spec) => Some(spec.span),
+          _ => None,
+        },
       })
   };
   let export_specifier_span = |range: TextRange| -> Option<TextRange> {
@@ -111,6 +117,41 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
           namespace,
           named,
           is_type_only: import.stx.type_only,
+        });
+      }
+      Stmt::ImportEqualsDecl(import_eq) => {
+        let target = match &import_eq.stx.rhs {
+          ImportEqualsRhs::Require { module } => {
+            has_module_syntax = true;
+            ImportEqualsTarget::Require {
+              specifier: module.clone(),
+              specifier_span: import_specifier_span(stmt_range).unwrap_or(stmt_range),
+            }
+          }
+          ImportEqualsRhs::EntityName { path } => ImportEqualsTarget::EntityName {
+            path: path.clone(),
+            span: stmt_range,
+          },
+        };
+
+        if import_eq.stx.export {
+          mark_defs_in_span(
+            &item_ids,
+            &lower.defs,
+            &lower.def_index,
+            &lower.hir.items,
+            stmt_range,
+            Some(DefKind::ImportBinding),
+            Exported::Named,
+            &mut exported,
+          );
+        }
+
+        import_equals.push(ImportEquals {
+          local: import_eq.stx.name.clone(),
+          local_span: span_for_name(stmt.loc, &import_eq.stx.name),
+          target,
+          is_exported: import_eq.stx.export,
         });
       }
       Stmt::ExportList(list) => {
@@ -505,6 +546,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
     },
     decls,
     imports,
+    import_equals,
     exports,
     export_as_namespace,
     ambient_modules: Vec::new(),
@@ -575,4 +617,15 @@ fn pat_name(pat: &Node<Pat>) -> Option<String> {
 
 fn to_range(loc: Loc) -> TextRange {
   TextRange::new(loc.start_u32(), loc.end_u32())
+}
+
+fn span_for_name(loc: Loc, name: &str) -> TextRange {
+  let range = to_range(loc);
+  let len = name.len() as u32;
+  if range.len() >= len {
+    return range;
+  }
+  let end = range.start;
+  let start = end.saturating_sub(len);
+  TextRange::new(start, end)
 }

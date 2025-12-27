@@ -15,7 +15,7 @@ use parse_js::ast::stmt::{
   ForTripleStmtInit, Stmt as AstStmt,
 };
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::{ModuleDecl, NamespaceDecl};
+use parse_js::ast::ts_stmt::{ImportEqualsDecl, ModuleDecl, NamespaceDecl};
 use parse_js::ast::type_expr::{
   TypeConstructor, TypeEntityName, TypeExpr, TypeFunction, TypeReference,
 };
@@ -651,6 +651,7 @@ impl DeclarePass {
       AstStmt::NamespaceDecl(ns) => self.walk_namespace(ns),
       AstStmt::ModuleDecl(module) => self.walk_module(module),
       AstStmt::Import(import) => self.walk_import(import),
+      AstStmt::ImportEqualsDecl(import_equals) => self.walk_import_equals(import_equals),
       _ => {}
     }
   }
@@ -1150,6 +1151,17 @@ impl DeclarePass {
     }
   }
 
+  fn walk_import_equals(&mut self, import: &mut Node<ImportEqualsDecl>) {
+    self.mark_scope(&mut import.assoc);
+    let namespaces = Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE;
+    self.declare(
+      &mut import.assoc,
+      &import.stx.name,
+      namespaces,
+      Some(span_for_name(import.loc, &import.stx.name)),
+    );
+  }
+
   fn finish(self) -> SemanticsBuilder {
     self.builder
   }
@@ -1365,6 +1377,12 @@ impl<'a> ResolvePass<'a> {
               }
             }
           }
+        }
+      }
+      AstStmt::ImportEqualsDecl(import) => {
+        if let Some(sym) = declared_symbol(&import.assoc) {
+          let span = span_for_name(import.loc, &import.stx.name);
+          self.expr_resolutions.insert(span, sym);
         }
       }
       _ => {}

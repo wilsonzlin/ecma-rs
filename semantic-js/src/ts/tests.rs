@@ -697,6 +697,54 @@ fn resolve_imports_point_to_origin_module() {
 }
 
 #[test]
+fn import_equals_require_binds_namespace_origin() {
+  let file_a = FileId(70);
+  let file_b = FileId(71);
+
+  let a = HirFile::module(file_a);
+
+  let mut b = HirFile::module(file_b);
+  b.decls
+    .push(mk_decl(0, "Foo", DeclKind::ImportBinding, Exported::No));
+  b.import_equals.push(ImportEquals {
+    local: "Foo".to_string(),
+    local_span: span(1),
+    target: ImportEqualsTarget::Require {
+      specifier: "a".to_string(),
+      specifier_span: span(2),
+    },
+    is_exported: false,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let import_symbol = semantics
+    .resolve_in_module(file_b, "Foo", Namespace::VALUE)
+    .expect("import equals binding present");
+  let import_data = semantics.symbols().symbol(import_symbol);
+  assert!(import_data.namespaces.contains(Namespace::VALUE));
+  assert!(import_data.namespaces.contains(Namespace::TYPE));
+  assert!(import_data.namespaces.contains(Namespace::NAMESPACE));
+  match import_data.origin {
+    SymbolOrigin::Import { from, ref imported } => {
+      assert_eq!(from, Some(file_a));
+      assert_eq!(imported, "*");
+    }
+    ref other => panic!("expected import origin, got {:?}", other),
+  }
+}
+
+#[test]
 fn unresolved_import_reports_specifier_span() {
   let file = FileId(50);
   let mut hir = HirFile::module(file);
@@ -1234,6 +1282,7 @@ fn ambient_modules_collect_exports() {
     name_span: span(100),
     decls: vec![decl],
     imports: Vec::new(),
+    import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),
@@ -1417,6 +1466,7 @@ fn ambient_module_fragments_merge_exports() {
     name_span: span(0),
     decls: Vec::new(),
     imports: Vec::new(),
+    import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),
@@ -1463,6 +1513,7 @@ fn ambient_module_interfaces_merge_deterministically() {
     name_span: span(0),
     decls: Vec::new(),
     imports: Vec::new(),
+    import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),
@@ -1727,4 +1778,32 @@ fn map_module_locals_to_program_symbols() {
     .resolve_in_module(file_b, "Foo", Namespace::VALUE)
     .expect("program import symbol present");
   assert_eq!(mapping.get(&local_foo), Some(&program_foo));
+}
+
+#[test]
+fn locals_resolve_import_equals_alias() {
+  let mut ast = parse(
+    r#"
+    import Foo = require("bar");
+    const x = Foo;
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, FileId(94), true);
+  let lowered = lower_file(FileId(94), HirFileKind::Ts, &ast);
+
+  let body = body_by_name(&lowered, "x", DefKind::Var);
+  let foo_use = body
+    .exprs
+    .iter()
+    .enumerate()
+    .find_map(|(idx, expr)| match expr.kind {
+      ExprKind::Ident(_) => Some(ExprId(idx as u32)),
+      _ => None,
+    })
+    .expect("identifier use present");
+  assert!(
+    locals.resolve_expr(body, foo_use).is_some(),
+    "import equals alias resolves"
+  );
 }

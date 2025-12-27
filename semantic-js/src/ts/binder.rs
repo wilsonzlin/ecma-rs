@@ -229,6 +229,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       hir.module_kind,
       hir.file_kind,
       &hir.imports,
+      &hir.import_equals,
       &hir.exports,
       &hir.decls,
       &hir.export_as_namespace,
@@ -245,6 +246,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       false,
       &hir.decls,
       &hir.imports,
+      &hir.import_equals,
       &hir.exports,
       &hir.export_as_namespace,
       &mut deps,
@@ -281,6 +283,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       true,
       &module.decls,
       &module.imports,
+      &module.import_equals,
       &module.exports,
       &module.export_as_namespace,
       &mut deps,
@@ -305,6 +308,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     implicit_export: bool,
     decls: &[Decl],
     imports: &[Import],
+    import_equals: &[ImportEquals],
     exports: &[Export],
     export_as_namespace: &[ExportAsNamespace],
     deps: &mut Vec<FileId>,
@@ -449,6 +453,64 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       }
     }
 
+    for import in import_equals {
+      match &import.target {
+        ImportEqualsTarget::Require {
+          specifier,
+          specifier_span,
+        } => {
+          let target = self.resolve_spec(file_id, specifier, Span::new(file_id, *specifier_span), true);
+          if let Some(t) = target {
+            deps.push(t);
+          }
+          let entry = ImportEntry {
+            local: import.local.clone(),
+            from: target,
+            imported: ImportItem::Namespace,
+            type_only: false,
+            def_id: import_def_ids.get(&import.local).copied(),
+            local_span: import.local_span,
+          };
+          self.add_import_binding(state, owner, file_id, &entry);
+        }
+        ImportEqualsTarget::EntityName { .. } => {
+          let namespaces = Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE;
+          let order = import.local_span.start;
+          let decl_id = self.symbols.alloc_decl(
+            file_id,
+            import.local.clone(),
+            DeclKind::ImportBinding,
+            namespaces,
+            false,
+            false,
+            order,
+            import_def_ids.get(&import.local).copied(),
+          );
+          add_decl_to_groups(
+            &mut state.symbols,
+            &import.local,
+            decl_id,
+            namespaces,
+            &mut self.symbols,
+            SymbolOrigin::Local,
+            owner,
+          );
+        }
+      }
+
+      if import.is_exported {
+        has_exports = true;
+        let span = Span::new(file_id, import.local_span);
+        first_export_span.get_or_insert(span);
+        state.export_specs.push(ExportSpec::Local {
+          name: import.local.clone(),
+          exported_as: import.local.clone(),
+          type_only: false,
+          span,
+        });
+      }
+    }
+
     for export in exports {
       match export {
         Export::Named(named) => {
@@ -589,6 +651,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     module_kind: ModuleKind,
     file_kind: FileKind,
     imports: &[Import],
+    import_equals: &[ImportEquals],
     exports: &[Export],
     decls: &[Decl],
     export_as_namespace: &[ExportAsNamespace],
@@ -599,6 +662,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       ModuleKind::Module => {
         matches!(file_kind, FileKind::Dts)
           && imports.is_empty()
+          && import_equals
+            .iter()
+            .all(|ie| !matches!(ie.target, ImportEqualsTarget::Require { .. }))
           && exports.is_empty()
           && export_as_namespace.is_empty()
           && ambient_modules.is_empty()
@@ -872,10 +938,31 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   ) {
     if let Some(import) = module.imports.get(name) {
       if let Some(from) = import.from {
-        // Namespace imports bind a local namespace object; exporting them should
-        // re-use that local binding rather than looking up exports in the
-        // target module.
-        if !matches!(import.imported, ImportItem::Namespace) {
+        if matches!(import.imported, ImportItem::Namespace) {
+          if let Some(group) = module.symbols.get(name) {
+            let filtered = filter_group(
+              group.clone(),
+              if type_only || import.type_only {
+                Namespace::TYPE
+              } else {
+                Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+              },
+              &self.symbols,
+            );
+            if let Some(group) = filtered {
+              insert_export(
+                map,
+                export_spans,
+                exported_as,
+                origin_span,
+                group,
+                &mut self.symbols,
+                &mut self.diagnostics,
+              );
+              return;
+            }
+          }
+        } else {
           let target_name = match &import.imported {
             ImportItem::Named(n) => n.clone(),
             ImportItem::Default => "default".to_string(),
