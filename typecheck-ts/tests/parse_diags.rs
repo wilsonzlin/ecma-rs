@@ -1,8 +1,14 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
-use diagnostics::{FileId, TextRange};
+use diagnostics::{Diagnostic, FileId, TextRange};
 use std::sync::Arc;
 use std::thread;
-use typecheck_ts::db::{parse_query_count, reset_parse_query_count, TypecheckDb};
+use typecheck_ts::db::{
+  parse_query_count,
+  program_diagnostics as db_program_diagnostics,
+  reset_parse_query_count,
+  unresolved_module_diagnostics,
+  TypecheckDb,
+};
 use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::queries::parse;
 use typecheck_ts::{codes, FileKey, FileOrigin, Host, HostError, Program};
@@ -69,6 +75,26 @@ impl Host for MissingImportHost {
   }
 }
 
+fn assert_unresolved_diag_covers_specifier(
+  diag: &Diagnostic,
+  file_id: FileId,
+  source: &str,
+  specifier: &str,
+) {
+  assert_eq!(diag.code.as_str(), codes::UNRESOLVED_MODULE.as_str());
+  assert_eq!(diag.primary.file, file_id);
+
+  let start = source.find(specifier).expect("missing specifier in source") as u32;
+  let end = start + specifier.len() as u32;
+  let expected_span = TextRange::new(start, end);
+  assert!(
+    diag.primary.range.start <= expected_span.start && diag.primary.range.end >= expected_span.end,
+    "diagnostic span {:?} should cover specifier {:?}",
+    diag.primary.range,
+    expected_span
+  );
+}
+
 #[test]
 fn unresolved_import_points_at_specifier() {
   let source = r#"import { Foo } from "./missing";"#;
@@ -81,19 +107,67 @@ fn unresolved_import_points_at_specifier() {
   let file_id = program.file_id(&FileKey::new("entry.ts")).unwrap();
   assert_eq!(diagnostics.len(), 1);
 
-  let diag = &diagnostics[0];
-  assert_eq!(diag.code.as_str(), codes::UNRESOLVED_MODULE.as_str());
-  assert_eq!(diag.primary.file, file_id);
+  assert_unresolved_diag_covers_specifier(&diagnostics[0], file_id, source, "\"./missing\"");
+}
 
-  let specifier = "\"./missing\"";
-  let start = source.find(specifier).expect("missing specifier in source") as u32;
-  let end = start + specifier.len() as u32;
-  let expected_span = TextRange::new(start, end);
-  assert!(
-    diag.primary.range.start <= expected_span.start && diag.primary.range.end >= expected_span.end,
-    "diagnostic span {:?} should cover specifier {:?}",
-    diag.primary.range,
-    expected_span
+#[test]
+fn db_unresolved_import_points_at_specifier() {
+  let source = r#"import { Foo } from "./missing";"#;
+  let file = FileId(10);
+  let key = FileKey::new("entry.ts");
+  let mut db = TypecheckDb::default();
+  db.set_roots(Arc::from([key.clone()]));
+  db.set_file(file, key, FileKind::Ts, Arc::from(source));
+  db.set_module_resolution(file, Arc::<str>::from("./missing"), None);
+
+  let diags = unresolved_module_diagnostics(&db, file);
+  assert_eq!(diags.len(), 1);
+  assert_unresolved_diag_covers_specifier(&diags[0], file, source, "\"./missing\"");
+
+  let program_diags = db_program_diagnostics(&db, std::iter::empty::<Diagnostic>());
+  assert_eq!(program_diags.len(), 1);
+  assert_unresolved_diag_covers_specifier(&program_diags[0], file, source, "\"./missing\"");
+}
+
+#[test]
+fn db_unresolved_export_all_and_import_equals_point_at_specifier() {
+  let source = r#"import foo = require("./missing-import-equals");
+export * from "./missing-export-all";"#;
+  let file = FileId(11);
+  let key = FileKey::new("entry.ts");
+  let mut db = TypecheckDb::default();
+  db.set_roots(Arc::from([key.clone()]));
+  db.set_file(file, key, FileKind::Ts, Arc::from(source));
+  db.set_module_resolution(file, Arc::<str>::from("./missing-import-equals"), None);
+  db.set_module_resolution(file, Arc::<str>::from("./missing-export-all"), None);
+
+  let mut diags: Vec<_> = unresolved_module_diagnostics(&db, file).as_ref().to_vec();
+  assert_eq!(diags.len(), 2);
+  diags.sort_by_key(|diag| diag.primary.range.start);
+
+  assert_unresolved_diag_covers_specifier(
+    &diags[0],
+    file,
+    source,
+    "\"./missing-import-equals\"",
+  );
+  assert_unresolved_diag_covers_specifier(&diags[1], file, source, "\"./missing-export-all\"");
+
+  let mut program_diags: Vec<_> =
+    db_program_diagnostics(&db, std::iter::empty::<Diagnostic>()).as_ref().to_vec();
+  program_diags.sort_by_key(|diag| diag.primary.range.start);
+  assert_eq!(program_diags.len(), 2);
+  assert_unresolved_diag_covers_specifier(
+    &program_diags[0],
+    file,
+    source,
+    "\"./missing-import-equals\"",
+  );
+  assert_unresolved_diag_covers_specifier(
+    &program_diags[1],
+    file,
+    source,
+    "\"./missing-export-all\"",
   );
 }
 

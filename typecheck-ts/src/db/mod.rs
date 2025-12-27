@@ -32,9 +32,9 @@ pub use queries::{
   expr_at, file_kind, file_span_index, file_text, global_bindings, local_symbol_info, lower_hir,
   module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse, parse_query_count,
   program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir, span_of_def,
-  span_of_expr, symbol_occurrences, ts_semantics, type_at, var_initializer, DeclInfo, DeclKind,
-  GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore, TsSemantics,
-  TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
+  span_of_expr, symbol_occurrences, ts_semantics, type_at, unresolved_module_diagnostics,
+  var_initializer, DeclInfo, DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics,
+  SharedTypeStore, TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;
 
@@ -331,6 +331,10 @@ impl Database {
 
   pub fn module_dep_diagnostics(&self, file: FileId) -> Arc<[diagnostics::Diagnostic]> {
     queries::module_dep_diagnostics(self, file)
+  }
+
+  pub fn unresolved_module_diagnostics(&self, file: FileId) -> Arc<[diagnostics::Diagnostic]> {
+    queries::unresolved_module_diagnostics(self, file)
   }
 
   pub fn reachable_files(&self) -> Arc<Vec<FileId>> {
