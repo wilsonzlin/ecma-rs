@@ -467,6 +467,29 @@ fn lower_block(
               &mut result.exported,
             );
           }
+          let name_span = to_range(module.stx.name_loc);
+          let nested = lower_block(
+            module.stx.body.as_deref().unwrap_or(&[]),
+            lower,
+            None,
+            import_specifier_span,
+            export_specifier_span,
+          );
+          let nested = finalize_block(nested, lower, ModuleKind::Module);
+          let module_name = match &module.stx.name {
+            ModuleName::Identifier(name) => name.clone(),
+            ModuleName::String(spec) => spec.clone(),
+          };
+          result.ambient_modules.push(AmbientModule {
+            name: module_name,
+            name_span,
+            decls: nested.decls,
+            imports: nested.imports,
+            import_equals: nested.import_equals,
+            exports: nested.exports,
+            export_as_namespace: nested.export_as_namespace,
+            ambient_modules: nested.ambient_modules,
+          });
         }
         ModuleName::String(spec) => {
           if module.stx.export {
@@ -714,6 +737,9 @@ fn collect_def_targets(stmts: &[Node<Stmt>]) -> Vec<DefTarget> {
         span,
         kind: DefKind::Class,
       }),
+      Stmt::GlobalDecl(global) => {
+        targets.extend(collect_def_targets(&global.stx.body));
+      }
       Stmt::ExportDefaultExpr(_) => targets.push(DefTarget {
         span,
         kind: DefKind::ExportAlias,
