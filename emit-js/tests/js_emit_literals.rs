@@ -25,7 +25,7 @@ fn emits_null() {
 #[test]
 fn emits_big_int_literal() {
   let expr = node(Expr::LitBigInt(node(LitBigIntExpr {
-    value: "123n".to_string(),
+    value: "123".to_string(),
   })));
   assert_eq!(emit(expr), "123n");
 }

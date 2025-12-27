@@ -187,7 +187,7 @@ where
 
   fn emit_lit_big_int(&mut self, lit: &Node<LitBigIntExpr>) -> EmitResult {
     with_node_context(lit.loc, || {
-      self.out.write_str(&lit.stx.value)?;
+      write!(self.out, "{}n", lit.stx.value)?;
       Ok(())
     })
   }

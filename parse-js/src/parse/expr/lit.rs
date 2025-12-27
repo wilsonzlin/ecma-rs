@@ -30,6 +30,7 @@ use crate::loc::Loc;
 use crate::num::JsNumber;
 use crate::operator::OperatorName;
 use crate::token::TT;
+use num_bigint::BigInt;
 pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
   JsNumber::from_literal(raw)
 }
@@ -37,21 +38,21 @@ pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
 pub fn normalise_literal_bigint(raw: &str) -> Option<String> {
   // Canonicalise BigInt literals while preserving their original radix. Prefixes are normalised
   // to lowercase (`0b`/`0o`/`0x`), numeric separators are stripped, and hex digits are emitted in
-  // lowercase via `char::from_digit`. The `n` suffix is always preserved so emitters can reuse the
-  // stored representation directly.
+  // lowercase via `char::from_digit`. The value is returned as a canonical decimal string (without
+  // the trailing `n`) so downstream consumers can parse it deterministically.
   if !raw.ends_with('n') {
     return None;
   }
   let body = &raw[..raw.len().saturating_sub(1)];
-  let (radix, prefix, digits) =
+  let (radix, digits) =
     if let Some(rest) = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B")) {
-      (2, "0b", rest)
+      (2, rest)
     } else if let Some(rest) = body.strip_prefix("0o").or_else(|| body.strip_prefix("0O")) {
-      (8, "0o", rest)
+      (8, rest)
     } else if let Some(rest) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
-      (16, "0x", rest)
+      (16, rest)
     } else {
-      (10, "", body)
+      (10, body)
     };
 
   let mut normalised_digits = String::with_capacity(digits.len());
@@ -81,11 +82,8 @@ pub fn normalise_literal_bigint(raw: &str) -> Option<String> {
     return None;
   }
 
-  let mut out = String::with_capacity(prefix.len() + normalised_digits.len() + 1);
-  out.push_str(prefix);
-  out.push_str(&normalised_digits);
-  out.push('n');
-  Some(out)
+  let value = BigInt::parse_bytes(normalised_digits.as_bytes(), radix)?;
+  Some(value.to_str_radix(10))
 }
 
 #[derive(Clone, Copy, Debug)]

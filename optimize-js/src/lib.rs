@@ -21,6 +21,7 @@ use cfg::bblock::convert_insts_to_bblocks;
 use cfg::cfg::Cfg;
 use dashmap::DashMap;
 use dom::Dom;
+use hir_js::lower_file;
 use hir_js::Body;
 use hir_js::BodyId;
 use hir_js::ExprId;
@@ -36,6 +37,7 @@ use opt::optpass_redundant_assigns::optpass_redundant_assigns;
 use opt::optpass_trivial_dce::optpass_trivial_dce;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
+use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::parse;
@@ -165,8 +167,6 @@ pub struct ProgramScope {
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub children: Vec<ScopeId>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
-  pub hoisted_bindings: Vec<SymbolId>,
-  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub tdz_bindings: Vec<SymbolId>,
   pub is_dynamic: bool,
   pub has_direct_eval: bool,
@@ -243,8 +243,8 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
     fn expr_for_span(&self, span: TextRange) -> Option<(BodyId, ExprId)> {
       for offset in Self::offsets(span) {
-        if let Some(result) = self.span_map.expr_span_at_offset(offset) {
-          return Some(result.id);
+        if let Some(span) = self.span_map.expr_span_at_offset(offset) {
+          return Some(span.id);
         }
       }
       None
@@ -252,8 +252,8 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
     fn pat_for_span(&self, span: TextRange) -> Option<(BodyId, PatId)> {
       for offset in Self::offsets(span) {
-        if let Some(result) = self.span_map.pat_span_at_offset(offset) {
-          return Some(result.id);
+        if let Some(span) = self.span_map.pat_span_at_offset(offset) {
+          return Some(span.id);
         }
       }
       None
@@ -292,11 +292,7 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
   for (span, sym) in collector.expr_spans.iter() {
     if let Some((body, expr_id)) = collector.expr_for_span(*span) {
-      bindings
-        .exprs
-        .entry(body)
-        .or_default()
-        .insert(expr_id, *sym);
+      bindings.exprs.entry(body).or_default().insert(expr_id, *sym);
     }
   }
   for (span, sym) in collector.pat_spans.iter() {
@@ -310,20 +306,12 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
     let exprs = bindings.exprs.entry(*body_id).or_default();
     for (idx, expr) in body.exprs.iter().enumerate() {
       let id = ExprId(idx as u32);
-      exprs.entry(id).or_insert_with(|| {
-        collector
-          .expr_spans
-          .get(&expr.span)
-          .copied()
-          .unwrap_or(None)
-      });
+      exprs.entry(id).or_insert_with(|| collector.expr_spans.get(&expr.span).copied().unwrap_or(None));
     }
     let pats = bindings.pats.entry(*body_id).or_default();
     for (idx, pat) in body.pats.iter().enumerate() {
       let id = PatId(idx as u32);
-      pats
-        .entry(id)
-        .or_insert_with(|| collector.pat_spans.get(&pat.span).copied().unwrap_or(None));
+      pats.entry(id).or_insert_with(|| collector.pat_spans.get(&pat.span).copied().unwrap_or(None));
     }
   }
 
@@ -403,6 +391,16 @@ pub(crate) fn compile_hir_body(
   Ok(build_program_function(program, insts, c_label, c_temp))
 }
 
+#[cfg(feature = "legacy-ast-lowering")]
+fn compile_js_ast_statements(
+  program: &ProgramCompiler,
+  statements: Vec<Node<Stmt>>,
+) -> OptimizeResult<ProgramFunction> {
+  let (insts, c_label, c_temp) =
+    crate::il::s2i::legacy::translate_source_to_inst(program, statements)?;
+  Ok(build_program_function(program, insts, c_label, c_temp))
+}
+
 pub type FnId = usize;
 
 pub use decompile::structurer::{structure_cfg, BreakTarget, ControlTree, LoopLabel};
@@ -463,10 +461,7 @@ pub struct Program {
   pub symbols: Option<ProgramSymbols>,
 }
 
-/// Parse, lower via `hir-js`, symbolize, and compile source text in one step.
-///
-/// The optimizer standardizes on the HIR pipeline; the legacy AST lowering path
-/// has been removed.
+/// Parse, symbolize, and compile source text in one step.
 ///
 /// The provided source must be valid UTF-8; identifier handling and span math
 /// operate on UTF-8 byte offsets. Validate and convert any raw byte buffers at
@@ -474,6 +469,84 @@ pub struct Program {
 pub fn compile_source(source: &str, mode: TopLevelMode, debug: bool) -> OptimizeResult<Program> {
   let top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
   Program::compile(top_level_node, mode, debug)
+}
+
+#[cfg(feature = "legacy-ast-lowering")]
+pub fn compile_source_ast(
+  source: &str,
+  mode: TopLevelMode,
+  debug: bool,
+) -> OptimizeResult<Program> {
+  let mut top_level_node = parse(source).map_err(|err| vec![err.to_diagnostic(SOURCE_FILE)])?;
+  let lower = lower_file(SOURCE_FILE, HirFileKind::Ts, &top_level_node);
+  let (semantics, _) = JsSymbols::bind(&mut top_level_node, mode, SOURCE_FILE);
+  let VarAnalysis {
+    foreign,
+    use_before_decl,
+    dynamic_scope,
+    ..
+  } = VarAnalysis::analyze(&mut top_level_node, &semantics);
+  if let Some(loc) = dynamic_scope {
+    return Err(unsupported_syntax(
+      loc,
+      "with statements introduce dynamic scope and are not supported",
+    ));
+  }
+  if !use_before_decl.is_empty() {
+    let mut diagnostics: Vec<_> = use_before_decl
+      .into_iter()
+      .map(|(_, (name, loc))| use_before_declaration(&name, loc))
+      .collect();
+    sort_diagnostics(&mut diagnostics);
+    return Err(diagnostics);
+  };
+  let mut symbol_table = collect_symbol_table(&semantics, &foreign);
+  let bindings = collect_hir_symbol_bindings(&mut top_level_node, &lower);
+  let lower = Arc::new(lower);
+  let program = ProgramCompiler(Arc::new(ProgramCompilerInner {
+    foreign_vars: foreign.clone(),
+    functions: DashMap::new(),
+    next_fn_id: AtomicUsize::new(0),
+    debug,
+    lower: Arc::clone(&lower),
+    bindings,
+    names: Arc::clone(&lower.names),
+  }));
+
+  let TopLevel { body } = *top_level_node.stx;
+  let top_level = crate::il::s2i::legacy::compile_js_statements(&program, body)?;
+  let ProgramCompilerInner {
+    functions,
+    next_fn_id,
+    ..
+  } = Arc::try_unwrap(program.0).unwrap();
+  let fn_count = next_fn_id.load(Ordering::Relaxed);
+  let functions: Vec<_> = (0..fn_count)
+    .map(|i| functions.remove(&i).unwrap().1)
+    .collect();
+
+  let free_symbols = ProgramFreeSymbols {
+    top_level: collect_free_symbols(&top_level),
+    functions: functions.iter().map(collect_free_symbols).collect(),
+  };
+
+  let has_any_symbols = !symbol_table.symbols.is_empty()
+    || !free_symbols.top_level.is_empty()
+    || free_symbols.functions.iter().any(|f| !f.is_empty());
+
+  let symbols = if has_any_symbols {
+    symbol_table.free_symbols = Some(free_symbols);
+    Some(symbol_table)
+  } else {
+    None
+  };
+
+  Ok(Program {
+    functions,
+    top_level,
+    top_level_mode: mode,
+    symbols,
+  })
 }
 
 fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> ProgramSymbols {
@@ -511,13 +584,6 @@ fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> Pr
     scope_symbols.sort_by_key(|sym| sym.raw_id());
     let mut children: Vec<_> = scope.children.iter().copied().map(Into::into).collect();
     children.sort_by_key(|child: &ScopeId| child.raw_id());
-    let mut hoisted_bindings: Vec<_> = scope
-      .hoisted_bindings
-      .iter()
-      .copied()
-      .map(Into::into)
-      .collect();
-    hoisted_bindings.sort_by_key(|sym: &SymbolId| sym.raw_id());
     let mut tdz_bindings: Vec<_> = scope.tdz_bindings.iter().copied().map(Into::into).collect();
     tdz_bindings.sort_by_key(|sym: &SymbolId| sym.raw_id());
     scopes.push(ProgramScope {
@@ -526,7 +592,6 @@ fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> Pr
       kind: scope.kind.into(),
       symbols: scope_symbols,
       children,
-      hoisted_bindings,
       tdz_bindings,
       is_dynamic: scope.is_dynamic,
       has_direct_eval: scope.has_direct_eval,

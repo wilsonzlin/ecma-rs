@@ -4,12 +4,14 @@ use crate::il::inst::Const;
 use crate::il::inst::Const::*;
 use crate::il::inst::UnOp;
 use crate::il::inst::UnOp::*;
+use num_bigint::{BigInt, Sign};
+use num_traits::ToPrimitive;
+use parse_js::char::{ECMASCRIPT_LINE_TERMINATORS, ECMASCRIPT_WHITESPACE};
 use parse_js::num::JsNumber as JN;
 use std::cmp::Ordering;
 use std::f64::consts::E;
 use std::f64::consts::PI;
 use std::mem::discriminant;
-use std::str::FromStr;
 
 /**
  * NOTES ON BUILTINS
@@ -21,34 +23,158 @@ use std::str::FromStr;
  * - Checking if either is null or undefined. A builtin could be null or undefined. Accessing an unknown property on a builtin object results in undefined *today* but may not in the future.
  * - Even `void (Builtin)` is not safe because the builtin path may not exist and we could be suppressing an error.
  */
-// TODO Verify num_bigint::BigInt::from_str matches ECMAScript spec.
-pub fn parse_bigint(raw: &str) -> Option<num_bigint::BigInt> {
-  num_bigint::BigInt::from_str(raw).ok()
+fn is_ecmascript_whitespace(ch: char) -> bool {
+  ECMASCRIPT_WHITESPACE.contains(&ch) || ECMASCRIPT_LINE_TERMINATORS.contains(&ch)
 }
 
-// TODO Verify f64::parse matches ECMAScript spec.
-pub fn coerce_bigint_to_num(v: &num_bigint::BigInt) -> f64 {
-  v.to_string().parse().unwrap()
+fn trim_js_whitespace(raw: &str) -> &str {
+  raw.trim_matches(is_ecmascript_whitespace)
+}
+
+fn bigint_to_f64(value: &BigInt) -> f64 {
+  value.to_f64().unwrap_or_else(|| {
+    if value.sign() == Sign::Minus {
+      f64::NEG_INFINITY
+    } else {
+      f64::INFINITY
+    }
+  })
+}
+
+fn parse_int_digits_to_bigint(digits: &str, radix: u32) -> Option<BigInt> {
+  if digits.is_empty() || digits.contains('_') {
+    return None;
+  }
+  if !digits.chars().all(|ch| ch.to_digit(radix).is_some()) {
+    return None;
+  }
+  BigInt::parse_bytes(digits.as_bytes(), radix)
+}
+
+pub fn parse_bigint(raw: &str) -> Option<BigInt> {
+  let trimmed = trim_js_whitespace(raw);
+  if trimmed.is_empty() {
+    return None;
+  }
+  let (sign, body) = match trimmed.strip_prefix('+') {
+    Some(rest) => (1, rest),
+    None => match trimmed.strip_prefix('-') {
+      Some(rest) => (-1, rest),
+      None => (1, trimmed),
+    },
+  };
+  if body.is_empty() {
+    return None;
+  }
+  let (radix, digits) = match body {
+    s if s.starts_with("0b") || s.starts_with("0B") => (2, &s[2..]),
+    s if s.starts_with("0o") || s.starts_with("0O") => (8, &s[2..]),
+    s if s.starts_with("0x") || s.starts_with("0X") => (16, &s[2..]),
+    s => (10, s),
+  };
+  let mut value = parse_int_digits_to_bigint(digits, radix)?;
+  if sign == -1 {
+    value = -value;
+  }
+  Some(value)
+}
+
+pub fn coerce_bigint_to_num(v: &BigInt) -> f64 {
+  bigint_to_f64(v)
 }
 
 // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number#number_coercion
 pub fn coerce_str_to_num(raw: &str) -> f64 {
-  let raw = raw.trim();
+  let raw = trim_js_whitespace(raw);
   if raw.is_empty() {
     return 0.0;
   };
-  if matches!(raw, "+Infinity" | "Infinity") {
-    return f64::INFINITY;
+  let mut sign = 1.0_f64;
+  let mut had_sign = false;
+  let mut body = raw;
+  if let Some(rest) = body.strip_prefix('+') {
+    had_sign = true;
+    body = rest;
+  } else if let Some(rest) = body.strip_prefix('-') {
+    had_sign = true;
+    sign = -1.0;
+    body = rest;
   };
-  if raw == "-Infinity" {
-    return f64::NEG_INFINITY;
+  if body.is_empty() {
+    return f64::NAN;
   };
-  let raw = raw.strip_prefix("+").unwrap_or(raw);
-  // TODO Verify Rust's f64::parse matches ECMAScript exactly.
-  match raw.parse::<f64>() {
-    Ok(v) => v,
-    Err(_) => f64::NAN,
+  if body == "Infinity" {
+    return sign * f64::INFINITY;
+  };
+
+  let parse_int =
+    |digits: &str, radix: u32| parse_int_digits_to_bigint(digits, radix).map(|v| bigint_to_f64(&v));
+
+  if body.starts_with("0x") || body.starts_with("0X") {
+    if had_sign {
+      return f64::NAN;
+    }
+    return parse_int(&body[2..], 16).unwrap_or(f64::NAN);
   }
+  if body.starts_with("0b") || body.starts_with("0B") {
+    if had_sign {
+      return f64::NAN;
+    }
+    return parse_int(&body[2..], 2).unwrap_or(f64::NAN);
+  }
+  if body.starts_with("0o") || body.starts_with("0O") {
+    if had_sign {
+      return f64::NAN;
+    }
+    return parse_int(&body[2..], 8).unwrap_or(f64::NAN);
+  }
+
+  if body.contains('_') {
+    return f64::NAN;
+  }
+
+  let mut saw_digit_before_exp = false;
+  let mut saw_dot = false;
+  let mut saw_exp = false;
+  let mut iter = body.chars().peekable();
+  while let Some(ch) = iter.next() {
+    match ch {
+      '0'..='9' => {
+        if !saw_exp {
+          saw_digit_before_exp = true;
+        }
+      }
+      '.' => {
+        if saw_dot || saw_exp {
+          return f64::NAN;
+        }
+        saw_dot = true;
+      }
+      'e' | 'E' => {
+        if saw_exp || !saw_digit_before_exp {
+          return f64::NAN;
+        }
+        saw_exp = true;
+        if matches!(iter.peek(), Some('+' | '-')) {
+          iter.next();
+        }
+        let mut exp_digits = 0;
+        while matches!(iter.peek(), Some('0'..='9')) {
+          exp_digits += 1;
+          iter.next();
+        }
+        if exp_digits == 0 {
+          return f64::NAN;
+        }
+      }
+      _ => return f64::NAN,
+    }
+  }
+  if !saw_digit_before_exp {
+    return f64::NAN;
+  }
+
+  body.parse::<f64>().map(|v| sign * v).unwrap_or(f64::NAN)
 }
 
 // https://tc39.es/ecma262/multipage/abstract-operations.html#sec-tonumber
@@ -67,7 +193,7 @@ pub fn coerce_to_num(v: &Const) -> f64 {
 // https://developer.mozilla.org/en-US/docs/Glossary/Falsy
 pub fn coerce_to_bool(v: &Const) -> bool {
   match v {
-    BigInt(v) => v == &num_bigint::BigInt::from(0),
+    BigInt(v) => v == &BigInt::from(0),
     Bool(b) => *b,
     Null => false,
     Num(JN(v)) => !v.is_nan() && *v != 0.0,
@@ -98,12 +224,7 @@ pub fn js_cmp(a: &Const, b: &Const) -> Option<Ordering> {
 }
 
 pub fn js_div(a: f64, b: f64) -> f64 {
-  match (a, b) {
-    (a, 0.0) if a > 0.0 => f64::INFINITY,
-    (a, 0.0) if a < 0.0 => f64::NEG_INFINITY,
-    (0.0, 0.0) => f64::NAN,
-    _ => a / b,
-  }
+  a / b
 }
 
 pub fn js_mod(a: f64, b: f64) -> f64 {

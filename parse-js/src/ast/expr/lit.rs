@@ -21,6 +21,7 @@ pub struct LitArrExpr {
 #[derive(Debug, Drive, DriveMut, Serialize)]
 pub struct LitBigIntExpr {
   #[drive(skip)]
+  /// Canonical decimal representation without the trailing `n`.
   pub value: String,
 }
 
