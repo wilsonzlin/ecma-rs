@@ -351,7 +351,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       readonly: self.map_modifier(mapped.readonly),
       optional: self.map_modifier(mapped.optional),
       name_type,
-      as_type: None,
+      as_type: name_type,
     };
     let mapped_ty = self.store.intern_type(TypeKind::Mapped(mapped_kind));
     mapped_ty
