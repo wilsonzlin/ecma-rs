@@ -10,7 +10,6 @@ use hir_js::{
   FileKind as HirFileKind, LowerResult, ObjectProperty, PatId, PatKind, StmtKind, VarDeclKind,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
-use salsa::Setter;
 use semantic_js::ts as sem_ts;
 use types_ts_interned::{PrimitiveIds, TypeStore};
 
