@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::codes;
+use crate::{codes, FileKey, Host};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   DefId as HirDefId, DefTypeInfo, TypeArenas, TypeArenasByDef, TypeExprId, TypeExprKind,
@@ -17,31 +17,40 @@ use types_ts_interned::{
 };
 
 /// Lower HIR type expressions and declarations into interned types.
-pub struct HirDeclLowerer<'a> {
+pub struct HirDeclLowerer<'a, 'diag> {
   store: Arc<TypeStore>,
   arenas: &'a TypeArenasByDef,
   current_arenas: Option<&'a TypeArenas>,
   semantics: Option<&'a TsProgramSemantics>,
-  defs: Arc<HashMap<(FileId, String), DefId>>,
+  defs: HashMap<(FileId, String), DefId>,
   file: FileId,
+  file_key: Option<FileKey>,
   local_defs: HashMap<String, HirDefId>,
-  diagnostics: Vec<Diagnostic>,
+  diagnostics: &'diag mut Vec<Diagnostic>,
   type_params: HashMap<HirTypeParamId, TypeParamId>,
   type_param_names: HashMap<hir_js::NameId, TypeParamId>,
-  def_map: HashMap<DefId, DefId>,
-  module_resolver: Option<Arc<dyn Fn(FileId, &str) -> Option<FileId> + Send + Sync + 'a>>,
+  def_map: Option<&'a HashMap<DefId, DefId>>,
+  def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
+  host: Option<&'a dyn Host>,
+  key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
+  value_defs: Option<&'a HashMap<DefId, DefId>>,
 }
 
-impl<'a> HirDeclLowerer<'a> {
+impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   pub fn new(
     store: Arc<TypeStore>,
     arenas: &'a TypeArenasByDef,
     semantics: Option<&'a TsProgramSemantics>,
-    defs: Arc<HashMap<(FileId, String), DefId>>,
+    defs: HashMap<(FileId, String), DefId>,
     file: FileId,
+    file_key: Option<FileKey>,
     local_defs: HashMap<String, HirDefId>,
-    def_map: HashMap<DefId, DefId>,
-    module_resolver: Option<Arc<dyn Fn(FileId, &str) -> Option<FileId> + Send + Sync + 'a>>,
+    diagnostics: &'diag mut Vec<Diagnostic>,
+    def_map: Option<&'a HashMap<DefId, DefId>>,
+    def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
+    host: Option<&'a dyn Host>,
+    key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
+    value_defs: Option<&'a HashMap<DefId, DefId>>,
   ) -> Self {
     Self {
       store,
@@ -49,18 +58,18 @@ impl<'a> HirDeclLowerer<'a> {
       semantics,
       defs,
       file,
+      file_key,
       local_defs,
-      diagnostics: Vec::new(),
+      diagnostics,
       type_params: HashMap::new(),
       type_param_names: HashMap::new(),
       current_arenas: None,
       def_map,
-      module_resolver,
+      def_by_name,
+      host,
+      key_to_id,
+      value_defs,
     }
-  }
-
-  pub fn into_diagnostics(self) -> Vec<Diagnostic> {
-    self.diagnostics
   }
 
   fn arenas(&self) -> &TypeArenas {
@@ -138,6 +147,13 @@ impl<'a> HirDeclLowerer<'a> {
     self.type_param_names.clear();
     self.current_arenas = None;
     result
+  }
+
+  fn map_value_def(&self, def: DefId) -> DefId {
+    self
+      .value_defs
+      .and_then(|map| map.get(&def).copied())
+      .unwrap_or(def)
   }
 
   fn register_type_params(&mut self, params: &[HirTypeParamId]) {
@@ -245,9 +261,9 @@ impl<'a> HirDeclLowerer<'a> {
       TypeExprKind::Parenthesized(inner) => self.lower_type_expr(inner, names),
       TypeExprKind::TypeRef(r) => self.lower_type_ref(&r, names),
       TypeExprKind::TypeQuery(name) => {
-        if let Some(def) = self.resolve_typeof_name(&name, names, None) {
+        if let Some(def) = self.resolve_value_name(&name, names, None) {
           return self.store.intern_type(TypeKind::Ref {
-            def,
+            def: self.map_value_def(def),
             args: Vec::new(),
           });
         }
@@ -430,13 +446,13 @@ impl<'a> HirDeclLowerer<'a> {
     params
       .iter()
       .filter_map(|id| {
-        let (constraint_id, default_id) = {
+        let (constraint, default) = {
           let data = self.arenas().type_params.get(id.0 as usize)?;
           (data.constraint, data.default)
         };
         let mapped = *self.type_params.get(id)?;
-        let constraint = constraint_id.map(|c| self.lower_type_expr(c, names));
-        let default = default_id.map(|d| self.lower_type_expr(d, names));
+        let constraint = constraint.map(|c| self.lower_type_expr(c, names));
+        let default = default.map(|d| self.lower_type_expr(d, names));
         Some(TypeParamDecl {
           id: mapped,
           constraint,
@@ -728,11 +744,17 @@ impl<'a> HirDeclLowerer<'a> {
     import: &hir_js::TypeImport,
     names: &hir_js::NameInterner,
   ) -> TypeId {
-    let Some(resolver) = self.module_resolver.as_ref() else {
+    let Some(host) = self.host else {
       return self.store.primitive_ids().unknown;
     };
 
-    let Some(target_file) = resolver(self.file, &import.module) else {
+    let Some(from_key) = self.file_key.as_ref() else {
+      return self.store.primitive_ids().unknown;
+    };
+    let Some(target_key) = host.resolve(from_key, &import.module) else {
+      return self.store.primitive_ids().unknown;
+    };
+    let Some(target_file) = self.key_to_id.and_then(|resolver| resolver(&target_key)) else {
       return self.store.primitive_ids().unknown;
     };
 
@@ -755,9 +777,9 @@ impl<'a> HirDeclLowerer<'a> {
 
     if let Some(name) = qualifier_name.map(|n| n.to_string()) {
       if let Some(def) = self
-        .defs
-        .get(&(target_file, name.clone()))
-        .copied()
+        .def_by_name
+        .and_then(|map| map.get(&(target_file, name.clone())).copied())
+        .or_else(|| self.defs.get(&(target_file, name.clone())).copied())
       {
         return self.store.intern_type(TypeKind::Ref {
           def,
@@ -769,67 +791,48 @@ impl<'a> HirDeclLowerer<'a> {
     self.store.primitive_ids().unknown
   }
 
-  fn resolve_import_target(&self, from: FileId, module: &str) -> Option<FileId> {
-    self
-      .module_resolver
-      .as_ref()
-      .and_then(|resolver| resolver(from, module))
-  }
-
   fn resolve_type_name(
     &self,
     name: &hir_js::TypeName,
     names: &hir_js::NameInterner,
     file_override: Option<FileId>,
   ) -> Option<DefId> {
-    match name {
-      TypeName::Ident(id) => {
-        let resolved = names.resolve(*id)?.to_string();
-        self.resolve_named_type(&resolved, file_override.unwrap_or(self.file))
-      }
-      TypeName::Qualified(path) => self
-        .resolve_qualified_type(path, names, file_override.unwrap_or(self.file))
-        .or_else(|| {
-          path
-            .last()
-            .and_then(|id| names.resolve(*id))
-            .and_then(|resolved| {
-              self.resolve_named_type(&resolved.to_string(), file_override.unwrap_or(self.file))
-            })
-        }),
-      TypeName::Import(import) => import.module.as_ref().and_then(|module| {
-        let name = import
-          .qualifier
-          .as_ref()
-          .and_then(|segments| segments.last())
-          .and_then(|id| names.resolve(*id))
-          .map(|s| s.to_string())?;
-        let target_file = self.resolve_import_target(file_override.unwrap_or(self.file), module)?;
-        self.resolve_named_type(&name, target_file)
-      }),
-      TypeName::ImportExpr => None,
-    }
+    self.resolve_in_namespace(name, names, file_override, Namespace::TYPE)
   }
 
-  fn resolve_typeof_name(
+  fn resolve_value_name(
     &self,
     name: &hir_js::TypeName,
     names: &hir_js::NameInterner,
     file_override: Option<FileId>,
   ) -> Option<DefId> {
+    self.resolve_in_namespace(name, names, file_override, Namespace::VALUE)
+  }
+
+  fn resolve_in_namespace(
+    &self,
+    name: &hir_js::TypeName,
+    names: &hir_js::NameInterner,
+    file_override: Option<FileId>,
+    ns: Namespace,
+  ) -> Option<DefId> {
     match name {
       TypeName::Ident(id) => {
         let resolved = names.resolve(*id)?.to_string();
-        self.resolve_named_value(&resolved, file_override.unwrap_or(self.file))
+        self.resolve_named_in_namespace(&resolved, file_override.unwrap_or(self.file), ns)
       }
       TypeName::Qualified(path) => self
-        .resolve_qualified_value(path, names, file_override.unwrap_or(self.file))
+        .resolve_qualified_in_namespace(path, names, file_override.unwrap_or(self.file), ns)
         .or_else(|| {
           path
             .last()
             .and_then(|id| names.resolve(*id))
             .and_then(|resolved| {
-              self.resolve_named_value(&resolved.to_string(), file_override.unwrap_or(self.file))
+              self.resolve_named_in_namespace(
+                &resolved.to_string(),
+                file_override.unwrap_or(self.file),
+                ns,
+              )
             })
         }),
       TypeName::Import(import) => import.module.as_ref().and_then(|module| {
@@ -839,21 +842,26 @@ impl<'a> HirDeclLowerer<'a> {
           .and_then(|segments| segments.last())
           .and_then(|id| names.resolve(*id))
           .map(|s| s.to_string())?;
-        let target_file = self.resolve_import_target(file_override.unwrap_or(self.file), module)?;
-        self.resolve_named_value(&name, target_file)
+        let from_key = self.file_key.as_ref()?;
+        let target_key = self.host.and_then(|h| h.resolve(from_key, module))?;
+        let target_file = self.key_to_id.and_then(|resolver| resolver(&target_key))?;
+        self.resolve_named_in_namespace(&name, target_file, ns)
       }),
       TypeName::ImportExpr => None,
     }
   }
 
-  fn resolve_named_type(&self, name: &str, file: FileId) -> Option<DefId> {
+  fn resolve_named_in_namespace(&self, name: &str, file: FileId, ns: Namespace) -> Option<DefId> {
     if file == self.file {
       if let Some(local) = self.local_defs.get(name).copied() {
         return self
           .def_map
-          .get(&local)
-          .copied()
-          .or_else(|| self.defs.get(&(self.file, name.to_string())).copied())
+          .and_then(|map| map.get(&local).copied())
+          .or_else(|| {
+            self
+              .def_by_name
+              .and_then(|map| map.get(&(self.file, name.to_string())).copied())
+          })
           .or(Some(local));
       }
     }
@@ -862,20 +870,37 @@ impl<'a> HirDeclLowerer<'a> {
       return Some(*def);
     }
 
+    if let Some(def) = self
+      .def_by_name
+      .and_then(|map| map.get(&(file, name.to_string())).copied())
+    {
+      return Some(def);
+    }
+
     if let Some(sem) = self.semantics {
-      if let Some(symbol) = sem.resolve_in_module(file, name, Namespace::TYPE) {
-        if let Some(decl) = sem.symbol_decls(symbol, Namespace::TYPE).first() {
+      let order = if ns == Namespace::VALUE {
+        [Namespace::VALUE, Namespace::NAMESPACE, Namespace::TYPE]
+      } else {
+        [Namespace::TYPE, Namespace::NAMESPACE, Namespace::VALUE]
+      };
+      if let Some(symbol) = self.resolve_symbol_in_module_ns(sem, file, name, &order) {
+        if let Some(decl) = sem.symbol_decls(symbol, ns).first().or_else(|| {
+          order
+            .iter()
+            .filter_map(|candidate| sem.symbol_decls(symbol, *candidate).first())
+            .next()
+        }) {
           let decl_data = sem.symbols().decl(*decl);
           let target = DefId(decl_data.def_id.0);
           return self
             .def_map
-            .get(&target)
-            .copied()
+            .and_then(|map| map.get(&target).copied())
             .or_else(|| {
-              self
-                .defs
-                .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
-                .copied()
+              self.def_by_name.and_then(|map| {
+                map
+                  .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
+                  .copied()
+              })
             })
             .or(Some(target));
         }
@@ -885,7 +910,7 @@ impl<'a> HirDeclLowerer<'a> {
         .iter()
         .find(|(global_name, _)| *global_name == name)
       {
-        if let Some(symbol) = group.symbol_for(Namespace::TYPE, sem.symbols()) {
+        if let Some(symbol) = group.symbol_for(ns, sem.symbols()) {
           if let Some(def) = self.def_for_symbol(sem, symbol) {
             return Some(def);
           }
@@ -896,50 +921,12 @@ impl<'a> HirDeclLowerer<'a> {
     None
   }
 
-  fn resolve_named_value(&self, name: &str, file: FileId) -> Option<DefId> {
-    let owned = name.to_string();
-    if file == self.file {
-      if let Some(local) = self.local_defs.get(name).copied() {
-        return self
-          .def_map
-          .get(&local)
-          .copied()
-          .or_else(|| self.defs.get(&(self.file, owned.clone())).copied())
-          .or(Some(local));
-      }
-    }
-
-    if let Some(def) = self.defs.get(&(file, owned.clone())) {
-      return Some(*def);
-    }
-
-    if let Some(sem) = self.semantics {
-      if let Some(symbol) = sem.resolve_in_module(file, name, Namespace::VALUE) {
-        if let Some(def) = self.def_for_symbol_in_namespace(sem, symbol, Namespace::VALUE) {
-          return Some(def);
-        }
-      }
-      if let Some((_, group)) = sem
-        .global_symbols()
-        .iter()
-        .find(|(global_name, _)| *global_name == name)
-      {
-        if let Some(symbol) = group.symbol_for(Namespace::VALUE, sem.symbols()) {
-          if let Some(def) = self.def_for_symbol_in_namespace(sem, symbol, Namespace::VALUE) {
-            return Some(def);
-          }
-        }
-      }
-    }
-
-    None
-  }
-
-  fn resolve_qualified_type(
+  fn resolve_qualified_in_namespace(
     &self,
     path: &[hir_js::NameId],
     names: &hir_js::NameInterner,
     file: FileId,
+    ns: Namespace,
   ) -> Option<DefId> {
     let sem = self.semantics?;
     let mut segments = Vec::new();
@@ -953,52 +940,30 @@ impl<'a> HirDeclLowerer<'a> {
       return None;
     }
 
-    let mut symbol = self.resolve_symbol_in_module(sem, file, &segments[0])?;
+    let order = if ns == Namespace::VALUE {
+      [Namespace::VALUE, Namespace::NAMESPACE, Namespace::TYPE]
+    } else {
+      [Namespace::TYPE, Namespace::NAMESPACE, Namespace::VALUE]
+    };
+    let mut symbol = self.resolve_symbol_in_module_ns(sem, file, &segments[0], &order)?;
     let mut current_file = self.symbol_target_file(sem, symbol).unwrap_or(file);
     for segment in segments.iter().skip(1) {
-      symbol = self.resolve_symbol_export(sem, current_file, segment)?;
+      symbol = self.resolve_symbol_export(sem, current_file, segment, &order)?;
       current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
     }
 
     self.def_for_symbol(sem, symbol)
   }
 
-  fn resolve_qualified_value(
-    &self,
-    path: &[hir_js::NameId],
-    names: &hir_js::NameInterner,
-    file: FileId,
-  ) -> Option<DefId> {
-    let sem = self.semantics?;
-    let mut segments = Vec::new();
-    for id in path.iter() {
-      let Some(name) = names.resolve(*id) else {
-        return None;
-      };
-      segments.push(name.to_string());
-    }
-    if segments.is_empty() {
-      return None;
-    }
-
-    let mut symbol = sem.resolve_in_module(file, &segments[0], Namespace::VALUE)?;
-    let mut current_file = self.symbol_target_file(sem, symbol).unwrap_or(file);
-    for segment in segments.iter().skip(1) {
-      symbol = sem.resolve_export(current_file, segment, Namespace::VALUE)?;
-      current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
-    }
-
-    self.def_for_symbol_in_namespace(sem, symbol, Namespace::VALUE)
-  }
-
-  fn resolve_symbol_in_module(
+  fn resolve_symbol_in_module_ns(
     &self,
     sem: &TsProgramSemantics,
     file: FileId,
     name: &str,
+    order: &[Namespace],
   ) -> Option<semantic_js::ts::SymbolId> {
-    for ns in [Namespace::TYPE, Namespace::NAMESPACE, Namespace::VALUE] {
-      if let Some(sym) = sem.resolve_in_module(file, name, ns) {
+    for ns in order {
+      if let Some(sym) = sem.resolve_in_module(file, name, *ns) {
         return Some(sym);
       }
     }
@@ -1010,9 +975,10 @@ impl<'a> HirDeclLowerer<'a> {
     sem: &TsProgramSemantics,
     file: FileId,
     name: &str,
+    order: &[Namespace],
   ) -> Option<semantic_js::ts::SymbolId> {
-    for ns in [Namespace::TYPE, Namespace::NAMESPACE, Namespace::VALUE] {
-      if let Some(sym) = sem.resolve_export(file, name, ns) {
+    for ns in order {
+      if let Some(sym) = sem.resolve_export(file, name, *ns) {
         return Some(sym);
       }
     }
@@ -1061,19 +1027,17 @@ impl<'a> HirDeclLowerer<'a> {
     let def = DefId(decl_data.def_id.0);
     self
       .def_map
-      .get(&def)
-      .copied()
+      .and_then(|map| map.get(&def).copied())
       .or_else(|| {
         self
-          .defs
-          .get(&(decl_data.file, decl_data.name.clone()))
-          .copied()
+          .def_by_name
+          .and_then(|map| map.get(&(decl_data.file, decl_data.name.clone())).copied())
       })
       .or(Some(def))
   }
 }
 
-impl<'a> std::fmt::Debug for HirDeclLowerer<'a> {
+impl<'a, 'diag> std::fmt::Debug for HirDeclLowerer<'a, 'diag> {
   fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
     f.debug_struct("HirDeclLowerer")
       .field("file", &self.file)

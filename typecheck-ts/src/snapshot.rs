@@ -70,6 +70,7 @@ pub struct ProgramSnapshot {
   pub interned_type_store: InternedTypeStoreSnapshot,
   pub interned_def_types: Vec<(DefId, InternedTypeId)>,
   pub interned_type_params: Vec<(DefId, Vec<TypeParamId>)>,
+  pub value_def_map: Vec<(DefId, DefId)>,
   pub builtin: BuiltinTypes,
   pub next_def: u32,
   pub next_body: u32,

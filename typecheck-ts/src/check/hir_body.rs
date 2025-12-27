@@ -84,27 +84,30 @@ impl ExprContext {
 #[derive(Clone)]
 pub struct BindingTypeResolver {
   map: HashMap<String, DefId>,
+  value_defs: HashMap<DefId, DefId>,
 }
 
 impl BindingTypeResolver {
-  pub fn new(map: HashMap<String, DefId>) -> Self {
-    Self { map }
+  pub fn new(map: HashMap<String, DefId>, value_defs: HashMap<DefId, DefId>) -> Self {
+    Self { map, value_defs }
+  }
+
+  fn resolve(&self, path: &[String]) -> Option<DefId> {
+    match path {
+      [name] => self.map.get(name).copied(),
+      _ => None,
+    }
   }
 }
 
 impl TypeResolver for BindingTypeResolver {
   fn resolve_type_name(&self, path: &[String]) -> Option<DefId> {
-    match path {
-      [name] => self.map.get(name).copied(),
-      _ => None,
-    }
+    self.resolve(path)
   }
 
   fn resolve_typeof(&self, path: &[String]) -> Option<DefId> {
-    match path {
-      [name] => self.map.get(name).copied(),
-      _ => None,
-    }
+    let def = self.resolve(path)?;
+    Some(self.value_defs.get(&def).copied().unwrap_or(def))
   }
 }
 
@@ -1633,7 +1636,11 @@ impl<'a> Checker<'a> {
 
   fn member_type(&mut self, obj: TypeId, prop: &str) -> TypeId {
     let prim = self.store.primitive_ids();
-    match self.store.type_kind(obj) {
+    let expanded = self.expand_for_props(obj);
+    if expanded != obj {
+      return self.member_type(expanded, prop);
+    }
+    match self.store.type_kind(expanded) {
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         for candidate in shape.properties.iter() {
@@ -4394,6 +4401,64 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
+  fn expand_for_props(&self, ty: TypeId) -> TypeId {
+    let Some(expander) = self.ref_expander else {
+      return ty;
+    };
+    match self.store.type_kind(ty) {
+      TypeKind::Ref { .. } | TypeKind::IndexedAccess { .. } => {}
+      _ => return ty,
+    }
+    struct Adapter<'a> {
+      hook: &'a dyn types_ts_interned::RelateTypeExpander,
+    }
+
+    impl<'a> TypeExpander for Adapter<'a> {
+      fn expand(
+        &self,
+        store: &TypeStore,
+        def: types_ts_interned::DefId,
+        args: &[TypeId],
+      ) -> Option<ExpandedType> {
+        self
+          .hook
+          .expand_ref(store, def, args)
+          .map(|ty| ExpandedType {
+            params: Vec::new(),
+            ty,
+          })
+      }
+    }
+
+    let adapter = Adapter { hook: expander };
+    let mut evaluator = TypeEvaluator::new(Arc::clone(&self.store), &adapter);
+    evaluator.evaluate(ty)
+  }
+
+  fn widen_object_prop(&self, ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::NumberLiteral(_) => prim.number,
+      TypeKind::StringLiteral(_) => prim.string,
+      TypeKind::BooleanLiteral(_) => prim.boolean,
+      TypeKind::Union(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_prop(m))
+          .collect();
+        self.store.union(mapped)
+      }
+      TypeKind::Intersection(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_prop(m))
+          .collect();
+        self.store.intersection(mapped)
+      }
+      _ => ty,
+    }
+  }
+
   fn member_type(&mut self, obj: TypeId, mem: &MemberExpr, env: &mut Env) -> TypeId {
     let prim = self.store.primitive_ids();
     let path_info = self.access_path_info(mem.object).and_then(|base| {
@@ -4445,7 +4510,11 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn object_prop_type(&self, obj: TypeId, key: &str) -> Option<TypeId> {
     let prim = self.store.primitive_ids();
-    match self.store.type_kind(obj) {
+    let expanded = self.expand_for_props(obj);
+    if expanded != obj {
+      return self.object_prop_type(expanded, key);
+    }
+    match self.store.type_kind(expanded) {
       TypeKind::Union(members) => {
         let mut tys = Vec::new();
         for member in members {
