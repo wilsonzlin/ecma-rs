@@ -1168,7 +1168,7 @@ impl<'a> Checker<'a> {
           callee_ty,
           &arg_types,
           this_arg,
-          None,
+          self.expr_context.expected,
           span,
         );
         for diag in &resolution.diagnostics {
