@@ -1,7 +1,7 @@
 use crate::ts::{
-  Decl, DeclKind, Export, ExportAll, ExportAsNamespace, ExportSpecifier, Exported, FileKind,
-  HirFile, Import, ImportDefault, ImportEquals, ImportEqualsTarget, ImportNamed, ImportNamespace,
-  ModuleKind, NamedExport,
+  AmbientModule, Decl, DeclKind, Export, ExportAll, ExportAsNamespace, ExportSpecifier, Exported,
+  FileKind, HirFile, Import, ImportDefault, ImportEquals, ImportEqualsTarget, ImportNamed,
+  ImportNamespace, ModuleKind, NamedExport,
 };
 use diagnostics::TextRange;
 use hir_js::{DefId, DefKind, ExportKind, FileKind as HirFileKind, ImportKind, LowerResult};
@@ -11,7 +11,7 @@ use parse_js::ast::import_export::{ExportNames, ImportNames};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::ImportEqualsRhs;
+use parse_js::ast::ts_stmt::{ImportEqualsRhs, ModuleName};
 use parse_js::loc::Loc;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -22,16 +22,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// renumbering.
 pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
   let file_id = lower.hir.file;
-  let mut imports = Vec::new();
-  let mut import_equals = Vec::new();
-  let mut exports = Vec::new();
-  let mut exported: HashMap<DefId, Exported> = HashMap::new();
-  let mut export_as_namespace = Vec::new();
-
-  // Track module syntax to determine module vs script semantics.
-  let mut has_module_syntax = false;
-
-  let item_ids: HashSet<DefId> = lower.hir.items.iter().copied().collect();
+  let mut item_ids: HashSet<DefId> = lower.hir.items.iter().copied().collect();
 
   let imports_by_span: HashMap<_, _> = lower
     .hir
@@ -66,7 +57,85 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
       })
   };
 
-  for stmt in ast.stx.body.iter() {
+  let lowered = lower_stmt_list(
+    &ast.stx.body,
+    lower,
+    &mut item_ids,
+    &import_specifier_span,
+    &export_specifier_span,
+    false,
+  );
+
+  let mut module_kind = if lowered.has_module_syntax {
+    ModuleKind::Module
+  } else {
+    ModuleKind::Script
+  };
+
+  if !lowered.ambient_modules.is_empty() {
+    module_kind = ModuleKind::Module;
+  }
+
+  // Ambient declarations participate in exports for modules unless they augment global.
+  let mut exported = lowered.exported;
+  if matches!(module_kind, ModuleKind::Module) {
+    for def_id in &lower.hir.items {
+      if exported.contains_key(def_id) {
+        continue;
+      }
+      let def = def_by_id(*def_id, &lower.defs, &lower.def_index);
+      if def.is_ambient && !def.in_global {
+        exported.insert(*def_id, Exported::Named);
+      }
+    }
+  }
+
+  let decls = decls_from_defs(lower.hir.items.iter().copied(), lower, &exported);
+
+  HirFile {
+    file_id,
+    module_kind,
+    file_kind: match lower.hir.file_kind {
+      HirFileKind::Dts => FileKind::Dts,
+      _ => FileKind::Ts,
+    },
+    decls,
+    imports: lowered.imports,
+    import_equals: lowered.import_equals,
+    exports: lowered.exports,
+    export_as_namespace: lowered.export_as_namespace,
+    ambient_modules: lowered.ambient_modules,
+  }
+}
+
+struct LoweredStmts {
+  imports: Vec<Import>,
+  import_equals: Vec<ImportEquals>,
+  exports: Vec<Export>,
+  export_as_namespace: Vec<ExportAsNamespace>,
+  exported: HashMap<DefId, Exported>,
+  ambient_modules: Vec<AmbientModule>,
+  has_module_syntax: bool,
+}
+
+fn lower_stmt_list(
+  stmts: &[Node<Stmt>],
+  lower: &LowerResult,
+  items: &mut HashSet<DefId>,
+  import_specifier_span: &impl Fn(TextRange) -> Option<TextRange>,
+  export_specifier_span: &impl Fn(TextRange) -> Option<TextRange>,
+  prune_nested_defs: bool,
+) -> LoweredStmts {
+  let mut has_module_syntax = false;
+  let mut imports = Vec::new();
+  let mut import_equals = Vec::new();
+  let mut exports = Vec::new();
+  let mut exported: HashMap<DefId, Exported> = HashMap::new();
+  let mut export_as_namespace = Vec::new();
+  let mut ambient_modules = Vec::new();
+  let item_list: Vec<DefId> = items.iter().copied().collect();
+
+  for stmt in stmts.iter() {
     let stmt_range = to_range(stmt.loc);
     match stmt.stx.as_ref() {
       Stmt::Import(import) => {
@@ -136,10 +205,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
 
         if import_eq.stx.export {
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::ImportBinding),
             Exported::Named,
@@ -169,7 +238,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
             }
           }
           ExportNames::Specific(names) => {
-            let mut items = Vec::new();
+            let mut items_to_export = Vec::new();
             let mut locals_to_export = Vec::new();
             for name in names {
               let local = name.stx.exportable.as_str().to_string();
@@ -179,7 +248,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
               } else {
                 Some(to_range(name.stx.alias.loc))
               };
-              items.push(ExportSpecifier {
+              items_to_export.push(ExportSpecifier {
                 local,
                 exported: if exported_span.is_some() {
                   Some(exported_name)
@@ -206,12 +275,12 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
                 .from
                 .as_ref()
                 .map(|_| export_specifier_span(stmt_range).unwrap_or(stmt_range)),
-              items,
+              items: items_to_export,
               is_type_only: list.stx.type_only || names.iter().all(|n| n.stx.type_only),
             }));
             for (name, export_kind) in locals_to_export {
               mark_defs_with_name(
-                &item_ids,
+                items,
                 &lower.defs,
                 &lower.def_index,
                 &lower.names,
@@ -226,10 +295,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
       Stmt::ExportDefaultExpr(_) => {
         has_module_syntax = true;
         mark_defs_in_span(
-          &item_ids,
+          items,
           &lower.defs,
           &lower.def_index,
-          &lower.hir.items,
+          &item_list,
           stmt_range,
           Some(DefKind::ExportAlias),
           Exported::Default,
@@ -305,10 +374,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if var.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Var),
             Exported::Named,
@@ -320,10 +389,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if func.stx.export || func.stx.export_default {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Function),
             if func.stx.export_default {
@@ -339,10 +408,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if class_decl.stx.export || class_decl.stx.export_default {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Class),
             if class_decl.stx.export_default {
@@ -358,10 +427,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if intf.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Interface),
             Exported::Named,
@@ -373,10 +442,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if alias.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::TypeAlias),
             Exported::Named,
@@ -388,10 +457,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if en.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Enum),
             Exported::Named,
@@ -403,10 +472,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if ns.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Namespace),
             Exported::Named,
@@ -415,13 +484,25 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         }
       }
       Stmt::ModuleDecl(module) => {
+        if module.stx.declare {
+          if let ModuleName::String(_) = module.stx.name {
+            let ambient =
+              lower_ambient_module(module, lower, import_specifier_span, export_specifier_span);
+            if prune_nested_defs {
+              remove_defs_in_range(items, lower, stmt_range);
+            }
+            has_module_syntax = true;
+            ambient_modules.push(ambient);
+            continue;
+          }
+        }
         if module.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Module),
             Exported::Named,
@@ -433,10 +514,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if av.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Var),
             Exported::Named,
@@ -448,10 +529,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if af.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Function),
             Exported::Named,
@@ -463,10 +544,10 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         if ac.stx.export {
           has_module_syntax = true;
           mark_defs_in_span(
-            &item_ids,
+            items,
             &lower.defs,
             &lower.def_index,
-            &lower.hir.items,
+            &item_list,
             stmt_range,
             Some(DefKind::Class),
             Exported::Named,
@@ -478,47 +559,151 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
     }
   }
 
-  let module_kind = if has_module_syntax {
-    ModuleKind::Module
-  } else {
-    ModuleKind::Script
-  };
+  let has_ambient_modules = !ambient_modules.is_empty();
 
-  // Ambient declarations participate in exports for modules unless they augment global.
-  if matches!(module_kind, ModuleKind::Module) {
-    for def_id in &lower.hir.items {
-      if exported.contains_key(def_id) {
-        continue;
-      }
-      let def = def_by_id(*def_id, &lower.defs, &lower.def_index);
-      if def.is_ambient && !def.in_global {
-        exported.insert(*def_id, Exported::Named);
+  LoweredStmts {
+    imports,
+    import_equals,
+    exports,
+    export_as_namespace,
+    exported,
+    ambient_modules,
+    has_module_syntax: has_module_syntax || has_ambient_modules,
+  }
+}
+
+fn lower_ambient_module(
+  module: &Node<parse_js::ast::ts_stmt::ModuleDecl>,
+  lower: &LowerResult,
+  import_specifier_span: &impl Fn(TextRange) -> Option<TextRange>,
+  export_specifier_span: &impl Fn(TextRange) -> Option<TextRange>,
+) -> AmbientModule {
+  let body = module.stx.body.as_deref().unwrap_or(&[]);
+  let mut items = ambient_def_candidates(body, lower);
+  let lowered = lower_stmt_list(
+    body,
+    lower,
+    &mut items,
+    import_specifier_span,
+    export_specifier_span,
+    true,
+  );
+  let def_order = def_ids_in_encounter_order(body, &items, lower);
+  AmbientModule {
+    name: match &module.stx.name {
+      ModuleName::String(name) => name.clone(),
+      ModuleName::Identifier(name) => name.clone(),
+    },
+    name_span: to_range(module.loc),
+    decls: decls_from_defs(def_order.into_iter(), lower, &lowered.exported),
+    imports: lowered.imports,
+    import_equals: lowered.import_equals,
+    exports: lowered.exports,
+    export_as_namespace: lowered.export_as_namespace,
+    ambient_modules: lowered.ambient_modules,
+  }
+}
+
+fn ambient_def_candidates(stmts: &[Node<Stmt>], lower: &LowerResult) -> HashSet<DefId> {
+  let mut ids = HashSet::new();
+  let Some(range) = stmts
+    .iter()
+    .fold(None, |acc: Option<TextRange>, stmt| match acc {
+      Some(r) => Some(TextRange::new(
+        r.start.min(stmt.loc.start_u32()),
+        r.end.max(stmt.loc.end_u32()),
+      )),
+      None => Some(to_range(stmt.loc)),
+    })
+  else {
+    return ids;
+  };
+  for def in &lower.defs {
+    if !def.is_ambient {
+      continue;
+    }
+    if def.span.start < range.start || def.span.end > range.end {
+      continue;
+    }
+    if def_kind_to_decl_kind(def.path.kind).is_some() {
+      ids.insert(def.id);
+    }
+  }
+  ids
+}
+
+fn def_ids_in_encounter_order(
+  stmts: &[Node<Stmt>],
+  items: &HashSet<DefId>,
+  lower: &LowerResult,
+) -> Vec<DefId> {
+  let mut order = Vec::new();
+  let mut seen = HashSet::new();
+  for stmt in stmts {
+    let stmt_range = to_range(stmt.loc);
+    let mut matches: Vec<_> = items
+      .iter()
+      .copied()
+      .filter(|id| {
+        let def = def_by_id(*id, &lower.defs, &lower.def_index);
+        def.span.start >= stmt_range.start && def.span.end <= stmt_range.end
+      })
+      .collect();
+    matches.sort_by_key(|id| {
+      let def = def_by_id(*id, &lower.defs, &lower.def_index);
+      (def.span.start, def.span.end, *id)
+    });
+    for id in matches {
+      if seen.insert(id) {
+        order.push(id);
       }
     }
   }
 
+  if seen.len() != items.len() {
+    let mut remaining: Vec<_> = items.difference(&seen).copied().collect();
+    remaining.sort_by_key(|id| {
+      let def = def_by_id(*id, &lower.defs, &lower.def_index);
+      (def.span.start, def.span.end, *id)
+    });
+    order.extend(remaining);
+  }
+
+  order
+}
+
+fn remove_defs_in_range(items: &mut HashSet<DefId>, lower: &LowerResult, range: TextRange) {
+  let to_remove: Vec<_> = items
+    .iter()
+    .copied()
+    .filter(|id| {
+      let def = def_by_id(*id, &lower.defs, &lower.def_index);
+      def.span.start >= range.start && def.span.end <= range.end
+    })
+    .collect();
+  for id in to_remove {
+    items.remove(&id);
+  }
+}
+
+fn decls_from_defs(
+  def_ids: impl IntoIterator<Item = DefId>,
+  lower: &LowerResult,
+  exported: &HashMap<DefId, Exported>,
+) -> Vec<Decl> {
   let mut decls = Vec::new();
-  for def_id in lower.hir.items.iter().copied() {
+  for def_id in def_ids {
     let def = def_by_id(def_id, &lower.defs, &lower.def_index);
-    let kind = match def.path.kind {
-      DefKind::Function => Some(DeclKind::Function),
-      DefKind::Class => Some(DeclKind::Class),
-      DefKind::Var => Some(DeclKind::Var),
-      DefKind::Interface => Some(DeclKind::Interface),
-      DefKind::TypeAlias => Some(DeclKind::TypeAlias),
-      DefKind::Enum => Some(DeclKind::Enum),
-      DefKind::Namespace | DefKind::Module => Some(DeclKind::Namespace),
-      DefKind::ImportBinding => Some(DeclKind::ImportBinding),
-      DefKind::ExportAlias => {
-        if exported.get(&def_id) == Some(&Exported::Default) {
-          Some(DeclKind::Var)
-        } else {
-          None
-        }
+    let kind = def_kind_to_decl_kind(def.path.kind);
+    if let Some(mut kind) = kind {
+      if matches!(def.path.kind, DefKind::ExportAlias)
+        && exported.get(&def_id) != Some(&Exported::Default)
+      {
+        continue;
       }
-      _ => None,
-    };
-    if let Some(kind) = kind {
+      if matches!(def.path.kind, DefKind::ExportAlias) {
+        kind = DeclKind::Var;
+      }
       let name = lower
         .names
         .resolve(def.name)
@@ -536,20 +721,21 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
       });
     }
   }
+  decls
+}
 
-  HirFile {
-    file_id,
-    module_kind,
-    file_kind: match lower.hir.file_kind {
-      HirFileKind::Dts => FileKind::Dts,
-      _ => FileKind::Ts,
-    },
-    decls,
-    imports,
-    import_equals,
-    exports,
-    export_as_namespace,
-    ambient_modules: Vec::new(),
+fn def_kind_to_decl_kind(kind: DefKind) -> Option<DeclKind> {
+  match kind {
+    DefKind::Function => Some(DeclKind::Function),
+    DefKind::Class => Some(DeclKind::Class),
+    DefKind::Var => Some(DeclKind::Var),
+    DefKind::Interface => Some(DeclKind::Interface),
+    DefKind::TypeAlias => Some(DeclKind::TypeAlias),
+    DefKind::Enum => Some(DeclKind::Enum),
+    DefKind::Namespace | DefKind::Module => Some(DeclKind::Namespace),
+    DefKind::ImportBinding => Some(DeclKind::ImportBinding),
+    DefKind::ExportAlias => Some(DeclKind::Var),
+    _ => None,
   }
 }
 

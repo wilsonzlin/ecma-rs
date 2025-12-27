@@ -858,6 +858,39 @@ fn declare_global_from_dts_module_merges_into_globals() {
 }
 
 #[test]
+fn ambient_modules_lower_from_ast() {
+  let source = r#"
+    declare module "pkg" { export const x: number }
+    import { x } from "pkg";
+    export const y = x;
+  "#;
+  let ast = parse(source).expect("parse");
+  let file = FileId(55);
+  let lower = lower_file(file, HirFileKind::Dts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lower);
+
+  let pkg_file = FileId(56);
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file => Arc::new(hir),
+    pkg_file => Arc::new(HirFile::module(pkg_file)),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "pkg".to_string() => pkg_file,
+  });
+
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports = semantics
+    .exports_of_ambient_module("pkg")
+    .expect("ambient module exports available");
+  assert!(
+    exports.contains_key("x"),
+    "ambient module exports should include x"
+  );
+}
+
+#[test]
 fn type_only_imports_skip_value_namespace() {
   let file_a = FileId(60);
   let file_b = FileId(61);
