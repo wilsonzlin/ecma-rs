@@ -4,7 +4,8 @@
 //! IDs attached to the `parse-js` AST via `NodeAssocData`.
 
 use super::SpanKey;
-use crate::ts::locals::{ScopeId, SymbolId};
+use crate::ts::locals::ScopeId;
+use crate::ts::SymbolId;
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::TextRange;
 use parse_js::ast::node::Node;

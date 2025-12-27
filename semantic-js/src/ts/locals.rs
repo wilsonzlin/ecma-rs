@@ -1,4 +1,4 @@
-use super::model::Namespace;
+use super::model::{Namespace, SymbolId, TsProgramSemantics};
 use crate::assoc::ts::{declared_symbol, scope_id, DeclaredSymbol, ResolvedSymbol, ScopeInfo};
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut};
@@ -47,15 +47,7 @@ impl NameId {
   }
 }
 
-/// Deterministic identifier for a symbol in any namespace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SymbolId(pub u64);
-
-impl SymbolId {
-  pub fn raw(self) -> u64 {
-    self.0
-  }
-}
+const LOCAL_SYMBOL_TAG: &str = "TS_LOCAL_SYMBOL";
 
 fn name_id_for(file: FileId, name: &str) -> NameId {
   NameId(stable_hash(&(file, name)))
@@ -77,7 +69,13 @@ fn scope_id_for(
 }
 
 fn symbol_id_for(file: FileId, scope: ScopeId, name: NameId, namespaces: Namespace) -> SymbolId {
-  SymbolId(stable_hash(&(file, scope.raw(), name, namespaces.bits())))
+  SymbolId(stable_hash(&(
+    LOCAL_SYMBOL_TAG,
+    file,
+    scope.raw(),
+    name.raw(),
+    namespaces.bits(),
+  )))
 }
 
 fn range_of<T: Drive + DriveMut>(node: &Node<T>) -> TextRange {
@@ -212,6 +210,38 @@ fn resolve_span_at_offset(
     })
     .min_by_key(|(range, sym)| (range.len(), range.start, range.end, sym.raw() as u32))
     .map(|(range, sym)| (*range, *sym))
+}
+
+/// Map module-scope local symbols to their program binder counterparts for the
+/// same name/namespace, if available. Only symbols declared in the root scope
+/// are considered; nested namespaces/modules and ambiguous namespace splits are
+/// left unmapped because the program binder does not currently expose them.
+pub fn map_module_scope_locals_to_program(
+  locals: &TsLocalSemantics,
+  program: &TsProgramSemantics,
+  file: FileId,
+) -> BTreeMap<SymbolId, SymbolId> {
+  let mut mapping = BTreeMap::new();
+  for (local_id, symbol) in locals.symbols.iter() {
+    if symbol.decl_scope != locals.root_scope() {
+      continue;
+    }
+    let Some(name) = locals.names.get(&symbol.name) else {
+      continue;
+    };
+    let mut resolved = Vec::new();
+    for ns in symbol.namespaces.iter_bits() {
+      if let Some(sym) = program.resolve_in_module(file, name, ns) {
+        resolved.push(sym);
+      }
+    }
+    if let Some(first) = resolved.first().copied() {
+      if resolved.iter().all(|sym| *sym == first) {
+        mapping.insert(*local_id, first);
+      }
+    }
+  }
+  mapping
 }
 
 #[derive(Clone, Copy)]
@@ -1054,17 +1084,24 @@ impl DeclarePass {
     let base_ns = if import.stx.type_only {
       Namespace::TYPE
     } else {
-      Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+      Namespace::VALUE | Namespace::TYPE
     };
     if let Some(default) = &mut import.stx.default {
       self.walk_pat_decl(default, base_ns);
     }
     if let Some(names) = &mut import.stx.names {
       match names {
-        ImportNames::All(pat) => self.walk_pat_decl(pat, base_ns),
+        ImportNames::All(pat) => {
+          let ns = if import.stx.type_only {
+            Namespace::TYPE
+          } else {
+            Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+          };
+          self.walk_pat_decl(pat, ns);
+        }
         ImportNames::Specific(list) => {
           for item in list.iter_mut() {
-            let ns = if item.stx.type_only {
+            let ns = if import.stx.type_only || item.stx.type_only {
               Namespace::TYPE
             } else {
               base_ns

@@ -1,6 +1,7 @@
 use super::*;
 use crate::assoc::{js, ts};
-use crate::ts::locals::{bind_ts_locals, SymbolId as LocalSymbolId};
+use crate::ts::from_hir_js::lower_to_ts_hir;
+use crate::ts::locals::{bind_ts_locals, map_module_scope_locals_to_program};
 use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
 use hir_js::ids::{DefKind, ExprId, TypeExprId};
 use hir_js::lower_file;
@@ -105,8 +106,8 @@ fn decls_for_file(table: &SymbolTable, file: FileId) -> Vec<DeclData> {
 #[test]
 fn ts_assoc_helpers_round_trip() {
   let mut assoc = NodeAssocData::default();
-  let declared = ts::DeclaredSymbol(LocalSymbolId(123));
-  let resolved = LocalSymbolId(456);
+  let declared = ts::DeclaredSymbol(SymbolId(123));
+  let resolved = SymbolId(456);
 
   assoc.set(declared);
   assoc.set(ts::ResolvedSymbol(Some(resolved)));
@@ -118,13 +119,13 @@ fn ts_assoc_helpers_round_trip() {
 #[test]
 fn ts_assoc_keys_do_not_overlap_js_accessors() {
   let mut assoc = NodeAssocData::default();
-  assoc.set(ts::DeclaredSymbol(LocalSymbolId(7)));
-  assoc.set(ts::ResolvedSymbol(Some(LocalSymbolId(9))));
+  assoc.set(ts::DeclaredSymbol(SymbolId(7)));
+  assoc.set(ts::ResolvedSymbol(Some(SymbolId(9))));
 
   assert_eq!(js::declared_symbol(&assoc), None);
   assert_eq!(js::resolved_symbol(&assoc), None);
-  assert_eq!(ts::declared_symbol(&assoc), Some(LocalSymbolId(7)));
-  assert_eq!(ts::resolved_symbol(&assoc), Some(LocalSymbolId(9)));
+  assert_eq!(ts::declared_symbol(&assoc), Some(SymbolId(7)));
+  assert_eq!(ts::resolved_symbol(&assoc), Some(SymbolId(9)));
 
   assert_ne!(
     TypeId::of::<ts::DeclaredSymbol>(),
@@ -137,8 +138,8 @@ fn ts_assoc_keys_do_not_overlap_js_accessors() {
 
   // Explicit type annotations ensure the accessors expose TS symbol IDs and
   // cannot be mistaken for JS ones at compile time.
-  let _: Option<LocalSymbolId> = ts::declared_symbol(&assoc);
-  let _: Option<LocalSymbolId> = ts::resolved_symbol(&assoc);
+  let _: Option<SymbolId> = ts::declared_symbol(&assoc);
+  let _: Option<SymbolId> = ts::resolved_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::declared_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::resolved_symbol(&assoc);
 }
@@ -1420,6 +1421,102 @@ fn body_by_name<'a>(
     .or_else(|| lowered.bodies.first())
     .map(|b| b.as_ref())
     .unwrap_or_else(|| panic!("body available for {}", name))
+}
+
+#[test]
+fn locals_imports_use_expected_namespaces() {
+  let mut ast = parse(
+    r#"
+    import { foo } from "mod";
+    import * as ns from "mod";
+    import type { bar } from "mod";
+    import baz from "mod";
+  "#,
+  )
+  .unwrap();
+  let locals = bind_ts_locals(&mut ast, FileId(98), true);
+  let root = locals.root_scope();
+
+  let symbol_named = |name: &str| {
+    locals
+      .symbols
+      .values()
+      .find(|sym| {
+        sym.decl_scope == root
+          && locals
+            .names
+            .get(&sym.name)
+            .map(|n| n == name)
+            .unwrap_or(false)
+      })
+      .expect("symbol present")
+  };
+
+  assert_eq!(
+    symbol_named("foo").namespaces,
+    Namespace::VALUE | Namespace::TYPE
+  );
+  assert_eq!(
+    symbol_named("baz").namespaces,
+    Namespace::VALUE | Namespace::TYPE
+  );
+  assert_eq!(symbol_named("bar").namespaces, Namespace::TYPE);
+  assert_eq!(
+    symbol_named("ns").namespaces,
+    Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+  );
+}
+
+#[test]
+fn module_scope_locals_map_to_program_symbols() {
+  let ast_a = parse(
+    r#"
+    export const Foo = 1;
+  "#,
+  )
+  .unwrap();
+  let mut ast_b = parse(
+    r#"
+    import { Foo } from "./a";
+  "#,
+  )
+  .unwrap();
+  let file_a = FileId(99);
+  let file_b = FileId(100);
+
+  let lower_a = lower_file(file_a, HirFileKind::Ts, &ast_a);
+  let lower_b = lower_file(file_b, HirFileKind::Ts, &ast_b);
+  let locals_b = bind_ts_locals(&mut ast_b, file_b, true);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(lower_to_ts_hir(&ast_a, &lower_a)),
+    file_b => Arc::new(lower_to_ts_hir(&ast_b, &lower_b)),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "./a".to_string() => file_a,
+  });
+
+  let (program, diags) = bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let mapping = map_module_scope_locals_to_program(&locals_b, &program, file_b);
+  let local_foo = locals_b
+    .symbols
+    .values()
+    .find(|sym| {
+      sym.decl_scope == locals_b.root_scope()
+        && locals_b
+          .names
+          .get(&sym.name)
+          .map(|n| n == "Foo")
+          .unwrap_or(false)
+    })
+    .expect("local Foo binding present")
+    .id;
+  let program_foo = program
+    .resolve_in_module(file_b, "Foo", Namespace::VALUE)
+    .expect("program import symbol present");
+  assert_eq!(mapping.get(&local_foo), Some(&program_foo));
 }
 
 #[test]

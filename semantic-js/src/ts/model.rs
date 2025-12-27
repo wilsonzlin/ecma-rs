@@ -96,6 +96,12 @@ impl Namespace {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SymbolId(pub u64);
 
+impl SymbolId {
+  pub fn raw(self) -> u64 {
+    self.0
+  }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DeclId(pub u64);
 
