@@ -15,8 +15,8 @@ use parse_js::loc::Loc;
 use std::fmt;
 use std::sync::Arc;
 use types_ts_interned::{
-  DefId, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property, Shape,
-  Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamDecl,
+  DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
+  Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamDecl,
   TypeParamId, TypeStore,
 };
 
@@ -292,42 +292,24 @@ impl TypeLowerer {
   }
 
   fn lower_function_type(&mut self, func: &Node<TypeFunction>) -> TypeId {
-    self.push_type_param_scope();
-    let mut type_params = Vec::new();
-    if let Some(params) = func.stx.type_parameters.as_ref() {
-      type_params = self.register_type_params(params);
-    }
-    let (this_param, params) = self.lower_params(&func.stx.parameters);
-    let sig = Signature {
-      params,
-      ret: self.lower_type_expr(&func.stx.return_type),
-      type_params,
-      this_param,
-    };
-    self.pop_type_param_scope();
-    let sig_id = self.store.intern_signature(sig);
+    let sig = self.lower_member_signature(
+      &func.stx.type_parameters,
+      &func.stx.parameters,
+      Some(func.stx.return_type.as_ref()),
+    );
     self.store.intern_type(TypeKind::Callable {
-      overloads: vec![sig_id],
+      overloads: vec![sig],
     })
   }
 
   fn lower_constructor_type(&mut self, cons: &Node<TypeConstructor>) -> TypeId {
-    self.push_type_param_scope();
-    let mut type_params = Vec::new();
-    if let Some(params) = cons.stx.type_parameters.as_ref() {
-      type_params = self.register_type_params(params);
-    }
-    let (this_param, params) = self.lower_params(&cons.stx.parameters);
-    let sig = Signature {
-      params,
-      ret: self.lower_type_expr(&cons.stx.return_type),
-      type_params,
-      this_param,
-    };
-    self.pop_type_param_scope();
-    let sig_id = self.store.intern_signature(sig);
+    let sig = self.lower_member_signature(
+      &cons.stx.type_parameters,
+      &cons.stx.parameters,
+      Some(cons.stx.return_type.as_ref()),
+    );
     self.store.intern_type(TypeKind::Callable {
-      overloads: vec![sig_id],
+      overloads: vec![sig],
     })
   }
 
@@ -356,10 +338,35 @@ impl TypeLowerer {
     (this_param, lowered)
   }
 
-  fn lower_object_type(&mut self, obj: &Node<TypeObjectLiteral>) -> TypeId {
+  fn lower_member_signature(
+    &mut self,
+    type_params: &Option<Vec<Node<TypeParameter>>>,
+    params: &[Node<TypeFunctionParameter>],
+    return_type: Option<&Node<TypeExpr>>,
+  ) -> types_ts_interned::SignatureId {
+    self.push_type_param_scope();
+    let type_params = type_params
+      .as_ref()
+      .map(|params| self.register_type_params(params))
+      .unwrap_or_default();
+    let (this_param, params) = self.lower_params(params);
+    let ret = return_type
+      .map(|t| self.lower_type_expr(t))
+      .unwrap_or(self.store.primitive_ids().unknown);
+    let sig = Signature {
+      params,
+      ret,
+      type_params,
+      this_param,
+    };
+    self.pop_type_param_scope();
+    self.store.intern_signature(sig)
+  }
+
+  pub(crate) fn lower_type_members(&mut self, members: &[Node<TypeMember>]) -> Shape {
     let mut shape = Shape::new();
 
-    for member in obj.stx.members.iter() {
+    for member in members.iter() {
       match member.stx.as_ref() {
         TypeMember::Property(prop) => {
           if let Some((key, data)) = self.lower_property(prop) {
@@ -383,75 +390,97 @@ impl TypeLowerer {
           }
         }
         TypeMember::Constructor(cons) => {
-          self.push_type_param_scope();
-          let mut type_params = Vec::new();
-          if let Some(params) = cons.stx.type_parameters.as_ref() {
-            type_params = self.register_type_params(params);
-          }
-          let (this_param, params) = self.lower_params(&cons.stx.parameters);
-          let sig = Signature {
-            params,
-            ret: cons
-              .stx
-              .return_type
-              .as_ref()
-              .map(|t| self.lower_type_expr(t))
-              .unwrap_or(self.store.primitive_ids().unknown),
-            type_params,
-            this_param,
-          };
-          self.pop_type_param_scope();
-          let sig_id = self.store.intern_signature(sig);
-          shape.construct_signatures.push(sig_id);
+          let sig = self.lower_member_signature(
+            &cons.stx.type_parameters,
+            &cons.stx.parameters,
+            cons.stx.return_type.as_ref(),
+          );
+          shape.construct_signatures.push(sig);
         }
         TypeMember::CallSignature(call) => {
-          self.push_type_param_scope();
-          let mut type_params = Vec::new();
-          if let Some(params) = call.stx.type_parameters.as_ref() {
-            type_params = self.register_type_params(params);
-          }
-          let (this_param, params) = self.lower_params(&call.stx.parameters);
-          let sig = Signature {
-            params,
-            ret: call
-              .stx
-              .return_type
-              .as_ref()
-              .map(|t| self.lower_type_expr(t))
-              .unwrap_or(self.store.primitive_ids().unknown),
-            type_params,
-            this_param,
-          };
-          self.pop_type_param_scope();
-          let sig_id = self.store.intern_signature(sig);
-          shape.call_signatures.push(sig_id);
+          let sig = self.lower_member_signature(
+            &call.stx.type_parameters,
+            &call.stx.parameters,
+            call.stx.return_type.as_ref(),
+          );
+          shape.call_signatures.push(sig);
         }
         TypeMember::IndexSignature(idx) => {
-          shape.indexers.push(types_ts_interned::Indexer {
+          shape.indexers.push(Indexer {
             key_type: self.lower_type_expr(&idx.stx.parameter_type),
             value_type: self.lower_type_expr(&idx.stx.type_annotation),
             readonly: idx.stx.readonly,
           });
         }
-        _ => {}
+        TypeMember::GetAccessor(get) => {
+          if let Some(key) = self.lower_type_member_key(&get.stx.key) {
+            let ty = get
+              .stx
+              .return_type
+              .as_ref()
+              .map(|t| self.lower_type_expr(t))
+              .unwrap_or(self.store.primitive_ids().unknown);
+            shape.properties.push(Property {
+              key,
+              data: PropData {
+                ty,
+                optional: false,
+                readonly: true,
+                accessibility: None,
+                is_method: false,
+                origin: None,
+                declared_on: None,
+              },
+            });
+          }
+        }
+        TypeMember::SetAccessor(set) => {
+          if let Some(key) = self.lower_type_member_key(&set.stx.key) {
+            shape.properties.push(Property {
+              key,
+              data: PropData {
+                ty: self.lower_type_expr(&set.stx.parameter.stx.type_expr),
+                optional: set.stx.parameter.stx.optional,
+                readonly: false,
+                accessibility: None,
+                is_method: false,
+                origin: None,
+                declared_on: None,
+              },
+            });
+          }
+        }
+        TypeMember::MappedProperty(_) => {}
       }
     }
 
+    shape
+  }
+
+  fn lower_object_type(&mut self, obj: &Node<TypeObjectLiteral>) -> TypeId {
+    let shape = self.lower_type_members(&obj.stx.members);
     let shape = self.store.intern_shape(shape);
     let obj = self.store.intern_object(ObjectType { shape });
     self.store.intern_type(TypeKind::Object(obj))
   }
 
-  fn lower_property(&mut self, prop: &Node<TypePropertySignature>) -> Option<(PropKey, PropData)> {
-    let key = match &prop.stx.key {
+  fn lower_type_member_key(&self, key: &TypePropertyKey) -> Option<PropKey> {
+    match key {
       TypePropertyKey::Identifier(id) | TypePropertyKey::String(id) => {
-        PropKey::String(self.store.intern_name(id.clone()))
+        Some(PropKey::String(self.store.intern_name(id.clone())))
       }
       TypePropertyKey::Number(num) => {
         let parsed = num.parse::<i64>().ok()?;
-        PropKey::Number(parsed)
+        Some(PropKey::Number(parsed))
       }
-      TypePropertyKey::Computed(_) => return None,
+      TypePropertyKey::Computed(_) => None,
+    }
+  }
+
+  fn lower_property(&mut self, prop: &Node<TypePropertySignature>) -> Option<(PropKey, PropData)> {
+    let key = match self.lower_type_member_key(&prop.stx.key) {
+      Some(key) => key,
+      None => return None,
     };
     let ty = prop
       .stx
@@ -472,40 +501,20 @@ impl TypeLowerer {
   }
 
   fn lower_method(&mut self, method: &Node<TypeMethodSignature>) -> Option<(PropKey, TypeId)> {
-    let key = match &method.stx.key {
-      TypePropertyKey::Identifier(id) | TypePropertyKey::String(id) => {
-        PropKey::String(self.store.intern_name(id.clone()))
-      }
-      TypePropertyKey::Number(num) => {
-        let parsed = num.parse::<i64>().ok()?;
-        PropKey::Number(parsed)
-      }
-      TypePropertyKey::Computed(_) => return None,
+    let key = match self.lower_type_member_key(&method.stx.key) {
+      Some(key) => key,
+      None => return None,
     };
 
-    let mut type_params = Vec::new();
-    self.push_type_param_scope();
-    if let Some(params) = method.stx.type_parameters.as_ref() {
-      type_params = self.register_type_params(params);
-    }
-    let (this_param, params) = self.lower_params(&method.stx.parameters);
-    let sig = Signature {
-      params,
-      ret: method
-        .stx
-        .return_type
-        .as_ref()
-        .map(|t| self.lower_type_expr(t))
-        .unwrap_or(self.store.primitive_ids().unknown),
-      type_params,
-      this_param,
-    };
-    self.pop_type_param_scope();
-    let sig_id = self.store.intern_signature(sig);
+    let sig = self.lower_member_signature(
+      &method.stx.type_parameters,
+      &method.stx.parameters,
+      method.stx.return_type.as_ref(),
+    );
     Some((
       key,
       self.store.intern_type(TypeKind::Callable {
-        overloads: vec![sig_id],
+        overloads: vec![sig],
       }),
     ))
   }

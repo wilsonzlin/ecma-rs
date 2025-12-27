@@ -3831,7 +3831,7 @@ impl ProgramState {
         &ast,
         lowered,
         *file,
-        &flat_defs,
+        &def_by_name,
         &mut self.diagnostics,
       );
       for class in class_infos {
@@ -3861,8 +3861,8 @@ impl ProgramState {
       }
     }
 
-    self.collect_function_decl_types(&store, &flat_defs, &mut def_types, &mut type_params);
-    self.collect_var_decl_types(&store, &flat_defs, &mut def_types);
+    self.collect_function_decl_types(&store, &def_by_name, &mut def_types, &mut type_params);
+    self.collect_var_decl_types(&store, &def_by_name, &mut def_types);
 
     let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
     for (file, lowered) in lowered_entries.into_iter() {
