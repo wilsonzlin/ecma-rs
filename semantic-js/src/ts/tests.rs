@@ -2,9 +2,8 @@ use super::*;
 use crate::assoc::{js, ts, SpanKey};
 use crate::ts::from_hir_js::lower_to_ts_hir;
 use crate::ts::locals::{
-  bind_ts_locals, bind_ts_locals_tables, map_module_scope_locals_to_program,
-  NameId as LocalNameId, ScopeId as LocalScopeId, ScopeKind as LocalScopeKind,
-  TsLocalSemantics,
+  bind_ts_locals, bind_ts_locals_tables, map_module_scope_locals_to_program, NameId as LocalNameId,
+  ScopeId as LocalScopeId, ScopeKind as LocalScopeKind, TsLocalSemantics,
 };
 use crate::ts::model::SymbolId as LocalSymbolId;
 use derive_visitor::{DriveMut, VisitorMut};
@@ -271,7 +270,10 @@ fn ts_locals_tables_match_mutating_binder() {
     assert_eq!(mut_sem.resolve_type_span(range), Some(*sym));
   }
 
-  let expr_offsets: Vec<u32> = source.match_indices("foo").map(|(idx, _)| idx as u32).collect();
+  let expr_offsets: Vec<u32> = source
+    .match_indices("foo")
+    .map(|(idx, _)| idx as u32)
+    .collect();
   for offset in expr_offsets {
     assert_eq!(
       table_sem.resolve_expr_at_offset(offset),
@@ -319,6 +321,8 @@ fn reexport_chain_uses_original_symbols() {
     specifier: "b".to_string(),
     is_type_only: false,
     specifier_span: span(12),
+    alias: None,
+    alias_span: None,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -361,6 +365,59 @@ fn reexport_chain_uses_original_symbols() {
 }
 
 #[test]
+fn export_all_as_namespace_adds_only_alias() {
+  let file_a = FileId(400);
+  let file_b = FileId(401);
+
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "foo", DeclKind::Var, Exported::Named));
+
+  let mut b = HirFile::module(file_b);
+  b.exports.push(Export::All(ExportAll {
+    specifier: "a".to_string(),
+    is_type_only: false,
+    specifier_span: span(10),
+    alias: Some("NS".to_string()),
+    alias_span: Some(span(11)),
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports_b = semantics.exports_of(file_b);
+  assert!(exports_b.contains_key("NS"));
+  assert!(!exports_b.contains_key("foo"));
+
+  let symbols = semantics.symbols();
+  let ns_group = exports_b.get("NS").expect("namespace alias exported");
+  let mask = ns_group.namespaces(symbols);
+  assert!(mask.contains(Namespace::VALUE));
+  assert!(mask.contains(Namespace::TYPE));
+  assert!(mask.contains(Namespace::NAMESPACE));
+  let ns_symbol = ns_group
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("value namespace present");
+  match symbols.symbol(ns_symbol).origin {
+    SymbolOrigin::Import { from, ref imported } => {
+      assert_eq!(from, Some(file_a));
+      assert_eq!(imported, "*");
+    }
+    ref other => panic!("expected import origin, got {:?}", other),
+  }
+}
+
+#[test]
 fn circular_export_is_cycle_safe() {
   let file_a = FileId(10);
   let file_b = FileId(11);
@@ -372,6 +429,8 @@ fn circular_export_is_cycle_safe() {
     specifier: "b".to_string(),
     is_type_only: false,
     specifier_span: span(20),
+    alias: None,
+    alias_span: None,
   }));
 
   let mut b = HirFile::module(file_b);
@@ -381,6 +440,8 @@ fn circular_export_is_cycle_safe() {
     specifier: "a".to_string(),
     is_type_only: false,
     specifier_span: span(21),
+    alias: None,
+    alias_span: None,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -586,6 +647,8 @@ fn unresolved_import_export_have_spans() {
     specifier: "missing".to_string(),
     is_type_only: false,
     specifier_span: export_span,
+    alias: None,
+    alias_span: None,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
@@ -855,6 +918,8 @@ fn resolve_export_handles_export_star_cycles() {
     specifier: "b".to_string(),
     is_type_only: false,
     specifier_span: span(80),
+    alias: None,
+    alias_span: None,
   }));
 
   let mut b = HirFile::module(file_b);
@@ -864,6 +929,8 @@ fn resolve_export_handles_export_star_cycles() {
     specifier: "a".to_string(),
     is_type_only: false,
     specifier_span: span(81),
+    alias: None,
+    alias_span: None,
   }));
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
@@ -955,6 +1022,8 @@ fn binder_is_deterministic_across_orders_and_threads() {
     specifier: "b".to_string(),
     is_type_only: false,
     specifier_span: span(17),
+    alias: None,
+    alias_span: None,
   }));
   c.exports.push(Export::Named(NamedExport {
     specifier: Some("a".to_string()),
@@ -1469,8 +1538,7 @@ fn dts_export_as_namespace_creates_global_symbol() {
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
   let resolver = StaticResolver::new(HashMap::new());
-  let (semantics, diags) =
-    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
 
   assert!(diags.is_empty());
 
@@ -1514,8 +1582,9 @@ fn export_as_namespace_conflict_reports_diagnostic() {
   let files: HashMap<FileId, Arc<HirFile>> =
     maplit::hashmap! { file_a => Arc::new(a), file_b => Arc::new(b) };
   let resolver = StaticResolver::new(HashMap::new());
-  let (semantics, diags) =
-    bind_ts_program(&[file_a, file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  let (semantics, diags) = bind_ts_program(&[file_a, file_b], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
 
   assert!(semantics.global_symbols().contains_key("Foo"));
   assert_eq!(diags.len(), 1);

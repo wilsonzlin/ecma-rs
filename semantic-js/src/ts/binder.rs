@@ -13,6 +13,7 @@ enum ExportStatus {
 
 #[derive(Clone, Debug)]
 struct ModuleState {
+  owner: SymbolOwner,
   file_id: FileId,
   file_kind: FileKind,
   is_script: bool,
@@ -25,8 +26,9 @@ struct ModuleState {
 }
 
 impl ModuleState {
-  fn new(file_id: FileId, file_kind: FileKind, is_script: bool) -> Self {
+  fn new(owner: SymbolOwner, file_id: FileId, file_kind: FileKind, is_script: bool) -> Self {
     Self {
+      owner,
       file_id,
       file_kind,
       is_script,
@@ -57,6 +59,12 @@ enum ExportSpec {
   },
   ExportAll {
     from: Option<FileId>,
+    type_only: bool,
+    span: Span,
+  },
+  ExportAllAlias {
+    from: Option<FileId>,
+    exported_as: String,
     type_only: bool,
     span: Span,
   },
@@ -228,8 +236,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       &hir.export_as_namespace,
       &hir.ambient_modules,
     );
-    let mut state = ModuleState::new(hir.file_id, hir.file_kind, is_script);
     let owner = SymbolOwner::Module(hir.file_id);
+    let mut state = ModuleState::new(owner.clone(), hir.file_id, hir.file_kind, is_script);
     let mut deps = Vec::new();
 
     self.bind_module_items(
@@ -267,7 +275,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     let mut state = self
       .ambient_modules
       .remove(&module.name)
-      .unwrap_or_else(|| ModuleState::new(file_id, file_kind, false));
+      .unwrap_or_else(|| ModuleState::new(owner.clone(), file_id, file_kind, false));
 
     self.bind_module_items(
       &mut state,
@@ -455,7 +463,12 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           specifier,
           specifier_span,
         } => {
-          let target = self.resolve_spec(file_id, specifier, Span::new(file_id, *specifier_span), true);
+          let target = self.resolve_spec(
+            file_id,
+            specifier,
+            Span::new(file_id, *specifier_span),
+            true,
+          );
           if let Some(t) = target {
             deps.push(t);
           }
@@ -557,11 +570,22 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           if let Some(t) = target {
             deps.push(t);
           }
-          state.export_specs.push(ExportSpec::ExportAll {
-            from: target,
-            type_only: all.is_type_only,
-            span: spec_span,
-          });
+          if let Some(alias) = &all.alias {
+            let alias_span = Span::new(file_id, all.alias_span.unwrap_or(all.specifier_span));
+            first_export_span.get_or_insert(alias_span);
+            state.export_specs.push(ExportSpec::ExportAllAlias {
+              from: target,
+              exported_as: alias.clone(),
+              type_only: all.is_type_only,
+              span: alias_span,
+            });
+          } else {
+            state.export_specs.push(ExportSpec::ExportAll {
+              from: target,
+              type_only: all.is_type_only,
+              span: spec_span,
+            });
+          }
           has_exports = true;
           has_other_exports = true;
         }
@@ -671,11 +695,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     }
   }
 
-  fn handle_export_as_namespace(
-    &mut self,
-    state: &ModuleState,
-    seen: &mut BTreeMap<String, Span>,
-  ) {
+  fn handle_export_as_namespace(&mut self, state: &ModuleState, seen: &mut BTreeMap<String, Span>) {
     for export in &state.export_as_namespace {
       if state.is_script {
         continue;
@@ -890,6 +910,22 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
               &mut export_spans,
             );
           }
+          ExportSpec::ExportAllAlias {
+            from,
+            exported_as,
+            type_only,
+            span,
+          } => {
+            self.add_export_all_alias(
+              &module,
+              *from,
+              exported_as,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
           ExportSpec::ExportAssignment { target, span } => {
             self.add_export_assignment(&module, target, *span, &mut map, &mut export_spans);
           }
@@ -968,6 +1004,22 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             self.add_export_all(
               &module,
               *from,
+              *type_only,
+              *span,
+              &mut map,
+              &mut export_spans,
+            );
+          }
+          ExportSpec::ExportAllAlias {
+            from,
+            exported_as,
+            type_only,
+            span,
+          } => {
+            self.add_export_all_alias(
+              &module,
+              *from,
+              exported_as,
               *type_only,
               *span,
               &mut map,
@@ -1187,6 +1239,43 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           );
         }
       }
+    }
+  }
+
+  fn add_export_all_alias(
+    &mut self,
+    module: &ModuleState,
+    from: Option<FileId>,
+    exported_as: &str,
+    type_only: bool,
+    origin_span: Span,
+    map: &mut ExportMap,
+    export_spans: &mut BTreeMap<String, ExportNamespaceSpans>,
+  ) {
+    if let Some(target) = from {
+      let namespaces = if type_only {
+        Namespace::TYPE
+      } else {
+        Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+      };
+      let sym = self.symbols.alloc_symbol(
+        &module.owner,
+        exported_as,
+        namespaces,
+        SymbolOrigin::Import {
+          from: Some(target),
+          imported: "*".to_string(),
+        },
+      );
+      insert_export(
+        map,
+        export_spans,
+        exported_as,
+        origin_span,
+        SymbolGroup::merged(sym),
+        &mut self.symbols,
+        &mut self.diagnostics,
+      );
     }
   }
 

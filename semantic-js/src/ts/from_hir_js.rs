@@ -158,14 +158,14 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
         has_module_syntax = true;
         match &list.stx.names {
           ExportNames::All(alias) => {
-            if alias.is_none() {
-              if let Some(specifier) = list.stx.from.clone() {
-                exports.push(Export::All(ExportAll {
-                  specifier_span: export_specifier_span(stmt_range).unwrap_or(stmt_range),
-                  specifier,
-                  is_type_only: list.stx.type_only,
-                }));
-              }
+            if let Some(specifier) = list.stx.from.clone() {
+              exports.push(Export::All(ExportAll {
+                specifier_span: export_specifier_span(stmt_range).unwrap_or(stmt_range),
+                specifier,
+                is_type_only: list.stx.type_only,
+                alias: alias.as_ref().map(|a| a.stx.name.clone()),
+                alias_span: alias.as_ref().map(|a| to_range(a.loc)),
+              }));
             }
           }
           ExportNames::Specific(names) => {

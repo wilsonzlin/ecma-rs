@@ -745,8 +745,11 @@ impl Program {
       let state = self.lock_state();
       state.lib_manager.clone()
     };
-    let mut new_state =
-      ProgramState::new(lib_manager, self.query_stats.clone(), Arc::clone(&self.cancelled));
+    let mut new_state = ProgramState::new(
+      lib_manager,
+      self.query_stats.clone(),
+      Arc::clone(&self.cancelled),
+    );
     new_state.file_overrides = overrides;
     new_state.compiler_options = compiler_options;
     let mut roots = self.roots.clone();
@@ -1016,7 +1019,7 @@ impl Program {
       let ty = match state.interned_def_types.get(&def).copied() {
         Some(existing) if !matches!(store.type_kind(existing), tti::TypeKind::Unknown) => existing,
         _ => {
-        ProgramState::type_of_def(state, def)?;
+          ProgramState::type_of_def(state, def)?;
           state
             .interned_def_types
             .get(&def)
@@ -2088,11 +2091,20 @@ impl SemHirBuilder {
       }));
   }
 
-  fn add_export_all(&mut self, specifier: String, specifier_span: TextRange, is_type_only: bool) {
+  fn add_export_all(
+    &mut self,
+    specifier: String,
+    specifier_span: TextRange,
+    is_type_only: bool,
+    alias: Option<String>,
+    alias_span: Option<TextRange>,
+  ) {
     self.exports.push(sem_ts::Export::All(sem_ts::ExportAll {
       specifier,
       is_type_only,
       specifier_span,
+      alias,
+      alias_span,
     }));
   }
 
@@ -3411,15 +3423,9 @@ impl ProgramState {
     let result = db::parse(&self.typecheck_db, file);
     match result.ast {
       Some(ast) => Ok(ast),
-      None => Err(
-        result
-          .diagnostics
-          .into_iter()
-          .next()
-          .unwrap_or_else(|| {
-            codes::MISSING_BODY.error("missing parsed AST", Span::new(file, TextRange::new(0, 0)))
-          }),
-      ),
+      None => Err(result.diagnostics.into_iter().next().unwrap_or_else(|| {
+        codes::MISSING_BODY.error("missing parsed AST", Span::new(file, TextRange::new(0, 0)))
+      })),
     }
   }
 
@@ -4787,23 +4793,24 @@ impl ProgramState {
               }
             }
             ExportNames::All(alias) => {
-              if alias.is_some() {
-                self.diagnostics.push(
-                  codes::UNSUPPORTED_PATTERN
-                    .error("unsupported export * as alias", loc_to_span(file, stmt.loc)),
-                );
-              } else if let Some(spec) = export_list.stx.from.clone() {
+              if let Some(spec) = export_list.stx.from.clone() {
+                let alias_name = alias.as_ref().map(|a| a.stx.name.clone());
+                let alias_span = alias.as_ref().map(|a| loc_to_span(file, a.loc).range);
                 if let Some(target) = resolved {
-                  export_all.push(ExportAll {
-                    from: target,
-                    type_only: export_list.stx.type_only,
-                    span: loc_to_span(file, stmt.loc).range,
-                  });
+                  if alias_name.is_none() {
+                    export_all.push(ExportAll {
+                      from: target,
+                      type_only: export_list.stx.type_only,
+                      span: loc_to_span(file, stmt.loc).range,
+                    });
+                  }
                 }
                 sem_builder.add_export_all(
                   spec,
                   loc_to_span(file, stmt.loc).range,
                   export_list.stx.type_only,
+                  alias_name,
+                  alias_span,
                 );
               }
             }
@@ -7944,7 +7951,6 @@ impl ProgramState {
       .push(SymbolOccurrence { range, symbol });
   }
 }
-
 fn type_member_name(key: &TypePropertyKey) -> Option<String> {
   match key {
     TypePropertyKey::Identifier(name) => Some(name.clone()),

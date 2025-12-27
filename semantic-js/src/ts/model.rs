@@ -230,8 +230,14 @@ pub struct ImportEquals {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportEqualsTarget {
-  Require { specifier: String, specifier_span: TextRange },
-  EntityName { path: Vec<String>, span: TextRange },
+  Require {
+    specifier: String,
+    specifier_span: TextRange,
+  },
+  EntityName {
+    path: Vec<String>,
+    span: TextRange,
+  },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,6 +261,8 @@ pub struct ExportAll {
   pub specifier: String,
   pub is_type_only: bool,
   pub specifier_span: TextRange,
+  pub alias: Option<String>,
+  pub alias_span: Option<TextRange>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

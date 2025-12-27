@@ -186,6 +186,8 @@ fn map_export_from_lower(
       specifier: all.source.value.clone(),
       is_type_only: all.is_type_only,
       specifier_span: all.source.span,
+      alias: all.alias.as_ref().map(|a| resolve_name(a.exported)),
+      alias_span: all.alias.as_ref().map(|a| a.span),
     })),
     HirExportKind::Default(_) => None,
     HirExportKind::Assignment(_) => Some(sem_ts::Export::ExportAssignment {
