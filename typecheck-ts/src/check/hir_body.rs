@@ -1247,7 +1247,7 @@ impl<'a> Checker<'a> {
         self.member_type(obj_ty, "<computed>")
       }
       AstExpr::LitArr(arr) => self.array_literal_type(arr),
-      AstExpr::LitObj(obj) => self.object_literal_type(obj),
+      AstExpr::LitObj(obj) => self.check_object_literal(obj, self.expr_context),
       AstExpr::Func(func) => self.function_type(&func.stx.func),
       AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func),
       AstExpr::IdPat(_) | AstExpr::ArrPat(_) | AstExpr::ObjPat(_) => {
@@ -1692,39 +1692,64 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn object_literal_type(&mut self, obj: &Node<parse_js::ast::expr::lit::LitObjExpr>) -> TypeId {
+  fn check_object_literal(
+    &mut self,
+    obj: &Node<parse_js::ast::expr::lit::LitObjExpr>,
+    ctx: ExprContext,
+  ) -> TypeId {
+    let expected_obj = ctx
+      .expected
+      .and_then(|expected| self.contextual_object_expected(expected));
     let mut shape = Shape::new();
     for member in obj.stx.members.iter() {
       match &member.stx.typ {
         ObjMemberType::Valued { key, val } => {
-          let prop_key = match key {
-            ClassOrObjKey::Direct(direct) => {
-              PropKey::String(self.store.intern_name(direct.stx.key.clone()))
-            }
-            ClassOrObjKey::Computed(_) => continue,
+          let prop_name = match key {
+            ClassOrObjKey::Direct(direct) => Some(direct.stx.key.clone()),
+            ClassOrObjKey::Computed(_) => None,
           };
-          if let ClassOrObjVal::Prop(Some(expr)) = val {
-            let ty = self.check_expr(expr);
-            shape.properties.push(types_ts_interned::Property {
-              key: prop_key,
-              data: PropData {
-                ty,
-                optional: false,
-                readonly: false,
-                accessibility: None,
-                is_method: false,
-                origin: None,
-                declared_on: None,
-              },
-            });
+          match val {
+            ClassOrObjVal::Prop(Some(expr)) => {
+              let expected_prop = prop_name
+                .as_deref()
+                .and_then(|name| expected_obj.and_then(|expected| self.contextual_prop_type(expected, name)));
+              let value_ty = self.check_expr_in_ctx(
+                expr,
+                ExprContext {
+                  expected: expected_prop,
+                  const_context: ctx.const_context,
+                  preserve_inferred: ctx.preserve_inferred,
+                },
+              );
+              if let Some(name) = prop_name {
+                let prop_ty = self.contextual_object_prop_type(value_ty, expected_prop);
+                shape.properties.push(types_ts_interned::Property {
+                  key: PropKey::String(self.store.intern_name(name)),
+                  data: PropData {
+                    ty: prop_ty,
+                    optional: false,
+                    readonly: false,
+                    accessibility: None,
+                    is_method: false,
+                    origin: None,
+                    declared_on: None,
+                  },
+                });
+              }
+            }
+            ClassOrObjVal::StaticBlock(block) => self.check_stmt_list(&block.stx.body),
+            _ => {}
           }
         }
         ObjMemberType::Shorthand { id } => {
           let key = PropKey::String(self.store.intern_name(id.stx.name.clone()));
-          let ty = self
+          let expected_prop =
+            expected_obj.and_then(|expected| self.contextual_prop_type(expected, &id.stx.name));
+          let binding_ty = self
             .lookup(&id.stx.name)
             .map(|b| b.ty)
             .unwrap_or(self.store.primitive_ids().unknown);
+          let ty = self.contextual_object_prop_type(binding_ty, expected_prop);
           shape.properties.push(types_ts_interned::Property {
             key,
             data: PropData {
@@ -1739,17 +1764,155 @@ impl<'a> Checker<'a> {
           });
         }
         ObjMemberType::Rest { val } => {
-          let _ = self.check_expr(val);
+          let _ = self.check_expr_in_ctx(
+            val,
+            ExprContext {
+              expected: None,
+              const_context: ctx.const_context,
+              preserve_inferred: ctx.preserve_inferred,
+            },
+          );
         }
       }
     }
     let shape_id = self.store.intern_shape(shape);
     let obj = self.store.intern_object(ObjectType { shape: shape_id });
     let ty = self.store.intern_type(TypeKind::Object(obj));
-    if self.widen_object_literals {
+    if self.widen_object_literals && expected_obj.is_none() {
       widen_object_literal_props(&self.store, ty)
     } else {
       ty
+    }
+  }
+
+  fn contextual_object_expected(&self, expected: TypeId) -> Option<TypeId> {
+    let expanded = self.expand_for_props(expected);
+    if expanded != expected {
+      return self.contextual_object_expected(expanded);
+    }
+    match self.store.type_kind(expected) {
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        let mut saw_object = false;
+        for member in members {
+          if self.contextual_object_expected(member).is_some() {
+            saw_object = true;
+          }
+        }
+        saw_object.then_some(expected)
+      }
+      TypeKind::Object(_) | TypeKind::Mapped(_) => Some(expected),
+      _ => None,
+    }
+  }
+
+  fn should_preserve_literal(&self, expected: Option<TypeId>) -> bool {
+    let Some(expected) = expected else {
+      return false;
+    };
+    let expanded = self.expand_for_props(expected);
+    self.is_literal_union(expanded)
+  }
+
+  fn contextual_prop_type(&self, expected: TypeId, key: &str) -> Option<TypeId> {
+    let expanded = self.expand_for_props(expected);
+    if expanded != expected {
+      return self.contextual_prop_type(expanded, key);
+    }
+    match self.store.type_kind(expected) {
+      TypeKind::Union(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          if let Some(prop_ty) = self.contextual_prop_type(member, key) {
+            collected.push(prop_ty);
+          }
+        }
+        if collected.is_empty() {
+          None
+        } else {
+          Some(self.store.union(collected))
+        }
+      }
+      TypeKind::Intersection(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          if let Some(prop_ty) = self.contextual_prop_type(member, key) {
+            collected.push(prop_ty);
+          }
+        }
+        if collected.is_empty() {
+          None
+        } else if collected.len() == 1 {
+          collected.first().copied()
+        } else {
+          Some(self.store.intersection(collected))
+        }
+      }
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        for candidate in shape.properties.iter() {
+          let matches = match &candidate.key {
+            PropKey::String(name) => self.store.name(*name) == key,
+            PropKey::Number(num) => num.to_string() == key,
+            PropKey::Symbol(_) => false,
+          };
+          if matches {
+            return Some(candidate.data.ty);
+          }
+        }
+        shape.indexers.first().map(|idx| idx.value_type)
+      }
+      _ => None,
+    }
+  }
+
+  fn contextual_object_prop_type(&self, value_ty: TypeId, expected: Option<TypeId>) -> TypeId {
+    if self.should_preserve_literal(expected) {
+      return value_ty;
+    }
+    if let Some(expected) = expected {
+      return self.contextual_arg_type(value_ty, expected);
+    }
+    if self.widen_object_literals {
+      return self.widen_object_prop(value_ty);
+    }
+    value_ty
+  }
+
+  fn is_literal_union(&self, ty: TypeId) -> bool {
+    match self.store.type_kind(ty) {
+      TypeKind::StringLiteral(_)
+      | TypeKind::NumberLiteral(_)
+      | TypeKind::BooleanLiteral(_)
+      | TypeKind::BigIntLiteral(_)
+      | TypeKind::TemplateLiteral(_) => true,
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        members.iter().copied().all(|member| self.is_literal_union(member))
+      }
+      _ => false,
+    }
+  }
+
+  fn widen_object_prop(&self, ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::NumberLiteral(_) => prim.number,
+      TypeKind::StringLiteral(_) => prim.string,
+      TypeKind::BooleanLiteral(_) => prim.boolean,
+      TypeKind::Union(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_prop(m))
+          .collect();
+        self.store.union(mapped)
+      }
+      TypeKind::Intersection(members) => {
+        let mapped: Vec<_> = members
+          .into_iter()
+          .map(|m| self.widen_object_prop(m))
+          .collect();
+        self.store.intersection(mapped)
+      }
+      _ => ty,
     }
   }
 
@@ -2294,14 +2457,7 @@ impl<'a> Checker<'a> {
         return;
       }
     }
-    if matches!(self.store.type_kind(src), TypeKind::Conditional { .. })
-      || matches!(self.store.type_kind(dst), TypeKind::Conditional { .. })
-    {
-      return;
-    }
-    if self.is_mapped_type(dst) {
-      return;
-    }
+    let dst = self.expand_for_props(dst);
     if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
       if self.has_excess_properties(obj, dst) {
         self.diagnostics.push(codes::EXCESS_PROPERTY.error(
@@ -2311,11 +2467,14 @@ impl<'a> Checker<'a> {
             range: loc_to_range(self.file, expr.loc),
           },
         ));
-        return;
       }
-      // Fresh object literals only participate in excess property checking for
-      // now; other assignability rules (e.g. structural compatibility) are
-      // handled elsewhere in the type relation engine.
+    }
+    if matches!(self.store.type_kind(src), TypeKind::Conditional { .. })
+      || matches!(self.store.type_kind(dst), TypeKind::Conditional { .. })
+    {
+      return;
+    }
+    if self.is_mapped_type(dst) {
       return;
     }
     if self.relate.is_assignable(src, dst) {
