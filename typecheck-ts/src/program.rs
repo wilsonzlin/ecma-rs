@@ -4545,17 +4545,13 @@ impl ProgramState {
       ProgramState::normalize_semantic_diagnostic(diag);
     }
     diagnostics.extend(additional.into_iter());
-<<<<<<< HEAD
     diagnostics.extend(self.diagnostics.clone());
     codes::normalize_diagnostics(&mut diagnostics);
     diagnostics.dedup_by(|a, b| {
       a.code == b.code && a.primary == b.primary && a.message == b.message && a.labels == b.labels
     });
-    Ok(diagnostics.into())
-=======
     self.diagnostics = diagnostics.clone();
     Ok(Arc::from(diagnostics))
->>>>>>> 2f4aca9 (fix: keep type exports accessible and stabilize decl queries)
   }
 
   fn load_text(&self, file: FileId, host: &Arc<dyn Host>) -> Result<Arc<str>, HostError> {
