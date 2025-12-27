@@ -6,21 +6,25 @@ pub(crate) fn exports_from_semantics(
   state: &mut ProgramState,
   semantics: &sem_ts::TsProgramSemantics,
   file: FileId,
-) -> ExportMap {
+) -> Result<ExportMap, crate::FatalError> {
   let sem_file = sem_ts::FileId(file.0);
   let Some(exports) = semantics.exports_of_opt(sem_file) else {
-    return state
-      .files
-      .get(&file)
-      .map(|state| state.exports.clone())
-      .unwrap_or_default();
+    return Ok(
+      state
+        .files
+        .get(&file)
+        .map(|state| state.exports.clone())
+        .unwrap_or_default(),
+    );
   };
   if exports.is_empty() {
-    return state
-      .files
-      .get(&file)
-      .map(|state| state.exports.clone())
-      .unwrap_or_default();
+    return Ok(
+      state
+        .files
+        .get(&file)
+        .map(|state| state.exports.clone())
+        .unwrap_or_default(),
+    );
   }
   let symbols = semantics.symbols();
   let mut mapped = ExportMap::new();
@@ -35,14 +39,14 @@ pub(crate) fn exports_from_semantics(
       if let Some(symbol_id) = group.symbol_for(ns, symbols) {
         mapped.insert(
           name.clone(),
-          map_export(state, semantics, sem_file, symbol_id, ns),
+          map_export(state, semantics, sem_file, symbol_id, ns)?,
         );
         break;
       }
     }
   }
 
-  mapped
+  Ok(mapped)
 }
 
 fn map_export(
@@ -51,7 +55,7 @@ fn map_export(
   sem_file: sem_ts::FileId,
   symbol_id: sem_ts::SymbolId,
   ns: sem_ts::Namespace,
-) -> ExportEntry {
+) -> Result<ExportEntry, crate::FatalError> {
   let symbols = semantics.symbols();
   let mut local_defs: Vec<DefId> = Vec::new();
   let mut all_defs: Vec<DefId> = Vec::new();
@@ -86,7 +90,10 @@ fn map_export(
   };
 
   let preferred = pick_best(&local_defs).or_else(|| pick_best(&all_defs));
-  let type_id: Option<TypeId> = preferred.and_then(|def| state.export_type_for_def(def));
+  let type_id: Option<TypeId> = match preferred {
+    Some(def) => state.export_type_for_def(def)?,
+    None => None,
+  };
   let symbol = preferred
     .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
     .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
@@ -98,11 +105,11 @@ fn map_export(
     }
   });
 
-  ExportEntry {
+  Ok(ExportEntry {
     symbol,
     def: local_def,
     type_id,
-  }
+  })
 }
 
 fn map_decl_to_program_def(
