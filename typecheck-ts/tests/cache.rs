@@ -1,14 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::thread;
 
 use ordered_float::OrderedFloat;
 use typecheck_ts::check::caches::{CheckerCacheStats, CheckerCaches};
 use typecheck_ts::check::instantiate::InstantiationCache;
+use typecheck_ts::db::expander::{DbTypeExpander, TypeExpanderDb};
 use typecheck_ts::lib_support::{CacheMode, CacheOptions, CompilerOptions};
 use typecheck_ts::{CacheKind, FileKey, Host, HostError, Program, QueryStatsCollector};
 use types_ts_interned::{
-  DefId, Param, RelateCtx, Signature, SignatureId, TypeEvaluator, TypeId, TypeKind, TypeOptions,
-  TypeParamId, TypeStore,
+  CacheConfig, DefId, EvaluatorCaches, Param, RelateCtx, RelateTypeExpander, Signature,
+  SignatureId, TypeEvaluator, TypeId, TypeKind, TypeOptions, TypeParamId, TypeStore,
 };
 
 fn relation_round(store: &Arc<TypeStore>, caches: &CheckerCaches) -> CheckerCacheStats {
@@ -172,6 +174,107 @@ fn relation_eviction_remains_deterministic() {
     stats_one.relation.evictions > 0 || stats_two.relation.evictions > 0,
     "small caches should evict entries without affecting results"
   );
+}
+
+#[derive(Clone)]
+struct MockDb {
+  store: Arc<TypeStore>,
+  decl_types: HashMap<DefId, TypeId>,
+  params: HashMap<DefId, Arc<[TypeParamId]>>,
+}
+
+impl MockDb {
+  fn new(store: Arc<TypeStore>) -> Self {
+    Self {
+      store,
+      decl_types: HashMap::new(),
+      params: HashMap::new(),
+    }
+  }
+}
+
+impl TypeExpanderDb for MockDb {
+  fn type_store(&self) -> Arc<TypeStore> {
+    Arc::clone(&self.store)
+  }
+
+  fn decl_type(&self, def: DefId) -> Option<TypeId> {
+    self.decl_types.get(&def).copied()
+  }
+
+  fn type_params(&self, def: DefId) -> Arc<[TypeParamId]> {
+    self
+      .params
+      .get(&def)
+      .cloned()
+      .unwrap_or_else(|| Arc::from([]))
+  }
+}
+
+#[test]
+fn db_expander_handles_eviction_and_parallel_expansion() {
+  let store = TypeStore::new();
+  let param = TypeParamId(0);
+  let declared = store.intern_type(TypeKind::TypeParam(param));
+  let def = DefId(99);
+
+  let mut db = MockDb::new(store.clone());
+  db.decl_types.insert(def, declared);
+  db.params
+    .insert(def, Arc::from(vec![param].into_boxed_slice()));
+
+  let caches = EvaluatorCaches::new(CacheConfig {
+    max_entries: 4,
+    shard_count: 1,
+  });
+  let expander = DbTypeExpander::new(&db, caches.clone());
+
+  let args: Vec<TypeId> = (0..24)
+    .map(|i| store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(i as f64))))
+    .collect();
+
+  let expand_all = |expander: &DbTypeExpander<'_>| -> Vec<TypeId> {
+    args
+      .iter()
+      .map(|arg| expander.expand_ref(store.as_ref(), def, &[*arg]).unwrap())
+      .collect()
+  };
+
+  let expected = expand_all(&expander);
+  for (arg, expanded) in args.iter().zip(expected.iter()) {
+    assert_eq!(
+      store.type_kind(*expanded),
+      store.type_kind(*arg),
+      "type arguments should be substituted deterministically"
+    );
+  }
+
+  let repeated = expand_all(&expander);
+  assert_eq!(expected, repeated, "expansions should remain deterministic");
+  assert!(
+    caches.stats().references.evictions > 0,
+    "bounded caches should evict when over capacity"
+  );
+
+  thread::scope(|scope| {
+    let mut handles = Vec::new();
+    for _ in 0..4 {
+      let args = args.clone();
+      let expander = &expander;
+      let store = store.clone();
+      handles.push(scope.spawn(move || {
+        args
+          .iter()
+          .map(|arg| expander.expand_ref(store.as_ref(), def, &[*arg]).unwrap())
+          .collect::<Vec<_>>()
+      }));
+    }
+
+    for handle in handles {
+      let result = handle.join().expect("thread panicked");
+      assert_eq!(result, expected, "parallel expansions should be stable");
+    }
+  });
 }
 
 #[derive(Debug)]

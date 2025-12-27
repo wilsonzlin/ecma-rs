@@ -1,10 +1,11 @@
-//! Incremental salsa database for type checking.
+//! Incremental salsa database for type checking and associated helpers.
 
+pub mod expander;
 mod queries;
 
 pub use queries::{
-  lower_hir, parse, parse_query_count, reset_parse_query_count, sem_hir,
-  LowerResultWithDiagnostics, TypecheckDatabase, TypecheckStorage,
+  lower_hir, parse, parse_query_count, reset_parse_query_count, sem_hir, LowerResultWithDiagnostics,
+  TypecheckDatabase, TypecheckStorage,
 };
 
 /// Concrete database implementing the `TypecheckDatabase` query group.

@@ -1,23 +1,64 @@
+use ahash::RandomState;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-
 use types_ts_interned::{
   DefId, EvaluatorCaches, ExpandedType, RelateTypeExpander, TypeEvaluator, TypeExpander, TypeId,
   TypeKind, TypeParamId, TypeStore,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct RefKey {
-  def: DefId,
-  args: Vec<TypeId>,
+pub(crate) struct RefKey {
+  pub(crate) def: DefId,
+  pub(crate) args: Vec<TypeId>,
 }
 
 impl RefKey {
-  fn new(def: DefId, args: &[TypeId]) -> Self {
+  pub(crate) fn new(def: DefId, args: &[TypeId]) -> Self {
     Self {
       def,
       args: args.to_vec(),
     }
+  }
+}
+
+pub(crate) fn stable_hash_builder() -> RandomState {
+  RandomState::with_seeds(0, 0, 0, 0)
+}
+
+#[derive(Debug)]
+pub(crate) struct RefRecursionGuard {
+  in_progress: Mutex<HashSet<RefKey, RandomState>>,
+}
+
+impl RefRecursionGuard {
+  pub(crate) fn new() -> Self {
+    Self {
+      in_progress: Mutex::new(HashSet::with_hasher(stable_hash_builder())),
+    }
+  }
+
+  pub(crate) fn begin(&self, key: &RefKey) -> bool {
+    self.in_progress.lock().unwrap().insert(key.clone())
+  }
+
+  pub(crate) fn end(&self, key: &RefKey) {
+    self.in_progress.lock().unwrap().remove(key);
+  }
+}
+
+pub(crate) fn instantiate_expanded<E: TypeExpander>(
+  store: &Arc<TypeStore>,
+  expander: &E,
+  caches: &EvaluatorCaches,
+  expanded: &ExpandedType,
+  args: &[TypeId],
+) -> TypeId {
+  if expanded.params.is_empty() {
+    expanded.ty
+  } else {
+    let bindings = expanded.params.iter().copied().zip(args.iter().copied());
+    let mut evaluator = TypeEvaluator::with_caches(Arc::clone(store), expander, caches.clone());
+    evaluator.evaluate_with_bindings(expanded.ty, bindings)
   }
 }
 
@@ -29,8 +70,7 @@ pub(crate) struct ProgramTypeExpander<'a> {
   def_types: &'a HashMap<DefId, TypeId>,
   type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
   caches: EvaluatorCaches,
-  memoized: Mutex<HashMap<RefKey, TypeId>>,
-  in_progress: Mutex<HashSet<RefKey>>,
+  guard: RefRecursionGuard,
 }
 
 impl<'a> ProgramTypeExpander<'a> {
@@ -45,8 +85,7 @@ impl<'a> ProgramTypeExpander<'a> {
       def_types,
       type_params,
       caches,
-      memoized: Mutex::new(HashMap::new()),
-      in_progress: Mutex::new(HashSet::new()),
+      guard: RefRecursionGuard::new(),
     }
   }
 
@@ -67,41 +106,19 @@ impl<'a> RelateTypeExpander for ProgramTypeExpander<'a> {
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId> {
     debug_assert!(std::ptr::eq(store, self.store.as_ref()));
 
+    let key = RefKey::new(def, args);
     let expanded = match self.expanded(def) {
       Some(expanded) => expanded,
       None => return None,
     };
-
-    let key = RefKey::new(def, args);
-    if let Some(cached) = self.memoized.lock().unwrap().get(&key).copied() {
-      return Some(cached);
+    if !self.guard.begin(&key) {
+      return Some(store.intern_type(TypeKind::Ref {
+        def,
+        args: key.args,
+      }));
     }
-
-    {
-      let mut in_progress = self.in_progress.lock().unwrap();
-      if !in_progress.insert(key.clone()) {
-        return Some(store.intern_type(TypeKind::Ref {
-          def,
-          args: key.args,
-        }));
-      }
-    }
-
-    let instantiated = if expanded.params.is_empty() {
-      expanded.ty
-    } else {
-      let bindings = expanded.params.iter().copied().zip(args.iter().copied());
-      let mut evaluator =
-        TypeEvaluator::with_caches(Arc::clone(&self.store), self, self.caches.clone());
-      evaluator.evaluate_with_bindings(expanded.ty, bindings)
-    };
-
-    self
-      .memoized
-      .lock()
-      .unwrap()
-      .insert(key.clone(), instantiated);
-    self.in_progress.lock().unwrap().remove(&key);
+    let instantiated = instantiate_expanded(&self.store, self, &self.caches, &expanded, &key.args);
+    self.guard.end(&key);
     Some(instantiated)
   }
 }
