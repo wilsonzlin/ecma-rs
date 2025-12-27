@@ -1,4 +1,6 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
+use crate::semantic_js;
+use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
 use ::semantic_js::ts as sem_ts;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
@@ -34,6 +36,7 @@ use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, Typ
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::codes;
+use crate::db::GlobalBindingsDb;
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileRegistry;
 use crate::profile::{
@@ -75,26 +78,6 @@ pub trait Host: Send + Sync + 'static {
   /// Kind of the file; defaults to TypeScript.
   fn file_kind(&self, _file: &FileKey) -> FileKind {
     FileKind::Ts
-  }
-}
-
-/// Public symbol identifier exposed through [`Program::symbol_at`].
-pub mod semantic_js {
-  /// Opaque symbol identifier.
-  #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-  #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Ord, PartialOrd)]
-  pub struct SymbolId(pub u32);
-
-  impl From<::semantic_js::ts::SymbolId> for SymbolId {
-    fn from(id: ::semantic_js::ts::SymbolId) -> Self {
-      SymbolId(id.0.try_into().unwrap_or(u32::MAX))
-    }
-  }
-
-  impl From<SymbolId> for ::semantic_js::ts::SymbolId {
-    fn from(id: SymbolId) -> Self {
-      ::semantic_js::ts::SymbolId(id.0.into())
-    }
   }
 }
 
@@ -1305,6 +1288,17 @@ impl Program {
     })
   }
 
+  /// Global bindings available to all files (from libs, `.d.ts`, and builtins).
+  pub fn global_bindings(&self) -> Arc<BTreeMap<String, SymbolBinding>> {
+    match self.with_interned_state(|state| Ok(Arc::clone(&state.global_bindings))) {
+      Ok(bindings) => bindings,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Arc::new(BTreeMap::new())
+      }
+    }
+  }
+
   /// Helper to render a type as displayable string.
   pub fn display_type(&self, ty: TypeId) -> TypeDisplay {
     let (store, ty, resolver) = {
@@ -1867,7 +1861,7 @@ impl Program {
       state.ensure_body_map_from_defs();
       state.symbol_occurrences = snapshot.symbol_occurrences.into_iter().collect();
       state.symbol_to_def = snapshot.symbol_to_def.into_iter().collect();
-      state.global_bindings = snapshot.global_bindings.into_iter().collect();
+      state.global_bindings = Arc::new(snapshot.global_bindings.into_iter().collect());
       state.diagnostics = snapshot.diagnostics;
       state.type_store = snapshot.type_store;
       state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
@@ -1902,32 +1896,6 @@ impl Program {
     }
     program
   }
-}
-
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
-pub struct SymbolOccurrence {
-  pub range: TextRange,
-  pub symbol: semantic_js::SymbolId,
-}
-
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
-pub struct SymbolBinding {
-  pub symbol: semantic_js::SymbolId,
-  pub def: Option<DefId>,
-  pub type_id: Option<TypeId>,
-}
-
-/// Symbol metadata exposed via [`Program::symbol_info`].
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Clone, Debug)]
-pub struct SymbolInfo {
-  pub symbol: semantic_js::SymbolId,
-  pub def: Option<DefId>,
-  pub file: Option<FileId>,
-  pub type_id: Option<TypeId>,
-  pub name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -2496,7 +2464,7 @@ struct ProgramState {
   body_parents: HashMap<BodyId, BodyId>,
   hir_lowered: HashMap<FileId, LowerResult>,
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
-  semantics: Option<sem_ts::TsProgramSemantics>,
+  semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
@@ -2505,7 +2473,7 @@ struct ProgramState {
   file_kinds: HashMap<FileId, FileKind>,
   lib_file_ids: HashSet<FileId>,
   lib_texts: HashMap<FileId, Arc<str>>,
-  global_bindings: HashMap<String, SymbolBinding>,
+  global_bindings: Arc<BTreeMap<String, SymbolBinding>>,
   namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
   diagnostics: Vec<Diagnostic>,
   type_store: TypeStore,
@@ -2519,6 +2487,48 @@ struct ProgramState {
   next_body: u32,
   next_symbol: u32,
   type_stack: Vec<DefId>,
+}
+
+impl GlobalBindingsDb for ProgramState {
+  fn ts_semantics(&self) -> Option<Arc<sem_ts::TsProgramSemantics>> {
+    self.semantics.clone()
+  }
+
+  fn dts_value_bindings(&self) -> Vec<(String, SymbolBinding)> {
+    let mut bindings = Vec::new();
+    let semantics = self.semantics.as_deref();
+    for (file, state) in self.files.iter() {
+      if self.file_kinds.get(file) != Some(&FileKind::Dts) {
+        continue;
+      }
+      for (name, binding) in state.bindings.iter() {
+        let mut binding = binding.clone();
+        if let Some(def) = binding.def {
+          if let Some(ty) = self.interned_def_types.get(&def).copied() {
+            binding.type_id = Some(ty);
+          }
+          if let Some(sem) = semantics {
+            if let Some(symbol) = sem.symbol_for_def(def, sem_ts::Namespace::VALUE) {
+              binding.symbol = symbol.into();
+            }
+          }
+        }
+        bindings.push((name.clone(), binding));
+      }
+    }
+    bindings
+  }
+
+  fn type_of_def(&self, def: DefId) -> Option<TypeId> {
+    self.interned_def_types.get(&def).copied()
+  }
+
+  fn primitive_ids(&self) -> Option<tti::PrimitiveIds> {
+    self
+      .interned_store
+      .as_ref()
+      .map(|store| store.primitive_ids())
+  }
 }
 
 impl ProgramState {
@@ -2548,7 +2558,7 @@ impl ProgramState {
       file_kinds: HashMap::new(),
       lib_file_ids: HashSet::new(),
       lib_texts: HashMap::new(),
-      global_bindings: HashMap::new(),
+      global_bindings: Arc::new(BTreeMap::new()),
       namespace_object_types: HashMap::new(),
       diagnostics: Vec::new(),
       type_store,
@@ -3065,7 +3075,7 @@ impl ProgramState {
       let mut lowerer = check::decls::HirDeclLowerer::new(
         Arc::clone(&store),
         &lowered.types,
-        self.semantics.as_ref(),
+        self.semantics.as_deref(),
         def_by_name.clone(),
         *file,
         file_key.clone(),
@@ -3313,62 +3323,7 @@ impl ProgramState {
   }
 
   fn recompute_global_bindings(&mut self) {
-    let mut globals = HashMap::new();
-    if let Some(semantics) = self.semantics.as_ref() {
-      let symbols = semantics.symbols();
-      for (name, group) in semantics.global_symbols() {
-        if let Some(symbol) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) {
-          let public_symbol: semantic_js::SymbolId = symbol.into();
-          let def = self.symbol_to_def.get(&public_symbol).copied();
-          let type_id = def.and_then(|id| self.interned_def_types.get(&id).copied());
-          globals.insert(
-            name.clone(),
-            SymbolBinding {
-              symbol: public_symbol,
-              def,
-              type_id,
-            },
-          );
-        }
-      }
-    }
-    for (file, state) in self.files.iter() {
-      if self.file_kinds.get(file) != Some(&FileKind::Dts) {
-        continue;
-      }
-      for (name, binding) in state.bindings.iter() {
-        globals
-          .entry(name.clone())
-          .and_modify(|existing| {
-            if existing.type_id.is_none() {
-              existing.type_id = binding.type_id;
-            }
-            if existing.def.is_none() {
-              existing.def = binding.def;
-            }
-          })
-          .or_insert(binding.clone());
-      }
-    }
-    globals
-      .entry("undefined".to_string())
-      .or_insert(SymbolBinding {
-        symbol: self.alloc_symbol(),
-        def: None,
-        type_id: self
-          .interned_store
-          .as_ref()
-          .map(|store| store.primitive_ids().undefined),
-      });
-    globals.entry("Error".to_string()).or_insert(SymbolBinding {
-      symbol: self.alloc_symbol(),
-      def: None,
-      type_id: self
-        .interned_store
-        .as_ref()
-        .map(|store| store.primitive_ids().any),
-    });
-    self.global_bindings = globals;
+    self.global_bindings = crate::db::global_bindings(self);
   }
 
   fn compute_semantics(&mut self, host: &Arc<dyn Host>, roots: &[FileId], libs: &[FileId]) {
@@ -3409,7 +3364,7 @@ impl ProgramState {
         })
     });
     self.push_semantic_diagnostics(diags);
-    self.semantics = Some(semantics);
+    self.semantics = Some(Arc::new(semantics));
   }
 
   /// Remap bound definitions to the stable IDs produced by HIR lowering while
@@ -6101,7 +6056,7 @@ impl ProgramState {
 
   fn exports_of_file(&mut self, file: FileId) -> ExportMap {
     if let Some(semantics) = self.semantics.clone() {
-      return check::modules::exports_from_semantics(self, &semantics, file);
+      return check::modules::exports_from_semantics(self, semantics.as_ref(), file);
     }
     let Some(state) = self.files.get(&file).cloned() else {
       return ExportMap::new();

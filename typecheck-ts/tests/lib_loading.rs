@@ -87,6 +87,15 @@ fn bundled_libs_enable_global_promise_and_array() {
     diagnostics.is_empty(),
     "expected no diagnostics, got {diagnostics:?}"
   );
+  let globals = program.global_bindings();
+  assert!(
+    globals.contains_key("Promise"),
+    "Promise should be available when bundled libs are loaded"
+  );
+  assert!(
+    globals.contains_key("Array"),
+    "Array should be available when bundled libs are loaded"
+  );
 }
 
 #[test]
@@ -111,6 +120,15 @@ fn missing_libs_emit_unknown_global_diagnostics() {
   assert!(
     unknowns >= 2,
     "expected unknown global diagnostics for Promise/Array, got {diagnostics:?}"
+  );
+  let globals = program.global_bindings();
+  assert!(
+    !globals.contains_key("Promise"),
+    "Promise should be absent without default libs"
+  );
+  assert!(
+    !globals.contains_key("Array"),
+    "Array should be absent without default libs"
   );
 }
 

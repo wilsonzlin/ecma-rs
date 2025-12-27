@@ -142,6 +142,7 @@ mod program;
 mod sem_hir;
 #[cfg(feature = "serde")]
 mod snapshot;
+mod symbols;
 mod type_queries;
 
 pub use api::*;
@@ -151,6 +152,7 @@ pub use program::BodyCheckResult;
 pub use program::*;
 #[cfg(feature = "serde")]
 pub use snapshot::*;
+pub use symbols::*;
 pub use type_queries::*;
 
 use std::collections::HashMap;

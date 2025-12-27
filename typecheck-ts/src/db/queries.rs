@@ -1,11 +1,15 @@
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use diagnostics::{sort_diagnostics, Diagnostic, FileId};
 use hir_js::{lower_file_with_diagnostics, FileKind as HirFileKind, LowerResult};
 use semantic_js::ts as sem_ts;
+use types_ts_interned::PrimitiveIds;
 
+use crate::semantic_js::SymbolId;
+use crate::symbols::SymbolBinding;
+use crate::{DefId, TypeId};
 use crate::db::inputs::{FileOrigin, Inputs};
 use crate::lib_support::lib_env::{collect_libs, validate_libs};
 use crate::lib_support::{FileKind, LibFile, LibManager};
@@ -28,6 +32,100 @@ impl PartialEq for LowerResultWithDiagnostics {
     };
     lowered_eq && self.diagnostics == other.diagnostics && self.file_kind == other.file_kind
   }
+}
+
+/// Minimal interface required to compute global bindings.
+pub trait GlobalBindingsDb {
+  /// Bound TS semantics for the current program.
+  fn ts_semantics(&self) -> Option<Arc<sem_ts::TsProgramSemantics>>;
+  /// Value namespace bindings introduced by `.d.ts` files.
+  fn dts_value_bindings(&self) -> Vec<(String, SymbolBinding)>;
+  /// Canonical type for a definition, if already computed.
+  fn type_of_def(&self, def: DefId) -> Option<TypeId>;
+  /// Primitive type identifiers from the shared type store.
+  fn primitive_ids(&self) -> Option<PrimitiveIds>;
+}
+
+fn deterministic_symbol_id(name: &str) -> SymbolId {
+  // FNV-1a 64-bit with fold-down to `u32` for stability across runs.
+  let mut hash: u64 = 0xcbf29ce484222325;
+  for byte in name.as_bytes() {
+    hash ^= *byte as u64;
+    hash = hash.wrapping_mul(0x100000001b3);
+  }
+  let folded = hash ^ (hash >> 32);
+  SymbolId(folded as u32)
+}
+
+/// Global value bindings derived from TS semantics, `.d.ts` files, and builtin
+/// symbols. This intentionally returns a sorted map to keep iteration
+/// deterministic regardless of evaluation order.
+pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, SymbolBinding>> {
+  let mut globals: BTreeMap<String, SymbolBinding> = BTreeMap::new();
+  let semantics = db.ts_semantics();
+
+  if let Some(sem) = semantics.as_deref() {
+    let symbols = sem.symbols();
+    for (name, group) in sem.global_symbols() {
+      if let Some(symbol) = group.symbol_for(sem_ts::Namespace::VALUE, symbols) {
+        let def = symbols
+          .symbol(symbol)
+          .decls_for(sem_ts::Namespace::VALUE)
+          .first()
+          .map(|decl| symbols.decl(*decl).def_id);
+        let type_id = def.and_then(|def| db.type_of_def(def));
+        globals.insert(
+          name.clone(),
+          SymbolBinding {
+            symbol: symbol.into(),
+            def,
+            type_id,
+          },
+        );
+      }
+    }
+  }
+
+  for (name, mut binding) in db.dts_value_bindings().into_iter() {
+    if let Some(def) = binding.def {
+      if binding.type_id.is_none() {
+        binding.type_id = db.type_of_def(def);
+      }
+      if let Some(sem) = semantics.as_deref() {
+        if let Some(symbol) = sem.symbol_for_def(def, sem_ts::Namespace::VALUE) {
+          binding.symbol = symbol.into();
+        }
+      }
+    }
+
+    globals
+      .entry(name.clone())
+      .and_modify(|existing| {
+        if existing.type_id.is_none() {
+          existing.type_id = binding.type_id;
+        }
+        if existing.def.is_none() {
+          existing.def = binding.def;
+        }
+      })
+      .or_insert(binding);
+  }
+
+  let primitives = db.primitive_ids();
+  globals
+    .entry("undefined".to_string())
+    .or_insert(SymbolBinding {
+      symbol: deterministic_symbol_id("undefined"),
+      def: None,
+      type_id: primitives.map(|p| p.undefined),
+    });
+  globals.entry("Error".to_string()).or_insert(SymbolBinding {
+    symbol: deterministic_symbol_id("Error"),
+    def: None,
+    type_id: primitives.map(|p| p.any),
+  });
+
+  Arc::new(globals)
 }
 
 impl Eq for LowerResultWithDiagnostics {}
