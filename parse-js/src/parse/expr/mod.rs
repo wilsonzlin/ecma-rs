@@ -807,11 +807,14 @@ impl<'a> Parser<'a> {
       })?.into_wrapped(),
       TT::Invalid => {
         let raw = self.bytes(t0.loc);
-        if raw
+        let starts_like_number = raw
           .chars()
           .next()
-          .is_some_and(|c| c.is_ascii_digit() || c == '.')
-        {
+          .is_some_and(|c| c.is_ascii_digit() || c == '.');
+        if starts_like_number && raw.ends_with('n') {
+          return Err(t0.error(SyntaxErrorType::MalformedLiteralBigInt));
+        }
+        if starts_like_number {
           return Err(t0.error(SyntaxErrorType::MalformedLiteralNumber));
         }
         match raw.chars().next() {

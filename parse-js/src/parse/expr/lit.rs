@@ -80,9 +80,57 @@ pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
 }
 
 pub fn normalise_literal_bigint(raw: &str) -> Option<String> {
-  // TODO Use custom type like JsNumber.
-  // TODO
-  Some(raw.to_string())
+  // Canonicalise BigInt literals while preserving their original radix. Prefixes are normalised
+  // to lowercase (`0b`/`0o`/`0x`), numeric separators are stripped, and hex digits are emitted in
+  // lowercase via `char::from_digit`. The `n` suffix is always preserved so emitters can reuse the
+  // stored representation directly.
+  if !raw.ends_with('n') {
+    return None;
+  }
+  let body = &raw[..raw.len().saturating_sub(1)];
+  let (radix, prefix, digits) =
+    if let Some(rest) = body.strip_prefix("0b").or_else(|| body.strip_prefix("0B")) {
+      (2, "0b", rest)
+    } else if let Some(rest) = body.strip_prefix("0o").or_else(|| body.strip_prefix("0O")) {
+      (8, "0o", rest)
+    } else if let Some(rest) = body.strip_prefix("0x").or_else(|| body.strip_prefix("0X")) {
+      (16, "0x", rest)
+    } else {
+      (10, "", body)
+    };
+
+  let mut normalised_digits = String::with_capacity(digits.len());
+  let mut prev_sep = false;
+  let mut saw_digit = false;
+  for ch in digits.chars() {
+    if ch == '_' {
+      // Separators must be sandwiched between digits.
+      if prev_sep || !saw_digit {
+        return None;
+      }
+      prev_sep = true;
+      continue;
+    }
+    let value = ch.to_digit(radix)?;
+    let digit = char::from_digit(value, radix)?;
+    normalised_digits.push(digit);
+    saw_digit = true;
+    prev_sep = false;
+  }
+  if prev_sep || !saw_digit {
+    return None;
+  }
+
+  if radix == 10 && normalised_digits.len() > 1 && normalised_digits.starts_with('0') {
+    // Decimal BigInt literals cannot use a leading zero.
+    return None;
+  }
+
+  let mut out = String::with_capacity(prefix.len() + normalised_digits.len() + 1);
+  out.push_str(prefix);
+  out.push_str(&normalised_digits);
+  out.push('n');
+  Some(out)
 }
 
 #[derive(Clone, Copy, Debug)]
