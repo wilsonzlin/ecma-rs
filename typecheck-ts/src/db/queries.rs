@@ -3,19 +3,17 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use std::time::Duration;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  lower_file_with_diagnostics, ExportDefaultValue, ExportKind, ExprKind, FileKind as HirFileKind,
-  LowerResult, ObjectProperty, PatKind, StmtKind, VarDeclKind,
+  lower_file_with_diagnostics, DefKind, ExportDefaultValue, ExportKind, ExprKind,
+  FileKind as HirFileKind, LowerResult, ObjectProperty, PatId, PatKind, StmtKind, VarDeclKind,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
-use types_ts_interned::{CacheStats, PrimitiveIds, TypeStore};
+use types_ts_interned::{PrimitiveIds, TypeStore};
 
 use crate::codes;
-use crate::db::cache::{BodyCache, DefCache};
 use crate::db::inputs::{
   CancellationToken, CancelledInput, CompilerOptionsInput, FileInput, ModuleResolutionInput,
   RootsInput,
@@ -23,42 +21,21 @@ use crate::db::inputs::{
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
 use crate::db::{symbols, Db, ModuleKey};
-use crate::lib_support::{CacheOptions, CompilerOptions, FileKind};
+use crate::lib_support::{CompilerOptions, FileKind};
 use crate::parse_metrics;
-use crate::profile::{CacheKind, QueryKind, QueryStatsCollector};
+use crate::profile::QueryKind;
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
 use crate::semantic_js::SymbolId;
+use crate::symbols::SymbolBinding;
 use crate::FileKey;
-use crate::SymbolBinding;
 use crate::SymbolOccurrence;
 use crate::{BodyId, DefId, ExprId, TypeId};
-use salsa::plumbing::current_revision;
-
-fn cache_delta(after: &CacheStats, before: &CacheStats) -> CacheStats {
-  CacheStats {
-    hits: after.hits.saturating_sub(before.hits),
-    misses: after.misses.saturating_sub(before.misses),
-    insertions: after.insertions.saturating_sub(before.insertions),
-    evictions: after.evictions.saturating_sub(before.evictions),
-  }
-}
-
-fn file_ids_from_key(db: &dyn Db, key: &FileKey) -> Vec<FileId> {
-  let mut ids = db.file_ids_for_key(key);
-  if ids.is_empty() {
-    panic!("file {:?} must be seeded before use", key);
-  }
-  ids.sort_by_key(|id| id.0);
-  ids.dedup();
-  ids
-}
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
-  file_ids_from_key(db, key)
-    .into_iter()
-    .next()
+  db.file_input_by_key(key)
     .unwrap_or_else(|| panic!("file {:?} must be seeded before use", key))
+    .file_id(db)
 }
 
 #[salsa::tracked]
@@ -122,103 +99,30 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
 
 #[salsa::tracked]
 fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
-  unresolved_module_diagnostics_for(db, file)
-}
-
-#[salsa::tracked]
-fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
+  let specs = module_specifiers_for(db, file);
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
   };
+  let mut spans = HashMap::new();
+  for (spec, span) in collect_module_specifiers(lowered).into_iter() {
+    spans.entry(spec).or_insert(span);
+  }
+
   let mut diagnostics = Vec::new();
-  let file_id = file.file_id(db);
-  let source = file_text_for(db, file);
-  let refine_spec_span =
-    |spec: &hir_js::ModuleSpecifier| -> TextRange {
-      if (spec.span.end as usize) <= source.len() {
-        if let Some(segment) = source.get(spec.span.start as usize..spec.span.end as usize) {
-          for quote in ['"', '\'', '`'] {
-            let needle = format!("{quote}{}{quote}", spec.value);
-            if let Some(idx) = segment.find(&needle) {
-              let start = spec.span.start + idx as u32;
-              let end = start + needle.len() as u32;
-              return TextRange::new(start, end);
-            }
-          }
-        }
-      }
-      spec.span
-    };
-  let mut seen = BTreeSet::new();
-  let mut check_specifier =
-    |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
-      db,
-      file_id,
-      Arc::<str>::from(spec.value.clone()),
-    ) {
-      Some(_) => {}
-      None => {
-        let range = refine_spec_span(spec);
-        let key = (range.start, range.end, spec.value.clone());
-        if !seen.insert(key) {
-          return;
-        }
-        let mut diag = codes::UNRESOLVED_MODULE.error(
-          format!("unresolved module specifier \"{}\"", spec.value),
-          Span::new(file_id, range),
-        );
-        diag.push_note(format!("module specifier: \"{}\"", spec.value));
-        diags.push(diag);
-      }
-    };
-
-  for import in lowered.hir.imports.iter() {
-    match &import.kind {
-      hir_js::ImportKind::Es(es) => {
-        check_specifier(&es.specifier, &mut diagnostics);
-      }
-      hir_js::ImportKind::ImportEquals(eq) => {
-        if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
-          check_specifier(module, &mut diagnostics);
-        }
+  for spec in specs.iter() {
+    if module_resolve(db, file.file_id(db), Arc::clone(spec)).is_none() {
+      if let Some(span) = spans.get(spec) {
+        diagnostics.push(codes::UNRESOLVED_MODULE.error(
+          format!("module {} could not be resolved", spec),
+          Span::new(file.file_id(db), *span),
+        ));
       }
     }
   }
-
-  for export in lowered.hir.exports.iter() {
-    match &export.kind {
-      ExportKind::Named(named) => {
-        if let Some(source) = named.source.as_ref() {
-          check_specifier(source, &mut diagnostics);
-        }
-      }
-      ExportKind::ExportAll(all) => {
-        check_specifier(&all.source, &mut diagnostics);
-      }
-      ExportKind::Default(_) | ExportKind::Assignment(_) => {}
-    }
-  }
-
-  diagnostics.sort_by(|a, b| {
-    a.primary
-      .range
-      .start
-      .cmp(&b.primary.range.start)
-      .then_with(|| a.primary.range.end.cmp(&b.primary.range.end))
-      .then_with(|| a.code.as_str().cmp(b.code.as_str()))
-      .then_with(|| a.message.cmp(&b.message))
-  });
+  diagnostics.sort();
   diagnostics.dedup();
   Arc::from(diagnostics.into_boxed_slice())
-}
-
-/// Diagnostics for unresolved module specifiers within a file.
-pub fn unresolved_module_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
-  db
-    .file_input(file)
-    .map(|input| unresolved_module_diagnostics_for(db, input))
-    .unwrap_or_else(|| Arc::from([]))
 }
 
 #[derive(Debug, Clone)]
@@ -341,7 +245,7 @@ pub mod body_check {
   use std::sync::{Arc, OnceLock, RwLock};
   use std::time::Instant;
 
-  use diagnostics::{FileId, Span, TextRange};
+  use diagnostics::{Diagnostic, FileId, Span, TextRange};
   use hir_js::{
     Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, DefId as HirDefId, NameInterner,
   };
@@ -667,6 +571,12 @@ pub mod body_check {
 
       let caches = ctx.checker_caches.for_body();
       let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
+      let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
+        function_expr_span(self, body_id)
+          .and_then(|span| contextual_callable_for_body(self, body_id, span))
+      } else {
+        None
+      };
       let mut result = check_body_with_expander(
         body_id,
         body,
@@ -679,32 +589,35 @@ pub mod body_check {
         (!binding_defs.is_empty())
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
-        None,
+        contextual_fn_ty,
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
-        let mut initial_env: HashMap<_, _> = HashMap::new();
+        let flow_bindings = crate::check::flow_bindings::FlowBindings::from_body(body);
+        let mut initial_env: HashMap<crate::check::flow_bindings::FlowBindingId, TypeId> =
+          HashMap::new();
         if let Some(function) = body.function.as_ref() {
           for param in function.params.iter() {
             if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
               if ty != prim.unknown {
-                if let Some(pat) = body.pats.get(param.pat.0 as usize) {
-                  if let HirPatKind::Ident(name) = pat.kind {
-                    initial_env.insert(name, ty);
-                  }
+                if let Some(binding) = flow_bindings.binding_for_pat(param.pat) {
+                  initial_env.insert(binding, ty);
                 }
               }
             }
           }
         }
-        for expr in body.exprs.iter() {
+        for (idx, expr) in body.exprs.iter().enumerate() {
           if let hir_js::ExprKind::Ident(name_id) = expr.kind {
-            if initial_env.contains_key(&name_id) {
-              continue;
-            }
-            if let Some(name) = lowered.names.resolve(name_id) {
-              if let Some(ty) = bindings.get(name) {
-                initial_env.insert(name_id, *ty);
+            let expr_id = hir_js::ExprId(idx as u32);
+            if let Some(binding) = flow_bindings.binding_for_expr(expr_id) {
+              if initial_env.contains_key(&binding) {
+                continue;
+              }
+              if let Some(name) = lowered.names.resolve(name_id) {
+                if let Some(ty) = bindings.get(name) {
+                  initial_env.insert(binding, *ty);
+                }
               }
             }
           }
@@ -721,6 +634,7 @@ pub mod body_check {
           body_id,
           body,
           &lowered.names,
+          &flow_bindings,
           meta.file,
           "",
           Arc::clone(&ctx.store),
@@ -760,11 +674,49 @@ pub mod body_check {
             }
           }
         }
-        if result.return_types.is_empty() && !flow_result.return_types.is_empty() {
-          result.return_types = flow_result.return_types;
+        let flow_return_types = flow_result.return_types;
+        if result.return_types.is_empty() && !flow_return_types.is_empty() {
+          result.return_types = flow_return_types;
+        } else if flow_return_types.len() == result.return_types.len() {
+          for (idx, ty) in flow_return_types.iter().enumerate() {
+            if *ty != prim.unknown {
+              let existing = result.return_types[idx];
+              let narrower =
+                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+              if existing == prim.unknown || narrower {
+                result.return_types[idx] = *ty;
+              }
+            }
+          }
         }
-        if result.diagnostics.is_empty() && !flow_result.diagnostics.is_empty() {
-          result.diagnostics = flow_result.diagnostics;
+        let mut flow_diagnostics = flow_result.diagnostics;
+        if !flow_diagnostics.is_empty() {
+          let mut seen: HashSet<(String, FileId, TextRange, String)> = HashSet::new();
+          let diag_key = |diag: &Diagnostic| -> (String, FileId, TextRange, String) {
+            (
+              diag.code.as_str().to_string(),
+              diag.primary.file,
+              diag.primary.range,
+              diag.message.clone(),
+            )
+          };
+          for diag in result.diagnostics.iter() {
+            seen.insert(diag_key(diag));
+          }
+          flow_diagnostics.sort_by(|a, b| {
+            a.primary
+              .file
+              .cmp(&b.primary.file)
+              .then(a.primary.range.start.cmp(&b.primary.range.start))
+              .then(a.primary.range.end.cmp(&b.primary.range.end))
+              .then(a.code.cmp(&b.code))
+              .then(a.message.cmp(&b.message))
+          });
+          for diag in flow_diagnostics.into_iter() {
+            if seen.insert(diag_key(&diag)) {
+              result.diagnostics.push(diag);
+            }
+          }
         }
       }
 
@@ -958,81 +910,77 @@ pub mod body_check {
     }
     let _ = unknown;
   }
+
+  fn function_expr_span(db: &BodyCheckDb, body_id: BodyId) -> Option<TextRange> {
+    let ctx = &db.context;
+    let mut visited = HashSet::new();
+    let mut current = ctx.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let Some(meta) = db.bc_body_info(parent) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(hir_body_id) = meta.hir else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(lowered) = db.bc_lower_hir(meta.file) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(parent_body) = lowered.body(hir_body_id) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      for expr in parent_body.exprs.iter() {
+        if let hir_js::ExprKind::FunctionExpr { body, .. } = expr.kind {
+          if body == body_id {
+            return Some(expr.span);
+          }
+        }
+      }
+      current = ctx.body_parents.get(&parent).copied();
+    }
+    None
+  }
+
+  fn contextual_callable_for_body(
+    db: &BodyCheckDb,
+    body_id: BodyId,
+    func_span: TextRange,
+  ) -> Option<TypeId> {
+    let store = &db.context.store;
+    let mut visited = HashSet::new();
+    let mut current = db.context.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let parent_result = db.check_body(parent);
+      for (idx, span) in parent_result.expr_spans.iter().enumerate() {
+        if *span != func_span {
+          continue;
+        }
+        if let Some(ty) = parent_result.expr_types.get(idx).copied() {
+          if store.contains_type_id(ty)
+            && matches!(
+              store.type_kind(ty),
+              types_ts_interned::TypeKind::Callable { .. }
+            )
+          {
+            return Some(ty);
+          }
+        }
+      }
+      current = db.context.body_parents.get(&parent).copied();
+    }
+    None
+  }
 }
 impl Eq for LowerResultWithDiagnostics {}
-
-/// Extract the initializer expression for a variable definition within a single
-/// lowered file.
-pub fn var_initializer_in_file(
-  lowered: &hir_js::LowerResult,
-  def: DefId,
-  def_span: TextRange,
-  def_name: Option<&str>,
-) -> Option<VarInit> {
-  let hir_def = lowered.def(def)?;
-  let body_id = hir_def.body?;
-  let body = lowered.body(body_id)?;
-
-  let pat_matches = |pat: &hir_js::Pat| -> bool {
-    if pat.span == def_span {
-      return true;
-    }
-    match (&pat.kind, def_name) {
-      (PatKind::Ident(name_id), Some(expected)) => {
-        lowered.names.resolve(*name_id) == Some(expected)
-      }
-      _ => false,
-    }
-  };
-
-  for stmt_id in body.root_stmts.iter() {
-    let stmt = body.stmts.get(stmt_id.0 as usize)?;
-    if let StmtKind::Var(decl) = &stmt.kind {
-      for declarator in decl.declarators.iter() {
-        let Some(pat) = body.pats.get(declarator.pat.0 as usize) else {
-          continue;
-        };
-        if !pat_matches(pat) {
-          continue;
-        }
-        if let Some(expr) = declarator.init {
-          return Some(VarInit {
-            body: body_id,
-            expr,
-            decl_kind: decl.kind,
-          });
-        }
-      }
-    }
-  }
-
-  if matches!(
-    body.kind,
-    hir_js::BodyKind::Initializer | hir_js::BodyKind::TopLevel
-  ) {
-    for stmt_id in body.root_stmts.iter() {
-      if let Some(stmt) = body.stmts.get(stmt_id.0 as usize) {
-        if let StmtKind::Expr(expr) = stmt.kind {
-          return Some(VarInit {
-            body: body_id,
-            expr,
-            decl_kind: VarDeclKind::Const,
-          });
-        }
-      }
-    }
-  }
-
-  None
-}
-
-/// Minimal initializer information for a variable definition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct VarInit {
-  pub body: BodyId,
-  pub expr: ExprId,
-  pub decl_kind: VarDeclKind,
-}
 
 pub fn parse_query_count() -> usize {
   parse_metrics::parse_call_count()
@@ -1078,10 +1026,10 @@ fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
 #[salsa::tracked]
 fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
   let lowered = lower_hir_for(db, file);
-  let parsed = parse_for(db, file);
-  match (parsed.ast.as_ref(), lowered.lowered.as_ref()) {
-    (Some(ast), Some(lowered)) => sem_hir_from_lower(ast, lowered),
-    _ => empty_sem_hir(file.file_id(db), lowered.file_kind),
+  if let Some(lowered) = lowered.lowered.as_ref() {
+    sem_hir_from_lower(lowered)
+  } else {
+    empty_sem_hir(file.file_id(db), lowered.file_kind)
   }
 }
 
@@ -1172,7 +1120,7 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
     .roots_input()
     .roots(db)
     .iter()
-    .flat_map(|key| file_ids_from_key(db, key))
+    .map(|key| file_id_from_key(db, key))
     .collect();
   while let Some(file) = queue.pop_front() {
     if !visited.insert(file) {
@@ -1211,7 +1159,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     .roots_input()
     .roots(db)
     .iter()
-    .flat_map(|f| file_ids_from_key(db, f))
+    .map(|f| file_id_from_key(db, f))
     .map(|id| sem_ts::FileId(id.0))
     .collect();
   roots.sort();
@@ -1274,15 +1222,9 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
       _ => {}
     }
   }
-  for arenas in lowered.types.values() {
-    for ty in arenas.type_exprs.iter() {
-      if let hir_js::TypeExprKind::TypeRef(type_ref) = &ty.kind {
-        if let hir_js::TypeName::Import(import) = &type_ref.name {
-          if let Some(module) = &import.module {
-            specs.push((Arc::from(module.clone()), ty.span));
-          }
-        }
-      }
+  for ty in lowered.types.type_exprs.iter() {
+    if let hir_js::TypeExprKind::Import(import) = &ty.kind {
+      specs.push((Arc::from(import.module.clone()), ty.span));
     }
   }
   specs
@@ -1352,11 +1294,6 @@ pub fn module_dep_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
     .file_input(file)
     .expect("file must be seeded before querying module deps");
   module_dep_diagnostics_for(db, handle)
-}
-
-/// Diagnostics for unresolved module imports/exports in a file.
-pub fn unresolved_module_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
-  module_dep_diagnostics(db, file)
 }
 
 pub fn reachable_files(db: &dyn Db) -> Arc<Vec<FileId>> {
@@ -1437,20 +1374,6 @@ pub fn span_of_def(db: &dyn Db, def: DefId) -> Option<Span> {
   let lowered = lower_hir(db, file);
   let lowered = lowered.lowered.as_ref()?;
   lowered.def(def).map(|data| Span::new(file, data.span))
-}
-
-fn var_initializer_for(db: &dyn Db, def: DefId) -> Option<VarInit> {
-  let file = def_to_file(db).get(&def).copied()?;
-  let lowered = lower_hir(db, file);
-  let lowered = lowered.lowered.as_deref()?;
-  let hir_def = lowered.def(def)?;
-  let name = lowered.names.resolve(hir_def.path.name);
-  var_initializer_in_file(lowered, def, hir_def.span, name)
-}
-
-/// Initializer expression for a variable definition, if available.
-pub fn var_initializer(db: &dyn Db, def: DefId) -> Option<VarInit> {
-  var_initializer_for(db, def)
 }
 
 /// Type of the innermost expression at the given offset, if available.
@@ -1656,6 +1579,132 @@ pub fn body_parent(db: &dyn Db, body: BodyId) -> Option<BodyId> {
   body_parents_in_file(db, file).get(&body).copied()
 }
 
+/// Mapping from a definition to its initializer expression within HIR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VarInit {
+  /// Body containing the variable declarator.
+  pub body: BodyId,
+  /// Expression representing the initializer.
+  pub expr: ExprId,
+  /// Decl kind (`var`/`let`/`const`) of the declarator.
+  pub decl_kind: VarDeclKind,
+  /// Pattern bound by the declarator, if available.
+  pub pat: Option<PatId>,
+  /// Span covering the binding pattern, if available.
+  pub span: Option<TextRange>,
+}
+
+fn span_distance(a: TextRange, b: TextRange) -> u64 {
+  let start = a.start.abs_diff(b.start) as u64;
+  let end = a.end.abs_diff(b.end) as u64;
+  start.saturating_add(end)
+}
+
+pub fn var_initializer(db: &dyn Db, def: DefId) -> Option<VarInit> {
+  let file = def_file(db, def)?;
+  let lowered = lower_hir(db, file);
+  let lowered = lowered.lowered.as_deref()?;
+  let hir_def = lowered.def(def)?;
+  let def_span = hir_def.span;
+  let def_name = lowered.names.resolve(hir_def.path.name);
+  var_initializer_in_file(lowered, def, def_span, def_name)
+}
+
+pub(crate) fn var_initializer_in_file(
+  lowered: &LowerResult,
+  def: DefId,
+  def_span: TextRange,
+  def_name: Option<&str>,
+) -> Option<VarInit> {
+  let hir_def = lowered.def(def)?;
+  match hir_def.path.kind {
+    DefKind::Var => {}
+    DefKind::Field | DefKind::Param => return None,
+    _ if def_name != Some("default") => return None,
+    _ => {}
+  }
+
+  let mut best: Option<(u64, (usize, usize, usize), VarInit)> = None;
+
+  for (body_order, (body_id, _)) in lowered.body_index.iter().enumerate() {
+    let body = lowered.body(*body_id)?;
+    for (stmt_idx, stmt) in body.stmts.iter().enumerate() {
+      let decl = match &stmt.kind {
+        StmtKind::Var(decl) => decl,
+        _ => continue,
+      };
+      for (decl_idx, declarator) in decl.declarators.iter().enumerate() {
+        let Some(expr) = declarator.init else {
+          continue;
+        };
+        let pat = declarator.pat;
+        let pat_span = body.pats.get(pat.0 as usize).map(|p| p.span);
+        if let Some(span) = pat_span {
+          if span == def_span {
+            return Some(VarInit {
+              body: *body_id,
+              expr,
+              decl_kind: decl.kind,
+              pat: Some(pat),
+              span: Some(span),
+            });
+          }
+        }
+        if let (Some(name), Some(span)) = (def_name, pat_span) {
+          let pat_name = match body.pats.get(pat.0 as usize).map(|p| &p.kind) {
+            Some(PatKind::Ident(name_id)) => lowered.names.resolve(*name_id),
+            _ => None,
+          };
+          if pat_name == Some(name) {
+            let dist = span_distance(span, def_span);
+            let key = (dist, (body_order, stmt_idx, decl_idx));
+            let candidate = VarInit {
+              body: *body_id,
+              expr,
+              decl_kind: decl.kind,
+              pat: Some(pat),
+              span: Some(span),
+            };
+            let replace = best
+              .as_ref()
+              .map(|current| key < (current.0, current.1))
+              .unwrap_or(true);
+            if replace {
+              best = Some((dist, (body_order, stmt_idx, decl_idx), candidate));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if let Some((_, _, init)) = best {
+    return Some(init);
+  }
+
+  if def_name == Some("default") {
+    for export in lowered.hir.exports.iter() {
+      if let ExportKind::Default(default) = &export.kind {
+        if let ExportDefaultValue::Expr { expr, body } = &default.value {
+          if export.span == def_span
+            || (export.span.start <= def_span.start && def_span.end <= export.span.end)
+          {
+            return Some(VarInit {
+              body: *body,
+              expr: *expr,
+              decl_kind: VarDeclKind::Const,
+              pat: None,
+              span: Some(export.span),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  None
+}
+
 #[salsa::input]
 pub struct TypeCompilerOptions {
   #[return_ref]
@@ -1686,9 +1735,6 @@ pub trait TypeDb: salsa::Database + Send + 'static {
   fn type_store_input(&self) -> TypeStoreInput;
   fn files_input(&self) -> FilesInput;
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput>;
-  fn profiler(&self) -> Option<QueryStatsCollector>;
-  fn body_cache(&self) -> &BodyCache;
-  fn def_cache(&self) -> &DefCache;
 }
 
 /// Cheap wrapper around [`TypeStore`] with pointer-based equality for salsa
@@ -1822,54 +1868,19 @@ pub fn type_semantics(db: &dyn TypeDb) -> Arc<TypeSemantics> {
   })
 }
 
-/// Snapshot cache statistics for the tracked `check_body` and `type_of_def`
-/// queries. Statistics are also recorded into the active profiler, if present,
-/// so callers can observe cache activity alongside other query metrics.
-pub fn cache_stats(db: &dyn TypeDb) -> (CacheStats, CacheStats) {
-  let body = db.body_cache().stats();
-  let def = db.def_cache().stats();
-  if let Some(profiler) = db.profiler() {
-    profiler.record_cache(CacheKind::Body, &body);
-    profiler.record_cache(CacheKind::Def, &def);
-  }
-  (body, def)
-}
-
-#[salsa::tracked(recovery_fn = check_body_cycle, lru = 0)]
+#[salsa::tracked(recovery_fn = check_body_cycle)]
 pub fn check_body(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // The unit seed mirrors `decl_types_in_file` to avoid introducing synthetic
   // salsa structs for every definition key.
-  let revision = current_revision(db);
-  let profiler = db.profiler();
-  let cache_before = profiler.as_ref().map(|_| db.body_cache().stats());
-  if let Some(cached) = db.body_cache().get(def, revision) {
-    if let Some(profiler) = profiler.as_ref() {
-      profiler.record(QueryKind::CheckBody, true, Duration::ZERO);
-      if let Some(before) = cache_before.as_ref() {
-        let after = db.body_cache().stats();
-        profiler.record_cache(CacheKind::Body, &cache_delta(&after, before));
-      }
-    }
-    return cached;
-  }
-
-  let _timer = profiler
-    .as_ref()
-    .map(|profiler| profiler.timer(QueryKind::CheckBody, false));
   let store = type_store(db).arc();
   let fallback = store.primitive_ids().unknown;
-  let result = decl_types_for_def(db, def)
-    .and_then(|decl| decl.initializer.clone())
-    .map(|init| eval_initializer(db, &store, init))
-    .unwrap_or(fallback);
-  db.body_cache().insert(def, revision, result);
-  if let Some(profiler) = profiler.as_ref() {
-    if let Some(before) = cache_before.as_ref() {
-      let after = db.body_cache().stats();
-      profiler.record_cache(CacheKind::Body, &cache_delta(&after, before));
-    }
-  }
-  result
+  let Some(decl) = decl_types_for_def(db, def) else {
+    return fallback;
+  };
+  let Some(init) = decl.initializer.clone() else {
+    return fallback;
+  };
+  eval_initializer(db, &store, init)
 }
 
 fn check_body_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: ()) -> TypeId {
@@ -1879,33 +1890,16 @@ fn check_body_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: 
   type_store(db).arc().primitive_ids().any
 }
 
-#[salsa::tracked(recovery_fn = type_of_def_cycle, lru = 0)]
+#[salsa::tracked(recovery_fn = type_of_def_cycle)]
 pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // The extra seed enables the tracked query to memoize arbitrary `DefId`s
   // without forcing them to implement salsa's struct traits.
   // Track compiler options changes even if we do not branch on them yet.
-  let revision = current_revision(db);
-  let profiler = db.profiler();
-  let cache_before = profiler.as_ref().map(|_| db.def_cache().stats());
-  if let Some(cached) = db.def_cache().get_store(def, revision) {
-    if let Some(profiler) = profiler.as_ref() {
-      profiler.record(QueryKind::TypeOfDef, true, Duration::ZERO);
-      if let Some(before) = cache_before.as_ref() {
-        let after = db.def_cache().stats();
-        profiler.record_cache(CacheKind::Def, &cache_delta(&after, before));
-      }
-    }
-    return cached;
-  }
-
   let _options = type_compiler_options(db);
-  let _timer = profiler
-    .as_ref()
-    .map(|profiler| profiler.timer(QueryKind::TypeOfDef, false));
   let store = type_store(db).arc();
   let fallback = store.primitive_ids().any;
 
-  let mut result = base_type(db, &store, def, fallback);
+  let base = base_type(db, &store, def, fallback);
 
   let semantics = type_semantics(db);
   if let Some(group) = semantics.merged_defs.get(&def) {
@@ -1916,24 +1910,17 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
         // each member's base type directly. Definitions are processed in the
         // stable order produced by `type_semantics` to keep unions deterministic.
         let ty = if *member == def {
-          result
+          base
         } else {
           base_type(db, &store, *member, fallback)
         };
         members.push(ty);
       }
-      result = store.union(members);
+      return store.union(members);
     }
   }
 
-  db.def_cache().insert_store(def, revision, result);
-  if let Some(profiler) = profiler.as_ref() {
-    if let Some(before) = cache_before.as_ref() {
-      let after = db.def_cache().stats();
-      profiler.record_cache(CacheKind::Def, &cache_delta(&after, before));
-    }
-  }
-  result
+  base
 }
 
 fn type_of_def_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: ()) -> TypeId {
@@ -1997,44 +1984,23 @@ pub struct TypesDatabase {
   type_store: Option<TypeStoreInput>,
   files: Option<FilesInput>,
   decls: BTreeMap<FileId, DeclTypesInput>,
-  profiler: Option<QueryStatsCollector>,
-  body_cache: BodyCache,
-  def_cache: DefCache,
 }
 
 impl Default for TypesDatabase {
   fn default() -> Self {
-    let cache_options = CompilerOptions::default().cache;
-    let mut db = Self {
+    Self {
       storage: salsa::Storage::default(),
       compiler_options: None,
       type_store: None,
       files: None,
       decls: BTreeMap::new(),
-      profiler: None,
-      body_cache: BodyCache::new(cache_options.body_config()),
-      def_cache: DefCache::new(cache_options.def_config()),
-    };
-    db.configure_cache_limits(&cache_options);
-    db
+    }
   }
 }
 
 #[salsa::db]
 impl salsa::Database for TypesDatabase {
-  fn salsa_event(&self, event: &dyn Fn() -> salsa::Event) {
-    if let Some(profiler) = self.profiler.as_ref() {
-      let event = event();
-      if let salsa::EventKind::DidValidateMemoizedValue { database_key } = event.kind {
-        let name = self.ingredient_debug_name(database_key.ingredient_index());
-        match name.as_ref() {
-          "check_body" => profiler.record(QueryKind::CheckBody, true, Duration::ZERO),
-          "type_of_def" => profiler.record(QueryKind::TypeOfDef, true, Duration::ZERO),
-          _ => {}
-        }
-      }
-    }
-  }
+  fn salsa_event(&self, _event: &dyn Fn() -> salsa::Event) {}
 }
 
 #[salsa::db]
@@ -2056,18 +2022,6 @@ impl TypeDb for TypesDatabase {
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput> {
     self.decls.get(&file).copied()
   }
-
-  fn profiler(&self) -> Option<QueryStatsCollector> {
-    self.profiler.clone()
-  }
-
-  fn body_cache(&self) -> &BodyCache {
-    &self.body_cache
-  }
-
-  fn def_cache(&self) -> &DefCache {
-    &self.def_cache
-  }
 }
 
 impl TypesDatabase {
@@ -2079,13 +2033,7 @@ impl TypesDatabase {
     self.clone()
   }
 
-  fn configure_cache_limits(&mut self, cache: &CacheOptions) {
-    self.body_cache = BodyCache::new(cache.body_config());
-    self.def_cache = DefCache::new(cache.def_config());
-  }
-
   pub fn set_compiler_options(&mut self, options: CompilerOptions) {
-    self.configure_cache_limits(&options.cache);
     if let Some(handle) = self.compiler_options {
       handle.set_options(self).to(options);
     } else {
@@ -2116,10 +2064,6 @@ impl TypesDatabase {
       let input = DeclTypesInput::new(self, file, decls);
       self.decls.insert(file, input);
     }
-  }
-
-  pub fn set_profiler(&mut self, profiler: QueryStatsCollector) {
-    self.profiler = Some(profiler);
   }
 }
 
@@ -2180,13 +2124,11 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
   let files = all_files(db);
   let mut parse_diags = Vec::new();
   let mut lower_diags = Vec::new();
-  let mut module_diags = Vec::new();
   for file in files.iter() {
     let parsed = parse(db, *file);
     parse_diags.extend(parsed.diagnostics.into_iter());
     let lowered = lower_hir(db, *file);
     lower_diags.extend(lowered.diagnostics.into_iter());
-    module_diags.extend(unresolved_module_diagnostics(db, *file).iter().cloned());
   }
   let semantics = ts_semantics(db);
   let mut body_diags = Vec::new();
@@ -2197,19 +2139,10 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
     body_diags.extend(body_diagnostics_from_results(db, *body).iter().cloned());
   }
   body_diags.extend(extra_diagnostics_for(db).iter().cloned());
-  // Drop binder-level unresolved import diagnostics (`BIND1002`) in favor of the
-  // module-resolution-based `UNRESOLVED_MODULE` diagnostics, which carry spans
-  // targeting the specifier literal.
-  let semantic_diags = semantics
-    .diagnostics
-    .iter()
-    .filter(|diag| diag.code.as_str() != "BIND1002")
-    .cloned()
-    .chain(module_diags.into_iter());
   aggregate_program_diagnostics(
     parse_diags,
     lower_diags,
-    semantic_diags,
+    semantics.diagnostics.iter().cloned(),
     body_diags,
   )
 }

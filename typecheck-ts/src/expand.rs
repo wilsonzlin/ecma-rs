@@ -1,7 +1,7 @@
 use ahash::RandomState;
 use std::collections::{HashMap, HashSet};
-use std::thread::ThreadId;
 use std::sync::{Arc, Mutex};
+use std::thread::ThreadId;
 use types_ts_interned::{
   DefId, EvaluatorCaches, ExpandedType, RelateTypeExpander, TypeEvaluator, TypeExpander, TypeId,
   TypeKind, TypeParamId, TypeStore,

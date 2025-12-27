@@ -5,7 +5,7 @@ pub mod cfg;
 pub(crate) mod decls;
 pub(crate) mod expr;
 pub(super) mod flow;
-pub(crate) mod flow_bindings;
+pub mod flow_bindings;
 pub(super) mod flow_narrow;
 pub mod hir_body;
 pub(crate) mod infer;

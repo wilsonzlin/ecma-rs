@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use diagnostics::FileId;
 use hir_js::{lower_from_source, Body, BodyId, DefKind, LowerResult, NameId, NameInterner};
+use typecheck_ts::check::flow_bindings::FlowBindings;
 use typecheck_ts::check::hir_body::check_body_with_env;
 use typecheck_ts::codes;
 use types_ts_interned::{RelateCtx, TypeStore};
@@ -31,15 +32,25 @@ fn run_flow(
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, types_ts_interned::TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
+  let flow_bindings = FlowBindings::from_body(body);
+  let initial = initial
+    .iter()
+    .filter_map(|(name, ty)| {
+      flow_bindings
+        .binding_for_name(*name)
+        .map(|binding| (binding, *ty))
+    })
+    .collect::<HashMap<_, _>>();
   let relate = RelateCtx::new(Arc::clone(store), store.options());
   check_body_with_env(
     body_id,
     body,
     names,
+    &flow_bindings,
     file,
     src,
     Arc::clone(store),
-    initial,
+    &initial,
     relate,
     None,
   )
@@ -57,7 +68,15 @@ fn assignment_on_all_paths() {
     name_id(lowered.names.as_ref(), "cond"),
     store.primitive_ids().boolean,
   );
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+  );
   assert!(res.diagnostics().is_empty());
 }
 
@@ -72,7 +91,15 @@ fn missing_assignment_in_branch() {
     name_id(lowered.names.as_ref(), "cond"),
     store.primitive_ids().boolean,
   );
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+  );
   assert_eq!(res.diagnostics().len(), 1);
   assert_eq!(
     res.diagnostics()[0].code.as_str(),
@@ -86,7 +113,15 @@ fn typeof_unassigned_allowed() {
   let lowered = lower_from_source(src).expect("lower");
   let (body_id, body) = body_of(&lowered, &lowered.names, "f");
   let store = TypeStore::new();
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &HashMap::new());
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &HashMap::new(),
+  );
   assert!(res.diagnostics().is_empty());
 }
 
@@ -102,7 +137,15 @@ fn shadowed_bindings_are_distinct() {
     name_id(lowered.names.as_ref(), "cond"),
     store.primitive_ids().boolean,
   );
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+  );
   assert!(res.diagnostics().is_empty());
 }
 
@@ -117,7 +160,15 @@ fn loop_assignment_not_definite() {
     name_id(lowered.names.as_ref(), "cond"),
     store.primitive_ids().boolean,
   );
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+  );
   assert_eq!(res.diagnostics().len(), 1);
   assert_eq!(
     res.diagnostics()[0].code.as_str(),

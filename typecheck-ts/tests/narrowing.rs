@@ -6,6 +6,7 @@ use hir_js::{
   lower_from_source, BinaryOp, Body, BodyId, DefKind, ExprId, ExprKind, LowerResult, NameId,
   NameInterner,
 };
+use typecheck_ts::check::flow_bindings::FlowBindings;
 use typecheck_ts::check::hir_body::check_body_with_env as check_body_with_env_impl;
 use types_ts_interned::{
   DefId, NameId as TypeNameId, Param, PropData, PropKey, Property, RelateCtx, RelateHooks,
@@ -97,9 +98,27 @@ fn check_body_with_env(
   store: Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
+  let flow_bindings = FlowBindings::from_body(body);
+  let initial = initial
+    .iter()
+    .filter_map(|(name, ty)| {
+      flow_bindings
+        .binding_for_name(*name)
+        .map(|binding| (binding, *ty))
+    })
+    .collect::<HashMap<_, _>>();
   let relate = RelateCtx::new(Arc::clone(&store), store.options());
   check_body_with_env_impl(
-    body_id, body, names, file, src, store, initial, relate, None,
+    body_id,
+    body,
+    names,
+    &flow_bindings,
+    file,
+    src,
+    store,
+    &initial,
+    relate,
+    None,
   )
 }
 
@@ -113,6 +132,15 @@ fn run_flow(
   initial: &HashMap<NameId, TypeId>,
   expander: Option<&dyn RelateTypeExpander>,
 ) -> typecheck_ts::BodyCheckResult {
+  let flow_bindings = FlowBindings::from_body(body);
+  let initial = initial
+    .iter()
+    .filter_map(|(name, ty)| {
+      flow_bindings
+        .binding_for_name(*name)
+        .map(|binding| (binding, *ty))
+    })
+    .collect::<HashMap<_, _>>();
   let mut hooks = RelateHooks::default();
   hooks.expander = expander;
   let relate = RelateCtx::with_hooks(Arc::clone(store), store.options(), hooks);
@@ -120,10 +148,11 @@ fn run_flow(
     body_id,
     body,
     names,
+    &flow_bindings,
     file,
     src,
     Arc::clone(store),
-    initial,
+    &initial,
     relate,
     expander,
   )
