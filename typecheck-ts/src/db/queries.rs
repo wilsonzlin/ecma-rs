@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use salsa::Setter;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{

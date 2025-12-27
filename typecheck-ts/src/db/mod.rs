@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use salsa::Setter;
+
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::profile::QueryStatsCollector;
 use crate::FileKey;
@@ -17,7 +19,6 @@ use diagnostics::FileId;
 pub mod expander;
 mod inputs;
 pub mod queries;
-pub(crate) mod spans;
 pub(crate) mod spans;
 pub mod symbols;
 
