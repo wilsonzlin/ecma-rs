@@ -2,7 +2,7 @@ use hir_js::{
   ids::{ExprId, PatId},
   Body, ExprKind, PatKind,
 };
-use semantic_js::ts::locals::{SymbolId, TsLocalSemantics};
+use semantic_js::ts::{locals::TsLocalSemantics, SymbolId};
 
 /// Stable identifier for flow bindings. This reuses the value-namespace symbol
 /// identifiers produced by the TS locals binder.
