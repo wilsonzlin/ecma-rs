@@ -19,7 +19,7 @@ pub fn lower_decl_types(
   semantics: Option<&TsProgramSemantics>,
   defs: Arc<HashMap<(FileId, String), DefId>>,
   file: FileId,
-  module_resolver: Option<Arc<dyn Fn(FileId, &str) -> Option<FileId> + Send + Sync + '_>>,
+  _module_resolver: Option<Arc<dyn Fn(FileId, &str) -> Option<FileId> + Send + Sync + '_>>,
 ) -> DeclTypes {
   let mut def_map = HashMap::new();
   let mut local_defs = HashMap::new();
@@ -36,18 +36,22 @@ pub fn lower_decl_types(
   let mut sorted_defs = lowered.defs.clone();
   sorted_defs.sort_by_key(|def| (def.span.start, def.span.end, def.id.0));
 
+  let mut decls = DeclTypes::default();
   let mut lowerer = HirDeclLowerer::new(
     Arc::clone(&store),
     &lowered.types,
     semantics,
-    Arc::clone(&defs),
+    defs.as_ref().clone(),
     file,
+    None,
     local_defs,
-    def_map.clone(),
-    module_resolver,
+    &mut decls.diagnostics,
+    Some(&def_map),
+    Some(defs.as_ref()),
+    None,
+    None,
+    None,
   );
-
-  let mut decls = DeclTypes::default();
   for def in sorted_defs.iter() {
     let Some(info) = def.type_info.as_ref() else {
       continue;
@@ -106,7 +110,6 @@ pub fn lower_decl_types(
     }
   }
 
-  decls.diagnostics.extend(lowerer.into_diagnostics());
   decls
 }
 

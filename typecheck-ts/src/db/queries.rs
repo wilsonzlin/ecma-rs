@@ -29,7 +29,7 @@ use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
 use crate::symbols::{semantic_js::SymbolId, SymbolBinding, SymbolOccurrence};
 use crate::FileKey;
-use crate::{BodyId, DefId};
+use crate::{BodyId, DefId, ExprId};
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
   db.file_input_by_key(key)
@@ -219,19 +219,28 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
       .or_insert(binding);
   }
 
-  let primitives = db.primitive_ids();
-  globals
-    .entry("undefined".to_string())
-    .or_insert(SymbolBinding {
-      symbol: deterministic_symbol_id("undefined"),
-      def: None,
-      type_id: primitives.map(|p| p.undefined),
-    });
-  globals.entry("Error".to_string()).or_insert(SymbolBinding {
-    symbol: deterministic_symbol_id("Error"),
-    def: None,
-    type_id: primitives.map(|p| p.any),
-  });
+  if let Some(primitives) = db.primitive_ids() {
+    globals
+      .entry("undefined".to_string())
+      .and_modify(|binding| binding.type_id = Some(primitives.undefined))
+      .or_insert(SymbolBinding {
+        symbol: deterministic_symbol_id("undefined"),
+        def: None,
+        type_id: Some(primitives.undefined),
+      });
+    globals
+      .entry("Error".to_string())
+      .and_modify(|binding| {
+        if binding.type_id.is_none() {
+          binding.type_id = Some(primitives.any);
+        }
+      })
+      .or_insert(SymbolBinding {
+        symbol: deterministic_symbol_id("Error"),
+        def: None,
+        type_id: Some(primitives.any),
+      });
+  }
 
   Arc::new(globals)
 }
@@ -538,6 +547,7 @@ pub mod body_check {
           .interned_def_types
           .get(&def)
           .copied()
+          .map(|ty| ctx.store.canon(ty))
           .unwrap_or(prim.unknown)
       };
 
@@ -550,6 +560,7 @@ pub mod body_check {
         &ctx.global_bindings,
         map_def_ty,
         prim.unknown,
+        &ctx.store,
       );
       if let Some(file_bindings) = ctx.file_bindings.get(&meta.file) {
         seed_bindings(
@@ -558,6 +569,7 @@ pub mod body_check {
           file_bindings,
           map_def_ty,
           prim.unknown,
+          &ctx.store,
         );
       }
 
@@ -855,9 +867,17 @@ pub mod body_check {
     source: &HashMap<String, SymbolBinding>,
     map_def_ty: impl Fn(DefId) -> TypeId,
     unknown: TypeId,
+    store: &Arc<TypeStore>,
   ) {
     for (name, binding) in source.iter() {
-      let ty = binding.def.map(|d| map_def_ty(d)).unwrap_or(unknown);
+      let mut ty = binding
+        .type_id
+        .filter(|ty| store.contains_type_id(*ty))
+        .map(|ty| store.canon(ty));
+      if ty.is_none() {
+        ty = binding.def.map(|d| map_def_ty(d));
+      }
+      let ty = ty.unwrap_or(unknown);
       bindings.insert(name.clone(), ty);
       if let Some(def) = binding.def {
         binding_defs.insert(name.clone(), def);

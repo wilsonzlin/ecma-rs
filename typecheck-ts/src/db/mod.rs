@@ -24,7 +24,6 @@ pub mod queries;
 pub(crate) mod spans;
 pub mod symbols;
 pub mod types;
-pub mod types;
 
 #[allow(unused_imports)]
 pub use inputs::CancellationToken;
@@ -39,7 +38,7 @@ pub use queries::{
   module_resolve, module_specifiers, parse, parse_query_count, program_diagnostics, reachable_files,
   reset_parse_query_count, roots, sem_hir, span_of_def, span_of_expr, symbol_occurrences,
   ts_semantics, type_at, type_params, type_store, var_initializer, DeclInfo, DeclKind,
-  GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore, TsSemantics,
+  GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, TsSemantics,
   TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;

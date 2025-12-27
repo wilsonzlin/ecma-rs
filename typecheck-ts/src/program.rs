@@ -1828,6 +1828,7 @@ impl Program {
       interned_type_store,
       interned_def_types,
       interned_type_params,
+      value_def_map: Vec::new(),
       builtin: state.builtin,
       next_def: state.next_def,
       next_body: state.next_body,
@@ -2460,6 +2461,33 @@ fn match_kind_from_hir(kind: HirDefKind) -> DefMatchKind {
   }
 }
 
+fn is_value_def_kind(kind: &DefKind) -> bool {
+  matches!(kind, DefKind::Function(_) | DefKind::Var(_) | DefKind::Import(_))
+}
+
+fn find_value_def(defs: &HashMap<DefId, DefData>, file: FileId, name: &str) -> Option<DefId> {
+  let mut best: Option<(DefId, u8)> = None;
+  for (id, data) in defs.iter() {
+    if data.file != file || data.name != name {
+      continue;
+    }
+    if !is_value_def_kind(&data.kind) {
+      continue;
+    }
+    let pri = match &data.kind {
+      DefKind::Function(_) => 0,
+      DefKind::Var(_) => 1,
+      DefKind::Import(_) => 2,
+      _ => continue,
+    };
+    match best {
+      Some((best_id, best_pri)) if pri > best_pri || (pri == best_pri && *id >= best_id) => {}
+      _ => best = Some((*id, pri)),
+    }
+  }
+  best.map(|(id, _)| id)
+}
+
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
 pub struct TypeStore {
@@ -3010,6 +3038,23 @@ impl ProgramState {
       cache_options: self.compiler_options.cache.clone(),
       query_stats: self.query_stats.clone(),
     }
+  }
+
+  fn type_id_in_store(
+    &self,
+    ty: TypeId,
+    store: &Arc<tti::TypeStore>,
+    cache: &mut HashMap<TypeId, tti::TypeId>,
+  ) -> TypeId {
+    if store.contains_type_id(ty) {
+      return store.canon(ty);
+    }
+    let mapped = if (ty.0 as usize) < self.type_store.kinds.len() {
+      convert_type_for_display(ty, self, store, cache)
+    } else {
+      store.primitive_ids().unknown
+    };
+    store.canon(mapped)
   }
 
   fn file_key_for_id(&self, id: FileId) -> Option<FileKey> {
@@ -3596,6 +3641,57 @@ impl ProgramState {
     Ok(())
   }
 
+  fn update_binding_value_types(&mut self) {
+    let Some(store) = self.interned_store.as_ref().cloned() else {
+      return;
+    };
+    let mut cache = HashMap::new();
+    let mut updates: Vec<(FileId, String, TypeId)> = Vec::new();
+    for (file_id, state) in self.files.iter() {
+      for (name, binding) in state.bindings.iter() {
+        let value_def = binding
+          .def
+          .filter(|def_id| {
+            self
+              .def_data
+              .get(def_id)
+              .map(|data| is_value_def_kind(&data.kind))
+              .unwrap_or(false)
+          })
+          .or_else(|| find_value_def(&self.def_data, *file_id, name));
+        let ty = if let Some(def_id) = value_def {
+          let mut ty = if let Some(ty) = self.interned_def_types.get(&def_id).copied() {
+            Some(store.canon(ty))
+          } else if let Some(store_ty) = self.def_types.get(&def_id).copied() {
+            Some(self.type_id_in_store(store_ty, &store, &mut cache))
+          } else {
+            None
+          };
+          if ty.is_none() {
+            ty = binding
+              .type_id
+              .map(|binding_ty| self.type_id_in_store(binding_ty, &store, &mut cache));
+          }
+          ty
+        } else if let Some(binding_ty) = binding.type_id {
+          Some(self.type_id_in_store(binding_ty, &store, &mut cache))
+        } else {
+          None
+        };
+        if let Some(ty) = ty {
+          updates.push((*file_id, name.clone(), ty));
+        }
+      }
+    }
+    for (file_id, name, ty) in updates.into_iter() {
+      if let Some(state) = self.files.get_mut(&file_id) {
+        if let Some(binding) = state.bindings.get_mut(&name) {
+          binding.type_id = Some(ty);
+        }
+      }
+    }
+  }
+
   fn ensure_analyzed(&mut self, host: &Arc<dyn Host>, roots: &[FileKey]) {
     if let Err(fatal) = self.ensure_analyzed_result(host, roots) {
       self.diagnostics.push(fatal_to_diagnostic(fatal));
@@ -3743,6 +3839,8 @@ impl ProgramState {
     if self.interned_store.is_some() && self.interned_def_types.len() >= self.def_data.len() {
       self.rebuild_callable_overloads();
       self.merge_callable_overload_types();
+      self.update_binding_value_types();
+      self.recompute_global_bindings();
       return Ok(());
     }
     self.ensure_analyzed_result(host, roots)?;
@@ -3795,6 +3893,7 @@ impl ProgramState {
         Some(&def_by_name),
         Some(host.as_ref()),
         Some(&key_to_id),
+        None,
       );
       for def in lowered.defs.iter() {
         let Some(info) = def.type_info.as_ref() else {
@@ -3982,6 +4081,7 @@ impl ProgramState {
     }
     self.merge_callable_overload_types();
     self.merge_namespace_value_types()?;
+    self.update_binding_value_types();
     self.recompute_global_bindings();
     codes::normalize_diagnostics(&mut self.diagnostics);
     Ok(())
@@ -6691,7 +6791,12 @@ impl ProgramState {
                       store: &Arc<tti::TypeStore>,
                       cache: &mut HashMap<TypeId, tti::TypeId>,
                       def: DefId| {
-      if let Some(existing) = state.interned_def_types.get(&def).copied() {
+      if let Some(existing) = state
+        .interned_def_types
+        .get(&def)
+        .copied()
+        .map(|ty| store.canon(ty))
+      {
         return Some(existing);
       }
       let Some(store_ty) = state.def_types.get(&def).copied() else {
@@ -6714,28 +6819,28 @@ impl ProgramState {
         .collect()
     });
     let mut bind = |name: &str, binding: &SymbolBinding| {
-      let mut def_for_resolver = binding.def;
-      let mut ty = None;
-      if let Some(def) = binding.def {
-        if let Some(defs) = self.callable_overload_defs(def) {
-          if let Some(first) = defs.first().copied() {
-            def_for_resolver = Some(first);
-          }
-          if defs.len() > 1 {
-            if let Some(merged) =
-              self.callable_overload_type_for_def(def, &store, &mut convert_cache)
-            {
-              ty = Some(merged);
+      let mut ty = binding
+        .type_id
+        .map(|ty| self.type_id_in_store(ty, &store, &mut convert_cache));
+      if ty.is_none() {
+        if let Some(def) = binding.def {
+          if let Some(defs) = self.callable_overload_defs(def) {
+            if defs.len() > 1 {
+              if let Some(merged) =
+                self.callable_overload_type_for_def(def, &store, &mut convert_cache)
+              {
+                ty = Some(merged);
+              }
             }
           }
-        }
-        if ty.is_none() {
-          ty = map_def_ty(self, &store, &mut convert_cache, def);
+          if ty.is_none() {
+            ty = map_def_ty(self, &store, &mut convert_cache, def);
+          }
         }
       }
       let ty = ty.unwrap_or_else(|| store.primitive_ids().unknown);
       bindings.insert(name.to_string(), ty);
-      if let Some(def) = def_for_resolver {
+      if let Some(def) = binding.def {
         binding_defs.insert(name.to_string(), def);
       }
     };
@@ -8039,5 +8144,76 @@ fn loc_to_span(file: FileId, loc: Loc) -> Span {
       start: loc.0.min(u32::MAX as usize) as u32,
       end: loc.1.min(u32::MAX as usize) as u32,
     },
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::sync::Arc;
+
+  #[test]
+  fn value_binding_type_id_used_when_def_points_to_type() {
+    let mut host = crate::MemoryHost::default();
+    let source = "namespace Foo { export const value = 123; }\nconst useValue = Foo.value;".to_string();
+    let file = FileKey::new("main.ts");
+    host.insert(file.clone(), Arc::from(source.clone()));
+
+    let program = Program::new(host, vec![file.clone()]);
+    let diagnostics = program.check();
+    assert!(
+      diagnostics.is_empty(),
+      "unexpected diagnostics: {:?}",
+      diagnostics
+    );
+
+    let file_id = program.file_id(&file).expect("file id");
+    {
+      let mut state = program.lock_state();
+      let builtin_any = state.builtin.any;
+      let any_interned = state
+        .interned_store
+        .as_ref()
+        .map(|store| store.primitive_ids().any);
+      let new_def = DefId(state.next_def);
+      state.next_def += 1;
+      let new_symbol = semantic_js::SymbolId(state.next_symbol);
+      state.next_symbol += 1;
+      state.def_data.insert(
+        new_def,
+        DefData {
+          name: "Foo".to_string(),
+          file: file_id,
+          span: TextRange::new(0, 0),
+          symbol: new_symbol,
+          export: false,
+          kind: DefKind::TypeAlias(TypeAliasData {
+            typ: builtin_any,
+          }),
+        },
+      );
+      state.def_types.insert(new_def, builtin_any);
+      if let Some(any) = any_interned {
+        state.interned_def_types.insert(new_def, any);
+      }
+      if let Some(file_state) = state.files.get_mut(&file_id) {
+        file_state.defs.push(new_def);
+        if let Some(binding) = file_state.bindings.get_mut("Foo") {
+          binding.def = Some(new_def);
+          binding.type_id = None;
+        }
+      }
+      state.body_results.clear();
+    }
+
+    let offset = source.rfind("Foo.value").expect("member offset") as u32 + 4;
+    let ty = program
+      .type_at(file_id, offset)
+      .expect("type at namespace access");
+    let display = program.display_type(ty).to_string();
+    assert!(
+      display == "123" || display == "number",
+      "expected namespace value type, got {display}"
+    );
   }
 }
