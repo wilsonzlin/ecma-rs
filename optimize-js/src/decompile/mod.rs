@@ -14,13 +14,15 @@ use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::{BinaryExpr, Expr, IdExpr};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{PatDecl, VarDecl, VarDeclMode, VarDeclarator};
-use parse_js::ast::stmt::{BlockStmt, BreakStmt, ExprStmt, IfStmt, Stmt, WhileStmt};
+use parse_js::ast::stmt::{
+  BlockStmt, BreakStmt, ContinueStmt, ExprStmt, IfStmt, LabelStmt, Stmt, WhileStmt,
+};
 use parse_js::ast::stx::TopLevel;
 use parse_js::loc::Loc;
 use parse_js::num::JsNumber;
 use parse_js::operator::OperatorName;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 pub use foreign::{collect_foreign_bindings, ForeignBinding, ForeignBindings};
 pub use il::{
@@ -66,12 +68,14 @@ pub fn program_to_ast(
 ) -> il::DecompileResult<Node<TopLevel>> {
   let lowered = lower_program(program);
   let control = structure_cfg(&program.top_level.body);
+  let labeled_loops = collect_labeled_loops(&control);
 
   let mut decompiler = FunctionDecompiler::new(
     &program.top_level,
     &lowered.foreign_bindings,
     opts,
     TempDeclScope::TopLevel(program.top_level_mode),
+    labeled_loops,
   );
 
   let temps: Vec<u32> = collect_temps(&program.top_level);
@@ -200,6 +204,17 @@ fn break_stmt(label: Option<String>) -> Node<Stmt> {
   node(Stmt::Break(node(BreakStmt { label })))
 }
 
+fn continue_stmt(label: Option<String>) -> Node<Stmt> {
+  node(Stmt::Continue(node(ContinueStmt { label })))
+}
+
+fn label_stmt(name: String, stmt: Node<Stmt>) -> Node<Stmt> {
+  node(Stmt::Label(node(LabelStmt {
+    name,
+    statement: stmt,
+  })))
+}
+
 fn identifier(name: String) -> Node<Expr> {
   node(Expr::Id(node(IdExpr { name })))
 }
@@ -212,6 +227,7 @@ struct FunctionDecompiler<'a> {
   resolved_style: ResolvedTempDeclStyle,
   decl_mode: VarDeclMode,
   predeclared: bool,
+  loop_labels: HashMap<LoopLabel, String>,
 }
 
 impl<'a> FunctionDecompiler<'a> {
@@ -220,9 +236,20 @@ impl<'a> FunctionDecompiler<'a> {
     bindings: &'a ForeignBindings,
     options: &'a DecompileOptions,
     scope: TempDeclScope,
+    labeled_loops: HashSet<LoopLabel>,
   ) -> Self {
     let mut reserved = collect_reserved_from_cfg(&func.body);
     reserved.extend(bindings.iter().map(|binding| binding.ident.clone()));
+    let mut mangler = NameMangler::new(reserved);
+
+    let mut loop_labels = HashMap::new();
+    let mut labeled_loops: Vec<_> = labeled_loops.into_iter().collect();
+    labeled_loops.sort_unstable();
+    for label in labeled_loops {
+      let name = mangler.fresh("loop");
+      loop_labels.insert(label, name);
+    }
+
     let resolved_style = options.resolve_temp_decl_style(scope);
     let decl_mode = match resolved_style {
       ResolvedTempDeclStyle::Var => VarDeclMode::Var,
@@ -232,11 +259,12 @@ impl<'a> FunctionDecompiler<'a> {
     Self {
       options,
       bindings,
-      mangler: RefCell::new(NameMangler::new(reserved)),
+      mangler: RefCell::new(mangler),
       declared: HashSet::new(),
       resolved_style,
       decl_mode,
       predeclared: false,
+      loop_labels,
     }
   }
 
@@ -545,11 +573,20 @@ impl<'a> FunctionDecompiler<'a> {
   }
 
   fn lower_tree(&mut self, tree: &ControlTree) -> il::DecompileResult<Vec<Node<Stmt>>> {
+    let mut loop_stack = Vec::new();
+    self.lower_tree_with_stack(tree, &mut loop_stack)
+  }
+
+  fn lower_tree_with_stack(
+    &mut self,
+    tree: &ControlTree,
+    loop_stack: &mut Vec<LoopLabel>,
+  ) -> il::DecompileResult<Vec<Node<Stmt>>> {
     match tree {
       ControlTree::Seq(nodes) => {
         let mut out = Vec::new();
         for node in nodes {
-          out.extend(self.lower_tree(node)?);
+          out.extend(self.lower_tree_with_stack(node, loop_stack)?);
         }
         Ok(out)
       }
@@ -563,8 +600,8 @@ impl<'a> FunctionDecompiler<'a> {
       } => {
         let mut out = self.lower_insts(insts)?;
         let test = self.lower_arg(cond)?;
-        let consequent = block_stmt(self.lower_tree(then_t)?);
-        let alt_stmts = self.lower_tree(else_t)?;
+        let consequent = block_stmt(self.lower_tree_with_stack(then_t, loop_stack)?);
+        let alt_stmts = self.lower_tree_with_stack(else_t, loop_stack)?;
         let alternate = (!alt_stmts.is_empty()).then(|| block_stmt(alt_stmts));
         out.push(node(Stmt::If(node(IfStmt {
           test,
@@ -573,21 +610,32 @@ impl<'a> FunctionDecompiler<'a> {
         }))));
         Ok(out)
       }
-      ControlTree::Loop { body, .. } => {
-        let body = block_stmt(self.lower_tree(body)?);
+      ControlTree::Loop {
+        body, loop_label, ..
+      } => {
+        loop_stack.push(*loop_label);
+        let body = block_stmt(self.lower_tree_with_stack(body, loop_stack)?);
+        loop_stack.pop();
+
         let stmt = node(Stmt::While(node(WhileStmt {
           condition: bool_expr(true),
           body,
         })));
-        Ok(vec![stmt])
+        if let Some(label) = self.loop_labels.get(loop_label) {
+          Ok(vec![label_stmt(label.clone(), stmt)])
+        } else {
+          Ok(vec![stmt])
+        }
       }
       ControlTree::Break { target } => match target {
-        BreakTarget::Loop(_) => Ok(vec![break_stmt(None)]),
+        BreakTarget::Loop(label) => Ok(vec![break_stmt(self.loop_labels.get(label).cloned())]),
         BreakTarget::Label(label) => Err(il::DecompileError::Unsupported(format!(
           "break to label {label} is not supported"
         ))),
       },
-      ControlTree::Continue { .. } => Ok(Vec::new()),
+      ControlTree::Continue { target } => {
+        Ok(vec![continue_stmt(self.loop_labels.get(target).cloned())])
+      }
       ControlTree::StateMachine { entry, blocks } => self.lower_state_machine(*entry, blocks),
     }
   }
@@ -615,4 +663,49 @@ impl FnEmitter for FunctionDecompiler<'_> {
   fn emit_function(&self, id: usize) -> Node<Expr> {
     identifier(format!("fn{id}"))
   }
+}
+
+fn collect_labeled_loops(tree: &ControlTree) -> HashSet<LoopLabel> {
+  fn walk(
+    tree: &ControlTree,
+    stack: &mut Vec<LoopLabel>,
+    labeled: &mut HashSet<LoopLabel>,
+  ) {
+    match tree {
+      ControlTree::Seq(nodes) => {
+        for node in nodes {
+          walk(node, stack, labeled);
+        }
+      }
+      ControlTree::Block { .. } => {}
+      ControlTree::If {
+        then_t, else_t, ..
+      } => {
+        walk(then_t, stack, labeled);
+        walk(else_t, stack, labeled);
+      }
+      ControlTree::Loop { loop_label, body, .. } => {
+        stack.push(*loop_label);
+        walk(body, stack, labeled);
+        stack.pop();
+      }
+      ControlTree::Break { target } => {
+        if let BreakTarget::Loop(label) = target {
+          if stack.last().copied() != Some(*label) {
+            labeled.insert(*label);
+          }
+        }
+      }
+      ControlTree::Continue { target } => {
+        if stack.last().copied() != Some(*target) {
+          labeled.insert(*target);
+        }
+      }
+      ControlTree::StateMachine { .. } => {}
+    }
+  }
+
+  let mut labeled = HashSet::new();
+  walk(tree, &mut Vec::new(), &mut labeled);
+  labeled
 }

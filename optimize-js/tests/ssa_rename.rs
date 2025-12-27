@@ -20,7 +20,11 @@ fn phi_inputs_are_added_when_definition_is_missing_on_a_path() {
   bblocks.add(2, vec![]);
   bblocks.add(3, vec![Inst::var_assign(2, Arg::Var(1))]);
 
-  let mut cfg = Cfg { graph, bblocks };
+  let mut cfg = Cfg {
+    graph,
+    bblocks,
+    entry: 0,
+  };
 
   let mut defs = calculate_defs(&cfg);
   let dom = Dom::calculate(&cfg);
@@ -57,7 +61,11 @@ fn trivial_phi_is_pruned_and_uses_are_rewritten() {
     vec![Inst::phi_empty(1), Inst::var_assign(2, Arg::Var(1))],
   );
 
-  let mut cfg = Cfg { graph, bblocks };
+  let mut cfg = Cfg {
+    graph,
+    bblocks,
+    entry: 0,
+  };
 
   let mut defs = calculate_defs(&cfg);
   let dom = Dom::calculate(&cfg);
