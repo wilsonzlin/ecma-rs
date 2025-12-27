@@ -3,10 +3,13 @@ use std::sync::Arc;
 
 use diagnostics::FileId;
 use hir_js::{lower_from_source, Body, BodyId, DefKind, LowerResult, NameId, NameInterner};
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use typecheck_ts::check::caches::CheckerCaches;
 use typecheck_ts::check::flow_bindings::FlowBindings;
-use typecheck_ts::check::hir_body::check_body_with_env;
+use typecheck_ts::check::hir_body::{check_body_with_expander, refine_types_with_flow};
 use typecheck_ts::codes;
-use types_ts_interned::{RelateCtx, TypeStore};
+use typecheck_ts::lib_support::CacheOptions;
+use types_ts_interned::{RelateCtx, RelateHooks, TypeStore};
 
 fn name_id(names: &NameInterner, target: &str) -> NameId {
   let mut clone = names.clone();
@@ -32,25 +35,49 @@ fn run_flow(
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, types_ts_interned::TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
+  let parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse");
+  let caches = CheckerCaches::new(CacheOptions::default()).for_body();
   let flow_bindings = FlowBindings::from_body(body);
-  let initial = initial
+  let hooks = RelateHooks::default();
+  let relate = RelateCtx::with_hooks_and_cache(
+    Arc::clone(store),
+    store.options(),
+    hooks,
+    caches.relation.clone(),
+  );
+  let base_bindings: HashMap<String, types_ts_interned::TypeId> = initial
     .iter()
-    .filter_map(|(name, ty)| {
-      flow_bindings
-        .binding_for_name(*name)
-        .map(|binding| (binding, *ty))
-    })
-    .collect::<HashMap<_, _>>();
-  let relate = RelateCtx::new(Arc::clone(store), store.options());
-  check_body_with_env(
+    .filter_map(|(name, ty)| names.resolve(*name).map(|name| (name.to_string(), *ty)))
+    .collect();
+  let base = check_body_with_expander(
+    body_id,
+    body,
+    names,
+    file,
+    &parsed,
+    Arc::clone(store),
+    &caches,
+    &base_bindings,
+    None,
+    None,
+    None,
+  );
+  refine_types_with_flow(
     body_id,
     body,
     names,
     &flow_bindings,
     file,
-    src,
     Arc::clone(store),
-    &initial,
+    &base,
+    initial,
     relate,
     None,
   )

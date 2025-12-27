@@ -8,9 +8,11 @@ use hir_js::{
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts::locals::{bind_ts_locals, TsLocalSemantics};
+use typecheck_ts::check::caches::CheckerCaches;
 use typecheck_ts::check::flow_bindings::FlowBindings;
-use typecheck_ts::check::hir_body::check_body_with_env;
-use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
+use typecheck_ts::check::hir_body::{check_body_with_expander, refine_types_with_flow};
+use typecheck_ts::lib_support::CacheOptions;
+use types_ts_interned::{RelateCtx, RelateHooks, TypeDisplay, TypeStore};
 
 fn parse_and_lower_with_locals(source: &str) -> (LowerResult, TsLocalSemantics) {
   let mut ast = parse_with_options(
@@ -52,24 +54,48 @@ fn run_flow(
 ) -> typecheck_ts::BodyCheckResult {
   let (body_id, body) = body_of(lowered, &lowered.names, func);
   let flow_bindings = FlowBindings::new(body, locals);
-  let initial = initial
+  let caches = CheckerCaches::new(CacheOptions::default()).for_body();
+  let hooks = RelateHooks::default();
+  let relate = RelateCtx::with_hooks_and_cache(
+    Arc::clone(&store),
+    store.options(),
+    hooks,
+    caches.relation.clone(),
+  );
+  let ast = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse");
+  let base_bindings: HashMap<String, types_ts_interned::TypeId> = initial
     .iter()
-    .filter_map(|(name, ty)| {
-      flow_bindings
-        .binding_for_name(*name)
-        .map(|binding| (binding, *ty))
-    })
-    .collect::<HashMap<_, _>>();
-  let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  check_body_with_env(
+    .filter_map(|(name, ty)| lowered.names.resolve(*name).map(|name| (name.to_string(), *ty)))
+    .collect();
+  let base = check_body_with_expander(
+    body_id,
+    body,
+    &lowered.names,
+    file,
+    &ast,
+    Arc::clone(&store),
+    &caches,
+    &base_bindings,
+    None,
+    None,
+    None,
+  );
+  refine_types_with_flow(
     body_id,
     body,
     &lowered.names,
     &flow_bindings,
     file,
-    src,
     store,
-    &initial,
+    &base,
+    initial,
     relate,
     None,
   )

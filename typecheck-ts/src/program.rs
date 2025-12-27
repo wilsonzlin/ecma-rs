@@ -2729,7 +2729,6 @@ struct ProgramState {
   global_bindings: HashMap<String, SymbolBinding>,
   namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
   diagnostics: Vec<Diagnostic>,
-  symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   type_store: TypeStore,
   interned_store: Option<Arc<tti::TypeStore>>,
   interned_def_types: HashMap<DefId, tti::TypeId>,
@@ -6157,9 +6156,7 @@ impl ProgramState {
     );
     let prim = store.primitive_ids();
     let binding_resolver = (!binding_defs.is_empty()).then(|| {
-      Arc::new(check::hir_body::BindingTypeResolver::new(
-        binding_defs.clone(),
-      )) as Arc<dyn TypeResolver>
+      Arc::new(check::hir_body::BindingTypeResolver::new(binding_defs.clone())) as Arc<dyn TypeResolver>
     });
     let resolver: Option<Arc<dyn TypeResolver>> = self
       .semantics
@@ -6189,31 +6186,28 @@ impl ProgramState {
     );
     if !body.exprs.is_empty() {
       let flow_bindings = check::flow_bindings::FlowBindings::from_body(body);
-      let mut initial_env: HashMap<check::flow_bindings::FlowBindingId, TypeId> = HashMap::new();
+      let mut initial_env: HashMap<hir_js::NameId, TypeId> = HashMap::new();
       if matches!(meta.kind, HirBodyKind::Function) {
         if let Some(function) = body.function.as_ref() {
           for param in function.params.iter() {
-            if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
-              if ty != prim.unknown {
-                if let Some(binding) = flow_bindings.binding_for_pat(param.pat) {
-                  initial_env.insert(binding, ty);
+            if let hir_js::PatKind::Ident(name_id) = body.pats[param.pat.0 as usize].kind {
+              if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
+                if ty != prim.unknown {
+                  initial_env.insert(name_id, ty);
                 }
               }
             }
           }
         }
       }
-      for (idx, expr) in body.exprs.iter().enumerate() {
+      for expr in body.exprs.iter() {
         if let hir_js::ExprKind::Ident(name_id) = expr.kind {
-          let expr_id = hir_js::ExprId(idx as u32);
-          if let Some(binding) = flow_bindings.binding_for_expr(expr_id) {
-            if initial_env.contains_key(&binding) {
-              continue;
-            }
-            if let Some(name) = lowered.names.resolve(name_id) {
-              if let Some(ty) = bindings.get(name) {
-                initial_env.insert(binding, *ty);
-              }
+          if initial_env.contains_key(&name_id) {
+            continue;
+          }
+          if let Some(name) = lowered.names.resolve(name_id) {
+            if let Some(ty) = bindings.get(name) {
+              initial_env.insert(name_id, *ty);
             }
           }
         }
@@ -6227,14 +6221,14 @@ impl ProgramState {
         flow_hooks,
         caches.relation.clone(),
       );
-      let flow_result = check::hir_body::check_body_with_env(
+      let flow_result = check::hir_body::refine_types_with_flow(
         body_id,
         body,
         &lowered.names,
         &flow_bindings,
         file,
-        "",
         Arc::clone(&store),
+        &result,
         &initial_env,
         flow_relate,
         Some(&expander),

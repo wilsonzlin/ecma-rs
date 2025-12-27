@@ -6,8 +6,11 @@ use hir_js::{
   lower_from_source, BinaryOp, Body, BodyId, DefKind, ExprId, ExprKind, LowerResult, NameId,
   NameInterner,
 };
+use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use typecheck_ts::check::caches::CheckerCaches;
 use typecheck_ts::check::flow_bindings::FlowBindings;
-use typecheck_ts::check::hir_body::check_body_with_env as check_body_with_env_impl;
+use typecheck_ts::check::hir_body::{check_body_with_expander, refine_types_with_flow};
+use typecheck_ts::lib_support::CacheOptions;
 use types_ts_interned::{
   DefId, NameId as TypeNameId, Param, PropData, PropKey, Property, RelateCtx, RelateHooks,
   RelateTypeExpander, Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeStore,
@@ -98,28 +101,7 @@ fn check_body_with_env(
   store: Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
-  let flow_bindings = FlowBindings::from_body(body);
-  let initial = initial
-    .iter()
-    .filter_map(|(name, ty)| {
-      flow_bindings
-        .binding_for_name(*name)
-        .map(|binding| (binding, *ty))
-    })
-    .collect::<HashMap<_, _>>();
-  let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  check_body_with_env_impl(
-    body_id,
-    body,
-    names,
-    &flow_bindings,
-    file,
-    src,
-    store,
-    &initial,
-    relate,
-    None,
-  )
+  run_flow(body_id, body, names, file, src, &store, initial, None)
 }
 
 fn run_flow(
@@ -132,27 +114,50 @@ fn run_flow(
   initial: &HashMap<NameId, TypeId>,
   expander: Option<&dyn RelateTypeExpander>,
 ) -> typecheck_ts::BodyCheckResult {
+  let parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse");
+  let caches = CheckerCaches::new(CacheOptions::default()).for_body();
   let flow_bindings = FlowBindings::from_body(body);
-  let initial = initial
-    .iter()
-    .filter_map(|(name, ty)| {
-      flow_bindings
-        .binding_for_name(*name)
-        .map(|binding| (binding, *ty))
-    })
-    .collect::<HashMap<_, _>>();
   let mut hooks = RelateHooks::default();
   hooks.expander = expander;
-  let relate = RelateCtx::with_hooks(Arc::clone(store), store.options(), hooks);
-  check_body_with_env_impl(
+  let relate = RelateCtx::with_hooks_and_cache(
+    Arc::clone(store),
+    store.options(),
+    hooks,
+    caches.relation.clone(),
+  );
+  let base_bindings: HashMap<String, TypeId> = initial
+    .iter()
+    .filter_map(|(name, ty)| names.resolve(*name).map(|name| (name.to_string(), *ty)))
+    .collect();
+  let base = check_body_with_expander(
+    body_id,
+    body,
+    names,
+    file,
+    &parsed,
+    Arc::clone(store),
+    &caches,
+    &base_bindings,
+    None,
+    expander,
+    None,
+  );
+  refine_types_with_flow(
     body_id,
     body,
     names,
     &flow_bindings,
     file,
-    src,
     Arc::clone(store),
-    &initial,
+    &base,
+    initial,
     relate,
     expander,
   )
@@ -294,6 +299,38 @@ fn loose_nullish_comparison_narrows_non_nullish() {
   let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "null | undefined");
+}
+
+#[test]
+fn discriminant_branch_refines_member_type() {
+  let src = r#"
+type Tagged =
+  | { kind: "left"; value: { text: string } }
+  | { kind: "right"; value: { text: number } };
+
+function read(tagged: Tagged) {
+  if (tagged.kind === "left") {
+    return tagged.value.text;
+  } else {
+    return tagged.value.text;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "read");
+  let store = TypeStore::new();
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &HashMap::new(),
+  );
+  let returns = res.return_types();
+  assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "string");
+  assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
 }
 
 #[test]

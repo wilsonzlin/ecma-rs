@@ -2540,21 +2540,26 @@ fn loc_to_range(_file: FileId, loc: Loc) -> TextRange {
   TextRange::new(range.start, range.end)
 }
 
-/// Flow-sensitive body checker built directly on `hir-js` bodies. This is a
-/// lightweight, statement-level analysis that uses a CFG plus a simple lattice
-/// of variable environments to drive narrowing.
-pub fn check_body_with_env(
+/// Flow-sensitive refinement pass built directly on `hir-js` bodies. Takes the
+/// base types produced by the main checker and narrows them using flow facts,
+/// never widening beyond the provided baseline.
+pub fn refine_types_with_flow(
   body_id: BodyId,
   body: &Body,
   names: &NameInterner,
   bindings: &FlowBindings,
   file: FileId,
-  _source: &str,
   store: Arc<TypeStore>,
-  initial: &HashMap<FlowBindingId, TypeId>,
+  base: &BodyCheckResult,
+  initial: &HashMap<NameId, TypeId>,
   relate: RelateCtx,
   ref_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> BodyCheckResult {
+  let initial = initial
+    .iter()
+    .filter_map(|(name, ty)| bindings.binding_for_name(*name).map(|binding| (binding, *ty)))
+    .collect::<HashMap<_, _>>();
+
   let mut checker = FlowBodyChecker::new(
     body_id,
     body,
@@ -2562,11 +2567,11 @@ pub fn check_body_with_env(
     bindings,
     Arc::clone(&store),
     file,
-    initial,
+    base,
     relate,
     ref_expander,
   );
-  checker.run(initial);
+  checker.run(&initial);
   checker.into_result()
 }
 
@@ -2578,6 +2583,7 @@ struct FlowBodyChecker<'a> {
   store: Arc<TypeStore>,
   file: FileId,
   relate: RelateCtx<'a>,
+  base: &'a BodyCheckResult,
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
@@ -2615,20 +2621,18 @@ impl<'a> FlowBodyChecker<'a> {
     bindings: &'a FlowBindings,
     store: Arc<TypeStore>,
     file: FileId,
-    initial: &HashMap<FlowBindingId, TypeId>,
+    base: &'a BodyCheckResult,
     relate: RelateCtx<'a>,
     ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
   ) -> Self {
     let prim = store.primitive_ids();
-    let expr_types = vec![prim.unknown; body.exprs.len()];
+    let mut expr_types = vec![prim.unknown; body.exprs.len()];
+    if base.expr_types.len() == body.exprs.len() {
+      expr_types.clone_from(&base.expr_types);
+    }
     let mut pat_types = vec![prim.unknown; body.pats.len()];
-    for (idx, _pat) in body.pats.iter().enumerate() {
-      let pat_id = PatId(idx as u32);
-      if let Some(binding) = bindings.binding_for_pat(pat_id) {
-        if let Some(ty) = initial.get(&binding) {
-          pat_types[idx] = *ty;
-        }
-      }
+    if base.pat_types.len() == body.pats.len() {
+      pat_types.clone_from(&base.pat_types);
     }
 
     let mut returns: Vec<(StmtId, u32)> = body
@@ -2648,11 +2652,21 @@ impl<'a> FlowBodyChecker<'a> {
     let mut return_types = Vec::new();
     for (idx, (stmt_id, _)) in returns.into_iter().enumerate() {
       return_indices.insert(stmt_id, idx);
-      return_types.push(prim.unknown);
+      if let Some(existing) = base.return_types.get(idx).copied() {
+        return_types.push(existing);
+      } else {
+        return_types.push(prim.unknown);
+      }
     }
 
-    let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
-    let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
+    let mut expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
+    if base.expr_spans.len() == expr_spans.len() {
+      expr_spans.clone_from(&base.expr_spans);
+    }
+    let mut pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
+    if base.pat_spans.len() == pat_spans.len() {
+      pat_spans.clone_from(&base.pat_spans);
+    }
     Self {
       body_id,
       body,
@@ -2661,6 +2675,7 @@ impl<'a> FlowBodyChecker<'a> {
       store,
       file,
       relate,
+      base,
       expr_types,
       pat_types,
       expr_spans,
@@ -2682,6 +2697,106 @@ impl<'a> FlowBodyChecker<'a> {
       pat_spans: self.pat_spans,
       diagnostics: self.diagnostics,
       return_types: self.return_types,
+    }
+  }
+
+  fn base_expr_type(&self, expr: ExprId) -> TypeId {
+    self
+      .base
+      .expr_types
+      .get(expr.0 as usize)
+      .copied()
+      .unwrap_or_else(|| self.store.primitive_ids().unknown)
+  }
+
+  fn base_pat_type(&self, pat: PatId) -> TypeId {
+    self
+      .base
+      .pat_types
+      .get(pat.0 as usize)
+      .copied()
+      .unwrap_or_else(|| self.store.primitive_ids().unknown)
+  }
+
+  fn base_return_type(&self, idx: usize) -> TypeId {
+    self
+      .base
+      .return_types
+      .get(idx)
+      .copied()
+      .unwrap_or_else(|| self.store.primitive_ids().unknown)
+  }
+
+  fn is_unknown(&self, ty: TypeId) -> bool {
+    matches!(self.store.type_kind(ty), TypeKind::Unknown)
+  }
+
+  fn within_baseline(&self, candidate: TypeId, baseline: TypeId) -> bool {
+    self.is_unknown(baseline) || self.relate.is_assignable(candidate, baseline)
+  }
+
+  fn is_narrower(&self, candidate: TypeId, existing: TypeId) -> bool {
+    if self.is_unknown(existing) {
+      !self.is_unknown(candidate)
+    } else {
+      self.relate.is_assignable(candidate, existing) && !self.relate.is_assignable(existing, candidate)
+    }
+  }
+
+  fn refine_slot(&self, slot: &mut TypeId, baseline: TypeId, candidate: TypeId) {
+    if !self.within_baseline(candidate, baseline) {
+      return;
+    }
+    if self.is_narrower(candidate, *slot) {
+      *slot = candidate;
+    }
+  }
+
+  fn refine_expr_slot(&mut self, expr_id: ExprId, candidate: TypeId) {
+    let baseline = self.base_expr_type(expr_id);
+    if let Some(slot) = self.expr_types.get_mut(expr_id.0 as usize) {
+      self.refine_slot(slot, baseline, candidate);
+    }
+  }
+
+  fn refine_pat_slot(&mut self, pat_id: PatId, candidate: TypeId) {
+    let baseline = self.base_pat_type(pat_id);
+    if let Some(slot) = self.pat_types.get_mut(pat_id.0 as usize) {
+      self.refine_slot(slot, baseline, candidate);
+    }
+  }
+
+  fn refine_return_slot(&mut self, idx: usize, candidate: TypeId) {
+    let baseline = self.base_return_type(idx);
+    if let Some(slot) = self.return_types.get_mut(idx) {
+      self.refine_slot(slot, baseline, candidate);
+    }
+  }
+
+  fn constrain_expr_type(&self, expr_id: ExprId, ty: TypeId) -> TypeId {
+    let baseline = self.base_expr_type(expr_id);
+    if self.within_baseline(ty, baseline) {
+      ty
+    } else {
+      baseline
+    }
+  }
+
+  fn constrain_pat_type(&self, pat_id: PatId, ty: TypeId) -> TypeId {
+    let baseline = self.base_pat_type(pat_id);
+    if self.within_baseline(ty, baseline) {
+      ty
+    } else {
+      baseline
+    }
+  }
+
+  fn constrain_return_type(&self, idx: usize, ty: TypeId) -> TypeId {
+    let baseline = self.base_return_type(idx);
+    if self.within_baseline(ty, baseline) {
+      ty
+    } else {
+      baseline
     }
   }
 
@@ -3058,17 +3173,14 @@ impl<'a> FlowBodyChecker<'a> {
       self.return_types.push(prim.unknown);
       self.return_types.len() - 1
     });
-    let slot = self.return_types.get_mut(idx).unwrap();
-    if *slot == prim.unknown {
-      *slot = ty;
-    } else {
-      *slot = self.store.union(vec![*slot, ty]);
-    }
+    let constrained = self.constrain_return_type(idx, ty);
+    self.refine_return_slot(idx, constrained);
   }
 
   fn eval_expr(&mut self, expr_id: ExprId, env: &mut Env) -> (TypeId, Facts) {
     let prim = self.store.primitive_ids();
     let expr = &self.body.exprs[expr_id.0 as usize];
+    let base_ty = self.base_expr_type(expr_id);
     let mut facts = Facts::default();
     let ty = match &expr.kind {
       ExprKind::Ident(name) => {
@@ -3089,48 +3201,74 @@ impl<'a> FlowBodyChecker<'a> {
               },
             ));
           }
-          let ty = self.store.canon(state.ty.unwrap_or(prim.unknown));
+          let ty = self
+            .store
+            .canon(state.ty.unwrap_or(base_ty));
           let (truthy, falsy) = truthy_falsy_types(ty, &self.store);
           facts.truthy.insert(key.clone(), truthy);
           facts.falsy.insert(key, falsy);
           ty
         } else {
-          prim.unknown
+          base_ty
         }
       }
-      ExprKind::Literal(lit) => match lit {
-        hir_js::Literal::Number(num) => self.store.intern_type(TypeKind::NumberLiteral(
-          num.parse::<f64>().unwrap_or(0.0).into(),
-        )),
-        hir_js::Literal::String(s) => self
-          .store
-          .intern_type(TypeKind::StringLiteral(self.store.intern_name(s.clone()))),
-        hir_js::Literal::Boolean(b) => self.store.intern_type(TypeKind::BooleanLiteral(*b)),
-        hir_js::Literal::Null => prim.null,
-        hir_js::Literal::Undefined => prim.undefined,
-        hir_js::Literal::BigInt(v) => self.store.intern_type(TypeKind::BigIntLiteral(
-          v.parse::<i128>().unwrap_or(0).into(),
-        )),
-        hir_js::Literal::Regex(_) => prim.string,
-      },
+      ExprKind::Literal(lit) => {
+        if !self.is_unknown(base_ty) {
+          base_ty
+        } else {
+          match lit {
+            hir_js::Literal::Number(num) => self.store.intern_type(TypeKind::NumberLiteral(
+              num.parse::<f64>().unwrap_or(0.0).into(),
+            )),
+            hir_js::Literal::String(s) => self
+              .store
+              .intern_type(TypeKind::StringLiteral(self.store.intern_name(s.clone()))),
+            hir_js::Literal::Boolean(b) => self.store.intern_type(TypeKind::BooleanLiteral(*b)),
+            hir_js::Literal::Null => prim.null,
+            hir_js::Literal::Undefined => prim.undefined,
+            hir_js::Literal::BigInt(v) => self.store.intern_type(TypeKind::BigIntLiteral(
+              v.parse::<i128>().unwrap_or(0).into(),
+            )),
+            hir_js::Literal::Regex(_) => prim.string,
+          }
+        }
+      }
       ExprKind::Unary { op, expr } => match op {
         UnaryOp::Not => {
           let (_, inner_facts) = self.eval_expr(*expr, env);
           facts.truthy = inner_facts.falsy;
           facts.falsy = inner_facts.truthy;
           facts.assertions = inner_facts.assertions;
-          prim.boolean
+          if self.is_unknown(base_ty) {
+            prim.boolean
+          } else {
+            base_ty
+          }
         }
         UnaryOp::Typeof => {
           let _ = self.eval_expr(*expr, env);
-          prim.string
+          if self.is_unknown(base_ty) {
+            prim.string
+          } else {
+            base_ty
+          }
         }
-        UnaryOp::Void => prim.undefined,
+        UnaryOp::Void => {
+          if self.is_unknown(base_ty) {
+            prim.undefined
+          } else {
+            base_ty
+          }
+        }
         UnaryOp::Plus | UnaryOp::Minus | UnaryOp::BitNot => {
           let _ = self.eval_expr(*expr, env);
-          prim.number
+          if self.is_unknown(base_ty) {
+            prim.number
+          } else {
+            base_ty
+          }
         }
-        _ => prim.unknown,
+        _ => base_ty,
       },
       ExprKind::Update { expr, .. } => {
         let operand_ty = self.eval_expr(*expr, env).0;
@@ -3154,7 +3292,11 @@ impl<'a> FlowBodyChecker<'a> {
         | BinaryOp::StrictEquality
         | BinaryOp::StrictInequality => {
           self.eval_equality(*op, *left, *right, env, &mut facts);
-          prim.boolean
+          if self.is_unknown(base_ty) {
+            prim.boolean
+          } else {
+            base_ty
+          }
         }
         BinaryOp::LessThan
         | BinaryOp::LessEqual
@@ -3162,19 +3304,27 @@ impl<'a> FlowBodyChecker<'a> {
         | BinaryOp::GreaterEqual => {
           let _ = self.eval_expr(*left, env);
           let _ = self.eval_expr(*right, env);
-          prim.boolean
+          if self.is_unknown(base_ty) {
+            prim.boolean
+          } else {
+            base_ty
+          }
         }
         BinaryOp::Add => {
           let (l_ty, _) = self.eval_expr(*left, env);
           let (r_ty, _) = self.eval_expr(*right, env);
-          match (self.store.type_kind(l_ty), self.store.type_kind(r_ty)) {
-            (TypeKind::String | TypeKind::StringLiteral(_), _)
-            | (_, TypeKind::String | TypeKind::StringLiteral(_)) => prim.string,
-            (
-              TypeKind::Number | TypeKind::NumberLiteral(_),
-              TypeKind::Number | TypeKind::NumberLiteral(_),
-            ) => prim.number,
-            _ => self.store.union(vec![l_ty, r_ty]),
+          if self.is_unknown(base_ty) {
+            match (self.store.type_kind(l_ty), self.store.type_kind(r_ty)) {
+              (TypeKind::String | TypeKind::StringLiteral(_), _)
+              | (_, TypeKind::String | TypeKind::StringLiteral(_)) => prim.string,
+              (
+                TypeKind::Number | TypeKind::NumberLiteral(_),
+                TypeKind::Number | TypeKind::NumberLiteral(_),
+              ) => prim.number,
+              _ => self.store.union(vec![l_ty, r_ty]),
+            }
+          } else {
+            base_ty
           }
         }
         BinaryOp::Subtract
@@ -3190,7 +3340,11 @@ impl<'a> FlowBodyChecker<'a> {
         | BinaryOp::BitXor => {
           let _ = self.eval_expr(*left, env);
           let _ = self.eval_expr(*right, env);
-          prim.number
+          if self.is_unknown(base_ty) {
+            prim.number
+          } else {
+            base_ty
+          }
         }
         BinaryOp::Instanceof => {
           let left_expr = *left;
@@ -3207,7 +3361,11 @@ impl<'a> FlowBodyChecker<'a> {
             facts.truthy.insert(target.path.clone(), yes);
             facts.falsy.insert(target.path, no);
           }
-          prim.boolean
+          if self.is_unknown(base_ty) {
+            prim.boolean
+          } else {
+            base_ty
+          }
         }
         BinaryOp::In => {
           let _ = self.eval_expr(*left, env);
@@ -3219,11 +3377,19 @@ impl<'a> FlowBodyChecker<'a> {
             facts.truthy.insert(target.path.clone(), yes);
             facts.falsy.insert(target.path, no);
           }
-          prim.boolean
+          if self.is_unknown(base_ty) {
+            prim.boolean
+          } else {
+            base_ty
+          }
         }
         BinaryOp::Comma => {
           let _ = self.eval_expr(*left, env);
-          self.eval_expr(*right, env).0
+          if self.is_unknown(base_ty) {
+            self.eval_expr(*right, env).0
+          } else {
+            base_ty
+          }
         }
       },
       ExprKind::Assignment { op, target, value } => {
@@ -3263,7 +3429,7 @@ impl<'a> FlowBodyChecker<'a> {
       }
       ExprKind::Call(call) => {
         let ret_ty = self.eval_call(call, env, &mut facts);
-        let mut ty = ret_ty;
+        let mut ty = if self.is_unknown(base_ty) { ret_ty } else { base_ty };
         if call.optional {
           if let Some(base) = self.optional_chain_root(call.callee) {
             let base_ty = env
@@ -3339,21 +3505,64 @@ impl<'a> FlowBodyChecker<'a> {
         } else {
           self.store.union(elem_tys)
         };
-        self.store.intern_type(TypeKind::Array {
-          ty: elem_ty,
-          readonly: false,
-        })
+        if self.is_unknown(base_ty) {
+          self.store.intern_type(TypeKind::Array {
+            ty: elem_ty,
+            readonly: false,
+          })
+        } else {
+          base_ty
+        }
       }
-      ExprKind::Object(obj) => self.object_type(obj, env),
-      ExprKind::FunctionExpr { .. } => prim.unknown,
-      ExprKind::ClassExpr { .. } => prim.unknown,
-      ExprKind::Template(_) => prim.string,
-      ExprKind::TaggedTemplate { .. } => prim.unknown,
-      ExprKind::Await { expr } => self.eval_expr(*expr, env).0,
-      ExprKind::Yield { expr, .. } => expr
-        .map(|id| self.eval_expr(id, env).0)
-        .unwrap_or(prim.undefined),
-      ExprKind::TypeAssertion { expr } => self.eval_expr(*expr, env).0,
+      ExprKind::Object(obj) => {
+        if self.is_unknown(base_ty) {
+          self.object_type(obj, env)
+        } else {
+          base_ty
+        }
+      }
+      ExprKind::FunctionExpr { .. } => base_ty,
+      ExprKind::ClassExpr { .. } => base_ty,
+      ExprKind::Template(_) => {
+        if self.is_unknown(base_ty) {
+          prim.string
+        } else {
+          base_ty
+        }
+      }
+      ExprKind::TaggedTemplate { .. } => {
+        if self.is_unknown(base_ty) {
+          prim.unknown
+        } else {
+          base_ty
+        }
+      }
+      ExprKind::Await { expr } => {
+        let awaited = self.eval_expr(*expr, env).0;
+        if self.is_unknown(base_ty) {
+          awaited
+        } else {
+          base_ty
+        }
+      }
+      ExprKind::Yield { expr, .. } => {
+        let yielded = expr
+          .map(|id| self.eval_expr(id, env).0)
+          .unwrap_or(prim.undefined);
+        if self.is_unknown(base_ty) {
+          yielded
+        } else {
+          base_ty
+        }
+      }
+      ExprKind::TypeAssertion { expr } => {
+        let inner = self.eval_expr(*expr, env).0;
+        if self.is_unknown(base_ty) {
+          inner
+        } else {
+          base_ty
+        }
+      }
       ExprKind::NonNull { expr } => {
         let inner_ty = self.eval_expr(*expr, env).0;
         let (_, nonnull) = narrow_by_nullish_equality(
@@ -3371,15 +3580,11 @@ impl<'a> FlowBodyChecker<'a> {
         self.widen_object_literals = prev;
         ty
       }
-      _ => prim.unknown,
+      _ => base_ty,
     };
 
-    let slot = &mut self.expr_types[expr_id.0 as usize];
-    *slot = if *slot == prim.unknown {
-      ty
-    } else {
-      self.store.union(vec![*slot, ty])
-    };
+    let ty = self.constrain_expr_type(expr_id, ty);
+    self.refine_expr_slot(expr_id, ty);
     (ty, facts)
   }
 
@@ -4010,13 +4215,9 @@ impl<'a> FlowBodyChecker<'a> {
   ) {
     let pat = &self.body.pats[pat_id.0 as usize];
     let prim = self.store.primitive_ids();
-    let write_ty = self.apply_binding_mode(value_ty, mode);
-    let slot = &mut self.pat_types[pat_id.0 as usize];
-    *slot = if *slot == prim.unknown {
-      write_ty
-    } else {
-      self.store.union(vec![*slot, write_ty])
-    };
+    let mut write_ty = self.apply_binding_mode(value_ty, mode);
+    write_ty = self.constrain_pat_type(pat_id, write_ty);
+    self.refine_pat_slot(pat_id, write_ty);
     match &pat.kind {
       PatKind::Ident(_) => {
         if let Some(binding) = self.bindings.binding_for_pat(pat_id) {
@@ -4090,7 +4291,7 @@ impl<'a> FlowBodyChecker<'a> {
       }
       PatKind::AssignTarget(expr) => {
         if let Some(path) = self.access_path_info(*expr) {
-          env.set_path_with_assigned(path.path, value_ty, assigned);
+          env.set_path_with_assigned(path.path, write_ty, assigned);
         } else if let Some(root) = self.access_path_root(*expr) {
           env.invalidate_prefix(&FlowKey::root(root));
         } else {

@@ -254,9 +254,7 @@ pub mod body_check {
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
   use crate::check::caches::CheckerCaches;
-  use crate::check::hir_body::{
-    check_body_with_env, check_body_with_expander, BindingTypeResolver,
-  };
+  use crate::check::hir_body::{refine_types_with_flow, check_body_with_expander, BindingTypeResolver};
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
   use crate::lib_support::{CacheMode, CacheOptions};
@@ -594,30 +592,26 @@ pub mod body_check {
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
         let flow_bindings = crate::check::flow_bindings::FlowBindings::from_body(body);
-        let mut initial_env: HashMap<crate::check::flow_bindings::FlowBindingId, TypeId> =
-          HashMap::new();
+        let mut initial_env: HashMap<hir_js::NameId, TypeId> = HashMap::new();
         if let Some(function) = body.function.as_ref() {
           for param in function.params.iter() {
-            if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
-              if ty != prim.unknown {
-                if let Some(binding) = flow_bindings.binding_for_pat(param.pat) {
-                  initial_env.insert(binding, ty);
+            if let hir_js::PatKind::Ident(name_id) = body.pats[param.pat.0 as usize].kind {
+              if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
+                if ty != prim.unknown {
+                  initial_env.insert(name_id, ty);
                 }
               }
             }
           }
         }
-        for (idx, expr) in body.exprs.iter().enumerate() {
+        for expr in body.exprs.iter() {
           if let hir_js::ExprKind::Ident(name_id) = expr.kind {
-            let expr_id = hir_js::ExprId(idx as u32);
-            if let Some(binding) = flow_bindings.binding_for_expr(expr_id) {
-              if initial_env.contains_key(&binding) {
-                continue;
-              }
-              if let Some(name) = lowered.names.resolve(name_id) {
-                if let Some(ty) = bindings.get(name) {
-                  initial_env.insert(binding, *ty);
-                }
+            if initial_env.contains_key(&name_id) {
+              continue;
+            }
+            if let Some(name) = lowered.names.resolve(name_id) {
+              if let Some(ty) = bindings.get(name) {
+                initial_env.insert(name_id, *ty);
               }
             }
           }
@@ -630,14 +624,14 @@ pub mod body_check {
           flow_hooks,
           caches.relation.clone(),
         );
-        let flow_result = check_body_with_env(
+        let flow_result = refine_types_with_flow(
           body_id,
           body,
           &lowered.names,
           &flow_bindings,
           meta.file,
-          "",
           Arc::clone(&ctx.store),
+          &result,
           &initial_env,
           flow_relate,
           Some(&expander),
