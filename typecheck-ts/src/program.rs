@@ -6303,6 +6303,71 @@ impl ProgramState {
     )) as Arc<_>)
   }
 
+  fn function_expr_span(&self, body_id: BodyId) -> Option<TextRange> {
+    let mut visited = HashSet::new();
+    let mut current = self.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let Some(meta) = self.body_map.get(&parent) else {
+        current = self.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(hir_body_id) = meta.hir else {
+        current = self.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(lowered) = self.hir_lowered.get(&meta.file) else {
+        current = self.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(parent_body) = lowered.body(hir_body_id) else {
+        current = self.body_parents.get(&parent).copied();
+        continue;
+      };
+      for expr in parent_body.exprs.iter() {
+        if let HirExprKind::FunctionExpr { body, .. } = expr.kind {
+          if body == body_id {
+            return Some(expr.span);
+          }
+        }
+      }
+      current = self.body_parents.get(&parent).copied();
+    }
+    None
+  }
+
+  fn contextual_callable_for_body(
+    &mut self,
+    body_id: BodyId,
+    func_span: TextRange,
+    store: &Arc<tti::TypeStore>,
+  ) -> Result<Option<TypeId>, FatalError> {
+    let mut visited = HashSet::new();
+    let mut current = self.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let parent_result = self.check_body(parent)?;
+      for (idx, span) in parent_result.expr_spans.iter().enumerate() {
+        if *span != func_span {
+          continue;
+        }
+        if let Some(ty) = parent_result.expr_types.get(idx).copied() {
+          if store.contains_type_id(ty)
+            && matches!(store.type_kind(ty), tti::TypeKind::Callable { .. })
+          {
+            return Ok(Some(ty));
+          }
+        }
+      }
+      current = self.body_parents.get(&parent).copied();
+    }
+    Ok(None)
+  }
+
   fn check_body(&mut self, body_id: BodyId) -> Result<Arc<BodyCheckResult>, FatalError> {
     self.check_cancelled()?;
     let _parallel_guard = db::queries::body_check::parallel_guard();
@@ -6529,6 +6594,16 @@ impl ProgramState {
       return Err(err);
     }
 
+    let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
+      if let Some(func_span) = self.function_expr_span(body_id) {
+        self.contextual_callable_for_body(body_id, func_span, &store)?
+      } else {
+        None
+      }
+    } else {
+      None
+    };
+
     let caches = self.checker_caches.for_body();
     let expander = RefExpander::new(
       Arc::clone(&store),
@@ -6571,6 +6646,7 @@ impl ProgramState {
       &bindings,
       resolver,
       Some(&expander),
+      contextual_fn_ty,
     );
     if !body.exprs.is_empty() {
       let mut initial_env: HashMap<NameId, TypeId> = HashMap::new();

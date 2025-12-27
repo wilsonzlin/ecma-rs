@@ -414,7 +414,7 @@ pub fn check_body(
   resolver: Option<Arc<dyn TypeResolver>>,
 ) -> BodyCheckResult {
   check_body_with_expander(
-    body_id, body, names, file, ast, store, caches, bindings, resolver, None,
+    body_id, body, names, file, ast, store, caches, bindings, resolver, None, None,
   )
 }
 
@@ -432,6 +432,7 @@ pub fn check_body_with_expander(
   bindings: &HashMap<String, TypeId>,
   resolver: Option<Arc<dyn TypeResolver>>,
   relate_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
+  contextual_fn_ty: Option<TypeId>,
 ) -> BodyCheckResult {
   let prim = store.primitive_ids();
   let expr_types = vec![prim.unknown; body.exprs.len()];
@@ -495,6 +496,7 @@ pub fn check_body_with_expander(
     widen_object_literals: true,
     file,
     ref_expander: relate_expander,
+    contextual_fn_ty,
     _names: names,
     _bump: Bump::new(),
   };
@@ -558,6 +560,7 @@ struct Checker<'a> {
   widen_object_literals: bool,
   file: FileId,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
+  contextual_fn_ty: Option<TypeId>,
   _names: &'a NameInterner,
   _bump: Bump,
 }
@@ -616,13 +619,16 @@ impl<'a> Checker<'a> {
         has_type_params = true;
         type_param_decls = self.lower_type_params(params);
       }
-      self.expected_return = func
+      let contextual_sig = self.contextual_signature();
+      let annotated_return = func
         .func
         .stx
         .return_type
         .as_ref()
         .map(|ret| self.lowerer.lower_type_expr(ret));
-      self.bind_params(func.func, &type_param_decls);
+      self.expected_return =
+        annotated_return.or_else(|| contextual_sig.as_ref().map(|sig| sig.ret));
+      self.bind_params(func.func, &type_param_decls, contextual_sig.as_ref());
       self.check_function_body(func.func);
       if has_type_params {
         self.lowerer.pop_type_param_scope();
@@ -664,8 +670,14 @@ impl<'a> Checker<'a> {
     false
   }
 
-  fn bind_params(&mut self, func: &Node<Func>, type_param_decls: &[TypeParamDecl]) {
-    for param in func.stx.parameters.iter() {
+  fn bind_params(
+    &mut self,
+    func: &Node<Func>,
+    type_param_decls: &[TypeParamDecl],
+    contextual_sig: Option<&Signature>,
+  ) {
+    let prim = self.store.primitive_ids();
+    for (idx, param) in func.stx.parameters.iter().enumerate() {
       let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
       let annotation = param
         .stx
@@ -673,7 +685,10 @@ impl<'a> Checker<'a> {
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
       let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
-      let mut ty = annotation.unwrap_or(self.store.primitive_ids().unknown);
+      let contextual_param_ty = contextual_sig
+        .and_then(|sig| sig.params.get(idx))
+        .map(|param| param.ty);
+      let mut ty = annotation.or(contextual_param_ty).unwrap_or(prim.unknown);
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
       }
@@ -722,6 +737,14 @@ impl<'a> Checker<'a> {
         self.return_types.push(ty);
       }
       None => {}
+    }
+  }
+
+  fn contextual_signature(&self) -> Option<Signature> {
+    let ty = self.contextual_fn_ty?;
+    match self.store.type_kind(ty) {
+      TypeKind::Callable { overloads } => overloads.first().map(|sig| self.store.signature(*sig)),
+      _ => None,
     }
   }
 
