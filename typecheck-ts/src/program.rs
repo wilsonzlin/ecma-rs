@@ -2270,6 +2270,8 @@ impl SemHirBuilder {
       specifier,
       is_type_only,
       specifier_span,
+      alias: None,
+      alias_span: None,
     }));
   }
 

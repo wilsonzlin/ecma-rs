@@ -1,5 +1,10 @@
+use crate::hir::ClassMemberAccessibility;
+use crate::hir::ClassMemberSig;
+use crate::hir::ClassMemberSigKind;
 use crate::hir::ConditionalType;
 use crate::hir::DefTypeInfo;
+use crate::hir::EnumMemberInfo;
+use crate::hir::EnumMemberValue;
 use crate::hir::PropertyName;
 use crate::hir::TypeArenas;
 use crate::hir::TypeArray;
@@ -38,12 +43,19 @@ use crate::intern::NameInterner;
 use crate::lower::LoweringContext;
 use crate::span_map::SpanMap;
 use diagnostics::TextRange;
+use parse_js::ast::class_or_object::*;
+use parse_js::ast::expr::ClassExpr as AstClassExpr;
+use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::ImportExpr;
+use parse_js::ast::func::Func;
 use parse_js::ast::node::Node;
+use parse_js::ast::stmt::decl::{ClassDecl, ParamDecl};
 use parse_js::ast::ts_stmt::InterfaceDecl;
 use parse_js::ast::ts_stmt::TypeAliasDecl;
+use parse_js::ast::ts_stmt::{AmbientClassDecl, EnumDecl};
 use parse_js::ast::type_expr::*;
+use parse_js::token::TT;
 use std::collections::{HashMap, HashSet};
 
 pub(crate) struct TypeLowerer<'a> {
@@ -102,6 +114,82 @@ impl<'a> TypeLowerer<'a> {
       extends,
       members,
     }
+  }
+
+  pub fn lower_class_decl(&mut self, decl: &Node<ClassDecl>) -> DefTypeInfo {
+    let type_params = self.lower_type_params(decl.stx.type_parameters.as_deref());
+    let extends = decl
+      .stx
+      .extends
+      .as_ref()
+      .map(|base| self.lower_heritage_expr(base));
+    let implements = decl
+      .stx
+      .implements
+      .iter()
+      .map(|imp| self.lower_heritage_expr(imp))
+      .collect();
+    let members = self.lower_class_members(&decl.stx.members);
+    DefTypeInfo::Class {
+      type_params,
+      extends,
+      implements,
+      members,
+    }
+  }
+
+  pub fn lower_class_expr(&mut self, expr: &Node<AstClassExpr>) -> DefTypeInfo {
+    let type_params = self.lower_type_params(expr.stx.type_parameters.as_deref());
+    let extends = expr
+      .stx
+      .extends
+      .as_ref()
+      .map(|base| self.lower_heritage_expr(base));
+    let implements = expr
+      .stx
+      .implements
+      .iter()
+      .map(|imp| self.lower_type_expr(imp))
+      .collect();
+    let members = self.lower_class_members(&expr.stx.members);
+    DefTypeInfo::Class {
+      type_params,
+      extends,
+      implements,
+      members,
+    }
+  }
+
+  pub fn lower_ambient_class(&mut self, decl: &Node<AmbientClassDecl>) -> DefTypeInfo {
+    let type_params = self.lower_type_params(decl.stx.type_parameters.as_deref());
+    let extends = decl
+      .stx
+      .extends
+      .as_ref()
+      .map(|base| self.lower_type_expr(base));
+    let implements = decl
+      .stx
+      .implements
+      .iter()
+      .map(|imp| self.lower_type_expr(imp))
+      .collect();
+    let members = self.lower_type_member_signatures(&decl.stx.members);
+    DefTypeInfo::Class {
+      type_params,
+      extends,
+      implements,
+      members,
+    }
+  }
+
+  pub fn lower_enum(&mut self, decl: &Node<EnumDecl>) -> DefTypeInfo {
+    let members = decl
+      .stx
+      .members
+      .iter()
+      .map(|member| self.lower_enum_member(member))
+      .collect();
+    DefTypeInfo::Enum { members }
   }
 
   pub fn lower_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeExprId {
@@ -376,6 +464,402 @@ impl<'a> TypeLowerer<'a> {
       is_infer: true,
     };
     self.alloc_type_param(param)
+  }
+
+  fn lower_class_members(&mut self, members: &[Node<ClassMember>]) -> Vec<ClassMemberSig> {
+    let mut lowered = Vec::new();
+    for member in members.iter() {
+      let span = self.ctx.to_range(member.loc);
+      let accessibility = self.lower_member_accessibility(member.stx.accessibility);
+      let static_ = member.stx.static_;
+      let readonly = member.stx.readonly;
+      let optional = member.stx.optional;
+      match &member.stx.val {
+        ClassOrObjVal::Prop(_) => {
+          let name = self.lower_class_member_name(&member.stx.key);
+          let type_annotation = member
+            .stx
+            .type_annotation
+            .as_ref()
+            .map(|ty| self.lower_type_expr(ty));
+          lowered.push(ClassMemberSig {
+            span,
+            static_,
+            accessibility,
+            readonly,
+            optional,
+            kind: ClassMemberSigKind::Field {
+              name,
+              type_annotation,
+            },
+          });
+        }
+        ClassOrObjVal::Method(method) => {
+          let signature = self.lower_method_signature_from_func(&method.stx.func);
+          let name = self.lower_class_member_name(&member.stx.key);
+          let is_constructor = !static_ && self.is_constructor_name(&name);
+          let kind = if is_constructor {
+            ClassMemberSigKind::Constructor(signature)
+          } else {
+            ClassMemberSigKind::Method { name, signature }
+          };
+          lowered.push(ClassMemberSig {
+            span,
+            static_,
+            accessibility,
+            readonly,
+            optional,
+            kind,
+          });
+        }
+        ClassOrObjVal::Getter(get) => {
+          let name = self.lower_class_member_name(&member.stx.key);
+          let return_type = get
+            .stx
+            .func
+            .stx
+            .return_type
+            .as_ref()
+            .map(|ret| self.lower_type_expr(ret));
+          lowered.push(ClassMemberSig {
+            span,
+            static_,
+            accessibility,
+            readonly,
+            optional,
+            kind: ClassMemberSigKind::Getter { name, return_type },
+          });
+        }
+        ClassOrObjVal::Setter(set) => {
+          let name = self.lower_class_member_name(&member.stx.key);
+          let parameter = set
+            .stx
+            .func
+            .stx
+            .parameters
+            .get(0)
+            .map(|param| self.lower_param_decl(param))
+            .unwrap_or_else(|| TypeFnParam {
+              name: None,
+              ty: self.alloc_type_expr(span, TypeExprKind::Any),
+              optional: false,
+              rest: false,
+            });
+          lowered.push(ClassMemberSig {
+            span,
+            static_,
+            accessibility,
+            readonly,
+            optional,
+            kind: ClassMemberSigKind::Setter { name, parameter },
+          });
+        }
+        ClassOrObjVal::IndexSignature(sig) => {
+          let signature = self.lower_class_index_signature(sig, readonly);
+          lowered.push(ClassMemberSig {
+            span,
+            static_,
+            accessibility,
+            readonly,
+            optional,
+            kind: ClassMemberSigKind::IndexSignature(signature),
+          });
+        }
+        ClassOrObjVal::StaticBlock(_) => {}
+      }
+    }
+    lowered
+  }
+
+  fn lower_type_member_signatures(&mut self, members: &[Node<TypeMember>]) -> Vec<ClassMemberSig> {
+    let mut lowered = Vec::new();
+    for member in members.iter() {
+      let span = self.ctx.to_range(member.loc);
+      match &*member.stx {
+        TypeMember::Property(prop) => {
+          lowered.push(ClassMemberSig {
+            span,
+            static_: false,
+            accessibility: None,
+            readonly: prop.stx.readonly,
+            optional: prop.stx.optional,
+            kind: ClassMemberSigKind::Field {
+              name: self.lower_property_name(&prop.stx.key),
+              type_annotation: prop
+                .stx
+                .type_annotation
+                .as_ref()
+                .map(|t| self.lower_type_expr(t)),
+            },
+          });
+        }
+        TypeMember::Method(method) => {
+          let signature = self.lower_method_signature(method);
+          lowered.push(ClassMemberSig {
+            span,
+            static_: false,
+            accessibility: None,
+            readonly: false,
+            optional: method.stx.optional,
+            kind: ClassMemberSigKind::Method {
+              name: self.lower_property_name(&method.stx.key),
+              signature: HirTypeSignature {
+                type_params: signature.type_params,
+                params: signature.params,
+                return_type: signature.return_type,
+              },
+            },
+          });
+        }
+        TypeMember::Constructor(cons) => {
+          let signature = self.lower_type_signature(
+            cons.stx.type_parameters.as_deref(),
+            &cons.stx.parameters,
+            cons.stx.return_type.as_ref(),
+          );
+          lowered.push(ClassMemberSig {
+            span,
+            static_: false,
+            accessibility: None,
+            readonly: false,
+            optional: false,
+            kind: ClassMemberSigKind::Constructor(signature),
+          });
+        }
+        TypeMember::CallSignature(call) => {
+          let signature = self.lower_type_signature(
+            call.stx.type_parameters.as_deref(),
+            &call.stx.parameters,
+            call.stx.return_type.as_ref(),
+          );
+          lowered.push(ClassMemberSig {
+            span,
+            static_: false,
+            accessibility: None,
+            readonly: false,
+            optional: false,
+            kind: ClassMemberSigKind::CallSignature(signature),
+          });
+        }
+        TypeMember::IndexSignature(sig) => {
+          let signature = self.lower_index_signature(sig);
+          lowered.push(ClassMemberSig {
+            span,
+            static_: false,
+            accessibility: None,
+            readonly: sig.stx.readonly,
+            optional: false,
+            kind: ClassMemberSigKind::IndexSignature(signature),
+          });
+        }
+        TypeMember::GetAccessor(get) => {
+          let sig = self.lower_get_accessor(get);
+          lowered.push(ClassMemberSig {
+            span,
+            static_: false,
+            accessibility: None,
+            readonly: false,
+            optional: false,
+            kind: ClassMemberSigKind::Getter {
+              name: sig.name,
+              return_type: sig.return_type,
+            },
+          });
+        }
+        TypeMember::SetAccessor(set) => {
+          let sig = self.lower_set_accessor(set);
+          lowered.push(ClassMemberSig {
+            span,
+            static_: false,
+            accessibility: None,
+            readonly: false,
+            optional: false,
+            kind: ClassMemberSigKind::Setter {
+              name: sig.name,
+              parameter: sig.parameter,
+            },
+          });
+        }
+        TypeMember::MappedProperty(mapped) => {
+          let mapped = self.lower_mapped_type(mapped);
+          let mapped_id = self.alloc_type_expr(span, TypeExprKind::Mapped(mapped));
+          lowered.push(ClassMemberSig {
+            span,
+            static_: false,
+            accessibility: None,
+            readonly: false,
+            optional: false,
+            kind: ClassMemberSigKind::Field {
+              name: PropertyName::Computed,
+              type_annotation: Some(mapped_id),
+            },
+          });
+        }
+      }
+    }
+    lowered
+  }
+
+  fn lower_enum_member(
+    &mut self,
+    member: &Node<parse_js::ast::ts_stmt::EnumMember>,
+  ) -> EnumMemberInfo {
+    let name = self.names.intern(&member.stx.name);
+    let span = self.ctx.to_range(member.loc);
+    let value = match &member.stx.initializer {
+      Some(init) => match &*init.stx {
+        AstExpr::LitNum(_) => EnumMemberValue::Number,
+        AstExpr::LitStr(_) => EnumMemberValue::String,
+        _ => EnumMemberValue::Computed,
+      },
+      None => EnumMemberValue::Number,
+    };
+    EnumMemberInfo { name, span, value }
+  }
+
+  fn lower_member_accessibility(
+    &self,
+    accessibility: Option<parse_js::ast::stmt::decl::Accessibility>,
+  ) -> Option<ClassMemberAccessibility> {
+    accessibility.map(|acc| match acc {
+      parse_js::ast::stmt::decl::Accessibility::Public => ClassMemberAccessibility::Public,
+      parse_js::ast::stmt::decl::Accessibility::Protected => ClassMemberAccessibility::Protected,
+      parse_js::ast::stmt::decl::Accessibility::Private => ClassMemberAccessibility::Private,
+    })
+  }
+
+  fn lower_class_member_name(&mut self, key: &ClassOrObjKey) -> PropertyName {
+    match key {
+      ClassOrObjKey::Direct(direct) => match direct.stx.tt {
+        TT::LiteralString | TT::LiteralTemplatePartString | TT::LiteralTemplatePartStringEnd => {
+          PropertyName::String(direct.stx.key.clone())
+        }
+        TT::LiteralNumber | TT::LiteralNumberBin | TT::LiteralNumberHex | TT::LiteralNumberOct => {
+          PropertyName::Number(direct.stx.key.clone())
+        }
+        _ => PropertyName::Ident(self.names.intern(&direct.stx.key)),
+      },
+      ClassOrObjKey::Computed(_) => PropertyName::Computed,
+    }
+  }
+
+  fn lower_method_signature_from_func(&mut self, func: &Node<Func>) -> HirTypeSignature {
+    let type_params = self.lower_type_params(func.stx.type_parameters.as_deref());
+    let params = func
+      .stx
+      .parameters
+      .iter()
+      .map(|p| self.lower_param_decl(p))
+      .collect();
+    let return_type = func
+      .stx
+      .return_type
+      .as_ref()
+      .map(|ret| self.lower_type_expr(ret));
+    HirTypeSignature {
+      type_params,
+      params,
+      return_type,
+    }
+  }
+
+  fn lower_param_decl(&mut self, param: &Node<ParamDecl>) -> TypeFnParam {
+    let name = match &*param.stx.pattern.stx.pat.stx {
+      parse_js::ast::expr::pat::Pat::Id(id) => Some(self.names.intern(&id.stx.name)),
+      _ => None,
+    };
+    let ty = if let Some(annotation) = param.stx.type_annotation.as_ref() {
+      self.lower_type_expr(annotation)
+    } else {
+      let span = self.ctx.to_range(param.loc);
+      self.alloc_type_expr(span, TypeExprKind::Any)
+    };
+    TypeFnParam {
+      name,
+      ty,
+      optional: param.stx.optional,
+      rest: param.stx.rest,
+    }
+  }
+
+  fn lower_class_index_signature(
+    &mut self,
+    sig: &Node<ClassIndexSignature>,
+    readonly: bool,
+  ) -> HirTypeIndexSignature {
+    HirTypeIndexSignature {
+      readonly,
+      parameter_name: self.names.intern(&sig.stx.parameter_name),
+      parameter_type: self.lower_type_expr(&sig.stx.parameter_type),
+      type_annotation: self.lower_type_expr(&sig.stx.type_annotation),
+    }
+  }
+
+  fn lower_heritage_expr(&mut self, expr: &Node<AstExpr>) -> TypeExprId {
+    let span = self.ctx.to_range(expr.loc);
+    if let Some(name) = self.type_name_from_expr(expr) {
+      self.alloc_type_expr(
+        span,
+        TypeExprKind::TypeRef(TypeRef {
+          name,
+          type_args: Vec::new(),
+        }),
+      )
+    } else {
+      self.warn_heritage(
+        span,
+        "heritage clause expression could not be lowered; using `any`",
+      );
+      self.alloc_type_expr(span, TypeExprKind::Any)
+    }
+  }
+
+  fn type_name_from_expr(&mut self, expr: &Node<AstExpr>) -> Option<TypeName> {
+    match &*expr.stx {
+      AstExpr::Id(id) => Some(TypeName::Ident(self.names.intern(&id.stx.name))),
+      AstExpr::Member(member) if !member.stx.optional_chaining => {
+        let mut parts = Vec::new();
+        if self.collect_member_path(&member.stx.left, &mut parts) {
+          parts.push(self.names.intern(&member.stx.right));
+          if parts.len() == 1 {
+            Some(TypeName::Ident(parts[0]))
+          } else {
+            Some(TypeName::Qualified(parts))
+          }
+        } else {
+          None
+        }
+      }
+      _ => None,
+    }
+  }
+
+  fn collect_member_path(&mut self, expr: &Node<AstExpr>, acc: &mut Vec<NameId>) -> bool {
+    match &*expr.stx {
+      AstExpr::Id(id) => {
+        acc.push(self.names.intern(&id.stx.name));
+        true
+      }
+      AstExpr::Member(member) if !member.stx.optional_chaining => {
+        if !self.collect_member_path(&member.stx.left, acc) {
+          return false;
+        }
+        acc.push(self.names.intern(&member.stx.right));
+        true
+      }
+      _ => false,
+    }
+  }
+
+  fn warn_heritage(&mut self, range: TextRange, message: impl Into<String>) {
+    self.ctx.warn("LOWER0003", message, range);
+  }
+
+  fn is_constructor_name(&self, name: &PropertyName) -> bool {
+    match name {
+      PropertyName::Ident(id) => self.names.resolve(*id) == Some("constructor"),
+      _ => false,
+    }
   }
 
   fn lower_type_members(&mut self, members: &[Node<TypeMember>]) -> Vec<TypeMemberId> {

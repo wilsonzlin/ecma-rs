@@ -82,6 +82,17 @@ impl LoweringContext {
     range
   }
 
+  pub(crate) fn warn(&mut self, code: &'static str, message: impl Into<String>, range: TextRange) {
+    self.diagnostics.push(Diagnostic::warning(
+      code,
+      message,
+      Span {
+        file: self.file,
+        range,
+      },
+    ));
+  }
+
   #[allow(dead_code)]
   fn unsupported(&mut self, range: TextRange, message: impl Into<String>) {
     self.diagnostics.push(Diagnostic::warning(
@@ -150,6 +161,12 @@ enum DefSource<'a> {
 enum TypeSource<'a> {
   TypeAlias(&'a Node<TypeAliasDecl>),
   Interface(&'a Node<InterfaceDecl>),
+  Class(&'a Node<ClassDecl>),
+  ClassExpr(&'a Node<parse_js::ast::expr::ClassExpr>),
+  AmbientClass(&'a Node<AmbientClassDecl>),
+  Enum(&'a Node<EnumDecl>),
+  Namespace(&'a Node<NamespaceDecl>),
+  Module(&'a Node<ModuleDecl>),
 }
 
 #[derive(Debug)]
@@ -370,7 +387,6 @@ pub fn lower_file_with_diagnostics(
   let mut disambiguators: BTreeMap<(Option<DefId>, DefKind, NameId), u32> = BTreeMap::new();
   let mut def_lookup = DefLookup::default();
   let mut allocated_def_ids: BTreeMap<u32, DefPath> = BTreeMap::new();
-  let mut enum_members: HashMap<DefId, Vec<(TextRange, DefId)>> = HashMap::new();
 
   let mut planned = Vec::new();
   let mut body_disambiguators: BTreeMap<DefId, u32> = BTreeMap::new();
@@ -418,15 +434,6 @@ pub fn lower_file_with_diagnostics(
       items.push(def_id);
     }
 
-    if let Some(parent) = def_path.parent {
-      if desc.kind == DefKind::EnumMember {
-        enum_members
-          .entry(parent)
-          .or_default()
-          .push((desc.span, def_id));
-      }
-    }
-
     span_map.add_def(desc.span, def_id);
 
     let body_id = body.map(|b| b.id);
@@ -470,15 +477,6 @@ pub fn lower_file_with_diagnostics(
     defs.push(def_data);
   }
 
-  for def in defs.iter_mut().filter(|def| def.path.kind == DefKind::Enum) {
-    let members = enum_members.remove(&def.id).unwrap_or_default();
-    let mut ordered: Vec<_> = members.into_iter().collect();
-    ordered.sort_by_key(|(span, _)| (span.start, span.end));
-    def.type_info = Some(DefTypeInfo::Enum {
-      members: ordered.into_iter().map(|(_, id)| id).collect(),
-    });
-  }
-
   let mut root_body_id =
     BodyId(BodyPath::new(DefId(file.0), BodyKind::TopLevel, 0).stable_hash_u32());
   while body_index.contains_key(&root_body_id) {
@@ -503,20 +501,77 @@ pub fn lower_file_with_diagnostics(
 
   let types = {
     let mut type_lowerer = TypeLowerer::new(&mut names, &mut span_map, &mut ctx);
+    let mut pending_namespaces: Vec<(DefId, TextRange)> = Vec::new();
     for (def_id, source) in pending_types {
-      let type_info = match source {
-        TypeSource::TypeAlias(alias) => Some(type_lowerer.lower_type_alias(alias)),
-        TypeSource::Interface(intf) => Some(type_lowerer.lower_interface(intf)),
-      };
-      if let Some(info) = type_info {
-        if let Some(idx) = id_to_index.get(&def_id) {
-          if let Some(def) = defs.get_mut(*idx) {
-            def.type_info = Some(info);
+      match source {
+        TypeSource::TypeAlias(alias) => {
+          let info = type_lowerer.lower_type_alias(alias);
+          if let Some(idx) = id_to_index.get(&def_id) {
+            if let Some(def) = defs.get_mut(*idx) {
+              def.type_info = Some(info);
+            }
           }
-        };
+        }
+        TypeSource::Interface(intf) => {
+          let info = type_lowerer.lower_interface(intf);
+          if let Some(idx) = id_to_index.get(&def_id) {
+            if let Some(def) = defs.get_mut(*idx) {
+              def.type_info = Some(info);
+            }
+          }
+        }
+        TypeSource::Class(class) => {
+          let info = type_lowerer.lower_class_decl(class);
+          if let Some(idx) = id_to_index.get(&def_id) {
+            if let Some(def) = defs.get_mut(*idx) {
+              def.type_info = Some(info);
+            }
+          }
+        }
+        TypeSource::ClassExpr(class) => {
+          let info = type_lowerer.lower_class_expr(class);
+          if let Some(idx) = id_to_index.get(&def_id) {
+            if let Some(def) = defs.get_mut(*idx) {
+              def.type_info = Some(info);
+            }
+          }
+        }
+        TypeSource::AmbientClass(class) => {
+          let info = type_lowerer.lower_ambient_class(class);
+          if let Some(idx) = id_to_index.get(&def_id) {
+            if let Some(def) = defs.get_mut(*idx) {
+              def.type_info = Some(info);
+            }
+          }
+        }
+        TypeSource::Enum(en) => {
+          let info = type_lowerer.lower_enum(en);
+          if let Some(idx) = id_to_index.get(&def_id) {
+            if let Some(def) = defs.get_mut(*idx) {
+              def.type_info = Some(info);
+            }
+          }
+        }
+        TypeSource::Namespace(ns) => {
+          let span = ns.loc.to_diagnostics_range_with_note().0;
+          pending_namespaces.push((def_id, span));
+        }
+        TypeSource::Module(module) => {
+          let span = module.loc.to_diagnostics_range_with_note().0;
+          pending_namespaces.push((def_id, span));
+        }
       }
     }
-    type_lowerer.finish()
+    let types = type_lowerer.finish();
+    for (def_id, span) in pending_namespaces {
+      if let Some(idx) = id_to_index.get(&def_id) {
+        let members = collect_namespace_members(def_id, span, &defs);
+        if let Some(def) = defs.get_mut(*idx) {
+          def.type_info = Some(DefTypeInfo::Namespace { members });
+        }
+      }
+    }
+    types
   };
 
   let def_paths: BTreeMap<DefPath, DefId> = defs.iter().map(|def| (def.path, def.id)).collect();
@@ -566,6 +621,20 @@ pub fn lower_file_with_diagnostics(
 /// tooling so overflow and unsupported constructs can be surfaced.
 pub fn lower_file(file: FileId, file_kind: FileKind, ast: &Node<TopLevel>) -> LowerResult {
   lower_file_with_diagnostics(file, file_kind, ast).0
+}
+
+fn collect_namespace_members(def_id: DefId, span: TextRange, defs: &[DefData]) -> Vec<DefId> {
+  let mut members: Vec<DefId> = defs
+    .iter()
+    .filter(|def| def.id != def_id && span_contains(span, def.span))
+    .map(|def| def.id)
+    .collect();
+  members.sort();
+  members
+}
+
+fn span_contains(container: TextRange, inner: TextRange) -> bool {
+  inner.start >= container.start && inner.end <= container.end
 }
 
 fn empty_body(owner: DefId, kind: BodyKind) -> Body {
@@ -1960,6 +2029,7 @@ fn collect_stmt<'a>(
         in_global,
         DefSource::ClassDecl(class_decl),
       );
+      desc.type_source = Some(TypeSource::Class(class_decl));
       desc.is_exported = class_decl.stx.export;
       desc.is_default_export = class_decl.stx.export_default;
       if desc.is_exported || desc.is_default_export {
@@ -2063,6 +2133,7 @@ fn collect_stmt<'a>(
         DefSource::None,
       );
       desc.is_exported = module.stx.export;
+      desc.type_source = Some(TypeSource::Module(module));
       descriptors.push(desc);
       if module.stx.export {
         if module_item {
@@ -2180,6 +2251,7 @@ fn collect_stmt<'a>(
         in_global,
         DefSource::Enum(en),
       );
+      desc.type_source = Some(TypeSource::Enum(en));
       desc.is_exported = en.stx.export;
       let parent_raw = RawNode::from(en);
       for member in en.stx.members.iter() {
@@ -2388,6 +2460,7 @@ fn collect_stmt<'a>(
         DefSource::None,
       );
       desc.is_exported = ac.stx.export;
+      desc.type_source = Some(TypeSource::AmbientClass(ac));
       descriptors.push(desc);
       if ac.stx.export && module_item {
         module_items.push(ModuleItem {
@@ -2749,6 +2822,7 @@ fn collect_namespace<'a>(
     DefSource::None,
   );
   desc.is_exported = ns.stx.export;
+  desc.type_source = Some(TypeSource::Namespace(ns));
   descriptors.push(desc);
   match &ns.stx.body {
     NamespaceBody::Block(stmts) => {
@@ -3346,7 +3420,7 @@ fn collect_expr<'a>(
     }
     AstExpr::Class(class_expr) => {
       let (name_id, text) = name_from_optional(&class_expr.stx.name, names);
-      descriptors.push(DefDescriptor::new(
+      let mut desc = DefDescriptor::new(
         DefKind::Class,
         name_id,
         text,
@@ -3355,7 +3429,9 @@ fn collect_expr<'a>(
         ambient,
         in_global,
         DefSource::ClassExpr(class_expr),
-      ));
+      );
+      desc.type_source = Some(TypeSource::ClassExpr(class_expr));
+      descriptors.push(desc);
       collect_class_members(
         &class_expr.stx.members,
         RawNode::from(class_expr),

@@ -391,6 +391,60 @@ pub struct TypeSetterSignature {
   pub parameter: TypeFnParam,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassMemberAccessibility {
+  Public,
+  Protected,
+  Private,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassMemberSig {
+  pub span: TextRange,
+  pub static_: bool,
+  pub accessibility: Option<ClassMemberAccessibility>,
+  pub readonly: bool,
+  pub optional: bool,
+  pub kind: ClassMemberSigKind,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClassMemberSigKind {
+  Field {
+    name: PropertyName,
+    type_annotation: Option<TypeExprId>,
+  },
+  Method {
+    name: PropertyName,
+    signature: TypeSignature,
+  },
+  Getter {
+    name: PropertyName,
+    return_type: Option<TypeExprId>,
+  },
+  Setter {
+    name: PropertyName,
+    parameter: TypeFnParam,
+  },
+  Constructor(TypeSignature),
+  CallSignature(TypeSignature),
+  IndexSignature(TypeIndexSignature),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnumMemberValue {
+  Number,
+  String,
+  Computed,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EnumMemberInfo {
+  pub name: NameId,
+  pub span: TextRange,
+  pub value: EnumMemberValue,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeMapped {
   pub type_param: TypeParamId,
@@ -471,7 +525,16 @@ pub enum DefTypeInfo {
     extends: Vec<TypeExprId>,
     members: Vec<TypeMemberId>,
   },
+  Class {
+    type_params: Vec<TypeParamId>,
+    extends: Option<TypeExprId>,
+    implements: Vec<TypeExprId>,
+    members: Vec<ClassMemberSig>,
+  },
   Enum {
+    members: Vec<EnumMemberInfo>,
+  },
+  Namespace {
     members: Vec<DefId>,
   },
 }

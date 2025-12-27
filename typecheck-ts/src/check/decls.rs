@@ -120,7 +120,15 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         self.type_param_names.clear();
         (ty, params)
       }
+      DefTypeInfo::Class { type_params, .. } => {
+        self.register_type_params(type_params);
+        let params = self.collect_type_params(type_params);
+        self.type_params.clear();
+        self.type_param_names.clear();
+        (self.store.primitive_ids().unknown, params)
+      }
       DefTypeInfo::Enum { .. } => (self.store.primitive_ids().any, Vec::new()),
+      DefTypeInfo::Namespace { .. } => (self.store.primitive_ids().unknown, Vec::new()),
     }
   }
 

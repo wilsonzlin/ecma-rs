@@ -2,10 +2,14 @@ use diagnostics::FileId;
 use hir_js::hir::TypeImportName;
 use hir_js::lower_file_with_diagnostics;
 use hir_js::lower_from_source;
+use hir_js::ClassMemberSigKind;
 use hir_js::DefTypeInfo;
+use hir_js::EnumMemberValue;
 use hir_js::FileKind;
+use hir_js::PropertyName;
 use hir_js::TypeExprKind;
 use hir_js::TypeMappedModifier;
+use hir_js::TypeName;
 use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
@@ -339,4 +343,121 @@ fn type_name(names: &hir_js::NameInterner, ty: &TypeExprKind) -> String {
     },
     other => format!("{other:?}"),
   }
+}
+#[test]
+fn lowers_class_type_info_basic() {
+  let result = lower_from_source(
+    "class C<T> extends Base implements IFace { x: string; m(a: number): boolean { return true } }",
+  )
+  .expect("lower");
+  let def = result
+    .defs
+    .iter()
+    .find(|def| result.names.resolve(def.name).unwrap() == "C")
+    .expect("class definition");
+  let info = def.type_info.as_ref().expect("type info present");
+  let (type_params, extends, implements, members) = match info {
+    DefTypeInfo::Class {
+      type_params,
+      extends,
+      implements,
+      members,
+    } => (type_params, extends, implements, members),
+    other => panic!("expected class type info, got {other:?}"),
+  };
+  assert_eq!(type_params.len(), 1);
+
+  let base = extends.expect("extends clause");
+  let base_expr = &result.types.type_exprs[base.0 as usize];
+  match &base_expr.kind {
+    TypeExprKind::TypeRef(reference) => match &reference.name {
+      TypeName::Ident(id) => assert_eq!(result.names.resolve(*id).unwrap(), "Base"),
+      other => panic!("unexpected base name {other:?}"),
+    },
+    other => panic!("unexpected extends kind {other:?}"),
+  }
+
+  assert_eq!(implements.len(), 1);
+  let iface_expr = &result.types.type_exprs[implements[0].0 as usize];
+  match &iface_expr.kind {
+    TypeExprKind::TypeRef(reference) => match &reference.name {
+      TypeName::Ident(id) => assert_eq!(result.names.resolve(*id).unwrap(), "IFace"),
+      other => panic!("unexpected implements name {other:?}"),
+    },
+    other => panic!("unexpected implements kind {other:?}"),
+  }
+
+  let field = members
+    .iter()
+    .find(|member| match &member.kind {
+      ClassMemberSigKind::Field { name, .. } => matches!(
+        name,
+        PropertyName::Ident(id) if result.names.resolve(*id).unwrap() == "x"
+      ),
+      _ => false,
+    })
+    .expect("field member");
+  match &field.kind {
+    ClassMemberSigKind::Field {
+      type_annotation, ..
+    } => {
+      let ty = type_annotation.expect("field type");
+      assert!(matches!(
+        result.types.type_exprs[ty.0 as usize].kind,
+        TypeExprKind::String
+      ));
+    }
+    other => panic!("unexpected field kind {other:?}"),
+  }
+
+  let method = members
+    .iter()
+    .find(|member| match &member.kind {
+      ClassMemberSigKind::Method { name, .. } => matches!(
+        name,
+        PropertyName::Ident(id) if result.names.resolve(*id).unwrap() == "m"
+      ),
+      _ => false,
+    })
+    .expect("method member");
+  match &method.kind {
+    ClassMemberSigKind::Method { signature, .. } => {
+      assert_eq!(signature.params.len(), 1);
+      let param = &signature.params[0];
+      let param_name = param.name.expect("param name");
+      assert_eq!(result.names.resolve(param_name).unwrap(), "a");
+      assert!(matches!(
+        result.types.type_exprs[param.ty.0 as usize].kind,
+        TypeExprKind::Number
+      ));
+      let ret = signature.return_type.expect("return type");
+      assert!(matches!(
+        result.types.type_exprs[ret.0 as usize].kind,
+        TypeExprKind::Boolean
+      ));
+    }
+    other => panic!("unexpected method kind {other:?}"),
+  }
+}
+
+#[test]
+fn lowers_enum_type_info() {
+  let result = lower_from_source(r#"enum E { A, B = 2, C = "c" }"#).expect("lower");
+  let def = result
+    .defs
+    .iter()
+    .find(|def| result.names.resolve(def.name).unwrap() == "E")
+    .expect("enum definition");
+  let info = def.type_info.as_ref().expect("type info present");
+  let members = match info {
+    DefTypeInfo::Enum { members } => members,
+    other => panic!("expected enum type info, got {other:?}"),
+  };
+  assert_eq!(members.len(), 3);
+  assert_eq!(result.names.resolve(members[0].name).unwrap(), "A");
+  assert_eq!(members[0].value, EnumMemberValue::Number);
+  assert_eq!(result.names.resolve(members[1].name).unwrap(), "B");
+  assert_eq!(members[1].value, EnumMemberValue::Number);
+  assert_eq!(result.names.resolve(members[2].name).unwrap(), "C");
+  assert_eq!(members[2].value, EnumMemberValue::String);
 }
