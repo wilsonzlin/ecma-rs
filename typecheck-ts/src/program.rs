@@ -2653,6 +2653,66 @@ impl ProgramState {
     id
   }
 
+  fn merge_sem_hir(mut base: sem_ts::HirFile, extras: sem_ts::HirFile) -> sem_ts::HirFile {
+    debug_assert_eq!(base.file_id, extras.file_id);
+    debug_assert_eq!(base.file_kind, extras.file_kind);
+
+    let mut existing_defs: HashSet<sem_ts::DefId> =
+      base.decls.iter().map(|decl| decl.def_id).collect();
+    let mut existing_decl_keys: HashSet<(String, sem_ts::DeclKind)> = base
+      .decls
+      .iter()
+      .map(|decl| (decl.name.clone(), decl.kind.clone()))
+      .collect();
+
+    for decl in extras.decls {
+      if existing_defs.contains(&decl.def_id)
+        || existing_decl_keys.contains(&(decl.name.clone(), decl.kind.clone()))
+      {
+        continue;
+      }
+      existing_defs.insert(decl.def_id);
+      existing_decl_keys.insert((decl.name.clone(), decl.kind.clone()));
+      base.decls.push(decl);
+    }
+
+    for import in extras.imports {
+      if !base.imports.contains(&import) {
+        base.imports.push(import);
+      }
+    }
+    for export in extras.exports {
+      if !base.exports.contains(&export) {
+        base.exports.push(export);
+      }
+    }
+    for export in extras.export_as_namespace {
+      if !base.export_as_namespace.contains(&export) {
+        base.export_as_namespace.push(export);
+      }
+    }
+    base.ambient_modules.extend(extras.ambient_modules);
+
+    base.module_kind = ProgramState::module_kind_from_sem_hir(&base);
+    base
+  }
+
+  fn module_kind_from_sem_hir(file: &sem_ts::HirFile) -> sem_ts::ModuleKind {
+    if file.imports.is_empty()
+      && file.exports.is_empty()
+      && file.export_as_namespace.is_empty()
+      && file.ambient_modules.is_empty()
+      && file
+        .decls
+        .iter()
+        .all(|decl| matches!(decl.exported, sem_ts::Exported::No))
+    {
+      sem_ts::ModuleKind::Script
+    } else {
+      sem_ts::ModuleKind::Module
+    }
+  }
+
   fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
     let Some(data) = self.def_data.get(&def) else {
       return u8::MAX;
@@ -3029,7 +3089,6 @@ impl ProgramState {
           self.diagnostics.extend(lower_diags);
           self.hir_lowered.insert(file, lowered.clone());
           let sem_hir = sem_hir_from_lower(&lowered);
-          self.sem_hir.insert(file, sem_hir);
           let lower_span = QuerySpan::enter(
             QueryKind::LowerHir,
             query_span!(
@@ -3043,12 +3102,14 @@ impl ProgramState {
             false,
             Some(self.query_stats.clone()),
           );
-          self.bind_file(file, ast.as_ref(), host, &mut queue);
+          let bound_sem_hir = self.bind_file(file, ast.as_ref(), host, &mut queue);
           self.align_definitions_with_hir(file, &lowered);
           self.map_hir_bodies(file, &lowered);
           if let Some(span) = lower_span {
             span.finish(None);
           }
+          let merged_sem_hir = ProgramState::merge_sem_hir(sem_hir, bound_sem_hir);
+          self.sem_hir.insert(file, merged_sem_hir);
         }
         Err(err) => {
           self.diagnostics.push(err);
@@ -3329,10 +3390,11 @@ impl ProgramState {
           let (lowered, lower_diags) = lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
           let mut queue = VecDeque::new();
-          self.bind_file(file_id, ast.as_ref(), host, &mut queue);
+          let bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, &mut queue);
           let sem_hir = sem_hir_from_lower(&lowered);
           self.hir_lowered.insert(file_id, lowered.clone());
-          self.sem_hir.insert(file_id, sem_hir);
+          let merged_sem_hir = ProgramState::merge_sem_hir(sem_hir, bound_sem_hir);
+          self.sem_hir.insert(file_id, merged_sem_hir);
           self.align_definitions_with_hir(file_id, &lowered);
           self.map_hir_bodies(file_id, &lowered);
         }
@@ -4305,7 +4367,7 @@ impl ProgramState {
     ast: &Node<TopLevel>,
     host: &Arc<dyn Host>,
     queue: &mut VecDeque<FileId>,
-  ) {
+  ) -> sem_ts::HirFile {
     let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
     let mut sem_builder = SemHirBuilder::new(file, sem_file_kind(file_kind));
     let mut defs = Vec::new();
@@ -4913,10 +4975,6 @@ impl ProgramState {
       }
     }
 
-    self
-      .sem_hir
-      .entry(file)
-      .or_insert_with(|| sem_builder.finish());
     self.files.insert(
       file,
       FileState {
@@ -4928,6 +4986,7 @@ impl ProgramState {
         export_all,
       },
     );
+    sem_builder.finish()
   }
 
   fn handle_var_decl(

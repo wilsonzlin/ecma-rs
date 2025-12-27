@@ -100,6 +100,47 @@ fn default_export_has_type() {
 }
 
 #[test]
+fn default_export_expr_resolves_for_default_imports() {
+  let mut host = MemoryHost::default();
+  let key_module = fk(300);
+  let key_entry = fk(301);
+  host.insert(
+    key_module.clone(),
+    "const x = 1;\nexport const named = 2;\nexport default x;\n",
+  );
+  host.insert(
+    key_entry.clone(),
+    "import foo from \"./m\";\nimport { named } from \"./m\";\nfoo satisfies number;\nnamed satisfies number;\n",
+  );
+  host.link(key_entry.clone(), "./m", key_module.clone());
+
+  let program = Program::new(host, vec![key_entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let module_id = program.file_id(&key_module).expect("module id");
+  let exports = program.exports_of(module_id);
+  let default_entry = exports.get("default").expect("default export present");
+  assert!(
+    default_entry.def.is_some(),
+    "default export should be visible to semantic exports"
+  );
+  let default_ty = default_entry.type_id.expect("type for default");
+  let rendered = program.display_type(default_ty).to_string();
+  assert!(
+    rendered == "1" || rendered == "number",
+    "unexpected default export type: {rendered}"
+  );
+  assert!(
+    exports.contains_key("named"),
+    "expected named export to remain available"
+  );
+}
+
+#[test]
 fn type_exports_propagate_through_reexports() {
   let mut host = MemoryHost::default();
   let key_types = fk(20);
