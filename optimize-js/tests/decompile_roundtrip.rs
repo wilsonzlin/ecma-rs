@@ -23,7 +23,9 @@ fn assert_roundtrip(src: &str, mode: TopLevelMode) {
   let out_str = String::from_utf8(out1).expect("emitted JS should be UTF-8");
 
   parse_js::parse(&out_str).expect("emitted JS should parse");
-  compile_source(&out_str, mode, false);
+  if let Err(errs) = optimize_js::compile_source(&out_str, mode, false) {
+    panic!("compile emitted JS: {errs:?}\n\n{out_str}");
+  }
 }
 
 #[test]

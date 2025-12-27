@@ -11,6 +11,7 @@ pub mod symbol;
 pub mod util;
 
 pub use crate::decompile::program_to_js;
+pub use crate::decompile::ProgramToJsError;
 pub use crate::decompile::{program_to_ast, DecompileOptions};
 use crate::il::inst::Inst;
 use crate::util::counter::Counter;
@@ -243,8 +244,8 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
     fn expr_for_span(&self, span: TextRange) -> Option<(BodyId, ExprId)> {
       for offset in Self::offsets(span) {
-        if let Some(span) = self.span_map.expr_span_at_offset(offset) {
-          return Some(span.id);
+        if let Some(result) = self.span_map.expr_span_at_offset(offset) {
+          return Some(result.id);
         }
       }
       None
@@ -252,8 +253,8 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
     fn pat_for_span(&self, span: TextRange) -> Option<(BodyId, PatId)> {
       for offset in Self::offsets(span) {
-        if let Some(span) = self.span_map.pat_span_at_offset(offset) {
-          return Some(span.id);
+        if let Some(result) = self.span_map.pat_span_at_offset(offset) {
+          return Some(result.id);
         }
       }
       None
