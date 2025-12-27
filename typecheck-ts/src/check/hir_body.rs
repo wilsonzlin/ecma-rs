@@ -3658,7 +3658,7 @@ impl<'a> FlowBodyChecker<'a> {
   fn object_prop_type(&self, obj: TypeId, key: &str) -> Option<TypeId> {
     let prim = self.store.primitive_ids();
     match self.store.type_kind(obj) {
-      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+      TypeKind::Union(members) => {
         let mut tys = Vec::new();
         for member in members {
           if let Some(prop_ty) = self.object_prop_type(member, key) {
@@ -3669,6 +3669,19 @@ impl<'a> FlowBodyChecker<'a> {
           None
         } else {
           Some(self.store.union(tys))
+        }
+      }
+      TypeKind::Intersection(members) => {
+        let mut tys = Vec::new();
+        for member in members {
+          if let Some(prop_ty) = self.object_prop_type(member, key) {
+            tys.push(prop_ty);
+          }
+        }
+        if tys.is_empty() {
+          None
+        } else {
+          Some(self.store.intersection(tys))
         }
       }
       TypeKind::Object(obj_id) => {
