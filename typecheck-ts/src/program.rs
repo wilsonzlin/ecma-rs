@@ -7870,7 +7870,15 @@ impl ProgramState {
               }
             }
             if let Some((id, _)) = best {
-              return self.type_of_def(id);
+              return match self.type_of_def(id) {
+                Ok(ty) => ty,
+                Err(fatal) => {
+                  if !matches!(fatal, FatalError::Cancelled) {
+                    self.diagnostics.push(fatal_to_diagnostic(fatal));
+                  }
+                  self.builtin.unknown
+                }
+              };
             }
           }
         }

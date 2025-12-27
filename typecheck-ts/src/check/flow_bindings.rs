@@ -25,14 +25,22 @@ impl FlowBindings {
       .iter()
       .enumerate()
       .map(|(idx, expr)| {
-        if matches!(expr.kind, ExprKind::Ident(_)) {
-          let id = ExprId(idx as u32);
-          sem
-            .resolve_expr(body, id)
-            .or_else(|| sem.resolve_expr_span(expr.span))
-        } else {
-          None
-        }
+        matches!(expr.kind, ExprKind::Ident(_))
+          .then(|| ExprId(idx as u32))
+          .and_then(|id| {
+            let span = expr.span;
+            sem
+              .resolve_expr(body, id)
+              .or_else(|| sem.resolve_expr_span(span))
+              .or_else(|| sem.resolve_expr_at_offset(span.start).map(|(_, id)| id))
+              .or_else(|| {
+                if span.end > span.start {
+                  sem.resolve_expr_at_offset(span.end - 1).map(|(_, id)| id)
+                } else {
+                  None
+                }
+              })
+          })
       })
       .collect();
 
@@ -40,11 +48,20 @@ impl FlowBindings {
       .pats
       .iter()
       .map(|pat| {
-        if matches!(pat.kind, PatKind::Ident(_)) {
-          sem.resolve_expr_span(pat.span)
-        } else {
-          None
-        }
+        matches!(pat.kind, PatKind::Ident(_))
+          .then(|| pat.span)
+          .and_then(|span| {
+            sem
+              .resolve_expr_span(span)
+              .or_else(|| sem.resolve_expr_at_offset(span.start).map(|(_, id)| id))
+              .or_else(|| {
+                if span.end > span.start {
+                  sem.resolve_expr_at_offset(span.end - 1).map(|(_, id)| id)
+                } else {
+                  None
+                }
+              })
+          })
       })
       .collect();
 
