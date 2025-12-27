@@ -30,53 +30,8 @@ use crate::loc::Loc;
 use crate::num::JsNumber;
 use crate::operator::OperatorName;
 use crate::token::TT;
-use core::str::FromStr;
-
-fn parse_radix(raw: &str, radix: u32) -> Result<f64, ()> {
-  // Strip numeric separators (_) before parsing
-  let stripped = raw.replace('_', "");
-  if stripped.is_empty() {
-    return Err(());
-  }
-  let radix_f64 = radix as f64;
-  let mut value = 0.0_f64;
-  for ch in stripped.chars() {
-    let digit = ch.to_digit(radix).ok_or(())? as f64;
-    value = value * radix_f64 + digit;
-    if !value.is_finite() {
-      return Ok(f64::INFINITY);
-    }
-  }
-  Ok(value)
-}
-
 pub fn normalise_literal_number(raw: &str) -> Option<JsNumber> {
-  // TODO We assume that the Rust parser follows ECMAScript spec and that different representations
-  // of the same value get parsed into the same f64 value/bit pattern (e.g. `5.1e10` and `0.51e11`).
-  // Strip numeric separators (_) before parsing for decimal numbers
-  let stripped;
-  let to_parse = if raw.contains('_')
-    && !raw.starts_with("0b")
-    && !raw.starts_with("0B")
-    && !raw.starts_with("0o")
-    && !raw.starts_with("0O")
-    && !raw.starts_with("0x")
-    && !raw.starts_with("0X")
-  {
-    stripped = raw.replace('_', "");
-    &stripped
-  } else {
-    raw
-  };
-
-  match to_parse {
-    s if s.starts_with("0b") || s.starts_with("0B") => parse_radix(&s[2..], 2),
-    s if s.starts_with("0o") || s.starts_with("0O") => parse_radix(&s[2..], 8),
-    s if s.starts_with("0x") || s.starts_with("0X") => parse_radix(&s[2..], 16),
-    s => f64::from_str(s).map_err(|_| ()),
-  }
-  .map(JsNumber)
-  .ok()
+  JsNumber::from_literal(raw)
 }
 
 pub fn normalise_literal_bigint(raw: &str) -> Option<String> {
