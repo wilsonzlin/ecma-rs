@@ -29,8 +29,8 @@ use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::Env;
 use super::flow_narrow::{
   narrow_by_asserted, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
-  narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof, truthy_falsy_types, Facts,
-  LiteralValue,
+  narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof, narrow_non_nullish,
+  truthy_falsy_types, Facts, LiteralValue,
 };
 
 use super::caches::BodyCaches;
@@ -2027,6 +2027,12 @@ struct FlowBodyChecker<'a> {
   widen_object_literals: bool,
 }
 
+struct OptionalChainInfo {
+  base: NameId,
+  base_ty: TypeId,
+  result_ty: Option<TypeId>,
+}
+
 impl<'a> FlowBodyChecker<'a> {
   fn new(
     body_id: BodyId,
@@ -2466,10 +2472,34 @@ impl<'a> FlowBodyChecker<'a> {
         self.bind_pat(*target, val_ty, env);
         val_ty
       }
-      ExprKind::Call(call) => self.eval_call(call, env, &mut facts),
+      ExprKind::Call(call) => {
+        let ret_ty = self.eval_call(call, env, &mut facts);
+        if call.optional {
+          if let Some(name) = self.optional_chain_root(call.callee) {
+            let (non_nullish, _) = narrow_non_nullish(self.expr_types[call.callee.0 as usize], &self.store);
+            if non_nullish != prim.never {
+              facts.truthy.insert(name, non_nullish);
+            }
+          }
+          self.store.union(vec![ret_ty, prim.undefined])
+        } else {
+          ret_ty
+        }
+      }
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
-        self.member_type(obj_ty, &mem)
+        let prop_ty = self.member_type(obj_ty, &mem);
+        if mem.optional {
+          if let Some(name) = self.optional_chain_root(mem.object) {
+            let (non_nullish, _) = narrow_non_nullish(obj_ty, &self.store);
+            if non_nullish != prim.never {
+              facts.truthy.insert(name, non_nullish);
+            }
+          }
+          self.store.union(vec![prop_ty, prim.undefined])
+        } else {
+          prop_ty
+        }
       }
       ExprKind::Conditional {
         test,
@@ -2652,6 +2682,9 @@ impl<'a> FlowBodyChecker<'a> {
       let (yes, no) = narrow_by_typeof(target_ty, &lit, &self.store);
       apply(target, yes, no);
     }
+
+    self.optional_chain_equality_facts(left, right_ty, negate, out);
+    self.optional_chain_equality_facts(right, left_ty, negate, out);
   }
 
   fn eval_call(&mut self, call: &hir_js::CallExpr, env: &mut Env, out: &mut Facts) -> TypeId {
@@ -2700,6 +2733,81 @@ impl<'a> FlowBodyChecker<'a> {
       }
     }
     prim.unknown
+  }
+
+  fn optional_chain_equality_facts(
+    &mut self,
+    expr: ExprId,
+    other_ty: TypeId,
+    negate: bool,
+    out: &mut Facts,
+  ) {
+    let prim = self.store.primitive_ids();
+    let Some(info) = self.optional_chain_info(expr) else { return; };
+    let (non_nullish_base, nullish_base) = narrow_non_nullish(info.base_ty, &self.store);
+    if non_nullish_base == prim.never {
+      return;
+    }
+
+    if self.excludes_nullish(other_ty) {
+      let target = if negate { &mut out.falsy } else { &mut out.truthy };
+      target.insert(info.base, non_nullish_base);
+      return;
+    }
+
+    if self.is_nullish_only(other_ty) {
+      if let Some(result_ty) = info.result_ty {
+        let (_, result_nullish) = narrow_non_nullish(result_ty, &self.store);
+        if result_nullish == prim.never && nullish_base != prim.never {
+          let target = if negate { &mut out.falsy } else { &mut out.truthy };
+          target.insert(info.base, nullish_base);
+        }
+      }
+    }
+  }
+
+  fn optional_chain_info(&mut self, expr: ExprId) -> Option<OptionalChainInfo> {
+    match &self.body.exprs[expr.0 as usize].kind {
+      ExprKind::Member(mem) if mem.optional => {
+        let base = self.optional_chain_root(mem.object)?;
+        let base_ty = self.expr_types[mem.object.0 as usize];
+        let result_ty = Some(self.member_type(base_ty, mem));
+        Some(OptionalChainInfo {
+          base,
+          base_ty,
+          result_ty,
+        })
+      }
+      ExprKind::Call(call) if call.optional => {
+        let base = self.optional_chain_root(call.callee)?;
+        let base_ty = self.expr_types[call.callee.0 as usize];
+        Some(OptionalChainInfo {
+          base,
+          base_ty,
+          result_ty: None,
+        })
+      }
+      _ => None,
+    }
+  }
+
+  fn optional_chain_root(&self, expr_id: ExprId) -> Option<NameId> {
+    match self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Ident(name) => Some(name),
+      _ => None,
+    }
+  }
+
+  fn excludes_nullish(&self, ty: TypeId) -> bool {
+    let prim = self.store.primitive_ids();
+    let (_, nullish) = narrow_non_nullish(ty, &self.store);
+    nullish == prim.never
+  }
+
+  fn is_nullish_only(&self, ty: TypeId) -> bool {
+    let prim = self.store.primitive_ids();
+    let (non_nullish, nullish) = narrow_non_nullish(ty, &self.store);
+    non_nullish == prim.never && nullish != prim.never
   }
 
   fn ident_name(&self, expr_id: ExprId) -> Option<NameId> {

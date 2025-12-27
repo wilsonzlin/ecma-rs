@@ -309,6 +309,73 @@ fn narrows_discriminants() {
 }
 
 #[test]
+fn optional_chain_discriminant_narrows() {
+  let src = r#"
+function f(x: {kind:"a"}|{kind:"b"}|null) {
+  if (x?.kind === "a") {
+    return x.kind;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let kind_a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let kind_b = store.intern_type(TypeKind::StringLiteral(store.intern_name("b")));
+  let a_obj = obj_type(&store, &[("kind", kind_a)]);
+  let b_obj = obj_type(&store, &[("kind", kind_b)]);
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![a_obj, b_obj, prim.null]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty_expected = store.union(vec![b_obj, prim.null]);
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, TypeDisplay::new(&store, kind_a).to_string());
+  assert_eq!(else_ty, TypeDisplay::new(&store, else_ty_expected).to_string());
+}
+
+#[test]
+fn optional_member_adds_undefined() {
+  let src = r#"function g(x: {v: number} | null) { const y = x?.v; return y; }"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "g");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let obj = obj_type(&store, &[("v", prim.number)]);
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![obj, prim.null]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let expected = store.union(vec![prim.number, prim.undefined]);
+  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ty, TypeDisplay::new(&store, expected).to_string());
+}
+
+#[test]
 fn user_defined_type_guards() {
   let src = r#"
 function isStr(x: string | number): x is string {

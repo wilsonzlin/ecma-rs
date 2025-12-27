@@ -218,6 +218,31 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
   }
 }
 
+/// Split a type into its non-nullish and nullish parts.
+pub fn narrow_non_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
+  let primitives = store.primitive_ids();
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => {
+      let mut non_nullish = Vec::new();
+      let mut nullish = Vec::new();
+      for member in members {
+        let (yes, no) = narrow_non_nullish(member, store);
+        if yes != primitives.never {
+          non_nullish.push(yes);
+        }
+        if no != primitives.never {
+          nullish.push(no);
+        }
+      }
+      (store.union(non_nullish), store.union(nullish))
+    }
+    TypeKind::Null | TypeKind::Undefined | TypeKind::Void => (primitives.never, ty),
+    TypeKind::Any | TypeKind::Unknown | TypeKind::Intersection(_) => (ty, ty),
+    TypeKind::Never => (primitives.never, primitives.never),
+    _ => (ty, primitives.never),
+  }
+}
+
 /// Narrow a variable by a typeof comparison (e.g. `typeof x === "string"`).
 pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
