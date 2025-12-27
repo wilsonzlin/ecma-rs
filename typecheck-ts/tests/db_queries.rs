@@ -3,7 +3,7 @@ use std::sync::Arc;
 use diagnostics::FileId;
 use typecheck_ts::db::TypecheckDb;
 use typecheck_ts::lib_support::FileKind;
-use typecheck_ts::FileKey;
+use typecheck_ts::{FileKey, FileOrigin};
 
 fn def_by_name<'a>(lowered: &'a hir_js::LowerResult, name: &str) -> &'a hir_js::DefData {
   lowered
@@ -19,7 +19,13 @@ fn nested_function_body_parent_and_file_lookup() {
   let file = FileId(0);
   let key = FileKey::new("main.ts");
   let source = "function outer() { function inner() { return 1; } return inner(); }";
-  db.set_file(file, key.clone(), FileKind::Ts, Arc::from(source));
+  db.set_file(
+    file,
+    key.clone(),
+    FileKind::Ts,
+    Arc::from(source),
+    FileOrigin::Source,
+  );
   db.set_roots(Arc::from([key]));
 
   let lowered = db.lower_hir(file).lowered.expect("lowered HIR");
@@ -46,12 +52,14 @@ fn indices_are_deterministic_across_root_order() {
     key_a.clone(),
     FileKind::Ts,
     Arc::from("export function a() {}"),
+    FileOrigin::Source,
   );
   db_ordered.set_file(
     file_b,
     key_b.clone(),
     FileKind::Ts,
     Arc::from("export function b() {}"),
+    FileOrigin::Source,
   );
   db_ordered.set_roots(Arc::from([key_a.clone(), key_b.clone()]));
 
@@ -61,12 +69,14 @@ fn indices_are_deterministic_across_root_order() {
     key_a.clone(),
     FileKind::Ts,
     Arc::from("export function a() {}"),
+    FileOrigin::Source,
   );
   db_reversed.set_file(
     file_b,
     key_b.clone(),
     FileKind::Ts,
     Arc::from("export function b() {}"),
+    FileOrigin::Source,
   );
   db_reversed.set_roots(Arc::from([key_b, key_a]));
 

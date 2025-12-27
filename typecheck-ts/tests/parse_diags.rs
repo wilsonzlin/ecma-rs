@@ -5,7 +5,7 @@ use std::thread;
 use typecheck_ts::db::{parse_query_count, reset_parse_query_count, TypecheckDb};
 use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::queries::parse;
-use typecheck_ts::{codes, FileKey, Host, HostError, Program};
+use typecheck_ts::{codes, FileKey, FileOrigin, Host, HostError, Program};
 
 struct SingleFile<'a> {
   name: &'a str,
@@ -103,7 +103,13 @@ fn db_parse_reports_diagnostic_with_span_for_invalid_syntax() {
   let key = FileKey::new("test.ts");
   let source = "function missingBrace(";
   let mut db = TypecheckDb::default();
-  db.set_file(file, key, FileKind::Ts, Arc::from(source));
+  db.set_file(
+    file,
+    key,
+    FileKind::Ts,
+    Arc::from(source),
+    FileOrigin::Source,
+  );
 
   let result = db.parse(file);
 
@@ -118,7 +124,13 @@ fn parse_query_is_memoized() {
   let file = FileId(0);
   let key = FileKey::new("memoized.ts");
   let mut db = TypecheckDb::default();
-  db.set_file(file, key, FileKind::Ts, Arc::from("const value = 1;"));
+  db.set_file(
+    file,
+    key,
+    FileKind::Ts,
+    Arc::from("const value = 1;"),
+    FileOrigin::Source,
+  );
 
   reset_parse_query_count();
   let first = db.parse(file);
@@ -153,6 +165,7 @@ fn concurrent_snapshots_share_results() {
     key,
     FileKind::Ts,
     Arc::from("export function add(a: number, b: number) { return a + b; }"),
+    FileOrigin::Source,
   );
 
   let snapshot_a = db.snapshot();

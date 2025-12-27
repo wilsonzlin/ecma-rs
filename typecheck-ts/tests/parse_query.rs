@@ -3,7 +3,7 @@ use std::sync::Arc;
 use diagnostics::FileId;
 use typecheck_ts::db::Database;
 use typecheck_ts::lib_support::FileKind;
-use typecheck_ts::{parse_call_count, reset_parse_call_count, FileKey};
+use typecheck_ts::{parse_call_count, reset_parse_call_count, FileKey, FileOrigin};
 
 #[test]
 fn parse_query_uses_cache() {
@@ -15,6 +15,7 @@ fn parse_query_uses_cache() {
     key,
     FileKind::Ts,
     Arc::from("export const value = 1;"),
+    FileOrigin::Source,
   );
 
   reset_parse_call_count();

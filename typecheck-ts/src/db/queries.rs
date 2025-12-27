@@ -1,3 +1,4 @@
+use salsa::Setter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
@@ -32,10 +33,14 @@ use crate::FileKey;
 use crate::SymbolOccurrence;
 use crate::{BodyId, DefId, TypeId};
 
-fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
-  db.file_input_by_key(key)
-    .unwrap_or_else(|| panic!("file {:?} must be seeded before use", key))
-    .file_id(db)
+fn file_ids_from_key(db: &dyn Db, key: &FileKey) -> Vec<FileId> {
+  let mut ids = db.file_ids_for_key(key);
+  if ids.is_empty() {
+    panic!("file {:?} must be seeded before use", key);
+  }
+  ids.sort_by_key(|id| id.0);
+  ids.dedup();
+  ids
 }
 
 #[salsa::tracked]
@@ -1112,12 +1117,13 @@ impl std::fmt::Debug for TsSemantics {
 #[salsa::tracked]
 fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
   let mut visited = BTreeSet::new();
-  let mut queue: VecDeque<FileId> = db
-    .roots_input()
-    .roots(db)
-    .iter()
-    .map(|key| file_id_from_key(db, key))
-    .collect();
+  let mut seeds = Vec::new();
+  for key in db.roots_input().roots(db).iter() {
+    seeds.extend(file_ids_from_key(db, key));
+  }
+  seeds.sort_by_key(|id| id.0);
+  seeds.dedup();
+  let mut queue: VecDeque<FileId> = seeds.into();
   while let Some(file) = queue.pop_front() {
     if !visited.insert(file) {
       continue;
@@ -1155,7 +1161,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     .roots_input()
     .roots(db)
     .iter()
-    .map(|f| file_id_from_key(db, f))
+    .flat_map(|f| file_ids_from_key(db, f))
     .map(|id| sem_ts::FileId(id.0))
     .collect();
   roots.sort();

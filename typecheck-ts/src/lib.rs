@@ -150,6 +150,7 @@ mod type_queries;
 pub use api::*;
 pub use db::queries::VarInit;
 pub use error::*;
+pub use files::FileOrigin;
 pub use parse_metrics::{parse_call_count, reset_parse_call_count};
 pub use profile::*;
 pub use program::BodyCheckResult;

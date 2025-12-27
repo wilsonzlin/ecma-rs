@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use typecheck_ts::db::TypecheckDb;
 use typecheck_ts::lib_support::FileKind;
-use typecheck_ts::{codes, FileId, FileKey};
+use typecheck_ts::{codes, FileId, FileKey, FileOrigin};
 
 #[test]
 fn reachable_files_are_deterministic_and_cycle_safe() {
@@ -20,18 +20,21 @@ fn reachable_files_are_deterministic_and_cycle_safe() {
     key_a.clone(),
     FileKind::Ts,
     Arc::from(r#"import { value } from "./b"; export const a = value;"#),
+    FileOrigin::Source,
   );
   db.set_file(
     file_b,
     key_b.clone(),
     FileKind::Ts,
     Arc::from(r#"export { c as value } from "./c";"#),
+    FileOrigin::Source,
   );
   db.set_file(
     file_c,
     key_c.clone(),
     FileKind::Ts,
     Arc::from(r#"export * from "./a"; export const c = 1;"#),
+    FileOrigin::Source,
   );
 
   db.set_module_resolution(file_a, Arc::<str>::from("./b"), Some(file_b));
@@ -70,6 +73,7 @@ fn unresolved_modules_emit_diagnostics() {
     key,
     FileKind::Ts,
     Arc::from("import \"./missing\";\nexport * from \"./also\";"),
+    FileOrigin::Source,
   );
   db.set_module_resolution(file, Arc::<str>::from("./missing"), None);
   db.set_module_resolution(file, Arc::<str>::from("./also"), None);

@@ -269,6 +269,43 @@ fn host_file_named_like_lib_does_not_collide() {
 }
 
 #[test]
+fn host_file_named_like_default_lib_has_distinct_text() {
+  let mut options = CompilerOptions::default();
+  options.libs = vec![LibName::Es5];
+  let key = FileKey::new("lib:lib.es5.d.ts");
+  let host_text = "export const local = 1;";
+  let host = TestHost::new(options).with_file(key.clone(), host_text);
+  let program = Program::new(host, vec![key.clone()]);
+  let mut ids_for_key = program.file_ids_for_key(&key);
+  ids_for_key.sort_by_key(|id| id.0);
+  ids_for_key.dedup();
+  assert_eq!(
+    ids_for_key.len(),
+    2,
+    "both host file and bundled lib should be loaded even when keys collide"
+  );
+  assert_ne!(ids_for_key[0], ids_for_key[1]);
+
+  let texts: Vec<_> = ids_for_key
+    .iter()
+    .filter_map(|id| program.file_text(*id))
+    .collect();
+  assert_eq!(
+    texts.len(),
+    2,
+    "expected to retrieve text for both host and bundled lib files"
+  );
+  assert!(
+    texts.iter().any(|text| text.as_ref() == host_text),
+    "host-provided text should be returned for the source-origin file"
+  );
+  assert!(
+    texts.iter().any(|text| text.as_ref() != host_text),
+    "bundled lib text should differ from the host file text"
+  );
+}
+
+#[test]
 fn imported_type_alias_resolves_interned_type() {
   let host = TestHost::new(CompilerOptions::default())
     .with_file(FileKey::new("types.ts"), "export type Foo = number;")

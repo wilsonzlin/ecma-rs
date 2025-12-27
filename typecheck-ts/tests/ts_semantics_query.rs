@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use typecheck_ts::db::TypecheckDb;
 use typecheck_ts::lib_support::FileKind;
-use typecheck_ts::{FileId, FileKey, Host, MemoryHost, Program};
+use typecheck_ts::{FileId, FileKey, FileOrigin, Host, MemoryHost, Program};
 
 fn fk(id: u32) -> FileKey {
   FileKey::new(format!("file{id}.ts"))
@@ -79,7 +79,7 @@ fn ts_semantics_matches_program_exports_and_is_deterministic() {
     (key_c.clone(), file_c),
   ] {
     let text = db_host.file_text(&key).expect("file text");
-    db.set_file(id, key, FileKind::Ts, text);
+    db.set_file(id, key, FileKind::Ts, text, FileOrigin::Source);
   }
   for (from, spec, to) in edges.into_iter() {
     let from_id = program.file_id(&from).expect("from id");

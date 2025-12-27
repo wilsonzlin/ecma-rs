@@ -545,9 +545,8 @@ fn hir_alias_reference_expands_through_evaluator() {
   let store = TypeStore::new();
 
   let mut box_lowerer = TypeLowerer::new(store.clone());
-  let box_params = box_lowerer.register_type_params(
-    box_alias.stx.type_parameters.as_deref().unwrap_or(&[]),
-  );
+  let box_params =
+    box_lowerer.register_type_params(box_alias.stx.type_parameters.as_deref().unwrap_or(&[]));
   let box_param_ids: Vec<_> = box_params.iter().map(|p| p.id).collect();
   let box_body = box_lowerer.lower_type_expr(&box_alias.stx.type_expr);
 

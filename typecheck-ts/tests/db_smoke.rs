@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use typecheck_ts::db::{queries, Database};
 use typecheck_ts::lib_support::{CompilerOptions, FileKind};
-use typecheck_ts::{FileId, FileKey};
+use typecheck_ts::{FileId, FileKey, FileOrigin};
 
 #[test]
 fn smoke_parallel_database_usage() {
@@ -21,6 +21,7 @@ fn smoke_parallel_database_usage() {
     roots[0].clone(),
     FileKind::Ts,
     Arc::<str>::from("export const value = 1;"),
+    FileOrigin::Source,
   );
   db.set_module_resolution(FileId(0), Arc::<str>::from("./missing"), None);
 

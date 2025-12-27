@@ -40,7 +40,7 @@ use crate::codes;
 use crate::db::queries::{var_initializer_in_file, VarInit};
 use crate::db::{self, BodyCheckContext, BodyCheckDb, BodyInfo, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
-use crate::files::FileRegistry;
+use crate::files::{FileOrigin, FileRegistry};
 use crate::profile::{
   CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector, QueryTimer,
 };
@@ -110,12 +110,6 @@ pub struct BodyCheckResult {
   pub(crate) pat_spans: Vec<TextRange>,
   pub(crate) diagnostics: Vec<Diagnostic>,
   pub(crate) return_types: Vec<TypeId>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FileOrigin {
-  Source,
-  Lib,
 }
 
 impl BodyCheckResult {
@@ -479,6 +473,14 @@ impl Program {
         self.record_fatal(fatal);
         None
       }
+    }
+  }
+
+  /// All [`FileId`]s associated with a [`FileKey`], preferring source-origin IDs first.
+  pub fn file_ids_for_key(&self, key: &FileKey) -> Vec<FileId> {
+    match self.with_analyzed_state(|state| Ok(state.file_ids_for_key(key))) {
+      Ok(ids) => ids,
+      Err(_) => Vec::new(),
     }
   }
 
@@ -1862,7 +1864,12 @@ impl Program {
       state.cache_stats = CheckerCacheStats::default();
       for file in snapshot.files.into_iter() {
         let key = file.key.clone();
-        let id = state.file_registry.intern(&key);
+        let origin = if file.is_lib {
+          FileOrigin::Lib
+        } else {
+          FileOrigin::Source
+        };
+        let id = state.file_registry.intern(&key, origin);
         debug_assert_eq!(id, file.file, "snapshot file id mismatch");
         state.file_kinds.insert(file.file, file.kind);
         if file.is_lib {
@@ -2939,17 +2946,11 @@ impl ProgramState {
   }
 
   fn file_id_for_key(&self, key: &FileKey) -> Option<FileId> {
-    self
-      .file_registry
-      .lookup_id(key)
-      .and_then(|id| {
-        if !self.lib_file_ids.contains(&id) {
-          Some(id)
-        } else {
-          None
-        }
-      })
-      .or_else(|| self.file_registry.lookup_id(key))
+    self.file_registry.lookup_id(key)
+  }
+
+  fn file_ids_for_key(&self, key: &FileKey) -> Vec<FileId> {
+    self.file_registry.lookup_ids(key)
   }
 
   fn body_check_context(&self) -> BodyCheckContext {
@@ -3007,20 +3008,11 @@ impl ProgramState {
   }
 
   fn intern_file_key(&mut self, key: FileKey, origin: FileOrigin) -> FileId {
-    if let Some(existing) = self.file_registry.lookup_id(&key) {
-      match origin {
-        FileOrigin::Lib => {
-          self.lib_file_ids.insert(existing);
-        }
-        FileOrigin::Source => {
-          self.lib_file_ids.remove(&existing);
-        }
-      }
-      return existing;
-    }
-    let id = self.file_registry.intern(&key);
+    let id = self.file_registry.intern(&key, origin);
     if matches!(origin, FileOrigin::Lib) {
       self.lib_file_ids.insert(id);
+    } else {
+      self.lib_file_ids.remove(&id);
     }
     id
   }
@@ -4280,6 +4272,15 @@ impl ProgramState {
     let Some(key) = self.file_key_for_id(file) else {
       return Err(HostError::new(format!("missing file key for {file:?}")));
     };
+    let origin = self
+      .file_registry
+      .origin(file)
+      .unwrap_or(FileOrigin::Source);
+    if matches!(origin, FileOrigin::Lib) {
+      if let Some(text) = self.lib_texts.get(&file) {
+        return Ok(text.clone());
+      }
+    }
     if let Some(text) = self.file_overrides.get(&key) {
       return Ok(text.clone());
     }
@@ -4311,7 +4312,11 @@ impl ProgramState {
       .file_registry
       .lookup_key(file)
       .unwrap_or_else(|| panic!("file {:?} must be interned before setting inputs", file));
-    self.typecheck_db.set_file(file, key, kind, text);
+    let origin = self
+      .file_registry
+      .origin(file)
+      .unwrap_or(FileOrigin::Source);
+    self.typecheck_db.set_file(file, key, kind, text, origin);
   }
 
   fn parse_via_salsa(
@@ -6848,6 +6853,7 @@ impl ProgramState {
                 }
               }
               result.expr_types[idx] = ty;
+            }
           }
         }
       }
@@ -6858,7 +6864,6 @@ impl ProgramState {
       }
       self.current_file = prev_file;
       return Err(err);
-    }
     }
     let res = Arc::new(result);
     if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
