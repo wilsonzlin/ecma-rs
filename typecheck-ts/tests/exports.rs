@@ -278,11 +278,69 @@ fn imported_overloads_preserve_all_signatures() {
     .and_then(|entry| entry.def)
     .expect("asNumber def");
   assert_eq!(
-    program.display_type(program.type_of_def(str_def)).to_string(),
+    program
+      .display_type(program.type_of_def(str_def))
+      .to_string(),
     "string"
   );
   assert_eq!(
-    program.display_type(program.type_of_def(num_def)).to_string(),
+    program
+      .display_type(program.type_of_def(num_def))
+      .to_string(),
+    "number"
+  );
+}
+
+#[test]
+fn typeof_imported_overload_merges_signatures() {
+  let mut host = MemoryHost::default();
+  let key_math = fk(320);
+  let key_use = fk(321);
+  host.insert(
+    key_math.clone(),
+    "export function overload(value: string): string;\n\
+     export function overload(value: number): number;\n\
+     export function overload(value: string | number) { return value; }",
+  );
+  host.insert(
+    key_use.clone(),
+    "import { overload } from \"./math\";\n\
+     type Over = typeof overload;\n\
+     const fn: Over = overload;\n\
+     export const viaString = fn(\"hi\");\n\
+     export const viaNumber = fn(2);",
+  );
+  host.link(key_use.clone(), "./math", key_math.clone());
+
+  let program = Program::new(host, vec![key_use.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let use_id = program.file_id(&key_use).expect("use id");
+  let exports = program.exports_of(use_id);
+
+  let via_string = exports
+    .get("viaString")
+    .expect("string overload call export");
+  let via_string_def = via_string.def.expect("viaString def");
+  assert_eq!(
+    program
+      .display_type(program.type_of_def(via_string_def))
+      .to_string(),
+    "string"
+  );
+
+  let via_number = exports
+    .get("viaNumber")
+    .expect("number overload call export");
+  let via_number_def = via_number.def.expect("viaNumber def");
+  assert_eq!(
+    program
+      .display_type(program.type_of_def(via_number_def))
+      .to_string(),
     "number"
   );
 }

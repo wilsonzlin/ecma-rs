@@ -3039,12 +3039,12 @@ impl ProgramState {
         DefKind::Interface(_) | DefKind::TypeAlias(_) => sem_ts::Namespace::TYPE,
         _ => sem_ts::Namespace::VALUE,
       };
-        let mut mapped_def = def_id;
-        if let DefKind::Import(import) = &data.kind {
-          if let Some(target) = self
-            .exports_of_file(import.from)?
-            .get(&import.original)
-            .and_then(|entry| entry.def)
+      let mut mapped_def = def_id;
+      if let DefKind::Import(import) = &data.kind {
+        if let Some(target) = self
+          .exports_of_file(import.from)?
+          .get(&import.original)
+          .and_then(|entry| entry.def)
         {
           mapped_def = target;
         }
@@ -3090,7 +3090,7 @@ impl ProgramState {
             }
           }
         }
-        if defs.len() > 1 {
+        if !defs.is_empty() {
           for def in defs.iter().copied() {
             if let Some(def_data) = self.def_data.get(&def) {
               self
@@ -3118,10 +3118,87 @@ impl ProgramState {
     for ((file, name), mut defs) in grouped.into_iter() {
       defs.sort_by_key(|(id, span)| (span.start, span.end, id.0));
       let ordered: Vec<_> = defs.into_iter().map(|(id, _)| id).collect();
-      if ordered.len() > 1 {
-        self.callable_overloads.insert((file, name), ordered);
+      self.callable_overloads.insert((file, name), ordered);
+    }
+  }
+
+  fn callable_overload_defs(&mut self, def: DefId) -> Option<Vec<DefId>> {
+    let (file, name) = {
+      let data = self.def_data.get(&def)?;
+      if !matches!(data.kind, DefKind::Function(_)) {
+        return None;
+      }
+      (data.file, data.name.clone())
+    };
+    if self.callable_overloads.is_empty() {
+      self.rebuild_callable_overloads();
+    }
+    let key = (file, name);
+    Some(
+      self
+        .callable_overloads
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| vec![def]),
+    )
+  }
+
+  fn merged_overload_callable_type(
+    &mut self,
+    defs: &[DefId],
+    store: &Arc<tti::TypeStore>,
+    cache: &mut HashMap<TypeId, tti::TypeId>,
+  ) -> Option<tti::TypeId> {
+    if defs.is_empty() {
+      return None;
+    }
+    let mut overloads = Vec::new();
+    let mut seen_sigs = HashSet::new();
+    for def in defs.iter().copied() {
+      if !self.interned_def_types.contains_key(&def) {
+        let _ = self.type_of_def(def);
+      }
+      let ty = self.interned_def_types.get(&def).copied().or_else(|| {
+        self.def_types.get(&def).copied().map(|store_ty| {
+          let mapped = store.canon(convert_type_for_display(store_ty, self, store, cache));
+          self.interned_def_types.insert(def, mapped);
+          mapped
+        })
+      });
+      let Some(ty) = ty else {
+        continue;
+      };
+      if let tti::TypeKind::Callable { overloads: sigs } = store.type_kind(ty) {
+        let mut sigs: Vec<_> = sigs.iter().copied().collect();
+        sigs.sort();
+        for sig in sigs.into_iter() {
+          if seen_sigs.insert(sig) {
+            overloads.push(sig);
+          }
+        }
       }
     }
+    if overloads.is_empty() {
+      return None;
+    }
+    Some(store.canon(store.intern_type(tti::TypeKind::Callable { overloads })))
+  }
+
+  fn callable_overload_type_for_def(
+    &mut self,
+    def: DefId,
+    store: &Arc<tti::TypeStore>,
+    cache: &mut HashMap<TypeId, tti::TypeId>,
+  ) -> Option<tti::TypeId> {
+    let defs = self.callable_overload_defs(def)?;
+    if defs.len() < 2 {
+      return None;
+    }
+    let merged = self.merged_overload_callable_type(&defs, store, cache)?;
+    for member in defs {
+      self.interned_def_types.insert(member, merged);
+    }
+    Some(merged)
   }
 
   fn merge_callable_overload_types(&mut self) {
@@ -3141,42 +3218,10 @@ impl ProgramState {
       if defs.len() < 2 {
         continue;
       }
-      let mut overloads = Vec::new();
-      let mut seen_sigs = HashSet::new();
-      // Preserve declaration order from the binder while deterministically
-      // deduplicating on signature identity.
-      for def in defs.iter().copied() {
-        if !self.interned_def_types.contains_key(&def) {
-          let _ = self.type_of_def(def);
+      if let Some(merged) = self.merged_overload_callable_type(&defs, &store, &mut cache) {
+        for def in defs.into_iter() {
+          self.interned_def_types.insert(def, merged);
         }
-        let Some(ty) = self
-          .interned_def_types
-          .get(&def)
-          .copied()
-          .or_else(|| {
-            self.def_types.get(&def).copied().map(|store_ty| {
-              let mapped = store.canon(convert_type_for_display(store_ty, self, &store, &mut cache));
-              self.interned_def_types.insert(def, mapped);
-              mapped
-            })
-          })
-        else {
-          continue;
-        };
-        if let tti::TypeKind::Callable { overloads: sigs } = store.type_kind(ty) {
-          for sig in sigs.iter().copied() {
-            if seen_sigs.insert(sig) {
-              overloads.push(sig);
-            }
-          }
-        }
-      }
-      if overloads.is_empty() {
-        continue;
-      }
-      let merged = store.canon(store.intern_type(tti::TypeKind::Callable { overloads }));
-      for def in defs.into_iter() {
-        self.interned_def_types.insert(def, merged);
       }
     }
   }
@@ -4791,23 +4836,26 @@ impl ProgramState {
   }
 
   fn export_type_for_def(&mut self, def: DefId) -> Result<Option<TypeId>, FatalError> {
-    if self.interned_store.is_some() && !self.def_types.contains_key(&def) {
-      self.type_of_def(def)?;
-    }
-    if let Some(ty) = self.interned_def_types.get(&def).copied() {
-      return Ok(Some(ty));
-    }
-    let Some(store_ty) = self.def_types.get(&def).copied() else {
-      return Ok(None);
-    };
-    if let Some(store) = self.interned_store.as_ref() {
+    if let Some(store) = self.interned_store.clone() {
       let mut cache = HashMap::new();
-      let interned = convert_type_for_display(store_ty, self, store, &mut cache);
+      if let Some(merged) = self.callable_overload_type_for_def(def, &store, &mut cache) {
+        return Ok(Some(merged));
+      }
+      if !self.def_types.contains_key(&def) {
+        self.type_of_def(def)?;
+      }
+      if let Some(ty) = self.interned_def_types.get(&def).copied() {
+        return Ok(Some(ty));
+      }
+      let Some(store_ty) = self.def_types.get(&def).copied() else {
+        return Ok(None);
+      };
+      let interned = convert_type_for_display(store_ty, self, &store, &mut cache);
       let interned = store.canon(interned);
       self.interned_def_types.insert(def, interned);
       Ok(Some(interned))
     } else {
-      Ok(Some(store_ty))
+      Ok(self.def_types.get(&def).copied())
     }
   }
 
@@ -6300,26 +6348,50 @@ impl ProgramState {
           .map(|ty| store.canon(convert_type_for_display(ty, state, store, cache)))
       })
     };
-    for (name, binding) in self.global_bindings.iter() {
-      let ty = binding
-        .def
-        .and_then(|d| map_def_ty(self, &store, &mut convert_cache, d))
-        .unwrap_or_else(|| store.primitive_ids().unknown);
-      bindings.insert(name.clone(), ty);
+    let global_binding_entries: Vec<_> = self
+      .global_bindings
+      .iter()
+      .map(|(name, binding)| (name.clone(), binding.clone()))
+      .collect();
+    let file_binding_entries: Option<Vec<_>> = self.files.get(&file).map(|state| {
+      state
+        .bindings
+        .iter()
+        .map(|(name, binding)| (name.clone(), binding.clone()))
+        .collect()
+    });
+    let mut bind = |name: &str, binding: &SymbolBinding| {
+      let mut def_for_resolver = binding.def;
+      let mut ty = None;
       if let Some(def) = binding.def {
-        binding_defs.insert(name.clone(), def);
-      }
-    }
-    if let Some(file_state) = self.files.get(&file) {
-      for (name, binding) in file_state.bindings.iter() {
-        let ty = binding
-          .def
-          .and_then(|d| map_def_ty(self, &store, &mut convert_cache, d))
-          .unwrap_or_else(|| store.primitive_ids().unknown);
-        bindings.insert(name.clone(), ty);
-        if let Some(def) = binding.def {
-          binding_defs.insert(name.clone(), def);
+        if let Some(defs) = self.callable_overload_defs(def) {
+          if let Some(first) = defs.first().copied() {
+            def_for_resolver = Some(first);
+          }
+          if defs.len() > 1 {
+            if let Some(merged) =
+              self.callable_overload_type_for_def(def, &store, &mut convert_cache)
+            {
+              ty = Some(merged);
+            }
+          }
         }
+        if ty.is_none() {
+          ty = map_def_ty(self, &store, &mut convert_cache, def);
+        }
+      }
+      let ty = ty.unwrap_or_else(|| store.primitive_ids().unknown);
+      bindings.insert(name.to_string(), ty);
+      if let Some(def) = def_for_resolver {
+        binding_defs.insert(name.to_string(), def);
+      }
+    };
+    for (name, binding) in global_binding_entries.into_iter() {
+      bind(&name, &binding);
+    }
+    if let Some(bindings) = file_binding_entries {
+      for (name, binding) in bindings.into_iter() {
+        bind(&name, &binding);
       }
     }
 

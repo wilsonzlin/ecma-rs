@@ -278,10 +278,6 @@ pub mod check {
     pub use crate::program::check::caches::*;
   }
 
-  pub mod cfg {
-    pub use crate::program::check::cfg::*;
-  }
-
   pub mod instantiate {
     pub use crate::program::check::instantiate::*;
   }
