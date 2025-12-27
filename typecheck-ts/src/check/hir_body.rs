@@ -2535,9 +2535,11 @@ fn loc_to_range(_file: FileId, loc: Loc) -> TextRange {
   TextRange::new(range.start, range.end)
 }
 
-/// Flow-sensitive body checker built directly on `hir-js` bodies. This is a
-/// lightweight, statement-level analysis that uses a CFG plus a simple lattice
-/// of variable environments to drive narrowing.
+/// Flow-sensitive body checker built directly on `hir-js` bodies. Locals
+/// semantics are used to resolve identifier bindings to stable keys, and the
+/// initial environment is keyed by those bindings. This is a lightweight,
+/// statement-level analysis that uses a CFG plus a simple lattice of variable
+/// environments to drive narrowing.
 pub fn check_body_with_env(
   body_id: BodyId,
   body: &Body,
@@ -2582,7 +2584,6 @@ struct FlowBodyChecker<'a> {
   return_indices: HashMap<StmtId, usize>,
   widen_object_literals: bool,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
-  initial: HashMap<FlowBindingId, TypeId>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2669,7 +2670,6 @@ impl<'a> FlowBodyChecker<'a> {
       return_indices,
       widen_object_literals: true,
       ref_expander,
-      initial: initial.clone(),
     }
   }
 
