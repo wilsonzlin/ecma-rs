@@ -15,6 +15,7 @@ impl<'a> Parser<'a> {
       },
       top_level: true,
       in_namespace: false,
+      asi: super::AsiContext::Statements,
     };
     let body = self.stmts(ctx, TT::EOF)?;
     self.require(TT::EOF)?;

@@ -6,7 +6,7 @@ use parse_js::ast::ts_stmt::InterfaceDecl;
 use parse_js::ast::type_expr::{TypeExpr, TypeMember, TypePropertyKey};
 use parse_js::lex::Lexer;
 use parse_js::parse::expr::pat::ParsePatternRules;
-use parse_js::parse::{ParseCtx, Parser};
+use parse_js::parse::{AsiContext, ParseCtx, Parser};
 use parse_js::token::TT;
 use parse_js::Dialect;
 use parse_js::ParseOptions;
@@ -27,6 +27,7 @@ fn default_ctx(opts: &ParseOptions) -> ParseCtx {
     },
     top_level: true,
     in_namespace: false,
+    asi: AsiContext::Statements,
   }
 }
 

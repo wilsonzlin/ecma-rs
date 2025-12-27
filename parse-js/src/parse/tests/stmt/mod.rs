@@ -1,7 +1,7 @@
 use crate::lex::Lexer;
 use crate::parse::expr::pat::ParsePatternRules;
-use crate::parse::ParseCtx;
 use crate::parse::Parser;
+use crate::parse::{AsiContext, ParseCtx};
 use crate::util::test::evaluate_test_input_files;
 use crate::Dialect;
 use crate::ParseOptions;
@@ -21,6 +21,7 @@ fn parse_stmt_and_serialize(input: String) -> Value {
     },
     top_level: true,
     in_namespace: false,
+    asi: AsiContext::Statements,
   };
   let node = parser.stmt(ctx).unwrap();
   serde_json::to_value(&node).unwrap()

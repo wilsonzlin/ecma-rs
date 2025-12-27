@@ -4,7 +4,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::lex::Lexer;
 use parse_js::parse::expr::pat::ParsePatternRules;
-use parse_js::parse::{ParseCtx, Parser};
+use parse_js::parse::{AsiContext, ParseCtx, Parser};
 use parse_js::token::TT;
 use parse_js::{Dialect, ParseOptions, SourceType};
 
@@ -21,6 +21,7 @@ fn parse_expression(input: &str) -> Node<Expr> {
     },
     top_level: true,
     in_namespace: false,
+    asi: AsiContext::Statements,
   };
   let expr = parser.expr(ctx, [TT::EOF]).expect("parse expression");
   parser.require(TT::EOF).expect("exhaust input");

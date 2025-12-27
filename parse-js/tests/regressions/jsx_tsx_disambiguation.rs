@@ -3,7 +3,7 @@ use parse_js::error::SyntaxResult;
 use parse_js::lex::Lexer;
 use parse_js::operator::OperatorName;
 use parse_js::parse::expr::pat::ParsePatternRules;
-use parse_js::parse::{ParseCtx, Parser};
+use parse_js::parse::{AsiContext, ParseCtx, Parser};
 use parse_js::token::TT;
 use parse_js::Dialect;
 use parse_js::{ParseOptions, SourceType};
@@ -23,6 +23,7 @@ fn parse_expr(source: &str, dialect: Dialect) -> SyntaxResult<parse_js::ast::nod
     },
     top_level: true,
     in_namespace: false,
+    asi: AsiContext::Statements,
   };
   let expr = parser.expr(ctx, [TT::EOF])?;
   parser.require(TT::EOF)?;

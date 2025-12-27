@@ -12,6 +12,7 @@ use crate::error::SyntaxErrorType;
 use crate::error::SyntaxResult;
 use crate::parse::expr::pat::ParsePatternRules;
 use crate::parse::expr::Asi;
+use crate::parse::AsiContext;
 use crate::token::TT;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -91,7 +92,9 @@ impl<'a> Parser<'a> {
           VarDeclParseMode::Asi => Asi::can(),
           VarDeclParseMode::Leftmost => Asi::no(),
         };
-        let initializer = if parse_mode == VarDeclParseMode::Leftmost && p.in_for_header {
+        let initializer = if parse_mode == VarDeclParseMode::Leftmost
+          && matches!(ctx.asi, AsiContext::StatementHeader)
+        {
           p.consume_if(TT::Equals).and_then(|| {
             p.expr_with_asi(
               ctx,

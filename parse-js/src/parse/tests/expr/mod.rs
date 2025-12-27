@@ -4,8 +4,8 @@ use crate::ast::type_expr::TypeEntityName;
 use crate::ast::type_expr::TypeExpr;
 use crate::lex::Lexer;
 use crate::parse::expr::pat::ParsePatternRules;
-use crate::parse::ParseCtx;
 use crate::parse::Parser;
+use crate::parse::{AsiContext, ParseCtx};
 use crate::token::TT;
 use crate::util::test::evaluate_test_input_files;
 use crate::Dialect;
@@ -22,6 +22,7 @@ fn parse_expr_with_options(input: &str, opts: ParseOptions) -> Node<Expr> {
     },
     top_level: true,
     in_namespace: false,
+    asi: AsiContext::Statements,
   };
   parser.expr(ctx, [TT::Semicolon]).unwrap()
 }

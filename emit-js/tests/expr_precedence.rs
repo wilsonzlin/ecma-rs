@@ -3,7 +3,7 @@ use parse_js::ast::expr::Expr;
 use parse_js::ast::node::Node;
 use parse_js::lex::Lexer;
 use parse_js::parse::expr::pat::ParsePatternRules;
-use parse_js::parse::{ParseCtx, Parser};
+use parse_js::parse::{AsiContext, ParseCtx, Parser};
 use parse_js::token::TT;
 use parse_js::{Dialect, ParseOptions, SourceType};
 use serde_json::Value;
@@ -21,6 +21,7 @@ fn parse_expr(source: &str) -> Node<Expr> {
     },
     top_level: true,
     in_namespace: false,
+    asi: AsiContext::Statements,
   };
   let expr = parser
     .expr(ctx, [TT::EOF])

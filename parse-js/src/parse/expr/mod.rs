@@ -837,7 +837,7 @@ impl<'a> Parser<'a> {
     asi: &mut Asi,
   ) -> SyntaxResult<Node<Expr>> {
     let mut left = self.expr_operand(ctx, terminators, asi)?;
-    let asi_allowed = asi.can_end_with_asi && !self.in_for_header;
+    let asi_allowed = asi.can_end_with_asi && ctx.asi.allows_asi();
 
     loop {
       let cp = self.checkpoint();
@@ -1031,7 +1031,7 @@ impl<'a> Parser<'a> {
           // TypeScript: For error recovery, trigger ASI when we see tokens that typically start new constructs
           // This handles cases like `await 1` (in contexts where await is an identifier),
           // arrow functions with malformed types `(a): =>`, object literals after expressions, etc.
-          if asi.can_end_with_asi
+          if asi_allowed
             && matches!(
               t.typ,
               TT::Colon |           // Arrow function malformed type annotation: (a):

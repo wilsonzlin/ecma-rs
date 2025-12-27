@@ -32,6 +32,7 @@ pub struct ParseCtx {
   pub rules: ParsePatternRules, // For simplicity, this is a copy, not a non-mutable reference, to avoid having a separate lifetime for it. The value is only two booleans, so a reference is probably slower, and it's supposed to be immutable (i.e. changes come from altered copying, not mutating the original single instance), so there shouldn't be any difference between a reference and a copy.
   pub top_level: bool,
   pub in_namespace: bool,
+  pub asi: AsiContext,
 }
 
 impl ParseCtx {
@@ -63,6 +64,26 @@ impl ParseCtx {
       in_namespace: true,
       ..*self
     }
+  }
+
+  pub fn with_asi(&self, asi: AsiContext) -> ParseCtx {
+    ParseCtx { asi, ..*self }
+  }
+
+  pub fn for_statement_header(&self) -> ParseCtx {
+    self.with_asi(AsiContext::StatementHeader)
+  }
+}
+
+#[derive(Clone, Copy)]
+pub enum AsiContext {
+  Statements,
+  StatementHeader,
+}
+
+impl AsiContext {
+  pub fn allows_asi(self) -> bool {
+    matches!(self, AsiContext::Statements)
   }
 }
 
@@ -122,7 +143,6 @@ pub struct Parser<'a> {
   next_tok_i: usize,
   options: ParseOptions,
   allow_bare_ts_type_args: bool,
-  in_for_header: bool,
 }
 
 // We extend this struct with added methods in the various submodules, instead of simply using free functions and passing `&mut Parser` around, for several reasons:
@@ -140,19 +160,7 @@ impl<'a> Parser<'a> {
       next_tok_i: 0,
       options,
       allow_bare_ts_type_args: false,
-      in_for_header: false,
     }
-  }
-
-  fn with_for_header<T>(
-    &mut self,
-    f: impl FnOnce(&mut Self) -> SyntaxResult<T>,
-  ) -> SyntaxResult<T> {
-    let prev = self.in_for_header;
-    self.in_for_header = true;
-    let out = f(self);
-    self.in_for_header = prev;
-    out
   }
 
   pub fn options(&self) -> ParseOptions {

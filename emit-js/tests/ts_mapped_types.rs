@@ -6,8 +6,8 @@ use parse_js::ast::ts_stmt::InterfaceDecl;
 use parse_js::ast::type_expr::TypeExpr;
 use parse_js::lex::Lexer;
 use parse_js::parse::expr::pat::ParsePatternRules;
-use parse_js::parse::ParseCtx;
 use parse_js::parse::Parser;
+use parse_js::parse::{AsiContext, ParseCtx};
 use parse_js::token::TT;
 use parse_js::Dialect;
 use parse_js::ParseOptions;
@@ -26,6 +26,7 @@ fn parse_type_expr(src: &str) -> Node<TypeExpr> {
     },
     top_level: true,
     in_namespace: false,
+    asi: AsiContext::Statements,
   };
   let expr = parser.type_expr(ctx).expect("parse type expression");
   parser.require(TT::EOF).expect("exhaust input");
