@@ -3620,8 +3620,12 @@ impl ProgramState {
   }
 
   fn set_salsa_inputs(&mut self, file: FileId, kind: FileKind, text: Arc<str>) {
-    self.typecheck_db.set_file_kind(file, kind);
-    self.typecheck_db.set_file_text(file, text);
+    if let Some(key) = self.file_key_for_id(file) {
+      self.typecheck_db.set_file(file, key, kind, text);
+    } else {
+      self.typecheck_db.set_file_kind(file, kind);
+      self.typecheck_db.set_file_text(file, text);
+    }
   }
 
   fn parse_via_salsa(
