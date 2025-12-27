@@ -27,6 +27,7 @@ ordered-float = "3"
 num-bigint = "0.4"
 bumpalo = { version = "3.14", features = ["collections"] }
 sha2 = "0.10"
+salsa = "0.16"
 
 [dev-dependencies]
 diagnostics = { path = "../diagnostics" }

@@ -133,10 +133,12 @@
 
 mod api;
 pub mod codes;
+pub mod db;
 mod error;
 mod expand;
 mod profile;
 mod program;
+mod sem_hir;
 #[cfg(feature = "serde")]
 mod snapshot;
 mod type_queries;

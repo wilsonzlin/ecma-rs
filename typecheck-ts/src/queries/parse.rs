@@ -2,23 +2,37 @@ pub use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use std::sync::Arc;
 
 use crate::lib_support::FileKind;
 
 /// Result of parsing a single file.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParseResult {
   /// Parsed AST, if the source was syntactically valid.
-  pub ast: Option<Node<TopLevel>>,
+  pub ast: Option<Arc<Node<TopLevel>>>,
   /// Diagnostics emitted during parsing.
   pub diagnostics: Vec<Diagnostic>,
 }
+
+impl PartialEq for ParseResult {
+  fn eq(&self, other: &Self) -> bool {
+    let ast_equal = match (&self.ast, &other.ast) {
+      (Some(left), Some(right)) => Arc::ptr_eq(left, right),
+      (None, None) => true,
+      _ => false,
+    };
+    ast_equal && self.diagnostics == other.diagnostics
+  }
+}
+
+impl Eq for ParseResult {}
 
 impl ParseResult {
   /// Convenience helper for a successful parse with no diagnostics.
   pub fn ok(ast: Node<TopLevel>) -> Self {
     Self {
-      ast: Some(ast),
+      ast: Some(Arc::new(ast)),
       diagnostics: Vec::new(),
     }
   }
