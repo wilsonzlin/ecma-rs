@@ -242,7 +242,10 @@ fn namespace_value_members_use_member_types() {
     "string",
     "namespace property should retain declared type"
   );
-  let offset_y = source.rfind("y;").map(|idx| idx as u32).expect("offset for y usage");
+  let offset_y = source
+    .rfind("y;")
+    .map(|idx| idx as u32)
+    .expect("offset for y usage");
   let y_ty = program.type_at(file_id, offset_y).expect("type at y");
   assert_eq!(
     program.display_type(y_ty).to_string(),

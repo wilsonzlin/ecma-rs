@@ -40,9 +40,9 @@ const value = N.I;
   let ns_ty = program.type_of_def_interned(ns_def);
   let props = program.properties_of(ns_ty);
   assert!(
-    props.iter().all(|prop| {
-      !matches!(&prop.key, PropertyKey::String(name) if name == "I")
-    }),
+    props
+      .iter()
+      .all(|prop| { !matches!(&prop.key, PropertyKey::String(name) if name == "I") }),
     "namespace should not expose interface members as values"
   );
 

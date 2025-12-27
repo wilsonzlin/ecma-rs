@@ -6,12 +6,13 @@ use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   ArrayElement, AssignOp, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr,
   NameId, NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind,
-  UnaryOp, VarDeclKind,
+  UnaryOp,
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
+use parse_js::ast::expr::CallArg;
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
@@ -26,9 +27,8 @@ use types_ts_interned::{
 };
 
 use super::cfg::{BlockId, ControlFlowGraph};
-pub use super::flow::FlowBindingId;
-use super::flow::{Env, FlowKey, PathSegment};
-pub use super::flow_bindings::FlowBindings;
+use super::flow::{Env, FlowBindingId, FlowKey, PathSegment};
+use super::flow_bindings::FlowBindings;
 use super::flow_narrow::{
   and_facts, narrow_by_asserted, narrow_by_assignability, narrow_by_discriminant_path,
   narrow_by_in_check, narrow_by_instanceof_rhs, narrow_by_literal, narrow_by_nullish_equality,
@@ -38,11 +38,9 @@ use super::flow_narrow::{
 
 use super::caches::BodyCaches;
 use super::expr::resolve_call;
-use super::overload::callable_signatures;
+use super::overload::{callable_signatures, OverloadContext};
 use super::type_expr::{TypeLowerer, TypeResolver};
-use super::widen::{
-  widen_array_elements, widen_literal, widen_object_literal_props, widen_union_literals,
-};
+use super::widen::{widen_array_elements, widen_literal, widen_object_literal_props};
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
 use semantic_js::ts::locals::TsLocalSemantics;
@@ -58,11 +56,13 @@ struct Binding {
   type_params: Vec<TypeParamDecl>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 struct ExprContext {
   expected: Option<TypeId>,
   const_context: bool,
   preserve_inferred: bool,
+  record_type: bool,
+  emit_diagnostics: bool,
 }
 
 impl ExprContext {
@@ -73,11 +73,16 @@ impl ExprContext {
       ..Default::default()
     }
   }
+}
 
-  fn with_expected(expected: Option<TypeId>) -> Self {
+impl Default for ExprContext {
+  fn default() -> Self {
     Self {
-      expected,
-      ..Default::default()
+      expected: None,
+      const_context: false,
+      preserve_inferred: false,
+      record_type: true,
+      emit_diagnostics: true,
     }
   }
 }
@@ -443,7 +448,7 @@ pub fn check_body(
   resolver: Option<Arc<dyn TypeResolver>>,
 ) -> BodyCheckResult {
   check_body_with_expander(
-    body_id, body, names, file, ast, store, caches, bindings, resolver, None, None,
+    body_id, body, names, file, ast, store, caches, bindings, resolver, None,
   )
 }
 
@@ -461,7 +466,6 @@ pub fn check_body_with_expander(
   bindings: &HashMap<String, TypeId>,
   resolver: Option<Arc<dyn TypeResolver>>,
   relate_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
-  contextual_fn_ty: Option<TypeId>,
 ) -> BodyCheckResult {
   let prim = store.primitive_ids();
   let expr_types = vec![prim.unknown; body.exprs.len()];
@@ -526,7 +530,6 @@ pub fn check_body_with_expander(
     expr_context: ExprContext::default(),
     file,
     ref_expander: relate_expander,
-    contextual_fn_ty,
     _names: names,
     _bump: Bump::new(),
   };
@@ -591,9 +594,113 @@ struct Checker<'a> {
   expr_context: ExprContext,
   file: FileId,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
-  contextual_fn_ty: Option<TypeId>,
   _names: &'a NameInterner,
   _bump: Bump,
+}
+
+struct CallContext<'a, 'b> {
+  checker: &'a mut Checker<'b>,
+  args: &'a [Node<CallArg>],
+  opts: ExprContext,
+}
+
+impl<'a, 'b> CallContext<'a, 'b> {
+  fn new(checker: &'a mut Checker<'b>, args: &'a [Node<CallArg>], opts: ExprContext) -> Self {
+    Self {
+      checker,
+      args,
+      opts,
+    }
+  }
+}
+
+impl<'a, 'b> OverloadContext for CallContext<'a, 'b> {
+  fn contextual_arg_type(&mut self, index: usize, expected: TypeId) -> Option<TypeId> {
+    let arg = self.args.get(index)?;
+    match arg.stx.value.stx.as_ref() {
+      AstExpr::ArrowFunc(func) => {
+        let contextual_sig = callable_signatures(self.checker.store.as_ref(), expected)
+          .into_iter()
+          .next()
+          .map(|id| self.checker.store.signature(id).clone());
+        let (ty, _) = self.checker.function_type_with_context(
+          &func.stx.func,
+          ExprContext {
+            expected: Some(expected),
+            record_type: self.opts.record_type,
+            emit_diagnostics: self.opts.emit_diagnostics,
+            ..Default::default()
+          },
+          contextual_sig.as_ref(),
+        );
+        Some(ty)
+      }
+      AstExpr::Func(func) => {
+        let contextual_sig = callable_signatures(self.checker.store.as_ref(), expected)
+          .into_iter()
+          .next()
+          .map(|id| self.checker.store.signature(id).clone());
+        let (ty, _) = self.checker.function_type_with_context(
+          &func.stx.func,
+          ExprContext {
+            expected: Some(expected),
+            record_type: self.opts.record_type,
+            emit_diagnostics: self.opts.emit_diagnostics,
+            ..Default::default()
+          },
+          contextual_sig.as_ref(),
+        );
+        Some(ty)
+      }
+      AstExpr::LitArr(_) | AstExpr::LitObj(_) => Some(self.checker.check_expr_in_ctx(
+        &arg.stx.value,
+        ExprContext {
+          expected: Some(expected),
+          record_type: self.opts.record_type,
+          emit_diagnostics: self.opts.emit_diagnostics,
+          ..Default::default()
+        },
+      )),
+      _ => None,
+    }
+  }
+
+  fn actual_function_signature(
+    &mut self,
+    index: usize,
+    contextual_sig: &Signature,
+  ) -> Option<Signature> {
+    let arg = self.args.get(index)?;
+    match arg.stx.value.stx.as_ref() {
+      AstExpr::ArrowFunc(func) => {
+        let (_, actual) = self.checker.function_type_with_context(
+          &func.stx.func,
+          ExprContext {
+            expected: Some(contextual_sig.ret),
+            record_type: self.opts.record_type,
+            emit_diagnostics: self.opts.emit_diagnostics,
+            ..Default::default()
+          },
+          Some(contextual_sig),
+        );
+        Some(actual)
+      }
+      AstExpr::Func(func) => {
+        let (_, actual) = self.checker.function_type_with_context(
+          &func.stx.func,
+          ExprContext {
+            expected: Some(contextual_sig.ret),
+            record_type: self.opts.record_type,
+            emit_diagnostics: self.opts.emit_diagnostics,
+            ..Default::default()
+          },
+          Some(contextual_sig),
+        );
+        Some(actual)
+      }
+      _ => None,
+    }
+  }
 }
 
 impl<'a> Checker<'a> {
@@ -650,16 +757,13 @@ impl<'a> Checker<'a> {
         has_type_params = true;
         type_param_decls = self.lower_type_params(params);
       }
-      let contextual_sig = self.contextual_signature();
-      let annotated_return = func
+      self.expected_return = func
         .func
         .stx
         .return_type
         .as_ref()
         .map(|ret| self.lowerer.lower_type_expr(ret));
-      self.expected_return =
-        annotated_return.or_else(|| contextual_sig.as_ref().map(|sig| sig.ret));
-      self.bind_params(func.func, &type_param_decls, contextual_sig.as_ref());
+      self.bind_params(func.func, &type_param_decls);
       self.check_function_body(func.func);
       if has_type_params {
         self.lowerer.pop_type_param_scope();
@@ -705,14 +809,8 @@ impl<'a> Checker<'a> {
     false
   }
 
-  fn bind_params(
-    &mut self,
-    func: &Node<Func>,
-    type_param_decls: &[TypeParamDecl],
-    contextual_sig: Option<&Signature>,
-  ) {
-    let prim = self.store.primitive_ids();
-    for (idx, param) in func.stx.parameters.iter().enumerate() {
+  fn bind_params(&mut self, func: &Node<Func>, type_param_decls: &[TypeParamDecl]) {
+    for param in func.stx.parameters.iter() {
       let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
       let annotation = param
         .stx
@@ -720,10 +818,7 @@ impl<'a> Checker<'a> {
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
       let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
-      let contextual_param_ty = contextual_sig
-        .and_then(|sig| sig.params.get(idx))
-        .map(|param| param.ty);
-      let mut ty = annotation.or(contextual_param_ty).unwrap_or(prim.unknown);
+      let mut ty = annotation.unwrap_or(self.store.primitive_ids().unknown);
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
       }
@@ -746,21 +841,13 @@ impl<'a> Checker<'a> {
         self.check_stmt_list(block);
       }
       Some(FuncBody::Expression(expr)) => {
-        let ty = self.check_expr_in_ctx(expr, ExprContext::with_expected(self.expected_return));
+        let ty = self.check_expr(expr);
         if let Some(expected) = self.expected_return {
           self.check_assignable(expr, ty, expected);
         }
         self.return_types.push(ty);
       }
       None => {}
-    }
-  }
-
-  fn contextual_signature(&self) -> Option<Signature> {
-    let ty = self.contextual_fn_ty?;
-    match self.store.type_kind(ty) {
-      TypeKind::Callable { overloads } => overloads.first().map(|sig| self.store.signature(*sig)),
-      _ => None,
     }
   }
 
@@ -779,12 +866,11 @@ impl<'a> Checker<'a> {
         self.check_expr(&default_expr.stx.expression);
       }
       Stmt::Return(ret) => {
-        let ctx = ExprContext::with_expected(self.expected_return);
         let ty = ret
           .stx
           .value
           .as_ref()
-          .map(|v| self.check_expr_in_ctx(v, ctx))
+          .map(|v| self.check_expr(v))
           .unwrap_or(self.store.primitive_ids().undefined);
         if let (Some(expected), Some(value)) = (self.expected_return, ret.stx.value.as_ref()) {
           self.check_assignable(value, ty, expected);
@@ -988,17 +1074,7 @@ impl<'a> Checker<'a> {
     if annotation.is_some() {
       self.widen_object_literals = false;
     }
-    let init_ty = match annotation {
-      Some(expected) => self.check_expr_in_ctx(
-        init,
-        ExprContext {
-          expected: Some(expected),
-          const_context: self.expr_context.const_context,
-          preserve_inferred: true,
-        },
-      ),
-      None => self.check_expr(init),
-    };
+    let init_ty = self.check_expr(init);
     self.widen_object_literals = prev;
     if let Some(expected) = annotation {
       let contextual = self.contextual_arg_type(init_ty, expected);
@@ -1062,6 +1138,7 @@ impl<'a> Checker<'a> {
   fn with_expr_context<R>(&mut self, ctx: ExprContext, f: impl FnOnce(&mut Self) -> R) -> R {
     let prev_ctx = self.expr_context;
     let prev_widen = self.widen_object_literals;
+    let diag_checkpoint = self.diagnostics.len();
     if ctx.const_context {
       self.widen_object_literals = false;
     }
@@ -1069,6 +1146,9 @@ impl<'a> Checker<'a> {
     let result = f(self);
     self.expr_context = prev_ctx;
     self.widen_object_literals = prev_widen;
+    if !ctx.emit_diagnostics {
+      self.diagnostics.truncate(diag_checkpoint);
+    }
     result
   }
 
@@ -1079,14 +1159,16 @@ impl<'a> Checker<'a> {
   fn check_expr_in_ctx(&mut self, expr: &Node<AstExpr>, ctx: ExprContext) -> TypeId {
     self.with_expr_context(ctx, |checker| {
       let ty = checker.check_expr_inner(expr);
-      let record_ty = match (
-        checker.expr_context.expected,
-        checker.expr_context.preserve_inferred,
-      ) {
-        (Some(expected), false) => expected,
-        _ => ty,
-      };
-      checker.record_expr_type(expr.loc, record_ty);
+      if checker.expr_context.record_type {
+        let record_ty = match (
+          checker.expr_context.expected,
+          checker.expr_context.preserve_inferred,
+        ) {
+          (Some(expected), false) => expected,
+          _ => ty,
+        };
+        checker.record_expr_type(expr.loc, record_ty);
+      }
       ty
     })
   }
@@ -1157,77 +1239,93 @@ impl<'a> Checker<'a> {
           file: self.file,
           range: loc_to_range(self.file, call.loc),
         };
-        let resolution = resolve_call(
-          &self.store,
-          &self.relate,
-          callee_ty,
-          &arg_types,
-          this_arg,
-          self.expr_context.expected,
-          span,
-        );
+        let contextual_return = self.expr_context.expected;
+        let store_ptr: *const Arc<TypeStore> = &self.store;
+        let relate_ptr: *const RelateCtx<'_> = &self.relate;
+        let resolution = {
+          let mut context = CallContext::new(
+            self,
+            &call.stx.arguments,
+            ExprContext {
+              record_type: false,
+              emit_diagnostics: false,
+              ..Default::default()
+            },
+          );
+          resolve_call(
+            unsafe { &*store_ptr },
+            unsafe { &*relate_ptr },
+            callee_ty,
+            &arg_types,
+            this_arg,
+            contextual_return,
+            span,
+            Some(&mut context),
+          )
+        };
         for diag in &resolution.diagnostics {
           self.diagnostics.push(diag.clone());
         }
-        if resolution.diagnostics.is_empty() {
-          if let Some(sig_id) = resolution.signature {
-            let sig = self.store.signature(sig_id);
-            let params = self.params_for_call(&sig);
+        if let Some(sig_id) = resolution.signature {
+          let sig = self.store.signature(sig_id);
+          let params = self.params_for_call(&sig);
+          {
+            let mut recorder = CallContext::new(
+              self,
+              &call.stx.arguments,
+              ExprContext {
+                record_type: true,
+                emit_diagnostics: true,
+                ..Default::default()
+              },
+            );
             for (idx, arg) in call.stx.arguments.iter().enumerate() {
               if let Some(param) = params.get(idx) {
-                let arg_ty = arg_types
-                  .get(idx)
-                  .copied()
-                  .unwrap_or(self.store.primitive_ids().unknown);
-                self.check_assignable(&arg.stx.value, arg_ty, param.ty);
+                let arg_ty = recorder
+                  .contextual_arg_type(idx, param.ty)
+                  .unwrap_or_else(|| {
+                    recorder.checker.check_expr_in_ctx(
+                      &arg.stx.value,
+                      ExprContext {
+                        expected: Some(param.ty),
+                        record_type: true,
+                        emit_diagnostics: true,
+                        ..Default::default()
+                      },
+                    )
+                  });
+                recorder
+                  .checker
+                  .check_assignable(&arg.stx.value, arg_ty, param.ty);
               }
             }
-            if let TypeKind::Predicate {
-              parameter: Some(param_name),
-              asserted: Some(asserted),
-              asserts: true,
-            } = self.store.type_kind(sig.ret)
-            {
-              let target = params
-                .iter()
-                .enumerate()
-                .find(|(_, p)| p.name == Some(param_name))
-                .or_else(|| params.get(0).map(|p| (0usize, p)));
-              if let Some((idx, _)) = target {
-                if let Some(arg) = call.stx.arguments.get(idx) {
-                  if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
-                    self.insert_binding(id.stx.name.clone(), asserted.clone(), Vec::new());
-                  }
+          }
+          if let TypeKind::Predicate {
+            parameter: Some(param_name),
+            asserted: Some(asserted),
+            asserts: true,
+          } = self.store.type_kind(sig.ret)
+          {
+            let target = params
+              .iter()
+              .enumerate()
+              .find(|(_, p)| p.name == Some(param_name))
+              .or_else(|| params.get(0).map(|p| (0usize, p)));
+            if let Some((idx, _)) = target {
+              if let Some(arg) = call.stx.arguments.get(idx) {
+                if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
+                  self.insert_binding(id.stx.name.clone(), asserted.clone(), Vec::new());
                 }
               }
             }
-            let required = params.iter().filter(|p| !p.optional && !p.rest).count();
-            let has_rest = params.iter().any(|p| p.rest);
-            let max = if has_rest { None } else { Some(params.len()) };
-            if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
-              self
-                .diagnostics
-                .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
-            }
           }
-        }
-        let contextual_sig = resolution.signature.or_else(|| {
-          callable_signatures(self.store.as_ref(), callee_ty)
-            .into_iter()
-            .next()
-        });
-        if let Some(sig_id) = contextual_sig {
-          let sig = self.store.signature(sig_id);
-          let params = self.params_for_call(&sig);
-          for (idx, arg) in call.stx.arguments.iter().enumerate() {
-            if let Some(param) = params.get(idx) {
-              let arg_ty = arg_types
-                .get(idx)
-                .copied()
-                .unwrap_or(self.store.primitive_ids().unknown);
-              let contextual = self.contextual_arg_type(arg_ty, param.ty);
-              self.record_expr_type(arg.stx.value.loc, contextual);
-            }
+          let required = params.iter().filter(|p| !p.optional && !p.rest).count();
+          let has_rest = params.iter().any(|p| p.rest);
+          let max = if has_rest { None } else { Some(params.len()) };
+          if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
+            self
+              .diagnostics
+              .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
           }
         }
         resolution.return_type
@@ -1242,9 +1340,29 @@ impl<'a> Checker<'a> {
         self.member_type(obj_ty, "<computed>")
       }
       AstExpr::LitArr(arr) => self.array_literal_type(arr),
-      AstExpr::LitObj(obj) => self.check_object_literal(obj, self.expr_context),
-      AstExpr::Func(func) => self.function_type(&func.stx.func),
-      AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func),
+      AstExpr::LitObj(obj) => self.object_literal_type(obj),
+      AstExpr::Func(func) => {
+        let contextual_sig = self.expr_context.expected.and_then(|expected| {
+          callable_signatures(self.store.as_ref(), expected)
+            .into_iter()
+            .next()
+            .map(|id| self.store.signature(id).clone())
+        });
+        self
+          .function_type_with_context(&func.stx.func, self.expr_context, contextual_sig.as_ref())
+          .0
+      }
+      AstExpr::ArrowFunc(func) => {
+        let contextual_sig = self.expr_context.expected.and_then(|expected| {
+          callable_signatures(self.store.as_ref(), expected)
+            .into_iter()
+            .next()
+            .map(|id| self.store.signature(id).clone())
+        });
+        self
+          .function_type_with_context(&func.stx.func, self.expr_context, contextual_sig.as_ref())
+          .0
+      }
       AstExpr::IdPat(_) | AstExpr::ArrPat(_) | AstExpr::ObjPat(_) => {
         self.store.primitive_ids().unknown
       }
@@ -1281,227 +1399,57 @@ impl<'a> Checker<'a> {
   }
 
   fn array_literal_type(&mut self, arr: &Node<parse_js::ast::expr::lit::LitArrExpr>) -> TypeId {
-    let prim = self.store.primitive_ids();
-    let expected_array_elem =
-      self
-        .expr_context
-        .expected
-        .and_then(|expected| match self.store.type_kind(expected) {
-          TypeKind::Array { ty, .. } => Some(ty),
-          _ => None,
-        });
-    let expected_tuple =
-      self
-        .expr_context
-        .expected
-        .and_then(|expected| match self.store.type_kind(expected) {
-          TypeKind::Tuple(elems) => Some(elems),
-          _ => None,
-        });
-
-    let mut elem_types = Vec::new();
-    let mut tuple_elems = Vec::new();
-    let mut idx = 0usize;
-    for elem in arr.stx.elements.iter() {
+    let mut elems = Vec::new();
+    for (idx, elem) in arr.stx.elements.iter().enumerate() {
+      let elem_ctx = self.contextual_array_element_ctx(idx);
       match elem {
         parse_js::ast::expr::lit::LitArrElem::Single(v) => {
-          let expected_elem = expected_tuple
-            .as_ref()
-            .and_then(|elems| self.tuple_elem_expected_type(elems, idx))
-            .or(expected_array_elem);
-          let elem_ty = self.check_expr_in_ctx(
-            v,
-            ExprContext {
-              expected: expected_elem,
-              const_context: self.expr_context.const_context,
-              ..ExprContext::default()
-            },
-          );
-          elem_types.push(elem_ty);
-          tuple_elems.push(types_ts_interned::TupleElem {
-            ty: elem_ty,
-            optional: false,
-            rest: false,
-            readonly: self.expr_context.const_context,
-          });
-          idx += 1;
+          elems.push(self.check_array_element(v, elem_ctx))
         }
         parse_js::ast::expr::lit::LitArrElem::Rest(v) => {
-          let expected_elem = expected_tuple
-            .as_ref()
-            .and_then(|elems| self.tuple_elem_expected_type(elems, idx))
-            .or(expected_array_elem);
-          let rest_ty = self.check_expr_in_ctx(
-            v,
-            ExprContext {
-              expected: expected_elem,
-              const_context: self.expr_context.const_context,
-              ..ExprContext::default()
-            },
-          );
-          if let Some(elem_ty) = self.array_element_type(rest_ty) {
-            elem_types.push(elem_ty);
-          }
-          tuple_elems.push(types_ts_interned::TupleElem {
-            ty: rest_ty,
-            optional: false,
-            rest: true,
-            readonly: self.expr_context.const_context,
-          });
-          idx += 1;
+          elems.push(self.check_array_element(v, elem_ctx))
         }
-        parse_js::ast::expr::lit::LitArrElem::Empty => {
-          elem_types.push(prim.undefined);
-          tuple_elems.push(types_ts_interned::TupleElem {
-            ty: prim.undefined,
-            optional: true,
-            rest: false,
-            readonly: self.expr_context.const_context,
-          });
-          idx += 1;
-        }
+        parse_js::ast::expr::lit::LitArrElem::Empty => {}
       }
     }
-
-    let mut elem_ty = if elem_types.is_empty() {
-      prim.unknown
+    let elem_ty = if elems.is_empty() {
+      self.store.primitive_ids().unknown
     } else {
-      self.store.union(elem_types)
+      self.store.union(elems)
     };
-    let preserve_literals = if let Some(preserve) =
-      self.array_literal_context_preserves_literals(self.expr_context.expected)
-    {
-      preserve
-    } else {
-      self.expr_context.expected.is_some()
-    };
-    if !self.expr_context.const_context && !preserve_literals {
-      elem_ty = widen_union_literals(&self.store, elem_ty);
-    }
-    let array_ty = self.store.intern_type(TypeKind::Array {
+    self.store.intern_type(TypeKind::Array {
       ty: elem_ty,
       readonly: false,
-    });
-
-    if let Some(expected) = expected_tuple {
-      if self.array_literal_matches_tuple(&tuple_elems, &expected) {
-        return self.store.intern_type(TypeKind::Tuple(tuple_elems));
-      }
-    }
-
-    array_ty
+    })
   }
 
-  fn array_literal_context_preserves_literals(&self, expected: Option<TypeId>) -> Option<bool> {
-    let Some(ty) = expected else {
-      return None;
-    };
-    match self.store.type_kind(ty) {
-      TypeKind::Array { ty, .. } => Some(self.literal_context_type(ty)),
-      TypeKind::Tuple(_) => Some(true),
-      TypeKind::Union(members) | TypeKind::Intersection(members) => {
-        let mut decision: Option<bool> = None;
-        for member in members {
-          let Some(preserve) = self.array_literal_context_preserves_literals(Some(member)) else {
-            return None;
-          };
-          decision = match decision {
-            None => Some(preserve),
-            Some(existing) if existing == preserve => Some(existing),
-            _ => return None,
-          };
-        }
-        decision
-      }
+  fn check_array_element(&mut self, expr: &Node<AstExpr>, ctx: Option<ExprContext>) -> TypeId {
+    match ctx {
+      Some(ctx) => self.check_expr_in_ctx(expr, ctx),
+      None => self.check_expr(expr),
+    }
+  }
+
+  fn contextual_array_element_ctx(&self, index: usize) -> Option<ExprContext> {
+    self
+      .contextual_array_element_type(index)
+      .map(|ty| ExprContext {
+        expected: Some(ty),
+        const_context: self.expr_context.const_context,
+        ..ExprContext::default()
+      })
+  }
+
+  fn contextual_array_element_type(&self, index: usize) -> Option<TypeId> {
+    let contextual = self.expr_context.expected?;
+    match self.store.type_kind(contextual) {
+      TypeKind::Array { ty, .. } => Some(ty),
+      TypeKind::Tuple(elems) => elems
+        .get(index)
+        .map(|elem| elem.ty)
+        .or_else(|| elems.iter().find(|elem| elem.rest).map(|elem| elem.ty)),
       _ => None,
     }
-  }
-
-  fn literal_context_type(&self, ty: TypeId) -> bool {
-    match self.store.type_kind(ty) {
-      TypeKind::NumberLiteral(_)
-      | TypeKind::StringLiteral(_)
-      | TypeKind::BooleanLiteral(_)
-      | TypeKind::BigIntLiteral(_)
-      | TypeKind::TemplateLiteral(_) => true,
-      TypeKind::Union(members) | TypeKind::Intersection(members) => members
-        .into_iter()
-        .all(|member| self.literal_context_type(member)),
-      _ => false,
-    }
-  }
-
-  fn tuple_elem_expected_type(
-    &self,
-    expected: &[types_ts_interned::TupleElem],
-    idx: usize,
-  ) -> Option<TypeId> {
-    let mut pos = 0usize;
-    for elem in expected.iter() {
-      if elem.rest {
-        return Some(elem.ty);
-      }
-      if pos == idx {
-        return Some(elem.ty);
-      }
-      pos += 1;
-    }
-    None
-  }
-
-  fn array_element_type(&self, ty: TypeId) -> Option<TypeId> {
-    let prim = self.store.primitive_ids();
-    match self.store.type_kind(ty) {
-      TypeKind::Array { ty, .. } => Some(ty),
-      TypeKind::Tuple(elems) => {
-        if elems.is_empty() {
-          None
-        } else {
-          let members: Vec<_> = elems.into_iter().map(|e| e.ty).collect();
-          Some(self.store.union(members))
-        }
-      }
-      TypeKind::Union(members) => {
-        let collected: Vec<_> = members
-          .into_iter()
-          .filter_map(|member| self.array_element_type(member))
-          .collect();
-        if collected.is_empty() {
-          Some(prim.unknown)
-        } else {
-          Some(self.store.union(collected))
-        }
-      }
-      TypeKind::Intersection(members) => {
-        let collected: Vec<_> = members
-          .into_iter()
-          .filter_map(|member| self.array_element_type(member))
-          .collect();
-        if collected.is_empty() {
-          Some(prim.unknown)
-        } else {
-          Some(self.store.intersection(collected))
-        }
-      }
-      _ => Some(prim.unknown),
-    }
-  }
-
-  fn array_literal_matches_tuple(
-    &self,
-    actual: &[types_ts_interned::TupleElem],
-    expected: &[types_ts_interned::TupleElem],
-  ) -> bool {
-    if actual.iter().any(|e| e.rest) || expected.iter().any(|e| e.rest) {
-      return true;
-    }
-    if actual.len() > expected.len() {
-      return false;
-    }
-    if actual.len() == expected.len() {
-      return true;
-    }
-    expected.iter().skip(actual.len()).all(|e| e.optional)
   }
 
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
@@ -1687,64 +1635,39 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn check_object_literal(
-    &mut self,
-    obj: &Node<parse_js::ast::expr::lit::LitObjExpr>,
-    ctx: ExprContext,
-  ) -> TypeId {
-    let expected_obj = ctx
-      .expected
-      .and_then(|expected| self.contextual_object_expected(expected));
+  fn object_literal_type(&mut self, obj: &Node<parse_js::ast::expr::lit::LitObjExpr>) -> TypeId {
     let mut shape = Shape::new();
     for member in obj.stx.members.iter() {
       match &member.stx.typ {
         ObjMemberType::Valued { key, val } => {
-          let prop_name = match key {
-            ClassOrObjKey::Direct(direct) => Some(direct.stx.key.clone()),
-            ClassOrObjKey::Computed(_) => None,
-          };
-          match val {
-            ClassOrObjVal::Prop(Some(expr)) => {
-              let expected_prop = prop_name
-                .as_deref()
-                .and_then(|name| expected_obj.and_then(|expected| self.contextual_prop_type(expected, name)));
-              let value_ty = self.check_expr_in_ctx(
-                expr,
-                ExprContext {
-                  expected: expected_prop,
-                  const_context: ctx.const_context,
-                  preserve_inferred: ctx.preserve_inferred,
-                },
-              );
-              if let Some(name) = prop_name {
-                let prop_ty = self.contextual_object_prop_type(value_ty, expected_prop);
-                shape.properties.push(types_ts_interned::Property {
-                  key: PropKey::String(self.store.intern_name(name)),
-                  data: PropData {
-                    ty: prop_ty,
-                    optional: false,
-                    readonly: false,
-                    accessibility: None,
-                    is_method: false,
-                    origin: None,
-                    declared_on: None,
-                  },
-                });
-              }
+          let prop_key = match key {
+            ClassOrObjKey::Direct(direct) => {
+              PropKey::String(self.store.intern_name(direct.stx.key.clone()))
             }
-            ClassOrObjVal::StaticBlock(block) => self.check_stmt_list(&block.stx.body),
-            _ => {}
+            ClassOrObjKey::Computed(_) => continue,
+          };
+          if let ClassOrObjVal::Prop(Some(expr)) = val {
+            let ty = self.check_expr(expr);
+            shape.properties.push(types_ts_interned::Property {
+              key: prop_key,
+              data: PropData {
+                ty,
+                optional: false,
+                readonly: false,
+                accessibility: None,
+                is_method: false,
+                origin: None,
+                declared_on: None,
+              },
+            });
           }
         }
         ObjMemberType::Shorthand { id } => {
           let key = PropKey::String(self.store.intern_name(id.stx.name.clone()));
-          let expected_prop =
-            expected_obj.and_then(|expected| self.contextual_prop_type(expected, &id.stx.name));
-          let binding_ty = self
+          let ty = self
             .lookup(&id.stx.name)
             .map(|b| b.ty)
             .unwrap_or(self.store.primitive_ids().unknown);
-          let ty = self.contextual_object_prop_type(binding_ty, expected_prop);
           shape.properties.push(types_ts_interned::Property {
             key,
             data: PropData {
@@ -1759,155 +1682,17 @@ impl<'a> Checker<'a> {
           });
         }
         ObjMemberType::Rest { val } => {
-          let _ = self.check_expr_in_ctx(
-            val,
-            ExprContext {
-              expected: None,
-              const_context: ctx.const_context,
-              preserve_inferred: ctx.preserve_inferred,
-            },
-          );
+          let _ = self.check_expr(val);
         }
       }
     }
     let shape_id = self.store.intern_shape(shape);
     let obj = self.store.intern_object(ObjectType { shape: shape_id });
     let ty = self.store.intern_type(TypeKind::Object(obj));
-    if self.widen_object_literals && expected_obj.is_none() {
+    if self.widen_object_literals {
       widen_object_literal_props(&self.store, ty)
     } else {
       ty
-    }
-  }
-
-  fn contextual_object_expected(&self, expected: TypeId) -> Option<TypeId> {
-    let expanded = self.expand_for_props(expected);
-    if expanded != expected {
-      return self.contextual_object_expected(expanded);
-    }
-    match self.store.type_kind(expected) {
-      TypeKind::Union(members) | TypeKind::Intersection(members) => {
-        let mut saw_object = false;
-        for member in members {
-          if self.contextual_object_expected(member).is_some() {
-            saw_object = true;
-          }
-        }
-        saw_object.then_some(expected)
-      }
-      TypeKind::Object(_) | TypeKind::Mapped(_) => Some(expected),
-      _ => None,
-    }
-  }
-
-  fn should_preserve_literal(&self, expected: Option<TypeId>) -> bool {
-    let Some(expected) = expected else {
-      return false;
-    };
-    let expanded = self.expand_for_props(expected);
-    self.is_literal_union(expanded)
-  }
-
-  fn contextual_prop_type(&self, expected: TypeId, key: &str) -> Option<TypeId> {
-    let expanded = self.expand_for_props(expected);
-    if expanded != expected {
-      return self.contextual_prop_type(expanded, key);
-    }
-    match self.store.type_kind(expected) {
-      TypeKind::Union(members) => {
-        let mut collected = Vec::new();
-        for member in members {
-          if let Some(prop_ty) = self.contextual_prop_type(member, key) {
-            collected.push(prop_ty);
-          }
-        }
-        if collected.is_empty() {
-          None
-        } else {
-          Some(self.store.union(collected))
-        }
-      }
-      TypeKind::Intersection(members) => {
-        let mut collected = Vec::new();
-        for member in members {
-          if let Some(prop_ty) = self.contextual_prop_type(member, key) {
-            collected.push(prop_ty);
-          }
-        }
-        if collected.is_empty() {
-          None
-        } else if collected.len() == 1 {
-          collected.first().copied()
-        } else {
-          Some(self.store.intersection(collected))
-        }
-      }
-      TypeKind::Object(obj_id) => {
-        let shape = self.store.shape(self.store.object(obj_id).shape);
-        for candidate in shape.properties.iter() {
-          let matches = match &candidate.key {
-            PropKey::String(name) => self.store.name(*name) == key,
-            PropKey::Number(num) => num.to_string() == key,
-            PropKey::Symbol(_) => false,
-          };
-          if matches {
-            return Some(candidate.data.ty);
-          }
-        }
-        shape.indexers.first().map(|idx| idx.value_type)
-      }
-      _ => None,
-    }
-  }
-
-  fn contextual_object_prop_type(&self, value_ty: TypeId, expected: Option<TypeId>) -> TypeId {
-    if self.should_preserve_literal(expected) {
-      return value_ty;
-    }
-    if let Some(expected) = expected {
-      return self.contextual_arg_type(value_ty, expected);
-    }
-    if self.widen_object_literals {
-      return self.widen_object_prop(value_ty);
-    }
-    value_ty
-  }
-
-  fn is_literal_union(&self, ty: TypeId) -> bool {
-    match self.store.type_kind(ty) {
-      TypeKind::StringLiteral(_)
-      | TypeKind::NumberLiteral(_)
-      | TypeKind::BooleanLiteral(_)
-      | TypeKind::BigIntLiteral(_)
-      | TypeKind::TemplateLiteral(_) => true,
-      TypeKind::Union(members) | TypeKind::Intersection(members) => {
-        members.iter().copied().all(|member| self.is_literal_union(member))
-      }
-      _ => false,
-    }
-  }
-
-  fn widen_object_prop(&self, ty: TypeId) -> TypeId {
-    let prim = self.store.primitive_ids();
-    match self.store.type_kind(ty) {
-      TypeKind::NumberLiteral(_) => prim.number,
-      TypeKind::StringLiteral(_) => prim.string,
-      TypeKind::BooleanLiteral(_) => prim.boolean,
-      TypeKind::Union(members) => {
-        let mapped: Vec<_> = members
-          .into_iter()
-          .map(|m| self.widen_object_prop(m))
-          .collect();
-        self.store.union(mapped)
-      }
-      TypeKind::Intersection(members) => {
-        let mapped: Vec<_> = members
-          .into_iter()
-          .map(|m| self.widen_object_prop(m))
-          .collect();
-        self.store.intersection(mapped)
-      }
-      _ => ty,
     }
   }
 
@@ -1999,28 +1784,24 @@ impl<'a> Checker<'a> {
     left: &Node<AstExpr>,
     right: &Node<AstExpr>,
   ) -> TypeId {
-    if let AstExpr::Id(id) = left.stx.as_ref() {
-      let binding = self.lookup(&id.stx.name);
-      let expected = binding.as_ref().map(|b| b.ty);
-      let value_ty = self.check_expr_in_ctx(right, ExprContext::with_expected(expected));
-      if let Some(binding) = binding {
-        if !self.relate.is_assignable(value_ty, binding.ty) {
-          self.diagnostics.push(codes::TYPE_MISMATCH.error(
-            "assignment type mismatch",
-            Span {
-              file: self.file,
-              range: loc_to_range(self.file, left.loc),
-            },
-          ));
-        }
-        self.insert_binding(id.stx.name.clone(), value_ty, binding.type_params);
-      } else {
-        self.insert_binding(id.stx.name.clone(), value_ty, Vec::new());
-      }
-      return value_ty;
-    }
     let value_ty = self.check_expr(right);
     match left.stx.as_ref() {
+      AstExpr::Id(id) => {
+        if let Some(binding) = self.lookup(&id.stx.name) {
+          if !self.relate.is_assignable(value_ty, binding.ty) {
+            self.diagnostics.push(codes::TYPE_MISMATCH.error(
+              "assignment type mismatch",
+              Span {
+                file: self.file,
+                range: loc_to_range(self.file, left.loc),
+              },
+            ));
+          }
+          self.insert_binding(id.stx.name.clone(), value_ty, binding.type_params);
+        } else {
+          self.insert_binding(id.stx.name.clone(), value_ty, Vec::new());
+        }
+      }
       AstExpr::ArrPat(arr) => {
         let span = loc_to_range(self.file, arr.loc);
         if let Some(pat) = self.index.pats.get(&span) {
@@ -2048,7 +1829,9 @@ impl<'a> Checker<'a> {
     value: TypeId,
     type_params: Vec<TypeParamDecl>,
   ) {
-    self.record_pat_type(pat.loc, value);
+    if self.expr_context.record_type {
+      self.record_pat_type(pat.loc, value);
+    }
     match pat.stx.as_ref() {
       AstPat::Id(id) => {
         self.insert_binding(id.stx.name.clone(), value, type_params);
@@ -2169,7 +1952,23 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn function_type(&mut self, func: &Node<Func>) -> TypeId {
+  fn function_type_with_context(
+    &mut self,
+    func: &Node<Func>,
+    ctx: ExprContext,
+    contextual_sig: Option<&Signature>,
+  ) -> (TypeId, Signature) {
+    self.with_expr_context(ctx, |checker| {
+      checker.compute_function_type_with_context(func, contextual_sig)
+    })
+  }
+
+  fn compute_function_type_with_context(
+    &mut self,
+    func: &Node<Func>,
+    contextual_sig: Option<&Signature>,
+  ) -> (TypeId, Signature) {
+    let prim = self.store.primitive_ids();
     let mut type_param_decls = Vec::new();
     let mut has_type_params = false;
     if let Some(params) = func.stx.type_parameters.as_ref() {
@@ -2177,64 +1976,157 @@ impl<'a> Checker<'a> {
       has_type_params = true;
       type_param_decls = self.lower_type_params(params);
     }
+
+    let contextual_params = contextual_sig.map(|sig| self.params_for_call(sig).to_vec());
+
     let mut param_start = 0usize;
     let mut this_param = None;
     if let Some(first) = func.stx.parameters.first() {
       if let AstPat::Id(id) = first.stx.pattern.stx.pat.stx.as_ref() {
         if id.stx.name == "this" {
+          param_start = 1;
           if let Some(annotation) = first.stx.type_annotation.as_ref() {
             this_param = Some(self.lowerer.lower_type_expr(annotation));
-            param_start = 1;
+          } else if let Some(sig) = contextual_sig {
+            this_param = sig.this_param;
           }
         }
       }
     }
-    let params = func
-      .stx
-      .parameters
-      .iter()
-      .skip(param_start)
-      .map(|p| {
-        let name = match p.stx.pattern.stx.pat.stx.as_ref() {
-          AstPat::Id(id) => Some(self.store.intern_name(id.stx.name.clone())),
-          _ => None,
-        };
-        SigParam {
-          name,
-          ty: p
-            .stx
-            .type_annotation
-            .as_ref()
-            .map(|t| self.lowerer.lower_type_expr(t))
-            .unwrap_or(self.store.primitive_ids().unknown),
-          optional: p.stx.optional,
-          rest: p.stx.rest,
-        }
-      })
-      .collect::<Vec<_>>();
-    let ret = func
+
+    let should_check_body = contextual_sig.is_some();
+    if should_check_body {
+      self.scopes.push(Scope::default());
+    }
+
+    let mut params = Vec::new();
+    for (idx, p) in func.stx.parameters.iter().enumerate().skip(param_start) {
+      let contextual_ty = contextual_params
+        .as_ref()
+        .and_then(|params| {
+          let relative = idx - param_start;
+          params.get(relative).map(|p| p.ty).or_else(|| {
+            params
+              .last()
+              .and_then(|last| if last.rest { Some(last.ty) } else { None })
+          })
+        })
+        .unwrap_or(prim.unknown);
+      let mut ty = p
+        .stx
+        .type_annotation
+        .as_ref()
+        .map(|t| self.lowerer.lower_type_expr(t))
+        .unwrap_or(contextual_ty);
+      if let Some(default) = &p.stx.default_value {
+        let default_ty = self.check_expr(default);
+        ty = self.store.union(vec![ty, default_ty]);
+      }
+      let name = match p.stx.pattern.stx.pat.stx.as_ref() {
+        AstPat::Id(id) => Some(self.store.intern_name(id.stx.name.clone())),
+        _ => None,
+      };
+      params.push(SigParam {
+        name,
+        ty,
+        optional: p.stx.optional,
+        rest: p.stx.rest,
+      });
+      if should_check_body {
+        self.bind_pattern_with_type_params(&p.stx.pattern.stx.pat, ty, type_param_decls.clone());
+      }
+    }
+
+    let mut ret = func
       .stx
       .return_type
       .as_ref()
       .map(|t| self.lowerer.lower_type_expr(t))
-      .unwrap_or(self.store.primitive_ids().unknown);
+      .unwrap_or(prim.unknown);
+
+    if should_check_body {
+      let expected_ret = func
+        .stx
+        .return_type
+        .as_ref()
+        .map(|_| ret)
+        .or_else(|| contextual_sig.map(|sig| sig.ret));
+
+      match &func.stx.body {
+        Some(FuncBody::Expression(expr)) => {
+          let body_ctx = ExprContext {
+            expected: expected_ret,
+            record_type: self.expr_context.record_type,
+            emit_diagnostics: self.expr_context.emit_diagnostics,
+            const_context: self.expr_context.const_context,
+            preserve_inferred: self.expr_context.preserve_inferred,
+          };
+          let body_ty = self.check_expr_in_ctx(expr, body_ctx);
+          if func.stx.return_type.is_none() {
+            ret = body_ty;
+          }
+        }
+        Some(FuncBody::Block(block)) => {
+          let body_ctx = ExprContext {
+            expected: expected_ret,
+            record_type: self.expr_context.record_type,
+            emit_diagnostics: self.expr_context.emit_diagnostics,
+            const_context: self.expr_context.const_context,
+            preserve_inferred: self.expr_context.preserve_inferred,
+          };
+          let prev_expected = self.expected_return;
+          let prev_return_len = self.return_types.len();
+          self.expected_return = expected_ret;
+          self.with_expr_context(body_ctx, |checker| {
+            checker.check_stmt_list(block);
+          });
+          let returns = self.return_types.split_off(prev_return_len);
+          let block_ret = if returns.is_empty() {
+            prim.undefined
+          } else {
+            self.store.union(returns)
+          };
+          if func.stx.return_type.is_none() {
+            ret = block_ret;
+          }
+          self.expected_return = prev_expected;
+        }
+        None => {
+          if let Some(expected) = expected_ret {
+            ret = expected;
+          }
+        }
+      }
+    }
+
+    if should_check_body {
+      self.scopes.pop();
+    }
+
     let sig = Signature {
       params,
       ret,
       type_params: type_param_decls.clone(),
       this_param,
     };
-    let sig_id = self.store.intern_signature(sig);
+    let sig_id = self.store.intern_signature(sig.clone());
     let ty = self.store.intern_type(TypeKind::Callable {
       overloads: vec![sig_id],
     });
     if !type_param_decls.is_empty() {
       self.function_type_params.insert(ty, type_param_decls);
     }
+    if self.expr_context.record_type {
+      self.record_expr_type(func.loc, ty);
+    }
     if has_type_params {
       self.lowerer.pop_type_param_scope();
     }
-    ty
+    (ty, sig)
+  }
+
+  fn function_type(&mut self, func: &Node<Func>) -> TypeId {
+    self.compute_function_type_with_context(func, None).0
   }
 
   fn params_for_call<'b>(&self, sig: &'b Signature) -> &'b [SigParam] {
@@ -2456,7 +2348,14 @@ impl<'a> Checker<'a> {
         return;
       }
     }
-    let dst = self.expand_for_props(dst);
+    if matches!(self.store.type_kind(src), TypeKind::Conditional { .. })
+      || matches!(self.store.type_kind(dst), TypeKind::Conditional { .. })
+    {
+      return;
+    }
+    if self.is_mapped_type(dst) {
+      return;
+    }
     if let AstExpr::LitObj(obj) = expr.stx.as_ref() {
       if self.has_excess_properties(obj, dst) {
         self.diagnostics.push(codes::EXCESS_PROPERTY.error(
@@ -2466,14 +2365,11 @@ impl<'a> Checker<'a> {
             range: loc_to_range(self.file, expr.loc),
           },
         ));
+        return;
       }
-    }
-    if matches!(self.store.type_kind(src), TypeKind::Conditional { .. })
-      || matches!(self.store.type_kind(dst), TypeKind::Conditional { .. })
-    {
-      return;
-    }
-    if self.is_mapped_type(dst) {
+      // Fresh object literals only participate in excess property checking for
+      // now; other assignability rules (e.g. structural compatibility) are
+      // handled elsewhere in the type relation engine.
       return;
     }
     if self.relate.is_assignable(src, dst) {
@@ -2535,30 +2431,29 @@ fn loc_to_range(_file: FileId, loc: Loc) -> TextRange {
   TextRange::new(range.start, range.end)
 }
 
-/// Flow-sensitive body checker built directly on `hir-js` bodies. Locals
-/// semantics are used to resolve identifier bindings to stable keys, and the
-/// initial environment is keyed by those bindings. This is a lightweight,
-/// statement-level analysis that uses a CFG plus a simple lattice of variable
-/// environments to drive narrowing.
+/// Flow-sensitive body checker built directly on `hir-js` bodies. This is a
+/// lightweight, statement-level analysis that uses a CFG plus a simple lattice
+/// of variable environments to drive narrowing.
 pub fn check_body_with_env(
   body_id: BodyId,
   body: &Body,
   names: &NameInterner,
   file: FileId,
   store: Arc<TypeStore>,
-  sem: &TsLocalSemantics,
+  flow_bindings: &FlowBindings,
+  locals: &TsLocalSemantics,
   initial: &HashMap<FlowBindingId, TypeId>,
   relate: RelateCtx,
   ref_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> BodyCheckResult {
-  let bindings = FlowBindings::new(body, sem);
   let mut checker = FlowBodyChecker::new(
     body_id,
     body,
     names,
+    flow_bindings,
+    locals,
     Arc::clone(&store),
     file,
-    bindings,
     initial,
     relate,
     ref_expander,
@@ -2571,7 +2466,7 @@ struct FlowBodyChecker<'a> {
   body_id: BodyId,
   body: &'a Body,
   names: &'a NameInterner,
-  bindings: FlowBindings,
+  flow_bindings: &'a FlowBindings,
   store: Arc<TypeStore>,
   file: FileId,
   relate: RelateCtx<'a>,
@@ -2609,9 +2504,10 @@ impl<'a> FlowBodyChecker<'a> {
     body_id: BodyId,
     body: &'a Body,
     names: &'a NameInterner,
+    flow_bindings: &'a FlowBindings,
+    _locals: &'a TsLocalSemantics,
     store: Arc<TypeStore>,
     file: FileId,
-    bindings: FlowBindings,
     initial: &HashMap<FlowBindingId, TypeId>,
     relate: RelateCtx<'a>,
     ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
@@ -2619,12 +2515,9 @@ impl<'a> FlowBodyChecker<'a> {
     let prim = store.primitive_ids();
     let expr_types = vec![prim.unknown; body.exprs.len()];
     let mut pat_types = vec![prim.unknown; body.pats.len()];
-    for (idx, pat) in body.pats.iter().enumerate() {
-      if !matches!(pat.kind, PatKind::Ident(_)) {
-        continue;
-      }
+    for (idx, _pat) in body.pats.iter().enumerate() {
       let pat_id = PatId(idx as u32);
-      if let Some(binding) = bindings.binding_for_pat(pat_id) {
+      if let Some(binding) = flow_bindings.binding_for_pat(pat_id) {
         if let Some(ty) = initial.get(&binding) {
           pat_types[idx] = *ty;
         }
@@ -2657,7 +2550,7 @@ impl<'a> FlowBodyChecker<'a> {
       body_id,
       body,
       names,
-      bindings,
+      flow_bindings,
       store,
       file,
       relate,
@@ -2673,6 +2566,18 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
+  fn binding_for_expr(&self, expr_id: ExprId) -> Option<FlowBindingId> {
+    self.flow_bindings.binding_for_expr(expr_id)
+  }
+
+  fn binding_for_pat(&self, pat_id: PatId) -> Option<FlowBindingId> {
+    self.flow_bindings.binding_for_pat(pat_id)
+  }
+
+  fn binding_for_name(&self, name: NameId) -> Option<FlowBindingId> {
+    self.flow_bindings.binding_for_name(name)
+  }
+
   fn into_result(self) -> BodyCheckResult {
     BodyCheckResult {
       body: self.body_id,
@@ -2685,19 +2590,18 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
-  fn binding_for_expr(&self, expr_id: ExprId) -> Option<FlowBindingId> {
-    self.bindings.binding_for_expr(expr_id)
-  }
-
   fn access_path_info(&self, expr_id: ExprId) -> Option<AccessPathInfo> {
     let expr = &self.body.exprs[expr_id.0 as usize];
     match &expr.kind {
-      ExprKind::Ident(_) => self
-        .binding_for_expr(expr_id)
-        .map(|binding| AccessPathInfo {
+      ExprKind::Ident(name) => {
+        let binding = self
+          .binding_for_expr(expr_id)
+          .or_else(|| self.binding_for_name(*name))?;
+        Some(AccessPathInfo {
           path: FlowKey::root(binding),
           optional: false,
-        }),
+        })
+      }
       ExprKind::Member(mem) => {
         let base = self.access_path_info(mem.object)?;
         let segment = self.path_segment(&mem.property)?;
@@ -2712,14 +2616,12 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn access_path_root(&self, expr_id: ExprId) -> Option<FlowBindingId> {
     match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(_) => self.binding_for_expr(expr_id),
+      ExprKind::Ident(name) => self
+        .binding_for_expr(expr_id)
+        .or_else(|| self.binding_for_name(*name)),
       ExprKind::Member(mem) => self.access_path_root(mem.object),
       _ => None,
     }
-  }
-
-  fn ident_binding(&self, expr_id: ExprId) -> Option<FlowBindingId> {
-    self.binding_for_expr(expr_id)
   }
 
   fn path_segment(&self, key: &ObjectKey) -> Option<PathSegment> {
@@ -2817,8 +2719,7 @@ impl<'a> FlowBodyChecker<'a> {
               .init
               .map(|id| self.eval_expr(id, &mut env).0)
               .unwrap_or_else(|| self.store.primitive_ids().unknown);
-            let assigned = declarator.init.is_some() || matches!(decl.kind, VarDeclKind::Var);
-            self.bind_pat(declarator.pat, init_ty, &mut env, assigned);
+            self.bind_pat(declarator.pat, init_ty, &mut env);
           }
         }
         StmtKind::If {
@@ -2880,8 +2781,7 @@ impl<'a> FlowBodyChecker<'a> {
                     .init
                     .map(|id| self.eval_expr(id, &mut env).0)
                     .unwrap_or_else(|| self.store.primitive_ids().unknown);
-                  let assigned = declarator.init.is_some() || matches!(var.kind, VarDeclKind::Var);
-                  self.bind_pat(declarator.pat, init_ty, &mut env, assigned);
+                  self.bind_pat(declarator.pat, init_ty, &mut env);
                 }
               }
             }
@@ -2917,7 +2817,7 @@ impl<'a> FlowBodyChecker<'a> {
             ForHead::Pat(pat) => self.assign_pat(*pat, iter_ty, &mut env),
             ForHead::Var(var) => {
               for declarator in var.declarators.iter() {
-                self.bind_pat(declarator.pat, iter_ty, &mut env, true);
+                self.bind_pat(declarator.pat, iter_ty, &mut env);
               }
             }
           }
@@ -2981,12 +2881,7 @@ impl<'a> FlowBodyChecker<'a> {
           if let Some((idx, catch_clause)) = catch.as_ref().map(|c| (1, c)) {
             let mut catch_env = env.clone();
             if let Some(param) = catch_clause.param {
-              self.bind_pat(
-                param,
-                self.store.primitive_ids().unknown,
-                &mut catch_env,
-                true,
-              );
+              self.bind_pat(param, self.store.primitive_ids().unknown, &mut catch_env);
             }
             if let Some(succ) = block.successors.get(idx) {
               outgoing.push((*succ, catch_env));
@@ -3079,34 +2974,19 @@ impl<'a> FlowBodyChecker<'a> {
     let mut facts = Facts::default();
     let ty = match &expr.kind {
       ExprKind::Ident(name) => {
-        let Some(binding) = self.binding_for_expr(expr_id) else {
-          return (prim.unknown, facts);
-        };
-        let key = FlowKey::root(binding);
-        let state = env.get_path_state(&key);
-        if let Some(state) = state {
-          if !state.assigned {
-            let name_str = self
-              .names
-              .resolve(*name)
-              .map(|n| format!("`{n}` "))
-              .unwrap_or_default();
-            self.diagnostics.push(codes::USE_BEFORE_ASSIGNMENT.error(
-              format!("{name_str}used before assignment"),
-              Span {
-                file: self.file,
-                range: expr.span,
-              },
-            ));
-          }
+        if let Some(binding) = self
+          .binding_for_expr(expr_id)
+          .or_else(|| self.binding_for_name(*name))
+        {
+          let key = FlowKey::root(binding);
+          let ty = self.store.canon(env.get_path(&key).unwrap_or(prim.unknown));
+          let (truthy, falsy) = truthy_falsy_types(ty, &self.store);
+          facts.truthy.insert(key.clone(), truthy);
+          facts.falsy.insert(key, falsy);
+          ty
+        } else {
+          prim.unknown
         }
-        let ty = self
-          .store
-          .canon(state.map(|s| s.ty).unwrap_or(prim.unknown));
-        let (truthy, falsy) = truthy_falsy_types(ty, &self.store);
-        facts.truthy.insert(key.clone(), truthy);
-        facts.falsy.insert(key, falsy);
-        ty
       }
       ExprKind::Literal(lit) => match lit {
         hir_js::Literal::Number(num) => self.store.intern_type(TypeKind::NumberLiteral(
@@ -3653,7 +3533,12 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn optional_chain_root(&self, expr_id: ExprId) -> Option<FlowKey> {
     match self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(_) => self.binding_for_expr(expr_id).map(FlowKey::root),
+      ExprKind::Ident(name) => {
+        let binding = self
+          .binding_for_expr(expr_id)
+          .or_else(|| self.binding_for_name(name))?;
+        Some(FlowKey::root(binding))
+      }
       _ => None,
     }
   }
@@ -3701,7 +3586,9 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn assignment_target_root_expr(&self, expr_id: ExprId) -> Option<FlowBindingId> {
     match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(_) => self.binding_for_expr(expr_id),
+      ExprKind::Ident(name) => self
+        .binding_for_expr(expr_id)
+        .or_else(|| self.binding_for_name(*name)),
       ExprKind::Member(mem) => self.assignment_target_root_expr(mem.object),
       ExprKind::TypeAssertion { expr }
       | ExprKind::NonNull { expr }
@@ -3715,9 +3602,9 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn record_assignment_facts(&self, root: Option<FlowBindingId>, ty: TypeId, facts: &mut Facts) {
-    if let Some(binding) = root {
+    if let Some(name) = root {
       let (truthy, falsy) = truthy_falsy_types(ty, &self.store);
-      let key = FlowKey::root(binding);
+      let key = FlowKey::root(name);
       facts.truthy.insert(key.clone(), truthy);
       facts.falsy.insert(key, falsy);
     }
@@ -3835,10 +3722,13 @@ impl<'a> FlowBodyChecker<'a> {
   ) -> (TypeId, Option<FlowBindingId>, bool) {
     let prim = self.store.primitive_ids();
     match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(_) => {
-        let binding = self.binding_for_expr(expr_id);
+      ExprKind::Ident(name) => {
+        let binding = self
+          .binding_for_expr(expr_id)
+          .or_else(|| self.binding_for_name(*name));
         let ty = binding
-          .and_then(|b| env.get_path(&FlowKey::root(b)))
+          .as_ref()
+          .and_then(|id| env.get_path(&FlowKey::root(*id)))
           .unwrap_or(prim.unknown);
         (ty, binding, false)
       }
@@ -3874,9 +3764,10 @@ impl<'a> FlowBodyChecker<'a> {
     let prim = self.store.primitive_ids();
     match &pat.kind {
       PatKind::Ident(_) => {
-        let binding = self.bindings.binding_for_pat(pat_id);
+        let binding = self.binding_for_pat(pat_id);
         let ty = binding
-          .and_then(|b| env.get_path(&FlowKey::root(b)))
+          .as_ref()
+          .and_then(|id| env.get_path(&FlowKey::root(*id)))
           .unwrap_or(prim.unknown);
         (ty, binding, false)
       }
@@ -3980,11 +3871,11 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn assign_pat(&mut self, pat_id: PatId, value_ty: TypeId, env: &mut Env) {
-    self.bind_pat_with_mode(pat_id, value_ty, env, BindingMode::Assign, true);
+    self.bind_pat_with_mode(pat_id, value_ty, env, BindingMode::Assign);
   }
 
-  fn bind_pat(&mut self, pat_id: PatId, value_ty: TypeId, env: &mut Env, assigned: bool) {
-    self.bind_pat_with_mode(pat_id, value_ty, env, BindingMode::Declare, assigned);
+  fn bind_pat(&mut self, pat_id: PatId, value_ty: TypeId, env: &mut Env) {
+    self.bind_pat_with_mode(pat_id, value_ty, env, BindingMode::Declare);
   }
 
   fn bind_pat_with_mode(
@@ -3993,7 +3884,6 @@ impl<'a> FlowBodyChecker<'a> {
     value_ty: TypeId,
     env: &mut Env,
     mode: BindingMode,
-    assigned: bool,
   ) {
     let pat = &self.body.pats[pat_id.0 as usize];
     let prim = self.store.primitive_ids();
@@ -4006,8 +3896,8 @@ impl<'a> FlowBodyChecker<'a> {
     };
     match &pat.kind {
       PatKind::Ident(_) => {
-        if let Some(binding) = self.bindings.binding_for_pat(pat_id) {
-          env.set_var_with_assigned(binding, write_ty, assigned);
+        if let Some(binding) = self.binding_for_pat(pat_id) {
+          env.set_var(binding, write_ty);
         }
       }
       PatKind::Assign {
@@ -4017,9 +3907,9 @@ impl<'a> FlowBodyChecker<'a> {
         let default_eval = self.eval_expr(*default_value, env).0;
         let default_ty = self.apply_binding_mode(default_eval, mode);
         let combined = self.store.union(vec![write_ty, default_ty]);
-        self.bind_pat_with_mode(*target, combined, env, mode, assigned);
+        self.bind_pat_with_mode(*target, combined, env, mode);
       }
-      PatKind::Rest(inner) => self.bind_pat_with_mode(**inner, write_ty, env, mode, assigned),
+      PatKind::Rest(inner) => self.bind_pat_with_mode(**inner, write_ty, env, mode),
       PatKind::Array(arr) => {
         let element_ty = match self.store.type_kind(value_ty) {
           TypeKind::Array { ty, .. } => ty,
@@ -4040,12 +3930,12 @@ impl<'a> FlowBodyChecker<'a> {
               let default_ty = self.apply_binding_mode(default_eval, mode);
               ty = self.store.union(vec![ty, default_ty]);
             }
-            self.bind_pat_with_mode(elem.pat, ty, env, mode, assigned);
+            self.bind_pat_with_mode(elem.pat, ty, env, mode);
           }
         }
         if let Some(rest) = arr.rest {
           let rest_ty = self.apply_binding_mode(value_ty, mode);
-          self.bind_pat_with_mode(rest, rest_ty, env, mode, assigned);
+          self.bind_pat_with_mode(rest, rest_ty, env, mode);
         }
       }
       PatKind::Object(obj) => {
@@ -4068,16 +3958,16 @@ impl<'a> FlowBodyChecker<'a> {
             let default_ty = self.apply_binding_mode(default_eval, mode);
             prop_ty = self.store.union(vec![prop_ty, default_ty]);
           }
-          self.bind_pat_with_mode(prop.value, prop_ty, env, mode, assigned);
+          self.bind_pat_with_mode(prop.value, prop_ty, env, mode);
         }
         if let Some(rest) = obj.rest {
           let rest_ty = self.apply_binding_mode(value_ty, mode);
-          self.bind_pat_with_mode(rest, rest_ty, env, mode, assigned);
+          self.bind_pat_with_mode(rest, rest_ty, env, mode);
         }
       }
       PatKind::AssignTarget(expr) => {
         if let Some(path) = self.access_path_info(*expr) {
-          env.set_path_with_assigned(path.path, value_ty, assigned);
+          env.set_path(path.path, value_ty);
         } else if let Some(root) = self.access_path_root(*expr) {
           env.invalidate_prefix(&FlowKey::root(root));
         } else {
@@ -4095,8 +3985,11 @@ impl<'a> FlowBodyChecker<'a> {
     _mode: BindingMode,
   ) {
     match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(_) => {
-        if let Some(binding) = self.binding_for_expr(expr_id) {
+      ExprKind::Ident(name) => {
+        if let Some(binding) = self
+          .binding_for_expr(expr_id)
+          .or_else(|| self.binding_for_name(*name))
+        {
           env.set_var(binding, value_ty);
         }
       }
@@ -4296,7 +4189,7 @@ impl<'a> FlowBodyChecker<'a> {
       expr,
     } = &self.body.exprs[discriminant.0 as usize].kind
     {
-      if let LiteralValue::String(value) = lit {
+      if let LiteralValue::String(value) = &lit {
         if let Some(path) = self.access_path_info(*expr) {
           let expr_ty = env
             .get_path(&path.path)

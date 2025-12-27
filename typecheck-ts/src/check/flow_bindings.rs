@@ -7,9 +7,7 @@ use hir_js::{
 };
 use semantic_js::ts::{locals::TsLocalSemantics, SymbolId};
 
-/// Stable identifier for flow bindings. This reuses the value-namespace symbol
-/// identifiers produced by the TS locals binder.
-pub type FlowBindingId = SymbolId;
+pub use super::flow::FlowBindingId;
 
 /// Per-body side table mapping identifiers in expressions and patterns back to
 /// their resolved bindings.

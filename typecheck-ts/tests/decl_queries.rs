@@ -24,6 +24,38 @@ fn def_by_name_in_lower(lowered: &LowerResult, name: &str) -> DefId {
     .expect("definition present")
 }
 
+fn seed_db(
+  host: &MemoryHost,
+  program: &Program,
+  file_a: &FileKey,
+  file_b: &FileKey,
+) -> (Database, typecheck_ts::FileId, typecheck_ts::FileId) {
+  let mut db = Database::new();
+  db.set_compiler_options(program.compiler_options());
+  db.set_roots(vec![file_b.clone()].into());
+
+  let file_a_id = program.file_id(file_a).expect("file a id");
+  let file_b_id = program.file_id(file_b).expect("file b id");
+
+  db.set_file(
+    file_a_id,
+    file_a.clone(),
+    FileKind::Ts,
+    host.file_text(file_a).unwrap(),
+    FileOrigin::Source,
+  );
+  db.set_file(
+    file_b_id,
+    file_b.clone(),
+    FileKind::Ts,
+    host.file_text(file_b).unwrap(),
+    FileOrigin::Source,
+  );
+  db.set_module_resolution(file_b_id, Arc::<str>::from("./a"), Some(file_a_id));
+
+  (db, file_a_id, file_b_id)
+}
+
 #[test]
 fn decl_queries_follow_interned_types_across_files() {
   let mut host = MemoryHost::new();
@@ -39,13 +71,32 @@ fn decl_queries_follow_interned_types_across_files() {
   );
   host.link(file_b.clone(), "./a", file_a.clone());
 
-  let program = Program::new(host, vec![file_b.clone()]);
+  let program = Program::new(host.clone(), vec![file_b.clone()]);
 
   let box_def = def_by_name(&program, file_a.clone(), "Box");
   let make_box_def = def_by_name(&program, file_b.clone(), "makeBox");
 
+  let (db, _, _) = seed_db(&host, &program, &file_a, &file_b);
+  let store = queries::type_store(&db);
+
+  let decl_box = queries::decl_type(&db, box_def).expect("declared box type");
   let inferred_box = program.type_of_def_interned(box_def);
+  assert_eq!(
+    TypeDisplay::new(&store, decl_box).to_string(),
+    program.display_type(inferred_box).to_string()
+  );
+  let box_params = queries::type_params(&db, box_def);
+  assert_eq!(box_params.len(), 1);
+
+  let decl_make_box = queries::decl_type(&db, make_box_def).expect("declared makeBox type");
   let inferred_make_box = program.type_of_def_interned(make_box_def);
+  assert_eq!(
+    TypeDisplay::new(&store, decl_make_box).to_string(),
+    program.display_type(inferred_make_box).to_string()
+  );
+  let fn_params = queries::type_params(&db, make_box_def);
+  assert_eq!(fn_params.len(), 1);
+
   assert_ne!(inferred_box, inferred_make_box);
 }
 
@@ -67,8 +118,7 @@ fn decl_type_queries_match_program_across_files() {
   let program = Program::new(host.clone(), vec![file_b.clone()]);
   let box_def = def_by_name(&program, file_a.clone(), "Box");
   let make_box_def = def_by_name(&program, file_b.clone(), "makeBox");
-  let file_a_id = program.file_id(&file_a).unwrap();
-  let file_b_id = program.file_id(&file_b).unwrap();
+  let (db, file_a_id, file_b_id) = seed_db(&host, &program, &file_a, &file_b);
 
   let box_type_program = program.type_of_def_interned(box_def);
   let make_box_type_program = program.type_of_def_interned(make_box_def);
@@ -77,25 +127,6 @@ fn decl_type_queries_match_program_across_files() {
     .interned_type_params
     .into_iter()
     .collect();
-
-  let mut db = Database::new();
-  db.set_compiler_options(program.compiler_options());
-  db.set_roots(vec![file_b.clone()].into());
-  db.set_file(
-    file_a_id,
-    file_a.clone(),
-    FileKind::Ts,
-    host.file_text(&file_a).unwrap(),
-    FileOrigin::Source,
-  );
-  db.set_file(
-    file_b_id,
-    file_b.clone(),
-    FileKind::Ts,
-    host.file_text(&file_b).unwrap(),
-    FileOrigin::Source,
-  );
-  db.set_module_resolution(file_b_id, Arc::<str>::from("./a"), Some(file_a_id));
 
   let lowered_a = queries::lower_hir(&db, file_a_id);
   let lowered_b = queries::lower_hir(&db, file_b_id);

@@ -85,7 +85,7 @@ fn decl_queries_match_program_types() {
 
   let store = type_store(&db);
   let resolver_names = Arc::new(def_names);
-  let resolver = {
+  let resolver: Arc<dyn Fn(DefId) -> Option<String> + Send + Sync> = {
     let names = Arc::clone(&resolver_names);
     Arc::new(move |def: DefId| names.get(&def).cloned())
       as Arc<dyn Fn(DefId) -> Option<String> + Send + Sync>

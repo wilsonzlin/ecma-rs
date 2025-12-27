@@ -34,8 +34,8 @@ use tracing::debug_span;
 use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, TypeId, TypeParamId};
 
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
+use self::check::flow_bindings::{FlowBindingId, FlowBindings};
 use self::check::relate_hooks;
-use crate::check::hir_body::FlowBindingId;
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::class_typing;
 use crate::codes;
@@ -2459,7 +2459,10 @@ fn match_kind_from_hir(kind: HirDefKind) -> DefMatchKind {
 }
 
 fn is_value_def_kind(kind: &DefKind) -> bool {
-  matches!(kind, DefKind::Function(_) | DefKind::Var(_) | DefKind::Import(_))
+  matches!(
+    kind,
+    DefKind::Function(_) | DefKind::Var(_) | DefKind::Import(_)
+  )
 }
 
 fn find_value_def(defs: &HashMap<DefId, DefData>, file: FileId, name: &str) -> Option<DefId> {
@@ -2845,6 +2848,7 @@ struct ProgramState {
   semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
+  symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
   file_registry: FileRegistry,
   file_kinds: HashMap<FileId, FileKind>,
@@ -2940,6 +2944,7 @@ impl ProgramState {
       semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
+      symbol_occurrences: HashMap::new(),
       symbol_to_def: HashMap::new(),
       file_registry: FileRegistry::new(),
       file_kinds: HashMap::new(),
@@ -6959,16 +6964,6 @@ impl ProgramState {
       return Err(err);
     }
 
-    let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
-      if let Some(func_span) = self.function_expr_span(body_id) {
-        self.contextual_callable_for_body(body_id, func_span, &store)?
-      } else {
-        None
-      }
-    } else {
-      None
-    };
-
     let caches = self.checker_caches.for_body();
     let expander = RefExpander::new(
       Arc::clone(&store),
@@ -7011,11 +7006,10 @@ impl ProgramState {
       &bindings,
       resolver,
       Some(&expander),
-      contextual_fn_ty,
     );
     if !body.exprs.is_empty() {
       let (locals, _) = ::semantic_js::ts::locals::bind_ts_locals_tables(&*ast, file, true);
-      let flow_bindings = check::hir_body::FlowBindings::new(body, &locals);
+      let flow_bindings = FlowBindings::new(body, &locals);
 
       let mut initial_env: HashMap<FlowBindingId, TypeId> = HashMap::new();
       if matches!(meta.kind, HirBodyKind::Function) {
@@ -7062,6 +7056,7 @@ impl ProgramState {
         &lowered.names,
         file,
         Arc::clone(&store),
+        &flow_bindings,
         &locals,
         &initial_env,
         flow_relate,
@@ -8271,7 +8266,8 @@ mod tests {
   #[test]
   fn value_binding_type_id_used_when_def_points_to_type() {
     let mut host = crate::MemoryHost::default();
-    let source = "namespace Foo { export const value = 123; }\nconst useValue = Foo.value;".to_string();
+    let source =
+      "namespace Foo { export const value = 123; }\nconst useValue = Foo.value;".to_string();
     let file = FileKey::new("main.ts");
     host.insert(file.clone(), Arc::from(source.clone()));
 
@@ -8303,9 +8299,7 @@ mod tests {
           span: TextRange::new(0, 0),
           symbol: new_symbol,
           export: false,
-          kind: DefKind::TypeAlias(TypeAliasData {
-            typ: builtin_any,
-          }),
+          kind: DefKind::TypeAlias(TypeAliasData { typ: builtin_any }),
         },
       );
       state.def_types.insert(new_def, builtin_any);

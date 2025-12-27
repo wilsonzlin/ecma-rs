@@ -264,8 +264,9 @@ pub mod body_check {
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
   use crate::check::caches::CheckerCaches;
+  use crate::check::flow_bindings::FlowBindings;
   use crate::check::hir_body::{
-    check_body_with_env, check_body_with_expander, BindingTypeResolver, FlowBindings,
+    check_body_with_env, check_body_with_expander, BindingTypeResolver,
   };
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
@@ -584,12 +585,6 @@ pub mod body_check {
 
       let caches = ctx.checker_caches.for_body();
       let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
-      let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
-        function_expr_span(self, body_id)
-          .and_then(|span| contextual_callable_for_body(self, body_id, span))
-      } else {
-        None
-      };
       let mut result = check_body_with_expander(
         body_id,
         body,
@@ -602,7 +597,6 @@ pub mod body_check {
         (!binding_defs.is_empty())
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
-        contextual_fn_ty,
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
@@ -652,6 +646,7 @@ pub mod body_check {
           &lowered.names,
           meta.file,
           Arc::clone(&ctx.store),
+          &flow_bindings,
           &locals,
           &initial_env,
           flow_relate,

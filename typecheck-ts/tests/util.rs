@@ -4,7 +4,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts::locals::{bind_ts_locals, TsLocalSemantics};
-use typecheck_ts::check::hir_body::{FlowBindingId, FlowBindings};
+use typecheck_ts::check::flow_bindings::{FlowBindingId, FlowBindings};
 
 #[allow(dead_code)]
 pub struct Parsed {

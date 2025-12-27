@@ -8,7 +8,8 @@ use hir_js::{
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts::locals::{bind_ts_locals, TsLocalSemantics};
-use typecheck_ts::check::hir_body::{check_body_with_env, FlowBindings};
+use typecheck_ts::check::flow_bindings::FlowBindings;
+use typecheck_ts::check::hir_body::check_body_with_env;
 use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
 fn parse_and_lower_with_locals(source: &str) -> (LowerResult, TsLocalSemantics) {
@@ -67,6 +68,7 @@ function f(x: string | null) {
     &lowered.names,
     FileId(0),
     Arc::clone(&store),
+    &flow_bindings,
     &semantics,
     &initial,
     relate,
@@ -111,6 +113,7 @@ function f(x: string | null) {
     &lowered.names,
     FileId(0),
     Arc::clone(&store),
+    &flow_bindings,
     &semantics,
     &initial,
     relate,
