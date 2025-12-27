@@ -283,3 +283,23 @@ fn nested_body_lookup_uses_span_map() {
     "expected numeric literal type, got {display}"
   );
 }
+
+#[test]
+fn type_at_handles_construct_signatures() {
+  let mut host = MemoryHost::default();
+  let source =
+    "class Greeter { constructor(public msg: string) {} }\nconst g = new Greeter(\"hi\");\nconst m = g.msg;";
+  let file = FileKey::new("new_expr.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+  let offset = source
+    .rfind("m = g.msg")
+    .expect("offset for binding")
+    .try_into()
+    .expect("offset fits");
+
+  let ty = program.type_at(file_id, offset).expect("type at m");
+  assert_eq!(program.display_type(ty).to_string(), "string");
+}

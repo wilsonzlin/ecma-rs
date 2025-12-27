@@ -32,6 +32,14 @@ pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
   out
 }
 
+/// Collect all construct signatures from a type, expanding unions/intersections
+/// and object construct signatures.
+pub fn construct_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
+  let mut out = Vec::new();
+  collect_construct_signatures(store, ty, &mut out, &mut HashSet::new());
+  out
+}
+
 /// Expected argument type at the given index, applying rest element expansion
 /// when needed. Returns `None` if the signature does not accept an argument at
 /// this position.
@@ -119,8 +127,61 @@ pub fn resolve_overloads(
   contextual_return: Option<TypeId>,
   span: Span,
 ) -> CallResolution {
-  let mut candidates = Vec::new();
-  collect_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());
+  let candidates = callable_signatures(store.as_ref(), callee);
+  resolve_from_candidates(
+    store,
+    relate,
+    callee,
+    candidates,
+    args,
+    this_arg,
+    contextual_return,
+    span,
+    "expression is not callable",
+    "no overload matches this call",
+    "call is ambiguous",
+  )
+}
+
+/// Resolve a `new` expression against a constructible type.
+pub fn resolve_construct(
+  store: &Arc<TypeStore>,
+  relate: &RelateCtx<'_>,
+  callee: TypeId,
+  args: &[TypeId],
+  this_arg: Option<TypeId>,
+  contextual_return: Option<TypeId>,
+  span: Span,
+) -> CallResolution {
+  let candidates = construct_signatures(store.as_ref(), callee);
+  resolve_from_candidates(
+    store,
+    relate,
+    callee,
+    candidates,
+    args,
+    this_arg,
+    contextual_return,
+    span,
+    "expression is not constructible",
+    "no overload matches this constructor call",
+    "constructor call is ambiguous",
+  )
+}
+
+fn resolve_from_candidates(
+  store: &Arc<TypeStore>,
+  relate: &RelateCtx<'_>,
+  callee: TypeId,
+  candidates: Vec<SignatureId>,
+  args: &[TypeId],
+  this_arg: Option<TypeId>,
+  contextual_return: Option<TypeId>,
+  span: Span,
+  non_callable_message: &str,
+  no_match_message: &str,
+  ambiguous_message: &str,
+) -> CallResolution {
   let primitives = store.primitive_ids();
   if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
     return CallResolution {
@@ -131,7 +192,7 @@ pub fn resolve_overloads(
   }
   if candidates.is_empty() {
     let diag = codes::NO_OVERLOAD
-      .error("expression is not callable", span)
+      .error(non_callable_message, span)
       .with_note(format!(
         "callee has type {}",
         TypeDisplay::new(store, callee)
@@ -169,8 +230,7 @@ pub fn resolve_overloads(
       continue;
     }
 
-    let inference =
-      infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
+    let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
     outcome.unknown_inferred = count_unknown(
       store.as_ref(),
       &inference.substitutions,
@@ -241,7 +301,7 @@ pub fn resolve_overloads(
     outcomes.iter().filter(|c| c.rejection.is_none()).collect();
   if applicable.is_empty() {
     let mut fallback = outcomes.clone();
-    let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes);
+    let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes, no_match_message);
     fallback.sort_by(|a, b| {
       (
         a.specificity,
@@ -299,7 +359,7 @@ pub fn resolve_overloads(
     })
     .collect();
   if tied.len() > 1 {
-    let diag = build_ambiguous_diagnostic(span, &tied);
+    let diag = build_ambiguous_diagnostic(span, &tied, ambiguous_message);
     return CallResolution {
       return_type: primitives.unknown,
       signature: None,
@@ -332,6 +392,29 @@ fn collect_signatures(
     TypeKind::Union(members) | TypeKind::Intersection(members) => {
       for member in members {
         collect_signatures(store, member, out, seen);
+      }
+    }
+    _ => {}
+  }
+}
+
+fn collect_construct_signatures(
+  store: &TypeStore,
+  ty: TypeId,
+  out: &mut Vec<SignatureId>,
+  seen: &mut HashSet<TypeId>,
+) {
+  if !seen.insert(ty) {
+    return;
+  }
+  match store.type_kind(ty) {
+    TypeKind::Object(obj) => {
+      let shape = store.shape(store.object(obj).shape);
+      out.extend(shape.construct_signatures.iter().copied());
+    }
+    TypeKind::Union(members) | TypeKind::Intersection(members) => {
+      for member in members {
+        collect_construct_signatures(store, member, out, seen);
       }
     }
     _ => {}
@@ -527,8 +610,9 @@ fn build_no_match_diagnostic(
   store: &TypeStore,
   span: Span,
   outcomes: Vec<CandidateOutcome>,
+  message: &str,
 ) -> Diagnostic {
-  let mut diag = codes::NO_OVERLOAD.error("no overload matches this call", span);
+  let mut diag = codes::NO_OVERLOAD.error(message, span);
   let mut shown = 0usize;
   for outcome in outcomes.iter() {
     if let Some(reason) = &outcome.rejection {
@@ -550,8 +634,12 @@ fn build_no_match_diagnostic(
   diag
 }
 
-fn build_ambiguous_diagnostic(span: Span, candidates: &[&CandidateOutcome]) -> Diagnostic {
-  let mut diag = codes::AMBIGUOUS_OVERLOAD.error("call is ambiguous", span);
+fn build_ambiguous_diagnostic(
+  span: Span,
+  candidates: &[&CandidateOutcome],
+  message: &str,
+) -> Diagnostic {
+  let mut diag = codes::AMBIGUOUS_OVERLOAD.error(message, span);
   let mut shown = 0usize;
   for candidate in candidates.iter() {
     if shown >= MAX_NOTES {

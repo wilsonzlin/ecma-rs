@@ -13,7 +13,7 @@ use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
-use parse_js::ast::expr::Expr as AstExpr;
+use parse_js::ast::expr::{CallArg as AstCallArg, Expr as AstExpr};
 use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{ParamDecl, VarDecl};
@@ -24,7 +24,7 @@ use parse_js::operator::OperatorName;
 use semantic_js::ts::SymbolId;
 use types_ts_interned::{
   ExpandedType, ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature,
-  TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamDecl, TypeStore,
+  SignatureId, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamDecl, TypeStore,
 };
 
 use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
@@ -37,8 +37,8 @@ use super::flow_narrow::{
 };
 
 use super::caches::BodyCaches;
-use super::expr::resolve_call;
-use super::overload::callable_signatures;
+use super::expr::{resolve_call, resolve_construct};
+use super::overload::{callable_signatures, construct_signatures, CallResolution};
 use super::type_expr::{TypeLowerer, TypeResolver};
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
@@ -971,7 +971,13 @@ impl<'a> Checker<'a> {
       }
       AstExpr::This(_) => self.store.primitive_ids().unknown,
       AstExpr::Super(_) => self.store.primitive_ids().unknown,
-      AstExpr::Unary(un) => self.check_unary(un.stx.operator, &un.stx.argument),
+      AstExpr::Unary(un) => {
+        if matches!(un.stx.operator, OperatorName::New) {
+          self.check_new(un)
+        } else {
+          self.check_unary(un.stx.operator, &un.stx.argument)
+        }
+      }
       AstExpr::UnaryPostfix(post) => match post.stx.operator {
         OperatorName::PostfixIncrement | OperatorName::PostfixDecrement => {
           self.store.primitive_ids().number
@@ -1005,74 +1011,14 @@ impl<'a> Checker<'a> {
           None,
           span,
         );
-        for diag in &resolution.diagnostics {
-          self.diagnostics.push(diag.clone());
-        }
-        if resolution.diagnostics.is_empty() {
-          if let Some(sig_id) = resolution.signature {
-            let sig = self.store.signature(sig_id);
-            for (idx, arg) in call.stx.arguments.iter().enumerate() {
-              if let Some(param) = sig.params.get(idx) {
-                let arg_ty = arg_types
-                  .get(idx)
-                  .copied()
-                  .unwrap_or(self.store.primitive_ids().unknown);
-                self.check_assignable(&arg.stx.value, arg_ty, param.ty);
-              }
-            }
-            if let TypeKind::Predicate {
-              parameter: Some(param_name),
-              asserted: Some(asserted),
-              asserts: true,
-            } = self.store.type_kind(sig.ret)
-            {
-              let target = sig
-                .params
-                .iter()
-                .enumerate()
-                .find(|(_, p)| p.name == Some(param_name))
-                .or_else(|| sig.params.get(0).map(|p| (0usize, p)));
-              if let Some((idx, _)) = target {
-                if let Some(arg) = call.stx.arguments.get(idx) {
-                  if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
-                    self.insert_binding(id.stx.name.clone(), asserted.clone(), Vec::new());
-                  }
-                }
-              }
-            }
-            let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
-            let has_rest = sig.params.iter().any(|p| p.rest);
-            let max = if has_rest {
-              None
-            } else {
-              Some(sig.params.len())
-            };
-            if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
-              self
-                .diagnostics
-                .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
-            }
-          }
-        }
-        let contextual_sig = resolution.signature.or_else(|| {
-          callable_signatures(self.store.as_ref(), callee_ty)
-            .into_iter()
-            .next()
-        });
-        if let Some(sig_id) = contextual_sig {
-          let sig = self.store.signature(sig_id);
-          for (idx, arg) in call.stx.arguments.iter().enumerate() {
-            if let Some(param) = sig.params.get(idx) {
-              let arg_ty = arg_types
-                .get(idx)
-                .copied()
-                .unwrap_or(self.store.primitive_ids().unknown);
-              let contextual = self.contextual_arg_type(arg_ty, param.ty);
-              self.record_expr_type(arg.stx.value.loc, contextual);
-            }
-          }
-        }
-        resolution.return_type
+        let contextual_sigs = callable_signatures(self.store.as_ref(), callee_ty);
+        self.apply_call_resolution(
+          &call.stx.arguments,
+          &arg_types,
+          resolution,
+          contextual_sigs,
+          span,
+        )
       }
       AstExpr::Member(mem) => {
         let obj_ty = self.check_expr(&mem.stx.left);
@@ -1132,6 +1078,111 @@ impl<'a> Checker<'a> {
     };
     self.record_expr_type(expr.loc, ty);
     ty
+  }
+
+  fn apply_call_resolution(
+    &mut self,
+    args: &[Node<AstCallArg>],
+    arg_types: &[TypeId],
+    resolution: CallResolution,
+    contextual_sigs: Vec<SignatureId>,
+    span: Span,
+  ) -> TypeId {
+    for diag in &resolution.diagnostics {
+      self.diagnostics.push(diag.clone());
+    }
+    if resolution.diagnostics.is_empty() {
+      if let Some(sig_id) = resolution.signature {
+        let sig = self.store.signature(sig_id);
+        for (idx, arg) in args.iter().enumerate() {
+          if let Some(param) = sig.params.get(idx) {
+            let arg_ty = arg_types
+              .get(idx)
+              .copied()
+              .unwrap_or(self.store.primitive_ids().unknown);
+            self.check_assignable(&arg.stx.value, arg_ty, param.ty);
+          }
+        }
+        if let TypeKind::Predicate {
+          parameter: Some(param_name),
+          asserted: Some(asserted),
+          asserts: true,
+        } = self.store.type_kind(sig.ret)
+        {
+          let target = sig
+            .params
+            .iter()
+            .enumerate()
+            .find(|(_, p)| p.name == Some(param_name))
+            .or_else(|| sig.params.get(0).map(|p| (0usize, p)));
+          if let Some((idx, _)) = target {
+            if let Some(arg) = args.get(idx) {
+              if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
+                self.insert_binding(id.stx.name.clone(), asserted.clone(), Vec::new());
+              }
+            }
+          }
+        }
+        let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
+        let has_rest = sig.params.iter().any(|p| p.rest);
+        let max = if has_rest {
+          None
+        } else {
+          Some(sig.params.len())
+        };
+        if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
+          self
+            .diagnostics
+            .push(codes::ARGUMENT_COUNT_MISMATCH.error("argument count mismatch", span));
+        }
+      }
+    }
+    let contextual_sig = resolution
+      .signature
+      .or_else(|| contextual_sigs.into_iter().next());
+    if let Some(sig_id) = contextual_sig {
+      let sig = self.store.signature(sig_id);
+      for (idx, arg) in args.iter().enumerate() {
+        if let Some(param) = sig.params.get(idx) {
+          let arg_ty = arg_types
+            .get(idx)
+            .copied()
+            .unwrap_or(self.store.primitive_ids().unknown);
+          let contextual = self.contextual_arg_type(arg_ty, param.ty);
+          self.record_expr_type(arg.stx.value.loc, contextual);
+        }
+      }
+    }
+    resolution.return_type
+  }
+
+  fn check_new(&mut self, un: &Node<parse_js::ast::expr::UnaryExpr>) -> TypeId {
+    let empty_args: Vec<Node<AstCallArg>> = Vec::new();
+    let (callee_expr, args): (&Node<AstExpr>, &[Node<AstCallArg>]) =
+      match un.stx.argument.stx.as_ref() {
+        AstExpr::Call(call) => (&call.stx.callee, call.stx.arguments.as_slice()),
+        _ => (&un.stx.argument, empty_args.as_slice()),
+      };
+    let callee_ty = self.check_expr(callee_expr);
+    let arg_types: Vec<TypeId> = args
+      .iter()
+      .map(|arg| self.check_expr(&arg.stx.value))
+      .collect();
+    let span = Span {
+      file: self.file,
+      range: loc_to_range(self.file, un.loc),
+    };
+    let resolution = resolve_construct(
+      &self.store,
+      &self.relate,
+      callee_ty,
+      &arg_types,
+      None,
+      None,
+      span,
+    );
+    let contextual_sigs = construct_signatures(self.store.as_ref(), callee_ty);
+    self.apply_call_resolution(args, &arg_types, resolution, contextual_sigs, span)
   }
 
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
@@ -3574,9 +3625,13 @@ impl<'a> FlowBodyChecker<'a> {
       arg_bases.push(self.expr_types[arg.expr.0 as usize]);
     }
 
-    let this_arg = match &self.body.exprs[call.callee.0 as usize].kind {
-      ExprKind::Member(MemberExpr { object, .. }) => Some(self.expr_types[object.0 as usize]),
-      _ => None,
+    let this_arg = if call.is_new {
+      None
+    } else {
+      match &self.body.exprs[call.callee.0 as usize].kind {
+        ExprKind::Member(MemberExpr { object, .. }) => Some(self.expr_types[object.0 as usize]),
+        _ => None,
+      }
     };
 
     let span = Span::new(
@@ -3586,50 +3641,64 @@ impl<'a> FlowBodyChecker<'a> {
         .get(expr_id.0 as usize)
         .unwrap_or(&TextRange::new(0, 0)),
     );
-    let resolution = resolve_call(
-      &self.store,
-      &self.relate,
-      callee_base,
-      &arg_bases,
-      this_arg,
-      None,
-      span,
-    );
+    let resolution = if call.is_new {
+      resolve_construct(
+        &self.store,
+        &self.relate,
+        callee_base,
+        &arg_bases,
+        this_arg,
+        None,
+        span,
+      )
+    } else {
+      resolve_call(
+        &self.store,
+        &self.relate,
+        callee_base,
+        &arg_bases,
+        this_arg,
+        None,
+        span,
+      )
+    };
+    for diag in &resolution.diagnostics {
+      self.diagnostics.push(diag.clone());
+    }
 
     let mut ret_ty = resolution.return_type;
-    if let Some(sig_id) = resolution.signature {
-      let sig = self.store.signature(sig_id);
-      if let TypeKind::Predicate {
-        asserted,
-        asserts,
-        parameter,
-      } = self.store.type_kind(sig.ret)
-      {
-        if let Some(asserted) = asserted {
-          let target_idx = parameter
-            .and_then(|param_name| sig.params.iter().position(|p| p.name == Some(param_name)))
-            .unwrap_or(0);
-          if let Some(arg_expr) = call.args.get(target_idx).map(|a| a.expr) {
-            if let Some(binding) = self.ident_binding(arg_expr) {
-              let arg_ty = arg_bases.get(target_idx).copied().unwrap_or(prim.unknown);
-              let (yes, no) = narrow_by_assignability(arg_ty, asserted, &self.store, &self.relate);
-              if asserts {
-                out.assertions.insert(FlowKey::root(binding), yes);
-              } else {
-                let key = FlowKey::root(binding);
-                out.truthy.insert(key.clone(), yes);
-                out.falsy.insert(key, no);
+    if !call.is_new {
+      if let Some(sig_id) = resolution.signature {
+        let sig = self.store.signature(sig_id);
+        if let TypeKind::Predicate {
+          asserted,
+          asserts,
+          parameter,
+        } = self.store.type_kind(sig.ret)
+        {
+          if let Some(asserted) = asserted {
+            let target_idx = parameter
+              .and_then(|param_name| sig.params.iter().position(|p| p.name == Some(param_name)))
+              .unwrap_or(0);
+            if let Some(arg_expr) = call.args.get(target_idx).map(|a| a.expr) {
+              if let Some(binding) = self.ident_binding(arg_expr) {
+                let arg_ty = arg_bases.get(target_idx).copied().unwrap_or(prim.unknown);
+                let (yes, no) =
+                  narrow_by_assignability(arg_ty, asserted, &self.store, &self.relate);
+                if asserts {
+                  out.assertions.insert(FlowKey::root(binding), yes);
+                } else {
+                  let key = FlowKey::root(binding);
+                  out.truthy.insert(key.clone(), yes);
+                  out.falsy.insert(key, no);
+                }
               }
             }
           }
-        }
-        ret_ty = if asserts {
-          prim.undefined
+          ret_ty = if asserts { prim.undefined } else { prim.boolean };
         } else {
-          prim.boolean
-        };
-      } else {
-        ret_ty = sig.ret;
+          ret_ty = sig.ret;
+        }
       }
     }
 
