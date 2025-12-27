@@ -268,3 +268,58 @@ fn reports_overflowing_type_spans() {
   assert_eq!(span.start, u32::MAX);
   assert_eq!(span.end, u32::MAX);
 }
+
+#[test]
+fn union_canonicalization_is_span_stable() {
+  let base = lower_from_source("type A = (Foo | Bar);").expect("lower");
+  let with_padding =
+    lower_from_source("type Z = string;\ntype A = (Foo | Bar);").expect("lower with padding");
+
+  let base_members = union_member_names(&base, "A");
+  let with_padding_members = union_member_names(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["Bar", "Foo"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
+fn union_dedups_simple_duplicates() {
+  let result = lower_from_source("type A = string | string | Foo | Foo;").expect("lower");
+  let members = union_member_names(&result, "A");
+  assert_eq!(members, vec!["string", "Foo"]);
+}
+
+fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
+  let (expr_id, _) = type_alias(result, alias);
+  let mut ty = &result.types.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &result.types.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|id| type_name(&result.names, &result.types.type_exprs[id.0 as usize].kind))
+    .collect()
+}
+
+fn type_name(names: &hir_js::NameInterner, ty: &TypeExprKind) -> String {
+  match ty {
+    TypeExprKind::String => "string".to_string(),
+    TypeExprKind::TypeRef(r) => match &r.name {
+      hir_js::TypeName::Ident(id) => names.resolve(*id).unwrap().to_string(),
+      hir_js::TypeName::Qualified(path) => path
+        .iter()
+        .map(|id| names.resolve(*id).unwrap())
+        .collect::<Vec<_>>()
+        .join("."),
+      hir_js::TypeName::Import(_) => "[import]".to_string(),
+      hir_js::TypeName::ImportExpr => "[import expr]".to_string(),
+    },
+    other => format!("{other:?}"),
+  }
+}

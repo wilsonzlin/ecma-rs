@@ -44,6 +44,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::ts_stmt::InterfaceDecl;
 use parse_js::ast::ts_stmt::TypeAliasDecl;
 use parse_js::ast::type_expr::*;
+use std::collections::{HashMap, HashSet};
 
 pub(crate) struct TypeLowerer<'a> {
   pub type_exprs: Vec<HirTypeExpr>,
@@ -630,33 +631,276 @@ impl<'a> TypeLowerer<'a> {
   }
 
   fn canonicalize_union(&self, members: Vec<TypeExprId>) -> Vec<TypeExprId> {
-    let mut flat = Vec::new();
-    for m in members {
-      match &self.type_exprs[m.0 as usize].kind {
-        TypeExprKind::Union(inner) => flat.extend(inner.iter().copied()),
-        _ => flat.push(m),
-      }
-    }
-    flat.sort_by_key(|m| m.0);
-    flat.dedup();
-    flat
+    self.canonicalize_type_set(members, |kind| match kind {
+      TypeExprKind::Union(inner) => Some(inner),
+      _ => None,
+    })
   }
 
   fn canonicalize_intersection(&self, members: Vec<TypeExprId>) -> Vec<TypeExprId> {
+    self.canonicalize_type_set(members, |kind| match kind {
+      TypeExprKind::Intersection(inner) => Some(inner),
+      _ => None,
+    })
+  }
+
+  // Canonicalize a set of type expressions (union or intersection) with a stable,
+  // semantic sort key so ordering does not depend on allocation order and obvious
+  // duplicates can be removed.
+  fn canonicalize_type_set(
+    &self,
+    members: Vec<TypeExprId>,
+    nested: impl Fn(&TypeExprKind) -> Option<&Vec<TypeExprId>>,
+  ) -> Vec<TypeExprId> {
     let mut flat = Vec::new();
-    for m in members {
-      match &self.type_exprs[m.0 as usize].kind {
-        TypeExprKind::Intersection(inner) => flat.extend(inner.iter().copied()),
-        _ => flat.push(m),
+    self.flatten_type_members(&members, &nested, &mut flat);
+
+    let mut key_cache = HashMap::new();
+    let mut in_progress = HashSet::new();
+    let mut keyed: Vec<(TypeSortKey, TypeExprId)> = flat
+      .into_iter()
+      .map(|id| {
+        (
+          self.type_expr_sort_key(id, &mut key_cache, &mut in_progress),
+          id,
+        )
+      })
+      .collect();
+
+    keyed.sort_by(|(ka, ida), (kb, idb)| {
+      ka.cmp(kb)
+        .then_with(|| {
+          let a_span = self.type_exprs[ida.0 as usize].span;
+          let b_span = self.type_exprs[idb.0 as usize].span;
+          a_span
+            .start
+            .cmp(&b_span.start)
+            .then_with(|| a_span.end.cmp(&b_span.end))
+        })
+        .then_with(|| ida.0.cmp(&idb.0))
+    });
+    keyed.dedup_by(|(ka, _), (kb, _)| ka == kb);
+    keyed.into_iter().map(|(_, id)| id).collect()
+  }
+
+  fn flatten_type_members(
+    &self,
+    members: &[TypeExprId],
+    nested: &impl Fn(&TypeExprKind) -> Option<&Vec<TypeExprId>>,
+    out: &mut Vec<TypeExprId>,
+  ) {
+    for &member in members {
+      if let Some(inner) = nested(&self.type_exprs[member.0 as usize].kind) {
+        self.flatten_type_members(inner, nested, out);
+      } else {
+        out.push(member);
       }
     }
-    flat.sort_by_key(|m| m.0);
-    flat.dedup();
-    flat
+  }
+
+  fn type_expr_sort_key(
+    &self,
+    id: TypeExprId,
+    cache: &mut HashMap<TypeExprId, TypeSortKey>,
+    in_progress: &mut HashSet<TypeExprId>,
+  ) -> TypeSortKey {
+    if let Some(cached) = cache.get(&id) {
+      return cached.clone();
+    }
+
+    if !in_progress.insert(id) {
+      let expr = &self.type_exprs[id.0 as usize];
+      return TypeSortKey::Cycle {
+        discriminant: self.type_kind_discriminant(&expr.kind),
+        span_start: expr.span.start,
+        span_end: expr.span.end,
+      };
+    }
+
+    let expr = &self.type_exprs[id.0 as usize];
+    let key = match &expr.kind {
+      TypeExprKind::Any => TypeSortKey::Primitive("any"),
+      TypeExprKind::Unknown => TypeSortKey::Primitive("unknown"),
+      TypeExprKind::Never => TypeSortKey::Primitive("never"),
+      TypeExprKind::Void => TypeSortKey::Primitive("void"),
+      TypeExprKind::String => TypeSortKey::Primitive("string"),
+      TypeExprKind::Number => TypeSortKey::Primitive("number"),
+      TypeExprKind::Boolean => TypeSortKey::Primitive("boolean"),
+      TypeExprKind::BigInt => TypeSortKey::Primitive("bigint"),
+      TypeExprKind::Symbol => TypeSortKey::Primitive("symbol"),
+      TypeExprKind::UniqueSymbol => TypeSortKey::Primitive("unique symbol"),
+      TypeExprKind::Object => TypeSortKey::Primitive("object"),
+      TypeExprKind::Null => TypeSortKey::Primitive("null"),
+      TypeExprKind::Undefined => TypeSortKey::Primitive("undefined"),
+      TypeExprKind::This => TypeSortKey::Primitive("this"),
+      TypeExprKind::Literal(lit) => TypeSortKey::Literal(self.literal_sort_key(lit)),
+      TypeExprKind::TypeRef(r) => TypeSortKey::TypeRef {
+        name: self.type_name_sort_key(&r.name),
+        type_args: r
+          .type_args
+          .iter()
+          .map(|arg| self.type_expr_sort_key(*arg, cache, in_progress))
+          .collect(),
+      },
+      TypeExprKind::Array(arr) => TypeSortKey::Array {
+        readonly: arr.readonly,
+        element: Box::new(self.type_expr_sort_key(arr.element, cache, in_progress)),
+      },
+      TypeExprKind::Tuple(tuple) => TypeSortKey::Tuple {
+        readonly: tuple.readonly,
+        elements: tuple
+          .elements
+          .iter()
+          .map(|el| TupleElementKey {
+            label: el.label.map(|id| self.name_id_to_string(id)),
+            optional: el.optional,
+            rest: el.rest,
+            ty: self.type_expr_sort_key(el.ty, cache, in_progress),
+          })
+          .collect(),
+      },
+      TypeExprKind::Parenthesized(inner) => self.type_expr_sort_key(*inner, cache, in_progress),
+      _ => TypeSortKey::Other {
+        discriminant: self.type_kind_discriminant(&expr.kind),
+        span_start: expr.span.start,
+        span_end: expr.span.end,
+      },
+    };
+
+    in_progress.remove(&id);
+    cache.insert(id, key.clone());
+    key
+  }
+
+  fn literal_sort_key(&self, literal: &HirTypeLiteral) -> LiteralKey {
+    match literal {
+      HirTypeLiteral::String(s) => LiteralKey::String(s.clone()),
+      HirTypeLiteral::Number(n) => LiteralKey::Number(n.clone()),
+      HirTypeLiteral::BigInt(n) => LiteralKey::BigInt(n.clone()),
+      HirTypeLiteral::Boolean(b) => LiteralKey::Boolean(*b),
+      HirTypeLiteral::Null => LiteralKey::Null,
+    }
+  }
+
+  fn type_name_sort_key(&self, name: &TypeName) -> TypeNameKey {
+    match name {
+      TypeName::Ident(id) => TypeNameKey::Ident(self.name_id_to_string(*id)),
+      TypeName::Qualified(path) => {
+        TypeNameKey::Qualified(path.iter().map(|id| self.name_id_to_string(*id)).collect())
+      }
+      TypeName::Import(import) => TypeNameKey::Import {
+        module: import.module.clone(),
+        qualifier: import.qualifier.as_ref().map(|qualifier| {
+          qualifier
+            .iter()
+            .map(|id| self.name_id_to_string(*id))
+            .collect()
+        }),
+      },
+      TypeName::ImportExpr => TypeNameKey::ImportExpr,
+    }
+  }
+
+  fn name_id_to_string(&self, id: NameId) -> String {
+    self.names.resolve(id).unwrap_or("").to_string()
+  }
+
+  fn type_kind_discriminant(&self, kind: &TypeExprKind) -> u8 {
+    match kind {
+      TypeExprKind::Any => 0,
+      TypeExprKind::Unknown => 1,
+      TypeExprKind::Never => 2,
+      TypeExprKind::Void => 3,
+      TypeExprKind::String => 4,
+      TypeExprKind::Number => 5,
+      TypeExprKind::Boolean => 6,
+      TypeExprKind::BigInt => 7,
+      TypeExprKind::Symbol => 8,
+      TypeExprKind::UniqueSymbol => 9,
+      TypeExprKind::Object => 10,
+      TypeExprKind::Null => 11,
+      TypeExprKind::Undefined => 12,
+      TypeExprKind::This => 13,
+      TypeExprKind::Literal(_) => 14,
+      TypeExprKind::TypeRef(_) => 15,
+      TypeExprKind::Array(_) => 16,
+      TypeExprKind::Tuple(_) => 17,
+      TypeExprKind::Union(_) => 18,
+      TypeExprKind::Intersection(_) => 19,
+      TypeExprKind::Function(_) => 20,
+      TypeExprKind::Constructor(_) => 21,
+      TypeExprKind::TypeLiteral(_) => 22,
+      TypeExprKind::Parenthesized(_) => 23,
+      TypeExprKind::TypeQuery(_) => 24,
+      TypeExprKind::KeyOf(_) => 25,
+      TypeExprKind::IndexedAccess { .. } => 26,
+      TypeExprKind::Conditional(_) => 27,
+      TypeExprKind::Infer(_) => 28,
+      TypeExprKind::Mapped(_) => 29,
+      TypeExprKind::TemplateLiteral(_) => 30,
+      TypeExprKind::TypePredicate(_) => 31,
+      TypeExprKind::Import(_) => 32,
+    }
   }
 }
 
 enum LoweredEntityName {
   Path(Vec<NameId>),
   Import(TypeImportName),
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum TypeSortKey {
+  Primitive(&'static str),
+  Literal(LiteralKey),
+  TypeRef {
+    name: TypeNameKey,
+    type_args: Vec<TypeSortKey>,
+  },
+  Array {
+    readonly: bool,
+    element: Box<TypeSortKey>,
+  },
+  Tuple {
+    readonly: bool,
+    elements: Vec<TupleElementKey>,
+  },
+  Other {
+    discriminant: u8,
+    span_start: u32,
+    span_end: u32,
+  },
+  Cycle {
+    discriminant: u8,
+    span_start: u32,
+    span_end: u32,
+  },
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct TupleElementKey {
+  label: Option<String>,
+  optional: bool,
+  rest: bool,
+  ty: TypeSortKey,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum LiteralKey {
+  String(String),
+  Number(String),
+  BigInt(String),
+  Boolean(bool),
+  Null,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+enum TypeNameKey {
+  Ident(String),
+  Qualified(Vec<String>),
+  Import {
+    module: Option<String>,
+    qualifier: Option<Vec<String>>,
+  },
+  ImportExpr,
 }

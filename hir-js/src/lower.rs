@@ -2712,6 +2712,7 @@ fn collect_class_members<'a>(
             module_items,
             names,
             false,
+            false,
             ambient,
             in_global,
             ctx,

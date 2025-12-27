@@ -718,7 +718,6 @@ impl<'a> Parser<'a> {
     // Check if it's typeof import(...)
     let expr_name = if self.peek().typ == TT::KeywordImport {
       let import_expr = self.import_call(ctx)?;
-      let _end_loc = import_expr.loc;
       self.parse_qualified_type_entity_name(TypeEntityName::Import(import_expr))?
     } else {
       self.parse_type_entity_name()?
