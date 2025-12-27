@@ -10,7 +10,7 @@ use typecheck_ts::lib_support::{CacheMode, CacheOptions, CompilerOptions};
 use typecheck_ts::{CacheKind, FileKey, Host, HostError, Program, QueryStatsCollector};
 use types_ts_interned::{
   CacheConfig, DefId, EvaluatorCaches, Param, RelateCtx, RelateTypeExpander, Signature,
-  SignatureId, TypeEvaluator, TypeId, TypeKind, TypeOptions, TypeParamId, TypeStore,
+  SignatureId, TypeEvaluator, TypeId, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 fn relation_round(store: &Arc<TypeStore>, caches: &CheckerCaches) -> CheckerCacheStats {
@@ -75,7 +75,7 @@ fn instantiation_cache_eviction_is_deterministic() {
       rest: false,
     }],
     ret: param_ty,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
   let def = DefId(42);
@@ -327,7 +327,7 @@ fn cache_stats_are_recorded_for_profiling() {
       rest: false,
     }],
     ret: param_ty,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
   let mut subst = HashMap::new();

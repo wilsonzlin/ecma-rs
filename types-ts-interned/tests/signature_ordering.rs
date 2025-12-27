@@ -5,6 +5,7 @@ use types_ts_interned::Shape;
 use types_ts_interned::Signature;
 use types_ts_interned::SignatureId;
 use types_ts_interned::TypeKind;
+use types_ts_interned::TypeParamDecl;
 use types_ts_interned::TypeParamId;
 use types_ts_interned::TypeStore;
 
@@ -125,11 +126,11 @@ fn signature_ordering_accounts_for_this_and_type_params() {
   );
 
   let mut tp_a_sig = Signature::new(vec![base_param.clone()], primitives.void);
-  tp_a_sig.type_params = vec![TypeParamId(0)];
+  tp_a_sig.type_params = vec![TypeParamDecl::new(TypeParamId(0))];
   let tp_a = store.intern_signature(tp_a_sig);
 
   let mut tp_b_sig = Signature::new(vec![base_param], primitives.void);
-  tp_b_sig.type_params = vec![TypeParamId(1)];
+  tp_b_sig.type_params = vec![TypeParamDecl::new(TypeParamId(1))];
   let tp_b = store.intern_signature(tp_b_sig);
 
   let tp_a_callable = store.intern_type(TypeKind::Callable {

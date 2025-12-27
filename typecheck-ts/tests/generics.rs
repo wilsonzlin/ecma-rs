@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
 use typecheck_ts::check::infer::{
-  infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature, TypeParamDecl,
+  infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature,
 };
 use typecheck_ts::check::instantiate::{InstantiationCache, Substituter};
 use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey, TypeKindSummary};
 use types_ts_interned::{
-  CacheConfig, DefId, Param, Signature, TypeId, TypeKind, TypeParamId, TypeStore,
+  CacheConfig, DefId, Param, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 fn param(name: &str, ty: TypeId, store: &Arc<TypeStore>) -> Param {
@@ -30,14 +30,13 @@ fn infers_identity_function() {
   let sig = Signature {
     params: vec![param("x", t_type, &store)],
     ret: t_type,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
 
   let result = infer_type_arguments_for_call(
     &store,
     &sig,
-    &[TypeParamDecl::new(t_param)],
     &[primitives.number],
     None,
   );
@@ -61,13 +60,12 @@ fn infers_union_from_multiple_arguments() {
   let sig = Signature {
     params: vec![param("a", t_type, &store), param("b", t_type, &store)],
     ret: t_type,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
 
   let args = [primitives.string, primitives.number];
-  let result =
-    infer_type_arguments_for_call(&store, &sig, &[TypeParamDecl::new(t_param)], &args, None);
+  let result = infer_type_arguments_for_call(&store, &sig, &args, None);
   assert!(result.diagnostics.is_empty());
   let expected_union = store.union(vec![primitives.string, primitives.number]);
   assert_eq!(result.substitutions.get(&t_param), Some(&expected_union));
@@ -85,19 +83,18 @@ fn uses_default_type_argument_when_not_inferred() {
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
-  let sig = Signature {
-    params: Vec::new(),
-    ret: t_type,
-    type_params: vec![t_param],
-    this_param: None,
-  };
-
   let decl = TypeParamDecl {
     id: t_param,
     constraint: None,
     default: Some(primitives.string),
   };
-  let result = infer_type_arguments_for_call(&store, &sig, &[decl], &[], None);
+  let sig = Signature {
+    params: Vec::new(),
+    ret: t_type,
+    type_params: vec![decl.clone()],
+    this_param: None,
+  };
+  let result = infer_type_arguments_for_call(&store, &sig, &[], None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
 }
@@ -109,20 +106,20 @@ fn reports_constraint_violation() {
   let t_param = TypeParamId(0);
   let t_type = store.intern_type(TypeKind::TypeParam(t_param));
 
-  let sig = Signature {
-    params: vec![param("value", t_type, &store)],
-    ret: t_type,
-    type_params: vec![t_param],
-    this_param: None,
-  };
-
   let decl = TypeParamDecl {
     id: t_param,
     constraint: Some(primitives.number),
     default: None,
   };
 
-  let result = infer_type_arguments_for_call(&store, &sig, &[decl], &[primitives.string], None);
+  let sig = Signature {
+    params: vec![param("value", t_type, &store)],
+    ret: t_type,
+    type_params: vec![decl.clone()],
+    this_param: None,
+  };
+
+  let result = infer_type_arguments_for_call(&store, &sig, &[primitives.string], None);
   assert_eq!(result.diagnostics.len(), 1);
   let diag = &result.diagnostics[0];
   assert_eq!(diag.param, t_param);
@@ -169,7 +166,7 @@ fn infers_from_function_argument_structure() {
       param("mapper", expected_callback, &store),
     ],
     ret: return_array,
-    type_params: vec![t_param, u_param],
+    type_params: vec![TypeParamDecl::new(t_param), TypeParamDecl::new(u_param)],
     this_param: None,
   };
 
@@ -190,8 +187,7 @@ fn infers_from_function_argument_structure() {
     inferred_callback,
   ];
 
-  let decls = vec![TypeParamDecl::new(t_param), TypeParamDecl::new(u_param)];
-  let result = infer_type_arguments_for_call(&store, &generic_sig, &decls, &args, None);
+  let result = infer_type_arguments_for_call(&store, &generic_sig, &args, None);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
   assert_eq!(result.substitutions.get(&u_param), Some(&primitives.string));
@@ -217,7 +213,7 @@ fn infers_from_contravariant_function_parameter() {
   let generic_sig = Signature {
     params: vec![param("cb", callback_type, &store)],
     ret: t_type,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
 
@@ -234,7 +230,6 @@ fn infers_from_contravariant_function_parameter() {
   let result = infer_type_arguments_for_call(
     &store,
     &generic_sig,
-    &[TypeParamDecl::new(t_param)],
     &[actual_cb],
     None,
   );
@@ -257,7 +252,7 @@ fn caches_instantiations_for_same_def() {
   let sig = Signature {
     params: vec![param("value", t_type, &store)],
     ret: t_type,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
 
@@ -280,7 +275,7 @@ fn instantiation_cache_evictions_are_bounded_and_deterministic() {
   let sig = Signature {
     params: vec![param("value", t_type, &store)],
     ret: t_type,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
 
@@ -319,7 +314,7 @@ fn infers_from_contextual_signature_return_type() {
   let contextual_sig = Signature {
     params: vec![param("value", t_type, &store)],
     ret: t_type,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
 
@@ -335,7 +330,6 @@ fn infers_from_contextual_signature_return_type() {
   let result = infer_type_arguments_from_contextual_signature(
     &store,
     &contextual_sig,
-    &[TypeParamDecl::new(t_param)],
     &actual_sig,
   );
   assert!(result.diagnostics.is_empty());
@@ -352,7 +346,7 @@ fn infers_from_contextual_signature_parameter() {
   let contextual_sig = Signature {
     params: vec![param("value", t_type, &store)],
     ret: primitives.void,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
 
@@ -366,7 +360,6 @@ fn infers_from_contextual_signature_parameter() {
   let result = infer_type_arguments_from_contextual_signature(
     &store,
     &contextual_sig,
-    &[TypeParamDecl::new(t_param)],
     &actual_sig,
   );
   assert!(result.diagnostics.is_empty());
@@ -383,14 +376,13 @@ fn infers_from_contextual_return_in_call() {
   let sig = Signature {
     params: vec![param("value", t_type, &store)],
     ret: t_type,
-    type_params: vec![t_param],
+    type_params: vec![TypeParamDecl::new(t_param)],
     this_param: None,
   };
 
   let result = infer_type_arguments_for_call(
     &store,
     &sig,
-    &[TypeParamDecl::new(t_param)],
     &[primitives.unknown],
     Some(primitives.string),
   );

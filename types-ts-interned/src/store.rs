@@ -1,9 +1,9 @@
 use crate::display::TypeDisplay;
-use crate::ids::{NameId, ObjectId, ShapeId, SignatureId, TypeId, TypeParamId};
+use crate::ids::{NameId, ObjectId, ShapeId, SignatureId, TypeId};
 use crate::kind::{CompositeKind, TypeKind};
 use crate::options::TypeOptions;
 use crate::shape::{Indexer, ObjectType, Property, Shape};
-use crate::signature::{Param, Signature};
+use crate::signature::{Param, Signature, TypeParamDecl};
 use ahash::RandomState;
 use dashmap::mapref::entry::Entry;
 use dashmap::DashMap;
@@ -447,6 +447,14 @@ impl TypeStore {
     signature.ret = self.canon(signature.ret);
     if let Some(this) = signature.this_param.as_mut() {
       *this = self.canon(*this);
+    }
+    for tp in signature.type_params.iter_mut() {
+      if let Some(constraint) = tp.constraint.as_mut() {
+        *constraint = self.canon(*constraint);
+      }
+      if let Some(default) = tp.default.as_mut() {
+        *default = self.canon(*default);
+      }
     }
     self.insert_signature_direct(signature)
   }
@@ -995,7 +1003,7 @@ impl TypeStore {
     }
   }
 
-  fn compare_type_params(&self, a: &[TypeParamId], b: &[TypeParamId]) -> Ordering {
+  fn compare_type_params(&self, a: &[TypeParamDecl], b: &[TypeParamDecl]) -> Ordering {
     let mut idx = 0;
     loop {
       let Some(a_param) = a.get(idx) else {
@@ -1004,7 +1012,11 @@ impl TypeStore {
       let Some(b_param) = b.get(idx) else {
         return a.len().cmp(&b.len());
       };
-      let ord = a_param.cmp(b_param);
+      let ord = a_param
+        .id
+        .cmp(&b_param.id)
+        .then_with(|| self.option_type_cmp(a_param.constraint, b_param.constraint))
+        .then_with(|| self.option_type_cmp(a_param.default, b_param.default));
       if ord != Ordering::Equal {
         return ord;
       }

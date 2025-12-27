@@ -12,7 +12,7 @@ use ordered_float::OrderedFloat;
 use semantic_js::ts::{ImportSource, Namespace, SymbolOrigin, SymbolOwner, TsProgramSemantics};
 use types_ts_interned::{
   DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
-  Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamId, TypeStore,
+  Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 /// Lower HIR type expressions and declarations into interned types.
@@ -361,17 +361,20 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     func: &hir_js::TypeFunction,
     names: &hir_js::NameInterner,
   ) -> Signature {
+    let prev_params = self.type_params.clone();
+    let prev_names = self.type_param_names.clone();
+    let type_params = self.lower_type_param_decls(&func.type_params, names);
     let (this_param, params) = self.lower_fn_params(&func.params, names);
-    let mut type_params = Vec::new();
-    for tp in func.type_params.iter() {
-      type_params.push(self.alloc_type_param(*tp));
-    }
-    Signature {
+    let ret = self.lower_type_expr(func.ret, names);
+    let sig = Signature {
       params,
-      ret: self.lower_type_expr(func.ret, names),
+      ret,
       type_params,
       this_param,
-    }
+    };
+    self.type_params = prev_params;
+    self.type_param_names = prev_names;
+    sig
   }
 
   fn map_modifier(&self, modifier: Option<hir_js::TypeMappedModifier>) -> MappedModifier {
@@ -395,6 +398,34 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     new_id
   }
 
+  fn lower_type_param_decls(
+    &mut self,
+    params: &[HirTypeParamId],
+    names: &hir_js::NameInterner,
+  ) -> Vec<TypeParamDecl> {
+    for tp in params.iter() {
+      self.alloc_type_param(*tp);
+    }
+    params
+      .iter()
+      .filter_map(|id| {
+        let data = self.arenas.type_params.get(id.0 as usize)?;
+        let mapped = *self.type_params.get(id)?;
+        let constraint = data
+          .constraint
+          .map(|c| self.lower_type_expr(c, names));
+        let default = data
+          .default
+          .map(|d| self.lower_type_expr(d, names));
+        Some(TypeParamDecl {
+          id: mapped,
+          constraint,
+          default,
+        })
+      })
+      .collect()
+  }
+
   fn collect_type_params(&self, params: &[HirTypeParamId]) -> Vec<TypeParamId> {
     params
       .iter()
@@ -403,21 +434,23 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   }
 
   fn lower_signature(&mut self, sig: &TypeSignature, names: &hir_js::NameInterner) -> Signature {
+    let prev_params = self.type_params.clone();
+    let prev_names = self.type_param_names.clone();
+    let type_params = self.lower_type_param_decls(&sig.type_params, names);
     let (this_param, sig_params) = self.lower_fn_params(&sig.params, names);
     let ret = sig
       .return_type
       .map(|r| self.lower_type_expr(r, names))
       .unwrap_or(self.store.primitive_ids().any);
-    let mut type_params = Vec::new();
-    for tp in sig.type_params.iter() {
-      type_params.push(self.alloc_type_param(*tp));
-    }
-    Signature {
+    let sig = Signature {
       params: sig_params,
       ret,
       type_params,
       this_param,
-    }
+    };
+    self.type_params = prev_params;
+    self.type_param_names = prev_names;
+    sig
   }
 
   fn lower_fn_params(
@@ -591,6 +624,9 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }
       hir_js::PropertyName::Computed => return None,
     };
+    let prev_params = self.type_params.clone();
+    let prev_names = self.type_param_names.clone();
+    let type_params = self.lower_type_param_decls(&method.type_params, names);
     let (this_param, params) = self.lower_fn_params(&method.params, names);
     let sig = Signature {
       params,
@@ -598,14 +634,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         .return_type
         .map(|t| self.lower_type_expr(t, names))
         .unwrap_or(self.store.primitive_ids().unknown),
-      type_params: method
-        .type_params
-        .iter()
-        .map(|tp| self.alloc_type_param(*tp))
-        .collect(),
+      type_params,
       this_param,
     };
     let sig_id = self.store.intern_signature(sig);
+    self.type_params = prev_params;
+    self.type_param_names = prev_names;
     Some((
       key,
       self.store.intern_type(TypeKind::Callable {

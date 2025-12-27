@@ -613,7 +613,14 @@ pub mod body_check {
             }
           }
         }
-        let relate = RelateCtx::new(Arc::clone(&ctx.store), ctx.store.options());
+        let mut flow_hooks = relate_hooks();
+        flow_hooks.expander = Some(&expander);
+        let flow_relate = RelateCtx::with_hooks_and_cache(
+          Arc::clone(&ctx.store),
+          ctx.store.options(),
+          flow_hooks,
+          caches.relation.clone(),
+        );
         let flow_result = check_body_with_env(
           body_id,
           body,
@@ -622,8 +629,8 @@ pub mod body_check {
           "",
           Arc::clone(&ctx.store),
           &initial_env,
-          relate,
-          None,
+          flow_relate,
+          Some(&expander),
         );
         let mut relate_hooks = relate_hooks();
         relate_hooks.expander = Some(&expander);

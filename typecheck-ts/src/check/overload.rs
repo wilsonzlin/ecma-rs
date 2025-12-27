@@ -7,7 +7,7 @@ use types_ts_interned::{
   TypeStore,
 };
 
-use super::infer::{infer_type_arguments_for_call, TypeParamDecl};
+use super::infer::infer_type_arguments_for_call;
 use super::instantiate::Substituter;
 use crate::codes;
 
@@ -116,7 +116,6 @@ pub fn resolve_overloads(
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
-  type_params: &[TypeParamDecl],
   contextual_return: Option<TypeId>,
   span: Span,
 ) -> CallResolution {
@@ -171,7 +170,7 @@ pub fn resolve_overloads(
     }
 
     let inference =
-      infer_type_arguments_for_call(store, &original_sig, type_params, args, contextual_return);
+      infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
     outcome.unknown_inferred = count_unknown(
       store.as_ref(),
       &inference.substitutions,
@@ -600,7 +599,15 @@ fn format_signature(store: &TypeStore, sig: &Signature) -> String {
       if idx > 0 {
         out.push_str(", ");
       }
-      out.push_str(&format!("T{}", tp.0));
+      out.push_str(&format!("T{}", tp.id.0));
+      if let Some(constraint) = tp.constraint {
+        out.push_str(" extends ");
+        out.push_str(&TypeDisplay::new(store, constraint).to_string());
+      }
+      if let Some(default) = tp.default {
+        out.push_str(" = ");
+        out.push_str(&TypeDisplay::new(store, default).to_string());
+      }
     }
     out.push('>');
   }

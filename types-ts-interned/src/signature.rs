@@ -5,6 +5,23 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct TypeParamDecl {
+  pub id: TypeParamId,
+  pub constraint: Option<TypeId>,
+  pub default: Option<TypeId>,
+}
+
+impl TypeParamDecl {
+  pub fn new(id: TypeParamId) -> Self {
+    Self {
+      id,
+      constraint: None,
+      default: None,
+    }
+  }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Param {
   pub name: Option<NameId>,
   pub ty: TypeId,
@@ -16,7 +33,7 @@ pub struct Param {
 pub struct Signature {
   pub params: Vec<Param>,
   pub ret: TypeId,
-  pub type_params: Vec<TypeParamId>,
+  pub type_params: Vec<TypeParamDecl>,
   pub this_param: Option<TypeId>,
 }
 

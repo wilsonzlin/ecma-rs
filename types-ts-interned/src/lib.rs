@@ -53,6 +53,7 @@ pub use shape::Property;
 pub use shape::Shape;
 pub use signature::Param;
 pub use signature::Signature;
+pub use signature::TypeParamDecl;
 pub use store::PrimitiveIds;
 pub use store::TypeStore;
 pub use store::TypeStoreSnapshot;

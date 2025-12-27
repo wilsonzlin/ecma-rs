@@ -3,7 +3,6 @@ use std::sync::Arc;
 use diagnostics::Span;
 use types_ts_interned::{RelateCtx, TypeId, TypeStore};
 
-use super::infer::TypeParamDecl;
 use super::overload::{resolve_overloads, CallResolution};
 
 /// Resolve a call expression against a callable type.
@@ -13,7 +12,6 @@ pub fn resolve_call(
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
-  type_params: &[TypeParamDecl],
   contextual_return: Option<TypeId>,
   span: Span,
 ) -> CallResolution {
@@ -23,7 +21,6 @@ pub fn resolve_call(
     callee,
     args,
     this_arg,
-    type_params,
     contextual_return,
     span,
   )

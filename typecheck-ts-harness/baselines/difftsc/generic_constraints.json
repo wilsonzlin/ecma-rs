@@ -1,0 +1,36 @@
+{
+  "schema_version": 2,
+  "metadata": {
+    "typescript_version": "5.9.3",
+    "options": {
+      "exactOptionalPropertyTypes": false,
+      "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
+      "skipLibCheck": true,
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
+    }
+  },
+  "diagnostics": [
+    {
+      "code": 2345,
+      "file": "c.ts",
+      "start": 53,
+      "end": 54,
+      "category": "error",
+      "message": "Argument of type 'number' is not assignable to parameter of type 'string'."
+    },
+    {
+      "code": 2345,
+      "file": "c.ts",
+      "start": 59,
+      "end": 62,
+      "category": "error",
+      "message": "Argument of type '\"s\"' is not assignable to parameter of type 'number'."
+    }
+  ]
+}

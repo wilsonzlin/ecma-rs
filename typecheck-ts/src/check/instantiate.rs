@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use types_ts_interned::{
   CacheConfig, CacheStats, ObjectType, Shape, ShardedCache, Signature, SignatureId, TupleElem,
-  TypeId, TypeKind, TypeParamId, TypeStore,
+  TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 use types_ts_interned::{DefId, ShapeId};
 
@@ -43,9 +43,20 @@ impl Substituter {
     if let Some(this) = instantiated.this_param.as_mut() {
       *this = self.substitute_type(*this);
     }
-    instantiated
+    instantiated.type_params = instantiated
       .type_params
-      .retain(|tp| !self.subst.contains_key(tp));
+      .iter()
+      .filter_map(|tp| {
+        if self.subst.contains_key(&tp.id) {
+          return None;
+        }
+        Some(TypeParamDecl {
+          id: tp.id,
+          constraint: tp.constraint.map(|c| self.substitute_type(c)),
+          default: tp.default.map(|d| self.substitute_type(d)),
+        })
+      })
+      .collect();
     self.store.intern_signature(instantiated)
   }
 
@@ -258,7 +269,7 @@ impl InstantiationCache {
       .iter()
       .map(|tp| {
         subst
-          .get(tp)
+          .get(&tp.id)
           .copied()
           .unwrap_or(store.primitive_ids().unknown)
       })

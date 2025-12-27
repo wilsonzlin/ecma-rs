@@ -23,7 +23,7 @@ use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use types_ts_interned::{
   ExpandedType, ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature,
-  TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeStore,
+  TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamDecl, TypeStore,
 };
 
 use super::cfg::{BlockId, ControlFlowGraph};
@@ -36,7 +36,6 @@ use super::flow_narrow::{
 
 use super::caches::BodyCaches;
 use super::expr::resolve_call;
-use super::infer::TypeParamDecl;
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
 pub use crate::BodyCheckResult;
@@ -490,7 +489,6 @@ pub fn check_body_with_expander(
     return_types: Vec::new(),
     index,
     scopes: vec![Scope::default()],
-    function_type_params: HashMap::new(),
     expected_return: None,
     check_var_assignments: !synthetic_top_level,
     widen_object_literals: true,
@@ -554,7 +552,6 @@ struct Checker<'a> {
   return_types: Vec<TypeId>,
   index: AstIndex<'a>,
   scopes: Vec<Scope>,
-  function_type_params: HashMap<TypeId, Vec<TypeParamDecl>>,
   expected_return: Option<TypeId>,
   check_var_assignments: bool,
   widen_object_literals: bool,
@@ -702,26 +699,7 @@ impl<'a> Checker<'a> {
     &mut self,
     params: &[Node<parse_js::ast::type_expr::TypeParameter>],
   ) -> Vec<TypeParamDecl> {
-    let ids = self.lowerer.register_type_params(params);
-    let mut decls = Vec::new();
-    for (param, id) in params.iter().zip(ids.iter()) {
-      let constraint = param
-        .stx
-        .constraint
-        .as_ref()
-        .map(|c| self.lowerer.lower_type_expr(c));
-      let default = param
-        .stx
-        .default
-        .as_ref()
-        .map(|d| self.lowerer.lower_type_expr(d));
-      decls.push(TypeParamDecl {
-        id: *id,
-        constraint,
-        default,
-      });
-    }
-    decls
+    self.lowerer.register_type_params(params)
   }
 
   fn check_function_body(&mut self, func: &Node<Func>) {
@@ -905,9 +883,6 @@ impl<'a> Checker<'a> {
             } else {
               self.store.intersection(vec![existing.ty, fn_ty])
             };
-            if let Some(params) = self.function_type_params.get(&fn_ty).cloned() {
-              self.function_type_params.entry(ty).or_insert(params);
-            }
             self.insert_binding(name_str, ty, Vec::new());
           } else {
             self.insert_binding(name_str, fn_ty, Vec::new());
@@ -1019,18 +994,12 @@ impl<'a> Checker<'a> {
           file: self.file,
           range: loc_to_range(self.file, call.loc),
         };
-        let type_params = self
-          .function_type_params
-          .get(&callee_ty)
-          .cloned()
-          .unwrap_or_default();
         let resolution = resolve_call(
           &self.store,
           &self.relate,
           callee_ty,
           &arg_types,
           None,
-          &type_params,
           None,
           span,
         );
@@ -1686,14 +1655,11 @@ impl<'a> Checker<'a> {
   }
 
   fn function_type(&mut self, func: &Node<Func>) -> TypeId {
-    let mut type_param_decls = Vec::new();
-    let mut type_params_ids = Vec::new();
-    let mut has_type_params = false;
+    let mut type_params = Vec::new();
     if let Some(params) = func.stx.type_parameters.as_ref() {
       self.lowerer.push_type_param_scope();
-      has_type_params = true;
-      type_param_decls = self.lower_type_params(params);
-      type_params_ids = type_param_decls.iter().map(|d| d.id).collect();
+      type_params = self.lower_type_params(params);
+      self.lowerer.pop_type_param_scope();
     }
     let params = func
       .stx
@@ -1726,19 +1692,13 @@ impl<'a> Checker<'a> {
     let sig = Signature {
       params,
       ret,
-      type_params: type_params_ids,
+      type_params,
       this_param: None,
     };
     let sig_id = self.store.intern_signature(sig);
     let ty = self.store.intern_type(TypeKind::Callable {
       overloads: vec![sig_id],
     });
-    if !type_param_decls.is_empty() {
-      self.function_type_params.insert(ty, type_param_decls);
-    }
-    if has_type_params {
-      self.lowerer.pop_type_param_scope();
-    }
     ty
   }
 
@@ -3442,7 +3402,6 @@ impl<'a> FlowBodyChecker<'a> {
       callee_base,
       &arg_bases,
       this_arg,
-      &[],
       None,
       span,
     );

@@ -16,8 +16,8 @@ use std::fmt;
 use std::sync::Arc;
 use types_ts_interned::{
   DefId, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property, Shape,
-  Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamId,
-  TypeStore,
+  Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeId, TypeKind, TypeParamDecl,
+  TypeParamId, TypeStore,
 };
 
 /// Resolves entity names in type positions to canonical [`DefId`]s.
@@ -127,12 +127,20 @@ impl TypeLowerer {
     self.lookup_type_param(name)
   }
 
-  pub fn register_type_params(&mut self, params: &[Node<TypeParameter>]) -> Vec<TypeParamId> {
+  pub fn register_type_params(&mut self, params: &[Node<TypeParameter>]) -> Vec<TypeParamDecl> {
     let mut ids = Vec::new();
     for param in params.iter() {
       ids.push(self.alloc_type_param(param.stx.name.clone()));
     }
-    ids
+    params
+      .iter()
+      .zip(ids.iter())
+      .map(|(param, id)| TypeParamDecl {
+        id: *id,
+        constraint: param.stx.constraint.as_ref().map(|c| self.lower_type_expr(c)),
+        default: param.stx.default.as_ref().map(|d| self.lower_type_expr(d)),
+      })
+      .collect()
   }
 
   fn alloc_type_param(&mut self, name: String) -> TypeParamId {
@@ -281,15 +289,15 @@ impl TypeLowerer {
 
   fn lower_function_type(&mut self, func: &Node<TypeFunction>) -> TypeId {
     self.push_type_param_scope();
-    let mut type_param_ids = Vec::new();
+    let mut type_params = Vec::new();
     if let Some(params) = func.stx.type_parameters.as_ref() {
-      type_param_ids = self.register_type_params(params);
+      type_params = self.register_type_params(params);
     }
     let (this_param, params) = self.lower_params(&func.stx.parameters);
     let sig = Signature {
       params,
       ret: self.lower_type_expr(&func.stx.return_type),
-      type_params: type_param_ids,
+      type_params,
       this_param,
     };
     self.pop_type_param_scope();
@@ -301,15 +309,15 @@ impl TypeLowerer {
 
   fn lower_constructor_type(&mut self, cons: &Node<TypeConstructor>) -> TypeId {
     self.push_type_param_scope();
-    let mut type_param_ids = Vec::new();
+    let mut type_params = Vec::new();
     if let Some(params) = cons.stx.type_parameters.as_ref() {
-      type_param_ids = self.register_type_params(params);
+      type_params = self.register_type_params(params);
     }
     let (this_param, params) = self.lower_params(&cons.stx.parameters);
     let sig = Signature {
       params,
       ret: self.lower_type_expr(&cons.stx.return_type),
-      type_params: type_param_ids,
+      type_params,
       this_param,
     };
     self.pop_type_param_scope();
@@ -372,9 +380,9 @@ impl TypeLowerer {
         }
         TypeMember::Constructor(cons) => {
           self.push_type_param_scope();
-          let mut type_param_ids = Vec::new();
+          let mut type_params = Vec::new();
           if let Some(params) = cons.stx.type_parameters.as_ref() {
-            type_param_ids = self.register_type_params(params);
+            type_params = self.register_type_params(params);
           }
           let (this_param, params) = self.lower_params(&cons.stx.parameters);
           let sig = Signature {
@@ -385,7 +393,7 @@ impl TypeLowerer {
               .as_ref()
               .map(|t| self.lower_type_expr(t))
               .unwrap_or(self.store.primitive_ids().unknown),
-            type_params: type_param_ids,
+            type_params,
             this_param,
           };
           self.pop_type_param_scope();
@@ -394,9 +402,9 @@ impl TypeLowerer {
         }
         TypeMember::CallSignature(call) => {
           self.push_type_param_scope();
-          let mut type_param_ids = Vec::new();
+          let mut type_params = Vec::new();
           if let Some(params) = call.stx.type_parameters.as_ref() {
-            type_param_ids = self.register_type_params(params);
+            type_params = self.register_type_params(params);
           }
           let (this_param, params) = self.lower_params(&call.stx.parameters);
           let sig = Signature {
@@ -407,7 +415,7 @@ impl TypeLowerer {
               .as_ref()
               .map(|t| self.lower_type_expr(t))
               .unwrap_or(self.store.primitive_ids().unknown),
-            type_params: type_param_ids,
+            type_params,
             this_param,
           };
           self.pop_type_param_scope();
@@ -471,10 +479,10 @@ impl TypeLowerer {
       TypePropertyKey::Computed(_) => return None,
     };
 
+    let mut type_params = Vec::new();
     self.push_type_param_scope();
-    let mut type_param_ids = Vec::new();
     if let Some(params) = method.stx.type_parameters.as_ref() {
-      type_param_ids = self.register_type_params(params);
+      type_params = self.register_type_params(params);
     }
     let (this_param, params) = self.lower_params(&method.stx.parameters);
     let sig = Signature {
@@ -485,7 +493,7 @@ impl TypeLowerer {
         .as_ref()
         .map(|t| self.lower_type_expr(t))
         .unwrap_or(self.store.primitive_ids().unknown),
-      type_params: type_param_ids,
+      type_params,
       this_param,
     };
     self.pop_type_param_scope();

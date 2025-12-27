@@ -411,6 +411,25 @@ impl<'a> TypeDisplay<'a> {
     sig: &crate::signature::Signature,
     f: &mut fmt::Formatter<'_>,
   ) -> fmt::Result {
+    if !sig.type_params.is_empty() {
+      write!(f, "<")?;
+      let mut iter = sig.type_params.iter().peekable();
+      while let Some(param) = iter.next() {
+        write!(f, "T{}", param.id.0)?;
+        if let Some(constraint) = param.constraint {
+          write!(f, " extends ")?;
+          self.fmt_type(constraint, f)?;
+        }
+        if let Some(default) = param.default {
+          write!(f, " = ")?;
+          self.fmt_type(default, f)?;
+        }
+        if iter.peek().is_some() {
+          write!(f, ", ")?;
+        }
+      }
+      write!(f, ">")?;
+    }
     write!(f, "(")?;
     let mut needs_comma = false;
 

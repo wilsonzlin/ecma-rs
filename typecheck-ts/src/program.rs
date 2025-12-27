@@ -3974,10 +3974,11 @@ impl ProgramState {
       None => TypeLowerer::new(Arc::clone(store)),
     };
     lowerer.set_file(file);
-    let mut type_param_ids = Vec::new();
+    let mut type_param_decls = Vec::new();
     if let Some(params) = func.function.stx.type_parameters.as_ref() {
-      type_param_ids = lowerer.register_type_params(params);
+      type_param_decls = lowerer.register_type_params(params);
     }
+    let type_param_ids: Vec<_> = type_param_decls.iter().map(|d| d.id).collect();
     let mut params = Vec::new();
     let mut this_param = None;
     for (idx, param) in func.function.stx.parameters.iter().enumerate() {
@@ -4012,7 +4013,7 @@ impl ProgramState {
     let sig = tti::Signature {
       params,
       ret,
-      type_params: type_param_ids.clone(),
+      type_params: type_param_decls,
       this_param,
     };
     let sig_id = store.intern_signature(sig);

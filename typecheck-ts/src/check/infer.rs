@@ -2,25 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::instantiate::Substituter;
-use types_ts_interned::{Shape, Signature, TypeId, TypeKind, TypeParamId, TypeStore};
-
-/// Definition for a single type parameter, including constraint and default.
-#[derive(Clone, Debug)]
-pub struct TypeParamDecl {
-  pub id: TypeParamId,
-  pub constraint: Option<TypeId>,
-  pub default: Option<TypeId>,
-}
-
-impl TypeParamDecl {
-  pub fn new(id: TypeParamId) -> Self {
-    Self {
-      id,
-      constraint: None,
-      default: None,
-    }
-  }
-}
+use types_ts_interned::{Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore};
 
 /// Diagnostic emitted when inference fails to satisfy a constraint.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,25 +21,20 @@ pub struct InferenceResult {
 }
 
 /// Infer type arguments for a call to a generic function signature.
-///
-/// The caller is responsible for providing the [`TypeParamDecl`] metadata for
-/// the signature's [`Signature::type_params`]. Inference proceeds by relating
-/// the declared parameter types against the provided argument types, collecting
-/// lower and upper bounds for each type parameter depending on variance.
+/// Inference proceeds by relating the declared parameter types against the
+/// provided argument types, collecting lower and upper bounds for each type
+/// parameter depending on variance.
 pub fn infer_type_arguments_for_call(
   store: &Arc<TypeStore>,
   sig: &Signature,
-  type_params: &[TypeParamDecl],
   args: &[TypeId],
   contextual_return: Option<TypeId>,
 ) -> InferenceResult {
-  let mut decls: HashMap<TypeParamId, TypeParamDecl> = type_params
+  let mut decls: HashMap<TypeParamId, TypeParamDecl> = sig
+    .type_params
     .iter()
     .map(|decl| (decl.id, decl.clone()))
     .collect();
-  for tp in sig.type_params.iter() {
-    decls.entry(*tp).or_insert_with(|| TypeParamDecl::new(*tp));
-  }
 
   let mut ctx = InferenceContext::new(Arc::clone(store), decls);
 
@@ -69,7 +46,8 @@ pub fn infer_type_arguments_for_call(
     ctx.constrain(sig.ret, ret, Variance::Covariant);
   }
 
-  ctx.solve(&sig.type_params)
+  let order: Vec<TypeParamId> = sig.type_params.iter().map(|tp| tp.id).collect();
+  ctx.solve(&order)
 }
 
 /// Infer type arguments using a contextual function type (e.g. arrow function
@@ -77,20 +55,22 @@ pub fn infer_type_arguments_for_call(
 pub fn infer_type_arguments_from_contextual_signature(
   store: &Arc<TypeStore>,
   contextual_sig: &Signature,
-  type_params: &[TypeParamDecl],
   actual_sig: &Signature,
 ) -> InferenceResult {
-  let mut decls: HashMap<TypeParamId, TypeParamDecl> = type_params
+  let mut decls: HashMap<TypeParamId, TypeParamDecl> = contextual_sig
+    .type_params
     .iter()
     .map(|decl| (decl.id, decl.clone()))
     .collect();
-  for tp in contextual_sig.type_params.iter() {
-    decls.entry(*tp).or_insert_with(|| TypeParamDecl::new(*tp));
-  }
 
   let mut ctx = InferenceContext::new(Arc::clone(store), decls);
   ctx.constrain_signature(contextual_sig, actual_sig, Variance::Covariant);
-  ctx.solve(&contextual_sig.type_params)
+  let order: Vec<TypeParamId> = contextual_sig
+    .type_params
+    .iter()
+    .map(|tp| tp.id)
+    .collect();
+  ctx.solve(&order)
 }
 
 #[derive(Clone, Copy, Debug)]
