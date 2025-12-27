@@ -1,9 +1,9 @@
 use crate::cfg::cfg::Cfg;
 use crate::eval::consteval::coerce_to_bool;
 use crate::il::inst::Arg;
-use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::opt::PassResult;
+use crate::ssa::phi_simplify::simplify_phis;
 use itertools::Itertools;
 
 // Correctness:
@@ -13,6 +13,7 @@ use itertools::Itertools;
 pub fn optpass_impossible_branches(cfg: &mut Cfg) -> PassResult {
   let mut result = PassResult::default();
   loop {
+    let mut iteration_changed = false;
     for label in cfg.graph.labels_sorted() {
       let Some(inst) = cfg.bblocks.get_mut(label).last_mut() else {
         continue;
@@ -27,6 +28,7 @@ pub fn optpass_impossible_branches(cfg: &mut Cfg) -> PassResult {
         // TODO Should this optimization be part of optapss_impossible_branches?
         cfg.bblocks.get_mut(label).pop().unwrap();
         result.mark_changed();
+        iteration_changed = true;
         continue;
       }
       let Arg::Const(cond) = cond else {
@@ -42,35 +44,13 @@ pub fn optpass_impossible_branches(cfg: &mut Cfg) -> PassResult {
       // Detach from child.
       cfg.graph.disconnect(label, never_child);
       result.mark_cfg_changed();
-      // Update Phi insts in child.
-      // NOTE: This is not the same as the subsequent Phi pruning for each `to_delete`, as `never_child` may still reachable (e.g. CondGoto was for if-with-no-else stmt, and never_child was for after if stmt).
-      for inst in cfg.bblocks.get_mut(never_child).iter_mut() {
-        if inst.t != InstTyp::Phi {
-          // No more Phi insts.
-          break;
-        };
-        inst.remove_phi(label);
-      }
+      iteration_changed = true;
     }
 
     // Detaching bblocks means that we may have removed entire subgraphs (i.e. its descendants). Therefore, we must recalculate again the accessible bblocks.
     // NOTE: We cannot delete now, as we need to access the children of these deleted nodes first. (They won't have children after deleting.)
     let mut to_delete = cfg.graph.find_unreachable(cfg.entry).collect_vec();
     to_delete.sort_unstable();
-    // All defs in now-deleted bblocks must be cleared. Since we are in strict SSA, they should only ever appear outside of the deleted bblocks in Phi insts.
-    for &n in to_delete.iter() {
-      // Update Phi insts in children.
-      for c in cfg.graph.children_sorted(n) {
-        for inst in cfg.bblocks.get_mut(c).iter_mut() {
-          if inst.t != InstTyp::Phi {
-            // No more Phi insts.
-            break;
-          };
-          // NOTE: We don't try to remove the Phi insts or transform into a VarAssign (if it only has one entry in `from_blocks`) right now out of abundance of caution for correctness, since `from_blocks` could still be modified during these loops.
-          inst.remove_phi(n);
-        }
-      }
-    }
 
     // Delete bblocks now so that only valid bblocks remain, which is the set of bblocks to iterate for pruning Phi insts.
     let did_delete = !to_delete.is_empty();
@@ -78,32 +58,21 @@ pub fn optpass_impossible_branches(cfg: &mut Cfg) -> PassResult {
     cfg.bblocks.remove_many(to_delete);
     if did_delete {
       result.mark_cfg_changed();
+      iteration_changed = true;
     }
 
-    // Prune Phi insts in remaining bblocks.
-    for (_, bblock) in cfg.bblocks.all_mut() {
-      let mut phis_to_delete = Vec::new();
-      for (i, inst) in bblock.iter_mut().enumerate() {
-        if inst.t != InstTyp::Phi {
-          // No more Phi insts.
-          break;
-        };
-        let tgt = inst.tgts[0];
-        if inst.labels.is_empty() {
-          // TODO Is this always safe?
-          phis_to_delete.push(i);
-        }
-        if inst.labels.len() == 1 {
-          let arg = inst.args[0].clone();
-          *inst = Inst::var_assign(tgt, arg);
-        };
-      }
-      for i in phis_to_delete.into_iter().rev() {
-        bblock.remove(i);
-      }
+    if simplify_phis(cfg) {
+      result.mark_changed();
+      iteration_changed = true;
     }
 
-    if !did_delete {
+    #[cfg(debug_assertions)]
+    {
+      crate::ssa::phi_simplify::validate_phis(cfg)
+        .expect("phi validation failed after impossible branches");
+    }
+
+    if !iteration_changed {
       break;
     }
     result.mark_changed();

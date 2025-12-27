@@ -1,6 +1,7 @@
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::InstTyp;
 use crate::opt::PassResult;
+use crate::ssa::phi_simplify::simplify_phis;
 use itertools::Itertools;
 
 /**
@@ -217,6 +218,16 @@ pub fn optpass_cfg_prune(cfg: &mut Cfg) -> PassResult {
         }
         result.mark_cfg_changed();
       }
+    }
+
+    if simplify_phis(cfg) {
+      result.mark_changed();
+      converged = false;
+    }
+
+    #[cfg(debug_assertions)]
+    {
+      crate::ssa::phi_simplify::validate_phis(cfg).expect("phi validation failed after cfg prune");
     }
 
     if converged {

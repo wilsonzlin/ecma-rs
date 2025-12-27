@@ -3,6 +3,7 @@ use crate::dom::Dom;
 use crate::il::inst::Arg;
 use crate::il::inst::Const;
 use crate::il::inst::InstTyp;
+use crate::ssa::phi_simplify::simplify_phis;
 use crate::util::counter::Counter;
 use ahash::HashMap;
 use ahash::HashMapExt;
@@ -156,5 +157,10 @@ pub fn rename_targets_for_ssa_construction(cfg: &mut Cfg, dom: &Dom, c_temp: &mu
         }
       }
     }
+  }
+  simplify_phis(cfg);
+  #[cfg(debug_assertions)]
+  {
+    crate::ssa::phi_simplify::validate_phis(cfg).expect("phi validation failed after SSA rename");
   }
 }
