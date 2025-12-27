@@ -139,8 +139,8 @@ fn lowers_mapped_types_with_remapping() {
   let expr = &result.types.type_exprs[type_expr.0 as usize];
   match &expr.kind {
     TypeExprKind::Mapped(mapped) => {
-      assert_eq!(mapped.readonly, TypeMappedModifier::None);
-      assert_eq!(mapped.optional, TypeMappedModifier::None);
+      assert_eq!(mapped.readonly, Some(TypeMappedModifier::None));
+      assert_eq!(mapped.optional, Some(TypeMappedModifier::None));
       assert!(mapped.name_type.is_some());
       let value_type = &result.types.type_exprs[mapped.value_type.0 as usize];
       assert!(matches!(
@@ -210,6 +210,23 @@ fn lowers_template_literal_and_indexed_access_types() {
     .type_expr_at_offset(span.start)
     .expect("span lookup");
   assert_eq!(mapped, tmpl_expr);
+}
+
+#[test]
+fn lowers_mapped_types_without_modifiers() {
+  let result = lower_from_source("type M<T> = { [K in keyof T]: T[K] };").expect("lower");
+  let (type_expr, type_params) = type_alias(&result, "M");
+  assert_eq!(type_params.len(), 1);
+
+  let expr = &result.types.type_exprs[type_expr.0 as usize];
+  match &expr.kind {
+    TypeExprKind::Mapped(mapped) => {
+      assert_eq!(mapped.readonly, None);
+      assert_eq!(mapped.optional, None);
+      assert!(mapped.name_type.is_none());
+    }
+    other => panic!("expected mapped type, got {other:?}"),
+  }
 }
 
 #[test]

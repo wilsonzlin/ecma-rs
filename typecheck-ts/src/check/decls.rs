@@ -366,11 +366,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
   }
 
-  fn map_modifier(&self, modifier: hir_js::TypeMappedModifier) -> MappedModifier {
+  fn map_modifier(&self, modifier: Option<hir_js::TypeMappedModifier>) -> MappedModifier {
     match modifier {
-      hir_js::TypeMappedModifier::Plus => MappedModifier::Add,
-      hir_js::TypeMappedModifier::Minus => MappedModifier::Remove,
-      hir_js::TypeMappedModifier::None => MappedModifier::Preserve,
+      None => MappedModifier::Preserve,
+      Some(hir_js::TypeMappedModifier::Plus) => MappedModifier::Add,
+      Some(hir_js::TypeMappedModifier::Minus) => MappedModifier::Remove,
+      Some(hir_js::TypeMappedModifier::None) => MappedModifier::Add,
     }
   }
 
@@ -523,7 +524,10 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         shape.indexers.push(Indexer {
           key_type,
           value_type,
-          readonly: matches!(mapped.readonly, hir_js::TypeMappedModifier::Plus),
+          readonly: matches!(
+            mapped.readonly,
+            Some(hir_js::TypeMappedModifier::Plus) | Some(hir_js::TypeMappedModifier::None)
+          ),
         });
       }
     }

@@ -566,13 +566,11 @@ impl<'a> TypeLowerer<'a> {
       readonly: mapped
         .stx
         .readonly_modifier
-        .map(Self::lower_mapped_modifier)
-        .unwrap_or(TypeMappedModifier::None),
+        .map(Self::lower_mapped_modifier),
       optional: mapped
         .stx
         .optional_modifier
-        .map(Self::lower_mapped_modifier)
-        .unwrap_or(TypeMappedModifier::None),
+        .map(Self::lower_mapped_modifier),
     }
   }
 

@@ -397,8 +397,8 @@ pub struct TypeMapped {
   pub constraint: TypeExprId,
   pub name_type: Option<TypeExprId>,
   pub value_type: TypeExprId,
-  pub readonly: TypeMappedModifier,
-  pub optional: TypeMappedModifier,
+  pub readonly: Option<TypeMappedModifier>,
+  pub optional: Option<TypeMappedModifier>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
