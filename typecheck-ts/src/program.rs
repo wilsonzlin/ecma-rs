@@ -34,6 +34,7 @@ use tracing::debug_span;
 use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, TypeId, TypeParamId};
 
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
+use self::check::flow_bindings::FlowBindings;
 use self::check::relate_hooks;
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
@@ -7215,6 +7216,7 @@ impl ProgramState {
         }
       }
       let local_semantics = self.local_semantics.get(&file);
+      let flow_bindings = local_semantics.map(|locals| FlowBindings::new(body, locals));
       for (idx, expr) in body.exprs.iter().enumerate() {
         if let hir_js::ExprKind::Ident(name_id) = expr.kind {
           if initial_env.contains_key(&name_id) {
@@ -7245,7 +7247,7 @@ impl ProgramState {
         flow_hooks,
         caches.relation.clone(),
       );
-      let flow_result = check::hir_body::check_body_with_env(
+      let flow_result = check::hir_body::check_body_with_env_with_bindings(
         body_id,
         body,
         &lowered.names,
@@ -7253,6 +7255,7 @@ impl ProgramState {
         "",
         Arc::clone(&store),
         &initial_env,
+        flow_bindings.as_ref(),
         flow_relate,
         Some(&expander),
       );
