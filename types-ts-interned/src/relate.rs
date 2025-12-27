@@ -253,6 +253,12 @@ impl<'a> RelateCtx<'a> {
       .result
   }
 
+  /// Expand a [`TypeKind::Ref`] into the referenced type using the configured
+  /// expander, if available.
+  pub fn expand_ref_type(&self, def: DefId, args: &[TypeId]) -> Option<TypeId> {
+    self.expand_ref(def, args)
+  }
+
   pub fn explain_assignable(&self, src: TypeId, dst: TypeId) -> RelationResult {
     self.reset_reason_budget();
     self.relate_internal(

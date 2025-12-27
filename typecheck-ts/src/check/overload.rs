@@ -42,9 +42,9 @@ pub struct CallResolution {
 
 /// Collect all callable signatures from a type, expanding unions/intersections
 /// and object call signatures.
-pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
+pub fn callable_signatures(store: &Arc<TypeStore>, ty: TypeId) -> Vec<SignatureId> {
   let mut out = Vec::new();
-  collect_signatures(store, ty, &mut out, &mut HashSet::new());
+  collect_signatures(store, None, ty, &mut out, &mut HashSet::new());
   out
 }
 
@@ -157,7 +157,15 @@ pub fn resolve_overloads(
     );
   }
   let mut candidates = Vec::new();
-  collect_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());
+  collect_signatures(
+    store,
+    Some(relate),
+    callee,
+    &mut candidates,
+    &mut HashSet::new(),
+  );
+  candidates.sort_by(|a, b| store.compare_signatures(*a, *b));
+  candidates.dedup();
   let primitives = store.primitive_ids();
   if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
     return CallResolution {
@@ -224,9 +232,8 @@ pub fn resolve_overloads(
           if let Some(ty) = ctx.contextual_arg_type(idx, expected.ty) {
             contextual_args[idx] = ty;
           }
-          if let Some(contextual_sig_id) = callable_signatures(store.as_ref(), expected.ty)
-            .into_iter()
-            .next()
+          if let Some(contextual_sig_id) =
+            callable_signatures(store, expected.ty).into_iter().next()
           {
             let contextual_sig = store.signature(contextual_sig_id);
             if let Some(actual) = ctx.actual_function_signature(idx, &contextual_sig) {
@@ -482,8 +489,7 @@ pub fn resolve_construct(
       continue;
     }
 
-    let inference =
-      infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
+    let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
 
     let merged_substitutions = inference.substitutions.clone();
 
@@ -632,7 +638,8 @@ pub fn resolve_construct(
 }
 
 fn collect_signatures(
-  store: &TypeStore,
+  store: &Arc<TypeStore>,
+  relate: Option<&RelateCtx<'_>>,
   ty: TypeId,
   out: &mut Vec<SignatureId>,
   seen: &mut HashSet<TypeId>,
@@ -646,9 +653,16 @@ fn collect_signatures(
       let shape = store.shape(store.object(obj).shape);
       out.extend(shape.call_signatures);
     }
+    TypeKind::Ref { def, args } => {
+      if let Some(relate) = relate {
+        if let Some(expanded) = relate.expand_ref_type(def, &args) {
+          collect_signatures(store, Some(relate), expanded, out, seen);
+        }
+      }
+    }
     TypeKind::Union(members) | TypeKind::Intersection(members) => {
       for member in members {
-        collect_signatures(store, member, out, seen);
+        collect_signatures(store, relate, member, out, seen);
       }
     }
     _ => {}

@@ -741,10 +741,10 @@ fn resolve_def_targets(
         continue;
       }
     }
-    if targets
+    let matches_target = targets
       .iter()
-      .any(|target| target.span == def.span && target.kind == def.path.kind)
-    {
+      .any(|target| target.span == def.span && target.kind == def.path.kind);
+    if matches_target || def.in_global {
       if seen.insert(def.id) {
         selected.push(def.id);
       }

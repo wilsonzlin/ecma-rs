@@ -1,6 +1,5 @@
 use salsa::Setter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -20,6 +19,7 @@ use crate::db::inputs::{
 };
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
+use crate::db::types::SharedTypeStore;
 use crate::db::{symbols, Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::parse_metrics;
@@ -317,8 +317,10 @@ pub mod body_check {
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
   use crate::check::caches::CheckerCaches;
-use crate::check::hir_body::{check_body_with_env, check_body_with_expander, BindingTypeResolver};
-use crate::check::hir_body::{FlowBindingId, FlowBindings};
+  use crate::check::hir_body::{
+    check_body_with_env, check_body_with_expander, BindingTypeResolver,
+  };
+  use crate::check::hir_body::{FlowBindingId, FlowBindings};
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
   use crate::lib_support::{CacheMode, CacheOptions};
@@ -1805,33 +1807,6 @@ pub trait TypeDb: salsa::Database + Send + 'static {
   fn files_input(&self) -> FilesInput;
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput>;
 }
-
-/// Cheap wrapper around [`TypeStore`] with pointer-based equality for salsa
-/// inputs.
-#[derive(Clone)]
-pub struct SharedTypeStore(pub Arc<TypeStore>);
-
-impl SharedTypeStore {
-  pub fn arc(&self) -> Arc<TypeStore> {
-    Arc::clone(&self.0)
-  }
-}
-
-impl fmt::Debug for SharedTypeStore {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_tuple("SharedTypeStore")
-      .field(&Arc::as_ptr(&self.0))
-      .finish()
-  }
-}
-
-impl PartialEq for SharedTypeStore {
-  fn eq(&self, other: &Self) -> bool {
-    Arc::ptr_eq(&self.0, &other.0)
-  }
-}
-
-impl Eq for SharedTypeStore {}
 
 /// Kind of declaration associated with a definition.
 #[derive(Clone, Debug, PartialEq, Eq)]

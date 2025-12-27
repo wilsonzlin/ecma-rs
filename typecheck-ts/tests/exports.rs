@@ -323,15 +323,14 @@ fn imported_overloads_preserve_all_signatures() {
 
   let program = Program::new(host, vec![key_use.clone()]);
   let diagnostics = program.check();
-  let math_id = program.file_id(&key_math).expect("math id");
-  let math_exports = program.exports_of(math_id);
-  let overload_entry = math_exports.get("overload").expect("overload export");
-  let overload_type = overload_entry.type_id.expect("type for overload");
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
-
+  let math_id = program.file_id(&key_math).expect("math id");
+  let math_exports = program.exports_of(math_id);
+  let overload_entry = math_exports.get("overload").expect("overload export");
+  let overload_type = overload_entry.type_id.expect("type for overload");
   let returns: Vec<_> = program
     .call_signatures(overload_type)
     .iter()
@@ -390,7 +389,6 @@ fn typeof_imported_overload_merges_signatures() {
   let program = Program::new(host, vec![key_use.clone()]);
   let diagnostics = program.check();
   let math_id = program.file_id(&key_math).expect("math id");
-  let math_exports = program.exports_of(math_id);
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"

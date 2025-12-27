@@ -516,7 +516,7 @@ impl<'a> CfgBuilder<'a> {
     self.cfg.blocks[init_block.0].kind = BlockKind::ForInit { init };
     self.connect(&preds, init_block);
 
-    let test_block = self.cfg.add_block();
+    let test_block = self.add_stmt_block(stmt_id);
     self.cfg.blocks[test_block.0].kind = BlockKind::ForTest { test };
     self.cfg.blocks[test_block.0].stmts.push(stmt_id);
 

@@ -2,10 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{BodyCheckResult, BuiltinTypes, DefData, TypeStore};
-use crate::{
-  semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId, FileKey, SymbolBinding,
-  SymbolOccurrence,
-};
+use crate::symbols::{semantic_js, SymbolBinding, SymbolOccurrence};
+use crate::{BodyId, DefId, Diagnostic, ExportMap, FileId, FileKey};
 use types_ts_interned::{
   TypeId, TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };

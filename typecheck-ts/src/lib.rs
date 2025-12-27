@@ -149,7 +149,6 @@ mod symbols;
 mod type_queries;
 
 pub use api::*;
-pub use db::queries::VarInit;
 pub use error::*;
 pub use files::FileOrigin;
 pub use parse_metrics::{parse_call_count, reset_parse_call_count};
@@ -158,7 +157,7 @@ pub use program::BodyCheckResult;
 pub use program::*;
 #[cfg(feature = "serde")]
 pub use snapshot::*;
-pub use symbols::*;
+pub use symbols::{semantic_js, SymbolBinding, SymbolInfo, SymbolOccurrence};
 pub use type_queries::*;
 
 use std::collections::HashMap;

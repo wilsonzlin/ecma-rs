@@ -916,7 +916,7 @@ impl<'a> Checker<'a> {
           let name_str = name.stx.name.clone();
           let fn_ty = self.function_type(&func.stx.function);
           if let Some(existing) = self.lookup(&name_str) {
-            let has_callables = !callable_signatures(self.store.as_ref(), existing.ty).is_empty();
+            let has_callables = !callable_signatures(&self.store, existing.ty).is_empty();
             let ty = if has_callables {
               existing.ty
             } else {
@@ -1212,7 +1212,7 @@ impl<'a> Checker<'a> {
           }
         }
         let contextual_sig = resolution.signature.or_else(|| {
-          callable_signatures(self.store.as_ref(), callee_ty)
+          callable_signatures(&self.store, callee_ty)
             .into_iter()
             .next()
         });
