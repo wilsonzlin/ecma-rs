@@ -192,3 +192,33 @@ declare module "ambient" {
     "annotated imports from ambient modules should preserve their declared shape"
   );
 }
+
+#[test]
+fn ambient_module_types_drive_object_checks() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+
+  let entry = FileKey::new("entry.ts");
+  let ambient_lib = LibFile {
+    key: FileKey::new("ambient.d.ts"),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(r#"declare module "ambient" { export interface Foo { a: string } }"#),
+  };
+
+  let host = AmbientHost::new(options).with_lib(ambient_lib).with_file(
+    entry.clone(),
+    r#"
+import type { Foo } from "ambient";
+const ok: Foo = { a: "ok" };
+const bad: Foo = { a: 123 };
+"#,
+  );
+
+  let program = Program::new(host, vec![entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    !diagnostics.is_empty(),
+    "assigning the wrong property type should produce a diagnostic"
+  );
+}

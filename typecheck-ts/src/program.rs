@@ -2797,7 +2797,13 @@ fn match_kind_from_hir(kind: HirDefKind) -> DefMatchKind {
 fn is_value_def_kind(kind: &DefKind) -> bool {
   matches!(
     kind,
-    DefKind::Function(_) | DefKind::Var(_) | DefKind::Import(_)
+    DefKind::Function(_)
+      | DefKind::Class(_)
+      | DefKind::Enum(_)
+      | DefKind::Namespace(_)
+      | DefKind::Module(_)
+      | DefKind::Var(_)
+      | DefKind::Import(_)
   )
 }
 
@@ -2811,8 +2817,8 @@ fn find_value_def(defs: &HashMap<DefId, DefData>, file: FileId, name: &str) -> O
       continue;
     }
     let pri = match &data.kind {
-      DefKind::Function(_) => 0,
-      DefKind::Var(_) => 1,
+      DefKind::Function(_) | DefKind::Class(_) | DefKind::Enum(_) => 0,
+      DefKind::Namespace(_) | DefKind::Module(_) | DefKind::Var(_) => 1,
       DefKind::Import(_) => 2,
       _ => continue,
     };
@@ -4050,8 +4056,12 @@ impl ProgramState {
       return;
     };
     let mut cache = HashMap::new();
-    let mut updates: Vec<(FileId, String, TypeId)> = Vec::new();
-    for (file_id, state) in self.files.iter() {
+    let file_ids: Vec<_> = self.files.keys().copied().collect();
+    for file_id in file_ids {
+      let Some(mut state) = self.files.remove(&file_id) else {
+        continue;
+      };
+      let mut updates: Vec<(String, TypeId)> = Vec::new();
       for (name, binding) in state.bindings.iter() {
         let value_def = binding
           .def
@@ -4062,37 +4072,112 @@ impl ProgramState {
               .map(|data| is_value_def_kind(&data.kind))
               .unwrap_or(false)
           })
-          .or_else(|| find_value_def(&self.def_data, *file_id, name));
-        let ty = if let Some(def_id) = value_def {
-          let mut ty = if let Some(ty) = self.interned_def_types.get(&def_id).copied() {
-            Some(store.canon(ty))
-          } else if let Some(store_ty) = self.def_types.get(&def_id).copied() {
-            Some(self.type_id_in_store(store_ty, &store, &mut cache))
-          } else {
-            None
-          };
-          if ty.is_none() {
-            ty = binding
-              .type_id
-              .map(|binding_ty| self.type_id_in_store(binding_ty, &store, &mut cache));
-          }
-          ty
-        } else if let Some(binding_ty) = binding.type_id {
-          Some(self.type_id_in_store(binding_ty, &store, &mut cache))
-        } else {
-          None
-        };
-        if let Some(ty) = ty {
-          updates.push((*file_id, name.to_string(), ty));
+          .or_else(|| find_value_def(&self.def_data, file_id, name));
+        if let Some(ty) = self.binding_type_for(value_def, binding, &store, &mut cache) {
+          updates.push((name.to_string(), ty));
         }
       }
-    }
-    for (file_id, name, ty) in updates.into_iter() {
-      if let Some(state) = self.files.get_mut(&file_id) {
+      for (name, ty) in updates.into_iter() {
         if let Some(binding) = state.bindings.get_mut(&name) {
           binding.type_id = Some(ty);
         }
       }
+      self.update_ambient_module_binding_types(&mut state.ambient_modules, &store, &mut cache);
+      self.files.insert(file_id, state);
+    }
+  }
+
+  fn binding_type_for(
+    &self,
+    value_def: Option<DefId>,
+    binding: &SymbolBinding,
+    store: &Arc<tti::TypeStore>,
+    cache: &mut HashMap<TypeId, tti::TypeId>,
+  ) -> Option<TypeId> {
+    if let Some(def_id) = value_def {
+      if let Some(ty) = self.interned_def_types.get(&def_id).copied() {
+        return Some(store.canon(ty));
+      }
+      if let Some(store_ty) = self.def_types.get(&def_id).copied() {
+        return Some(self.type_id_in_store(store_ty, store, cache));
+      }
+    }
+    binding
+      .type_id
+      .map(|binding_ty| self.type_id_in_store(binding_ty, store, cache))
+  }
+
+  fn update_ambient_module_binding_types(
+    &self,
+    modules: &mut HashMap<String, AmbientModuleState>,
+    store: &Arc<tti::TypeStore>,
+    cache: &mut HashMap<TypeId, tti::TypeId>,
+  ) {
+    for state in modules.values_mut() {
+      let mut updates: Vec<(String, TypeId)> = Vec::new();
+      for (name, binding) in state.bindings.iter() {
+        let value_def = binding
+          .def
+          .filter(|def_id| {
+            self
+              .def_data
+              .get(def_id)
+              .map(|data| is_value_def_kind(&data.kind))
+              .unwrap_or(false)
+          })
+          .or_else(|| {
+            state.defs.iter().copied().find(|def_id| {
+              self
+                .def_data
+                .get(def_id)
+                .map(|data| data.name == *name && is_value_def_kind(&data.kind))
+                .unwrap_or(false)
+            })
+          });
+        if let Some(ty) = self.binding_type_for(value_def, binding, store, cache) {
+          updates.push((name.clone(), ty));
+        }
+      }
+      for (name, ty) in updates.into_iter() {
+        if let Some(binding) = state.bindings.get_mut(&name) {
+          binding.type_id = Some(ty);
+        }
+      }
+
+      let symbol_types: HashMap<semantic_js::SymbolId, TypeId> = state
+        .bindings
+        .values()
+        .filter_map(|binding| binding.type_id.map(|ty| (binding.symbol, ty)))
+        .collect();
+
+      for export in state.exports.values_mut() {
+        if export.type_id.is_some() {
+          continue;
+        }
+        if let Some(def) = export.def {
+          let ty = self
+            .interned_def_types
+            .get(&def)
+            .copied()
+            .map(|ty| store.canon(ty))
+            .or_else(|| {
+              self
+                .def_types
+                .get(&def)
+                .copied()
+                .map(|ty| self.type_id_in_store(ty, store, cache))
+            });
+          if let Some(ty) = ty {
+            export.type_id = Some(ty);
+            continue;
+          }
+        }
+        if let Some(ty) = symbol_types.get(&export.symbol).copied() {
+          export.type_id = Some(ty);
+        }
+      }
+
+      self.update_ambient_module_binding_types(&mut state.ambient_modules, store, cache);
     }
   }
 
@@ -4931,7 +5016,9 @@ impl ProgramState {
               pending.push((*file, file_key.clone(), specifier.clone()));
             }
           }
-          sem_ts::Export::All(all) => pending.push((*file, file_key.clone(), all.specifier.clone())),
+          sem_ts::Export::All(all) => {
+            pending.push((*file, file_key.clone(), all.specifier.clone()))
+          }
           sem_ts::Export::ExportAssignment { .. } => {}
         }
       }
@@ -5461,10 +5548,7 @@ impl ProgramState {
     names
   }
 
-  fn has_ambient_module(
-    modules: &HashMap<String, AmbientModuleState>,
-    specifier: &str,
-  ) -> bool {
+  fn has_ambient_module(modules: &HashMap<String, AmbientModuleState>, specifier: &str) -> bool {
     modules.keys().any(|name| name == specifier)
       || modules
         .values()

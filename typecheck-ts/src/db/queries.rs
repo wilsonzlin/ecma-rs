@@ -19,8 +19,8 @@ use crate::db::inputs::{
 };
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
-use crate::db::{symbols, Db, ModuleKey};
 use crate::db::types::SharedTypeStore;
+use crate::db::{symbols, Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::parse_metrics;
 use crate::profile::QueryKind;
