@@ -18,10 +18,14 @@ use ts_erase::erase_types;
 use std::cell::Cell;
 
 pub use parse_js::Dialect;
+#[cfg(feature = "fuzzing")]
+mod fuzz;
 mod rename;
 #[cfg(test)]
 mod tests;
 mod ts_erase;
+#[cfg(feature = "fuzzing")]
+pub use fuzz::fuzz_minify_pipeline;
 
 #[cfg(feature = "emit-minify")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
