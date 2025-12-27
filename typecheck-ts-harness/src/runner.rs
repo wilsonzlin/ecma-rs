@@ -376,13 +376,12 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
   };
 
   let mut cases = discover_conformance_tests(&opts.root, &opts.filter, &extensions)?;
-
-  if cases.is_empty() && !opts.allow_empty {
-    return Err(crate::HarnessError::Typecheck(format!(
-      "no conformance tests discovered under '{}' (extensions: {})",
-      opts.root.display(),
-      extensions.join(",")
-    )));
+  let root_missing = !opts.root.is_dir();
+  if (root_missing || cases.is_empty()) && !opts.allow_empty {
+    return Err(crate::HarnessError::EmptySuite {
+      root: opts.root.display().to_string(),
+      extensions: extensions.join(","),
+    });
   }
 
   let expectations = match &opts.manifest {

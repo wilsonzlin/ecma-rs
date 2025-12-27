@@ -184,6 +184,47 @@ fn cli_json_output_is_deterministic() {
 }
 
 #[test]
+fn cli_requires_suite_unless_allowed_to_be_empty() {
+  let dir = tempdir().expect("tempdir");
+
+  #[allow(deprecated)]
+  let mut cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  cmd
+    .arg("conformance")
+    .arg("--root")
+    .arg(dir.path())
+    .arg("--compare")
+    .arg("none")
+    .arg("--timeout-secs")
+    .arg("1");
+
+  let assert = cmd.assert().failure();
+  let stderr = String::from_utf8_lossy(&assert.get_output().stderr);
+  assert!(
+    stderr.contains("git submodule update --init --recursive parse-js/tests/TypeScript"),
+    "stderr should hint at initializing the TypeScript submodule: {stderr}"
+  );
+  assert!(
+    stderr.contains("--root"),
+    "stderr should mention overriding the root: {stderr}"
+  );
+
+  #[allow(deprecated)]
+  let mut allow_cmd = Command::cargo_bin("typecheck-ts-harness").expect("binary");
+  allow_cmd
+    .arg("conformance")
+    .arg("--root")
+    .arg(dir.path())
+    .arg("--compare")
+    .arg("none")
+    .arg("--timeout-secs")
+    .arg("1")
+    .arg("--allow-empty");
+
+  allow_cmd.assert().success();
+}
+
+#[test]
 fn cli_runs_with_filter_and_json() {
   let (_dir, root) = write_fixtures();
 

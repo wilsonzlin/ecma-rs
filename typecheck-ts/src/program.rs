@@ -326,7 +326,7 @@ fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeSt
     }
   }
 
-  let store = tti::TypeStore::new();
+  let store = tti::TypeStore::with_options((&state.compiler_options).into());
   let mut cache = HashMap::new();
   let interned = convert_type_for_display(ty, state, &store, &mut cache);
   (store, interned)
@@ -1715,7 +1715,10 @@ impl Program {
       .interned_store
       .as_ref()
       .map(|s| s.snapshot())
-      .unwrap_or_else(|| tti::TypeStore::new().snapshot());
+      .unwrap_or_else(|| {
+        let store = tti::TypeStore::with_options((&state.compiler_options).into());
+        store.snapshot()
+      });
     let mut interned_def_types: Vec<_> = state
       .interned_def_types
       .iter()
@@ -3037,7 +3040,7 @@ impl ProgramState {
     }
 
     let store = self.interned_store.clone().unwrap_or_else(|| {
-      let store = tti::TypeStore::new();
+      let store = tti::TypeStore::with_options((&self.compiler_options).into());
       self.interned_store = Some(Arc::clone(&store));
       store
     });
@@ -5416,7 +5419,7 @@ impl ProgramState {
     let store = match self.interned_store.as_ref() {
       Some(store) => Arc::clone(store),
       None => {
-        let store = tti::TypeStore::new();
+        let store = tti::TypeStore::with_options((&self.compiler_options).into());
         self.interned_store = Some(Arc::clone(&store));
         store
       }

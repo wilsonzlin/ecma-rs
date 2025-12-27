@@ -32,7 +32,7 @@ pub enum HarnessError {
   #[error("output failed: {0}")]
   Output(String),
   #[error(
-    "no conformance tests discovered under '{root}' (extensions: {extensions}); ensure the TypeScript suite is present or pass --allow-empty"
+    "no conformance tests discovered under '{root}' (extensions: {extensions}); ensure the TypeScript suite is checked out (git submodule update --init --recursive parse-js/tests/TypeScript), use --root to point at another suite, or pass --allow-empty to bypass this check"
   )]
   EmptySuite { root: String, extensions: String },
   #[error("snapshot error: {0}")]

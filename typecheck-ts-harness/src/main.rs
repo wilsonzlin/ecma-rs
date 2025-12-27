@@ -83,8 +83,8 @@ enum Commands {
     #[arg(long)]
     allow_mismatches: bool,
 
-    /// Allow empty test suites without erroring
-    #[arg(long)]
+    /// Allow missing/empty conformance suites without erroring
+    #[arg(long, alias = "allow-missing-suite")]
     allow_empty: bool,
 
     /// Path to a manifest of expected failures/skips

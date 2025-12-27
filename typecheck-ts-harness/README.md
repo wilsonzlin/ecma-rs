@@ -19,8 +19,8 @@ cargo run -p typecheck-ts-harness --release -- conformance --filter "*/es2020/**
 cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc --update-baselines
 ```
 
-If any step silently produces zero tests or fails with “cannot find module
-`typescript`”, revisit the prerequisites below.
+If setup fails because the TypeScript suite is missing or you see “cannot find
+module `typescript`”, revisit the prerequisites below.
 
 All fixtures are treated as UTF-8; discovery will fail fast on invalid encodings
 to keep spans and offsets consistent.
@@ -38,11 +38,11 @@ ls parse-js/tests/TypeScript/tests/cases/conformance | head
 ```
 
 - Default root: `parse-js/tests/TypeScript/tests/cases/conformance`
-- If the submodule is missing/empty, conformance discovery returns **zero**
-  tests and the command prints `Ran 0 test(s)` (treat this as a misconfiguration,
-  not success).
-- Override the root with `--root <path>` to point at a different checkout or a
-  reduced local corpus.
+- If the submodule is missing/empty, `conformance` fails fast with a hint to run
+  `git submodule update --init --recursive parse-js/tests/TypeScript`. Override
+  the root with `--root <path>` to point at a different checkout or a reduced
+  local corpus, or opt out of the check with `--allow-empty` (alias:
+  `--allow-missing-suite`).
 
 ### Node.js + `typescript` npm package
 
@@ -119,8 +119,9 @@ matrix:
 run: cargo run -p typecheck-ts-harness --release -- conformance --shard ${{matrix.shard}}/16 --timeout-secs 20 --json
 ```
 
-If the TypeScript suite is missing you will see `Ran 0 test(s)`; check the
-submodule before assuming green.
+If the TypeScript suite is missing the command errors with setup instructions
+instead of returning `Ran 0 test(s)`. Use `--allow-empty`/`--allow-missing-suite`
+if you intentionally want to skip discovery.
 
 ## Differential testing (`difftsc`)
 
