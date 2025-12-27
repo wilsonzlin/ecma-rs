@@ -3,8 +3,8 @@ use ::semantic_js::ts as sem_ts;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
   BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
-  ExprKind as HirExprKind, FileKind as HirFileKind, ImportKind as HirImportKind, LowerResult, NameId,
-  PatId as HirPatId, PatKind as HirPatKind, StmtKind as HirStmtKind,
+  ExprKind as HirExprKind, FileKind as HirFileKind, ImportKind as HirImportKind, LowerResult,
+  NameId, PatId as HirPatId, PatKind as HirPatKind, StmtKind as HirStmtKind,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::expr::pat::Pat;
@@ -943,7 +943,11 @@ impl Program {
                       let is_number = state
                         .interned_store
                         .as_ref()
-                        .and_then(|store| store.contains_type_id(bin_ty).then(|| store.type_kind(bin_ty)))
+                        .and_then(|store| {
+                          store
+                            .contains_type_id(bin_ty)
+                            .then(|| store.type_kind(bin_ty))
+                        })
                         .map(|kind| matches!(kind, tti::TypeKind::Number))
                         .unwrap_or(false);
                       if is_number {
@@ -1295,6 +1299,150 @@ impl Program {
           .unwrap_or_default(),
       )
     })
+  }
+
+  /// Bodies belonging to a file.
+  pub fn bodies_in_file(&self, file: FileId) -> Vec<BodyId> {
+    match self.with_analyzed_state(|state| {
+      Ok(
+        state
+          .body_map
+          .iter()
+          .filter_map(|(id, meta)| (meta.file == file).then_some(*id))
+          .collect(),
+      )
+    }) {
+      Ok(bodies) => bodies,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
+    }
+  }
+
+  /// Expression IDs in a body.
+  pub fn exprs_in_body(&self, body: BodyId) -> Vec<ExprId> {
+    match self.with_analyzed_state(|state| {
+      let ids = state.body_map.get(&body).and_then(|meta| {
+        meta.hir.and_then(|hir_id| {
+          state
+            .hir_lowered
+            .get(&meta.file)
+            .and_then(|lowered| lowered.body(hir_id))
+            .map(|body| (0..body.exprs.len() as u32).map(ExprId).collect())
+        })
+      });
+      Ok(ids.unwrap_or_default())
+    }) {
+      Ok(exprs) => exprs,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
+    }
+  }
+
+  /// Pattern IDs in a body.
+  pub fn pats_in_body(&self, body: BodyId) -> Vec<PatId> {
+    match self.with_analyzed_state(|state| {
+      let ids = state.body_map.get(&body).and_then(|meta| {
+        meta.hir.and_then(|hir_id| {
+          state
+            .hir_lowered
+            .get(&meta.file)
+            .and_then(|lowered| lowered.body(hir_id))
+            .map(|body| (0..body.pats.len() as u32).map(PatId).collect())
+        })
+      });
+      Ok(ids.unwrap_or_default())
+    }) {
+      Ok(pats) => pats,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
+    }
+  }
+
+  /// Span for a definition, if available.
+  pub fn def_span(&self, def: DefId) -> Option<Span> {
+    match self.with_analyzed_state(|state| {
+      Ok(state.def_data.get(&def).map(|data| Span {
+        file: data.file,
+        range: data.span,
+      }))
+    }) {
+      Ok(span) => span,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  /// Span for an expression, if available.
+  pub fn expr_span(&self, body: BodyId, expr: ExprId) -> Option<Span> {
+    match self.with_analyzed_state(|state| {
+      Ok(state.body_map.get(&body).and_then(|meta| {
+        meta.hir.and_then(|hir_id| {
+          state
+            .hir_lowered
+            .get(&meta.file)
+            .and_then(|lowered| lowered.body(hir_id))
+            .and_then(|body| {
+              body.exprs.get(expr.0 as usize).map(|expr| Span {
+                file: meta.file,
+                range: expr.span,
+              })
+            })
+        })
+      }))
+    }) {
+      Ok(span) => span,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  /// Span for a pattern, if available.
+  pub fn pat_span(&self, body: BodyId, pat: PatId) -> Option<Span> {
+    match self.with_analyzed_state(|state| {
+      Ok(state.body_map.get(&body).and_then(|meta| {
+        meta.hir.and_then(|hir_id| {
+          state
+            .hir_lowered
+            .get(&meta.file)
+            .and_then(|lowered| lowered.body(hir_id))
+            .and_then(|body| {
+              body.pats.get(pat.0 as usize).map(|pat| Span {
+                file: meta.file,
+                range: pat.span,
+              })
+            })
+        })
+      }))
+    }) {
+      Ok(span) => span,
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        None
+      }
+    }
+  }
+
+  /// Raw symbol occurrences for debugging.
+  pub fn debug_symbol_occurrences(&self, file: FileId) -> Vec<(TextRange, semantic_js::SymbolId)> {
+    let state = self.lock_state();
+    state
+      .symbol_occurrences
+      .get(&file)
+      .cloned()
+      .unwrap_or_default()
+      .into_iter()
+      .map(|occ| (occ.range, occ.symbol))
+      .collect()
   }
 
   /// Friendly name for a definition.
@@ -1926,6 +2074,42 @@ struct BodyMeta {
   file: FileId,
   hir: Option<hir_js::BodyId>,
   kind: HirBodyKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum DefMatchKind {
+  Function,
+  Var,
+  Interface,
+  TypeAlias,
+  Import,
+  Other,
+}
+
+fn match_kind_from_def(kind: &DefKind) -> DefMatchKind {
+  match kind {
+    DefKind::Function(_) => DefMatchKind::Function,
+    DefKind::Var(_) => DefMatchKind::Var,
+    DefKind::Import(_) => DefMatchKind::Import,
+    DefKind::Interface(_) => DefMatchKind::Interface,
+    DefKind::TypeAlias(_) => DefMatchKind::TypeAlias,
+  }
+}
+
+fn match_kind_from_hir(kind: HirDefKind) -> DefMatchKind {
+  match kind {
+    HirDefKind::Function | HirDefKind::Method | HirDefKind::Constructor => DefMatchKind::Function,
+    HirDefKind::ImportBinding => DefMatchKind::Import,
+    HirDefKind::Var
+    | HirDefKind::Field
+    | HirDefKind::Param
+    | HirDefKind::ExportAlias
+    | HirDefKind::Namespace
+    | HirDefKind::Module => DefMatchKind::Var,
+    HirDefKind::Interface => DefMatchKind::Interface,
+    HirDefKind::TypeAlias => DefMatchKind::TypeAlias,
+    _ => DefMatchKind::Other,
+  }
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -2771,6 +2955,7 @@ impl ProgramState {
             Some(self.query_stats.clone()),
           );
           self.bind_file(file, ast.as_ref(), host, &mut queue);
+          self.align_definitions_with_hir(file, &lowered);
           self.map_hir_bodies(file, &lowered);
           if let Some(span) = lower_span {
             span.finish(None);
@@ -2806,14 +2991,11 @@ impl ProgramState {
       return Err(FatalError::Cancelled);
     }
 
-    let store = self
-      .interned_store
-      .clone()
-      .unwrap_or_else(|| {
-        let store = tti::TypeStore::new();
-        self.interned_store = Some(Arc::clone(&store));
-        store
-      });
+    let store = self.interned_store.clone().unwrap_or_else(|| {
+      let store = tti::TypeStore::new();
+      self.interned_store = Some(Arc::clone(&store));
+      store
+    });
     self.interned_def_types.clear();
     self.interned_type_params.clear();
     let mut def_types = HashMap::new();
@@ -3083,12 +3265,13 @@ impl ProgramState {
           self.asts.insert(file_id, Arc::clone(&ast));
           let (lowered, lower_diags) = lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
-          let sem_hir = sem_hir_from_lower(&lowered);
-          self.map_hir_bodies(file_id, &lowered);
           let mut queue = VecDeque::new();
           self.bind_file(file_id, ast.as_ref(), host, &mut queue);
-          self.hir_lowered.insert(file_id, lowered);
+          let sem_hir = sem_hir_from_lower(&lowered);
+          self.hir_lowered.insert(file_id, lowered.clone());
           self.sem_hir.insert(file_id, sem_hir);
+          self.align_definitions_with_hir(file_id, &lowered);
+          self.map_hir_bodies(file_id, &lowered);
         }
         Err(err) => {
           self.diagnostics.push(err);
@@ -3208,6 +3391,235 @@ impl ProgramState {
     self.semantics = Some(semantics);
   }
 
+  /// Remap bound definitions to the stable IDs produced by HIR lowering while
+  /// preserving existing symbols and cached types.
+  ///
+  /// The binder allocates definitions sequentially, but HIR uses content-derived
+  /// identifiers that stay stable across edits. Re-aligning keeps
+  /// `definitions_in_file`, `expr_at`, and `type_of_def` working across repeated
+  /// checks and avoids dropping cached type information when files are
+  /// re-lowered.
+  fn align_definitions_with_hir(&mut self, file: FileId, lowered: &LowerResult) {
+    let file_def_ids: HashSet<_> = self
+      .def_data
+      .iter()
+      .filter(|(_, data)| data.file == file)
+      .map(|(id, _)| *id)
+      .collect();
+    let mut by_name_kind: HashMap<(String, DefMatchKind), Vec<(DefId, DefData)>> = HashMap::new();
+    for (id, data) in self.def_data.iter() {
+      if data.file != file {
+        continue;
+      }
+      by_name_kind
+        .entry((data.name.clone(), match_kind_from_def(&data.kind)))
+        .or_default()
+        .push((*id, data.clone()));
+    }
+    for defs in by_name_kind.values_mut() {
+      defs.sort_by_key(|(_, data)| (data.span.start, data.span.end));
+    }
+
+    let mut new_def_data: HashMap<DefId, DefData> = self
+      .def_data
+      .iter()
+      .filter(|(_, data)| data.file != file)
+      .map(|(id, data)| (*id, data.clone()))
+      .collect();
+    let mut new_def_types: HashMap<DefId, TypeId> = self
+      .def_types
+      .iter()
+      .filter(|(id, _)| !file_def_ids.contains(id))
+      .map(|(id, ty)| (*id, *ty))
+      .collect();
+    let mut new_interned_def_types: HashMap<DefId, tti::TypeId> = self
+      .interned_def_types
+      .iter()
+      .filter(|(id, _)| !file_def_ids.contains(id))
+      .map(|(id, ty)| (*id, *ty))
+      .collect();
+    let mut new_interned_type_params: HashMap<DefId, Vec<TypeParamId>> = self
+      .interned_type_params
+      .iter()
+      .filter(|(id, _)| !file_def_ids.contains(id))
+      .map(|(id, params)| (*id, params.clone()))
+      .collect();
+    let mut id_mapping: HashMap<DefId, DefId> = HashMap::new();
+
+    let Some(file_state) = self.files.get(&file).cloned() else {
+      return;
+    };
+    let mut resolved_defs = Vec::new();
+    let mut bindings = file_state.bindings.clone();
+    let mut exports = file_state.exports.clone();
+    let reexports = file_state.reexports.clone();
+    let export_all = file_state.export_all.clone();
+
+    for def in lowered.defs.iter() {
+      let name = lowered
+        .names
+        .resolve(def.name)
+        .unwrap_or_default()
+        .to_string();
+      let match_kind = match_kind_from_hir(def.path.kind);
+      let matched = by_name_kind
+        .get_mut(&(name.clone(), match_kind))
+        .and_then(|list| {
+          if list.is_empty() {
+            None
+          } else {
+            Some(list.remove(0))
+          }
+        });
+      let (def_id, data) = if let Some((old_id, mut data)) = matched {
+        id_mapping.insert(old_id, def.id);
+        data.span = def.span;
+        data.export = data.export || def.is_exported || def.is_default_export;
+        match &mut data.kind {
+          DefKind::Function(func) => func.body = def.body,
+          DefKind::Var(var) => {
+            if let Some(body) = def.body {
+              var.body = body;
+            }
+          }
+          _ => {}
+        }
+        if let Some(ty) = self.def_types.get(&old_id).copied() {
+          new_def_types.insert(def.id, ty);
+        }
+        if let Some(ty) = self.interned_def_types.get(&old_id).copied() {
+          new_interned_def_types.insert(def.id, ty);
+        }
+        if let Some(params) = self.interned_type_params.get(&old_id).cloned() {
+          new_interned_type_params.insert(def.id, params);
+        }
+        (def.id, data)
+      } else {
+        let symbol = self.alloc_symbol();
+        let kind = match match_kind {
+          DefMatchKind::Function => DefKind::Function(FuncData {
+            params: Vec::new(),
+            return_ann: None,
+            body: def.body,
+          }),
+          DefMatchKind::Interface => DefKind::Interface(InterfaceData {
+            typ: self.builtin.unknown,
+          }),
+          DefMatchKind::TypeAlias => DefKind::TypeAlias(TypeAliasData {
+            typ: self.builtin.unknown,
+          }),
+          _ => DefKind::Var(VarData {
+            typ: None,
+            init: None,
+            body: def.body.unwrap_or(BodyId(u32::MAX)),
+            mode: VarDeclMode::Var,
+          }),
+        };
+        let data = DefData {
+          name: name.clone(),
+          file,
+          span: def.span,
+          symbol,
+          export: def.is_exported || def.is_default_export,
+          kind,
+        };
+        self.record_def_symbol(def.id, symbol);
+        self.record_symbol(file, def.span, symbol);
+        (def.id, data)
+      };
+
+      bindings
+        .entry(name.clone())
+        .and_modify(|binding| {
+          binding.symbol = data.symbol;
+          binding.def = Some(def_id);
+        })
+        .or_insert(SymbolBinding {
+          symbol: data.symbol,
+          def: Some(def_id),
+          type_id: None,
+        });
+
+      if data.export {
+        let export_name = if def.is_default_export {
+          "default".to_string()
+        } else {
+          name.clone()
+        };
+        exports.insert(
+          export_name,
+          ExportEntry {
+            symbol: data.symbol,
+            def: Some(def_id),
+            type_id: new_def_types.get(&def_id).copied(),
+          },
+        );
+      }
+
+      new_def_data.insert(def_id, data);
+      resolved_defs.push(def_id);
+    }
+
+    for leftovers in by_name_kind.values_mut() {
+      for (old_id, data) in leftovers.drain(..) {
+        new_def_data.insert(old_id, data.clone());
+        if let Some(ty) = self.def_types.get(&old_id).copied() {
+          new_def_types.insert(old_id, ty);
+        }
+        if let Some(ty) = self.interned_def_types.get(&old_id).copied() {
+          new_interned_def_types.insert(old_id, ty);
+        }
+        if let Some(params) = self.interned_type_params.get(&old_id).cloned() {
+          new_interned_type_params.insert(old_id, params);
+        }
+      }
+    }
+
+    for binding in bindings.values_mut() {
+      if let Some(def) = binding.def {
+        if let Some(mapped) = id_mapping.get(&def) {
+          binding.def = Some(*mapped);
+        }
+      }
+    }
+    for entry in exports.values_mut() {
+      if let Some(def) = entry.def {
+        if let Some(mapped) = id_mapping.get(&def) {
+          entry.def = Some(*mapped);
+        }
+      }
+    }
+
+    self.files.insert(
+      file,
+      FileState {
+        defs: resolved_defs,
+        exports,
+        bindings,
+        top_body: file_state.top_body,
+        reexports,
+        export_all,
+      },
+    );
+
+    self.def_data = new_def_data;
+    self.def_types = new_def_types;
+    self.interned_def_types = new_interned_def_types;
+    self.interned_type_params = new_interned_type_params;
+
+    self.symbol_to_def.clear();
+    for (def, data) in self.def_data.iter() {
+      self.symbol_to_def.insert(data.symbol, *def);
+    }
+    self.next_def = self
+      .def_data
+      .keys()
+      .map(|d| d.0)
+      .max()
+      .unwrap_or(0)
+      .saturating_add(1);
+  }
+
   fn map_hir_bodies(&mut self, file: FileId, lowered: &LowerResult) {
     let stale: HashSet<_> = self
       .body_map
@@ -3218,148 +3630,39 @@ impl ProgramState {
     self.body_map.retain(|_, meta| meta.file != file);
     self.body_parents.retain(|child, _| !stale.contains(child));
 
+    if let Some(state) = self.files.get_mut(&file) {
+      state.top_body = Some(lowered.root_body());
+    }
+
     let mut defs_by_span: HashMap<(TextRange, &'static str), DefId> = HashMap::new();
     let mut defs_by_name: HashMap<(String, &'static str), DefId> = HashMap::new();
-    let mut namespace_defs: HashSet<DefId> = HashSet::new();
-    let namespace_spans: Vec<TextRange> = lowered
-      .defs
+    let mut file_defs: Vec<_> = self
+      .def_data
       .iter()
-      .filter(|d| matches!(d.path.kind, HirDefKind::Namespace | HirDefKind::Module))
-      .map(|d| d.span)
+      .filter(|(_, data)| data.file == file)
       .collect();
-    for (def_id, data) in self.def_data.iter() {
-      if data.file != file {
-        continue;
-      }
+    file_defs.sort_by_key(|(id, data)| (data.span.start, data.span.end, id.0));
+    for (def_id, data) in file_defs {
       let kind = match data.kind {
         DefKind::Function(_) => Some("fn"),
         DefKind::Var(_) => Some("var"),
         _ => None,
       };
       if let Some(kind) = kind {
-        defs_by_span.insert((data.span, kind), *def_id);
-        defs_by_name.insert((data.name.clone(), kind), *def_id);
-      }
-    }
-
-    let mut hir_to_prog: HashMap<hir_js::DefId, DefId> = HashMap::new();
-    let mut hir_to_prog_body: HashMap<hir_js::BodyId, BodyId> = HashMap::new();
-    for hir_body_id in lowered.body_index.keys() {
-      let id = BodyId(self.next_body);
-      self.next_body += 1;
-      hir_to_prog_body.insert(*hir_body_id, id);
-    }
-    for def in lowered.defs.iter() {
-      let kind = match def.path.kind {
-        HirDefKind::Function | HirDefKind::Method | HirDefKind::Constructor => Some("fn"),
-        HirDefKind::Var
-        | HirDefKind::Field
-        | HirDefKind::Param
-        | HirDefKind::ExportAlias
-        | HirDefKind::Namespace
-        | HirDefKind::Module => Some("var"),
-        _ => None,
-      };
-      let Some(kind) = kind else { continue };
-      let mut prog_def = defs_by_span.get(&(def.span, kind)).copied().or_else(|| {
-        lowered
-          .names
-          .resolve(def.name)
-          .and_then(|name| defs_by_name.get(&(name.to_string(), kind)).copied())
-      });
-      if prog_def.is_none() && matches!(def.path.kind, HirDefKind::Namespace | HirDefKind::Module) {
-        if let Some(name) = lowered.names.resolve(def.name) {
-          let def_id = self.alloc_def();
-          let symbol = self.alloc_symbol();
-          self.def_data.insert(
-            def_id,
-            DefData {
-              name: name.to_string(),
-              file,
-              span: def.span,
-              symbol,
-              export: false,
-              kind: DefKind::Var(VarData {
-                typ: None,
-                init: None,
-                body: BodyId(u32::MAX),
-                mode: VarDeclMode::Var,
-              }),
-            },
-          );
-          self.record_def_symbol(def_id, symbol);
-          if let Some(state) = self.files.get_mut(&file) {
-            state.defs.push(def_id);
-          }
-          defs_by_span.insert((def.span, kind), def_id);
-          defs_by_name.insert((name.to_string(), kind), def_id);
-          prog_def = Some(def_id);
-        }
-      }
-      if prog_def.is_none()
-        && matches!(def.path.kind, HirDefKind::Var)
-        && namespace_spans
-          .iter()
-          .any(|ns| def.span.start >= ns.start && def.span.end <= ns.end)
-      {
-        if let Some(name) = lowered.names.resolve(def.name) {
-          let symbol = self.alloc_symbol();
-          let def_id = self.alloc_def();
-          self.def_data.insert(
-            def_id,
-            DefData {
-              name: name.to_string(),
-              file,
-              span: def.span,
-              symbol,
-              export: false,
-              kind: DefKind::Var(VarData {
-                typ: None,
-                init: None,
-                body: BodyId(u32::MAX),
-                mode: VarDeclMode::Const,
-              }),
-            },
-          );
-          self.record_def_symbol(def_id, symbol);
-          if let Some(state) = self.files.get_mut(&file) {
-            state.defs.push(def_id);
-          }
-          defs_by_span.insert((def.span, "var"), def_id);
-          defs_by_name.insert((name.to_string(), "var"), def_id);
-          prog_def = Some(def_id);
-        }
-      }
-      if let Some(prog_def) = prog_def {
-        if matches!(def.path.kind, HirDefKind::Namespace | HirDefKind::Module) {
-          namespace_defs.insert(prog_def);
-        }
-        hir_to_prog.insert(def.id, prog_def);
-        if let Some(data) = self.def_data.get_mut(&prog_def) {
-          let mapped_body = def.body.and_then(|b| hir_to_prog_body.get(&b).copied());
-          match &mut data.kind {
-            DefKind::Function(func) => func.body = mapped_body,
-            DefKind::Var(var) => {
-              if !matches!(def.path.kind, HirDefKind::Namespace | HirDefKind::Module) {
-                var.body = mapped_body.unwrap_or(var.body);
-              }
-            }
-            _ => {}
-          }
-        }
+        defs_by_span.entry((data.span, kind)).or_insert(*def_id);
+        defs_by_name
+          .entry((data.name.clone(), kind))
+          .or_insert(*def_id);
       }
     }
 
     for (hir_body_id, idx) in lowered.body_index.iter() {
-      let body_id = hir_to_prog_body
-        .get(hir_body_id)
-        .copied()
-        .unwrap_or(BodyId(u32::MAX));
       let hir_body = lowered
         .bodies
         .get(*idx)
         .map(Arc::as_ref)
         .unwrap_or_else(|| panic!("missing lowered body for id {:?}", hir_body_id));
+
       for stmt in hir_body.stmts.iter() {
         if let hir_js::StmtKind::Var(decl) = &stmt.kind {
           for declarator in decl.declarators.iter() {
@@ -3381,9 +3684,14 @@ impl ProgramState {
             if let Some(def_id) = def_id {
               if let Some(def) = self.def_data.get_mut(&def_id) {
                 if let DefKind::Var(var) = &mut def.kind {
+                  var.mode = match decl.kind {
+                    hir_js::VarDeclKind::Var => VarDeclMode::Var,
+                    hir_js::VarDeclKind::Let => VarDeclMode::Let,
+                    hir_js::VarDeclKind::Const => VarDeclMode::Const,
+                  };
                   let prefer = matches!(hir_body.kind, HirBodyKind::Initializer);
                   if var.body.0 == u32::MAX || prefer {
-                    var.body = body_id;
+                    var.body = *hir_body_id;
                   }
                   if let Some(init) = declarator.init {
                     if var.init.is_none() || prefer {
@@ -3396,40 +3704,12 @@ impl ProgramState {
           }
         }
       }
-      if let Some(def_id) = hir_to_prog.get(&hir_body.owner).copied() {
-        if namespace_defs.contains(&def_id) {
-          continue;
-        }
-        if let Some(def) = self.def_data.get_mut(&def_id) {
-          match &mut def.kind {
-            DefKind::Function(func) => func.body = Some(body_id),
-            DefKind::Var(var) => {
-              let prefer = matches!(hir_body.kind, HirBodyKind::Initializer);
-              if var.body.0 == u32::MAX || prefer {
-                var.body = body_id;
-              }
-              let init_expr = hir_body.stmts.iter().find_map(|stmt| match &stmt.kind {
-                hir_js::StmtKind::Var(decl) => decl.declarators.iter().find_map(|d| d.init),
-                hir_js::StmtKind::Expr(expr) => Some(*expr),
-                hir_js::StmtKind::Return(ret) => *ret,
-                _ => None,
-              });
-              if let Some(init_expr) = init_expr {
-                if var.init.is_none() || prefer {
-                  var.init = Some(init_expr);
-                }
-              }
-            }
-            _ => {}
-          }
-        }
-      }
 
       for stmt in hir_body.stmts.iter() {
         if let hir_js::StmtKind::Decl(def) = &stmt.kind {
           if let Some(hir_def) = lowered.def(*def) {
-            if let Some(child) = hir_def.body.and_then(|b| hir_to_prog_body.get(&b).copied()) {
-              self.body_parents.insert(child, body_id);
+            if let Some(child) = hir_def.body {
+              self.body_parents.insert(child, *hir_body_id);
             }
           }
         }
@@ -3438,49 +3718,59 @@ impl ProgramState {
       for expr in hir_body.exprs.iter() {
         match &expr.kind {
           HirExprKind::FunctionExpr { body, .. } | HirExprKind::ClassExpr { body, .. } => {
-            if let Some(child) = hir_to_prog_body.get(body).copied() {
-              self.body_parents.insert(child, body_id);
-            }
+            self.body_parents.insert(*body, *hir_body_id);
           }
           _ => {}
         }
       }
 
       self.body_map.insert(
-        body_id,
+        *hir_body_id,
         BodyMeta {
           file,
           hir: Some(*hir_body_id),
           kind: hir_body.kind,
         },
       );
+    }
 
-      if matches!(hir_body.kind, HirBodyKind::TopLevel) {
-        if let Some(state) = self.files.get_mut(&file) {
-          state.top_body = Some(body_id);
+    for export in lowered.hir.exports.iter() {
+      if let HirExportKind::Default(default) = &export.kind {
+        match &default.value {
+          hir_js::ExportDefaultValue::Expr { expr, body } => {
+            if let Some((_def_id, def)) = self
+              .def_data
+              .iter_mut()
+              .find(|(_, data)| data.file == file && data.name == "default")
+            {
+              if let DefKind::Var(var) = &mut def.kind {
+                var.body = *body;
+                var.init = Some(*expr);
+                var.mode = VarDeclMode::Const;
+              }
+              self.body_parents.insert(*body, lowered.root_body());
+            }
+          }
+          hir_js::ExportDefaultValue::Class { def, body, .. }
+          | hir_js::ExportDefaultValue::Function { def, body, .. } => {
+            if let Some(data) = self.def_data.get_mut(def) {
+              if let DefKind::Function(func) = &mut data.kind {
+                func.body = Some(*body);
+              }
+            }
+            self.body_parents.insert(*body, lowered.root_body());
+          }
         }
       }
     }
 
-    let has_top_level = self
+    self.next_body = self
       .body_map
-      .values()
-      .any(|meta| meta.file == file && matches!(meta.kind, HirBodyKind::TopLevel));
-    if !has_top_level {
-      let body_id = BodyId(self.next_body);
-      self.next_body += 1;
-      self.body_map.insert(
-        body_id,
-        BodyMeta {
-          file,
-          hir: None,
-          kind: HirBodyKind::TopLevel,
-        },
-      );
-      if let Some(state) = self.files.get_mut(&file) {
-        state.top_body = Some(body_id);
-      }
-    }
+      .keys()
+      .map(|b| b.0)
+      .max()
+      .unwrap_or(0)
+      .saturating_add(1);
   }
 
   fn ensure_body_map_from_defs(&mut self) {
@@ -4813,7 +5103,9 @@ impl ProgramState {
       let Some(pat) = body.pats.get(pat_id.0 as usize) else {
         return;
       };
-      let ty = result.pat_type(PatId(pat_id.0)).unwrap_or(state.builtin.unknown);
+      let ty = result
+        .pat_type(PatId(pat_id.0))
+        .unwrap_or(state.builtin.unknown);
       match &pat.kind {
         HirPatKind::Ident(name_id) => {
           if let Some(name) = names.resolve(*name_id) {
@@ -4843,7 +5135,16 @@ impl ProgramState {
             );
           }
           if let Some(rest) = arr.rest {
-            record_pat(state, rest, body, names, result, bindings, binding_defs, file);
+            record_pat(
+              state,
+              rest,
+              body,
+              names,
+              result,
+              bindings,
+              binding_defs,
+              file,
+            );
           }
         }
         HirPatKind::Object(obj) => {
@@ -4860,14 +5161,41 @@ impl ProgramState {
             );
           }
           if let Some(rest) = obj.rest {
-            record_pat(state, rest, body, names, result, bindings, binding_defs, file);
+            record_pat(
+              state,
+              rest,
+              body,
+              names,
+              result,
+              bindings,
+              binding_defs,
+              file,
+            );
           }
         }
         HirPatKind::Rest(inner) => {
-          record_pat(state, **inner, body, names, result, bindings, binding_defs, file);
+          record_pat(
+            state,
+            **inner,
+            body,
+            names,
+            result,
+            bindings,
+            binding_defs,
+            file,
+          );
         }
         HirPatKind::Assign { target, .. } => {
-          record_pat(state, *target, body, names, result, bindings, binding_defs, file);
+          record_pat(
+            state,
+            *target,
+            body,
+            names,
+            result,
+            bindings,
+            binding_defs,
+            file,
+          );
         }
         HirPatKind::AssignTarget(_) => {}
       }
@@ -7390,6 +7718,11 @@ impl ProgramState {
       }
       TypeExpr::ObjectType(obj) => {
         let object = self.object_type_from_members(&obj.stx.members);
+        self.type_store.object(object)
+      }
+      TypeExpr::MappedType(mapped) => {
+        let mut object = ObjectType::empty();
+        object.string_index = Some(self.type_from_type_expr(&mapped.stx.type_expr));
         self.type_store.object(object)
       }
       TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(&inner.stx.type_expr),

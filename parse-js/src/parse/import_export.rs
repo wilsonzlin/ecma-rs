@@ -324,7 +324,7 @@ impl<'a> Parser<'a> {
   // https://tc39.es/ecma262/#sec-exports
   // https://jakearchibald.com/2021/export-default-thing-vs-thing-as-default/
   pub fn export_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<Stmt>> {
-    if !ctx.top_level && !ctx.allow_non_top_level_exports {
+    if !ctx.top_level {
       return Err(self.peek().error(SyntaxErrorType::ExpectedSyntax(
         "export declarations must be at top level",
       )));

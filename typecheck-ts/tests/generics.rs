@@ -416,7 +416,7 @@ type Uses = Value;
 
   let program = Program::new(host, vec![file_b.clone()]);
   let file_a = program.file_id(&file_a).unwrap();
-  let value_def = program
+  let _value_def = program
     .definitions_in_file(file_a)
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("Value"))

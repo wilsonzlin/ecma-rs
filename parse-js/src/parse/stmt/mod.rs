@@ -69,7 +69,7 @@ impl<'a> Parser<'a> {
             "export not allowed in scripts",
           )));
         }
-        if !ctx.top_level && !ctx.allow_non_top_level_exports {
+        if !ctx.top_level {
           return Err(t0.error(SyntaxErrorType::ExpectedSyntax(
             "export declarations must be at top level",
           )));
