@@ -728,3 +728,105 @@ function pick(val: string | number) {
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "number");
 }
+
+#[test]
+fn assignment_clears_previous_narrowing() {
+  let src = r#"
+function f(x: string | number) {
+  if (typeof x === "string") {
+    x;
+    x = 1;
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.number]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, "number");
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn logical_and_assignment_preserves_truthiness() {
+  let src = r#"
+function f(x: string | null, y: string) {
+  if (x &&= y) {
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null]),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "y"), prim.string);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "null");
+}
+
+#[test]
+fn nullish_assignment_removes_nullish() {
+  let src = r#"
+function f(x?: string, y: string) {
+  x ??= y;
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.undefined]),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "y"), prim.string);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ty, "string");
+}

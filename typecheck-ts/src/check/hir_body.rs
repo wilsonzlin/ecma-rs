@@ -4,9 +4,9 @@ use std::sync::Arc;
 use bumpalo::Bump;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  ArrayElement, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr, NameId,
-  NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind,
-  UnaryOp,
+  ArrayElement, AssignOp, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr,
+  NameId, NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId,
+  StmtKind, UnaryOp,
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
@@ -2037,6 +2037,13 @@ struct FlowBodyChecker<'a> {
   return_types: Vec<TypeId>,
   return_indices: HashMap<StmtId, usize>,
   widen_object_literals: bool,
+  initial: HashMap<NameId, TypeId>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BindingMode {
+  Declare,
+  Assign,
 }
 
 struct OptionalChainInfo {
@@ -2100,6 +2107,7 @@ impl<'a> FlowBodyChecker<'a> {
       return_types,
       return_indices,
       widen_object_literals: true,
+      initial: initial.clone(),
     }
   }
 
@@ -2268,7 +2276,7 @@ impl<'a> FlowBodyChecker<'a> {
         StmtKind::ForIn { left, right, .. } => {
           let right_ty = self.eval_expr(*right, &mut env).0;
           match left {
-            ForHead::Pat(pat) => self.bind_pat(*pat, right_ty, &mut env),
+            ForHead::Pat(pat) => self.assign_pat(*pat, right_ty, &mut env),
             ForHead::Var(var) => {
               for declarator in var.declarators.iter() {
                 self.bind_pat(declarator.pat, right_ty, &mut env);
@@ -2403,8 +2411,17 @@ impl<'a> FlowBodyChecker<'a> {
         _ => prim.unknown,
       },
       ExprKind::Update { expr, .. } => {
-        let _ = self.eval_expr(*expr, env);
-        prim.number
+        let operand_ty = self.eval_expr(*expr, env).0;
+        let result_ty = if self.is_bigint_like(self.base_type(operand_ty)) {
+          prim.bigint
+        } else {
+          prim.number
+        };
+        self.write_assign_target_expr(*expr, result_ty, env, BindingMode::Assign);
+        if let Some(root) = self.assignment_target_root_expr(*expr) {
+          self.record_assignment_facts(Some(root), result_ty, &mut facts);
+        }
+        result_ty
       }
       ExprKind::Binary { op, left, right } => match op {
         BinaryOp::LogicalAnd | BinaryOp::LogicalOr | BinaryOp::NullishCoalescing => {
@@ -2479,10 +2496,40 @@ impl<'a> FlowBodyChecker<'a> {
           self.eval_expr(*right, env).0
         }
       },
-      ExprKind::Assignment { target, value, .. } => {
-        let val_ty = self.eval_expr(*value, env).0;
-        self.bind_pat(*target, val_ty, env);
-        val_ty
+      ExprKind::Assignment { op, target, value } => {
+        let (left_ty, root, _) = self.assignment_target_info(*target, env);
+        match op {
+          AssignOp::Assign => {
+            let val_ty = self.eval_expr(*value, env).0;
+            self.assign_pat(*target, val_ty, env);
+            let assigned_ty = self.apply_binding_mode(val_ty, BindingMode::Assign);
+            self.record_assignment_facts(root, assigned_ty, &mut facts);
+            assigned_ty
+          }
+          AssignOp::AddAssign => {
+            let val_ty = self.eval_expr(*value, env).0;
+            let result_ty = self.add_assign_result(left_ty, val_ty);
+            self.assign_pat(*target, result_ty, env);
+            self.record_assignment_facts(root, result_ty, &mut facts);
+            result_ty
+          }
+          AssignOp::LogicalAndAssign => {
+            self.logical_and_assign(*target, left_ty, *value, root, env, &mut facts)
+          }
+          AssignOp::LogicalOrAssign => {
+            self.logical_or_assign(*target, left_ty, *value, root, env, &mut facts)
+          }
+          AssignOp::NullishAssign => {
+            self.nullish_assign(*target, left_ty, *value, root, env, &mut facts)
+          }
+          _ => {
+            let val_ty = self.eval_expr(*value, env).0;
+            let result_ty = self.numeric_assign_result(left_ty, val_ty);
+            self.assign_pat(*target, result_ty, env);
+            self.record_assignment_facts(root, result_ty, &mut facts);
+            result_ty
+          }
+        }
       }
       ExprKind::Call(call) => {
         let ret_ty = self.eval_call(call, env, &mut facts);
@@ -2853,6 +2900,93 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
+  fn assignment_target_root_expr(&self, expr_id: ExprId) -> Option<NameId> {
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Ident(name) => Some(*name),
+      ExprKind::Member(mem) => self.assignment_target_root_expr(mem.object),
+      ExprKind::TypeAssertion { expr }
+      | ExprKind::NonNull { expr }
+      | ExprKind::Satisfies { expr }
+      | ExprKind::Await { expr }
+      | ExprKind::Yield { expr: Some(expr), .. } => self.assignment_target_root_expr(*expr),
+      _ => None,
+    }
+  }
+
+  fn record_assignment_facts(&self, root: Option<NameId>, ty: TypeId, facts: &mut Facts) {
+    if let Some(name) = root {
+      let (truthy, falsy) = truthy_falsy_types(ty, &self.store);
+      facts.truthy.insert(name, truthy);
+      facts.falsy.insert(name, falsy);
+    }
+  }
+
+  fn apply_binding_mode(&self, ty: TypeId, mode: BindingMode) -> TypeId {
+    match mode {
+      BindingMode::Declare => ty,
+      BindingMode::Assign => self.base_type(ty),
+    }
+  }
+
+  fn base_type(&self, ty: TypeId) -> TypeId {
+    match self.store.type_kind(ty) {
+      TypeKind::BooleanLiteral(_) => self.store.primitive_ids().boolean,
+      TypeKind::NumberLiteral(_) => self.store.primitive_ids().number,
+      TypeKind::StringLiteral(_) => self.store.primitive_ids().string,
+      TypeKind::BigIntLiteral(_) => self.store.primitive_ids().bigint,
+      TypeKind::Union(members) => {
+        let mapped: Vec<_> = members.into_iter().map(|m| self.base_type(m)).collect();
+        self.store.union(mapped)
+      }
+      TypeKind::Intersection(members) => {
+        let mapped: Vec<_> = members.into_iter().map(|m| self.base_type(m)).collect();
+        self.store.intersection(mapped)
+      }
+      _ => ty,
+    }
+  }
+
+  fn is_bigint_like(&self, ty: TypeId) -> bool {
+    match self.store.type_kind(ty) {
+      TypeKind::BigInt | TypeKind::BigIntLiteral(_) => true,
+      TypeKind::Union(members) => members.iter().all(|m| self.is_bigint_like(*m)),
+      TypeKind::Intersection(members) => members.iter().all(|m| self.is_bigint_like(*m)),
+      _ => false,
+    }
+  }
+
+  fn maybe_string(&self, ty: TypeId) -> bool {
+    match self.store.type_kind(ty) {
+      TypeKind::String | TypeKind::StringLiteral(_) => true,
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        members.iter().any(|m| self.maybe_string(*m))
+      }
+      _ => false,
+    }
+  }
+
+  fn split_nullish(&self, ty: TypeId) -> (TypeId, TypeId) {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::Union(members) => {
+        let mut non_nullish = Vec::new();
+        let mut nullish = Vec::new();
+        for member in members {
+          let (nonnull, nulls) = self.split_nullish(member);
+          if nonnull != prim.never {
+            non_nullish.push(nonnull);
+          }
+          if nulls != prim.never {
+            nullish.push(nulls);
+          }
+        }
+        (self.store.union(non_nullish), self.store.union(nullish))
+      }
+      TypeKind::Null | TypeKind::Undefined => (prim.never, ty),
+      _ => (ty, prim.never),
+    }
+  }
+
   fn hir_name(&self, id: NameId) -> String {
     self
       .names
@@ -2910,31 +3044,182 @@ impl<'a> FlowBodyChecker<'a> {
     None
   }
 
-  fn bind_pat(&mut self, pat_id: PatId, value_ty: TypeId, env: &mut Env) {
+  fn assignment_expr_info(
+    &mut self,
+    expr_id: ExprId,
+    env: &mut Env,
+  ) -> (TypeId, Option<NameId>, bool) {
+    let prim = self.store.primitive_ids();
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Ident(name) => (env.get(*name).unwrap_or(prim.unknown), Some(*name), false),
+      ExprKind::Member(mem) => {
+        let obj_ty = self.eval_expr(mem.object, env).0;
+        let prop_ty = match &mem.property {
+          ObjectKey::Computed(prop) => {
+            let _ = self.eval_expr(*prop, env);
+            prim.unknown
+          }
+          _ => self.member_type(obj_ty, mem),
+        };
+        let root = self.assignment_target_root_expr(mem.object);
+        (prop_ty, root, matches!(mem.property, ObjectKey::Computed(_)))
+      }
+      ExprKind::TypeAssertion { expr }
+      | ExprKind::NonNull { expr }
+      | ExprKind::Satisfies { expr } => self.assignment_expr_info(*expr, env),
+      _ => (prim.unknown, None, false),
+    }
+  }
+
+  fn assignment_target_info(
+    &mut self,
+    pat_id: PatId,
+    env: &mut Env,
+  ) -> (TypeId, Option<NameId>, bool) {
     let pat = &self.body.pats[pat_id.0 as usize];
     let prim = self.store.primitive_ids();
+    match &pat.kind {
+      PatKind::Ident(name) => (env.get(*name).unwrap_or(prim.unknown), Some(*name), false),
+      PatKind::Assign { target, .. } => self.assignment_target_info(*target, env),
+      PatKind::Rest(inner) => self.assignment_target_info(**inner, env),
+      PatKind::AssignTarget(expr) => self.assignment_expr_info(*expr, env),
+      _ => (prim.unknown, None, false),
+    }
+  }
+
+  fn numeric_assign_result(&self, left: TypeId, right: TypeId) -> TypeId {
+    let left_base = self.base_type(left);
+    let right_base = self.base_type(right);
+    if self.is_bigint_like(left_base) && self.is_bigint_like(right_base) {
+      self.store.primitive_ids().bigint
+    } else {
+      self.store.primitive_ids().number
+    }
+  }
+
+  fn add_assign_result(&self, left: TypeId, right: TypeId) -> TypeId {
+    let left_base = self.base_type(left);
+    let right_base = self.base_type(right);
+    let prim = self.store.primitive_ids();
+    if self.is_bigint_like(left_base) && self.is_bigint_like(right_base) {
+      return prim.bigint;
+    }
+    if self.maybe_string(left_base) || self.maybe_string(right_base) {
+      self.store.union(vec![prim.string, prim.number])
+    } else {
+      prim.number
+    }
+  }
+
+  fn logical_and_assign(
+    &mut self,
+    target: PatId,
+    left: TypeId,
+    value: ExprId,
+    root: Option<NameId>,
+    env: &mut Env,
+    facts: &mut Facts,
+  ) -> TypeId {
+    let left_base = self.base_type(left);
+    let (left_truthy, left_falsy) = truthy_falsy_types(left_base, &self.store);
+    let mut right_env = env.clone();
+    if let Some(name) = root {
+      right_env.set(name, left_truthy);
+    }
+    let right_ty = self.eval_expr(value, &mut right_env).0;
+    let result_ty = self.store.union(vec![left_falsy, self.base_type(right_ty)]);
+    self.assign_pat(target, result_ty, env);
+    self.record_assignment_facts(root, result_ty, facts);
+    result_ty
+  }
+
+  fn logical_or_assign(
+    &mut self,
+    target: PatId,
+    left: TypeId,
+    value: ExprId,
+    root: Option<NameId>,
+    env: &mut Env,
+    facts: &mut Facts,
+  ) -> TypeId {
+    let left_base = self.base_type(left);
+    let (left_truthy, left_falsy) = truthy_falsy_types(left_base, &self.store);
+    let mut right_env = env.clone();
+    if let Some(name) = root {
+      right_env.set(name, left_falsy);
+    }
+    let right_ty = self.eval_expr(value, &mut right_env).0;
+    let result_ty = self.store.union(vec![left_truthy, self.base_type(right_ty)]);
+    self.assign_pat(target, result_ty, env);
+    self.record_assignment_facts(root, result_ty, facts);
+    result_ty
+  }
+
+  fn nullish_assign(
+    &mut self,
+    target: PatId,
+    left: TypeId,
+    value: ExprId,
+    root: Option<NameId>,
+    env: &mut Env,
+    facts: &mut Facts,
+  ) -> TypeId {
+    let left_base = self.base_type(left);
+    let (nonnullish, nullish) = self.split_nullish(left_base);
+    let mut right_env = env.clone();
+    if let Some(name) = root {
+      right_env.set(name, nullish);
+    }
+    let right_ty = self.eval_expr(value, &mut right_env).0;
+    let result_ty = self.store.union(vec![nonnullish, self.base_type(right_ty)]);
+    self.assign_pat(target, result_ty, env);
+    self.record_assignment_facts(root, result_ty, facts);
+    result_ty
+  }
+
+  fn assign_pat(&mut self, pat_id: PatId, value_ty: TypeId, env: &mut Env) {
+    self.bind_pat_with_mode(pat_id, value_ty, env, BindingMode::Assign);
+  }
+
+  fn bind_pat(&mut self, pat_id: PatId, value_ty: TypeId, env: &mut Env) {
+    self.bind_pat_with_mode(pat_id, value_ty, env, BindingMode::Declare);
+  }
+
+  fn bind_pat_with_mode(
+    &mut self,
+    pat_id: PatId,
+    value_ty: TypeId,
+    env: &mut Env,
+    mode: BindingMode,
+  ) {
+    let pat = &self.body.pats[pat_id.0 as usize];
+    let prim = self.store.primitive_ids();
+    let write_ty = self.apply_binding_mode(value_ty, mode);
     let slot = &mut self.pat_types[pat_id.0 as usize];
     *slot = if *slot == prim.unknown {
-      value_ty
+      write_ty
     } else {
-      self.store.union(vec![*slot, value_ty])
+      self.store.union(vec![*slot, write_ty])
     };
     match &pat.kind {
       PatKind::Ident(name) => {
-        env.set(*name, value_ty);
+        if matches!(mode, BindingMode::Assign) {
+          env.invalidate(*name);
+        }
+        env.set(*name, write_ty);
       }
-      PatKind::Assign { target, .. } => {
-        self.bind_pat(*target, value_ty, env);
+      PatKind::Assign { target, default_value } => {
+        let default_eval = self.eval_expr(*default_value, env).0;
+        let default_ty = self.apply_binding_mode(default_eval, mode);
+        let combined = self.store.union(vec![write_ty, default_ty]);
+        self.bind_pat_with_mode(*target, combined, env, mode);
       }
-      PatKind::Rest(inner) => self.bind_pat(**inner, value_ty, env),
+      PatKind::Rest(inner) => self.bind_pat_with_mode(**inner, write_ty, env, mode),
       PatKind::Array(arr) => {
         let element_ty = match self.store.type_kind(value_ty) {
           TypeKind::Array { ty, .. } => ty,
-          TypeKind::Tuple(elems) => elems
-            .first()
-            .map(|e| e.ty)
-            .unwrap_or(self.store.primitive_ids().unknown),
-          _ => self.store.primitive_ids().unknown,
+          TypeKind::Tuple(elems) => elems.first().map(|e| e.ty).unwrap_or(prim.unknown),
+          _ => prim.unknown,
         };
         for (idx, elem) in arr.elements.iter().enumerate() {
           if let Some(elem) = elem {
@@ -2944,15 +3229,18 @@ impl<'a> FlowBodyChecker<'a> {
                 ty = specific.ty;
               }
             }
+            ty = self.apply_binding_mode(ty, mode);
             if let Some(default) = elem.default_value {
-              let default_ty = self.eval_expr(default, env).0;
+              let default_eval = self.eval_expr(default, env).0;
+              let default_ty = self.apply_binding_mode(default_eval, mode);
               ty = self.store.union(vec![ty, default_ty]);
             }
-            self.bind_pat(elem.pat, ty, env);
+            self.bind_pat_with_mode(elem.pat, ty, env, mode);
           }
         }
         if let Some(rest) = arr.rest {
-          self.bind_pat(rest, value_ty, env);
+          let rest_ty = self.apply_binding_mode(value_ty, mode);
+          self.bind_pat_with_mode(rest, rest_ty, env, mode);
         }
       }
       PatKind::Object(obj) => {
@@ -2963,23 +3251,64 @@ impl<'a> FlowBodyChecker<'a> {
             ObjectKey::Number(n) => Some(n.clone()),
             _ => None,
           };
-          let mut prop_ty = self.store.primitive_ids().unknown;
+          let mut prop_ty = prim.unknown;
           if let Some(name) = prop_name {
             if let Some(found) = self.object_prop_type(value_ty, &name) {
               prop_ty = found;
             }
           }
+          prop_ty = self.apply_binding_mode(prop_ty, mode);
           if let Some(default) = prop.default_value {
-            let default_ty = self.eval_expr(default, env).0;
+            let default_eval = self.eval_expr(default, env).0;
+            let default_ty = self.apply_binding_mode(default_eval, mode);
             prop_ty = self.store.union(vec![prop_ty, default_ty]);
           }
-          self.bind_pat(prop.value, prop_ty, env);
+          self.bind_pat_with_mode(prop.value, prop_ty, env, mode);
         }
         if let Some(rest) = obj.rest {
-          self.bind_pat(rest, value_ty, env);
+          let rest_ty = self.apply_binding_mode(value_ty, mode);
+          self.bind_pat_with_mode(rest, rest_ty, env, mode);
         }
       }
-      PatKind::AssignTarget(_) => {}
+      PatKind::AssignTarget(expr) => {
+        self.write_assign_target_expr(*expr, write_ty, env, mode);
+      }
+    }
+  }
+
+  fn write_assign_target_expr(
+    &mut self,
+    expr_id: ExprId,
+    value_ty: TypeId,
+    env: &mut Env,
+    mode: BindingMode,
+  ) {
+    match &self.body.exprs[expr_id.0 as usize].kind {
+      ExprKind::Ident(name) => {
+        if matches!(mode, BindingMode::Assign) {
+          env.invalidate(*name);
+        }
+        env.set(*name, value_ty);
+      }
+      ExprKind::Member(mem) => {
+        if let Some(root) = self.assignment_target_root_expr(mem.object) {
+          let root_ty = env
+            .get(root)
+            .or_else(|| self.initial.get(&root).copied())
+            .unwrap_or(self.store.primitive_ids().unknown);
+          let widened = self.widen_object_prop(root_ty);
+          env.invalidate(root);
+          env.set(root, self.base_type(widened));
+        } else if matches!(mem.property, ObjectKey::Computed(_)) {
+          env.clear_all_properties();
+        }
+      }
+      ExprKind::TypeAssertion { expr }
+      | ExprKind::NonNull { expr }
+      | ExprKind::Satisfies { expr } => {
+        self.write_assign_target_expr(*expr, value_ty, env, mode);
+      }
+      _ => {}
     }
   }
 

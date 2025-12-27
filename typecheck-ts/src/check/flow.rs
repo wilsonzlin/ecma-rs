@@ -34,6 +34,19 @@ impl Env {
     self.vars.insert(name, ty);
   }
 
+  /// Remove any tracked information for a variable, clearing previous narrowings.
+  pub fn invalidate(&mut self, name: NameId) {
+    self.vars.remove(&name);
+  }
+
+  /// Clear any tracked property narrowings rooted at `name`. Currently there are
+  /// no separate property entries, but this hook is used to invalidate access
+  /// paths when writes occur.
+  pub fn clear_properties_of(&mut self, _name: NameId) {}
+
+  /// Clear all tracked property-specific narrowings.
+  pub fn clear_all_properties(&mut self) {}
+
   pub fn apply_facts(&mut self, facts: &Facts) {
     for (name, ty) in facts.truthy.iter() {
       self.vars.insert(*name, *ty);
