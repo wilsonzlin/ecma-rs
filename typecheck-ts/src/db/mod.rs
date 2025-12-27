@@ -22,12 +22,13 @@ pub mod queries;
 
 pub use inputs::CancellationToken;
 pub use queries::{
-  all_files, body_file, body_parent, body_parents_in_file, body_to_file, cancelled,
-  compiler_options, db_revision, def_file, def_to_file, file_kind, file_text, global_bindings,
-  lower_hir, module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse,
-  parse_query_count, reachable_files, reset_parse_query_count, roots, sem_hir, ts_semantics,
-  DeclInfo, DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore,
-  TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase,
+  aggregate_diagnostics, aggregate_program_diagnostics, all_files, body_file, body_parent,
+  body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, def_file,
+  def_to_file, file_kind, file_text, global_bindings, lower_hir, module_dep_diagnostics,
+  module_deps, module_resolve, module_specifiers, parse, parse_query_count, program_diagnostics,
+  reachable_files, reset_parse_query_count, roots, sem_hir, ts_semantics, DeclInfo, DeclKind,
+  GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore, TsSemantics,
+  TypeDatabase, TypeSemantics, TypesDatabase,
 };
 
 pub trait TypecheckDatabase: Db {}

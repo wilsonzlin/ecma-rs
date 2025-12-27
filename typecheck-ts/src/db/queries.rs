@@ -1079,3 +1079,66 @@ impl TypesDatabase {
     }
   }
 }
+
+/// Canonicalize and deduplicate diagnostics to keep outputs deterministic.
+pub fn aggregate_diagnostics(mut diagnostics: Vec<Diagnostic>) -> Arc<[Diagnostic]> {
+  codes::normalize_diagnostics(&mut diagnostics);
+  diagnostics.sort_by(|a, b| {
+    (
+      a.primary.file,
+      a.primary.range.start,
+      a.code.as_str(),
+      &a.message,
+      a.primary.range.end,
+      a.severity,
+    )
+      .cmp(&(
+        b.primary.file,
+        b.primary.range.start,
+        b.code.as_str(),
+        &b.message,
+        b.primary.range.end,
+        b.severity,
+      ))
+  });
+  diagnostics.dedup();
+  diagnostics.into()
+}
+
+/// Aggregate diagnostics from all pipeline stages.
+pub fn aggregate_program_diagnostics(
+  parse: impl IntoIterator<Item = Diagnostic>,
+  lower: impl IntoIterator<Item = Diagnostic>,
+  semantic: impl IntoIterator<Item = Diagnostic>,
+  bodies: impl IntoIterator<Item = Diagnostic>,
+) -> Arc<[Diagnostic]> {
+  let mut diagnostics: Vec<_> = parse.into_iter().collect();
+  diagnostics.extend(lower);
+  diagnostics.extend(semantic);
+  diagnostics.extend(bodies);
+  aggregate_diagnostics(diagnostics)
+}
+
+/// Derived query that aggregates diagnostics from parsing, lowering, binding,
+/// and any additional sources (e.g. body checking) across all reachable files.
+pub fn program_diagnostics(
+  db: &dyn Db,
+  additional: impl IntoIterator<Item = Diagnostic>,
+) -> Arc<[Diagnostic]> {
+  let files = all_files(db);
+  let mut parse_diags = Vec::new();
+  let mut lower_diags = Vec::new();
+  for file in files.iter() {
+    let parsed = parse(db, *file);
+    parse_diags.extend(parsed.diagnostics.into_iter());
+    let lowered = lower_hir(db, *file);
+    lower_diags.extend(lowered.diagnostics.into_iter());
+  }
+  let semantics = ts_semantics(db);
+  aggregate_program_diagnostics(
+    parse_diags,
+    lower_diags,
+    semantics.diagnostics.iter().cloned(),
+    additional,
+  )
+}

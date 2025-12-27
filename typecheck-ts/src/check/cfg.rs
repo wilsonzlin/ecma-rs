@@ -219,7 +219,10 @@ impl<'a> CfgBuilder<'a> {
       }
       preds = res.exits;
     }
-    BuildResult { entry, exits: preds }
+    BuildResult {
+      entry,
+      exits: preds,
+    }
   }
 
   fn build_stmt(&mut self, stmt_id: StmtId, preds: Vec<BlockId>) -> BuildResult {
@@ -257,7 +260,13 @@ impl<'a> CfgBuilder<'a> {
         block: inner,
         catch,
         finally_block,
-      } => self.build_try(stmt_id, *inner, catch.as_ref(), finally_block.as_ref(), preds),
+      } => self.build_try(
+        stmt_id,
+        *inner,
+        catch.as_ref(),
+        finally_block.as_ref(),
+        preds,
+      ),
       StmtKind::Return(_) | StmtKind::Throw(_) => {
         let block = self.add_stmt_block(stmt_id);
         self.connect(&preds, block);
@@ -296,9 +305,7 @@ impl<'a> CfgBuilder<'a> {
           exits: vec![block],
         }
       }
-      StmtKind::Labeled { label, body } => {
-        self.build_labeled(stmt_id, *label, *body, preds)
-      }
+      StmtKind::Labeled { label, body } => self.build_labeled(stmt_id, *label, *body, preds),
       StmtKind::With { body, .. } => {
         let block = self.add_stmt_block(stmt_id);
         self.connect(&preds, block);
@@ -562,13 +569,19 @@ impl<'a> CfgBuilder<'a> {
     self.connect(&preds, label_block);
     let body_stmt = &self.body.stmts[body_id.0 as usize];
     let body_res = match &body_stmt.kind {
-      StmtKind::While { body, .. } => self.build_while(body_id, *body, vec![label_block], Some(label)),
+      StmtKind::While { body, .. } => {
+        self.build_while(body_id, *body, vec![label_block], Some(label))
+      }
       StmtKind::DoWhile { body, .. } => {
         self.build_do_while(body_id, *body, vec![label_block], Some(label))
       }
-      StmtKind::For { body, update, .. } => {
-        self.build_for(body_id, *body, update.is_some(), vec![label_block], Some(label))
-      }
+      StmtKind::For { body, update, .. } => self.build_for(
+        body_id,
+        *body,
+        update.is_some(),
+        vec![label_block],
+        Some(label),
+      ),
       StmtKind::ForIn { body, .. } => {
         self.build_for_in(body_id, *body, vec![label_block], Some(label))
       }

@@ -1,7 +1,6 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
 use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
-use ::semantic_js::ts as sem_ts;
 use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
   BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
@@ -21,6 +20,7 @@ use parse_js::ast::type_expr::{
   TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
 use parse_js::loc::Loc;
+use semantic_js::ts as sem_ts;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
@@ -556,90 +556,16 @@ impl Program {
 
   /// Fallible entry point that surfaces unrecoverable failures to the host.
   pub fn check_fallible(&self) -> Result<Vec<Diagnostic>, FatalError> {
+    self
+      .collect_program_diagnostics()
+      .map(|diagnostics| diagnostics.to_vec())
+  }
+
+  fn collect_program_diagnostics(&self) -> Result<Arc<[Diagnostic]>, FatalError> {
     self.catch_fatal(|| {
       self.ensure_not_cancelled()?;
       let mut state = self.lock_state();
-      state.ensure_analyzed_result(&self.host, &self.roots)?;
-      state.ensure_interned_types(&self.host, &self.roots)?;
-      if state.asts.is_empty() && state.hir_lowered.is_empty() {
-        let mut diagnostics = state.diagnostics.clone();
-        let mut body_ids: Vec<BodyId> = state.body_results.keys().copied().collect();
-        body_ids.sort_by_key(|id| id.0);
-        for body in body_ids {
-          if let Some(result) = state.body_results.get(&body) {
-            diagnostics.extend(result.diagnostics.iter().cloned());
-          }
-        }
-        codes::normalize_diagnostics(&mut diagnostics);
-        diagnostics.dedup();
-        return Ok(diagnostics);
-      }
-      let mut body_ids: Vec<BodyId> = state
-        .body_map
-        .iter()
-        .filter_map(|(id, meta)| {
-          let kind = state
-            .file_kinds
-            .get(&meta.file)
-            .copied()
-            .unwrap_or(FileKind::Ts);
-          if matches!(kind, FileKind::Dts) {
-            None
-          } else {
-            Some(*id)
-          }
-        })
-        .collect();
-      body_ids.sort_by_key(|id| id.0);
-      let mut body_diagnostics = Vec::new();
-      for body in body_ids.iter().copied() {
-        self.ensure_not_cancelled()?;
-        if let Some(meta) = state.body_map.get(&body) {
-          if !state.hir_lowered.contains_key(&meta.file) {
-            continue;
-          }
-        }
-        let res = state.check_body(body)?;
-        body_diagnostics.extend(res.diagnostics.iter().cloned());
-      }
-      let mut def_ids: Vec<_> = state.def_data.keys().copied().collect();
-      def_ids.sort_by_key(|id| id.0);
-      for def in def_ids.iter().copied() {
-        let _ = ProgramState::type_of_def(&mut state, def)?;
-      }
-      state.merge_namespace_value_types()?;
-      state.update_export_types()?;
-      state.resolve_reexports();
-      state.body_results.clear();
-      for body in body_ids.iter().copied() {
-        let _ = state.check_body(body)?;
-      }
-      state.def_types.clear();
-      state.namespace_object_types.clear();
-      for def in def_ids.into_iter() {
-        let _ = ProgramState::type_of_def(&mut state, def)?;
-      }
-      state.merge_namespace_value_types()?;
-      let mut recompute: Vec<_> = state.def_data.keys().copied().collect();
-      recompute.sort_by_key(|d| d.0);
-      for def in recompute {
-        if let Some(DefKind::Var(var)) = state.def_data.get(&def).map(|d| &d.kind) {
-          if var.body.0 == u32::MAX {
-            continue;
-          }
-          state.def_types.remove(&def);
-          state.interned_def_types.remove(&def);
-          let _ = ProgramState::type_of_def(&mut state, def)?;
-        }
-      }
-      state.update_export_types()?;
-      state.resolve_reexports();
-      codes::normalize_diagnostics(&mut state.diagnostics);
-      let mut diagnostics = state.diagnostics.clone();
-      diagnostics.extend(body_diagnostics);
-      codes::normalize_diagnostics(&mut diagnostics);
-      diagnostics.dedup();
-      Ok(diagnostics)
+      state.program_diagnostics(&self.host, &self.roots)
     })
   }
 
@@ -1756,6 +1682,14 @@ impl Program {
       .collect();
     namespace_types.sort_by_key(|(def, _)| def.0);
 
+    let diagnostics = match state.program_diagnostics(&self.host, &self.roots) {
+      Ok(diags) => diags.to_vec(),
+      Err(fatal) => {
+        state.diagnostics.push(fatal_to_diagnostic(fatal));
+        state.diagnostics.clone()
+      }
+    };
+
     ProgramSnapshot {
       schema_version: PROGRAM_SNAPSHOT_VERSION,
       tool_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -1775,7 +1709,7 @@ impl Program {
       symbol_occurrences,
       symbol_to_def,
       global_bindings,
-      diagnostics: state.diagnostics.clone(),
+      diagnostics,
       type_store: state.type_store.clone(),
       interned_type_store,
       interned_def_types,
@@ -1876,6 +1810,8 @@ impl Program {
       state.interned_store = Some(tti::TypeStore::from_snapshot(snapshot.interned_type_store));
       state.interned_def_types = snapshot.interned_def_types.into_iter().collect();
       state.interned_type_params = snapshot.interned_type_params.into_iter().collect();
+      state.root_ids = snapshot.roots.clone();
+      state.lib_diagnostics.clear();
       if let Some(store) = state.interned_store.clone() {
         for (def, store_ty) in snapshot.namespace_types.into_iter() {
           state.def_types.entry(def).or_insert(store_ty);
@@ -1902,6 +1838,7 @@ impl Program {
       state.next_def = snapshot.next_def;
       state.next_body = snapshot.next_body;
       state.next_symbol = snapshot.next_symbol;
+      state.sync_typecheck_roots();
     }
     program
   }
@@ -2696,6 +2633,8 @@ struct ProgramState {
   file_kinds: HashMap<FileId, FileKind>,
   lib_file_ids: HashSet<FileId>,
   lib_texts: HashMap<FileId, Arc<str>>,
+  lib_diagnostics: Vec<Diagnostic>,
+  root_ids: Vec<FileId>,
   global_bindings: Arc<BTreeMap<String, SymbolBinding>>,
   namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
   diagnostics: Vec<Diagnostic>,
@@ -2789,6 +2728,8 @@ impl ProgramState {
       file_kinds: HashMap::new(),
       lib_file_ids: HashSet::new(),
       lib_texts: HashMap::new(),
+      lib_diagnostics: Vec::new(),
+      root_ids: Vec::new(),
       global_bindings: Arc::new(BTreeMap::new()),
       namespace_object_types: HashMap::new(),
       diagnostics: Vec::new(),
@@ -3225,6 +3166,7 @@ impl ProgramState {
     roots: &[FileKey],
   ) -> Result<(), FatalError> {
     if self.analyzed {
+      self.sync_typecheck_roots();
       return Ok(());
     }
     let libs = self.collect_libraries(host.as_ref());
@@ -3238,6 +3180,8 @@ impl ProgramState {
       .map(|key| self.intern_file_key(key.clone(), FileOrigin::Source))
       .collect();
     root_ids.sort_by_key(|id| id.0);
+    self.root_ids = root_ids.clone();
+    self.sync_typecheck_roots();
     let mut queue: VecDeque<FileId> = root_ids.iter().copied().collect();
     let mut seen: HashSet<FileId> = HashSet::new();
     while let Some(file) = queue.pop_front() {
@@ -3278,7 +3222,7 @@ impl ProgramState {
       match parsed {
         Ok(ast) => {
           self.asts.insert(file, Arc::clone(&ast));
-          let (lowered, lower_diags) = lower_hir_with_diagnostics(
+          let (lowered, _lower_diags) = lower_hir_with_diagnostics(
             file,
             match file_kind {
               FileKind::Dts => HirFileKind::Dts,
@@ -3289,7 +3233,6 @@ impl ProgramState {
             },
             &ast,
           );
-          self.diagnostics.extend(lower_diags);
           self.hir_lowered.insert(file, lowered.clone());
           let sem_hir = sem_hir_from_lower(&lowered);
           let lower_span = QuerySpan::enter(
@@ -3315,7 +3258,7 @@ impl ProgramState {
           self.sem_hir.insert(file, merged_sem_hir);
         }
         Err(err) => {
-          self.diagnostics.push(err);
+          let _ = err;
         }
       }
       self.current_file = prev_file;
@@ -3325,7 +3268,6 @@ impl ProgramState {
     }
     self.resolve_reexports();
     self.recompute_global_bindings();
-    codes::normalize_diagnostics(&mut self.diagnostics);
     self.analyzed = true;
     Ok(())
   }
@@ -3566,11 +3508,15 @@ impl ProgramState {
     self.compiler_options = options.clone();
     self.checker_caches = CheckerCaches::new(options.cache.clone());
     self.cache_stats = CheckerCacheStats::default();
+    self.typecheck_db.set_compiler_options(options.clone());
+    self
+      .typecheck_db
+      .set_cancellation_flag(self.cancelled.clone());
     let libs = collect_libs(&options, host.lib_files(), &self.lib_manager);
     let validated = validate_libs(libs, |lib| {
       self.intern_file_key(lib.key.clone(), FileOrigin::Lib)
     });
-    self.diagnostics.extend(validated.diagnostics.into_iter());
+    self.lib_diagnostics = validated.diagnostics.clone();
 
     let mut dts_libs = Vec::new();
     for (lib, file_id) in validated.libs.into_iter() {
@@ -3590,7 +3536,7 @@ impl ProgramState {
         Ok(ast) => {
           self.asts.insert(file_id, Arc::clone(&ast));
           let (lowered, lower_diags) = lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
-          self.diagnostics.extend(lower_diags);
+          let _ = lower_diags;
           let mut queue = VecDeque::new();
           let bound_sem_hir = self.bind_file(file_id, ast.as_ref(), host, &mut queue);
           let sem_hir = sem_hir_from_lower(&lowered);
@@ -3601,10 +3547,96 @@ impl ProgramState {
           self.map_hir_bodies(file_id, &lowered);
         }
         Err(err) => {
-          self.diagnostics.push(err);
+          let _ = err;
         }
       }
     }
+  }
+
+  fn update_typecheck_roots(&mut self, roots: &[FileId]) {
+    let mut keys: Vec<FileKey> = roots
+      .iter()
+      .copied()
+      .chain(self.lib_file_ids.iter().copied())
+      .filter_map(|id| self.file_registry.lookup_key(id))
+      .collect();
+    keys.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    keys.dedup();
+    self
+      .typecheck_db
+      .set_roots(Arc::from(keys.into_boxed_slice()));
+  }
+
+  fn sync_typecheck_roots(&mut self) {
+    let roots = self.root_ids.clone();
+    self.update_typecheck_roots(&roots);
+  }
+
+  fn prime_module_resolve_inputs(&mut self) {
+    let mut seen = HashSet::new();
+    for (file, sem_hir) in self.sem_hir.iter() {
+      let Some(file_key) = self.file_key_for_id(*file) else {
+        continue;
+      };
+      let mut record = |spec: &str| {
+        if !seen.insert((*file, spec.to_string())) {
+          return;
+        }
+        let target = self
+          .host
+          .resolve(&file_key, spec)
+          .and_then(|key| self.file_registry.lookup_id(&key));
+        self
+          .typecheck_db
+          .set_module_resolution(*file, Arc::<str>::from(spec), target);
+      };
+      for import in sem_hir.imports.iter() {
+        record(&import.specifier);
+      }
+      for export in sem_hir.exports.iter() {
+        match export {
+          sem_ts::Export::Named(named) => {
+            if let Some(specifier) = named.specifier.as_ref() {
+              record(specifier);
+            }
+          }
+          sem_ts::Export::All(all) => record(&all.specifier),
+          sem_ts::Export::ExportAssignment { .. } => {}
+        }
+      }
+    }
+  }
+
+  fn program_diagnostics(
+    &mut self,
+    host: &Arc<dyn Host>,
+    roots: &[FileKey],
+  ) -> Result<Arc<[Diagnostic]>, FatalError> {
+    self.check_cancelled()?;
+    self.ensure_analyzed_result(host, roots)?;
+    self.ensure_interned_types(host, roots)?;
+    self.sync_typecheck_roots();
+    self.prime_module_resolve_inputs();
+
+    let db = self.typecheck_db.clone();
+    let mut additional: Vec<Diagnostic> = self.lib_diagnostics.clone();
+
+    let mut body_ids: Vec<_> = db::body_to_file(&db)
+      .iter()
+      .filter_map(|(body, file)| {
+        let kind = db::file_kind(&db, *file);
+        (!matches!(kind, FileKind::Dts)).then_some(*body)
+      })
+      .collect();
+    body_ids.sort_by_key(|id| id.0);
+
+    for body in body_ids {
+      self.check_cancelled()?;
+      let res = self.check_body(body)?;
+      additional.extend(res.diagnostics.iter().cloned());
+    }
+
+    Ok(db::program_diagnostics(&db, additional))
   }
 
   fn load_text(&self, file: FileId, host: &Arc<dyn Host>) -> Result<Arc<str>, HostError> {
@@ -3621,14 +3653,10 @@ impl ProgramState {
   }
 
   fn set_salsa_inputs(&mut self, file: FileId, kind: FileKind, text: Arc<str>) {
-    if self.typecheck_db.file_input(file).is_none() {
-      if let Some(key) = self.file_key_for_id(file) {
-        self.typecheck_db.set_file(file, key, kind, text);
-        return;
-      }
-    }
-    self.typecheck_db.set_file_kind(file, kind);
-    self.typecheck_db.set_file_text(file, text);
+    let key = self
+      .file_key_for_id(file)
+      .unwrap_or_else(|| panic!("file key missing for {:?}", file));
+    self.typecheck_db.set_file(file, key, kind, text);
   }
 
   fn parse_via_salsa(

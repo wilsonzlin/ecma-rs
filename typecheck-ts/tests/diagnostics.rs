@@ -1,5 +1,6 @@
 use diagnostics::{FileId, Label, Span, TextRange};
 use typecheck_ts::codes;
+use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
 fn normalize_sorts_diagnostics_and_labels() {
@@ -42,4 +43,32 @@ fn normalize_sorts_diagnostics_and_labels() {
   let second_labels = &diagnostics[1].labels;
   assert!(!second_labels.is_empty());
   assert!(second_labels[0].is_primary);
+}
+
+#[test]
+fn repeated_checks_are_stable() {
+  let mut host = MemoryHost::new();
+  let key = FileKey::new("main.ts");
+  host.insert(key.clone(), "const value: number = 'not a number';");
+
+  let program = Program::new(host, vec![key]);
+  let first = program.check();
+  let second = program.check();
+
+  assert_eq!(first, second);
+}
+
+#[test]
+fn repeated_checks_with_multiple_files_are_identical() {
+  let mut host = MemoryHost::new();
+  let first = FileKey::new("first.ts");
+  let second = FileKey::new("second.ts");
+  host.insert(first.clone(), "const value: number = 'still wrong';");
+  host.insert(second.clone(), "let ;");
+
+  let program = Program::new(host, vec![first, second]);
+  let first_run = program.check();
+  let second_run = program.check();
+
+  assert_eq!(first_run, second_run);
 }

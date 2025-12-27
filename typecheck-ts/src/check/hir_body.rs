@@ -2130,7 +2130,10 @@ pub fn check_body_with_env(
 }
 
 enum Reference {
-  Ident { name: NameId, ty: TypeId },
+  Ident {
+    name: NameId,
+    ty: TypeId,
+  },
   Member {
     base: NameId,
     prop: String,
@@ -2268,8 +2271,7 @@ impl<'a> FlowBodyChecker<'a> {
 
     let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
     let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
-    let relate =
-      RelateCtx::with_hooks(Arc::clone(&store), store.options(), super::relate_hooks());
+    let relate = RelateCtx::with_hooks(Arc::clone(&store), store.options(), super::relate_hooks());
 
     Self {
       body_id,
@@ -2529,9 +2531,7 @@ impl<'a> FlowBodyChecker<'a> {
           return outgoing;
         }
         StmtKind::Try {
-          block: _,
-          catch,
-          ..
+          block: _, catch, ..
         } => {
           // Successors are ordered as try then optional catch; any `finally`
           // runs after those bodies in the CFG.
@@ -3005,9 +3005,10 @@ impl<'a> FlowBodyChecker<'a> {
     }
 
     if !negate {
-      if let (Some(left_ref), Some(right_ref)) =
-        (self.reference_from_expr(left, left_ty), self.reference_from_expr(right, right_ty))
-      {
+      if let (Some(left_ref), Some(right_ref)) = (
+        self.reference_from_expr(left, left_ty),
+        self.reference_from_expr(right, right_ty),
+      ) {
         let left_yes = self.narrow_reference_against(&left_ref, right_ref.value_ty());
         let right_yes = self.narrow_reference_against(&right_ref, left_ref.value_ty());
         if left_ref.target() == right_ref.target() {
@@ -3406,7 +3407,10 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn reference_from_expr(&self, expr_id: ExprId, expr_ty: TypeId) -> Option<Reference> {
     match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(name) => Some(Reference::Ident { name: *name, ty: expr_ty }),
+      ExprKind::Ident(name) => Some(Reference::Ident {
+        name: *name,
+        ty: expr_ty,
+      }),
       ExprKind::Member(mem) => {
         let base = self.ident_name(mem.object)?;
         let prop = match &mem.property {
@@ -3433,9 +3437,9 @@ impl<'a> FlowBodyChecker<'a> {
         let (yes, _) = narrow_by_assignability(*ty, other_value_ty, &self.store, &self.relate);
         yes
       }
-      Reference::Member {
-        base_ty, prop, ..
-      } => self.narrow_object_by_prop_assignability(*base_ty, prop, other_value_ty),
+      Reference::Member { base_ty, prop, .. } => {
+        self.narrow_object_by_prop_assignability(*base_ty, prop, other_value_ty)
+      }
     }
   }
 
