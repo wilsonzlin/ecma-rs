@@ -163,7 +163,7 @@ fn map_semantic_symbol(
   let sem_symbol = semantics.symbols().symbol(symbol);
   match &sem_symbol.origin {
     sem_ts::SymbolOrigin::Import {
-      source: sem_ts::ImportSource::File(from),
+      from: sem_ts::ModuleRef::File(from),
       imported,
     } => semantics
       .resolve_export(*from, imported, ns)

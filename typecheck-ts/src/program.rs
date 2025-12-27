@@ -2195,8 +2195,8 @@ impl ProgramTypeResolver {
   fn symbol_owner_file(&self, symbol: sem_ts::SymbolId) -> Option<sem_ts::FileId> {
     let sym = self.semantics.symbols().symbol(symbol);
     match &sym.origin {
-      sem_ts::SymbolOrigin::Import { source, .. } => match source {
-        sem_ts::ImportSource::File(file) => Some(*file),
+      sem_ts::SymbolOrigin::Import { from, .. } => match from {
+        sem_ts::ModuleRef::File(file) => Some(*file),
         _ => None,
       },
       _ => match &sym.owner {
@@ -2331,8 +2331,8 @@ impl ProgramTypeResolver {
 
   fn import_origin_file(&self, symbol: sem_ts::SymbolId) -> Option<sem_ts::FileId> {
     match &self.semantics.symbols().symbol(symbol).origin {
-      sem_ts::SymbolOrigin::Import { source, .. } => match source {
-        sem_ts::ImportSource::File(file) => Some(*file),
+      sem_ts::SymbolOrigin::Import { from, .. } => match from {
+        sem_ts::ModuleRef::File(file) => Some(*file),
         _ => None,
       },
       _ => None,
@@ -3286,7 +3286,9 @@ impl ProgramState {
         .iter()
         .filter_map(|(def_id, data)| matches!(data.kind, DefKind::Function(_)).then_some(def_id))
       {
-        let Some(symbol) = semantics.symbol_for_def(sem_ts::DefId(def_id.0), sem_ts::Namespace::VALUE) else {
+        let Some(symbol) =
+          semantics.symbol_for_def(sem_ts::DefId(def_id.0), sem_ts::Namespace::VALUE)
+        else {
           continue;
         };
         if !seen_symbols.insert(symbol) {

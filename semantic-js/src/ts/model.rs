@@ -360,19 +360,18 @@ pub enum SymbolOwner {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum ImportSource {
+pub enum ModuleRef {
   File(FileId),
-  AmbientModule(String),
+  Ambient(String),
   Unresolved(String),
 }
+
+pub type ImportSource = ModuleRef;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum SymbolOrigin {
   Local,
-  Import {
-    source: ImportSource,
-    imported: String,
-  },
+  Import { from: ModuleRef, imported: String },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -704,11 +703,13 @@ impl TsProgramSemantics {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImportEntry {
   pub local: String,
-  pub source: ImportSource,
+  pub from: ModuleRef,
   pub imported: ImportItem,
   pub type_only: bool,
   pub def_id: Option<DefId>,
   pub local_span: TextRange,
+  pub specifier_span: Span,
+  pub symbol: SymbolId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
