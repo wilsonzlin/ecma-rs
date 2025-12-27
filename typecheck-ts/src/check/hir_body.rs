@@ -53,6 +53,21 @@ struct Binding {
   type_params: Vec<TypeParamDecl>,
 }
 
+#[derive(Clone, Copy, Default)]
+struct ExprContext {
+  contextual_type: Option<TypeId>,
+  const_context: bool,
+}
+
+impl ExprContext {
+  fn const_with_type(ty: TypeId) -> Self {
+    Self {
+      contextual_type: Some(ty),
+      const_context: true,
+    }
+  }
+}
+
 /// Simple resolver that maps single-segment type names to known definitions.
 #[derive(Clone)]
 pub struct BindingTypeResolver {
@@ -493,6 +508,7 @@ pub fn check_body_with_expander(
     expected_return: None,
     check_var_assignments: !synthetic_top_level,
     widen_object_literals: true,
+    expr_context: ExprContext::default(),
     file,
     ref_expander: relate_expander,
     _names: names,
@@ -556,6 +572,7 @@ struct Checker<'a> {
   expected_return: Option<TypeId>,
   check_var_assignments: bool,
   widen_object_literals: bool,
+  expr_context: ExprContext,
   file: FileId,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
   _names: &'a NameInterner,
@@ -945,6 +962,19 @@ impl<'a> Checker<'a> {
     self.bind_pattern(pat, value_ty);
   }
 
+  fn with_expr_context<R>(&mut self, ctx: ExprContext, f: impl FnOnce(&mut Self) -> R) -> R {
+    let prev_ctx = self.expr_context;
+    let prev_widen = self.widen_object_literals;
+    if ctx.const_context {
+      self.widen_object_literals = false;
+    }
+    self.expr_context = ctx;
+    let result = f(self);
+    self.expr_context = prev_ctx;
+    self.widen_object_literals = prev_widen;
+    result
+  }
+
   fn check_expr(&mut self, expr: &Node<AstExpr>) -> TypeId {
     let ty = match expr.stx.as_ref() {
       AstExpr::Id(id) => self.resolve_ident(&id.stx.name, expr),
@@ -1089,25 +1119,7 @@ impl<'a> Checker<'a> {
         let _ = self.check_expr(&mem.stx.member);
         self.member_type(obj_ty, "<computed>")
       }
-      AstExpr::LitArr(arr) => {
-        let mut elems = Vec::new();
-        for elem in arr.stx.elements.iter() {
-          match elem {
-            parse_js::ast::expr::lit::LitArrElem::Single(v) => elems.push(self.check_expr(v)),
-            parse_js::ast::expr::lit::LitArrElem::Rest(v) => elems.push(self.check_expr(v)),
-            parse_js::ast::expr::lit::LitArrElem::Empty => {}
-          }
-        }
-        let elem_ty = if elems.is_empty() {
-          self.store.primitive_ids().unknown
-        } else {
-          self.store.union(elems)
-        };
-        self.store.intern_type(TypeKind::Array {
-          ty: elem_ty,
-          readonly: false,
-        })
-      }
+      AstExpr::LitArr(arr) => self.array_literal_type(arr),
       AstExpr::LitObj(obj) => self.object_literal_type(obj),
       AstExpr::Func(func) => self.function_type(&func.stx.func),
       AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func),
@@ -1128,16 +1140,70 @@ impl<'a> Checker<'a> {
       }
       AstExpr::NonNullAssertion(assert) => self.check_expr(&assert.stx.expression),
       AstExpr::SatisfiesExpr(expr) => {
-        let prev = self.widen_object_literals;
-        self.widen_object_literals = false;
-        let ty = self.check_expr(&expr.stx.expression);
-        self.widen_object_literals = prev;
-        ty
+        let target_ty = self.lowerer.lower_type_expr(&expr.stx.type_annotation);
+        let lhs_ty = self.with_expr_context(ExprContext::const_with_type(target_ty), |checker| {
+          checker.check_expr(&expr.stx.expression)
+        });
+        self.check_assignable(&expr.stx.expression, lhs_ty, target_ty);
+        lhs_ty
       }
       _ => self.store.primitive_ids().unknown,
     };
     self.record_expr_type(expr.loc, ty);
     ty
+  }
+
+  fn array_literal_type(&mut self, arr: &Node<parse_js::ast::expr::lit::LitArrExpr>) -> TypeId {
+    let mut elems = Vec::new();
+    for (idx, elem) in arr.stx.elements.iter().enumerate() {
+      let elem_ctx = self.contextual_array_element_ctx(idx);
+      match elem {
+        parse_js::ast::expr::lit::LitArrElem::Single(v) => {
+          elems.push(self.check_array_element(v, elem_ctx))
+        }
+        parse_js::ast::expr::lit::LitArrElem::Rest(v) => {
+          elems.push(self.check_array_element(v, elem_ctx))
+        }
+        parse_js::ast::expr::lit::LitArrElem::Empty => {}
+      }
+    }
+    let elem_ty = if elems.is_empty() {
+      self.store.primitive_ids().unknown
+    } else {
+      self.store.union(elems)
+    };
+    self.store.intern_type(TypeKind::Array {
+      ty: elem_ty,
+      readonly: false,
+    })
+  }
+
+  fn check_array_element(&mut self, expr: &Node<AstExpr>, ctx: Option<ExprContext>) -> TypeId {
+    match ctx {
+      Some(ctx) => self.with_expr_context(ctx, |checker| checker.check_expr(expr)),
+      None => self.check_expr(expr),
+    }
+  }
+
+  fn contextual_array_element_ctx(&self, index: usize) -> Option<ExprContext> {
+    self
+      .contextual_array_element_type(index)
+      .map(|ty| ExprContext {
+        contextual_type: Some(ty),
+        const_context: self.expr_context.const_context,
+      })
+  }
+
+  fn contextual_array_element_type(&self, index: usize) -> Option<TypeId> {
+    let contextual = self.expr_context.contextual_type?;
+    match self.store.type_kind(contextual) {
+      TypeKind::Array { ty, .. } => Some(ty),
+      TypeKind::Tuple(elems) => elems
+        .get(index)
+        .map(|elem| elem.ty)
+        .or_else(|| elems.iter().find(|elem| elem.rest).map(|elem| elem.ty)),
+      _ => None,
+    }
   }
 
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
