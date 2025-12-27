@@ -487,7 +487,7 @@ impl<'a> CfgBuilder<'a> {
 
   fn build_for(
     &mut self,
-    _stmt_id: StmtId,
+    stmt_id: StmtId,
     body: StmtId,
     init: Option<ForInit>,
     test: Option<ExprId>,
@@ -501,6 +501,7 @@ impl<'a> CfgBuilder<'a> {
 
     let test_block = self.cfg.add_block();
     self.cfg.blocks[test_block.0].kind = BlockKind::ForTest { test };
+    self.cfg.blocks[test_block.0].stmts.push(stmt_id);
 
     let update_block = self.cfg.add_block();
     self.cfg.blocks[update_block.0].kind = BlockKind::ForUpdate { update };

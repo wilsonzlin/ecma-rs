@@ -59,7 +59,7 @@ pub struct ProgramSnapshot {
   pub file_states: Vec<FileStateSnapshot>,
   pub def_data: Vec<DefSnapshot>,
   pub def_types: Vec<(DefId, TypeId)>,
-  pub canonical_defs: Vec<((FileId, String, u8), DefId)>,
+  pub canonical_defs: Vec<((FileId, String), DefId)>,
   pub namespace_types: Vec<(DefId, TypeId)>,
   pub body_results: Vec<BodyCheckResult>,
   pub symbol_occurrences: Vec<(FileId, Vec<SymbolOccurrence>)>,
