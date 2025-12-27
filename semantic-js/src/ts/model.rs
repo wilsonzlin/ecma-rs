@@ -35,6 +35,7 @@
 //! - `BIND1001`: duplicate export
 //! - `BIND1002`: unresolved import/export or missing export
 //! - `BIND1003`: unsupported export assignment or exports in a script module
+//! - `BIND1004`: duplicate import binding
 //!
 //! ## Determinism expectations
 //!
@@ -656,7 +657,7 @@ impl TsProgramSemantics {
   }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ImportEntry {
   pub local: String,
   pub from: Option<FileId>,
@@ -666,7 +667,7 @@ pub(crate) struct ImportEntry {
   pub local_span: TextRange,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ImportItem {
   Named(String),
   Default,

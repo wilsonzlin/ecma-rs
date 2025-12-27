@@ -580,6 +580,23 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     file: FileId,
     entry: &ImportEntry,
   ) {
+    if let Some(existing) = state.imports.get(&entry.local) {
+      let same_from = existing.from == entry.from;
+      let same_item = existing.imported == entry.imported;
+      if !(same_from && same_item) {
+        let previous = Span::new(file, existing.local_span);
+        let current = Span::new(file, entry.local_span);
+        self.diagnostics.push(
+          Diagnostic::error(
+            "BIND1004",
+            format!("duplicate import binding: '{}'", entry.local),
+            current,
+          )
+          .with_label(Label::secondary(previous, "previous binding here")),
+        );
+      }
+    }
+
     state.imports.insert(entry.local.clone(), entry.clone());
     let namespaces = if entry.type_only {
       Namespace::TYPE

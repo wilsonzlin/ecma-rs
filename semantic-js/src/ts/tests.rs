@@ -1042,6 +1042,70 @@ fn duplicate_export_has_two_labels() {
 }
 
 #[test]
+fn duplicate_import_binding_reports_previous_span() {
+  let file_main = FileId(62);
+  let file_a = FileId(63);
+  let file_b = FileId(64);
+
+  let mut main = HirFile::module(file_main);
+  let first_local_span = span(70);
+  let second_local_span = span(80);
+  main.imports.push(Import {
+    specifier: "a".to_string(),
+    specifier_span: TextRange::new(10, 20),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Foo".to_string(),
+      local: "Foo".to_string(),
+      is_type_only: false,
+      imported_span: span(71),
+      local_span: first_local_span,
+    }],
+    is_type_only: false,
+  });
+  main.imports.push(Import {
+    specifier: "b".to_string(),
+    specifier_span: TextRange::new(30, 40),
+    default: None,
+    namespace: None,
+    named: vec![ImportNamed {
+      imported: "Foo".to_string(),
+      local: "Foo".to_string(),
+      is_type_only: false,
+      imported_span: span(81),
+      local_span: second_local_span,
+    }],
+    is_type_only: false,
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_main => Arc::new(main),
+    file_a => Arc::new(HirFile::module(file_a)),
+    file_b => Arc::new(HirFile::module(file_b)),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+    "b".to_string() => file_b,
+  });
+
+  let (_semantics, diags) =
+    bind_ts_program(&[file_main], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1004");
+  assert_eq!(diag.message, "duplicate import binding: 'Foo'");
+  assert_eq!(diag.primary.file, file_main);
+  assert_eq!(diag.primary.range, second_local_span);
+  assert_eq!(diag.labels.len(), 1);
+  let label = &diag.labels[0];
+  assert_eq!(label.span.file, file_main);
+  assert_eq!(label.span.range, first_local_span);
+  assert!(!label.is_primary);
+}
+
+#[test]
 fn dts_script_decls_participate_in_globals() {
   let file = FileId(51);
   let mut hir = HirFile::script(file);
