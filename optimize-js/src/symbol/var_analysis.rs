@@ -1,6 +1,6 @@
 use crate::symbol::semantics::{
-  assoc_declared_symbol, assoc_resolved_symbol, assoc_scope_id, JsSymbols, ScopeId, ScopeKind,
-  SymbolId,
+  assoc_declared_symbol, assoc_resolved_symbol_info, assoc_scope_id, JsSymbols, ScopeId,
+  ScopeKind, SymbolId,
 };
 use ahash::HashMap;
 use ahash::HashSet;
@@ -62,20 +62,24 @@ impl<'a> VarVisitor<'a> {
       self.unknown.insert(name.to_string());
       return;
     };
-    match assoc_resolved_symbol(assoc) {
-      None => {
-        self.unknown.insert(name.to_string());
-      }
-      Some(symbol) => {
-        let usage_ls = lifted_scope(&self.symbols, usage_scope);
-        let decl_scope = self.symbols.symbol_decl_scope(symbol);
-        let decl_ls = lifted_scope(&self.symbols, decl_scope);
-        if usage_ls != decl_ls {
-          self.foreign.insert(symbol);
-        } else if !self.declared.contains(&symbol) {
-          self.use_before_decl.insert(symbol, (name.to_string(), loc));
-        }
-      }
+    let Some(resolved) = assoc_resolved_symbol_info(assoc) else {
+      self.unknown.insert(name.to_string());
+      return;
+    };
+    let Some(symbol) = resolved.symbol else {
+      self.unknown.insert(name.to_string());
+      return;
+    };
+    let usage_ls = lifted_scope(&self.symbols, usage_scope);
+    let decl_scope = self.symbols.symbol_decl_scope(symbol);
+    let decl_ls = lifted_scope(&self.symbols, decl_scope);
+    if usage_ls != decl_ls {
+      self.foreign.insert(symbol);
+    }
+    if resolved.in_tdz {
+      self.use_before_decl
+        .entry(symbol)
+        .or_insert_with(|| (name.to_string(), loc));
     }
   }
 
@@ -143,11 +147,15 @@ mod tests {
 
   use crate::symbol::semantics::{JsSymbols, ScopeId, ScopeKind, SymbolId};
 
-  fn parse_and_visit(source: &str) -> (VarAnalysis, JsSymbols) {
+  fn parse_and_visit_with_mode(source: &str, mode: TopLevelMode) -> (VarAnalysis, JsSymbols) {
     let mut parsed = parse(source).unwrap();
-    let (symbols, _) = JsSymbols::bind(&mut parsed, TopLevelMode::Global, FileId(0));
+    let (symbols, _) = JsSymbols::bind(&mut parsed, mode, FileId(0));
     let analysis = VarAnalysis::analyze(&mut parsed, &symbols);
     (analysis, symbols)
+  }
+
+  fn parse_and_visit(source: &str) -> (VarAnalysis, JsSymbols) {
+    parse_and_visit_with_mode(source, TopLevelMode::Global)
   }
 
   struct T {
@@ -383,5 +391,41 @@ mod tests {
     assert_eq!(v.foreign, HashSet::default());
     assert!(v.use_before_decl.is_empty());
     assert_eq!(v.unknown, HashSet::from_iter(["w".to_string()]));
+  }
+
+  #[test]
+  fn hoisted_var_and_function_are_not_reported() {
+    let (analysis, _symbols) = parse_and_visit_with_mode(
+      "var x; f(); function f() { return x; }",
+      TopLevelMode::Module,
+    );
+    assert!(
+      analysis.use_before_decl.is_empty(),
+      "hoisted bindings should not count as use-before-declaration"
+    );
+  }
+
+  #[test]
+  fn var_use_before_declaration_is_allowed() {
+    let (analysis, _symbols) =
+      parse_and_visit_with_mode("console.log(x); var x = 1;", TopLevelMode::Module);
+    assert!(
+      analysis.use_before_decl.is_empty(),
+      "var should be hoisted and initialized to undefined"
+    );
+  }
+
+  #[test]
+  fn let_use_before_declaration_is_reported() {
+    let (analysis, symbols) =
+      parse_and_visit_with_mode("console.log(x); let x = 1;", TopLevelMode::Module);
+    let top_scope = symbols.top_scope();
+    let symbol_x = symbols
+      .symbols_in_scope(top_scope)
+      .into_iter()
+      .find(|(_, name)| name == "x")
+      .map(|(sym, _)| sym)
+      .expect("let binding for x");
+    assert!(analysis.use_before_decl.contains_key(&symbol_x));
   }
 }

@@ -4,6 +4,7 @@ use super::ScopeData;
 use super::ScopeId;
 use super::ScopeKind;
 use super::SymbolData;
+use super::SymbolFlags;
 use super::SymbolId;
 use super::TopLevelMode;
 use crate::assoc::js::{scope_id, DeclaredSymbol};
@@ -110,6 +111,7 @@ impl SemanticsBuilder {
         symbols: BTreeMap::new(),
         is_dynamic: false,
         has_direct_eval: false,
+        hoisted_bindings: Vec::new(),
         tdz_bindings: Vec::new(),
       },
     );
@@ -136,6 +138,7 @@ impl SemanticsBuilder {
       symbols: BTreeMap::new(),
       is_dynamic: false,
       has_direct_eval: false,
+      hoisted_bindings: Vec::new(),
       tdz_bindings: Vec::new(),
     });
     if let Some(scope) = self.scopes.get_mut(&parent) {
@@ -155,14 +158,36 @@ impl SemanticsBuilder {
     id
   }
 
-  fn declare_in_scope(&mut self, scope: ScopeId, name: &str) -> SymbolId {
+  fn mark_tdz_binding(&mut self, scope: ScopeId, symbol: SymbolId) {
+    if let Some(bindings) = self.scopes.get_mut(&scope).map(|s| &mut s.tdz_bindings) {
+      if !bindings.contains(&symbol) {
+        bindings.push(symbol);
+      }
+    }
+  }
+
+  fn mark_hoisted_binding(&mut self, scope: ScopeId, symbol: SymbolId) {
+    if let Some(bindings) = self
+      .scopes
+      .get_mut(&scope)
+      .map(|s| &mut s.hoisted_bindings)
+    {
+      if !bindings.contains(&symbol) {
+        bindings.push(symbol);
+      }
+    }
+  }
+
+  fn declare_in_scope(&mut self, scope: ScopeId, name: &str, flags: SymbolFlags) -> SymbolId {
     let name_id = self.intern_name(name);
-    if let Some(existing) = self
+    let existing = self
       .scopes
       .get(&scope)
       .and_then(|s| s.symbols.get(&name_id))
-    {
-      return *existing;
+      .copied();
+    if let Some(existing) = existing {
+      self.update_flags(existing, flags);
+      return existing;
     }
     let id = symbol_id_for(self.file, scope, name_id);
     if let Some(scope_data) = self.scopes.get_mut(&scope) {
@@ -171,15 +196,31 @@ impl SemanticsBuilder {
     self.symbols.entry(id).or_insert(SymbolData {
       name: name_id,
       decl_scope: scope,
+      flags,
     });
+    if flags.hoisted {
+      self.mark_hoisted_binding(scope, id);
+    }
+    if flags.tdz {
+      self.mark_tdz_binding(scope, id);
+    }
     id
   }
 
-  fn mark_tdz_binding(&mut self, scope: ScopeId, symbol: SymbolId) {
-    if let Some(bindings) = self.scopes.get_mut(&scope).map(|s| &mut s.tdz_bindings) {
-      if !bindings.contains(&symbol) {
-        bindings.push(symbol);
+  fn update_flags(&mut self, symbol: SymbolId, flags: SymbolFlags) {
+    let (decl_scope, merged) = match self.symbols.get_mut(&symbol) {
+      Some(data) => {
+        let merged = data.flags.union(flags);
+        data.flags = merged;
+        (data.decl_scope, merged)
       }
+      None => return,
+    };
+    if merged.hoisted {
+      self.mark_hoisted_binding(decl_scope, symbol);
+    }
+    if merged.tdz {
+      self.mark_tdz_binding(decl_scope, symbol);
     }
   }
 
@@ -203,7 +244,7 @@ enum DeclTarget {
 #[derive(Clone, Copy)]
 struct DeclContext {
   target: DeclTarget,
-  in_tdz: bool,
+  flags: SymbolFlags,
 }
 
 #[derive(VisitorMut)]
@@ -263,12 +304,12 @@ impl DeclareVisitor {
   fn push_decl_target(&mut self, target: DeclTarget) {
     self.decl_target_stack.push(DeclContext {
       target,
-      in_tdz: false,
+      flags: SymbolFlags::default(),
     });
   }
 
-  fn push_decl_context(&mut self, target: DeclTarget, in_tdz: bool) {
-    self.decl_target_stack.push(DeclContext { target, in_tdz });
+  fn push_decl_context(&mut self, target: DeclTarget, flags: SymbolFlags) {
+    self.decl_target_stack.push(DeclContext { target, flags });
   }
 
   fn pop_decl_target(&mut self) {
@@ -303,17 +344,14 @@ impl DeclareVisitor {
         if self.builder.scope_kind(scope) == ScopeKind::Global {
           None
         } else {
-          Some((self.builder.declare_in_scope(scope, name), scope))
+          Some((self.builder.declare_in_scope(scope, name, ctx.flags), scope))
         }
       }
       DeclTarget::NearestClosure => {
         let scope = self.nearest_closure()?;
-        Some((self.builder.declare_in_scope(scope, name), scope))
+        Some((self.builder.declare_in_scope(scope, name, ctx.flags), scope))
       }
     }?;
-    if ctx.in_tdz {
-      self.builder.mark_tdz_binding(scope, symbol);
-    }
     Some((symbol, scope))
   }
 
@@ -353,7 +391,7 @@ impl DeclareVisitor {
         name,
         DeclContext {
           target: DeclTarget::IfNotGlobal,
-          in_tdz: true,
+          flags: SymbolFlags::lexical_tdz(),
         },
       );
     }
@@ -371,7 +409,7 @@ impl DeclareVisitor {
         name,
         DeclContext {
           target: DeclTarget::IfNotGlobal,
-          in_tdz: false,
+          flags: SymbolFlags::default(),
         },
       );
     }
@@ -397,11 +435,13 @@ impl DeclareVisitor {
         }
         VarDeclMode::Var => DeclTarget::NearestClosure,
       };
-      let in_tdz = matches!(
-        mode,
-        VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
-      );
-      self.push_decl_context(target, in_tdz);
+      let flags = match mode {
+        VarDeclMode::Var => SymbolFlags::hoisted(),
+        VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing => {
+          SymbolFlags::lexical_tdz()
+        }
+      };
+      self.push_decl_context(target, flags);
     }
   }
 
@@ -417,7 +457,7 @@ impl DeclareVisitor {
         name,
         DeclContext {
           target: DeclTarget::NearestClosure,
-          in_tdz: false,
+          flags: SymbolFlags::hoisted(),
         },
       );
     }
@@ -430,7 +470,7 @@ impl DeclareVisitor {
         name,
         DeclContext {
           target: DeclTarget::IfNotGlobal,
-          in_tdz: false,
+          flags: SymbolFlags::hoisted(),
         },
       );
     }
@@ -466,7 +506,7 @@ impl DeclareVisitor {
   }
 
   fn enter_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
-    self.push_decl_context(DeclTarget::IfNotGlobal, false);
+    self.push_decl_context(DeclTarget::IfNotGlobal, SymbolFlags::lexical_tdz());
   }
 
   fn exit_import_stmt_node(&mut self, _node: &mut ImportStmtNode) {
@@ -488,11 +528,13 @@ impl DeclareVisitor {
       }
       VarDeclMode::Var => DeclTarget::NearestClosure,
     };
-    let in_tdz = matches!(
-      node.stx.mode,
-      VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
-    );
-    self.push_decl_context(target, in_tdz);
+    let flags = match node.stx.mode {
+      VarDeclMode::Var => SymbolFlags::hoisted(),
+      VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing => {
+        SymbolFlags::lexical_tdz()
+      }
+    };
+    self.push_decl_context(target, flags);
   }
 
   fn exit_var_decl_node(&mut self, _node: &mut VarDeclNode) {

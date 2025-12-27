@@ -40,7 +40,9 @@
 //!   [`crate::assoc::js::ResolvedSymbol`] pointing to the nearest lexically
 //!   visible declaration.
 //! - Hoisting: `var` and function declarations bind to the nearest closure and
-//!   are visible throughout that scope regardless of source order.
+//!   are visible throughout that scope regardless of source order. Hoisted
+//!   bindings for each scope are listed in [`ScopeData::hoisted_bindings`] so
+//!   downstream passes can model the implicit `undefined` initialization.
 //! - Temporal dead zones (TDZ): `let`/`const`/class declarations are recorded as
 //!   TDZ bindings in their block scope; resolution marks uses as `in_tdz` until
 //!   the binding is initialized.
@@ -157,6 +159,8 @@ pub struct ScopeData {
   /// True if a direct `eval(...)` call was found within this scope or its
   /// non-closure ancestors.
   pub has_direct_eval: bool,
+  /// [`SymbolId`]s that are hoisted and initialized at the start of this scope.
+  pub hoisted_bindings: Vec<SymbolId>,
   /// [`SymbolId`]s for lexical bindings that are in TDZ from the start of the
   /// scope until initialized.
   pub tdz_bindings: Vec<SymbolId>,
@@ -173,10 +177,52 @@ impl ScopeData {
   }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SymbolFlags {
+  /// True if the binding is hoisted to the start of its declaration scope.
+  pub hoisted: bool,
+  /// True if the binding is in the temporal dead zone until initialized.
+  pub tdz: bool,
+}
+
+impl SymbolFlags {
+  pub const fn new(hoisted: bool, tdz: bool) -> Self {
+    Self { hoisted, tdz }
+  }
+
+  pub const fn hoisted() -> Self {
+    Self { hoisted: true, tdz: false }
+  }
+
+  pub const fn lexical_tdz() -> Self {
+    Self {
+      hoisted: false,
+      tdz: true,
+    }
+  }
+
+  pub fn union(self, other: SymbolFlags) -> SymbolFlags {
+    SymbolFlags {
+      hoisted: self.hoisted || other.hoisted,
+      tdz: self.tdz || other.tdz,
+    }
+  }
+}
+
+impl Default for SymbolFlags {
+  fn default() -> Self {
+    SymbolFlags {
+      hoisted: false,
+      tdz: false,
+    }
+  }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SymbolData {
   pub name: NameId,
   pub decl_scope: ScopeId,
+  pub flags: SymbolFlags,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,6 +247,10 @@ impl JsSemantics {
 
   pub fn symbol(&self, id: SymbolId) -> &SymbolData {
     self.symbols.get(&id).expect("symbol exists for id")
+  }
+
+  pub fn symbol_flags(&self, id: SymbolId) -> SymbolFlags {
+    self.symbol(id).flags
   }
 
   pub fn name(&self, id: NameId) -> &str {

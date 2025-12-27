@@ -9,6 +9,12 @@ use std::cmp::Ordering;
 
 pub use semantic_js::js::ScopeKind;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResolvedSymbol {
+  pub symbol: Option<SymbolId>,
+  pub in_tdz: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub struct ScopeId(pub u64);
 
@@ -143,4 +149,11 @@ pub fn assoc_declared_symbol(assoc: &NodeAssocData) -> Option<SymbolId> {
 
 pub fn assoc_resolved_symbol(assoc: &NodeAssocData) -> Option<SymbolId> {
   assoc::resolved_symbol(assoc).map(Into::into)
+}
+
+pub fn assoc_resolved_symbol_info(assoc: &NodeAssocData) -> Option<ResolvedSymbol> {
+  assoc::resolved_symbol_info(assoc).map(|info| ResolvedSymbol {
+    symbol: info.symbol.map(Into::into),
+    in_tdz: info.in_tdz,
+  })
 }

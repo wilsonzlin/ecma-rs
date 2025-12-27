@@ -87,6 +87,8 @@ fn snapshot(sem: &JsSemantics) -> Vec<u8> {
       scope.is_dynamic, scope.has_direct_eval
     )
     .unwrap();
+    let hoisted: Vec<_> = scope.hoisted_bindings.iter().map(|sym| sym.raw()).collect();
+    writeln!(&mut out, "  hoisted_bindings {hoisted:?}").unwrap();
     let tdz: Vec<_> = scope.tdz_bindings.iter().map(|sym| sym.raw()).collect();
     writeln!(&mut out, "  tdz_bindings {tdz:?}").unwrap();
     let symbols: Vec<_> = scope
@@ -236,6 +238,58 @@ fn marks_lexical_uses_in_tdz() {
   assert_eq!(second.symbol, Some(inner_symbol));
   assert!(first.in_tdz);
   assert!(!second.in_tdz);
+}
+
+#[test]
+fn top_level_tdz_and_hoisting_are_tracked() {
+  let mut ast = parse(
+    r#"
+    var hoisted = 0;
+    function hoisted_fn() { return hoisted; }
+    console.log(late);
+    let late = 1;
+  "#,
+  )
+  .unwrap();
+  let (sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(30));
+
+  let top_scope = sem.top_scope();
+  let hoisted_names: Vec<_> = sem
+    .scope(top_scope)
+    .hoisted_bindings
+    .iter()
+    .map(|sym| sem.name(sem.symbol(*sym).name).to_string())
+    .collect();
+  assert!(hoisted_names.contains(&"hoisted".to_string()));
+  assert!(hoisted_names.contains(&"hoisted_fn".to_string()));
+  assert!(!hoisted_names.contains(&"late".to_string()));
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+
+  let late_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "late")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("late should resolve");
+  assert!(late_use.in_tdz);
+}
+
+#[test]
+fn hoisted_var_uses_are_not_in_tdz() {
+  let mut ast = parse("console.log(x); var x = 1;").unwrap();
+  let (_sem, _res) = bind_js(&mut ast, TopLevelMode::Module, FileId(31));
+
+  let mut collect = CollectWithInfo::default();
+  ast.drive_mut(&mut collect);
+  let var_use = collect
+    .id_exprs
+    .iter()
+    .find(|(name, _)| name == "x")
+    .and_then(|(_, info)| info.as_ref())
+    .expect("use of x should resolve");
+  assert!(!var_use.in_tdz);
 }
 
 #[test]

@@ -165,6 +165,8 @@ pub struct ProgramScope {
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub children: Vec<ScopeId>,
   #[serde(default, skip_serializing_if = "Vec::is_empty")]
+  pub hoisted_bindings: Vec<SymbolId>,
+  #[serde(default, skip_serializing_if = "Vec::is_empty")]
   pub tdz_bindings: Vec<SymbolId>,
   pub is_dynamic: bool,
   pub has_direct_eval: bool,
@@ -241,8 +243,8 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
     fn expr_for_span(&self, span: TextRange) -> Option<(BodyId, ExprId)> {
       for offset in Self::offsets(span) {
-        if let Some(span) = self.span_map.expr_span_at_offset(offset) {
-          return Some(span.id);
+        if let Some(result) = self.span_map.expr_span_at_offset(offset) {
+          return Some(result.id);
         }
       }
       None
@@ -250,8 +252,8 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
     fn pat_for_span(&self, span: TextRange) -> Option<(BodyId, PatId)> {
       for offset in Self::offsets(span) {
-        if let Some(span) = self.span_map.pat_span_at_offset(offset) {
-          return Some(span.id);
+        if let Some(result) = self.span_map.pat_span_at_offset(offset) {
+          return Some(result.id);
         }
       }
       None
@@ -509,6 +511,13 @@ fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> Pr
     scope_symbols.sort_by_key(|sym| sym.raw_id());
     let mut children: Vec<_> = scope.children.iter().copied().map(Into::into).collect();
     children.sort_by_key(|child: &ScopeId| child.raw_id());
+    let mut hoisted_bindings: Vec<_> = scope
+      .hoisted_bindings
+      .iter()
+      .copied()
+      .map(Into::into)
+      .collect();
+    hoisted_bindings.sort_by_key(|sym: &SymbolId| sym.raw_id());
     let mut tdz_bindings: Vec<_> = scope.tdz_bindings.iter().copied().map(Into::into).collect();
     tdz_bindings.sort_by_key(|sym: &SymbolId| sym.raw_id());
     scopes.push(ProgramScope {
@@ -517,6 +526,7 @@ fn collect_symbol_table(symbols: &JsSymbols, captured: &HashSet<SymbolId>) -> Pr
       kind: scope.kind.into(),
       symbols: scope_symbols,
       children,
+      hoisted_bindings,
       tdz_bindings,
       is_dynamic: scope.is_dynamic,
       has_direct_eval: scope.has_direct_eval,
