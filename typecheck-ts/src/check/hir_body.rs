@@ -28,7 +28,7 @@ use types_ts_interned::{
 use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::Env;
 use super::flow_narrow::{
-  narrow_by_asserted, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
+  narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
   narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof, narrow_non_nullish,
   truthy_falsy_types, Facts, LiteralValue,
 };
@@ -2014,12 +2014,12 @@ pub fn check_body_with_env(
   body_id: BodyId,
   body: &Body,
   names: &NameInterner,
-  _file: FileId,
+  file: FileId,
   _source: &str,
   store: Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
 ) -> BodyCheckResult {
-  let mut checker = FlowBodyChecker::new(body_id, body, names, Arc::clone(&store), initial);
+  let mut checker = FlowBodyChecker::new(body_id, body, names, Arc::clone(&store), file, initial);
   checker.run(initial);
   checker.into_result()
 }
@@ -2029,6 +2029,8 @@ struct FlowBodyChecker<'a> {
   body: &'a Body,
   names: &'a NameInterner,
   store: Arc<TypeStore>,
+  file: FileId,
+  relate: RelateCtx<'static>,
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
   expr_spans: Vec<TextRange>,
@@ -2058,6 +2060,7 @@ impl<'a> FlowBodyChecker<'a> {
     body: &'a Body,
     names: &'a NameInterner,
     store: Arc<TypeStore>,
+    file: FileId,
     initial: &HashMap<NameId, TypeId>,
   ) -> Self {
     let prim = store.primitive_ids();
@@ -2093,12 +2096,15 @@ impl<'a> FlowBodyChecker<'a> {
 
     let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
     let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
+    let relate = RelateCtx::new(Arc::clone(&store), store.options());
 
     Self {
       body_id,
       body,
       names,
       store,
+      file,
+      relate,
       expr_types,
       pat_types,
       expr_spans,
@@ -2532,10 +2538,11 @@ impl<'a> FlowBodyChecker<'a> {
         }
       }
       ExprKind::Call(call) => {
-        let ret_ty = self.eval_call(call, env, &mut facts);
+        let ret_ty = self.eval_call(expr_id, call, env, &mut facts);
         if call.optional {
           if let Some(name) = self.optional_chain_root(call.callee) {
-            let (non_nullish, _) = narrow_non_nullish(self.expr_types[call.callee.0 as usize], &self.store);
+            let (non_nullish, _) =
+              narrow_non_nullish(self.expr_types[call.callee.0 as usize], &self.store);
             if non_nullish != prim.never {
               facts.truthy.insert(name, non_nullish);
             }
@@ -2746,52 +2753,82 @@ impl<'a> FlowBodyChecker<'a> {
     self.optional_chain_equality_facts(right, left_ty, negate, out);
   }
 
-  fn eval_call(&mut self, call: &hir_js::CallExpr, env: &mut Env, out: &mut Facts) -> TypeId {
+  fn eval_call(
+    &mut self,
+    expr_id: ExprId,
+    call: &hir_js::CallExpr,
+    env: &mut Env,
+    out: &mut Facts,
+  ) -> TypeId {
     let prim = self.store.primitive_ids();
-    let callee_ty = self.eval_expr(call.callee, env).0;
-    let arg_tys: Vec<TypeId> = call
-      .args
-      .iter()
-      .map(|arg| self.eval_expr(arg.expr, env).0)
-      .collect();
-    if let TypeKind::Callable { overloads } = self.store.type_kind(callee_ty) {
-      if let Some(sig_id) = overloads.first() {
-        let sig = self.store.signature(*sig_id);
-        if let TypeKind::Predicate {
-          asserted,
-          asserts,
-          parameter,
-        } = self.store.type_kind(sig.ret)
-        {
-          if let Some(asserted) = asserted {
-            let target_idx = parameter
-              .and_then(|param_name| sig.params.iter().position(|p| p.name == Some(param_name)))
-              .or(Some(0));
-            if let Some(idx) = target_idx {
-              if let Some(arg_expr) = call.args.get(idx).map(|a| a.expr) {
-                if let Some(name) = self.ident_name(arg_expr) {
-                  let arg_ty = arg_tys.get(idx).copied().unwrap_or(prim.unknown);
-                  let (yes, no) = narrow_by_asserted(arg_ty, asserted, &self.store);
-                  if asserts {
-                    out.assertions.insert(name, yes);
-                  } else {
-                    out.truthy.insert(name, yes);
-                    out.falsy.insert(name, no);
-                  }
-                }
+    let _ = self.eval_expr(call.callee, env);
+    let callee_base = self.expr_types[call.callee.0 as usize];
+    let mut arg_bases = Vec::new();
+    for arg in call.args.iter() {
+      let _ = self.eval_expr(arg.expr, env);
+      arg_bases.push(self.expr_types[arg.expr.0 as usize]);
+    }
+
+    let this_arg = match &self.body.exprs[call.callee.0 as usize].kind {
+      ExprKind::Member(MemberExpr { object, .. }) => Some(self.expr_types[object.0 as usize]),
+      _ => None,
+    };
+
+    let span = Span::new(
+      self.file,
+      *self
+        .expr_spans
+        .get(expr_id.0 as usize)
+        .unwrap_or(&TextRange::new(0, 0)),
+    );
+    let resolution = resolve_call(
+      &self.store,
+      &self.relate,
+      callee_base,
+      &arg_bases,
+      this_arg,
+      &[],
+      None,
+      span,
+    );
+
+    let mut ret_ty = resolution.return_type;
+    if let Some(sig_id) = resolution.signature {
+      let sig = self.store.signature(sig_id);
+      if let TypeKind::Predicate {
+        asserted,
+        asserts,
+        parameter,
+      } = self.store.type_kind(sig.ret)
+      {
+        if let Some(asserted) = asserted {
+          let target_idx = parameter
+            .and_then(|param_name| sig.params.iter().position(|p| p.name == Some(param_name)))
+            .unwrap_or(0);
+          if let Some(arg_expr) = call.args.get(target_idx).map(|a| a.expr) {
+            if let Some(name) = self.ident_name(arg_expr) {
+              let arg_ty = arg_bases.get(target_idx).copied().unwrap_or(prim.unknown);
+              let (yes, no) = narrow_by_assignability(arg_ty, asserted, &self.store, &self.relate);
+              if asserts {
+                out.assertions.insert(name, yes);
+              } else {
+                out.truthy.insert(name, yes);
+                out.falsy.insert(name, no);
               }
             }
           }
-          return if asserts {
-            prim.undefined
-          } else {
-            prim.boolean
-          };
         }
-        return sig.ret;
+        ret_ty = if asserts {
+          prim.undefined
+        } else {
+          prim.boolean
+        };
+      } else {
+        ret_ty = sig.ret;
       }
     }
-    prim.unknown
+
+    ret_ty
   }
 
   fn optional_chain_equality_facts(

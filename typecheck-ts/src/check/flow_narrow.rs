@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use hir_js::{BinaryOp, NameId};
 use num_bigint::BigInt;
-use types_ts_interned::{TypeId, TypeKind, TypeStore};
+use types_ts_interned::{RelateCtx, TypeId, TypeKind, TypeStore};
 
 /// Narrowing facts produced by evaluating an expression in a boolean context.
 ///
@@ -427,6 +427,39 @@ pub fn narrow_by_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> (T
     }
     _ => {
       if matches_asserted(ty, asserted, store) {
+        (ty, primitives.never)
+      } else {
+        (primitives.never, ty)
+      }
+    }
+  }
+}
+
+/// Narrow a type by retaining members assignable to the asserted target.
+pub fn narrow_by_assignability(
+  ty: TypeId,
+  asserted: TypeId,
+  store: &TypeStore,
+  relate: &RelateCtx<'_>,
+) -> (TypeId, TypeId) {
+  let primitives = store.primitive_ids();
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => {
+      let mut yes = Vec::new();
+      let mut no = Vec::new();
+      for member in members {
+        let (y, n) = narrow_by_assignability(member, asserted, store, relate);
+        if y != primitives.never {
+          yes.push(y);
+        }
+        if n != primitives.never {
+          no.push(n);
+        }
+      }
+      (store.union(yes), store.union(no))
+    }
+    _ => {
+      if relate.is_assignable(ty, asserted) {
         (ty, primitives.never)
       } else {
         (primitives.never, ty)

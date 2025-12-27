@@ -830,3 +830,134 @@ function f(x?: string, y: string) {
   let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   assert_eq!(ty, "string");
 }
+
+#[test]
+fn overloaded_predicates_use_resolution() {
+  let src = r#"
+function isStr(x: string): x is string;
+function isStr(x: number): x is number;
+function isStr(x: any) { return true; }
+function f(x: string | number) {
+  if (isStr(x)) {
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let x_ty = store.union(vec![prim.string, prim.number]);
+  initial.insert(name_id(lowered.names.as_ref(), "x"), x_ty);
+
+  let param_name = store.intern_name("x");
+  let sig_string = store.intern_signature(Signature {
+    params: vec![Param {
+      name: Some(param_name),
+      ty: prim.string,
+      optional: false,
+      rest: false,
+    }],
+    ret: store.intern_type(TypeKind::Predicate {
+      parameter: Some(param_name),
+      asserted: Some(prim.string),
+      asserts: false,
+    }),
+    type_params: Vec::new(),
+    this_param: None,
+  });
+  let sig_number = store.intern_signature(Signature {
+    params: vec![Param {
+      name: Some(param_name),
+      ty: prim.number,
+      optional: false,
+      rest: false,
+    }],
+    ret: store.intern_type(TypeKind::Predicate {
+      parameter: Some(param_name),
+      asserted: Some(prim.number),
+      asserts: false,
+    }),
+    type_params: Vec::new(),
+    this_param: None,
+  });
+  let sig_any = store.intern_signature(Signature {
+    params: vec![Param {
+      name: Some(param_name),
+      ty: prim.any,
+      optional: false,
+      rest: false,
+    }],
+    ret: prim.boolean,
+    type_params: Vec::new(),
+    this_param: None,
+  });
+  let guard = store.intern_type(TypeKind::Callable {
+    overloads: vec![sig_string, sig_number, sig_any],
+  });
+  initial.insert(name_id(lowered.names.as_ref(), "isStr"), guard);
+
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let expected = TypeDisplay::new(&store, x_ty).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, expected);
+  assert_eq!(else_ty, expected);
+}
+
+#[test]
+fn assertion_targets_named_argument() {
+  let src = r#"
+function assertStr(flag: number, candidate: string | number): asserts candidate is string {
+  if (typeof candidate !== "string") {
+    throw new Error("bad");
+  }
+}
+function useIt(val: string | number) {
+  assertStr(0, val);
+  return val;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let val_ty = store.union(vec![prim.string, prim.number]);
+  initial.insert(name_id(lowered.names.as_ref(), "val"), val_ty);
+
+  let candidate = store.intern_name("candidate");
+  let guard = predicate_callable_with_params(
+    &store,
+    &[
+      (Some(store.intern_name("flag")), prim.number),
+      (Some(candidate), val_ty),
+    ],
+    prim.string,
+    true,
+    Some(candidate),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "assertStr"), guard);
+
+  let (body_id, body) = body_of(&lowered, &lowered.names, "useIt");
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ty, "string");
+}
