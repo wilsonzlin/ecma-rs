@@ -1,5 +1,6 @@
 use ahash::RandomState;
 use std::collections::{HashMap, HashSet};
+use std::thread::ThreadId;
 use std::sync::{Arc, Mutex};
 use types_ts_interned::{
   DefId, EvaluatorCaches, ExpandedType, RelateTypeExpander, TypeEvaluator, TypeExpander, TypeId,
@@ -27,7 +28,7 @@ pub(crate) fn stable_hash_builder() -> RandomState {
 
 #[derive(Debug)]
 pub(crate) struct RefRecursionGuard {
-  in_progress: Mutex<HashSet<RefKey, RandomState>>,
+  in_progress: Mutex<HashSet<(ThreadId, RefKey), RandomState>>,
 }
 
 impl RefRecursionGuard {
@@ -38,11 +39,13 @@ impl RefRecursionGuard {
   }
 
   pub(crate) fn begin(&self, key: &RefKey) -> bool {
-    self.in_progress.lock().unwrap().insert(key.clone())
+    let id = std::thread::current().id();
+    self.in_progress.lock().unwrap().insert((id, key.clone()))
   }
 
   pub(crate) fn end(&self, key: &RefKey) {
-    self.in_progress.lock().unwrap().remove(key);
+    let id = std::thread::current().id();
+    self.in_progress.lock().unwrap().remove(&(id, key.clone()));
   }
 }
 
@@ -106,6 +109,10 @@ impl<'a> RelateTypeExpander for ProgramTypeExpander<'a> {
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId> {
     debug_assert!(std::ptr::eq(store, self.store.as_ref()));
 
+    if let Some(cached) = self.caches.get_ref(def, args) {
+      return Some(cached);
+    }
+
     let key = RefKey::new(def, args);
     let expanded = match self.expanded(def) {
       Some(expanded) => expanded,
@@ -119,6 +126,7 @@ impl<'a> RelateTypeExpander for ProgramTypeExpander<'a> {
     }
     let instantiated = instantiate_expanded(&self.store, self, &self.caches, &expanded, &key.args);
     self.guard.end(&key);
+    self.caches.insert_ref(def, &key.args, instantiated);
     Some(instantiated)
   }
 }

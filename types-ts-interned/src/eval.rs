@@ -184,6 +184,22 @@ impl EvaluatorCaches {
     }
   }
 
+  pub fn get_ref(&self, def: DefId, args: &[TypeId]) -> Option<TypeId> {
+    let key = RefKey {
+      def,
+      args: args.to_vec(),
+    };
+    self.refs.get(&key)
+  }
+
+  pub fn insert_ref(&self, def: DefId, args: &[TypeId], value: TypeId) {
+    let key = RefKey {
+      def,
+      args: args.to_vec(),
+    };
+    self.refs.insert(key, value);
+  }
+
   pub fn clear(&self) {
     self.eval.clear();
     self.refs.clear();

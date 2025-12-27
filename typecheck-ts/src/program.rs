@@ -6653,8 +6653,9 @@ impl ProgramState {
       if result.return_types.is_empty() && !flow_result.return_types.is_empty() {
         result.return_types = flow_result.return_types;
       }
-      if result.diagnostics.is_empty() && !flow_result.diagnostics.is_empty() {
-        result.diagnostics = flow_result.diagnostics;
+      if !flow_result.diagnostics.is_empty() {
+        result.diagnostics.extend(flow_result.diagnostics);
+        codes::normalize_diagnostics(&mut result.diagnostics);
       }
     }
     for (idx, expr) in body.exprs.iter().enumerate() {

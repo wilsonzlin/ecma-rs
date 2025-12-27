@@ -1,8 +1,8 @@
 //! Flow-sensitive environment utilities for per-body analysis.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use hir_js::NameId;
+use hir_js::{NameId, PatId};
 use types_ts_interned::{TypeId, TypeStore};
 
 use super::flow_narrow::Facts;
@@ -45,24 +45,58 @@ impl FlowKey {
   }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BindingKey {
+  Local { pat: PatId, name: NameId },
+  External(NameId),
+}
+
+impl BindingKey {
+  pub fn name(self) -> NameId {
+    match self {
+      BindingKey::Local { name, .. } | BindingKey::External(name) => name,
+    }
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitState {
+  Unassigned,
+  MaybeAssigned,
+  Assigned,
+}
+
+impl InitState {
+  pub fn join(self, other: InitState) -> InitState {
+    match (self, other) {
+      (InitState::Assigned, InitState::Assigned) => InitState::Assigned,
+      (InitState::Unassigned, InitState::Unassigned) => InitState::Unassigned,
+      _ => InitState::MaybeAssigned,
+    }
+  }
+}
+
 /// Per-point variable environment used during flow-sensitive checks.
 #[derive(Clone, Debug, Default)]
 pub struct Env {
   vars: HashMap<FlowKey, TypeId>,
+  init: HashMap<BindingKey, InitState>,
 }
 
 impl Env {
   pub fn new() -> Self {
     Env {
       vars: HashMap::new(),
+      init: HashMap::new(),
     }
   }
 
-  pub fn with_initial(initial: &HashMap<NameId, TypeId>) -> Self {
+  pub fn with_initial(initial: &HashMap<BindingKey, TypeId>) -> Self {
     let mut env = Env::new();
-    env
-      .vars
-      .extend(initial.iter().map(|(k, v)| (FlowKey::root(*k), *v)));
+    for (key, ty) in initial.iter() {
+      env.vars.insert(FlowKey::root(key.name()), *ty);
+      env.init.insert(*key, InitState::Assigned);
+    }
     env
   }
 
@@ -78,6 +112,14 @@ impl Env {
 
   pub fn get_path(&self, path: &FlowKey) -> Option<TypeId> {
     self.vars.get(path).copied()
+  }
+
+  pub fn get(&self, name: NameId) -> Option<TypeId> {
+    self.get_var(name)
+  }
+
+  pub fn set(&mut self, name: NameId, ty: TypeId) {
+    self.set_var(name, ty);
   }
 
   pub fn set_path(&mut self, path: FlowKey, ty: TypeId) {
@@ -110,6 +152,30 @@ impl Env {
   /// Clear all tracked property-specific narrowings.
   pub fn clear_all_properties(&mut self) {
     self.vars.retain(|key, _| key.segments.is_empty());
+  }
+
+  pub fn mark_assigned(&mut self, name: NameId) {
+    self
+      .init
+      .insert(BindingKey::External(name), InitState::Assigned);
+  }
+
+  pub fn mark_unassigned(&mut self, name: NameId) {
+    self
+      .init
+      .insert(BindingKey::External(name), InitState::Unassigned);
+  }
+
+  pub fn set_init_state(&mut self, key: BindingKey, state: InitState) {
+    self.init.insert(key, state);
+  }
+
+  pub fn init_state(&self, key: BindingKey) -> InitState {
+    self
+      .init
+      .get(&key)
+      .copied()
+      .unwrap_or(InitState::Unassigned)
   }
 
   pub fn apply_facts(&mut self, facts: &Facts) {
@@ -160,6 +226,21 @@ impl Env {
           self.vars.insert(name.clone(), *ty);
           changed = true;
         }
+      }
+    }
+    let mut all_keys: HashSet<BindingKey> = self.init.keys().copied().collect();
+    all_keys.extend(other.init.keys().copied());
+    for key in all_keys {
+      let left = self.init.get(&key).copied().unwrap_or(InitState::Unassigned);
+      let right = other
+        .init
+        .get(&key)
+        .copied()
+        .unwrap_or(InitState::Unassigned);
+      let joined = left.join(right);
+      if left != joined {
+        self.init.insert(key, joined);
+        changed = true;
       }
     }
     changed

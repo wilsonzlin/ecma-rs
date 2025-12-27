@@ -189,6 +189,19 @@ pub const MISSING_GLOBAL_PROPERTY: Code = Code::new(
   &[],
 );
 
+/// TC0009: Variable is used before being definitely assigned.
+///
+/// - Primary span: the identifier reference being read.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const USE_BEFORE_ASSIGNMENT: Code = Code::new(
+  "TC0009",
+  "variable used before being assigned",
+  "identifier used before assignment",
+  &["primary: identifier read before assignment"],
+  &[],
+);
+
 /// TC1001: Module specifier could not be resolved.
 ///
 /// - Primary span: the import/export module specifier.
