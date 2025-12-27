@@ -13,9 +13,9 @@ use rename::rewrite_source;
 use rename::{apply_renames, assign_names, collect_usages};
 use semantic_js::js::bind_js;
 pub use semantic_js::js::TopLevelMode;
-use ts_erase::erase_types;
 #[cfg(all(test, feature = "emit-minify"))]
 use std::cell::Cell;
+use ts_erase::erase_types;
 
 pub use parse_js::Dialect;
 #[cfg(feature = "fuzzing")]
@@ -26,6 +26,8 @@ mod tests;
 mod ts_erase;
 #[cfg(feature = "fuzzing")]
 pub use fuzz::fuzz_minify_pipeline;
+mod ts_lower;
+mod ts_lower;
 
 #[cfg(feature = "emit-minify")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
