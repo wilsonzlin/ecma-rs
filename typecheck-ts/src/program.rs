@@ -8095,7 +8095,11 @@ impl ProgramState {
   }
 
   fn record_symbol(&mut self, file: FileId, range: TextRange, symbol: semantic_js::SymbolId) {
-    let _ = (file, range, symbol);
+    self
+      .symbol_occurrences
+      .entry(file)
+      .or_default()
+      .push(SymbolOccurrence { range, symbol });
   }
 }
 

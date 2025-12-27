@@ -1169,7 +1169,7 @@ fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
   let parsed = parse_for(db, file);
   let lowered = lower_hir_for(db, file);
   if let (Some(ast), Some(lowered)) = (parsed.ast.as_ref(), lowered.lowered.as_ref()) {
-    sem_hir_from_lower(ast, lowered)
+    sem_hir_from_lower(ast.as_ref(), lowered)
   } else {
     empty_sem_hir(file.file_id(db), lowered.file_kind)
   }
