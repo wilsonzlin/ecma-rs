@@ -17,7 +17,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::{ImportEqualsRhs, ModuleDecl, ModuleName, NamespaceBody};
+use parse_js::ast::ts_stmt::{ImportEqualsRhs, NamespaceBody};
 use parse_js::ast::type_expr::{
   TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
@@ -2491,6 +2491,7 @@ impl SemHirBuilder {
       name_span,
       decls: self.decls,
       imports: self.imports,
+      import_equals: Vec::new(),
       exports: self.exports,
       export_as_namespace: Vec::new(),
       ambient_modules: self.ambient_modules,
@@ -2920,6 +2921,7 @@ struct ProgramState {
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
+  symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   file_registry: FileRegistry,
   file_kinds: HashMap<FileId, FileKind>,
   lib_file_ids: HashSet<FileId>,
@@ -3016,6 +3018,7 @@ impl ProgramState {
       def_types: HashMap::new(),
       body_results: HashMap::new(),
       symbol_to_def: HashMap::new(),
+      symbol_occurrences: HashMap::new(),
       file_registry: FileRegistry::new(),
       file_kinds: HashMap::new(),
       lib_file_ids: HashSet::new(),

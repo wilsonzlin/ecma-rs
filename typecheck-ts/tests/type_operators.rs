@@ -436,8 +436,7 @@ fn hir_decl_lowering_preserves_mapped_as_clause() {
     None,
     None,
   );
-  let (ty, _) =
-    lowerer.lower_type_info(alias.id, alias.type_info.as_ref().unwrap(), &lowered.names);
+  let (ty, _) = lowerer.lower_type_info(alias.id, alias.type_info.as_ref().unwrap(), &lowered.names);
 
   assert!(
     diagnostics.is_empty(),

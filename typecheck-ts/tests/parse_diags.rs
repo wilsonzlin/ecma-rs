@@ -123,7 +123,7 @@ fn db_unresolved_import_points_at_specifier() {
   assert_eq!(diags.len(), 1);
   assert_unresolved_diag_covers_specifier(&diags[0], file, source, "\"./missing\"");
 
-  let program_diags = db_program_diagnostics(&db, std::iter::empty::<Diagnostic>());
+  let program_diags = db_program_diagnostics(&db);
   assert_eq!(program_diags.len(), 1);
   assert_unresolved_diag_covers_specifier(&program_diags[0], file, source, "\"./missing\"");
 }
@@ -152,8 +152,7 @@ export * from "./missing-export-all";"#;
   );
   assert_unresolved_diag_covers_specifier(&diags[1], file, source, "\"./missing-export-all\"");
 
-  let mut program_diags: Vec<_> =
-    db_program_diagnostics(&db, std::iter::empty::<Diagnostic>()).as_ref().to_vec();
+  let mut program_diags: Vec<_> = db_program_diagnostics(&db).as_ref().to_vec();
   program_diags.sort_by_key(|diag| diag.primary.range.start);
   assert_eq!(program_diags.len(), 2);
   assert_unresolved_diag_covers_specifier(

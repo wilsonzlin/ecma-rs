@@ -213,6 +213,14 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
   Arc::from(diagnostics.into_boxed_slice())
 }
 
+/// Diagnostics for unresolved module specifiers within a file.
+pub fn unresolved_module_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
+  db
+    .file_input(file)
+    .map(|input| unresolved_module_diagnostics_for(db, input))
+    .unwrap_or_else(|| Arc::from([]))
+}
+
 #[derive(Debug, Clone)]
 pub struct LowerResultWithDiagnostics {
   pub lowered: Option<Arc<LowerResult>>,
