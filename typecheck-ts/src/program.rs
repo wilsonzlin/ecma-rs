@@ -229,14 +229,19 @@ fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeSt
     if store.contains_type_id(ty) {
       return (Arc::clone(store), store.canon(ty));
     }
-    if let Some(mapped) = state.def_types.iter().find_map(|(def, stored_ty)| {
-      if *stored_ty == ty {
-        state.interned_def_types.get(def).copied()
-      } else {
-        None
+    let mut matching_defs: Vec<_> = state
+      .def_types
+      .iter()
+      .filter_map(|(def, stored_ty)| (*stored_ty == ty).then_some(*def))
+      .collect();
+    matching_defs.sort_by_key(|d| d.0);
+    for def in matching_defs {
+      if let Some(mapped) = state.interned_def_types.get(&def).copied() {
+        return (
+          Arc::clone(store),
+          store.canon(strip_param_names(store, mapped)),
+        );
       }
-    }) {
-      return (Arc::clone(store), store.canon(mapped));
     }
   }
 
@@ -244,6 +249,25 @@ fn display_type_from_state(state: &ProgramState, ty: TypeId) -> (Arc<tti::TypeSt
   let mut cache = HashMap::new();
   let interned = convert_type_for_display(ty, state, &store, &mut cache);
   (store, interned)
+}
+
+fn strip_param_names(store: &Arc<tti::TypeStore>, ty: tti::TypeId) -> tti::TypeId {
+  match store.type_kind(ty) {
+    tti::TypeKind::Callable { overloads } => {
+      let mut stripped = Vec::new();
+      for sig_id in overloads {
+        let mut sig = store.signature(sig_id).clone();
+        for param in sig.params.iter_mut() {
+          param.name = None;
+        }
+        stripped.push(store.intern_signature(sig));
+      }
+      store.intern_type(tti::TypeKind::Callable {
+        overloads: stripped,
+      })
+    }
+    _ => ty,
+  }
 }
 
 fn convert_type_for_display(
@@ -257,7 +281,10 @@ fn convert_type_for_display(
   }
   let primitives = store.primitive_ids();
   cache.insert(ty, primitives.unknown);
-  let kind = match state.type_store.kinds.get(ty.0 as usize) {
+  let kind = match (ty.0 < state.type_store.kinds.len() as u128)
+    .then(|| state.type_store.kinds.get(ty.0 as usize))
+    .flatten()
+  {
     Some(kind) => kind.clone(),
     None => return primitives.unknown,
   };
@@ -2113,7 +2140,13 @@ fn default_var_mode() -> VarDeclMode {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
 pub struct ImportData {
-  pub from: FileId,
+  /// Resolved target file for the import, if host resolution succeeded.
+  #[cfg_attr(feature = "serde", serde(default))]
+  pub from: Option<FileId>,
+  /// Original module specifier (used to query ambient module declarations when
+  /// there is no concrete file).
+  #[cfg_attr(feature = "serde", serde(default))]
+  pub specifier: String,
   pub original: String,
 }
 
@@ -2696,13 +2729,14 @@ impl TypeStore {
   }
 
   pub(crate) fn kind(&self, id: TypeId) -> &TypeKind {
-    self.kinds.get(id.0 as usize).unwrap_or_else(|| {
-      // Gracefully degrade to `unknown` when encountering an out-of-range
-      // identifier instead of panicking; upstream code will treat this as a
-      // cache miss and recompute.
+    if id.0 >= self.kinds.len() as u128 {
       let fallback = Self::UNKNOWN_IDX.min(self.kinds.len().saturating_sub(1));
-      &self.kinds[fallback]
-    })
+      return &self.kinds[fallback];
+    }
+    self
+      .kinds
+      .get(id.0 as usize)
+      .unwrap_or_else(|| unreachable!("index checked against kinds length"))
   }
 
   pub(crate) fn union(&mut self, mut types: Vec<TypeId>, builtin: &BuiltinTypes) -> TypeId {
@@ -3336,6 +3370,18 @@ impl ProgramState {
     best.map(|(_, id)| id)
   }
 
+  fn exports_for_import(&mut self, import: &ImportData) -> Result<ExportMap, FatalError> {
+    if let Some(from) = import.from {
+      return self.exports_of_file(from);
+    }
+    if let Some(semantics) = self.semantics.clone() {
+      let exports =
+        check::modules::exports_of_ambient_module(self, semantics.as_ref(), &import.specifier)?;
+      return Ok(exports);
+    }
+    Ok(ExportMap::new())
+  }
+
   fn canonical_defs(
     &mut self,
   ) -> Result<HashMap<(FileId, String, sem_ts::Namespace), DefId>, FatalError> {
@@ -3360,7 +3406,7 @@ impl ProgramState {
         let mut mapped_def = def_id;
         if let DefKind::Import(import) = &data.kind {
           if let Some(target) = self
-            .exports_of_file(import.from)?
+            .exports_for_import(import)?
             .get(&import.original)
             .and_then(|entry| entry.def)
           {
@@ -4065,6 +4111,7 @@ impl ProgramState {
     }
 
     self.collect_function_decl_types(&store, &flat_defs, &mut def_types, &mut type_params);
+    self.collect_var_decl_types(&store, &flat_defs, &mut def_types);
 
     let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
     let mut namespace_member_defs: HashMap<(FileId, String, String), DefId> = HashMap::new();
@@ -4279,6 +4326,83 @@ impl ProgramState {
           {
             type_params.entry(*def_id).or_insert(params);
           }
+        }
+      }
+    }
+  }
+
+  fn collect_var_decl_types(
+    &mut self,
+    store: &Arc<tti::TypeStore>,
+    def_by_name: &HashMap<(FileId, String), DefId>,
+    def_types: &mut HashMap<DefId, tti::TypeId>,
+  ) {
+    if self.asts.is_empty() {
+      return;
+    }
+    let resolver_defs = Arc::new(def_by_name.clone());
+    let mut def_by_span: HashMap<(FileId, TextRange), DefId> = HashMap::new();
+    for (def_id, data) in self.def_data.iter() {
+      if !matches!(data.kind, DefKind::Var(_)) {
+        continue;
+      }
+      def_by_span.insert((data.file, data.span), *def_id);
+    }
+
+    let mut ast_entries: Vec<_> = self
+      .asts
+      .iter()
+      .map(|(file, ast)| (*file, Arc::clone(ast)))
+      .collect();
+    ast_entries.sort_by_key(|(file, _)| file.0);
+    for (file, ast) in ast_entries.into_iter() {
+      let resolver: Arc<dyn TypeResolver> =
+        Arc::new(DeclTypeResolver::new(file, Arc::clone(&resolver_defs)));
+
+      fn push_namespace_body<'a>(body: &'a NamespaceBody, stack: &mut Vec<&'a Node<Stmt>>) {
+        match body {
+          NamespaceBody::Block(stmts) => {
+            stack.extend(stmts.iter());
+          }
+          NamespaceBody::Namespace(inner) => push_namespace_body(&inner.stx.body, stack),
+        }
+      }
+
+      let mut stack: Vec<&Node<Stmt>> = ast.stx.body.iter().collect();
+      while let Some(stmt) = stack.pop() {
+        match stmt.stx.as_ref() {
+          Stmt::VarDecl(var) => {
+            for declarator in var.stx.declarators.iter() {
+              let Some(annotation) = declarator.type_annotation.as_ref() else {
+                continue;
+              };
+              let span = loc_to_span(file, declarator.pattern.loc).range;
+              let Some(def_id) = def_by_span.get(&(file, span)).copied() else {
+                continue;
+              };
+              let mut lowerer =
+                TypeLowerer::with_resolver(Arc::clone(store), Arc::clone(&resolver));
+              lowerer.set_file(file);
+              let ty = lowerer.lower_type_expr(annotation);
+              def_types.insert(def_id, ty);
+              self.diagnostics.extend(lowerer.take_diagnostics());
+            }
+          }
+          Stmt::ModuleDecl(module) => {
+            if let Some(body) = &module.stx.body {
+              stack.extend(body.iter());
+            }
+          }
+          Stmt::NamespaceDecl(ns) => {
+            push_namespace_body(&ns.stx.body, &mut stack);
+          }
+          Stmt::GlobalDecl(global) => {
+            stack.extend(global.stx.body.iter());
+          }
+          Stmt::Block(block) => {
+            stack.extend(block.stx.body.iter());
+          }
+          _ => {}
         }
       }
     }
@@ -6418,7 +6542,8 @@ impl ProgramState {
                 symbol,
                 export: false,
                 kind: DefKind::Import(ImportData {
-                  from: resolved.unwrap_or(file),
+                  from: resolved,
+                  specifier: module.clone(),
                   original: "default".to_string(),
                 }),
               },
@@ -6470,7 +6595,8 @@ impl ProgramState {
                     symbol,
                     export: false,
                     kind: DefKind::Import(ImportData {
-                      from: resolved.unwrap_or(file),
+                      from: resolved,
+                      specifier: module.clone(),
                       original: name.clone(),
                     }),
                   },
@@ -6515,7 +6641,8 @@ impl ProgramState {
                   symbol,
                   export: false,
                   kind: DefKind::Import(ImportData {
-                    from: resolved.unwrap_or(file),
+                    from: resolved,
+                    specifier: module.clone(),
                     original: "*".to_string(),
                   }),
                 },
@@ -6565,7 +6692,8 @@ impl ProgramState {
                 symbol,
                 export: import_equals.stx.export,
                 kind: DefKind::Import(ImportData {
-                  from: resolved.unwrap_or(file),
+                  from: resolved,
+                  specifier: module.clone(),
                   original: "*".to_string(),
                 }),
               },
@@ -8232,7 +8360,7 @@ impl ProgramState {
           }
         }
         DefKind::Import(import) => {
-          let exports = self.exports_of_file(import.from)?;
+          let exports = self.exports_for_import(&import)?;
           if let Some(entry) = exports.get(&import.original) {
             if let Some(ty) = entry.type_id {
               ty

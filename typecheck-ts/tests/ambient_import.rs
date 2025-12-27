@@ -74,10 +74,12 @@ fn imports_from_ambient_modules_without_host_resolution() {
     text: Arc::from(r#"declare module "ambient" { export const x: string; }"#),
   };
 
-  let host = AmbientHost::new(options).with_lib(ambient_lib).with_file(
-    entry.clone(),
-    r#"import { x } from "ambient"; const y = x;"#,
-  );
+  let host = AmbientHost::new(options)
+    .with_lib(ambient_lib.clone())
+    .with_file(
+      entry.clone(),
+      r#"import { x } from "ambient"; const y = x;"#,
+    );
 
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
@@ -87,6 +89,11 @@ fn imports_from_ambient_modules_without_host_resolution() {
   );
 
   let file_id = program.file_id(&entry).expect("entry file id");
+  let _x_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("x"))
+    .expect("definition for x");
   let y_def = program
     .definitions_in_file(file_id)
     .into_iter()

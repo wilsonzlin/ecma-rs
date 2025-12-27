@@ -11,7 +11,7 @@ use hir_js::{
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
-use types_ts_interned::{PrimitiveIds, TypeStore};
+use types_ts_interned::{PrimitiveIds, TypeParamId, TypeStore};
 
 use crate::codes;
 use crate::db::inputs::{
@@ -104,20 +104,30 @@ fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]>
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
   };
+  let semantics = ts_semantics(db);
   let mut spans = HashMap::new();
   for (spec, span) in collect_module_specifiers(lowered).into_iter() {
     spans.entry(spec).or_insert(span);
   }
 
   let mut diagnostics = Vec::new();
+  let file_id = file.file_id(db);
   for spec in specs.iter() {
-    if module_resolve(db, file.file_id(db), Arc::clone(spec)).is_none() {
-      if let Some(span) = spans.get(spec) {
-        diagnostics.push(codes::UNRESOLVED_MODULE.error(
-          format!("module {} could not be resolved", spec),
-          Span::new(file.file_id(db), *span),
-        ));
-      }
+    if module_resolve(db, file_id, Arc::clone(spec)).is_some() {
+      continue;
+    }
+    if semantics
+      .semantics
+      .exports_of_ambient_module(spec.as_ref())
+      .is_some()
+    {
+      continue;
+    }
+    if let Some(span) = spans.get(spec) {
+      diagnostics.push(codes::UNRESOLVED_MODULE.error(
+        format!("module {} could not be resolved", spec),
+        Span::new(file_id, *span),
+      ));
     }
   }
   diagnostics.sort();
@@ -1787,6 +1797,8 @@ pub struct DeclInfo {
   pub declared_type: Option<TypeId>,
   /// Initializer used for inference if no annotation is present.
   pub initializer: Option<Initializer>,
+  /// Declared type parameters, if any.
+  pub type_params: Arc<[TypeParamId]>,
 }
 
 /// Simplified initializer model used by [`check_body`].
@@ -1835,6 +1847,18 @@ pub fn decl_types_in_file(
   db.decl_types_input(file)
     .map(|handle| handle.decls(db).clone())
     .unwrap_or_else(|| Arc::new(BTreeMap::new()))
+}
+
+/// Declared type of a definition if it exists in the database.
+pub fn decl_type(db: &dyn TypeDb, def: DefId) -> Option<TypeId> {
+  decl_types_for_def(db, def).and_then(|decl| decl.declared_type)
+}
+
+/// Declared type parameters associated with a definition.
+pub fn type_params(db: &dyn TypeDb, def: DefId) -> Arc<[TypeParamId]> {
+  decl_types_for_def(db, def)
+    .map(|decl| decl.type_params.clone())
+    .unwrap_or_else(|| Arc::from([]))
 }
 
 #[salsa::tracked]
