@@ -1,9 +1,6 @@
 pub mod expr;
 pub mod stmt;
 
-#[cfg(feature = "legacy-ast-lowering")]
-pub mod legacy;
-
 #[cfg(test)]
 mod tests;
 

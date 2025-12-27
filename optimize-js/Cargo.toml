@@ -4,8 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["legacy-ast-lowering"]
-legacy-ast-lowering = []
+default = []
 
 [dependencies]
 ahash = { version = "0.8.6", features = ["serde"] }
