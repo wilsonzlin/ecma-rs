@@ -678,6 +678,7 @@ mod tests {
         bblocks: CfgBBlocks::default(),
         entry: 0,
       },
+      stats: Default::default(),
     }
   }
 
