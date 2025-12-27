@@ -1921,6 +1921,7 @@ impl Program {
     {
       let mut state = program.lock_state();
       state.analyzed = true;
+      state.checked = true;
       state.compiler_options = snapshot.compiler_options;
       state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
@@ -2871,6 +2872,7 @@ impl TypeResolver for DeclTypeResolver {
 
 struct ProgramState {
   analyzed: bool,
+  checked: bool,
   cancelled: Arc<AtomicBool>,
   host: Arc<dyn Host>,
   lib_manager: Arc<LibManager>,
@@ -2966,6 +2968,7 @@ impl ProgramState {
     let (type_store, builtin) = TypeStore::new();
     ProgramState {
       analyzed: false,
+      checked: false,
       cancelled,
       host,
       lib_manager,
@@ -4513,7 +4516,10 @@ impl ProgramState {
     host: &Arc<dyn Host>,
     roots: &[FileKey],
   ) -> Result<Arc<[Diagnostic]>, FatalError> {
-    if self.analyzed && !self.diagnostics.is_empty() {
+    if self.checked {
+      if self.diagnostics.is_empty() {
+        self.check_cancelled()?;
+      }
       return Ok(Arc::from(self.diagnostics.clone()));
     }
     self.check_cancelled()?;
@@ -4550,6 +4556,7 @@ impl ProgramState {
     diagnostics.dedup_by(|a, b| {
       a.code == b.code && a.primary == b.primary && a.message == b.message && a.labels == b.labels
     });
+    self.checked = true;
     self.diagnostics = diagnostics.clone();
     Ok(Arc::from(diagnostics))
   }
