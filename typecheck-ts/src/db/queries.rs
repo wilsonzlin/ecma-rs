@@ -612,6 +612,7 @@ pub mod body_check {
             }
           }
         }
+        let relate = RelateCtx::new(Arc::clone(&ctx.store), ctx.store.options());
         let flow_result = check_body_with_env(
           body_id,
           body,
@@ -620,6 +621,8 @@ pub mod body_check {
           "",
           Arc::clone(&ctx.store),
           &initial_env,
+          relate,
+          None,
         );
         let mut relate_hooks = relate_hooks();
         relate_hooks.expander = Some(&expander);
