@@ -74,12 +74,12 @@ fn conflicting_type_arguments_still_error() {
   let resolution = typecheck_ts::check::overload::resolve_overloads(
     &store,
     &relate,
+    None,
     callable,
     &[primitives.number, primitives.string],
     None,
     None,
     span,
-    None,
   );
 
   assert!(

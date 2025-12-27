@@ -123,8 +123,30 @@ fn export_const_initializer_infers_type() {
 
   let file_id = program.file_id(&entry).expect("file id");
   let exports = program.exports_of(file_id);
+  let add_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("add"))
+    .expect("imported add def");
+  println!(
+    "imported add type: {}",
+    program.display_type(program.type_of_def(add_def))
+  );
   let total = exports.get("total").expect("total export");
+  let init = program
+    .var_initializer(total.def.expect("total def"))
+    .unwrap();
+  let init_ty = program.type_of_expr(init.body, init.expr);
+  let init_res = program.check_body(init.body);
+  println!(
+    "init expr type from body: {:?}",
+    init_res
+      .expr_type(init.expr)
+      .map(|t| program.display_type(t).to_string())
+  );
+  println!("total init type: {}", program.display_type(init_ty));
   let ty = total.type_id.expect("type for total");
+  println!("total type: {}", program.display_type(ty));
   assert_eq!(program.display_type(ty).to_string(), "number");
 }
 
@@ -270,7 +292,13 @@ fn export_star_cycle_reaches_fixpoint() {
     let file = program.file_id(&key).expect("file id");
     let exports = program.exports_of(file);
     let shared = exports.get("shared").expect("shared export present");
-    let ty = shared.type_id.expect("type for shared");
+    let ty = shared.type_id;
+    println!(
+      "shared type in {}: {:?}",
+      key.as_str(),
+      ty.map(|t| program.display_type(t).to_string())
+    );
+    let ty = ty.expect("type for shared");
     assert_eq!(program.display_type(ty).to_string(), "1");
   }
 }
@@ -323,10 +351,33 @@ fn imported_overloads_preserve_all_signatures() {
 
   let program = Program::new(host, vec![key_use.clone()]);
   let diagnostics = program.check();
+  let math_id = program.file_id(&key_math).expect("math id");
+  let math_exports = program.exports_of(math_id);
+  let overload_entry = math_exports.get("overload").expect("overload export");
+  let overload_type = overload_entry.type_id.expect("type for overload");
+  let math_returns: Vec<_> = program
+    .call_signatures(overload_type)
+    .iter()
+    .map(|sig| program.display_type(sig.signature.ret).to_string())
+    .collect();
+  println!("math overload returns: {:?}", math_returns);
+  if !diagnostics.is_empty() {
+    let use_id = program.file_id(&key_use).expect("use id");
+    let overload_def = program
+      .definitions_in_file(use_id)
+      .into_iter()
+      .find(|d| program.def_name(*d).as_deref() == Some("overload"))
+      .unwrap();
+    println!(
+      "imported overload type: {}",
+      program.display_type(program.type_of_def(overload_def))
+    );
+  }
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
+
   let math_id = program.file_id(&key_math).expect("math id");
   let math_exports = program.exports_of(math_id);
   let overload_entry = math_exports.get("overload").expect("overload export");
@@ -351,6 +402,18 @@ fn imported_overloads_preserve_all_signatures() {
     .get("asNumber")
     .and_then(|entry| entry.def)
     .expect("asNumber def");
+  println!(
+    "overload export type: {}",
+    program.display_type(overload_type)
+  );
+  println!(
+    "asString type: {}",
+    program.display_type(program.type_of_def(str_def))
+  );
+  println!(
+    "asNumber type: {}",
+    program.display_type(program.type_of_def(num_def))
+  );
   assert_eq!(
     program
       .display_type(program.type_of_def(str_def))
@@ -388,13 +451,53 @@ fn typeof_imported_overload_merges_signatures() {
 
   let program = Program::new(host, vec![key_use.clone()]);
   let diagnostics = program.check();
-  let math_id = program.file_id(&key_math).expect("math id");
+  let use_id = program.file_id(&key_use).expect("use id");
+  if !diagnostics.is_empty() {
+    let overload_def = program
+      .definitions_in_file(use_id)
+      .into_iter()
+      .find(|d| program.def_name(*d).as_deref() == Some("overload"))
+      .unwrap();
+    println!(
+      "imported overload type: {}",
+      program.display_type(program.type_of_def(overload_def))
+    );
+    println!(
+      "imported overload sigs: {:?}",
+      program
+        .call_signatures(program.type_of_def(overload_def))
+        .iter()
+        .map(|sig| program.display_type(sig.signature.ret).to_string())
+        .collect::<Vec<_>>()
+    );
+    if let Some(over_alias) = program
+      .definitions_in_file(use_id)
+      .into_iter()
+      .find(|d| program.def_name(*d).as_deref() == Some("Over"))
+    {
+      println!(
+        "Over alias type: {}",
+        program.display_type(program.type_of_def(over_alias))
+      );
+      println!(
+        "Over alias kind: {:?}",
+        program.interned_type_kind(program.type_of_def(over_alias))
+      );
+      println!(
+        "Over sigs: {:?}",
+        program
+          .call_signatures(program.type_of_def(over_alias))
+          .iter()
+          .map(|sig| program.display_type(sig.signature.ret).to_string())
+          .collect::<Vec<_>>()
+      );
+    }
+  }
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let use_id = program.file_id(&key_use).expect("use id");
   let exports = program.exports_of(use_id);
 
   let via_string = exports
@@ -412,6 +515,10 @@ fn typeof_imported_overload_merges_signatures() {
     .get("viaNumber")
     .expect("number overload call export");
   let via_number_def = via_number.def.expect("viaNumber def");
+  println!(
+    "Over type: {}",
+    program.display_type(program.type_of_def(via_number_def))
+  );
   assert_eq!(
     program
       .display_type(program.type_of_def(via_number_def))
@@ -565,6 +672,7 @@ fn interned_type_for_exported_function() {
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition");
   let ty = program.type_of_def(def);
+  println!("add type: {}", program.display_type(ty));
   assert_eq!(
     program.display_type(ty).to_string(),
     "(number, number) => number"

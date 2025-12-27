@@ -3,31 +3,15 @@ use std::sync::Arc;
 
 use diagnostics::{Diagnostic, Span};
 use types_ts_interned::{
-  Param, RelateCtx, Signature, SignatureId, TupleElem, TypeDisplay, TypeId, TypeKind, TypeParamId,
-  TypeStore,
+  Param, RelateCtx, RelateTypeExpander, Signature, SignatureId, TupleElem, TypeDisplay, TypeId,
+  TypeKind, TypeParamId, TypeStore,
 };
 
-use super::infer::{infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature};
+use super::infer::infer_type_arguments_for_call;
 use super::instantiate::Substituter;
 use crate::codes;
 
 const MAX_NOTES: usize = 5;
-
-/// Optional provider used during overload resolution to compute contextual
-/// argument types or derive the actual signature of a function argument.
-pub trait OverloadContext {
-  /// Return a contextually typed version of the argument at `index` when the
-  /// parameter expects `expected`.
-  fn contextual_arg_type(&mut self, index: usize, expected: TypeId) -> Option<TypeId>;
-
-  /// Compute the actual signature of a function argument using the provided
-  /// contextual signature.
-  fn actual_function_signature(
-    &mut self,
-    index: usize,
-    contextual_sig: &Signature,
-  ) -> Option<Signature>;
-}
 
 /// Result of resolving a call expression against a callable type.
 #[derive(Debug)]
@@ -42,17 +26,9 @@ pub struct CallResolution {
 
 /// Collect all callable signatures from a type, expanding unions/intersections
 /// and object call signatures.
-pub fn callable_signatures(store: &Arc<TypeStore>, ty: TypeId) -> Vec<SignatureId> {
+pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
   let mut out = Vec::new();
   collect_signatures(store, None, ty, &mut out, &mut HashSet::new());
-  out
-}
-
-/// Collect all construct signatures from a type, expanding unions/intersections
-/// and object construct signatures.
-pub fn construct_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
-  let mut out = Vec::new();
-  collect_construct_signatures(store, ty, &mut out, &mut HashSet::new());
   out
 }
 
@@ -137,35 +113,24 @@ struct CandidateOutcome {
 pub fn resolve_overloads(
   store: &Arc<TypeStore>,
   relate: &RelateCtx<'_>,
+  expander: Option<&dyn RelateTypeExpander>,
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
   span: Span,
-  mut context: Option<&mut dyn OverloadContext>,
 ) -> CallResolution {
-  let debug = std::env::var("TRACE_TYPES").is_ok();
-  if debug {
-    let arg_display: Vec<_> = args
-      .iter()
-      .map(|a| TypeDisplay::new(store, *a).to_string())
-      .collect();
-    eprintln!(
-      "[resolve_overloads] callee {} args {:?}",
-      TypeDisplay::new(store, callee),
-      arg_display
-    );
-  }
   let mut candidates = Vec::new();
   collect_signatures(
-    store,
-    Some(relate),
+    store.as_ref(),
+    expander,
     callee,
     &mut candidates,
     &mut HashSet::new(),
   );
-  candidates.sort_by(|a, b| store.compare_signatures(*a, *b));
+  candidates.sort();
   candidates.dedup();
+  prune_broader_signatures(store.as_ref(), &mut candidates);
   let primitives = store.primitive_ids();
   if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
     return CallResolution {
@@ -203,286 +168,11 @@ pub fn resolve_overloads(
       rejection: None,
     };
 
-    let base_arity = analyze_arity(store.as_ref(), &original_sig);
-    if !base_arity.allows(args.len()) {
-      outcome.rejection = Some(CandidateRejection::Arity {
-        min: base_arity.min,
-        max: base_arity.max,
-        actual: args.len(),
-      });
-      outcomes.push(outcome);
-      continue;
-    }
-
-    let call_inference =
-      infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
-    let mut merged_substitutions = call_inference.substitutions.clone();
-
-    let mut substituter = Substituter::new(Arc::clone(store), merged_substitutions.clone());
-    let instantiated_id = substituter.substitute_signature(&original_sig);
-    let instantiated_sig = store.signature(instantiated_id);
-
-    let mut contextual_args = args.to_vec();
-    let mut contextual_sigs: Vec<Option<Signature>> = vec![None; args.len()];
-    let mut actual_sigs: Vec<Option<Signature>> = vec![None; args.len()];
-    if let Some(ctx) = context.as_deref_mut() {
-      let arity = analyze_arity(store.as_ref(), &instantiated_sig);
-      for idx in 0..args.len() {
-        if let Some(expected) = expected_arg_type(&instantiated_sig, &arity, idx) {
-          if let Some(ty) = ctx.contextual_arg_type(idx, expected.ty) {
-            contextual_args[idx] = ty;
-          }
-          if let Some(contextual_sig_id) =
-            callable_signatures(store, expected.ty).into_iter().next()
-          {
-            let contextual_sig = store.signature(contextual_sig_id);
-            if let Some(actual) = ctx.actual_function_signature(idx, &contextual_sig) {
-              contextual_sigs[idx] = Some(contextual_sig);
-              actual_sigs[idx] = Some(actual);
-            }
-          }
-        }
-      }
-    }
-
-    let inference_args: &[TypeId] = if context.is_some() {
-      &contextual_args
-    } else {
-      args
-    };
-
-    let call_inference =
-      infer_type_arguments_for_call(store, &original_sig, inference_args, contextual_return);
-
-    let mut inference_diags: Vec<String> = call_inference
-      .diagnostics
-      .iter()
-      .map(|d| d.message.clone())
-      .collect();
-    merge_substitutions(
-      store.as_ref(),
-      &mut merged_substitutions,
-      &call_inference.substitutions,
-      primitives.any,
-      primitives.unknown,
-    );
-
-    for (contextual_sig, actual_sig) in contextual_sigs.into_iter().zip(actual_sigs.into_iter()) {
-      if let (Some(contextual_sig), Some(actual_sig)) = (contextual_sig, actual_sig) {
-        let contextual_inference =
-          infer_type_arguments_from_contextual_signature(store, &contextual_sig, &actual_sig);
-        inference_diags.extend(
-          contextual_inference
-            .diagnostics
-            .into_iter()
-            .map(|d| d.message),
-        );
-        merge_substitutions(
-          store.as_ref(),
-          &mut merged_substitutions,
-          &contextual_inference.substitutions,
-          primitives.any,
-          primitives.unknown,
-        );
-      }
-    }
-
-    outcome.unknown_inferred = count_unknown(
-      store.as_ref(),
-      &merged_substitutions,
-      primitives.any,
-      primitives.unknown,
-    );
-
-    let mut substituter = Substituter::new(Arc::clone(store), merged_substitutions.clone());
-    let instantiated_id = substituter.substitute_signature(&original_sig);
-    let instantiated_sig = store.signature(instantiated_id);
-
-    let arity = analyze_arity(store.as_ref(), &instantiated_sig);
+    let arity = analyze_arity(store.as_ref(), &original_sig);
     if !arity.allows(args.len()) {
       outcome.rejection = Some(CandidateRejection::Arity {
         min: arity.min,
         max: arity.max,
-        actual: args.len(),
-      });
-      outcomes.push(outcome);
-      continue;
-    }
-    if !inference_diags.is_empty() {
-      outcome.rejection = Some(CandidateRejection::Inference(inference_diags));
-      outcomes.push(outcome);
-      continue;
-    }
-
-    if let Some(expected_this) = instantiated_sig.this_param {
-      match this_arg {
-        Some(actual_this) => {
-          if !relate.is_assignable(actual_this, expected_this) {
-            outcome.rejection = Some(CandidateRejection::ThisType {
-              expected: expected_this,
-              actual: Some(actual_this),
-            });
-            outcomes.push(outcome);
-            continue;
-          }
-        }
-        None => {
-          outcome.rejection = Some(CandidateRejection::ThisType {
-            expected: expected_this,
-            actual: None,
-          });
-          outcomes.push(outcome);
-          continue;
-        }
-      }
-    }
-
-    let arg_types = if context.is_some() {
-      contextual_args.as_slice()
-    } else {
-      args
-    };
-    let (_assignable, specificity, mismatch) =
-      check_arguments(store.as_ref(), relate, &instantiated_sig, &arity, arg_types);
-    outcome.instantiated_sig = instantiated_sig;
-    outcome.instantiated_id = instantiated_id;
-    outcome.specificity = specificity;
-    outcome.rejection = mismatch;
-    outcomes.push(outcome);
-    continue;
-  }
-
-  let mut applicable: Vec<&CandidateOutcome> =
-    outcomes.iter().filter(|c| c.rejection.is_none()).collect();
-  if applicable.is_empty() {
-    let mut fallback = outcomes.clone();
-    let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes);
-    fallback.sort_by(|a, b| {
-      (
-        a.specificity,
-        a.unknown_inferred,
-        a.instantiated_sig.params.len(),
-        a.sig_id,
-      )
-        .cmp(&(
-          b.specificity,
-          b.unknown_inferred,
-          b.instantiated_sig.params.len(),
-          b.sig_id,
-        ))
-    });
-    let ret = fallback
-      .first()
-      .map(|best| best.instantiated_sig.ret)
-      .unwrap_or(primitives.unknown);
-    return CallResolution {
-      return_type: ret,
-      signature: None,
-      diagnostics: vec![diag],
-    };
-  }
-
-  applicable.sort_by(|a, b| {
-    (
-      a.specificity,
-      a.unknown_inferred,
-      a.instantiated_sig.params.len(),
-      a.sig_id,
-    )
-      .cmp(&(
-        b.specificity,
-        b.unknown_inferred,
-        b.instantiated_sig.params.len(),
-        b.sig_id,
-      ))
-  });
-
-  let best = applicable[0];
-  let best_score = (
-    best.specificity,
-    best.unknown_inferred,
-    best.instantiated_sig.params.len(),
-  );
-  let tied: Vec<&CandidateOutcome> = applicable
-    .into_iter()
-    .take_while(|c| {
-      (
-        c.specificity,
-        c.unknown_inferred,
-        c.instantiated_sig.params.len(),
-      ) == best_score
-    })
-    .collect();
-  if tied.len() > 1 {
-    let diag = build_ambiguous_diagnostic(span, &tied);
-    return CallResolution {
-      return_type: primitives.unknown,
-      signature: None,
-      diagnostics: vec![diag],
-    };
-  }
-
-  CallResolution {
-    return_type: best.instantiated_sig.ret,
-    signature: Some(best.instantiated_id),
-    diagnostics: Vec::new(),
-  }
-}
-
-/// Resolve a `new` expression against a constructible type.
-pub fn resolve_construct(
-  store: &Arc<TypeStore>,
-  relate: &RelateCtx<'_>,
-  callee: TypeId,
-  args: &[TypeId],
-  this_arg: Option<TypeId>,
-  contextual_return: Option<TypeId>,
-  span: Span,
-) -> CallResolution {
-  let mut candidates = Vec::new();
-  collect_construct_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());
-  let primitives = store.primitive_ids();
-  if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
-    return CallResolution {
-      return_type: primitives.unknown,
-      signature: None,
-      diagnostics: Vec::new(),
-    };
-  }
-  if candidates.is_empty() {
-    let diag = codes::NO_OVERLOAD
-      .error("expression is not constructible", span)
-      .with_note(format!(
-        "callee has type {}",
-        TypeDisplay::new(store, callee)
-      ));
-    return CallResolution {
-      return_type: primitives.unknown,
-      signature: None,
-      diagnostics: vec![diag],
-    };
-  }
-
-  let mut outcomes = Vec::new();
-
-  for sig_id in candidates {
-    let original_sig = store.signature(sig_id);
-    let display = format_signature(store.as_ref(), &original_sig);
-    let mut outcome = CandidateOutcome {
-      sig_id,
-      display,
-      instantiated_sig: original_sig.clone(),
-      instantiated_id: sig_id,
-      specificity: usize::MAX,
-      unknown_inferred: 0,
-      rejection: None,
-    };
-
-    let base_arity = analyze_arity(store.as_ref(), &original_sig);
-    if !base_arity.allows(args.len()) {
-      outcome.rejection = Some(CandidateRejection::Arity {
-        min: base_arity.min,
-        max: base_arity.max,
         actual: args.len(),
       });
       outcomes.push(outcome);
@@ -490,23 +180,25 @@ pub fn resolve_construct(
     }
 
     let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
-
-    let merged_substitutions = inference.substitutions.clone();
-
-    let inference_diags: Vec<String> = inference
-      .diagnostics
-      .iter()
-      .map(|d| d.message.clone())
-      .collect();
-
     outcome.unknown_inferred = count_unknown(
       store.as_ref(),
-      &merged_substitutions,
+      &inference.substitutions,
       primitives.any,
       primitives.unknown,
     );
+    if !inference.diagnostics.is_empty() {
+      outcome.rejection = Some(CandidateRejection::Inference(
+        inference
+          .diagnostics
+          .into_iter()
+          .map(|d| d.message)
+          .collect(),
+      ));
+      outcomes.push(outcome);
+      continue;
+    }
 
-    let mut substituter = Substituter::new(Arc::clone(store), merged_substitutions.clone());
+    let mut substituter = Substituter::new(Arc::clone(store), inference.substitutions.clone());
     let instantiated_id = substituter.substitute_signature(&original_sig);
     let instantiated_sig = store.signature(instantiated_id);
 
@@ -517,11 +209,6 @@ pub fn resolve_construct(
         max: arity.max,
         actual: args.len(),
       });
-      outcomes.push(outcome);
-      continue;
-    }
-    if !inference_diags.is_empty() {
-      outcome.rejection = Some(CandidateRejection::Inference(inference_diags));
       outcomes.push(outcome);
       continue;
     }
@@ -549,9 +236,8 @@ pub fn resolve_construct(
       }
     }
 
-    let arg_types = args;
     let (_assignable, specificity, mismatch) =
-      check_arguments(store.as_ref(), relate, &instantiated_sig, &arity, arg_types);
+      check_arguments(store.as_ref(), relate, &instantiated_sig, &arity, args);
     outcome.instantiated_sig = instantiated_sig;
     outcome.instantiated_id = instantiated_id;
     outcome.specificity = specificity;
@@ -637,9 +323,88 @@ pub fn resolve_construct(
   }
 }
 
+fn prune_broader_signatures(store: &TypeStore, sigs: &mut Vec<SignatureId>) {
+  if sigs.len() < 2 {
+    return;
+  }
+  let is_broader = |a: &Signature, b: &Signature| -> bool {
+    let params_equal = a.params.len() == b.params.len()
+      && a
+        .params
+        .iter()
+        .zip(b.params.iter())
+        .all(|(p, other)| p.ty == other.ty);
+    let mut broader = false;
+    for (param, other) in a.params.iter().zip(b.params.iter()) {
+      if param.ty == other.ty {
+        continue;
+      }
+      match store.type_kind(param.ty) {
+        TypeKind::Union(members) => {
+          if members.contains(&other.ty) {
+            broader = true;
+            continue;
+          }
+          broader = false;
+          break;
+        }
+        TypeKind::Any | TypeKind::Unknown => {
+          broader = true;
+          continue;
+        }
+        _ => {
+          broader = false;
+          break;
+        }
+      }
+    }
+    if params_equal && !broader {
+      match store.type_kind(a.ret) {
+        TypeKind::Unknown | TypeKind::Any => {
+          if !matches!(store.type_kind(b.ret), TypeKind::Unknown | TypeKind::Any) {
+            broader = true;
+          }
+        }
+        _ => {}
+      }
+    }
+    if broader {
+      match (store.type_kind(a.ret), store.type_kind(b.ret)) {
+        (TypeKind::Unknown, _) | (TypeKind::Any, _) => true,
+        (ret_a, ret_b) => ret_a == ret_b,
+      }
+    } else {
+      false
+    }
+  };
+  let mut keep = Vec::new();
+  'outer: for (idx, sig_id) in sigs.iter().enumerate() {
+    let sig = store.signature(*sig_id);
+    for (jdx, other_id) in sigs.iter().enumerate() {
+      if idx == jdx {
+        continue;
+      }
+      let other = store.signature(*other_id);
+      if is_broader(&sig, &other) {
+        continue 'outer;
+      }
+    }
+    keep.push(*sig_id);
+  }
+  let mut seen_struct = HashSet::new();
+  keep.retain(|sig_id| {
+    let sig = store.signature(*sig_id);
+    let key: (Vec<TypeId>, TypeId) = (sig.params.iter().map(|p| p.ty).collect(), sig.ret);
+    seen_struct.insert(key)
+  });
+  keep.sort();
+  keep.dedup();
+  *sigs = keep;
+}
+
 fn collect_signatures(
-  store: &Arc<TypeStore>,
-  relate: Option<&RelateCtx<'_>>,
+  store: &TypeStore,
+  expander: Option<&dyn RelateTypeExpander>,
   ty: TypeId,
   out: &mut Vec<SignatureId>,
   seen: &mut HashSet<TypeId>,
@@ -653,39 +418,16 @@ fn collect_signatures(
       let shape = store.shape(store.object(obj).shape);
       out.extend(shape.call_signatures);
     }
+    TypeKind::Union(members) | TypeKind::Intersection(members) => {
+      for member in members {
+        collect_signatures(store, expander, member, out, seen);
+      }
+    }
     TypeKind::Ref { def, args } => {
-      if let Some(relate) = relate {
-        if let Some(expanded) = relate.expand_ref_type(def, &args) {
-          collect_signatures(store, Some(relate), expanded, out, seen);
+      if let Some(expander) = expander {
+        if let Some(expanded) = expander.expand_ref(store, def, &args) {
+          collect_signatures(store, Some(expander), expanded, out, seen);
         }
-      }
-    }
-    TypeKind::Union(members) | TypeKind::Intersection(members) => {
-      for member in members {
-        collect_signatures(store, relate, member, out, seen);
-      }
-    }
-    _ => {}
-  }
-}
-
-fn collect_construct_signatures(
-  store: &TypeStore,
-  ty: TypeId,
-  out: &mut Vec<SignatureId>,
-  seen: &mut HashSet<TypeId>,
-) {
-  if !seen.insert(ty) {
-    return;
-  }
-  match store.type_kind(ty) {
-    TypeKind::Object(obj) => {
-      let shape = store.shape(store.object(obj).shape);
-      out.extend(shape.construct_signatures.iter().copied());
-    }
-    TypeKind::Union(members) | TypeKind::Intersection(members) => {
-      for member in members {
-        collect_construct_signatures(store, member, out, seen);
       }
     }
     _ => {}
@@ -826,6 +568,13 @@ fn check_arguments(
       // Prefer fixed parameters over rest matches when both are applicable.
       specificity += 1;
     }
+    if matches!(store.type_kind(expected.ty), TypeKind::TypeParam(_)) {
+      // Unsolved type parameters are treated like `unknown` for compatibility,
+      // but they should make the candidate less specific than one with a
+      // concrete parameter type.
+      specificity += 2;
+      continue;
+    }
     if matches!(
       (store.type_kind(*arg), store.type_kind(expected.ty)),
       (TypeKind::Any | TypeKind::Unknown, _) | (_, TypeKind::Any | TypeKind::Unknown)
@@ -868,28 +617,6 @@ fn count_unknown(
       **v == any || **v == unknown || matches!(store.type_kind(**v), TypeKind::Infer { .. })
     })
     .count()
-}
-
-fn merge_substitutions(
-  store: &TypeStore,
-  target: &mut HashMap<TypeParamId, TypeId>,
-  incoming: &HashMap<TypeParamId, TypeId>,
-  any: TypeId,
-  unknown: TypeId,
-) {
-  for (key, value) in incoming.iter() {
-    let replace = target
-      .get(key)
-      .map(|existing| {
-        *existing == any
-          || *existing == unknown
-          || matches!(store.type_kind(*existing), TypeKind::Infer { .. })
-      })
-      .unwrap_or(true);
-    if replace {
-      target.insert(*key, *value);
-    }
-  }
 }
 
 fn build_no_match_diagnostic(
@@ -976,6 +703,14 @@ fn format_signature(store: &TypeStore, sig: &Signature) -> String {
         out.push_str(", ");
       }
       out.push_str(&format!("T{}", tp.id.0));
+      if let Some(constraint) = tp.constraint {
+        out.push_str(" extends ");
+        out.push_str(&TypeDisplay::new(store, constraint).to_string());
+      }
+      if let Some(default) = tp.default {
+        out.push_str(" = ");
+        out.push_str(&TypeDisplay::new(store, default).to_string());
+      }
     }
     out.push('>');
   }

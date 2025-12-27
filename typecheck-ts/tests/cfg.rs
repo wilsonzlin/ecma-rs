@@ -30,7 +30,18 @@ fn block_for_stmt(cfg: &ControlFlowGraph, stmt: StmtId) -> BlockId {
     .iter()
     .find(|block| block.stmts.contains(&stmt))
     .map(|block| block.id)
-    .expect("block containing statement")
+    .unwrap_or_else(|| {
+      eprintln!(
+        "missing block for statement {:?}; blocks: {:?}",
+        stmt,
+        cfg
+          .blocks
+          .iter()
+          .map(|block| (block.id, block.stmts.clone(), block.successors.clone()))
+          .collect::<Vec<_>>()
+      );
+      panic!("block containing statement");
+    })
 }
 
 fn update_block_for(cfg: &ControlFlowGraph, header: BlockId) -> BlockId {
@@ -44,7 +55,11 @@ fn update_block_for(cfg: &ControlFlowGraph, header: BlockId) -> BlockId {
   cfg
     .blocks
     .iter()
-    .find(|block| block.id != cfg.entry && block.stmts.is_empty() && block.successors == [header])
+    .find(|block| {
+      block.id != cfg.entry
+        && matches!(block.kind, BlockKind::ForUpdate { .. })
+        && block.successors == [header]
+    })
     .map(|block| block.id)
     .expect("update block")
 }

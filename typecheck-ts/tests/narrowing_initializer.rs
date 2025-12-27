@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use hir_js::lower_from_source;
 use typecheck_ts::{ExprId, FileKey, MemoryHost, Program};
 
 #[test]
@@ -13,7 +12,6 @@ fn narrows_initializer_body() {
 const maybe: { value: string } | null = { value: "ok" } as { value: string } | null;
 const from_init = maybe ? maybe.value : "fallback";
 "#;
-  let lowered = lower_from_source(src).expect("lower");
   host.insert(key.clone(), Arc::from(src));
 
   let program = Program::new(host, vec![key.clone()]);
@@ -23,12 +21,13 @@ const from_init = maybe ? maybe.value : "fallback";
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let body_id = lowered
-    .defs
-    .iter()
+  let file_id = program.file_id(&key).expect("file id for main.ts");
+  let body_id = program
+    .definitions_in_file(file_id)
+    .into_iter()
     .find_map(|def| {
-      (lowered.names.resolve(def.name) == Some("from_init"))
-        .then_some(def.body)
+      (program.def_name(def).as_deref() == Some("from_init"))
+        .then(|| program.body_of_def(def))
         .flatten()
     })
     .expect("initializer body");

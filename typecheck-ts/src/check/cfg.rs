@@ -167,40 +167,39 @@ impl<'a> CfgBuilder<'a> {
     if !preds.is_empty() {
       self.connect(&preds, self.cfg.exit);
     }
-    self.add_exit_shortcuts();
+    self.redirect_trivial_exit_blocks();
     self.cfg
-  }
-
-  /// Add direct edges to the exit block for branches that only flow through an
-  /// empty join node into `exit`. This keeps the false edges of terminal loops
-  /// pointing at `exit` even when an intermediate "after" block is used as a
-  /// join point.
-  fn add_exit_shortcuts(&mut self) {
-    let exit = self.cfg.exit;
-    let mut edges = Vec::new();
-    for (idx, block) in self.cfg.blocks.iter().enumerate() {
-      for succ in block.successors.iter() {
-        if *succ == exit {
-          continue;
-        }
-        if let Some(target) = self.cfg.blocks.get(succ.0) {
-          if target.stmts.is_empty() && target.successors == [exit] {
-            edges.push((BlockId(idx), exit));
-          }
-        }
-      }
-    }
-    for (from, to) in edges {
-      let successors = &mut self.cfg.blocks[from.0].successors;
-      if !successors.contains(&to) {
-        successors.push(to);
-      }
-    }
   }
 
   fn connect(&mut self, from: &[BlockId], to: BlockId) {
     for pred in from {
       self.cfg.add_edge(*pred, to);
+    }
+  }
+
+  fn redirect_trivial_exit_blocks(&mut self) {
+    let exit = self.cfg.exit;
+    let trivial: HashSet<BlockId> = self
+      .cfg
+      .blocks
+      .iter()
+      .filter(|block| {
+        block.id != exit
+          && block.stmts.is_empty()
+          && block.successors.len() == 1
+          && block.successors[0] == exit
+      })
+      .map(|block| block.id)
+      .collect();
+    if trivial.is_empty() {
+      return;
+    }
+    for block in self.cfg.blocks.iter_mut() {
+      for succ in block.successors.iter_mut() {
+        if trivial.contains(succ) {
+          *succ = exit;
+        }
+      }
     }
   }
 
@@ -294,7 +293,16 @@ impl<'a> CfgBuilder<'a> {
         update,
       } => self.build_for(stmt_id, *body, init.clone(), *test, *update, preds, None),
       StmtKind::ForIn { body, .. } => self.build_for_in(stmt_id, *body, preds, None),
-      StmtKind::Block(stmts) => self.build_stmt_list(stmts, preds),
+      StmtKind::Block(stmts) => {
+        if stmts.is_empty() {
+          BuildResult {
+            entry: None,
+            exits: preds,
+          }
+        } else {
+          self.build_stmt_list(stmts, preds)
+        }
+      }
       StmtKind::Try {
         block: inner,
         catch,
@@ -309,6 +317,9 @@ impl<'a> CfgBuilder<'a> {
       StmtKind::Return(_) | StmtKind::Throw(_) => {
         let block = self.add_stmt_block(stmt_id);
         self.connect(&preds, block);
+        if let Some(target) = self.resolve_continue_target(None) {
+          self.cfg.add_edge(block, target);
+        }
         BuildResult {
           entry: Some(block),
           exits: Vec::new(),
@@ -518,7 +529,6 @@ impl<'a> CfgBuilder<'a> {
 
     let test_block = self.add_stmt_block(stmt_id);
     self.cfg.blocks[test_block.0].kind = BlockKind::ForTest { test };
-    self.cfg.blocks[test_block.0].stmts.push(stmt_id);
 
     let update_block = self.cfg.add_block();
     self.cfg.blocks[update_block.0].kind = BlockKind::ForUpdate { update };

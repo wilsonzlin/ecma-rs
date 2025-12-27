@@ -395,6 +395,20 @@ impl<'a> TypeDisplay<'a> {
     let b_kind = self.store.type_kind(b);
     let a_ref = matches!(a_kind, TypeKind::Ref { .. });
     let b_ref = matches!(b_kind, TypeKind::Ref { .. });
+    let rank = |kind: &TypeKind| -> Option<u8> {
+      match kind {
+        TypeKind::Null => Some(0),
+        TypeKind::Number | TypeKind::NumberLiteral(_) => Some(1),
+        TypeKind::BigInt | TypeKind::BigIntLiteral(_) => Some(2),
+        TypeKind::Boolean | TypeKind::BooleanLiteral(_) => Some(3),
+        TypeKind::String | TypeKind::StringLiteral(_) => Some(4),
+        TypeKind::Undefined => Some(5),
+        _ => None,
+      }
+    };
+    if let (Some(a_rank), Some(b_rank)) = (rank(&a_kind), rank(&b_kind)) {
+      return a_rank.cmp(&b_rank);
+    }
     let a_nullish = matches!(a_kind, TypeKind::Null | TypeKind::Undefined);
     let b_nullish = matches!(b_kind, TypeKind::Null | TypeKind::Undefined);
     if a_ref && b_nullish {

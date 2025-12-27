@@ -112,7 +112,28 @@ fn value_and_namespace_merge_callable_and_members() {
     .into_iter()
     .find(|d| program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_some())
     .expect("foo definition");
+  let ns_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d) == Some("foo".to_string()) && program.body_of_def(*d).is_none())
+    .expect("foo namespace");
   let ty = program.type_of_def(def);
+  println!(
+    "value interned kind: {:?}",
+    program.interned_type_kind(program.type_of_def_interned(def))
+  );
+  println!(
+    "namespace interned kind: {:?}",
+    program.interned_type_kind(program.type_of_def_interned(ns_def))
+  );
+  println!(
+    "value props: {:?}",
+    program.properties_of(program.type_of_def_interned(def))
+  );
+  println!(
+    "namespace props: {:?}",
+    program.properties_of(program.type_of_def_interned(ns_def))
+  );
   let rendered = program.display_type(ty).to_string();
   assert!(
     rendered.contains("() =>"),

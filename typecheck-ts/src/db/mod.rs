@@ -15,35 +15,28 @@ use crate::FileKey;
 use crate::{BodyCheckResult, BodyId, DefId};
 use diagnostics::{Diagnostic, FileId};
 use salsa::Setter;
-pub mod cache;
-pub mod decl;
+
 pub mod expander;
 mod inputs;
 pub mod queries;
 pub(crate) mod spans;
 pub mod symbols;
-pub mod types;
 
-#[allow(unused_imports)]
 pub use inputs::CancellationToken;
 pub use queries::body_check::{
-  parallel_guard, parallel_tracker_active, set_parallel_tracker, BodyCheckContext, BodyCheckDb,
-  BodyInfo, ParallelTracker,
+  set_parallel_tracker, BodyCheckContext, BodyCheckDb, BodyInfo, ParallelTracker,
 };
 pub use queries::{
   aggregate_diagnostics, aggregate_program_diagnostics, all_files, body_file, body_parent,
-  body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, decl_type,
-  decl_types_in_file, def_file, def_to_file, expr_at, file_kind, file_span_index, file_text,
-  global_bindings, local_symbol_info, lower_hir, module_dep_diagnostics, module_deps,
-  module_resolve, module_specifiers, parse, parse_query_count, program_diagnostics,
-  reachable_files, reset_parse_query_count, roots, sem_hir, span_of_def, span_of_expr,
-  symbol_occurrences, ts_semantics, type_at, type_params, type_store,
-  unresolved_module_diagnostics, var_initializer, DeclInfo, DeclKind, GlobalBindingsDb,
-  Initializer, LowerResultWithDiagnostics, TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase,
-  VarInit,
+  body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, def_file,
+  def_to_file, expr_at, file_kind, file_span_index, file_text, global_bindings, local_symbol_info,
+  lower_hir, module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse,
+  parse_query_count, program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir,
+  span_of_def, span_of_expr, symbol_occurrences, ts_semantics, type_at, var_initializer, DeclInfo,
+  DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore,
+  TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;
-pub use types::{DeclTypes, SharedDeclTypes, SharedTypeStore};
 
 pub trait TypecheckDatabase: Db {}
 impl TypecheckDatabase for Database {}
@@ -95,7 +88,7 @@ pub struct Database {
   module_resolutions: BTreeMap<ModuleKey, inputs::ModuleResolutionInput>,
   extra_diagnostics: Option<inputs::ExtraDiagnosticsInput>,
   profiler: Option<QueryStatsCollector>,
-  body_results: BTreeMap<BodyId, Arc<BodyCheckResult>>,
+  body_results: BTreeMap<BodyId, inputs::BodyResultInput>,
 }
 
 impl Default for Database {
@@ -185,7 +178,10 @@ impl Db for Database {
   }
 
   fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>> {
-    self.body_results.get(&body).cloned()
+    self
+      .body_results
+      .get(&body)
+      .map(|input| input.result(self).clone())
   }
 }
 
@@ -323,6 +319,14 @@ impl Database {
     }
   }
 
+  pub fn set_extra_diagnostics(&mut self, diagnostics: Arc<[Diagnostic]>) {
+    if let Some(existing) = self.extra_diagnostics {
+      existing.set_diagnostics(self).to(diagnostics);
+    } else {
+      self.extra_diagnostics = Some(inputs::ExtraDiagnosticsInput::new(self, diagnostics));
+    }
+  }
+
   pub fn parse(&self, file: FileId) -> crate::queries::parse::ParseResult {
     queries::parse(self, file)
   }
@@ -347,18 +351,6 @@ impl Database {
     queries::module_dep_diagnostics(self, file)
   }
 
-  pub fn unresolved_module_diagnostics(&self, file: FileId) -> Arc<[diagnostics::Diagnostic]> {
-    queries::module_dep_diagnostics(self, file)
-  }
-
-  pub fn set_extra_diagnostics(&mut self, diagnostics: Arc<[Diagnostic]>) {
-    if let Some(existing) = self.extra_diagnostics {
-      existing.set_diagnostics(self).to(diagnostics);
-    } else {
-      self.extra_diagnostics = Some(inputs::ExtraDiagnosticsInput::new(self, diagnostics));
-    }
-  }
-
   pub fn reachable_files(&self) -> Arc<Vec<FileId>> {
     queries::reachable_files(self)
   }
@@ -377,7 +369,13 @@ impl Database {
 
   /// Cache a checked body result for reuse by span and type queries.
   pub fn set_body_result(&mut self, body: BodyId, result: Arc<BodyCheckResult>) {
-    self.body_results.insert(body, result);
+    if let Some(existing) = self.body_results.get(&body).copied() {
+      existing.set_body(self).to(body);
+      existing.set_result(self).to(result);
+    } else {
+      let input = inputs::BodyResultInput::new(self, body, result);
+      self.body_results.insert(body, input);
+    }
   }
 
   pub fn def_to_file(&self) -> Arc<BTreeMap<DefId, FileId>> {

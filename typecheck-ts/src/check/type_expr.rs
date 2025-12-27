@@ -741,7 +741,13 @@ impl TypeLowerer {
       parameter: pred.stx.parameter_name.clone(),
       ty: asserted,
     });
-    self.store.primitive_ids().boolean
+    let param = (!pred.stx.parameter_name.is_empty())
+      .then(|| self.store.intern_name(pred.stx.parameter_name.clone()));
+    self.store.intern_type(TypeKind::Predicate {
+      parameter: param,
+      asserted,
+      asserts: pred.stx.asserts,
+    })
   }
 
   fn lower_type_arguments(&mut self, args: &Option<Vec<Node<TypeExpr>>>) -> Vec<TypeId> {

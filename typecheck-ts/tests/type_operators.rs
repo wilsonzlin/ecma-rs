@@ -121,7 +121,7 @@ fn eval_indexed_access_with_union_key() {
   let evaluated = store.evaluate(ty);
   assert_eq!(
     store.display(evaluated).to_string(),
-    "undefined | number | string"
+    "number | string | undefined"
   );
 }
 
@@ -207,7 +207,24 @@ fn captures_type_predicate_details() {
     panic!("expected callable, got {:?}", store.type_kind(ty));
   };
   let sig = store.signature(overloads[0]);
-  assert!(matches!(store.type_kind(sig.ret), TypeKind::Boolean));
+  match store.type_kind(sig.ret) {
+    TypeKind::Predicate {
+      asserted,
+      asserts,
+      parameter,
+    } => {
+      assert_eq!(
+        parameter.map(|id| store.name(id)),
+        Some("value".to_string())
+      );
+      assert!(!asserts);
+      let Some(asserted) = asserted else {
+        panic!("expected asserted type");
+      };
+      assert!(matches!(store.type_kind(asserted), TypeKind::String));
+    }
+    other => panic!("expected predicate, got {:?}", other),
+  }
 
   let preds: Vec<LoweredPredicate> = lowerer.predicates().to_vec();
   assert_eq!(preds.len(), 1);

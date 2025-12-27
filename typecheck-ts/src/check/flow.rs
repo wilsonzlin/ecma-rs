@@ -2,30 +2,47 @@
 
 use std::collections::{HashMap, HashSet};
 
-use semantic_js::ts::SymbolId;
+use hir_js::NameId;
 use types_ts_interned::{TypeId, TypeStore};
 
-/// Stable identifier for a flow binding, derived from locals semantics.
-pub type FlowBindingId = SymbolId;
+use super::flow_bindings::FlowBindingId;
 use super::flow_narrow::Facts;
 
-/// Path segment for an object/property access tracked during flow analysis.
+/// Unique key for a flow-tracked binding, distinguishing shadowed locals even
+/// when they share the same name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BindingKey {
+  Symbol(FlowBindingId),
+  External(NameId),
+}
+
+impl BindingKey {
+  pub fn name(self) -> Option<NameId> {
+    match self {
+      BindingKey::External(name) => Some(name),
+      BindingKey::Symbol(_) => None,
+    }
+  }
+}
+
+/// Segment within an access path (currently limited to static property keys).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PathSegment {
   String(String),
   Number(String),
 }
 
-/// Stable key representing a binding and optional property path.
+/// Canonical key for flow facts and environment entries. Tracks a root local and
+/// zero or more property segments (e.g. `x`, `x.kind`, `x.meta.kind`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FlowKey {
-  pub root: FlowBindingId,
+  pub root: BindingKey,
   pub segments: Vec<PathSegment>,
 }
 
 impl FlowKey {
-  pub fn root(root: FlowBindingId) -> Self {
-    FlowKey {
+  pub fn root(root: BindingKey) -> Self {
+    Self {
       root,
       segments: Vec::new(),
     }
@@ -40,117 +57,159 @@ impl FlowKey {
     }
   }
 
-  fn is_prefix_of(&self, other: &FlowKey) -> bool {
+  /// Returns true if `self` is a prefix (including exact match) of `other`.
+  pub fn is_prefix_of(&self, other: &FlowKey) -> bool {
     self.root == other.root && other.segments.starts_with(&self.segments)
   }
 }
 
-/// Flow-tracked state for a particular binding path.
-#[derive(Clone, Copy, Debug)]
-pub struct PathState {
-  pub ty: TypeId,
-  pub assigned: bool,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitState {
+  Unassigned,
+  MaybeAssigned,
+  Assigned,
+}
+
+impl InitState {
+  pub fn join(self, other: InitState) -> InitState {
+    match (self, other) {
+      (InitState::Assigned, InitState::Assigned) => InitState::Assigned,
+      (InitState::Unassigned, InitState::Unassigned) => InitState::Unassigned,
+      _ => InitState::MaybeAssigned,
+    }
+  }
 }
 
 /// Per-point variable environment used during flow-sensitive checks.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Env {
-  unknown: TypeId,
-  paths: HashMap<FlowKey, PathState>,
+  vars: HashMap<FlowKey, TypeId>,
+  init: HashMap<BindingKey, InitState>,
 }
 
 impl Env {
-  pub fn new(unknown: TypeId) -> Self {
+  pub fn new() -> Self {
     Env {
-      unknown,
-      paths: HashMap::new(),
+      vars: HashMap::new(),
+      init: HashMap::new(),
     }
   }
 
-  pub fn with_initial(initial: &HashMap<FlowBindingId, TypeId>, unknown: TypeId) -> Self {
-    let mut env = Env::new(unknown);
-    for (binding, ty) in initial {
-      env.set_var_with_assigned(*binding, *ty, true);
+  pub fn with_initial(initial: &HashMap<BindingKey, TypeId>) -> Self {
+    let mut env = Env::new();
+    for (key, ty) in initial.iter() {
+      env.vars.insert(FlowKey::root(*key), *ty);
+      env.init.insert(*key, InitState::Assigned);
     }
     env
   }
 
-  pub fn get_path_state(&self, key: &FlowKey) -> Option<PathState> {
-    self.paths.get(key).copied()
+  pub fn get_var(&self, name: BindingKey) -> Option<TypeId> {
+    self.get_path(&FlowKey::root(name))
   }
 
-  pub fn get_path(&self, key: &FlowKey) -> Option<TypeId> {
-    self.get_path_state(key).map(|s| s.ty)
+  pub fn set_var(&mut self, name: BindingKey, ty: TypeId) {
+    let key = FlowKey::root(name);
+    self.invalidate_prefix(&key);
+    self.vars.insert(key, ty);
   }
 
-  pub fn set_var(&mut self, binding: FlowBindingId, ty: TypeId) {
-    self.set_var_with_assigned(binding, ty, true);
+  pub fn get_path(&self, path: &FlowKey) -> Option<TypeId> {
+    self.vars.get(path).copied()
   }
 
-  pub fn set_var_with_assigned(&mut self, binding: FlowBindingId, ty: TypeId, assigned: bool) {
+  pub fn get(&self, name: BindingKey) -> Option<TypeId> {
+    self.get_var(name)
+  }
+
+  pub fn set(&mut self, name: BindingKey, ty: TypeId) {
+    self.set_var(name, ty);
+  }
+
+  pub fn set_path(&mut self, path: FlowKey, ty: TypeId) {
+    self.invalidate_prefix(&path);
+    self.vars.insert(path, ty);
+  }
+
+  pub fn invalidate_prefix(&mut self, prefix: &FlowKey) {
+    self.vars.retain(|key, _| !prefix.is_prefix_of(key));
+  }
+
+  pub fn invalidate_all(&mut self) {
+    self.vars.clear();
+  }
+
+  /// Remove any tracked information for a variable, clearing previous narrowings.
+  pub fn invalidate(&mut self, name: BindingKey) {
+    self.invalidate_prefix(&FlowKey::root(name));
+  }
+
+  /// Clear any tracked property narrowings rooted at `name`. Currently there are
+  /// no separate property entries, but this hook is used to invalidate access
+  /// paths when writes occur.
+  pub fn clear_properties_of(&mut self, name: BindingKey) {
     self
-      .paths
-      .insert(FlowKey::root(binding), PathState { ty, assigned });
+      .vars
+      .retain(|key, _| key.root != name || key.segments.is_empty());
   }
 
-  pub fn set_path(&mut self, key: FlowKey, ty: TypeId) {
-    self.set_path_with_assigned(key, ty, true);
+  /// Clear all tracked property-specific narrowings.
+  pub fn clear_all_properties(&mut self) {
+    self.vars.retain(|key, _| key.segments.is_empty());
   }
 
-  pub fn set_path_with_assigned(&mut self, key: FlowKey, ty: TypeId, assigned: bool) {
-    self.paths.insert(key, PathState { ty, assigned });
+  pub fn mark_assigned(&mut self, name: NameId) {
+    self
+      .init
+      .insert(BindingKey::External(name), InitState::Assigned);
+  }
+
+  pub fn mark_unassigned(&mut self, name: NameId) {
+    self
+      .init
+      .insert(BindingKey::External(name), InitState::Unassigned);
+  }
+
+  pub fn set_init_state(&mut self, key: BindingKey, state: InitState) {
+    self.init.insert(key, state);
+  }
+
+  pub fn init_state(&self, key: BindingKey) -> InitState {
+    self
+      .init
+      .get(&key)
+      .copied()
+      .unwrap_or(InitState::Unassigned)
   }
 
   pub fn apply_facts(&mut self, facts: &Facts) {
-    for (key, ty) in facts.truthy.iter().chain(facts.assertions.iter()) {
-      self.paths.insert(
-        key.clone(),
-        PathState {
-          ty: *ty,
-          assigned: true,
-        },
-      );
+    for (name, ty) in facts.truthy.iter() {
+      self.vars.insert(name.clone(), *ty);
+    }
+    for (name, ty) in facts.assertions.iter() {
+      self.vars.insert(name.clone(), *ty);
     }
   }
 
   /// Apply falsy-directed facts to the environment, also honoring assertions
   /// that hold regardless of branch.
   pub fn apply_falsy(&mut self, facts: &Facts) {
-    for (key, ty) in facts.falsy.iter().chain(facts.assertions.iter()) {
-      self.paths.insert(
-        key.clone(),
-        PathState {
-          ty: *ty,
-          assigned: true,
-        },
-      );
+    for (name, ty) in facts.falsy.iter() {
+      self.vars.insert(name.clone(), *ty);
+    }
+    for (name, ty) in facts.assertions.iter() {
+      self.vars.insert(name.clone(), *ty);
     }
   }
 
   pub fn apply_map(&mut self, facts: &HashMap<FlowKey, TypeId>) {
-    for (key, ty) in facts.iter() {
-      self.paths.insert(
-        key.clone(),
-        PathState {
-          ty: *ty,
-          assigned: true,
-        },
-      );
+    for (name, ty) in facts.iter() {
+      self.vars.insert(name.clone(), *ty);
     }
   }
 
-  pub fn invalidate_prefix(&mut self, key: &FlowKey) {
-    for (path, state) in self.paths.iter_mut() {
-      if key.is_prefix_of(path) {
-        state.ty = self.unknown;
-      }
-    }
-  }
-
-  pub fn invalidate_all(&mut self) {
-    for state in self.paths.values_mut() {
-      state.ty = self.unknown;
-    }
+  pub fn merge(&mut self, other: &Env, store: &TypeStore) {
+    self.merge_from(other, store);
   }
 
   /// Join another environment into this one, returning whether any mapping
@@ -158,45 +217,40 @@ impl Env {
   /// reaching flows.
   pub fn merge_from(&mut self, other: &Env, store: &TypeStore) -> bool {
     let mut changed = false;
-    let mut keys: HashSet<FlowKey> = self.paths.keys().cloned().collect();
-    keys.extend(other.paths.keys().cloned());
-
-    for key in keys {
-      let left = self.paths.get(&key).copied().unwrap_or(PathState {
-        ty: self.unknown,
-        assigned: false,
-      });
-      let right = other.paths.get(&key).copied().unwrap_or(PathState {
-        ty: other.unknown,
-        assigned: false,
-      });
-      let merged_ty = store.union(vec![left.ty, right.ty]);
-      let merged_assigned = left.assigned && right.assigned;
-      match self.paths.get_mut(&key) {
-        Some(state) => {
-          if state.ty != merged_ty || state.assigned != merged_assigned {
-            state.ty = merged_ty;
-            state.assigned = merged_assigned;
+    for (name, ty) in other.vars.iter() {
+      match self.vars.get_mut(name) {
+        Some(existing) => {
+          let next = store.union(vec![*existing, *ty]);
+          if next != *existing {
+            *existing = next;
             changed = true;
           }
         }
         None => {
-          self.paths.insert(
-            key,
-            PathState {
-              ty: merged_ty,
-              assigned: merged_assigned,
-            },
-          );
+          self.vars.insert(name.clone(), *ty);
           changed = true;
         }
       }
     }
-
+    let mut all_keys: HashSet<BindingKey> = self.init.keys().copied().collect();
+    all_keys.extend(other.init.keys().copied());
+    for key in all_keys {
+      let left = self
+        .init
+        .get(&key)
+        .copied()
+        .unwrap_or(InitState::Unassigned);
+      let right = other
+        .init
+        .get(&key)
+        .copied()
+        .unwrap_or(InitState::Unassigned);
+      let joined = left.join(right);
+      if left != joined {
+        self.init.insert(key, joined);
+        changed = true;
+      }
+    }
     changed
-  }
-
-  pub fn merge(&mut self, other: &Env, store: &TypeStore) {
-    self.merge_from(other, store);
   }
 }
