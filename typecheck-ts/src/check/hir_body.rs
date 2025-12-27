@@ -2452,13 +2452,23 @@ impl<'a> FlowBodyChecker<'a> {
           }
           return outgoing;
         }
-        StmtKind::ForIn { left, right, .. } => {
+        StmtKind::ForIn {
+          left,
+          right,
+          is_for_of,
+          ..
+        } => {
           let right_ty = self.eval_expr(*right, &mut env).0;
+          let iter_ty = if *is_for_of {
+            self.iterable_element_type(right_ty)
+          } else {
+            self.for_in_key_type(right_ty)
+          };
           match left {
-            ForHead::Pat(pat) => self.assign_pat(*pat, right_ty, &mut env),
+            ForHead::Pat(pat) => self.assign_pat(*pat, iter_ty, &mut env),
             ForHead::Var(var) => {
               for declarator in var.declarators.iter() {
-                self.bind_pat(declarator.pat, right_ty, &mut env);
+                self.bind_pat(declarator.pat, iter_ty, &mut env);
               }
             }
           }
@@ -2547,6 +2557,54 @@ impl<'a> FlowBodyChecker<'a> {
       outgoing.extend(block.successors.iter().map(|succ| (*succ, env.clone())));
     }
     outgoing
+  }
+
+  fn iterable_element_type(&self, ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::Array { ty, .. } => ty,
+      TypeKind::Tuple(elems) => {
+        let elem_tys: Vec<_> = elems.into_iter().map(|e| e.ty).collect();
+        if elem_tys.is_empty() {
+          prim.unknown
+        } else {
+          self.store.union(elem_tys)
+        }
+      }
+      TypeKind::Union(members) => {
+        let elem_tys: Vec<_> = members
+          .into_iter()
+          .map(|member| self.iterable_element_type(member))
+          .collect();
+        if elem_tys.is_empty() {
+          prim.unknown
+        } else {
+          self.store.union(elem_tys)
+        }
+      }
+      _ => prim.unknown,
+    }
+  }
+
+  fn for_in_key_type(&self, ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::Array { .. } | TypeKind::Tuple(_) => {
+        self.store.union(vec![prim.string, prim.number])
+      }
+      TypeKind::Union(members) => {
+        let key_tys: Vec<_> = members
+          .into_iter()
+          .map(|member| self.for_in_key_type(member))
+          .collect();
+        if key_tys.is_empty() {
+          prim.string
+        } else {
+          self.store.union(key_tys)
+        }
+      }
+      _ => prim.string,
+    }
   }
 
   fn record_return(&mut self, stmt: StmtId, ty: TypeId) {

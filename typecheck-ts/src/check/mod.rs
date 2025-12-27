@@ -1,7 +1,7 @@
 //! Internal helpers for type inference, flow analysis, and generic instantiation.
 
 pub mod caches;
-pub(super) mod cfg;
+pub mod cfg;
 pub(crate) mod decls;
 pub(crate) mod expr;
 pub(super) mod flow;

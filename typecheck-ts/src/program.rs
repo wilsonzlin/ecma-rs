@@ -538,6 +538,14 @@ impl Program {
     }
   }
 
+  /// Files reachable from the program roots, including dependencies.
+  pub fn reachable_files(&self) -> Vec<FileId> {
+    match self.with_analyzed_state(|state| Ok((*state.typecheck_db.reachable_files()).clone())) {
+      Ok(files) => files,
+      Err(_) => Vec::new(),
+    }
+  }
+
   /// Parse, bind, and type-check all known files, returning accumulated diagnostics.
   pub fn check(&self) -> Vec<Diagnostic> {
     match self.check_fallible() {

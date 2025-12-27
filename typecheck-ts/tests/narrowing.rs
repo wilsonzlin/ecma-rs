@@ -1022,6 +1022,67 @@ function f(x?: string, y: string) {
 }
 
 #[test]
+fn for_of_binds_element_type() {
+  let src = r#"
+function f(xs: string[]) {
+  for (const x of xs) {
+    return x;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let xs_ty = store.intern_type(TypeKind::Array {
+    ty: prim.string,
+    readonly: false,
+  });
+  initial.insert(name_id(lowered.names.as_ref(), "xs"), xs_ty);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ty, "string");
+}
+
+#[test]
+fn for_in_uses_key_type() {
+  let src = r#"
+function g(obj: { a: number }) {
+  for (const k in obj) {
+    return k;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "g");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let obj_ty = obj_type(&store, &[("a", prim.number)]);
+  initial.insert(name_id(lowered.names.as_ref(), "obj"), obj_ty);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ty, "string");
+}
+
+#[test]
 fn nullish_coalescing_refines_result_type() {
   let src = r#"function f(x: string | null) { const y = x ?? ""; return y; }"#;
   let lowered = lower_from_source(src).expect("lower");
