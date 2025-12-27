@@ -132,6 +132,7 @@
 //! cache and share results without relying on implementation details.
 
 mod api;
+mod class_typing;
 pub mod codes;
 #[doc(hidden)]
 pub mod db;

@@ -357,9 +357,17 @@ impl TypeLowerer {
   }
 
   fn lower_object_type(&mut self, obj: &Node<TypeObjectLiteral>) -> TypeId {
+    let shape = self.lower_type_members(&obj.stx.members);
+    let shape = self.store.intern_shape(shape);
+    let obj = self.store.intern_object(ObjectType { shape });
+    self.store.intern_type(TypeKind::Object(obj))
+  }
+
+  /// Lower a list of [`TypeMember`] nodes into an object [`Shape`].
+  pub fn lower_type_members(&mut self, members: &[Node<TypeMember>]) -> Shape {
     let mut shape = Shape::new();
 
-    for member in obj.stx.members.iter() {
+    for member in members.iter() {
       match member.stx.as_ref() {
         TypeMember::Property(prop) => {
           if let Some((key, data)) = self.lower_property(prop) {
@@ -433,13 +441,76 @@ impl TypeLowerer {
             readonly: idx.stx.readonly,
           });
         }
-        _ => {}
+        TypeMember::GetAccessor(get) => {
+          let key = match &get.stx.key {
+            TypePropertyKey::Identifier(id) | TypePropertyKey::String(id) => {
+              PropKey::String(self.store.intern_name(id.clone()))
+            }
+            TypePropertyKey::Number(num) => match num.parse::<i64>() {
+              Ok(value) => PropKey::Number(value),
+              Err(_) => continue,
+            },
+            TypePropertyKey::Computed(_) => continue,
+          };
+          let ty = get
+            .stx
+            .return_type
+            .as_ref()
+            .map(|t| self.lower_type_expr(t))
+            .unwrap_or(self.store.primitive_ids().unknown);
+          shape.properties.push(Property {
+            key,
+            data: PropData {
+              ty,
+              optional: false,
+              readonly: true,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+        TypeMember::SetAccessor(set) => {
+          let key = match &set.stx.key {
+            TypePropertyKey::Identifier(id) | TypePropertyKey::String(id) => {
+              PropKey::String(self.store.intern_name(id.clone()))
+            }
+            TypePropertyKey::Number(num) => match num.parse::<i64>() {
+              Ok(value) => PropKey::Number(value),
+              Err(_) => continue,
+            },
+            TypePropertyKey::Computed(_) => continue,
+          };
+          let (this_param, mut params) =
+            self.lower_params(std::slice::from_ref(&set.stx.parameter));
+          let ty = params
+            .get(0)
+            .map(|p| p.ty)
+            .unwrap_or(self.store.primitive_ids().unknown);
+          let optional = params.get(0).map(|p| p.optional).unwrap_or(false);
+          // Setter parameters should not contribute a `this` parameter.
+          if this_param.is_some() && !params.is_empty() {
+            params.remove(0);
+          }
+          shape.properties.push(Property {
+            key,
+            data: PropData {
+              ty,
+              optional,
+              readonly: false,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+        TypeMember::MappedProperty(_) => {}
       }
     }
 
-    let shape = self.store.intern_shape(shape);
-    let obj = self.store.intern_object(ObjectType { shape });
-    self.store.intern_type(TypeKind::Object(obj))
+    shape
   }
 
   fn lower_property(&mut self, prop: &Node<TypePropertySignature>) -> Option<(PropKey, PropData)> {

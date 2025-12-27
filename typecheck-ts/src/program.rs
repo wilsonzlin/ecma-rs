@@ -37,6 +37,7 @@ use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::check::hir_body::FlowBindingId;
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
+use crate::class_typing;
 use crate::codes;
 use crate::db::queries::{var_initializer_in_file, VarInit};
 use crate::db::{self, BodyCheckContext, BodyCheckDb, BodyInfo, GlobalBindingsDb};
@@ -3614,9 +3615,6 @@ impl ProgramState {
     sorted_roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     self
       .typecheck_db
-      .set_roots(Arc::<[FileKey]>::from(sorted_roots));
-    self
-      .typecheck_db
       .set_compiler_options(self.compiler_options.clone());
     self
       .typecheck_db
@@ -3631,6 +3629,17 @@ impl ProgramState {
       .iter()
       .map(|key| self.intern_file_key(key.clone(), FileOrigin::Source))
       .collect();
+    for file in root_ids.iter().copied() {
+      let file_key = self
+        .file_key_for_id(file)
+        .expect("file id should map to key after interning");
+      let file_kind = *self
+        .file_kinds
+        .entry(file)
+        .or_insert_with(|| host.file_kind(&file_key));
+      let text = self.load_text(file, host)?;
+      self.set_salsa_inputs(file, file_kind, text);
+    }
     root_ids.sort_by_key(|id| id.0);
     self.root_ids = root_ids.clone();
     self.sync_typecheck_roots();
@@ -3654,6 +3663,7 @@ impl ProgramState {
         .or_insert_with(|| host.file_kind(&file_key));
       let file_kind = *self.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
       let text = self.load_text(file, host)?;
+      self.set_salsa_inputs(file, file_kind, Arc::clone(&text));
       let parse_span = QuerySpan::enter(
         QueryKind::Parse,
         query_span!(
@@ -3811,7 +3821,48 @@ impl ProgramState {
       }
     }
 
-    self.collect_function_decl_types(&store, &def_by_name, &mut def_types, &mut type_params);
+    for (file, lowered) in lowered_entries.iter() {
+      self.check_cancelled()?;
+      let Some(ast) = self.asts.get(file).cloned() else {
+        continue;
+      };
+      let class_infos = class_typing::type_classes_in_file(
+        Arc::clone(&store),
+        &ast,
+        lowered,
+        *file,
+        &flat_defs,
+        &mut self.diagnostics,
+      );
+      for class in class_infos {
+        let ty = if let Some(existing) = def_types.get(&class.def) {
+          ProgramState::merge_interned_decl_types(&store, *existing, class.instance)
+        } else {
+          class.instance
+        };
+        def_types.insert(class.def, ty);
+        if !class.type_params.is_empty() {
+          type_params.insert(class.def, class.type_params);
+        }
+        let legacy = self.import_interned_type(class.instance);
+        self.def_types.insert(class.def, legacy);
+        if let (Some(name), Some(def_data)) = (class.name.as_ref(), self.def_data.get(&class.def)) {
+          if let Some(file_state) = self.files.get_mut(&def_data.file) {
+            file_state.bindings.insert(
+              name.clone(),
+              SymbolBinding {
+                symbol: def_data.symbol,
+                def: Some(class.def),
+                type_id: Some(legacy),
+              },
+            );
+          }
+        }
+      }
+    }
+
+    self.collect_function_decl_types(&store, &flat_defs, &mut def_types, &mut type_params);
+    self.collect_var_decl_types(&store, &flat_defs, &mut def_types);
 
     let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
     for (file, lowered) in lowered_entries.into_iter() {
@@ -3908,6 +3959,27 @@ impl ProgramState {
     self.interned_store = Some(store);
     self.interned_def_types = def_types;
     self.interned_type_params = type_params;
+    self.body_results.clear();
+    for (def, interned_ty) in self.interned_def_types.clone() {
+      let legacy_ty = self
+        .def_types
+        .get(&def)
+        .copied()
+        .unwrap_or_else(|| self.import_interned_type(interned_ty));
+      self.def_types.entry(def).or_insert(legacy_ty);
+      if let Some(def_data) = self.def_data.get(&def) {
+        if let Some(file_state) = self.files.get_mut(&def_data.file) {
+          if let Some(binding) = file_state.bindings.get_mut(&def_data.name) {
+            let needs_type = binding.type_id.map_or(true, |ty| {
+              matches!(self.type_store.kind(ty), TypeKind::Unknown)
+            });
+            if needs_type {
+              binding.type_id = Some(legacy_ty);
+            }
+          }
+        }
+      }
+    }
     self.merge_callable_overload_types();
     self.merge_namespace_value_types()?;
     self.recompute_global_bindings();
@@ -3948,7 +4020,8 @@ impl ProgramState {
     let mut sigs_by_name: HashMap<(FileId, String), Vec<tti::SignatureId>> = HashMap::new();
     let mut def_type_params: HashMap<DefId, Vec<TypeParamId>> = HashMap::new();
     for (file, ast) in ast_entries.into_iter() {
-      let resolver = Arc::new(DeclTypeResolver::new(file, Arc::clone(&resolver_defs)));
+      let resolver: Arc<dyn TypeResolver> =
+        Arc::new(DeclTypeResolver::new(file, Arc::clone(&resolver_defs)));
       for stmt in ast.stx.body.iter() {
         let Stmt::FunctionDecl(func) = stmt.stx.as_ref() else {
           continue;
@@ -3997,6 +4070,55 @@ impl ProgramState {
           {
             type_params.entry(*def_id).or_insert(params);
           }
+        }
+      }
+    }
+  }
+
+  fn collect_var_decl_types(
+    &mut self,
+    store: &Arc<tti::TypeStore>,
+    def_by_name: &HashMap<(FileId, String), DefId>,
+    def_types: &mut HashMap<DefId, tti::TypeId>,
+  ) {
+    if self.asts.is_empty() {
+      return;
+    }
+    let resolver_defs = Arc::new(def_by_name.clone());
+    let mut def_by_span: HashMap<(FileId, TextRange), DefId> = HashMap::new();
+    for (def_id, data) in self.def_data.iter() {
+      if !matches!(data.kind, DefKind::Var(_)) {
+        continue;
+      }
+      def_by_span.insert((data.file, data.span), *def_id);
+    }
+
+    let mut ast_entries: Vec<_> = self
+      .asts
+      .iter()
+      .map(|(file, ast)| (*file, Arc::clone(ast)))
+      .collect();
+    ast_entries.sort_by_key(|(file, _)| file.0);
+    for (file, ast) in ast_entries.into_iter() {
+      let resolver: Arc<dyn TypeResolver> =
+        Arc::new(DeclTypeResolver::new(file, Arc::clone(&resolver_defs)));
+      for stmt in ast.stx.body.iter() {
+        let Stmt::VarDecl(var) = stmt.stx.as_ref() else {
+          continue;
+        };
+        for declarator in var.stx.declarators.iter() {
+          let Some(annotation) = declarator.type_annotation.as_ref() else {
+            continue;
+          };
+          let span = loc_to_span(file, declarator.pattern.loc).range;
+          let Some(def_id) = def_by_span.get(&(file, span)).copied() else {
+            continue;
+          };
+          let mut lowerer = TypeLowerer::with_resolver(Arc::clone(store), Arc::clone(&resolver));
+          lowerer.set_file(file);
+          let ty = lowerer.lower_type_expr(annotation);
+          def_types.insert(def_id, ty);
+          self.diagnostics.extend(lowerer.take_diagnostics());
         }
       }
     }
@@ -6565,17 +6687,19 @@ impl ProgramState {
     let mut bindings: HashMap<String, TypeId> = HashMap::new();
     let mut binding_defs: HashMap<String, DefId> = HashMap::new();
     let mut convert_cache = HashMap::new();
-    let map_def_ty = |state: &ProgramState,
+    let map_def_ty = |state: &mut ProgramState,
                       store: &Arc<tti::TypeStore>,
                       cache: &mut HashMap<TypeId, tti::TypeId>,
                       def: DefId| {
-      state.interned_def_types.get(&def).copied().or_else(|| {
-        state
-          .def_types
-          .get(&def)
-          .copied()
-          .map(|ty| store.canon(convert_type_for_display(ty, state, store, cache)))
-      })
+      if let Some(existing) = state.interned_def_types.get(&def).copied() {
+        return Some(existing);
+      }
+      let Some(store_ty) = state.def_types.get(&def).copied() else {
+        return None;
+      };
+      let interned = store.canon(convert_type_for_display(store_ty, state, store, cache));
+      state.interned_def_types.insert(def, interned);
+      Some(interned)
     };
     let global_binding_entries: Vec<_> = self
       .global_bindings
@@ -7223,11 +7347,24 @@ impl ProgramState {
       self.current_file = prev_file;
       return Ok(self.builtin.any);
     }
+    let mut root_keys: Vec<FileKey> = self
+      .root_ids
+      .iter()
+      .filter_map(|id| self.file_key_for_id(*id))
+      .collect();
+    root_keys.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    root_keys.dedup();
+    let host = Arc::clone(&self.host);
+    self.type_stack.push(def);
+    if let Err(err) = self.ensure_interned_types(&host, &root_keys) {
+      self.type_stack.pop();
+      self.current_file = prev_file;
+      return Err(err);
+    }
     let ns_entry = self
       .namespace_object_types
       .get(&(def_data.file, def_data.name.clone()))
       .copied();
-    self.type_stack.push(def);
     let result = (|| -> Result<TypeId, FatalError> {
       self.check_cancelled()?;
       let ty = match def_data.kind.clone() {

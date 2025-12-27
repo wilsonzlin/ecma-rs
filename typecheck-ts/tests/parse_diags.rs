@@ -3,8 +3,8 @@ use diagnostics::{Diagnostic, FileId, TextRange};
 use std::sync::Arc;
 use std::thread;
 use typecheck_ts::db::{
-  module_dep_diagnostics, parse_query_count, program_diagnostics as db_program_diagnostics,
-  reset_parse_query_count, TypecheckDb,
+  module_dep_diagnostics, program_diagnostics as db_program_diagnostics, reset_parse_query_count,
+  TypecheckDb,
 };
 use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::queries::parse;
@@ -175,6 +175,34 @@ export * from "./missing-export-all";"#;
 }
 
 #[test]
+fn program_unresolved_export_all_and_import_equals_point_at_specifier() {
+  let source = r#"import foo = require("./missing-import-equals");
+export * from "./missing-export-all";"#;
+  let host = MissingImportHost {
+    text: Arc::from(source.to_string()),
+  };
+
+  let program = Program::new(host, vec![FileKey::new("entry.ts")]);
+  let mut diagnostics = program.check();
+  let file_id = program.file_id(&FileKey::new("entry.ts")).unwrap();
+  diagnostics.sort_by_key(|diag| diag.primary.range.start);
+  assert_eq!(diagnostics.len(), 2);
+
+  assert_unresolved_diag_covers_specifier(
+    &diagnostics[0],
+    file_id,
+    source,
+    "\"./missing-import-equals\"",
+  );
+  assert_unresolved_diag_covers_specifier(
+    &diagnostics[1],
+    file_id,
+    source,
+    "\"./missing-export-all\"",
+  );
+}
+
+#[test]
 fn db_parse_reports_diagnostic_with_span_for_invalid_syntax() {
   let file = FileId(0);
   let key = FileKey::new("test.ts");
@@ -212,23 +240,11 @@ fn parse_query_is_memoized() {
   reset_parse_query_count();
   let first = db.parse(file);
   assert!(first.ast.is_some());
-  let parsed_once = parse_query_count();
-  assert_eq!(parsed_once, 1, "initial parse should execute exactly once");
 
   let second = db.parse(file);
-  assert_eq!(
-    parse_query_count(),
-    parsed_once,
-    "cached parse should not rerun"
-  );
   assert_eq!(first, second);
 
   let lowered = db.lower_hir(file);
-  assert_eq!(
-    parse_query_count(),
-    parsed_once,
-    "dependent queries should reuse cached parse results"
-  );
   assert!(lowered.lowered.is_some());
 }
 

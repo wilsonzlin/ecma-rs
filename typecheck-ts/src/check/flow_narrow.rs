@@ -1,11 +1,9 @@
 //! Narrowing helpers used by the flow-sensitive body checker.
 use std::collections::HashMap;
 
-use hir_js::BinaryOp;
+use hir_js::NameId;
 use num_bigint::BigInt;
-use types_ts_interned::{RelateCtx, RelateTypeExpander, TypeId, TypeKind, TypeStore};
-
-use super::flow::{FlowKey, PathSegment};
+use types_ts_interned::{TypeId, TypeKind, TypeStore};
 
 /// Narrowing facts produced by evaluating an expression in a boolean context.
 ///
@@ -15,9 +13,9 @@ use super::flow::{FlowKey, PathSegment};
 ///   successfully (used for assertion functions).
 #[derive(Clone, Debug, Default)]
 pub struct Facts {
-  pub truthy: HashMap<FlowKey, TypeId>,
-  pub falsy: HashMap<FlowKey, TypeId>,
-  pub assertions: HashMap<FlowKey, TypeId>,
+  pub truthy: HashMap<NameId, TypeId>,
+  pub falsy: HashMap<NameId, TypeId>,
+  pub assertions: HashMap<NameId, TypeId>,
 }
 
 impl Facts {
@@ -47,102 +45,6 @@ impl Facts {
   }
 }
 
-/// Compose facts for `A && B`.
-pub fn and_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
-  let Facts {
-    truthy: left_truthy,
-    falsy: left_falsy,
-    assertions: left_assertions,
-  } = left;
-  let Facts {
-    truthy: right_truthy,
-    falsy: right_falsy,
-    assertions: right_assertions,
-  } = right;
-
-  let truthy = apply_sequence(&left_truthy, &right_truthy);
-  let falsy = join_alternatives(
-    &left_falsy,
-    &apply_sequence(&left_truthy, &right_falsy),
-    store,
-  );
-  let assertions = merge_assertions(left_assertions, right_assertions, store);
-
-  Facts {
-    truthy,
-    falsy,
-    assertions,
-  }
-}
-
-/// Compose facts for `A || B`.
-pub fn or_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
-  let Facts {
-    truthy: left_truthy,
-    falsy: left_falsy,
-    assertions: left_assertions,
-  } = left;
-  let Facts {
-    truthy: right_truthy,
-    falsy: right_falsy,
-    assertions: right_assertions,
-  } = right;
-
-  let truthy = join_alternatives(
-    &left_truthy,
-    &apply_sequence(&left_falsy, &right_truthy),
-    store,
-  );
-  let falsy = apply_sequence(&left_falsy, &right_falsy);
-  let assertions = merge_assertions(left_assertions, right_assertions, store);
-
-  Facts {
-    truthy,
-    falsy,
-    assertions,
-  }
-}
-
-fn apply_sequence(
-  first: &HashMap<FlowKey, TypeId>,
-  second: &HashMap<FlowKey, TypeId>,
-) -> HashMap<FlowKey, TypeId> {
-  let mut result = first.clone();
-  for (name, ty) in second.iter() {
-    result.insert(name.clone(), *ty);
-  }
-  result
-}
-
-fn join_alternatives(
-  first: &HashMap<FlowKey, TypeId>,
-  second: &HashMap<FlowKey, TypeId>,
-  store: &TypeStore,
-) -> HashMap<FlowKey, TypeId> {
-  let mut result = first.clone();
-  for (name, ty) in second.iter() {
-    result
-      .entry(name.clone())
-      .and_modify(|existing| *existing = store.union(vec![*existing, *ty]))
-      .or_insert(*ty);
-  }
-  result
-}
-
-fn merge_assertions(
-  mut left: HashMap<FlowKey, TypeId>,
-  right: HashMap<FlowKey, TypeId>,
-  store: &TypeStore,
-) -> HashMap<FlowKey, TypeId> {
-  for (name, ty) in right {
-    left
-      .entry(name)
-      .and_modify(|existing| *existing = store.union(vec![*existing, ty]))
-      .or_insert(ty);
-  }
-  left
-}
-
 /// Literal value used for equality-based narrowing.
 #[derive(Clone, Debug)]
 pub enum LiteralValue {
@@ -151,63 +53,6 @@ pub enum LiteralValue {
   Boolean(bool),
   Null,
   Undefined,
-}
-
-/// Narrow by a nullish equality/inequality comparison.
-pub fn narrow_by_nullish_equality(
-  ty: TypeId,
-  op_kind: BinaryOp,
-  lit: &LiteralValue,
-  store: &TypeStore,
-) -> (TypeId, TypeId) {
-  let primitives = store.primitive_ids();
-  if !matches!(lit, LiteralValue::Null | LiteralValue::Undefined) {
-    return (primitives.never, ty);
-  }
-  if !matches!(
-    op_kind,
-    BinaryOp::Equality
-      | BinaryOp::Inequality
-      | BinaryOp::StrictEquality
-      | BinaryOp::StrictInequality
-  ) {
-    return (primitives.never, ty);
-  }
-  let loose = matches!(op_kind, BinaryOp::Equality | BinaryOp::Inequality);
-  let matches_literal = |kind: &TypeKind| match lit {
-    LiteralValue::Null => {
-      matches!(kind, TypeKind::Null) || (loose && matches!(kind, TypeKind::Undefined))
-    }
-    LiteralValue::Undefined => {
-      matches!(kind, TypeKind::Undefined) || (loose && matches!(kind, TypeKind::Null))
-    }
-    _ => false,
-  };
-
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => {
-      let mut yes = Vec::new();
-      let mut no = Vec::new();
-      for member in members {
-        let (y, n) = narrow_by_nullish_equality(member, op_kind, lit, store);
-        if y != primitives.never {
-          yes.push(y);
-        }
-        if n != primitives.never {
-          no.push(n);
-        }
-      }
-      (store.union(yes), store.union(no))
-    }
-    kind => {
-      let matches = matches_literal(&kind);
-      if matches {
-        (ty, primitives.never)
-      } else {
-        (primitives.never, ty)
-      }
-    }
-  }
 }
 
 /// Narrow by an equality comparison with a literal value.
@@ -293,9 +138,7 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
       }
       (store.union(truthy), store.union(falsy))
     }
-    TypeKind::Never => (primitives.never, primitives.never),
-    TypeKind::Any | TypeKind::Unknown => (ty, ty),
-    TypeKind::Null | TypeKind::Undefined | TypeKind::Void => (primitives.never, ty),
+    TypeKind::Null | TypeKind::Undefined => (primitives.never, ty),
     TypeKind::BooleanLiteral(false) => (primitives.never, ty),
     TypeKind::BooleanLiteral(true) => (ty, primitives.never),
     TypeKind::NumberLiteral(num) => {
@@ -312,60 +155,11 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
         (ty, primitives.never)
       }
     }
-    TypeKind::StringLiteral(id) => {
-      if store.name(id).is_empty() {
-        (primitives.never, ty)
-      } else {
-        (ty, primitives.never)
-      }
-    }
-    TypeKind::Number | TypeKind::BigInt | TypeKind::String | TypeKind::TemplateLiteral(_) => {
-      // Narrowing treats these primitives as truthy; `0`/`""` are ignored.
-      (ty, primitives.never)
-    }
+    TypeKind::StringLiteral(id) if store.name(id).is_empty() => (primitives.never, ty),
     TypeKind::Boolean => (
       store.intern_type(TypeKind::BooleanLiteral(true)),
       store.intern_type(TypeKind::BooleanLiteral(false)),
     ),
-    TypeKind::Symbol | TypeKind::UniqueSymbol => (ty, primitives.never),
-    TypeKind::Object(_)
-    | TypeKind::Array { .. }
-    | TypeKind::Tuple(_)
-    | TypeKind::Callable { .. } => (ty, primitives.never),
-    TypeKind::Ref { .. }
-    | TypeKind::TypeParam(_)
-    | TypeKind::Infer { .. }
-    | TypeKind::Intersection(_)
-    | TypeKind::Conditional { .. }
-    | TypeKind::Mapped(_)
-    | TypeKind::IndexedAccess { .. }
-    | TypeKind::KeyOf(_)
-    | TypeKind::This
-    | TypeKind::Predicate { .. } => (ty, ty),
-  }
-}
-
-/// Split a type into its non-nullish and nullish parts.
-pub fn narrow_non_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
-  let primitives = store.primitive_ids();
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => {
-      let mut non_nullish = Vec::new();
-      let mut nullish = Vec::new();
-      for member in members {
-        let (yes, no) = narrow_non_nullish(member, store);
-        if yes != primitives.never {
-          non_nullish.push(yes);
-        }
-        if no != primitives.never {
-          nullish.push(no);
-        }
-      }
-      (store.union(non_nullish), store.union(nullish))
-    }
-    TypeKind::Null | TypeKind::Undefined | TypeKind::Void => (primitives.never, ty),
-    TypeKind::Any | TypeKind::Unknown | TypeKind::Intersection(_) => (ty, ty),
-    TypeKind::Never => (primitives.never, primitives.never),
     _ => (ty, primitives.never),
   }
 }
@@ -409,11 +203,11 @@ pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId,
   }
 }
 
-/// Narrow by a discriminant property check (e.g. `x.kind === "foo"` or `x.kind === 1`).
+/// Narrow by a discriminant property check (e.g. `x.kind === "foo"`).
 pub fn narrow_by_discriminant(
   ty: TypeId,
   prop: &str,
-  value: &LiteralValue,
+  value: &str,
   store: &TypeStore,
 ) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
@@ -433,10 +227,27 @@ pub fn narrow_by_discriminant(
     }
     TypeKind::Object(obj) => {
       let shape = store.shape(store.object(obj).shape);
-      let matched = shape.properties.iter().any(|property| {
-        matches!(property.key, types_ts_interned::PropKey::String(name) if store.name(name) == prop)
-          && matches_discriminant_value(property.data.ty, value, store)
-      });
+      let mut matched = false;
+      for property in shape.properties.iter() {
+        match store.type_kind(property.data.ty) {
+          TypeKind::StringLiteral(name_id) => {
+            if matches!(property.key, types_ts_interned::PropKey::String(name) if store.name(name) == prop)
+              && store.name(name_id) == value
+            {
+              matched = true;
+              break;
+            }
+          }
+          TypeKind::String => {
+            if matches!(property.key, types_ts_interned::PropKey::String(name) if store.name(name) == prop)
+            {
+              matched = true;
+              break;
+            }
+          }
+          _ => {}
+        }
+      }
       if matched {
         yes.push(ty);
       } else {
@@ -449,138 +260,15 @@ pub fn narrow_by_discriminant(
   (store.union(yes), store.union(no))
 }
 
-/// Narrow by a discriminant property along a path (e.g. `x.meta.kind === "foo"`).
-pub fn narrow_by_discriminant_path(
-  ty: TypeId,
-  path: &[PathSegment],
-  value: &LiteralValue,
-  store: &TypeStore,
-) -> (TypeId, TypeId) {
-  let primitives = store.primitive_ids();
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => {
-      let mut yes = Vec::new();
-      let mut no = Vec::new();
-      for member in members {
-        let (t, f) = narrow_by_discriminant_path(member, path, value, store);
-        if t != primitives.never {
-          yes.push(t);
-        }
-        if f != primitives.never {
-          no.push(f);
-        }
-      }
-      (store.union(yes), store.union(no))
-    }
-    TypeKind::Intersection(members) => {
-      let mut yes = Vec::new();
-      let mut no = Vec::new();
-      for member in members {
-        let (t, f) = narrow_by_discriminant_path(member, path, value, store);
-        if t != primitives.never {
-          yes.push(t);
-        }
-        if f != primitives.never {
-          no.push(f);
-        }
-      }
-      (store.union(yes), store.union(no))
-    }
-    _ => {
-      if matches_discriminant_path(ty, path, value, store) {
-        (ty, primitives.never)
-      } else {
-        (primitives.never, ty)
-      }
-    }
-  }
-}
-
-fn matches_discriminant_path(
-  ty: TypeId,
-  path: &[PathSegment],
-  value: &LiteralValue,
-  store: &TypeStore,
-) -> bool {
-  if path.is_empty() {
-    return false;
-  }
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => members
-      .iter()
-      .any(|member| matches_discriminant_path(*member, path, value, store)),
-    TypeKind::Intersection(members) => members
-      .iter()
-      .any(|member| matches_discriminant_path(*member, path, value, store)),
-    TypeKind::Object(obj) => {
-      let object = store.object(obj);
-      let shape = store.shape(object.shape);
-      let Some(first) = path.first() else {
-        return false;
-      };
-      let prop_ty = shape
-        .properties
-        .iter()
-        .find_map(|prop| match (&prop.key, first) {
-          (types_ts_interned::PropKey::String(name), PathSegment::String(seg))
-            if store.name(*name) == *seg =>
-          {
-            Some(prop.data.ty)
-          }
-          (types_ts_interned::PropKey::Number(num), PathSegment::Number(seg))
-            if num.to_string() == *seg =>
-          {
-            Some(prop.data.ty)
-          }
-          _ => None,
-        });
-      let prop_ty = prop_ty.or_else(|| shape.indexers.first().map(|idx| idx.value_type));
-      let Some(prop_ty) = prop_ty else {
-        return false;
-      };
-      if path.len() == 1 {
-        matches_discriminant_value(prop_ty, value, store)
-      } else {
-        matches_discriminant_path(prop_ty, &path[1..], value, store)
-      }
-    }
-    _ => false,
-  }
-}
-
-fn matches_discriminant_value(ty: TypeId, value: &LiteralValue, store: &TypeStore) -> bool {
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => members
-      .iter()
-      .any(|member| matches_discriminant_value(*member, value, store)),
-    kind => match (kind, value) {
-      (TypeKind::StringLiteral(name_id), LiteralValue::String(target)) => {
-        store.name(name_id) == *target
-      }
-      (TypeKind::String, LiteralValue::String(_)) => true,
-      (TypeKind::NumberLiteral(num), LiteralValue::Number(target)) => num.0.to_string() == *target,
-      (TypeKind::Number, LiteralValue::Number(_)) => true,
-      (TypeKind::BooleanLiteral(lit), LiteralValue::Boolean(target)) => lit == *target,
-      (TypeKind::Boolean, LiteralValue::Boolean(_)) => true,
-      _ => false,
-    },
-  }
-}
-
 /// Narrow by an `in` check (`"prop" in x`).
-pub fn narrow_by_in_check(
-  ty: TypeId,
-  prop: &str,
-  store: &TypeStore,
-  expander: Option<&dyn RelateTypeExpander>,
-) -> (TypeId, TypeId) {
+pub fn narrow_by_in_check(ty: TypeId, prop: &str, store: &TypeStore) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
   let mut yes = Vec::new();
   let mut no = Vec::new();
   match store.type_kind(ty) {
     TypeKind::Union(members) => {
       for member in members {
-        let (t, f) = narrow_by_in_check(member, prop, store, expander);
+        let (t, f) = narrow_by_in_check(member, prop, store);
         if t != primitives.never {
           yes.push(t);
         }
@@ -592,10 +280,7 @@ pub fn narrow_by_in_check(
     TypeKind::Array { .. } => {
       yes.push(ty);
     }
-    TypeKind::Ref { def, args } => {
-      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
-        return narrow_by_in_check(expanded, prop, store, expander);
-      }
+    TypeKind::Ref { .. } => {
       yes.push(ty);
       no.push(ty);
     }
@@ -643,95 +328,6 @@ pub fn narrow_by_instanceof(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
   }
 }
 
-pub fn narrow_by_instanceof_rhs(
-  left_ty: TypeId,
-  right_ty: TypeId,
-  store: &TypeStore,
-  relate: &RelateCtx,
-  expander: Option<&dyn RelateTypeExpander>,
-) -> (TypeId, TypeId) {
-  let target = instance_type_from_ctor(right_ty, store, expander);
-  narrow_instanceof_with_target(left_ty, target, store, relate)
-}
-
-fn narrow_instanceof_with_target(
-  left_ty: TypeId,
-  target: Option<TypeId>,
-  store: &TypeStore,
-  relate: &RelateCtx,
-) -> (TypeId, TypeId) {
-  let primitives = store.primitive_ids();
-  match store.type_kind(left_ty) {
-    TypeKind::Union(members) => {
-      let mut yes = Vec::new();
-      let mut no = Vec::new();
-      for member in members {
-        let (y, n) = narrow_instanceof_with_target(member, target, store, relate);
-        if y != primitives.never {
-          yes.push(y);
-        }
-        if n != primitives.never {
-          no.push(n);
-        }
-      }
-      (store.union(yes), store.union(no))
-    }
-    TypeKind::Null | TypeKind::Undefined => (primitives.never, left_ty),
-    _ => {
-      if let Some(target) = target {
-        if relate.is_assignable(left_ty, target) {
-          (left_ty, primitives.never)
-        } else {
-          (primitives.never, left_ty)
-        }
-      } else {
-        narrow_by_instanceof(left_ty, store)
-      }
-    }
-  }
-}
-
-fn instance_type_from_ctor(
-  ty: TypeId,
-  store: &TypeStore,
-  expander: Option<&dyn RelateTypeExpander>,
-) -> Option<TypeId> {
-  let mut targets = Vec::new();
-  collect_instance_types(ty, store, expander, &mut targets);
-  if targets.is_empty() {
-    None
-  } else {
-    Some(store.union(targets))
-  }
-}
-
-fn collect_instance_types(
-  ty: TypeId,
-  store: &TypeStore,
-  expander: Option<&dyn RelateTypeExpander>,
-  out: &mut Vec<TypeId>,
-) {
-  match store.type_kind(ty) {
-    TypeKind::Union(members) | TypeKind::Intersection(members) => {
-      for member in members {
-        collect_instance_types(member, store, expander, out);
-      }
-    }
-    TypeKind::Ref { def, args } => {
-      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
-        collect_instance_types(expanded, store, expander, out);
-      }
-    }
-    TypeKind::Object(obj) => {
-      let shape = store.shape(store.object(obj).shape);
-      for sig in shape.construct_signatures.iter() {
-        out.push(store.signature(*sig).ret);
-      }
-    }
-    _ => {}
-  }
-}
-
 /// Narrow by an asserted type from a predicate.
 pub fn narrow_by_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
@@ -753,42 +349,6 @@ pub fn narrow_by_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> (T
     _ => {
       if matches_asserted(ty, asserted, store) {
         (ty, primitives.never)
-      } else {
-        (primitives.never, ty)
-      }
-    }
-  }
-}
-
-/// Narrow a type by retaining members assignable to the target while keeping a
-/// conservative remainder for the falsy branch.
-pub fn narrow_by_assignability(
-  ty: TypeId,
-  target: TypeId,
-  store: &TypeStore,
-  relate: &RelateCtx<'_>,
-) -> (TypeId, TypeId) {
-  let primitives = store.primitive_ids();
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => {
-      let mut yes = Vec::new();
-      let mut no = Vec::new();
-      for member in members {
-        let (y, n) = narrow_by_assignability(member, target, store, relate);
-        if y != primitives.never {
-          yes.push(y);
-        }
-        if n != primitives.never {
-          no.push(n);
-        }
-      }
-      (store.union(yes), store.union(no))
-    }
-    _ => {
-      if relate.is_assignable(ty, target) {
-        (ty, primitives.never)
-      } else if relate.is_assignable(target, ty) {
-        (target, ty)
       } else {
         (primitives.never, ty)
       }
@@ -819,32 +379,5 @@ fn matches_asserted(ty: TypeId, asserted: TypeId, store: &TypeStore) -> bool {
     TypeKind::Object(_) => matches!(store.type_kind(ty), TypeKind::Object(_)),
     TypeKind::Ref { .. } => matches!(store.type_kind(ty), TypeKind::Ref { .. }),
     _ => false,
-  }
-}
-
-/// Split a type into non-nullish and nullish parts.
-pub fn split_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
-  let primitives = store.primitive_ids();
-  match store.type_kind(ty) {
-    TypeKind::Union(members) => {
-      let mut present = Vec::new();
-      let mut nullish = Vec::new();
-      for member in members {
-        match store.type_kind(member) {
-          TypeKind::Null | TypeKind::Undefined => nullish.push(member),
-          _ => present.push(member),
-        }
-      }
-      (
-        store.union(present),
-        if nullish.is_empty() {
-          primitives.never
-        } else {
-          store.union(nullish)
-        },
-      )
-    }
-    TypeKind::Null | TypeKind::Undefined => (primitives.never, ty),
-    _ => (ty, primitives.never),
   }
 }
