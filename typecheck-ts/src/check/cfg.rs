@@ -5,7 +5,8 @@
 //! block per [`StmtId`] and wiring edges for the common control-flow constructs
 //! used by the lightweight checker (conditionals, switches, and loops).
 
-use hir_js::{Body, StmtId, StmtKind};
+use hir_js::hir::{CatchClause, SwitchCase};
+use hir_js::{Body, NameId, StmtId, StmtKind};
 use std::collections::HashSet;
 use std::fmt;
 
@@ -95,6 +96,22 @@ impl fmt::Display for ControlFlowGraph {
 struct CfgBuilder<'a> {
   cfg: ControlFlowGraph,
   body: &'a Body,
+  breakables: Vec<BreakableContext>,
+}
+
+#[derive(Default)]
+struct BuildResult {
+  entry: Option<BlockId>,
+  exits: Vec<BlockId>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BreakableContext {
+  label: Option<NameId>,
+  break_target: BlockId,
+  continue_target: Option<BlockId>,
+  /// Whether an unlabeled `break` can target this construct.
+  implicit_break: bool,
 }
 
 impl<'a> CfgBuilder<'a> {
@@ -104,127 +121,477 @@ impl<'a> CfgBuilder<'a> {
     let exit = cfg.add_block();
     cfg.entry = entry;
     cfg.exit = exit;
-    Self { cfg, body }
+    Self {
+      cfg,
+      body,
+      breakables: Vec::new(),
+    }
   }
 
   fn build(mut self) -> ControlFlowGraph {
+    let roots = self.root_stmts();
+    if roots.is_empty() {
+      self.cfg.add_edge(self.cfg.entry, self.cfg.exit);
+      return self.cfg;
+    }
+
+    let mut preds = vec![self.cfg.entry];
+    for stmt in roots {
+      let res = self.build_stmt(stmt, preds);
+      preds = res.exits;
+    }
+
+    if !preds.is_empty() {
+      self.connect(&preds, self.cfg.exit);
+    }
+    self.cfg
+  }
+
+  fn connect(&mut self, from: &[BlockId], to: BlockId) {
+    for pred in from {
+      self.cfg.add_edge(*pred, to);
+    }
+  }
+
+  fn root_stmts(&self) -> Vec<StmtId> {
+    if !self.body.root_stmts.is_empty() {
+      return self.body.root_stmts.clone();
+    }
     let mut referenced: HashSet<StmtId> = HashSet::new();
     for stmt in self.body.stmts.iter() {
       referenced.extend(child_stmt_ids(stmt));
     }
-
     let mut roots: Vec<StmtId> = (0..self.body.stmts.len() as u32)
       .map(StmtId)
       .filter(|id| !referenced.contains(id))
       .collect();
     roots.sort_by_key(|id| id.0);
-
-    let entry_target = if roots.is_empty() {
-      self.cfg.exit
-    } else {
-      self.build_stmt_list(&roots, self.cfg.exit)
-    };
-    self.cfg.add_edge(self.cfg.entry, entry_target);
-    self.cfg
+    roots
   }
 
-  /// Build a linear chain of statements ending at `after`, returning the entry
-  /// block for the first statement in the list (or `after` if empty).
-  fn build_stmt_list(&mut self, stmts: &[StmtId], after: BlockId) -> BlockId {
-    let mut next = after;
-    for stmt in stmts.iter().rev() {
-      next = self.build_stmt(*stmt, next);
-    }
-    next
-  }
-
-  /// Build a block for a single statement, connecting it to the continuation.
-  fn build_stmt(&mut self, stmt_id: StmtId, after: BlockId) -> BlockId {
+  fn add_stmt_block(&mut self, stmt_id: StmtId) -> BlockId {
     let block = self.cfg.add_block();
     self.cfg.blocks[block.0].stmts.push(stmt_id);
+    block
+  }
+
+  fn resolve_break_target(&self, label: Option<NameId>) -> Option<BlockId> {
+    if let Some(label) = label {
+      self
+        .breakables
+        .iter()
+        .rev()
+        .find(|ctx| ctx.label == Some(label))
+        .map(|ctx| ctx.break_target)
+    } else {
+      self
+        .breakables
+        .iter()
+        .rev()
+        .find(|ctx| ctx.implicit_break)
+        .map(|ctx| ctx.break_target)
+    }
+  }
+
+  fn resolve_continue_target(&self, label: Option<NameId>) -> Option<BlockId> {
+    if let Some(label) = label {
+      self
+        .breakables
+        .iter()
+        .rev()
+        .find(|ctx| ctx.label == Some(label) && ctx.continue_target.is_some())
+        .and_then(|ctx| ctx.continue_target)
+    } else {
+      self
+        .breakables
+        .iter()
+        .rev()
+        .find_map(|ctx| ctx.continue_target)
+    }
+  }
+
+  fn build_stmt_list(&mut self, stmts: &[StmtId], mut preds: Vec<BlockId>) -> BuildResult {
+    let mut entry = None;
+    for stmt in stmts {
+      let res = self.build_stmt(*stmt, preds);
+      if entry.is_none() {
+        entry = res.entry;
+      }
+      preds = res.exits;
+    }
+    BuildResult { entry, exits: preds }
+  }
+
+  fn build_stmt(&mut self, stmt_id: StmtId, preds: Vec<BlockId>) -> BuildResult {
     let stmt = &self.body.stmts[stmt_id.0 as usize];
     match &stmt.kind {
       StmtKind::If {
         consequent,
         alternate,
         ..
-      } => {
-        let then_entry = self.build_stmt(*consequent, after);
-        let else_entry = alternate
-          .map(|alt| self.build_stmt(alt, after))
-          .unwrap_or(after);
-        self.cfg.add_edge(block, then_entry);
-        self.cfg.add_edge(block, else_entry);
+      } => self.build_if(stmt_id, *consequent, alternate.as_ref(), preds),
+      StmtKind::Switch { cases, .. } => self.build_switch(stmt_id, cases, preds, None),
+      StmtKind::While { body, .. } => self.build_while(stmt_id, *body, preds, None),
+      StmtKind::DoWhile { body, .. } => self.build_do_while(stmt_id, *body, preds, None),
+      StmtKind::For { body, update, .. } => {
+        self.build_for(stmt_id, *body, update.is_some(), preds, None)
       }
-      StmtKind::Switch { cases, .. } => {
-        let mut has_default = false;
-        for case in cases {
-          if case.test.is_none() {
-            has_default = true;
-          }
-          let entry = if case.consequent.is_empty() {
-            after
-          } else {
-            self.build_stmt_list(&case.consequent, after)
-          };
-          self.cfg.add_edge(block, entry);
-        }
-        if !has_default {
-          self.cfg.add_edge(block, after);
-        }
-      }
-      StmtKind::While { body, .. } => {
-        let body_entry = self.build_stmt(*body, block);
-        self.cfg.add_edge(block, body_entry);
-        self.cfg.add_edge(block, after);
-      }
-      StmtKind::DoWhile { body, .. } => {
-        let body_entry = self.build_stmt(*body, block);
-        self.cfg.add_edge(block, body_entry);
-        self.cfg.add_edge(block, after);
-      }
-      StmtKind::For { body, .. } => {
-        let body_entry = self.build_stmt(*body, block);
-        self.cfg.add_edge(block, body_entry);
-        self.cfg.add_edge(block, after);
-      }
-      StmtKind::ForIn { body, .. } => {
-        let body_entry = self.build_stmt(*body, block);
-        self.cfg.add_edge(block, body_entry);
-        self.cfg.add_edge(block, after);
-      }
+      StmtKind::ForIn { body, .. } => self.build_for_in(stmt_id, *body, preds, None),
       StmtKind::Block(stmts) => {
-        let inner_entry = if stmts.is_empty() {
-          after
+        let block = self.add_stmt_block(stmt_id);
+        self.connect(&preds, block);
+        if stmts.is_empty() {
+          BuildResult {
+            entry: Some(block),
+            exits: vec![block],
+          }
         } else {
-          self.build_stmt_list(stmts, after)
-        };
-        self.cfg.add_edge(block, inner_entry);
+          let inner = self.build_stmt_list(stmts, vec![block]);
+          BuildResult {
+            entry: Some(block),
+            exits: inner.exits,
+          }
+        }
       }
       StmtKind::Try {
         block: inner,
         catch,
         finally_block,
-      } => {
-        let inner_entry = self.build_stmt(*inner, after);
-        self.cfg.add_edge(block, inner_entry);
-        if let Some(c) = catch {
-          let catch_entry = self.build_stmt(c.body, after);
-          self.cfg.add_edge(block, catch_entry);
-        }
-        if let Some(finally_stmt) = finally_block {
-          let finally_entry = self.build_stmt(*finally_stmt, after);
-          self.cfg.add_edge(block, finally_entry);
-        }
-      }
+      } => self.build_try(stmt_id, *inner, catch.as_ref(), finally_block.as_ref(), preds),
       StmtKind::Return(_) | StmtKind::Throw(_) => {
-        // Return/throw terminates the current control flow; no outgoing edges.
+        let block = self.add_stmt_block(stmt_id);
+        self.connect(&preds, block);
+        BuildResult {
+          entry: Some(block),
+          exits: Vec::new(),
+        }
       }
-      _ => {
-        self.cfg.add_edge(block, after);
+      StmtKind::Break(label) => {
+        let block = self.add_stmt_block(stmt_id);
+        self.connect(&preds, block);
+        if let Some(target) = self.resolve_break_target(*label) {
+          self.cfg.add_edge(block, target);
+        }
+        BuildResult {
+          entry: Some(block),
+          exits: Vec::new(),
+        }
+      }
+      StmtKind::Continue(label) => {
+        let block = self.add_stmt_block(stmt_id);
+        self.connect(&preds, block);
+        if let Some(target) = self.resolve_continue_target(*label) {
+          self.cfg.add_edge(block, target);
+        }
+        BuildResult {
+          entry: Some(block),
+          exits: Vec::new(),
+        }
+      }
+      StmtKind::Var(_) | StmtKind::Decl(_) | StmtKind::Expr(_) | StmtKind::Empty => {
+        let block = self.add_stmt_block(stmt_id);
+        self.connect(&preds, block);
+        BuildResult {
+          entry: Some(block),
+          exits: vec![block],
+        }
+      }
+      StmtKind::Labeled { label, body } => {
+        self.build_labeled(stmt_id, *label, *body, preds)
+      }
+      StmtKind::With { body, .. } => {
+        let block = self.add_stmt_block(stmt_id);
+        self.connect(&preds, block);
+        let inner = self.build_stmt(*body, vec![block]);
+        BuildResult {
+          entry: Some(block),
+          exits: inner.exits,
+        }
       }
     }
-    block
+  }
+
+  fn build_if(
+    &mut self,
+    stmt_id: StmtId,
+    consequent: StmtId,
+    alternate: Option<&StmtId>,
+    preds: Vec<BlockId>,
+  ) -> BuildResult {
+    let cond_block = self.add_stmt_block(stmt_id);
+    self.connect(&preds, cond_block);
+    let after = self.cfg.add_block();
+
+    let then_res = self.build_stmt(consequent, vec![cond_block]);
+    self.connect(&then_res.exits, after);
+
+    if let Some(alt) = alternate {
+      let else_res = self.build_stmt(*alt, vec![cond_block]);
+      self.connect(&else_res.exits, after);
+    } else {
+      self.cfg.add_edge(cond_block, after);
+    }
+
+    BuildResult {
+      entry: Some(cond_block),
+      exits: vec![after],
+    }
+  }
+
+  fn build_switch(
+    &mut self,
+    stmt_id: StmtId,
+    cases: &[SwitchCase],
+    preds: Vec<BlockId>,
+    label: Option<NameId>,
+  ) -> BuildResult {
+    let block = self.add_stmt_block(stmt_id);
+    self.connect(&preds, block);
+
+    let after = self.cfg.add_block();
+    self.breakables.push(BreakableContext {
+      label,
+      break_target: after,
+      continue_target: None,
+      implicit_break: true,
+    });
+
+    let mut has_default = false;
+    let mut case_entries: Vec<BlockId> = Vec::with_capacity(cases.len());
+    let mut next_entry = after;
+    for case in cases.iter().rev() {
+      if case.test.is_none() {
+        has_default = true;
+      }
+      let entry = if case.consequent.is_empty() {
+        next_entry
+      } else {
+        let res = self.build_stmt_list(&case.consequent, Vec::new());
+        if !res.exits.is_empty() {
+          self.connect(&res.exits, next_entry);
+        }
+        res.entry.unwrap_or(next_entry)
+      };
+      case_entries.push(entry);
+      next_entry = entry;
+    }
+    self.breakables.pop();
+
+    case_entries.reverse();
+    for entry in &case_entries {
+      self.cfg.add_edge(block, *entry);
+    }
+    if !has_default {
+      self.cfg.add_edge(block, after);
+    }
+
+    BuildResult {
+      entry: Some(block),
+      exits: vec![after],
+    }
+  }
+
+  fn build_while(
+    &mut self,
+    stmt_id: StmtId,
+    body: StmtId,
+    preds: Vec<BlockId>,
+    label: Option<NameId>,
+  ) -> BuildResult {
+    let header = self.add_stmt_block(stmt_id);
+    self.connect(&preds, header);
+
+    let after = self.cfg.add_block();
+    self.breakables.push(BreakableContext {
+      label,
+      break_target: after,
+      continue_target: Some(header),
+      implicit_break: true,
+    });
+    let body_res = self.build_stmt(body, vec![header]);
+    self.connect(&body_res.exits, header);
+    self.breakables.pop();
+
+    self.cfg.add_edge(header, after);
+
+    BuildResult {
+      entry: Some(header),
+      exits: vec![after],
+    }
+  }
+
+  fn build_do_while(
+    &mut self,
+    stmt_id: StmtId,
+    body: StmtId,
+    preds: Vec<BlockId>,
+    label: Option<NameId>,
+  ) -> BuildResult {
+    let after = self.cfg.add_block();
+    let test_block = self.add_stmt_block(stmt_id);
+    self.breakables.push(BreakableContext {
+      label,
+      break_target: after,
+      continue_target: Some(test_block),
+      implicit_break: true,
+    });
+    let body_res = self.build_stmt(body, preds);
+    self.connect(&body_res.exits, test_block);
+    self.breakables.pop();
+
+    if let Some(entry) = body_res.entry {
+      self.cfg.add_edge(test_block, entry);
+    }
+    self.cfg.add_edge(test_block, after);
+
+    BuildResult {
+      entry: body_res.entry.or(Some(test_block)),
+      exits: vec![after],
+    }
+  }
+
+  fn build_for(
+    &mut self,
+    stmt_id: StmtId,
+    body: StmtId,
+    has_update: bool,
+    preds: Vec<BlockId>,
+    label: Option<NameId>,
+  ) -> BuildResult {
+    let header = self.add_stmt_block(stmt_id);
+    self.connect(&preds, header);
+
+    let after = self.cfg.add_block();
+    let continue_target = if has_update {
+      let update_block = self.cfg.add_block();
+      self.cfg.add_edge(update_block, header);
+      update_block
+    } else {
+      header
+    };
+    self.breakables.push(BreakableContext {
+      label,
+      break_target: after,
+      continue_target: Some(continue_target),
+      implicit_break: true,
+    });
+    let body_res = self.build_stmt(body, vec![header]);
+    self.connect(&body_res.exits, continue_target);
+    self.breakables.pop();
+
+    self.cfg.add_edge(header, after);
+
+    BuildResult {
+      entry: Some(header),
+      exits: vec![after],
+    }
+  }
+
+  fn build_for_in(
+    &mut self,
+    stmt_id: StmtId,
+    body: StmtId,
+    preds: Vec<BlockId>,
+    label: Option<NameId>,
+  ) -> BuildResult {
+    let header = self.add_stmt_block(stmt_id);
+    self.connect(&preds, header);
+
+    let after = self.cfg.add_block();
+    self.breakables.push(BreakableContext {
+      label,
+      break_target: after,
+      continue_target: Some(header),
+      implicit_break: true,
+    });
+    let body_res = self.build_stmt(body, vec![header]);
+    self.connect(&body_res.exits, header);
+    self.breakables.pop();
+
+    self.cfg.add_edge(header, after);
+
+    BuildResult {
+      entry: Some(header),
+      exits: vec![after],
+    }
+  }
+
+  fn build_try(
+    &mut self,
+    stmt_id: StmtId,
+    inner: StmtId,
+    catch: Option<&CatchClause>,
+    finally_block: Option<&StmtId>,
+    preds: Vec<BlockId>,
+  ) -> BuildResult {
+    let block = self.add_stmt_block(stmt_id);
+    self.connect(&preds, block);
+
+    let after = self.cfg.add_block();
+    let try_res = self.build_stmt(inner, vec![block]);
+    self.connect(&try_res.exits, after);
+
+    if let Some(c) = catch {
+      let catch_res = self.build_stmt(c.body, vec![block]);
+      self.connect(&catch_res.exits, after);
+    }
+    if let Some(finally_stmt) = finally_block {
+      let finally_res = self.build_stmt(*finally_stmt, vec![block]);
+      self.connect(&finally_res.exits, after);
+    }
+
+    BuildResult {
+      entry: Some(block),
+      exits: vec![after],
+    }
+  }
+
+  fn build_labeled(
+    &mut self,
+    stmt_id: StmtId,
+    label: NameId,
+    body_id: StmtId,
+    preds: Vec<BlockId>,
+  ) -> BuildResult {
+    let label_block = self.add_stmt_block(stmt_id);
+    self.connect(&preds, label_block);
+    let body_stmt = &self.body.stmts[body_id.0 as usize];
+    let body_res = match &body_stmt.kind {
+      StmtKind::While { body, .. } => self.build_while(body_id, *body, vec![label_block], Some(label)),
+      StmtKind::DoWhile { body, .. } => {
+        self.build_do_while(body_id, *body, vec![label_block], Some(label))
+      }
+      StmtKind::For { body, update, .. } => {
+        self.build_for(body_id, *body, update.is_some(), vec![label_block], Some(label))
+      }
+      StmtKind::ForIn { body, .. } => {
+        self.build_for_in(body_id, *body, vec![label_block], Some(label))
+      }
+      StmtKind::Switch { cases, .. } => {
+        self.build_switch(body_id, cases, vec![label_block], Some(label))
+      }
+      _ => {
+        let after = self.cfg.add_block();
+        self.breakables.push(BreakableContext {
+          label: Some(label),
+          break_target: after,
+          continue_target: None,
+          implicit_break: false,
+        });
+        let inner = self.build_stmt(body_id, vec![label_block]);
+        self.connect(&inner.exits, after);
+        self.breakables.pop();
+        BuildResult {
+          entry: Some(label_block),
+          exits: vec![after],
+        }
+      }
+    };
+
+    BuildResult {
+      entry: Some(label_block),
+      exits: body_res.exits,
+    }
   }
 }
 
