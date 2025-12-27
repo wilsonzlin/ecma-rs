@@ -455,6 +455,46 @@ fn class_member_ids_survive_unrelated_insertions() {
 }
 
 #[test]
+fn span_map_indexes_class_members() {
+  let source =
+    "class C { x = 1; static { const s = 1; } method() { return 1; } }";
+  let result = lower_from_source(source).expect("lower");
+  let span_map = &result.hir.span_map;
+
+  let find_def = |kind: DefKind, name: &str| -> &hir_js::DefData {
+    result
+      .defs
+      .iter()
+      .find(|def| def.path.kind == kind && result.names.resolve(def.name) == Some(name))
+      .expect("definition present")
+  };
+
+  let field = find_def(DefKind::Field, "x");
+  let field_span = span_map.def_span(field.id).expect("field span");
+  assert_eq!(
+    span_map.def_at_offset(field_span.start),
+    Some(field.id),
+    "field def should map to its span start"
+  );
+
+  let method = find_def(DefKind::Method, "method");
+  let method_span = span_map.def_span(method.id).expect("method span");
+  assert_eq!(
+    span_map.def_at_offset(method_span.start),
+    Some(method.id),
+    "method def should map to its span start"
+  );
+
+  let static_block = find_def(DefKind::Method, "<static_block>");
+  let static_span = span_map.def_span(static_block.id).expect("static block span");
+  assert_eq!(
+    span_map.def_at_offset(static_span.start),
+    Some(static_block.id),
+    "static block def should map to its span start"
+  );
+}
+
+#[test]
 fn name_ids_stay_stable_when_unrelated_names_are_introduced() {
   let base = "function f() {}\nconst tail = 1;";
   let with_extra = "const earlier = 0;\nfunction f() {}\nconst tail = 1;";
