@@ -1,6 +1,5 @@
 use salsa::Setter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -20,6 +19,7 @@ use crate::db::inputs::{
 };
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
+use crate::db::types::SharedTypeStore;
 use crate::db::{symbols, Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::parse_metrics;
@@ -104,30 +104,65 @@ fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]>
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
   };
+  let source = file_text_for(db, file);
   let semantics = ts_semantics(db);
-  let mut spans = HashMap::new();
-  for (spec, span) in collect_module_specifiers(lowered).into_iter() {
-    spans.entry(spec).or_insert(span);
-  }
-
-  let mut diagnostics = Vec::new();
   let file_id = file.file_id(db);
-  for spec in specs.iter() {
-    if module_resolve(db, file_id, Arc::clone(spec)).is_some() {
-      continue;
+  let refine_spec_span = |spec: &hir_js::ModuleSpecifier| -> TextRange {
+    if (spec.span.end as usize) <= source.len() {
+      if let Some(segment) = source.get(spec.span.start as usize..spec.span.end as usize) {
+        for quote in ['"', '\'', '`'] {
+          let needle = format!("{quote}{}{quote}", spec.value);
+          if let Some(idx) = segment.find(&needle) {
+            let start = spec.span.start + idx as u32;
+            let end = start + needle.len() as u32;
+            return TextRange::new(start, end);
+          }
+        }
+      }
     }
-    if semantics
-      .semantics
-      .exports_of_ambient_module(spec.as_ref())
-      .is_some()
-    {
-      continue;
-    }
-    if let Some(span) = spans.get(spec) {
-      diagnostics.push(codes::UNRESOLVED_MODULE.error(
-        format!("module {} could not be resolved", spec),
-        Span::new(file_id, *span),
-      ));
+    spec.span
+  };
+  let mut seen = BTreeSet::new();
+  let mut check_specifier =
+    |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
+      db,
+      file_id,
+      Arc::<str>::from(spec.value.clone()),
+    ) {
+      Some(_) => {}
+      None => {
+        let has_ambient = semantics
+          .semantics
+          .exports_of_ambient_module(spec.value.as_ref())
+          .map(|exports| !exports.is_empty())
+          .unwrap_or(false);
+        if has_ambient {
+          return;
+        }
+        let range = refine_spec_span(spec);
+        let key = (range.start, range.end, spec.value.clone());
+        if !seen.insert(key) {
+          return;
+        }
+        let mut diag = codes::UNRESOLVED_MODULE.error(
+          format!("unresolved module specifier \"{}\"", spec.value),
+          Span::new(file_id, range),
+        );
+        diag.push_note(format!("module specifier: \"{}\"", spec.value));
+        diags.push(diag);
+      }
+    };
+
+  for import in lowered.hir.imports.iter() {
+    match &import.kind {
+      hir_js::ImportKind::Es(es) => {
+        check_specifier(&es.specifier, &mut diagnostics);
+      }
+      hir_js::ImportKind::ImportEquals(eq) => {
+        if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
+          check_specifier(module, &mut diagnostics);
+        }
+      }
     }
   }
   diagnostics.sort();
@@ -231,18 +266,32 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
   }
 
   let primitives = db.primitive_ids();
+  let undefined_ty = primitives.map(|p| p.undefined);
+  let error_ty = primitives.map(|p| p.any);
   globals
     .entry("undefined".to_string())
+    .and_modify(|binding| {
+      if let Some(ty) = undefined_ty {
+        binding.type_id = Some(ty);
+      }
+    })
     .or_insert(SymbolBinding {
       symbol: deterministic_symbol_id("undefined"),
       def: None,
-      type_id: primitives.map(|p| p.undefined),
+      type_id: undefined_ty,
     });
-  globals.entry("Error".to_string()).or_insert(SymbolBinding {
-    symbol: deterministic_symbol_id("Error"),
-    def: None,
-    type_id: primitives.map(|p| p.any),
-  });
+  globals
+    .entry("Error".to_string())
+    .and_modify(|binding| {
+      if let Some(ty) = error_ty {
+        binding.type_id = Some(ty);
+      }
+    })
+    .or_insert(SymbolBinding {
+      symbol: deterministic_symbol_id("Error"),
+      def: None,
+      type_id: error_ty,
+    });
 
   Arc::new(globals)
 }
@@ -266,10 +315,10 @@ pub mod body_check {
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
   use crate::check::caches::CheckerCaches;
-  use crate::check::flow_bindings::FlowBindings;
   use crate::check::hir_body::{
-    check_body_with_env_with_expander, check_body_with_expander, BindingTypeResolver,
+    check_body_with_env, check_body_with_expander, BindingTypeResolver,
   };
+  use crate::check::hir_body::{FlowBindingId, FlowBindings};
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
   use crate::lib_support::{CacheMode, CacheOptions};
@@ -862,7 +911,10 @@ pub mod body_check {
     unknown: TypeId,
   ) {
     for (name, binding) in source.iter() {
-      let ty = binding.def.map(|d| map_def_ty(d)).unwrap_or(unknown);
+      let ty = binding
+        .type_id
+        .or_else(|| binding.def.map(|d| map_def_ty(d)))
+        .unwrap_or(unknown);
       bindings.insert(name.clone(), ty);
       if let Some(def) = binding.def {
         binding_defs.insert(name.clone(), def);
@@ -1746,33 +1798,6 @@ pub trait TypeDb: salsa::Database + Send + 'static {
   fn files_input(&self) -> FilesInput;
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput>;
 }
-
-/// Cheap wrapper around [`TypeStore`] with pointer-based equality for salsa
-/// inputs.
-#[derive(Clone)]
-pub struct SharedTypeStore(pub Arc<TypeStore>);
-
-impl SharedTypeStore {
-  pub fn arc(&self) -> Arc<TypeStore> {
-    Arc::clone(&self.0)
-  }
-}
-
-impl fmt::Debug for SharedTypeStore {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_tuple("SharedTypeStore")
-      .field(&Arc::as_ptr(&self.0))
-      .finish()
-  }
-}
-
-impl PartialEq for SharedTypeStore {
-  fn eq(&self, other: &Self) -> bool {
-    Arc::ptr_eq(&self.0, &other.0)
-  }
-}
-
-impl Eq for SharedTypeStore {}
 
 /// Kind of declaration associated with a definition.
 #[derive(Clone, Debug, PartialEq, Eq)]

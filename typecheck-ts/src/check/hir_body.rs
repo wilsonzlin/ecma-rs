@@ -573,7 +573,16 @@ impl<'a> Checker<'a> {
 
   fn insert_binding(&mut self, name: String, ty: TypeId, type_params: Vec<TypeParamDecl>) {
     if let Some(scope) = self.scopes.last_mut() {
-      scope.bindings.insert(name, Binding { ty, type_params });
+      match scope.bindings.entry(name) {
+        std::collections::hash_map::Entry::Occupied(mut entry) => {
+          if !matches!(self.store.type_kind(ty), TypeKind::Unknown) {
+            entry.insert(Binding { ty, type_params });
+          }
+        }
+        std::collections::hash_map::Entry::Vacant(entry) => {
+          entry.insert(Binding { ty, type_params });
+        }
+      }
     }
   }
 
@@ -1267,6 +1276,18 @@ impl<'a> Checker<'a> {
 
   fn member_type(&mut self, obj: TypeId, prop: &str) -> TypeId {
     let prim = self.store.primitive_ids();
+    if let TypeKind::Ref { def, ref args } = self.store.type_kind(obj) {
+      if let Some(expanded) = self
+        .ref_expander
+        .and_then(|exp| exp.expand_ref(self.store.as_ref(), def, args))
+      {
+        return self.member_type(expanded, prop);
+      }
+    }
+    let expanded = self.expand_for_props(obj);
+    if expanded != obj {
+      return self.member_type(expanded, prop);
+    }
     match self.store.type_kind(obj) {
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
@@ -3557,6 +3578,13 @@ impl<'a> FlowBodyChecker<'a> {
           Some(self.store.intersection(tys))
         }
       }
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|expander| {
+          let expanded = expander.expand_ref(self.store.as_ref(), def, args.as_slice());
+          expanded
+        })
+        .and_then(|expanded| self.object_prop_type(expanded, key)),
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         for prop in shape.properties.iter() {

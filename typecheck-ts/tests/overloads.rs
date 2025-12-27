@@ -69,7 +69,6 @@ fn selects_literal_overload() {
   let resolution = resolve_call(
     &store,
     &relate,
-    None,
     callable,
     &[click, handler],
     None,
@@ -104,7 +103,6 @@ fn infers_generic_return_type() {
   let resolution = resolve_call(
     &store,
     &relate,
-    None,
     callable,
     &[primitives.number],
     None,
@@ -137,7 +135,6 @@ fn reports_no_matching_overload_with_reasons() {
   let resolution = resolve_call(
     &store,
     &relate,
-    None,
     callable,
     &[primitives.string],
     None,
@@ -186,7 +183,6 @@ fn reports_ambiguous_call() {
   let resolution = resolve_call(
     &store,
     &relate,
-    None,
     callable,
     &[primitives.string],
     None,
@@ -246,7 +242,6 @@ fn enforces_constraints_for_structurally_identical_generics() {
   let string_resolution = resolve_call(
     &store,
     &relate,
-    None,
     string_callable,
     &[primitives.number],
     None,
@@ -263,7 +258,6 @@ fn enforces_constraints_for_structurally_identical_generics() {
   let number_resolution = resolve_call(
     &store,
     &relate,
-    None,
     number_callable,
     &[primitives.string],
     None,
@@ -302,7 +296,7 @@ fn applies_default_type_argument_from_interned_signature() {
     Some(primitives.string)
   );
 
-  let resolution = resolve_call(&store, &relate, None, callable, &[], None, None, span());
+  let resolution = resolve_call(&store, &relate, callable, &[], None, None, span());
   assert!(resolution.diagnostics.is_empty());
   let instantiated = resolution
     .signature
@@ -349,16 +343,7 @@ fn prefers_union_compatible_overload() {
     overloads: vec![sig_string_id, sig_number_id, sig_union_id],
   });
 
-  let resolution = resolve_call(
-    &store,
-    &relate,
-    None,
-    callable,
-    &[union],
-    None,
-    None,
-    span(),
-  );
+  let resolution = resolve_call(&store, &relate, callable, &[union], None, None, span());
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(sig_union_id));
@@ -405,7 +390,6 @@ fn prefers_fixed_arity_over_rest() {
   let resolution = resolve_call(
     &store,
     &relate,
-    None,
     callable,
     &[primitives.string, primitives.string],
     None,
@@ -450,7 +434,6 @@ fn prefers_non_generic_when_inference_is_unknown() {
   let resolution = resolve_call(
     &store,
     &relate,
-    None,
     callable,
     &[primitives.any],
     None,
@@ -485,7 +468,6 @@ fn uses_contextual_return_for_generic_inference() {
   let resolution = resolve_call(
     &store,
     &relate,
-    None,
     callable,
     &[primitives.any],
     None,

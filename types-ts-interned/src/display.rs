@@ -461,14 +461,10 @@ impl<'a> TypeDisplay<'a> {
       if param.rest {
         write!(f, "...")?;
       }
-      if let Some(name) = param.name {
-        self.fmt_name(name, f)?;
-        if param.optional {
-          write!(f, "?")?;
-        }
-        write!(f, ": ")?;
-      }
       self.fmt_type(param.ty, f)?;
+      if param.optional {
+        write!(f, "?")?;
+      }
       needs_comma = true;
     }
     write!(f, ") => ")?;

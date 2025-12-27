@@ -552,6 +552,25 @@ fn lower_block(
           );
         }
       }
+      Stmt::GlobalDecl(global) => {
+        let nested = lower_block(
+          &global.stx.body,
+          lower,
+          allowed_defs,
+          import_specifier_span,
+          export_specifier_span,
+        );
+        result.local_defs.extend(nested.local_defs);
+        result.exported.extend(nested.exported);
+        result.imports.extend(nested.imports);
+        result.import_equals.extend(nested.import_equals);
+        result.exports.extend(nested.exports);
+        result
+          .export_as_namespace
+          .extend(nested.export_as_namespace);
+        result.ambient_modules.extend(nested.ambient_modules);
+        result.has_module_syntax |= nested.has_module_syntax;
+      }
       _ => {}
     }
   }

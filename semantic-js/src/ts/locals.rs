@@ -2532,7 +2532,7 @@ impl<'a> ResolveTablesPass<'a> {
 
   fn pop_scope_for_node<T: Drive + DriveMut>(&mut self, node: &Node<T>) {
     if let Some(id) = ts::scope_id_in_tables(&self.tables, node.loc) {
-      if self.scope_stack.last().copied() == Some(id) {
+      if self.scope_stack.len() > 1 && self.scope_stack.last().copied() == Some(id) {
         self.scope_stack.pop();
       }
     }

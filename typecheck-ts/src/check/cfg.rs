@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 /// Identifier for a basic block inside a body-local CFG.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
 pub struct BlockId(pub usize);
 
 /// Directed edge between two blocks.
@@ -90,8 +90,47 @@ impl ControlFlowGraph {
   /// Build a control-flow graph for a HIR [`Body`], creating one block per
   /// statement plus dedicated entry/exit blocks.
   pub fn from_body(body: &Body) -> ControlFlowGraph {
-    let builder = CfgBuilder::new(body);
-    builder.build()
+    let mut cfg = CfgBuilder::new(body).build();
+    cfg.compress_passthrough_blocks();
+    cfg
+  }
+
+  /// Redirect edges that pass through empty blocks with a single successor.
+  fn compress_passthrough_blocks(&mut self) {
+    let len = self.blocks.len();
+    let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); len];
+    for block in &self.blocks {
+      for succ in &block.successors {
+        if succ.0 < len {
+          preds[succ.0].push(block.id);
+        }
+      }
+    }
+
+    for idx in 0..len {
+      if idx == self.entry.0 || idx == self.exit.0 {
+        continue;
+      }
+      let block = &self.blocks[idx];
+      if !block.stmts.is_empty()
+        || block.successors.len() != 1
+        || !matches!(block.kind, BlockKind::Normal)
+      {
+        continue;
+      }
+      let target = block.successors[0];
+      for pred in preds[idx].iter().copied() {
+        if let Some(pred_block) = self.blocks.get_mut(pred.0) {
+          for succ in pred_block.successors.iter_mut() {
+            if *succ == BlockId(idx) {
+              *succ = target;
+            }
+          }
+          pred_block.successors.sort();
+          pred_block.successors.dedup();
+        }
+      }
+    }
   }
 }
 
@@ -300,7 +339,11 @@ impl<'a> CfgBuilder<'a> {
             exits: preds,
           }
         } else {
-          self.build_stmt_list(stmts, preds)
+          let inner = self.build_stmt_list(stmts, preds);
+          BuildResult {
+            entry: inner.entry,
+            exits: inner.exits,
+          }
         }
       }
       StmtKind::Try {
@@ -347,10 +390,6 @@ impl<'a> CfgBuilder<'a> {
           exits: Vec::new(),
         }
       }
-      StmtKind::Empty => BuildResult {
-        entry: None,
-        exits: preds,
-      },
       StmtKind::Var(_) | StmtKind::Decl(_) | StmtKind::Expr(_) => {
         let block = self.add_stmt_block(stmt_id);
         self.connect(&preds, block);
@@ -359,6 +398,10 @@ impl<'a> CfgBuilder<'a> {
           exits: vec![block],
         }
       }
+      StmtKind::Empty => BuildResult {
+        entry: None,
+        exits: preds,
+      },
       StmtKind::Labeled { label, body } => self.build_labeled(stmt_id, *label, *body, preds),
       StmtKind::With { body, .. } => {
         let block = self.add_stmt_block(stmt_id);

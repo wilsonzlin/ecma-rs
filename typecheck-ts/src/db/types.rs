@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use diagnostics::Diagnostic;
@@ -26,6 +27,8 @@ impl DeclTypes {
   }
 }
 
+/// Cheap wrapper around [`TypeStore`] with pointer-based equality for salsa
+/// inputs.
 #[derive(Clone)]
 pub struct SharedTypeStore(pub Arc<TypeStore>);
 
@@ -35,9 +38,11 @@ impl SharedTypeStore {
   }
 }
 
-impl std::fmt::Debug for SharedTypeStore {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_tuple("SharedTypeStore").finish()
+impl fmt::Debug for SharedTypeStore {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("SharedTypeStore")
+      .field(&Arc::as_ptr(&self.0))
+      .finish()
   }
 }
 
