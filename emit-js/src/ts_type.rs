@@ -238,7 +238,8 @@ impl<'a> TypeEmitter<'a> {
   fn emit_type_literal(&mut self, lit: &Node<TypeLiteral>) -> EmitResult {
     match lit.stx.as_ref() {
       TypeLiteral::String(value) => self.emit_string_literal(value),
-      TypeLiteral::Number(value) | TypeLiteral::BigInt(value) => self.em.write_number(value),
+      TypeLiteral::Number(value) => self.em.write_number(value),
+      TypeLiteral::BigInt(value) => self.em.write_bigint(value),
       TypeLiteral::Boolean(value) => self.em.write_keyword(if *value { "true" } else { "false" }),
       TypeLiteral::Null => self.em.write_keyword("null"),
     }
@@ -863,7 +864,7 @@ impl<'a> TypeEmitter<'a> {
         .em
         .write_keyword(if lit.stx.value { "true" } else { "false" }),
       Expr::LitNull(_) => self.em.write_keyword("null"),
-      Expr::LitBigInt(lit) => self.em.write_number(&lit.stx.value),
+      Expr::LitBigInt(lit) => self.em.write_bigint(&lit.stx.value),
       Expr::This(_) => self.em.write_keyword("this"),
       Expr::Member(member) => {
         let member = member.stx.as_ref();

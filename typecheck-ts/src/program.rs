@@ -2149,6 +2149,31 @@ impl ProgramTypeResolver {
     false
   }
 
+  fn decl_matches_namespace(kind: sem_ts::DeclKind, ns: sem_ts::Namespace) -> bool {
+    if ns.contains(sem_ts::Namespace::VALUE) {
+      return matches!(
+        kind,
+        sem_ts::DeclKind::Function
+          | sem_ts::DeclKind::Class
+          | sem_ts::DeclKind::Var
+          | sem_ts::DeclKind::Enum
+      );
+    }
+    if ns.contains(sem_ts::Namespace::TYPE) {
+      return matches!(
+        kind,
+        sem_ts::DeclKind::Interface
+          | sem_ts::DeclKind::TypeAlias
+          | sem_ts::DeclKind::Class
+          | sem_ts::DeclKind::Enum
+      );
+    }
+    if ns.contains(sem_ts::Namespace::NAMESPACE) {
+      return matches!(kind, sem_ts::DeclKind::Namespace);
+    }
+    false
+  }
+
   fn resolve_local(&self, name: &str, ns: sem_ts::Namespace) -> Option<DefId> {
     let def = self.local_defs.get(name).copied()?;
     let kind = self.def_kinds.get(&def)?;
@@ -2244,13 +2269,19 @@ impl ProgramTypeResolver {
     for (idx, decl_id) in self.semantics.symbol_decls(symbol, ns).iter().enumerate() {
       let decl = symbols.decl(*decl_id);
       let def = decl.def_id;
-      let Some(kind) = self.def_kinds.get(&def) else {
-        continue;
-      };
-      if !Self::matches_namespace(kind, ns) {
+      let decl_kind = decl.kind.clone();
+      let matches_decl_ns = Self::decl_matches_namespace(decl_kind.clone(), ns);
+      let matches_def_ns = self
+        .def_kinds
+        .get(&def)
+        .map_or(false, |kind| Self::matches_namespace(kind, ns));
+      if !matches_def_ns && !matches_decl_ns {
         continue;
       }
-      let pri = self.def_priority(def, ns);
+      let mut pri = self.def_priority(def, ns);
+      if pri == u8::MAX {
+        pri = Self::decl_priority(decl_kind, ns);
+      }
       best = match best {
         Some((best_pri, best_idx, best_def))
           if best_pri < pri || (best_pri == pri && best_idx <= idx) =>
@@ -2291,6 +2322,32 @@ impl ProgramTypeResolver {
       return match kind {
         DefKind::Var(var) if var.body.0 == u32::MAX => 0,
         DefKind::Import(_) => 1,
+        _ => 2,
+      };
+    }
+    u8::MAX
+  }
+
+  fn decl_priority(kind: sem_ts::DeclKind, ns: sem_ts::Namespace) -> u8 {
+    if ns.contains(sem_ts::Namespace::VALUE) {
+      return match kind {
+        sem_ts::DeclKind::Function => 0,
+        sem_ts::DeclKind::Class | sem_ts::DeclKind::Enum => 1,
+        sem_ts::DeclKind::Var => 3,
+        _ => 3,
+      };
+    }
+    if ns.contains(sem_ts::Namespace::TYPE) {
+      return match kind {
+        sem_ts::DeclKind::Interface => 0,
+        sem_ts::DeclKind::TypeAlias | sem_ts::DeclKind::Class => 1,
+        sem_ts::DeclKind::Enum => 2,
+        _ => 3,
+      };
+    }
+    if ns.contains(sem_ts::Namespace::NAMESPACE) {
+      return match kind {
+        sem_ts::DeclKind::Namespace => 0,
         _ => 2,
       };
     }

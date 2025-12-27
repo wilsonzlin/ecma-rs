@@ -343,6 +343,14 @@ impl Emitter {
     self.write_with_kind(number, TokenKind::Number);
   }
 
+  /// Emits a BigInt literal from a canonical decimal representation without the trailing `n`.
+  pub fn write_bigint(&mut self, value: &str) {
+    let mut buf = String::with_capacity(value.len().saturating_add(1));
+    buf.push_str(value);
+    buf.push('n');
+    self.write_with_kind(&buf, TokenKind::Number);
+  }
+
   /// Emits punctuation or operators.
   pub fn write_punct(&mut self, punct: &str) {
     let kind = match punct {
