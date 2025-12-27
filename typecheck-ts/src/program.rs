@@ -8095,11 +8095,9 @@ impl ProgramState {
   }
 
   fn record_symbol(&mut self, file: FileId, range: TextRange, symbol: semantic_js::SymbolId) {
-    self
-      .symbol_occurrences
-      .entry(file)
-      .or_default()
-      .push(SymbolOccurrence { range, symbol });
+    // Symbol occurrences are derived from the typecheck database (locals + semantics).
+    // This hook is kept for compatibility but does not store per-node data here.
+    let _ = (file, range, symbol);
   }
 }
 
