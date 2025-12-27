@@ -1,8 +1,14 @@
+use diagnostics::FileId;
+use hir_js::hir::TypeImportName;
+use hir_js::lower_file_with_diagnostics;
 use hir_js::lower_from_source;
 use hir_js::DefTypeInfo;
+use hir_js::FileKind;
 use hir_js::TypeExprKind;
 use hir_js::TypeMappedModifier;
-use hir_js::hir::TypeImportName;
+use parse_js::ast::stmt::Stmt as AstStmt;
+use parse_js::loc::Loc;
+use parse_js::parse;
 
 fn type_alias<'a>(
   result: &'a hir_js::LowerResult,
@@ -235,4 +241,30 @@ fn lowers_type_query_import_name_multi_segment() {
   assert_eq!(qualifier.len(), 2);
   assert_eq!(result.names.resolve(qualifier[0]).unwrap(), "Foo");
   assert_eq!(result.names.resolve(qualifier[1]).unwrap(), "Bar");
+}
+
+#[test]
+fn reports_overflowing_type_spans() {
+  let mut ast = parse("type Overflow = string;").expect("parse");
+  let huge_start = u32::MAX as usize + 10;
+  let huge_end = huge_start + 5;
+
+  let stmt = ast.stx.body.first_mut().expect("type alias stmt");
+  match &mut *stmt.stx {
+    AstStmt::TypeAliasDecl(alias) => {
+      alias.stx.type_expr.loc = Loc(huge_start, huge_end);
+    }
+    other => panic!("expected type alias, got {other:?}"),
+  }
+
+  let (result, diagnostics) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast);
+  assert!(
+    diagnostics.iter().any(|d| d.code == "LOWER0001"),
+    "expected overflow diagnostic for type span",
+  );
+
+  let (type_expr, _) = type_alias(&result, "Overflow");
+  let span = result.types.type_exprs[type_expr.0 as usize].span;
+  assert_eq!(span.start, u32::MAX);
+  assert_eq!(span.end, u32::MAX);
 }

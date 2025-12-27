@@ -48,7 +48,7 @@ use parse_js::loc::Loc;
 use std::collections::{btree_map::Entry, BTreeMap, HashMap};
 use std::sync::Arc;
 
-struct LoweringContext {
+pub(crate) struct LoweringContext {
   file: FileId,
   diagnostics: Vec<Diagnostic>,
 }
@@ -61,7 +61,7 @@ impl LoweringContext {
     }
   }
 
-  fn to_range(&mut self, loc: Loc) -> TextRange {
+  pub(crate) fn to_range(&mut self, loc: Loc) -> TextRange {
     let (range, note) = loc.to_diagnostics_range_with_note();
     if let Some(note) = note {
       self.diagnostics.push(
@@ -470,7 +470,7 @@ pub fn lower_file_with_diagnostics(
     .collect();
 
   let types = {
-    let mut type_lowerer = TypeLowerer::new(&mut names, &mut span_map);
+    let mut type_lowerer = TypeLowerer::new(&mut names, &mut span_map, &mut ctx);
     for (def_id, source) in pending_types {
       let type_info = match source {
         TypeSource::TypeAlias(alias) => Some(type_lowerer.lower_type_alias(alias)),

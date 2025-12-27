@@ -35,6 +35,7 @@ use crate::ids::TypeExprId;
 use crate::ids::TypeMemberId;
 use crate::ids::TypeParamId;
 use crate::intern::NameInterner;
+use crate::lower::LoweringContext;
 use crate::span_map::SpanMap;
 use diagnostics::TextRange;
 use parse_js::ast::expr::Expr;
@@ -43,7 +44,6 @@ use parse_js::ast::node::Node;
 use parse_js::ast::ts_stmt::InterfaceDecl;
 use parse_js::ast::ts_stmt::TypeAliasDecl;
 use parse_js::ast::type_expr::*;
-use parse_js::loc::Loc;
 
 pub(crate) struct TypeLowerer<'a> {
   pub type_exprs: Vec<HirTypeExpr>,
@@ -51,16 +51,22 @@ pub(crate) struct TypeLowerer<'a> {
   pub type_params: Vec<TypeParam>,
   names: &'a mut NameInterner,
   span_map: &'a mut SpanMap,
+  ctx: &'a mut LoweringContext,
 }
 
 impl<'a> TypeLowerer<'a> {
-  pub fn new(names: &'a mut NameInterner, span_map: &'a mut SpanMap) -> Self {
+  pub fn new(
+    names: &'a mut NameInterner,
+    span_map: &'a mut SpanMap,
+    ctx: &'a mut LoweringContext,
+  ) -> Self {
     Self {
       type_exprs: Vec::new(),
       type_members: Vec::new(),
       type_params: Vec::new(),
       names,
       span_map,
+      ctx,
     }
   }
 
@@ -98,7 +104,7 @@ impl<'a> TypeLowerer<'a> {
   }
 
   pub fn lower_type_expr(&mut self, expr: &Node<TypeExpr>) -> TypeExprId {
-    let span = to_range(expr.loc);
+    let span = self.ctx.to_range(expr.loc);
     let kind = match &*expr.stx {
       TypeExpr::Any(_) => TypeExprKind::Any,
       TypeExpr::Unknown(_) => TypeExprKind::Unknown,
@@ -328,7 +334,7 @@ impl<'a> TypeLowerer<'a> {
   }
 
   fn lower_type_param(&mut self, param: &Node<TypeParameter>, is_infer: bool) -> TypeParamId {
-    let span = to_range(param.loc);
+    let span = self.ctx.to_range(param.loc);
     let constraint = param
       .stx
       .constraint
@@ -353,7 +359,7 @@ impl<'a> TypeLowerer<'a> {
   }
 
   fn lower_infer_type_param(&mut self, name: &str, infer: &Node<TypeInfer>) -> TypeParamId {
-    let span = to_range(infer.loc);
+    let span = self.ctx.to_range(infer.loc);
     let constraint = infer
       .stx
       .constraint
@@ -375,7 +381,7 @@ impl<'a> TypeLowerer<'a> {
     let mut lowered: Vec<TypeMemberId> = members
       .iter()
       .map(|member| {
-        let span = to_range(member.loc);
+        let span = self.ctx.to_range(member.loc);
         let kind = match &*member.stx {
           TypeMember::Property(prop) => {
             TypeMemberKind::Property(self.lower_property_signature(prop))
@@ -535,8 +541,9 @@ impl<'a> TypeLowerer<'a> {
   fn lower_mapped_type(&mut self, mapped: &Node<TypeMapped>) -> HirTypeMapped {
     let constraint = self.lower_type_expr(&mapped.stx.constraint);
     let type_param_name = self.names.intern(&mapped.stx.type_parameter);
+    let type_param_span = self.ctx.to_range(mapped.loc);
     let type_param = self.alloc_type_param(TypeParam {
-      span: to_range(mapped.loc),
+      span: type_param_span,
       name: type_param_name,
       constraint: Some(constraint),
       default: None,
@@ -647,10 +654,6 @@ impl<'a> TypeLowerer<'a> {
     flat.dedup();
     flat
   }
-}
-
-fn to_range(loc: Loc) -> TextRange {
-  loc.to_diagnostics_range_with_note().0
 }
 
 enum LoweredEntityName {
