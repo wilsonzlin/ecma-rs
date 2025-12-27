@@ -2763,8 +2763,19 @@ impl<'a> FlowBodyChecker<'a> {
         self.store.union(vec![left_ty, right_ty])
       }
       BinaryOp::NullishCoalescing => {
-        let right_ty = self.eval_expr(right, env).0;
-        self.store.union(vec![left_ty, right_ty])
+        let prim = self.store.primitive_ids();
+        let (non_nullish, nullish) = narrow_non_nullish(left_ty, &self.store);
+        out.assertions = left_facts.assertions;
+        if nullish == prim.never {
+          return non_nullish;
+        }
+
+        let mut right_env = env.clone();
+        if let Some(name) = self.ident_name(left) {
+          right_env.set(name, nullish);
+        }
+        let (right_ty, _) = self.eval_expr(right, &mut right_env);
+        self.store.union(vec![non_nullish, right_ty])
       }
       _ => {
         let right_ty = self.eval_expr(right, env).0;
@@ -3119,25 +3130,7 @@ impl<'a> FlowBodyChecker<'a> {
   }
 
   fn split_nullish(&self, ty: TypeId) -> (TypeId, TypeId) {
-    let prim = self.store.primitive_ids();
-    match self.store.type_kind(ty) {
-      TypeKind::Union(members) => {
-        let mut non_nullish = Vec::new();
-        let mut nullish = Vec::new();
-        for member in members {
-          let (nonnull, nulls) = self.split_nullish(member);
-          if nonnull != prim.never {
-            non_nullish.push(nonnull);
-          }
-          if nulls != prim.never {
-            nullish.push(nulls);
-          }
-        }
-        (self.store.union(non_nullish), self.store.union(nullish))
-      }
-      TypeKind::Null | TypeKind::Undefined => (prim.never, ty),
-      _ => (ty, prim.never),
-    }
+    super::flow_narrow::split_nullish(ty, &self.store)
   }
 
   fn hir_name(&self, id: NameId) -> String {
@@ -3400,14 +3393,23 @@ impl<'a> FlowBodyChecker<'a> {
     env: &mut Env,
     facts: &mut Facts,
   ) -> TypeId {
+    let prim = self.store.primitive_ids();
     let left_base = self.base_type(left);
     let (nonnullish, nullish) = self.split_nullish(left_base);
+    if nullish == prim.never {
+      let result_ty = nonnullish;
+      self.assign_pat(target, result_ty, env);
+      self.record_assignment_facts(root, result_ty, facts);
+      return result_ty;
+    }
+
     let mut right_env = env.clone();
     if let Some(name) = root {
       right_env.set(name, nullish);
     }
     let right_ty = self.eval_expr(value, &mut right_env).0;
-    let result_ty = self.store.union(vec![nonnullish, self.base_type(right_ty)]);
+    let (nonnullish_right, _) = self.split_nullish(self.base_type(right_ty));
+    let result_ty = self.store.union(vec![nonnullish, nonnullish_right]);
     self.assign_pat(target, result_ty, env);
     self.record_assignment_facts(root, result_ty, facts);
     result_ty

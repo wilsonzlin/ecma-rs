@@ -246,6 +246,11 @@ pub fn narrow_non_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
   }
 }
 
+/// Split a type into its non-nullish and nullish components.
+pub fn split_nullish(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
+  narrow_non_nullish(ty, store)
+}
+
 /// Narrow a variable by a typeof comparison (e.g. `typeof x === "string"`).
 pub fn narrow_by_typeof(ty: TypeId, target: &str, store: &TypeStore) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();

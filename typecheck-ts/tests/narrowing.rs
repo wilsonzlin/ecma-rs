@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use diagnostics::FileId;
-use hir_js::{lower_from_source, Body, BodyId, DefKind, LowerResult, NameId, NameInterner};
+use hir_js::{
+  lower_from_source, BinaryOp, Body, BodyId, DefKind, ExprId, ExprKind, LowerResult, NameId,
+  NameInterner,
+};
 use typecheck_ts::check::hir_body::check_body_with_env;
 use types_ts_interned::{
   NameId as TypeNameId, Param, PropData, PropKey, Property, Shape, Signature, TypeDisplay, TypeId,
@@ -915,6 +918,95 @@ function f(x?: string, y: string) {
   );
   let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   assert_eq!(ty, "string");
+}
+
+#[test]
+fn nullish_coalescing_refines_result_type() {
+  let src = r#"function f(x: string | null) { const y = x ?? ""; return y; }"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let ret_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ret_ty, "string");
+}
+
+#[test]
+fn nullish_assignment_updates_environment() {
+  let src = r#"function g(x: string | null) { x ??= ""; return x; }"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "g");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let ret_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ret_ty, "string");
+}
+
+#[test]
+fn nullish_coalescing_narrows_member_base() {
+  let src = r#"function h(x: string | null) { return (x ?? "").length; }"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "h");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let nullish_expr = body
+    .exprs
+    .iter()
+    .enumerate()
+    .find(|(_, expr)| matches!(expr.kind, ExprKind::Binary { op: BinaryOp::NullishCoalescing, .. }))
+    .map(|(idx, _)| ExprId(idx as u32))
+    .expect("nullish expression");
+
+  let nullish_ty = res.expr_type(nullish_expr).unwrap();
+  assert_eq!(TypeDisplay::new(&store, nullish_ty).to_string(), "string");
 }
 
 #[test]
