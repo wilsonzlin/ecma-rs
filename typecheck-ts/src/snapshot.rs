@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::api::TextRange;
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{BodyCheckResult, BuiltinTypes, DefData, TypeStore};
 use crate::symbols::{semantic_js, SymbolBinding, SymbolOccurrence};
@@ -34,6 +35,36 @@ pub struct FileStateSnapshot {
   pub exports: ExportMap,
   pub bindings: Vec<(String, SymbolBinding)>,
   pub top_body: Option<BodyId>,
+  #[serde(default)]
+  pub ambient_modules: Vec<AmbientModuleSnapshot>,
+}
+
+/// Serialized view of an ambient module.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AmbientModuleSnapshot {
+  pub name: String,
+  pub defs: Vec<DefId>,
+  pub exports: ExportMap,
+  pub bindings: Vec<(String, SymbolBinding)>,
+  pub reexports: Vec<ReexportSnapshot>,
+  pub export_all: Vec<ExportAllSnapshot>,
+  pub ambient_modules: Vec<AmbientModuleSnapshot>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReexportSnapshot {
+  pub from: FileId,
+  pub original: String,
+  pub alias: String,
+  pub type_only: bool,
+  pub span: TextRange,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ExportAllSnapshot {
+  pub from: FileId,
+  pub type_only: bool,
+  pub span: TextRange,
 }
 
 /// Serialized view of a single definition entry.

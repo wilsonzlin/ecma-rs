@@ -246,6 +246,46 @@ fn declare_module_libs_do_not_crash() {
 }
 
 #[test]
+fn ambient_module_types_are_bound() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let ambient_key = FileKey::new("ambient.d.ts");
+  let ambient_src = r#"declare module "ambient" { export interface Foo { a: string } }"#;
+  let lib = LibFile {
+    key: ambient_key.clone(),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(ambient_src),
+  };
+  let entry = FileKey::new("entry.ts");
+  let source = "import type { Foo } from \"ambient\";\ntype Uses = Foo;";
+  let host = TestHost::new(options)
+    .with_lib(lib)
+    .with_file(ambient_key.clone(), ambient_src)
+    .with_file(entry.clone(), source)
+    .link(entry.clone(), "ambient", ambient_key.clone());
+  let program = Program::new(host, vec![entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+  let entry_id = program.file_id(&entry).expect("entry id");
+  let uses_def = program
+    .definitions_in_file(entry_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("Uses"))
+    .expect("definition for Uses");
+  let rendered = program
+    .display_type(program.type_of_def(uses_def))
+    .to_string();
+  assert!(
+    rendered.contains("a: string"),
+    "expected Uses to resolve to ambient Foo; got {rendered}"
+  );
+}
+
+#[test]
 fn host_file_named_like_lib_does_not_collide() {
   let mut options = CompilerOptions::default();
   options.libs = vec![LibName::Es2020];

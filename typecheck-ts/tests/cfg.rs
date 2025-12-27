@@ -30,28 +30,22 @@ fn block_for_stmt(cfg: &ControlFlowGraph, stmt: StmtId) -> BlockId {
     .iter()
     .find(|block| block.stmts.contains(&stmt))
     .map(|block| block.id)
-    .unwrap_or_else(|| panic!("block containing statement {:?}\n{cfg}", stmt))
+    .expect("block containing statement")
 }
 
 fn update_block_for(cfg: &ControlFlowGraph, header: BlockId) -> BlockId {
+  if let Some(block) = cfg
+    .blocks
+    .iter()
+    .find(|block| matches!(block.kind, BlockKind::ForUpdate { .. }))
+  {
+    return block.id;
+  }
   cfg
     .blocks
     .iter()
-    .find(|block| {
-      matches!(block.kind, BlockKind::ForUpdate { .. })
-        && block.id != cfg.entry
-        && block.successors.contains(&header)
-    })
+    .find(|block| block.id != cfg.entry && block.stmts.is_empty() && block.successors == [header])
     .map(|block| block.id)
-    .or_else(|| {
-      cfg
-        .blocks
-        .iter()
-        .find(|block| {
-          block.id != cfg.entry && block.stmts.is_empty() && block.successors == [header]
-        })
-        .map(|block| block.id)
-    })
     .expect("update block")
 }
 

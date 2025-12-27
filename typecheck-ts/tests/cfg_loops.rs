@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use hir_js::{lower_from_source, Body};
 use typecheck_ts::check::cfg::{BlockId, BlockKind, ControlFlowGraph};
 
@@ -6,19 +8,17 @@ fn root_body(lowered: &hir_js::LowerResult) -> &Body {
   lowered.body(body_id).expect("root body")
 }
 
-fn reachable_blocks(cfg: &ControlFlowGraph, from: BlockId, to: BlockId) -> bool {
-  let mut stack = vec![from];
-  let mut visited = std::collections::HashSet::new();
-  while let Some(block) = stack.pop() {
-    if !visited.insert(block) {
+fn reaches(cfg: &ControlFlowGraph, start: BlockId, target: BlockId) -> bool {
+  let mut stack = vec![start];
+  let mut seen = HashSet::new();
+  while let Some(cur) = stack.pop() {
+    if !seen.insert(cur) {
       continue;
     }
-    if block == to {
+    if cur == target {
       return true;
     }
-    if let Some(node) = cfg.blocks.get(block.0) {
-      stack.extend(node.successors.iter().copied());
-    }
+    stack.extend(cfg.blocks[cur.0].successors.iter().copied());
   }
   false
 }
@@ -50,21 +50,16 @@ fn for_loop_uses_distinct_blocks() {
   assert_eq!(cfg.blocks[cfg.entry.0].successors, vec![init]);
   assert_eq!(cfg.blocks[init.0].successors, vec![test]);
 
-  let body_entry = cfg.blocks[test.0]
-    .successors
-    .iter()
-    .copied()
-    .find(|succ| *succ != cfg.exit)
-    .expect("body edge");
+  let successors: HashSet<_> = cfg.blocks[test.0].successors.iter().copied().collect();
 
-  let false_edge = cfg.blocks[test.0]
-    .successors
-    .iter()
-    .copied()
-    .find(|succ| *succ != body_entry)
-    .expect("false edge");
-  assert!(reachable_blocks(&cfg, false_edge, cfg.exit));
-  assert!(reachable_blocks(&cfg, body_entry, update));
+  assert!(
+    successors.iter().any(|succ| reaches(&cfg, *succ, update)),
+    "loop true edge should reach update"
+  );
+  assert!(
+    successors.iter().any(|succ| reaches(&cfg, *succ, cfg.exit)),
+    "loop false edge should exit"
+  );
   assert_eq!(cfg.blocks[update.0].successors, vec![test]);
 }
 
@@ -96,7 +91,10 @@ fn do_while_executes_body_before_test() {
     "test true edge should loop"
   );
   assert!(
-    reachable_blocks(&cfg, test_block, cfg.exit),
+    cfg.blocks[test_block.0]
+      .successors
+      .iter()
+      .any(|succ| reaches(&cfg, *succ, cfg.exit)),
     "test false edge should exit"
   );
 }

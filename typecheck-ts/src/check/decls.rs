@@ -12,8 +12,8 @@ use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use semantic_js::ts::{ModuleRef, Namespace, SymbolOrigin, SymbolOwner, TsProgramSemantics};
 use types_ts_interned::{
-  DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey, Property,
-  Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+  Accessibility, DefId, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey,
+  Property, Shape, Signature, TupleElem, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 /// Lower HIR type expressions and declarations into interned types.
@@ -135,10 +135,44 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         };
         (ty, params)
       }
-      DefTypeInfo::Class { type_params, .. } => {
+      DefTypeInfo::Class {
+        type_params,
+        extends,
+        implements,
+        members,
+      } => {
         self.register_type_params(type_params);
         let params = self.collect_type_params(type_params);
-        (self.store.primitive_ids().unknown, params)
+        let mut shape = Shape::new();
+
+        for member in members.iter() {
+          self.lower_class_member(&mut shape, member, names);
+        }
+
+        let mut types: Vec<TypeId> = Vec::new();
+        if !shape.properties.is_empty()
+          || !shape.call_signatures.is_empty()
+          || !shape.construct_signatures.is_empty()
+          || !shape.indexers.is_empty()
+        {
+          let shape_id = self.store.intern_shape(shape);
+          let obj = self.store.intern_object(ObjectType { shape: shape_id });
+          types.push(self.store.intern_type(TypeKind::Object(obj)));
+        }
+
+        if let Some(base) = extends.as_ref() {
+          types.push(self.lower_type_expr(*base, names));
+        }
+        for implemented in implements.iter() {
+          types.push(self.lower_type_expr(*implemented, names));
+        }
+
+        let ty = match types.len() {
+          0 => self.store.primitive_ids().any,
+          1 => types[0],
+          _ => self.store.intersection(types),
+        };
+        (ty, params)
       }
       DefTypeInfo::Enum { .. } => (self.store.primitive_ids().any, Vec::new()),
       DefTypeInfo::Namespace { .. } => (self.store.primitive_ids().unknown, Vec::new()),
@@ -628,6 +662,107 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           ),
         });
       }
+    }
+  }
+
+  fn lower_class_member(
+    &mut self,
+    shape: &mut Shape,
+    member: &hir_js::ClassMemberSig,
+    names: &hir_js::NameInterner,
+  ) {
+    if member.static_ {
+      return;
+    }
+    match &member.kind {
+      hir_js::ClassMemberSigKind::Field {
+        name,
+        type_annotation,
+      } => {
+        let prop = hir_js::TypePropertySignature {
+          readonly: member.readonly,
+          optional: member.optional,
+          name: name.clone(),
+          type_annotation: *type_annotation,
+        };
+        if let Some((key, mut data)) = self.lower_property(&prop, names) {
+          data.accessibility = Self::map_accessibility(member.accessibility);
+          shape.properties.push(Property { key, data });
+        }
+      }
+      hir_js::ClassMemberSigKind::Method { name, signature } => {
+        let method = hir_js::TypeMethodSignature {
+          optional: member.optional,
+          name: name.clone(),
+          type_params: signature.type_params.clone(),
+          params: signature.params.clone(),
+          return_type: signature.return_type,
+        };
+        if let Some((key, ty)) = self.lower_method(&method, names) {
+          shape.properties.push(Property {
+            key,
+            data: PropData {
+              ty,
+              optional: member.optional,
+              readonly: false,
+              accessibility: Self::map_accessibility(member.accessibility),
+              is_method: true,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+      }
+      hir_js::ClassMemberSigKind::Getter { name, return_type } => {
+        let prop = hir_js::TypePropertySignature {
+          readonly: true,
+          optional: false,
+          name: name.clone(),
+          type_annotation: *return_type,
+        };
+        if let Some((key, mut data)) = self.lower_property(&prop, names) {
+          data.readonly = true;
+          data.accessibility = Self::map_accessibility(member.accessibility);
+          shape.properties.push(Property { key, data });
+        }
+      }
+      hir_js::ClassMemberSigKind::Setter { name, parameter } => {
+        let prop = hir_js::TypePropertySignature {
+          readonly: false,
+          optional: parameter.optional,
+          name: name.clone(),
+          type_annotation: Some(parameter.ty),
+        };
+        if let Some((key, mut data)) = self.lower_property(&prop, names) {
+          data.readonly = false;
+          data.accessibility = Self::map_accessibility(member.accessibility);
+          shape.properties.push(Property { key, data });
+        }
+      }
+      hir_js::ClassMemberSigKind::Constructor(_) => {}
+      hir_js::ClassMemberSigKind::CallSignature(sig) => {
+        let sig = self.lower_signature(sig, names);
+        let sig_id = self.store.intern_signature(sig);
+        shape.call_signatures.push(sig_id);
+      }
+      hir_js::ClassMemberSigKind::IndexSignature(idx) => {
+        let key_type = self.lower_type_expr(idx.parameter_type, names);
+        let value_type = self.lower_type_expr(idx.type_annotation, names);
+        shape.indexers.push(Indexer {
+          key_type,
+          value_type,
+          readonly: idx.readonly,
+        });
+      }
+    }
+  }
+
+  fn map_accessibility(acc: Option<hir_js::ClassMemberAccessibility>) -> Option<Accessibility> {
+    match acc {
+      Some(hir_js::ClassMemberAccessibility::Public) => Some(Accessibility::Public),
+      Some(hir_js::ClassMemberAccessibility::Private) => Some(Accessibility::Private),
+      Some(hir_js::ClassMemberAccessibility::Protected) => Some(Accessibility::Protected),
+      None => None,
     }
   }
 

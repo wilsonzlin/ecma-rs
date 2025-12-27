@@ -37,7 +37,6 @@ fn ambient_class_members_from_libs() {
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
-
   let file_id = program.file_id(&file).unwrap();
   let source = program.file_text(file_id).unwrap();
   let offset = source.rfind("value").expect("value offset") as u32;

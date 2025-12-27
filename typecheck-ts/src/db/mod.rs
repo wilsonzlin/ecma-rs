@@ -15,7 +15,6 @@ use crate::FileKey;
 use crate::{BodyCheckResult, BodyId, DefId};
 use diagnostics::{Diagnostic, FileId};
 use salsa::Setter;
-
 pub mod cache;
 pub mod decl;
 pub mod expander;
@@ -43,7 +42,7 @@ pub use queries::{
   TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;
-pub use types::SharedTypeStore;
+pub use types::{DeclTypes, SharedDeclTypes, SharedTypeStore};
 
 pub trait TypecheckDatabase: Db {}
 impl TypecheckDatabase for Database {}
@@ -95,7 +94,7 @@ pub struct Database {
   module_resolutions: BTreeMap<ModuleKey, inputs::ModuleResolutionInput>,
   extra_diagnostics: Option<inputs::ExtraDiagnosticsInput>,
   profiler: Option<QueryStatsCollector>,
-  body_results: BTreeMap<BodyId, inputs::BodyResultInput>,
+  body_results: BTreeMap<BodyId, Arc<BodyCheckResult>>,
 }
 
 impl Default for Database {
@@ -185,10 +184,7 @@ impl Db for Database {
   }
 
   fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>> {
-    self
-      .body_results
-      .get(&body)
-      .map(|input| input.result(self).clone())
+    self.body_results.get(&body).cloned()
   }
 }
 
@@ -326,14 +322,6 @@ impl Database {
     }
   }
 
-  pub fn set_extra_diagnostics(&mut self, diagnostics: Arc<[Diagnostic]>) {
-    if let Some(existing) = self.extra_diagnostics {
-      existing.set_diagnostics(self).to(diagnostics);
-    } else {
-      self.extra_diagnostics = Some(inputs::ExtraDiagnosticsInput::new(self, diagnostics));
-    }
-  }
-
   pub fn parse(&self, file: FileId) -> crate::queries::parse::ParseResult {
     queries::parse(self, file)
   }
@@ -358,6 +346,18 @@ impl Database {
     queries::module_dep_diagnostics(self, file)
   }
 
+  pub fn unresolved_module_diagnostics(&self, file: FileId) -> Arc<[diagnostics::Diagnostic]> {
+    queries::module_dep_diagnostics(self, file)
+  }
+
+  pub fn set_extra_diagnostics(&mut self, diagnostics: Arc<[Diagnostic]>) {
+    if let Some(existing) = self.extra_diagnostics {
+      existing.set_diagnostics(self).to(diagnostics);
+    } else {
+      self.extra_diagnostics = Some(inputs::ExtraDiagnosticsInput::new(self, diagnostics));
+    }
+  }
+
   pub fn reachable_files(&self) -> Arc<Vec<FileId>> {
     queries::reachable_files(self)
   }
@@ -376,13 +376,7 @@ impl Database {
 
   /// Cache a checked body result for reuse by span and type queries.
   pub fn set_body_result(&mut self, body: BodyId, result: Arc<BodyCheckResult>) {
-    if let Some(existing) = self.body_results.get(&body).copied() {
-      existing.set_body(self).to(body);
-      existing.set_result(self).to(result);
-    } else {
-      let input = inputs::BodyResultInput::new(self, body, result);
-      self.body_results.insert(body, input);
-    }
+    self.body_results.insert(body, result);
   }
 
   pub fn def_to_file(&self) -> Arc<BTreeMap<DefId, FileId>> {
