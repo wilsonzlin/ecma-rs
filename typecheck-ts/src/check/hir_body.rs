@@ -2004,24 +2004,28 @@ impl<'a> Checker<'a> {
     left: &Node<AstExpr>,
     right: &Node<AstExpr>,
   ) -> TypeId {
+    if let AstExpr::Id(id) = left.stx.as_ref() {
+      let binding = self.lookup(&id.stx.name);
+      let expected = binding.as_ref().map(|b| b.ty);
+      let value_ty = self.check_expr_in_ctx(right, ExprContext::with_expected(expected));
+      if let Some(binding) = binding {
+        if !self.relate.is_assignable(value_ty, binding.ty) {
+          self.diagnostics.push(codes::TYPE_MISMATCH.error(
+            "assignment type mismatch",
+            Span {
+              file: self.file,
+              range: loc_to_range(self.file, left.loc),
+            },
+          ));
+        }
+        self.insert_binding(id.stx.name.clone(), value_ty, binding.type_params);
+      } else {
+        self.insert_binding(id.stx.name.clone(), value_ty, Vec::new());
+      }
+      return value_ty;
+    }
     let value_ty = self.check_expr(right);
     match left.stx.as_ref() {
-      AstExpr::Id(id) => {
-        if let Some(binding) = self.lookup(&id.stx.name) {
-          if !self.relate.is_assignable(value_ty, binding.ty) {
-            self.diagnostics.push(codes::TYPE_MISMATCH.error(
-              "assignment type mismatch",
-              Span {
-                file: self.file,
-                range: loc_to_range(self.file, left.loc),
-              },
-            ));
-          }
-          self.insert_binding(id.stx.name.clone(), value_ty, binding.type_params);
-        } else {
-          self.insert_binding(id.stx.name.clone(), value_ty, Vec::new());
-        }
-      }
       AstExpr::ArrPat(arr) => {
         let span = loc_to_range(self.file, arr.loc);
         if let Some(pat) = self.index.pats.get(&span) {
