@@ -2107,3 +2107,30 @@ fn qualified_type_references_use_namespace_space() {
     "resolved symbol should live in the namespace namespace"
   );
 }
+
+#[test]
+fn import_type_qualifier_ignores_local_symbols() {
+  let src = r#"
+    type Foo = number;
+    type Bar = import("pkg").Foo;
+  "#;
+  let mut ast = parse(src).unwrap();
+  let locals = bind_ts_locals(&mut ast, FileId(130), true);
+
+  let local_foo = locals
+    .resolve_expr_at_offset(src.find("Foo = number").expect("local Foo present") as u32)
+    .expect("local Foo resolves")
+    .1;
+
+  let import_foo_offset = src
+    .rfind("Foo")
+    .expect("import qualifier present") as u32;
+
+  assert!(
+    locals
+      .resolve_type_at_offset(import_foo_offset)
+      .map(|(_, sym)| sym != local_foo)
+      .unwrap_or(true),
+    "import type qualifier should not resolve to local Foo"
+  );
+}

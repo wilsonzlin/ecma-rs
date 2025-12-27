@@ -1705,11 +1705,6 @@ impl<'a> ResolvePass<'a> {
         }
       }
       TypeExpr::ImportType(import) => {
-        if let Some(qual) = &import.stx.qualifier {
-          if let Some(sym) = self.resolve_type_entity_name(qual) {
-            self.type_resolutions.insert(to_range(ty.loc), sym);
-          }
-        }
         if let Some(args) = &mut import.stx.type_arguments {
           for arg in args.iter_mut() {
             self.walk_type_expr(arg);
