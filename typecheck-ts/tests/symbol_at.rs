@@ -310,6 +310,27 @@ fn symbol_at_prefers_innermost_binding_in_nested_functions() {
     "const value = 1; const factory = () => { const value = 2; return () => value + 1; }; const result = factory()();";
   host.insert(file.clone(), Arc::from(source.to_string()));
 
+  let lowered = hir_js::lower_from_source(source).expect("lower");
+  let mut value_spans: Vec<_> = lowered
+    .defs
+    .iter()
+    .filter(|d| {
+      lowered
+        .names
+        .resolve(d.name)
+        .map(|n| n == "value")
+        .unwrap_or(false)
+    })
+    .map(|d| d.span)
+    .collect();
+  value_spans.sort_by_key(|s| (s.start, s.end));
+  value_spans.dedup();
+  assert_eq!(
+    value_spans.len(),
+    2,
+    "lowering should produce one outer and one inner value definition"
+  );
+
   // Ensure the local semantics consider the inner arrow to reference the innermost
   // `value` binding rather than the outer one.
   let mut ast = parse_js::parse_with_options(
@@ -359,17 +380,6 @@ fn symbol_at_prefers_innermost_binding_in_nested_functions() {
 
   let program = Program::new(host, vec![file.clone()]);
   let file_id = program.file_id(&file).expect("file id");
-  let snapshot = program.snapshot();
-  if let Some((_, occs)) = snapshot
-    .symbol_occurrences
-    .iter()
-    .find(|(id, _)| *id == file_id)
-  {
-    for occ in occs {
-      let text = &source[occ.range.start as usize..occ.range.end as usize];
-      println!("{:?} -> {:?} ({text})", occ.range, occ.symbol);
-    }
-  }
   let outer_decl_symbol = program
     .symbol_at(file_id, outer_decl)
     .expect("outer declaration");

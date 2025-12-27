@@ -1104,9 +1104,11 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
       _ => {}
     }
   }
-  for ty in lowered.types.type_exprs.iter() {
-    if let hir_js::TypeExprKind::Import(import) = &ty.kind {
-      specs.push((Arc::from(import.module.clone()), ty.span));
+  for arenas in lowered.types.values() {
+    for ty in arenas.type_exprs.iter() {
+      if let hir_js::TypeExprKind::Import(import) = &ty.kind {
+        specs.push((Arc::from(import.module.clone()), ty.span));
+      }
     }
   }
   specs

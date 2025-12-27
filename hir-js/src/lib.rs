@@ -68,6 +68,7 @@ pub use hir::StmtKind;
 pub use hir::TemplateLiteral;
 pub use hir::TemplateLiteralSpan;
 pub use hir::TypeArenas;
+pub use hir::TypeArenasByDef;
 pub use hir::TypeExpr;
 pub use hir::TypeExprKind;
 pub use hir::TypeFnParam;

@@ -338,6 +338,21 @@ fn convert_type_for_display(
         asserts,
       })
     }
+    TypeKind::Mapped { source, value } => {
+      let param = tti::TypeParamId(0);
+      let source = convert_type_for_display(source, state, store, cache);
+      let value = convert_type_for_display(value, state, store, cache);
+      let mapped = tti::MappedType {
+        param,
+        source,
+        value,
+        readonly: tti::MappedModifier::Preserve,
+        optional: tti::MappedModifier::Preserve,
+        name_type: None,
+        as_type: None,
+      };
+      store.intern_type(tti::TypeKind::Mapped(mapped))
+    }
     TypeKind::Object(obj) => {
       let mut shape = tti::Shape::new();
       for (name, prop) in obj.props {
@@ -2518,6 +2533,10 @@ pub(crate) enum TypeKind {
     asserted: Option<TypeId>,
     asserts: bool,
   },
+  Mapped {
+    source: TypeId,
+    value: TypeId,
+  },
   Object(ObjectType),
 }
 
@@ -2612,6 +2631,10 @@ impl TypeStore {
 
   pub(crate) fn array(&mut self, element: TypeId) -> TypeId {
     self.alloc(TypeKind::Array(element))
+  }
+
+  pub(crate) fn mapped(&mut self, source: TypeId, value: TypeId) -> TypeId {
+    self.alloc(TypeKind::Mapped { source, value })
   }
 
   pub(crate) fn tuple(&mut self, elements: Vec<TypeId>, readonly: bool) -> TypeId {
@@ -3772,7 +3795,7 @@ impl ProgramState {
         let Some(info) = def.type_info.as_ref() else {
           continue;
         };
-        let (ty, params) = lowerer.lower_type_info(info, &lowered.names);
+        let (ty, params) = lowerer.lower_type_info(def.id, info, &lowered.names);
         let target_def = def_map.get(&def.id).copied().or_else(|| {
           lowered
             .names
@@ -7824,9 +7847,9 @@ impl ProgramState {
         self.type_store.object(object)
       }
       TypeExpr::MappedType(mapped) => {
-        let mut object = ObjectType::empty();
-        object.string_index = Some(self.type_from_type_expr(&mapped.stx.type_expr));
-        self.type_store.object(object)
+        let source = self.type_from_type_expr(&mapped.stx.constraint);
+        let value = self.type_from_type_expr(&mapped.stx.type_expr);
+        self.type_store.mapped(source, value)
       }
       TypeExpr::ParenthesizedType(inner) => self.type_from_type_expr(&inner.stx.type_expr),
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {

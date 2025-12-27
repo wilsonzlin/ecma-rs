@@ -90,14 +90,25 @@ pub struct PatId(pub u32);
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct StmtId(pub u32);
 
+/// Identifier for a type expression within a single definition's type arenas.
+///
+/// The numeric index is local to the owning [`DefId`]; combine it with the
+/// definition to look up spans or resolve the corresponding [`TypeExpr`]
+/// payload.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TypeExprId(pub u32);
 
+/// Identifier for a type parameter within a single definition's type arenas.
+///
+/// Values are only meaningful when used with the [`DefId`] that owns the
+/// surrounding declaration.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TypeParamId(pub u32);
 
+/// Identifier for a type member (e.g. property or signature) scoped to a
+/// single definition's type arenas.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct TypeMemberId(pub u32);

@@ -75,17 +75,19 @@ proptest! {
         }
       }
 
-      for ty in result.types.type_exprs.iter() {
-        prop_assert!(ty.span.start <= ty.span.end);
-        prop_assert!(ty.span.end <= limit);
-      }
-      for member in result.types.type_members.iter() {
-        prop_assert!(member.span.start <= member.span.end);
-        prop_assert!(member.span.end <= limit);
-      }
-      for param in result.types.type_params.iter() {
-        prop_assert!(param.span.start <= param.span.end);
-        prop_assert!(param.span.end <= limit);
+      for arenas in result.types.values() {
+        for ty in arenas.type_exprs.iter() {
+          prop_assert!(ty.span.start <= ty.span.end);
+          prop_assert!(ty.span.end <= limit);
+        }
+        for member in arenas.type_members.iter() {
+          prop_assert!(member.span.start <= member.span.end);
+          prop_assert!(member.span.end <= limit);
+        }
+        for param in arenas.type_params.iter() {
+          prop_assert!(param.span.start <= param.span.end);
+          prop_assert!(param.span.end <= limit);
+        }
       }
     }
   }

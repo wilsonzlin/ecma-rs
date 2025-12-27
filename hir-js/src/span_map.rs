@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct SpanMap {
   exprs: SpanIndex<(BodyId, ExprId)>,
   defs: SpanIndex<DefId>,
-  type_exprs: SpanIndex<TypeExprId>,
+  type_exprs: SpanIndex<(DefId, TypeExprId)>,
   type_members: SpanIndex<TypeMemberId>,
   type_params: SpanIndex<TypeParamId>,
   pats: SpanIndex<(BodyId, PatId)>,
@@ -39,8 +39,8 @@ impl SpanMap {
     self.defs.add(range, id);
   }
 
-  pub fn add_type_expr(&mut self, range: TextRange, id: TypeExprId) {
-    self.type_exprs.add(range, id);
+  pub fn add_type_expr(&mut self, range: TextRange, owner: DefId, id: TypeExprId) {
+    self.type_exprs.add(range, (owner, id));
   }
 
   pub fn add_type_member(&mut self, range: TextRange, id: TypeMemberId) {
@@ -85,11 +85,11 @@ impl SpanMap {
     self.exprs.query_span(offset)
   }
 
-  pub fn type_expr_at_offset(&self, offset: u32) -> Option<TypeExprId> {
+  pub fn type_expr_at_offset(&self, offset: u32) -> Option<(DefId, TypeExprId)> {
     self.type_exprs.query(offset)
   }
 
-  pub fn type_expr_span_at_offset(&self, offset: u32) -> Option<SpanResult<TypeExprId>> {
+  pub fn type_expr_span_at_offset(&self, offset: u32) -> Option<SpanResult<(DefId, TypeExprId)>> {
     self.type_exprs.query_span(offset)
   }
 
@@ -157,8 +157,8 @@ impl SpanMap {
     self.defs.span_of(def)
   }
 
-  pub fn type_expr_span(&self, type_expr: TypeExprId) -> Option<TextRange> {
-    self.type_exprs.span_of(type_expr)
+  pub fn type_expr_span(&self, owner: DefId, type_expr: TypeExprId) -> Option<TextRange> {
+    self.type_exprs.span_of((owner, type_expr))
   }
 
   pub fn type_member_span(&self, type_member: TypeMemberId) -> Option<TextRange> {
@@ -569,11 +569,11 @@ mod tests {
   #[test]
   fn type_expr_lookup_prefers_inner_span() {
     let mut map = SpanMap::new();
-    map.add_type_expr(TextRange::new(0, 10), TypeExprId(0));
-    map.add_type_expr(TextRange::new(2, 5), TypeExprId(1));
+    map.add_type_expr(TextRange::new(0, 10), DefId(0), TypeExprId(0));
+    map.add_type_expr(TextRange::new(2, 5), DefId(0), TypeExprId(1));
     map.finalize();
 
-    assert_eq!(map.type_expr_at_offset(3), Some(TypeExprId(1)));
+    assert_eq!(map.type_expr_at_offset(3), Some((DefId(0), TypeExprId(1))));
   }
 
   #[test]

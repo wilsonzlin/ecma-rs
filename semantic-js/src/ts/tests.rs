@@ -2079,18 +2079,24 @@ fn locals_separate_value_and_type_namespaces() {
   let locals = bind_ts_locals(&mut ast, FileId(92), true);
   let lowered = lower_file(FileId(92), HirFileKind::Ts, &ast);
 
-  let type_ref = lowered
-    .types
-    .type_exprs
-    .iter()
-    .enumerate()
-    .find_map(|(idx, expr)| match expr.kind {
-      TypeExprKind::TypeRef(_) => Some(TypeExprId(idx as u32)),
-      _ => None,
-    })
-    .expect("type reference present");
+  let mut type_ref = None;
+  let mut type_arenas = None;
+  for arenas in lowered.types.values() {
+    if let Some((idx, _)) = arenas
+      .type_exprs
+      .iter()
+      .enumerate()
+      .find(|(_, expr)| matches!(expr.kind, TypeExprKind::TypeRef(_)))
+    {
+      type_ref = Some(TypeExprId(idx as u32));
+      type_arenas = Some(arenas);
+      break;
+    }
+  }
+  let type_arenas = type_arenas.expect("type arenas present");
+  let type_ref = type_ref.expect("type reference present");
   let type_sym = locals
-    .resolve_type_name(&lowered.types.type_exprs, type_ref)
+    .resolve_type_name(&type_arenas.type_exprs, type_ref)
     .expect("type Foo resolves");
 
   let baz_body = body_by_name(&lowered, "baz", DefKind::Var);
@@ -2123,19 +2129,25 @@ fn type_only_imports_skip_value_resolution() {
   let locals = bind_ts_locals(&mut ast, FileId(93), true);
   let lowered = lower_file(FileId(93), HirFileKind::Ts, &ast);
 
-  let type_ref = lowered
-    .types
-    .type_exprs
-    .iter()
-    .enumerate()
-    .find_map(|(idx, expr)| match expr.kind {
-      TypeExprKind::TypeRef(_) => Some(TypeExprId(idx as u32)),
-      _ => None,
-    })
-    .expect("type ref present");
+  let mut type_ref = None;
+  let mut type_arenas = None;
+  for arenas in lowered.types.values() {
+    if let Some((idx, _)) = arenas
+      .type_exprs
+      .iter()
+      .enumerate()
+      .find(|(_, expr)| matches!(expr.kind, TypeExprKind::TypeRef(_)))
+    {
+      type_ref = Some(TypeExprId(idx as u32));
+      type_arenas = Some(arenas);
+      break;
+    }
+  }
+  let type_arenas = type_arenas.expect("type arenas present");
+  let type_ref = type_ref.expect("type ref present");
   assert!(
     locals
-      .resolve_type_name(&lowered.types.type_exprs, type_ref)
+      .resolve_type_name(&type_arenas.type_exprs, type_ref)
       .is_some(),
     "type import remains available"
   );

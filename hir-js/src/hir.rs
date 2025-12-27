@@ -196,17 +196,32 @@ pub struct LowerResult {
   pub hir: Arc<HirFile>,
   pub defs: Vec<DefData>,
   pub bodies: Vec<Arc<Body>>,
-  pub types: TypeArenas,
+  pub types: TypeArenasByDef,
   pub names: Arc<NameInterner>,
   pub def_index: BTreeMap<DefId, usize>,
   pub body_index: BTreeMap<BodyId, usize>,
 }
 
+/// Type nodes for a single definition.
+///
+/// All identifiers (`TypeExprId`, `TypeMemberId`, and `TypeParamId`) are local
+/// to the owning [`DefId`]; looking them up requires the corresponding entry in
+/// [`TypeArenasByDef`].
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct TypeArenas {
   pub type_exprs: Vec<TypeExpr>,
   pub type_members: Vec<TypeMember>,
   pub type_params: Vec<TypeParam>,
+}
+
+/// Deterministic mapping of definition → type arenas. Keys are sorted for
+/// stable iteration.
+pub type TypeArenasByDef = BTreeMap<DefId, TypeArenas>;
+
+impl LowerResult {
+  pub fn type_arenas(&self, owner: DefId) -> Option<&TypeArenas> {
+    self.types.get(&owner)
+  }
 }
 
 #[derive(Debug, Clone, PartialEq)]

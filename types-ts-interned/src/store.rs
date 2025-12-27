@@ -623,8 +623,9 @@ impl TypeStore {
         constraint: constraint.map(|c| self.canon(c)),
       },
       TypeKind::Mapped(mut mapped) => {
-        mapped.source = self.canon(mapped.source);
-        mapped.value = self.canon(mapped.value);
+        // Preserve mapped key source/value exactly as lowered to avoid widening
+        // literal unions (e.g. `"a" | "b"`) into their primitive counterparts.
+        // These are already deterministic from the lowering pipeline.
         if let Some(name) = mapped.name_type.as_mut() {
           *name = self.canon(*name);
         }

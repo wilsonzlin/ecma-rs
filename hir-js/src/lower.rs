@@ -596,80 +596,45 @@ pub fn lower_file_with_diagnostics(
     .map(|(idx, def)| (def.id, idx))
     .collect();
 
-  let types = {
-    let mut type_lowerer = TypeLowerer::new(&mut names, &mut span_map, &mut ctx);
-    let mut pending_namespaces: Vec<(DefId, TextRange)> = Vec::new();
-    for (def_id, source) in pending_types {
-      match source {
-        TypeSource::TypeAlias(alias) => {
-          let info = type_lowerer.lower_type_alias(alias);
-          if let Some(idx) = id_to_index.get(&def_id) {
-            if let Some(def) = defs.get_mut(*idx) {
-              def.type_info = Some(info);
-            }
-          }
-        }
-        TypeSource::Interface(intf) => {
-          let info = type_lowerer.lower_interface(intf);
-          if let Some(idx) = id_to_index.get(&def_id) {
-            if let Some(def) = defs.get_mut(*idx) {
-              def.type_info = Some(info);
-            }
-          }
-        }
-        TypeSource::Class(class) => {
-          let info = type_lowerer.lower_class_decl(class);
-          if let Some(idx) = id_to_index.get(&def_id) {
-            if let Some(def) = defs.get_mut(*idx) {
-              def.type_info = Some(info);
-            }
-          }
-        }
-        TypeSource::ClassExpr(class) => {
-          let info = type_lowerer.lower_class_expr(class);
-          if let Some(idx) = id_to_index.get(&def_id) {
-            if let Some(def) = defs.get_mut(*idx) {
-              def.type_info = Some(info);
-            }
-          }
-        }
-        TypeSource::AmbientClass(class) => {
-          let info = type_lowerer.lower_ambient_class(class);
-          if let Some(idx) = id_to_index.get(&def_id) {
-            if let Some(def) = defs.get_mut(*idx) {
-              def.type_info = Some(info);
-            }
-          }
-        }
-        TypeSource::Enum(en) => {
-          let info = type_lowerer.lower_enum(en);
-          if let Some(idx) = id_to_index.get(&def_id) {
-            if let Some(def) = defs.get_mut(*idx) {
-              def.type_info = Some(info);
-            }
-          }
-        }
-        TypeSource::Namespace(ns) => {
-          let span = ns.loc.to_diagnostics_range_with_note().0;
-          pending_namespaces.push((def_id, span));
-        }
-        TypeSource::Module(module) => {
-          let span = module.loc.to_diagnostics_range_with_note().0;
-          pending_namespaces.push((def_id, span));
-        }
+  let mut types = BTreeMap::new();
+  let mut pending_namespaces: Vec<(DefId, TextRange)> = Vec::new();
+  for (def_id, source) in pending_types {
+    let mut type_lowerer = TypeLowerer::new(def_id, &mut names, &mut span_map, &mut ctx);
+    let type_info = match source {
+      TypeSource::TypeAlias(alias) => Some(type_lowerer.lower_type_alias(alias)),
+      TypeSource::Interface(intf) => Some(type_lowerer.lower_interface(intf)),
+      TypeSource::Class(class) => Some(type_lowerer.lower_class_decl(class)),
+      TypeSource::ClassExpr(class) => Some(type_lowerer.lower_class_expr(class)),
+      TypeSource::AmbientClass(class) => Some(type_lowerer.lower_ambient_class(class)),
+      TypeSource::Enum(en) => Some(type_lowerer.lower_enum(en)),
+      TypeSource::Namespace(ns) => {
+        let span = ns.loc.to_diagnostics_range_with_note().0;
+        pending_namespaces.push((def_id, span));
+        None
       }
-    }
-    let types = type_lowerer.finish();
-    for (def_id, span) in pending_namespaces {
+      TypeSource::Module(module) => {
+        let span = module.loc.to_diagnostics_range_with_note().0;
+        pending_namespaces.push((def_id, span));
+        None
+      }
+    };
+    if let Some(info) = type_info {
       if let Some(idx) = id_to_index.get(&def_id) {
-        let members = collect_namespace_members(def_id, span, &defs);
         if let Some(def) = defs.get_mut(*idx) {
-          def.type_info = Some(DefTypeInfo::Namespace { members });
+          def.type_info = Some(info);
         }
       }
     }
-    types
-  };
+    types.insert(def_id, type_lowerer.finish());
+  }
+  for (def_id, span) in pending_namespaces {
+    if let Some(idx) = id_to_index.get(&def_id) {
+      let members = collect_namespace_members(def_id, span, &defs);
+      if let Some(def) = defs.get_mut(*idx) {
+        def.type_info = Some(DefTypeInfo::Namespace { members });
+      }
+    }
+  }
 
   let def_paths: BTreeMap<DefPath, DefId> = defs.iter().map(|def| (def.path, def.id)).collect();
   let def_index = id_to_index.clone();
@@ -3065,19 +3030,6 @@ fn collect_var_decl<'a>(
       ctx,
     );
 
-    if let Some(init) = &declarator.initializer {
-      collect_expr(
-        init,
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
-      );
-    }
-  }
-  for declarator in var_decl.stx.declarators.iter() {
     if let Some(init) = &declarator.initializer {
       collect_expr(
         init,

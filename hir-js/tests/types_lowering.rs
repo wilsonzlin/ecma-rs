@@ -18,24 +18,32 @@ use parse_js::parse;
 fn type_alias<'a>(
   result: &'a hir_js::LowerResult,
   name: &str,
-) -> (hir_js::TypeExprId, &'a [hir_js::TypeParamId]) {
+) -> (
+  hir_js::DefId,
+  &'a hir_js::TypeArenas,
+  hir_js::TypeExprId,
+  &'a [hir_js::TypeParamId],
+) {
   let def = result
     .defs
     .iter()
     .find(|def| result.names.resolve(def.name).unwrap() == name)
     .expect("type alias definition");
+  let arenas = result
+    .type_arenas(def.id)
+    .expect("type arenas present for alias");
   match def.type_info.as_ref().expect("type info present") {
     DefTypeInfo::TypeAlias {
       type_expr,
       type_params,
-    } => (*type_expr, type_params.as_slice()),
+    } => (def.id, arenas, *type_expr, type_params.as_slice()),
     other => panic!("expected type alias, found {other:?}"),
   }
 }
 
 fn type_query_import_name<'a>(result: &'a hir_js::LowerResult, name: &str) -> &'a TypeImportName {
-  let (type_expr, _) = type_alias(result, name);
-  let expr = &result.types.type_exprs[type_expr.0 as usize];
+  let (_, arenas, type_expr, _) = type_alias(result, name);
+  let expr = &arenas.type_exprs[type_expr.0 as usize];
   match &expr.kind {
     TypeExprKind::TypeQuery(type_name) => match type_name {
       hir_js::TypeName::Import(import) => import,
@@ -49,10 +57,10 @@ fn type_query_import_name<'a>(result: &'a hir_js::LowerResult, name: &str) -> &'
 fn lowers_function_type_alias() {
   let result = lower_from_source("type Fn = (x: string, y?: number, ...rest: boolean[]) => void;")
     .expect("lower");
-  let (type_expr, type_params) = type_alias(&result, "Fn");
+  let (_, arenas, type_expr, type_params) = type_alias(&result, "Fn");
   assert!(type_params.is_empty());
 
-  let expr = &result.types.type_exprs[type_expr.0 as usize];
+  let expr = &arenas.type_exprs[type_expr.0 as usize];
   match &expr.kind {
     TypeExprKind::Function(func) => {
       assert_eq!(func.params.len(), 3);
@@ -60,24 +68,24 @@ fn lowers_function_type_alias() {
       assert_eq!(result.names.resolve(first.name.unwrap()).unwrap(), "x");
       assert_eq!(first.optional, false);
       assert!(matches!(
-        result.types.type_exprs[first.ty.0 as usize].kind,
+        arenas.type_exprs[first.ty.0 as usize].kind,
         TypeExprKind::String
       ));
 
       let second = &func.params[1];
       assert!(second.optional);
       assert!(matches!(
-        result.types.type_exprs[second.ty.0 as usize].kind,
+        arenas.type_exprs[second.ty.0 as usize].kind,
         TypeExprKind::Number
       ));
 
       let third = &func.params[2];
       assert!(third.rest);
-      let third_ty = &result.types.type_exprs[third.ty.0 as usize];
+      let third_ty = &arenas.type_exprs[third.ty.0 as usize];
       match &third_ty.kind {
         TypeExprKind::Array(arr) => {
           assert!(matches!(
-            result.types.type_exprs[arr.element.0 as usize].kind,
+            arenas.type_exprs[arr.element.0 as usize].kind,
             TypeExprKind::Boolean
           ));
         }
@@ -85,7 +93,7 @@ fn lowers_function_type_alias() {
       }
 
       assert!(matches!(
-        result.types.type_exprs[func.ret.0 as usize].kind,
+        arenas.type_exprs[func.ret.0 as usize].kind,
         TypeExprKind::Void
       ));
     }
@@ -96,19 +104,19 @@ fn lowers_function_type_alias() {
 #[test]
 fn lowers_conditional_and_infer_types() {
   let result = lower_from_source("type Cond<T> = T extends infer R ? R[] : never;").expect("lower");
-  let (type_expr, type_params) = type_alias(&result, "Cond");
+  let (_, arenas, type_expr, type_params) = type_alias(&result, "Cond");
   assert_eq!(type_params.len(), 1);
 
-  let expr = &result.types.type_exprs[type_expr.0 as usize];
+  let expr = &arenas.type_exprs[type_expr.0 as usize];
   match &expr.kind {
     TypeExprKind::Conditional(cond) => {
-      let extends = &result.types.type_exprs[cond.extends_type.0 as usize];
+      let extends = &arenas.type_exprs[cond.extends_type.0 as usize];
       assert!(matches!(extends.kind, TypeExprKind::Infer(_)));
 
-      let true_type = &result.types.type_exprs[cond.true_type.0 as usize];
+      let true_type = &arenas.type_exprs[cond.true_type.0 as usize];
       match &true_type.kind {
         TypeExprKind::Array(arr) => {
-          let element = &result.types.type_exprs[arr.element.0 as usize];
+          let element = &arenas.type_exprs[arr.element.0 as usize];
           match &element.kind {
             TypeExprKind::TypeRef(reference) => match &reference.name {
               hir_js::TypeName::Ident(id) => {
@@ -122,7 +130,7 @@ fn lowers_conditional_and_infer_types() {
         other => panic!("expected array of infer, got {other:?}"),
       }
 
-      let false_type = &result.types.type_exprs[cond.false_type.0 as usize];
+      let false_type = &arenas.type_exprs[cond.false_type.0 as usize];
       assert!(matches!(false_type.kind, TypeExprKind::Never));
     }
     other => panic!("expected conditional type, got {other:?}"),
@@ -135,16 +143,16 @@ fn lowers_mapped_types_with_remapping() {
     "type Mapped<T> = { readonly [K in keyof T as `${K & string}Changed`]?: T[K] };",
   )
   .expect("lower");
-  let (type_expr, type_params) = type_alias(&result, "Mapped");
+  let (_, arenas, type_expr, type_params) = type_alias(&result, "Mapped");
   assert_eq!(type_params.len(), 1);
 
-  let expr = &result.types.type_exprs[type_expr.0 as usize];
+  let expr = &arenas.type_exprs[type_expr.0 as usize];
   match &expr.kind {
     TypeExprKind::Mapped(mapped) => {
       assert_eq!(mapped.readonly, Some(TypeMappedModifier::None));
       assert_eq!(mapped.optional, Some(TypeMappedModifier::None));
       assert!(mapped.name_type.is_some());
-      let value_type = &result.types.type_exprs[mapped.value_type.0 as usize];
+      let value_type = &arenas.type_exprs[mapped.value_type.0 as usize];
       assert!(matches!(
         value_type.kind,
         TypeExprKind::IndexedAccess { .. }
@@ -162,30 +170,30 @@ fn lowers_template_literal_and_indexed_access_types() {
   "#;
   let result = lower_from_source(source).expect("lower");
 
-  let (index_expr, _) = type_alias(&result, "Index");
-  let index = &result.types.type_exprs[index_expr.0 as usize];
+  let (_index_def, index_arenas, index_expr, _) = type_alias(&result, "Index");
+  let index = &index_arenas.type_exprs[index_expr.0 as usize];
   match &index.kind {
     TypeExprKind::IndexedAccess {
       object_type,
       index_type,
     } => {
-      let last_index = &result.types.type_exprs[index_type.0 as usize];
+      let last_index = &index_arenas.type_exprs[index_type.0 as usize];
       assert!(matches!(
         last_index.kind,
         TypeExprKind::Literal(hir_js::TypeLiteral::String(_))
       ));
-      let first_index = &result.types.type_exprs[object_type.0 as usize];
+      let first_index = &index_arenas.type_exprs[object_type.0 as usize];
       match &first_index.kind {
         TypeExprKind::IndexedAccess {
           object_type: first_object,
           index_type: first_key,
         } => {
-          let first_key_expr = &result.types.type_exprs[first_key.0 as usize];
+          let first_key_expr = &index_arenas.type_exprs[first_key.0 as usize];
           assert!(matches!(
             first_key_expr.kind,
             TypeExprKind::Literal(hir_js::TypeLiteral::String(_))
           ));
-          let object_expr = &result.types.type_exprs[first_object.0 as usize];
+          let object_expr = &index_arenas.type_exprs[first_object.0 as usize];
           assert!(matches!(object_expr.kind, TypeExprKind::TypeLiteral(_)));
         }
         other => panic!("expected nested indexed access, got {other:?}"),
@@ -194,8 +202,8 @@ fn lowers_template_literal_and_indexed_access_types() {
     other => panic!("expected indexed access, got {other:?}"),
   }
 
-  let (tmpl_expr, _) = type_alias(&result, "Tmpl");
-  let tmpl = &result.types.type_exprs[tmpl_expr.0 as usize];
+  let (tmpl_def, tmpl_arenas, tmpl_expr, _) = type_alias(&result, "Tmpl");
+  let tmpl = &tmpl_arenas.type_exprs[tmpl_expr.0 as usize];
   match &tmpl.kind {
     TypeExprKind::TemplateLiteral(tmpl) => {
       assert!(tmpl.head.contains("start"));
@@ -211,7 +219,61 @@ fn lowers_template_literal_and_indexed_access_types() {
     .span_map
     .type_expr_at_offset(span.start)
     .expect("span lookup");
-  assert_eq!(mapped, tmpl_expr);
+  assert_eq!(mapped, (tmpl_def, tmpl_expr));
+}
+
+#[test]
+fn type_ids_do_not_shift_across_unrelated_type_decl_insertions() {
+  let base = lower_from_source("type A = { a: string }; type B = { b: number };").expect("base");
+  let variant =
+    lower_from_source("type A = { a: string }; type Inserted = boolean; type B = { b: number };")
+      .expect("variant");
+
+  let (base_def, base_arenas, base_expr, _) = type_alias(&base, "B");
+  let (variant_def, variant_arenas, variant_expr, _) = type_alias(&variant, "B");
+
+  let base_info = base
+    .defs
+    .iter()
+    .find(|def| def.id == base_def)
+    .and_then(|def| def.type_info.clone())
+    .expect("base type info");
+  let variant_info = variant
+    .defs
+    .iter()
+    .find(|def| def.id == variant_def)
+    .and_then(|def| def.type_info.clone())
+    .expect("variant type info");
+
+  assert_eq!(base_info, variant_info);
+
+  let base_literal = match &base_arenas.type_exprs[base_expr.0 as usize].kind {
+    TypeExprKind::TypeLiteral(lit) => lit,
+    other => panic!("expected type literal, got {other:?}"),
+  };
+  let variant_literal = match &variant_arenas.type_exprs[variant_expr.0 as usize].kind {
+    TypeExprKind::TypeLiteral(lit) => lit,
+    other => panic!("expected type literal, got {other:?}"),
+  };
+
+  assert_eq!(base_literal.members, variant_literal.members);
+
+  let base_member = &base_arenas.type_members[base_literal.members[0].0 as usize];
+  let variant_member = &variant_arenas.type_members[variant_literal.members[0].0 as usize];
+  match (&base_member.kind, &variant_member.kind) {
+    (TypeMemberKind::Property(base_prop), TypeMemberKind::Property(variant_prop)) => {
+      assert_eq!(base_prop.type_annotation, variant_prop.type_annotation);
+      if let (Some(base_ty), Some(variant_ty)) =
+        (base_prop.type_annotation, variant_prop.type_annotation)
+      {
+        assert_eq!(
+          base_arenas.type_exprs[base_ty.0 as usize].kind,
+          variant_arenas.type_exprs[variant_ty.0 as usize].kind
+        );
+      }
+    }
+    other => panic!("expected property members, got {other:?}"),
+  }
 }
 
 #[test]
@@ -222,6 +284,7 @@ fn span_map_can_locate_type_member() {
     .iter()
     .find(|def| result.names.resolve(def.name).unwrap() == "Foo")
     .expect("interface definition");
+  let arenas = result.type_arenas(def.id).expect("type arenas present");
   let members = match def.type_info.as_ref().expect("type info present") {
     DefTypeInfo::Interface { members, .. } => members,
     other => panic!("expected interface, found {other:?}"),
@@ -229,7 +292,7 @@ fn span_map_can_locate_type_member() {
   let member_id = members
     .iter()
     .copied()
-    .find(|id| match &result.types.type_members[id.0 as usize].kind {
+    .find(|id| match &arenas.type_members[id.0 as usize].kind {
       TypeMemberKind::Property(prop) => match prop.name {
         PropertyName::Ident(id) => result.names.resolve(id).unwrap() == "a",
         _ => false,
@@ -238,7 +301,7 @@ fn span_map_can_locate_type_member() {
     })
     .expect("property member");
 
-  let span = result.types.type_members[member_id.0 as usize].span;
+  let span = arenas.type_members[member_id.0 as usize].span;
   let found = result
     .hir
     .span_map
@@ -250,11 +313,11 @@ fn span_map_can_locate_type_member() {
 #[test]
 fn span_map_can_locate_type_param() {
   let result = lower_from_source("type T<A extends string> = A;").expect("lower");
-  let (_, type_params) = type_alias(&result, "T");
+  let (_, arenas, _, type_params) = type_alias(&result, "T");
   assert_eq!(type_params.len(), 1);
   let type_param_id = type_params[0];
 
-  let span = result.types.type_params[type_param_id.0 as usize].span;
+  let span = arenas.type_params[type_param_id.0 as usize].span;
   let found = result
     .hir
     .span_map
@@ -266,10 +329,10 @@ fn span_map_can_locate_type_param() {
 #[test]
 fn lowers_mapped_types_without_modifiers() {
   let result = lower_from_source("type M<T> = { [K in keyof T]: T[K] };").expect("lower");
-  let (type_expr, type_params) = type_alias(&result, "M");
+  let (_, arenas, type_expr, type_params) = type_alias(&result, "M");
   assert_eq!(type_params.len(), 1);
 
-  let expr = &result.types.type_exprs[type_expr.0 as usize];
+  let expr = &arenas.type_exprs[type_expr.0 as usize];
   match &expr.kind {
     TypeExprKind::Mapped(mapped) => {
       assert_eq!(mapped.readonly, None);

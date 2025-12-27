@@ -35,6 +35,7 @@ use crate::hir::TypeTemplateLiteralSpan as HirTypeTemplateLiteralSpan;
 use crate::hir::TypeTuple;
 use crate::hir::TypeTupleElement;
 use crate::hir::TypeVariance;
+use crate::ids::DefId;
 use crate::ids::NameId;
 use crate::ids::TypeExprId;
 use crate::ids::TypeMemberId;
@@ -62,6 +63,7 @@ pub(crate) struct TypeLowerer<'a> {
   pub type_exprs: Vec<HirTypeExpr>,
   pub type_members: Vec<HirTypeMember>,
   pub type_params: Vec<TypeParam>,
+  owner: DefId,
   names: &'a mut NameInterner,
   span_map: &'a mut SpanMap,
   ctx: &'a mut LoweringContext,
@@ -69,6 +71,7 @@ pub(crate) struct TypeLowerer<'a> {
 
 impl<'a> TypeLowerer<'a> {
   pub fn new(
+    owner: DefId,
     names: &'a mut NameInterner,
     span_map: &'a mut SpanMap,
     ctx: &'a mut LoweringContext,
@@ -77,6 +80,7 @@ impl<'a> TypeLowerer<'a> {
       type_exprs: Vec::new(),
       type_members: Vec::new(),
       type_params: Vec::new(),
+      owner,
       names,
       span_map,
       ctx,
@@ -312,7 +316,7 @@ impl<'a> TypeLowerer<'a> {
   fn alloc_type_expr(&mut self, span: TextRange, kind: TypeExprKind) -> TypeExprId {
     let id = TypeExprId(self.type_exprs.len() as u32);
     self.type_exprs.push(HirTypeExpr { span, kind });
-    self.span_map.add_type_expr(span, id);
+    self.span_map.add_type_expr(span, self.owner, id);
     id
   }
 

@@ -4,8 +4,9 @@ use std::sync::Arc;
 use crate::{codes, FileKey, Host};
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  DefId as HirDefId, DefTypeInfo, TypeArenas, TypeExprId, TypeExprKind, TypeFnParam, TypeMemberId,
-  TypeMemberKind, TypeName, TypeParamId as HirTypeParamId, TypeSignature,
+  DefId as HirDefId, DefTypeInfo, TypeArenas, TypeArenasByDef, TypeExprId, TypeExprKind,
+  TypeFnParam, TypeMemberId, TypeMemberKind, TypeName, TypeParamId as HirTypeParamId,
+  TypeSignature,
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
@@ -18,7 +19,8 @@ use types_ts_interned::{
 /// Lower HIR type expressions and declarations into interned types.
 pub struct HirDeclLowerer<'a, 'diag> {
   store: Arc<TypeStore>,
-  arenas: &'a TypeArenas,
+  arenas: &'a TypeArenasByDef,
+  current_arenas: Option<&'a TypeArenas>,
   semantics: Option<&'a TsProgramSemantics>,
   defs: HashMap<(FileId, String), DefId>,
   file: FileId,
@@ -36,7 +38,7 @@ pub struct HirDeclLowerer<'a, 'diag> {
 impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   pub fn new(
     store: Arc<TypeStore>,
-    arenas: &'a TypeArenas,
+    arenas: &'a TypeArenasByDef,
     semantics: Option<&'a TsProgramSemantics>,
     defs: HashMap<(FileId, String), DefId>,
     file: FileId,
@@ -59,6 +61,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       diagnostics,
       type_params: HashMap::new(),
       type_param_names: HashMap::new(),
+      current_arenas: None,
       def_map,
       def_by_name,
       host,
@@ -66,12 +69,25 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
   }
 
+  fn arenas(&self) -> &TypeArenas {
+    self
+      .current_arenas
+      .expect("type arenas should be set before lowering")
+  }
+
   pub fn lower_type_info(
     &mut self,
+    owner: HirDefId,
     info: &DefTypeInfo,
     names: &hir_js::NameInterner,
   ) -> (TypeId, Vec<TypeParamId>) {
-    match info {
+    self.type_params.clear();
+    self.type_param_names.clear();
+    self.current_arenas = self.arenas.get(&owner);
+    let Some(_) = self.current_arenas else {
+      return (self.store.primitive_ids().unknown, Vec::new());
+    };
+    let result = match info {
       DefTypeInfo::TypeAlias {
         type_expr,
         type_params,
@@ -79,8 +95,6 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         self.register_type_params(type_params);
         let params = self.collect_type_params(type_params);
         let ty = self.lower_type_expr(*type_expr, names);
-        self.type_params.clear();
-        self.type_param_names.clear();
         (ty, params)
       }
       DefTypeInfo::Interface {
@@ -116,35 +130,37 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           1 => types[0],
           _ => self.store.intersection(types),
         };
-        self.type_params.clear();
-        self.type_param_names.clear();
         (ty, params)
       }
       DefTypeInfo::Class { type_params, .. } => {
         self.register_type_params(type_params);
         let params = self.collect_type_params(type_params);
-        self.type_params.clear();
-        self.type_param_names.clear();
         (self.store.primitive_ids().unknown, params)
       }
       DefTypeInfo::Enum { .. } => (self.store.primitive_ids().any, Vec::new()),
       DefTypeInfo::Namespace { .. } => (self.store.primitive_ids().unknown, Vec::new()),
-    }
+    };
+    self.type_params.clear();
+    self.type_param_names.clear();
+    self.current_arenas = None;
+    result
   }
 
   fn register_type_params(&mut self, params: &[HirTypeParamId]) {
     for tp in params.iter() {
       let id = TypeParamId(self.type_params.len() as u32);
       self.type_params.insert(*tp, id);
-      if let Some(param) = self.arenas.type_params.get(tp.0 as usize) {
+      if let Some(param) = self.arenas().type_params.get(tp.0 as usize) {
         self.type_param_names.insert(param.name, id);
       }
     }
   }
 
   fn lower_type_expr(&mut self, id: TypeExprId, names: &hir_js::NameInterner) -> TypeId {
-    let ty = &self.arenas.type_exprs[id.0 as usize];
-    match &ty.kind {
+    let Some(ty) = self.arenas().type_exprs.get(id.0 as usize).cloned() else {
+      return self.store.primitive_ids().unknown;
+    };
+    match ty.kind {
       TypeExprKind::Any => self.store.primitive_ids().any,
       TypeExprKind::Unknown => self.store.primitive_ids().unknown,
       TypeExprKind::Never => self.store.primitive_ids().never,
@@ -165,7 +181,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       TypeExprKind::UniqueSymbol => self.store.primitive_ids().unique_symbol,
       TypeExprKind::This => self.store.intern_type(TypeKind::This),
       TypeExprKind::Literal(lit) => match lit {
-        hir_js::TypeLiteral::Boolean(b) => self.store.intern_type(TypeKind::BooleanLiteral(*b)),
+        hir_js::TypeLiteral::Boolean(b) => self.store.intern_type(TypeKind::BooleanLiteral(b)),
         hir_js::TypeLiteral::Number(n) => {
           let parsed = n.parse::<f64>().unwrap_or(0.0);
           self
@@ -217,7 +233,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         self.store.intersection(lowered)
       }
       TypeExprKind::Function(func) | TypeExprKind::Constructor(func) => {
-        let sig = self.lower_function_type(func, names);
+        let sig = self.lower_function_type(&func, names);
         let sig_id = self.store.intern_signature(sig);
         self.store.intern_type(TypeKind::Callable {
           overloads: vec![sig_id],
@@ -232,17 +248,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         let obj = self.store.intern_object(ObjectType { shape: shape_id });
         self.store.intern_type(TypeKind::Object(obj))
       }
-      TypeExprKind::Parenthesized(inner) => self.lower_type_expr(*inner, names),
-      TypeExprKind::TypeRef(r) => self.lower_type_ref(r, names),
+      TypeExprKind::Parenthesized(inner) => self.lower_type_expr(inner, names),
+      TypeExprKind::TypeRef(r) => self.lower_type_ref(&r, names),
       TypeExprKind::TypeQuery(name) => {
-        if let Some(def) = self.resolve_typeof_name(name, names, None) {
+        if let Some(def) = self.resolve_typeof_name(&name, names, None) {
           return self.store.intern_type(TypeKind::Ref {
             def,
             args: Vec::new(),
           });
         }
 
-        let name = self.type_name_to_string(name, names);
+        let name = self.type_name_to_string(&name, names);
         self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
           format!("Cannot find name '{name}'."),
           Span::new(self.file, TextRange::new(0, 0)),
@@ -251,15 +267,15 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         self.store.primitive_ids().unknown
       }
       TypeExprKind::KeyOf(inner) => {
-        let ty = self.lower_type_expr(*inner, names);
+        let ty = self.lower_type_expr(inner, names);
         self.store.intern_type(TypeKind::KeyOf(ty))
       }
       TypeExprKind::IndexedAccess {
         object_type,
         index_type,
       } => {
-        let obj = self.lower_type_expr(*object_type, names);
-        let idx = self.lower_type_expr(*index_type, names);
+        let obj = self.lower_type_expr(object_type, names);
+        let idx = self.lower_type_expr(index_type, names);
         self
           .store
           .intern_type(TypeKind::IndexedAccess { obj, index: idx })
@@ -282,7 +298,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           distributive,
         })
       }
-      TypeExprKind::Mapped(mapped) => self.lower_mapped_type(mapped, names),
+      TypeExprKind::Mapped(mapped) => self.lower_mapped_type(&mapped, names),
       TypeExprKind::TemplateLiteral(tpl) => {
         let mut spans = Vec::new();
         for span in tpl.spans.iter() {
@@ -293,12 +309,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }
         self.store.intern_type(TypeKind::TemplateLiteral(
           types_ts_interned::TemplateLiteralType {
-            head: tpl.head.clone(),
+            head: tpl.head,
             spans,
           },
         ))
       }
-      TypeExprKind::Infer(param) => self.lower_infer_type(*param, names),
+      TypeExprKind::Infer(param) => self.lower_infer_type(param, names),
       TypeExprKind::TypePredicate(pred) => {
         let asserted = pred
           .type_annotation
@@ -312,7 +328,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           asserts: pred.asserts,
         })
       }
-      TypeExprKind::Import(import) => self.lower_import_type(import, names),
+      TypeExprKind::Import(import) => self.lower_import_type(&import, names),
     }
   }
 
@@ -324,25 +340,27 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let tp = self.alloc_type_param(mapped.type_param);
     let constraint = self.lower_type_expr(mapped.constraint, names);
     let value = self.lower_type_expr(mapped.value_type, names);
-    let as_type = mapped
+    let name_type = mapped
       .name_type
       .as_ref()
       .map(|n| self.lower_type_expr(*n, names));
-    self.store.intern_type(TypeKind::Mapped(MappedType {
+    let mapped_kind = MappedType {
       param: tp,
       source: constraint,
       value,
       readonly: self.map_modifier(mapped.readonly),
       optional: self.map_modifier(mapped.optional),
-      name_type: None,
-      as_type,
-    }))
+      name_type,
+      as_type: None,
+    };
+    let mapped_ty = self.store.intern_type(TypeKind::Mapped(mapped_kind));
+    mapped_ty
   }
 
   fn lower_infer_type(&mut self, id: HirTypeParamId, names: &hir_js::NameInterner) -> TypeId {
     let param = self.alloc_type_param(id);
     let constraint = self
-      .arenas
+      .arenas()
       .type_params
       .get(id.0 as usize)
       .and_then(|tp| tp.constraint)
@@ -353,7 +371,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   }
 
   fn is_naked_type_param(&self, expr: TypeExprId) -> bool {
-    let ty = &self.arenas.type_exprs[expr.0 as usize];
+    let ty = &self.arenas().type_exprs[expr.0 as usize];
     match &ty.kind {
       TypeExprKind::TypeRef(reference) if reference.type_args.is_empty() => {
         matches!(
@@ -401,7 +419,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
     let new_id = TypeParamId(self.type_params.len() as u32);
     self.type_params.insert(id, new_id);
-    if let Some(param) = self.arenas.type_params.get(id.0 as usize) {
+    if let Some(param) = self.arenas().type_params.get(id.0 as usize) {
       self.type_param_names.insert(param.name, new_id);
     }
     new_id
@@ -418,14 +436,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     params
       .iter()
       .filter_map(|id| {
-        let data = self.arenas.type_params.get(id.0 as usize)?;
+        let data = self.arenas().type_params.get(id.0 as usize)?;
         let mapped = *self.type_params.get(id)?;
-        let constraint = data
-          .constraint
-          .map(|c| self.lower_type_expr(c, names));
-        let default = data
-          .default
-          .map(|d| self.lower_type_expr(d, names));
+        let constraint_ann = data.constraint;
+        let default_ann = data.default;
+        let constraint = constraint_ann.map(|c| self.lower_type_expr(c, names));
+        let default = default_ann.map(|d| self.lower_type_expr(d, names));
         Some(TypeParamDecl {
           id: mapped,
           constraint,
@@ -517,15 +533,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     member: TypeMemberId,
     names: &hir_js::NameInterner,
   ) {
-    let member = &self.arenas.type_members[member.0 as usize];
-    match &member.kind {
+    let Some(member) = self.arenas().type_members.get(member.0 as usize).cloned() else {
+      return;
+    };
+    match member.kind {
       TypeMemberKind::Property(prop) => {
-        if let Some((key, data)) = self.lower_property(prop, names) {
+        if let Some((key, data)) = self.lower_property(&prop, names) {
           shape.properties.push(Property { key, data });
         }
       }
       TypeMemberKind::Method(method) => {
-        if let Some((key, ty)) = self.lower_method(method, names) {
+        if let Some((key, ty)) = self.lower_method(&method, names) {
           shape.properties.push(Property {
             key,
             data: PropData {
@@ -541,12 +559,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }
       }
       TypeMemberKind::Constructor(cons) => {
-        let sig = self.lower_signature(cons, names);
+        let sig = self.lower_signature(&cons, names);
         let sig_id = self.store.intern_signature(sig);
         shape.construct_signatures.push(sig_id);
       }
       TypeMemberKind::CallSignature(call) => {
-        let sig = self.lower_signature(call, names);
+        let sig = self.lower_signature(&call, names);
         let sig_id = self.store.intern_signature(sig);
         shape.call_signatures.push(sig_id);
       }
@@ -564,7 +582,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           &hir_js::TypePropertySignature {
             readonly: true,
             optional: false,
-            name: getter.name.clone(),
+            name: getter.name,
             type_annotation: getter.return_type,
           },
           names,
@@ -578,7 +596,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
           &hir_js::TypePropertySignature {
             readonly: false,
             optional: setter.parameter.optional,
-            name: setter.name.clone(),
+            name: setter.name,
             type_annotation: Some(setter.parameter.ty),
           },
           names,
