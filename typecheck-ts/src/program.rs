@@ -36,6 +36,7 @@ use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, Typ
 
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
+use crate::check::type_expr::TypeResolver;
 use crate::codes;
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::profile::{CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector};
@@ -43,7 +44,6 @@ use crate::profile::{CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsColl
 use crate::snapshot::{
   DefSnapshot, FileSnapshot, FileStateSnapshot, ProgramSnapshot, PROGRAM_SNAPSHOT_VERSION,
 };
-use crate::check::type_expr::TypeResolver;
 use crate::type_queries::{
   IndexerInfo, PropertyInfo, PropertyKey, SignatureInfo, TypeKindSummary, TypeQueries,
 };
@@ -293,7 +293,11 @@ impl ProgramTypeResolver {
     let direct = self.symbol_to_def.get(&public_symbol).copied();
     direct.or_else(|| {
       let symbols = self.semantics.symbols();
-      for ns in [sem_ts::Namespace::TYPE, sem_ts::Namespace::NAMESPACE, sem_ts::Namespace::VALUE] {
+      for ns in [
+        sem_ts::Namespace::TYPE,
+        sem_ts::Namespace::NAMESPACE,
+        sem_ts::Namespace::VALUE,
+      ] {
         if let Some(decl) = self.semantics.symbol_decls(symbol, ns).first() {
           let decl_data = symbols.decl(*decl);
           let key = (decl_data.file, decl_data.name.clone());
@@ -336,8 +340,9 @@ impl ProgramTypeResolver {
     path: &[String],
     mut idx: usize,
   ) -> Option<ResolvedSymbol> {
-    let mut current_file =
-      self.symbol_target_file(symbol).unwrap_or(sem_ts::FileId(self.file.0));
+    let mut current_file = self
+      .symbol_target_file(symbol)
+      .unwrap_or(sem_ts::FileId(self.file.0));
     while idx < path.len() {
       let sym_data = self.semantics.symbols().symbol(symbol);
       if let sem_ts::SymbolOrigin::Import { source, imported } = &sym_data.origin {
@@ -453,15 +458,21 @@ impl ProgramTypeResolver {
 
 impl TypeResolver for ProgramTypeResolver {
   fn resolve_type_name(&self, path: &[String]) -> Option<DefId> {
-    self
-      .resolve_type_path(path)
-      .or_else(|| self.fallback.as_ref().and_then(|resolver| resolver.resolve_type_name(path)))
+    self.resolve_type_path(path).or_else(|| {
+      self
+        .fallback
+        .as_ref()
+        .and_then(|resolver| resolver.resolve_type_name(path))
+    })
   }
 
   fn resolve_typeof(&self, path: &[String]) -> Option<DefId> {
-    self
-      .resolve_type_path(path)
-      .or_else(|| self.fallback.as_ref().and_then(|resolver| resolver.resolve_typeof(path)))
+    self.resolve_type_path(path).or_else(|| {
+      self
+        .fallback
+        .as_ref()
+        .and_then(|resolver| resolver.resolve_typeof(path))
+    })
   }
 
   fn resolve_import_type(&self, module: &str, qualifier: Option<&[String]>) -> Option<DefId> {
@@ -686,6 +697,7 @@ pub struct Program {
   host: Arc<dyn Host>,
   roots: Vec<FileKey>,
   cancelled: AtomicBool,
+  fatal: std::sync::Mutex<Option<FatalError>>,
   state: std::sync::Mutex<ProgramState>,
   query_stats: QueryStatsCollector,
 }
@@ -713,6 +725,7 @@ impl Program {
       host: Arc::new(host),
       roots,
       cancelled: AtomicBool::new(false),
+      fatal: std::sync::Mutex::new(None),
       state: std::sync::Mutex::new(ProgramState::new(lib_manager, query_stats.clone())),
       query_stats,
     };
@@ -909,6 +922,9 @@ impl Program {
   }
 
   fn ensure_not_cancelled(&self) -> Result<(), FatalError> {
+    if let Some(fatal) = self.take_fatal() {
+      return Err(fatal);
+    }
     if self.cancelled.load(Ordering::Relaxed) {
       Err(FatalError::Cancelled)
     } else {
@@ -918,10 +934,17 @@ impl Program {
 
   fn catch_fatal<R>(&self, f: impl FnOnce() -> Result<R, FatalError>) -> Result<R, FatalError> {
     match panic::catch_unwind(AssertUnwindSafe(f)) {
-      Ok(res) => res,
+      Ok(res) => match res {
+        Ok(val) => Ok(val),
+        Err(fatal) => {
+          self.store_fatal(&fatal);
+          Err(fatal)
+        }
+      },
       Err(payload) => {
-        eprintln!("caught panic in catch_fatal");
-        Err(FatalError::Ice(Ice::from_panic(payload)))
+        let fatal = FatalError::Ice(Ice::from_panic(payload));
+        self.store_fatal(&fatal);
+        Err(fatal)
       }
     }
   }
@@ -955,18 +978,35 @@ impl Program {
   }
 
   fn record_fatal(&self, fatal: FatalError) {
+    self.store_fatal(&fatal);
     let diag = fatal_to_diagnostic(fatal);
     let mut state = self.lock_state();
     state.diagnostics.push(diag);
   }
 
   fn fatal_to_diagnostics(&self, fatal: FatalError) -> Vec<Diagnostic> {
+    self.store_fatal(&fatal);
     let diag = fatal_to_diagnostic(fatal);
     {
       let mut state = self.lock_state();
       state.diagnostics.push(diag.clone());
     }
     vec![diag]
+  }
+
+  fn store_fatal(&self, fatal: &FatalError) {
+    if matches!(fatal, FatalError::Cancelled) {
+      return;
+    }
+    self.cancelled.store(true, Ordering::Relaxed);
+    let mut slot = self.fatal.lock().unwrap();
+    if slot.is_none() {
+      slot.replace(fatal.clone());
+    }
+  }
+
+  fn take_fatal(&self) -> Option<FatalError> {
+    self.fatal.lock().unwrap().clone()
   }
 
   fn builtin_unknown(&self) -> TypeId {
@@ -6087,11 +6127,11 @@ impl ProgramState {
 
     self.collect_parent_bindings(body_id, &mut bindings, &mut binding_defs);
 
-  let def_by_name: HashMap<(sem_ts::FileId, String), DefId> = self
-    .canonical_defs()
-    .into_iter()
-    .map(|((file_id, name), def)| ((sem_ts::FileId(file_id.0), name), def))
-    .collect();
+    let def_by_name: HashMap<(sem_ts::FileId, String), DefId> = self
+      .canonical_defs()
+      .into_iter()
+      .map(|((file_id, name), def)| ((sem_ts::FileId(file_id.0), name), def))
+      .collect();
     let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
       if let Some(func_span) = self.function_expr_span(body_id) {
         self.contextual_callable_for_body(body_id, func_span, &store)
@@ -6101,18 +6141,19 @@ impl ProgramState {
     } else {
       None
     };
-  let caches = self.checker_caches.for_body();
-  let expander = RefExpander::new(
-    Arc::clone(&store),
-    &self.interned_def_types,
-    &self.interned_type_params,
+    let caches = self.checker_caches.for_body();
+    let expander = RefExpander::new(
+      Arc::clone(&store),
+      &self.interned_def_types,
+      &self.interned_type_params,
       caches.eval.clone(),
     );
     let prim = store.primitive_ids();
-    let binding_resolver = (!binding_defs.is_empty())
-      .then(|| {
-        Arc::new(check::hir_body::BindingTypeResolver::new(binding_defs.clone())) as Arc<dyn TypeResolver>
-      });
+    let binding_resolver = (!binding_defs.is_empty()).then(|| {
+      Arc::new(check::hir_body::BindingTypeResolver::new(
+        binding_defs.clone(),
+      )) as Arc<dyn TypeResolver>
+    });
     let resolver: Option<Arc<dyn TypeResolver>> = self
       .semantics
       .as_ref()
@@ -6132,13 +6173,13 @@ impl ProgramState {
       &lowered.names,
       file,
       ast.as_ref(),
-    Arc::clone(&store),
-    &caches,
-    &bindings,
-    resolver,
-    Some(&expander),
-    contextual_fn_ty,
-  );
+      Arc::clone(&store),
+      &caches,
+      &bindings,
+      resolver,
+      Some(&expander),
+      contextual_fn_ty,
+    );
     if !body.exprs.is_empty() {
       let flow_bindings = check::flow_bindings::FlowBindings::from_body(body);
       let mut initial_env: HashMap<check::flow_bindings::FlowBindingId, TypeId> = HashMap::new();
@@ -6288,23 +6329,23 @@ impl ProgramState {
     for (idx, pat) in body.pats.iter().enumerate() {
       if let hir_js::PatKind::Ident(name_id) = pat.kind {
         if let Some(name) = lowered.names.resolve(name_id) {
-            if let Some(def_id) = binding_defs.get(name) {
-              if let Some(ty) = result.pat_types.get(idx).copied() {
-                if !matches!(store.type_kind(ty), tti::TypeKind::Unknown) {
-                  self.interned_def_types.insert(*def_id, ty);
-                  let store_ty = self.import_interned_type(ty);
-                  self.def_types.insert(*def_id, store_ty);
-                  if let Some(def) = self.def_data.get_mut(def_id) {
-                    if let DefKind::Var(var) = &mut def.kind {
-                      var.typ = Some(store_ty);
-                    }
+          if let Some(def_id) = binding_defs.get(name) {
+            if let Some(ty) = result.pat_types.get(idx).copied() {
+              if !matches!(store.type_kind(ty), tti::TypeKind::Unknown) {
+                self.interned_def_types.insert(*def_id, ty);
+                let store_ty = self.import_interned_type(ty);
+                self.def_types.insert(*def_id, store_ty);
+                if let Some(def) = self.def_data.get_mut(def_id) {
+                  if let DefKind::Var(var) = &mut def.kind {
+                    var.typ = Some(store_ty);
                   }
-                } else {
                 }
+              } else {
               }
             }
           }
         }
+      }
     }
     let res = Arc::new(result);
     if matches!(self.compiler_options.cache.mode, CacheMode::PerBody) {
