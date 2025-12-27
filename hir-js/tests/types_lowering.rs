@@ -2,6 +2,7 @@ use hir_js::lower_from_source;
 use hir_js::DefTypeInfo;
 use hir_js::TypeExprKind;
 use hir_js::TypeMappedModifier;
+use hir_js::hir::TypeImportName;
 
 fn type_alias<'a>(
   result: &'a hir_js::LowerResult,
@@ -18,6 +19,21 @@ fn type_alias<'a>(
       type_params,
     } => (*type_expr, type_params.as_slice()),
     other => panic!("expected type alias, found {other:?}"),
+  }
+}
+
+fn type_query_import_name<'a>(
+  result: &'a hir_js::LowerResult,
+  name: &str,
+) -> &'a TypeImportName {
+  let (type_expr, _) = type_alias(result, name);
+  let expr = &result.types.type_exprs[type_expr.0 as usize];
+  match &expr.kind {
+    TypeExprKind::TypeQuery(type_name) => match type_name {
+      hir_js::TypeName::Import(import) => import,
+      other => panic!("expected import type query, got {other:?}"),
+    },
+    other => panic!("expected type query, got {other:?}"),
   }
 }
 
@@ -188,4 +204,35 @@ fn lowers_template_literal_and_indexed_access_types() {
     .type_expr_at_offset(span.start)
     .expect("span lookup");
   assert_eq!(mapped, tmpl_expr);
+}
+
+#[test]
+fn lowers_type_query_import_name() {
+  let result =
+    lower_from_source(r#"type T = typeof import("mod").Foo;"#).expect("lower");
+  let import = type_query_import_name(&result, "T");
+  assert_eq!(import.module.as_deref(), Some("mod"));
+  let qualifier = import.qualifier.as_ref().expect("qualifier");
+  assert_eq!(qualifier.len(), 1);
+  assert_eq!(result.names.resolve(qualifier[0]).unwrap(), "Foo");
+}
+
+#[test]
+fn lowers_type_query_import_name_no_qualifier() {
+  let result = lower_from_source(r#"type T = typeof import("mod");"#).expect("lower");
+  let import = type_query_import_name(&result, "T");
+  assert_eq!(import.module.as_deref(), Some("mod"));
+  assert!(import.qualifier.is_none());
+}
+
+#[test]
+fn lowers_type_query_import_name_multi_segment() {
+  let result =
+    lower_from_source(r#"type T = typeof import("mod").Foo.Bar;"#).expect("lower");
+  let import = type_query_import_name(&result, "T");
+  assert_eq!(import.module.as_deref(), Some("mod"));
+  let qualifier = import.qualifier.as_ref().expect("qualifier");
+  assert_eq!(qualifier.len(), 2);
+  assert_eq!(result.names.resolve(qualifier[0]).unwrap(), "Foo");
+  assert_eq!(result.names.resolve(qualifier[1]).unwrap(), "Bar");
 }

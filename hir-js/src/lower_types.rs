@@ -18,6 +18,7 @@ use crate::hir::TypeMember as HirTypeMember;
 use crate::hir::TypeMemberKind;
 use crate::hir::TypeMethodSignature as HirTypeMethodSignature;
 use crate::hir::TypeName;
+use crate::hir::TypeImportName;
 use crate::hir::TypeParam;
 use crate::hir::TypePredicate as HirTypePredicate;
 use crate::hir::TypePropertySignature as HirTypePropertySignature;
@@ -36,6 +37,8 @@ use crate::ids::TypeParamId;
 use crate::intern::NameInterner;
 use crate::span_map::SpanMap;
 use diagnostics::TextRange;
+use parse_js::ast::expr::Expr;
+use parse_js::ast::expr::ImportExpr;
 use parse_js::ast::node::Node;
 use parse_js::ast::ts_stmt::InterfaceDecl;
 use parse_js::ast::ts_stmt::TypeAliasDecl;
@@ -241,26 +244,47 @@ impl<'a> TypeLowerer<'a> {
   }
 
   fn lower_entity_name(&mut self, name: &TypeEntityName) -> TypeName {
-    match name {
-      TypeEntityName::Identifier(id) => TypeName::Ident(self.names.intern(id)),
-      TypeEntityName::Qualified(qualified) => {
-        let mut path = Vec::new();
-        self.collect_qualified(&qualified.left, &mut path);
-        path.push(self.names.intern(&qualified.right));
-        TypeName::Qualified(path)
+    match self.lower_entity_name_parts(name) {
+      LoweredEntityName::Path(mut path) => {
+        if path.len() == 1 {
+          TypeName::Ident(path.pop().unwrap())
+        } else {
+          TypeName::Qualified(path)
+        }
       }
-      TypeEntityName::Import(_) => TypeName::ImportExpr,
+      LoweredEntityName::Import(import) => TypeName::Import(import),
     }
   }
 
-  fn collect_qualified(&mut self, name: &TypeEntityName, acc: &mut Vec<NameId>) {
+  fn lower_entity_name_parts(&mut self, name: &TypeEntityName) -> LoweredEntityName {
     match name {
-      TypeEntityName::Identifier(id) => acc.push(self.names.intern(id)),
-      TypeEntityName::Qualified(inner) => {
-        self.collect_qualified(&inner.left, acc);
-        acc.push(self.names.intern(&inner.right));
+      TypeEntityName::Identifier(id) => LoweredEntityName::Path(vec![self.names.intern(id)]),
+      TypeEntityName::Import(import_expr) => LoweredEntityName::Import(TypeImportName {
+        module: self.import_module_specifier(import_expr),
+        qualifier: None,
+      }),
+      TypeEntityName::Qualified(qualified) => {
+        let right = self.names.intern(&qualified.right);
+        match self.lower_entity_name_parts(&qualified.left) {
+          LoweredEntityName::Path(mut path) => {
+            path.push(right);
+            LoweredEntityName::Path(path)
+          }
+          LoweredEntityName::Import(mut import) => {
+            let mut qualifier = import.qualifier.take().unwrap_or_default();
+            qualifier.push(right);
+            import.qualifier = Some(qualifier);
+            LoweredEntityName::Import(import)
+          }
+        }
       }
-      TypeEntityName::Import(_) => {}
+    }
+  }
+
+  fn import_module_specifier(&self, import: &Node<ImportExpr>) -> Option<String> {
+    match &*import.stx.module.stx {
+      Expr::LitStr(lit) => Some(lit.stx.value.clone()),
+      _ => None,
     }
   }
 
@@ -627,4 +651,9 @@ impl<'a> TypeLowerer<'a> {
 
 fn to_range(loc: Loc) -> TextRange {
   loc.to_diagnostics_range_with_note().0
+}
+
+enum LoweredEntityName {
+  Path(Vec<NameId>),
+  Import(TypeImportName),
 }
