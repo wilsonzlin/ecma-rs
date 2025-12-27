@@ -665,6 +665,100 @@ impl FnEmitter for FunctionDecompiler<'_> {
   }
 }
 
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::cfg::cfg::{Cfg, CfgBBlocks, CfgGraph};
+
+  fn empty_program_function() -> ProgramFunction {
+    ProgramFunction {
+      debug: None,
+      body: Cfg {
+        graph: CfgGraph::default(),
+        bblocks: CfgBBlocks::default(),
+        entry: 0,
+      },
+    }
+  }
+
+  #[test]
+  fn break_to_outer_loop_is_labeled() {
+    let tree = ControlTree::Loop {
+      header: 0,
+      follow: None,
+      loop_label: LoopLabel(0),
+      body: Box::new(ControlTree::Seq(vec![
+        ControlTree::Loop {
+          header: 1,
+          follow: None,
+          loop_label: LoopLabel(1),
+          body: Box::new(ControlTree::Seq(vec![ControlTree::Break {
+            target: BreakTarget::Loop(LoopLabel(0)),
+          }])),
+        },
+        ControlTree::Continue {
+          target: LoopLabel(0),
+        },
+      ])),
+    };
+
+    let func = empty_program_function();
+    let labeled = collect_labeled_loops(&tree);
+    let bindings = ForeignBindings::default();
+    let options = DecompileOptions::default();
+    let mut decompiler = FunctionDecompiler::new(
+      &func,
+      &bindings,
+      &options,
+      TempDeclScope::Function,
+      labeled,
+    );
+    let stmts = decompiler.lower_tree(&tree).expect("lower");
+
+    assert_eq!(stmts.len(), 1);
+    let label = match stmts[0].stx.as_ref() {
+      Stmt::Label(label) => label,
+      other => panic!("expected label stmt, got {other:?}"),
+    };
+    assert_eq!(label.stx.name, "loop");
+
+    let while_stmt = match label.stx.statement.stx.as_ref() {
+      Stmt::While(w) => w,
+      other => panic!("expected labeled while loop, got {other:?}"),
+    };
+    let body = match while_stmt.stx.body.stx.as_ref() {
+      Stmt::Block(block) => &block.stx.body,
+      other => panic!("expected block body, got {other:?}"),
+    };
+    assert!(
+      body.iter().any(|stmt| matches!(stmt.stx.as_ref(), Stmt::While(_))),
+      "expected inner loop"
+    );
+    assert!(
+      body
+        .iter()
+        .any(|stmt| matches!(stmt.stx.as_ref(), Stmt::Continue(cont) if cont.stx.label.as_deref() == Some("loop"))),
+      "expected labeled continue to outer loop"
+    );
+
+    let inner_while = body
+      .iter()
+      .find_map(|stmt| match stmt.stx.as_ref() {
+        Stmt::While(w) => Some(w),
+        _ => None,
+      })
+      .expect("inner while loop");
+    let inner_body = match inner_while.stx.body.stx.as_ref() {
+      Stmt::Block(block) => &block.stx.body,
+      other => panic!("expected block body, got {other:?}"),
+    };
+    assert!(
+      inner_body.iter().any(|stmt| matches!(stmt.stx.as_ref(), Stmt::Break(brk) if brk.stx.label.as_deref() == Some("loop"))),
+      "expected break to outer loop"
+    );
+  }
+}
+
 fn collect_labeled_loops(tree: &ControlTree) -> HashSet<LoopLabel> {
   fn walk(
     tree: &ControlTree,
