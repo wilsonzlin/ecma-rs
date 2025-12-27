@@ -1226,7 +1226,7 @@ impl Program {
   }
 
   pub fn exports_of_fallible(&self, file: FileId) -> Result<ExportMap, FatalError> {
-    self.with_analyzed_state(|state| {
+    self.with_interned_state(|state| {
       let mut exports = state.exports_of_file(file)?;
       exports.retain(|_, entry| {
         if let Some(def) = entry.def {
@@ -1872,6 +1872,8 @@ impl Program {
       state.next_body = snapshot.next_body;
       state.next_symbol = snapshot.next_symbol;
       state.sync_typecheck_roots();
+      state.rebuild_callable_overloads();
+      state.merge_callable_overload_types();
     }
     program
   }
@@ -2742,6 +2744,7 @@ struct ProgramState {
   root_ids: Vec<FileId>,
   global_bindings: Arc<BTreeMap<String, SymbolBinding>>,
   namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
+  callable_overloads: HashMap<(FileId, String), Vec<DefId>>,
   diagnostics: Vec<Diagnostic>,
   type_store: TypeStore,
   interned_store: Option<Arc<tti::TypeStore>>,
@@ -2836,6 +2839,7 @@ impl ProgramState {
       root_ids: Vec::new(),
       global_bindings: Arc::new(BTreeMap::new()),
       namespace_object_types: HashMap::new(),
+      callable_overloads: HashMap::new(),
       diagnostics: Vec::new(),
       type_store,
       interned_store: None,
@@ -2993,6 +2997,34 @@ impl ProgramState {
     u8::MAX
   }
 
+  pub(crate) fn map_decl_to_program_def(
+    &self,
+    decl: &sem_ts::DeclData,
+    ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    let direct = DefId(decl.def_id.0);
+    if self.def_data.contains_key(&direct) {
+      return Some(direct);
+    }
+
+    let mut best: Option<(u8, DefId)> = None;
+    for (id, data) in self.def_data.iter() {
+      if data.file == FileId(decl.file.0) && data.name == decl.name {
+        let pri = self.def_priority(*id, ns);
+        best = best
+          .map(|(best_pri, best_id)| {
+            if pri < best_pri || (pri == best_pri && id < &best_id) {
+              (pri, *id)
+            } else {
+              (best_pri, best_id)
+            }
+          })
+          .or(Some((pri, *id)));
+      }
+    }
+    best.map(|(_, id)| id)
+  }
+
   fn canonical_defs(&mut self) -> Result<HashMap<(FileId, String), DefId>, FatalError> {
     let mut def_entries: Vec<_> = self
       .def_data
@@ -3007,12 +3039,12 @@ impl ProgramState {
         DefKind::Interface(_) | DefKind::TypeAlias(_) => sem_ts::Namespace::TYPE,
         _ => sem_ts::Namespace::VALUE,
       };
-      let mut mapped_def = def_id;
-      if let DefKind::Import(import) = &data.kind {
-        if let Some(target) = self
-          .exports_of_file(import.from)?
-          .get(&import.original)
-          .and_then(|entry| entry.def)
+        let mut mapped_def = def_id;
+        if let DefKind::Import(import) = &data.kind {
+          if let Some(target) = self
+            .exports_of_file(import.from)?
+            .get(&import.original)
+            .and_then(|entry| entry.def)
         {
           mapped_def = target;
         }
@@ -3029,6 +3061,124 @@ impl ProgramState {
         .or_insert(mapped_def);
     }
     Ok(def_by_name)
+  }
+
+  fn rebuild_callable_overloads(&mut self) {
+    self.callable_overloads.clear();
+    if let Some(semantics) = self.semantics.as_ref() {
+      let symbols = semantics.symbols();
+      let mut seen_symbols = HashSet::new();
+      for data in self
+        .def_data
+        .values()
+        .filter(|data| matches!(data.kind, DefKind::Function(_)))
+      {
+        let symbol: sem_ts::SymbolId = data.symbol.into();
+        if !seen_symbols.insert(symbol) {
+          continue;
+        }
+        let mut defs = Vec::new();
+        let mut seen_defs = HashSet::new();
+        for decl_id in semantics.symbol_decls(symbol, sem_ts::Namespace::VALUE) {
+          let decl = symbols.decl(*decl_id);
+          if !matches!(decl.kind, sem_ts::DeclKind::Function) {
+            continue;
+          }
+          if let Some(mapped) = self.map_decl_to_program_def(decl, sem_ts::Namespace::VALUE) {
+            if seen_defs.insert(mapped) {
+              defs.push(mapped);
+            }
+          }
+        }
+        if defs.len() > 1 {
+          for def in defs.iter().copied() {
+            if let Some(def_data) = self.def_data.get(&def) {
+              self
+                .callable_overloads
+                .entry((def_data.file, def_data.name.clone()))
+                .or_insert_with(|| defs.clone());
+            }
+          }
+        }
+      }
+      return;
+    }
+
+    let mut grouped: BTreeMap<(FileId, String), Vec<(DefId, TextRange)>> = BTreeMap::new();
+    for (id, data) in self
+      .def_data
+      .iter()
+      .filter(|(_, data)| matches!(data.kind, DefKind::Function(_)))
+    {
+      grouped
+        .entry((data.file, data.name.clone()))
+        .or_default()
+        .push((*id, data.span));
+    }
+    for ((file, name), mut defs) in grouped.into_iter() {
+      defs.sort_by_key(|(id, span)| (span.start, span.end, id.0));
+      let ordered: Vec<_> = defs.into_iter().map(|(id, _)| id).collect();
+      if ordered.len() > 1 {
+        self.callable_overloads.insert((file, name), ordered);
+      }
+    }
+  }
+
+  fn merge_callable_overload_types(&mut self) {
+    let Some(store) = self.interned_store.clone() else {
+      return;
+    };
+    if self.callable_overloads.is_empty() {
+      self.rebuild_callable_overloads();
+    }
+    let mut cache = HashMap::new();
+    let mut keys: Vec<_> = self.callable_overloads.keys().cloned().collect();
+    keys.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
+    for key in keys.into_iter() {
+      let Some(defs) = self.callable_overloads.get(&key).cloned() else {
+        continue;
+      };
+      if defs.len() < 2 {
+        continue;
+      }
+      let mut overloads = Vec::new();
+      let mut seen_sigs = HashSet::new();
+      // Preserve declaration order from the binder while deterministically
+      // deduplicating on signature identity.
+      for def in defs.iter().copied() {
+        if !self.interned_def_types.contains_key(&def) {
+          let _ = self.type_of_def(def);
+        }
+        let Some(ty) = self
+          .interned_def_types
+          .get(&def)
+          .copied()
+          .or_else(|| {
+            self.def_types.get(&def).copied().map(|store_ty| {
+              let mapped = store.canon(convert_type_for_display(store_ty, self, &store, &mut cache));
+              self.interned_def_types.insert(def, mapped);
+              mapped
+            })
+          })
+        else {
+          continue;
+        };
+        if let tti::TypeKind::Callable { overloads: sigs } = store.type_kind(ty) {
+          for sig in sigs.iter().copied() {
+            if seen_sigs.insert(sig) {
+              overloads.push(sig);
+            }
+          }
+        }
+      }
+      if overloads.is_empty() {
+        continue;
+      }
+      let merged = store.canon(store.intern_type(tti::TypeKind::Callable { overloads }));
+      for def in defs.into_iter() {
+        self.interned_def_types.insert(def, merged);
+      }
+    }
   }
 
   fn interned_unknown(&self) -> TypeId {
@@ -3382,6 +3532,7 @@ impl ProgramState {
       self.compute_semantics(host, &root_ids, &lib_ids)?;
     }
     self.resolve_reexports();
+    self.rebuild_callable_overloads();
     self.recompute_global_bindings();
     self.analyzed = true;
     Ok(())
@@ -3393,10 +3544,13 @@ impl ProgramState {
     roots: &[FileKey],
   ) -> Result<(), FatalError> {
     if self.interned_store.is_some() && self.interned_def_types.len() >= self.def_data.len() {
+      self.rebuild_callable_overloads();
+      self.merge_callable_overload_types();
       return Ok(());
     }
     self.ensure_analyzed_result(host, roots)?;
     self.check_cancelled()?;
+    self.rebuild_callable_overloads();
 
     let store = self.interned_store.clone().unwrap_or_else(|| {
       let store = tti::TypeStore::with_options((&self.compiler_options).into());
@@ -3567,6 +3721,7 @@ impl ProgramState {
     self.interned_store = Some(store);
     self.interned_def_types = def_types;
     self.interned_type_params = type_params;
+    self.merge_callable_overload_types();
     self.merge_namespace_value_types()?;
     self.recompute_global_bindings();
     codes::normalize_diagnostics(&mut self.diagnostics);

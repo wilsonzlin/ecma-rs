@@ -266,6 +266,10 @@ pub mod check {
     pub use crate::program::check::decls::*;
   }
 
+  pub mod cfg {
+    pub use crate::program::check::cfg::*;
+  }
+
   pub mod infer {
     pub use crate::program::check::infer::*;
   }

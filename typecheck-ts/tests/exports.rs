@@ -228,6 +228,66 @@ fn export_star_skips_default() {
 }
 
 #[test]
+fn imported_overloads_preserve_all_signatures() {
+  let mut host = MemoryHost::default();
+  let key_math = fk(310);
+  let key_use = fk(311);
+  host.insert(
+    key_math.clone(),
+    "export function overload(value: string): string;\n\
+     export function overload(value: number): number;\n\
+     export function overload(value: string | number) { return value; }",
+  );
+  host.insert(
+    key_use.clone(),
+    "import { overload } from \"./math\";\n\
+     export const asString = overload(\"hi\");\n\
+     export const asNumber = overload(1);",
+  );
+  host.link(key_use.clone(), "./math", key_math.clone());
+
+  let program = Program::new(host, vec![key_use.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let math_id = program.file_id(&key_math).expect("math id");
+  let math_exports = program.exports_of(math_id);
+  let overload_entry = math_exports.get("overload").expect("overload export");
+  let overload_type = overload_entry.type_id.expect("type for overload");
+  let returns: Vec<_> = program
+    .call_signatures(overload_type)
+    .iter()
+    .map(|sig| program.display_type(sig.signature.ret).to_string())
+    .collect();
+  assert!(
+    returns.contains(&"string".to_string()) && returns.contains(&"number".to_string()),
+    "expected overloads for string and number, got {returns:?}"
+  );
+
+  let use_id = program.file_id(&key_use).expect("use id");
+  let use_exports = program.exports_of(use_id);
+  let str_def = use_exports
+    .get("asString")
+    .and_then(|entry| entry.def)
+    .expect("asString def");
+  let num_def = use_exports
+    .get("asNumber")
+    .and_then(|entry| entry.def)
+    .expect("asNumber def");
+  assert_eq!(
+    program.display_type(program.type_of_def(str_def)).to_string(),
+    "string"
+  );
+  assert_eq!(
+    program.display_type(program.type_of_def(num_def)).to_string(),
+    "number"
+  );
+}
+
+#[test]
 fn duplicate_export_reports_conflict() {
   let mut host = MemoryHost::default();
   let key_a = fk(230);
