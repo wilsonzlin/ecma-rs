@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use typecheck_ts::db::queries::{decl_type, type_params, type_store};
 use typecheck_ts::db::{DeclInfo, DeclKind, SharedTypeStore, TypesDatabase};
-use typecheck_ts::{FileKey, MemoryHost, Program};
+use typecheck_ts::{FileId, FileKey, MemoryHost, Program};
 use types_ts_interned::{DefId, TypeDisplay, TypeParamId, TypeStore};
 
 fn seed_host() -> (MemoryHost, FileKey, FileKey) {
@@ -58,6 +58,8 @@ fn decl_queries_match_program_types() {
   let program_wrapper_ty = program.type_of_def_interned(wrapper_def);
 
   let snapshot = program.snapshot();
+  let canonical_defs: HashMap<(FileId, String), DefId> =
+    snapshot.canonical_defs.iter().cloned().collect();
   let def_names: HashMap<DefId, String> = snapshot
     .def_data
     .iter()
@@ -68,6 +70,11 @@ fn decl_queries_match_program_types() {
 
   let mut decls_by_file: BTreeMap<_, BTreeMap<DefId, DeclInfo>> = BTreeMap::new();
   for def in snapshot.def_data.iter() {
+    if let Some(expected) = canonical_defs.get(&(def.data.file, def.data.name.clone())) {
+      if *expected != def.def {
+        continue;
+      }
+    }
     let params = program_params.get(&def.def).cloned().unwrap_or_default();
     let entry = DeclInfo {
       file: def.data.file,
