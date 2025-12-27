@@ -227,14 +227,14 @@ pub fn resolve_overloads(
       }
     }
 
-    let inference_args: Vec<TypeId> = if context.is_some() {
-      contextual_args.clone()
+    let inference_args: &[TypeId] = if context.is_some() {
+      &contextual_args
     } else {
-      args.to_vec()
+      args
     };
 
     let call_inference =
-      infer_type_arguments_for_call(store, &original_sig, &inference_args, contextual_return);
+      infer_type_arguments_for_call(store, &original_sig, inference_args, contextual_return);
 
     let mut inference_diags: Vec<String> = call_inference
       .diagnostics
@@ -471,26 +471,16 @@ pub fn resolve_construct(
       continue;
     }
 
-    let base_inference =
+    let inference =
       infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
 
-    let mut merged_substitutions = base_inference.substitutions.clone();
+    let merged_substitutions = inference.substitutions.clone();
 
-    let call_inference =
-      infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
-
-    let inference_diags: Vec<String> = call_inference
+    let inference_diags: Vec<String> = inference
       .diagnostics
       .iter()
       .map(|d| d.message.clone())
       .collect();
-    merge_substitutions(
-      store.as_ref(),
-      &mut merged_substitutions,
-      &call_inference.substitutions,
-      primitives.any,
-      primitives.unknown,
-    );
 
     outcome.unknown_inferred = count_unknown(
       store.as_ref(),
