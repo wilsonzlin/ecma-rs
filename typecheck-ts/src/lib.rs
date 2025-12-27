@@ -260,6 +260,10 @@ impl Host for MemoryHost {
 /// This module intentionally re-exports internal building blocks from the main
 /// checker implementation so callers can experiment with standalone inference.
 pub mod check {
+  pub mod decls {
+    pub use crate::program::check::decls::*;
+  }
+
   pub mod infer {
     pub use crate::program::check::infer::*;
   }

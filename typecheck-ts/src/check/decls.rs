@@ -315,7 +315,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     let tp = self.alloc_type_param(mapped.type_param);
     let constraint = self.lower_type_expr(mapped.constraint, names);
     let value = self.lower_type_expr(mapped.value_type, names);
-    let name_type = mapped
+    let as_type = mapped
       .name_type
       .as_ref()
       .map(|n| self.lower_type_expr(*n, names));
@@ -325,8 +325,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       value,
       readonly: self.map_modifier(mapped.readonly),
       optional: self.map_modifier(mapped.optional),
-      name_type,
-      as_type: None,
+      name_type: None,
+      as_type,
     }))
   }
 

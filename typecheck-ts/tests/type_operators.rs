@@ -1,12 +1,15 @@
 use ahash::AHashMap;
-use hir_js::{lower_from_source, DefKind};
+use hir_js::{lower_from_source, DefKind, DefTypeInfo};
 use ordered_float::OrderedFloat;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::ts_stmt::TypeAliasDecl;
 use parse_js::parse;
+use std::collections::HashMap;
 use std::sync::Arc;
+use typecheck_ts::check::decls::HirDeclLowerer;
 use typecheck_ts::check::type_expr::{LoweredPredicate, TypeLowerer, TypeResolver};
+use typecheck_ts::Diagnostic;
 use types_ts_interned::{
   DefId, ExpandedType, MappedModifier, MappedType, ObjectType, PropData, PropKey, Property, Shape,
   TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamId,
@@ -405,6 +408,52 @@ fn mapped_type_over_literal_union_preserves_keys() {
     store.display(ty).to_string(),
     "{ [K in \"a\" | \"b\"]: number }"
   );
+}
+
+#[test]
+fn hir_decl_lowering_preserves_mapped_as_clause() {
+  let source = "type M<T> = { [K in keyof T as `${K & string}Changed`]: T[K] };";
+  let lowered = lower_from_source(source).expect("lowering should succeed");
+  let alias = lowered
+    .defs
+    .iter()
+    .find(|def| matches!(def.type_info, Some(DefTypeInfo::TypeAlias { .. })))
+    .expect("type alias");
+
+  let store = TypeStore::new();
+  let mut diagnostics: Vec<Diagnostic> = Vec::new();
+  let mut lowerer = HirDeclLowerer::new(
+    store.clone(),
+    &lowered.types,
+    None,
+    HashMap::new(),
+    alias.path.module,
+    None,
+    HashMap::new(),
+    &mut diagnostics,
+    None,
+    None,
+    None,
+    None,
+  );
+  let (ty, _) = lowerer.lower_type_info(alias.type_info.as_ref().unwrap(), &lowered.names);
+
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {:?}",
+    diagnostics
+  );
+
+  let TypeKind::Mapped(mapped) = store.type_kind(ty) else {
+    panic!("expected mapped type, got {:?}", store.type_kind(ty));
+  };
+  let Some(as_type) = mapped.as_type else {
+    panic!("expected as_type to be populated");
+  };
+  match store.type_kind(as_type) {
+    TypeKind::TemplateLiteral(_) => {}
+    other => panic!("expected template literal as_type, got {:?}", other),
+  }
 }
 
 #[test]
