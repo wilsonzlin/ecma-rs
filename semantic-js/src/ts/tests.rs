@@ -1282,7 +1282,7 @@ fn export_assignment_reports_span() {
   let file = FileId(94);
   let mut hir = HirFile::module(file);
   hir.exports.push(Export::ExportAssignment {
-    expr: "foo".to_string(),
+    expr: String::new(),
     span: span(10),
   });
 
@@ -1295,6 +1295,94 @@ fn export_assignment_reports_span() {
   assert_eq!(diag.code, "BIND1003");
   assert_eq!(diag.primary.file, file);
   assert_eq!(diag.primary.range, span(10));
+}
+
+#[test]
+fn export_assignment_adds_default_export() {
+  let file = FileId(200);
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Var, Exported::No));
+  hir.exports.push(Export::ExportAssignment {
+    expr: "Foo".to_string(),
+    span: span(20),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let symbols = semantics.symbols();
+  let default_export = semantics
+    .exports_of(file)
+    .get("default")
+    .expect("default export present")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("default export has value namespace");
+  let foo_symbol = symbols
+    .symbol_for_def(DefId(0), Namespace::VALUE)
+    .expect("Foo symbol present");
+  assert_eq!(default_export, foo_symbol);
+}
+
+#[test]
+fn export_assignment_unresolved() {
+  let file = FileId(201);
+  let mut hir = HirFile::module(file);
+  hir.exports.push(Export::ExportAssignment {
+    expr: "Missing".to_string(),
+    span: span(30),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1002");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, span(30));
+  assert!(semantics.exports_of(file).get("default").is_none());
+}
+
+#[test]
+fn export_assignment_with_named_export_emits_bind1005() {
+  let file = FileId(202);
+  let mut hir = HirFile::module(file);
+  hir
+    .decls
+    .push(mk_decl(0, "Foo", DeclKind::Var, Exported::Named));
+  hir.exports.push(Export::ExportAssignment {
+    expr: "Foo".to_string(),
+    span: span(40),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert!(
+    diags.iter().any(|d| d.code == "BIND1005"),
+    "expected BIND1005 diagnostic"
+  );
+
+  let symbols = semantics.symbols();
+  let default_export = semantics
+    .exports_of(file)
+    .get("default")
+    .expect("default export present")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("default export has value namespace");
+  let foo_export = semantics
+    .exports_of(file)
+    .get("Foo")
+    .expect("named export present")
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("Foo export available");
+  assert_eq!(default_export, foo_export);
 }
 
 #[test]

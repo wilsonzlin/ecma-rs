@@ -23,19 +23,23 @@
 //!
 //! The binder currently focuses on module graph semantics and declaration
 //! merging. It does not model statement-level scopes, contextual type-only
-//! exports beyond the supplied `is_type_only` flags, or `export =` assignments
-//! (which are reported as diagnostics). Cross-file ambient augmentations are
-//! only represented through re-exports/imports rather than global name
-//! injection.
-//! Ambient module declarations (`declare module "foo" { }`) are bound into
-//! their own export/symbol maps; unimplemented features such as `export as
-//! namespace` and `export =` are reported deterministically via diagnostics.
+//! exports beyond the supplied `is_type_only` flags, or non-identifier `export =`
+//! expressions (which are reported as diagnostics). Cross-file ambient
+//! augmentations are only represented through re-exports/imports rather than
+//! global name injection. Simple `export = Identifier` assignments synthesize a
+//! default export entry for tooling parity.
+//! Ambient module declarations (`declare module "foo" { }`) are bound into their
+//! own export/symbol maps; unimplemented features such as `export as namespace`
+//! and non-identifier `export =` forms are reported deterministically via
+//! diagnostics.
 //!
 //! Binder diagnostics use the shared [`diagnostics`] crate with stable codes:
 //! - `BIND1001`: duplicate export
 //! - `BIND1002`: unresolved import/export or missing export
-//! - `BIND1003`: unsupported export assignment or exports in a script module
+//! - `BIND1003`: unsupported export assignment expression or exports in a script
+//!   module
 //! - `BIND1004`: duplicate import binding
+//! - `BIND1005`: `export =` combined with other exports
 //!
 //! ## Determinism expectations
 //!
