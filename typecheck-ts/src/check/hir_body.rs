@@ -1015,7 +1015,22 @@ impl<'a> Checker<'a> {
         self.store.union(vec![cons, alt])
       }
       AstExpr::Call(call) => {
-        let callee_ty = self.check_expr(&call.stx.callee);
+        let (callee_ty, this_arg) = match call.stx.callee.stx.as_ref() {
+          AstExpr::Member(mem) => {
+            let obj_ty = self.check_expr(&mem.stx.left);
+            let callee_ty = self.member_type(obj_ty, &mem.stx.right);
+            self.record_expr_type(call.stx.callee.loc, callee_ty);
+            (callee_ty, Some(obj_ty))
+          }
+          AstExpr::ComputedMember(mem) => {
+            let obj_ty = self.check_expr(&mem.stx.object);
+            let _ = self.check_expr(&mem.stx.member);
+            let callee_ty = self.member_type(obj_ty, "<computed>");
+            self.record_expr_type(call.stx.callee.loc, callee_ty);
+            (callee_ty, Some(obj_ty))
+          }
+          _ => (self.check_expr(&call.stx.callee), None),
+        };
         let arg_types: Vec<TypeId> = call
           .stx
           .arguments
@@ -1036,7 +1051,7 @@ impl<'a> Checker<'a> {
           &self.relate,
           callee_ty,
           &arg_types,
-          None,
+          this_arg,
           &type_params,
           None,
           span,
@@ -1047,8 +1062,9 @@ impl<'a> Checker<'a> {
         if resolution.diagnostics.is_empty() {
           if let Some(sig_id) = resolution.signature {
             let sig = self.store.signature(sig_id);
+            let params = self.params_for_call(&sig);
             for (idx, arg) in call.stx.arguments.iter().enumerate() {
-              if let Some(param) = sig.params.get(idx) {
+              if let Some(param) = params.get(idx) {
                 let arg_ty = arg_types
                   .get(idx)
                   .copied()
@@ -1062,12 +1078,11 @@ impl<'a> Checker<'a> {
               asserts: true,
             } = self.store.type_kind(sig.ret)
             {
-              let target = sig
-                .params
+              let target = params
                 .iter()
                 .enumerate()
                 .find(|(_, p)| p.name == Some(param_name))
-                .or_else(|| sig.params.get(0).map(|p| (0usize, p)));
+                .or_else(|| params.get(0).map(|p| (0usize, p)));
               if let Some((idx, _)) = target {
                 if let Some(arg) = call.stx.arguments.get(idx) {
                   if let AstExpr::Id(id) = arg.stx.value.stx.as_ref() {
@@ -1076,13 +1091,9 @@ impl<'a> Checker<'a> {
                 }
               }
             }
-            let required = sig.params.iter().filter(|p| !p.optional && !p.rest).count();
-            let has_rest = sig.params.iter().any(|p| p.rest);
-            let max = if has_rest {
-              None
-            } else {
-              Some(sig.params.len())
-            };
+            let required = params.iter().filter(|p| !p.optional && !p.rest).count();
+            let has_rest = params.iter().any(|p| p.rest);
+            let max = if has_rest { None } else { Some(params.len()) };
             if arg_types.len() < required || max.map_or(false, |m| arg_types.len() > m) {
               self
                 .diagnostics
@@ -1097,8 +1108,9 @@ impl<'a> Checker<'a> {
         });
         if let Some(sig_id) = contextual_sig {
           let sig = self.store.signature(sig_id);
+          let params = self.params_for_call(&sig);
           for (idx, arg) in call.stx.arguments.iter().enumerate() {
-            if let Some(param) = sig.params.get(idx) {
+            if let Some(param) = params.get(idx) {
               let arg_ty = arg_types
                 .get(idx)
                 .copied()
@@ -1738,10 +1750,23 @@ impl<'a> Checker<'a> {
       type_param_decls = self.lower_type_params(params);
       type_params_ids = type_param_decls.iter().map(|d| d.id).collect();
     }
+    let mut param_start = 0usize;
+    let mut this_param = None;
+    if let Some(first) = func.stx.parameters.first() {
+      if let AstPat::Id(id) = first.stx.pattern.stx.pat.stx.as_ref() {
+        if id.stx.name == "this" {
+          if let Some(annotation) = first.stx.type_annotation.as_ref() {
+            this_param = Some(self.lowerer.lower_type_expr(annotation));
+            param_start = 1;
+          }
+        }
+      }
+    }
     let params = func
       .stx
       .parameters
       .iter()
+      .skip(param_start)
       .map(|p| {
         let name = match p.stx.pattern.stx.pat.stx.as_ref() {
           AstPat::Id(id) => Some(self.store.intern_name(id.stx.name.clone())),
@@ -1770,7 +1795,7 @@ impl<'a> Checker<'a> {
       params,
       ret,
       type_params: type_params_ids,
-      this_param: None,
+      this_param,
     };
     let sig_id = self.store.intern_signature(sig);
     let ty = self.store.intern_type(TypeKind::Callable {
@@ -1783,6 +1808,19 @@ impl<'a> Checker<'a> {
       self.lowerer.pop_type_param_scope();
     }
     ty
+  }
+
+  fn params_for_call<'b>(&self, sig: &'b Signature) -> &'b [SigParam] {
+    if sig.this_param.is_some() {
+      if let Some(first) = sig.params.first() {
+        if let Some(name) = first.name {
+          if self.store.name(name) == "this" {
+            return &sig.params[1..];
+          }
+        }
+      }
+    }
+    sig.params.as_slice()
   }
 
   fn record_expr_type(&mut self, loc: Loc, ty: TypeId) {
