@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use typecheck_ts::db::{TypecheckDatabase, TypecheckDb};
 use typecheck_ts::{
   CacheKind, FileId, FileKey, MemoryHost, Program, QueryKind, QueryStatsCollector,
 };
-use typecheck_ts::db::{TypecheckDatabase, TypecheckDb};
 use types_ts_interned::CacheStats;
 
 #[test]
@@ -101,7 +101,10 @@ fn program_records_query_stats_after_check() {
   );
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics {diagnostics:?}"
+  );
 
   let stats = program.query_stats();
   for kind in [
@@ -125,9 +128,14 @@ fn salsa_events_feed_collector() {
   db.set_profiler(stats.clone());
 
   let file = FileId(0);
-  db.set_roots(Arc::new(vec![file]));
-  db.set_file_text(file, Arc::<str>::from("export const x = 1;"));
-  db.set_file_kind(file, typecheck_ts::lib_support::FileKind::Ts);
+  let key = FileKey::new("profile.ts");
+  db.set_file(
+    file,
+    key.clone(),
+    typecheck_ts::lib_support::FileKind::Ts,
+    Arc::<str>::from("export const x = 1;"),
+  );
+  db.set_roots(Arc::from([key]));
 
   let result = db.ts_semantics();
   assert!(

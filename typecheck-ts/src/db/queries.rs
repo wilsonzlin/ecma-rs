@@ -3,22 +3,26 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use diagnostics::{Diagnostic, FileId};
-use hir_js::{lower_file_with_diagnostics, FileKind as HirFileKind, LowerResult};
+use hir_js::{
+  lower_file_with_diagnostics, ExportDefaultValue, ExportKind, ExprKind, FileKind as HirFileKind,
+  LowerResult, ObjectProperty, StmtKind,
+};
 use semantic_js::ts as sem_ts;
 use types_ts_interned::PrimitiveIds;
 
-use crate::semantic_js::SymbolId;
-use crate::symbols::SymbolBinding;
-use crate::{DefId, TypeId};
 use crate::db::inputs::{
   CancellationToken, CancelledInput, CompilerOptionsInput, FileInput, ModuleResolutionInput,
   RootsInput,
 };
 use crate::db::{Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
+use crate::profile::QueryKind;
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
+use crate::semantic_js::SymbolId;
+use crate::symbols::SymbolBinding;
 use crate::FileKey;
+use crate::{BodyId, DefId, TypeId};
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
   db.file_input_by_key(key)
@@ -182,6 +186,9 @@ pub fn reset_parse_query_count() {
 
 #[salsa::tracked]
 fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
+  let _timer = db
+    .profiler()
+    .map(|profiler| profiler.timer(QueryKind::Parse, false));
   PARSE_QUERY_CALLS.fetch_add(1, Ordering::Relaxed);
   let kind = file.kind(db);
   let source = file.text(db);
@@ -190,6 +197,9 @@ fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
 
 #[salsa::tracked]
 fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
+  let _timer = db
+    .profiler()
+    .map(|profiler| profiler.timer(QueryKind::LowerHir, false));
   let parsed = parse_for(db, file);
   let file_kind = file.kind(db);
   let mut diagnostics = parsed.diagnostics.clone();
@@ -290,17 +300,13 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
       match export {
         sem_ts::Export::Named(named) => {
           if let Some(specifier) = named.specifier.as_ref() {
-            if let Some(target) =
-              module_resolve(db, file, Arc::<str>::from(specifier.as_str()))
-            {
+            if let Some(target) = module_resolve(db, file, Arc::<str>::from(specifier.as_str())) {
               queue.push_back(target);
             }
           }
         }
         sem_ts::Export::All(all) => {
-          if let Some(target) =
-            module_resolve(db, file, Arc::<str>::from(all.specifier.as_str()))
-          {
+          if let Some(target) = module_resolve(db, file, Arc::<str>::from(all.specifier.as_str())) {
             queue.push_back(target);
           }
         }
@@ -313,6 +319,9 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
 
 #[salsa::tracked]
 fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
+  let _timer = db
+    .profiler()
+    .map(|profiler| profiler.timer(QueryKind::Bind, false));
   let files = all_files_for(db);
   let mut diagnostics = Vec::new();
   let mut sem_hirs: HashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = HashMap::new();
@@ -342,8 +351,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     sem_hirs.get(&file).cloned().unwrap_or_else(|| {
       Arc::new(empty_sem_hir(
         FileId(file.0),
-        db
-          .file_input(FileId(file.0))
+        db.file_input(FileId(file.0))
           .map(|input| input.kind(db))
           .unwrap_or(FileKind::Ts),
       ))
@@ -440,4 +448,171 @@ pub fn ts_semantics(db: &dyn Db) -> Arc<TsSemantics> {
 #[salsa::tracked]
 pub fn db_revision(db: &dyn Db) -> salsa::Revision {
   salsa::plumbing::current_revision(db)
+}
+
+#[salsa::tracked]
+fn def_to_file_for(db: &dyn Db) -> Arc<BTreeMap<DefId, FileId>> {
+  let mut files: Vec<_> = all_files(db).iter().copied().collect();
+  files.sort_by_key(|f| f.0);
+
+  let mut map = BTreeMap::new();
+  for file in files {
+    let lowered = lower_hir(db, file);
+    if let Some(lowered) = lowered.lowered.as_ref() {
+      for def in lowered.defs.iter() {
+        if let Some(existing) = map.insert(def.id, file) {
+          debug_assert_eq!(
+            existing, file,
+            "definition {def:?} seen in multiple files: {existing:?} and {file:?}"
+          );
+        }
+      }
+    }
+  }
+
+  Arc::new(map)
+}
+
+/// Map every [`DefId`] in the program to its owning [`FileId`].
+///
+/// Files are processed in ascending [`FileId`] order to keep iteration
+/// deterministic regardless of the order returned by [`all_files`].
+pub fn def_to_file(db: &dyn Db) -> Arc<BTreeMap<DefId, FileId>> {
+  def_to_file_for(db)
+}
+
+#[salsa::tracked]
+fn body_to_file_for(db: &dyn Db) -> Arc<BTreeMap<BodyId, FileId>> {
+  let mut files: Vec<_> = all_files(db).iter().copied().collect();
+  files.sort_by_key(|f| f.0);
+
+  let mut map = BTreeMap::new();
+  for file in files {
+    let lowered = lower_hir(db, file);
+    if let Some(lowered) = lowered.lowered.as_ref() {
+      for body_id in lowered.body_index.keys() {
+        if let Some(existing) = map.insert(*body_id, file) {
+          debug_assert_eq!(
+            existing, file,
+            "body {body_id:?} seen in multiple files: {existing:?} and {file:?}"
+          );
+        }
+      }
+    }
+  }
+
+  Arc::new(map)
+}
+
+/// Map every [`BodyId`] in the program to its owning [`FileId`].
+///
+/// Files are processed in ascending [`FileId`] order to guarantee deterministic
+/// results even if the root list is shuffled.
+pub fn body_to_file(db: &dyn Db) -> Arc<BTreeMap<BodyId, FileId>> {
+  body_to_file_for(db)
+}
+
+fn record_parent(map: &mut BTreeMap<BodyId, BodyId>, child: BodyId, parent: BodyId) {
+  if let Some(existing) = map.get(&child) {
+    debug_assert_eq!(
+      *existing, parent,
+      "conflicting parents for {child:?}: {existing:?} vs {parent:?}"
+    );
+    return;
+  }
+  map.insert(child, parent);
+}
+
+#[salsa::tracked]
+fn body_parents_in_file_for(db: &dyn Db, file: FileInput) -> Arc<BTreeMap<BodyId, BodyId>> {
+  let file_id = file.file_id(db);
+  let lowered = lower_hir(db, file_id);
+  let Some(lowered) = lowered.lowered.as_ref() else {
+    return Arc::new(BTreeMap::new());
+  };
+  let mut parents = BTreeMap::new();
+
+  let mut body_ids: Vec<_> = lowered.body_index.keys().copied().collect();
+  body_ids.sort_by_key(|id| id.0);
+
+  for body_id in body_ids {
+    let Some(body) = lowered.body(body_id) else {
+      continue;
+    };
+
+    for stmt in body.stmts.iter() {
+      if let StmtKind::Decl(def_id) = stmt.kind {
+        if let Some(def) = lowered.def(def_id) {
+          if let Some(child_body) = def.body {
+            record_parent(&mut parents, child_body, body_id);
+          }
+        }
+      }
+    }
+
+    for expr in body.exprs.iter() {
+      match &expr.kind {
+        ExprKind::FunctionExpr { body: child, .. } => record_parent(&mut parents, *child, body_id),
+        ExprKind::ClassExpr { body: child, .. } => record_parent(&mut parents, *child, body_id),
+        ExprKind::Object(object) => {
+          for prop in object.properties.iter() {
+            match prop {
+              ObjectProperty::Getter { body: child, .. }
+              | ObjectProperty::Setter { body: child, .. } => {
+                record_parent(&mut parents, *child, body_id)
+              }
+              _ => {}
+            }
+          }
+        }
+        _ => {}
+      }
+    }
+  }
+
+  let root_body = lowered.hir.root_body;
+  for export in lowered.hir.exports.iter() {
+    match &export.kind {
+      ExportKind::Default(default) => match &default.value {
+        ExportDefaultValue::Expr { body, .. }
+        | ExportDefaultValue::Class { body, .. }
+        | ExportDefaultValue::Function { body, .. } => {
+          record_parent(&mut parents, *body, root_body)
+        }
+      },
+      ExportKind::Assignment(assign) => record_parent(&mut parents, assign.body, root_body),
+      _ => {}
+    }
+  }
+
+  Arc::new(parents)
+}
+
+/// Parent map for all bodies declared within a single file.
+///
+/// A child relationship is recorded when a body is owned by a declaration within
+/// another body (`StmtKind::Decl`) or created by a function/class expression.
+/// Default export bodies are also associated with the file's top-level body to
+/// keep traversal cycle-safe.
+pub fn body_parents_in_file(db: &dyn Db, file: FileId) -> Arc<BTreeMap<BodyId, BodyId>> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before computing parents");
+  body_parents_in_file_for(db, handle)
+}
+
+/// Owning file for a definition, if present in the index.
+pub fn def_file(db: &dyn Db, def: DefId) -> Option<FileId> {
+  def_to_file(db).get(&def).copied()
+}
+
+/// Owning file for a body, if present in the index.
+pub fn body_file(db: &dyn Db, body: BodyId) -> Option<FileId> {
+  body_to_file(db).get(&body).copied()
+}
+
+/// Parent body for the given body.
+pub fn body_parent(db: &dyn Db, body: BodyId) -> Option<BodyId> {
+  let file = body_file(db, body)?;
+  body_parents_in_file(db, file).get(&body).copied()
 }

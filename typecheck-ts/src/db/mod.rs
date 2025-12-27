@@ -12,15 +12,18 @@ use diagnostics::FileId;
 use salsa::Setter;
 
 use crate::lib_support::{CompilerOptions, FileKind};
+use crate::profile::QueryStatsCollector;
 use crate::FileKey;
+use crate::{BodyId, DefId};
 
-mod inputs;
 pub mod expander;
+mod inputs;
 pub mod queries;
 
 pub use inputs::CancellationToken;
 pub use queries::{
-  all_files, cancelled, compiler_options, db_revision, file_kind, file_text, global_bindings,
+  all_files, body_file, body_parent, body_parents_in_file, body_to_file, cancelled,
+  compiler_options, db_revision, def_file, def_to_file, file_kind, file_text, global_bindings,
   lower_hir, module_resolve, parse, parse_query_count, reset_parse_query_count, roots, sem_hir,
   ts_semantics, GlobalBindingsDb, LowerResultWithDiagnostics, TsSemantics,
 };
@@ -54,6 +57,7 @@ pub trait Db: salsa::Database + Send + 'static {
   fn file_input(&self, file: FileId) -> Option<inputs::FileInput>;
   fn file_input_by_key(&self, key: &FileKey) -> Option<inputs::FileInput>;
   fn module_resolution_input(&self, key: &ModuleKey) -> Option<inputs::ModuleResolutionInput>;
+  fn profiler(&self) -> Option<QueryStatsCollector>;
 }
 
 #[salsa::db]
@@ -66,6 +70,7 @@ pub struct Database {
   files: BTreeMap<FileId, inputs::FileInput>,
   file_keys: BTreeMap<FileKey, FileId>,
   module_resolutions: BTreeMap<ModuleKey, inputs::ModuleResolutionInput>,
+  profiler: Option<QueryStatsCollector>,
 }
 
 impl Default for Database {
@@ -78,6 +83,7 @@ impl Default for Database {
       files: BTreeMap::new(),
       file_keys: BTreeMap::new(),
       module_resolutions: BTreeMap::new(),
+      profiler: None,
     };
     db.initialize_defaults();
     db
@@ -121,6 +127,10 @@ impl Db for Database {
 
   fn module_resolution_input(&self, key: &ModuleKey) -> Option<inputs::ModuleResolutionInput> {
     self.module_resolutions.get(key).copied()
+  }
+
+  fn profiler(&self) -> Option<QueryStatsCollector> {
+    self.profiler.clone()
   }
 }
 
@@ -267,6 +277,34 @@ impl Database {
 
   pub fn ts_semantics(&self) -> Arc<queries::TsSemantics> {
     queries::ts_semantics(self)
+  }
+
+  pub fn set_profiler(&mut self, profiler: QueryStatsCollector) {
+    self.profiler = Some(profiler);
+  }
+
+  pub fn def_to_file(&self) -> Arc<BTreeMap<DefId, FileId>> {
+    queries::def_to_file(self)
+  }
+
+  pub fn body_to_file(&self) -> Arc<BTreeMap<BodyId, FileId>> {
+    queries::body_to_file(self)
+  }
+
+  pub fn body_parents_in_file(&self, file: FileId) -> Arc<BTreeMap<BodyId, BodyId>> {
+    queries::body_parents_in_file(self, file)
+  }
+
+  pub fn def_file(&self, def: DefId) -> Option<FileId> {
+    queries::def_file(self, def)
+  }
+
+  pub fn body_file(&self, body: BodyId) -> Option<FileId> {
+    queries::body_file(self, body)
+  }
+
+  pub fn body_parent(&self, body: BodyId) -> Option<BodyId> {
+    queries::body_parent(self, body)
   }
 
   fn ensure_compiler_options(&mut self) -> inputs::CompilerOptionsInput {
