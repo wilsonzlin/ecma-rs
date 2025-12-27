@@ -10,7 +10,7 @@ use hir_js::{
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
-use types_ts_interned::{PrimitiveIds, TypeStore};
+use types_ts_interned::{PrimitiveIds, TypeParamId, TypeStore};
 
 use crate::codes;
 use crate::db::inputs::{
@@ -1831,6 +1831,8 @@ pub struct DeclInfo {
   pub declared_type: Option<TypeId>,
   /// Initializer used for inference if no annotation is present.
   pub initializer: Option<Initializer>,
+  /// Declared type parameters for this definition, if any.
+  pub type_params: Arc<[TypeParamId]>,
 }
 
 /// Simplified initializer model used by [`check_body`].
@@ -1879,6 +1881,18 @@ pub fn decl_types_in_file(
   db.decl_types_input(file)
     .map(|handle| handle.decls(db).clone())
     .unwrap_or_else(|| Arc::new(BTreeMap::new()))
+}
+
+/// Declared type of a definition if it exists in the database.
+pub fn decl_type(db: &dyn TypeDb, def: DefId) -> Option<TypeId> {
+  decl_types_for_def(db, def).map(|_| type_of_def(db, def, ()))
+}
+
+/// Declared type parameters associated with a definition.
+pub fn type_params(db: &dyn TypeDb, def: DefId) -> Arc<[TypeParamId]> {
+  decl_types_for_def(db, def)
+    .map(|decl| decl.type_params.clone())
+    .unwrap_or_else(|| Arc::from([]))
 }
 
 #[salsa::tracked]

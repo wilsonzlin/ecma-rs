@@ -1165,6 +1165,7 @@ impl<'a> Checker<'a> {
           this_arg,
           self.expr_context.expected,
           span,
+          None,
         );
         for diag in &resolution.diagnostics {
           self.diagnostics.push(diag.clone());
@@ -2536,6 +2537,72 @@ fn loc_to_range(_file: FileId, loc: Loc) -> TextRange {
   TextRange::new(range.start, range.end)
 }
 
+/// Construct a baseline [`BodyCheckResult`] with all types initialised to the
+/// provided `unknown` sentinel. This is primarily used by flow-only passes in
+/// tests and follow-up refinement stages.
+pub fn base_body_result(body_id: BodyId, body: &Body, unknown: TypeId) -> BodyCheckResult {
+  BodyCheckResult {
+    body: body_id,
+    expr_types: vec![unknown; body.exprs.len()],
+    pat_types: vec![unknown; body.pats.len()],
+    expr_spans: body.exprs.iter().map(|e| e.span).collect(),
+    pat_spans: body.pats.iter().map(|p| p.span).collect(),
+    diagnostics: Vec::new(),
+    return_types: Vec::new(),
+  }
+}
+
+/// Flow-sensitive refinement pass built directly on `hir-js` bodies. Takes the
+/// base types produced by the main checker and narrows them using flow facts,
+/// never widening beyond the provided baseline.
+pub fn refine_types_with_flow(
+  body_id: BodyId,
+  body: &Body,
+  names: &NameInterner,
+  bindings: &FlowBindings,
+  _locals: &TsLocalSemantics,
+  file: FileId,
+  store: Arc<TypeStore>,
+  base: &BodyCheckResult,
+  initial: &HashMap<NameId, TypeId>,
+  relate: RelateCtx,
+  ref_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
+) -> BodyCheckResult {
+  let initial = initial
+    .iter()
+    .filter_map(|(name, ty)| bindings.binding_for_name(*name).map(|binding| (binding, *ty)))
+    .collect::<HashMap<_, _>>();
+
+  let mut checker = FlowBodyChecker::new(
+    body_id,
+    body,
+    names,
+    Arc::clone(&store),
+    file,
+    bindings.clone(),
+    &initial,
+    relate,
+    ref_expander,
+  );
+  if base.expr_types.len() == checker.expr_types.len() {
+    checker.expr_types.clone_from(&base.expr_types);
+  }
+  if base.pat_types.len() == checker.pat_types.len() {
+    checker.pat_types.clone_from(&base.pat_types);
+  }
+  if base.expr_spans.len() == checker.expr_spans.len() {
+    checker.expr_spans.clone_from(&base.expr_spans);
+  }
+  if base.pat_spans.len() == checker.pat_spans.len() {
+    checker.pat_spans.clone_from(&base.pat_spans);
+  }
+  if base.return_types.len() == checker.return_types.len() {
+    checker.return_types.clone_from(&base.return_types);
+  }
+  checker.run(&initial);
+  checker.into_result()
+}
+
 /// Flow-sensitive body checker built directly on `hir-js` bodies. Locals
 /// semantics are used to resolve identifier bindings to stable keys, and the
 /// initial environment is keyed by those bindings. This is a lightweight,
@@ -3697,6 +3764,7 @@ impl<'a> FlowBodyChecker<'a> {
       None,
       None,
       span,
+      None,
     );
     self.diagnostics.extend(resolution.diagnostics.into_iter());
     let mut ret_ty = resolution.return_type;

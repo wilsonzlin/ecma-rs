@@ -60,6 +60,7 @@ fn setup_deterministic_db() -> (TypesDatabase, Arc<TypeStore>, Vec<DefId>) {
       kind: DeclKind::Function,
       declared_type: Some(primitives.number),
       initializer: None,
+      type_params: Arc::from([]),
     },
   );
   decls.insert(
@@ -70,6 +71,7 @@ fn setup_deterministic_db() -> (TypesDatabase, Arc<TypeStore>, Vec<DefId>) {
       kind: DeclKind::Function,
       declared_type: Some(primitives.string),
       initializer: None,
+      type_params: Arc::from([]),
     },
   );
   // Inferred from merged overloads.
@@ -84,6 +86,7 @@ fn setup_deterministic_db() -> (TypesDatabase, Arc<TypeStore>, Vec<DefId>) {
         Initializer::Reference(defs[0]),
         Initializer::Reference(defs[1]),
       ])),
+      type_params: Arc::from([]),
     },
   );
   decls.insert(
@@ -97,6 +100,7 @@ fn setup_deterministic_db() -> (TypesDatabase, Arc<TypeStore>, Vec<DefId>) {
         Initializer::Type(primitives.boolean),
         Initializer::Reference(defs[2]),
       ])),
+      type_params: Arc::from([]),
     },
   );
   decls.insert(
@@ -107,6 +111,7 @@ fn setup_deterministic_db() -> (TypesDatabase, Arc<TypeStore>, Vec<DefId>) {
       kind: DeclKind::Var,
       declared_type: Some(primitives.undefined),
       initializer: Some(Initializer::Reference(defs[3])),
+      type_params: Arc::from([]),
     },
   );
   decls.insert(
@@ -120,6 +125,7 @@ fn setup_deterministic_db() -> (TypesDatabase, Arc<TypeStore>, Vec<DefId>) {
         Initializer::Reference(defs[4]),
         Initializer::Reference(defs[0]),
       ])),
+      type_params: Arc::from([]),
     },
   );
 
@@ -147,6 +153,7 @@ fn self_referential_initializer_recovers() {
       kind: DeclKind::Var,
       declared_type: None,
       initializer: Some(Initializer::Reference(def)),
+      type_params: Arc::from([]),
     },
   );
   db.set_decl_types_in_file(file, Arc::new(decls));

@@ -1,11 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use typecheck_ts::db::queries::{decl_type, type_params, type_store};
-use typecheck_ts::db::Database;
-use typecheck_ts::lib_support::CompilerOptions;
-use typecheck_ts::{FileKey, FileOrigin, Host, MemoryHost, Program};
-use types_ts_interned::{DefId, TypeDisplay, TypeParamId};
+use typecheck_ts::db::{DeclInfo, DeclKind, SharedTypeStore, TypesDatabase};
+use typecheck_ts::{FileKey, MemoryHost, Program};
+use types_ts_interned::{DefId, TypeDisplay, TypeParamId, TypeStore};
 
 fn seed_host() -> (MemoryHost, FileKey, FileKey) {
   let mut host = MemoryHost::new();
@@ -65,24 +64,36 @@ fn decl_queries_match_program_types() {
     .map(|entry| (entry.def, entry.data.name.clone()))
     .collect();
   let program_params: HashMap<DefId, Vec<TypeParamId>> =
-    snapshot.interned_type_params.into_iter().collect();
+    snapshot.interned_type_params.clone().into_iter().collect();
 
-  let mut db = Database::new();
-  db.set_compiler_options(CompilerOptions::default());
-  db.set_roots(Arc::from([file_b.clone()]));
-
-  let mut key_to_id = HashMap::new();
-  key_to_id.insert(file_a.clone(), file_a_id);
-  key_to_id.insert(file_b.clone(), file_b_id);
-
-  for (key, id) in key_to_id.iter() {
-    let text = host.file_text(key).expect("file text");
-    let kind = host.file_kind(key);
-    db.set_file(*id, key.clone(), kind, text, FileOrigin::Source);
+  let mut decls_by_file: BTreeMap<_, BTreeMap<DefId, DeclInfo>> = BTreeMap::new();
+  for def in snapshot.def_data.iter() {
+    let params = program_params.get(&def.def).cloned().unwrap_or_default();
+    let entry = DeclInfo {
+      file: def.data.file,
+      name: def.data.name.clone(),
+      kind: DeclKind::Var,
+      declared_type: Some(program.type_of_def_interned(def.def)),
+      initializer: None,
+      type_params: Arc::from(params),
+    };
+    decls_by_file
+      .entry(def.data.file)
+      .or_default()
+      .insert(def.def, entry);
   }
-  db.set_module_resolution(file_b_id, Arc::<str>::from("./a"), Some(file_a_id));
 
-  let store = type_store(&db);
+  let mut db = TypesDatabase::new();
+  db.set_compiler_options(snapshot.compiler_options.clone());
+  db.set_type_store(SharedTypeStore(TypeStore::from_snapshot(
+    snapshot.interned_type_store.clone(),
+  )));
+  db.set_files(Arc::new(snapshot.files.iter().map(|f| f.file).collect()));
+  for (file, decls) in decls_by_file {
+    db.set_decl_types_in_file(file, Arc::new(decls));
+  }
+
+  let store = type_store(&db).arc();
   let resolver_names = Arc::new(def_names);
   let resolver: Arc<dyn Fn(DefId) -> Option<String> + Send + Sync> = {
     let names = Arc::clone(&resolver_names);
@@ -91,7 +102,7 @@ fn decl_queries_match_program_types() {
   };
 
   let decl_box = decl_type(&db, box_def).expect("box decl type");
-  let decl_box_str = TypeDisplay::new(&store, decl_box)
+  let decl_box_str = TypeDisplay::new(store.as_ref(), decl_box)
     .with_ref_resolver(Arc::clone(&resolver))
     .to_string();
   let program_box_str = program.display_type(program_box_ty).to_string();
@@ -105,7 +116,7 @@ fn decl_queries_match_program_types() {
   );
 
   let decl_map = decl_type(&db, map_def).expect("MapBox decl type");
-  let decl_map_str = TypeDisplay::new(&store, decl_map)
+  let decl_map_str = TypeDisplay::new(store.as_ref(), decl_map)
     .with_ref_resolver(Arc::clone(&resolver))
     .to_string();
   let program_map_str = program.display_type(program_map_ty).to_string();
@@ -119,7 +130,7 @@ fn decl_queries_match_program_types() {
   );
 
   let decl_wrapper = decl_type(&db, wrapper_def).expect("wrapper decl type");
-  let decl_wrapper_str = TypeDisplay::new(&store, decl_wrapper)
+  let decl_wrapper_str = TypeDisplay::new(store.as_ref(), decl_wrapper)
     .with_ref_resolver(resolver)
     .to_string();
   let program_wrapper_str = program.display_type(program_wrapper_ty).to_string();
