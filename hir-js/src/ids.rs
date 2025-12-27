@@ -28,7 +28,9 @@ pub struct BodyId(pub u32);
 ///
 /// `BodyId` values are derived from their owning [`DefId`], the body kind, and
 /// an optional disambiguator (see [`BodyPath`]) to remain stable even when new
-/// bodies are introduced elsewhere in the file.
+/// bodies are introduced elsewhere in the file. Allocation will re-hash the
+/// path with a deterministic salt if the 32-bit hash collides, mirroring
+/// [`DefId`] allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BodyPath {
   pub owner: DefId,
@@ -46,19 +48,33 @@ impl BodyPath {
   }
 
   pub fn stable_hash(&self) -> u64 {
-    let mut hasher = StableHasher::new();
-    hasher.write_u64(self.owner.0 as u64);
-    hasher.write_u64(self.kind as u64);
-    hasher.write_u64(self.disambiguator as u64);
-    hasher.finish()
+    self.stable_hash_impl(None).finish()
   }
 
   pub fn stable_hash_u32(&self) -> u32 {
+    #[cfg(test)]
+    if let Some(hash) = test_body_path_hash_override(self) {
+      return hash;
+    }
+
+    self.stable_hash_with_salt(0)
+  }
+
+  /// Compute a stable hash with an additional deterministic salt to derive an
+  /// alternative `BodyId` when the base hash collides.
+  pub fn stable_hash_with_salt(&self, salt: u64) -> u32 {
+    self.stable_hash_impl(Some(salt)).finish_u32()
+  }
+
+  fn stable_hash_impl(&self, salt: Option<u64>) -> StableHasher {
     let mut hasher = StableHasher::new();
     hasher.write_u64(self.owner.0 as u64);
     hasher.write_u64(self.kind as u64);
     hasher.write_u64(self.disambiguator as u64);
-    hasher.finish_u32()
+    if let Some(salt) = salt.filter(|s| *s != 0) {
+      hasher.write_u64(salt);
+    }
+    hasher
   }
 }
 
@@ -238,6 +254,33 @@ thread_local! {
 #[cfg(test)]
 fn test_def_path_hash_override(def_path: &DefPath) -> Option<u32> {
   TEST_DEF_PATH_HASH_OVERRIDE.with(|cell| cell.get().map(|hasher| hasher(def_path)))
+}
+
+#[cfg(test)]
+thread_local! {
+  static TEST_BODY_PATH_HASH_OVERRIDE: Cell<Option<fn(&BodyPath) -> u32>> = Cell::new(None);
+}
+
+#[cfg(test)]
+fn test_body_path_hash_override(body_path: &BodyPath) -> Option<u32> {
+  TEST_BODY_PATH_HASH_OVERRIDE.with(|cell| cell.get().map(|hasher| hasher(body_path)))
+}
+
+/// Run `f` with a test-only override for `BodyPath::stable_hash_u32`.
+///
+/// The override is thread-local to avoid affecting other tests running in
+/// parallel; it is cleared before returning.
+#[cfg(test)]
+pub(crate) fn with_test_body_path_hasher<R>(
+  hasher: fn(&BodyPath) -> u32,
+  f: impl FnOnce() -> R,
+) -> R {
+  TEST_BODY_PATH_HASH_OVERRIDE.with(|cell| {
+    let prev = cell.replace(Some(hasher));
+    let result = f();
+    cell.set(prev);
+    result
+  })
 }
 
 /// Run `f` with a test-only override for `DefPath::stable_hash_u32`.

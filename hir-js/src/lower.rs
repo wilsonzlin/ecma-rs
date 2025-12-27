@@ -374,6 +374,29 @@ fn allocate_def_id(def_path: DefPath, allocated: &mut BTreeMap<u32, DefPath>) ->
   }
 }
 
+fn allocate_body_id(body_path: BodyPath, allocated: &mut BTreeMap<u32, BodyPath>) -> BodyId {
+  let mut salt = 0u64;
+  loop {
+    let candidate = if salt == 0 {
+      body_path.stable_hash_u32()
+    } else {
+      body_path.stable_hash_with_salt(salt)
+    };
+    match allocated.entry(candidate) {
+      Entry::Vacant(slot) => {
+        slot.insert(body_path);
+        return BodyId(candidate);
+      }
+      Entry::Occupied(existing) if *existing.get() == body_path => {
+        return BodyId(candidate);
+      }
+      Entry::Occupied(_) => {
+        salt += 1;
+      }
+    }
+  }
+}
+
 impl<'a> DefSource<'a> {
   fn body_kind(&self) -> Option<BodyKind> {
     match self {
@@ -456,6 +479,7 @@ pub fn lower_file_with_diagnostics(
   let mut disambiguators: BTreeMap<(Option<DefId>, DefKind, NameId), u32> = BTreeMap::new();
   let mut def_lookup = DefLookup::default();
   let mut allocated_def_ids: BTreeMap<u32, DefPath> = BTreeMap::new();
+  let mut allocated_body_ids: BTreeMap<u32, BodyPath> = BTreeMap::new();
 
   let mut planned = Vec::new();
   let mut body_disambiguators: BTreeMap<DefId, u32> = BTreeMap::new();
@@ -474,7 +498,8 @@ pub fn lower_file_with_diagnostics(
     let def_id = allocate_def_id(def_path, &mut allocated_def_ids);
     let body = desc.source.body_kind().map(|kind| {
       let disambiguator = body_disambiguators.entry(def_id).or_insert(0);
-      let id = BodyId(BodyPath::new(def_id, kind, *disambiguator).stable_hash_u32());
+      let path = BodyPath::new(def_id, kind, *disambiguator);
+      let id = allocate_body_id(path, &mut allocated_body_ids);
       *disambiguator += 1;
       PlannedBody { id, kind }
     });
@@ -554,11 +579,10 @@ pub fn lower_file_with_diagnostics(
     defs.push(def_data);
   }
 
-  let mut root_body_id =
-    BodyId(BodyPath::new(DefId(file.0), BodyKind::TopLevel, 0).stable_hash_u32());
-  while body_index.contains_key(&root_body_id) {
-    root_body_id = BodyId(root_body_id.0.wrapping_add(1));
-  }
+  let root_body_id = allocate_body_id(
+    BodyPath::new(DefId(file.0), BodyKind::TopLevel, 0),
+    &mut allocated_body_ids,
+  );
   body_index.insert(root_body_id, bodies.len());
   body_ids.push(root_body_id);
   bodies.push(Arc::new(lower_root_body(
@@ -4841,10 +4865,10 @@ fn find_def<'a>(defs: &'a [DefData], kind: DefKind, span: TextRange) -> Option<&
 
 #[cfg(test)]
 mod tests {
-  use crate::ids::with_test_def_path_hasher;
+  use crate::ids::{with_test_body_path_hasher, with_test_def_path_hasher};
   use crate::lower_from_source_with_kind;
   use crate::FileKind;
-  use std::collections::HashSet;
+  use std::collections::{BTreeMap, HashSet};
 
   #[test]
   fn def_ids_are_rehashed_on_collision() {
@@ -4886,6 +4910,62 @@ mod tests {
       def_path_ids.len(),
       lowered.hir.def_paths.len(),
       "DefPath map should not reuse DefIds after collisions"
+    );
+  }
+
+  #[test]
+  fn body_ids_are_rehashed_on_collision() {
+    let source = "function first() {}\nfunction second() {}";
+    let lowered = || {
+      with_test_body_path_hasher(
+        |_| 1,
+        || lower_from_source_with_kind(FileKind::Ts, source).expect("lower"),
+      )
+    };
+
+    let first = lowered();
+    let second = lowered();
+
+    assert!(
+      first.hir.bodies.len() > 2,
+      "expected multiple bodies (including root) to exercise collision handling"
+    );
+
+    let first_ids: HashSet<_> = first.hir.bodies.iter().copied().collect();
+    assert_eq!(
+      first_ids.len(),
+      first.hir.bodies.len(),
+      "BodyIds should be rehashed to remain unique"
+    );
+    assert!(
+      first_ids.iter().any(|id| id.0 == 1),
+      "override should force the base BodyPath hash to collide"
+    );
+    assert_eq!(
+      first.body_index.len(),
+      first.hir.bodies.len(),
+      "body index should track every body even when hashes collide"
+    );
+
+    let first_map: BTreeMap<_, _> = first
+      .defs
+      .iter()
+      .filter_map(|def| def.body.map(|body| (def.path, body)))
+      .collect();
+    let second_map: BTreeMap<_, _> = second
+      .defs
+      .iter()
+      .filter_map(|def| def.body.map(|body| (def.path, body)))
+      .collect();
+    assert_eq!(
+      first_map, second_map,
+      "BodyId allocation should be deterministic under collisions"
+    );
+
+    let second_ids: HashSet<_> = second.hir.bodies.iter().copied().collect();
+    assert_eq!(
+      first_ids, second_ids,
+      "BodyIds should remain stable across runs when collisions are forced"
     );
   }
 }
