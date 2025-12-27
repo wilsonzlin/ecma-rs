@@ -5,7 +5,7 @@ use hir_js::{lower_from_source, BodyKind};
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use typecheck_ts::check::caches::CheckerCaches;
 use typecheck_ts::check::hir_body::check_body;
-use typecheck_ts::{BodyId, FileId};
+use typecheck_ts::{FileId, PatId};
 use types_ts_interned::TypeStore;
 
 #[test]
@@ -13,11 +13,12 @@ fn records_pattern_types_for_params_and_vars() {
   let source = "function add(a: number, b: number) { const c = a + b; return c; }";
   let lowered = lower_from_source(source).expect("lowering should succeed");
   let (body_id, body) = lowered
+    .hir
     .bodies
     .iter()
-    .enumerate()
+    .copied()
+    .filter_map(|id| lowered.body(id).map(|b| (id, b)))
     .find(|(_, body)| matches!(body.kind, BodyKind::Function))
-    .map(|(idx, b)| (BodyId(idx as u32), b.as_ref()))
     .expect("function body present");
   let names = Arc::clone(&lowered.names);
   let ast = parse_with_options(
@@ -45,7 +46,7 @@ fn records_pattern_types_for_params_and_vars() {
   );
   let prim = store.primitive_ids();
 
-  assert_eq!(result.pat_types().get(0), Some(&prim.number));
-  assert_eq!(result.pat_types().get(1), Some(&prim.number));
-  assert_eq!(result.pat_types().get(2), Some(&prim.number));
+  assert_eq!(result.pat_type(PatId(0)), Some(prim.number));
+  assert_eq!(result.pat_type(PatId(1)), Some(prim.number));
+  assert_eq!(result.pat_type(PatId(2)), Some(prim.number));
 }

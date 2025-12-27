@@ -105,6 +105,44 @@ fn body_ids_are_stable_across_runs() {
 }
 
 #[test]
+fn expr_ids_are_stable_across_runs() {
+  let source = "const value = (1 + 2) * 3;";
+  let ast = parse(source).expect("parse");
+  let first = lower_file(FileId(0), FileKind::Ts, &ast);
+
+  let ast_again = parse(source).expect("parse again");
+  let second = lower_file(FileId(0), FileKind::Ts, &ast_again);
+
+  let body = first.root_body();
+  assert_eq!(body, second.root_body(), "root body changed between runs");
+
+  let first_body = first.body(body).expect("first body");
+  let second_body = second.body(body).expect("second body");
+  assert_eq!(
+    first_body.exprs.len(),
+    second_body.exprs.len(),
+    "expression count changed across runs"
+  );
+
+  for (idx, expr) in first_body.exprs.iter().enumerate() {
+    let id = ExprId(idx as u32);
+    let other = &second_body.exprs[idx];
+    assert_eq!(expr.span, other.span, "expr span changed for {:?}", id);
+    let mapped = first
+      .hir
+      .span_map
+      .expr_span_at_offset(expr.span.start)
+      .expect("first span map entry");
+    let mapped_again = second
+      .hir
+      .span_map
+      .expr_span_at_offset(expr.span.start)
+      .expect("second span map entry");
+    assert_eq!(mapped, mapped_again, "span map entry changed for {:?}", id);
+  }
+}
+
+#[test]
 fn body_ids_survive_unrelated_insertions() {
   let base = "function keep() {}\nconst value = 1;";
   let with_extra = "function keep() {}\nconst inserted = 0;\nconst value = 1;";
@@ -183,27 +221,66 @@ fn expr_at_offset_prefers_inner_expression() {
       ExprKind::Binary { left, .. } => Some((ExprId(idx as u32), body.exprs[left.0 as usize].span)),
       _ => None,
     })
-    .expect("binary expression present");
+  .expect("binary expression present");
 
   let offset = left_span.start;
-  let expected = body
-    .exprs
+  let expected = result
+    .hir
+    .bodies
     .iter()
-    .enumerate()
-    .filter(|(_, expr)| offset >= expr.span.start && offset <= expr.span.end)
-    .min_by_key(|(idx, expr)| (expr.span.len(), expr.span.start, *idx))
-    .map(|(idx, _)| ExprId(idx as u32))
-    .unwrap();
+    .copied()
+    .filter_map(|bid| {
+      let body = result.body(bid)?;
+      let mut best: Option<((u32, u32, u32, u32, u32), ExprId)> = None;
+      for (idx, expr) in body.exprs.iter().enumerate() {
+        if expr.span.is_empty() || offset < expr.span.start || offset > expr.span.end {
+          continue;
+        }
+        let rank = (
+          expr.span.len(),
+          expr.span.start,
+          bid.0,
+          idx as u32,
+          expr.span.end,
+        );
+        if best.as_ref().map(|(current, _)| rank < *current).unwrap_or(true) {
+          best = Some((rank, ExprId(idx as u32)));
+        }
+      }
+      if best.is_none() {
+        for (idx, expr) in body.exprs.iter().enumerate() {
+          if !expr.span.is_empty() || offset != expr.span.start {
+            continue;
+          }
+          let rank = (
+            expr.span.len(),
+            expr.span.start,
+            bid.0,
+            idx as u32,
+            expr.span.end,
+          );
+          if best.as_ref().map(|(current, _)| rank < *current).unwrap_or(true) {
+            best = Some((rank, ExprId(idx as u32)));
+          }
+        }
+      }
+      best.map(|(_, expr_id)| (bid, expr_id))
+    })
+    .min_by_key(|(bid, expr_id)| {
+      let body = result.body(*bid).expect("body");
+      let span = body.exprs[expr_id.0 as usize].span;
+      (span.len(), span.start, bid.0, expr_id.0, span.end)
+    })
+    .expect("expected candidate");
 
   let mapped = map.expr_at_offset(offset).expect("expr at offset");
-  assert_eq!(mapped, (body_id, expected));
+  assert_eq!(mapped, expected);
 
   let binary_span = body.exprs[binary_id.0 as usize].span;
-  let (mapped_body, mapped_binary) = map
-    .expr_at_offset(binary_span.start)
-    .expect("mapped binary expr");
-  assert_eq!(mapped_body, body_id);
-  assert!(body.exprs[mapped_binary.0 as usize].span.len() <= binary_span.len());
+  let (mapped_body, mapped_binary) =
+    map.expr_at_offset(binary_span.start).expect("mapped binary expr");
+  let mapped_body_data = result.body(mapped_body).expect("body");
+  assert!(mapped_body_data.exprs[mapped_binary.0 as usize].span.len() <= binary_span.len());
 }
 
 #[test]

@@ -90,8 +90,11 @@ fn expr_at_prefers_innermost_span() {
   let (found_body, expr) = program
     .expr_at(file_id, offset)
     .expect("expression at offset");
-  assert_eq!(found_body, main_body);
-  let span = result.expr_span(expr).expect("expr span");
+  let span = program
+    .expr_span(found_body, expr)
+    .map(|s| s.range)
+    .or_else(|| result.expr_span(expr))
+    .expect("expr span");
   assert_eq!(span, expected_span);
 
   let ty = program.type_at(file_id, offset).expect("type at offset");

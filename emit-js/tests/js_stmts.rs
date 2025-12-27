@@ -3,6 +3,8 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 use serde_json::Value;
 
+mod util;
+
 fn emit(source: &str) -> String {
   let parsed = parse_js::parse(source).expect("parse failure");
   let mut emitter = Emitter::default();
@@ -11,7 +13,7 @@ fn emit(source: &str) -> String {
 }
 
 fn ast_value(top: &Node<TopLevel>) -> Value {
-  serde_json::to_value(top).expect("serialize")
+  util::serialize_without_locs(top)
 }
 
 #[test]

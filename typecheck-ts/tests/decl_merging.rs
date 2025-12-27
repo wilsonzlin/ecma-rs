@@ -69,6 +69,34 @@ export namespace Config { export const b = 2; }
     .and_then(|e| e.type_id)
     .expect("exported Config type");
   let rendered = program.display_type(config_ty).to_string();
+  println!("Config type: {rendered}");
+  let def_a = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("a"))
+    .expect("namespace member a");
+  let def_b = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("b"))
+    .expect("namespace member b");
+  println!(
+    "bodies: a={:?}, b={:?}",
+    program.body_of_def(def_a),
+    program.body_of_def(def_b)
+  );
+  if let Some(body) = program.body_of_def(def_a) {
+    let res = program.check_body(body);
+    println!("a expr spans: {:?}, pats: {:?}", res.expr_spans(), res.pat_spans());
+    for expr in program.exprs_in_body(body) {
+      let span = program.expr_span(body, expr);
+      let ty = program.display_type(program.type_of_expr(body, expr)).to_string();
+      println!("expr {expr:?} span {span:?} type {ty}");
+    }
+  }
+  let a_ty = program.display_type(program.type_of_def(def_a)).to_string();
+  let b_ty = program.display_type(program.type_of_def(def_b)).to_string();
+  println!("a type: {a_ty}, b type: {b_ty}");
   assert!(
     rendered.contains("a: 1"),
     "namespace merge should include first declaration, got {rendered}"
@@ -76,6 +104,14 @@ export namespace Config { export const b = 2; }
   assert!(
     rendered.contains("b: 2"),
     "namespace merge should include second declaration, got {rendered}"
+  );
+  assert!(
+    a_ty.contains('1'),
+    "namespace member a should retain literal type, got {a_ty}"
+  );
+  assert!(
+    b_ty.contains('2'),
+    "namespace member b should retain literal type, got {b_ty}"
   );
 }
 

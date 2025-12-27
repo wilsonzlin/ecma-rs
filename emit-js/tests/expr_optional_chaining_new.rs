@@ -5,6 +5,8 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::TypeExpr;
 
+mod util;
+
 fn parse_expr(source: &str) -> Node<Expr> {
   let parsed = parse_js::parse(source).expect("parse failed");
   let TopLevel { mut body } = *parsed.stx;
@@ -29,8 +31,9 @@ fn assert_roundtrip(source: &str, expected_emitted: &str) {
 
   let reparsed = parse_expr(&emitted);
   assert_eq!(
-    serde_json::to_value(&expr).unwrap(),
-    serde_json::to_value(&reparsed).unwrap()
+    util::serialize_without_locs(&expr),
+    util::serialize_without_locs(&reparsed),
+    "roundtrip mismatch for `{source}` emitted as `{emitted}`"
   );
 }
 

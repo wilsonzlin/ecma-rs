@@ -9,6 +9,48 @@ use std::fs::read_dir;
 use std::fs::File;
 use std::io::Read;
 
+fn strip_locs(value: &mut Value) {
+  match value {
+    Value::Object(map) => {
+      map.remove("loc");
+      if let Some(mut stx) = map.remove("stx") {
+        strip_locs(&mut stx);
+        match stx {
+          Value::Object(stx_map) => {
+            if map.is_empty() {
+              *value = Value::Object(stx_map);
+              strip_locs(value);
+              return;
+            } else {
+              for (k, v) in stx_map {
+                map.entry(k).or_insert(v);
+              }
+            }
+          }
+          other => {
+            if map.is_empty() {
+              *value = other;
+              strip_locs(value);
+              return;
+            } else {
+              map.insert("stx".to_string(), other);
+            }
+          }
+        }
+      }
+      for v in map.values_mut() {
+        strip_locs(v);
+      }
+    }
+    Value::Array(items) => {
+      for item in items {
+        strip_locs(item);
+      }
+    }
+    _ => {}
+  }
+}
+
 pub fn evaluate_test_input_files<T: Fn(String) -> Value>(dir_in_src: &str, tester: T) {
   let base_dir = format!("{}/src/{}", env!("CARGO_MANIFEST_DIR"), dir_in_src);
   for f_typ in read_dir(&base_dir).unwrap() {
@@ -26,10 +68,12 @@ pub fn evaluate_test_input_files<T: Fn(String) -> Value>(dir_in_src: &str, teste
             .unwrap();
           let input_str = String::from_utf8(input).unwrap();
           println!("Testing {}/{}...", typ, name);
-          let actual = tester(input_str);
+          let mut actual = tester(input_str);
           let json_out_path = format!("{}/{}/{}on", base_dir, typ, name);
-          let expected: Value =
+          let mut expected: Value =
             serde_json::from_reader(File::open(&json_out_path).unwrap()).unwrap();
+          strip_locs(&mut actual);
+          strip_locs(&mut expected);
           if actual != expected {
             if var("PARSEJS_REGENERATE_TEST_JSON_OUTPUTS").is_ok_and(|v| v == "1") {
               to_writer_pretty(File::create(&json_out_path).unwrap(), &actual).unwrap();

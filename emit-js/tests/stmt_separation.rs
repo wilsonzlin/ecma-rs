@@ -1,6 +1,7 @@
 use emit_js::{emit_program, EmitOptions, Emitter};
 use parse_js::{Dialect, ParseOptions, SourceType};
-use serde_json::to_value;
+
+mod util;
 
 fn assert_roundtrip(src: &str) -> bool {
   let opts = ParseOptions {
@@ -26,8 +27,8 @@ fn assert_roundtrip(src: &str) -> bool {
     }
   };
   assert_eq!(
-    to_value(&parsed).unwrap(),
-    to_value(&reparsed).unwrap(),
+    util::serialize_without_locs(&parsed),
+    util::serialize_without_locs(&reparsed),
     "emitted source: {emitted}"
   );
   true

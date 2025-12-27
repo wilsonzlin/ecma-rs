@@ -213,6 +213,7 @@ fn strip_stmt(
     | Stmt::TypeAliasDecl(_)
     | Stmt::ImportTypeDecl(_)
     | Stmt::ExportTypeDecl(_)
+    | Stmt::ExportAsNamespaceDecl(_)
     | Stmt::AmbientVarDecl(_)
     | Stmt::AmbientFunctionDecl(_)
     | Stmt::AmbientClassDecl(_)

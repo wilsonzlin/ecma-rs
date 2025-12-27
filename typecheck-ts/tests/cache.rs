@@ -5,7 +5,7 @@ use ordered_float::OrderedFloat;
 use typecheck_ts::check::caches::{CheckerCacheStats, CheckerCaches};
 use typecheck_ts::check::instantiate::InstantiationCache;
 use typecheck_ts::lib_support::{CacheMode, CacheOptions, CompilerOptions};
-use typecheck_ts::{CacheKind, FileId, FileKey, Host, HostError, Program, QueryStatsCollector};
+use typecheck_ts::{CacheKind, FileKey, Host, HostError, Program, QueryStatsCollector};
 use types_ts_interned::{
   DefId, Param, RelateCtx, Signature, SignatureId, TypeEvaluator, TypeId, TypeKind, TypeOptions,
   TypeParamId, TypeStore,
@@ -76,7 +76,7 @@ fn instantiation_cache_eviction_is_deterministic() {
     type_params: vec![t_param],
     this_param: None,
   };
-  let def = DefId(0);
+  let def = DefId(42);
 
   let config = CacheOptions {
     max_relation_cache_entries: 0,
@@ -230,10 +230,11 @@ fn cache_stats_are_recorded_for_profiling() {
   let mut subst = HashMap::new();
   subst.insert(t_param, primitives.number);
   let mut instantiation = body.instantiation.clone();
-  let instantiated = instantiation.instantiate_signature(&store, DefId(0), &sig, &subst);
+  let inst_def = DefId(7);
+  let instantiated = instantiation.instantiate_signature(&store, inst_def, &sig, &subst);
   assert_eq!(
     instantiated,
-    instantiation.instantiate_signature(&store, DefId(0), &sig, &subst)
+    instantiation.instantiate_signature(&store, inst_def, &sig, &subst)
   );
 
   let stats = body.stats();
@@ -297,10 +298,11 @@ impl Host for CacheHost {
 }
 
 fn relation_heavy_source() -> String {
-  let mut src = String::new();
+  let mut src = String::from("export function heavy(value: number): number {\n");
   for i in 0..24 {
-    src.push_str(&format!("const v{i}: number = {i};\n"));
+    src.push_str(&format!("  const v{i}: number = value + {i};\n"));
   }
+  src.push_str("  return value;\n}\nheavy(1);\n");
   src
 }
 
@@ -335,11 +337,11 @@ fn program_cache_stats_report_evictions() {
     .unwrap_or_default();
   assert!(
     relation.evictions > 0,
-    "tight caches should evict when checking relation-heavy bodies"
+    "tight caches should evict when checking relation-heavy bodies (relation stats: {relation:?})"
   );
   assert!(
     relation.hits + relation.misses > 0,
-    "relation cache stats should be recorded"
+    "relation cache stats should be recorded (relation stats: {relation:?})"
   );
 }
 
@@ -386,7 +388,9 @@ fn program_cache_evictions_are_deterministic() {
       .unwrap_or(0);
   assert!(
     evictions > 0,
-    "expected relation cache eviction under tiny bounds"
+    "expected relation cache eviction under tiny bounds (stats_a: {:?}, stats_b: {:?})",
+    stats_a,
+    stats_b
   );
 }
 
@@ -473,11 +477,11 @@ fn program_query_stats_include_shared_caches() {
     .unwrap_or_default();
   assert!(
     eval.insertions > 0 && eval.misses > 0,
-    "evaluation cache stats should be populated"
+    "evaluation cache stats should be populated (eval stats: {eval:?})"
   );
   assert!(
     eval.evictions > 0,
-    "evictions should occur when cache bounds are exceeded"
+    "evictions should occur when cache bounds are exceeded (eval stats: {eval:?})"
   );
 }
 

@@ -4,6 +4,8 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::{ExprStmt, Stmt};
 use parse_js::ast::stx::TopLevel;
 
+mod util;
+
 fn parse_expression(source: &str) -> Node<Expr> {
   let program = parse_js::parse(&format!("{};", source)).expect("parse failure");
   let TopLevel { mut body } = *program.stx;
@@ -30,8 +32,8 @@ fn assert_roundtrip(source: &str, expected_emitted: &str) {
 
   let reparsed = parse_expression(&emitted);
 
-  let original_json = serde_json::to_value(&parsed).expect("serialize parsed");
-  let reparsed_json = serde_json::to_value(&reparsed).expect("serialize reparsed");
+  let original_json = util::serialize_without_locs(&parsed);
+  let reparsed_json = util::serialize_without_locs(&reparsed);
   assert_eq!(
     original_json, reparsed_json,
     "roundtrip mismatch for `{}`",

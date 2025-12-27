@@ -71,6 +71,58 @@ fn destructuring_decl_shadowing_binds_local_symbol() {
     "#,
   );
 
+  let lowered = hir_js::lower_from_source(
+    r#"
+      const a = 0;
+      const make = (obj) => {
+        let { a } = obj;
+        a += 1;
+        const inner = () => { a += 1; };
+        inner;
+      };
+    "#,
+  )
+  .unwrap();
+  dbg!(lowered.defs.len());
+  dbg!(lowered
+    .defs
+    .iter()
+    .map(|d| {
+      (
+        format!("{:?}", d.path.kind),
+        lowered.names.resolve(d.name).unwrap_or_default().to_string()
+      )
+    })
+    .collect::<Vec<_>>());
+  dbg!(lowered
+    .defs
+    .iter()
+    .map(|d| (d.id, d.path.kind, d.body))
+    .collect::<Vec<_>>());
+
+  for def in lowered.defs.iter() {
+    if let Some(body_id) = def.body {
+      let body = lowered.body(body_id).unwrap();
+      dbg!(def.path.kind, lowered.names.resolve(def.name), body.kind);
+      dbg!(body.root_stmts.len());
+      for stmt_id in body.root_stmts.iter() {
+        let stmt = &body.stmts[stmt_id.0 as usize];
+        dbg!(stmt.kind.clone());
+      }
+    }
+  }
+
+  dbg!(lowered
+    .bodies
+    .iter()
+    .map(|b| (b.owner, b.kind, b.root_stmts.len(), b.stmts.len()))
+    .collect::<Vec<_>>());
+
+  dbg!(program.functions.len());
+  for (idx, func) in program.functions.iter().enumerate() {
+    dbg!(idx, inst_types(func));
+  }
+
   assert!(program.functions.len() >= 2);
   let make_insts = inst_types(&program.functions[0]);
   let make_unknowns: Vec<_> = program.functions[0]

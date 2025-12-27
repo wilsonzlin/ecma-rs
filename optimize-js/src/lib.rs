@@ -214,55 +214,104 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
   #[derive(VisitorMut)]
   #[visitor(IdExprNode(enter), IdPatNode(enter))]
-  struct Collector {
-    exprs: BTreeMap<TextRange, Option<SymbolId>>,
-    pats: BTreeMap<TextRange, Option<SymbolId>>,
+  struct Collector<'a> {
+    span_map: &'a hir_js::span_map::SpanMap,
+    expr_spans: BTreeMap<TextRange, Option<SymbolId>>,
+    pat_spans: BTreeMap<TextRange, Option<SymbolId>>,
   }
 
   type IdExprNode = Node<IdExpr>;
   type IdPatNode = Node<IdPat>;
 
-  impl Collector {
+  impl<'a> Collector<'a> {
     fn map_symbol(&self, assoc: &NodeAssocData) -> Option<SymbolId> {
       assoc_declared_symbol(assoc).or_else(|| assoc_resolved_symbol(assoc))
+    }
+
+    fn offsets(span: TextRange) -> impl Iterator<Item = u32> {
+      let mut offsets = vec![span.start];
+      if span.end > span.start {
+        let mid = span.start + (span.end - span.start) / 2;
+        let end = span.end.saturating_sub(1);
+        offsets.push(mid);
+        offsets.push(end);
+      }
+      offsets.sort_unstable();
+      offsets.dedup();
+      offsets.into_iter()
+    }
+
+    fn expr_for_span(&self, span: TextRange) -> Option<(BodyId, ExprId)> {
+      for offset in Self::offsets(span) {
+        if let Some(((body, expr_id), _)) = self.span_map.expr_span_at_offset(offset) {
+          return Some((body, expr_id));
+        }
+      }
+      None
+    }
+
+    fn pat_for_span(&self, span: TextRange) -> Option<(BodyId, PatId)> {
+      for offset in Self::offsets(span) {
+        if let Some(((body, pat_id), _)) = self.span_map.pat_span_at_offset(offset) {
+          return Some((body, pat_id));
+        }
+      }
+      None
+    }
+
+    fn record_expr(&mut self, span: TextRange, sym: Option<SymbolId>) {
+      self.expr_spans.insert(span, sym);
+      self.pat_spans.insert(span, sym);
+    }
+
+    fn record_pat(&mut self, span: TextRange, sym: Option<SymbolId>) {
+      self.pat_spans.insert(span, sym);
     }
 
     fn enter_id_expr_node(&mut self, node: &mut IdExprNode) {
       let span = TextRange::new(node.loc.start_u32(), node.loc.end_u32());
       let sym = self.map_symbol(&node.assoc);
-      self.exprs.insert(span, sym);
-      self.pats.insert(span, sym);
+      self.record_expr(span, sym);
     }
 
     fn enter_id_pat_node(&mut self, node: &mut IdPatNode) {
       let span = TextRange::new(node.loc.start_u32(), node.loc.end_u32());
       let sym = self.map_symbol(&node.assoc);
-      self.pats.insert(span, sym);
+      self.record_pat(span, sym);
     }
   }
 
+  let span_map = &lower.hir.span_map;
+  let mut bindings = HirSymbolBindings::default();
   let mut collector = Collector {
-    exprs: BTreeMap::new(),
-    pats: BTreeMap::new(),
+    span_map,
+    expr_spans: BTreeMap::new(),
+    pat_spans: BTreeMap::new(),
   };
   ast.drive_mut(&mut collector);
 
-  let mut bindings = HirSymbolBindings::default();
+  for (span, sym) in collector.expr_spans.iter() {
+    if let Some((body, expr_id)) = collector.expr_for_span(*span) {
+      bindings.exprs.entry(body).or_default().insert(expr_id, *sym);
+    }
+  }
+  for (span, sym) in collector.pat_spans.iter() {
+    if let Some((body, pat_id)) = collector.pat_for_span(*span) {
+      bindings.pats.entry(body).or_default().insert(pat_id, *sym);
+    }
+  }
+
   for (body_id, idx) in &lower.body_index {
     let body = &lower.bodies[*idx];
     let exprs = bindings.exprs.entry(*body_id).or_default();
     for (idx, expr) in body.exprs.iter().enumerate() {
       let id = ExprId(idx as u32);
-      if let Some(sym) = collector.exprs.get(&expr.span) {
-        exprs.insert(id, *sym);
-      }
+      exprs.entry(id).or_insert_with(|| collector.expr_spans.get(&expr.span).copied().unwrap_or(None));
     }
     let pats = bindings.pats.entry(*body_id).or_default();
     for (idx, pat) in body.pats.iter().enumerate() {
       let id = PatId(idx as u32);
-      if let Some(sym) = collector.pats.get(&pat.span) {
-        pats.insert(id, *sym);
-      }
+      pats.entry(id).or_insert_with(|| collector.pat_spans.get(&pat.span).copied().unwrap_or(None));
     }
   }
 

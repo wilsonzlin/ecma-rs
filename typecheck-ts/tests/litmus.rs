@@ -536,16 +536,16 @@ fn resolve_expr_type(
   file: FileId,
   offset: u32,
 ) -> Option<typecheck_ts::TypeId> {
-  let mut candidates: Vec<BodyId> = Vec::new();
+  let mut candidates: Vec<BodyId> = program
+    .definitions_in_file(file)
+    .into_iter()
+    .filter_map(|def| program.body_of_def(def))
+    .collect();
   if let Some(body) = program.file_body(file) {
-    candidates.push(body);
+    if !candidates.contains(&body) {
+      candidates.push(body);
+    }
   }
-  candidates.extend(
-    program
-      .definitions_in_file(file)
-      .into_iter()
-      .filter_map(|def| program.body_of_def(def)),
-  );
   let mut best: Option<(u32, typecheck_ts::TypeId)> = None;
   for probe in [offset, offset.saturating_sub(1), offset.saturating_add(1)] {
     for body in candidates.iter().copied() {

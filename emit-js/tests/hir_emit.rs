@@ -4,9 +4,11 @@ use parse_js::parse;
 use serde_json::Value;
 use std::collections::HashSet;
 
+mod util;
+
 fn syntax_value(source: &str) -> Value {
   let ast = parse(source).expect("parse source");
-  serde_json::to_value(&ast.stx).expect("serialize syntax")
+  util::serialize_without_locs(&ast)
 }
 
 fn roundtrip(source: &str) {

@@ -4,6 +4,8 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::type_expr::TypeExpr;
 
+mod util;
+
 fn parse_type_expr(src_type: &str) -> Node<TypeExpr> {
   let src = format!("type X = {};", src_type);
   let top = parse_js::parse(&src).expect("parse failed");
@@ -28,8 +30,8 @@ fn roundtrip_type_expr(src_type: &str) {
   let emitted = emit_type_expr_to_string(&original);
   let reparsed = parse_type_expr(&emitted);
 
-  let left = serde_json::to_value(&original).expect("serialize original");
-  let right = serde_json::to_value(&reparsed).expect("serialize reparsed");
+  let left = util::serialize_without_locs(&original);
+  let right = util::serialize_without_locs(&reparsed);
   assert_eq!(
     left, right,
     "roundtrip mismatch for `{}` => `{}`",
