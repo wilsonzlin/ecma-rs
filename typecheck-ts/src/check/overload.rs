@@ -479,7 +479,7 @@ pub fn resolve_construct(
     let call_inference =
       infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
 
-    let mut inference_diags: Vec<String> = call_inference
+    let inference_diags: Vec<String> = call_inference
       .diagnostics
       .iter()
       .map(|d| d.message.clone())
