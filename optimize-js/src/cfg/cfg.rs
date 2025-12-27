@@ -111,9 +111,9 @@ impl CfgGraph {
    * - When an empty bblock has no children.
    * - When an empty bblock has no children with Phi insts.
    */
-  pub fn find_unreachable(&self) -> impl Iterator<Item = u32> + '_ {
-    let mut seen = HashSet::from_iter([0]);
-    let mut to_visit = VecDeque::from([0]);
+  pub fn find_unreachable(&self, entry: u32) -> impl Iterator<Item = u32> + '_ {
+    let mut seen = HashSet::from_iter([entry]);
+    let mut to_visit = VecDeque::from([entry]);
     while let Some(n) = to_visit.pop_front() {
       for c in self.children_sorted(n) {
         if !seen.contains(&c) {
@@ -197,6 +197,7 @@ pub struct Cfg {
   // We store these as different fields because we often want to mutate one while holding a reference to the other. If we only provide &mut self methods, we'd have to borrow both mutably at the same time.
   pub graph: CfgGraph,
   pub bblocks: CfgBBlocks,
+  pub entry: u32,
 }
 
 /// Helper methods for operating on both Cfg graph and bblocks at once and therefore keep them in sync.
@@ -213,7 +214,7 @@ impl Cfg {
   /// Disconnects unreachable bblocks from the graph and removes them from the bblocks.
   /// Returns the labels of the removed bblocks.
   pub fn find_and_pop_unreachable(&mut self) -> Vec<u32> {
-    let to_delete = self.graph.find_unreachable().collect_vec();
+    let to_delete = self.graph.find_unreachable(self.entry).collect_vec();
     self.graph.delete_many(to_delete.iter().cloned());
     self.bblocks.remove_many(to_delete.iter().cloned());
     to_delete
@@ -263,11 +264,12 @@ impl Cfg {
     Self {
       graph: CfgGraph(graph),
       bblocks: CfgBBlocks(bblocks),
+      entry: 0,
     }
   }
 
-  pub fn reverse_postorder(&self, entry: u32) -> Vec<u32> {
-    let (postorder, _) = self.graph.calculate_postorder(entry);
+  pub fn reverse_postorder(&self) -> Vec<u32> {
+    let (postorder, _) = self.graph.calculate_postorder(self.entry);
     postorder.into_iter().rev().collect()
   }
 
@@ -298,7 +300,11 @@ mod tests {
   use crate::il::inst::Arg;
 
   fn make_cfg(graph: CfgGraph, bblocks: CfgBBlocks) -> Cfg {
-    Cfg { graph, bblocks }
+    Cfg {
+      graph,
+      bblocks,
+      entry: 0,
+    }
   }
 
   #[test]
@@ -392,6 +398,6 @@ mod tests {
     bblocks.add(2, vec![]);
 
     let cfg = make_cfg(graph, bblocks);
-    assert_eq!(cfg.reverse_postorder(0), vec![0, 2, 1]);
+    assert_eq!(cfg.reverse_postorder(), vec![0, 2, 1]);
   }
 }

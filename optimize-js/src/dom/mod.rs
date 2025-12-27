@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 
 fn reachable_from_entry(cfg: &Cfg) -> HashSet<u32> {
   let mut reachable = HashSet::new();
-  let mut queue = VecDeque::from([0]);
+  let mut queue = VecDeque::from([cfg.entry]);
   while let Some(label) = queue.pop_front() {
     if !reachable.insert(label) {
       continue;
@@ -287,7 +287,7 @@ impl<const POST: bool> Dom<POST> {
       let (postorder, label_to_postorder) = graph.calculate_reversed_graph_postorder(entry);
       (Some(graph), entry, postorder, label_to_postorder)
     } else {
-      let entry = 0;
+      let entry = cfg.entry;
       let (postorder, label_to_postorder) = cfg.graph.calculate_postorder(entry);
       (None, entry, postorder, label_to_postorder)
     };
@@ -503,6 +503,7 @@ mod tests {
     Cfg {
       bblocks: Default::default(),
       graph,
+      entry: 0,
     }
   }
 

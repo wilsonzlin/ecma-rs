@@ -156,6 +156,7 @@ mod tests {
     Cfg {
       graph,
       bblocks: Default::default(),
+      entry: 0,
     }
   }
 
@@ -194,6 +195,7 @@ mod tests {
     let cfg = Cfg {
       graph,
       bblocks: Default::default(),
+      entry: 0,
     };
     let dom = Dom::calculate(&cfg);
     let info = LoopInfo::compute(&cfg, &dom);
@@ -219,6 +221,7 @@ mod tests {
     let cfg = Cfg {
       graph,
       bblocks: Default::default(),
+      entry: 0,
     };
     let dom = Dom::calculate(&cfg);
     let info = LoopInfo::from_loops_map(

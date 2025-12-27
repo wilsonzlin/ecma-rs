@@ -29,7 +29,11 @@ fn build_cfg(label_insertion: &[u32], edge_order: &[(u32, u32)]) -> Cfg {
   for &label in label_insertion {
     bblocks.add(label, sample_block(label));
   }
-  Cfg { graph, bblocks }
+  Cfg {
+    graph,
+    bblocks,
+    entry: 0,
+  }
 }
 
 fn canonicalize_dom(dom: &Dom, cfg: &Cfg) -> BTreeMap<u32, Vec<u32>> {

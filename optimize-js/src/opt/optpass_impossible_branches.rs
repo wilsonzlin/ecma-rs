@@ -53,7 +53,7 @@ pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
 
     // Detaching bblocks means that we may have removed entire subgraphs (i.e. its descendants). Therefore, we must recalculate again the accessible bblocks.
     // NOTE: We cannot delete now, as we need to access the children of these deleted nodes first. (They won't have children after deleting.)
-    let mut to_delete = cfg.graph.find_unreachable().collect_vec();
+    let mut to_delete = cfg.graph.find_unreachable(cfg.entry).collect_vec();
     to_delete.sort_unstable();
     // All defs in now-deleted bblocks must be cleared. Since we are in strict SSA, they should only ever appear outside of the deleted bblocks in Phi insts.
     for &n in to_delete.iter() {

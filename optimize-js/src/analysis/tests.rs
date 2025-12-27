@@ -87,7 +87,11 @@ fn cfg(labels: &[u32], edges: &[(u32, u32)]) -> Cfg {
   for &label in labels {
     bblocks.add(label, Vec::new());
   }
-  Cfg { graph, bblocks }
+  Cfg {
+    graph,
+    bblocks,
+    entry: 0,
+  }
 }
 
 fn assert_exit(states: &HashMap<u32, BlockState<BTreeSet<u32>>>, label: u32, expected: &[u32]) {

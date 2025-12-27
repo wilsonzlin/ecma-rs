@@ -108,7 +108,14 @@ pub fn rename_targets_for_ssa_construction(cfg: &mut Cfg, dom: &Dom, c_temp: &mu
   }
 
   let mut rename_stacks = HashMap::<u32, Vec<u32>>::new();
-  inner(&mut rename_stacks, cfg, &phi_orig_tgts, dom, 0, c_temp);
+  inner(
+    &mut rename_stacks,
+    cfg,
+    &phi_orig_tgts,
+    dom,
+    cfg.entry,
+    c_temp,
+  );
   // Prune phi nodes that no longer need to exist and rewrite all uses of their targets to the
   // surviving incoming value to avoid dangling SSA variables.
   let mut replacements = HashMap::<u32, Arg>::new();

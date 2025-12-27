@@ -16,7 +16,11 @@ fn build_cfg(blocks: Vec<(u32, Vec<Inst>)>, edges: &[(u32, u32)]) -> Cfg {
   for (label, insts) in blocks {
     bblocks.add(label, insts);
   }
-  Cfg { graph, bblocks }
+  Cfg {
+    graph,
+    bblocks,
+    entry: 0,
+  }
 }
 
 #[test]

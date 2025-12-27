@@ -23,7 +23,11 @@ fn linear_cfg(blocks: u32, temps_per_block: u32) -> Cfg {
     }
     bblocks.add(label, build_block(label, temps_per_block));
   }
-  Cfg { graph, bblocks }
+  Cfg {
+    graph,
+    bblocks,
+    entry: 0,
+  }
 }
 
 fn loop_cfg(blocks: u32, temps_per_block: u32) -> Cfg {
@@ -39,7 +43,11 @@ fn loop_cfg(blocks: u32, temps_per_block: u32) -> Cfg {
     }
     bblocks.add(label, build_block(label, temps_per_block));
   }
-  Cfg { graph, bblocks }
+  Cfg {
+    graph,
+    bblocks,
+    entry: 0,
+  }
 }
 
 fn bench_liveness_linear(c: &mut Criterion) {

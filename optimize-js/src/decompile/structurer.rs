@@ -313,7 +313,7 @@ fn calculate_follow(cfg: &Cfg, postdom: &PostDom, nodes: &HashSet<u32>) -> Optio
 
 fn reachable_from_entry(cfg: &Cfg) -> HashSet<u32> {
   let mut seen = HashSet::new();
-  let mut queue = vec![0];
+  let mut queue = vec![cfg.entry];
   while let Some(n) = queue.pop() {
     if !seen.insert(n) {
       continue;
@@ -344,7 +344,7 @@ impl<'a> StructCtx<'a> {
       return None;
     }
     let allowed = self.reachable.clone();
-    let Ok(tree) = self.structure_seq(0, None, &allowed, None) else {
+    let Ok(tree) = self.structure_seq(self.cfg.entry, None, &allowed, None) else {
       return None;
     };
     if self.consumed == self.reachable {
@@ -684,7 +684,11 @@ mod tests {
     for (label, insts) in blocks {
       bblocks.add(*label, insts.clone());
     }
-    Cfg { graph, bblocks }
+    Cfg {
+      graph,
+      bblocks,
+      entry: 0,
+    }
   }
 
   fn simple_inst(val: u32) -> Inst {

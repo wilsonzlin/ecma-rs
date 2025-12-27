@@ -292,7 +292,11 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
   for (span, sym) in collector.expr_spans.iter() {
     if let Some((body, expr_id)) = collector.expr_for_span(*span) {
-      bindings.exprs.entry(body).or_default().insert(expr_id, *sym);
+      bindings
+        .exprs
+        .entry(body)
+        .or_default()
+        .insert(expr_id, *sym);
     }
   }
   for (span, sym) in collector.pat_spans.iter() {
@@ -306,12 +310,20 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
     let exprs = bindings.exprs.entry(*body_id).or_default();
     for (idx, expr) in body.exprs.iter().enumerate() {
       let id = ExprId(idx as u32);
-      exprs.entry(id).or_insert_with(|| collector.expr_spans.get(&expr.span).copied().unwrap_or(None));
+      exprs.entry(id).or_insert_with(|| {
+        collector
+          .expr_spans
+          .get(&expr.span)
+          .copied()
+          .unwrap_or(None)
+      });
     }
     let pats = bindings.pats.entry(*body_id).or_default();
     for (idx, pat) in body.pats.iter().enumerate() {
       let id = PatId(idx as u32);
-      pats.entry(id).or_insert_with(|| collector.pat_spans.get(&pat.span).copied().unwrap_or(None));
+      pats
+        .entry(id)
+        .or_insert_with(|| collector.pat_spans.get(&pat.span).copied().unwrap_or(None));
     }
   }
 

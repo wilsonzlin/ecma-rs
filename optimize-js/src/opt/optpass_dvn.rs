@@ -321,5 +321,5 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
 /// - Const evaluation
 pub fn optpass_dvn(changed: &mut bool, cfg: &mut Cfg, dom: &Dom) {
   let mut state = State::default();
-  inner(changed, &mut state, cfg, dom, 0);
+  inner(changed, &mut state, cfg, dom, cfg.entry);
 }

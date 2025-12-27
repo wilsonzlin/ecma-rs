@@ -173,7 +173,11 @@ mod tests {
     for (label, insts) in blocks {
       bblocks.add(*label, insts.clone());
     }
-    Cfg { graph, bblocks }
+    Cfg {
+      graph,
+      bblocks,
+      entry: 0,
+    }
   }
 
   #[test]

@@ -10,6 +10,7 @@ fn cfg_from_edges(edges: &[(u32, u32)]) -> Cfg {
   Cfg {
     bblocks: Default::default(),
     graph,
+    entry: 0,
   }
 }
 

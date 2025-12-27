@@ -27,6 +27,55 @@ fn can_prune_bblock(
   false
 }
 
+fn maybe_reroot_entry(changed: &mut bool, cfg: &mut Cfg) -> bool {
+  if cfg.entry != 0 {
+    return false;
+  }
+  let Some(entry_block) = cfg.bblocks.maybe_get(0) else {
+    return false;
+  };
+  if !entry_block.is_empty() {
+    return false;
+  }
+  let parents = cfg.graph.parents_sorted(0);
+  if !parents.is_empty() {
+    return false;
+  }
+  let children = cfg.graph.children_sorted(0);
+  if children.is_empty() || children.len() > 1 {
+    return false;
+  }
+  let new_entry = children[0];
+  if new_entry == 0 {
+    return false;
+  }
+  {
+    let new_entry_block = cfg.bblocks.get(new_entry);
+    for inst in new_entry_block.iter() {
+      if inst.t != InstTyp::Phi {
+        break;
+      }
+      if inst.labels.contains(&0) && inst.labels.len() == 1 {
+        // Removing the old entry would leave this Phi without any sources.
+        return false;
+      }
+    }
+  }
+
+  for inst in cfg.bblocks.get_mut(new_entry).iter_mut() {
+    if inst.t != InstTyp::Phi {
+      break;
+    }
+    inst.remove_phi(0);
+  }
+
+  cfg.graph.delete_many([0]);
+  cfg.bblocks.remove(0);
+  cfg.entry = new_entry;
+  *changed = true;
+  true
+}
+
 pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
   // Iterate until convergence, instead of waiting for another optimisation pass.
   loop {
@@ -34,9 +83,11 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
     let mut empty_leaves = Vec::new();
     // WARNING: We must update graph within this loop, instead of simply marking and then removing afterwards, as we possibly pop instructions which could make a non-empty bblock empty, but if we don't then immediately update the graph some invariants won't hold (e.g. empty bblocks have <= 1 children). This means we can't use common utility graph functions.
     let mut converged = true;
+    if maybe_reroot_entry(changed, cfg) {
+      continue;
+    }
     for cur in cfg.graph.labels_sorted() {
-      // TODO Figure out how to delete node 0 (i.e. re-root).
-      if cur == 0 {
+      if cur == cfg.entry {
         continue;
       };
 
