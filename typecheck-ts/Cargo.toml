@@ -27,7 +27,9 @@ ordered-float = "3"
 num-bigint = "0.4"
 bumpalo = { version = "3.14", features = ["collections"] }
 sha2 = "0.10"
-salsa = "0.16"
+# salsa 0.18 provides the 2022 tracked/input APIs without the newer Rust 1.85 toolchain
+# requirement and uses clone-based snapshots instead of the removed ParallelDatabase trait.
+salsa = "0.18"
 
 [dev-dependencies]
 diagnostics = { path = "../diagnostics" }

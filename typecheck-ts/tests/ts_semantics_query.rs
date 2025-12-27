@@ -1,7 +1,6 @@
-use salsa::ParallelDatabase;
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use typecheck_ts::db::{TypecheckDatabase, TypecheckDb};
+use typecheck_ts::db::TypecheckDb;
 use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::{FileId, FileKey, Host, MemoryHost, Program};
 
@@ -72,20 +71,20 @@ fn ts_semantics_matches_program_exports_and_is_deterministic() {
   let file_c = program.file_id(&key_c).expect("file c id");
 
   let mut db = TypecheckDb::default();
-  db.set_roots(Arc::new(vec![file_c]));
+  let roots: Arc<[FileKey]> = vec![key_c.clone()].into();
+  db.set_roots(roots);
   for (key, id) in [
     (key_a.clone(), file_a),
     (key_b.clone(), file_b),
     (key_c.clone(), file_c),
   ] {
     let text = db_host.file_text(&key).expect("file text");
-    db.set_file_text(id, text);
-    db.set_file_kind(id, FileKind::Ts);
+    db.set_file(id, key, FileKind::Ts, text);
   }
   for (from, spec, to) in edges.into_iter() {
     let from_id = program.file_id(&from).expect("from id");
     let to_id = program.file_id(&to).expect("to id");
-    db.set_module_resolve(from_id, Arc::<str>::from(spec.as_str()), Some(to_id));
+    db.set_module_resolution(from_id, Arc::<str>::from(spec.as_str()), Some(to_id));
   }
 
   let ts_result = db.ts_semantics();
@@ -137,7 +136,7 @@ fn ts_semantics_matches_program_exports_and_is_deterministic() {
   let baseline_diags = ts_diags.clone();
   let snap_a = db.snapshot();
   let snap_b = db.snapshot();
-  let join = |snap: salsa::Snapshot<TypecheckDb>| {
+  let join = |snap: TypecheckDb| {
     std::thread::spawn(move || {
       let result = snap.ts_semantics();
       let sem = &result.semantics;

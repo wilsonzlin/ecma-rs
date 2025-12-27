@@ -133,6 +133,7 @@
 
 mod api;
 pub mod codes;
+#[doc(hidden)]
 pub mod db;
 mod error;
 mod expand;

@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use diagnostics::{sort_diagnostics, Diagnostic, FileId};
+use diagnostics::{Diagnostic, FileId};
 use hir_js::{lower_file_with_diagnostics, FileKind as HirFileKind, LowerResult};
 use semantic_js::ts as sem_ts;
 use types_ts_interned::PrimitiveIds;
@@ -10,13 +10,51 @@ use types_ts_interned::PrimitiveIds;
 use crate::semantic_js::SymbolId;
 use crate::symbols::SymbolBinding;
 use crate::{DefId, TypeId};
-use crate::db::start_timer;
-use crate::db::inputs::{FileOrigin, Inputs};
-use crate::lib_support::lib_env::{collect_libs, validate_libs};
-use crate::lib_support::{FileKind, LibFile, LibManager};
-use crate::profile::QueryKind;
+use crate::db::inputs::{
+  CancellationToken, CancelledInput, CompilerOptionsInput, FileInput, ModuleResolutionInput,
+  RootsInput,
+};
+use crate::db::{Db, ModuleKey};
+use crate::lib_support::{CompilerOptions, FileKind};
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
+use crate::FileKey;
+
+fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
+  db.file_input_by_key(key)
+    .unwrap_or_else(|| panic!("file {:?} must be seeded before use", key))
+    .file_id(db)
+}
+
+#[salsa::tracked]
+fn compiler_options_for(db: &dyn Db, handle: CompilerOptionsInput) -> CompilerOptions {
+  handle.options(db)
+}
+
+#[salsa::tracked]
+fn roots_for(db: &dyn Db, handle: RootsInput) -> Arc<[FileKey]> {
+  handle.roots(db)
+}
+
+#[salsa::tracked]
+fn cancellation_token_for(db: &dyn Db, handle: CancelledInput) -> CancellationToken {
+  handle.token(db)
+}
+
+#[salsa::tracked]
+fn file_kind_for(db: &dyn Db, file: FileInput) -> FileKind {
+  file.kind(db)
+}
+
+#[salsa::tracked]
+fn file_text_for(db: &dyn Db, file: FileInput) -> Arc<str> {
+  file.text(db)
+}
+
+#[salsa::tracked]
+fn module_resolve_for(db: &dyn Db, entry: ModuleResolutionInput) -> Option<FileId> {
+  entry.resolved(db)
+}
 
 #[derive(Debug, Clone)]
 pub struct LowerResultWithDiagnostics {
@@ -134,92 +172,30 @@ impl Eq for LowerResultWithDiagnostics {}
 
 static PARSE_QUERY_CALLS: AtomicUsize = AtomicUsize::new(0);
 
-/// Number of times the [`parse`] query has been executed (not served from cache).
 pub fn parse_query_count() -> usize {
   PARSE_QUERY_CALLS.load(Ordering::Relaxed)
 }
 
-/// Reset the parse query execution counter.
 pub fn reset_parse_query_count() {
   PARSE_QUERY_CALLS.store(0, Ordering::Relaxed);
 }
 
-#[derive(Clone)]
-pub struct TsSemantics {
-  pub semantics: Arc<sem_ts::TsProgramSemantics>,
-  pub diagnostics: Arc<Vec<Diagnostic>>,
-}
-
-impl PartialEq for TsSemantics {
-  fn eq(&self, other: &Self) -> bool {
-    // Binder outputs are compared by identity; any dependency change rebuilds
-    // semantics.
-    Arc::ptr_eq(&self.semantics, &other.semantics) && self.diagnostics == other.diagnostics
-  }
-}
-
-impl Eq for TsSemantics {}
-
-impl std::fmt::Debug for TsSemantics {
-  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-    f.debug_struct("TsSemantics")
-      .field("semantics", &self.semantics)
-      .field("diagnostics", &self.diagnostics)
-      .finish()
-  }
-}
-
-#[salsa::query_group(TypecheckStorage)]
-pub trait TypecheckDatabase: salsa::Database {
-  /// Full UTF-8 source text for a file.
-  #[salsa::input]
-  fn file_text(&self, file: FileId) -> Arc<str>;
-
-  /// File kind, used to derive parsing and lowering options.
-  #[salsa::input]
-  fn file_kind(&self, file: FileId) -> FileKind;
-
-  /// Root files for module graph traversal and semantics.
-  #[salsa::input]
-  fn roots(&self) -> Arc<Vec<FileId>>;
-
-  /// Host-provided module resolution.
-  #[salsa::input]
-  fn module_resolve(&self, from: FileId, specifier: Arc<str>) -> Option<FileId>;
-
-  /// Parse source text into a `parse-js` AST with diagnostics.
-  fn parse(&self, file: FileId) -> parser::ParseResult;
-
-  /// Lower parsed AST into HIR with any diagnostics produced during lowering.
-  fn lower_hir(&self, file: FileId) -> LowerResultWithDiagnostics;
-
-  /// Semantic HIR derived from lowered HIR, suitable for binding and checking.
-  fn sem_hir(&self, file: FileId) -> sem_ts::HirFile;
-
-  /// All reachable files starting from [`roots`], following imports and
-  /// re-exports.
-  fn all_files(&self) -> Arc<Vec<FileId>>;
-
-  /// Semantic binding result across all files, including diagnostics.
-  fn ts_semantics(&self) -> Arc<TsSemantics>;
-}
-
-pub fn parse(db: &dyn TypecheckDatabase, file: FileId) -> parser::ParseResult {
-  let _timer = start_timer(db, QueryKind::Parse);
+#[salsa::tracked]
+fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
   PARSE_QUERY_CALLS.fetch_add(1, Ordering::Relaxed);
-  let kind = db.file_kind(file);
-  let source = db.file_text(file);
-  parser::parse(file, kind, &source)
+  let kind = file.kind(db);
+  let source = file.text(db);
+  parser::parse(file.file_id(db), kind, &source)
 }
 
-pub fn lower_hir(db: &dyn TypecheckDatabase, file: FileId) -> LowerResultWithDiagnostics {
-  let _timer = start_timer(db, QueryKind::LowerHir);
-  let parsed = db.parse(file);
-  let file_kind = db.file_kind(file);
+#[salsa::tracked]
+fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
+  let parsed = parse_for(db, file);
+  let file_kind = file.kind(db);
   let mut diagnostics = parsed.diagnostics.clone();
   let lowered = parsed.ast.as_ref().map(|ast| {
     let (lowered, mut lower_diags) =
-      lower_file_with_diagnostics(file, map_hir_file_kind(file_kind), ast);
+      lower_file_with_diagnostics(file.file_id(db), map_hir_file_kind(file_kind), ast);
     diagnostics.append(&mut lower_diags);
     Arc::new(lowered)
   });
@@ -231,88 +207,13 @@ pub fn lower_hir(db: &dyn TypecheckDatabase, file: FileId) -> LowerResultWithDia
   }
 }
 
-pub fn sem_hir(db: &dyn TypecheckDatabase, file: FileId) -> sem_ts::HirFile {
-  let lowered = db.lower_hir(file);
+#[salsa::tracked]
+fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
+  let lowered = lower_hir_for(db, file);
   if let Some(lowered) = lowered.lowered.as_ref() {
     sem_hir_from_lower(lowered)
   } else {
-    empty_sem_hir(file, lowered.file_kind)
-  }
-}
-
-pub fn all_files(db: &dyn TypecheckDatabase) -> Arc<Vec<FileId>> {
-  let mut visited = BTreeSet::new();
-  let mut queue: VecDeque<FileId> = db.roots().iter().copied().collect();
-  while let Some(file) = queue.pop_front() {
-    if !visited.insert(file) {
-      continue;
-    }
-    let sem_hir = db.sem_hir(file);
-    for import in sem_hir.imports.iter() {
-      if let Some(target) = db.module_resolve(file, Arc::<str>::from(import.specifier.as_str())) {
-        queue.push_back(target);
-      }
-    }
-    for export in sem_hir.exports.iter() {
-      match export {
-        sem_ts::Export::Named(named) => {
-          if let Some(specifier) = named.specifier.as_ref() {
-            if let Some(target) = db.module_resolve(file, Arc::<str>::from(specifier.as_str())) {
-              queue.push_back(target);
-            }
-          }
-        }
-        sem_ts::Export::All(all) => {
-          if let Some(target) = db.module_resolve(file, Arc::<str>::from(all.specifier.as_str())) {
-            queue.push_back(target);
-          }
-        }
-        sem_ts::Export::ExportAssignment { .. } => {}
-      }
-    }
-  }
-  Arc::new(visited.into_iter().collect())
-}
-
-pub fn ts_semantics(db: &dyn TypecheckDatabase) -> Arc<TsSemantics> {
-  let _timer = start_timer(db, QueryKind::Bind);
-  let files = db.all_files();
-  let mut diagnostics = Vec::new();
-  let mut sem_hirs: HashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = HashMap::new();
-  for file in files.iter() {
-    let lowered = db.lower_hir(*file);
-    diagnostics.extend(lowered.diagnostics.iter().cloned());
-    sem_hirs.insert(sem_ts::FileId(file.0), Arc::new(db.sem_hir(*file)));
-  }
-
-  let mut roots: Vec<_> = db.roots().iter().map(|f| sem_ts::FileId(f.0)).collect();
-  roots.sort();
-  roots.dedup();
-  let resolver = DbResolver { db };
-  let (semantics, mut bind_diags) = sem_ts::bind_ts_program(&roots, &resolver, |file| {
-    sem_hirs
-      .get(&file)
-      .cloned()
-      .unwrap_or_else(|| Arc::new(empty_sem_hir(FileId(file.0), db.file_kind(FileId(file.0)))))
-  });
-  diagnostics.append(&mut bind_diags);
-  sort_diagnostics(&mut diagnostics);
-  Arc::new(TsSemantics {
-    semantics: Arc::new(semantics),
-    diagnostics: Arc::new(diagnostics),
-  })
-}
-
-struct DbResolver<'db> {
-  db: &'db dyn TypecheckDatabase,
-}
-
-impl<'db> sem_ts::Resolver for DbResolver<'db> {
-  fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
-    self
-      .db
-      .module_resolve(FileId(from.0), Arc::<str>::from(specifier))
-      .map(|id| sem_ts::FileId(id.0))
+    empty_sem_hir(file.file_id(db), lowered.file_kind)
   }
 }
 
@@ -326,6 +227,7 @@ fn empty_sem_hir(file: FileId, kind: FileKind) -> sem_ts::HirFile {
     },
     decls: Vec::new(),
     imports: Vec::new(),
+    import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),
@@ -342,176 +244,200 @@ fn map_hir_file_kind(kind: FileKind) -> HirFileKind {
   }
 }
 
-#[derive(Clone, Debug, Default)]
-struct Cached<T> {
-  value: Option<T>,
-  revision: u64,
+#[derive(Clone)]
+pub struct TsSemantics {
+  pub semantics: Arc<sem_ts::TsProgramSemantics>,
+  pub diagnostics: Arc<Vec<Diagnostic>>,
 }
 
-#[derive(Clone, Debug, Default)]
-struct LibFilesState {
-  value: Option<Arc<[LibFile]>>,
-  revision: u64,
-  diagnostics: Vec<Diagnostic>,
-  lib_ids: Vec<FileId>,
-  lib_texts: HashMap<FileId, Arc<str>>,
-}
-
-/// Derived queries for lib loading and file aggregation.
-#[derive(Clone, Debug)]
-pub struct Database {
-  pub inputs: Inputs,
-  lib_manager: Arc<LibManager>,
-  lib_files: LibFilesState,
-  all_files: Cached<Arc<[FileId]>>,
-  effective_file_text: HashMap<FileId, Cached<Arc<str>>>,
-}
-
-impl Database {
-  /// Create a new database with a fresh [`LibManager`].
-  pub fn new() -> Self {
-    Self::with_lib_manager(Arc::new(LibManager::new()))
+impl PartialEq for TsSemantics {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.semantics, &other.semantics) && self.diagnostics == other.diagnostics
   }
+}
 
-  /// Create a database backed by a specific [`LibManager`].
-  pub fn with_lib_manager(lib_manager: Arc<LibManager>) -> Self {
-    Database {
-      inputs: Inputs::default(),
-      lib_manager,
-      lib_files: LibFilesState::default(),
-      all_files: Cached::default(),
-      effective_file_text: HashMap::new(),
+impl Eq for TsSemantics {}
+
+impl std::fmt::Debug for TsSemantics {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("TsSemantics")
+      .field("semantics", &self.semantics)
+      .field("diagnostics", &self.diagnostics)
+      .finish()
+  }
+}
+
+#[salsa::tracked]
+fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
+  let mut visited = BTreeSet::new();
+  let mut queue: VecDeque<FileId> = db
+    .roots_input()
+    .roots(db)
+    .iter()
+    .map(|key| file_id_from_key(db, key))
+    .collect();
+  while let Some(file) = queue.pop_front() {
+    if !visited.insert(file) {
+      continue;
+    }
+    let sem_hir = sem_hir_for(db, db.file_input(file).expect("file seeded for sem_hir"));
+    for import in sem_hir.imports.iter() {
+      if let Some(target) = module_resolve(db, file, Arc::<str>::from(import.specifier.as_str())) {
+        queue.push_back(target);
+      }
+    }
+    for export in sem_hir.exports.iter() {
+      match export {
+        sem_ts::Export::Named(named) => {
+          if let Some(specifier) = named.specifier.as_ref() {
+            if let Some(target) =
+              module_resolve(db, file, Arc::<str>::from(specifier.as_str()))
+            {
+              queue.push_back(target);
+            }
+          }
+        }
+        sem_ts::Export::All(all) => {
+          if let Some(target) =
+            module_resolve(db, file, Arc::<str>::from(all.specifier.as_str()))
+          {
+            queue.push_back(target);
+          }
+        }
+        sem_ts::Export::ExportAssignment { .. } => {}
+      }
     }
   }
+  Arc::new(visited.into_iter().collect())
+}
 
-  /// Access the lib manager backing this database.
-  pub fn lib_manager(&self) -> &LibManager {
-    &self.lib_manager
-  }
-
-  /// Intern a file key with the provided origin.
-  pub fn intern_file(&mut self, key: crate::FileKey, origin: FileOrigin) -> FileId {
-    self.inputs.intern_file(key, origin)
-  }
-
-  fn compute_lib_files(&mut self) -> Arc<[LibFile]> {
-    let dep_rev = std::cmp::max(
-      self.inputs.compiler_options_revision(),
-      self.inputs.host_libs_revision(),
+#[salsa::tracked]
+fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
+  let files = all_files_for(db);
+  let mut diagnostics = Vec::new();
+  let mut sem_hirs: HashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = HashMap::new();
+  for file in files.iter() {
+    let lowered = lower_hir_for(db, db.file_input(*file).expect("file seeded for lowering"));
+    diagnostics.extend(lowered.diagnostics.iter().cloned());
+    sem_hirs.insert(
+      sem_ts::FileId(file.0),
+      Arc::new(sem_hir_for(
+        db,
+        db.file_input(*file).expect("file seeded for sem hir"),
+      )),
     );
-    if let Some(value) = self.lib_files.value.as_ref() {
-      if self.lib_files.revision == dep_rev {
-        return Arc::clone(value);
-      }
-    }
-
-    let options = self.inputs.compiler_options().clone();
-    let host_libs = self.inputs.host_libs().as_ref().to_vec();
-    let libs = collect_libs(&options, host_libs, &self.lib_manager);
-    let validated = validate_libs(libs, |lib| {
-      self.inputs.intern_file(lib.key.clone(), FileOrigin::Lib)
-    });
-
-    let mut lib_ids = Vec::new();
-    let mut lib_texts = HashMap::new();
-    let mut dts_libs = Vec::new();
-    for (lib, file_id) in validated.libs.into_iter() {
-      lib_ids.push(file_id);
-      lib_texts.insert(file_id, Arc::clone(&lib.text));
-      self.inputs.set_file_kind(file_id, FileKind::Dts);
-      dts_libs.push(lib);
-    }
-    let value = Arc::from(dts_libs.into_boxed_slice());
-
-    self.lib_files = LibFilesState {
-      value: Some(Arc::clone(&value)),
-      revision: dep_rev,
-      diagnostics: validated.diagnostics,
-      lib_ids,
-      lib_texts,
-    };
-    value
   }
 
-  /// Libraries to include alongside reachable source files.
-  pub fn lib_files(&mut self) -> Arc<[LibFile]> {
-    self.compute_lib_files()
+  let mut roots: Vec<_> = db
+    .roots_input()
+    .roots(db)
+    .iter()
+    .map(|f| file_id_from_key(db, f))
+    .map(|id| sem_ts::FileId(id.0))
+    .collect();
+  roots.sort();
+  roots.dedup();
+  let resolver = DbResolver { db };
+  let (semantics, mut bind_diags) = sem_ts::bind_ts_program(&roots, &resolver, |file| {
+    sem_hirs.get(&file).cloned().unwrap_or_else(|| {
+      Arc::new(empty_sem_hir(
+        FileId(file.0),
+        db
+          .file_input(FileId(file.0))
+          .map(|input| input.kind(db))
+          .unwrap_or(FileKind::Ts),
+      ))
+    })
+  });
+  diagnostics.append(&mut bind_diags);
+  diagnostics.sort();
+  diagnostics.dedup();
+  Arc::new(TsSemantics {
+    semantics: Arc::new(semantics),
+    diagnostics: Arc::new(diagnostics),
+  })
+}
+
+struct DbResolver<'db> {
+  db: &'db dyn Db,
+}
+
+impl<'db> sem_ts::Resolver for DbResolver<'db> {
+  fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
+    module_resolve(self.db, FileId(from.0), Arc::<str>::from(specifier))
+      .map(|id| sem_ts::FileId(id.0))
   }
+}
 
-  /// Diagnostics produced while loading libraries.
-  pub fn lib_diagnostics(&mut self) -> &[Diagnostic] {
-    self.compute_lib_files();
-    &self.lib_files.diagnostics
-  }
+/// Current compiler options.
+pub fn compiler_options(db: &dyn Db) -> CompilerOptions {
+  compiler_options_for(db, db.compiler_options_input())
+}
 
-  /// IDs for all known libraries, in a deterministic order.
-  pub fn lib_file_ids(&mut self) -> Vec<FileId> {
-    self.compute_lib_files();
-    self.lib_files.lib_ids.clone()
-  }
+/// Entry-point file roots selected by the host.
+pub fn roots(db: &dyn Db) -> Arc<[FileKey]> {
+  roots_for(db, db.roots_input())
+}
 
-  /// All files that may participate in checking, including libraries.
-  pub fn all_files(&mut self) -> Arc<[FileId]> {
-    let lib_revision = {
-      self.compute_lib_files();
-      self.lib_files.revision
-    };
-    let dep_rev = std::cmp::max(self.inputs.reachable_files_revision(), lib_revision);
-    if let Some(value) = self.all_files.value.as_ref() {
-      if self.all_files.revision == dep_rev {
-        return Arc::clone(value);
-      }
-    }
+/// Cancellation token to propagate through long-running queries.
+pub fn cancelled(db: &dyn Db) -> Arc<AtomicBool> {
+  cancellation_token_for(db, db.cancelled_input()).0.clone()
+}
 
-    let mut seen = HashSet::new();
-    let mut ordered = Vec::new();
+/// File kind for a given file identifier.
+pub fn file_kind(db: &dyn Db, file: FileId) -> FileKind {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before reading kind");
+  file_kind_for(db, handle)
+}
 
-    for file in self.inputs.reachable_files().iter().copied() {
-      if seen.insert(file) {
-        ordered.push(file);
-      }
-    }
+/// Source text for a given file identifier.
+pub fn file_text(db: &dyn Db, file: FileId) -> Arc<str> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before reading text");
+  file_text_for(db, handle)
+}
 
-    for file in self.lib_files.lib_ids.iter().copied() {
-      if seen.insert(file) {
-        ordered.push(file);
-      }
-    }
+pub fn parse(db: &dyn Db, file: FileId) -> parser::ParseResult {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before parsing");
+  parse_for(db, handle)
+}
 
-    let value = Arc::from(ordered.into_boxed_slice());
-    self.all_files = Cached {
-      value: Some(Arc::clone(&value)),
-      revision: dep_rev,
-    };
-    value
-  }
+pub fn lower_hir(db: &dyn Db, file: FileId) -> LowerResultWithDiagnostics {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before lowering");
+  lower_hir_for(db, handle)
+}
 
-  /// Source text for a file, preferring lib contents when applicable.
-  pub fn effective_file_text(&mut self, file: FileId) -> Option<Arc<str>> {
-    let lib_revision = {
-      self.compute_lib_files();
-      self.lib_files.revision
-    };
-    let dep_rev = std::cmp::max(lib_revision, self.inputs.file_text_revision(file));
-    if let Some(cached) = self.effective_file_text.get(&file) {
-      if cached.revision == dep_rev {
-        return cached.value.clone();
-      }
-    }
+pub fn sem_hir(db: &dyn Db, file: FileId) -> sem_ts::HirFile {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before computing sem HIR");
+  sem_hir_for(db, handle)
+}
 
-    let text = if let Some(text) = self.lib_files.lib_texts.get(&file) {
-      Some(Arc::clone(text))
-    } else {
-      self.inputs.file_text(file).cloned()
-    };
+/// Host-provided module resolution result.
+pub fn module_resolve(db: &dyn Db, from: FileId, specifier: Arc<str>) -> Option<FileId> {
+  let key = ModuleKey::new(from, specifier);
+  db.module_resolution_input(&key)
+    .and_then(|input| module_resolve_for(db, input))
+}
 
-    self.effective_file_text.insert(
-      file,
-      Cached {
-        value: text.clone(),
-        revision: dep_rev,
-      },
-    );
-    text
-  }
+pub fn all_files(db: &dyn Db) -> Arc<Vec<FileId>> {
+  all_files_for(db)
+}
+
+pub fn ts_semantics(db: &dyn Db) -> Arc<TsSemantics> {
+  ts_semantics_for(db)
+}
+
+/// Expose the current revision for smoke-testing the salsa plumbing.
+#[salsa::tracked]
+pub fn db_revision(db: &dyn Db) -> salsa::Revision {
+  salsa::plumbing::current_revision(db)
 }

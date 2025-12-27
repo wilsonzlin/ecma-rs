@@ -35,7 +35,7 @@ use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, Typ
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::codes;
-use crate::db::{self, GlobalBindingsDb, TypecheckDatabase};
+use crate::db::{self, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileRegistry;
 use crate::profile::{
@@ -2115,6 +2115,7 @@ impl SemHirBuilder {
       file_kind: self.file_kind,
       decls: self.decls,
       imports: self.imports,
+      import_equals: Vec::new(),
       exports: self.exports,
       export_as_namespace: Vec::new(),
       ambient_modules: Vec::new(),
@@ -2672,6 +2673,11 @@ impl ProgramState {
         base.imports.push(import);
       }
     }
+    for import in extras.import_equals {
+      if !base.import_equals.contains(&import) {
+        base.import_equals.push(import);
+      }
+    }
     for export in extras.exports {
       if !base.exports.contains(&export) {
         base.exports.push(export);
@@ -2690,6 +2696,7 @@ impl ProgramState {
 
   fn module_kind_from_sem_hir(file: &sem_ts::HirFile) -> sem_ts::ModuleKind {
     if file.imports.is_empty()
+      && file.import_equals.is_empty()
       && file.exports.is_empty()
       && file.export_as_namespace.is_empty()
       && file.ambient_modules.is_empty()
@@ -3470,6 +3477,7 @@ impl ProgramState {
             file_kind,
             decls: Vec::new(),
             imports: Vec::new(),
+            import_equals: Vec::new(),
             exports: Vec::new(),
             export_as_namespace: Vec::new(),
             ambient_modules: Vec::new(),

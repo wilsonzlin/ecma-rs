@@ -52,6 +52,7 @@ pub(crate) fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
     .iter()
     .filter_map(|import| map_import_from_lower(import, &resolve_name))
     .collect();
+  let import_equals: Vec<sem_ts::ImportEquals> = Vec::new();
   let exports: Vec<_> = lowered
     .hir
     .exports
@@ -64,6 +65,7 @@ pub(crate) fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
     .filter_map(|export| map_export_from_lower(export, &resolve_name))
     .collect();
   let module_kind = if imports.is_empty()
+    && import_equals.is_empty()
     && exports.is_empty()
     && decls
       .iter()
@@ -86,6 +88,7 @@ pub(crate) fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
     },
     decls,
     imports,
+    import_equals,
     exports,
     export_as_namespace: Vec::new(),
     ambient_modules: Vec::new(),

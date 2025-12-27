@@ -1,11 +1,8 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{FileId, TextRange};
-use salsa::ParallelDatabase;
 use std::sync::Arc;
 use std::thread;
-use typecheck_ts::db::{
-  parse_query_count, reset_parse_query_count, TypecheckDatabase, TypecheckDb,
-};
+use typecheck_ts::db::{parse_query_count, reset_parse_query_count, TypecheckDb};
 use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::queries::parse;
 use typecheck_ts::{codes, FileKey, Host, HostError, Program};
@@ -103,10 +100,10 @@ fn unresolved_import_points_at_specifier() {
 #[test]
 fn db_parse_reports_diagnostic_with_span_for_invalid_syntax() {
   let file = FileId(0);
+  let key = FileKey::new("test.ts");
   let source = "function missingBrace(";
   let mut db = TypecheckDb::default();
-  db.set_file_kind(file, FileKind::Ts);
-  db.set_file_text(file, Arc::from(source));
+  db.set_file(file, key, FileKind::Ts, Arc::from(source));
 
   let result = db.parse(file);
 
@@ -119,9 +116,14 @@ fn db_parse_reports_diagnostic_with_span_for_invalid_syntax() {
 #[test]
 fn parse_query_is_memoized() {
   let file = FileId(0);
+  let key = FileKey::new("memoized.ts");
   let mut db = TypecheckDb::default();
-  db.set_file_kind(file, FileKind::Ts);
-  db.set_file_text(file, Arc::from("const value = 1;"));
+  db.set_file(
+    file,
+    key,
+    FileKind::Ts,
+    Arc::from("const value = 1;"),
+  );
 
   reset_parse_query_count();
   let first = db.parse(file);
@@ -149,10 +151,12 @@ fn parse_query_is_memoized() {
 #[test]
 fn concurrent_snapshots_share_results() {
   let file = FileId(0);
+  let key = FileKey::new("add.ts");
   let mut db = TypecheckDb::default();
-  db.set_file_kind(file, FileKind::Ts);
-  db.set_file_text(
+  db.set_file(
     file,
+    key,
+    FileKind::Ts,
     Arc::from("export function add(a: number, b: number) { return a + b; }"),
   );
 

@@ -1,187 +1,78 @@
-use std::collections::HashMap;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use diagnostics::FileId;
 
-use crate::lib_support::{CompilerOptions, FileKind, LibFile};
+use crate::lib_support::{CompilerOptions, FileKind};
 use crate::FileKey;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum FileOrigin {
-  Source,
-  Lib,
-}
+/// Wrapper around an atomic cancellation flag that can participate in salsa's
+/// change detection.
+///
+/// Equality is based on the `Arc` identity so the revision only changes when a
+/// new token is swapped in. Toggling the atomic flag is expected to happen
+/// without notifying salsa and should still be observed by readers of the
+/// shared [`Arc<AtomicBool>`](AtomicBool).
+#[derive(Clone)]
+pub struct CancellationToken(pub Arc<AtomicBool>);
 
-#[derive(Clone, Debug)]
-struct FileEntry {
-  key: FileKey,
-  origin: FileOrigin,
-}
-
-#[derive(Clone, Debug, Default)]
-struct FileInterner {
-  by_key: HashMap<(FileOrigin, FileKey), FileId>,
-  entries: Vec<FileEntry>,
-}
-
-impl FileInterner {
-  fn intern(&mut self, key: FileKey, origin: FileOrigin) -> (FileId, bool) {
-    if let Some(existing) = self.by_key.get(&(origin, key.clone())) {
-      return (*existing, false);
-    }
-    let id = FileId(self.entries.len() as u32);
-    self.by_key.insert((origin, key.clone()), id);
-    self.entries.push(FileEntry { key, origin });
-    (id, true)
-  }
-
-  fn get(&self, key: &FileKey, origin: FileOrigin) -> Option<FileId> {
-    self.by_key.get(&(origin, key.clone())).copied()
-  }
-
-  fn entry(&self, id: FileId) -> Option<&FileEntry> {
-    self.entries.get(id.0 as usize)
-  }
-
-  fn len(&self) -> usize {
-    self.entries.len()
+impl CancellationToken {
+  pub fn new(flag: Arc<AtomicBool>) -> Self {
+    Self(flag)
   }
 }
 
-/// Host-provided inputs for the query database.
-#[derive(Clone, Debug)]
-pub struct Inputs {
-  next_revision: u64,
-  files_revision: u64,
-  compiler_options: CompilerOptions,
-  compiler_options_rev: u64,
-  host_libs: Arc<[LibFile]>,
-  host_libs_rev: u64,
-  reachable_files: Arc<[FileId]>,
-  reachable_files_rev: u64,
-  interner: FileInterner,
-  file_texts: HashMap<FileId, (Arc<str>, u64)>,
-  file_kinds: HashMap<FileId, FileKind>,
-}
-
-impl Default for Inputs {
-  fn default() -> Self {
-    Inputs {
-      next_revision: 1,
-      files_revision: 0,
-      compiler_options: CompilerOptions::default(),
-      compiler_options_rev: 0,
-      host_libs: Arc::from([]),
-      host_libs_rev: 0,
-      reachable_files: Arc::from([]),
-      reachable_files_rev: 0,
-      interner: FileInterner::default(),
-      file_texts: HashMap::new(),
-      file_kinds: HashMap::new(),
-    }
+impl std::fmt::Debug for CancellationToken {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    f.debug_struct("CancellationToken")
+      .field("set", &self.0.load(std::sync::atomic::Ordering::Relaxed))
+      .finish()
   }
 }
 
-impl Inputs {
-  pub fn new() -> Self {
-    Inputs::default()
+impl PartialEq for CancellationToken {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
   }
+}
 
-  fn next_revision(&mut self) -> u64 {
-    let rev = self.next_revision;
-    self.next_revision = self.next_revision.saturating_add(1);
-    rev
-  }
+impl Eq for CancellationToken {}
 
-  pub fn compiler_options(&self) -> &CompilerOptions {
-    &self.compiler_options
+unsafe impl salsa::Update for CancellationToken {
+  unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+    let old_ref = &mut *old_pointer;
+    let changed = !Arc::ptr_eq(&old_ref.0, &new_value.0);
+    *old_ref = new_value;
+    changed
   }
+}
 
-  pub fn set_compiler_options(&mut self, options: CompilerOptions) -> bool {
-    if self.compiler_options == options {
-      return false;
-    }
-    self.compiler_options = options;
-    self.compiler_options_rev = self.next_revision();
-    true
-  }
+#[salsa::input]
+pub struct CompilerOptionsInput {
+  pub options: CompilerOptions,
+}
 
-  pub fn compiler_options_revision(&self) -> u64 {
-    self.compiler_options_rev
-  }
+#[salsa::input]
+pub struct RootsInput {
+  pub roots: Arc<[FileKey]>,
+}
 
-  pub fn set_host_libs(&mut self, libs: Vec<LibFile>) {
-    self.host_libs = Arc::from(libs.into_boxed_slice());
-    self.host_libs_rev = self.next_revision();
-  }
+#[salsa::input]
+pub struct CancelledInput {
+  pub token: CancellationToken,
+}
 
-  pub fn host_libs(&self) -> Arc<[LibFile]> {
-    Arc::clone(&self.host_libs)
-  }
+#[salsa::input]
+pub struct FileInput {
+  pub file_id: FileId,
+  pub key: FileKey,
+  pub kind: FileKind,
+  pub text: Arc<str>,
+}
 
-  pub fn host_libs_revision(&self) -> u64 {
-    self.host_libs_rev
-  }
-
-  pub fn set_reachable_files(&mut self, files: impl Into<Arc<[FileId]>>) {
-    self.reachable_files = files.into();
-    self.reachable_files_rev = self.next_revision();
-  }
-
-  pub fn reachable_files(&self) -> Arc<[FileId]> {
-    Arc::clone(&self.reachable_files)
-  }
-
-  pub fn reachable_files_revision(&self) -> u64 {
-    self.reachable_files_rev
-  }
-
-  pub fn files_revision(&self) -> u64 {
-    self.files_revision
-  }
-
-  pub fn intern_file(&mut self, key: FileKey, origin: FileOrigin) -> FileId {
-    let (id, inserted) = self.interner.intern(key, origin);
-    if inserted {
-      self.files_revision = self.next_revision();
-    }
-    id
-  }
-
-  pub fn file_id(&self, key: &FileKey, origin: FileOrigin) -> Option<FileId> {
-    self.interner.get(key, origin)
-  }
-
-  pub fn file_key(&self, file: FileId) -> Option<&FileKey> {
-    self.interner.entry(file).map(|entry| &entry.key)
-  }
-
-  pub fn file_origin(&self, file: FileId) -> Option<FileOrigin> {
-    self.interner.entry(file).map(|entry| entry.origin)
-  }
-
-  pub fn file_count(&self) -> usize {
-    self.interner.len()
-  }
-
-  pub fn set_file_text(&mut self, file: FileId, text: Arc<str>) {
-    let revision = self.next_revision();
-    self.file_texts.insert(file, (text, revision));
-  }
-
-  pub fn file_text(&self, file: FileId) -> Option<&Arc<str>> {
-    self.file_texts.get(&file).map(|(text, _)| text)
-  }
-
-  pub fn file_text_revision(&self, file: FileId) -> u64 {
-    self.file_texts.get(&file).map(|(_, rev)| *rev).unwrap_or(0)
-  }
-
-  pub fn set_file_kind(&mut self, file: FileId, kind: FileKind) {
-    self.file_kinds.insert(file, kind);
-  }
-
-  pub fn file_kind(&self, file: FileId) -> Option<FileKind> {
-    self.file_kinds.get(&file).copied()
-  }
+#[salsa::input]
+pub struct ModuleResolutionInput {
+  pub from_file: FileId,
+  pub specifier: Arc<str>,
+  pub resolved: Option<FileId>,
 }
