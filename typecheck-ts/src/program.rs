@@ -34,7 +34,7 @@ use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, Typ
 
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
-use crate::check::type_expr::TypeResolver;
+use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
 use crate::db::{self, Db, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
@@ -2607,6 +2607,41 @@ impl QuerySpan {
   }
 }
 
+#[derive(Clone)]
+struct DeclTypeResolver {
+  file: FileId,
+  defs: Arc<HashMap<(FileId, String), DefId>>,
+  by_name: HashMap<String, DefId>,
+}
+
+impl DeclTypeResolver {
+  fn new(file: FileId, defs: Arc<HashMap<(FileId, String), DefId>>) -> Self {
+    let mut by_name = HashMap::new();
+    for ((_, name), def) in defs.iter() {
+      by_name.entry(name.clone()).or_insert(*def);
+    }
+    DeclTypeResolver { file, defs, by_name }
+  }
+
+  fn resolve_name(&self, name: &str) -> Option<DefId> {
+    self
+      .defs
+      .get(&(self.file, name.to_string()))
+      .copied()
+      .or_else(|| self.by_name.get(name).copied())
+  }
+}
+
+impl TypeResolver for DeclTypeResolver {
+  fn resolve_type_name(&self, path: &[String]) -> Option<tti::DefId> {
+    path.last().and_then(|name| self.resolve_name(name))
+  }
+
+  fn resolve_typeof(&self, path: &[String]) -> Option<tti::DefId> {
+    self.resolve_type_name(path)
+  }
+}
+
 struct ProgramState {
   analyzed: bool,
   cancelled: Arc<AtomicBool>,
@@ -3295,9 +3330,13 @@ impl ProgramState {
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let def_by_name = self.canonical_defs()?;
 
-    let mut lowered_entries: Vec<_> = self.hir_lowered.iter().collect();
+    let mut lowered_entries: Vec<_> = self
+      .hir_lowered
+      .iter()
+      .map(|(file, lowered)| (*file, lowered.clone()))
+      .collect();
     lowered_entries.sort_by_key(|(file, _)| file.0);
-    for (file, lowered) in lowered_entries.iter().copied() {
+    for (file, lowered) in lowered_entries.iter() {
       self.check_cancelled()?;
       let mut def_map: HashMap<DefId, DefId> = HashMap::new();
       let mut local_defs: HashMap<String, HirDefId> = HashMap::new();
@@ -3351,6 +3390,8 @@ impl ProgramState {
       }
     }
 
+    self.collect_function_decl_types(&store, &def_by_name, &mut def_types, &mut type_params);
+
     let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
     for (file, lowered) in lowered_entries.into_iter() {
       for ns_def in lowered
@@ -3377,7 +3418,7 @@ impl ProgramState {
         if members.is_empty() {
           continue;
         }
-        namespace_members.push((*file, ns_name.to_string(), members));
+        namespace_members.push((file, ns_name.to_string(), members));
       }
     }
     namespace_members.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
@@ -3452,6 +3493,150 @@ impl ProgramState {
     Ok(())
   }
 
+  fn collect_function_decl_types(
+    &mut self,
+    store: &Arc<tti::TypeStore>,
+    def_by_name: &HashMap<(FileId, String), DefId>,
+    def_types: &mut HashMap<DefId, tti::TypeId>,
+    type_params: &mut HashMap<DefId, Vec<TypeParamId>>,
+  ) {
+    if self.asts.is_empty() {
+      return;
+    }
+    let resolver_defs = Arc::new(def_by_name.clone());
+    let mut def_by_span: HashMap<(FileId, TextRange), DefId> = HashMap::new();
+    let mut defs_by_name: HashMap<(FileId, String), Vec<DefId>> = HashMap::new();
+    for (def_id, data) in self.def_data.iter() {
+      if !matches!(data.kind, DefKind::Function(_)) {
+        continue;
+      }
+      def_by_span.insert((data.file, data.span), *def_id);
+      defs_by_name
+        .entry((data.file, data.name.clone()))
+        .or_default()
+        .push(*def_id);
+    }
+
+    let mut ast_entries: Vec<_> = self
+      .asts
+      .iter()
+      .map(|(file, ast)| (*file, Arc::clone(ast)))
+      .collect();
+    ast_entries.sort_by_key(|(file, _)| file.0);
+    let mut sigs_by_name: HashMap<(FileId, String), Vec<tti::SignatureId>> = HashMap::new();
+    let mut def_type_params: HashMap<DefId, Vec<TypeParamId>> = HashMap::new();
+    for (file, ast) in ast_entries.into_iter() {
+      let resolver = Arc::new(DeclTypeResolver::new(file, Arc::clone(&resolver_defs)));
+      for stmt in ast.stx.body.iter() {
+        let Stmt::FunctionDecl(func) = stmt.stx.as_ref() else {
+          continue;
+        };
+        let span = loc_to_span(file, stmt.loc).range;
+        let Some(def_id) = def_by_span.get(&(file, span)).copied() else {
+          continue;
+        };
+        let Some(name) = func.stx.name.as_ref() else {
+          continue;
+        };
+        let (sig_id, params, diags) =
+          Self::lower_function_signature(store, file, func.stx.as_ref(), Some(resolver.clone()));
+        if !diags.is_empty() {
+          self.diagnostics.extend(diags);
+        }
+        sigs_by_name
+          .entry((file, name.stx.name.clone()))
+          .or_default()
+          .push(sig_id);
+        if !params.is_empty() {
+          def_type_params.entry(def_id).or_insert(params);
+        }
+      }
+    }
+
+    for ((file, name), mut sigs) in sigs_by_name.into_iter() {
+      sigs.sort();
+      sigs.dedup();
+      let callable = store.intern_type(tti::TypeKind::Callable { overloads: sigs });
+      if let Some(def_ids) = defs_by_name.get(&(file, name)) {
+        let shared_params = def_ids
+          .iter()
+          .find_map(|id| def_type_params.get(id).cloned());
+        for def_id in def_ids {
+          def_types
+            .entry(*def_id)
+            .and_modify(|existing| {
+              *existing = ProgramState::merge_interned_decl_types(store, *existing, callable);
+            })
+            .or_insert(callable);
+          if let Some(params) = def_type_params
+            .get(def_id)
+            .cloned()
+            .or_else(|| shared_params.clone())
+          {
+            type_params.entry(*def_id).or_insert(params);
+          }
+        }
+      }
+    }
+  }
+
+  fn lower_function_signature(
+    store: &Arc<tti::TypeStore>,
+    file: FileId,
+    func: &FuncDecl,
+    resolver: Option<Arc<dyn TypeResolver>>,
+  ) -> (tti::SignatureId, Vec<TypeParamId>, Vec<Diagnostic>) {
+    let mut lowerer = match resolver {
+      Some(resolver) => TypeLowerer::with_resolver(Arc::clone(store), resolver),
+      None => TypeLowerer::new(Arc::clone(store)),
+    };
+    lowerer.set_file(file);
+    let mut type_param_ids = Vec::new();
+    if let Some(params) = func.function.stx.type_parameters.as_ref() {
+      type_param_ids = lowerer.register_type_params(params);
+    }
+    let mut params = Vec::new();
+    let mut this_param = None;
+    for (idx, param) in func.function.stx.parameters.iter().enumerate() {
+      let name = match param.stx.pattern.stx.pat.stx.as_ref() {
+        Pat::Id(id) => Some(id.stx.name.clone()),
+        _ => None,
+      };
+      let ty = param
+        .stx
+        .type_annotation
+        .as_ref()
+        .map(|ann| lowerer.lower_type_expr(ann))
+        .unwrap_or(store.primitive_ids().unknown);
+      if idx == 0 && matches!(name.as_deref(), Some("this")) {
+        this_param = Some(ty);
+        continue;
+      }
+      params.push(tti::Param {
+        name: name.map(|n| store.intern_name(n)),
+        ty,
+        optional: param.stx.optional,
+        rest: param.stx.rest,
+      });
+    }
+    let ret = func
+      .function
+      .stx
+      .return_type
+      .as_ref()
+      .map(|r| lowerer.lower_type_expr(r))
+      .unwrap_or(store.primitive_ids().unknown);
+    let sig = tti::Signature {
+      params,
+      ret,
+      type_params: type_param_ids.clone(),
+      this_param,
+    };
+    let sig_id = store.intern_signature(sig);
+    let diags = lowerer.take_diagnostics();
+    (sig_id, type_param_ids, diags)
+  }
+
   fn merge_interned_object_types(
     store: &Arc<tti::TypeStore>,
     existing: tti::TypeId,
@@ -3490,12 +3675,47 @@ impl ProgramState {
     }
   }
 
+  fn merge_callable_with_object(
+    store: &Arc<tti::TypeStore>,
+    overloads: &[tti::SignatureId],
+    object: tti::ObjectId,
+    object_ty: tti::TypeId,
+  ) -> tti::TypeId {
+    let shape = store.shape(store.object(object).shape);
+    let mut merged = overloads.to_vec();
+    merged.extend(shape.call_signatures.iter().copied());
+    merged.sort();
+    merged.dedup();
+    let callable = store.intern_type(tti::TypeKind::Callable { overloads: merged });
+    let has_extras = !shape.properties.is_empty()
+      || !shape.construct_signatures.is_empty()
+      || !shape.indexers.is_empty();
+    if has_extras {
+      store.intersection(vec![callable, object_ty])
+    } else {
+      callable
+    }
+  }
+
   fn merge_interned_decl_types(
     store: &Arc<tti::TypeStore>,
     existing: tti::TypeId,
     incoming: tti::TypeId,
   ) -> tti::TypeId {
     match (store.type_kind(existing), store.type_kind(incoming)) {
+      (tti::TypeKind::Callable { overloads: a }, tti::TypeKind::Callable { overloads: b }) => {
+        let mut merged = a;
+        merged.extend(b.into_iter());
+        merged.sort();
+        merged.dedup();
+        store.intern_type(tti::TypeKind::Callable { overloads: merged })
+      }
+      (tti::TypeKind::Callable { overloads }, tti::TypeKind::Object(obj)) => {
+        ProgramState::merge_callable_with_object(store, &overloads, obj, incoming)
+      }
+      (tti::TypeKind::Object(obj), tti::TypeKind::Callable { overloads }) => {
+        ProgramState::merge_callable_with_object(store, &overloads, obj, existing)
+      }
       (tti::TypeKind::Object(_), tti::TypeKind::Object(_)) => {
         ProgramState::merge_interned_object_types(store, existing, incoming)
       }
