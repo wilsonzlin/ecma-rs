@@ -528,16 +528,21 @@ impl<'a> CfgBuilder<'a> {
     self.connect(&preds, block);
 
     let after = self.cfg.add_block();
+    let mut exits = Vec::new();
+
     let try_res = self.build_stmt(inner, vec![block]);
-    self.connect(&try_res.exits, after);
+    exits.extend(try_res.exits);
 
     if let Some(c) = catch {
       let catch_res = self.build_stmt(c.body, vec![block]);
-      self.connect(&catch_res.exits, after);
+      exits.extend(catch_res.exits);
     }
+
     if let Some(finally_stmt) = finally_block {
-      let finally_res = self.build_stmt(*finally_stmt, vec![block]);
+      let finally_res = self.build_stmt(*finally_stmt, exits);
       self.connect(&finally_res.exits, after);
+    } else {
+      self.connect(&exits, after);
     }
 
     BuildResult {

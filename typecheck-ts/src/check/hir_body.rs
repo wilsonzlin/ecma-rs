@@ -29,9 +29,9 @@ use types_ts_interned::{
 use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::Env;
 use super::flow_narrow::{
-  narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
-  narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof, narrow_non_nullish,
-  truthy_falsy_types, Facts, LiteralValue,
+  narrow_by_asserted, narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check,
+  narrow_by_instanceof, narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof,
+  narrow_non_nullish, truthy_falsy_types, Facts, LiteralValue,
 };
 
 use super::caches::BodyCaches;
@@ -2164,8 +2164,7 @@ impl<'a> FlowBodyChecker<'a> {
 
     let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
     let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
-    let relate =
-      RelateCtx::with_hooks(Arc::clone(&store), store.options(), super::relate_hooks());
+    let relate = RelateCtx::with_hooks(Arc::clone(&store), store.options(), super::relate_hooks());
 
     Self {
       body_id,
@@ -2417,25 +2416,20 @@ impl<'a> FlowBodyChecker<'a> {
         StmtKind::Try {
           block: _,
           catch,
-          finally_block,
+          ..
         } => {
+          // Successors are ordered as try then optional catch; any `finally`
+          // runs after those bodies in the CFG.
           if let Some(succ) = block.successors.get(0) {
             outgoing.push((*succ, env.clone()));
           }
-          if let Some((idx, catch_clause)) = catch.as_ref().map(|c| (1, c)) {
+          if let Some(catch_clause) = catch {
             let mut catch_env = env.clone();
             if let Some(param) = catch_clause.param {
               self.bind_pat(param, self.store.primitive_ids().unknown, &mut catch_env);
             }
-            if let Some(succ) = block.successors.get(idx) {
+            if let Some(succ) = block.successors.get(1) {
               outgoing.push((*succ, catch_env));
-            }
-          }
-          if let Some(_) = finally_block {
-            if let Some(pos) = catch.as_ref().map(|_| 2).or_else(|| Some(1)) {
-              if let Some(succ) = block.successors.get(pos) {
-                outgoing.push((*succ, env.clone()));
-              }
             }
           }
           return outgoing;

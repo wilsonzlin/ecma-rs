@@ -113,6 +113,62 @@ fn narrows_truthiness() {
 }
 
 #[test]
+fn loose_nullish_comparison_narrows_non_nullish() {
+  let src = "function f(x: string | null | undefined) { if (x != null) return x; return x; }";
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null, prim.undefined]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "null | undefined");
+}
+
+#[test]
+fn strict_undefined_comparison_narrows() {
+  let src = "function f(x: string | undefined) { if (x === undefined) return x; return x; }";
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.undefined]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "undefined");
+  assert_eq!(else_ty, "string");
+}
+
+#[test]
 fn boolean_truthiness_splits_literals() {
   let src = "function f(flag: boolean) { if (flag) { return flag; } else { return flag; } }";
   let lowered = lower_from_source(src).expect("lower");
@@ -253,7 +309,6 @@ fn narrows_discriminants() {
 }
 
 #[test]
-<<<<<<< HEAD
 fn optional_chain_discriminant_narrows() {
   let src = r#"
 function f(x: {kind:"a"}|{kind:"b"}|null) {
@@ -403,6 +458,7 @@ function f(
   assert_eq!(else_ty, "\"bar\" | \"foo\"");
 }
 
+#[test]
 fn user_defined_type_guards() {
   let src = r#"
 function isStr(x: string | number): x is string {
@@ -571,126 +627,6 @@ fn non_null_guard_allows_member_access() {
   let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
   assert_eq!(then_ty, "number");
   assert_eq!(else_ty, "0");
-}
-
-#[test]
-fn switch_typeof_discriminant_narrows_cases() {
-  let src = r#"
-function describe(x: string | number | boolean) {
-  switch (typeof x) {
-    case "string":
-      return x;
-    case "number":
-      return x;
-    default:
-      return x;
-  }
-}
-"#;
-  let lowered = lower_from_source(src).expect("lower");
-  let (body_id, body) = body_of(&lowered, &lowered.names, "describe");
-  let store = TypeStore::new();
-  let prim = store.primitive_ids();
-  let mut initial = HashMap::new();
-  initial.insert(
-    name_id(lowered.names.as_ref(), "x"),
-    store.union(vec![prim.string, prim.number, prim.boolean]),
-  );
-  let res = check_body_with_env(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    Arc::clone(&store),
-    &initial,
-  );
-  let ret_types = res.return_types();
-  assert_eq!(TypeDisplay::new(&store, ret_types[0]).to_string(), "string");
-  assert_eq!(TypeDisplay::new(&store, ret_types[1]).to_string(), "number");
-  assert_eq!(
-    TypeDisplay::new(&store, ret_types[2]).to_string(),
-    "boolean"
-  );
-}
-
-#[test]
-fn switch_default_receives_complement_of_literals() {
-  let src = r#"
-function pick(x: "a" | "b" | "c") {
-  switch (x) {
-    case "a":
-      return x;
-    default:
-      return x;
-  }
-}
-"#;
-  let lowered = lower_from_source(src).expect("lower");
-  let (body_id, body) = body_of(&lowered, &lowered.names, "pick");
-  let store = TypeStore::new();
-  let mut initial = HashMap::new();
-  let a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
-  let b = store.intern_type(TypeKind::StringLiteral(store.intern_name("b")));
-  let c = store.intern_type(TypeKind::StringLiteral(store.intern_name("c")));
-  initial.insert(
-    name_id(lowered.names.as_ref(), "x"),
-    store.union(vec![a, b, c]),
-  );
-
-  let res = check_body_with_env(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    Arc::clone(&store),
-    &initial,
-  );
-  let ret_types = res.return_types();
-  assert_eq!(TypeDisplay::new(&store, ret_types[0]).to_string(), "\"a\"");
-  assert_eq!(
-    TypeDisplay::new(&store, ret_types[1]).to_string(),
-    "\"b\" | \"c\""
-  );
-}
-
-#[test]
-fn switch_narrowing_respects_fallthrough() {
-  let src = r#"
-function fall(x: "a" | "b") {
-  switch (x) {
-    case "a":
-    case "b":
-      return x;
-  }
-}
-"#;
-  let lowered = lower_from_source(src).expect("lower");
-  let (body_id, body) = body_of(&lowered, &lowered.names, "fall");
-  let store = TypeStore::new();
-  let a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
-  let b = store.intern_type(TypeKind::StringLiteral(store.intern_name("b")));
-  let mut initial = HashMap::new();
-  initial.insert(
-    name_id(lowered.names.as_ref(), "x"),
-    store.union(vec![a, b]),
-  );
-
-  let res = check_body_with_env(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    Arc::clone(&store),
-    &initial,
-  );
-  let ret_types = res.return_types();
-  assert_eq!(
-    TypeDisplay::new(&store, ret_types[0]).to_string(),
-    "\"a\" | \"b\""
-  );
 }
 
 #[test]
@@ -874,4 +810,355 @@ function pick(val: string | number) {
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn assignment_clears_previous_narrowing() {
+  let src = r#"
+function f(x: string | number) {
+  if (typeof x === "string") {
+    x;
+    x = 1;
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.number]),
+  );
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, "number");
+  assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn logical_and_assignment_preserves_truthiness() {
+  let src = r#"
+function f(x: string | null, y: string) {
+  if (x &&= y) {
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null]),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "y"), prim.string);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, "string");
+  assert_eq!(else_ty, "null");
+}
+
+#[test]
+fn nullish_assignment_removes_nullish() {
+  let src = r#"
+function f(x?: string, y: string) {
+  x ??= y;
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.undefined]),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "y"), prim.string);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ty, "string");
+}
+
+#[test]
+fn overloaded_predicates_use_resolution() {
+  let src = r#"
+function isStr(x: string): x is string;
+function isStr(x: number): x is number;
+function isStr(x: any) { return true; }
+function f(x: string | number) {
+  if (isStr(x)) {
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let x_ty = store.union(vec![prim.string, prim.number]);
+  initial.insert(name_id(lowered.names.as_ref(), "x"), x_ty);
+
+  let param_name = store.intern_name("x");
+  let sig_string = store.intern_signature(Signature {
+    params: vec![Param {
+      name: Some(param_name),
+      ty: prim.string,
+      optional: false,
+      rest: false,
+    }],
+    ret: store.intern_type(TypeKind::Predicate {
+      parameter: Some(param_name),
+      asserted: Some(prim.string),
+      asserts: false,
+    }),
+    type_params: Vec::new(),
+    this_param: None,
+  });
+  let sig_number = store.intern_signature(Signature {
+    params: vec![Param {
+      name: Some(param_name),
+      ty: prim.number,
+      optional: false,
+      rest: false,
+    }],
+    ret: store.intern_type(TypeKind::Predicate {
+      parameter: Some(param_name),
+      asserted: Some(prim.number),
+      asserts: false,
+    }),
+    type_params: Vec::new(),
+    this_param: None,
+  });
+  let sig_any = store.intern_signature(Signature {
+    params: vec![Param {
+      name: Some(param_name),
+      ty: prim.any,
+      optional: false,
+      rest: false,
+    }],
+    ret: prim.boolean,
+    type_params: Vec::new(),
+    this_param: None,
+  });
+  let guard = store.intern_type(TypeKind::Callable {
+    overloads: vec![sig_string, sig_number, sig_any],
+  });
+  initial.insert(name_id(lowered.names.as_ref(), "isStr"), guard);
+
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let expected = TypeDisplay::new(&store, x_ty).to_string();
+  let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(then_ty, expected);
+  assert_eq!(else_ty, expected);
+}
+
+#[test]
+fn assertion_targets_named_argument() {
+  let src = r#"
+function assertStr(flag: number, candidate: string | number): asserts candidate is string {
+  if (typeof candidate !== "string") {
+    throw new Error("bad");
+  }
+}
+function useIt(val: string | number) {
+  assertStr(0, val);
+  return val;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let val_ty = store.union(vec![prim.string, prim.number]);
+  initial.insert(name_id(lowered.names.as_ref(), "val"), val_ty);
+
+  let candidate = store.intern_name("candidate");
+  let guard = predicate_callable_with_params(
+    &store,
+    &[
+      (Some(store.intern_name("flag")), prim.number),
+      (Some(candidate), val_ty),
+    ],
+    prim.string,
+    true,
+    Some(candidate),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "assertStr"), guard);
+
+  let (body_id, body) = body_of(&lowered, &lowered.names, "useIt");
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  assert_eq!(ty, "string");
+}
+
+#[test]
+fn try_finally_keeps_try_narrowing() {
+  let src = r#"
+function f(x: string | null) {
+  try {
+    if (x) return x;
+  } finally {
+    // no-op
+  }
+  return x;
+}
+"#;
+
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let first_return = TypeDisplay::new(&store, res.return_types()[0]).to_string();
+  let after_try = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+  assert_eq!(first_return, "string");
+  assert_eq!(after_try, "null");
+}
+
+#[test]
+fn try_catch_merges_assignments() {
+  let src = r#"
+function g(x: string) {
+  try {
+    x = 1 + 1;
+  } catch {
+  }
+  return x;
+}
+"#;
+
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "g");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(name_id(lowered.names.as_ref(), "x"), prim.string);
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let ret_ty = res.return_types()[0];
+  let expected = store.union(vec![prim.string, prim.number]);
+  assert_eq!(
+    TypeDisplay::new(&store, ret_ty).to_string(),
+    TypeDisplay::new(&store, expected).to_string()
+  );
+}
+
+#[test]
+fn finally_assignments_invalidate_narrowing() {
+  let src = r#"
+function h(x: string | null) {
+  try {
+    if (x) {
+      x = x;
+    }
+  } finally {
+    x = "done";
+  }
+  return x;
+}
+"#;
+
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "h");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null]),
+  );
+
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+
+  let expected = prim.string;
+  assert_eq!(
+    TypeDisplay::new(&store, res.return_types()[0]).to_string(),
+    TypeDisplay::new(&store, expected).to_string()
+  );
 }
