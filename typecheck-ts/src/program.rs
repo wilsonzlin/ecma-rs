@@ -6133,15 +6133,17 @@ impl ProgramState {
       resolver,
       Some(&expander),
     );
-    if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
+    if !body.exprs.is_empty() {
       let mut initial_env: HashMap<NameId, TypeId> = HashMap::new();
-      if let Some(function) = body.function.as_ref() {
-        for param in function.params.iter() {
-          if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
-            if ty != prim.unknown {
-              if let Some(pat) = body.pats.get(param.pat.0 as usize) {
-                if let hir_js::PatKind::Ident(name) = pat.kind {
-                  initial_env.insert(name, ty);
+      if matches!(meta.kind, HirBodyKind::Function) {
+        if let Some(function) = body.function.as_ref() {
+          for param in function.params.iter() {
+            if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
+              if ty != prim.unknown {
+                if let Some(pat) = body.pats.get(param.pat.0 as usize) {
+                  if let hir_js::PatKind::Ident(name) = pat.kind {
+                    initial_env.insert(name, ty);
+                  }
                 }
               }
             }
