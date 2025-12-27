@@ -32,10 +32,8 @@ use crate::FileKey;
 use crate::SymbolOccurrence;
 use crate::{BodyId, DefId, ExprId, TypeId};
 
-fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
-  db.file_input_by_key(key)
-    .unwrap_or_else(|| panic!("file {:?} must be seeded before use", key))
-    .file_id(db)
+fn file_id_from_key(db: &dyn Db, key: &FileKey) -> Option<FileId> {
+  db.file_input_by_key(key).map(|input| input.file_id(db))
 }
 
 #[salsa::tracked]
@@ -451,6 +449,10 @@ use crate::check::hir_body::{FlowBindingId, FlowBindings};
     *tracker_slot().write().unwrap() = tracker;
   }
 
+  pub fn parallel_tracker_active() -> bool {
+    tracker_slot().read().unwrap().is_some()
+  }
+
   pub fn parallel_guard() -> Option<ParallelGuard> {
     tracker_slot()
       .read()
@@ -551,6 +553,7 @@ use crate::check::hir_body::{FlowBindingId, FlowBindings};
 
   impl BodyCheckDb {
     pub fn check_body(&self, body_id: BodyId) -> Arc<BodyCheckResult> {
+      let _parallel_guard = parallel_guard();
       if let Some(cached) = self.memo.borrow().get(&body_id).cloned() {
         return cached;
       }
@@ -593,7 +596,6 @@ use crate::check::hir_body::{FlowBindingId, FlowBindings};
       let Some(body) = body else {
         return Arc::new(empty_result(body_id));
       };
-      let _parallel_guard = parallel_guard();
 
       let prim = ctx.store.primitive_ids();
       let map_def_ty = |def: DefId| {
@@ -634,12 +636,6 @@ use crate::check::hir_body::{FlowBindingId, FlowBindings};
 
       let caches = ctx.checker_caches.for_body();
       let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
-      let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
-        function_expr_span(self, body_id)
-          .and_then(|span| contextual_callable_for_body(self, body_id, span))
-      } else {
-        None
-      };
       let mut result = check_body_with_expander(
         body_id,
         body,
@@ -652,7 +648,7 @@ use crate::check::hir_body::{FlowBindingId, FlowBindings};
         (!binding_defs.is_empty())
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
-        contextual_fn_ty,
+        None,
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
@@ -1180,7 +1176,7 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
     .roots_input()
     .roots(db)
     .iter()
-    .map(|key| file_id_from_key(db, key))
+    .filter_map(|key| file_id_from_key(db, key))
     .collect();
   while let Some(file) = queue.pop_front() {
     if !visited.insert(file) {
@@ -1219,7 +1215,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     .roots_input()
     .roots(db)
     .iter()
-    .map(|f| file_id_from_key(db, f))
+    .filter_map(|f| file_id_from_key(db, f))
     .map(|id| sem_ts::FileId(id.0))
     .collect();
   roots.sort();
@@ -1360,6 +1356,13 @@ pub fn module_dep_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
     .file_input(file)
     .expect("file must be seeded before querying module deps");
   module_dep_diagnostics_for(db, handle)
+}
+
+pub fn unresolved_module_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
+  let Some(handle) = db.file_input(file) else {
+    return Arc::from([]);
+  };
+  unresolved_module_diagnostics_for(db, handle)
 }
 
 pub fn reachable_files(db: &dyn Db) -> Arc<Vec<FileId>> {
@@ -2196,7 +2199,7 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
     parse_diags.extend(parsed.diagnostics.into_iter());
     let lowered = lower_hir(db, *file);
     lower_diags.extend(lowered.diagnostics.into_iter());
-    module_diags.extend(module_dep_diagnostics(db, *file).iter().cloned());
+    module_diags.extend(unresolved_module_diagnostics(db, *file).iter().cloned());
   }
   let semantics = ts_semantics(db);
   let mut body_diags = Vec::new();
@@ -2213,7 +2216,10 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
   let semantic_diags = semantics
     .diagnostics
     .iter()
-    .filter(|diag| diag.code.as_str() != "BIND1002")
+    .filter(|diag| {
+      let code = diag.code.as_str();
+      code != "BIND1002" && code != codes::UNRESOLVED_MODULE.as_str()
+    })
     .cloned()
     .chain(module_diags.into_iter());
   aggregate_program_diagnostics(parse_diags, lower_diags, semantic_diags, body_diags)

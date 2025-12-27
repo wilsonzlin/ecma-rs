@@ -3662,7 +3662,7 @@ impl<'a> FlowBodyChecker<'a> {
       }
     }
 
-    if let Some((target, target_ty, lit)) = self.typeof_comparison(left, right) {
+    if let Some((target, target_ty, lit)) = self.typeof_comparison(left, right, env) {
       let (yes, no) = narrow_by_typeof(target_ty, &lit, &self.store);
       apply(target, yes, no);
     }
@@ -3956,7 +3956,12 @@ impl<'a> FlowBodyChecker<'a> {
       .unwrap_or_default()
   }
 
-  fn typeof_comparison(&self, left: ExprId, right: ExprId) -> Option<(FlowKey, TypeId, String)> {
+  fn typeof_comparison(
+    &self,
+    left: ExprId,
+    right: ExprId,
+    env: &Env,
+  ) -> Option<(FlowKey, TypeId, String)> {
     let left_expr = &self.body.exprs[left.0 as usize].kind;
     let right_expr = &self.body.exprs[right.0 as usize].kind;
     match (left_expr, right_expr) {
@@ -3968,7 +3973,10 @@ impl<'a> FlowBodyChecker<'a> {
         ExprKind::Literal(hir_js::Literal::String(s)),
       ) => {
         if let Some(path) = self.access_path_info(*expr) {
-          return Some((path.path, self.expr_types[expr.0 as usize], s.clone()));
+          let target_ty = env
+            .get_path(&path.path)
+            .unwrap_or(self.expr_types[expr.0 as usize]);
+          return Some((path.path, target_ty, s.clone()));
         }
       }
       (
@@ -3979,7 +3987,10 @@ impl<'a> FlowBodyChecker<'a> {
         },
       ) => {
         if let Some(path) = self.access_path_info(*expr) {
-          return Some((path.path, self.expr_types[expr.0 as usize], s.clone()));
+          let target_ty = env
+            .get_path(&path.path)
+            .unwrap_or(self.expr_types[expr.0 as usize]);
+          return Some((path.path, target_ty, s.clone()));
         }
       }
       _ => {}
@@ -4165,8 +4176,12 @@ impl<'a> FlowBodyChecker<'a> {
       self.store.union(vec![*slot, write_ty])
     };
     match &pat.kind {
-      PatKind::Ident(_) => {
-        if let Some(binding) = self.bindings.binding_for_pat(pat_id) {
+      PatKind::Ident(name) => {
+        let binding = self
+          .bindings
+          .binding_for_pat(pat_id)
+          .or_else(|| self.bindings.binding_for_name(*name));
+        if let Some(binding) = binding {
           let write_ty = if merge_existing {
             let existing = env
               .get_path_state(&FlowKey::root(binding))

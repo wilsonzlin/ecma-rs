@@ -7549,23 +7549,30 @@ impl ProgramState {
           }
         }
         if let Some((ns_interned, _ns_store)) = ns_entry {
-          match def_data.kind {
-            DefKind::Function(_) | DefKind::Var(_) => {
-              if let Some(store) = self.interned_store.as_ref() {
-                let merged = if let Some(existing) = self.interned_def_types.get(&def).copied() {
-                  store.intersection(vec![existing, ns_interned])
-                } else {
-                  ns_interned
-                };
-                self.interned_def_types.insert(def, merged);
-              }
+          if let DefKind::Function(_) | DefKind::Var(_) = def_data.kind {
+            if let Some(store) = self.interned_store.as_ref() {
+              let merged = if let Some(existing) = self.interned_def_types.get(&def).copied() {
+                store.intersection(vec![existing, ns_interned])
+              } else {
+                ns_interned
+              };
+              self.interned_def_types.insert(def, merged);
             }
-            _ => {}
           }
         }
         self.def_types.insert(def, ty);
-        let ret_ty = if let Some(_store) = self.interned_store.as_ref() {
-          self.interned_def_types.get(&def).copied().unwrap_or(ty)
+        let ret_ty = if let Some(store) = self.interned_store.as_ref() {
+          let interned = self
+            .interned_def_types
+            .get(&def)
+            .copied()
+            .filter(|existing| !matches!(store.type_kind(*existing), tti::TypeKind::Unknown))
+            .unwrap_or_else(|| {
+              let interned = self.ensure_interned_type(ty);
+              self.interned_def_types.insert(def, interned);
+              interned
+            });
+          interned
         } else {
           ty
         };
@@ -7632,11 +7639,8 @@ impl ProgramState {
     };
     let mut map = state.exports.clone();
     for entry in map.values_mut() {
-      if entry.type_id.is_none() {
-        entry.type_id = match entry.def {
-          Some(def) => self.export_type_for_def(def)?,
-          None => None,
-        };
+      if let Some(def) = entry.def {
+        entry.type_id = self.export_type_for_def(def)?;
       }
     }
     Ok(map)

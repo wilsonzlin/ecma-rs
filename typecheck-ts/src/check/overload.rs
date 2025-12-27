@@ -144,6 +144,18 @@ pub fn resolve_overloads(
   span: Span,
   mut context: Option<&mut dyn OverloadContext>,
 ) -> CallResolution {
+  let debug = std::env::var("TRACE_TYPES").is_ok();
+  if debug {
+    let arg_display: Vec<_> = args
+      .iter()
+      .map(|a| TypeDisplay::new(store, *a).to_string())
+      .collect();
+    eprintln!(
+      "[resolve_overloads] callee {} args {:?}",
+      TypeDisplay::new(store, callee),
+      arg_display
+    );
+  }
   let mut candidates = Vec::new();
   collect_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());
   let primitives = store.primitive_ids();
