@@ -5,8 +5,8 @@ use bumpalo::Bump;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   ArrayElement, AssignOp, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr,
-  NameId, NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId,
-  StmtKind, UnaryOp,
+  NameId, NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind,
+  UnaryOp,
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
@@ -39,6 +39,7 @@ use super::expr::resolve_call;
 use super::infer::TypeParamDecl;
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
+use super::widen::widen_object_literal_props;
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
 
@@ -56,7 +57,9 @@ struct Binding {
 #[derive(Clone, Copy, Default)]
 struct ExprContext {
   contextual_type: Option<TypeId>,
+  expected: Option<TypeId>,
   const_context: bool,
+  preserve_inferred: bool,
 }
 
 impl ExprContext {
@@ -64,6 +67,7 @@ impl ExprContext {
     Self {
       contextual_type: Some(ty),
       const_context: true,
+      ..Default::default()
     }
   }
 }
@@ -964,11 +968,7 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn initializer_type(
-    &mut self,
-    init: &Node<AstExpr>,
-    annotation: Option<TypeId>,
-  ) -> TypeId {
+  fn initializer_type(&mut self, init: &Node<AstExpr>, annotation: Option<TypeId>) -> TypeId {
     let prev = self.widen_object_literals;
     if annotation.is_some() {
       self.widen_object_literals = false;
@@ -1028,9 +1028,10 @@ impl<'a> Checker<'a> {
       }
       TypeKind::Array { ty, readonly } => {
         let widened = self.widen_union_literals(ty);
-        self
-          .store
-          .intern_type(TypeKind::Array { ty: widened, readonly })
+        self.store.intern_type(TypeKind::Array {
+          ty: widened,
+          readonly,
+        })
       }
       _ => ty,
     }
@@ -1040,9 +1041,10 @@ impl<'a> Checker<'a> {
     match self.store.type_kind(ty) {
       TypeKind::Array { ty, readonly } => {
         let widened = self.widen_union_literals(ty);
-        self
-          .store
-          .intern_type(TypeKind::Array { ty: widened, readonly })
+        self.store.intern_type(TypeKind::Array {
+          ty: widened,
+          readonly,
+        })
       }
       _ => ty,
     }
@@ -1125,6 +1127,25 @@ impl<'a> Checker<'a> {
   }
 
   fn check_expr(&mut self, expr: &Node<AstExpr>) -> TypeId {
+    self.check_expr_in_ctx(expr, self.expr_context)
+  }
+
+  fn check_expr_in_ctx(&mut self, expr: &Node<AstExpr>, ctx: ExprContext) -> TypeId {
+    self.with_expr_context(ctx, |checker| {
+      let ty = checker.check_expr_inner(expr);
+      let record_ty = match (
+        checker.expr_context.expected,
+        checker.expr_context.preserve_inferred,
+      ) {
+        (Some(expected), false) => expected,
+        _ => ty,
+      };
+      checker.record_expr_type(expr.loc, record_ty);
+      ty
+    })
+  }
+
+  fn check_expr_inner(&mut self, expr: &Node<AstExpr>) -> TypeId {
     let ty = match expr.stx.as_ref() {
       AstExpr::Id(id) => self.resolve_ident(&id.stx.name, expr),
       AstExpr::LitNum(num) => {
@@ -1302,15 +1323,20 @@ impl<'a> Checker<'a> {
       AstExpr::NonNullAssertion(assert) => self.check_expr(&assert.stx.expression),
       AstExpr::SatisfiesExpr(expr) => {
         let target_ty = self.lowerer.lower_type_expr(&expr.stx.type_annotation);
-        let lhs_ty = self.with_expr_context(ExprContext::const_with_type(target_ty), |checker| {
-          checker.check_expr(&expr.stx.expression)
-        });
+        let lhs_ty = self.check_expr_in_ctx(
+          &expr.stx.expression,
+          ExprContext {
+            contextual_type: Some(target_ty),
+            const_context: true,
+            preserve_inferred: true,
+            ..Default::default()
+          },
+        );
         self.check_assignable(&expr.stx.expression, lhs_ty, target_ty);
         lhs_ty
       }
       _ => self.store.primitive_ids().unknown,
     };
-    self.record_expr_type(expr.loc, ty);
     ty
   }
 
@@ -1341,7 +1367,7 @@ impl<'a> Checker<'a> {
 
   fn check_array_element(&mut self, expr: &Node<AstExpr>, ctx: Option<ExprContext>) -> TypeId {
     match ctx {
-      Some(ctx) => self.with_expr_context(ctx, |checker| checker.check_expr(expr)),
+      Some(ctx) => self.check_expr_in_ctx(expr, ctx),
       None => self.check_expr(expr),
     }
   }
@@ -1352,6 +1378,7 @@ impl<'a> Checker<'a> {
       .map(|ty| ExprContext {
         contextual_type: Some(ty),
         const_context: self.expr_context.const_context,
+        ..ExprContext::default()
       })
   }
 
@@ -1563,11 +1590,6 @@ impl<'a> Checker<'a> {
           };
           if let ClassOrObjVal::Prop(Some(expr)) = val {
             let ty = self.check_expr(expr);
-            let ty = if self.widen_object_literals {
-              self.widen_object_prop(ty)
-            } else {
-              ty
-            };
             shape.properties.push(types_ts_interned::Property {
               key: prop_key,
               data: PropData {
@@ -1608,30 +1630,11 @@ impl<'a> Checker<'a> {
     }
     let shape_id = self.store.intern_shape(shape);
     let obj = self.store.intern_object(ObjectType { shape: shape_id });
-    self.store.intern_type(TypeKind::Object(obj))
-  }
-
-  fn widen_object_prop(&self, ty: TypeId) -> TypeId {
-    let prim = self.store.primitive_ids();
-    match self.store.type_kind(ty) {
-      TypeKind::NumberLiteral(_) => prim.number,
-      TypeKind::StringLiteral(_) => prim.string,
-      TypeKind::BooleanLiteral(_) => prim.boolean,
-      TypeKind::Union(members) => {
-        let mapped: Vec<_> = members
-          .into_iter()
-          .map(|m| self.widen_object_prop(m))
-          .collect();
-        self.store.union(mapped)
-      }
-      TypeKind::Intersection(members) => {
-        let mapped: Vec<_> = members
-          .into_iter()
-          .map(|m| self.widen_object_prop(m))
-          .collect();
-        self.store.intersection(mapped)
-      }
-      _ => ty,
+    let ty = self.store.intern_type(TypeKind::Object(obj));
+    if self.widen_object_literals {
+      widen_object_literal_props(&self.store, ty)
+    } else {
+      ty
     }
   }
 
@@ -3191,9 +3194,10 @@ impl<'a> FlowBodyChecker<'a> {
     }
 
     if !negate {
-      if let (Some((left_key, _)), Some((right_key, _))) =
-        (self.reference_from_expr(left, left_ty), self.reference_from_expr(right, right_ty))
-      {
+      if let (Some((left_key, _)), Some((right_key, _))) = (
+        self.reference_from_expr(left, left_ty),
+        self.reference_from_expr(right, right_ty),
+      ) {
         let (left_yes, _) = narrow_by_assignability(left_ty, right_ty, &self.store, &self.relate);
         let (right_yes, _) = narrow_by_assignability(right_ty, left_ty, &self.store, &self.relate);
         if left_key == right_key {
@@ -3391,7 +3395,9 @@ impl<'a> FlowBodyChecker<'a> {
       | ExprKind::NonNull { expr }
       | ExprKind::Satisfies { expr }
       | ExprKind::Await { expr }
-      | ExprKind::Yield { expr: Some(expr), .. } => self.assignment_target_root_expr(*expr),
+      | ExprKind::Yield {
+        expr: Some(expr), ..
+      } => self.assignment_target_root_expr(*expr),
       _ => None,
     }
   }
@@ -3532,7 +3538,11 @@ impl<'a> FlowBodyChecker<'a> {
           _ => self.member_type(obj_ty, mem, env),
         };
         let root = self.assignment_target_root_expr(mem.object);
-        (prop_ty, root, matches!(mem.property, ObjectKey::Computed(_)))
+        (
+          prop_ty,
+          root,
+          matches!(mem.property, ObjectKey::Computed(_)),
+        )
       }
       ExprKind::TypeAssertion { expr }
       | ExprKind::NonNull { expr }
@@ -3550,9 +3560,7 @@ impl<'a> FlowBodyChecker<'a> {
     let prim = self.store.primitive_ids();
     match &pat.kind {
       PatKind::Ident(name) => (
-        env
-          .get_path(&FlowKey::root(*name))
-          .unwrap_or(prim.unknown),
+        env.get_path(&FlowKey::root(*name)).unwrap_or(prim.unknown),
         Some(*name),
         false,
       ),
@@ -3625,7 +3633,9 @@ impl<'a> FlowBodyChecker<'a> {
       right_env.set_var(name, left_falsy);
     }
     let right_ty = self.eval_expr(value, &mut right_env).0;
-    let result_ty = self.store.union(vec![left_truthy, self.base_type(right_ty)]);
+    let result_ty = self
+      .store
+      .union(vec![left_truthy, self.base_type(right_ty)]);
     self.assign_pat(target, result_ty, env);
     self.record_assignment_facts(root, result_ty, facts);
     result_ty
@@ -3681,7 +3691,10 @@ impl<'a> FlowBodyChecker<'a> {
       PatKind::Ident(name) => {
         env.set_var(*name, write_ty);
       }
-      PatKind::Assign { target, default_value } => {
+      PatKind::Assign {
+        target,
+        default_value,
+      } => {
         let default_eval = self.eval_expr(*default_value, env).0;
         let default_ty = self.apply_binding_mode(default_eval, mode);
         let combined = self.store.union(vec![write_ty, default_ty]);
@@ -3796,11 +3809,6 @@ impl<'a> FlowBodyChecker<'a> {
             ObjectKey::Computed(_) => continue,
           };
           let ty = self.eval_expr(*value, env).0;
-          let ty = if self.widen_object_literals {
-            self.widen_object_prop(ty)
-          } else {
-            ty
-          };
           shape.properties.push(types_ts_interned::Property {
             key: prop_key,
             data: PropData {
@@ -3841,30 +3849,11 @@ impl<'a> FlowBodyChecker<'a> {
     }
     let shape_id = self.store.intern_shape(shape);
     let obj_id = self.store.intern_object(ObjectType { shape: shape_id });
-    self.store.intern_type(TypeKind::Object(obj_id))
-  }
-
-  fn widen_object_prop(&self, ty: TypeId) -> TypeId {
-    let prim = self.store.primitive_ids();
-    match self.store.type_kind(ty) {
-      TypeKind::NumberLiteral(_) => prim.number,
-      TypeKind::StringLiteral(_) => prim.string,
-      TypeKind::BooleanLiteral(_) => prim.boolean,
-      TypeKind::Union(members) => {
-        let mapped: Vec<_> = members
-          .into_iter()
-          .map(|m| self.widen_object_prop(m))
-          .collect();
-        self.store.union(mapped)
-      }
-      TypeKind::Intersection(members) => {
-        let mapped: Vec<_> = members
-          .into_iter()
-          .map(|m| self.widen_object_prop(m))
-          .collect();
-        self.store.intersection(mapped)
-      }
-      _ => ty,
+    let ty = self.store.intern_type(TypeKind::Object(obj_id));
+    if self.widen_object_literals {
+      widen_object_literal_props(&self.store, ty)
+    } else {
+      ty
     }
   }
 

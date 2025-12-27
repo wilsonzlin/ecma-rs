@@ -301,6 +301,10 @@ pub mod check {
   pub mod hir_body {
     pub use crate::program::check::hir_body::*;
   }
+
+  pub mod widen {
+    pub use crate::program::check::widen::*;
+  }
 }
 
 pub mod queries;

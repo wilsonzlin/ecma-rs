@@ -4,8 +4,8 @@ pub mod caches;
 pub mod cfg;
 pub(crate) mod decls;
 pub(crate) mod expr;
-pub(crate) mod flow_bindings;
 pub(super) mod flow;
+pub(crate) mod flow_bindings;
 pub(super) mod flow_narrow;
 pub mod hir_body;
 pub(crate) mod infer;
@@ -14,6 +14,7 @@ pub(super) mod legacy_narrow;
 pub(super) mod modules;
 pub(crate) mod overload;
 pub(crate) mod type_expr;
+pub mod widen;
 
 use types_ts_interned::{Property, RelateHooks};
 

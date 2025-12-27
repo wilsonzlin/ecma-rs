@@ -530,20 +530,27 @@ impl Program {
     }
   }
 
-  /// Reachable files starting from the program roots using module resolution.
-  pub fn reachable_files(&self) -> Vec<FileId> {
-    match self.with_analyzed_state(|state| Ok(crate::db::reachable_files(&state.typecheck_db))) {
-      Ok(files) => files.as_ref().clone(),
-      Err(fatal) => {
-        self.record_fatal(fatal);
-        Vec::new()
-      }
-    }
-  }
-
   /// All known file IDs in this program.
   pub fn files(&self) -> Vec<FileId> {
     match self.with_analyzed_state(|state| Ok(state.files.keys().copied().collect())) {
+      Ok(files) => files,
+      Err(_) => Vec::new(),
+    }
+  }
+
+  /// All files reachable from the configured roots.
+  pub fn reachable_files(&self) -> Vec<FileId> {
+    match self.with_analyzed_state(|state| {
+      let mut files: Vec<FileId> = state
+        .typecheck_db
+        .reachable_files()
+        .iter()
+        .copied()
+        .filter(|file| !state.lib_file_ids.contains(file))
+        .collect();
+      files.sort_by_key(|id| id.0);
+      Ok(files)
+    }) {
       Ok(files) => files,
       Err(_) => Vec::new(),
     }
