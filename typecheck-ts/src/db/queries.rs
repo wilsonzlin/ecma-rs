@@ -1,6 +1,5 @@
 use salsa::Setter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
-use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -11,15 +10,17 @@ use hir_js::{
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
-use types_ts_interned::{PrimitiveIds, TypeStore};
+use types_ts_interned::{PrimitiveIds, TypeId, TypeParamId, TypeStore};
 
 use crate::codes;
+use crate::db::decl;
 use crate::db::inputs::{
   CancellationToken, CancelledInput, CompilerOptionsInput, FileInput, ModuleResolutionInput,
   RootsInput,
 };
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
+use crate::db::types::{DeclTypes, SharedDeclTypes, SharedTypeStore};
 use crate::db::{symbols, Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::parse_metrics;
@@ -982,6 +983,126 @@ pub mod body_check {
 }
 impl Eq for LowerResultWithDiagnostics {}
 
+#[salsa::tracked]
+fn type_store_for(db: &dyn Db) -> SharedTypeStore {
+  let options = compiler_options(db);
+  SharedTypeStore(TypeStore::with_options((&options).into()))
+}
+
+#[salsa::tracked]
+fn canonical_defs_for(db: &dyn Db) -> Arc<HashMap<(FileId, String), DefId>> {
+  let mut defs = HashMap::new();
+  let files = all_files_for(db);
+  for file in files.iter() {
+    let lowered = lower_hir_for(db, db.file_input(*file).expect("file seeded for lowering"));
+    let Some(lowered_hir) = lowered.lowered.as_ref() else {
+      continue;
+    };
+    let mut file_defs = lowered_hir.defs.clone();
+    file_defs.sort_by_key(|def| (def.span.start, def.span.end, def.id.0));
+    for def in file_defs.into_iter() {
+      if let Some(name) = lowered_hir.names.resolve(def.name) {
+        defs.entry((*file, name.to_string())).or_insert(def.id);
+      }
+    }
+  }
+  Arc::new(defs)
+}
+
+#[salsa::tracked]
+fn decl_types_in_file_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
+  let lowered = lower_hir_for(db, file);
+  let store = type_store_for(db).0;
+  let semantics = ts_semantics_for(db);
+  let def_by_name = canonical_defs_for(db);
+  let file_id = file.file_id(db);
+  let mut module_resolutions = HashMap::new();
+  for spec in module_specifiers_for(db, file).iter() {
+    if let Some(target) = module_resolve(db, file_id, Arc::clone(spec)) {
+      module_resolutions.insert(spec.to_string(), target);
+    }
+  }
+  let Some(lowered_hir) = lowered.lowered.as_ref() else {
+    let mut decls = DeclTypes::default();
+    decls
+      .diagnostics
+      .extend(lowered.diagnostics.iter().cloned());
+    return SharedDeclTypes(decls.into_shared());
+  };
+  let resolver = Arc::new(move |from: FileId, spec: &str| {
+    if from != file_id {
+      return None;
+    }
+    module_resolutions.get(spec).copied()
+  });
+  let mut decls = decl::lower_decl_types(
+    store,
+    lowered_hir,
+    Some(&semantics.semantics),
+    def_by_name.clone(),
+    def_by_name.as_ref(),
+    file_id,
+    Some(resolver),
+  );
+  decls
+    .diagnostics
+    .extend(lowered.diagnostics.iter().cloned());
+  SharedDeclTypes(decls.into_shared())
+}
+
+fn decl_for_def<'a>(
+  semantics: &'a sem_ts::TsProgramSemantics,
+  def: DefId,
+) -> Option<&'a sem_ts::DeclData> {
+  for ns in [
+    sem_ts::Namespace::TYPE,
+    sem_ts::Namespace::NAMESPACE,
+    sem_ts::Namespace::VALUE,
+  ] {
+    let Some(symbol) = semantics.symbol_for_def(def, ns) else {
+      continue;
+    };
+    for decl_id in semantics.symbol_decls(symbol, ns) {
+      let decl = semantics.symbols().decl(*decl_id);
+      if decl.def_id == def {
+        return Some(decl);
+      }
+    }
+  }
+  None
+}
+
+fn decl_type_for(db: &dyn Db, def: DefId) -> Option<TypeId> {
+  let semantics = ts_semantics_for(db);
+  let decl = decl_for_def(&semantics.semantics, def)?;
+  let handle = db.file_input(decl.file)?;
+  let decls = decl_types_in_file_for(db, handle).0;
+  if let Some(ty) = decls.types.get(&def).copied() {
+    return Some(ty);
+  }
+  decls
+    .namespace_members
+    .get(&def)
+    .map(|members| decl::build_namespace_object_type(&type_store_for(db).0, None, members))
+}
+
+fn type_params_for(db: &dyn Db, def: DefId) -> Arc<[TypeParamId]> {
+  let semantics = ts_semantics_for(db);
+  let decl = match decl_for_def(&semantics.semantics, def) {
+    Some(decl) => decl,
+    None => return Arc::from([]),
+  };
+  let handle = match db.file_input(decl.file) {
+    Some(handle) => handle,
+    None => return Arc::from([]),
+  };
+  let decls = decl_types_in_file_for(db, handle).0;
+  if let Some(params) = decls.type_params.get(&def) {
+    Arc::from(params.clone())
+  } else {
+    Arc::from([])
+  }
+}
 pub fn parse_query_count() -> usize {
   parse_metrics::parse_call_count()
 }
@@ -1406,6 +1527,25 @@ pub fn ts_semantics(db: &dyn Db) -> Arc<TsSemantics> {
   ts_semantics_for(db)
 }
 
+pub fn type_store(db: &dyn Db) -> Arc<TypeStore> {
+  type_store_for(db).0
+}
+
+pub fn decl_types_in_file(db: &dyn Db, file: FileId) -> Arc<DeclTypes> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before lowering declarations");
+  decl_types_in_file_for(db, handle).0
+}
+
+pub fn decl_type(db: &dyn Db, def: DefId) -> Option<TypeId> {
+  decl_type_for(db, def)
+}
+
+pub fn type_params(db: &dyn Db, def: DefId) -> Arc<[TypeParamId]> {
+  type_params_for(db, def)
+}
+
 /// Expose the current revision for smoke-testing the salsa plumbing.
 #[salsa::tracked]
 pub fn db_revision(db: &dyn Db) -> salsa::Revision {
@@ -1737,33 +1877,6 @@ pub trait TypeDb: salsa::Database + Send + 'static {
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput>;
 }
 
-/// Cheap wrapper around [`TypeStore`] with pointer-based equality for salsa
-/// inputs.
-#[derive(Clone)]
-pub struct SharedTypeStore(pub Arc<TypeStore>);
-
-impl SharedTypeStore {
-  pub fn arc(&self) -> Arc<TypeStore> {
-    Arc::clone(&self.0)
-  }
-}
-
-impl fmt::Debug for SharedTypeStore {
-  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    f.debug_tuple("SharedTypeStore")
-      .field(&Arc::as_ptr(&self.0))
-      .finish()
-  }
-}
-
-impl PartialEq for SharedTypeStore {
-  fn eq(&self, other: &Self) -> bool {
-    Arc::ptr_eq(&self.0, &other.0)
-  }
-}
-
-impl Eq for SharedTypeStore {}
-
 /// Kind of declaration associated with a definition.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeclKind {
@@ -1815,7 +1928,7 @@ pub fn type_compiler_options(db: &dyn TypeDb) -> CompilerOptions {
 }
 
 #[salsa::tracked]
-pub fn type_store(db: &dyn TypeDb) -> SharedTypeStore {
+pub fn types_type_store(db: &dyn TypeDb) -> SharedTypeStore {
   db.type_store_input().store(db)
 }
 
@@ -1825,7 +1938,7 @@ pub fn files(db: &dyn TypeDb) -> Arc<Vec<FileId>> {
 }
 
 #[salsa::tracked]
-pub fn decl_types_in_file(
+pub fn types_decl_types_in_file(
   db: &dyn TypeDb,
   file: FileId,
   _seed: (),
@@ -1844,7 +1957,7 @@ pub fn type_semantics(db: &dyn TypeDb) -> Arc<TypeSemantics> {
   let mut file_list: Vec<_> = files(db).iter().copied().collect();
   file_list.sort_by_key(|f| f.0);
   for file in file_list.into_iter() {
-    for (def, decl) in decl_types_in_file(db, file, ()).iter() {
+    for (def, decl) in types_decl_types_in_file(db, file, ()).iter() {
       by_name
         .entry((decl.file, decl.name.clone()))
         .or_default()
@@ -1872,7 +1985,7 @@ pub fn type_semantics(db: &dyn TypeDb) -> Arc<TypeSemantics> {
 pub fn check_body(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // The unit seed mirrors `decl_types_in_file` to avoid introducing synthetic
   // salsa structs for every definition key.
-  let store = type_store(db).arc();
+  let store = types_type_store(db).arc();
   let fallback = store.primitive_ids().unknown;
   let Some(decl) = decl_types_for_def(db, def) else {
     return fallback;
@@ -1887,7 +2000,7 @@ fn check_body_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: 
   // Bodies are part of the same cycle when an initializer references its own
   // definition. Recover with `any` to mirror `type_of_def`'s fallback and avoid
   // panicking on self-references.
-  type_store(db).arc().primitive_ids().any
+  types_type_store(db).arc().primitive_ids().any
 }
 
 #[salsa::tracked(recovery_fn = type_of_def_cycle)]
@@ -1896,7 +2009,7 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // without forcing them to implement salsa's struct traits.
   // Track compiler options changes even if we do not branch on them yet.
   let _options = type_compiler_options(db);
-  let store = type_store(db).arc();
+  let store = types_type_store(db).arc();
   let fallback = store.primitive_ids().any;
 
   let base = base_type(db, &store, def, fallback);
@@ -1926,7 +2039,7 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
 fn type_of_def_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: ()) -> TypeId {
   // Self-referential definitions fall back to `any` to keep results stable
   // under cycles instead of panicking.
-  type_store(db).arc().primitive_ids().any
+  types_type_store(db).arc().primitive_ids().any
 }
 
 fn base_type(db: &dyn TypeDb, store: &Arc<TypeStore>, def: DefId, fallback: TypeId) -> TypeId {
@@ -1944,7 +2057,7 @@ fn base_type(db: &dyn TypeDb, store: &Arc<TypeStore>, def: DefId, fallback: Type
 fn decl_types_for_def(db: &dyn TypeDb, def: DefId) -> Option<DeclInfo> {
   let semantics = type_semantics(db);
   if let Some(file) = semantics.def_files.get(&def).copied() {
-    if let Some(entry) = decl_types_in_file(db, file, ()).get(&def) {
+    if let Some(entry) = types_decl_types_in_file(db, file, ()).get(&def) {
       return Some(entry.clone());
     }
   }
@@ -1952,7 +2065,7 @@ fn decl_types_for_def(db: &dyn TypeDb, def: DefId) -> Option<DeclInfo> {
   let mut file_list: Vec<_> = files(db).iter().copied().collect();
   file_list.sort_by_key(|f| f.0);
   for file in file_list {
-    if let Some(entry) = decl_types_in_file(db, file, ()).get(&def) {
+    if let Some(entry) = types_decl_types_in_file(db, file, ()).get(&def) {
       return Some(entry.clone());
     }
   }
