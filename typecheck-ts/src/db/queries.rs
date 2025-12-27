@@ -10,7 +10,7 @@ use hir_js::{
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
-use types_ts_interned::{PrimitiveIds, TypeId, TypeParamId, TypeStore};
+use types_ts_interned::{CacheStats, PrimitiveIds, TypeId, TypeParamId, TypeStore};
 
 use crate::codes;
 use crate::db::decl;
@@ -22,9 +22,10 @@ use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
 use crate::db::types::{DeclTypes, SharedDeclTypes, SharedTypeStore};
 use crate::db::{symbols, Db, ModuleKey};
-use crate::lib_support::{CompilerOptions, FileKind};
+use crate::db::{cache::BodyCache, cache::DefCache, cache::DefCacheEntry};
+use crate::lib_support::{CacheOptions, CompilerOptions, FileKind};
 use crate::parse_metrics;
-use crate::profile::QueryKind;
+use crate::profile::{CacheKind, QueryKind, QueryStatsCollector};
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
 use crate::symbols::{semantic_js::SymbolId, SymbolBinding, SymbolOccurrence};
@@ -1384,12 +1385,10 @@ pub fn file_kind(db: &dyn Db, file: FileId) -> FileKind {
   file_kind_for(db, handle)
 }
 
-/// Source text for a given file identifier.
-pub fn file_text(db: &dyn Db, file: FileId) -> Arc<str> {
-  let handle = db
-    .file_input(file)
-    .expect("file must be seeded before reading text");
-  file_text_for(db, handle)
+/// Source text for a given file identifier, if seeded.
+pub fn file_text(db: &dyn Db, file: FileId) -> Option<Arc<str>> {
+  let handle = db.file_input(file)?;
+  Some(file_text_for(db, handle))
 }
 
 pub fn parse(db: &dyn Db, file: FileId) -> parser::ParseResult {
@@ -1425,6 +1424,10 @@ pub fn module_dep_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
     .file_input(file)
     .expect("file must be seeded before querying module deps");
   module_dep_diagnostics_for(db, handle)
+}
+
+pub fn unresolved_module_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
+  module_dep_diagnostics(db, file)
 }
 
 pub fn reachable_files(db: &dyn Db) -> Arc<Vec<FileId>> {
@@ -1885,6 +1888,9 @@ pub trait TypeDb: salsa::Database + Send + 'static {
   fn type_store_input(&self) -> TypeStoreInput;
   fn files_input(&self) -> FilesInput;
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput>;
+  fn body_cache(&self) -> BodyCache;
+  fn def_cache(&self) -> DefCache;
+  fn profiler(&self) -> Option<QueryStatsCollector>;
 }
 
 /// Kind of declaration associated with a definition.
@@ -1960,6 +1966,10 @@ pub fn types_decl_types_in_file(
     .unwrap_or_else(|| Arc::new(BTreeMap::new()))
 }
 
+pub fn cache_stats(db: &dyn TypeDb) -> (CacheStats, CacheStats) {
+  (db.body_cache().stats(), db.def_cache().stats())
+}
+
 #[salsa::tracked]
 pub fn type_semantics(db: &dyn TypeDb) -> Arc<TypeSemantics> {
   let mut by_name: BTreeMap<(FileId, String), Vec<DefId>> = BTreeMap::new();
@@ -1997,13 +2007,22 @@ pub fn check_body(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // salsa structs for every definition key.
   let store = types_type_store(db).arc();
   let fallback = store.primitive_ids().unknown;
+  let revision = salsa::plumbing::current_revision(db);
+  if let Some(cached) = db.body_cache().get(def, revision) {
+    return cached;
+  }
   let Some(decl) = decl_types_for_def(db, def) else {
     return fallback;
   };
   let Some(init) = decl.initializer.clone() else {
     return fallback;
   };
-  eval_initializer(db, &store, init)
+  let result = eval_initializer(db, &store, init);
+  db.body_cache().insert(def, revision, result);
+  if let Some(profiler) = db.profiler() {
+    profiler.record_cache(CacheKind::Body, &db.body_cache().stats());
+  }
+  result
 }
 
 fn check_body_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: ()) -> TypeId {
@@ -2021,6 +2040,12 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   let _options = type_compiler_options(db);
   let store = types_type_store(db).arc();
   let fallback = store.primitive_ids().any;
+  let revision = salsa::plumbing::current_revision(db);
+  if let Some(entry) = db.def_cache().get_entry(def, revision) {
+    if let Some(ty) = entry.store {
+      return ty;
+    }
+  }
 
   let base = base_type(db, &store, def, fallback);
 
@@ -2043,6 +2068,12 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
     }
   }
 
+  db
+    .def_cache()
+    .insert_entry(def, revision, DefCacheEntry::default().with_store(base));
+  if let Some(profiler) = db.profiler() {
+    profiler.record_cache(CacheKind::Def, &db.def_cache().stats());
+  }
   base
 }
 
@@ -2107,16 +2138,23 @@ pub struct TypesDatabase {
   type_store: Option<TypeStoreInput>,
   files: Option<FilesInput>,
   decls: BTreeMap<FileId, DeclTypesInput>,
+  body_cache: BodyCache,
+  def_cache: DefCache,
+  profiler: Option<QueryStatsCollector>,
 }
 
 impl Default for TypesDatabase {
   fn default() -> Self {
+    let default_cache = CacheOptions::default();
     Self {
       storage: salsa::Storage::default(),
       compiler_options: None,
       type_store: None,
       files: None,
       decls: BTreeMap::new(),
+      body_cache: BodyCache::new(default_cache.body_config()),
+      def_cache: DefCache::new(default_cache.def_config()),
+      profiler: None,
     }
   }
 }
@@ -2145,6 +2183,18 @@ impl TypeDb for TypesDatabase {
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput> {
     self.decls.get(&file).copied()
   }
+
+  fn body_cache(&self) -> BodyCache {
+    self.body_cache.clone()
+  }
+
+  fn def_cache(&self) -> DefCache {
+    self.def_cache.clone()
+  }
+
+  fn profiler(&self) -> Option<QueryStatsCollector> {
+    self.profiler.clone()
+  }
 }
 
 impl TypesDatabase {
@@ -2157,11 +2207,14 @@ impl TypesDatabase {
   }
 
   pub fn set_compiler_options(&mut self, options: CompilerOptions) {
+    let cache_options = options.cache.clone();
     if let Some(handle) = self.compiler_options {
       handle.set_options(self).to(options);
     } else {
       self.compiler_options = Some(TypeCompilerOptions::new(self, options));
     }
+    self.body_cache = BodyCache::new(cache_options.body_config());
+    self.def_cache = DefCache::new(cache_options.def_config());
   }
 
   pub fn set_type_store(&mut self, store: SharedTypeStore) {
@@ -2178,6 +2231,10 @@ impl TypesDatabase {
     } else {
       self.files = Some(FilesInput::new(self, files));
     }
+  }
+
+  pub fn set_profiler(&mut self, profiler: QueryStatsCollector) {
+    self.profiler = Some(profiler);
   }
 
   pub fn set_decl_types_in_file(&mut self, file: FileId, decls: Arc<BTreeMap<DefId, DeclInfo>>) {

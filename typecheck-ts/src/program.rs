@@ -7,7 +7,7 @@ use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
   BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
   ExprKind as HirExprKind, FileKind as HirFileKind, LowerResult, PatId as HirPatId,
-  PatKind as HirPatKind, VarDeclKind as HirVarDeclKind,
+  PatKind as HirPatKind, StmtKind as HirStmtKind, VarDeclKind as HirVarDeclKind,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::expr::pat::Pat;
@@ -495,17 +495,6 @@ impl Program {
     state.file_key_for_id(file)
   }
 
-  /// Text contents for a loaded file, if available from the host.
-  pub fn file_text(&self, file: FileId) -> Option<Arc<str>> {
-    match self.with_analyzed_state(|state| Ok(state.load_text(file, &self.host).ok())) {
-      Ok(text) => text,
-      Err(fatal) => {
-        self.record_fatal(fatal);
-        None
-      }
-    }
-  }
-
   /// All known file IDs in this program.
   pub fn files(&self) -> Vec<FileId> {
     match self.with_analyzed_state(|state| Ok(state.files.keys().copied().collect())) {
@@ -528,7 +517,10 @@ impl Program {
       Ok(files)
     }) {
       Ok(files) => files,
-      Err(_) => Vec::new(),
+      Err(fatal) => {
+        self.record_fatal(fatal);
+        Vec::new()
+      }
     }
   }
 
@@ -593,9 +585,13 @@ impl Program {
     self.cancelled.store(true, Ordering::Relaxed);
   }
 
-  /// Clear any pending cancellation request so new work can proceed.
+  /// Clear any pending cancellation flag so subsequent operations can proceed.
   pub fn clear_cancellation(&self) {
     self.cancelled.store(false, Ordering::Relaxed);
+    let mut state = self.lock_state();
+    state
+      .diagnostics
+      .retain(|diag| diag.code.as_str() != codes::CANCELLED.id);
   }
 
   fn ensure_not_cancelled(&self) -> Result<(), FatalError> {
@@ -1280,7 +1276,7 @@ impl Program {
 
   pub fn exports_of_fallible(&self, file: FileId) -> Result<ExportMap, FatalError> {
     self.with_interned_state(|state| {
-      let mut exports = state.exports_of_file(file)?;
+      let mut exports = state.exports_of_file(file);
       exports.retain(|_, entry| {
         if let Some(def) = entry.def {
           if let Some(def_data) = state.def_data.get(&def) {
@@ -1441,7 +1437,6 @@ impl Program {
   pub fn var_initializer_fallible(&self, def: DefId) -> Result<Option<VarInit>, FatalError> {
     self.with_analyzed_state(|state| Ok(state.var_initializer(def)))
   }
-
   /// Span for an expression, if available.
   pub fn expr_span(&self, body: BodyId, expr: ExprId) -> Option<Span> {
     match self.with_analyzed_state(|state| {
@@ -1827,6 +1822,7 @@ impl Program {
       type_store: state.type_store.clone(),
       interned_type_store,
       interned_def_types,
+      enum_value_types: Vec::new(),
       interned_type_params,
       value_def_map: Vec::new(),
       builtin: state.builtin,
@@ -2074,6 +2070,7 @@ fn default_var_mode() -> VarDeclMode {
 pub struct ImportData {
   pub from: FileId,
   pub original: String,
+  pub module: String,
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -3226,7 +3223,7 @@ impl ProgramState {
       let mut mapped_def = def_id;
       if let DefKind::Import(import) = &data.kind {
         if let Some(target) = self
-          .exports_of_file(import.from)?
+          .exports_of_file(import.from)
           .get(&import.original)
           .and_then(|entry| entry.def)
         {
@@ -3535,7 +3532,7 @@ impl ProgramState {
         if !seen.insert(member_id) {
           continue;
         }
-        let ty_interned = match self.export_type_for_def(member_id)? {
+        let ty_interned = match self.export_type_for_def(member_id) {
           Some(ty) => store.canon(ty),
           None => continue,
         };
@@ -3793,6 +3790,7 @@ impl ProgramState {
           );
           self.hir_lowered.insert(file, lowered.clone());
           let sem_hir = sem_hir_from_lower(ast.as_ref(), &lowered);
+          self.sem_hir.insert(file, sem_hir.clone());
           let lower_span = QuerySpan::enter(
             QueryKind::LowerHir,
             query_span!(
@@ -4833,6 +4831,10 @@ impl ProgramState {
     self.interned_def_types = new_interned_def_types;
     self.interned_type_params = new_interned_type_params;
 
+    if self.file_kinds.get(&file) == Some(&FileKind::Dts) {
+      self.hydrate_var_types_from_ast(file);
+    }
+
     self.symbol_to_def.clear();
     for (def, data) in self.def_data.iter() {
       self.symbol_to_def.insert(data.symbol, *def);
@@ -5186,7 +5188,7 @@ impl ProgramState {
     }
   }
 
-  fn update_export_types(&mut self) -> Result<(), FatalError> {
+  fn update_export_types(&mut self) {
     let mut updates: Vec<(FileId, String, DefId)> = Vec::new();
     for (file_id, state) in self.files.iter() {
       for (name, entry) in state.exports.iter() {
@@ -5196,7 +5198,7 @@ impl ProgramState {
       }
     }
     for (file_id, name, def) in updates.into_iter() {
-      if let Some(ty) = self.export_type_for_def(def)? {
+      if let Some(ty) = self.export_type_for_def(def) {
         if let Some(state) = self.files.get_mut(&file_id) {
           if let Some(entry) = state.exports.get_mut(&name) {
             entry.type_id = Some(ty);
@@ -5204,30 +5206,31 @@ impl ProgramState {
         }
       }
     }
-    Ok(())
   }
 
-  fn export_type_for_def(&mut self, def: DefId) -> Result<Option<TypeId>, FatalError> {
+  fn export_type_for_def(&mut self, def: DefId) -> Option<TypeId> {
     if let Some(store) = self.interned_store.clone() {
       let mut cache = HashMap::new();
       if let Some(merged) = self.callable_overload_type_for_def(def, &store, &mut cache) {
-        return Ok(Some(merged));
+        return Some(merged);
       }
       if !self.def_types.contains_key(&def) {
-        self.type_of_def(def)?;
+        if self.type_of_def(def).is_err() {
+          return None;
+        }
       }
       if let Some(ty) = self.interned_def_types.get(&def).copied() {
-        return Ok(Some(ty));
+        return Some(ty);
       }
       let Some(store_ty) = self.def_types.get(&def).copied() else {
-        return Ok(None);
+        return None;
       };
       let interned = convert_type_for_display(store_ty, self, &store, &mut cache);
       let interned = store.canon(interned);
       self.interned_def_types.insert(def, interned);
-      Ok(Some(interned))
+      Some(interned)
     } else {
-      Ok(self.def_types.get(&def).copied())
+      self.def_types.get(&def).copied()
     }
   }
 
@@ -5507,6 +5510,88 @@ impl ProgramState {
       }
       TypeEntityName::Import(_) => {}
       _ => {}
+    }
+  }
+
+  fn collect_var_types_in_stmts(
+    &mut self,
+    file: FileId,
+    stmts: &[Node<Stmt>],
+    types: &mut HashMap<String, TypeId>,
+  ) {
+    for stmt in stmts {
+      match stmt.stx.as_ref() {
+        Stmt::VarDecl(var) => {
+          for decl in var.stx.declarators.iter() {
+            let ann = decl
+              .type_annotation
+              .as_ref();
+            let Some(type_ann) = ann else {
+              continue;
+            };
+            let Pat::Id(id) = decl.pattern.stx.pat.stx.as_ref() else {
+              continue;
+            };
+            let ty = self.type_from_type_expr(type_ann);
+            types.insert(id.stx.name.clone(), ty);
+          }
+        }
+        Stmt::NamespaceDecl(ns) => match &ns.stx.body {
+          NamespaceBody::Block(body) => {
+            self.collect_var_types_in_stmts(file, body, types);
+          }
+          NamespaceBody::Namespace(inner) => {
+            let mut current = inner.as_ref();
+            loop {
+              match &current.stx.body {
+                NamespaceBody::Block(body) => {
+                  self.collect_var_types_in_stmts(file, body, types);
+                  break;
+                }
+                NamespaceBody::Namespace(next) => {
+                  current = next.as_ref();
+                }
+              }
+            }
+          }
+        },
+        Stmt::ModuleDecl(module) => {
+          if let Some(body) = module.stx.body.as_ref() {
+            self.collect_var_types_in_stmts(file, body, types);
+          }
+        }
+        Stmt::GlobalDecl(global) => {
+          self.collect_var_types_in_stmts(file, &global.stx.body, types);
+        }
+        Stmt::Block(block) => {
+          self.collect_var_types_in_stmts(file, &block.stx.body, types);
+        }
+        _ => {}
+      }
+    }
+  }
+
+  fn hydrate_var_types_from_ast(&mut self, file: FileId) {
+    let Some(ast) = self.asts.get(&file).cloned() else {
+      return;
+    };
+    let mut types: HashMap<String, TypeId> = HashMap::new();
+    self.collect_var_types_in_stmts(file, &ast.stx.body, &mut types);
+    if types.is_empty() {
+      return;
+    }
+    for (def_id, data) in self.def_data.iter_mut() {
+      if data.file != file {
+        continue;
+      }
+      if let DefKind::Var(var) = &mut data.kind {
+        if var.typ.is_none() {
+          if let Some(ty) = types.get(&data.name).copied() {
+            var.typ = Some(ty);
+            self.def_types.insert(*def_id, ty);
+          }
+        }
+      }
     }
   }
 
@@ -5954,6 +6039,7 @@ impl ProgramState {
         }
         Stmt::Import(import_stmt) => {
           let module = import_stmt.stx.module.clone();
+          let module_str = module.to_string();
           let resolved = self.record_module_resolution(file, &module, host);
           if let Some(target) = resolved {
             queue.push_back(target);
@@ -5986,15 +6072,16 @@ impl ProgramState {
               DefData {
                 name: alias_name.clone(),
                 file,
-                span: loc_to_span(file, default_pat.loc).range,
-                symbol,
-                export: false,
-                kind: DefKind::Import(ImportData {
-                  from: resolved.unwrap_or(file),
-                  original: "default".to_string(),
-                }),
-              },
-            );
+                  span: loc_to_span(file, default_pat.loc).range,
+                  symbol,
+                  export: false,
+                  kind: DefKind::Import(ImportData {
+                    from: resolved.unwrap_or(FileId(u32::MAX)),
+                    original: "default".to_string(),
+                    module: module_str.clone(),
+                  }),
+                },
+              );
             defs.push(def_id);
             bindings.insert(
               alias_name.clone(),
@@ -6038,15 +6125,16 @@ impl ProgramState {
                   DefData {
                     name: alias_name.clone(),
                     file,
-                    span: loc_to_span(file, alias_pat.loc).range,
-                    symbol,
-                    export: false,
-                    kind: DefKind::Import(ImportData {
-                      from: resolved.unwrap_or(file),
-                      original: name.clone(),
-                    }),
-                  },
-                );
+                  span: loc_to_span(file, alias_pat.loc).range,
+                  symbol,
+                  export: false,
+                  kind: DefKind::Import(ImportData {
+                    from: resolved.unwrap_or(FileId(u32::MAX)),
+                    original: name.clone(),
+                    module: module_str.clone(),
+                  }),
+                },
+              );
                 self.record_def_symbol(def_id, symbol);
                 defs.push(def_id);
                 bindings.insert(
@@ -6087,8 +6175,9 @@ impl ProgramState {
                   symbol,
                   export: false,
                   kind: DefKind::Import(ImportData {
-                    from: resolved.unwrap_or(file),
+                    from: resolved.unwrap_or(FileId(u32::MAX)),
                     original: "*".to_string(),
+                    module: module_str.clone(),
                   }),
                 },
               );
@@ -6139,6 +6228,7 @@ impl ProgramState {
                 kind: DefKind::Import(ImportData {
                   from: resolved.unwrap_or(file),
                   original: "*".to_string(),
+                  module: module.to_string(),
                 }),
               },
             );
@@ -7407,6 +7497,29 @@ impl ProgramState {
     var_initializer_in_file(lowered, def, hir_def.span, def_name)
   }
 
+  fn type_for_export_entry(&mut self, entry: &ExportEntry) -> Result<TypeId, FatalError> {
+    if let Some(ty) = entry.type_id {
+      return Ok(ty);
+    }
+    if let Some(def) = entry.def {
+      return self.type_of_def(def);
+    }
+    if let Some(semantics) = self.semantics.clone() {
+      let sem_symbol: sem_ts::SymbolId = entry.symbol.into();
+      if let Some(decl) = semantics
+        .symbol_decls(sem_symbol, sem_ts::Namespace::VALUE)
+        .first()
+        .copied()
+      {
+        let def = semantics.symbols().decl(decl).def_id;
+        if self.def_data.contains_key(&def) {
+          return self.type_of_def(def);
+        }
+      }
+    }
+    Ok(self.builtin.unknown)
+  }
+
   fn type_of_def(&mut self, def: DefId) -> Result<TypeId, FatalError> {
     self.check_cancelled()?;
     let cache_hit = self.def_types.contains_key(&def);
@@ -7576,12 +7689,14 @@ impl ProgramState {
           ty
         }
         DefKind::Import(import) => {
-          let exports = self.exports_of_file(import.from)?;
+          let exports = self.exports_of_file(import.from);
           if let Some(entry) = exports.get(&import.original) {
-            if let Some(ty) = entry.type_id {
-              ty
-            } else if let Some(def) = entry.def {
-              self.type_of_def(def)?
+            self.type_for_export_entry(entry)?
+          } else if let Some(semantics) = self.semantics.clone() {
+            let exports =
+              check::modules::exports_of_ambient_module(self, &semantics, &import.module);
+            if let Some(entry) = exports.get(&import.original) {
+              self.type_for_export_entry(entry)?
             } else {
               self.builtin.unknown
             }
@@ -7703,25 +7818,24 @@ impl ProgramState {
     Ok(ty)
   }
 
-  fn exports_of_file(&mut self, file: FileId) -> Result<ExportMap, FatalError> {
+  fn exports_of_file(&mut self, file: FileId) -> ExportMap {
     if let Some(semantics) = self.semantics.clone() {
       return check::modules::exports_from_semantics(self, semantics.as_ref(), file);
     }
     let Some(state) = self.files.get(&file).cloned() else {
-      return Ok(ExportMap::new());
+      return ExportMap::new();
     };
     let mut map = state.exports.clone();
     for entry in map.values_mut() {
       if entry.type_id.is_none() {
         entry.type_id = match entry.def {
-          Some(def) => self.export_type_for_def(def)?,
+          Some(def) => self.export_type_for_def(def),
           None => None,
         };
       }
     }
-    Ok(map)
+    map
   }
-
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
     let mut files: Vec<_> = self.file_kinds.keys().copied().collect();
     files.sort_by_key(|file| file.0);
