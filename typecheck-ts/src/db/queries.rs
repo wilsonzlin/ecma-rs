@@ -35,6 +35,15 @@ use crate::SymbolOccurrence;
 use crate::{BodyId, DefId, ExprId, TypeId};
 use salsa::plumbing::current_revision;
 
+fn cache_delta(after: &CacheStats, before: &CacheStats) -> CacheStats {
+  CacheStats {
+    hits: after.hits.saturating_sub(before.hits),
+    misses: after.misses.saturating_sub(before.misses),
+    insertions: after.insertions.saturating_sub(before.insertions),
+    evictions: after.evictions.saturating_sub(before.evictions),
+  }
+}
+
 fn file_ids_from_key(db: &dyn Db, key: &FileKey) -> Vec<FileId> {
   let mut ids = db.file_ids_for_key(key);
   if ids.is_empty() {
@@ -239,7 +248,9 @@ pub fn var_initializer_in_file(
       return true;
     }
     match (&pat.kind, def_name) {
-      (PatKind::Ident(name_id), Some(expected)) => lowered.names.resolve(*name_id) == Some(expected),
+      (PatKind::Ident(name_id), Some(expected)) => {
+        lowered.names.resolve(*name_id) == Some(expected)
+      }
       _ => false,
     }
   };
@@ -265,7 +276,10 @@ pub fn var_initializer_in_file(
     }
   }
 
-  if matches!(body.kind, hir_js::BodyKind::Initializer | hir_js::BodyKind::TopLevel) {
+  if matches!(
+    body.kind,
+    hir_js::BodyKind::Initializer | hir_js::BodyKind::TopLevel
+  ) {
     for stmt_id in body.root_stmts.iter() {
       if let Some(stmt) = body.stmts.get(stmt_id.0 as usize) {
         if let StmtKind::Expr(expr) = stmt.kind {
@@ -1891,14 +1905,19 @@ pub fn check_body(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // The unit seed mirrors `decl_types_in_file` to avoid introducing synthetic
   // salsa structs for every definition key.
   let revision = current_revision(db);
+  let profiler = db.profiler();
+  let cache_before = profiler.as_ref().map(|_| db.body_cache().stats());
   if let Some(cached) = db.body_cache().get(def, revision) {
-    if let Some(profiler) = db.profiler() {
+    if let Some(profiler) = profiler.as_ref() {
       profiler.record(QueryKind::CheckBody, true, Duration::ZERO);
+      if let Some(before) = cache_before.as_ref() {
+        let after = db.body_cache().stats();
+        profiler.record_cache(CacheKind::Body, &cache_delta(&after, before));
+      }
     }
     return cached;
   }
 
-  let profiler = db.profiler();
   let _timer = profiler
     .as_ref()
     .map(|profiler| profiler.timer(QueryKind::CheckBody, false));
@@ -1909,6 +1928,12 @@ pub fn check_body(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
     .map(|init| eval_initializer(db, &store, init))
     .unwrap_or(fallback);
   db.body_cache().insert(def, revision, result);
+  if let Some(profiler) = profiler.as_ref() {
+    if let Some(before) = cache_before.as_ref() {
+      let after = db.body_cache().stats();
+      profiler.record_cache(CacheKind::Body, &cache_delta(&after, before));
+    }
+  }
   result
 }
 
@@ -1925,15 +1950,20 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // without forcing them to implement salsa's struct traits.
   // Track compiler options changes even if we do not branch on them yet.
   let revision = current_revision(db);
+  let profiler = db.profiler();
+  let cache_before = profiler.as_ref().map(|_| db.def_cache().stats());
   if let Some(cached) = db.def_cache().get_store(def, revision) {
-    if let Some(profiler) = db.profiler() {
+    if let Some(profiler) = profiler.as_ref() {
       profiler.record(QueryKind::TypeOfDef, true, Duration::ZERO);
+      if let Some(before) = cache_before.as_ref() {
+        let after = db.def_cache().stats();
+        profiler.record_cache(CacheKind::Def, &cache_delta(&after, before));
+      }
     }
     return cached;
   }
 
   let _options = type_compiler_options(db);
-  let profiler = db.profiler();
   let _timer = profiler
     .as_ref()
     .map(|profiler| profiler.timer(QueryKind::TypeOfDef, false));
@@ -1962,6 +1992,12 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   }
 
   db.def_cache().insert_store(def, revision, result);
+  if let Some(profiler) = profiler.as_ref() {
+    if let Some(before) = cache_before.as_ref() {
+      let after = db.def_cache().stats();
+      profiler.record_cache(CacheKind::Def, &cache_delta(&after, before));
+    }
+  }
   result
 }
 

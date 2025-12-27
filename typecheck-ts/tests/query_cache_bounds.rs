@@ -8,6 +8,7 @@ use salsa::{Database, Durability};
 use typecheck_ts::db::queries::{cache_stats, check_body, type_of_def};
 use typecheck_ts::db::{DeclInfo, DeclKind, Initializer, SharedTypeStore, TypesDatabase};
 use typecheck_ts::lib_support::CompilerOptions;
+use typecheck_ts::{CacheKind, QueryStatsCollector};
 use types_ts_interned::{TypeId, TypeStore};
 
 fn build_database(def_count: usize) -> (TypesDatabase, Arc<TypeStore>, Vec<DefId>) {
@@ -70,6 +71,8 @@ fn snapshot(db: &TypesDatabase, defs: &[DefId]) -> (Vec<TypeId>, Vec<TypeId>) {
 fn query_caches_evict_without_affecting_results() {
   let def_count = 48;
   let (mut db, _store, defs) = build_database(def_count);
+  let profiler = QueryStatsCollector::default();
+  db.set_profiler(profiler.clone());
 
   let first = snapshot(&db, &defs);
   let second = snapshot(&db, &defs);
@@ -112,5 +115,21 @@ fn query_caches_evict_without_affecting_results() {
   assert!(
     def_stats.hits > 0 && def_stats.misses > 0,
     "def cache stats should record both hits and misses (stats: {def_stats:?})"
+  );
+
+  let snapshot = profiler.snapshot();
+  let body_cache = snapshot
+    .caches
+    .get(&CacheKind::Body)
+    .cloned()
+    .unwrap_or_default();
+  let def_cache = snapshot
+    .caches
+    .get(&CacheKind::Def)
+    .cloned()
+    .unwrap_or_default();
+  assert!(
+    body_cache.evictions > 0 && def_cache.evictions > 0,
+    "recorded cache stats should include evictions (body: {body_cache:?}, def: {def_cache:?})"
   );
 }
