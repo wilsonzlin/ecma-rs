@@ -7,6 +7,7 @@ use hir_js::{
   NameId, PatId as HirPatId, PatKind as HirPatKind, StmtKind as HirStmtKind,
 };
 use ordered_float::OrderedFloat;
+use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::func::Func;
 use parse_js::ast::import_export::{ExportNames, ImportNames};
@@ -16,7 +17,8 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::NamespaceBody;
 use parse_js::ast::type_expr::{
-  TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
+  TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypeParameter, TypePropertyKey,
+  TypeUnion,
 };
 use parse_js::loc::Loc;
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
@@ -4564,6 +4566,127 @@ impl ProgramState {
     }
   }
 
+  fn queue_type_imports_in_type_parameters(
+    &mut self,
+    file: FileId,
+    params: &[Node<TypeParameter>],
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    for tp in params.iter() {
+      if let Some(constraint) = tp.stx.constraint.as_ref() {
+        self.queue_type_imports_in_type_expr(file, constraint, host, queue);
+      }
+      if let Some(default) = tp.stx.default.as_ref() {
+        self.queue_type_imports_in_type_expr(file, default, host, queue);
+      }
+    }
+  }
+
+  fn queue_type_imports_in_func(
+    &mut self,
+    file: FileId,
+    func: &Func,
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    if let Some(params) = func.type_parameters.as_ref() {
+      self.queue_type_imports_in_type_parameters(file, params, host, queue);
+    }
+    for param in func.parameters.iter() {
+      if let Some(ann) = param.stx.type_annotation.as_ref() {
+        self.queue_type_imports_in_type_expr(file, ann, host, queue);
+      }
+    }
+    if let Some(ret) = func.return_type.as_ref() {
+      self.queue_type_imports_in_type_expr(file, ret, host, queue);
+    }
+  }
+
+  fn queue_type_imports_in_class_member(
+    &mut self,
+    file: FileId,
+    member: &Node<ClassMember>,
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    if let Some(ann) = member.stx.type_annotation.as_ref() {
+      self.queue_type_imports_in_type_expr(file, ann, host, queue);
+    }
+    match &member.stx.val {
+      ClassOrObjVal::Method(method) => {
+        self.queue_type_imports_in_func(file, &method.stx.func.stx, host, queue);
+      }
+      ClassOrObjVal::Getter(getter) => {
+        self.queue_type_imports_in_func(file, &getter.stx.func.stx, host, queue);
+      }
+      ClassOrObjVal::Setter(setter) => {
+        self.queue_type_imports_in_func(file, &setter.stx.func.stx, host, queue);
+      }
+      ClassOrObjVal::IndexSignature(idx) => {
+        self.queue_type_imports_in_type_expr(file, &idx.stx.parameter_type, host, queue);
+        self.queue_type_imports_in_type_expr(file, &idx.stx.type_annotation, host, queue);
+      }
+      _ => {}
+    }
+  }
+
+  fn queue_type_imports_in_type_members(
+    &mut self,
+    file: FileId,
+    members: &[Node<TypeMember>],
+    host: &Arc<dyn Host>,
+    queue: &mut VecDeque<FileId>,
+  ) {
+    for member in members.iter() {
+      match member.stx.as_ref() {
+        TypeMember::Property(prop) => {
+          if let Some(ann) = prop.stx.type_annotation.as_ref() {
+            self.queue_type_imports_in_type_expr(file, ann, host, queue);
+          }
+        }
+        TypeMember::Method(method) => {
+          for param in method.stx.parameters.iter() {
+            self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
+          }
+          if let Some(ret) = method.stx.return_type.as_ref() {
+            self.queue_type_imports_in_type_expr(file, ret, host, queue);
+          }
+          if let Some(params) = method.stx.type_parameters.as_ref() {
+            self.queue_type_imports_in_type_parameters(file, params, host, queue);
+          }
+        }
+        TypeMember::Constructor(cons) => {
+          for param in cons.stx.parameters.iter() {
+            self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
+          }
+          if let Some(ret) = cons.stx.return_type.as_ref() {
+            self.queue_type_imports_in_type_expr(file, ret, host, queue);
+          }
+          if let Some(params) = cons.stx.type_parameters.as_ref() {
+            self.queue_type_imports_in_type_parameters(file, params, host, queue);
+          }
+        }
+        TypeMember::CallSignature(call) => {
+          for param in call.stx.parameters.iter() {
+            self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
+          }
+          if let Some(ret) = call.stx.return_type.as_ref() {
+            self.queue_type_imports_in_type_expr(file, ret, host, queue);
+          }
+          if let Some(params) = call.stx.type_parameters.as_ref() {
+            self.queue_type_imports_in_type_parameters(file, params, host, queue);
+          }
+        }
+        TypeMember::IndexSignature(idx) => {
+          self.queue_type_imports_in_type_expr(file, &idx.stx.parameter_type, host, queue);
+          self.queue_type_imports_in_type_expr(file, &idx.stx.type_annotation, host, queue);
+        }
+        _ => {}
+      }
+    }
+  }
+
   fn queue_type_imports_in_stmt(
     &mut self,
     file: FileId,
@@ -4572,18 +4695,19 @@ impl ProgramState {
     queue: &mut VecDeque<FileId>,
   ) {
     match stmt.stx.as_ref() {
+      Stmt::ClassDecl(class) => {
+        if let Some(params) = class.stx.type_parameters.as_ref() {
+          self.queue_type_imports_in_type_parameters(file, params, host, queue);
+        }
+        for member in class.stx.members.iter() {
+          self.queue_type_imports_in_class_member(file, member, host, queue);
+        }
+      }
       Stmt::TypeAliasDecl(alias) => {
         self.queue_type_imports_in_type_expr(file, &alias.stx.type_expr, host, queue);
       }
       Stmt::FunctionDecl(func) => {
-        for param in func.stx.function.stx.parameters.iter() {
-          if let Some(ann) = param.stx.type_annotation.as_ref() {
-            self.queue_type_imports_in_type_expr(file, ann, host, queue);
-          }
-        }
-        if let Some(ret) = func.stx.function.stx.return_type.as_ref() {
-          self.queue_type_imports_in_type_expr(file, ret, host, queue);
-        }
+        self.queue_type_imports_in_func(file, &func.stx.function.stx, host, queue);
         if let Some(body) = func.stx.function.stx.body.as_ref() {
           if let parse_js::ast::func::FuncBody::Block(block) = body {
             for stmt in block.iter() {
@@ -4603,6 +4727,18 @@ impl ProgramState {
         for stmt in block.stx.body.iter() {
           self.queue_type_imports_in_stmt(file, stmt, host, queue);
         }
+      }
+      Stmt::AmbientClassDecl(ambient) => {
+        if let Some(params) = ambient.stx.type_parameters.as_ref() {
+          self.queue_type_imports_in_type_parameters(file, params, host, queue);
+        }
+        if let Some(base) = ambient.stx.extends.as_ref() {
+          self.queue_type_imports_in_type_expr(file, base, host, queue);
+        }
+        for implemented in ambient.stx.implements.iter() {
+          self.queue_type_imports_in_type_expr(file, implemented, host, queue);
+        }
+        self.queue_type_imports_in_type_members(file, &ambient.stx.members, host, queue);
       }
       Stmt::NamespaceDecl(ns) => {
         self.queue_type_imports_in_namespace_body(file, &ns.stx.body, host, queue);
@@ -4690,14 +4826,7 @@ impl ProgramState {
         }
         self.queue_type_imports_in_type_expr(file, &func.stx.return_type, host, queue);
         if let Some(params) = func.stx.type_parameters.as_ref() {
-          for tp in params.iter() {
-            if let Some(constraint) = tp.stx.constraint.as_ref() {
-              self.queue_type_imports_in_type_expr(file, constraint, host, queue);
-            }
-            if let Some(default) = tp.stx.default.as_ref() {
-              self.queue_type_imports_in_type_expr(file, default, host, queue);
-            }
-          }
+          self.queue_type_imports_in_type_parameters(file, params, host, queue);
         }
       }
       TypeExpr::ConstructorType(cons) => {
@@ -4706,75 +4835,11 @@ impl ProgramState {
         }
         self.queue_type_imports_in_type_expr(file, &cons.stx.return_type, host, queue);
         if let Some(params) = cons.stx.type_parameters.as_ref() {
-          for tp in params.iter() {
-            if let Some(constraint) = tp.stx.constraint.as_ref() {
-              self.queue_type_imports_in_type_expr(file, constraint, host, queue);
-            }
-            if let Some(default) = tp.stx.default.as_ref() {
-              self.queue_type_imports_in_type_expr(file, default, host, queue);
-            }
-          }
+          self.queue_type_imports_in_type_parameters(file, params, host, queue);
         }
       }
       TypeExpr::ObjectType(obj) => {
-        for member in obj.stx.members.iter() {
-          match member.stx.as_ref() {
-            TypeMember::Property(prop) => {
-              if let Some(ann) = prop.stx.type_annotation.as_ref() {
-                self.queue_type_imports_in_type_expr(file, ann, host, queue);
-              }
-            }
-            TypeMember::Method(method) => {
-              for param in method.stx.parameters.iter() {
-                self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
-              }
-              if let Some(ret) = method.stx.return_type.as_ref() {
-                self.queue_type_imports_in_type_expr(file, ret, host, queue);
-              }
-              if let Some(params) = method.stx.type_parameters.as_ref() {
-                for tp in params.iter() {
-                  if let Some(constraint) = tp.stx.constraint.as_ref() {
-                    self.queue_type_imports_in_type_expr(file, constraint, host, queue);
-                  }
-                  if let Some(default) = tp.stx.default.as_ref() {
-                    self.queue_type_imports_in_type_expr(file, default, host, queue);
-                  }
-                }
-              }
-            }
-            TypeMember::Constructor(cons) => {
-              for param in cons.stx.parameters.iter() {
-                self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
-              }
-              if let Some(ret) = cons.stx.return_type.as_ref() {
-                self.queue_type_imports_in_type_expr(file, ret, host, queue);
-              }
-            }
-            TypeMember::CallSignature(call) => {
-              for param in call.stx.parameters.iter() {
-                self.queue_type_imports_in_type_expr(file, &param.stx.type_expr, host, queue);
-              }
-              if let Some(ret) = call.stx.return_type.as_ref() {
-                self.queue_type_imports_in_type_expr(file, ret, host, queue);
-              }
-              if let Some(params) = call.stx.type_parameters.as_ref() {
-                for tp in params.iter() {
-                  if let Some(constraint) = tp.stx.constraint.as_ref() {
-                    self.queue_type_imports_in_type_expr(file, constraint, host, queue);
-                  }
-                  if let Some(default) = tp.stx.default.as_ref() {
-                    self.queue_type_imports_in_type_expr(file, default, host, queue);
-                  }
-                }
-              }
-            }
-            TypeMember::IndexSignature(idx) => {
-              self.queue_type_imports_in_type_expr(file, &idx.stx.parameter_type, host, queue);
-              self.queue_type_imports_in_type_expr(file, &idx.stx.type_annotation, host, queue);
-            }
-            _ => {}
-          }
-        }
+        self.queue_type_imports_in_type_members(file, &obj.stx.members, host, queue);
       }
       TypeExpr::ParenthesizedType(inner) => {
         self.queue_type_imports_in_type_expr(file, &inner.stx.type_expr, host, queue);

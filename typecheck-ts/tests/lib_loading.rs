@@ -402,3 +402,41 @@ fn bundled_libs_enable_dom_and_promise_fixture() {
     "expected bundled libs to typecheck Promise/DOM fixture, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn type_imports_inside_classes_queue_dependencies() {
+  let entry = FileKey::new("entry.ts");
+  let class_mod = FileKey::new("class_mod.ts");
+  let ambient_mod = FileKey::new("ambient_mod.ts");
+  let host = TestHost::new(CompilerOptions::default())
+    .with_file(
+      entry.clone(),
+      r#"
+class Foo {
+  value!: import("./class_mod").Thing;
+}
+
+declare class Bar extends import("./ambient_mod").Base {
+  method(arg: import("./ambient_mod").Arg): import("./ambient_mod").Ret;
+}
+"#,
+    )
+    .with_file(class_mod.clone(), "export type Thing = string;")
+    .with_file(
+      ambient_mod.clone(),
+      "export class Base {}\nexport type Arg = number;\nexport type Ret = string;",
+    )
+    .link(entry.clone(), "./class_mod", class_mod.clone())
+    .link(entry.clone(), "./ambient_mod", ambient_mod.clone());
+  let program = Program::new(host, vec![entry.clone()]);
+  let class_loaded = program.file_id(&class_mod);
+  let ambient_loaded = program.file_id(&ambient_mod);
+  assert!(
+    class_loaded.is_some(),
+    "class member type imports should queue referenced module"
+  );
+  assert!(
+    ambient_loaded.is_some(),
+    "ambient class type references should queue referenced module"
+  );
+}
