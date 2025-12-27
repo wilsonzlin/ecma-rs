@@ -1,4 +1,6 @@
-use super::super::{semantic_js, DefId, ExportEntry, ExportMap, FileId, ProgramState, TypeId};
+use super::super::{
+  semantic_js, DefId, ExportEntry, ExportMap, FatalError, FileId, ProgramState, TypeId,
+};
 use ::semantic_js::ts as sem_ts;
 
 /// Build [`ExportMap`] for a file using `semantic-js` binder output.
@@ -6,21 +8,25 @@ pub(crate) fn exports_from_semantics(
   state: &mut ProgramState,
   semantics: &sem_ts::TsProgramSemantics,
   file: FileId,
-) -> ExportMap {
+) -> Result<ExportMap, FatalError> {
   let sem_file = sem_ts::FileId(file.0);
   let Some(exports) = semantics.exports_of_opt(sem_file) else {
-    return state
-      .files
-      .get(&file)
-      .map(|state| state.exports.clone())
-      .unwrap_or_default();
+    return Ok(
+      state
+        .files
+        .get(&file)
+        .map(|state| state.exports.clone())
+        .unwrap_or_default(),
+    );
   };
   if exports.is_empty() {
-    return state
-      .files
-      .get(&file)
-      .map(|state| state.exports.clone())
-      .unwrap_or_default();
+    return Ok(
+      state
+        .files
+        .get(&file)
+        .map(|state| state.exports.clone())
+        .unwrap_or_default(),
+    );
   }
   let symbols = semantics.symbols();
   let mut mapped = ExportMap::new();
@@ -33,13 +39,16 @@ pub(crate) fn exports_from_semantics(
     ];
     for ns in candidates {
       if let Some(symbol_id) = group.symbol_for(ns, symbols) {
-        mapped.insert(name.clone(), map_export(state, semantics, Some(sem_file), symbol_id, ns));
+        mapped.insert(
+          name.clone(),
+          map_export(state, semantics, Some(sem_file), symbol_id, ns)?,
+        );
         break;
       }
     }
   }
 
-  mapped
+  Ok(mapped)
 }
 
 /// Build [`ExportMap`] for an ambient module specifier using `semantic-js` binder output.
@@ -47,12 +56,12 @@ pub(crate) fn exports_of_ambient_module(
   state: &mut ProgramState,
   semantics: &sem_ts::TsProgramSemantics,
   specifier: &str,
-) -> ExportMap {
+) -> Result<ExportMap, FatalError> {
   let Some(exports) = semantics.exports_of_ambient_module(specifier) else {
-    return ExportMap::new();
+    return Ok(ExportMap::new());
   };
   if exports.is_empty() {
-    return ExportMap::new();
+    return Ok(ExportMap::new());
   }
   let symbols = semantics.symbols();
   let mut mapped = ExportMap::new();
@@ -65,13 +74,13 @@ pub(crate) fn exports_of_ambient_module(
     ];
     for ns in candidates {
       if let Some(symbol_id) = group.symbol_for(ns, symbols) {
-        mapped.insert(name.clone(), map_export(state, semantics, None, symbol_id, ns));
+        mapped.insert(name.clone(), map_export(state, semantics, None, symbol_id, ns)?);
         break;
       }
     }
   }
 
-  mapped
+  Ok(mapped)
 }
 
 fn map_export(
@@ -80,7 +89,7 @@ fn map_export(
   sem_file: Option<sem_ts::FileId>,
   symbol_id: sem_ts::SymbolId,
   ns: sem_ts::Namespace,
-) -> ExportEntry {
+) -> Result<ExportEntry, FatalError> {
   let symbols = semantics.symbols();
   let mut local_defs: Vec<DefId> = Vec::new();
   let mut all_defs: Vec<DefId> = Vec::new();
@@ -116,7 +125,7 @@ fn map_export(
 
   let preferred = pick_best(&local_defs).or_else(|| pick_best(&all_defs));
   let type_id: Option<TypeId> = match preferred {
-    Some(def) => state.export_type_for_def(def),
+    Some(def) => state.export_type_for_def(def)?,
     None => None,
   };
   let symbol = preferred
@@ -130,11 +139,11 @@ fn map_export(
     }
   });
 
-  ExportEntry {
+  Ok(ExportEntry {
     symbol,
     def: local_def,
     type_id,
-  }
+  })
 }
 
 fn map_decl_to_program_def(

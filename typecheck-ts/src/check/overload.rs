@@ -194,10 +194,9 @@ pub fn resolve_overloads(
       continue;
     }
 
-    let base_inference =
+    let call_inference =
       infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
-
-    let mut merged_substitutions = base_inference.substitutions.clone();
+    let mut merged_substitutions = call_inference.substitutions.clone();
 
     let mut substituter = Substituter::new(Arc::clone(store), merged_substitutions.clone());
     let instantiated_id = substituter.substitute_signature(&original_sig);

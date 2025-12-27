@@ -319,9 +319,8 @@ pub mod body_check {
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
   use crate::check::caches::CheckerCaches;
-  use crate::check::hir_body::{
-    check_body_with_env, check_body_with_expander, BindingTypeResolver, FlowBindingId, FlowBindings,
-  };
+use crate::check::hir_body::{check_body_with_env, check_body_with_expander, BindingTypeResolver};
+use crate::check::hir_body::{FlowBindingId, FlowBindings};
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
   use crate::lib_support::{CacheMode, CacheOptions};

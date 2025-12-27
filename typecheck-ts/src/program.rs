@@ -1854,6 +1854,7 @@ impl Program {
       type_store: state.type_store.clone(),
       interned_type_store,
       interned_def_types,
+      enum_value_types: Vec::new(),
       interned_type_params,
       value_def_map: Vec::new(),
       builtin: state.builtin,

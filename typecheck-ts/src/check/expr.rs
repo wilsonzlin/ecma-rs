@@ -25,6 +25,7 @@ pub fn resolve_call(
     this_arg,
     contextual_return,
     span,
+    None,
   )
 }
 
