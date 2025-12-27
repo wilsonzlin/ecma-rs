@@ -2092,8 +2092,15 @@ fn default_var_mode() -> VarDeclMode {
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
 pub struct ImportData {
-  pub from: FileId,
+  pub target: ImportTarget,
   pub original: String,
+}
+
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[derive(Clone, Debug)]
+pub enum ImportTarget {
+  File(FileId),
+  Unresolved { specifier: String },
 }
 
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -2378,9 +2385,11 @@ impl TypeResolver for ProgramTypeResolver {
 struct SemHirBuilder {
   file: FileId,
   file_kind: sem_ts::FileKind,
+  is_ambient: bool,
   decls: Vec<sem_ts::Decl>,
   imports: Vec<sem_ts::Import>,
   exports: Vec<sem_ts::Export>,
+  ambient_modules: Vec<sem_ts::AmbientModule>,
 }
 
 impl SemHirBuilder {
@@ -2388,9 +2397,18 @@ impl SemHirBuilder {
     SemHirBuilder {
       file,
       file_kind,
+      is_ambient: false,
       decls: Vec::new(),
       imports: Vec::new(),
       exports: Vec::new(),
+      ambient_modules: Vec::new(),
+    }
+  }
+
+  fn new_ambient(file: FileId, file_kind: sem_ts::FileKind) -> Self {
+    SemHirBuilder {
+      is_ambient: true,
+      ..SemHirBuilder::new(file, file_kind)
     }
   }
 
@@ -2406,7 +2424,7 @@ impl SemHirBuilder {
       def_id: sem_ts::DefId(def.0),
       name,
       kind,
-      is_ambient: false,
+      is_ambient: self.is_ambient,
       is_global: false,
       exported,
       span,
@@ -2415,6 +2433,10 @@ impl SemHirBuilder {
 
   fn add_import(&mut self, import: sem_ts::Import) {
     self.imports.push(import);
+  }
+
+  fn add_ambient_module(&mut self, module: sem_ts::AmbientModule) {
+    self.ambient_modules.push(module);
   }
 
   fn add_named_export(
@@ -2457,7 +2479,19 @@ impl SemHirBuilder {
       import_equals: Vec::new(),
       exports: self.exports,
       export_as_namespace: Vec::new(),
-      ambient_modules: Vec::new(),
+      ambient_modules: self.ambient_modules,
+    }
+  }
+
+  fn into_ambient(self, name: String, name_span: TextRange) -> sem_ts::AmbientModule {
+    sem_ts::AmbientModule {
+      name,
+      name_span,
+      decls: self.decls,
+      imports: self.imports,
+      exports: self.exports,
+      export_as_namespace: Vec::new(),
+      ambient_modules: self.ambient_modules,
     }
   }
 }
@@ -3259,7 +3293,7 @@ impl ProgramState {
         let mut mapped_def = def_id;
         if let DefKind::Import(import) = &data.kind {
           if let Some(target) = self
-            .exports_of_file(import.from)?
+            .exports_for_import(import)?
             .get(&import.original)
             .and_then(|entry| entry.def)
           {
@@ -4551,8 +4585,8 @@ impl ProgramState {
           })
         })
     });
-    self.push_semantic_diagnostics(diags);
     self.semantics = Some(Arc::new(semantics));
+    self.push_semantic_diagnostics(diags);
     Ok(())
   }
 
@@ -5017,6 +5051,19 @@ impl ProgramState {
 
   fn push_semantic_diagnostics(&mut self, diags: Vec<Diagnostic>) {
     for mut diag in diags {
+      if diag.code == "BIND1002" && diag.message.contains("unresolved import:") {
+        if let Some(spec) = diag.message.split(':').nth(1).map(|s| s.trim()) {
+          let has_ambient = self
+            .semantics
+            .as_ref()
+            .and_then(|semantics| semantics.exports_of_ambient_module(spec))
+            .map(|exports| !exports.is_empty())
+            .unwrap_or(false);
+          if has_ambient {
+            continue;
+          }
+        }
+      }
       if diag.code == "BIND1002" {
         if diag.message.contains("unresolved") {
           diag.code = codes::UNRESOLVED_MODULE.as_str().into();
@@ -5760,6 +5807,12 @@ impl ProgramState {
           }
         }
         Stmt::ModuleDecl(module) => {
+          if matches!(
+            module.stx.name,
+            parse_js::ast::ts_stmt::ModuleName::String(_)
+          ) {
+            self.bind_ambient_module(file, module, &mut sem_builder, &mut defs);
+          }
           let span = loc_to_span(file, stmt.loc);
           let name = match &module.stx.name {
             parse_js::ast::ts_stmt::ModuleName::Identifier(id) => id.clone(),
@@ -5948,6 +6001,12 @@ impl ProgramState {
           if let Some(target) = resolved {
             queue.push_back(target);
           }
+          let import_target =
+            resolved
+              .map(ImportTarget::File)
+              .unwrap_or_else(|| ImportTarget::Unresolved {
+                specifier: module.clone(),
+              });
           let mut import_default = None;
           let mut import_namespace = None;
           let mut import_named = Vec::new();
@@ -5980,7 +6039,7 @@ impl ProgramState {
                 symbol,
                 export: false,
                 kind: DefKind::Import(ImportData {
-                  from: resolved.unwrap_or(file),
+                  target: import_target.clone(),
                   original: "default".to_string(),
                 }),
               },
@@ -6032,7 +6091,7 @@ impl ProgramState {
                     symbol,
                     export: false,
                     kind: DefKind::Import(ImportData {
-                      from: resolved.unwrap_or(file),
+                      target: import_target.clone(),
                       original: name.clone(),
                     }),
                   },
@@ -6077,7 +6136,7 @@ impl ProgramState {
                   symbol,
                   export: false,
                   kind: DefKind::Import(ImportData {
-                    from: resolved.unwrap_or(file),
+                    target: import_target.clone(),
                     original: "*".to_string(),
                   }),
                 },
@@ -6114,6 +6173,12 @@ impl ProgramState {
             if let Some(target) = resolved {
               queue.push_back(target);
             }
+            let import_target =
+              resolved
+                .map(ImportTarget::File)
+                .unwrap_or_else(|| ImportTarget::Unresolved {
+                  specifier: module.clone(),
+                });
             let span = loc_to_span(file, stmt.loc).range;
             let name = import_equals.stx.name.clone();
             let symbol = self.alloc_symbol();
@@ -6127,7 +6192,7 @@ impl ProgramState {
                 symbol,
                 export: import_equals.stx.export,
                 kind: DefKind::Import(ImportData {
-                  from: resolved.unwrap_or(file),
+                  target: import_target.clone(),
                   original: "*".to_string(),
                 }),
               },
@@ -6192,6 +6257,229 @@ impl ProgramState {
       },
     );
     sem_builder.finish()
+  }
+
+  fn bind_ambient_module(
+    &mut self,
+    file: FileId,
+    module: &Node<parse_js::ast::ts_stmt::ModuleDecl>,
+    builder: &mut SemHirBuilder,
+    defs: &mut Vec<DefId>,
+  ) {
+    let Some(body) = module.stx.body.as_ref() else {
+      return;
+    };
+    let name_span = loc_to_span(file, module.loc).range;
+    let name = match &module.stx.name {
+      parse_js::ast::ts_stmt::ModuleName::Identifier(id) => id.clone(),
+      parse_js::ast::ts_stmt::ModuleName::String(specifier) => specifier.clone(),
+    };
+    let mut module_builder = SemHirBuilder::new_ambient(file, builder.file_kind);
+    let mut bindings = HashMap::new();
+    for stmt in body.iter() {
+      self.bind_ambient_stmt(file, stmt, &mut module_builder, &mut bindings, defs);
+    }
+    builder.add_ambient_module(module_builder.into_ambient(name, name_span));
+  }
+
+  fn bind_ambient_stmt(
+    &mut self,
+    file: FileId,
+    stmt: &Node<Stmt>,
+    builder: &mut SemHirBuilder,
+    bindings: &mut HashMap<String, SymbolBinding>,
+    defs: &mut Vec<DefId>,
+  ) {
+    match stmt.stx.as_ref() {
+      Stmt::VarDecl(var) => {
+        let var_span = loc_to_span(file, stmt.loc);
+        let new_defs = self.handle_var_decl(file, var_span.range, var.stx.as_ref(), builder);
+        for (def_id, binding, _export_name) in new_defs {
+          defs.push(def_id);
+          let (name, value) = binding;
+          bindings.insert(name, value);
+        }
+      }
+      Stmt::FunctionDecl(func) => {
+        let span = loc_to_span(file, stmt.loc);
+        if let Some((def_id, binding, _export_name)) =
+          self.handle_function_decl(file, span.range, func.stx.as_ref(), builder)
+        {
+          defs.push(def_id);
+          let (name, value) = binding;
+          bindings.insert(name, value);
+        }
+      }
+      Stmt::InterfaceDecl(interface) => {
+        let span = loc_to_span(file, stmt.loc);
+        let name = interface.stx.name.clone();
+        let mut object = self.object_type_from_members(&interface.stx.members);
+        for base in interface.stx.extends.iter() {
+          let base_ty = self.type_from_type_expr(base);
+          if let TypeKind::Object(base_obj) = self.type_store.kind(base_ty).clone() {
+            object = self.merge_object_types(object, base_obj);
+          }
+        }
+        let mut typ = self.type_store.object(object);
+        let existing_interface = bindings
+          .get(&name)
+          .and_then(|b| b.def)
+          .and_then(|id| self.def_data.get(&id).map(|d| (id, d.clone())))
+          .and_then(|(id, data)| match data.kind {
+            DefKind::Interface(existing) => Some((id, data.symbol, existing.typ)),
+            _ => None,
+          });
+        let (def_id, symbol) = if let Some((existing_id, symbol, existing_ty)) = existing_interface
+        {
+          typ = match (
+            self.type_store.kind(existing_ty).clone(),
+            self.type_store.kind(typ).clone(),
+          ) {
+            (TypeKind::Object(existing_obj), TypeKind::Object(obj)) => {
+              let merged = self.merge_object_types(existing_obj, obj);
+              self.type_store.object(merged)
+            }
+            _ => self.type_store.union(vec![existing_ty, typ], &self.builtin),
+          };
+          if let Some(def) = self.def_data.get_mut(&existing_id) {
+            def.kind = DefKind::Interface(InterfaceData { typ });
+            def.export = def.export || interface.stx.export;
+          }
+          (existing_id, symbol)
+        } else {
+          let symbol = self.alloc_symbol();
+          let def_id = self.alloc_def();
+          self.def_data.insert(
+            def_id,
+            DefData {
+              name: name.clone(),
+              file,
+              span: span.range,
+              symbol,
+              export: interface.stx.export,
+              kind: DefKind::Interface(InterfaceData { typ }),
+            },
+          );
+          self.record_def_symbol(def_id, symbol);
+          defs.push(def_id);
+          builder.add_decl(
+            def_id,
+            name.clone(),
+            sem_ts::DeclKind::Interface,
+            if interface.stx.export {
+              sem_ts::Exported::Named
+            } else {
+              sem_ts::Exported::No
+            },
+            span.range,
+          );
+          (def_id, symbol)
+        };
+
+        bindings
+          .entry(name.clone())
+          .and_modify(|binding| {
+            binding.symbol = symbol;
+            binding.def = Some(def_id);
+            binding.type_id = Some(typ);
+          })
+          .or_insert(SymbolBinding {
+            symbol,
+            def: Some(def_id),
+            type_id: Some(typ),
+          });
+
+        self.def_types.insert(def_id, typ);
+        self.record_symbol(file, span.range, symbol);
+      }
+      Stmt::TypeAliasDecl(alias) => {
+        let span = loc_to_span(file, stmt.loc);
+        let name = alias.stx.name.clone();
+        let mut ty = self.type_from_type_expr(&alias.stx.type_expr);
+        if ty == self.builtin.unknown {
+          ty = self.type_store.literal_string(name.clone());
+        }
+        if let TypeExpr::TypeReference(reference) = alias.stx.type_expr.stx.as_ref() {
+          if let TypeEntityName::Identifier(type_name) = &reference.stx.name {
+            if let Some(binding) = bindings.get(type_name) {
+              self.record_symbol(
+                file,
+                loc_to_span(file, alias.stx.type_expr.loc).range,
+                binding.symbol,
+              );
+            }
+          }
+        }
+        let def_id = self.alloc_def();
+        let symbol = self.alloc_symbol();
+        self.def_data.insert(
+          def_id,
+          DefData {
+            name: name.clone(),
+            file,
+            span: span.range,
+            symbol,
+            export: alias.stx.export,
+            kind: DefKind::TypeAlias(TypeAliasData { typ: ty }),
+          },
+        );
+        self.record_def_symbol(def_id, symbol);
+        self.def_types.insert(def_id, ty);
+        bindings.insert(
+          name.clone(),
+          SymbolBinding {
+            symbol,
+            def: Some(def_id),
+            type_id: Some(ty),
+          },
+        );
+        defs.push(def_id);
+        self.record_symbol(file, span.range, symbol);
+        builder.add_decl(
+          def_id,
+          name.clone(),
+          sem_ts::DeclKind::TypeAlias,
+          if alias.stx.export {
+            sem_ts::Exported::Named
+          } else {
+            sem_ts::Exported::No
+          },
+          span.range,
+        );
+      }
+      Stmt::NamespaceDecl(ns) => {
+        self.bind_ambient_namespace_body(file, &ns.stx.body, builder, bindings, defs);
+      }
+      Stmt::ModuleDecl(module) => {
+        if matches!(
+          module.stx.name,
+          parse_js::ast::ts_stmt::ModuleName::String(_)
+        ) {
+          self.bind_ambient_module(file, module, builder, defs);
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn bind_ambient_namespace_body(
+    &mut self,
+    file: FileId,
+    body: &NamespaceBody,
+    builder: &mut SemHirBuilder,
+    bindings: &mut HashMap<String, SymbolBinding>,
+    defs: &mut Vec<DefId>,
+  ) {
+    match body {
+      NamespaceBody::Block(stmts) => {
+        for stmt in stmts.iter() {
+          self.bind_ambient_stmt(file, stmt, builder, bindings, defs);
+        }
+      }
+      NamespaceBody::Namespace(inner) => {
+        self.bind_ambient_namespace_body(file, &inner.stx.body, builder, bindings, defs)
+      }
+    }
   }
 
   fn handle_var_decl(
@@ -7627,7 +7915,7 @@ impl ProgramState {
           }
         }
         DefKind::Import(import) => {
-          let exports = self.exports_of_file(import.from)?;
+          let exports = self.exports_for_import(&import)?;
           if let Some(entry) = exports.get(&import.original) {
             if let Some(ty) = entry.type_id {
               ty
@@ -7771,6 +8059,20 @@ impl ProgramState {
       }
     }
     Ok(map)
+  }
+
+  fn exports_of_ambient_module(&mut self, specifier: &str) -> Result<ExportMap, FatalError> {
+    let Some(semantics) = self.semantics.clone() else {
+      return Ok(ExportMap::new());
+    };
+    check::modules::exports_of_ambient_module(self, &semantics, specifier)
+  }
+
+  fn exports_for_import(&mut self, import: &ImportData) -> Result<ExportMap, FatalError> {
+    match &import.target {
+      ImportTarget::File(file) => self.exports_of_file(*file),
+      ImportTarget::Unresolved { specifier } => self.exports_of_ambient_module(specifier),
+    }
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {
