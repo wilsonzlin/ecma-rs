@@ -235,11 +235,20 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       TypeExprKind::Parenthesized(inner) => self.lower_type_expr(*inner, names),
       TypeExprKind::TypeRef(r) => self.lower_type_ref(r, names),
       TypeExprKind::TypeQuery(name) => {
-        let reference = hir_js::TypeRef {
-          name: name.clone(),
-          type_args: Vec::new(),
-        };
-        self.lower_type_ref(&reference, names)
+        if let Some(def) = self.resolve_typeof_name(name, names, None) {
+          return self.store.intern_type(TypeKind::Ref {
+            def,
+            args: Vec::new(),
+          });
+        }
+
+        let name = self.type_name_to_string(name, names);
+        self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+          format!("Cannot find name '{name}'."),
+          Span::new(self.file, TextRange::new(0, 0)),
+        ));
+
+        self.store.primitive_ids().unknown
       }
       TypeExprKind::KeyOf(inner) => {
         let ty = self.lower_type_expr(*inner, names);
@@ -431,6 +440,25 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       .iter()
       .filter_map(|id| self.type_params.get(id).copied())
       .collect()
+  }
+
+  fn type_name_to_string(&self, name: &hir_js::TypeName, names: &hir_js::NameInterner) -> String {
+    match name {
+      TypeName::Ident(id) => names.resolve(*id).unwrap_or_default().to_string(),
+      TypeName::Qualified(path) => path
+        .last()
+        .and_then(|id| names.resolve(*id))
+        .unwrap_or_default()
+        .to_string(),
+      TypeName::Import(import) => import
+        .qualifier
+        .as_ref()
+        .and_then(|q| q.last())
+        .and_then(|id| names.resolve(*id))
+        .unwrap_or_default()
+        .to_string(),
+      TypeName::ImportExpr => String::new(),
+    }
   }
 
   fn lower_signature(&mut self, sig: &TypeSignature, names: &hir_js::NameInterner) -> Signature {
@@ -672,22 +700,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       });
     }
 
-    let name = match &reference.name {
-      TypeName::Ident(id) => names.resolve(*id).unwrap_or_default().to_string(),
-      TypeName::Qualified(path) => path
-        .last()
-        .and_then(|id| names.resolve(*id))
-        .unwrap_or_default()
-        .to_string(),
-      TypeName::Import(import) => import
-        .qualifier
-        .as_ref()
-        .and_then(|q| q.last())
-        .and_then(|id| names.resolve(*id))
-        .unwrap_or_default()
-        .to_string(),
-      TypeName::ImportExpr => String::new(),
-    };
+    let name = self.type_name_to_string(&reference.name, names);
 
     self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
       format!("Cannot find name '{name}'."),
@@ -786,6 +799,43 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
   }
 
+  fn resolve_typeof_name(
+    &self,
+    name: &hir_js::TypeName,
+    names: &hir_js::NameInterner,
+    file_override: Option<FileId>,
+  ) -> Option<DefId> {
+    match name {
+      TypeName::Ident(id) => {
+        let resolved = names.resolve(*id)?.to_string();
+        self.resolve_named_value(&resolved, file_override.unwrap_or(self.file))
+      }
+      TypeName::Qualified(path) => self
+        .resolve_qualified_value(path, names, file_override.unwrap_or(self.file))
+        .or_else(|| {
+          path
+            .last()
+            .and_then(|id| names.resolve(*id))
+            .and_then(|resolved| {
+              self.resolve_named_value(&resolved.to_string(), file_override.unwrap_or(self.file))
+            })
+        }),
+      TypeName::Import(import) => import.module.as_ref().and_then(|module| {
+        let name = import
+          .qualifier
+          .as_ref()
+          .and_then(|segments| segments.last())
+          .and_then(|id| names.resolve(*id))
+          .map(|s| s.to_string())?;
+        let from_key = self.file_key.as_ref()?;
+        let target_key = self.host.and_then(|h| h.resolve(from_key, module))?;
+        let target_file = self.key_to_id.and_then(|resolver| resolver(&target_key))?;
+        self.resolve_named_value(&name, target_file)
+      }),
+      TypeName::ImportExpr => None,
+    }
+  }
+
   fn resolve_named_type(&self, name: &str, file: FileId) -> Option<DefId> {
     if file == self.file {
       if let Some(local) = self.local_defs.get(name).copied() {
@@ -846,6 +896,55 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     None
   }
 
+  fn resolve_named_value(&self, name: &str, file: FileId) -> Option<DefId> {
+    let owned = name.to_string();
+    if file == self.file {
+      if let Some(local) = self.local_defs.get(name).copied() {
+        return self
+          .def_map
+          .and_then(|map| map.get(&local).copied())
+          .or_else(|| {
+            self
+              .def_by_name
+              .and_then(|map| map.get(&(self.file, owned.clone())).copied())
+          })
+          .or(Some(local));
+      }
+    }
+
+    if let Some(def) = self.defs.get(&(file, owned.clone())) {
+      return Some(*def);
+    }
+
+    if let Some(def) = self
+      .def_by_name
+      .and_then(|map| map.get(&(file, owned.clone())).copied())
+    {
+      return Some(def);
+    }
+
+    if let Some(sem) = self.semantics {
+      if let Some(symbol) = sem.resolve_in_module(file, name, Namespace::VALUE) {
+        if let Some(def) = self.def_for_symbol_in_namespace(sem, symbol, Namespace::VALUE) {
+          return Some(def);
+        }
+      }
+      if let Some((_, group)) = sem
+        .global_symbols()
+        .iter()
+        .find(|(global_name, _)| *global_name == name)
+      {
+        if let Some(symbol) = group.symbol_for(Namespace::VALUE, sem.symbols()) {
+          if let Some(def) = self.def_for_symbol_in_namespace(sem, symbol, Namespace::VALUE) {
+            return Some(def);
+          }
+        }
+      }
+    }
+
+    None
+  }
+
   fn resolve_qualified_type(
     &self,
     path: &[hir_js::NameId],
@@ -872,6 +971,34 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
 
     self.def_for_symbol(sem, symbol)
+  }
+
+  fn resolve_qualified_value(
+    &self,
+    path: &[hir_js::NameId],
+    names: &hir_js::NameInterner,
+    file: FileId,
+  ) -> Option<DefId> {
+    let sem = self.semantics?;
+    let mut segments = Vec::new();
+    for id in path.iter() {
+      let Some(name) = names.resolve(*id) else {
+        return None;
+      };
+      segments.push(name.to_string());
+    }
+    if segments.is_empty() {
+      return None;
+    }
+
+    let mut symbol = sem.resolve_in_module(file, &segments[0], Namespace::VALUE)?;
+    let mut current_file = self.symbol_target_file(sem, symbol).unwrap_or(file);
+    for segment in segments.iter().skip(1) {
+      symbol = sem.resolve_export(current_file, segment, Namespace::VALUE)?;
+      current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
+    }
+
+    self.def_for_symbol_in_namespace(sem, symbol, Namespace::VALUE)
   }
 
   fn resolve_symbol_in_module(
@@ -926,21 +1053,31 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     symbol: semantic_js::ts::SymbolId,
   ) -> Option<DefId> {
     for ns in [Namespace::TYPE, Namespace::NAMESPACE, Namespace::VALUE] {
-      if let Some(decl) = sem.symbol_decls(symbol, ns).first() {
-        let decl_data = sem.symbols().decl(*decl);
-        let def = DefId(decl_data.def_id.0);
-        return self
-          .def_map
-          .and_then(|map| map.get(&def).copied())
-          .or_else(|| {
-            self
-              .def_by_name
-              .and_then(|map| map.get(&(decl_data.file, decl_data.name.clone())).copied())
-          })
-          .or(Some(def));
+      if let Some(def) = self.def_for_symbol_in_namespace(sem, symbol, ns) {
+        return Some(def);
       }
     }
     None
+  }
+
+  fn def_for_symbol_in_namespace(
+    &self,
+    sem: &TsProgramSemantics,
+    symbol: semantic_js::ts::SymbolId,
+    ns: Namespace,
+  ) -> Option<DefId> {
+    let decl = sem.symbol_decls(symbol, ns).first()?;
+    let decl_data = sem.symbols().decl(*decl);
+    let def = DefId(decl_data.def_id.0);
+    self
+      .def_map
+      .and_then(|map| map.get(&def).copied())
+      .or_else(|| {
+        self
+          .def_by_name
+          .and_then(|map| map.get(&(decl_data.file, decl_data.name.clone())).copied())
+      })
+      .or(Some(def))
   }
 }
 

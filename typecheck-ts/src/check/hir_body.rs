@@ -98,6 +98,13 @@ impl TypeResolver for BindingTypeResolver {
       _ => None,
     }
   }
+
+  fn resolve_typeof(&self, path: &[String]) -> Option<DefId> {
+    match path {
+      [name] => self.map.get(name).copied(),
+      _ => None,
+    }
+  }
 }
 
 #[derive(Default)]

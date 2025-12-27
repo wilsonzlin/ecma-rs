@@ -7802,6 +7802,42 @@ impl ProgramState {
           .type_store
           .predicate(pred.stx.parameter_name.clone(), asserted, pred.stx.asserts)
       }
+      TypeExpr::TypeQuery(query) => {
+        fn entity_name_segments(name: &TypeEntityName) -> Option<Vec<String>> {
+          match name {
+            TypeEntityName::Identifier(id) => Some(vec![id.clone()]),
+            TypeEntityName::Qualified(qualified) => {
+              let mut parts = entity_name_segments(&qualified.left)?;
+              parts.push(qualified.right.clone());
+              Some(parts)
+            }
+            TypeEntityName::Import(_) => None,
+          }
+        }
+
+        if let Some(path) = entity_name_segments(&query.stx.expr_name) {
+          if path.len() == 1 {
+            let mut entries: Vec<_> = self.def_data.iter().collect();
+            entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
+            let mut best: Option<(DefId, u8)> = None;
+            for (id, data) in entries.into_iter() {
+              if data.name != path[0] {
+                continue;
+              }
+              let pri = self.def_priority(*id, sem_ts::Namespace::VALUE);
+              match best {
+                Some((_, existing)) if existing <= pri => {}
+                _ => best = Some((*id, pri)),
+              }
+            }
+            if let Some((id, _)) = best {
+              return self.type_of_def(id);
+            }
+          }
+        }
+
+        self.builtin.unknown
+      }
       _ => self.builtin.unknown,
     }
   }
