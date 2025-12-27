@@ -149,6 +149,8 @@ pub struct CacheOptions {
   pub max_relation_cache_entries: usize,
   pub max_eval_cache_entries: usize,
   pub max_instantiation_cache_entries: usize,
+  pub max_body_cache_entries: usize,
+  pub max_def_cache_entries: usize,
   pub cache_shards: usize,
   pub mode: CacheMode,
 }
@@ -174,6 +176,20 @@ impl CacheOptions {
       shard_count: self.cache_shards,
     }
   }
+
+  pub fn body_config(&self) -> CacheConfig {
+    CacheConfig {
+      max_entries: self.max_body_cache_entries,
+      shard_count: self.cache_shards,
+    }
+  }
+
+  pub fn def_config(&self) -> CacheConfig {
+    CacheConfig {
+      max_entries: self.max_def_cache_entries,
+      shard_count: self.cache_shards,
+    }
+  }
 }
 
 impl Default for CacheOptions {
@@ -182,6 +198,8 @@ impl Default for CacheOptions {
       max_relation_cache_entries: CacheConfig::default().max_entries,
       max_eval_cache_entries: CacheConfig::default().max_entries,
       max_instantiation_cache_entries: CacheConfig::default().max_entries / 2,
+      max_body_cache_entries: CacheConfig::default().max_entries,
+      max_def_cache_entries: CacheConfig::default().max_entries,
       cache_shards: CacheConfig::default().shard_count,
       mode: CacheMode::Shared,
     }

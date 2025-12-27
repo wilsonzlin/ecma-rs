@@ -54,14 +54,18 @@ pub enum CacheKind {
   Eval,
   RefExpansion,
   Instantiation,
+  Body,
+  Def,
 }
 
 impl CacheKind {
-  pub const ALL: [CacheKind; 4] = [
+  pub const ALL: [CacheKind; 6] = [
     CacheKind::Relation,
     CacheKind::Eval,
     CacheKind::RefExpansion,
     CacheKind::Instantiation,
+    CacheKind::Body,
+    CacheKind::Def,
   ];
 
   pub const COUNT: usize = CacheKind::ALL.len();
@@ -73,6 +77,8 @@ impl CacheKind {
       CacheKind::Eval => 1,
       CacheKind::RefExpansion => 2,
       CacheKind::Instantiation => 3,
+      CacheKind::Body => 4,
+      CacheKind::Def => 5,
     }
   }
 }

@@ -31,6 +31,7 @@ fn shared_caches_reuse_entries_across_bodies() {
     max_instantiation_cache_entries: 4,
     cache_shards: 1,
     mode: CacheMode::Shared,
+    ..CacheOptions::default()
   });
 
   let first = relation_round(&store, &caches);
@@ -51,6 +52,7 @@ fn per_body_caches_do_not_leak_entries() {
     max_instantiation_cache_entries: 4,
     cache_shards: 1,
     mode: CacheMode::PerBody,
+    ..CacheOptions::default()
   });
 
   let first = relation_round(&store, &caches);
@@ -86,6 +88,7 @@ fn instantiation_cache_eviction_is_deterministic() {
     max_instantiation_cache_entries: 2,
     cache_shards: 1,
     mode: CacheMode::Shared,
+    ..CacheOptions::default()
   }
   .instantiation_config();
 
@@ -153,6 +156,7 @@ fn relation_eviction_remains_deterministic() {
     max_instantiation_cache_entries: 2,
     cache_shards: 1,
     mode: CacheMode::PerBody,
+    ..CacheOptions::default()
   });
 
   let run = |caches: &CheckerCaches| -> (Vec<bool>, CheckerCacheStats) {
@@ -301,6 +305,7 @@ fn cache_stats_are_recorded_for_profiling() {
     max_instantiation_cache_entries: 8,
     cache_shards: 1,
     mode: CacheMode::Shared,
+    ..CacheOptions::default()
   });
   let collector = QueryStatsCollector::default();
 
@@ -418,6 +423,7 @@ fn program_cache_stats_report_evictions() {
       max_instantiation_cache_entries: 0,
       cache_shards: 1,
       mode: CacheMode::PerBody,
+      ..CacheOptions::default()
     },
     ..CompilerOptions::default()
   };
@@ -457,6 +463,7 @@ fn program_cache_evictions_are_deterministic() {
       max_instantiation_cache_entries: 0,
       cache_shards: 1,
       mode: CacheMode::PerBody,
+      ..CacheOptions::default()
     },
     ..CompilerOptions::default()
   };
@@ -547,6 +554,7 @@ fn program_query_stats_include_shared_caches() {
     max_instantiation_cache_entries: 0,
     cache_shards: 1,
     mode: CacheMode::Shared,
+    ..CacheOptions::default()
   };
   let options = CompilerOptions {
     cache,
@@ -597,6 +605,7 @@ fn program_accumulates_per_body_cache_stats() {
     max_instantiation_cache_entries: 0,
     cache_shards: 1,
     mode: CacheMode::PerBody,
+    ..CacheOptions::default()
   };
   let options = CompilerOptions {
     cache,

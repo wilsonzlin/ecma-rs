@@ -87,6 +87,10 @@ impl<K: Eq + Hash + Clone, V: Clone> ClockCache<K, V> {
     self.entries.len()
   }
 
+  fn contains(&self, key: &K) -> bool {
+    self.index.contains_key(key)
+  }
+
   fn stats(&self) -> CacheStats {
     self.stats
   }
@@ -110,6 +114,22 @@ impl<K: Eq + Hash + Clone, V: Clone> ClockCache<K, V> {
         None
       }
     }
+  }
+
+  fn remove(&mut self, key: &K) -> Option<V> {
+    let idx = self.index.remove(key)?;
+    let entry = self.entries.swap_remove(idx);
+    if idx < self.entries.len() {
+      let swapped_key = self.entries[idx].key.clone();
+      self.index.insert(swapped_key, idx);
+    }
+    if self.hand > idx && self.hand != 0 {
+      self.hand -= 1;
+    }
+    if self.hand >= self.entries.len() {
+      self.hand = 0;
+    }
+    Some(entry.value)
   }
 
   fn insert(&mut self, key: K, value: V) {
@@ -178,6 +198,14 @@ impl<K: Eq + Hash + Clone, V: Clone> ClockCache<K, V> {
     self.hand = 0;
     self.stats = CacheStats::default();
   }
+
+  fn entries(&self) -> Vec<(K, V)> {
+    self
+      .entries
+      .iter()
+      .map(|entry| (entry.key.clone(), entry.value.clone()))
+      .collect()
+  }
 }
 
 #[derive(Debug)]
@@ -215,9 +243,27 @@ impl<K: Eq + Hash + Clone, V: Clone> ShardedCache<K, V> {
     self.shards[idx].lock().get(key)
   }
 
+  pub fn contains(&self, key: &K) -> bool {
+    let idx = self.shard_index(key);
+    self.shards[idx].lock().contains(key)
+  }
+
   pub fn insert(&self, key: K, value: V) {
     let idx = self.shard_index(&key);
     self.shards[idx].lock().insert(key, value);
+  }
+
+  pub fn remove(&self, key: &K) -> Option<V> {
+    let idx = self.shard_index(key);
+    self.shards[idx].lock().remove(key)
+  }
+
+  pub fn entries(&self) -> Vec<(K, V)> {
+    self
+      .shards
+      .iter()
+      .flat_map(|shard| shard.lock().entries())
+      .collect()
   }
 
   pub fn clear(&self) {
