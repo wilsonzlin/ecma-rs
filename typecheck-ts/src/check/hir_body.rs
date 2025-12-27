@@ -39,7 +39,9 @@ use super::expr::resolve_call;
 use super::infer::TypeParamDecl;
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
-use super::widen::{widen_array_elements, widen_literal, widen_object_literal_props};
+use super::widen::{
+  widen_array_elements, widen_literal, widen_object_literal_props, widen_union_literals,
+};
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
 
@@ -66,6 +68,13 @@ impl ExprContext {
     Self {
       expected: Some(ty),
       const_context: true,
+      ..Default::default()
+    }
+  }
+
+  fn with_expected(expected: Option<TypeId>) -> Self {
+    Self {
+      expected,
       ..Default::default()
     }
   }
@@ -696,7 +705,9 @@ impl<'a> Checker<'a> {
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
-      let default_ty = param.stx.default_value.as_ref().map(|d| self.check_expr(d));
+      let default_ty = param.stx.default_value.as_ref().map(|d| {
+        self.check_expr_in_ctx(d, ExprContext::with_expected(annotation))
+      });
       let mut ty = annotation.unwrap_or(self.store.primitive_ids().unknown);
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
@@ -739,7 +750,7 @@ impl<'a> Checker<'a> {
         self.check_stmt_list(block);
       }
       Some(FuncBody::Expression(expr)) => {
-        let ty = self.check_expr(expr);
+        let ty = self.check_expr_in_ctx(expr, ExprContext::with_expected(self.expected_return));
         if let Some(expected) = self.expected_return {
           self.check_assignable(expr, ty, expected);
         }
@@ -764,11 +775,12 @@ impl<'a> Checker<'a> {
         self.check_expr(&default_expr.stx.expression);
       }
       Stmt::Return(ret) => {
+        let ctx = ExprContext::with_expected(self.expected_return);
         let ty = ret
           .stx
           .value
           .as_ref()
-          .map(|v| self.check_expr(v))
+          .map(|v| self.check_expr_in_ctx(v, ctx))
           .unwrap_or(self.store.primitive_ids().undefined);
         if let (Some(expected), Some(value)) = (self.expected_return, ret.stx.value.as_ref()) {
           self.check_assignable(value, ty, expected);
@@ -972,7 +984,17 @@ impl<'a> Checker<'a> {
     if annotation.is_some() {
       self.widen_object_literals = false;
     }
-    let init_ty = self.check_expr(init);
+    let init_ty = match annotation {
+      Some(expected) => self.check_expr_in_ctx(
+        init,
+        ExprContext {
+          expected: Some(expected),
+          const_context: self.expr_context.const_context,
+          preserve_inferred: true,
+        },
+      ),
+      None => self.check_expr(init),
+    };
     self.widen_object_literals = prev;
     if let Some(expected) = annotation {
       let contextual = self.contextual_arg_type(init_ty, expected);
@@ -1261,57 +1283,227 @@ impl<'a> Checker<'a> {
   }
 
   fn array_literal_type(&mut self, arr: &Node<parse_js::ast::expr::lit::LitArrExpr>) -> TypeId {
-    let mut elems = Vec::new();
-    for (idx, elem) in arr.stx.elements.iter().enumerate() {
-      let elem_ctx = self.contextual_array_element_ctx(idx);
+    let prim = self.store.primitive_ids();
+    let expected_array_elem = self
+      .expr_context
+      .expected
+      .and_then(|expected| match self.store.type_kind(expected) {
+        TypeKind::Array { ty, .. } => Some(ty),
+        _ => None,
+      });
+    let expected_tuple = self
+      .expr_context
+      .expected
+      .and_then(|expected| match self.store.type_kind(expected) {
+        TypeKind::Tuple(elems) => Some(elems),
+        _ => None,
+      });
+
+    let mut elem_types = Vec::new();
+    let mut tuple_elems = Vec::new();
+    let mut idx = 0usize;
+    for elem in arr.stx.elements.iter() {
       match elem {
         parse_js::ast::expr::lit::LitArrElem::Single(v) => {
-          elems.push(self.check_array_element(v, elem_ctx))
+          let expected_elem = expected_tuple
+            .as_ref()
+            .and_then(|elems| self.tuple_elem_expected_type(elems, idx))
+            .or(expected_array_elem);
+          let elem_ty = self.check_expr_in_ctx(
+            v,
+            ExprContext {
+              expected: expected_elem,
+              const_context: self.expr_context.const_context,
+              ..ExprContext::default()
+            },
+          );
+          elem_types.push(elem_ty);
+          tuple_elems.push(types_ts_interned::TupleElem {
+            ty: elem_ty,
+            optional: false,
+            rest: false,
+            readonly: self.expr_context.const_context,
+          });
+          idx += 1;
         }
         parse_js::ast::expr::lit::LitArrElem::Rest(v) => {
-          elems.push(self.check_array_element(v, elem_ctx))
+          let expected_elem = expected_tuple
+            .as_ref()
+            .and_then(|elems| self.tuple_elem_expected_type(elems, idx))
+            .or(expected_array_elem);
+          let rest_ty = self.check_expr_in_ctx(
+            v,
+            ExprContext {
+              expected: expected_elem,
+              const_context: self.expr_context.const_context,
+              ..ExprContext::default()
+            },
+          );
+          if let Some(elem_ty) = self.array_element_type(rest_ty) {
+            elem_types.push(elem_ty);
+          }
+          tuple_elems.push(types_ts_interned::TupleElem {
+            ty: rest_ty,
+            optional: false,
+            rest: true,
+            readonly: self.expr_context.const_context,
+          });
+          idx += 1;
         }
-        parse_js::ast::expr::lit::LitArrElem::Empty => {}
+        parse_js::ast::expr::lit::LitArrElem::Empty => {
+          elem_types.push(prim.undefined);
+          tuple_elems.push(types_ts_interned::TupleElem {
+            ty: prim.undefined,
+            optional: true,
+            rest: false,
+            readonly: self.expr_context.const_context,
+          });
+          idx += 1;
+        }
       }
     }
-    let elem_ty = if elems.is_empty() {
-      self.store.primitive_ids().unknown
+
+    let mut elem_ty = if elem_types.is_empty() {
+      prim.unknown
     } else {
-      self.store.union(elems)
+      self.store.union(elem_types)
     };
-    self.store.intern_type(TypeKind::Array {
+    let preserve_literals = if let Some(preserve) =
+      self.array_literal_context_preserves_literals(self.expr_context.expected)
+    {
+      preserve
+    } else {
+      self.expr_context.expected.is_some()
+    };
+    if !self.expr_context.const_context && !preserve_literals {
+      elem_ty = widen_union_literals(&self.store, elem_ty);
+    }
+    let array_ty = self.store.intern_type(TypeKind::Array {
       ty: elem_ty,
       readonly: false,
-    })
-  }
+    });
 
-  fn check_array_element(&mut self, expr: &Node<AstExpr>, ctx: Option<ExprContext>) -> TypeId {
-    match ctx {
-      Some(ctx) => self.check_expr_in_ctx(expr, ctx),
-      None => self.check_expr(expr),
+    if let Some(expected) = expected_tuple {
+      if self.array_literal_matches_tuple(&tuple_elems, &expected) {
+        return self.store.intern_type(TypeKind::Tuple(tuple_elems));
+      }
     }
+
+    array_ty
   }
 
-  fn contextual_array_element_ctx(&self, index: usize) -> Option<ExprContext> {
-    self
-      .contextual_array_element_type(index)
-      .map(|ty| ExprContext {
-        expected: Some(ty),
-        const_context: self.expr_context.const_context,
-        ..ExprContext::default()
-      })
-  }
-
-  fn contextual_array_element_type(&self, index: usize) -> Option<TypeId> {
-    let contextual = self.expr_context.expected?;
-    match self.store.type_kind(contextual) {
-      TypeKind::Array { ty, .. } => Some(ty),
-      TypeKind::Tuple(elems) => elems
-        .get(index)
-        .map(|elem| elem.ty)
-        .or_else(|| elems.iter().find(|elem| elem.rest).map(|elem| elem.ty)),
+  fn array_literal_context_preserves_literals(&self, expected: Option<TypeId>) -> Option<bool> {
+    let Some(ty) = expected else {
+      return None;
+    };
+    match self.store.type_kind(ty) {
+      TypeKind::Array { ty, .. } => Some(self.literal_context_type(ty)),
+      TypeKind::Tuple(_) => Some(true),
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        let mut decision: Option<bool> = None;
+        for member in members {
+          let Some(preserve) = self.array_literal_context_preserves_literals(Some(member)) else {
+            return None;
+          };
+          decision = match decision {
+            None => Some(preserve),
+            Some(existing) if existing == preserve => Some(existing),
+            _ => return None,
+          };
+        }
+        decision
+      }
       _ => None,
     }
+  }
+
+  fn literal_context_type(&self, ty: TypeId) -> bool {
+    match self.store.type_kind(ty) {
+      TypeKind::NumberLiteral(_)
+      | TypeKind::StringLiteral(_)
+      | TypeKind::BooleanLiteral(_)
+      | TypeKind::BigIntLiteral(_)
+      | TypeKind::TemplateLiteral(_) => true,
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        members
+          .into_iter()
+          .all(|member| self.literal_context_type(member))
+      }
+      _ => false,
+    }
+  }
+
+  fn tuple_elem_expected_type(
+    &self,
+    expected: &[types_ts_interned::TupleElem],
+    idx: usize,
+  ) -> Option<TypeId> {
+    let mut pos = 0usize;
+    for elem in expected.iter() {
+      if elem.rest {
+        return Some(elem.ty);
+      }
+      if pos == idx {
+        return Some(elem.ty);
+      }
+      pos += 1;
+    }
+    None
+  }
+
+  fn array_element_type(&self, ty: TypeId) -> Option<TypeId> {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::Array { ty, .. } => Some(ty),
+      TypeKind::Tuple(elems) => {
+        if elems.is_empty() {
+          None
+        } else {
+          let members: Vec<_> = elems.into_iter().map(|e| e.ty).collect();
+          Some(self.store.union(members))
+        }
+      }
+      TypeKind::Union(members) => {
+        let collected: Vec<_> = members
+          .into_iter()
+          .filter_map(|member| self.array_element_type(member))
+          .collect();
+        if collected.is_empty() {
+          Some(prim.unknown)
+        } else {
+          Some(self.store.union(collected))
+        }
+      }
+      TypeKind::Intersection(members) => {
+        let collected: Vec<_> = members
+          .into_iter()
+          .filter_map(|member| self.array_element_type(member))
+          .collect();
+        if collected.is_empty() {
+          Some(prim.unknown)
+        } else {
+          Some(self.store.intersection(collected))
+        }
+      }
+      _ => Some(prim.unknown),
+    }
+  }
+
+  fn array_literal_matches_tuple(
+    &self,
+    actual: &[types_ts_interned::TupleElem],
+    expected: &[types_ts_interned::TupleElem],
+  ) -> bool {
+    if actual.iter().any(|e| e.rest) || expected.iter().any(|e| e.rest) {
+      return true;
+    }
+    if actual.len() > expected.len() {
+      return false;
+    }
+    if actual.len() == expected.len() {
+      return true;
+    }
+    expected.iter().skip(actual.len()).all(|e| e.optional)
   }
 
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
