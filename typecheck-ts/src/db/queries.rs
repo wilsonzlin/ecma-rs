@@ -13,6 +13,7 @@ use crate::sem_hir::sem_hir_from_lower;
 pub struct LowerResultWithDiagnostics {
   pub lowered: Option<Arc<LowerResult>>,
   pub diagnostics: Vec<Diagnostic>,
+  pub file_kind: FileKind,
 }
 
 impl PartialEq for LowerResultWithDiagnostics {
@@ -22,7 +23,7 @@ impl PartialEq for LowerResultWithDiagnostics {
       (None, None) => true,
       _ => false,
     };
-    lowered_eq && self.diagnostics == other.diagnostics
+    lowered_eq && self.diagnostics == other.diagnostics && self.file_kind == other.file_kind
   }
 }
 
@@ -81,6 +82,7 @@ pub fn lower_hir(db: &dyn TypecheckDatabase, file: FileId) -> LowerResultWithDia
   LowerResultWithDiagnostics {
     lowered,
     diagnostics,
+    file_kind,
   }
 }
 
@@ -89,7 +91,7 @@ pub fn sem_hir(db: &dyn TypecheckDatabase, file: FileId) -> sem_ts::HirFile {
   if let Some(lowered) = lowered.lowered.as_ref() {
     sem_hir_from_lower(lowered)
   } else {
-    empty_sem_hir(file, db.file_kind(file))
+    empty_sem_hir(file, lowered.file_kind)
   }
 }
 
