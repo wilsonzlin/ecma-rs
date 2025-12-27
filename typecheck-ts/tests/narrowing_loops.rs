@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use diagnostics::FileId;
 use hir_js::{lower_from_source, Body, BodyId, DefKind, LowerResult, NameId, NameInterner};
+use typecheck_ts::check::flow_bindings::FlowBindings;
 use typecheck_ts::check::hir_body::check_body_with_env;
 use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
@@ -30,15 +31,25 @@ fn run_flow(
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, types_ts_interned::TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
+  let flow_bindings = FlowBindings::from_body(body);
+  let initial = initial
+    .iter()
+    .filter_map(|(name, ty)| {
+      flow_bindings
+        .binding_for_name(*name)
+        .map(|binding| (binding, *ty))
+    })
+    .collect::<HashMap<_, _>>();
   let relate = RelateCtx::new(Arc::clone(store), store.options());
   check_body_with_env(
     body_id,
     body,
     names,
+    &flow_bindings,
     file,
     src,
     Arc::clone(store),
-    initial,
+    &initial,
     relate,
     None,
   )

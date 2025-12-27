@@ -7,11 +7,12 @@ use hir_js::{
   NameInterner,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
-use semantic_js::ts::locals::bind_ts_locals;
+use semantic_js::ts::locals::{bind_ts_locals, TsLocalSemantics};
+use typecheck_ts::check::flow_bindings::FlowBindings;
 use typecheck_ts::check::hir_body::check_body_with_env;
 use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
-fn parse_and_lower_with_locals(source: &str) -> LowerResult {
+fn parse_and_lower_with_locals(source: &str) -> (LowerResult, TsLocalSemantics) {
   let mut ast = parse_with_options(
     source,
     ParseOptions {
@@ -20,9 +21,9 @@ fn parse_and_lower_with_locals(source: &str) -> LowerResult {
     },
   )
   .expect("parse");
-  bind_ts_locals(&mut ast, FileId(0), true);
+  let locals = bind_ts_locals(&mut ast, FileId(0), true);
   let (lowered, _) = lower_file_with_diagnostics(FileId(0), HirFileKind::Ts, &ast);
-  lowered
+  (lowered, locals)
 }
 
 fn name_id(names: &NameInterner, target: &str) -> NameId {
@@ -40,6 +41,40 @@ fn body_of<'a>(lowered: &'a LowerResult, names: &NameInterner, func: &str) -> (B
   (body_id, lowered.body(body_id).unwrap())
 }
 
+fn run_flow(
+  lowered: &LowerResult,
+  locals: &TsLocalSemantics,
+  func: &str,
+  file: FileId,
+  src: &str,
+  store: Arc<TypeStore>,
+  initial: &HashMap<NameId, types_ts_interned::TypeId>,
+) -> typecheck_ts::BodyCheckResult {
+  let (body_id, body) = body_of(lowered, &lowered.names, func);
+  let flow_bindings = FlowBindings::new(body, locals);
+  let initial = initial
+    .iter()
+    .filter_map(|(name, ty)| {
+      flow_bindings
+        .binding_for_name(*name)
+        .map(|binding| (binding, *ty))
+    })
+    .collect::<HashMap<_, _>>();
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    &flow_bindings,
+    file,
+    src,
+    store,
+    &initial,
+    relate,
+    None,
+  )
+}
+
 #[test]
 fn block_scoped_shadowing_does_not_poison_outer() {
   let src = r#"
@@ -50,25 +85,21 @@ function f(x: string | null) {
   return x;
 }
 "#;
-  let lowered = parse_and_lower_with_locals(src);
-  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let (lowered, locals) = parse_and_lower_with_locals(src);
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
   let expected = store.union(vec![prim.string, prim.null]);
   initial.insert(name_id(lowered.names.as_ref(), "x"), expected);
 
-  let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  let res = check_body_with_env(
-    body_id,
-    body,
-    &lowered.names,
+  let res = run_flow(
+    &lowered,
+    &locals,
+    "f",
     FileId(0),
     src,
     Arc::clone(&store),
     &initial,
-    relate,
-    None,
   );
 
   let ret_ty = res.return_types()[0];
@@ -88,8 +119,7 @@ function f(x: string | null) {
   return x;
 }
 "#;
-  let lowered = parse_and_lower_with_locals(src);
-  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let (lowered, locals) = parse_and_lower_with_locals(src);
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
@@ -98,17 +128,14 @@ function f(x: string | null) {
     store.union(vec![prim.string, prim.null]),
   );
 
-  let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  let res = check_body_with_env(
-    body_id,
-    body,
-    &lowered.names,
+  let res = run_flow(
+    &lowered,
+    &locals,
+    "f",
     FileId(0),
     src,
     Arc::clone(&store),
     &initial,
-    relate,
-    None,
   );
 
   let ret_ty = res.return_types()[0];
