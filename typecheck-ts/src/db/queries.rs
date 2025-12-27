@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -8,7 +9,7 @@ use hir_js::{
   LowerResult, ObjectProperty, StmtKind,
 };
 use semantic_js::ts as sem_ts;
-use types_ts_interned::PrimitiveIds;
+use types_ts_interned::{PrimitiveIds, TypeStore};
 
 use crate::codes;
 use crate::db::inputs::{
@@ -25,6 +26,7 @@ use crate::semantic_js::SymbolId;
 use crate::symbols::SymbolBinding;
 use crate::FileKey;
 use crate::{BodyId, DefId, TypeId};
+use salsa::Setter;
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
   db.file_input_by_key(key)
@@ -714,4 +716,366 @@ pub fn body_file(db: &dyn Db, body: BodyId) -> Option<FileId> {
 pub fn body_parent(db: &dyn Db, body: BodyId) -> Option<BodyId> {
   let file = body_file(db, body)?;
   body_parents_in_file(db, file).get(&body).copied()
+}
+
+#[salsa::input]
+pub struct TypeCompilerOptions {
+  #[return_ref]
+  pub options: CompilerOptions,
+}
+
+#[salsa::input]
+pub struct TypeStoreInput {
+  pub store: SharedTypeStore,
+}
+
+#[salsa::input]
+pub struct FilesInput {
+  #[return_ref]
+  pub files: Arc<Vec<FileId>>,
+}
+
+#[salsa::input]
+pub struct DeclTypesInput {
+  pub file: FileId,
+  #[return_ref]
+  pub decls: Arc<BTreeMap<DefId, DeclInfo>>,
+}
+
+#[salsa::db]
+pub trait TypeDb: salsa::Database + Send + 'static {
+  fn compiler_options_input(&self) -> TypeCompilerOptions;
+  fn type_store_input(&self) -> TypeStoreInput;
+  fn files_input(&self) -> FilesInput;
+  fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput>;
+}
+
+/// Cheap wrapper around [`TypeStore`] with pointer-based equality for salsa
+/// inputs.
+#[derive(Clone)]
+pub struct SharedTypeStore(pub Arc<TypeStore>);
+
+impl SharedTypeStore {
+  pub fn arc(&self) -> Arc<TypeStore> {
+    Arc::clone(&self.0)
+  }
+}
+
+impl fmt::Debug for SharedTypeStore {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("SharedTypeStore")
+      .field(&Arc::as_ptr(&self.0))
+      .finish()
+  }
+}
+
+impl PartialEq for SharedTypeStore {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+impl Eq for SharedTypeStore {}
+
+/// Kind of declaration associated with a definition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeclKind {
+  Var,
+  Function,
+  TypeAlias,
+  Interface,
+  Namespace,
+}
+
+/// Representation of a lowered declaration.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeclInfo {
+  /// Owning file.
+  pub file: FileId,
+  /// Name of the declaration, used for merging.
+  pub name: String,
+  /// Kind of declaration (variable/function/etc.).
+  pub kind: DeclKind,
+  /// Explicitly annotated type if present.
+  pub declared_type: Option<TypeId>,
+  /// Initializer used for inference if no annotation is present.
+  pub initializer: Option<Initializer>,
+}
+
+/// Simplified initializer model used by [`check_body`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Initializer {
+  /// Reference to another definition.
+  Reference(DefId),
+  /// Explicit type literal for the initializer.
+  Type(TypeId),
+  /// Union-like combination of other initializers.
+  Union(Vec<Initializer>),
+}
+
+/// Semantic snapshot derived from declared definitions.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TypeSemantics {
+  /// Grouped definitions by merge boundary (currently name + file).
+  pub merged_defs: HashMap<DefId, Arc<Vec<DefId>>>,
+  /// Owning file for each known definition.
+  pub def_files: HashMap<DefId, FileId>,
+}
+
+#[salsa::tracked]
+pub fn type_compiler_options(db: &dyn TypeDb) -> CompilerOptions {
+  db.compiler_options_input().options(db).clone()
+}
+
+#[salsa::tracked]
+pub fn type_store(db: &dyn TypeDb) -> SharedTypeStore {
+  db.type_store_input().store(db)
+}
+
+#[salsa::tracked]
+pub fn files(db: &dyn TypeDb) -> Arc<Vec<FileId>> {
+  db.files_input().files(db).clone()
+}
+
+#[salsa::tracked]
+pub fn decl_types_in_file(
+  db: &dyn TypeDb,
+  file: FileId,
+  _seed: (),
+) -> Arc<BTreeMap<DefId, DeclInfo>> {
+  // The unit `seed` keeps this as a memoized-style query without requiring
+  // `FileId` to be a salsa struct.
+  db.decl_types_input(file)
+    .map(|handle| handle.decls(db).clone())
+    .unwrap_or_else(|| Arc::new(BTreeMap::new()))
+}
+
+#[salsa::tracked]
+pub fn type_semantics(db: &dyn TypeDb) -> Arc<TypeSemantics> {
+  let mut by_name: BTreeMap<(FileId, String), Vec<DefId>> = BTreeMap::new();
+  let mut def_files = HashMap::new();
+  let mut file_list: Vec<_> = files(db).iter().copied().collect();
+  file_list.sort_by_key(|f| f.0);
+  for file in file_list.into_iter() {
+    for (def, decl) in decl_types_in_file(db, file, ()).iter() {
+      by_name
+        .entry((decl.file, decl.name.clone()))
+        .or_default()
+        .push(*def);
+      def_files.insert(*def, decl.file);
+    }
+  }
+
+  let mut merged_defs = HashMap::new();
+  for (_, mut defs) in by_name.into_iter() {
+    defs.sort_by_key(|d| d.0);
+    let group = Arc::new(defs.clone());
+    for def in defs {
+      merged_defs.insert(def, Arc::clone(&group));
+    }
+  }
+
+  Arc::new(TypeSemantics {
+    merged_defs,
+    def_files,
+  })
+}
+
+#[salsa::tracked(recovery_fn = check_body_cycle)]
+pub fn check_body(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
+  // The unit seed mirrors `decl_types_in_file` to avoid introducing synthetic
+  // salsa structs for every definition key.
+  let store = type_store(db).arc();
+  let fallback = store.primitive_ids().unknown;
+  let Some(decl) = decl_types_for_def(db, def) else {
+    return fallback;
+  };
+  let Some(init) = decl.initializer.clone() else {
+    return fallback;
+  };
+  eval_initializer(db, &store, init)
+}
+
+fn check_body_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: ()) -> TypeId {
+  // Bodies are part of the same cycle when an initializer references its own
+  // definition. Recover with `any` to mirror `type_of_def`'s fallback and avoid
+  // panicking on self-references.
+  type_store(db).arc().primitive_ids().any
+}
+
+#[salsa::tracked(recovery_fn = type_of_def_cycle)]
+pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
+  // The extra seed enables the tracked query to memoize arbitrary `DefId`s
+  // without forcing them to implement salsa's struct traits.
+  // Track compiler options changes even if we do not branch on them yet.
+  let _options = type_compiler_options(db);
+  let store = type_store(db).arc();
+  let fallback = store.primitive_ids().any;
+
+  let base = base_type(db, &store, def, fallback);
+
+  let semantics = type_semantics(db);
+  if let Some(group) = semantics.merged_defs.get(&def) {
+    if group.len() > 1 {
+      let mut members = Vec::with_capacity(group.len());
+      for member in group.iter() {
+        // Avoid recursive `type_of_def` calls across a merged group by using
+        // each member's base type directly. Definitions are processed in the
+        // stable order produced by `type_semantics` to keep unions deterministic.
+        let ty = if *member == def {
+          base
+        } else {
+          base_type(db, &store, *member, fallback)
+        };
+        members.push(ty);
+      }
+      return store.union(members);
+    }
+  }
+
+  base
+}
+
+fn type_of_def_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: ()) -> TypeId {
+  // Self-referential definitions fall back to `any` to keep results stable
+  // under cycles instead of panicking.
+  type_store(db).arc().primitive_ids().any
+}
+
+fn base_type(db: &dyn TypeDb, store: &Arc<TypeStore>, def: DefId, fallback: TypeId) -> TypeId {
+  if let Some(decl) = decl_types_for_def(db, def) {
+    if let Some(annotated) = decl.declared_type {
+      return store.canon(annotated);
+    }
+    if decl.initializer.is_some() {
+      return check_body(db, def, ());
+    }
+  }
+  fallback
+}
+
+fn decl_types_for_def(db: &dyn TypeDb, def: DefId) -> Option<DeclInfo> {
+  let semantics = type_semantics(db);
+  if let Some(file) = semantics.def_files.get(&def).copied() {
+    if let Some(entry) = decl_types_in_file(db, file, ()).get(&def) {
+      return Some(entry.clone());
+    }
+  }
+
+  let mut file_list: Vec<_> = files(db).iter().copied().collect();
+  file_list.sort_by_key(|f| f.0);
+  for file in file_list {
+    if let Some(entry) = decl_types_in_file(db, file, ()).get(&def) {
+      return Some(entry.clone());
+    }
+  }
+  None
+}
+
+fn eval_initializer(db: &dyn TypeDb, store: &Arc<TypeStore>, init: Initializer) -> TypeId {
+  match init {
+    Initializer::Reference(def) => type_of_def(db, def, ()),
+    Initializer::Type(ty) => store.canon(ty),
+    Initializer::Union(inits) => {
+      let mut members = Vec::with_capacity(inits.len());
+      for init in inits.into_iter() {
+        members.push(eval_initializer(db, store, init));
+      }
+      store.union(members)
+    }
+  }
+}
+
+pub trait TypeDatabase: TypeDb {}
+impl TypeDatabase for TypesDatabase {}
+
+#[salsa::db]
+#[derive(Clone)]
+pub struct TypesDatabase {
+  storage: salsa::Storage<Self>,
+  compiler_options: Option<TypeCompilerOptions>,
+  type_store: Option<TypeStoreInput>,
+  files: Option<FilesInput>,
+  decls: BTreeMap<FileId, DeclTypesInput>,
+}
+
+impl Default for TypesDatabase {
+  fn default() -> Self {
+    Self {
+      storage: salsa::Storage::default(),
+      compiler_options: None,
+      type_store: None,
+      files: None,
+      decls: BTreeMap::new(),
+    }
+  }
+}
+
+#[salsa::db]
+impl salsa::Database for TypesDatabase {
+  fn salsa_event(&self, _event: &dyn Fn() -> salsa::Event) {}
+}
+
+#[salsa::db]
+impl TypeDb for TypesDatabase {
+  fn compiler_options_input(&self) -> TypeCompilerOptions {
+    self
+      .compiler_options
+      .expect("compiler options must be initialized")
+  }
+
+  fn type_store_input(&self) -> TypeStoreInput {
+    self.type_store.expect("type store must be initialized")
+  }
+
+  fn files_input(&self) -> FilesInput {
+    self.files.expect("files must be initialized")
+  }
+
+  fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput> {
+    self.decls.get(&file).copied()
+  }
+}
+
+impl TypesDatabase {
+  pub fn new() -> Self {
+    Self::default()
+  }
+
+  pub fn snapshot(&self) -> Self {
+    self.clone()
+  }
+
+  pub fn set_compiler_options(&mut self, options: CompilerOptions) {
+    if let Some(handle) = self.compiler_options {
+      handle.set_options(self).to(options);
+    } else {
+      self.compiler_options = Some(TypeCompilerOptions::new(self, options));
+    }
+  }
+
+  pub fn set_type_store(&mut self, store: SharedTypeStore) {
+    if let Some(handle) = self.type_store {
+      handle.set_store(self).to(store.clone());
+    } else {
+      self.type_store = Some(TypeStoreInput::new(self, store));
+    }
+  }
+
+  pub fn set_files(&mut self, files: Arc<Vec<FileId>>) {
+    if let Some(handle) = self.files {
+      handle.set_files(self).to(files);
+    } else {
+      self.files = Some(FilesInput::new(self, files));
+    }
+  }
+
+  pub fn set_decl_types_in_file(&mut self, file: FileId, decls: Arc<BTreeMap<DefId, DeclInfo>>) {
+    if let Some(handle) = self.decls.get(&file).copied() {
+      handle.set_decls(self).to(decls);
+    } else {
+      let input = DeclTypesInput::new(self, file, decls);
+      self.decls.insert(file, input);
+    }
+  }
 }
