@@ -813,41 +813,46 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   ) {
     if let Some(import) = module.imports.get(name) {
       if let Some(from) = import.from {
-        let target_name = match &import.imported {
-          ImportItem::Named(n) => n.clone(),
-          ImportItem::Default => "default".to_string(),
-          ImportItem::Namespace => name.to_string(),
-        };
-        let target_exports = self.exports_for(from);
-        if let Some(entry) = target_exports.get(&target_name) {
-          let filtered = filter_group(
-            entry.clone(),
-            if type_only || import.type_only {
-              Namespace::TYPE
-            } else {
-              Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
-            },
-            &self.symbols,
-          );
-          if let Some(group) = filtered {
-            insert_export(
-              map,
-              export_spans,
-              exported_as,
-              origin_span,
-              group,
-              &mut self.symbols,
-              &mut self.diagnostics,
+        // Namespace imports bind a local namespace object; exporting them should
+        // re-use that local binding rather than looking up exports in the
+        // target module.
+        if !matches!(import.imported, ImportItem::Namespace) {
+          let target_name = match &import.imported {
+            ImportItem::Named(n) => n.clone(),
+            ImportItem::Default => "default".to_string(),
+            ImportItem::Namespace => unreachable!("handled above"),
+          };
+          let target_exports = self.exports_for(from);
+          if let Some(entry) = target_exports.get(&target_name) {
+            let filtered = filter_group(
+              entry.clone(),
+              if type_only || import.type_only {
+                Namespace::TYPE
+              } else {
+                Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
+              },
+              &self.symbols,
             );
+            if let Some(group) = filtered {
+              insert_export(
+                map,
+                export_spans,
+                exported_as,
+                origin_span,
+                group,
+                &mut self.symbols,
+                &mut self.diagnostics,
+              );
+              return;
+            }
+          } else {
+            self.diagnostics.push(Diagnostic::error(
+              "BIND1002",
+              format!("cannot find export '{}' in module", target_name),
+              origin_span,
+            ));
             return;
           }
-        } else {
-          self.diagnostics.push(Diagnostic::error(
-            "BIND1002",
-            format!("cannot find export '{}' in module", target_name),
-            origin_span,
-          ));
-          return;
         }
       }
     }

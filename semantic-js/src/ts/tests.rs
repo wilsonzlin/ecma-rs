@@ -325,6 +325,76 @@ fn type_only_import_export_isolated() {
 }
 
 #[test]
+fn export_namespace_import_uses_local_binding() {
+  let file_a = FileId(22);
+  let file_b = FileId(23);
+
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "Value", DeclKind::Var, Exported::Named));
+
+  let mut b = HirFile::module(file_b);
+  b.imports.push(Import {
+    specifier: "a".to_string(),
+    specifier_span: span(40),
+    default: None,
+    namespace: Some(ImportNamespace {
+      local: "NS".to_string(),
+      local_span: span(41),
+      is_type_only: false,
+    }),
+    named: Vec::new(),
+    is_type_only: false,
+  });
+  b.exports.push(Export::Named(NamedExport {
+    specifier: None,
+    specifier_span: None,
+    items: vec![ExportSpecifier {
+      local: "NS".to_string(),
+      exported: None,
+      local_span: span(42),
+      exported_span: None,
+    }],
+    is_type_only: false,
+  }));
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(
+    diags.iter().all(|d| d.code != "BIND1002"),
+    "unexpected BIND1002 diagnostics: {:?}",
+    diags
+  );
+  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+
+  let exports = semantics.exports_of(file_b);
+  let symbols = semantics.symbols();
+  let ns_export = exports
+    .get("NS")
+    .expect("namespace import should be exported");
+  let value_symbol = ns_export
+    .symbol_for(Namespace::VALUE, symbols)
+    .expect("value namespace exported");
+  let local_symbol = semantics
+    .resolve_in_module(file_b, "NS", Namespace::VALUE)
+    .expect("import binding present");
+  assert_eq!(value_symbol, local_symbol);
+  assert_eq!(symbols.symbol(value_symbol).owner, SymbolOwner::Module(file_b));
+  assert!(
+    ns_export.namespaces(symbols).contains(Namespace::NAMESPACE),
+    "namespace import should retain namespace namespace"
+  );
+}
+
+#[test]
 fn declaration_merging_orders_deterministically() {
   let file = FileId(30);
   let mut hir = HirFile::module(file);
