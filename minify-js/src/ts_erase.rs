@@ -1,7 +1,3 @@
-use crate::ts_lower::{
-  assign_expr, binary_expr, empty_object, expr_stmt, id, iife_stmt, member_assignment_stmt,
-  member_expr, number, string, var_decl_stmt, MemberKey,
-};
 use crate::{Diagnostic, TopLevelMode};
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::{FileId, Span};
@@ -21,12 +17,9 @@ use parse_js::ast::stmt::decl::{
 };
 use parse_js::ast::stmt::*;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::{
-  EnumDecl, ImportEqualsDecl, ImportEqualsRhs, ModuleDecl, ModuleName, NamespaceBody, NamespaceDecl,
-};
+use parse_js::ast::ts_stmt::{EnumDecl, ImportEqualsDecl, ImportEqualsRhs};
 use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
-use std::collections::HashMap;
 
 const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
 
@@ -110,65 +103,38 @@ pub fn erase_types(
 fn strip_stmts(ctx: &mut StripContext<'_>, stmts: &mut Vec<Node<Stmt>>, is_top_level: bool) {
   let mut new_stmts = Vec::with_capacity(stmts.len());
   for stmt in stmts.drain(..) {
-    new_stmts.extend(strip_stmt(ctx, stmt, is_top_level));
+    if let Some(stripped) = strip_stmt(ctx, stmt, is_top_level) {
+      new_stmts.push(stripped);
+    }
   }
   *stmts = new_stmts;
 }
 
-fn strip_stmt_single(
+fn strip_stmt(
   ctx: &mut StripContext<'_>,
   stmt: Node<Stmt>,
   is_top_level: bool,
 ) -> Option<Node<Stmt>> {
   let loc = stmt.loc;
   let assoc = stmt.assoc;
-  let stx = *stmt.stx;
-  let mut stmts = strip_stmt_inner(ctx, loc, assoc, stx, is_top_level);
-  match stmts.len() {
-    0 => None,
-    1 => stmts.pop(),
-    _ => {
-      let block = Node::new(loc, BlockStmt { body: stmts });
-      Some(new_node(loc, NodeAssocData::default(), Stmt::Block(block)))
-    }
-  }
-}
-
-fn strip_stmt(ctx: &mut StripContext<'_>, stmt: Node<Stmt>, is_top_level: bool) -> Vec<Node<Stmt>> {
-  let loc = stmt.loc;
-  let assoc = stmt.assoc;
-  let stx = *stmt.stx;
-  strip_stmt_inner(ctx, loc, assoc, stx, is_top_level)
-}
-
-fn strip_stmt_inner(
-  ctx: &mut StripContext<'_>,
-  loc: Loc,
-  assoc: NodeAssocData,
-  stmt: Stmt,
-  is_top_level: bool,
-) -> Vec<Node<Stmt>> {
-  match stmt {
+  match *stmt.stx {
     Stmt::Block(block) => {
       let mut block = block;
       strip_stmts(ctx, &mut block.stx.body, false);
-      vec![new_node(loc, assoc, Stmt::Block(block))]
+      Some(new_node(loc, assoc, Stmt::Block(block)))
     }
     Stmt::Expr(expr_stmt) => {
       let mut expr_stmt = expr_stmt;
       expr_stmt.stx.expr = strip_expr(ctx, expr_stmt.stx.expr);
-      vec![new_node(loc, assoc, Stmt::Expr(expr_stmt))]
+      Some(new_node(loc, assoc, Stmt::Expr(expr_stmt)))
     }
     Stmt::If(mut if_stmt) => {
       if_stmt.stx.test = strip_expr(ctx, if_stmt.stx.test);
-      let Some(consequent) = strip_stmt_single(ctx, if_stmt.stx.consequent, false) else {
-        return vec![];
-      };
-      if_stmt.stx.consequent = consequent;
+      if_stmt.stx.consequent = strip_stmt(ctx, if_stmt.stx.consequent, false)?;
       if let Some(alt) = if_stmt.stx.alternate.take() {
-        if_stmt.stx.alternate = strip_stmt_single(ctx, alt, false);
+        if_stmt.stx.alternate = strip_stmt(ctx, alt, false);
       }
-      vec![new_node(loc, assoc, Stmt::If(if_stmt))]
+      Some(new_node(loc, assoc, Stmt::If(if_stmt)))
     }
     Stmt::ForTriple(mut for_stmt) => {
       match &mut for_stmt.stx.init {
@@ -186,35 +152,29 @@ fn strip_stmt_inner(
         for_stmt.stx.post = Some(strip_expr(ctx, post));
       }
       strip_for_body(ctx, &mut for_stmt.stx.body);
-      vec![new_node(loc, assoc, Stmt::ForTriple(for_stmt))]
+      Some(new_node(loc, assoc, Stmt::ForTriple(for_stmt)))
     }
     Stmt::ForIn(mut for_stmt) => {
       strip_for_in_of_lhs(ctx, &mut for_stmt.stx.lhs);
       for_stmt.stx.rhs = strip_expr(ctx, for_stmt.stx.rhs);
       strip_for_body(ctx, &mut for_stmt.stx.body);
-      vec![new_node(loc, assoc, Stmt::ForIn(for_stmt))]
+      Some(new_node(loc, assoc, Stmt::ForIn(for_stmt)))
     }
     Stmt::ForOf(mut for_stmt) => {
       strip_for_in_of_lhs(ctx, &mut for_stmt.stx.lhs);
       for_stmt.stx.rhs = strip_expr(ctx, for_stmt.stx.rhs);
       strip_for_body(ctx, &mut for_stmt.stx.body);
-      vec![new_node(loc, assoc, Stmt::ForOf(for_stmt))]
+      Some(new_node(loc, assoc, Stmt::ForOf(for_stmt)))
     }
     Stmt::While(mut while_stmt) => {
       while_stmt.stx.condition = strip_expr(ctx, while_stmt.stx.condition);
-      let Some(body) = strip_stmt_single(ctx, while_stmt.stx.body, false) else {
-        return vec![];
-      };
-      while_stmt.stx.body = body;
-      vec![new_node(loc, assoc, Stmt::While(while_stmt))]
+      while_stmt.stx.body = strip_stmt(ctx, while_stmt.stx.body, false)?;
+      Some(new_node(loc, assoc, Stmt::While(while_stmt)))
     }
     Stmt::DoWhile(mut do_stmt) => {
-      let Some(body) = strip_stmt_single(ctx, do_stmt.stx.body, false) else {
-        return vec![];
-      };
-      do_stmt.stx.body = body;
+      do_stmt.stx.body = strip_stmt(ctx, do_stmt.stx.body, false)?;
       do_stmt.stx.condition = strip_expr(ctx, do_stmt.stx.condition);
-      vec![new_node(loc, assoc, Stmt::DoWhile(do_stmt))]
+      Some(new_node(loc, assoc, Stmt::DoWhile(do_stmt)))
     }
     Stmt::Switch(mut switch_stmt) => {
       switch_stmt.stx.test = strip_expr(ctx, switch_stmt.stx.test);
@@ -223,7 +183,7 @@ fn strip_stmt_inner(
         new_branches.push(strip_switch_branch(ctx, branch));
       }
       switch_stmt.stx.branches = new_branches;
-      vec![new_node(loc, assoc, Stmt::Switch(switch_stmt))]
+      Some(new_node(loc, assoc, Stmt::Switch(switch_stmt)))
     }
     Stmt::Try(mut try_stmt) => {
       try_stmt.stx.wrapped = strip_block(ctx, try_stmt.stx.wrapped);
@@ -233,60 +193,41 @@ fn strip_stmt_inner(
       if let Some(finally) = try_stmt.stx.finally.take() {
         try_stmt.stx.finally = Some(strip_block(ctx, finally));
       }
-      vec![new_node(loc, assoc, Stmt::Try(try_stmt))]
+      Some(new_node(loc, assoc, Stmt::Try(try_stmt)))
     }
     Stmt::Throw(mut throw_stmt) => {
       throw_stmt.stx.value = strip_expr(ctx, throw_stmt.stx.value);
-      vec![new_node(loc, assoc, Stmt::Throw(throw_stmt))]
+      Some(new_node(loc, assoc, Stmt::Throw(throw_stmt)))
     }
     Stmt::Return(mut ret_stmt) => {
       if let Some(value) = ret_stmt.stx.value.take() {
         ret_stmt.stx.value = Some(strip_expr(ctx, value));
       }
-      vec![new_node(loc, assoc, Stmt::Return(ret_stmt))]
+      Some(new_node(loc, assoc, Stmt::Return(ret_stmt)))
     }
-    Stmt::Break(stmt) => vec![new_node(loc, assoc, Stmt::Break(stmt))],
-    Stmt::Continue(stmt) => vec![new_node(loc, assoc, Stmt::Continue(stmt))],
-    Stmt::Debugger(stmt) => vec![new_node(loc, assoc, Stmt::Debugger(stmt))],
-    Stmt::Empty(stmt) => vec![new_node(loc, assoc, Stmt::Empty(stmt))],
+    Stmt::Break(_) | Stmt::Continue(_) | Stmt::Debugger(_) | Stmt::Empty(_) => {
+      Some(new_node(loc, assoc, *stmt.stx))
+    }
     Stmt::With(mut with_stmt) => {
       with_stmt.stx.object = strip_expr(ctx, with_stmt.stx.object);
-      let Some(body) = strip_stmt_single(ctx, with_stmt.stx.body, false) else {
-        return vec![];
-      };
-      with_stmt.stx.body = body;
-      vec![new_node(loc, assoc, Stmt::With(with_stmt))]
+      with_stmt.stx.body = strip_stmt(ctx, with_stmt.stx.body, false)?;
+      Some(new_node(loc, assoc, Stmt::With(with_stmt)))
     }
     Stmt::Label(mut label_stmt) => {
-      let Some(stmt) = strip_stmt_single(ctx, label_stmt.stx.statement, false) else {
-        return vec![];
-      };
-      label_stmt.stx.statement = stmt;
-      vec![new_node(loc, assoc, Stmt::Label(label_stmt))]
+      label_stmt.stx.statement = strip_stmt(ctx, label_stmt.stx.statement, false)?;
+      Some(new_node(loc, assoc, Stmt::Label(label_stmt)))
     }
     Stmt::VarDecl(mut decl) => {
       strip_var_decl(ctx, &mut decl.stx);
-      vec![new_node(loc, assoc, Stmt::VarDecl(decl))]
+      Some(new_node(loc, assoc, Stmt::VarDecl(decl)))
     }
-    Stmt::FunctionDecl(func_decl) => match strip_func_decl(ctx, func_decl, loc, assoc) {
-      Some(stmt) => vec![stmt],
-      None => vec![],
-    },
-    Stmt::ClassDecl(class_decl) => match strip_class_decl(ctx, class_decl, loc, assoc) {
-      Some(stmt) => vec![stmt],
-      None => vec![],
-    },
-    Stmt::Import(import_stmt) => match strip_import(ctx, import_stmt, loc, assoc) {
-      Some(stmt) => vec![stmt],
-      None => vec![],
-    },
-    Stmt::ExportList(export_stmt) => match strip_export_list(export_stmt, loc, assoc) {
-      Some(stmt) => vec![stmt],
-      None => vec![],
-    },
+    Stmt::FunctionDecl(func_decl) => strip_func_decl(ctx, func_decl, loc, assoc),
+    Stmt::ClassDecl(class_decl) => strip_class_decl(ctx, class_decl, loc, assoc),
+    Stmt::Import(import_stmt) => strip_import(ctx, import_stmt, loc, assoc),
+    Stmt::ExportList(export_stmt) => strip_export_list(export_stmt, loc, assoc),
     Stmt::ExportDefaultExpr(mut expr) => {
       expr.stx.expression = strip_expr(ctx, expr.stx.expression);
-      vec![new_node(loc, assoc, Stmt::ExportDefaultExpr(expr))]
+      Some(new_node(loc, assoc, Stmt::ExportDefaultExpr(expr)))
     }
     Stmt::InterfaceDecl(_)
     | Stmt::TypeAliasDecl(_)
@@ -296,22 +237,28 @@ fn strip_stmt_inner(
     | Stmt::AmbientVarDecl(_)
     | Stmt::AmbientFunctionDecl(_)
     | Stmt::AmbientClassDecl(_)
-    | Stmt::GlobalDecl(_) => vec![],
+    | Stmt::GlobalDecl(_) => None,
     Stmt::EnumDecl(decl) => strip_enum_decl(ctx, decl, loc, assoc),
-    Stmt::NamespaceDecl(decl) => strip_namespace_decl(ctx, decl, loc, assoc),
-    Stmt::ModuleDecl(decl) => strip_module_decl(ctx, decl, loc, assoc),
-    Stmt::ImportEqualsDecl(decl) => {
-      match lower_import_equals_decl(ctx, decl, loc, assoc, is_top_level) {
-        Some(stmt) => vec![stmt],
-        None => vec![],
+    Stmt::NamespaceDecl(decl) => {
+      if decl.stx.declare {
+        None
+      } else {
+        unsupported_ts(ctx, loc, "namespaces with runtime bodies are not supported");
+        None
       }
     }
+    Stmt::ModuleDecl(decl) => {
+      if decl.stx.declare {
+        None
+      } else {
+        unsupported_ts(ctx, loc, "modules with runtime bodies are not supported");
+        None
+      }
+    }
+    Stmt::ImportEqualsDecl(decl) => lower_import_equals_decl(ctx, decl, loc, assoc, is_top_level),
     Stmt::ExportAssignmentDecl(decl) => {
       let expr = strip_expr(ctx, decl.stx.expression);
-      match lower_export_assignment(ctx, loc, assoc, expr, is_top_level) {
-        Some(stmt) => vec![stmt],
-        None => vec![],
-      }
+      lower_export_assignment(ctx, loc, assoc, expr, is_top_level)
     }
   }
 }
@@ -632,387 +579,17 @@ fn strip_export_list(
   Some(new_node(loc, assoc, Stmt::ExportList(export_stmt)))
 }
 
-#[derive(Clone)]
-enum EnumValue {
-  Number(f64),
-  String(String),
-}
-
 fn strip_enum_decl(
   ctx: &mut StripContext<'_>,
   decl: Node<EnumDecl>,
   loc: Loc,
   _assoc: NodeAssocData,
-) -> Vec<Node<Stmt>> {
+) -> Option<Node<Stmt>> {
   if decl.stx.declare || decl.stx.const_ {
-    return vec![];
-  }
-  lower_enum_decl(ctx, decl, loc)
-}
-
-fn lower_enum_decl(ctx: &mut StripContext<'_>, decl: Node<EnumDecl>, loc: Loc) -> Vec<Node<Stmt>> {
-  let mut statements = Vec::new();
-  let enum_name = decl.stx.name.clone();
-  statements.push(var_decl_stmt(
-    loc,
-    enum_name.clone(),
-    None,
-    decl.stx.export,
-    VarDeclMode::Var,
-  ));
-
-  let mut body = Vec::new();
-  let mut known_values: HashMap<String, EnumValue> = HashMap::new();
-  let mut next_auto_value = Some(0.0);
-  for member in decl.stx.members {
-    let member_loc = member.loc;
-    let member_name = member.stx.name.clone();
-    let initializer = member.stx.initializer.map(|expr| strip_expr(ctx, expr));
-    match lower_enum_member(
-      ctx,
-      &enum_name,
-      member_name.clone(),
-      member_loc,
-      initializer,
-      &known_values,
-      &mut next_auto_value,
-    ) {
-      Some((stmt, value)) => {
-        body.push(stmt);
-        if let Some(value) = value {
-          if let EnumValue::Number(num) = value {
-            known_values.insert(member_name.clone(), EnumValue::Number(num));
-            next_auto_value = Some(num + 1.0);
-          } else {
-            known_values.insert(member_name.clone(), value);
-            next_auto_value = None;
-          }
-        } else {
-          next_auto_value = None;
-        }
-      }
-      None => next_auto_value = None,
-    }
-  }
-
-  let enum_target = id(loc, enum_name.clone());
-  let create_enum_obj = assign_expr(loc, id(loc, enum_name.clone()), empty_object(loc));
-  let arg = binary_expr(loc, OperatorName::LogicalOr, enum_target, create_enum_obj);
-  statements.push(iife_stmt(loc, enum_name, arg, body));
-  statements
-}
-
-fn lower_enum_member(
-  ctx: &mut StripContext<'_>,
-  enum_name: &str,
-  member_name: String,
-  member_loc: Loc,
-  initializer: Option<Node<Expr>>,
-  known_values: &HashMap<String, EnumValue>,
-  next_auto_value: &mut Option<f64>,
-) -> Option<(Node<Stmt>, Option<EnumValue>)> {
-  if let Some(initializer) = initializer {
-    let const_value = eval_enum_expr(&initializer, known_values);
-    if let Some(EnumValue::String(_)) = const_value {
-      let stmt = member_assignment_stmt(
-        member_loc,
-        id(member_loc, enum_name.to_string()),
-        MemberKey::Name(member_name),
-        initializer,
-      );
-      *next_auto_value = None;
-      return Some((stmt, const_value));
-    }
-    let stmt = enum_numeric_stmt(enum_name, &member_name, initializer, member_loc);
-    return Some((
-      stmt,
-      const_value.and_then(|v| match v {
-        EnumValue::Number(num) => Some(EnumValue::Number(num)),
-        EnumValue::String(_) => None,
-      }),
-    ));
-  }
-  let Some(value) = next_auto_value.take() else {
-    unsupported_ts(
-      ctx,
-      member_loc,
-      "enum members after non-constant initializers must specify a value",
-    );
-    return None;
-  };
-  let stmt = enum_numeric_stmt(
-    enum_name,
-    &member_name,
-    number(member_loc, value),
-    member_loc,
-  );
-  Some((stmt, Some(EnumValue::Number(value))))
-}
-
-fn enum_numeric_stmt(
-  enum_name: &str,
-  member_name: &str,
-  value_expr: Node<Expr>,
-  loc: Loc,
-) -> Node<Stmt> {
-  let set_member = assign_expr(
-    loc,
-    member_expr(
-      loc,
-      id(loc, enum_name.to_string()),
-      MemberKey::Name(member_name.to_string()),
-    ),
-    value_expr,
-  );
-  let numeric_key = member_expr(
-    loc,
-    id(loc, enum_name.to_string()),
-    MemberKey::Expr(set_member),
-  );
-  expr_stmt(
-    loc,
-    assign_expr(loc, numeric_key, string(loc, member_name.to_string())),
-  )
-}
-
-fn eval_enum_expr(expr: &Node<Expr>, values: &HashMap<String, EnumValue>) -> Option<EnumValue> {
-  match expr.stx.as_ref() {
-    Expr::LitNum(num) => Some(EnumValue::Number(num.stx.value.0)),
-    Expr::LitStr(str) => Some(EnumValue::String(str.stx.value.clone())),
-    Expr::Id(id) => values.get(&id.stx.name).cloned(),
-    Expr::Unary(unary) => {
-      let value = eval_enum_expr(&unary.stx.argument, values)?;
-      match unary.stx.operator {
-        OperatorName::UnaryPlus => match value {
-          EnumValue::Number(num) => Some(EnumValue::Number(num)),
-          _ => None,
-        },
-        OperatorName::UnaryNegation => match value {
-          EnumValue::Number(num) => Some(EnumValue::Number(-num)),
-          _ => None,
-        },
-        OperatorName::BitwiseNot => match value {
-          EnumValue::Number(num) => Some(EnumValue::Number((!(num as i32)) as f64)),
-          _ => None,
-        },
-        _ => None,
-      }
-    }
-    Expr::Binary(bin) => {
-      let left = eval_enum_expr(&bin.stx.left, values)?;
-      let right = eval_enum_expr(&bin.stx.right, values)?;
-      let result = match (left, right, bin.stx.operator) {
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::Addition) => {
-          Some(EnumValue::Number(a + b))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::Subtraction) => {
-          Some(EnumValue::Number(a - b))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::Multiplication) => {
-          Some(EnumValue::Number(a * b))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::Division) => {
-          Some(EnumValue::Number(a / b))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::Remainder) => {
-          Some(EnumValue::Number(a % b))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::BitwiseLeftShift) => {
-          Some(EnumValue::Number(((a as i32) << (b as i32)) as f64))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::BitwiseRightShift) => {
-          Some(EnumValue::Number(((a as i32) >> (b as i32)) as f64))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::BitwiseUnsignedRightShift) => {
-          Some(EnumValue::Number(((a as u32) >> (b as u32)) as f64))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::BitwiseAnd) => {
-          Some(EnumValue::Number(((a as i32) & (b as i32)) as f64))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::BitwiseOr) => {
-          Some(EnumValue::Number(((a as i32) | (b as i32)) as f64))
-        }
-        (EnumValue::Number(a), EnumValue::Number(b), OperatorName::BitwiseXor) => {
-          Some(EnumValue::Number(((a as i32) ^ (b as i32)) as f64))
-        }
-        (EnumValue::String(mut a), EnumValue::String(b), OperatorName::Addition) => {
-          a.push_str(&b);
-          Some(EnumValue::String(a))
-        }
-        _ => None,
-      };
-      result
-    }
-    _ => None,
-  }
-}
-
-fn strip_namespace_decl(
-  ctx: &mut StripContext<'_>,
-  decl: Node<NamespaceDecl>,
-  loc: Loc,
-  _assoc: NodeAssocData,
-) -> Vec<Node<Stmt>> {
-  if decl.stx.declare {
-    return vec![];
-  }
-  match decl.stx.body {
-    NamespaceBody::Block(body) => {
-      lower_namespace_block(ctx, decl.stx.export, decl.stx.name, body, loc)
-    }
-    NamespaceBody::Namespace(_) => {
-      unsupported_ts(
-        ctx,
-        loc,
-        "nested namespaces are not supported in JS erasure",
-      );
-      vec![]
-    }
-  }
-}
-
-fn strip_module_decl(
-  ctx: &mut StripContext<'_>,
-  decl: Node<ModuleDecl>,
-  loc: Loc,
-  _assoc: NodeAssocData,
-) -> Vec<Node<Stmt>> {
-  if decl.stx.declare {
-    return vec![];
-  }
-  let Some(body) = decl.stx.body else {
-    unsupported_ts(ctx, loc, "runtime modules without bodies are not supported");
-    return vec![];
-  };
-  match decl.stx.name {
-    ModuleName::Identifier(name) => lower_namespace_block(ctx, decl.stx.export, name, body, loc),
-    ModuleName::String(_) => {
-      unsupported_ts(ctx, loc, "string-named runtime modules are not supported");
-      vec![]
-    }
-  }
-}
-
-fn lower_namespace_block(
-  ctx: &mut StripContext<'_>,
-  export: bool,
-  namespace_name: String,
-  body: Vec<Node<Stmt>>,
-  loc: Loc,
-) -> Vec<Node<Stmt>> {
-  let mut lowered_body = Vec::new();
-  for stmt in body {
-    let Node {
-      loc: stmt_loc,
-      assoc: stmt_assoc,
-      stx,
-    } = stmt;
-    match *stx {
-      Stmt::VarDecl(mut decl) => {
-        let exported = decl.stx.export;
-        let mut exported_names = Vec::new();
-        if exported {
-          for declarator in decl.stx.declarators.iter() {
-            let pat = &declarator.pattern.stx.pat;
-            if let Some(binding) = binding_ident(pat) {
-              exported_names.push((binding, pat.loc));
-            } else {
-              unsupported_ts(
-                ctx,
-                stmt_loc,
-                "exported namespace variables must use simple identifiers",
-              );
-            }
-          }
-        }
-        decl.stx.export = false;
-        strip_var_decl(ctx, &mut decl.stx);
-        lowered_body.push(new_node(stmt_loc, stmt_assoc, Stmt::VarDecl(decl)));
-        for (binding, bind_loc) in exported_names {
-          lowered_body.push(member_assignment_stmt(
-            bind_loc,
-            id(bind_loc, namespace_name.clone()),
-            MemberKey::Name(binding.clone()),
-            id(bind_loc, binding),
-          ));
-        }
-      }
-      Stmt::FunctionDecl(mut func_decl) => {
-        let exported = func_decl.stx.export;
-        let func_name = func_decl
-          .stx
-          .name
-          .as_ref()
-          .map(|name| name.stx.name.clone());
-        func_decl.stx.export = false;
-        func_decl.stx.export_default = false;
-        if let Some(func_stmt) = strip_func_decl(ctx, func_decl, stmt_loc, stmt_assoc) {
-          lowered_body.push(func_stmt);
-          if exported {
-            if let Some(func_name) = func_name {
-              lowered_body.push(member_assignment_stmt(
-                stmt_loc,
-                id(stmt_loc, namespace_name.clone()),
-                MemberKey::Name(func_name.clone()),
-                id(stmt_loc, func_name),
-              ));
-            } else {
-              unsupported_ts(
-                ctx,
-                stmt_loc,
-                "exported namespace functions must have a name",
-              );
-            }
-          }
-        }
-      }
-      Stmt::NamespaceDecl(_) | Stmt::ModuleDecl(_) => {
-        unsupported_ts(
-          ctx,
-          stmt_loc,
-          "nested namespaces are not supported in JS erasure",
-        );
-      }
-      Stmt::Import(_) | Stmt::ExportList(_) | Stmt::ExportDefaultExpr(_) => {
-        unsupported_ts(ctx, stmt_loc, "complex namespace exports are not supported");
-      }
-      other => {
-        lowered_body.extend(strip_stmt(
-          ctx,
-          Node {
-            loc: stmt_loc,
-            assoc: stmt_assoc,
-            stx: Box::new(other),
-          },
-          false,
-        ));
-      }
-    }
-  }
-
-  let mut statements = Vec::new();
-  statements.push(var_decl_stmt(
-    loc,
-    namespace_name.clone(),
-    None,
-    export,
-    VarDeclMode::Var,
-  ));
-  let arg = namespace_argument(&namespace_name, loc);
-  statements.push(iife_stmt(loc, namespace_name, arg, lowered_body));
-  statements
-}
-
-fn namespace_argument(name: &str, loc: Loc) -> Node<Expr> {
-  let target = id(loc, name.to_string());
-  let init = assign_expr(loc, id(loc, name.to_string()), empty_object(loc));
-  binary_expr(loc, OperatorName::LogicalOr, target, init)
-}
-
-fn binding_ident(pat: &Node<Pat>) -> Option<String> {
-  match pat.stx.as_ref() {
-    Pat::Id(id) => Some(id.stx.name.clone()),
-    _ => None,
+    None
+  } else {
+    unsupported_ts(ctx, loc, "runtime enums are not supported in JS erasure");
+    None
   }
 }
 

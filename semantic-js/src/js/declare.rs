@@ -167,11 +167,7 @@ impl SemanticsBuilder {
   }
 
   fn mark_hoisted_binding(&mut self, scope: ScopeId, symbol: SymbolId) {
-    if let Some(bindings) = self
-      .scopes
-      .get_mut(&scope)
-      .map(|s| &mut s.hoisted_bindings)
-    {
+    if let Some(bindings) = self.scopes.get_mut(&scope).map(|s| &mut s.hoisted_bindings) {
       if !bindings.contains(&symbol) {
         bindings.push(symbol);
       }

@@ -191,7 +191,10 @@ impl SymbolFlags {
   }
 
   pub const fn hoisted() -> Self {
-    Self { hoisted: true, tdz: false }
+    Self {
+      hoisted: true,
+      tdz: false,
+    }
   }
 
   pub const fn lexical_tdz() -> Self {

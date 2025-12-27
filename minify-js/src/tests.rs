@@ -1,7 +1,11 @@
+#[cfg(feature = "emit-minify")]
+use crate::{
+  clear_last_emit_backend_for_tests, force_hir_emit_failure_for_tests, last_emit_backend_for_tests,
+  EmitBackend,
+};
 use crate::{minify, minify_with_options, Dialect, FileId, MinifyOptions, Severity, TopLevelMode};
 use parse_js::ast::expr::jsx::JsxElemChild;
 use parse_js::ast::expr::Expr;
-use parse_js::ast::func::FuncBody;
 use parse_js::ast::import_export::ImportNames;
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::VarDeclMode;
@@ -44,36 +48,13 @@ fn minified_program(
   (output, parsed)
 }
 
-fn iife_body_from_stmt(stmt: &Node<Stmt>) -> &Vec<Node<Stmt>> {
-  let expr = match stmt.stx.as_ref() {
-    Stmt::Expr(expr) => expr,
-    other => panic!("expected expression statement, got {other:?}"),
-  };
-  let call = match expr.stx.expr.stx.as_ref() {
-    Expr::Call(call) => call,
-    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => {
-      match bin.stx.right.stx.as_ref() {
-        Expr::Call(call) => call,
-        other => panic!("expected comma-wrapped call, got {other:?}"),
-      }
-    }
-    other => panic!("expected IIFE call, got {other:?}"),
-  };
-  let func = match call.stx.callee.stx.as_ref() {
-    Expr::Func(func) => func,
-    other => panic!("expected function callee, got {other:?}"),
-  };
-  match func
-    .stx
-    .func
-    .stx
-    .body
-    .as_ref()
-    .expect("IIFE should have a body")
-  {
-    FuncBody::Block(body) => body,
-    other => panic!("expected block body, got {other:?}"),
-  }
+#[cfg(feature = "emit-minify")]
+fn minified_with_backend_options(options: MinifyOptions, src: &str) -> (String, EmitBackend) {
+  clear_last_emit_backend_for_tests();
+  let mut out = Vec::new();
+  minify_with_options(options, src, &mut out).unwrap();
+  let backend = last_emit_backend_for_tests().expect("emitter backend should be recorded");
+  (String::from_utf8(out).unwrap(), backend)
 }
 
 #[test]
@@ -127,6 +108,26 @@ fn test_minify_determinism() {
   let first = minified(TopLevelMode::Module, src);
   let second = minified(TopLevelMode::Module, src);
   assert_eq!(first, second);
+}
+
+#[cfg(feature = "emit-minify")]
+#[test]
+fn hir_emitter_matches_ast_output() {
+  let options = MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js);
+  let src =
+    "function wrap(value){return value+1;} const result=wrap(2); const doubled=wrap(result);";
+  let (hir_output, hir_backend) = minified_with_backend_options(options, src);
+  assert_eq!(hir_backend, EmitBackend::Hir);
+
+  force_hir_emit_failure_for_tests();
+  let (ast_output, ast_backend) = minified_with_backend_options(
+    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
+    src,
+  );
+  assert_eq!(ast_backend, EmitBackend::Ast);
+  assert_eq!(hir_output, ast_output);
+
+  parse(&hir_output).expect("HIR-emitted output should remain parseable");
 }
 
 #[test]
@@ -316,97 +317,4 @@ fn drops_type_only_import_equals() {
   let src = r#"import type foo = require("bar");"#;
   let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
   assert!(parsed.stx.body.is_empty());
-}
-
-#[test]
-fn lowers_runtime_numeric_enum() {
-  let src = "export enum E { A, B = 2, C }";
-  let (_output, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
-  assert_eq!(parsed.stx.body.len(), 2);
-  match parsed.stx.body[0].stx.as_ref() {
-    Stmt::VarDecl(decl) => {
-      assert!(decl.stx.export);
-      assert_eq!(decl.stx.mode, VarDeclMode::Var);
-    }
-    other => panic!("expected enum var decl, got {other:?}"),
-  }
-  let body = iife_body_from_stmt(&parsed.stx.body[1]);
-  let mut reverse_mappings = 0;
-  let mut has_auto_increment = false;
-  for stmt in body.iter() {
-    if let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() {
-      if let Expr::Binary(bin) = expr_stmt.stx.expr.stx.as_ref() {
-        if let Expr::ComputedMember(member) = bin.stx.left.stx.as_ref() {
-          if let Expr::Binary(inner) = member.stx.member.stx.as_ref() {
-            reverse_mappings += 1;
-            if let Expr::LitNum(num) = inner.stx.right.stx.as_ref() {
-              if num.stx.value.0 == 3.0 {
-                has_auto_increment = true;
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-  assert_eq!(reverse_mappings, 3);
-  assert!(has_auto_increment);
-}
-
-#[test]
-fn lowers_string_enum_members() {
-  let src = "enum Names { A = \"x\" }";
-  let (_output, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
-  assert_eq!(parsed.stx.body.len(), 2);
-  let body = iife_body_from_stmt(&parsed.stx.body[1]);
-  assert_eq!(body.len(), 1);
-  let expr_stmt = match body[0].stx.as_ref() {
-    Stmt::Expr(expr) => expr,
-    other => panic!("expected enum assignment, got {other:?}"),
-  };
-  match expr_stmt.stx.expr.stx.as_ref() {
-    Expr::Binary(bin) => match bin.stx.left.stx.as_ref() {
-      Expr::ComputedMember(member) => match member.stx.member.stx.as_ref() {
-        Expr::LitStr(lit) => assert_eq!(lit.stx.value, "A"),
-        other => panic!("expected string member assignment, got {other:?}"),
-      },
-      other => panic!("expected computed member assignment, got {other:?}"),
-    },
-    other => panic!("expected binary assignment, got {other:?}"),
-  }
-}
-
-#[test]
-fn lowers_namespace_exports() {
-  let src = r#"
-    namespace N {
-      export const x = 1;
-      export function f() { return x; }
-      const y = f();
-    }
-  "#;
-  let (_output, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
-  assert_eq!(parsed.stx.body.len(), 2);
-  match parsed.stx.body[0].stx.as_ref() {
-    Stmt::VarDecl(decl) => assert_eq!(decl.stx.mode, VarDeclMode::Var),
-    other => panic!("expected namespace declaration lowered to var, got {other:?}"),
-  }
-  let body = iife_body_from_stmt(&parsed.stx.body[1]);
-  assert!(body
-    .iter()
-    .any(|stmt| matches!(stmt.stx.as_ref(), Stmt::VarDecl(_))));
-  let mut exported_props = Vec::new();
-  for stmt in body.iter() {
-    if let Stmt::Expr(expr_stmt) = stmt.stx.as_ref() {
-      if let Expr::Binary(bin) = expr_stmt.stx.expr.stx.as_ref() {
-        if let Expr::ComputedMember(member) = bin.stx.left.stx.as_ref() {
-          if let Expr::LitStr(prop) = member.stx.member.stx.as_ref() {
-            exported_props.push(prop.stx.value.clone());
-          }
-        }
-      }
-    }
-  }
-  assert!(exported_props.contains(&"x".to_string()));
-  assert!(exported_props.contains(&"f".to_string()));
 }

@@ -1,6 +1,6 @@
 use crate::symbol::semantics::{
-  assoc_declared_symbol, assoc_resolved_symbol_info, assoc_scope_id, JsSymbols, ScopeId,
-  ScopeKind, SymbolId,
+  assoc_declared_symbol, assoc_resolved_symbol_info, assoc_scope_id, JsSymbols, ScopeId, ScopeKind,
+  SymbolId,
 };
 use ahash::HashMap;
 use ahash::HashSet;
@@ -77,7 +77,8 @@ impl<'a> VarVisitor<'a> {
       self.foreign.insert(symbol);
     }
     if resolved.in_tdz {
-      self.use_before_decl
+      self
+        .use_before_decl
         .entry(symbol)
         .or_insert_with(|| (name.to_string(), loc));
     }

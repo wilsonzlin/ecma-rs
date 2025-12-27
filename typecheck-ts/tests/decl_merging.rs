@@ -87,10 +87,16 @@ export namespace Config { export const b = 2; }
   );
   if let Some(body) = program.body_of_def(def_a) {
     let res = program.check_body(body);
-    println!("a expr spans: {:?}, pats: {:?}", res.expr_spans(), res.pat_spans());
+    println!(
+      "a expr spans: {:?}, pats: {:?}",
+      res.expr_spans(),
+      res.pat_spans()
+    );
     for expr in program.exprs_in_body(body) {
       let span = program.expr_span(body, expr);
-      let ty = program.display_type(program.type_of_expr(body, expr)).to_string();
+      let ty = program
+        .display_type(program.type_of_expr(body, expr))
+        .to_string();
       println!("expr {expr:?} span {span:?} type {ty}");
     }
   }

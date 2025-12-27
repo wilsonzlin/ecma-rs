@@ -287,12 +287,7 @@ impl QueryStatsCollector {
 
   /// Start a new timer using an explicit start instant. Useful when the caller
   /// already captured a timestamp (e.g. from salsa events).
-  pub fn timer_with_start(
-    &self,
-    kind: QueryKind,
-    cache_hit: bool,
-    start: Instant,
-  ) -> QueryTimer {
+  pub fn timer_with_start(&self, kind: QueryKind, cache_hit: bool, start: Instant) -> QueryTimer {
     QueryTimer::with_start(self.clone(), kind, cache_hit, start)
   }
 
@@ -414,9 +409,7 @@ impl QueryTimer {
     if self.finished {
       return;
     }
-    self
-      .collector
-      .record(self.kind, self.cache_hit, duration);
+    self.collector.record(self.kind, self.cache_hit, duration);
     self.finished = true;
   }
 }
@@ -427,9 +420,7 @@ impl Drop for QueryTimer {
       return;
     }
     let duration = self.start.elapsed();
-    self
-      .collector
-      .record(self.kind, self.cache_hit, duration);
+    self.collector.record(self.kind, self.cache_hit, duration);
     self.finished = true;
   }
 }
@@ -465,9 +456,7 @@ impl SalsaEventAdapter {
     match &event.kind {
       EventKind::DidValidateMemoizedValue { database_key } => {
         if let Some(kind) = (self.mapper)(*database_key) {
-          self
-            .collector
-            .record(kind, true, Duration::ZERO);
+          self.collector.record(kind, true, Duration::ZERO);
         }
       }
       EventKind::WillExecute { database_key } => {

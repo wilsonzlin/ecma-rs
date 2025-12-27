@@ -757,10 +757,7 @@ impl<'a> RelateCtx<'a> {
         record,
         depth + 1,
       ),
-      (
-        TypeKind::Array { ty: src_elem, .. },
-        TypeKind::Object(dst_obj),
-      ) => {
+      (TypeKind::Array { ty: src_elem, .. }, TypeKind::Object(dst_obj)) => {
         let dst_shape = self.store.shape(self.store.object(*dst_obj).shape);
         if let Some(idx) = dst_shape
           .indexers

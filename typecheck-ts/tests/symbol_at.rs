@@ -376,9 +376,7 @@ fn symbol_at_prefers_innermost_binding_in_nested_functions() {
   let inner_decl_symbol = program
     .symbol_at(file_id, inner_decl)
     .expect("inner declaration");
-  let inner_use_symbol = program
-    .symbol_at(file_id, inner_use)
-    .expect("inner use");
+  let inner_use_symbol = program.symbol_at(file_id, inner_use).expect("inner use");
 
   assert_ne!(
     outer_decl_symbol, inner_decl_symbol,

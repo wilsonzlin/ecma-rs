@@ -136,26 +136,26 @@ pub enum DefKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct DefPath {
   pub module: FileId,
+  pub parent: Option<DefId>,
   pub kind: DefKind,
   pub name: NameId,
   pub disambiguator: u32,
-  pub parent: Option<DefId>,
 }
 
 impl DefPath {
   pub fn new(
     module: FileId,
+    parent: Option<DefId>,
     kind: DefKind,
     name: NameId,
     disambiguator: u32,
-    parent: Option<DefId>,
   ) -> Self {
     Self {
       module,
+      parent,
       kind,
       name,
       disambiguator,
-      parent,
     }
   }
 
@@ -182,15 +182,10 @@ impl DefPath {
   fn stable_hash_impl(&self, salt: Option<u64>) -> StableHasher {
     let mut hasher = StableHasher::new();
     hasher.write_u64(self.module.0 as u64);
+    hasher.write_u64(self.parent.map_or(0, |id| id.0 as u64 + 1));
     hasher.write_u64(self.kind as u64);
     hasher.write_u64(self.disambiguator as u64);
     hasher.write_u64(self.name.0);
-    if let Some(parent) = self.parent {
-      hasher.write_u64(1);
-      hasher.write_u64(parent.0 as u64);
-    } else {
-      hasher.write_u64(0);
-    }
     if let Some(salt) = salt.filter(|s| *s != 0) {
       hasher.write_u64(salt);
     }

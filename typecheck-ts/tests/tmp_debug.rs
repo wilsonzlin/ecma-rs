@@ -160,7 +160,8 @@ fn debug_noop_void() {
       println!(
         "  body expr types len {} return types {:?}",
         res.expr_spans().len(),
-        res.return_types()
+        res
+          .return_types()
           .iter()
           .map(|t| program.display_type(*t).to_string())
           .collect::<Vec<_>>()
@@ -201,5 +202,8 @@ fn debug_shadow_symbols() {
   let result = program.check_body(body);
   println!("expr spans: {:?}", result.expr_spans());
   println!("pat spans: {:?}", result.pat_spans());
-  println!("occurrences: {:?}", program.debug_symbol_occurrences(file_id));
+  println!(
+    "occurrences: {:?}",
+    program.debug_symbol_occurrences(file_id)
+  );
 }

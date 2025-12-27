@@ -707,13 +707,8 @@ mod tests {
     let labeled = collect_labeled_loops(&tree);
     let bindings = ForeignBindings::default();
     let options = DecompileOptions::default();
-    let mut decompiler = FunctionDecompiler::new(
-      &func,
-      &bindings,
-      &options,
-      TempDeclScope::Function,
-      labeled,
-    );
+    let mut decompiler =
+      FunctionDecompiler::new(&func, &bindings, &options, TempDeclScope::Function, labeled);
     let stmts = decompiler.lower_tree(&tree).expect("lower");
 
     assert_eq!(stmts.len(), 1);
@@ -732,7 +727,9 @@ mod tests {
       other => panic!("expected block body, got {other:?}"),
     };
     assert!(
-      body.iter().any(|stmt| matches!(stmt.stx.as_ref(), Stmt::While(_))),
+      body
+        .iter()
+        .any(|stmt| matches!(stmt.stx.as_ref(), Stmt::While(_))),
       "expected inner loop"
     );
     assert!(
@@ -761,11 +758,7 @@ mod tests {
 }
 
 fn collect_labeled_loops(tree: &ControlTree) -> HashSet<LoopLabel> {
-  fn walk(
-    tree: &ControlTree,
-    stack: &mut Vec<LoopLabel>,
-    labeled: &mut HashSet<LoopLabel>,
-  ) {
+  fn walk(tree: &ControlTree, stack: &mut Vec<LoopLabel>, labeled: &mut HashSet<LoopLabel>) {
     match tree {
       ControlTree::Seq(nodes) => {
         for node in nodes {
@@ -773,13 +766,13 @@ fn collect_labeled_loops(tree: &ControlTree) -> HashSet<LoopLabel> {
         }
       }
       ControlTree::Block { .. } => {}
-      ControlTree::If {
-        then_t, else_t, ..
-      } => {
+      ControlTree::If { then_t, else_t, .. } => {
         walk(then_t, stack, labeled);
         walk(else_t, stack, labeled);
       }
-      ControlTree::Loop { loop_label, body, .. } => {
+      ControlTree::Loop {
+        loop_label, body, ..
+      } => {
         stack.push(*loop_label);
         walk(body, stack, labeled);
         stack.pop();

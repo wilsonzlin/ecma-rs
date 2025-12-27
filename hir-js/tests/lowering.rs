@@ -19,7 +19,7 @@ use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::loc::Loc;
 use parse_js::parse;
 use proptest::prelude::*;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 #[test]
 fn def_ids_are_sorted_and_stable() {
@@ -156,6 +156,173 @@ fn enum_member_ids_are_stable() {
       "enum member id changed for {}",
       base.names.resolve(path.name).unwrap()
     );
+  }
+}
+
+#[test]
+fn nested_defs_use_scoped_paths() {
+  let source = "namespace A { export const x = 1; }\nconst x = 2;";
+  let ast = parse(source).expect("parse base");
+  let (base, diagnostics) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast);
+  assert!(diagnostics.is_empty());
+
+  let namespace = base
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::Namespace && base.names.resolve(d.name) == Some("A"))
+    .expect("namespace A");
+  let nested_x = base
+    .defs
+    .iter()
+    .find(|d| {
+      d.path.kind == DefKind::Var
+        && base.names.resolve(d.name) == Some("x")
+        && d.parent == Some(namespace.id)
+    })
+    .expect("nested x");
+  let top_level_x = base
+    .defs
+    .iter()
+    .find(|d| {
+      d.path.kind == DefKind::Var && base.names.resolve(d.name) == Some("x") && d.parent.is_none()
+    })
+    .expect("top-level x");
+
+  assert_ne!(nested_x.path, top_level_x.path);
+  assert_eq!(nested_x.parent, Some(namespace.id));
+  assert_eq!(top_level_x.parent, None);
+
+  let variant_source = "const y = 0;\nnamespace A { export const x = 1; }\nconst x = 2;";
+  let variant_ast = parse(variant_source).expect("parse variant");
+  let variant = lower_file(FileId(0), FileKind::Ts, &variant_ast);
+
+  let variant_namespace = variant
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::Namespace && variant.names.resolve(d.name) == Some("A"))
+    .expect("variant namespace");
+  let variant_nested_x = variant
+    .defs
+    .iter()
+    .find(|d| {
+      d.path.kind == DefKind::Var
+        && variant.names.resolve(d.name) == Some("x")
+        && d.parent == Some(variant_namespace.id)
+    })
+    .expect("variant nested x");
+  let variant_top_x = variant
+    .defs
+    .iter()
+    .find(|d| {
+      d.path.kind == DefKind::Var
+        && variant.names.resolve(d.name) == Some("x")
+        && d.parent.is_none()
+    })
+    .expect("variant top-level x");
+
+  assert_eq!(namespace.path, variant_namespace.path);
+  assert_eq!(nested_x.path, variant_nested_x.path);
+  assert_eq!(top_level_x.path, variant_top_x.path);
+}
+
+#[test]
+fn nested_disambiguators_are_scoped() {
+  let base_ast = parse("const x = 0;").expect("parse base");
+  let base = lower_file(FileId(0), FileKind::Ts, &base_ast);
+
+  let variant_source =
+    "namespace A { export const x = 1; }\nnamespace A { export const x = 1; }\nconst x = 0;";
+  let variant_ast = parse(variant_source).expect("parse variant");
+  let variant = lower_file(FileId(0), FileKind::Ts, &variant_ast);
+
+  let base_top_x = base
+    .defs
+    .iter()
+    .find(|d| d.path.kind == DefKind::Var && base.names.resolve(d.name) == Some("x"))
+    .expect("base top-level x");
+  let variant_top_x = variant
+    .defs
+    .iter()
+    .find(|d| {
+      d.path.kind == DefKind::Var
+        && variant.names.resolve(d.name) == Some("x")
+        && d.parent.is_none()
+    })
+    .expect("variant top-level x");
+
+  assert_eq!(base_top_x.path, variant_top_x.path);
+  let base_top_id = base
+    .hir
+    .def_paths
+    .get(&base_top_x.path)
+    .copied()
+    .expect("base id for top-level x");
+  let variant_top_id = variant
+    .hir
+    .def_paths
+    .get(&variant_top_x.path)
+    .copied()
+    .expect("variant id for top-level x");
+  assert_eq!(base_top_id, variant_top_id);
+  assert_eq!(base_top_x.path.disambiguator, 0);
+
+  let namespaces: Vec<_> = variant
+    .defs
+    .iter()
+    .filter(|d| d.path.kind == DefKind::Namespace && variant.names.resolve(d.name) == Some("A"))
+    .collect();
+  assert_eq!(namespaces.len(), 2);
+
+  let nested_xs: Vec<_> = namespaces
+    .iter()
+    .map(|ns| {
+      variant
+        .defs
+        .iter()
+        .find(|d| {
+          d.path.kind == DefKind::Var
+            && variant.names.resolve(d.name) == Some("x")
+            && d.parent == Some(ns.id)
+        })
+        .expect("namespace member x")
+    })
+    .collect();
+  assert_eq!(nested_xs.len(), 2);
+  let parent_ids: HashSet<_> = nested_xs.iter().map(|d| d.parent.unwrap()).collect();
+  assert_eq!(parent_ids.len(), 2);
+  assert!(nested_xs.iter().all(|d| d.path.disambiguator == 0));
+  let nested_paths: HashSet<_> = nested_xs.iter().map(|d| d.path).collect();
+  assert_eq!(nested_paths.len(), 2);
+}
+
+#[test]
+fn lowering_is_deterministic_for_nested_defs() {
+  let source = r#"
+    namespace A {
+      export const x = 1;
+      export function f() {}
+    }
+    enum Color { Red, Green }
+    const value = () => Color.Red;
+  "#;
+
+  let ast = parse(source).expect("parse");
+  let (first, diagnostics) = lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast);
+  assert!(diagnostics.is_empty());
+
+  let ast_again = parse(source).expect("parse again");
+  let (second, diagnostics_again) =
+    lower_file_with_diagnostics(FileId(0), FileKind::Ts, &ast_again);
+  assert!(diagnostics_again.is_empty());
+
+  assert_eq!(first.hir.def_paths, second.hir.def_paths);
+  assert_eq!(first.defs.len(), second.defs.len());
+
+  for (left, right) in first.defs.iter().zip(second.defs.iter()) {
+    assert_eq!(left.id, right.id, "def id changed for {:?}", left.path);
+    assert_eq!(left.path, right.path);
+    assert_eq!(left.parent, right.parent);
+    assert_eq!(left.body, right.body);
   }
 }
 
@@ -456,8 +623,7 @@ fn class_member_ids_survive_unrelated_insertions() {
 
 #[test]
 fn span_map_indexes_class_members() {
-  let source =
-    "class C { x = 1; static { const s = 1; } method() { return 1; } }";
+  let source = "class C { x = 1; static { const s = 1; } method() { return 1; } }";
   let result = lower_from_source(source).expect("lower");
   let span_map = &result.hir.span_map;
 
@@ -486,7 +652,9 @@ fn span_map_indexes_class_members() {
   );
 
   let static_block = find_def(DefKind::Method, "<static_block>");
-  let static_span = span_map.def_span(static_block.id).expect("static block span");
+  let static_span = span_map
+    .def_span(static_block.id)
+    .expect("static block span");
   assert_eq!(
     span_map.def_at_offset(static_span.start),
     Some(static_block.id),

@@ -716,12 +716,20 @@ impl<'a> Parser<'a> {
     self.require(TT::KeywordTypeof)?;
 
     // Check if it's typeof import(...)
-    let expr_name = if self.peek().typ == TT::KeywordImport {
+    let mut expr_name = if self.peek().typ == TT::KeywordImport {
       let import_expr = self.import_call(ctx)?;
       self.parse_qualified_type_entity_name(TypeEntityName::Import(import_expr))?
     } else {
       self.parse_type_entity_name()?
     };
+
+    while self.consume_if(TT::Dot).is_match() {
+      let right = self.require_type_identifier()?;
+      expr_name = TypeEntityName::Qualified(Box::new(TypeQualifiedName {
+        left: expr_name,
+        right,
+      }));
+    }
 
     let end_loc = self.peek().loc;
     use crate::loc::Loc;

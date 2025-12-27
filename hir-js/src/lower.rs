@@ -20,10 +20,7 @@ use diagnostics::Diagnostic;
 use diagnostics::FileId;
 use diagnostics::Span;
 use diagnostics::TextRange;
-use parse_js::ast::class_or_object::ClassMember;
-use parse_js::ast::class_or_object::ClassOrObjKey;
-use parse_js::ast::class_or_object::ClassOrObjVal;
-use parse_js::ast::class_or_object::ClassStaticBlock;
+use parse_js::ast::class_or_object::{ClassMember, ClassOrObjKey, ClassOrObjVal, ClassStaticBlock};
 use parse_js::ast::expr::jsx;
 use parse_js::ast::expr::pat::ArrPat;
 use parse_js::ast::expr::pat::ClassOrFuncName;
@@ -82,17 +79,6 @@ impl LoweringContext {
     range
   }
 
-  pub(crate) fn warn(&mut self, code: &'static str, message: impl Into<String>, range: TextRange) {
-    self.diagnostics.push(Diagnostic::warning(
-      code,
-      message,
-      Span {
-        file: self.file,
-        range,
-      },
-    ));
-  }
-
   #[allow(dead_code)]
   fn unsupported(&mut self, range: TextRange, message: impl Into<String>) {
     self.diagnostics.push(Diagnostic::warning(
@@ -105,9 +91,9 @@ impl LoweringContext {
     ));
   }
 
-  fn warn_non_module_export(&mut self, range: TextRange, message: impl Into<String>) {
+  pub(crate) fn warn(&mut self, code: &'static str, message: impl Into<String>, range: TextRange) {
     self.diagnostics.push(Diagnostic::warning(
-      "LOWER0003",
+      code,
       message,
       Span {
         file: self.file,
@@ -118,6 +104,194 @@ impl LoweringContext {
 
   fn into_diagnostics(self) -> Vec<Diagnostic> {
     self.diagnostics
+  }
+}
+
+fn collect_class_members<'a>(
+  members: &'a [Node<ClassMember>],
+  parent: usize,
+  tree: &mut DefTree<'a>,
+  module_items: &mut Vec<ModuleItem<'a>>,
+  names: &mut NameInterner,
+  ambient: bool,
+  in_global: bool,
+  ctx: &mut LoweringContext,
+) {
+  for member in members.iter() {
+    let span = ctx.to_range(member.loc);
+    let is_static = member.stx.static_;
+    match &member.stx.val {
+      ClassOrObjVal::Method(method) => {
+        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let is_constructor = matches!(&member.stx.key, ClassOrObjKey::Direct(direct) if direct.stx.key == "constructor")
+          && !is_static;
+        let kind = if is_constructor {
+          DefKind::Constructor
+        } else {
+          DefKind::Method
+        };
+        let mut desc = DefDescriptor::new(
+          kind,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::Method(method),
+        );
+        desc.is_static = is_static;
+        let def_idx = tree.add(desc, Some(parent));
+        collect_func_params(
+          &method.stx.func,
+          tree,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          Some(def_idx),
+          ctx,
+        );
+        collect_func_body(
+          &method.stx.func,
+          tree,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          Some(def_idx),
+          ctx,
+        );
+      }
+      ClassOrObjVal::Getter(getter) => {
+        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let mut desc = DefDescriptor::new(
+          DefKind::Method,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::Getter(getter),
+        );
+        desc.is_static = is_static;
+        let def_idx = tree.add(desc, Some(parent));
+        collect_func_params(
+          &getter.stx.func,
+          tree,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          Some(def_idx),
+          ctx,
+        );
+        collect_func_body(
+          &getter.stx.func,
+          tree,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          Some(def_idx),
+          ctx,
+        );
+      }
+      ClassOrObjVal::Setter(setter) => {
+        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let mut desc = DefDescriptor::new(
+          DefKind::Method,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::Setter(setter),
+        );
+        desc.is_static = is_static;
+        let def_idx = tree.add(desc, Some(parent));
+        collect_func_params(
+          &setter.stx.func,
+          tree,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          Some(def_idx),
+          ctx,
+        );
+        collect_func_body(
+          &setter.stx.func,
+          tree,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          Some(def_idx),
+          ctx,
+        );
+      }
+      ClassOrObjVal::Prop(init) => {
+        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let mut desc = DefDescriptor::new(
+          DefKind::Field,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::ClassField(member),
+        );
+        desc.is_static = is_static;
+        let def_idx = tree.add(desc, Some(parent));
+        if let Some(expr) = init {
+          collect_expr(
+            expr,
+            tree,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            Some(def_idx),
+            ctx,
+          );
+        }
+      }
+      ClassOrObjVal::StaticBlock(block) => {
+        let name_id = names.intern("<static_block>");
+        let name_text = names.resolve(name_id).unwrap().to_string();
+        let mut desc = DefDescriptor::new(
+          DefKind::Method,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::ClassStaticBlock(block),
+        );
+        desc.is_static = true;
+        let def_idx = tree.add(desc, Some(parent));
+        for stmt in block.stx.body.iter() {
+          collect_stmt(
+            stmt,
+            tree,
+            module_items,
+            names,
+            false,
+            false,
+            ambient,
+            in_global,
+            Some(def_idx),
+            ctx,
+          );
+        }
+      }
+      ClassOrObjVal::IndexSignature(_) => {}
+    }
   }
 }
 
@@ -132,7 +306,6 @@ struct DefDescriptor<'a> {
   in_global: bool,
   is_exported: bool,
   is_default_export: bool,
-  parent: Option<RawNode>,
   is_static: bool,
   source: DefSource<'a>,
   type_source: Option<TypeSource<'a>>,
@@ -141,13 +314,13 @@ struct DefDescriptor<'a> {
 #[derive(Debug)]
 enum DefSource<'a> {
   None,
-  ClassDecl(&'a Node<ClassDecl>),
-  ClassExpr(&'a Node<ClassExpr>),
   ClassField(&'a Node<ClassMember>),
   ClassStaticBlock(&'a Node<ClassStaticBlock>),
   Function(&'a Node<FuncDecl>),
   ArrowFunction(&'a Node<ArrowFuncExpr>),
   FuncExpr(&'a Node<FuncExpr>),
+  ClassDecl(&'a Node<ClassDecl>),
+  ClassExpr(&'a Node<ClassExpr>),
   Enum(&'a Node<EnumDecl>),
   Var(&'a AstVarDeclarator, VarDeclKind),
   Method(&'a Node<parse_js::ast::class_or_object::ClassOrObjMethod>),
@@ -162,11 +335,74 @@ enum TypeSource<'a> {
   TypeAlias(&'a Node<TypeAliasDecl>),
   Interface(&'a Node<InterfaceDecl>),
   Class(&'a Node<ClassDecl>),
-  ClassExpr(&'a Node<parse_js::ast::expr::ClassExpr>),
+  ClassExpr(&'a Node<ClassExpr>),
   AmbientClass(&'a Node<AmbientClassDecl>),
   Enum(&'a Node<EnumDecl>),
-  Namespace(&'a Node<NamespaceDecl>),
-  Module(&'a Node<ModuleDecl>),
+  Namespace,
+  Module,
+}
+
+#[derive(Debug)]
+struct DefNode<'a> {
+  desc: DefDescriptor<'a>,
+  children: Vec<usize>,
+  parent: Option<usize>,
+}
+
+#[derive(Debug, Default)]
+struct DefTree<'a> {
+  nodes: Vec<DefNode<'a>>,
+  roots: Vec<usize>,
+}
+
+impl<'a> DefTree<'a> {
+  fn add(&mut self, desc: DefDescriptor<'a>, parent: Option<usize>) -> usize {
+    let idx = self.nodes.len();
+    self.nodes.push(DefNode {
+      desc,
+      children: Vec::new(),
+      parent,
+    });
+    if let Some(parent) = parent {
+      self
+        .nodes
+        .get_mut(parent)
+        .expect("parent index should exist")
+        .children
+        .push(idx);
+    } else {
+      self.roots.push(idx);
+    }
+    idx
+  }
+
+  fn sort(&mut self) {
+    let roots = self.roots.clone();
+    self.sort_children(roots);
+  }
+
+  fn sort_children(&mut self, mut indices: Vec<usize>) {
+    indices.sort_by(|&a, &b| {
+      let a_desc = &self.nodes[a].desc;
+      let b_desc = &self.nodes[b].desc;
+      (a_desc.kind, a_desc.name_text.as_str(), a_desc.span.start).cmp(&(
+        b_desc.kind,
+        b_desc.name_text.as_str(),
+        b_desc.span.start,
+      ))
+    });
+    for &idx in indices.iter() {
+      let children = self.nodes[idx].children.clone();
+      self.sort_children(children);
+    }
+    if let Some(first) = indices.first() {
+      if self.nodes[*first].parent.is_none() {
+        self.roots = indices;
+      } else if let Some(parent) = self.nodes[*first].parent {
+        self.nodes[parent].children = indices;
+      }
+    }
+  }
 }
 
 #[derive(Debug)]
@@ -231,7 +467,6 @@ impl<'a> DefDescriptor<'a> {
       in_global,
       is_exported: false,
       is_default_export: false,
-      parent: None,
       is_static: false,
       source,
       type_source: None,
@@ -252,11 +487,9 @@ struct PlannedBody {
 }
 
 #[derive(Debug)]
-struct PlannedDef<'a> {
-  desc: DefDescriptor<'a>,
+struct Allocation {
   def_id: DefId,
   def_path: DefPath,
-  parent: Option<DefId>,
   body: Option<PlannedBody>,
 }
 
@@ -278,10 +511,6 @@ impl DefLookup {
 
   fn def_for_node<T: Drive + DriveMut>(&self, node: &Node<T>) -> Option<DefId> {
     self.node_to_def.get(&RawNode::from(node)).copied()
-  }
-
-  fn def_for_raw(&self, raw: RawNode) -> Option<DefId> {
-    self.node_to_def.get(&raw).copied()
   }
 
   fn body_for(&self, def: DefId) -> Option<BodyId> {
@@ -312,6 +541,88 @@ fn allocate_def_id(def_path: DefPath, allocated: &mut BTreeMap<u32, DefPath>) ->
   }
 }
 
+fn allocate_defs<'a>(
+  file: FileId,
+  tree: &DefTree<'a>,
+  allocated_def_ids: &mut BTreeMap<u32, DefPath>,
+  def_lookup: &mut DefLookup,
+) -> Vec<Allocation> {
+  if tree.nodes.is_empty() {
+    return Vec::new();
+  }
+
+  let mut allocations: Vec<Option<Allocation>> = (0..tree.nodes.len()).map(|_| None).collect();
+  let mut disambiguators: BTreeMap<(Option<DefId>, DefKind, NameId), u32> = BTreeMap::new();
+  let mut body_disambiguators: BTreeMap<DefId, u32> = BTreeMap::new();
+
+  fn assign<'a>(
+    file: FileId,
+    idx: usize,
+    parent: Option<DefId>,
+    tree: &DefTree<'a>,
+    disambiguators: &mut BTreeMap<(Option<DefId>, DefKind, NameId), u32>,
+    body_disambiguators: &mut BTreeMap<DefId, u32>,
+    allocated_def_ids: &mut BTreeMap<u32, DefPath>,
+    def_lookup: &mut DefLookup,
+    allocations: &mut [Option<Allocation>],
+  ) {
+    let desc = &tree.nodes[idx].desc;
+    let disambiguator = disambiguators
+      .entry((parent, desc.kind, desc.name))
+      .or_insert(0);
+    let def_path = DefPath::new(file, parent, desc.kind, desc.name, *disambiguator);
+    *disambiguator += 1;
+    let def_id = allocate_def_id(def_path, allocated_def_ids);
+    let body = desc.source.body_kind().map(|kind| {
+      let disambiguator = body_disambiguators.entry(def_id).or_insert(0);
+      let id = BodyId(BodyPath::new(def_id, kind, *disambiguator).stable_hash_u32());
+      *disambiguator += 1;
+      PlannedBody { id, kind }
+    });
+    def_lookup.record_source(&desc.source, def_id);
+    if let Some(body) = &body {
+      def_lookup.def_bodies.insert(def_id, body.id);
+    }
+    allocations[idx] = Some(Allocation {
+      def_id,
+      def_path,
+      body,
+    });
+    for &child in tree.nodes[idx].children.iter() {
+      assign(
+        file,
+        child,
+        Some(def_id),
+        tree,
+        disambiguators,
+        body_disambiguators,
+        allocated_def_ids,
+        def_lookup,
+        allocations,
+      );
+    }
+  }
+
+  for &root in tree.roots.iter() {
+    assign(
+      file,
+      root,
+      None,
+      tree,
+      &mut disambiguators,
+      &mut body_disambiguators,
+      allocated_def_ids,
+      def_lookup,
+      &mut allocations,
+    );
+  }
+
+  allocations
+    .into_iter()
+    .map(|alloc| alloc.expect("allocation missing"))
+    .collect()
+}
+
 impl<'a> DefSource<'a> {
   fn body_kind(&self) -> Option<BodyKind> {
     match self {
@@ -339,13 +650,13 @@ impl<'a> DefSource<'a> {
 
   fn ptr(&self) -> Option<RawNode> {
     match self {
-      DefSource::ClassDecl(node) => Some(RawNode::from(*node)),
-      DefSource::ClassExpr(node) => Some(RawNode::from(*node)),
       DefSource::ClassField(node) => Some(RawNode::from(*node)),
       DefSource::ClassStaticBlock(block) => Some(RawNode::from(*block)),
       DefSource::Function(node) => Some(RawNode::from(*node)),
       DefSource::ArrowFunction(node) => Some(RawNode::from(*node)),
       DefSource::FuncExpr(node) => Some(RawNode::from(*node)),
+      DefSource::ClassDecl(node) => Some(RawNode::from(*node)),
+      DefSource::ClassExpr(node) => Some(RawNode::from(*node)),
       DefSource::Enum(node) => Some(RawNode::from(*node)),
       DefSource::Var(_, _) => None,
       DefSource::Method(node) => Some(RawNode::from(*node)),
@@ -358,6 +669,95 @@ impl<'a> DefSource<'a> {
   }
 }
 
+fn lower_def_subtree<'a>(
+  idx: usize,
+  tree: &DefTree<'a>,
+  allocations: &[Allocation],
+  defs: &mut Vec<DefData>,
+  pending_types: &mut Vec<(DefId, TypeSource<'a>)>,
+  span_map: &mut SpanMap,
+  def_lookup: &DefLookup,
+  names: &mut NameInterner,
+  bodies: &mut Vec<Arc<Body>>,
+  body_ids: &mut Vec<BodyId>,
+  body_index: &mut BTreeMap<BodyId, usize>,
+  items: &mut Vec<DefId>,
+  ctx: &mut LoweringContext,
+) {
+  let node = tree
+    .nodes
+    .get(idx)
+    .unwrap_or_else(|| panic!("missing def tree node at index {}", idx));
+  let alloc = allocations
+    .get(idx)
+    .unwrap_or_else(|| panic!("missing allocation for node {}", idx));
+  let def_id = alloc.def_id;
+
+  if node.desc.is_item {
+    items.push(def_id);
+  }
+
+  span_map.add_def(node.desc.span, def_id);
+
+  let body_id = alloc.body.map(|b| b.id);
+  let def_data = DefData {
+    id: def_id,
+    name: node.desc.name,
+    path: alloc.def_path,
+    parent: alloc.def_path.parent,
+    span: node.desc.span,
+    is_static: node.desc.is_static,
+    is_ambient: node.desc.is_ambient,
+    in_global: node.desc.in_global,
+    is_exported: node.desc.is_exported,
+    is_default_export: node.desc.is_default_export,
+    body: body_id,
+    type_info: None,
+  };
+
+  if let Some(type_source) = node.desc.type_source {
+    pending_types.push((def_id, type_source));
+  }
+
+  if let Some(body) = alloc.body {
+    let body_arc = lower_body_from_source(
+      def_id,
+      body.id,
+      &node.desc.source,
+      def_lookup,
+      names,
+      span_map,
+      ctx,
+    )
+    .map(Arc::new)
+    .unwrap_or_else(|| Arc::new(empty_body(def_id, body.kind)));
+    let idx = bodies.len();
+    body_ids.push(body.id);
+    body_index.insert(body.id, idx);
+    bodies.push(body_arc);
+  }
+
+  defs.push(def_data);
+
+  for &child in node.children.iter() {
+    lower_def_subtree(
+      child,
+      tree,
+      allocations,
+      defs,
+      pending_types,
+      span_map,
+      def_lookup,
+      names,
+      bodies,
+      body_ids,
+      body_index,
+      items,
+      ctx,
+    );
+  }
+}
+
 /// Lower a parsed file into HIR structures, returning lowering diagnostics.
 pub fn lower_file_with_diagnostics(
   file: FileId,
@@ -366,115 +766,47 @@ pub fn lower_file_with_diagnostics(
 ) -> (LowerResult, Vec<Diagnostic>) {
   let mut ctx = LoweringContext::new(file);
   let mut names = NameInterner::default();
-  let mut descriptors = Vec::new();
   let mut module_items = Vec::new();
+  let mut def_tree = DefTree::default();
   collect_top_level(
     ast,
     file_kind,
-    &mut descriptors,
+    &mut def_tree,
     &mut module_items,
     &mut names,
     &mut ctx,
   );
-
-  descriptors.sort_by(|a, b| {
-    (a.kind, a.name_text.as_str(), a.span.start).cmp(&(b.kind, b.name_text.as_str(), b.span.start))
-  });
+  def_tree.sort();
 
   let mut span_map = SpanMap::new();
-  let mut defs = Vec::with_capacity(descriptors.len());
+  let mut defs = Vec::with_capacity(def_tree.nodes.len());
   let mut pending_types = Vec::new();
-  let mut disambiguators: BTreeMap<(Option<DefId>, DefKind, NameId), u32> = BTreeMap::new();
   let mut def_lookup = DefLookup::default();
   let mut allocated_def_ids: BTreeMap<u32, DefPath> = BTreeMap::new();
 
-  let mut planned = Vec::new();
-  let mut body_disambiguators: BTreeMap<DefId, u32> = BTreeMap::new();
-  for desc in descriptors {
-    let parent = desc.parent.and_then(|raw| def_lookup.def_for_raw(raw));
-    let dis = disambiguators
-      .entry((parent, desc.kind, desc.name))
-      .or_insert(0);
-    let def_path = DefPath::new(file, desc.kind, desc.name, *dis, parent);
-    *dis += 1;
-    let def_id = allocate_def_id(def_path, &mut allocated_def_ids);
-    let body = desc.source.body_kind().map(|kind| {
-      let disambiguator = body_disambiguators.entry(def_id).or_insert(0);
-      let id = BodyId(BodyPath::new(def_id, kind, *disambiguator).stable_hash_u32());
-      *disambiguator += 1;
-      PlannedBody { id, kind }
-    });
-    def_lookup.record_source(&desc.source, def_id);
-    if let Some(body) = &body {
-      def_lookup.def_bodies.insert(def_id, body.id);
-    }
-    planned.push(PlannedDef {
-      desc,
-      def_id,
-      def_path,
-      parent,
-      body,
-    });
-  }
+  let allocations = allocate_defs(file, &def_tree, &mut allocated_def_ids, &mut def_lookup);
 
   let mut body_ids: Vec<BodyId> = Vec::new();
   let mut bodies: Vec<Arc<Body>> = Vec::new();
   let mut body_index: BTreeMap<BodyId, usize> = BTreeMap::new();
   let mut items = Vec::new();
 
-  for PlannedDef {
-    desc,
-    def_id,
-    def_path,
-    parent,
-    body,
-  } in planned
-  {
-    if desc.is_item {
-      items.push(def_id);
-    }
-
-    span_map.add_def(desc.span, def_id);
-
-    let body_id = body.map(|b| b.id);
-    let def_data = DefData {
-      id: def_id,
-      name: desc.name,
-      path: def_path,
-      span: desc.span,
-      parent,
-      is_static: desc.is_static,
-      is_ambient: desc.is_ambient,
-      in_global: desc.in_global,
-      is_exported: desc.is_exported,
-      is_default_export: desc.is_default_export,
-      body: body_id,
-      type_info: None,
-    };
-
-    if let Some(type_source) = desc.type_source {
-      pending_types.push((def_id, type_source));
-    }
-
-    if let Some(body) = body {
-      let body_arc = lower_body_from_source(
-        def_id,
-        body.id,
-        &desc.source,
-        &def_lookup,
-        &mut names,
-        &mut span_map,
-        &mut ctx,
-      )
-      .map(Arc::new)
-      .unwrap_or_else(|| Arc::new(empty_body(def_id, body.kind)));
-      let idx = bodies.len();
-      body_ids.push(body.id);
-      body_index.insert(body.id, idx);
-      bodies.push(body_arc);
-    }
-
-    defs.push(def_data);
+  for root in def_tree.roots.clone() {
+    lower_def_subtree(
+      root,
+      &def_tree,
+      &allocations,
+      &mut defs,
+      &mut pending_types,
+      &mut span_map,
+      &def_lookup,
+      &mut names,
+      &mut bodies,
+      &mut body_ids,
+      &mut body_index,
+      &mut items,
+      &mut ctx,
+    );
   }
 
   let mut root_body_id =
@@ -501,7 +833,7 @@ pub fn lower_file_with_diagnostics(
 
   let types = {
     let mut type_lowerer = TypeLowerer::new(&mut names, &mut span_map, &mut ctx);
-    let mut pending_namespaces: Vec<(DefId, TextRange)> = Vec::new();
+    let mut pending_namespaces: Vec<DefId> = Vec::new();
     for (def_id, source) in pending_types {
       match source {
         TypeSource::TypeAlias(alias) => {
@@ -552,20 +884,15 @@ pub fn lower_file_with_diagnostics(
             }
           }
         }
-        TypeSource::Namespace(ns) => {
-          let span = ns.loc.to_diagnostics_range_with_note().0;
-          pending_namespaces.push((def_id, span));
-        }
-        TypeSource::Module(module) => {
-          let span = module.loc.to_diagnostics_range_with_note().0;
-          pending_namespaces.push((def_id, span));
+        TypeSource::Namespace | TypeSource::Module => {
+          pending_namespaces.push(def_id);
         }
       }
     }
     let types = type_lowerer.finish();
-    for (def_id, span) in pending_namespaces {
+    for def_id in pending_namespaces {
       if let Some(idx) = id_to_index.get(&def_id) {
-        let members = collect_namespace_members(def_id, span, &defs);
+        let members = collect_namespace_members(def_id, &defs);
         if let Some(def) = defs.get_mut(*idx) {
           def.type_info = Some(DefTypeInfo::Namespace { members });
         }
@@ -623,18 +950,14 @@ pub fn lower_file(file: FileId, file_kind: FileKind, ast: &Node<TopLevel>) -> Lo
   lower_file_with_diagnostics(file, file_kind, ast).0
 }
 
-fn collect_namespace_members(def_id: DefId, span: TextRange, defs: &[DefData]) -> Vec<DefId> {
+fn collect_namespace_members(def_id: DefId, defs: &[DefData]) -> Vec<DefId> {
   let mut members: Vec<DefId> = defs
     .iter()
-    .filter(|def| def.id != def_id && span_contains(span, def.span))
+    .filter(|def| def.parent == Some(def_id))
     .map(|def| def.id)
     .collect();
   members.sort();
   members
-}
-
-fn span_contains(container: TextRange, inner: TextRange) -> bool {
-  inner.start >= container.start && inner.end <= container.end
 }
 
 fn empty_body(owner: DefId, kind: BodyKind) -> Body {
@@ -1929,7 +2252,7 @@ impl<'a> BodyBuilder<'a> {
 fn collect_top_level<'a>(
   ast: &'a Node<TopLevel>,
   file_kind: FileKind,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
   ctx: &mut LoweringContext,
@@ -1938,13 +2261,14 @@ fn collect_top_level<'a>(
   for stmt in ast.stx.body.iter() {
     collect_stmt(
       stmt,
-      descriptors,
+      tree,
       module_items,
       names,
       true,
       true,
       ambient,
       false,
+      None,
       ctx,
     );
   }
@@ -1952,13 +2276,14 @@ fn collect_top_level<'a>(
 
 fn collect_stmt<'a>(
   stmt: &'a Node<AstStmt>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
   module_item: bool,
   is_item: bool,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   let span = ctx.to_range(stmt.loc);
@@ -1978,41 +2303,36 @@ fn collect_stmt<'a>(
       );
       desc.is_exported = func.stx.export;
       desc.is_default_export = func.stx.export_default;
-      if desc.is_exported || desc.is_default_export {
-        if module_item {
-          module_items.push(ModuleItem {
+      if module_item && (desc.is_exported || desc.is_default_export) {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+            default: desc.is_default_export,
+            type_only: false,
             span,
-            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-              default: desc.is_default_export,
-              type_only: false,
-              span,
-              kind: ExportedDeclKind::Func(func),
-            }),
-          });
-        } else if desc.is_default_export {
-          ctx.warn_non_module_export(
-            span,
-            "export default is only allowed at the module top level",
-          );
-        }
+            kind: ExportedDeclKind::Func(func),
+          }),
+        });
       }
-      descriptors.push(desc);
+      let def_idx = tree.add(desc, parent);
       collect_func_params(
         &func.stx.function,
-        descriptors,
+        tree,
         module_items,
         names,
         decl_ambient,
         in_global,
+        Some(def_idx),
         ctx,
       );
       collect_func_body(
         &func.stx.function,
-        descriptors,
+        tree,
         module_items,
         names,
         decl_ambient,
         in_global,
+        Some(def_idx),
         ctx,
       );
     }
@@ -2032,29 +2352,22 @@ fn collect_stmt<'a>(
       desc.type_source = Some(TypeSource::Class(class_decl));
       desc.is_exported = class_decl.stx.export;
       desc.is_default_export = class_decl.stx.export_default;
-      if desc.is_exported || desc.is_default_export {
-        if module_item {
-          module_items.push(ModuleItem {
+      if module_item && (desc.is_exported || desc.is_default_export) {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+            default: desc.is_default_export,
+            type_only: false,
             span,
-            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-              default: desc.is_default_export,
-              type_only: false,
-              span,
-              kind: ExportedDeclKind::Class(class_decl),
-            }),
-          });
-        } else if desc.is_default_export {
-          ctx.warn_non_module_export(
-            span,
-            "export default is only allowed at the module top level",
-          );
-        }
+            kind: ExportedDeclKind::Class(class_decl),
+          }),
+        });
       }
-      descriptors.push(desc);
+      let def_idx = tree.add(desc, parent);
       collect_class_members(
         &class_decl.stx.members,
-        RawNode::from(class_decl),
-        descriptors,
+        def_idx,
+        tree,
         module_items,
         names,
         decl_ambient,
@@ -2065,54 +2378,51 @@ fn collect_stmt<'a>(
     AstStmt::VarDecl(var_decl) => {
       collect_var_decl(
         var_decl,
-        descriptors,
+        tree,
         module_items,
         names,
-        module_item,
         is_item,
+        var_decl.stx.export,
         ambient,
         in_global,
+        parent,
         ctx,
       );
-      if var_decl.stx.export {
-        if module_item {
-          module_items.push(ModuleItem {
+      if module_item && var_decl.stx.export {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+            default: false,
+            type_only: false,
             span,
-            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-              default: false,
-              type_only: false,
-              span,
-              kind: ExportedDeclKind::Var(var_decl),
-            }),
-          });
-        }
+            kind: ExportedDeclKind::Var(var_decl),
+          }),
+        });
       }
     }
     AstStmt::NamespaceDecl(ns) => {
       let decl_ambient = ambient || ns.stx.declare;
       collect_namespace(
         ns,
-        descriptors,
+        tree,
         module_items,
         names,
-        module_item,
         is_item,
         decl_ambient,
         in_global,
+        parent,
         ctx,
       );
-      if ns.stx.export {
-        if module_item {
-          module_items.push(ModuleItem {
+      if module_item && ns.stx.export {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+            default: false,
+            type_only: false,
             span,
-            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-              default: false,
-              type_only: false,
-              span,
-              kind: ExportedDeclKind::Namespace(ns),
-            }),
-          });
-        }
+            kind: ExportedDeclKind::Namespace(ns),
+          }),
+        });
       }
     }
     AstStmt::ModuleDecl(module) => {
@@ -2132,33 +2442,32 @@ fn collect_stmt<'a>(
         in_global,
         DefSource::None,
       );
+      desc.type_source = Some(TypeSource::Module);
       desc.is_exported = module.stx.export;
-      desc.type_source = Some(TypeSource::Module(module));
-      descriptors.push(desc);
-      if module.stx.export {
-        if module_item {
-          module_items.push(ModuleItem {
+      let def_idx = tree.add(desc, parent);
+      if module_item && module.stx.export {
+        module_items.push(ModuleItem {
+          span,
+          kind: ModuleItemKind::ExportedDecl(ExportedDecl {
+            default: false,
+            type_only: false,
             span,
-            kind: ModuleItemKind::ExportedDecl(ExportedDecl {
-              default: false,
-              type_only: false,
-              span,
-              kind: ExportedDeclKind::Module(module),
-            }),
-          });
-        }
+            kind: ExportedDeclKind::Module(module),
+          }),
+        });
       }
       if let Some(body) = &module.stx.body {
         for st in body.iter() {
           collect_stmt(
             st,
-            descriptors,
+            tree,
             module_items,
             names,
             false,
             false,
             decl_ambient,
             in_global,
+            Some(def_idx),
             ctx,
           );
         }
@@ -2168,13 +2477,14 @@ fn collect_stmt<'a>(
       for st in global.stx.body.iter() {
         collect_stmt(
           st,
-          descriptors,
+          tree,
           module_items,
           names,
-          false,
           true,
           true,
           true,
+          true,
+          None,
           ctx,
         );
       }
@@ -2195,8 +2505,8 @@ fn collect_stmt<'a>(
       );
       desc.type_source = Some(TypeSource::Interface(intf));
       desc.is_exported = intf.stx.export;
-      descriptors.push(desc);
-      if intf.stx.export && module_item {
+      let _ = tree.add(desc, parent);
+      if module_item && intf.stx.export {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2224,8 +2534,8 @@ fn collect_stmt<'a>(
       );
       desc.type_source = Some(TypeSource::TypeAlias(ta));
       desc.is_exported = ta.stx.export;
-      descriptors.push(desc);
-      if ta.stx.export && module_item {
+      let _ = tree.add(desc, parent);
+      if module_item && ta.stx.export {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2253,11 +2563,11 @@ fn collect_stmt<'a>(
       );
       desc.type_source = Some(TypeSource::Enum(en));
       desc.is_exported = en.stx.export;
-      let parent_raw = RawNode::from(en);
+      let def_idx = tree.add(desc, parent);
       for member in en.stx.members.iter() {
         let member_name = names.intern(&member.stx.name);
         let member_text = names.resolve(member_name).unwrap().to_string();
-        let mut member_desc = DefDescriptor::new(
+        let member_desc = DefDescriptor::new(
           DefKind::EnumMember,
           member_name,
           member_text,
@@ -2267,24 +2577,21 @@ fn collect_stmt<'a>(
           in_global,
           DefSource::None,
         );
-        member_desc.parent = Some(parent_raw);
-        member_desc.is_exported = desc.is_exported;
-        member_desc.is_default_export = desc.is_default_export;
-        descriptors.push(member_desc);
+        tree.add(member_desc, Some(def_idx));
         if let Some(init) = &member.stx.initializer {
           collect_expr(
             init,
-            descriptors,
+            tree,
             module_items,
             names,
             decl_ambient,
             in_global,
+            Some(def_idx),
             ctx,
           );
         }
       }
-      descriptors.push(desc);
-      if en.stx.export && module_item {
+      if module_item && en.stx.export {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2306,7 +2613,7 @@ fn collect_stmt<'a>(
       if let Some(default) = &stmt_import.stx.default {
         let pat_names = collect_pat_names(&default.stx.pat, names, ctx);
         for (id, span) in pat_names {
-          descriptors.push(DefDescriptor::new(
+          let desc = DefDescriptor::new(
             DefKind::ImportBinding,
             id,
             names.resolve(id).unwrap().to_string(),
@@ -2315,7 +2622,8 @@ fn collect_stmt<'a>(
             ambient,
             in_global,
             DefSource::None,
-          ));
+          );
+          let _ = tree.add(desc, parent);
         }
       }
       if let Some(names_list) = &stmt_import.stx.names {
@@ -2323,7 +2631,7 @@ fn collect_stmt<'a>(
           ImportNames::All(pat) => {
             let pat_names = collect_pat_names(&pat.stx.pat, names, ctx);
             for (id, span) in pat_names {
-              descriptors.push(DefDescriptor::new(
+              let desc = DefDescriptor::new(
                 DefKind::ImportBinding,
                 id,
                 names.resolve(id).unwrap().to_string(),
@@ -2332,14 +2640,15 @@ fn collect_stmt<'a>(
                 ambient,
                 in_global,
                 DefSource::None,
-              ));
+              );
+              let _ = tree.add(desc, parent);
             }
           }
           ImportNames::Specific(list) => {
             for item in list.iter() {
               let pat_names = collect_pat_names(&item.stx.alias.stx.pat, names, ctx);
               for (id, span) in pat_names {
-                descriptors.push(DefDescriptor::new(
+                let desc = DefDescriptor::new(
                   DefKind::ImportBinding,
                   id,
                   names.resolve(id).unwrap().to_string(),
@@ -2348,7 +2657,8 @@ fn collect_stmt<'a>(
                   ambient,
                   in_global,
                   DefSource::None,
-                ));
+                );
+                let _ = tree.add(desc, parent);
               }
             }
           }
@@ -2361,11 +2671,6 @@ fn collect_stmt<'a>(
           span,
           kind: ModuleItemKind::ExportList(export),
         });
-      } else {
-        ctx.warn_non_module_export(
-          span,
-          "export statements are only allowed at the module top level",
-        );
       }
     }
     AstStmt::ExportDefaultExpr(expr) => {
@@ -2381,22 +2686,17 @@ fn collect_stmt<'a>(
         DefSource::ExportDefaultExpr(expr),
       );
       desc.is_default_export = true;
-      descriptors.push(desc);
+      let _ = tree.add(desc, parent);
       if module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportDefaultExpr(expr),
         });
-      } else {
-        ctx.warn_non_module_export(
-          span,
-          "export default is only allowed at the module top level",
-        );
       }
     }
     AstStmt::AmbientVarDecl(av) => {
       let name_id = names.intern(&av.stx.name);
-      let mut desc = DefDescriptor::new(
+      let desc = DefDescriptor::new(
         DefKind::Var,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
@@ -2406,9 +2706,8 @@ fn collect_stmt<'a>(
         in_global,
         DefSource::None,
       );
-      desc.is_exported = av.stx.export;
-      descriptors.push(desc);
-      if av.stx.export && module_item {
+      let _ = tree.add(desc, parent);
+      if module_item && av.stx.export {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2422,7 +2721,7 @@ fn collect_stmt<'a>(
     }
     AstStmt::AmbientFunctionDecl(af) => {
       let name_id = names.intern(&af.stx.name);
-      let mut desc = DefDescriptor::new(
+      let desc = DefDescriptor::new(
         DefKind::Function,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
@@ -2432,10 +2731,17 @@ fn collect_stmt<'a>(
         in_global,
         DefSource::None,
       );
-      desc.is_exported = af.stx.export;
-      descriptors.push(desc);
-      collect_func_params_from_parts(&af.stx.parameters, descriptors, names, true, in_global, ctx);
-      if af.stx.export && module_item {
+      let def_idx = tree.add(desc, parent);
+      collect_func_params_from_parts(
+        &af.stx.parameters,
+        tree,
+        names,
+        true,
+        in_global,
+        Some(def_idx),
+        ctx,
+      );
+      if module_item && af.stx.export {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2459,10 +2765,9 @@ fn collect_stmt<'a>(
         in_global,
         DefSource::None,
       );
-      desc.is_exported = ac.stx.export;
       desc.type_source = Some(TypeSource::AmbientClass(ac));
-      descriptors.push(desc);
-      if ac.stx.export && module_item {
+      let _ = tree.add(desc, parent);
+      if module_item && ac.stx.export {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportedDecl(ExportedDecl {
@@ -2488,8 +2793,6 @@ fn collect_stmt<'a>(
           span,
           kind: ModuleItemKind::ExportType(export_type),
         });
-      } else {
-        ctx.warn_non_module_export(span, "export type is only allowed at the module top level");
       }
     }
     AstStmt::ImportEqualsDecl(ie) => {
@@ -2500,7 +2803,7 @@ fn collect_stmt<'a>(
         });
       }
       let name_id = names.intern(&ie.stx.name);
-      descriptors.push(DefDescriptor::new(
+      let desc = DefDescriptor::new(
         DefKind::ImportBinding,
         name_id,
         names.resolve(name_id).unwrap().to_string(),
@@ -2509,7 +2812,8 @@ fn collect_stmt<'a>(
         ambient,
         in_global,
         DefSource::None,
-      ));
+      );
+      let _ = tree.add(desc, parent);
     }
     AstStmt::ExportAssignmentDecl(assign) => {
       let name_id = names.intern("export=");
@@ -2524,288 +2828,102 @@ fn collect_stmt<'a>(
         DefSource::ExportAssignment(assign),
       );
       desc.is_exported = true;
-      descriptors.push(desc);
+      let _ = tree.add(desc, parent);
       if module_item {
         module_items.push(ModuleItem {
           span,
           kind: ModuleItemKind::ExportAssignment(assign),
         });
-      } else {
-        ctx.warn_non_module_export(
-          span,
-          "export assignment is only allowed at the module top level",
-        );
       }
     }
     AstStmt::ForIn(for_in) => {
       collect_for_lhs(
         &for_in.stx.lhs,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_expr(
         &for_in.stx.rhs,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_for_body(
         &for_in.stx.body,
-        descriptors,
+        tree,
         module_items,
         names,
-        false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstStmt::ForOf(for_of) => {
       collect_for_lhs(
         &for_of.stx.lhs,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_expr(
         &for_of.stx.rhs,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_for_body(
         &for_of.stx.body,
-        descriptors,
+        tree,
         module_items,
         names,
-        false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     _ => {
       walk_stmt_children(
         stmt,
-        descriptors,
+        tree,
         module_items,
         names,
-        false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
   }
 }
 
-fn collect_class_members<'a>(
-  members: &'a [Node<ClassMember>],
-  parent: RawNode,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
-  module_items: &mut Vec<ModuleItem<'a>>,
-  names: &mut NameInterner,
-  ambient: bool,
-  in_global: bool,
-  ctx: &mut LoweringContext,
-) {
-  for member in members.iter() {
-    let span = ctx.to_range(member.loc);
-    let is_static = member.stx.static_;
-    match &member.stx.val {
-      ClassOrObjVal::Method(method) => {
-        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
-        let is_constructor = matches!(&member.stx.key, ClassOrObjKey::Direct(direct) if direct.stx.key == "constructor")
-          && !member.stx.static_;
-        let kind = if is_constructor {
-          DefKind::Constructor
-        } else {
-          DefKind::Method
-        };
-        let mut desc = DefDescriptor::new(
-          kind,
-          name_id,
-          name_text,
-          span,
-          false,
-          ambient,
-          in_global,
-          DefSource::Method(method),
-        );
-        desc.parent = Some(parent);
-        desc.is_static = is_static;
-        descriptors.push(desc);
-        collect_func_params(
-          &method.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-        collect_func_body(
-          &method.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-      }
-      ClassOrObjVal::Getter(getter) => {
-        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
-        let mut desc = DefDescriptor::new(
-          DefKind::Method,
-          name_id,
-          name_text,
-          span,
-          false,
-          ambient,
-          in_global,
-          DefSource::Getter(getter),
-        );
-        desc.parent = Some(parent);
-        desc.is_static = is_static;
-        descriptors.push(desc);
-        collect_func_params(
-          &getter.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-        collect_func_body(
-          &getter.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-      }
-      ClassOrObjVal::Setter(setter) => {
-        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
-        let mut desc = DefDescriptor::new(
-          DefKind::Method,
-          name_id,
-          name_text,
-          span,
-          false,
-          ambient,
-          in_global,
-          DefSource::Setter(setter),
-        );
-        desc.parent = Some(parent);
-        desc.is_static = is_static;
-        descriptors.push(desc);
-        collect_func_params(
-          &setter.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-        collect_func_body(
-          &setter.stx.func,
-          descriptors,
-          module_items,
-          names,
-          ambient,
-          in_global,
-          ctx,
-        );
-      }
-      ClassOrObjVal::Prop(init) => {
-        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
-        let mut desc = DefDescriptor::new(
-          DefKind::Field,
-          name_id,
-          name_text,
-          span,
-          false,
-          ambient,
-          in_global,
-          DefSource::ClassField(member),
-        );
-        desc.parent = Some(parent);
-        desc.is_static = is_static;
-        descriptors.push(desc);
-        if let Some(expr) = init {
-          collect_expr(
-            expr,
-            descriptors,
-            module_items,
-            names,
-            ambient,
-            in_global,
-            ctx,
-          );
-        }
-      }
-      ClassOrObjVal::StaticBlock(block) => {
-        let name_id = names.intern("<static_block>");
-        let name_text = names.resolve(name_id).unwrap().to_string();
-        let mut desc = DefDescriptor::new(
-          DefKind::Method,
-          name_id,
-          name_text,
-          span,
-          false,
-          ambient,
-          in_global,
-          DefSource::ClassStaticBlock(block),
-        );
-        desc.parent = Some(parent);
-        desc.is_static = true;
-        descriptors.push(desc);
-        for stmt in block.stx.body.iter() {
-          collect_stmt(
-            stmt,
-            descriptors,
-            module_items,
-            names,
-            false,
-            false,
-            ambient,
-            in_global,
-            ctx,
-          );
-        }
-      }
-      ClassOrObjVal::IndexSignature(_) => {}
-    }
-  }
-}
-
 fn collect_namespace<'a>(
   ns: &'a Node<NamespaceDecl>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
-  _module_item: bool,
   is_item: bool,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   let name_id = names.intern(&ns.stx.name);
@@ -2821,21 +2939,21 @@ fn collect_namespace<'a>(
     in_global,
     DefSource::None,
   );
-  desc.is_exported = ns.stx.export;
-  desc.type_source = Some(TypeSource::Namespace(ns));
-  descriptors.push(desc);
+  desc.type_source = Some(TypeSource::Namespace);
+  let def_idx = tree.add(desc, parent);
   match &ns.stx.body {
     NamespaceBody::Block(stmts) => {
       for st in stmts.iter() {
         collect_stmt(
           st,
-          descriptors,
+          tree,
           module_items,
           names,
           false,
           false,
           ambient,
           in_global,
+          Some(def_idx),
           ctx,
         );
       }
@@ -2843,13 +2961,13 @@ fn collect_namespace<'a>(
     NamespaceBody::Namespace(inner) => {
       collect_namespace(
         inner,
-        descriptors,
+        tree,
         module_items,
         names,
         false,
-        false,
         ambient,
         in_global,
+        Some(def_idx),
         ctx,
       );
     }
@@ -2858,13 +2976,14 @@ fn collect_namespace<'a>(
 
 fn collect_var_decl<'a>(
   var_decl: &'a Node<parse_js::ast::stmt::decl::VarDecl>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
-  _module_item: bool,
   is_item: bool,
+  is_exported: bool,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   let kind = match var_decl.stx.mode {
@@ -2886,8 +3005,8 @@ fn collect_var_decl<'a>(
         in_global,
         DefSource::Var(declarator, kind),
       );
-      desc.is_exported = var_decl.stx.export;
-      descriptors.push(desc);
+      desc.is_exported = is_exported;
+      let _ = tree.add(desc, parent);
     } else {
       for (id, span) in pat_names {
         let mut desc = DefDescriptor::new(
@@ -2900,29 +3019,31 @@ fn collect_var_decl<'a>(
           in_global,
           DefSource::Var(declarator, kind),
         );
-        desc.is_exported = var_decl.stx.export;
-        descriptors.push(desc);
+        desc.is_exported = is_exported;
+        let _ = tree.add(desc, parent);
       }
     }
 
     collect_exprs_from_pat(
       &declarator.pattern.stx.pat,
-      descriptors,
+      tree,
       module_items,
       names,
       ambient,
       in_global,
+      parent,
       ctx,
     );
 
     if let Some(init) = &declarator.initializer {
       collect_expr(
         init,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
@@ -2931,11 +3052,12 @@ fn collect_var_decl<'a>(
     if let Some(init) = &declarator.initializer {
       collect_expr(
         init,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
@@ -2944,11 +3066,12 @@ fn collect_var_decl<'a>(
 
 fn collect_for_lhs<'a>(
   lhs: &'a ForInOfLhs,
-  _descriptors: &mut Vec<DefDescriptor<'a>>,
+  _tree: &mut DefTree<'a>,
   _module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
   _ambient: bool,
   _in_global: bool,
+  _parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   match lhs {
@@ -2963,60 +3086,73 @@ fn collect_for_lhs<'a>(
 
 fn walk_stmt_children<'a>(
   stmt: &'a Node<AstStmt>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
-  _module_item: bool,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   match &*stmt.stx {
     AstStmt::Expr(expr_stmt) => collect_expr(
       &expr_stmt.stx.expr,
-      descriptors,
+      tree,
       module_items,
       names,
       ambient,
       in_global,
+      parent,
       ctx,
     ),
     AstStmt::Return(ret) => {
       if let Some(v) = &ret.stx.value {
-        collect_expr(v, descriptors, module_items, names, ambient, in_global, ctx);
+        collect_expr(
+          v,
+          tree,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          parent,
+          ctx,
+        );
       }
     }
     AstStmt::If(if_stmt) => {
       collect_expr(
         &if_stmt.stx.test,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_stmt(
         &if_stmt.stx.consequent,
-        descriptors,
+        tree,
         module_items,
         names,
         false,
         false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       if let Some(alt) = &if_stmt.stx.alternate {
         collect_stmt(
           alt,
-          descriptors,
+          tree,
           module_items,
           names,
           false,
           false,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
@@ -3025,13 +3161,14 @@ fn walk_stmt_children<'a>(
       for stmt in block.stx.body.iter() {
         collect_stmt(
           stmt,
-          descriptors,
+          tree,
           module_items,
           names,
           false,
           false,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
@@ -3039,61 +3176,73 @@ fn walk_stmt_children<'a>(
     AstStmt::While(wh) => {
       collect_expr(
         &wh.stx.condition,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_stmt(
         &wh.stx.body,
-        descriptors,
+        tree,
         module_items,
         names,
         false,
         false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstStmt::DoWhile(dw) => {
       collect_expr(
         &dw.stx.condition,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_stmt(
         &dw.stx.body,
-        descriptors,
+        tree,
         module_items,
         names,
         false,
         false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstStmt::ForTriple(for_stmt) => {
       match &for_stmt.stx.init {
-        ForTripleStmtInit::Expr(e) => {
-          collect_expr(e, descriptors, module_items, names, ambient, in_global, ctx)
-        }
+        ForTripleStmtInit::Expr(e) => collect_expr(
+          e,
+          tree,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          parent,
+          ctx,
+        ),
         ForTripleStmtInit::Decl(d) => collect_var_decl(
           d,
-          descriptors,
+          tree,
           module_items,
           names,
           false,
           false,
           ambient,
           in_global,
+          parent,
           ctx,
         ),
         ForTripleStmtInit::None => {}
@@ -3101,128 +3250,137 @@ fn walk_stmt_children<'a>(
       if let Some(cond) = &for_stmt.stx.cond {
         collect_expr(
           cond,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
       if let Some(post) = &for_stmt.stx.post {
         collect_expr(
           post,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
       collect_for_body(
         &for_stmt.stx.body,
-        descriptors,
+        tree,
         module_items,
         names,
-        false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstStmt::ForIn(for_in) => {
       collect_for_lhs(
         &for_in.stx.lhs,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_expr(
         &for_in.stx.rhs,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_for_body(
         &for_in.stx.body,
-        descriptors,
+        tree,
         module_items,
         names,
-        false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstStmt::ForOf(for_of) => {
       collect_for_lhs(
         &for_of.stx.lhs,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_expr(
         &for_of.stx.rhs,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_for_body(
         &for_of.stx.body,
-        descriptors,
+        tree,
         module_items,
         names,
-        false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstStmt::Switch(sw) => {
       collect_expr(
         &sw.stx.test,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       for branch in sw.stx.branches.iter() {
         if let Some(case) = &branch.stx.case {
           collect_expr(
             case,
-            descriptors,
+            tree,
             module_items,
             names,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
         for stmt in branch.stx.body.iter() {
           collect_stmt(
             stmt,
-            descriptors,
+            tree,
             module_items,
             names,
             false,
             false,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
@@ -3231,12 +3389,12 @@ fn walk_stmt_children<'a>(
     AstStmt::Try(tr) => {
       collect_block(
         &tr.stx.wrapped,
-        descriptors,
+        tree,
         module_items,
         names,
-        false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       if let Some(catch) = &tr.stx.catch {
@@ -3246,13 +3404,14 @@ fn walk_stmt_children<'a>(
         for stmt in catch.stx.body.iter() {
           collect_stmt(
             stmt,
-            descriptors,
+            tree,
             module_items,
             names,
             false,
             false,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
@@ -3260,12 +3419,12 @@ fn walk_stmt_children<'a>(
       if let Some(finally) = &tr.stx.finally {
         collect_block(
           finally,
-          descriptors,
+          tree,
           module_items,
           names,
-          false,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
@@ -3273,22 +3432,24 @@ fn walk_stmt_children<'a>(
     AstStmt::With(w) => {
       collect_expr(
         &w.stx.object,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_stmt(
         &w.stx.body,
-        descriptors,
+        tree,
         module_items,
         names,
         false,
         false,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
@@ -3298,24 +3459,25 @@ fn walk_stmt_children<'a>(
 
 fn collect_block<'a>(
   block: &'a Node<parse_js::ast::stmt::BlockStmt>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
-  _module_item: bool,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   for stmt in block.stx.body.iter() {
     collect_stmt(
       stmt,
-      descriptors,
+      tree,
       module_items,
       names,
       false,
       false,
       ambient,
       in_global,
+      parent,
       ctx,
     );
   }
@@ -3323,24 +3485,25 @@ fn collect_block<'a>(
 
 fn collect_for_body<'a>(
   body: &'a Node<ForBody>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
-  _module_item: bool,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   for stmt in body.stx.body.iter() {
     collect_stmt(
       stmt,
-      descriptors,
+      tree,
       module_items,
       names,
       false,
       false,
       ambient,
       in_global,
+      parent,
       ctx,
     );
   }
@@ -3348,73 +3511,84 @@ fn collect_for_body<'a>(
 
 fn collect_expr<'a>(
   expr: &'a Node<AstExpr>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   match &*expr.stx {
     AstExpr::Func(f) => {
       let (name_id, name_text) = name_from_optional(&f.stx.name, names);
-      descriptors.push(DefDescriptor::new(
-        DefKind::Function,
-        name_id,
-        name_text,
-        ctx.to_range(expr.loc),
-        false,
-        ambient,
-        in_global,
-        DefSource::FuncExpr(f),
-      ));
+      let def_idx = tree.add(
+        DefDescriptor::new(
+          DefKind::Function,
+          name_id,
+          name_text,
+          ctx.to_range(expr.loc),
+          false,
+          ambient,
+          in_global,
+          DefSource::FuncExpr(f),
+        ),
+        parent,
+      );
       collect_func_params(
         &f.stx.func,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        Some(def_idx),
         ctx,
       );
       collect_func_body(
         &f.stx.func,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        Some(def_idx),
         ctx,
       );
     }
     AstExpr::ArrowFunc(f) => {
       let name_id = names.intern("<arrow>");
-      descriptors.push(DefDescriptor::new(
-        DefKind::Function,
-        name_id,
-        names.resolve(name_id).unwrap().to_string(),
-        ctx.to_range(expr.loc),
-        false,
-        ambient,
-        in_global,
-        DefSource::ArrowFunction(f),
-      ));
+      let def_idx = tree.add(
+        DefDescriptor::new(
+          DefKind::Function,
+          name_id,
+          names.resolve(name_id).unwrap().to_string(),
+          ctx.to_range(expr.loc),
+          false,
+          ambient,
+          in_global,
+          DefSource::ArrowFunction(f),
+        ),
+        parent,
+      );
       collect_func_params(
         &f.stx.func,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        Some(def_idx),
         ctx,
       );
       collect_func_body(
         &f.stx.func,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        Some(def_idx),
         ctx,
       );
     }
@@ -3431,11 +3605,11 @@ fn collect_expr<'a>(
         DefSource::ClassExpr(class_expr),
       );
       desc.type_source = Some(TypeSource::ClassExpr(class_expr));
-      descriptors.push(desc);
+      let def_idx = tree.add(desc, parent);
       collect_class_members(
         &class_expr.stx.members,
-        RawNode::from(class_expr),
-        descriptors,
+        def_idx,
+        tree,
         module_items,
         names,
         ambient,
@@ -3446,70 +3620,77 @@ fn collect_expr<'a>(
     AstExpr::Cond(cond) => {
       collect_expr(
         &cond.stx.test,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_expr(
         &cond.stx.consequent,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_expr(
         &cond.stx.alternate,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstExpr::Binary(bin) => {
       collect_expr(
         &bin.stx.left,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_expr(
         &bin.stx.right,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstExpr::Call(call) => {
       collect_expr(
         &call.stx.callee,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       for arg in call.stx.arguments.iter() {
         collect_expr(
           &arg.stx.value,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
@@ -3517,53 +3698,58 @@ fn collect_expr<'a>(
     AstExpr::Member(mem) => {
       collect_expr(
         &mem.stx.left,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstExpr::ComputedMember(mem) => {
       collect_expr(
         &mem.stx.object,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       collect_expr(
         &mem.stx.member,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstExpr::TaggedTemplate(tag) => {
       collect_expr(
         &tag.stx.function,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
       for part in tag.stx.parts.iter() {
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
           collect_expr(
             expr,
-            descriptors,
+            tree,
             module_items,
             names,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
@@ -3576,11 +3762,12 @@ fn collect_expr<'a>(
           | parse_js::ast::expr::lit::LitArrElem::Rest(expr) => {
             collect_expr(
               expr,
-              descriptors,
+              tree,
               module_items,
               names,
               ambient,
               in_global,
+              parent,
               ctx,
             );
           }
@@ -3596,103 +3783,119 @@ fn collect_expr<'a>(
           ObjMemberType::Valued { key, val } => match val {
             ClassOrObjVal::Prop(Some(expr)) => collect_expr(
               expr,
-              descriptors,
+              tree,
               module_items,
               names,
               ambient,
               in_global,
+              parent,
               ctx,
             ),
             ClassOrObjVal::Getter(getter) => {
               let (name_id, name_text) = obj_key_name(key, names);
-              descriptors.push(DefDescriptor::new(
-                DefKind::Method,
-                name_id,
-                name_text,
-                ctx.to_range(getter.loc),
-                false,
-                ambient,
-                in_global,
-                DefSource::Getter(getter),
-              ));
+              let def_idx = tree.add(
+                DefDescriptor::new(
+                  DefKind::Method,
+                  name_id,
+                  name_text,
+                  ctx.to_range(getter.loc),
+                  false,
+                  ambient,
+                  in_global,
+                  DefSource::Getter(getter),
+                ),
+                parent,
+              );
               collect_func_params(
                 &getter.stx.func,
-                descriptors,
+                tree,
                 module_items,
                 names,
                 ambient,
                 in_global,
+                Some(def_idx),
                 ctx,
               );
               collect_func_body(
                 &getter.stx.func,
-                descriptors,
+                tree,
                 module_items,
                 names,
                 ambient,
                 in_global,
+                Some(def_idx),
                 ctx,
               );
             }
             ClassOrObjVal::Setter(setter) => {
               let (name_id, name_text) = obj_key_name(key, names);
-              descriptors.push(DefDescriptor::new(
-                DefKind::Method,
-                name_id,
-                name_text,
-                ctx.to_range(setter.loc),
-                false,
-                ambient,
-                in_global,
-                DefSource::Setter(setter),
-              ));
+              let def_idx = tree.add(
+                DefDescriptor::new(
+                  DefKind::Method,
+                  name_id,
+                  name_text,
+                  ctx.to_range(setter.loc),
+                  false,
+                  ambient,
+                  in_global,
+                  DefSource::Setter(setter),
+                ),
+                parent,
+              );
               collect_func_params(
                 &setter.stx.func,
-                descriptors,
+                tree,
                 module_items,
                 names,
                 ambient,
                 in_global,
+                Some(def_idx),
                 ctx,
               );
               collect_func_body(
                 &setter.stx.func,
-                descriptors,
+                tree,
                 module_items,
                 names,
                 ambient,
                 in_global,
+                Some(def_idx),
                 ctx,
               );
             }
             ClassOrObjVal::Method(method) => {
               let (name_id, name_text) = obj_key_name(key, names);
-              descriptors.push(DefDescriptor::new(
-                DefKind::Method,
-                name_id,
-                name_text,
-                ctx.to_range(method.loc),
-                false,
-                ambient,
-                in_global,
-                DefSource::Method(method),
-              ));
+              let def_idx = tree.add(
+                DefDescriptor::new(
+                  DefKind::Method,
+                  name_id,
+                  name_text,
+                  ctx.to_range(method.loc),
+                  false,
+                  ambient,
+                  in_global,
+                  DefSource::Method(method),
+                ),
+                parent,
+              );
               collect_func_params(
                 &method.stx.func,
-                descriptors,
+                tree,
                 module_items,
                 names,
                 ambient,
                 in_global,
+                Some(def_idx),
                 ctx,
               );
               collect_func_body(
                 &method.stx.func,
-                descriptors,
+                tree,
                 module_items,
                 names,
                 ambient,
                 in_global,
+                Some(def_idx),
                 ctx,
               );
             }
@@ -3700,11 +3903,12 @@ fn collect_expr<'a>(
           },
           ObjMemberType::Rest { val } => collect_expr(
             val,
-            descriptors,
+            tree,
             module_items,
             names,
             ambient,
             in_global,
+            parent,
             ctx,
           ),
           ObjMemberType::Shorthand { .. } => {}
@@ -3716,11 +3920,12 @@ fn collect_expr<'a>(
         if let parse_js::ast::expr::lit::LitTemplatePart::Substitution(expr) = part {
           collect_expr(
             expr,
-            descriptors,
+            tree,
             module_items,
             names,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
@@ -3730,21 +3935,23 @@ fn collect_expr<'a>(
       for elem in arr.stx.elements.iter().flatten() {
         collect_exprs_from_pat(
           &elem.target,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
         if let Some(default) = &elem.default_value {
           collect_expr(
             default,
-            descriptors,
+            tree,
             module_items,
             names,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
@@ -3752,11 +3959,12 @@ fn collect_expr<'a>(
       if let Some(rest) = &arr.stx.rest {
         collect_exprs_from_pat(
           rest,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
@@ -3765,21 +3973,23 @@ fn collect_expr<'a>(
       for prop in obj.stx.properties.iter() {
         collect_exprs_from_pat(
           &prop.stx.target,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
         if let Some(default) = &prop.stx.default_value {
           collect_expr(
             default,
-            descriptors,
+            tree,
             module_items,
             names,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
@@ -3787,11 +3997,12 @@ fn collect_expr<'a>(
       if let Some(rest) = &obj.stx.rest {
         collect_exprs_from_pat(
           rest,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
@@ -3799,33 +4010,36 @@ fn collect_expr<'a>(
     AstExpr::TypeAssertion(assert) => {
       collect_expr(
         &assert.stx.expression,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstExpr::NonNullAssertion(nn) => {
       collect_expr(
         &nn.stx.expression,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
     AstExpr::SatisfiesExpr(sat) => {
       collect_expr(
         &sat.stx.expression,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
@@ -3847,11 +4061,12 @@ fn obj_key_name(
 
 fn collect_exprs_from_pat<'a>(
   pat: &'a Node<AstPat>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   match &*pat.stx {
@@ -3859,21 +4074,23 @@ fn collect_exprs_from_pat<'a>(
       for elem in arr.stx.elements.iter().flatten() {
         collect_exprs_from_pat(
           &elem.target,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
         if let Some(default) = &elem.default_value {
           collect_expr(
             default,
-            descriptors,
+            tree,
             module_items,
             names,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
@@ -3881,11 +4098,12 @@ fn collect_exprs_from_pat<'a>(
       if let Some(rest) = &arr.stx.rest {
         collect_exprs_from_pat(
           rest,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
@@ -3894,21 +4112,23 @@ fn collect_exprs_from_pat<'a>(
       for prop in obj.stx.properties.iter() {
         collect_exprs_from_pat(
           &prop.stx.target,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
         if let Some(default) = &prop.stx.default_value {
           collect_expr(
             default,
-            descriptors,
+            tree,
             module_items,
             names,
             ambient,
             in_global,
+            parent,
             ctx,
           );
         }
@@ -3916,22 +4136,24 @@ fn collect_exprs_from_pat<'a>(
       if let Some(rest) = &obj.stx.rest {
         collect_exprs_from_pat(
           rest,
-          descriptors,
+          tree,
           module_items,
           names,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
     }
     AstPat::AssignTarget(expr) => collect_expr(
       expr,
-      descriptors,
+      tree,
       module_items,
       names,
       ambient,
       in_global,
+      parent,
       ctx,
     ),
     AstPat::Id(_) => {}
@@ -3956,31 +4178,34 @@ fn name_from_optional(
 
 fn collect_func_params<'a>(
   func: &'a Node<Func>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   for param in func.stx.parameters.iter() {
     collect_pat_defs(
       &param.stx.pattern,
       DefKind::Param,
-      descriptors,
+      tree,
       names,
       ambient,
       in_global,
+      parent,
       ctx,
     );
     if let Some(default) = &param.stx.default_value {
       collect_expr(
         default,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
@@ -3989,11 +4214,12 @@ fn collect_func_params<'a>(
 
 fn collect_func_body<'a>(
   func: &'a Node<Func>,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   module_items: &mut Vec<ModuleItem<'a>>,
   names: &mut NameInterner,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   match &func.stx.body {
@@ -4001,13 +4227,14 @@ fn collect_func_body<'a>(
       for stmt in block.iter() {
         collect_stmt(
           stmt,
-          descriptors,
+          tree,
           module_items,
           names,
           false,
           false,
           ambient,
           in_global,
+          parent,
           ctx,
         );
       }
@@ -4015,11 +4242,12 @@ fn collect_func_body<'a>(
     Some(FuncBody::Expression(expr)) => {
       collect_expr(
         expr,
-        descriptors,
+        tree,
         module_items,
         names,
         ambient,
         in_global,
+        parent,
         ctx,
       );
     }
@@ -4029,49 +4257,57 @@ fn collect_func_body<'a>(
 
 fn collect_func_params_from_parts<'a>(
   params: &'a [Node<AmbientFunctionParameter>],
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   names: &mut NameInterner,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   for param in params.iter() {
     let id = names.intern(&param.stx.name);
     let span = ctx.to_range(param.loc);
-    descriptors.push(DefDescriptor::new(
-      DefKind::Param,
-      id,
-      names.resolve(id).unwrap().to_string(),
-      span,
-      false,
-      ambient,
-      in_global,
-      DefSource::None,
-    ));
+    let _ = tree.add(
+      DefDescriptor::new(
+        DefKind::Param,
+        id,
+        names.resolve(id).unwrap().to_string(),
+        span,
+        false,
+        ambient,
+        in_global,
+        DefSource::None,
+      ),
+      parent,
+    );
   }
 }
 
 fn collect_pat_defs<'a>(
   pat_decl: &'a Node<parse_js::ast::stmt::decl::PatDecl>,
   kind: DefKind,
-  descriptors: &mut Vec<DefDescriptor<'a>>,
+  tree: &mut DefTree<'a>,
   names: &mut NameInterner,
   ambient: bool,
   in_global: bool,
+  parent: Option<usize>,
   ctx: &mut LoweringContext,
 ) {
   for (name_id, span) in collect_pat_names(&pat_decl.stx.pat, names, ctx) {
     let text = names.resolve(name_id).unwrap().to_string();
-    descriptors.push(DefDescriptor::new(
-      kind,
-      name_id,
-      text,
-      span,
-      false,
-      ambient,
-      in_global,
-      DefSource::None,
-    ));
+    let _ = tree.add(
+      DefDescriptor::new(
+        kind,
+        name_id,
+        text,
+        span,
+        false,
+        ambient,
+        in_global,
+        DefSource::None,
+      ),
+      parent,
+    );
   }
 }
 

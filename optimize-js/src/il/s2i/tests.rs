@@ -90,7 +90,11 @@ fn destructuring_decl_shadowing_binds_local_symbol() {
     .map(|d| {
       (
         format!("{:?}", d.path.kind),
-        lowered.names.resolve(d.name).unwrap_or_default().to_string()
+        lowered
+          .names
+          .resolve(d.name)
+          .unwrap_or_default()
+          .to_string(),
       )
     })
     .collect::<Vec<_>>());

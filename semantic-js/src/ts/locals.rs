@@ -1,5 +1,7 @@
 use super::model::{Namespace, SymbolId, TsProgramSemantics};
-use crate::assoc::ts::{self, declared_symbol, scope_id, DeclaredSymbol, ResolvedSymbol, ScopeInfo};
+use crate::assoc::ts::{
+  self, declared_symbol, scope_id, DeclaredSymbol, ResolvedSymbol, ScopeInfo,
+};
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::{FileId, TextRange};
