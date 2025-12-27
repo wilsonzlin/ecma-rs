@@ -29,7 +29,7 @@ use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::{Env, FlowKey, PathSegment};
 use super::flow_narrow::{
   and_facts, narrow_by_asserted, narrow_by_assignability, narrow_by_discriminant_path,
-  narrow_by_in_check, narrow_by_instanceof, narrow_by_literal, narrow_by_nullish_equality,
+  narrow_by_in_check, narrow_by_instanceof_rhs, narrow_by_literal, narrow_by_nullish_equality,
   narrow_by_typeof, narrow_non_nullish, or_facts, split_nullish, truthy_falsy_types, Facts,
   LiteralValue,
 };
@@ -2268,12 +2268,23 @@ pub fn check_body_with_env(
   body_id: BodyId,
   body: &Body,
   names: &NameInterner,
-  _file: FileId,
+  file: FileId,
   _source: &str,
   store: Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
+  relate: RelateCtx,
+  ref_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> BodyCheckResult {
-  let mut checker = FlowBodyChecker::new(body_id, body, names, Arc::clone(&store), initial);
+  let mut checker = FlowBodyChecker::new(
+    body_id,
+    body,
+    names,
+    Arc::clone(&store),
+    file,
+    initial,
+    relate,
+    ref_expander,
+  );
   checker.run(initial);
   checker.into_result()
 }
@@ -2283,6 +2294,7 @@ struct FlowBodyChecker<'a> {
   body: &'a Body,
   names: &'a NameInterner,
   store: Arc<TypeStore>,
+  file: FileId,
   relate: RelateCtx<'a>,
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
@@ -2292,6 +2304,7 @@ struct FlowBodyChecker<'a> {
   return_types: Vec<TypeId>,
   return_indices: HashMap<StmtId, usize>,
   widen_object_literals: bool,
+  ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
   initial: HashMap<NameId, TypeId>,
 }
 
@@ -2319,7 +2332,10 @@ impl<'a> FlowBodyChecker<'a> {
     body: &'a Body,
     names: &'a NameInterner,
     store: Arc<TypeStore>,
+    file: FileId,
     initial: &HashMap<NameId, TypeId>,
+    relate: RelateCtx<'a>,
+    ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
   ) -> Self {
     let prim = store.primitive_ids();
     let expr_types = vec![prim.unknown; body.exprs.len()];
@@ -2354,13 +2370,12 @@ impl<'a> FlowBodyChecker<'a> {
 
     let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
     let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
-    let relate = RelateCtx::with_hooks(Arc::clone(&store), store.options(), super::relate_hooks());
-
     Self {
       body_id,
       body,
       names,
       store,
+      file,
       relate,
       expr_types,
       pat_types,
@@ -2370,6 +2385,7 @@ impl<'a> FlowBodyChecker<'a> {
       return_types,
       return_indices,
       widen_object_literals: true,
+      ref_expander,
       initial: initial.clone(),
     }
   }
@@ -2630,12 +2646,23 @@ impl<'a> FlowBodyChecker<'a> {
           cases,
         } => {
           let discriminant_ty = self.eval_expr(*discriminant, &mut env).0;
+          let mut matched_literals = Vec::new();
           for (idx, case) in cases.iter().enumerate() {
             if let Some(succ) = block.successors.get(idx) {
               let mut case_env = env.clone();
               if let Some(test) = case.test {
                 let _ = self.eval_expr(test, &mut case_env);
+                if let Some(lit) = self.literal_value(test) {
+                  matched_literals.push(lit.clone());
+                }
                 self.apply_switch_narrowing(*discriminant, discriminant_ty, test, &mut case_env);
+              } else {
+                self.apply_switch_default_narrowing(
+                  *discriminant,
+                  discriminant_ty,
+                  &matched_literals,
+                  &mut case_env,
+                );
               }
               outgoing.push((*succ, case_env));
             }
@@ -2643,7 +2670,14 @@ impl<'a> FlowBodyChecker<'a> {
           // If there is an implicit default edge (no default case), use the final successor.
           if block.successors.len() > cases.len() {
             if let Some(succ) = block.successors.last() {
-              outgoing.push((*succ, env.clone()));
+              let mut default_env = env.clone();
+              self.apply_switch_default_narrowing(
+                *discriminant,
+                discriminant_ty,
+                &matched_literals,
+                &mut default_env,
+              );
+              outgoing.push((*succ, default_env));
             }
           }
           return outgoing;
@@ -2856,9 +2890,15 @@ impl<'a> FlowBodyChecker<'a> {
         BinaryOp::Instanceof => {
           let left_expr = *left;
           let left_ty = self.eval_expr(left_expr, env).0;
-          let _ = self.eval_expr(*right, env);
+          let right_ty = self.eval_expr(*right, env).0;
           if let Some(target) = self.access_path_info(left_expr) {
-            let (yes, no) = narrow_by_instanceof(left_ty, &self.store);
+            let (yes, no) = narrow_by_instanceof_rhs(
+              left_ty,
+              right_ty,
+              &self.store,
+              &self.relate,
+              self.ref_expander,
+            );
             facts.truthy.insert(target.path.clone(), yes);
             facts.falsy.insert(target.path, no);
           }
@@ -2870,7 +2910,7 @@ impl<'a> FlowBodyChecker<'a> {
           if let (Some(prop), Some(target)) =
             (self.literal_prop(*left), self.access_path_info(*right))
           {
-            let (yes, no) = narrow_by_in_check(right_ty, &prop, &self.store);
+            let (yes, no) = narrow_by_in_check(right_ty, &prop, &self.store, self.ref_expander);
             facts.truthy.insert(target.path.clone(), yes);
             facts.falsy.insert(target.path, no);
           }
@@ -3937,25 +3977,90 @@ impl<'a> FlowBodyChecker<'a> {
     test: ExprId,
     env: &mut Env,
   ) {
+    let Some(lit) = self.literal_value(test) else {
+      return;
+    };
+
+    if let ExprKind::Unary {
+      op: UnaryOp::Typeof,
+      expr,
+    } = &self.body.exprs[discriminant.0 as usize].kind
+    {
+      if let LiteralValue::String(value) = lit {
+        if let Some(path) = self.access_path_info(*expr) {
+          let expr_ty = env
+            .get_path(&path.path)
+            .unwrap_or_else(|| self.store.primitive_ids().unknown);
+          let (yes, _) = narrow_by_typeof(expr_ty, &value, &self.store);
+          let mut map = HashMap::new();
+          map.insert(path.path.clone(), yes);
+          env.apply_map(&map);
+        }
+      }
+      return;
+    }
+
     if let Some(path) = self.access_path_info(discriminant) {
-      if let Some(lit) = self.literal_value(test) {
-        let (yes, _) = narrow_by_literal(discriminant_ty, &lit, &self.store);
-        let mut map = HashMap::new();
-        map.insert(path.path.clone(), yes);
-        env.apply_map(&map);
-        if let LiteralValue::String(value) = lit {
-          if !path.path.segments.is_empty() {
-            let root = FlowKey::root(path.path.root);
-            if let Some(root_ty) = env.get_path(&root) {
-              let (root_yes, _) =
-                narrow_by_discriminant_path(root_ty, &path.path.segments, &value, &self.store);
-              let mut root_map = HashMap::new();
-              root_map.insert(root, root_yes);
-              env.apply_map(&root_map);
-            }
+      let (yes, _) = narrow_by_literal(discriminant_ty, &lit, &self.store);
+      let mut map = HashMap::new();
+      map.insert(path.path.clone(), yes);
+      env.apply_map(&map);
+      if let LiteralValue::String(value) = lit {
+        if !path.path.segments.is_empty() {
+          let root = FlowKey::root(path.path.root);
+          if let Some(root_ty) = env.get_path(&root) {
+            let (root_yes, _) =
+              narrow_by_discriminant_path(root_ty, &path.path.segments, &value, &self.store);
+            let mut root_map = HashMap::new();
+            root_map.insert(root, root_yes);
+            env.apply_map(&root_map);
           }
         }
       }
+    }
+  }
+
+  fn apply_switch_default_narrowing(
+    &mut self,
+    discriminant: ExprId,
+    discriminant_ty: TypeId,
+    matched_literals: &[LiteralValue],
+    env: &mut Env,
+  ) {
+    if matched_literals.is_empty() {
+      return;
+    }
+    if let ExprKind::Unary {
+      op: UnaryOp::Typeof,
+      expr,
+    } = &self.body.exprs[discriminant.0 as usize].kind
+    {
+      if let Some(path) = self.access_path_info(*expr) {
+        let prim = self.store.primitive_ids();
+        let mut remaining = env
+          .get_path(&path.path)
+          .unwrap_or_else(|| prim.unknown);
+        for lit in matched_literals {
+          if let LiteralValue::String(value) = lit {
+            let (_, no) = narrow_by_typeof(remaining, value, &self.store);
+            remaining = no;
+          }
+        }
+        let mut map = HashMap::new();
+        map.insert(path.path.clone(), remaining);
+        env.apply_map(&map);
+      }
+      return;
+    }
+    if let Some(path) = self.access_path_info(discriminant) {
+      let mut remaining = discriminant_ty;
+      for lit in matched_literals {
+        let (_, no) = narrow_by_literal(remaining, lit, &self.store);
+        remaining = no;
+      }
+      let mut map = HashMap::new();
+      map.insert(path.path.clone(), remaining);
+      env.apply_map(&map);
     }
   }
 }

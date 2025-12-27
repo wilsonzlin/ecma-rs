@@ -6200,6 +6200,14 @@ impl ProgramState {
           }
         }
       }
+      let mut flow_hooks = relate_hooks();
+      flow_hooks.expander = Some(&expander);
+      let flow_relate = RelateCtx::with_hooks_and_cache(
+        Arc::clone(&store),
+        store.options(),
+        flow_hooks,
+        caches.relation.clone(),
+      );
       let flow_result = check::hir_body::check_body_with_env(
         body_id,
         body,
@@ -6208,6 +6216,8 @@ impl ProgramState {
         "",
         Arc::clone(&store),
         &initial_env,
+        flow_relate,
+        Some(&expander),
       );
       let mut relate_hooks = relate_hooks();
       relate_hooks.expander = Some(&expander);

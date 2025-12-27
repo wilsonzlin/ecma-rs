@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use hir_js::BinaryOp;
 use num_bigint::BigInt;
-use types_ts_interned::{RelateCtx, TypeId, TypeKind, TypeStore};
+use types_ts_interned::{RelateCtx, RelateTypeExpander, TypeId, TypeKind, TypeStore};
 
 use super::flow::{FlowKey, PathSegment};
 
@@ -550,14 +550,19 @@ fn matches_discriminant_value(ty: TypeId, value: &str, store: &TypeStore) -> boo
 }
 
 /// Narrow by an `in` check (`"prop" in x`).
-pub fn narrow_by_in_check(ty: TypeId, prop: &str, store: &TypeStore) -> (TypeId, TypeId) {
+pub fn narrow_by_in_check(
+  ty: TypeId,
+  prop: &str,
+  store: &TypeStore,
+  expander: Option<&dyn RelateTypeExpander>,
+) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
   let mut yes = Vec::new();
   let mut no = Vec::new();
   match store.type_kind(ty) {
     TypeKind::Union(members) => {
       for member in members {
-        let (t, f) = narrow_by_in_check(member, prop, store);
+        let (t, f) = narrow_by_in_check(member, prop, store, expander);
         if t != primitives.never {
           yes.push(t);
         }
@@ -569,7 +574,10 @@ pub fn narrow_by_in_check(ty: TypeId, prop: &str, store: &TypeStore) -> (TypeId,
     TypeKind::Array { .. } => {
       yes.push(ty);
     }
-    TypeKind::Ref { .. } => {
+    TypeKind::Ref { def, args } => {
+      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
+        return narrow_by_in_check(expanded, prop, store, expander);
+      }
       yes.push(ty);
       no.push(ty);
     }
@@ -614,6 +622,95 @@ pub fn narrow_by_instanceof(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
     | TypeKind::Callable { .. }
     | TypeKind::Ref { .. } => (ty, primitives.never),
     _ => (primitives.never, ty),
+  }
+}
+
+pub fn narrow_by_instanceof_rhs(
+  left_ty: TypeId,
+  right_ty: TypeId,
+  store: &TypeStore,
+  relate: &RelateCtx,
+  expander: Option<&dyn RelateTypeExpander>,
+) -> (TypeId, TypeId) {
+  let target = instance_type_from_ctor(right_ty, store, expander);
+  narrow_instanceof_with_target(left_ty, target, store, relate)
+}
+
+fn narrow_instanceof_with_target(
+  left_ty: TypeId,
+  target: Option<TypeId>,
+  store: &TypeStore,
+  relate: &RelateCtx,
+) -> (TypeId, TypeId) {
+  let primitives = store.primitive_ids();
+  match store.type_kind(left_ty) {
+    TypeKind::Union(members) => {
+      let mut yes = Vec::new();
+      let mut no = Vec::new();
+      for member in members {
+        let (y, n) = narrow_instanceof_with_target(member, target, store, relate);
+        if y != primitives.never {
+          yes.push(y);
+        }
+        if n != primitives.never {
+          no.push(n);
+        }
+      }
+      (store.union(yes), store.union(no))
+    }
+    TypeKind::Null | TypeKind::Undefined => (primitives.never, left_ty),
+    _ => {
+      if let Some(target) = target {
+        if relate.is_assignable(left_ty, target) {
+          (left_ty, primitives.never)
+        } else {
+          (primitives.never, left_ty)
+        }
+      } else {
+        narrow_by_instanceof(left_ty, store)
+      }
+    }
+  }
+}
+
+fn instance_type_from_ctor(
+  ty: TypeId,
+  store: &TypeStore,
+  expander: Option<&dyn RelateTypeExpander>,
+) -> Option<TypeId> {
+  let mut targets = Vec::new();
+  collect_instance_types(ty, store, expander, &mut targets);
+  if targets.is_empty() {
+    None
+  } else {
+    Some(store.union(targets))
+  }
+}
+
+fn collect_instance_types(
+  ty: TypeId,
+  store: &TypeStore,
+  expander: Option<&dyn RelateTypeExpander>,
+  out: &mut Vec<TypeId>,
+) {
+  match store.type_kind(ty) {
+    TypeKind::Union(members) | TypeKind::Intersection(members) => {
+      for member in members {
+        collect_instance_types(member, store, expander, out);
+      }
+    }
+    TypeKind::Ref { def, args } => {
+      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
+        collect_instance_types(expanded, store, expander, out);
+      }
+    }
+    TypeKind::Object(obj) => {
+      let shape = store.shape(store.object(obj).shape);
+      for sig in shape.construct_signatures.iter() {
+        out.push(store.signature(*sig).ret);
+      }
+    }
+    _ => {}
   }
 }
 

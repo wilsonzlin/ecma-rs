@@ -6,10 +6,10 @@ use hir_js::{
   lower_from_source, BinaryOp, Body, BodyId, DefKind, ExprId, ExprKind, LowerResult, NameId,
   NameInterner,
 };
-use typecheck_ts::check::hir_body::check_body_with_env;
+use typecheck_ts::check::hir_body::check_body_with_env as check_body_with_env_impl;
 use types_ts_interned::{
-  NameId as TypeNameId, Param, PropData, PropKey, Property, Shape, Signature, TypeDisplay, TypeId,
-  TypeKind, TypeStore,
+  DefId, NameId as TypeNameId, Param, PropData, PropKey, Property, RelateCtx, RelateHooks,
+  RelateTypeExpander, Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeStore,
 };
 
 fn name_id(names: &NameInterner, target: &str) -> NameId {
@@ -86,6 +86,45 @@ fn predicate_callable_with_params(
   store.intern_type(TypeKind::Callable {
     overloads: vec![sig_id],
   })
+}
+
+fn check_body_with_env(
+  body_id: BodyId,
+  body: &Body,
+  names: &NameInterner,
+  file: FileId,
+  src: &str,
+  store: Arc<TypeStore>,
+  initial: &HashMap<NameId, TypeId>,
+) -> typecheck_ts::BodyCheckResult {
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  check_body_with_env_impl(body_id, body, names, file, src, store, initial, relate, None)
+}
+
+fn run_flow(
+  body_id: BodyId,
+  body: &Body,
+  names: &NameInterner,
+  file: FileId,
+  src: &str,
+  store: &Arc<TypeStore>,
+  initial: &HashMap<NameId, TypeId>,
+  expander: Option<&dyn RelateTypeExpander>,
+) -> typecheck_ts::BodyCheckResult {
+  let mut hooks = RelateHooks::default();
+  hooks.expander = expander;
+  let relate = RelateCtx::with_hooks(Arc::clone(store), store.options(), hooks);
+  check_body_with_env_impl(
+    body_id,
+    body,
+    names,
+    file,
+    src,
+    Arc::clone(store),
+    initial,
+    relate,
+    expander,
+  )
 }
 
 #[test]
@@ -636,6 +675,129 @@ fn non_null_guard_allows_member_access() {
 }
 
 #[test]
+fn switch_typeof_discriminant_narrows_cases() {
+  let src = r#"
+function describe(x: string | number | boolean) {
+  switch (typeof x) {
+    case "string":
+      return x;
+    case "number":
+      return x;
+    default:
+      return x;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "describe");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.number, prim.boolean]),
+  );
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+    None,
+  );
+  let ret_types = res.return_types();
+  assert_eq!(TypeDisplay::new(&store, ret_types[0]).to_string(), "string");
+  assert_eq!(TypeDisplay::new(&store, ret_types[1]).to_string(), "number");
+  assert_eq!(
+    TypeDisplay::new(&store, ret_types[2]).to_string(),
+    "boolean"
+  );
+}
+
+#[test]
+fn switch_default_receives_complement_of_literals() {
+  let src = r#"
+function pick(x: "a" | "b" | "c") {
+  switch (x) {
+    case "a":
+      return x;
+    default:
+      return x;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "pick");
+  let store = TypeStore::new();
+  let mut initial = HashMap::new();
+  let a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let b = store.intern_type(TypeKind::StringLiteral(store.intern_name("b")));
+  let c = store.intern_type(TypeKind::StringLiteral(store.intern_name("c")));
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![a, b, c]),
+  );
+
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+    None,
+  );
+  let ret_types = res.return_types();
+  assert_eq!(TypeDisplay::new(&store, ret_types[0]).to_string(), "\"a\"");
+  assert_eq!(
+    TypeDisplay::new(&store, ret_types[1]).to_string(),
+    "\"b\" | \"c\""
+  );
+}
+
+#[test]
+fn switch_narrowing_respects_fallthrough() {
+  let src = r#"
+function fall(x: "a" | "b") {
+  switch (x) {
+    case "a":
+    case "b":
+      return x;
+  }
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "fall");
+  let store = TypeStore::new();
+  let a = store.intern_type(TypeKind::StringLiteral(store.intern_name("a")));
+  let b = store.intern_type(TypeKind::StringLiteral(store.intern_name("b")));
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![a, b]),
+  );
+
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+    None,
+  );
+  let ret_types = res.return_types();
+  assert_eq!(
+    TypeDisplay::new(&store, ret_types[0]).to_string(),
+    "\"a\" | \"b\""
+  );
+}
+
+#[test]
 fn short_circuit_preserves_narrowing() {
   let src = r#"
 function f(x: string | null) {
@@ -917,6 +1079,154 @@ function pick(val: string | number) {
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
   assert_eq!(else_ty, "number");
+}
+
+#[test]
+fn in_checks_expand_refs_and_optional_props() {
+  let src = r#"
+function test(val) {
+  if ("opt" in val) {
+    return val;
+  }
+  return val;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "test");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut shape = Shape::new();
+  shape.properties.push(Property {
+    key: PropKey::String(store.intern_name("opt")),
+    data: PropData {
+      ty: prim.string,
+      optional: true,
+      readonly: false,
+      accessibility: None,
+      is_method: false,
+      origin: None,
+      declared_on: None,
+    },
+  });
+  let shape_id = store.intern_shape(shape);
+  let obj_ty = store.intern_type(TypeKind::Object(
+    store.intern_object(types_ts_interned::ObjectType { shape: shape_id }),
+  ));
+  let def = DefId(0);
+  let ref_ty = store.intern_type(TypeKind::Ref {
+    def,
+    args: Vec::new(),
+  });
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "val"),
+    store.union(vec![ref_ty, prim.number]),
+  );
+  struct StaticExpander {
+    def: DefId,
+    target: TypeId,
+  }
+  impl RelateTypeExpander for StaticExpander {
+    fn expand_ref(&self, _store: &TypeStore, def: DefId, _args: &[TypeId]) -> Option<TypeId> {
+      (def == self.def).then_some(self.target)
+    }
+  }
+  let expander = StaticExpander {
+    def,
+    target: obj_ty,
+  };
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+    Some(&expander),
+  );
+  let then_ty = res.return_types()[0];
+  let else_ty = res.return_types()[1];
+  let mut hooks = RelateHooks::default();
+  hooks.expander = Some(&expander);
+  let relate = RelateCtx::with_hooks(Arc::clone(&store), store.options(), hooks);
+  assert!(relate.is_assignable(then_ty, obj_ty));
+  assert!(relate.is_assignable(else_ty, prim.number));
+  assert!(!relate.is_assignable(then_ty, prim.number));
+}
+
+#[test]
+fn instanceof_prefers_instance_type_over_object_like() {
+  let src = r#"
+function check(val, Foo) {
+  if (val instanceof Foo) {
+    return val;
+  }
+  return val;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "check");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut instance_shape = Shape::new();
+  instance_shape.properties.push(Property {
+    key: PropKey::String(store.intern_name("tag")),
+    data: PropData {
+      ty: prim.string,
+      optional: false,
+      readonly: false,
+      accessibility: None,
+      is_method: false,
+      origin: None,
+      declared_on: None,
+    },
+  });
+  let instance_shape_id = store.intern_shape(instance_shape);
+  let foo_instance = store.intern_type(TypeKind::Object(store.intern_object(
+    types_ts_interned::ObjectType {
+      shape: instance_shape_id,
+    },
+  )));
+  let ctor_sig = Signature::new(Vec::new(), foo_instance);
+  let sig_id = store.intern_signature(ctor_sig);
+  let mut ctor_shape = Shape::new();
+  ctor_shape.construct_signatures.push(sig_id);
+  let ctor_shape_id = store.intern_shape(ctor_shape);
+  let foo_ctor = store.intern_type(TypeKind::Object(store.intern_object(
+    types_ts_interned::ObjectType {
+      shape: ctor_shape_id,
+    },
+  )));
+  let mut initial = HashMap::new();
+  initial.insert(
+    name_id(lowered.names.as_ref(), "val"),
+    store.union(vec![foo_instance, prim.number, prim.undefined]),
+  );
+  initial.insert(name_id(lowered.names.as_ref(), "Foo"), foo_ctor);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+    None,
+  );
+  let then_ty = res.return_types()[0];
+  let else_ty = res.return_types()[1];
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  let then_display = TypeDisplay::new(&store, then_ty).to_string();
+  let else_display = TypeDisplay::new(&store, else_ty).to_string();
+  assert_eq!(
+    then_display,
+    TypeDisplay::new(&store, foo_instance).to_string()
+  );
+  assert_eq!(else_display, "undefined | number");
+  assert!(relate.is_assignable(then_ty, foo_instance));
+  assert!(!relate.is_assignable(then_ty, prim.number));
+  assert!(!relate.is_assignable(foo_instance, else_ty));
 }
 
 #[test]
