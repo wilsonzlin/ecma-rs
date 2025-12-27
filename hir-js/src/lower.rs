@@ -20,7 +20,10 @@ use diagnostics::Diagnostic;
 use diagnostics::FileId;
 use diagnostics::Span;
 use diagnostics::TextRange;
+use parse_js::ast::class_or_object::ClassMember;
+use parse_js::ast::class_or_object::ClassOrObjKey;
 use parse_js::ast::class_or_object::ClassOrObjVal;
+use parse_js::ast::class_or_object::ClassStaticBlock;
 use parse_js::ast::expr::jsx;
 use parse_js::ast::expr::pat::ArrPat;
 use parse_js::ast::expr::pat::ClassOrFuncName;
@@ -116,9 +119,10 @@ struct DefDescriptor<'a> {
   is_item: bool,
   is_ambient: bool,
   in_global: bool,
-  parent: Option<RawNode>,
   is_exported: bool,
   is_default_export: bool,
+  parent: Option<RawNode>,
+  is_static: bool,
   source: DefSource<'a>,
   type_source: Option<TypeSource<'a>>,
 }
@@ -126,11 +130,13 @@ struct DefDescriptor<'a> {
 #[derive(Debug)]
 enum DefSource<'a> {
   None,
+  ClassDecl(&'a Node<ClassDecl>),
+  ClassExpr(&'a Node<ClassExpr>),
+  ClassField(&'a Node<ClassMember>),
+  ClassStaticBlock(&'a Node<ClassStaticBlock>),
   Function(&'a Node<FuncDecl>),
   ArrowFunction(&'a Node<ArrowFuncExpr>),
   FuncExpr(&'a Node<FuncExpr>),
-  ClassDecl(&'a Node<ClassDecl>),
-  ClassExpr(&'a Node<ClassExpr>),
   Enum(&'a Node<EnumDecl>),
   Var(&'a AstVarDeclarator, VarDeclKind),
   Method(&'a Node<parse_js::ast::class_or_object::ClassOrObjMethod>),
@@ -206,9 +212,10 @@ impl<'a> DefDescriptor<'a> {
       is_item,
       is_ambient,
       in_global,
-      parent: None,
       is_exported: false,
       is_default_export: false,
+      parent: None,
+      is_static: false,
       source,
       type_source: None,
     }
@@ -232,6 +239,7 @@ struct PlannedDef<'a> {
   desc: DefDescriptor<'a>,
   def_id: DefId,
   def_path: DefPath,
+  parent: Option<DefId>,
   body: Option<PlannedBody>,
 }
 
@@ -290,6 +298,14 @@ fn allocate_def_id(def_path: DefPath, allocated: &mut BTreeMap<u32, DefPath>) ->
 impl<'a> DefSource<'a> {
   fn body_kind(&self) -> Option<BodyKind> {
     match self {
+      DefSource::ClassField(member) => {
+        if matches!(member.stx.val, ClassOrObjVal::Prop(Some(_))) {
+          Some(BodyKind::Initializer)
+        } else {
+          None
+        }
+      }
+      DefSource::ClassStaticBlock(_) => Some(BodyKind::Class),
       DefSource::Function(_)
       | DefSource::ArrowFunction(_)
       | DefSource::FuncExpr(_)
@@ -306,11 +322,13 @@ impl<'a> DefSource<'a> {
 
   fn ptr(&self) -> Option<RawNode> {
     match self {
+      DefSource::ClassDecl(node) => Some(RawNode::from(*node)),
+      DefSource::ClassExpr(node) => Some(RawNode::from(*node)),
+      DefSource::ClassField(node) => Some(RawNode::from(*node)),
+      DefSource::ClassStaticBlock(block) => Some(RawNode::from(*block)),
       DefSource::Function(node) => Some(RawNode::from(*node)),
       DefSource::ArrowFunction(node) => Some(RawNode::from(*node)),
       DefSource::FuncExpr(node) => Some(RawNode::from(*node)),
-      DefSource::ClassDecl(node) => Some(RawNode::from(*node)),
-      DefSource::ClassExpr(node) => Some(RawNode::from(*node)),
       DefSource::Enum(node) => Some(RawNode::from(*node)),
       DefSource::Var(_, _) => None,
       DefSource::Method(node) => Some(RawNode::from(*node)),
@@ -378,6 +396,7 @@ pub fn lower_file_with_diagnostics(
       desc,
       def_id,
       def_path,
+      parent,
       body,
     });
   }
@@ -391,6 +410,7 @@ pub fn lower_file_with_diagnostics(
     desc,
     def_id,
     def_path,
+    parent,
     body,
   } in planned
   {
@@ -415,11 +435,12 @@ pub fn lower_file_with_diagnostics(
       name: desc.name,
       path: def_path,
       span: desc.span,
+      parent,
+      is_static: desc.is_static,
       is_ambient: desc.is_ambient,
       in_global: desc.in_global,
       is_exported: desc.is_exported,
       is_default_export: desc.is_default_export,
-      parent: def_path.parent,
       body: body_id,
       type_info: None,
     };
@@ -640,6 +661,12 @@ fn lower_body_from_source(
       span_map,
       ctx,
     )),
+    DefSource::ClassField(member) => match &member.stx.val {
+      ClassOrObjVal::Prop(Some(init)) => {
+        lower_field_initializer_body(owner, body_id, init, def_lookup, names, span_map, ctx)
+      }
+      _ => None,
+    },
     DefSource::Method(method) => lower_function_body(
       owner,
       body_id,
@@ -650,6 +677,15 @@ fn lower_body_from_source(
       span_map,
       ctx,
     ),
+    DefSource::ClassStaticBlock(block) => {
+      let mut builder =
+        BodyBuilder::new(owner, body_id, BodyKind::Class, def_lookup, names, span_map);
+      for stmt in block.stx.body.iter() {
+        let id = lower_stmt(stmt, &mut builder, ctx);
+        builder.root_stmt(id);
+      }
+      Some(builder.finish())
+    }
     DefSource::Getter(getter) => lower_function_body(
       owner,
       body_id,
@@ -736,6 +772,29 @@ fn lower_var_body(
       declarators: vec![VarDeclarator { pat: pat_id, init }],
     }),
   );
+  builder.root_stmt(stmt_id);
+  Some(builder.finish())
+}
+
+fn lower_field_initializer_body(
+  owner: DefId,
+  body_id: BodyId,
+  init: &Node<AstExpr>,
+  def_lookup: &DefLookup,
+  names: &mut NameInterner,
+  span_map: &mut SpanMap,
+  ctx: &mut LoweringContext,
+) -> Option<Body> {
+  let mut builder = BodyBuilder::new(
+    owner,
+    body_id,
+    BodyKind::Initializer,
+    def_lookup,
+    names,
+    span_map,
+  );
+  let expr_id = lower_expr(init, &mut builder, ctx);
+  let stmt_id = builder.alloc_stmt(ctx.to_range(init.loc), StmtKind::Expr(expr_id));
   builder.root_stmt(stmt_id);
   Some(builder.finish())
 }
@@ -1922,6 +1981,16 @@ fn collect_stmt<'a>(
         }
       }
       descriptors.push(desc);
+      collect_class_members(
+        &class_decl.stx.members,
+        RawNode::from(class_decl),
+        descriptors,
+        module_items,
+        names,
+        decl_ambient,
+        in_global,
+        ctx,
+      );
     }
     AstStmt::VarDecl(var_decl) => {
       collect_var_decl(
@@ -2466,6 +2535,190 @@ fn collect_stmt<'a>(
         in_global,
         ctx,
       );
+    }
+  }
+}
+
+fn collect_class_members<'a>(
+  members: &'a [Node<ClassMember>],
+  parent: RawNode,
+  descriptors: &mut Vec<DefDescriptor<'a>>,
+  module_items: &mut Vec<ModuleItem<'a>>,
+  names: &mut NameInterner,
+  ambient: bool,
+  in_global: bool,
+  ctx: &mut LoweringContext,
+) {
+  for member in members.iter() {
+    let span = ctx.to_range(member.loc);
+    let is_static = member.stx.static_;
+    match &member.stx.val {
+      ClassOrObjVal::Method(method) => {
+        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let is_constructor = matches!(&member.stx.key, ClassOrObjKey::Direct(direct) if direct.stx.key == "constructor")
+          && !member.stx.static_;
+        let kind = if is_constructor {
+          DefKind::Constructor
+        } else {
+          DefKind::Method
+        };
+        let mut desc = DefDescriptor::new(
+          kind,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::Method(method),
+        );
+        desc.parent = Some(parent);
+        desc.is_static = is_static;
+        descriptors.push(desc);
+        collect_func_params(
+          &method.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+        collect_func_body(
+          &method.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+      }
+      ClassOrObjVal::Getter(getter) => {
+        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let mut desc = DefDescriptor::new(
+          DefKind::Method,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::Getter(getter),
+        );
+        desc.parent = Some(parent);
+        desc.is_static = is_static;
+        descriptors.push(desc);
+        collect_func_params(
+          &getter.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+        collect_func_body(
+          &getter.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+      }
+      ClassOrObjVal::Setter(setter) => {
+        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let mut desc = DefDescriptor::new(
+          DefKind::Method,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::Setter(setter),
+        );
+        desc.parent = Some(parent);
+        desc.is_static = is_static;
+        descriptors.push(desc);
+        collect_func_params(
+          &setter.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+        collect_func_body(
+          &setter.stx.func,
+          descriptors,
+          module_items,
+          names,
+          ambient,
+          in_global,
+          ctx,
+        );
+      }
+      ClassOrObjVal::Prop(init) => {
+        let (name_id, name_text) = obj_key_name(&member.stx.key, names);
+        let mut desc = DefDescriptor::new(
+          DefKind::Field,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::ClassField(member),
+        );
+        desc.parent = Some(parent);
+        desc.is_static = is_static;
+        descriptors.push(desc);
+        if let Some(expr) = init {
+          collect_expr(
+            expr,
+            descriptors,
+            module_items,
+            names,
+            ambient,
+            in_global,
+            ctx,
+          );
+        }
+      }
+      ClassOrObjVal::StaticBlock(block) => {
+        let name_id = names.intern("<static_block>");
+        let name_text = names.resolve(name_id).unwrap().to_string();
+        let mut desc = DefDescriptor::new(
+          DefKind::Method,
+          name_id,
+          name_text,
+          span,
+          false,
+          ambient,
+          in_global,
+          DefSource::ClassStaticBlock(block),
+        );
+        desc.parent = Some(parent);
+        desc.is_static = true;
+        descriptors.push(desc);
+        for stmt in block.stx.body.iter() {
+          collect_stmt(
+            stmt,
+            descriptors,
+            module_items,
+            names,
+            false,
+            ambient,
+            in_global,
+            ctx,
+          );
+        }
+      }
+      ClassOrObjVal::IndexSignature(_) => {}
     }
   }
 }
@@ -3102,6 +3355,16 @@ fn collect_expr<'a>(
         in_global,
         DefSource::ClassExpr(class_expr),
       ));
+      collect_class_members(
+        &class_expr.stx.members,
+        RawNode::from(class_expr),
+        descriptors,
+        module_items,
+        names,
+        ambient,
+        in_global,
+        ctx,
+      );
     }
     AstExpr::Cond(cond) => {
       collect_expr(

@@ -567,8 +567,13 @@ impl<'a> Parser<'a> {
   /// Parse entity name (can be qualified: A.B.C)
   fn parse_type_entity_name(&mut self) -> SyntaxResult<TypeEntityName> {
     let first = self.require_type_identifier()?;
-    let mut name = TypeEntityName::Identifier(first);
+    self.parse_qualified_type_entity_name(TypeEntityName::Identifier(first))
+  }
 
+  fn parse_qualified_type_entity_name(
+    &mut self,
+    mut name: TypeEntityName,
+  ) -> SyntaxResult<TypeEntityName> {
     while self.consume_if(TT::Dot).is_match() {
       let right = self.require_type_identifier()?;
       name = TypeEntityName::Qualified(Box::new(TypeQualifiedName { left: name, right }));
@@ -714,7 +719,7 @@ impl<'a> Parser<'a> {
     let expr_name = if self.peek().typ == TT::KeywordImport {
       let import_expr = self.import_call(ctx)?;
       let _end_loc = import_expr.loc;
-      TypeEntityName::Import(import_expr)
+      self.parse_qualified_type_entity_name(TypeEntityName::Import(import_expr))?
     } else {
       self.parse_type_entity_name()?
     };

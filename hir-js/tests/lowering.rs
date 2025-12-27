@@ -1,6 +1,7 @@
 use diagnostics::FileId;
 use hir_js::lower_file;
 use hir_js::lower_file_with_diagnostics;
+use hir_js::lower_from_source;
 use hir_js::lower_from_source_with_kind;
 use hir_js::BodyId;
 use hir_js::BodyKind;
@@ -331,6 +332,126 @@ fn export_default_class_has_ids() {
   let class_body = result.body(body).expect("class body");
   assert_eq!(class_body.kind, BodyKind::Class);
   assert!(name.is_none());
+}
+
+#[test]
+fn class_member_defs_have_stable_ids() {
+  let source = "class C { x = 1; static y = 2; method(a){ const inner = () => 1; } get z(){ return 1 } set z(v){} static { const s = 1 } constructor(){} }";
+  let result = lower_from_source(source).expect("lower");
+
+  let class_def = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Class && result.names.resolve(def.name) == Some("C"))
+    .expect("class definition");
+  let class_id = class_def.id;
+
+  let find_def = |kind: DefKind, name: &str| -> &hir_js::DefData {
+    result
+      .defs
+      .iter()
+      .find(|def| def.path.kind == kind && result.names.resolve(def.name) == Some(name))
+      .expect("definition present")
+  };
+
+  let field_x = find_def(DefKind::Field, "x");
+  assert_eq!(field_x.parent, Some(class_id));
+  let field_body = result
+    .body(field_x.body.expect("field body"))
+    .expect("body present");
+  assert!(
+    !field_body.root_stmts.is_empty(),
+    "field initializer should produce statements"
+  );
+
+  let static_y = find_def(DefKind::Field, "y");
+  assert_eq!(static_y.parent, Some(class_id));
+  assert!(static_y.is_static, "static field should be marked static");
+  let static_body = result
+    .body(static_y.body.expect("static field body"))
+    .expect("body present");
+  assert!(
+    !static_body.root_stmts.is_empty(),
+    "static field initializer should produce statements"
+  );
+
+  let method = find_def(DefKind::Method, "method");
+  assert_eq!(method.parent, Some(class_id));
+  let method_body = result
+    .body(method.body.expect("method body"))
+    .expect("body present");
+  assert!(
+    !method_body.root_stmts.is_empty(),
+    "method body should contain statements"
+  );
+  assert!(
+    method_body
+      .exprs
+      .iter()
+      .any(|expr| matches!(expr.kind, ExprKind::FunctionExpr { is_arrow: true, .. })),
+    "arrow function in method should be lowered"
+  );
+
+  let z_members: Vec<_> = result
+    .defs
+    .iter()
+    .filter(|def| def.path.kind == DefKind::Method && result.names.resolve(def.name) == Some("z"))
+    .collect();
+  assert_eq!(z_members.len(), 2, "expected getter and setter for z");
+  for member in z_members {
+    assert_eq!(member.parent, Some(class_id));
+    assert!(member.body.is_some(), "accessor should have a body");
+  }
+
+  let static_block = find_def(DefKind::Method, "<static_block>");
+  assert_eq!(static_block.parent, Some(class_id));
+  assert!(static_block.is_static);
+  let static_block_body = result
+    .body(static_block.body.expect("static block body"))
+    .expect("body present");
+  assert!(
+    !static_block_body.root_stmts.is_empty(),
+    "static block should contain statements"
+  );
+
+  let constructor = find_def(DefKind::Constructor, "constructor");
+  assert_eq!(constructor.parent, Some(class_id));
+  assert!(constructor.body.is_some());
+}
+
+#[test]
+fn class_member_ids_survive_unrelated_insertions() {
+  let base = "class C { method() {} }\nclass D { method() {} }";
+  let with_extra = "class C { method() {} }\nclass Extra { method() {} }\nclass D { method() {} }";
+
+  let base = lower_from_source(base).expect("lower base");
+  let variant = lower_from_source(with_extra).expect("lower variant");
+
+  let base_member_paths: Vec<_> = base
+    .hir
+    .def_paths
+    .iter()
+    .filter(|(path, _)| path.parent.is_some())
+    .map(|(path, id)| (*path, *id))
+    .collect();
+
+  for (path, def_id) in base_member_paths {
+    let other = variant
+      .hir
+      .def_paths
+      .get(&path)
+      .copied()
+      .expect("path should exist in variant");
+    assert_eq!(def_id, other, "def id changed for path {:?}", path);
+
+    if let Some(body) = base.def(def_id).and_then(|d| d.body) {
+      let variant_body = variant
+        .def(other)
+        .and_then(|d| d.body)
+        .expect("body in variant");
+      assert_eq!(body, variant_body, "body id changed for path {:?}", path);
+    }
+  }
 }
 
 #[test]

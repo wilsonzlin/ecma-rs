@@ -179,6 +179,7 @@ pub struct DefData {
   pub path: DefPath,
   pub span: TextRange,
   pub parent: Option<DefId>,
+  pub is_static: bool,
   pub is_ambient: bool,
   pub in_global: bool,
   pub is_exported: bool,
