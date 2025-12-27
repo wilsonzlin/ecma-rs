@@ -294,6 +294,10 @@ pub mod check {
     pub use crate::program::check::expr::*;
   }
 
+  pub mod flow_bindings {
+    pub use crate::program::check::flow_bindings::*;
+  }
+
   pub mod hir_body {
     pub use crate::program::check::hir_body::*;
   }

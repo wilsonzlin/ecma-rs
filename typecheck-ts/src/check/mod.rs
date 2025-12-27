@@ -4,6 +4,7 @@ pub mod caches;
 pub mod cfg;
 pub(crate) mod decls;
 pub(crate) mod expr;
+pub(crate) mod flow_bindings;
 pub(super) mod flow;
 pub(super) mod flow_narrow;
 pub mod hir_body;
