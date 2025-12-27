@@ -3,10 +3,11 @@ use std::sync::Arc;
 
 use bumpalo::Bump;
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
+use hir_js::hir::SwitchCase;
 use hir_js::{
   ArrayElement, AssignOp, BinaryOp, Body, BodyKind, ExprId, ExprKind, ForHead, ForInit, MemberExpr,
-  NameId, NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId,
-  StmtKind, UnaryOp,
+  NameId, NameInterner, ObjectKey, ObjectLiteral, ObjectProperty, PatId, PatKind, StmtId, StmtKind,
+  UnaryOp,
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
@@ -2097,6 +2098,40 @@ struct OptionalChainInfo {
   result_ty: Option<TypeId>,
 }
 
+enum SwitchDiscriminant {
+  Ident {
+    name: NameId,
+    ty: TypeId,
+  },
+  Member {
+    name: NameId,
+    prop: String,
+    ty: TypeId,
+  },
+  Typeof {
+    name: NameId,
+    ty: TypeId,
+  },
+}
+
+impl SwitchDiscriminant {
+  fn ty(&self) -> TypeId {
+    match self {
+      SwitchDiscriminant::Ident { ty, .. }
+      | SwitchDiscriminant::Member { ty, .. }
+      | SwitchDiscriminant::Typeof { ty, .. } => *ty,
+    }
+  }
+
+  fn name(&self) -> NameId {
+    match self {
+      SwitchDiscriminant::Ident { name, .. }
+      | SwitchDiscriminant::Member { name, .. }
+      | SwitchDiscriminant::Typeof { name, .. } => *name,
+    }
+  }
+}
+
 impl<'a> FlowBodyChecker<'a> {
   fn new(
     body_id: BodyId,
@@ -2353,20 +2388,45 @@ impl<'a> FlowBodyChecker<'a> {
           cases,
         } => {
           let discriminant_ty = self.eval_expr(*discriminant, &mut env).0;
-          for (idx, case) in cases.iter().enumerate() {
-            if let Some(succ) = block.successors.get(idx) {
-              let mut case_env = env.clone();
-              if let Some(test) = case.test {
-                let _ = self.eval_expr(test, &mut case_env);
-                self.apply_switch_narrowing(*discriminant, discriminant_ty, test, &mut case_env);
+          let target = self.switch_discriminant_target(*discriminant, discriminant_ty, &env);
+          let default_remaining = target
+            .as_ref()
+            .and_then(|t| self.switch_default_remaining(t, cases));
+
+          let mut case_envs = Vec::with_capacity(cases.len());
+          for case in cases.iter() {
+            let mut case_env = env.clone();
+            if let Some(test) = case.test {
+              let _ = self.eval_expr(test, &mut case_env);
+              if let Some(target) = target.as_ref() {
+                let _ = self.apply_switch_narrowing(target, test, &mut case_env);
               }
-              outgoing.push((*succ, case_env));
+            } else if let (Some(target), Some(default_ty)) = (target.as_ref(), default_remaining) {
+              self.apply_switch_result(target, default_ty, &mut case_env);
+            }
+            case_envs.push(case_env);
+          }
+
+          for (idx, case_env) in case_envs.iter().enumerate() {
+            if let Some(succ) = block.successors.get(idx) {
+              outgoing.push((*succ, case_env.clone()));
+              if self.switch_case_falls_through(cases.get(idx)) {
+                for later in (idx + 1)..cases.len() {
+                  if let Some(later_succ) = block.successors.get(later) {
+                    outgoing.push((*later_succ, case_env.clone()));
+                  }
+                }
+              }
             }
           }
           // If there is an implicit default edge (no default case), use the final successor.
           if block.successors.len() > cases.len() {
             if let Some(succ) = block.successors.last() {
-              outgoing.push((*succ, env.clone()));
+              let mut default_env = env.clone();
+              if let (Some(target), Some(default_ty)) = (target.as_ref(), default_remaining) {
+                self.apply_switch_result(target, default_ty, &mut default_env);
+              }
+              outgoing.push((*succ, default_env));
             }
           }
           return outgoing;
@@ -2907,14 +2967,20 @@ impl<'a> FlowBodyChecker<'a> {
     out: &mut Facts,
   ) {
     let prim = self.store.primitive_ids();
-    let Some(info) = self.optional_chain_info(expr) else { return; };
+    let Some(info) = self.optional_chain_info(expr) else {
+      return;
+    };
     let (non_nullish_base, nullish_base) = narrow_non_nullish(info.base_ty, &self.store);
     if non_nullish_base == prim.never {
       return;
     }
 
     if self.excludes_nullish(other_ty) {
-      let target = if negate { &mut out.falsy } else { &mut out.truthy };
+      let target = if negate {
+        &mut out.falsy
+      } else {
+        &mut out.truthy
+      };
       target.insert(info.base, non_nullish_base);
       return;
     }
@@ -2923,7 +2989,11 @@ impl<'a> FlowBodyChecker<'a> {
       if let Some(result_ty) = info.result_ty {
         let (_, result_nullish) = narrow_non_nullish(result_ty, &self.store);
         if result_nullish == prim.never && nullish_base != prim.never {
-          let target = if negate { &mut out.falsy } else { &mut out.truthy };
+          let target = if negate {
+            &mut out.falsy
+          } else {
+            &mut out.truthy
+          };
           target.insert(info.base, nullish_base);
         }
       }
@@ -2983,9 +3053,7 @@ impl<'a> FlowBodyChecker<'a> {
 
   fn literal_value(&self, expr_id: ExprId) -> Option<LiteralValue> {
     match &self.body.exprs[expr_id.0 as usize].kind {
-      ExprKind::Ident(name) if self.hir_name(*name) == "undefined" => {
-        Some(LiteralValue::Undefined)
-      }
+      ExprKind::Ident(name) if self.hir_name(*name) == "undefined" => Some(LiteralValue::Undefined),
       ExprKind::Literal(lit) => match lit {
         hir_js::Literal::String(s) => Some(LiteralValue::String(s.clone())),
         hir_js::Literal::Number(n) => Some(LiteralValue::Number(n.clone())),
@@ -3013,7 +3081,9 @@ impl<'a> FlowBodyChecker<'a> {
       | ExprKind::NonNull { expr }
       | ExprKind::Satisfies { expr }
       | ExprKind::Await { expr }
-      | ExprKind::Yield { expr: Some(expr), .. } => self.assignment_target_root_expr(*expr),
+      | ExprKind::Yield {
+        expr: Some(expr), ..
+      } => self.assignment_target_root_expr(*expr),
       _ => None,
     }
   }
@@ -3100,17 +3170,25 @@ impl<'a> FlowBodyChecker<'a> {
       .unwrap_or_default()
   }
 
+  fn member_property_name(&self, property: &ObjectKey) -> Option<String> {
+    match property {
+      ObjectKey::Ident(id) => Some(self.hir_name(*id)),
+      ObjectKey::String(s) => Some(s.clone()),
+      ObjectKey::Number(n) => Some(n.clone()),
+      ObjectKey::Computed(expr) => self.literal_value(*expr).and_then(|lit| match lit {
+        LiteralValue::String(s) | LiteralValue::Number(s) => Some(s),
+        _ => None,
+      }),
+    }
+  }
+
   fn discriminant_member(&self, expr_id: ExprId) -> Option<(NameId, String, TypeId)> {
     if let ExprKind::Member(MemberExpr {
       object, property, ..
     }) = &self.body.exprs[expr_id.0 as usize].kind
     {
       if let Some(name) = self.ident_name(*object) {
-        let prop = match property {
-          ObjectKey::Ident(id) => Some(self.hir_name(*id)),
-          ObjectKey::String(s) => Some(s.clone()),
-          _ => None,
-        }?;
+        let prop = self.member_property_name(property)?;
         let obj_ty = self.expr_types[object.0 as usize];
         return Some((name, prop, obj_ty));
       }
@@ -3166,7 +3244,11 @@ impl<'a> FlowBodyChecker<'a> {
           _ => self.member_type(obj_ty, mem),
         };
         let root = self.assignment_target_root_expr(mem.object);
-        (prop_ty, root, matches!(mem.property, ObjectKey::Computed(_)))
+        (
+          prop_ty,
+          root,
+          matches!(mem.property, ObjectKey::Computed(_)),
+        )
       }
       ExprKind::TypeAssertion { expr }
       | ExprKind::NonNull { expr }
@@ -3323,7 +3405,9 @@ impl<'a> FlowBodyChecker<'a> {
       right_env.set(name, left_falsy);
     }
     let right_ty = self.eval_expr(value, &mut right_env).0;
-    let result_ty = self.store.union(vec![left_truthy, self.base_type(right_ty)]);
+    let result_ty = self
+      .store
+      .union(vec![left_truthy, self.base_type(right_ty)]);
     self.assign_pat(target, result_ty, env);
     self.record_assignment_facts(root, result_ty, facts);
     result_ty
@@ -3382,7 +3466,10 @@ impl<'a> FlowBodyChecker<'a> {
         }
         env.set(*name, write_ty);
       }
-      PatKind::Assign { target, default_value } => {
+      PatKind::Assign {
+        target,
+        default_value,
+      } => {
         let default_eval = self.eval_expr(*default_value, env).0;
         let default_ty = self.apply_binding_mode(default_eval, mode);
         let combined = self.store.union(vec![write_ty, default_ty]);
@@ -3630,25 +3717,114 @@ impl<'a> FlowBodyChecker<'a> {
     }
   }
 
+  fn switch_case_falls_through(&self, case: Option<&SwitchCase>) -> bool {
+    let Some(case) = case else {
+      return false;
+    };
+    match case.consequent.last() {
+      None => true,
+      Some(stmt) => match &self.body.stmts[stmt.0 as usize].kind {
+        StmtKind::Return(_) | StmtKind::Throw(_) | StmtKind::Break(_) => false,
+        _ => true,
+      },
+    }
+  }
+
   fn apply_switch_narrowing(
     &mut self,
-    discriminant: ExprId,
-    discriminant_ty: TypeId,
+    target: &SwitchDiscriminant,
     test: ExprId,
     env: &mut Env,
-  ) {
-    if let Some((target, prop, obj_ty)) = self.discriminant_member(discriminant) {
-      if let Some(LiteralValue::String(value)) = self.literal_value(test) {
-        let (yes, _) = narrow_by_discriminant(obj_ty, &prop, &value, &self.store);
-        env.set(target, yes);
+  ) -> Option<(TypeId, TypeId)> {
+    let (yes, no) = self.switch_case_narrowing_with_type(target, target.ty(), test)?;
+    self.apply_switch_result(target, yes, env);
+    Some((yes, no))
+  }
+
+  fn switch_default_remaining(
+    &self,
+    target: &SwitchDiscriminant,
+    cases: &[SwitchCase],
+  ) -> Option<TypeId> {
+    let mut remaining = target.ty();
+    for case in cases.iter() {
+      if let Some(test) = case.test {
+        let (_, no) = self.switch_case_narrowing_with_type(target, remaining, test)?;
+        remaining = no;
       }
-      return;
     }
-    if let Some(name) = self.ident_name(discriminant) {
-      if let Some(lit) = self.literal_value(test) {
-        let (yes, _) = narrow_by_literal(discriminant_ty, &lit, &self.store);
-        env.set(name, yes);
+    Some(remaining)
+  }
+
+  fn switch_case_narrowing_with_type(
+    &self,
+    target: &SwitchDiscriminant,
+    ty: TypeId,
+    test: ExprId,
+  ) -> Option<(TypeId, TypeId)> {
+    match target {
+      SwitchDiscriminant::Ident { .. } => {
+        let lit = self.literal_value(test)?;
+        Some(narrow_by_literal(ty, &lit, &self.store))
       }
+      SwitchDiscriminant::Member { prop, .. } => match self.literal_value(test) {
+        Some(LiteralValue::String(value)) => {
+          Some(narrow_by_discriminant(ty, prop, &value, &self.store))
+        }
+        _ => None,
+      },
+      SwitchDiscriminant::Typeof { .. } => match self.literal_value(test) {
+        Some(LiteralValue::String(value)) => Some(narrow_by_typeof(ty, &value, &self.store)),
+        _ => None,
+      },
     }
+  }
+
+  fn switch_discriminant_target(
+    &self,
+    discriminant: ExprId,
+    discriminant_ty: TypeId,
+    env: &Env,
+  ) -> Option<SwitchDiscriminant> {
+    match &self.body.exprs[discriminant.0 as usize].kind {
+      ExprKind::Unary {
+        op: UnaryOp::Typeof,
+        expr,
+      } => {
+        if let Some(name) = self.ident_name(*expr) {
+          let operand_ty = env
+            .get(name)
+            .unwrap_or_else(|| self.expr_types[expr.0 as usize]);
+          return Some(SwitchDiscriminant::Typeof {
+            name,
+            ty: operand_ty,
+          });
+        }
+        None
+      }
+      ExprKind::Member(mem) => self.switch_member_target(mem, env),
+      ExprKind::Ident(name) => Some(SwitchDiscriminant::Ident {
+        name: *name,
+        ty: env.get(*name).unwrap_or(discriminant_ty),
+      }),
+      _ => None,
+    }
+  }
+
+  fn switch_member_target(&self, mem: &MemberExpr, env: &Env) -> Option<SwitchDiscriminant> {
+    let name = self.ident_name(mem.object)?;
+    let prop = self.member_property_name(&mem.property)?;
+    let obj_ty = env
+      .get(name)
+      .unwrap_or_else(|| self.expr_types[mem.object.0 as usize]);
+    Some(SwitchDiscriminant::Member {
+      name,
+      prop,
+      ty: obj_ty,
+    })
+  }
+
+  fn apply_switch_result(&mut self, target: &SwitchDiscriminant, narrowed: TypeId, env: &mut Env) {
+    env.set(target.name(), narrowed);
   }
 }
