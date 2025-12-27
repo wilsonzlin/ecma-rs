@@ -34,6 +34,7 @@ use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, Typ
 
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
+use crate::check::type_expr::TypeResolver;
 use crate::codes;
 use crate::db::{self, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
@@ -449,13 +450,15 @@ impl Program {
     roots: Vec<FileKey>,
     lib_manager: Arc<LibManager>,
   ) -> Program {
+    let host: Arc<dyn Host> = Arc::new(host);
     let query_stats = QueryStatsCollector::default();
     let cancelled = Arc::new(AtomicBool::new(false));
     let program = Program {
-      host: Arc::new(host),
+      host: Arc::clone(&host),
       roots,
       cancelled: Arc::clone(&cancelled),
       state: std::sync::Mutex::new(ProgramState::new(
+        Arc::clone(&host),
         lib_manager,
         query_stats.clone(),
         Arc::clone(&cancelled),
@@ -746,6 +749,7 @@ impl Program {
       state.lib_manager.clone()
     };
     let mut new_state = ProgramState::new(
+      Arc::clone(&self.host),
       lib_manager,
       self.query_stats.clone(),
       Arc::clone(&self.cancelled),
@@ -2028,6 +2032,176 @@ pub struct TypeAliasData {
   pub typ: TypeId,
 }
 
+#[derive(Clone)]
+struct ProgramTypeResolver {
+  semantics: Arc<sem_ts::TsProgramSemantics>,
+  def_kinds: HashMap<DefId, DefKind>,
+  registry: FileRegistry,
+  host: Arc<dyn Host>,
+  current_file: FileId,
+  local_defs: HashMap<String, DefId>,
+}
+
+impl ProgramTypeResolver {
+  fn new(
+    host: Arc<dyn Host>,
+    semantics: Arc<sem_ts::TsProgramSemantics>,
+    def_kinds: HashMap<DefId, DefKind>,
+    registry: FileRegistry,
+    current_file: FileId,
+    local_defs: HashMap<String, DefId>,
+  ) -> Self {
+    ProgramTypeResolver {
+      semantics,
+      def_kinds,
+      registry,
+      host,
+      current_file,
+      local_defs,
+    }
+  }
+
+  fn resolve_symbol_in_module(&self, name: &str, ns: sem_ts::Namespace) -> Option<DefId> {
+    let resolved = self
+      .semantics
+      .resolve_in_module(sem_ts::FileId(self.current_file.0), name, ns)
+      .and_then(|symbol| self.pick_decl(symbol, ns));
+    resolved.or_else(|| self.local_defs.get(name).copied())
+  }
+
+  fn resolve_namespace_import_path(
+    &self,
+    path: &[String],
+    final_ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    if path.len() < 2 {
+      return None;
+    }
+    let symbol = self.semantics.resolve_in_module(
+      sem_ts::FileId(self.current_file.0),
+      &path[0],
+      sem_ts::Namespace::NAMESPACE,
+    )?;
+    let Some(mut module) = self.import_origin_file(symbol) else {
+      return None;
+    };
+    self.resolve_export_path(&path[1..], &mut module, final_ns)
+  }
+
+  fn resolve_export_path(
+    &self,
+    segments: &[String],
+    module: &mut sem_ts::FileId,
+    final_ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    for (idx, segment) in segments.iter().enumerate() {
+      let is_last = idx + 1 == segments.len();
+      let ns = if is_last {
+        final_ns
+      } else {
+        sem_ts::Namespace::NAMESPACE
+      };
+      let symbol = self.semantics.resolve_export(*module, segment, ns)?;
+      if is_last {
+        return self.pick_decl(symbol, final_ns);
+      }
+      *module = self.import_origin_file(symbol)?;
+    }
+    None
+  }
+
+  fn pick_decl(&self, symbol: sem_ts::SymbolId, ns: sem_ts::Namespace) -> Option<DefId> {
+    let symbols = self.semantics.symbols();
+    let mut best: Option<(u8, usize, DefId)> = None;
+    for (idx, decl_id) in self.semantics.symbol_decls(symbol, ns).iter().enumerate() {
+      let decl = symbols.decl(*decl_id);
+      let def = decl.def_id;
+      let pri = self.def_priority(def, ns);
+      best = match best {
+        Some((best_pri, best_idx, best_def))
+          if best_pri < pri || (best_pri == pri && best_idx <= idx) =>
+        {
+          Some((best_pri, best_idx, best_def))
+        }
+        _ => Some((pri, idx, def)),
+      };
+    }
+    best.map(|(_, _, def)| def)
+  }
+
+  fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
+    let Some(kind) = self.def_kinds.get(&def) else {
+      return u8::MAX;
+    };
+    if ns.contains(sem_ts::Namespace::VALUE) {
+      return match kind {
+        DefKind::Function(_) => 0,
+        DefKind::Var(var) if var.body.0 != u32::MAX => 1,
+        DefKind::Import(_) => 2,
+        DefKind::Var(_) => 3,
+        DefKind::Interface(_) | DefKind::TypeAlias(_) => 4,
+      };
+    }
+    if ns.contains(sem_ts::Namespace::TYPE) {
+      return match kind {
+        DefKind::Interface(_) => 0,
+        DefKind::TypeAlias(_) => 1,
+        DefKind::Import(_) => 2,
+        _ => 3,
+      };
+    }
+    if ns.contains(sem_ts::Namespace::NAMESPACE) {
+      return match kind {
+        DefKind::Var(var) if var.body.0 == u32::MAX => 0,
+        DefKind::Import(_) => 1,
+        _ => 2,
+      };
+    }
+    u8::MAX
+  }
+
+  fn import_origin_file(&self, symbol: sem_ts::SymbolId) -> Option<sem_ts::FileId> {
+    match &self.semantics.symbols().symbol(symbol).origin {
+      sem_ts::SymbolOrigin::Import { from, .. } => *from,
+      _ => None,
+    }
+  }
+}
+
+impl TypeResolver for ProgramTypeResolver {
+  fn resolve_type_name(&self, path: &[String]) -> Option<DefId> {
+    match path {
+      [] => None,
+      [name] => self.resolve_symbol_in_module(name, sem_ts::Namespace::TYPE),
+      _ => self.resolve_namespace_import_path(path, sem_ts::Namespace::TYPE),
+    }
+  }
+
+  fn resolve_typeof(&self, path: &[String]) -> Option<DefId> {
+    match path {
+      [] => None,
+      [name] => self.resolve_symbol_in_module(name, sem_ts::Namespace::VALUE),
+      _ => self.resolve_namespace_import_path(path, sem_ts::Namespace::VALUE),
+    }
+  }
+
+  fn resolve_import_type(&self, module: &str, qualifier: Option<&[String]>) -> Option<DefId> {
+    let Some(from_key) = self.registry.lookup_key(self.current_file) else {
+      return None;
+    };
+    let target_key = self.host.resolve(&from_key, module)?;
+    let target_file = self.registry.lookup_id(&target_key)?;
+    let mut module = sem_ts::FileId(target_file.0);
+    let Some(path) = qualifier else {
+      return None;
+    };
+    if path.is_empty() {
+      return None;
+    }
+    self.resolve_export_path(path, &mut module, sem_ts::Namespace::TYPE)
+  }
+}
+
 #[derive(Clone, Debug)]
 struct SemHirBuilder {
   file: FileId,
@@ -2091,20 +2265,11 @@ impl SemHirBuilder {
       }));
   }
 
-  fn add_export_all(
-    &mut self,
-    specifier: String,
-    specifier_span: TextRange,
-    is_type_only: bool,
-    alias: Option<String>,
-    alias_span: Option<TextRange>,
-  ) {
+  fn add_export_all(&mut self, specifier: String, specifier_span: TextRange, is_type_only: bool) {
     self.exports.push(sem_ts::Export::All(sem_ts::ExportAll {
       specifier,
       is_type_only,
       specifier_span,
-      alias,
-      alias_span,
     }));
   }
 
@@ -2470,6 +2635,7 @@ impl QuerySpan {
 struct ProgramState {
   analyzed: bool,
   cancelled: Arc<AtomicBool>,
+  host: Arc<dyn Host>,
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
   file_overrides: HashMap<FileKey, Arc<str>>,
@@ -2552,6 +2718,7 @@ impl GlobalBindingsDb for ProgramState {
 
 impl ProgramState {
   fn new(
+    host: Arc<dyn Host>,
     lib_manager: Arc<LibManager>,
     query_stats: QueryStatsCollector,
     cancelled: Arc<AtomicBool>,
@@ -2561,6 +2728,7 @@ impl ProgramState {
     ProgramState {
       analyzed: false,
       cancelled,
+      host,
       lib_manager,
       compiler_options: default_options.clone(),
       file_overrides: HashMap::new(),
@@ -4801,24 +4969,23 @@ impl ProgramState {
               }
             }
             ExportNames::All(alias) => {
-              if let Some(spec) = export_list.stx.from.clone() {
-                let alias_name = alias.as_ref().map(|a| a.stx.name.clone());
-                let alias_span = alias.as_ref().map(|a| loc_to_span(file, a.loc).range);
+              if alias.is_some() {
+                self.diagnostics.push(
+                  codes::UNSUPPORTED_PATTERN
+                    .error("unsupported export * as alias", loc_to_span(file, stmt.loc)),
+                );
+              } else if let Some(spec) = export_list.stx.from.clone() {
                 if let Some(target) = resolved {
-                  if alias_name.is_none() {
-                    export_all.push(ExportAll {
-                      from: target,
-                      type_only: export_list.stx.type_only,
-                      span: loc_to_span(file, stmt.loc).range,
-                    });
-                  }
+                  export_all.push(ExportAll {
+                    from: target,
+                    type_only: export_list.stx.type_only,
+                    span: loc_to_span(file, stmt.loc).range,
+                  });
                 }
                 sem_builder.add_export_all(
                   spec,
                   loc_to_span(file, stmt.loc).range,
                   export_list.stx.type_only,
-                  alias_name,
-                  alias_span,
                 );
               }
             }
@@ -5545,6 +5712,25 @@ impl ProgramState {
       caches.eval.clone(),
     );
     let prim = store.primitive_ids();
+    let resolver = if let Some(semantics) = self.semantics.as_ref() {
+      let def_kinds = self
+        .def_data
+        .iter()
+        .map(|(id, data)| (*id, data.kind.clone()))
+        .collect();
+      Some(Arc::new(ProgramTypeResolver::new(
+        Arc::clone(&self.host),
+        Arc::clone(semantics),
+        def_kinds,
+        self.file_registry.clone(),
+        file,
+        binding_defs,
+      )) as Arc<_>)
+    } else if !binding_defs.is_empty() {
+      Some(Arc::new(check::hir_body::BindingTypeResolver::new(binding_defs)) as Arc<_>)
+    } else {
+      None
+    };
     let mut result = check::hir_body::check_body_with_expander(
       body_id,
       body,
@@ -5554,8 +5740,7 @@ impl ProgramState {
       Arc::clone(&store),
       &caches,
       &bindings,
-      (!binding_defs.is_empty())
-        .then(|| Arc::new(check::hir_body::BindingTypeResolver::new(binding_defs)) as Arc<_>),
+      resolver,
       Some(&expander),
     );
     if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
@@ -7959,6 +8144,7 @@ impl ProgramState {
       .push(SymbolOccurrence { range, symbol });
   }
 }
+
 fn type_member_name(key: &TypePropertyKey) -> Option<String> {
   match key {
     TypePropertyKey::Identifier(name) => Some(name.clone()),
