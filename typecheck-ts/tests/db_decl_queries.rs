@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use diagnostics::FileId;
 use typecheck_ts::db::queries::{decl_type, type_params, type_store};
 use typecheck_ts::db::Database;
 use typecheck_ts::lib_support::CompilerOptions;
+use typecheck_ts::Host;
 use typecheck_ts::{FileKey, FileOrigin, MemoryHost, Program};
 use types_ts_interned::{DefId, TypeDisplay, TypeParamId};
 
@@ -88,6 +88,7 @@ fn decl_queries_match_program_types() {
   let resolver = {
     let names = Arc::clone(&resolver_names);
     Arc::new(move |def: DefId| names.get(&def).cloned())
+      as Arc<dyn Fn(DefId) -> Option<String> + Send + Sync>
   };
 
   let decl_box = decl_type(&db, box_def).expect("box decl type");
@@ -98,7 +99,10 @@ fn decl_queries_match_program_types() {
   assert_eq!(decl_box_str, program_box_str, "box type mismatch");
   assert_eq!(
     type_params(&db, box_def).as_ref(),
-    program_params.get(&box_def).map(Vec::as_slice).unwrap_or(&[])
+    program_params
+      .get(&box_def)
+      .map(Vec::as_slice)
+      .unwrap_or(&[])
   );
 
   let decl_map = decl_type(&db, map_def).expect("MapBox decl type");
@@ -109,7 +113,10 @@ fn decl_queries_match_program_types() {
   assert_eq!(decl_map_str, program_map_str, "MapBox type mismatch");
   assert_eq!(
     type_params(&db, map_def).as_ref(),
-    program_params.get(&map_def).map(Vec::as_slice).unwrap_or(&[])
+    program_params
+      .get(&map_def)
+      .map(Vec::as_slice)
+      .unwrap_or(&[])
   );
 
   let decl_wrapper = decl_type(&db, wrapper_def).expect("wrapper decl type");
@@ -123,6 +130,9 @@ fn decl_queries_match_program_types() {
   );
   assert_eq!(
     type_params(&db, wrapper_def).as_ref(),
-    program_params.get(&wrapper_def).map(Vec::as_slice).unwrap_or(&[])
+    program_params
+      .get(&wrapper_def)
+      .map(Vec::as_slice)
+      .unwrap_or(&[])
   );
 }

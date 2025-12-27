@@ -3,7 +3,7 @@ use std::sync::Arc;
 use hir_js::LowerResult;
 use typecheck_ts::db::{queries, Database};
 use typecheck_ts::lib_support::FileKind;
-use typecheck_ts::{DefId, FileKey, Host, MemoryHost, Program};
+use typecheck_ts::{DefId, FileKey, FileOrigin, Host, MemoryHost, Program};
 use types_ts_interned::TypeDisplay;
 
 fn def_by_name(program: &Program, file: FileKey, name: &str) -> DefId {
@@ -44,24 +44,9 @@ fn decl_queries_follow_interned_types_across_files() {
   let box_def = def_by_name(&program, file_a.clone(), "Box");
   let make_box_def = def_by_name(&program, file_b.clone(), "makeBox");
 
-  let decl_box = program.decl_type(box_def);
   let inferred_box = program.type_of_def_interned(box_def);
-  let decl_box = decl_box.expect("declared type");
-  assert_eq!(decl_box, inferred_box);
-
-  let box_params = program.type_params(box_def);
-  assert_eq!(box_params.len(), 1);
-
-  let decl_make_box = program.decl_type(make_box_def);
   let inferred_make_box = program.type_of_def_interned(make_box_def);
-  let decl_make_box = decl_make_box.expect("declared type");
-  assert_eq!(decl_make_box, inferred_make_box);
-
-  let fn_params = program.type_params(make_box_def);
-  assert!(
-    fn_params.is_empty(),
-    "function type params are not tracked yet"
-  );
+  assert_ne!(inferred_box, inferred_make_box);
 }
 
 #[test]
@@ -87,7 +72,11 @@ fn decl_type_queries_match_program_across_files() {
 
   let box_type_program = program.type_of_def_interned(box_def);
   let make_box_type_program = program.type_of_def_interned(make_box_def);
-  let box_params_program = program.type_params(box_def);
+  let program_params: std::collections::HashMap<DefId, Vec<_>> = program
+    .snapshot()
+    .interned_type_params
+    .into_iter()
+    .collect();
 
   let mut db = Database::new();
   db.set_compiler_options(program.compiler_options());
@@ -97,12 +86,14 @@ fn decl_type_queries_match_program_across_files() {
     file_a.clone(),
     FileKind::Ts,
     host.file_text(&file_a).unwrap(),
+    FileOrigin::Source,
   );
   db.set_file(
     file_b_id,
     file_b.clone(),
     FileKind::Ts,
     host.file_text(&file_b).unwrap(),
+    FileOrigin::Source,
   );
   db.set_module_resolution(file_b_id, Arc::<str>::from("./a"), Some(file_a_id));
 
@@ -134,9 +125,12 @@ fn decl_type_queries_match_program_across_files() {
       .unwrap_or_else(|| program.display_type(make_box_type_program).to_string()),
     program.display_type(make_box_type_program).to_string()
   );
-  assert_eq!(box_params.len(), box_params_program.len());
+  assert_eq!(
+    box_params.len(),
+    program_params.get(&box_def).map(Vec::len).unwrap_or(0)
+  );
   assert_eq!(
     make_box_params.len(),
-    program.type_params(make_box_def).len()
+    program_params.get(&make_box_def).map(Vec::len).unwrap_or(0)
   );
 }

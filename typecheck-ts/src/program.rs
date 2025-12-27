@@ -3893,7 +3893,7 @@ impl ProgramState {
         Some(&def_by_name),
         Some(host.as_ref()),
         Some(&key_to_id),
-        None,
+        Some(&def_map),
       );
       for def in lowered.defs.iter() {
         let Some(info) = def.type_info.as_ref() else {

@@ -1037,12 +1037,6 @@ fn decl_types_in_file_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
   let semantics = ts_semantics_for(db);
   let def_by_name = canonical_defs_for(db);
   let file_id = file.file_id(db);
-  let mut module_resolutions = HashMap::new();
-  for spec in module_specifiers_for(db, file).iter() {
-    if let Some(target) = module_resolve(db, file_id, Arc::clone(spec)) {
-      module_resolutions.insert(spec.to_string(), target);
-    }
-  }
   let Some(lowered_hir) = lowered.lowered.as_ref() else {
     let mut decls = DeclTypes::default();
     decls
@@ -1050,19 +1044,12 @@ fn decl_types_in_file_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
       .extend(lowered.diagnostics.iter().cloned());
     return SharedDeclTypes(decls.into_shared());
   };
-  let resolver = Arc::new(move |from: FileId, spec: &str| {
-    if from != file_id {
-      return None;
-    }
-    module_resolutions.get(spec).copied()
-  });
   let mut decls = decl::lower_decl_types(
     store,
     lowered_hir,
     Some(&semantics.semantics),
     def_by_name,
     file_id,
-    Some(resolver),
   );
   decls
     .diagnostics
