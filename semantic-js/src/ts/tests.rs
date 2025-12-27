@@ -46,6 +46,17 @@ fn span(start: u32) -> TextRange {
   TextRange::new(start, start + 1)
 }
 
+fn positions(source: &str, needle: &str) -> Vec<u32> {
+  let mut positions = Vec::new();
+  let mut start = 0usize;
+  while let Some(found) = source[start..].find(needle) {
+    let pos = start + found;
+    positions.push(pos as u32);
+    start = pos + needle.len();
+  }
+  positions
+}
+
 fn export_snapshot(
   sem: &TsProgramSemantics,
   files: &[FileId],
@@ -142,6 +153,35 @@ fn ts_assoc_keys_do_not_overlap_js_accessors() {
   let _: Option<SymbolId> = ts::resolved_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::declared_symbol(&assoc);
   let _: Option<crate::js::SymbolId> = js::resolved_symbol(&assoc);
+}
+
+#[test]
+fn locals_resolve_object_literal_shorthand() {
+  let source = "const x = 1; const obj = { x };";
+  let mut ast = parse(source).expect("parse object literal shorthand");
+  let locals = bind_ts_locals(&mut ast, FileId(0), true);
+
+  let occs = positions(source, "x");
+  assert!(
+    occs.len() >= 2,
+    "expected declaration and shorthand occurrences: {occs:?}"
+  );
+  let decl_offset = occs[0];
+  let shorthand_offset = occs[1];
+
+  let decl_symbol = locals
+    .resolve_expr_at_offset(decl_offset)
+    .map(|(_, id)| id)
+    .expect("declaration should resolve");
+  let shorthand_symbol = locals
+    .resolve_expr_at_offset(shorthand_offset)
+    .map(|(_, id)| id)
+    .expect("shorthand should resolve");
+
+  assert_eq!(
+    decl_symbol, shorthand_symbol,
+    "object literal shorthand should resolve to declared binding"
+  );
 }
 
 #[test]

@@ -5,6 +5,7 @@ use crate::assoc::ts::{
 use crate::hash::stable_hash;
 use derive_visitor::{Drive, DriveMut};
 use diagnostics::{FileId, TextRange};
+use parse_js::ast::class_or_object::ObjMemberType;
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
@@ -1574,6 +1575,16 @@ impl<'a> ResolvePass<'a> {
       AstExpr::LitObj(obj) => {
         for member in obj.stx.members.iter_mut() {
           self.push_scope_from_assoc(&member.assoc);
+          if let ObjMemberType::Shorthand { id } = &mut member.stx.typ {
+            let span = span_for_name(id.loc, &id.stx.name);
+            let sym = self
+              .builder
+              .resolve(self.current_scope(), &id.stx.name, Namespace::VALUE);
+            id.assoc.set(ResolvedSymbol(sym));
+            if let Some(sym) = sym {
+              self.expr_resolutions.insert(span, sym);
+            }
+          }
           self.pop_scope_from_assoc(&member.assoc);
         }
       }
