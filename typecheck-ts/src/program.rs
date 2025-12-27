@@ -7,7 +7,7 @@ use hir_js::{
   lower_file_with_diagnostics as lower_hir_with_diagnostics, BinaryOp as HirBinaryOp,
   BodyKind as HirBodyKind, DefId as HirDefId, DefKind as HirDefKind, ExportKind as HirExportKind,
   ExprKind as HirExprKind, FileKind as HirFileKind, LowerResult, PatId as HirPatId,
-  PatKind as HirPatKind, StmtKind as HirStmtKind, VarDeclKind as HirVarDeclKind,
+  PatKind as HirPatKind, VarDeclKind as HirVarDeclKind,
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::expr::pat::Pat;
