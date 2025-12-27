@@ -97,6 +97,9 @@ enum Val {
 #[derive(Clone, Default)]
 struct State {
   val_to_coc: HashMap<Val, Arg>,
+  // Map SSA target to its canonical Arg. Entries only ever come from values defined
+  // in the current dominator path so that any rewrite that uses this mapping is
+  // guaranteed to reference something that dominates the use site.
   tgt_to_coc: HashMap<u32, Arg>,
 }
 
@@ -125,6 +128,61 @@ impl State {
         // We haven't seen this variable before, so it must be from a back edge. Therefore, we must leave it as is.
         Entry::Vacant(_) => Arg::Var(*tgt),
       },
+    }
+  }
+}
+
+/// Update phi arguments in `child_block` that correspond to `pred_label`.
+/// We canonicalize each incoming value using the predecessor's state (which is why
+/// this runs while visiting the predecessor) and then sort by predecessor label so
+/// that phi ordering stays deterministic regardless of traversal order. If the
+/// phi is missing an entry for this predecessor we leave it untouched; SSA
+/// construction is responsible for providing the right shape.
+fn canonicalize_phi_args_for_child(
+  changed: &mut bool,
+  state: &mut State,
+  child_block: &mut Vec<Inst>,
+  pred_label: u32,
+) {
+  for inst in child_block.iter_mut() {
+    if inst.t != InstTyp::Phi {
+      // Phi nodes are always at the top of the block.
+      break;
+    };
+    debug_assert_eq!(inst.labels.len(), inst.args.len());
+    #[cfg(debug_assertions)]
+    {
+      use ahash::HashSet;
+      let mut seen = HashSet::default();
+      for &label in &inst.labels {
+        assert!(seen.insert(label), "phi contains duplicate label {label}: {inst:?}");
+      }
+    }
+
+    let mut entries: Vec<(u32, Arg)> = inst
+      .labels
+      .iter()
+      .copied()
+      .zip(inst.args.iter().cloned())
+      .collect();
+
+    for (label, arg) in entries.iter_mut() {
+      if *label == pred_label {
+        let coc = state.canon_arg(arg);
+        if *arg != coc {
+          *changed = true;
+          *arg = coc;
+        }
+      }
+    }
+
+    entries.sort_by_key(|(label, _)| *label);
+    let new_labels: Vec<_> = entries.iter().map(|(label, _)| *label).collect();
+    let new_args: Vec<_> = entries.into_iter().map(|(_, arg)| arg).collect();
+    if inst.labels != new_labels || inst.args != new_args {
+      *changed = true;
+      inst.labels = new_labels;
+      inst.args = new_args;
     }
   }
 }
@@ -169,8 +227,10 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
         }
       }
       InstTyp::Call => {
-        let (tgt, func, this, args, spreads) = inst.as_call();
-        // TODO If constevalable and `tgt` is None.
+        let (tgt, func, this, args, spreads) = new_inst.as_call();
+        // We only fold calls that actually produce a value. Dropping a pure-looking
+        // call with no assignment target would require a stronger purity model, so
+        // we conservatively leave them intact.
         match (tgt, func, this, args, spreads) {
           (Some(_), Arg::Builtin(func), _, args, spreads)
             if spreads.is_empty() && args.iter().all(|a| matches!(a, Arg::Const(_))) =>
@@ -187,10 +247,14 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
     // Stage 3: DVN.
     // If we have a consteval value, get its canonical representation and replace our Inst with a VarAssign to it.
     // If we don't, and our Inst is pure and has already been computed before, also replace it.
+    // Any rewrite here must keep the RHS in canonical form and only use values that dominate this
+    // instruction. The state we thread through the dominator tree only contains mappings from the
+    // current dominator path, so any canonical Arg we read is available on every path to this block.
     if let Some(value) = consteval {
       let tgt = new_inst.tgts[0];
-      assert!(state.tgt_to_coc.insert(tgt, value.clone()).is_none());
-      new_inst = Inst::var_assign(tgt, value)
+      let canonical_value = state.canon_arg(&value);
+      assert!(state.tgt_to_coc.insert(tgt, canonical_value.clone()).is_none());
+      new_inst = Inst::var_assign(tgt, canonical_value)
     } else {
       let pure_val = match new_inst.t {
         InstTyp::Bin => {
@@ -235,21 +299,7 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
   }
 
   for s in cfg.graph.children_sorted(label) {
-    for inst in cfg.bblocks.get_mut(s).iter_mut() {
-      if inst.t != InstTyp::Phi {
-        // No more phi nodes.
-        break;
-      };
-      // TODO Is the following algorithm correct?
-      let Some(ex) = inst.remove_phi(label) else {
-        continue;
-      };
-      let coc = state.canon_arg(&ex);
-      if ex != coc {
-        *changed = true;
-      };
-      inst.insert_phi(label, coc);
-    }
+    canonicalize_phi_args_for_child(changed, state, cfg.bblocks.get_mut(s), label);
   }
 
   for c in dom.immediately_dominated_by(label) {
