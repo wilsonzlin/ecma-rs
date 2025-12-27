@@ -98,7 +98,9 @@ fn check_body_with_env(
   initial: &HashMap<NameId, TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
   let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  check_body_with_env_impl(body_id, body, names, file, src, store, initial, relate, None)
+  check_body_with_env_impl(
+    body_id, body, names, file, src, store, initial, relate, None,
+  )
 }
 
 fn run_flow(

@@ -18,7 +18,10 @@ const from_init = maybe ? maybe.value : "fallback";
 
   let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let body_id = lowered
     .defs

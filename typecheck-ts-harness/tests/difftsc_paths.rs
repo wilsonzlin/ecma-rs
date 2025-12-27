@@ -71,7 +71,10 @@ fn difftsc_uses_canonical_file_paths() {
     "module_types should not produce Rust diagnostics: {:?}",
     rust_diags
   );
-  if let Some(types) = module_case.get("actual_types").and_then(|t| t.get("exports")) {
+  if let Some(types) = module_case
+    .get("actual_types")
+    .and_then(|t| t.get("exports"))
+  {
     let mut bad = Vec::new();
     if let Some(exports) = types.as_array() {
       for export in exports {

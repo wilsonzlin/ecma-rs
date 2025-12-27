@@ -17,6 +17,7 @@ use crate::db::inputs::{
   CancellationToken, CancelledInput, CompilerOptionsInput, FileInput, ModuleResolutionInput,
   RootsInput,
 };
+use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
 use crate::db::{symbols, Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
@@ -28,8 +29,7 @@ use crate::semantic_js::SymbolId;
 use crate::symbols::SymbolBinding;
 use crate::FileKey;
 use crate::SymbolOccurrence;
-use crate::{BodyId, DefId, TypeId};
-use salsa::Setter;
+use crate::{BodyId, DefId, ExprId, TypeId};
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
   db.file_input_by_key(key)
@@ -575,6 +575,76 @@ pub fn local_symbol_info(db: &dyn Db, file: FileId) -> Arc<BTreeMap<SymbolId, Lo
     .file_input(file)
     .expect("file must be seeded before computing symbol info");
   symbol_index_for(db, handle).locals
+}
+
+#[salsa::tracked]
+fn file_span_index_for(db: &dyn Db, file: FileInput) -> Arc<FileSpanIndex> {
+  let lowered = lower_hir_for(db, file);
+  let Some(lowered) = lowered.lowered.as_ref() else {
+    return Arc::new(FileSpanIndex::default());
+  };
+
+  Arc::new(FileSpanIndex::from_lowered(lowered))
+}
+
+/// Cached span index for a file, built from lowered HIR expression spans.
+pub fn file_span_index(db: &dyn Db, file: FileId) -> Arc<FileSpanIndex> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before building span index");
+  file_span_index_for(db, handle)
+}
+
+/// Innermost expression covering an offset within a file.
+pub fn expr_at(db: &dyn Db, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
+  let index = file_span_index(db, file);
+  let body = index.body_at(offset)?;
+
+  if let Some(result) = db.body_result(body) {
+    if let Some((expr, _)) = expr_at_from_spans(result.expr_spans(), offset) {
+      return Some((body, expr));
+    }
+  }
+
+  index
+    .expr_at_in_body(body, offset)
+    .map(|(expr, _span)| (body, expr))
+}
+
+/// Span for a specific expression within a body.
+pub fn span_of_expr(db: &dyn Db, body: BodyId, expr: ExprId) -> Option<Span> {
+  let file = body_file(db, body)?;
+  if let Some(result) = db.body_result(body) {
+    if let Some(range) = result.expr_span(expr) {
+      return Some(Span::new(file, range));
+    }
+  }
+  file_span_index(db, file)
+    .span_of_expr(body, expr)
+    .map(|range| Span::new(file, range))
+}
+
+/// Span for a definition using its lowered HIR span, if available.
+pub fn span_of_def(db: &dyn Db, def: DefId) -> Option<Span> {
+  let file = def_file(db, def)?;
+  let lowered = lower_hir(db, file);
+  let lowered = lowered.lowered.as_ref()?;
+  lowered.def(def).map(|data| Span::new(file, data.span))
+}
+
+/// Type of the innermost expression at the given offset, if available.
+///
+/// This uses cached [`BodyCheckResult`]s stored in the database by
+/// [`Program::check_body`](crate::Program::check_body). When no cached result is
+/// available the query returns `None` to avoid triggering type checking from
+/// within salsa.
+pub fn type_at(db: &dyn Db, file: FileId, offset: u32) -> Option<TypeId> {
+  let (body, expr) = expr_at(db, file, offset)?;
+  let result = db.body_result(body)?;
+  if let Some((_, ty)) = result.expr_at(offset) {
+    return Some(ty);
+  }
+  result.expr_type(expr)
 }
 
 /// Host-provided module resolution result.

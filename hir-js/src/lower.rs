@@ -132,10 +132,7 @@ impl LoweringContext {
   }
 
   fn current_parent(&self) -> Option<RawNode> {
-    self.parent_stack
-      .last()
-      .copied()
-      .unwrap_or(None)
+    self.parent_stack.last().copied().unwrap_or(None)
   }
 
   fn with_parent<F, R>(&mut self, parent: Option<RawNode>, f: F) -> R
@@ -464,13 +461,12 @@ pub fn lower_file_with_diagnostics(
 
   compute_descriptor_depths(&mut descriptors);
   descriptors.sort_by(|a, b| {
-    (
-      a.depth,
-      a.kind,
-      a.name_text.as_str(),
-      a.span.start,
-    )
-      .cmp(&(b.depth, b.kind, b.name_text.as_str(), b.span.start))
+    (a.depth, a.kind, a.name_text.as_str(), a.span.start).cmp(&(
+      b.depth,
+      b.kind,
+      b.name_text.as_str(),
+      b.span.start,
+    ))
   });
 
   let mut span_map = SpanMap::new();
@@ -3771,16 +3767,16 @@ fn collect_expr<'a>(
                 in_global,
                 ctx,
               );
-      collect_func_body(
-        &getter.stx.func,
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
-      );
-    }
+              collect_func_body(
+                &getter.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
+            }
             ClassOrObjVal::Setter(setter) => {
               let (name_id, name_text) = obj_key_name(key, names);
               descriptors.push(DefDescriptor::new(
@@ -3802,16 +3798,16 @@ fn collect_expr<'a>(
                 in_global,
                 ctx,
               );
-      collect_func_body(
-        &setter.stx.func,
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
-      );
-    }
+              collect_func_body(
+                &setter.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
+            }
             ClassOrObjVal::Method(method) => {
               let (name_id, name_text) = obj_key_name(key, names);
               descriptors.push(DefDescriptor::new(
@@ -3833,16 +3829,16 @@ fn collect_expr<'a>(
                 in_global,
                 ctx,
               );
-      collect_func_body(
-        &method.stx.func,
-        descriptors,
-        module_items,
-        names,
-        ambient,
-        in_global,
-        ctx,
-      );
-    }
+              collect_func_body(
+                &method.stx.func,
+                descriptors,
+                module_items,
+                names,
+                ambient,
+                in_global,
+                ctx,
+              );
+            }
             _ => {}
           },
           ObjMemberType::Rest { val } => collect_expr(

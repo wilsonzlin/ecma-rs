@@ -8,30 +8,31 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use diagnostics::FileId;
-use salsa::Setter;
-
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::profile::QueryStatsCollector;
 use crate::FileKey;
-use crate::{BodyId, DefId};
+use crate::{BodyCheckResult, BodyId, DefId};
+use diagnostics::FileId;
 
 pub mod expander;
 mod inputs;
 pub mod queries;
+pub(crate) mod spans;
+pub(crate) mod spans;
 pub mod symbols;
 
 pub use inputs::CancellationToken;
 pub use queries::{
   aggregate_diagnostics, aggregate_program_diagnostics, all_files, body_file, body_parent,
   body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, def_file,
-  def_to_file, file_kind, file_text, global_bindings, local_symbol_info, lower_hir,
-  module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse, parse_query_count,
-  program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir,
-  symbol_occurrences, ts_semantics, DeclInfo, DeclKind, GlobalBindingsDb, Initializer,
-  LowerResultWithDiagnostics, SharedTypeStore, TsSemantics, TypeDatabase, TypeSemantics,
-  TypesDatabase,
+  def_to_file, expr_at, file_kind, file_span_index, file_text, global_bindings, local_symbol_info,
+  lower_hir, module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse,
+  parse_query_count, program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir,
+  span_of_def, span_of_expr, symbol_occurrences, ts_semantics, type_at, DeclInfo, DeclKind,
+  GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore, TsSemantics,
+  TypeDatabase, TypeSemantics, TypesDatabase,
 };
+pub use spans::FileSpanIndex;
 
 pub trait TypecheckDatabase: Db {}
 impl TypecheckDatabase for Database {}
@@ -63,6 +64,7 @@ pub trait Db: salsa::Database + Send + 'static {
   fn file_input_by_key(&self, key: &FileKey) -> Option<inputs::FileInput>;
   fn module_resolution_input(&self, key: &ModuleKey) -> Option<inputs::ModuleResolutionInput>;
   fn profiler(&self) -> Option<QueryStatsCollector>;
+  fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>>;
 }
 
 #[salsa::db]
@@ -76,6 +78,7 @@ pub struct Database {
   file_keys: BTreeMap<FileKey, FileId>,
   module_resolutions: BTreeMap<ModuleKey, inputs::ModuleResolutionInput>,
   profiler: Option<QueryStatsCollector>,
+  body_results: BTreeMap<BodyId, Arc<BodyCheckResult>>,
 }
 
 impl Default for Database {
@@ -89,6 +92,7 @@ impl Default for Database {
       file_keys: BTreeMap::new(),
       module_resolutions: BTreeMap::new(),
       profiler: None,
+      body_results: BTreeMap::new(),
     };
     db.initialize_defaults();
     db
@@ -136,6 +140,10 @@ impl Db for Database {
 
   fn profiler(&self) -> Option<QueryStatsCollector> {
     self.profiler.clone()
+  }
+
+  fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>> {
+    self.body_results.get(&body).cloned()
   }
 }
 
@@ -302,6 +310,11 @@ impl Database {
 
   pub fn set_profiler(&mut self, profiler: QueryStatsCollector) {
     self.profiler = Some(profiler);
+  }
+
+  /// Cache a checked body result for reuse by span and type queries.
+  pub fn set_body_result(&mut self, body: BodyId, result: Arc<BodyCheckResult>) {
+    self.body_results.insert(body, result);
   }
 
   pub fn def_to_file(&self) -> Arc<BTreeMap<DefId, FileId>> {

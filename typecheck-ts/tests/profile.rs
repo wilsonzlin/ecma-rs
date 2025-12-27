@@ -98,7 +98,10 @@ fn program_records_query_stats_after_check() {
   );
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics {diagnostics:?}"
+  );
 
   let stats = program.query_stats();
   for kind in [

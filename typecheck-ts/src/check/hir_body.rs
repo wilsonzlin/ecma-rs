@@ -3946,9 +3946,7 @@ impl<'a> FlowBodyChecker<'a> {
     {
       if let Some(path) = self.access_path_info(*expr) {
         let prim = self.store.primitive_ids();
-        let mut remaining = env
-          .get_path(&path.path)
-          .unwrap_or_else(|| prim.unknown);
+        let mut remaining = env.get_path(&path.path).unwrap_or_else(|| prim.unknown);
         for lit in matched_literals {
           if let LiteralValue::String(value) = lit {
             let (_, no) = narrow_by_typeof(remaining, value, &self.store);

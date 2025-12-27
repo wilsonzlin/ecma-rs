@@ -75,12 +75,12 @@ impl<'db> TypeExpander for DbTypeExpander<'db> {
 impl<'db> RelateTypeExpander for DbTypeExpander<'db> {
   fn expand_ref(&self, store: &TypeStore, def: DefId, args: &[TypeId]) -> Option<TypeId> {
     debug_assert!(std::ptr::eq(store, self.store.as_ref()));
+    let key = RefKey::new(def, args);
     let expanded = match self.expanded(def) {
       Some(expanded) => expanded,
       None => return None,
     };
 
-    let key = RefKey::new(def, args);
     if !self.guard.begin(&key) {
       return Some(store.intern_type(TypeKind::Ref {
         def,

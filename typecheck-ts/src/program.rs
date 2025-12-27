@@ -1,4 +1,5 @@
 use crate::api::{BodyId, DefId, Diagnostic, ExprId, FileId, FileKey, PatId, Span, TextRange};
+use crate::db::spans::expr_at_from_spans;
 use crate::semantic_js;
 use crate::{SymbolBinding, SymbolInfo, SymbolOccurrence};
 use ::semantic_js::ts as sem_ts;
@@ -159,41 +160,8 @@ impl BodyCheckResult {
 
   /// Find the innermost expression covering the given offset.
   pub fn expr_at(&self, offset: u32) -> Option<(ExprId, TypeId)> {
-    let mut best_containing: Option<(ExprId, TypeId, TextRange)> = None;
-    let mut best_empty: Option<(ExprId, TypeId, TextRange)> = None;
-    for (idx, span) in self.expr_spans.iter().enumerate() {
-      let width = span.end.saturating_sub(span.start);
-      if span.start <= offset && offset < span.end {
-        let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
-        best_containing = match best_containing {
-          Some((_, _, existing)) if existing.end.saturating_sub(existing.start) <= width => {
-            best_containing
-          }
-          _ => Some((entry.0, entry.1, *span)),
-        };
-      } else if span.start == span.end && offset == span.start {
-        let entry = (ExprId(idx as u32), *self.expr_types.get(idx)?, width);
-        best_empty = match best_empty {
-          Some((_, _, existing)) if existing.end.saturating_sub(existing.start) <= width => {
-            best_empty
-          }
-          _ => Some((entry.0, entry.1, *span)),
-        };
-      }
-    }
-    let best = match (best_containing, best_empty) {
-      (Some((cont_id, cont_ty, cont_span)), Some((empty_id, empty_ty, empty_span))) => {
-        if empty_span.start > cont_span.start && empty_span.end < cont_span.end {
-          Some((empty_id, empty_ty, empty_span))
-        } else {
-          Some((cont_id, cont_ty, cont_span))
-        }
-      }
-      (Some(cont), None) => Some(cont),
-      (None, Some(empty)) => Some(empty),
-      (None, None) => None,
-    };
-    best.map(|(id, ty, _)| (id, ty))
+    let (expr, _) = expr_at_from_spans(&self.expr_spans, offset)?;
+    self.expr_type(expr).map(|ty| (expr, ty))
   }
 
   /// Spans for all expressions in this body.
@@ -873,7 +841,62 @@ impl Program {
       };
       let result = state.check_body(body)?;
       let unknown = state.interned_unknown();
-      let mut ty = result.expr_type(expr).unwrap_or(unknown);
+      let (expr, mut ty) = match result.expr_at(offset) {
+        Some((expr_id, ty)) => (expr_id, ty),
+        None => (expr, result.expr_type(expr).unwrap_or(unknown)),
+      };
+      if std::env::var("DEBUG_TYPE_AT").is_ok() {
+        if let Some(span) = result.expr_span(expr) {
+          eprintln!(
+            "type_at debug: body {:?} expr {:?} span {:?}",
+            body, expr, span
+          );
+        } else {
+          eprintln!("type_at debug: body {:?} expr {:?} (no span)", body, expr);
+        }
+        if let Some(meta) = state.body_map.get(&body) {
+          eprintln!("  meta kind {:?}", meta.kind);
+          if let Some(hir_id) = meta.hir {
+            if let Some(lowered) = state.hir_lowered.get(&meta.file) {
+              if let Some(hir_body) = lowered.body(hir_id) {
+                if let Some(expr_data) = hir_body.exprs.get(expr.0 as usize) {
+                  eprintln!("  hir expr kind {:?}", expr_data.kind);
+                }
+              }
+            }
+          }
+        }
+        eprintln!("  parent {:?}", state.body_parents.get(&body));
+        if let Some(raw_ty) = result.expr_type(expr) {
+          if let Some(store) = state.interned_store.as_ref() {
+            eprintln!("  raw type {:?}", store.type_kind(raw_ty));
+          } else {
+            eprintln!("  raw type {:?}", raw_ty);
+          }
+        }
+        if let Some(parent) = state.body_parents.get(&body).copied() {
+          if let Ok(parent_res) = state.check_body(parent) {
+            eprintln!("  parent pat types {:?}", parent_res.pat_types());
+            if let Some(first) = parent_res.pat_types().first() {
+              if let Some(store) = state.interned_store.as_ref() {
+                eprintln!("  parent pat kind {:?}", store.type_kind(*first));
+              }
+            }
+          }
+        }
+        if let Some(owner) = state.owner_of_body(body) {
+          if let Some(def) = state.def_data.get(&owner) {
+            eprintln!("  owner {:?}", def.name);
+          }
+        }
+        if let Some(parent) = state.body_parents.get(&body).copied() {
+          if let Some(owner) = state.owner_of_body(parent) {
+            if let Some(def) = state.def_data.get(&owner) {
+              eprintln!("  parent owner {:?}", def.name);
+            }
+          }
+        }
+      }
       let is_number_literal = state
         .interned_store
         .as_ref()
@@ -1515,6 +1538,9 @@ impl Program {
 
   pub fn span_of_def_fallible(&self, def: DefId) -> Result<Option<Span>, FatalError> {
     self.with_analyzed_state(|state| {
+      if let Some(span) = db::span_of_def(&state.typecheck_db, def) {
+        return Ok(Some(span));
+      }
       Ok(
         state
           .def_data
@@ -1541,6 +1567,9 @@ impl Program {
     expr: ExprId,
   ) -> Result<Option<Span>, FatalError> {
     self.with_analyzed_state(|state| {
+      if let Some(span) = db::span_of_expr(&state.typecheck_db, body, expr) {
+        return Ok(Some(span));
+      }
       let Some(meta) = state.body_map.get(&body).copied() else {
         return Ok(None);
       };
@@ -3475,18 +3504,18 @@ impl ProgramState {
       self.sync_typecheck_roots();
       return Ok(());
     }
-    let mut db_roots: Vec<_> = roots.to_vec();
-    db_roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    let mut sorted_roots = roots.to_vec();
+    sorted_roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
     self
       .typecheck_db
-      .set_roots(Arc::from(db_roots.into_boxed_slice()));
+      .set_roots(Arc::<[FileKey]>::from(sorted_roots));
+    self
+      .typecheck_db
+      .set_compiler_options(self.compiler_options.clone());
     self
       .typecheck_db
       .set_cancellation_flag(Arc::clone(&self.cancelled));
     let libs = self.collect_libraries(host.as_ref());
-    self
-      .typecheck_db
-      .set_compiler_options(self.compiler_options.clone());
     let lib_ids: Vec<FileId> = libs
       .iter()
       .map(|l| self.intern_file_key(l.key.clone(), FileOrigin::Lib))
@@ -4178,8 +4207,9 @@ impl ProgramState {
 
   fn set_salsa_inputs(&mut self, file: FileId, kind: FileKind, text: Arc<str>) {
     let key = self
-      .file_key_for_id(file)
-      .unwrap_or_else(|| panic!("file key missing for {:?}", file));
+      .file_registry
+      .lookup_key(file)
+      .unwrap_or_else(|| panic!("file {:?} must be interned before setting inputs", file));
     self.typecheck_db.set_file(file, key, kind, text);
   }
 
@@ -6240,6 +6270,7 @@ impl ProgramState {
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
+      self.typecheck_db.set_body_result(body_id, res.clone());
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -6260,6 +6291,7 @@ impl ProgramState {
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
+      self.typecheck_db.set_body_result(body_id, res.clone());
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -6281,6 +6313,7 @@ impl ProgramState {
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
+      self.typecheck_db.set_body_result(body_id, res.clone());
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -6317,6 +6350,7 @@ impl ProgramState {
         return_types: Vec::new(),
       });
       self.body_results.insert(body_id, res.clone());
+      self.typecheck_db.set_body_result(body_id, res.clone());
       if let Some(span) = span.take() {
         span.finish(None);
       }
@@ -6567,6 +6601,7 @@ impl ProgramState {
       self.cache_stats.merge(&stats);
     }
     self.body_results.insert(body_id, res.clone());
+    self.typecheck_db.set_body_result(body_id, res.clone());
     if let Some(span) = span.take() {
       span.finish(None);
     }
@@ -7241,83 +7276,8 @@ impl ProgramState {
     })
   }
 
-  fn expr_at(&self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
-    fn body_priority(kind: HirBodyKind) -> u32 {
-      match kind {
-        HirBodyKind::Function | HirBodyKind::Class => 0,
-        HirBodyKind::TopLevel => 1,
-        HirBodyKind::Initializer => 2,
-        HirBodyKind::Unknown => 3,
-      }
-    }
-
-    let mut best_containing: Option<(u32, u32, u32, u32, BodyId, ExprId)> = None;
-    let mut best_empty: Option<(u32, u32, u32, u32, BodyId, ExprId)> = None;
-
-    let update_best =
-      |body: BodyId,
-       kind: HirBodyKind,
-       expr: ExprId,
-       span: TextRange,
-       best_containing: &mut Option<(u32, u32, u32, u32, BodyId, ExprId)>,
-       best_empty: &mut Option<(u32, u32, u32, u32, BodyId, ExprId)>| {
-        let len = span.len();
-        let priority = body_priority(kind);
-        let parent_rank = if self.body_parents.contains_key(&body) {
-          0
-        } else {
-          1
-        };
-        let key = (priority, parent_rank, len, span.start, body, expr);
-        if span.start <= offset && offset < span.end {
-          let replace = best_containing.map(|best| key < best).unwrap_or(true);
-          if replace {
-            *best_containing = Some(key);
-          }
-        } else if span.start == span.end && offset == span.start {
-          let replace = best_empty.map(|best| key < best).unwrap_or(true);
-          if replace {
-            *best_empty = Some(key);
-          }
-        }
-      };
-
-    for (body_id, meta) in self.body_map.iter().filter(|(_, meta)| meta.file == file) {
-      if let Some(result) = self.body_results.get(body_id) {
-        for (idx, span) in result.expr_spans().iter().enumerate() {
-          update_best(
-            *body_id,
-            meta.kind,
-            ExprId(idx as u32),
-            *span,
-            &mut best_containing,
-            &mut best_empty,
-          );
-        }
-        continue;
-      }
-
-      if let Some(hir_id) = meta.hir {
-        if let Some(lowered) = self.hir_lowered.get(&meta.file) {
-          if let Some(body) = lowered.body(hir_id) {
-            for (idx, expr) in body.exprs.iter().enumerate() {
-              update_best(
-                *body_id,
-                meta.kind,
-                ExprId(idx as u32),
-                expr.span,
-                &mut best_containing,
-                &mut best_empty,
-              );
-            }
-          }
-        }
-      }
-    }
-
-    best_containing
-      .or(best_empty)
-      .map(|(_, _, _, _, body, expr)| (body, expr))
+  fn expr_at(&mut self, file: FileId, offset: u32) -> Option<(BodyId, ExprId)> {
+    db::expr_at(&self.typecheck_db, file, offset)
   }
 
   fn body_of_def(&self, def: DefId) -> Option<BodyId> {

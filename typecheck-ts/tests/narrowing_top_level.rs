@@ -16,7 +16,10 @@ if (x) {
 
   let program = Program::new(host, vec![key.clone()]);
   let diagnostics = program.check();
-  assert!(diagnostics.is_empty(), "unexpected diagnostics: {diagnostics:?}");
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
 
   let file_id = program.file_id(&key).expect("file id");
   let body = program.file_body(file_id).expect("top-level body");

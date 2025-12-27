@@ -2162,9 +2162,7 @@ fn import_type_qualifier_ignores_local_symbols() {
     .expect("local Foo resolves")
     .1;
 
-  let import_foo_offset = src
-    .rfind("Foo")
-    .expect("import qualifier present") as u32;
+  let import_foo_offset = src.rfind("Foo").expect("import qualifier present") as u32;
 
   assert!(
     locals
