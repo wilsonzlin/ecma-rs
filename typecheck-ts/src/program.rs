@@ -2010,95 +2010,6 @@ pub struct ImportData {
   pub original: String,
 }
 
-#[derive(Clone)]
-struct SemanticTypeResolver {
-  bindings: HashMap<String, DefId>,
-  imports: HashMap<DefId, ImportData>,
-  def_by_name: HashMap<(FileId, String), DefId>,
-  def_ids: HashSet<DefId>,
-  semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
-}
-
-impl SemanticTypeResolver {
-  fn symbol_target_file(
-    &self,
-    sem: &sem_ts::TsProgramSemantics,
-    symbol: sem_ts::SymbolId,
-  ) -> Option<FileId> {
-    let sym = sem.symbols().symbol(symbol);
-    match &sym.origin {
-      sem_ts::SymbolOrigin::Import { source, .. } => match source {
-        sem_ts::ImportSource::File(file) => Some(*file),
-        _ => None,
-      },
-      _ => match &sym.owner {
-        sem_ts::SymbolOwner::Module(file) => Some(*file),
-        _ => None,
-      },
-    }
-  }
-
-  fn def_for_symbol(
-    &self,
-    sem: &sem_ts::TsProgramSemantics,
-    symbol: sem_ts::SymbolId,
-  ) -> Option<DefId> {
-    for ns in [
-      sem_ts::Namespace::TYPE,
-      sem_ts::Namespace::NAMESPACE,
-      sem_ts::Namespace::VALUE,
-    ] {
-      if let Some(decl) = sem.symbol_decls(symbol, ns).first() {
-        let decl_data = sem.symbols().decl(*decl);
-        let def = DefId(decl_data.def_id.0);
-        if self.def_ids.contains(&def) {
-          return Some(def);
-        }
-        if let Some(mapped) = self
-          .def_by_name
-          .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
-        {
-          return Some(*mapped);
-        }
-      }
-    }
-    None
-  }
-}
-
-impl TypeResolver for SemanticTypeResolver {
-  fn resolve_type_name(&self, path: &[String]) -> Option<DefId> {
-    let (head, tail) = path.split_first()?;
-    let def = *self.bindings.get(head)?;
-    if tail.is_empty() {
-      return Some(def);
-    }
-    let import = self.imports.get(&def)?;
-    if import.original != "*" {
-      return None;
-    }
-    let sem = self.semantics.as_deref()?;
-    let mut segments = tail.iter();
-    let Some(first) = segments.next() else {
-      return None;
-    };
-    let mut current_file = import.from;
-    let mut symbol = sem
-      .resolve_export(current_file, first, sem_ts::Namespace::TYPE)
-      .or_else(|| sem.resolve_export(current_file, first, sem_ts::Namespace::NAMESPACE))
-      .or_else(|| sem.resolve_export(current_file, first, sem_ts::Namespace::VALUE))?;
-    current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
-    for segment in segments {
-      symbol = sem
-        .resolve_export(current_file, segment, sem_ts::Namespace::TYPE)
-        .or_else(|| sem.resolve_export(current_file, segment, sem_ts::Namespace::NAMESPACE))
-        .or_else(|| sem.resolve_export(current_file, segment, sem_ts::Namespace::VALUE))?;
-      current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
-    }
-    self.def_for_symbol(sem, symbol)
-  }
-}
-
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
 pub struct InterfaceData {
@@ -5708,33 +5619,24 @@ impl ProgramState {
     if binding_defs.is_empty() {
       return None;
     }
-    let imports: HashMap<_, _> = binding_defs
-      .values()
-      .filter_map(|def| {
-        self.def_data.get(def).and_then(|data| match &data.kind {
-          DefKind::Import(import) => Some((*def, import.clone())),
-          _ => None,
-        })
-      })
-      .collect();
-    let mut def_entries: Vec<_> = self
-      .def_data
-      .iter()
-      .map(|(id, data)| (*id, data.file, data.name.clone()))
-      .collect();
-    def_entries.sort_by_key(|(id, file, name)| (file.0, name.clone(), id.0));
-    let mut def_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
-    for (id, file, name) in def_entries {
-      def_by_name.entry((file, name)).or_insert(id);
+    if let Some(semantics) = self.semantics.as_ref() {
+      let def_kinds = self
+        .def_data
+        .iter()
+        .map(|(id, data)| (*id, data.kind.clone()))
+        .collect();
+      return Some(Arc::new(ProgramTypeResolver::new(
+        Arc::clone(&self.host),
+        Arc::clone(semantics),
+        def_kinds,
+        self.file_registry.clone(),
+        self.current_file.unwrap_or(FileId(u32::MAX)),
+        binding_defs.clone(),
+      )) as Arc<_>);
     }
-    let def_ids = self.def_data.keys().copied().collect();
-    Some(Arc::new(SemanticTypeResolver {
-      bindings: binding_defs.clone(),
-      imports,
-      def_by_name,
-      def_ids,
-      semantics: self.semantics.clone(),
-    }) as Arc<dyn TypeResolver>)
+    Some(Arc::new(check::hir_body::BindingTypeResolver::new(
+      binding_defs.clone(),
+    )) as Arc<_>)
   }
 
   fn check_body(&mut self, body_id: BodyId) -> Result<Arc<BodyCheckResult>, FatalError> {
