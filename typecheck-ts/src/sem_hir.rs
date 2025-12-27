@@ -3,9 +3,13 @@ use hir_js::{
   DefKind as HirDefKind, Export, ExportKind as HirExportKind, Import, ImportEqualsTarget,
   ImportKind as HirImportKind, LowerResult,
 };
+use parse_js::ast::node::Node;
+use parse_js::ast::stmt::Stmt;
+use parse_js::ast::stx::TopLevel;
+use parse_js::ast::ts_stmt::{ModuleDecl, ModuleName};
 use semantic_js::ts as sem_ts;
 
-pub(crate) fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
+pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) -> sem_ts::HirFile {
   let resolve_name = |name| lowered.names.resolve(name).unwrap_or_default().to_string();
   let namespace_spans: Vec<TextRange> = lowered
     .defs
@@ -89,9 +93,9 @@ pub(crate) fn sem_hir_from_lower(lowered: &LowerResult) -> sem_ts::HirFile {
     decls,
     imports,
     import_equals,
-    exports,
-    export_as_namespace: Vec::new(),
-    ambient_modules: Vec::new(),
+      exports,
+      export_as_namespace: Vec::new(),
+    ambient_modules: collect_ambient_modules(ast.stx.body.as_slice()),
   }
 }
 
@@ -211,5 +215,40 @@ fn map_export_from_lower(
       expr: String::new(),
       span: export.span,
     }),
+  }
+}
+
+fn collect_ambient_modules(stmts: &[Node<Stmt>]) -> Vec<sem_ts::AmbientModule> {
+  stmts
+    .iter()
+    .filter_map(|stmt| match stmt.stx.as_ref() {
+      Stmt::ModuleDecl(module) => match module.stx.name {
+        ModuleName::String(_) => Some(lower_ambient_module(module.stx.as_ref())),
+        _ => None,
+      },
+      _ => None,
+    })
+    .collect()
+}
+
+fn lower_ambient_module(module: &ModuleDecl) -> sem_ts::AmbientModule {
+  let name = match &module.name {
+    ModuleName::Identifier(name) | ModuleName::String(name) => name.clone(),
+  };
+  let name_span = TextRange::new(module.name_loc.start_u32(), module.name_loc.end_u32());
+  let ambient_modules = module
+    .body
+    .as_ref()
+    .map(|body| collect_ambient_modules(body))
+    .unwrap_or_default();
+  sem_ts::AmbientModule {
+    name,
+    name_span,
+    decls: Vec::new(),
+    imports: Vec::new(),
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules,
   }
 }

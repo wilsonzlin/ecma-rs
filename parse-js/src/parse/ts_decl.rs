@@ -207,10 +207,14 @@ impl<'a> Parser<'a> {
     self.with_loc(|p| {
       p.require(TT::KeywordModule)?;
 
-      let name = if p.peek().typ == TT::LiteralString {
-        ModuleName::String(p.lit_str_val()?)
+      let name_token = p.peek();
+      let (name, name_loc) = if name_token.typ == TT::LiteralString {
+        (ModuleName::String(p.lit_str_val()?), name_token.loc)
       } else {
-        ModuleName::Identifier(p.require_identifier()?)
+        (
+          ModuleName::Identifier(p.require_identifier()?),
+          name_token.loc,
+        )
       };
 
       let body = if p.peek().typ == TT::BraceOpen {
@@ -226,6 +230,7 @@ impl<'a> Parser<'a> {
       Ok(ModuleDecl {
         export,
         declare,
+        name_loc,
         name,
         body,
       })

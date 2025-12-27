@@ -84,6 +84,9 @@ pub struct ModuleDecl {
   pub export: bool,
   #[drive(skip)]
   pub declare: bool,
+  #[drive(skip)]
+  #[serde(skip_serializing, skip_deserializing)]
+  pub name_loc: crate::loc::Loc,
   pub name: ModuleName,
   pub body: Option<Vec<Node<Stmt>>>,
 }

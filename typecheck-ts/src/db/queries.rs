@@ -1087,10 +1087,10 @@ fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
 #[salsa::tracked]
 fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
   let lowered = lower_hir_for(db, file);
-  if let Some(lowered) = lowered.lowered.as_ref() {
-    sem_hir_from_lower(lowered)
-  } else {
-    empty_sem_hir(file.file_id(db), lowered.file_kind)
+  let parsed = parse_for(db, file);
+  match (parsed.ast.as_ref(), lowered.lowered.as_ref()) {
+    (Some(ast), Some(lowered)) => sem_hir_from_lower(ast, lowered),
+    _ => empty_sem_hir(file.file_id(db), lowered.file_kind),
   }
 }
 

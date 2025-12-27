@@ -1441,6 +1441,42 @@ fn ambient_modules_collect_exports() {
 }
 
 #[test]
+fn ambient_import_diagnostic_points_to_specifier() {
+  let file = FileId(150);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+
+  let import_span = span(25);
+  hir.ambient_modules.push(AmbientModule {
+    name: "pkg".to_string(),
+    name_span: span(10),
+    decls: Vec::new(),
+    imports: vec![Import {
+      specifier: "missing".to_string(),
+      specifier_span: import_span,
+      default: None,
+      namespace: None,
+      named: Vec::new(),
+      is_type_only: false,
+    }],
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1002");
+  assert_eq!(diag.primary.file, file);
+  assert_eq!(diag.primary.range, import_span);
+}
+
+#[test]
 fn script_exports_report_single_diagnostic_with_span() {
   let file = FileId(93);
   let mut hir = HirFile::script(file);

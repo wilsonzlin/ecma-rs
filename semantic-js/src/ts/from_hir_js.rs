@@ -472,6 +472,7 @@ fn lower_block(
           if module.stx.export {
             result.has_module_syntax = true;
           }
+          let name_span = to_range(module.stx.name_loc);
           let nested = lower_block(
             module.stx.body.as_deref().unwrap_or(&[]),
             lower,
@@ -482,7 +483,7 @@ fn lower_block(
           let nested = finalize_block(nested, lower, ModuleKind::Module);
           result.ambient_modules.push(AmbientModule {
             name: spec.clone(),
-            name_span: stmt_range,
+            name_span,
             decls: nested.decls,
             imports: nested.imports,
             import_equals: nested.import_equals,
