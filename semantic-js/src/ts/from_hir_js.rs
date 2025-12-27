@@ -22,7 +22,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 /// renumbering.
 pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
   let file_id = lower.hir.file;
-  let mut item_ids: HashSet<DefId> = lower.hir.items.iter().copied().collect();
+  let item_ids: HashSet<DefId> = lower.hir.items.iter().copied().collect();
 
   let imports_by_span: HashMap<_, _> = lower
     .hir
@@ -57,40 +57,21 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
       })
   };
 
-  let lowered = lower_stmt_list(
+  let block = lower_block(
     &ast.stx.body,
     lower,
-    &mut item_ids,
+    Some(&item_ids),
     &import_specifier_span,
     &export_specifier_span,
-    false,
   );
 
-  let mut module_kind = if lowered.has_module_syntax {
+  let module_kind = if block.has_module_syntax {
     ModuleKind::Module
   } else {
     ModuleKind::Script
   };
 
-  if !lowered.ambient_modules.is_empty() {
-    module_kind = ModuleKind::Module;
-  }
-
-  // Ambient declarations participate in exports for modules unless they augment global.
-  let mut exported = lowered.exported;
-  if matches!(module_kind, ModuleKind::Module) {
-    for def_id in &lower.hir.items {
-      if exported.contains_key(def_id) {
-        continue;
-      }
-      let def = def_by_id(*def_id, &lower.defs, &lower.def_index);
-      if def.is_ambient && !def.in_global {
-        exported.insert(*def_id, Exported::Named);
-      }
-    }
-  }
-
-  let decls = decls_from_defs(lower.hir.items.iter().copied(), lower, &exported);
+  let finalized = finalize_block(block, lower, module_kind);
 
   HirFile {
     file_id,
@@ -99,47 +80,62 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
       HirFileKind::Dts => FileKind::Dts,
       _ => FileKind::Ts,
     },
-    decls,
-    imports: lowered.imports,
-    import_equals: lowered.import_equals,
-    exports: lowered.exports,
-    export_as_namespace: lowered.export_as_namespace,
-    ambient_modules: lowered.ambient_modules,
+    decls: finalized.decls,
+    imports: finalized.imports,
+    import_equals: finalized.import_equals,
+    exports: finalized.exports,
+    export_as_namespace: finalized.export_as_namespace,
+    ambient_modules: finalized.ambient_modules,
   }
 }
 
-struct LoweredStmts {
+struct BlockResult {
+  local_defs: Vec<DefId>,
+  exported: HashMap<DefId, Exported>,
   imports: Vec<Import>,
   import_equals: Vec<ImportEquals>,
   exports: Vec<Export>,
   export_as_namespace: Vec<ExportAsNamespace>,
-  exported: HashMap<DefId, Exported>,
   ambient_modules: Vec<AmbientModule>,
   has_module_syntax: bool,
 }
 
-fn lower_stmt_list(
+struct LoweredBlock {
+  decls: Vec<Decl>,
+  imports: Vec<Import>,
+  import_equals: Vec<ImportEquals>,
+  exports: Vec<Export>,
+  export_as_namespace: Vec<ExportAsNamespace>,
+  ambient_modules: Vec<AmbientModule>,
+}
+
+fn lower_block(
   stmts: &[Node<Stmt>],
   lower: &LowerResult,
-  items: &mut HashSet<DefId>,
+  allowed_defs: Option<&HashSet<DefId>>,
   import_specifier_span: &impl Fn(TextRange) -> Option<TextRange>,
   export_specifier_span: &impl Fn(TextRange) -> Option<TextRange>,
-  prune_nested_defs: bool,
-) -> LoweredStmts {
-  let mut has_module_syntax = false;
-  let mut imports = Vec::new();
-  let mut import_equals = Vec::new();
-  let mut exports = Vec::new();
-  let mut exported: HashMap<DefId, Exported> = HashMap::new();
-  let mut export_as_namespace = Vec::new();
-  let mut ambient_modules = Vec::new();
-  let item_list: Vec<DefId> = items.iter().copied().collect();
+) -> BlockResult {
+  let targets = collect_def_targets(stmts);
+  let local_defs = resolve_def_targets(&targets, lower, allowed_defs);
+  let defs_by_name = build_name_map(&local_defs, lower);
+
+  let mut result = BlockResult {
+    local_defs,
+    exported: HashMap::new(),
+    imports: Vec::new(),
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+    has_module_syntax: false,
+  };
 
   for stmt in stmts.iter() {
     let stmt_range = to_range(stmt.loc);
     match stmt.stx.as_ref() {
       Stmt::Import(import) => {
-        has_module_syntax = true;
+        result.has_module_syntax = true;
         let mut default = None;
         if let Some(pat) = import.stx.default.as_ref() {
           if let Some(name) = pat_name(&pat.stx.pat) {
@@ -179,7 +175,7 @@ fn lower_stmt_list(
           None => {}
         }
 
-        imports.push(Import {
+        result.imports.push(Import {
           specifier: import.stx.module.clone(),
           specifier_span: import_specifier_span(stmt_range).unwrap_or(stmt_range),
           default,
@@ -191,7 +187,7 @@ fn lower_stmt_list(
       Stmt::ImportEqualsDecl(import_eq) => {
         let target = match &import_eq.stx.rhs {
           ImportEqualsRhs::Require { module } => {
-            has_module_syntax = true;
+            result.has_module_syntax = true;
             ImportEqualsTarget::Require {
               specifier: module.clone(),
               specifier_span: import_specifier_span(stmt_range).unwrap_or(stmt_range),
@@ -205,18 +201,16 @@ fn lower_stmt_list(
 
         if import_eq.stx.export {
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::ImportBinding),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
 
-        import_equals.push(ImportEquals {
+        result.import_equals.push(ImportEquals {
           local: import_eq.stx.name.clone(),
           local_span: span_for_name(stmt.loc, &import_eq.stx.name),
           target,
@@ -224,11 +218,11 @@ fn lower_stmt_list(
         });
       }
       Stmt::ExportList(list) => {
-        has_module_syntax = true;
+        result.has_module_syntax = true;
         match &list.stx.names {
           ExportNames::All(alias) => {
             if let Some(specifier) = list.stx.from.clone() {
-              exports.push(Export::All(ExportAll {
+              result.exports.push(Export::All(ExportAll {
                 specifier_span: export_specifier_span(stmt_range).unwrap_or(stmt_range),
                 specifier,
                 is_type_only: list.stx.type_only,
@@ -238,8 +232,7 @@ fn lower_stmt_list(
             }
           }
           ExportNames::Specific(names) => {
-            let mut items_to_export = Vec::new();
-            let mut locals_to_export = Vec::new();
+            let mut items = Vec::new();
             for name in names {
               let local = name.stx.exportable.as_str().to_string();
               let exported_name = name.stx.alias.stx.name.clone();
@@ -248,8 +241,8 @@ fn lower_stmt_list(
               } else {
                 Some(to_range(name.stx.alias.loc))
               };
-              items_to_export.push(ExportSpecifier {
-                local,
+              items.push(ExportSpecifier {
+                local: local.clone(),
                 exported: if exported_span.is_some() {
                   Some(exported_name)
                 } else {
@@ -265,66 +258,58 @@ fn lower_stmt_list(
                 } else {
                   Exported::Named
                 };
-                locals_to_export.push((name.stx.exportable.as_str(), export_kind));
+                mark_defs_with_name(
+                  &defs_by_name,
+                  &local,
+                  export_kind.clone(),
+                  &mut result.exported,
+                );
               }
             }
-            exports.push(Export::Named(NamedExport {
+            result.exports.push(Export::Named(NamedExport {
               specifier: list.stx.from.clone(),
               specifier_span: list
                 .stx
                 .from
                 .as_ref()
                 .map(|_| export_specifier_span(stmt_range).unwrap_or(stmt_range)),
-              items: items_to_export,
+              items,
               is_type_only: list.stx.type_only || names.iter().all(|n| n.stx.type_only),
             }));
-            for (name, export_kind) in locals_to_export {
-              mark_defs_with_name(
-                items,
-                &lower.defs,
-                &lower.def_index,
-                &lower.names,
-                name,
-                export_kind.clone(),
-                &mut exported,
-              );
-            }
           }
         }
       }
       Stmt::ExportDefaultExpr(_) => {
-        has_module_syntax = true;
+        result.has_module_syntax = true;
         mark_defs_in_span(
-          items,
-          &lower.defs,
-          &lower.def_index,
-          &item_list,
+          &result.local_defs,
+          lower,
           stmt_range,
           Some(DefKind::ExportAlias),
           Exported::Default,
-          &mut exported,
+          &mut result.exported,
         );
       }
       Stmt::ExportAssignmentDecl(assign) => {
-        has_module_syntax = true;
+        result.has_module_syntax = true;
         let expr = match assign.stx.expression.stx.as_ref() {
           Expr::Id(id) => id.stx.name.clone(),
           _ => String::new(),
         };
-        exports.push(Export::ExportAssignment {
+        result.exports.push(Export::ExportAssignment {
           expr,
           span: stmt_range,
         });
       }
       Stmt::ExportAsNamespaceDecl(decl) => {
-        has_module_syntax = true;
-        export_as_namespace.push(ExportAsNamespace {
+        result.has_module_syntax = true;
+        result.export_as_namespace.push(ExportAsNamespace {
           name: decl.stx.name.clone(),
           span: stmt_range,
         });
       }
       Stmt::ImportTypeDecl(import_type) => {
-        has_module_syntax = true;
+        result.has_module_syntax = true;
         let named = import_type
           .stx
           .names
@@ -337,7 +322,7 @@ fn lower_stmt_list(
             local_span: stmt_range,
           })
           .collect();
-        imports.push(Import {
+        result.imports.push(Import {
           specifier: import_type.stx.module.clone(),
           specifier_span: import_specifier_span(stmt_range).unwrap_or(stmt_range),
           default: None,
@@ -347,7 +332,7 @@ fn lower_stmt_list(
         });
       }
       Stmt::ExportTypeDecl(export_type) => {
-        has_module_syntax = true;
+        result.has_module_syntax = true;
         let items = export_type
           .stx
           .names
@@ -359,7 +344,7 @@ fn lower_stmt_list(
             exported_span: n.exported.as_ref().map(|_| stmt_range),
           })
           .collect();
-        exports.push(Export::Named(NamedExport {
+        result.exports.push(Export::Named(NamedExport {
           specifier: export_type.stx.module.clone(),
           specifier_span: export_type
             .stx
@@ -372,27 +357,23 @@ fn lower_stmt_list(
       }
       Stmt::VarDecl(var) => {
         if var.stx.export {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Var),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
       Stmt::FunctionDecl(func) => {
         if func.stx.export || func.stx.export_default {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Function),
             if func.stx.export_default {
@@ -400,18 +381,16 @@ fn lower_stmt_list(
             } else {
               Exported::Named
             },
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
       Stmt::ClassDecl(class_decl) => {
         if class_decl.stx.export || class_decl.stx.export_default {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Class),
             if class_decl.stx.export_default {
@@ -419,139 +398,136 @@ fn lower_stmt_list(
             } else {
               Exported::Named
             },
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
       Stmt::InterfaceDecl(intf) => {
         if intf.stx.export {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Interface),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
       Stmt::TypeAliasDecl(alias) => {
         if alias.stx.export {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::TypeAlias),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
       Stmt::EnumDecl(en) => {
         if en.stx.export {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Enum),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
       Stmt::NamespaceDecl(ns) => {
         if ns.stx.export {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Namespace),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
-      Stmt::ModuleDecl(module) => {
-        if module.stx.declare {
-          if let ModuleName::String(_) = module.stx.name {
-            let ambient =
-              lower_ambient_module(module, lower, import_specifier_span, export_specifier_span);
-            if prune_nested_defs {
-              remove_defs_in_range(items, lower, stmt_range);
-            }
-            has_module_syntax = true;
-            ambient_modules.push(ambient);
-            continue;
+      Stmt::ModuleDecl(module) => match &module.stx.name {
+        ModuleName::Identifier(_) => {
+          if module.stx.export {
+            result.has_module_syntax = true;
+            mark_defs_in_span(
+              &result.local_defs,
+              lower,
+              stmt_range,
+              Some(DefKind::Module),
+              Exported::Named,
+              &mut result.exported,
+            );
           }
         }
-        if module.stx.export {
-          has_module_syntax = true;
-          mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
-            stmt_range,
-            Some(DefKind::Module),
-            Exported::Named,
-            &mut exported,
+        ModuleName::String(spec) => {
+          if module.stx.export {
+            result.has_module_syntax = true;
+          }
+          let nested = lower_block(
+            module.stx.body.as_deref().unwrap_or(&[]),
+            lower,
+            None,
+            import_specifier_span,
+            export_specifier_span,
           );
+          let nested = finalize_block(nested, lower, ModuleKind::Module);
+          result.ambient_modules.push(AmbientModule {
+            name: spec.clone(),
+            name_span: stmt_range,
+            decls: nested.decls,
+            imports: nested.imports,
+            import_equals: nested.import_equals,
+            exports: nested.exports,
+            export_as_namespace: nested.export_as_namespace,
+            ambient_modules: nested.ambient_modules,
+          });
         }
-      }
+      },
       Stmt::AmbientVarDecl(av) => {
         if av.stx.export {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Var),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
       Stmt::AmbientFunctionDecl(af) => {
         if af.stx.export {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Function),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
       Stmt::AmbientClassDecl(ac) => {
         if ac.stx.export {
-          has_module_syntax = true;
+          result.has_module_syntax = true;
           mark_defs_in_span(
-            items,
-            &lower.defs,
-            &lower.def_index,
-            &item_list,
+            &result.local_defs,
+            lower,
             stmt_range,
             Some(DefKind::Class),
             Exported::Named,
-            &mut exported,
+            &mut result.exported,
           );
         }
       }
@@ -559,151 +535,49 @@ fn lower_stmt_list(
     }
   }
 
-  let has_ambient_modules = !ambient_modules.is_empty();
-
-  LoweredStmts {
-    imports,
-    import_equals,
-    exports,
-    export_as_namespace,
-    exported,
-    ambient_modules,
-    has_module_syntax: has_module_syntax || has_ambient_modules,
-  }
+  result
 }
 
-fn lower_ambient_module(
-  module: &Node<parse_js::ast::ts_stmt::ModuleDecl>,
+fn finalize_block(
+  block: BlockResult,
   lower: &LowerResult,
-  import_specifier_span: &impl Fn(TextRange) -> Option<TextRange>,
-  export_specifier_span: &impl Fn(TextRange) -> Option<TextRange>,
-) -> AmbientModule {
-  let body = module.stx.body.as_deref().unwrap_or(&[]);
-  let mut items = ambient_def_candidates(body, lower);
-  let lowered = lower_stmt_list(
-    body,
-    lower,
-    &mut items,
-    import_specifier_span,
-    export_specifier_span,
-    true,
-  );
-  let def_order = def_ids_in_encounter_order(body, &items, lower);
-  AmbientModule {
-    name: match &module.stx.name {
-      ModuleName::String(name) => name.clone(),
-      ModuleName::Identifier(name) => name.clone(),
-    },
-    name_span: to_range(module.loc),
-    decls: decls_from_defs(def_order.into_iter(), lower, &lowered.exported),
-    imports: lowered.imports,
-    import_equals: lowered.import_equals,
-    exports: lowered.exports,
-    export_as_namespace: lowered.export_as_namespace,
-    ambient_modules: lowered.ambient_modules,
-  }
-}
-
-fn ambient_def_candidates(stmts: &[Node<Stmt>], lower: &LowerResult) -> HashSet<DefId> {
-  let mut ids = HashSet::new();
-  let Some(range) = stmts
-    .iter()
-    .fold(None, |acc: Option<TextRange>, stmt| match acc {
-      Some(r) => Some(TextRange::new(
-        r.start.min(stmt.loc.start_u32()),
-        r.end.max(stmt.loc.end_u32()),
-      )),
-      None => Some(to_range(stmt.loc)),
-    })
-  else {
-    return ids;
-  };
-  for def in &lower.defs {
-    if !def.is_ambient {
-      continue;
-    }
-    if def.span.start < range.start || def.span.end > range.end {
-      continue;
-    }
-    if def_kind_to_decl_kind(def.path.kind).is_some() {
-      ids.insert(def.id);
-    }
-  }
-  ids
-}
-
-fn def_ids_in_encounter_order(
-  stmts: &[Node<Stmt>],
-  items: &HashSet<DefId>,
-  lower: &LowerResult,
-) -> Vec<DefId> {
-  let mut order = Vec::new();
-  let mut seen = HashSet::new();
-  for stmt in stmts {
-    let stmt_range = to_range(stmt.loc);
-    let mut matches: Vec<_> = items
-      .iter()
-      .copied()
-      .filter(|id| {
-        let def = def_by_id(*id, &lower.defs, &lower.def_index);
-        def.span.start >= stmt_range.start && def.span.end <= stmt_range.end
-      })
-      .collect();
-    matches.sort_by_key(|id| {
-      let def = def_by_id(*id, &lower.defs, &lower.def_index);
-      (def.span.start, def.span.end, *id)
-    });
-    for id in matches {
-      if seen.insert(id) {
-        order.push(id);
-      }
-    }
-  }
-
-  if seen.len() != items.len() {
-    let mut remaining: Vec<_> = items.difference(&seen).copied().collect();
-    remaining.sort_by_key(|id| {
-      let def = def_by_id(*id, &lower.defs, &lower.def_index);
-      (def.span.start, def.span.end, *id)
-    });
-    order.extend(remaining);
-  }
-
-  order
-}
-
-fn remove_defs_in_range(items: &mut HashSet<DefId>, lower: &LowerResult, range: TextRange) {
-  let to_remove: Vec<_> = items
-    .iter()
-    .copied()
-    .filter(|id| {
-      let def = def_by_id(*id, &lower.defs, &lower.def_index);
-      def.span.start >= range.start && def.span.end <= range.end
-    })
-    .collect();
-  for id in to_remove {
-    items.remove(&id);
-  }
-}
-
-fn decls_from_defs(
-  def_ids: impl IntoIterator<Item = DefId>,
-  lower: &LowerResult,
-  exported: &HashMap<DefId, Exported>,
-) -> Vec<Decl> {
-  let mut decls = Vec::new();
-  for def_id in def_ids {
-    let def = def_by_id(def_id, &lower.defs, &lower.def_index);
-    let kind = def_kind_to_decl_kind(def.path.kind);
-    if let Some(mut kind) = kind {
-      if matches!(def.path.kind, DefKind::ExportAlias)
-        && exported.get(&def_id) != Some(&Exported::Default)
-      {
+  module_kind: ModuleKind,
+) -> LoweredBlock {
+  let mut exported = block.exported;
+  if matches!(module_kind, ModuleKind::Module) {
+    for def_id in &block.local_defs {
+      if exported.contains_key(def_id) {
         continue;
       }
-      if matches!(def.path.kind, DefKind::ExportAlias) {
-        kind = DeclKind::Var;
+      let def = def_by_id(*def_id, &lower.defs, &lower.def_index);
+      if def.is_ambient && !def.in_global {
+        exported.insert(*def_id, Exported::Named);
       }
+    }
+  }
+
+  let mut decls = Vec::new();
+  for def_id in block.local_defs.iter().copied() {
+    let def = def_by_id(def_id, &lower.defs, &lower.def_index);
+    let kind = match def.path.kind {
+      DefKind::Function => Some(DeclKind::Function),
+      DefKind::Class => Some(DeclKind::Class),
+      DefKind::Var => Some(DeclKind::Var),
+      DefKind::Interface => Some(DeclKind::Interface),
+      DefKind::TypeAlias => Some(DeclKind::TypeAlias),
+      DefKind::Enum => Some(DeclKind::Enum),
+      DefKind::Namespace | DefKind::Module => Some(DeclKind::Namespace),
+      DefKind::ImportBinding => Some(DeclKind::ImportBinding),
+      DefKind::ExportAlias => {
+        if exported.get(&def_id) == Some(&Exported::Default) {
+          Some(DeclKind::Var)
+        } else {
+          None
+        }
+      }
+      _ => None,
+    };
+    if let Some(kind) = kind {
       let name = lower
         .names
         .resolve(def.name)
@@ -721,22 +595,151 @@ fn decls_from_defs(
       });
     }
   }
-  decls
+
+  LoweredBlock {
+    decls,
+    imports: block.imports,
+    import_equals: block.import_equals,
+    exports: block.exports,
+    export_as_namespace: block.export_as_namespace,
+    ambient_modules: block.ambient_modules,
+  }
 }
 
-fn def_kind_to_decl_kind(kind: DefKind) -> Option<DeclKind> {
-  match kind {
-    DefKind::Function => Some(DeclKind::Function),
-    DefKind::Class => Some(DeclKind::Class),
-    DefKind::Var => Some(DeclKind::Var),
-    DefKind::Interface => Some(DeclKind::Interface),
-    DefKind::TypeAlias => Some(DeclKind::TypeAlias),
-    DefKind::Enum => Some(DeclKind::Enum),
-    DefKind::Namespace | DefKind::Module => Some(DeclKind::Namespace),
-    DefKind::ImportBinding => Some(DeclKind::ImportBinding),
-    DefKind::ExportAlias => Some(DeclKind::Var),
-    _ => None,
+#[derive(Clone, Copy)]
+struct DefTarget {
+  span: TextRange,
+  kind: DefKind,
+}
+
+fn collect_def_targets(stmts: &[Node<Stmt>]) -> Vec<DefTarget> {
+  let mut targets = Vec::new();
+  for stmt in stmts {
+    let span = to_range(stmt.loc);
+    match stmt.stx.as_ref() {
+      Stmt::Import(import) => {
+        if let Some(default) = &import.stx.default {
+          targets.push(DefTarget {
+            span: to_range(default.loc),
+            kind: DefKind::ImportBinding,
+          });
+        }
+        match &import.stx.names {
+          Some(ImportNames::All(pat)) => targets.push(DefTarget {
+            span: to_range(pat.loc),
+            kind: DefKind::ImportBinding,
+          }),
+          Some(ImportNames::Specific(list)) => {
+            for entry in list {
+              targets.push(DefTarget {
+                span: to_range(entry.stx.alias.loc),
+                kind: DefKind::ImportBinding,
+              });
+            }
+          }
+          None => {}
+        }
+      }
+      Stmt::VarDecl(var) => {
+        for decl in var.stx.declarators.iter() {
+          targets.push(DefTarget {
+            span: to_range(decl.pattern.loc),
+            kind: DefKind::Var,
+          });
+        }
+      }
+      Stmt::FunctionDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::Function,
+      }),
+      Stmt::ClassDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::Class,
+      }),
+      Stmt::InterfaceDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::Interface,
+      }),
+      Stmt::TypeAliasDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::TypeAlias,
+      }),
+      Stmt::EnumDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::Enum,
+      }),
+      Stmt::NamespaceDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::Namespace,
+      }),
+      Stmt::ModuleDecl(module) => {
+        if matches!(module.stx.name, ModuleName::Identifier(_)) {
+          targets.push(DefTarget {
+            span,
+            kind: DefKind::Module,
+          });
+        }
+      }
+      Stmt::AmbientVarDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::Var,
+      }),
+      Stmt::AmbientFunctionDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::Function,
+      }),
+      Stmt::AmbientClassDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::Class,
+      }),
+      Stmt::ExportDefaultExpr(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::ExportAlias,
+      }),
+      Stmt::ImportEqualsDecl(_) => targets.push(DefTarget {
+        span,
+        kind: DefKind::ImportBinding,
+      }),
+      _ => {}
+    }
   }
+  targets
+}
+
+fn resolve_def_targets(
+  targets: &[DefTarget],
+  lower: &LowerResult,
+  allowed_defs: Option<&HashSet<DefId>>,
+) -> Vec<DefId> {
+  let mut selected = Vec::new();
+  let mut seen = HashSet::new();
+  for def in &lower.defs {
+    if let Some(allowed) = allowed_defs {
+      if !allowed.contains(&def.id) {
+        continue;
+      }
+    }
+    if targets
+      .iter()
+      .any(|target| target.span == def.span && target.kind == def.path.kind)
+    {
+      if seen.insert(def.id) {
+        selected.push(def.id);
+      }
+    }
+  }
+  selected
+}
+
+fn build_name_map(local_defs: &[DefId], lower: &LowerResult) -> HashMap<String, Vec<DefId>> {
+  let mut names: HashMap<String, Vec<DefId>> = HashMap::new();
+  for def_id in local_defs {
+    let def = def_by_id(*def_id, &lower.defs, &lower.def_index);
+    if let Some(name) = lower.names.resolve(def.name) {
+      names.entry(name.to_string()).or_default().push(*def_id);
+    }
+  }
+  names
 }
 
 fn def_by_id<'a>(
@@ -752,37 +755,28 @@ fn def_by_id<'a>(
 }
 
 fn mark_defs_with_name(
-  items: &HashSet<DefId>,
-  defs: &[hir_js::DefData],
-  def_index: &BTreeMap<DefId, usize>,
-  names: &hir_js::NameInterner,
+  available_defs: &HashMap<String, Vec<DefId>>,
   name: &str,
   exported: Exported,
   out: &mut HashMap<DefId, Exported>,
 ) {
-  for def_id in items {
-    let def = def_by_id(*def_id, defs, def_index);
-    if names.resolve(def.name) == Some(name) {
+  if let Some(defs) = available_defs.get(name) {
+    for def_id in defs {
       out.entry(*def_id).or_insert(exported.clone());
     }
   }
 }
 
 fn mark_defs_in_span(
-  items: &HashSet<DefId>,
-  defs: &[hir_js::DefData],
-  def_index: &BTreeMap<DefId, usize>,
-  top_level: &[DefId],
+  local_defs: &[DefId],
+  lower: &LowerResult,
   span: TextRange,
   kind: Option<DefKind>,
   exported: Exported,
   out: &mut HashMap<DefId, Exported>,
 ) {
-  for def_id in top_level.iter().copied() {
-    if !items.contains(&def_id) {
-      continue;
-    }
-    let def = def_by_id(def_id, defs, def_index);
+  for def_id in local_defs.iter().copied() {
+    let def = def_by_id(def_id, &lower.defs, &lower.def_index);
     if def.span.start >= span.start && def.span.end <= span.end {
       if let Some(k) = kind {
         if def.path.kind != k {

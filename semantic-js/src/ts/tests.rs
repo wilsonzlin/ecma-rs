@@ -1805,6 +1805,79 @@ fn ambient_module_reexport_chain() {
   assert_eq!(ambient_symbol, reexported_symbol);
 }
 
+#[test]
+fn lower_ambient_module_from_dts() {
+  let source = r#"declare module "pkg" { interface Foo {} }"#;
+  let ast = parse(source).expect("parse");
+  let lowered = lower_file(FileId(200), HirFileKind::Dts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lowered);
+
+  assert_eq!(hir.module_kind, ModuleKind::Script);
+  assert!(
+    hir.decls.is_empty(),
+    "module declaration should not be a top-level decl"
+  );
+  assert_eq!(hir.ambient_modules.len(), 1);
+
+  let ambient = &hir.ambient_modules[0];
+  assert_eq!(ambient.name, "pkg");
+  assert!(ambient
+    .decls
+    .iter()
+    .any(|d| d.name == "Foo" && matches!(d.kind, DeclKind::Interface)));
+
+  let files: HashMap<FileId, Arc<HirFile>> = HashMap::from([(FileId(200), Arc::new(hir))]);
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[FileId(200)], &resolver, |f| {
+    files.get(&f).unwrap().clone()
+  });
+  assert!(diags.is_empty());
+
+  let exports = semantics
+    .exports_of_ambient_module("pkg")
+    .expect("ambient module exports present");
+  let symbols = semantics.symbols();
+  assert!(exports
+    .get("Foo")
+    .and_then(|group| group.symbol_for(Namespace::TYPE, symbols))
+    .is_some());
+}
+
+#[test]
+fn nested_module_syntax_stays_in_ambient_module() {
+  let source = r#"
+    declare module "pkg" {
+      export interface Local {}
+      export { Local as Alias };
+    }
+  "#;
+  let ast = parse(source).expect("parse");
+  let lowered = lower_file(FileId(201), HirFileKind::Dts, &ast);
+  let hir = lower_to_ts_hir(&ast, &lowered);
+
+  assert_eq!(hir.module_kind, ModuleKind::Script);
+  assert!(
+    hir.imports.is_empty(),
+    "nested imports should not appear at file level"
+  );
+  assert!(
+    hir.exports.is_empty(),
+    "nested exports should not appear at file level"
+  );
+  assert!(
+    hir.decls.is_empty(),
+    "ambient module def should not become a decl"
+  );
+  assert_eq!(hir.ambient_modules.len(), 1);
+
+  let ambient = &hir.ambient_modules[0];
+  assert_eq!(ambient.exports.len(), 1);
+  assert!(ambient
+    .decls
+    .iter()
+    .any(|d| d.name == "Local" && matches!(d.kind, DeclKind::Interface)));
+}
+
 fn body_by_name<'a>(
   lowered: &'a hir_js::hir::LowerResult,
   name: &str,
