@@ -3,13 +3,15 @@ use crate::eval::consteval::coerce_to_bool;
 use crate::il::inst::Arg;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
+use crate::opt::PassResult;
 use itertools::Itertools;
 
 // Correctness:
 // - When we detach bblocks A and B (because A can never branch to B in reality e.g. const eval is always true/false), we move all bblocks in subgraph G, which contains all bblocks only reachable from B.
 // - We must then detach all bblocks within G i.e. remove all edges to bblocks outside of G. This isn't recursive, as the bblocks only reachable from B doesn't change as we remove these bblocks or their edges.
 // - We must clean up any usages of defs within G outside of G. Outside of G, these uses can only appear in Phi nodes.
-pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
+pub fn optpass_impossible_branches(cfg: &mut Cfg) -> PassResult {
+  let mut result = PassResult::default();
   loop {
     for label in cfg.graph.labels_sorted() {
       let Some(inst) = cfg.bblocks.get_mut(label).last_mut() else {
@@ -24,7 +26,7 @@ pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
         // No need to update the graph, it's connected correctly, it's just a redundant inst.
         // TODO Should this optimization be part of optapss_impossible_branches?
         cfg.bblocks.get_mut(label).pop().unwrap();
-        *changed = true;
+        result.mark_changed();
         continue;
       }
       let Arg::Const(cond) = cond else {
@@ -39,6 +41,7 @@ pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
       cfg.bblocks.get_mut(label).pop().unwrap();
       // Detach from child.
       cfg.graph.disconnect(label, never_child);
+      result.mark_cfg_changed();
       // Update Phi insts in child.
       // NOTE: This is not the same as the subsequent Phi pruning for each `to_delete`, as `never_child` may still reachable (e.g. CondGoto was for if-with-no-else stmt, and never_child was for after if stmt).
       for inst in cfg.bblocks.get_mut(never_child).iter_mut() {
@@ -48,7 +51,6 @@ pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
         };
         inst.remove_phi(label);
       }
-      *changed = true;
     }
 
     // Detaching bblocks means that we may have removed entire subgraphs (i.e. its descendants). Therefore, we must recalculate again the accessible bblocks.
@@ -74,6 +76,9 @@ pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
     let did_delete = !to_delete.is_empty();
     cfg.graph.delete_many(to_delete.clone());
     cfg.bblocks.remove_many(to_delete);
+    if did_delete {
+      result.mark_cfg_changed();
+    }
 
     // Prune Phi insts in remaining bblocks.
     for (_, bblock) in cfg.bblocks.all_mut() {
@@ -101,6 +106,7 @@ pub fn optpass_impossible_branches(changed: &mut bool, cfg: &mut Cfg) {
     if !did_delete {
       break;
     }
-    *changed = true;
+    result.mark_changed();
   }
+  result
 }

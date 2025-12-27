@@ -36,6 +36,7 @@ use opt::optpass_dvn::optpass_dvn;
 use opt::optpass_impossible_branches::optpass_impossible_branches;
 use opt::optpass_redundant_assigns::optpass_redundant_assigns;
 use opt::optpass_trivial_dce::optpass_trivial_dce;
+use opt::PassResult;
 use parse_js::ast::node::Node;
 use parse_js::ast::node::NodeAssocData;
 use parse_js::ast::stmt::Stmt;
@@ -111,10 +112,30 @@ fn sort_diagnostics(diagnostics: &mut [Diagnostic]) {
 }
 
 // The top level is considered a function (the optimizer concept, not parser or symbolizer).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct OptimizationStats {
+  /// Number of times dominance was recomputed for this function, including SSA construction.
+  pub dom_calculations: usize,
+  /// Number of iterations through the optimization fixpoint loop.
+  pub fixpoint_iterations: usize,
+}
+
+impl OptimizationStats {
+  fn record_dom_calculation(&mut self) {
+    self.dom_calculations += 1;
+  }
+
+  fn record_iteration(&mut self) {
+    self.fixpoint_iterations += 1;
+  }
+}
+
 #[derive(Debug, Serialize)]
 pub struct ProgramFunction {
   pub debug: Option<OptimizerDebug>,
   pub body: Cfg,
+  #[serde(skip_serializing)]
+  pub stats: OptimizationStats,
 }
 
 #[derive(Debug, Serialize)]
@@ -244,8 +265,8 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
     fn expr_for_span(&self, span: TextRange) -> Option<(BodyId, ExprId)> {
       for offset in Self::offsets(span) {
-        if let Some(result) = self.span_map.expr_span_at_offset(offset) {
-          return Some(result.id);
+        if let Some(span) = self.span_map.expr_span_at_offset(offset) {
+          return Some(span.id);
         }
       }
       None
@@ -253,8 +274,8 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
 
     fn pat_for_span(&self, span: TextRange) -> Option<(BodyId, PatId)> {
       for offset in Self::offsets(span) {
-        if let Some(result) = self.span_map.pat_span_at_offset(offset) {
-          return Some(result.id);
+        if let Some(span) = self.span_map.pat_span_at_offset(offset) {
+          return Some(span.id);
         }
       }
       None
@@ -331,6 +352,35 @@ fn collect_hir_symbol_bindings(ast: &mut Node<TopLevel>, lower: &LowerResult) ->
   bindings
 }
 
+struct DomCache {
+  dom: Option<Dom>,
+  dirty: bool,
+}
+
+impl DomCache {
+  fn new() -> Self {
+    Self {
+      dom: None,
+      dirty: true,
+    }
+  }
+
+  fn ensure<'a>(&'a mut self, cfg: &Cfg, stats: &mut OptimizationStats) -> &'a Dom {
+    if self.dirty || self.dom.is_none() {
+      self.dom = Some(Dom::calculate(cfg));
+      self.dirty = false;
+      stats.record_dom_calculation();
+    }
+    self.dom.as_ref().unwrap()
+  }
+
+  fn maybe_invalidate(&mut self, result: &PassResult) {
+    if result.cfg_changed {
+      self.dirty = true;
+    }
+  }
+}
+
 pub(crate) fn build_program_function(
   program: &ProgramCompiler,
   insts: Vec<Inst>,
@@ -351,11 +401,14 @@ pub(crate) fn build_program_function(
   let mut defs = calculate_defs(&cfg);
   dbg_checkpoint("source", &cfg);
 
+  let mut stats = OptimizationStats::default();
+  let mut dom_cache = DomCache::new();
+
   // Construct SSA.
-  let dom = Dom::calculate(&cfg);
-  insert_phis_for_ssa_construction(&mut defs, &mut cfg, &dom);
+  let dom = dom_cache.ensure(&cfg, &mut stats);
+  insert_phis_for_ssa_construction(&mut defs, &mut cfg, dom);
   dbg_checkpoint("ssa_insert_phis", &cfg);
-  rename_targets_for_ssa_construction(&mut cfg, &dom, &mut c_temp);
+  rename_targets_for_ssa_construction(&mut cfg, dom, &mut c_temp);
   dbg_checkpoint("ssa_rename_targets", &cfg);
 
   // Optimisation passes:
@@ -364,24 +417,27 @@ pub(crate) fn build_program_function(
   // Drop defs as it likely will be invalid after even one pass.
   drop(defs);
   for i in 1.. {
-    let mut changed = false;
+    stats.record_iteration();
+    let dom = dom_cache.ensure(&cfg, &mut stats);
+    let mut iteration_result = PassResult::default();
 
-    // TODO Can we avoid recalculating these on every iteration i.e. mutate in-place when changing the CFG?
-    let dom = Dom::calculate(&cfg);
-
-    optpass_dvn(&mut changed, &mut cfg, &dom);
+    iteration_result.merge(optpass_dvn(&mut cfg, dom));
     dbg_checkpoint(&format!("opt{}_dvn", i), &cfg);
-    optpass_trivial_dce(&mut changed, &mut cfg);
+    iteration_result.merge(optpass_trivial_dce(&mut cfg));
     dbg_checkpoint(&format!("opt{}_dce", i), &cfg);
     // TODO Isn't this really const/copy propagation to child Phi insts?
-    optpass_redundant_assigns(&mut changed, &mut cfg);
+    iteration_result.merge(optpass_redundant_assigns(&mut cfg));
     dbg_checkpoint(&format!("opt{}_redundant_assigns", i), &cfg);
-    optpass_impossible_branches(&mut changed, &mut cfg);
+    let impossible_result = optpass_impossible_branches(&mut cfg);
+    dom_cache.maybe_invalidate(&impossible_result);
+    iteration_result.merge(impossible_result);
     dbg_checkpoint(&format!("opt{}_impossible_branches", i), &cfg);
-    optpass_cfg_prune(&mut changed, &mut cfg);
+    let cfg_prune_result = optpass_cfg_prune(&mut cfg);
+    dom_cache.maybe_invalidate(&cfg_prune_result);
+    iteration_result.merge(cfg_prune_result);
     dbg_checkpoint(&format!("opt{}_cfg_prune", i), &cfg);
 
-    if !changed {
+    if !iteration_result.any_change() {
       break;
     }
   }
@@ -393,6 +449,7 @@ pub(crate) fn build_program_function(
   ProgramFunction {
     debug: dbg,
     body: cfg,
+    stats,
   }
 }
 

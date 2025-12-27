@@ -1,8 +1,9 @@
 use ahash::{HashMap, HashSet};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
 use optimize_js::analysis::liveness::calculate_live_ins;
 use optimize_js::cfg::cfg::{Cfg, CfgBBlocks, CfgGraph};
 use optimize_js::il::inst::{Arg, Inst};
+use std::hint::black_box;
 
 fn build_block(label: u32, temps_per_block: u32) -> Vec<Inst> {
   (0..temps_per_block)

@@ -1,6 +1,7 @@
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::Arg;
 use crate::il::inst::InstTyp;
+use crate::opt::PassResult;
 use ahash::HashMap;
 use ahash::HashMapExt;
 
@@ -8,7 +9,8 @@ use ahash::HashMapExt;
 // My theory for correctness:
 // - Strict SSA requires all defs to dominate all their uses.
 // - Targets are only assigned in one place globally.
-pub fn optpass_redundant_assigns(changed: &mut bool, cfg: &mut Cfg) {
+pub fn optpass_redundant_assigns(cfg: &mut Cfg) -> PassResult {
+  let mut result = PassResult::default();
   let mut tgt_to_arg = HashMap::new();
   for (_, bblock) in cfg.bblocks.all_mut() {
     let mut to_delete = Vec::new();
@@ -22,7 +24,7 @@ pub fn optpass_redundant_assigns(changed: &mut bool, cfg: &mut Cfg) {
     }
     for i in to_delete.into_iter().rev() {
       bblock.remove(i);
-      *changed = true;
+      result.mark_changed();
     }
   }
   for (_, bblock) in cfg.bblocks.all_mut() {
@@ -38,4 +40,5 @@ pub fn optpass_redundant_assigns(changed: &mut bool, cfg: &mut Cfg) {
       }
     }
   }
+  result
 }

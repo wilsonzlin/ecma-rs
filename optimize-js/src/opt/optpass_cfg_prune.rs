@@ -1,5 +1,6 @@
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::InstTyp;
+use crate::opt::PassResult;
 use itertools::Itertools;
 
 /**
@@ -27,7 +28,7 @@ fn can_prune_bblock(
   false
 }
 
-fn maybe_reroot_entry(changed: &mut bool, cfg: &mut Cfg) -> bool {
+fn maybe_reroot_entry(result: &mut PassResult, cfg: &mut Cfg) -> bool {
   if cfg.entry != 0 {
     return false;
   }
@@ -72,18 +73,19 @@ fn maybe_reroot_entry(changed: &mut bool, cfg: &mut Cfg) -> bool {
   cfg.graph.delete_many([0]);
   cfg.bblocks.remove(0);
   cfg.entry = new_entry;
-  *changed = true;
+  result.mark_cfg_changed();
   true
 }
 
-pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
+pub fn optpass_cfg_prune(cfg: &mut Cfg) -> PassResult {
+  let mut result = PassResult::default();
   // Iterate until convergence, instead of waiting for another optimisation pass.
   loop {
     // Merge all empty leaf bblocks into one, so that we can detect CondGoto that actually go to both empty leaves.
     let mut empty_leaves = Vec::new();
     // WARNING: We must update graph within this loop, instead of simply marking and then removing afterwards, as we possibly pop instructions which could make a non-empty bblock empty, but if we don't then immediately update the graph some invariants won't hold (e.g. empty bblocks have <= 1 children). This means we can't use common utility graph functions.
     let mut converged = true;
-    if maybe_reroot_entry(changed, cfg) {
+    if maybe_reroot_entry(&mut result, cfg) {
       continue;
     }
     for cur in cfg.graph.labels_sorted() {
@@ -127,6 +129,7 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
 
       // Pop from graph and bblocks.
       let insts = cfg.pop(cur);
+      result.mark_cfg_changed();
       // Move insts to parents, before any CondGoto, and update that CondGoto.
       for &parent in parents.iter() {
         let p_bblock = cfg.bblocks.get_mut(parent);
@@ -169,8 +172,8 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
           };
         }
       }
-      *changed = true;
       converged = false;
+      result.mark_cfg_changed();
     }
 
     // Now that we've found all empty leaves, replace all CondGoto labels that go to any of them with one bblock label.
@@ -196,6 +199,7 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
               cfg.graph.disconnect(label, *child);
               cfg.graph.connect(label, new_child);
               *child = new_child;
+              result.mark_cfg_changed();
             } else {
               all_children_empty = false;
             };
@@ -211,7 +215,7 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
             cfg.pop(label);
           }
         }
-        *changed = true;
+        result.mark_cfg_changed();
       }
     }
 
@@ -219,4 +223,5 @@ pub fn optpass_cfg_prune(changed: &mut bool, cfg: &mut Cfg) {
       break;
     }
   }
+  result
 }

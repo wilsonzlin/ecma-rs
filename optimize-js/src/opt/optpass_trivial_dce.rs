@@ -1,10 +1,11 @@
 use crate::cfg::cfg::Cfg;
 use crate::il::inst::Arg;
 use crate::il::inst::InstTyp;
+use crate::opt::PassResult;
 use ahash::HashSet;
 use ahash::HashSetExt;
 
-pub fn optpass_trivial_dce(changed: &mut bool, cfg: &mut Cfg) {
+pub fn optpass_trivial_dce(cfg: &mut Cfg) -> PassResult {
   let mut used = HashSet::new();
   for (_, bblock) in cfg.bblocks.all() {
     for inst in bblock.iter() {
@@ -16,6 +17,7 @@ pub fn optpass_trivial_dce(changed: &mut bool, cfg: &mut Cfg) {
       }
     }
   }
+  let mut result = PassResult::default();
   for (_, bblock) in cfg.bblocks.all_mut() {
     for i in (0..bblock.len()).rev() {
       // We should delete if all targets are unused. (There should only ever be zero or one targets.)
@@ -28,8 +30,9 @@ pub fn optpass_trivial_dce(changed: &mut bool, cfg: &mut Cfg) {
         } else {
           bblock.remove(i);
         };
-        *changed = true;
+        result.mark_changed();
       };
     }
   }
+  result
 }

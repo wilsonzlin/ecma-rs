@@ -78,14 +78,13 @@ fn serialize_cfg(cfg: &Cfg) -> String {
 }
 
 fn run_once(mut cfg: Cfg) -> (BTreeMap<u32, Vec<u32>>, BTreeMap<u32, Vec<u32>>, String) {
-  let mut changed = false;
-  optpass_impossible_branches(&mut changed, &mut cfg);
+  optpass_impossible_branches(&mut cfg);
 
   let dom = Dom::calculate(&cfg);
   let dom_tree = canonicalize_dom(&dom, &cfg);
   let loops = canonicalize_loops(&find_loops(&cfg, &dom));
 
-  optpass_cfg_prune(&mut changed, &mut cfg);
+  optpass_cfg_prune(&mut cfg);
 
   (dom_tree, loops, serialize_cfg(&cfg))
 }

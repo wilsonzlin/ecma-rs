@@ -9,6 +9,7 @@ use crate::il::inst::Const;
 use crate::il::inst::Inst;
 use crate::il::inst::InstTyp;
 use crate::il::inst::UnOp;
+use crate::opt::PassResult;
 use ahash::HashMap;
 use itertools::Itertools;
 use std::collections::hash_map::Entry;
@@ -139,7 +140,7 @@ impl State {
 /// phi is missing an entry for this predecessor we leave it untouched; SSA
 /// construction is responsible for providing the right shape.
 fn canonicalize_phi_args_for_child(
-  changed: &mut bool,
+  result: &mut PassResult,
   state: &mut State,
   child_block: &mut Vec<Inst>,
   pred_label: u32,
@@ -155,7 +156,10 @@ fn canonicalize_phi_args_for_child(
       use ahash::HashSet;
       let mut seen = HashSet::default();
       for &label in &inst.labels {
-        assert!(seen.insert(label), "phi contains duplicate label {label}: {inst:?}");
+        assert!(
+          seen.insert(label),
+          "phi contains duplicate label {label}: {inst:?}"
+        );
       }
     }
 
@@ -170,7 +174,7 @@ fn canonicalize_phi_args_for_child(
       if *label == pred_label {
         let coc = state.canon_arg(arg);
         if *arg != coc {
-          *changed = true;
+          result.mark_changed();
           *arg = coc;
         }
       }
@@ -180,14 +184,14 @@ fn canonicalize_phi_args_for_child(
     let new_labels: Vec<_> = entries.iter().map(|(label, _)| *label).collect();
     let new_args: Vec<_> = entries.into_iter().map(|(_, arg)| arg).collect();
     if inst.labels != new_labels || inst.args != new_args {
-      *changed = true;
+      result.mark_changed();
       inst.labels = new_labels;
       inst.args = new_args;
     }
   }
 }
 
-fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label: u32) {
+fn inner(result: &mut PassResult, state: &mut State, cfg: &mut Cfg, dom: &Dom, label: u32) {
   let orig_state = state.clone();
   for inst_mut in cfg.bblocks.get_mut(label).iter_mut() {
     // We still need to normalise args in instructions in case we don't rewrite entire instruction to a VarAssign.
@@ -253,7 +257,10 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
     if let Some(value) = consteval {
       let tgt = new_inst.tgts[0];
       let canonical_value = state.canon_arg(&value);
-      assert!(state.tgt_to_coc.insert(tgt, canonical_value.clone()).is_none());
+      assert!(state
+        .tgt_to_coc
+        .insert(tgt, canonical_value.clone())
+        .is_none());
       new_inst = Inst::var_assign(tgt, canonical_value)
     } else {
       let pure_val = match new_inst.t {
@@ -293,17 +300,17 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
     };
 
     if inst != &new_inst {
-      *changed = true;
+      result.mark_changed();
       *inst = new_inst;
     };
   }
 
   for s in cfg.graph.children_sorted(label) {
-    canonicalize_phi_args_for_child(changed, state, cfg.bblocks.get_mut(s), label);
+    canonicalize_phi_args_for_child(result, state, cfg.bblocks.get_mut(s), label);
   }
 
   for c in dom.immediately_dominated_by(label) {
-    inner(changed, state, cfg, dom, c);
+    inner(result, state, cfg, dom, c);
   }
 
   *state = orig_state;
@@ -319,7 +326,9 @@ fn inner(changed: &mut bool, state: &mut State, cfg: &mut Cfg, dom: &Dom, label:
 /// - Copy propagation
 /// - Const propagation
 /// - Const evaluation
-pub fn optpass_dvn(changed: &mut bool, cfg: &mut Cfg, dom: &Dom) {
+pub fn optpass_dvn(cfg: &mut Cfg, dom: &Dom) -> PassResult {
   let mut state = State::default();
-  inner(changed, &mut state, cfg, dom, cfg.entry);
+  let mut result = PassResult::default();
+  inner(&mut result, &mut state, cfg, dom, cfg.entry);
+  result
 }

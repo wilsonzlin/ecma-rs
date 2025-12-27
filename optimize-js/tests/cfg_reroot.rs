@@ -33,11 +33,10 @@ fn simple_cfg_with_entry_jump() -> Cfg {
 #[test]
 fn reroots_empty_entry_block() {
   let mut cfg = simple_cfg_with_entry_jump();
-  let mut changed = false;
 
-  optpass_cfg_prune(&mut changed, &mut cfg);
+  let result = optpass_cfg_prune(&mut cfg);
 
-  assert!(changed, "pruning should reroot the cfg");
+  assert!(result.changed, "pruning should reroot the cfg");
   assert_eq!(cfg.entry, 1, "entry should move to the only child");
   assert!(
     !cfg.graph.contains(0) && cfg.bblocks.maybe_get(0).is_none(),
@@ -57,9 +56,8 @@ fn reroots_empty_entry_block() {
 #[test]
 fn dominance_and_ssa_handle_new_entry() {
   let mut cfg = simple_cfg_with_entry_jump();
-  let mut changed = false;
 
-  optpass_cfg_prune(&mut changed, &mut cfg);
+  optpass_cfg_prune(&mut cfg);
   let dom = Dom::calculate(&cfg);
   assert_eq!(dom.entry_label(), cfg.entry);
   assert_eq!(dom.idom_of(2), Some(1));

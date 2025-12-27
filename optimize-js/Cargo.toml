@@ -30,3 +30,7 @@ criterion = { version = "0.7", features = ["html_reports"] }
 [[bench]]
 name = "analysis"
 harness = false
+
+[[bench]]
+name = "optimize"
+harness = false
