@@ -10,9 +10,11 @@ use types_ts_interned::PrimitiveIds;
 use crate::semantic_js::SymbolId;
 use crate::symbols::SymbolBinding;
 use crate::{DefId, TypeId};
+use crate::db::start_timer;
 use crate::db::inputs::{FileOrigin, Inputs};
 use crate::lib_support::lib_env::{collect_libs, validate_libs};
 use crate::lib_support::{FileKind, LibFile, LibManager};
+use crate::profile::QueryKind;
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
 
@@ -203,6 +205,7 @@ pub trait TypecheckDatabase: salsa::Database {
 }
 
 pub fn parse(db: &dyn TypecheckDatabase, file: FileId) -> parser::ParseResult {
+  let _timer = start_timer(db, QueryKind::Parse);
   PARSE_QUERY_CALLS.fetch_add(1, Ordering::Relaxed);
   let kind = db.file_kind(file);
   let source = db.file_text(file);
@@ -210,6 +213,7 @@ pub fn parse(db: &dyn TypecheckDatabase, file: FileId) -> parser::ParseResult {
 }
 
 pub fn lower_hir(db: &dyn TypecheckDatabase, file: FileId) -> LowerResultWithDiagnostics {
+  let _timer = start_timer(db, QueryKind::LowerHir);
   let parsed = db.parse(file);
   let file_kind = db.file_kind(file);
   let mut diagnostics = parsed.diagnostics.clone();
@@ -271,6 +275,7 @@ pub fn all_files(db: &dyn TypecheckDatabase) -> Arc<Vec<FileId>> {
 }
 
 pub fn ts_semantics(db: &dyn TypecheckDatabase) -> Arc<TsSemantics> {
+  let _timer = start_timer(db, QueryKind::Bind);
   let files = db.all_files();
   let mut diagnostics = Vec::new();
   let mut sem_hirs: HashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = HashMap::new();

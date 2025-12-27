@@ -1,7 +1,11 @@
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use typecheck_ts::{CacheKind, FileKey, MemoryHost, Program, QueryKind, QueryStatsCollector};
+use typecheck_ts::{
+  CacheKind, FileId, FileKey, MemoryHost, Program, QueryKind, QueryStatsCollector,
+};
+use typecheck_ts::db::{TypecheckDatabase, TypecheckDb};
 use types_ts_interned::CacheStats;
 
 #[test]
@@ -111,5 +115,30 @@ fn program_records_query_stats_after_check() {
       entry.total > 0,
       "expected stats for {kind:?} to be recorded"
     );
+  }
+}
+
+#[test]
+fn salsa_events_feed_collector() {
+  let mut db = TypecheckDb::default();
+  let stats = QueryStatsCollector::default();
+  db.set_profiler(stats.clone());
+
+  let file = FileId(0);
+  db.set_roots(Arc::new(vec![file]));
+  db.set_file_text(file, Arc::<str>::from("export const x = 1;"));
+  db.set_file_kind(file, typecheck_ts::lib_support::FileKind::Ts);
+
+  let result = db.ts_semantics();
+  assert!(
+    result.diagnostics.is_empty(),
+    "unexpected diagnostics from ts_semantics: {:?}",
+    result.diagnostics
+  );
+
+  let snapshot = stats.snapshot();
+  for kind in [QueryKind::Parse, QueryKind::LowerHir, QueryKind::Bind] {
+    let entry = snapshot.queries.get(&kind).cloned().unwrap_or_default();
+    assert!(entry.total > 0, "{kind:?} stat should be recorded");
   }
 }

@@ -604,7 +604,7 @@ impl Program {
       let mut def_ids: Vec<_> = state.def_data.keys().copied().collect();
       def_ids.sort_by_key(|id| id.0);
       for def in def_ids.iter().copied() {
-        let _ = state.type_of_def(def)?;
+        let _ = ProgramState::type_of_def(&mut state, def)?;
       }
       state.merge_namespace_value_types()?;
       state.update_export_types()?;
@@ -616,7 +616,7 @@ impl Program {
       state.def_types.clear();
       state.namespace_object_types.clear();
       for def in def_ids.into_iter() {
-        let _ = state.type_of_def(def)?;
+        let _ = ProgramState::type_of_def(&mut state, def)?;
       }
       state.merge_namespace_value_types()?;
       let mut recompute: Vec<_> = state.def_data.keys().copied().collect();
@@ -628,7 +628,7 @@ impl Program {
           }
           state.def_types.remove(&def);
           state.interned_def_types.remove(&def);
-          let _ = state.type_of_def(def)?;
+          let _ = ProgramState::type_of_def(&mut state, def)?;
         }
       }
       state.update_export_types()?;
@@ -745,7 +745,8 @@ impl Program {
       let state = self.lock_state();
       state.lib_manager.clone()
     };
-    let mut new_state = ProgramState::new(lib_manager, self.query_stats.clone());
+    let mut new_state =
+      ProgramState::new(lib_manager, self.query_stats.clone(), Arc::clone(&self.cancelled));
     new_state.file_overrides = overrides;
     new_state.compiler_options = compiler_options;
     let mut roots = self.roots.clone();
@@ -784,7 +785,7 @@ impl Program {
   }
 
   pub fn type_of_def_fallible(&self, def: DefId) -> Result<TypeId, FatalError> {
-    self.with_interned_state(|state| state.type_of_def(def))
+    self.with_interned_state(|state| ProgramState::type_of_def(state, def))
   }
 
   /// Check a body, returning the cached result.
@@ -1015,7 +1016,7 @@ impl Program {
       let ty = match state.interned_def_types.get(&def).copied() {
         Some(existing) if !matches!(store.type_kind(existing), tti::TypeKind::Unknown) => existing,
         _ => {
-          state.type_of_def(def)?;
+        ProgramState::type_of_def(state, def)?;
           state
             .interned_def_types
             .get(&def)
@@ -1599,7 +1600,7 @@ impl Program {
     let mut def_ids: Vec<_> = state.def_data.keys().copied().collect();
     def_ids.sort_by_key(|id| id.0);
     for def in def_ids.iter() {
-      if let Err(fatal) = state.type_of_def(*def) {
+      if let Err(fatal) = ProgramState::type_of_def(&mut state, *def) {
         state.diagnostics.push(fatal_to_diagnostic(fatal));
         break;
       }

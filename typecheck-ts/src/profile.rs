@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use salsa::{DatabaseKeyIndex, Event, EventKind};
+use salsa::{DatabaseKeyIndex, Event, EventKind, RuntimeId};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -442,7 +442,7 @@ impl Drop for QueryTimer {
 pub struct SalsaEventAdapter {
   collector: QueryStatsCollector,
   mapper: Arc<dyn Fn(DatabaseKeyIndex) -> Option<QueryKind> + Send + Sync>,
-  starts: DashMap<(ThreadId, DatabaseKeyIndex), (QueryKind, Instant)>,
+  starts: DashMap<(RuntimeId, DatabaseKeyIndex), (QueryKind, Instant)>,
 }
 
 impl SalsaEventAdapter {
@@ -472,10 +472,10 @@ impl SalsaEventAdapter {
       }
       EventKind::WillExecute { database_key } => {
         if let Some(kind) = (self.mapper)(*database_key) {
-          let thread_id = std::thread::current().id();
+          let runtime_id = event.runtime_id;
           self
             .starts
-            .insert((thread_id, *database_key), (kind, Instant::now()));
+            .insert((runtime_id, *database_key), (kind, Instant::now()));
         }
       }
       _ => {}
@@ -485,12 +485,11 @@ impl SalsaEventAdapter {
   /// Obtain a query timer for an executing salsa query. This should be called
   /// from inside the query function; it reuses the start time recorded from the
   /// corresponding `WillExecute` event when available.
-  pub fn start_query(&self, key: DatabaseKeyIndex) -> Option<QueryTimer> {
-    let thread_id = std::thread::current().id();
+  pub fn start_query(&self, runtime_id: RuntimeId, key: DatabaseKeyIndex) -> Option<QueryTimer> {
     let now = Instant::now();
     let (kind, start) = self
       .starts
-      .remove(&(thread_id, key))
+      .remove(&(runtime_id, key))
       .map(|(_, data)| data)
       .or_else(|| (self.mapper)(key).map(|kind| (kind, now)))?;
     Some(QueryTimer::with_start(
@@ -499,6 +498,11 @@ impl SalsaEventAdapter {
       false,
       start,
     ))
+  }
+
+  /// Access the underlying collector for custom timing.
+  pub fn collector(&self) -> QueryStatsCollector {
+    self.collector.clone()
   }
 }
 
