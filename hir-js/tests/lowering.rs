@@ -77,6 +77,88 @@ fn def_ids_survive_unrelated_insertions() {
 }
 
 #[test]
+fn lowers_enum_members_as_defs() {
+  let source = r#"enum Color { Red, Green = 2, Blue = "b" }"#;
+  let result = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+
+  let color = result
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Enum && result.names.resolve(def.name) == Some("Color"))
+    .expect("enum definition");
+
+  let members: Vec<_> = result
+    .defs
+    .iter()
+    .filter(|def| def.path.kind == DefKind::EnumMember && def.parent == Some(color.id))
+    .collect();
+  assert_eq!(members.len(), 3);
+  let mut member_names: Vec<_> = members
+    .iter()
+    .map(|def| result.names.resolve(def.name).unwrap())
+    .collect();
+  member_names.sort();
+  let mut expected = vec!["Red", "Green", "Blue"];
+  expected.sort();
+  assert_eq!(member_names, expected);
+
+  for member in members {
+    let mapped = result
+      .hir
+      .span_map
+      .def_at_offset(member.span.start)
+      .expect("member in span map");
+    assert_eq!(mapped, member.id);
+    assert_eq!(member.parent, Some(color.id));
+  }
+}
+
+#[test]
+fn enum_member_ids_are_stable() {
+  let base = lower_from_source_with_kind(FileKind::Ts, "enum Color { Red, Green, Blue }")
+    .expect("base lowering");
+  let variant = lower_from_source_with_kind(
+    FileKind::Ts,
+    "enum Shape { Red }\nenum Color { Red, Green, Blue }",
+  )
+  .expect("variant lowering");
+
+  let color = base
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Enum && base.names.resolve(def.name) == Some("Color"))
+    .expect("color enum");
+
+  let member_paths: Vec<_> = base
+    .defs
+    .iter()
+    .filter(|def| def.path.kind == DefKind::EnumMember && def.parent == Some(color.id))
+    .map(|def| def.path)
+    .collect();
+
+  for path in member_paths {
+    let base_id = base
+      .hir
+      .def_paths
+      .get(&path)
+      .copied()
+      .expect("path in base def map");
+    let variant_id = variant
+      .hir
+      .def_paths
+      .get(&path)
+      .copied()
+      .expect("path in variant def map");
+    assert_eq!(
+      base_id,
+      variant_id,
+      "enum member id changed for {}",
+      base.names.resolve(path.name).unwrap()
+    );
+  }
+}
+
+#[test]
 fn body_ids_are_stable_across_runs() {
   let source = "function keep() {}\nconst value = () => keep();";
   let ast = parse(source).expect("parse");

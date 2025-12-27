@@ -1,12 +1,12 @@
 use crate::hir::{
   ArrayElement, ArrayLiteral, ArrayPat, ArrayPatElement, AssignOp, BinaryOp, Body, BodyKind,
-  CallArg, CallExpr, CatchClause, DefData, Export, ExportAlias, ExportAll, ExportAssignment,
-  ExportDefault, ExportDefaultValue, ExportKind, ExportNamed, ExportSpecifier, Expr, ExprKind,
-  FileKind, ForHead, ForInit, FunctionBody, FunctionData, HirFile, Import, ImportBinding,
-  ImportEquals, ImportEqualsTarget, ImportEs, ImportKind, ImportNamed, JsxElement, JsxElementKind,
-  Literal, LowerResult, MemberExpr, ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat,
-  ObjectPatProp, ObjectProperty, Param, Pat, PatKind, Stmt, StmtKind, SwitchCase, TemplateLiteral,
-  TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl, VarDeclKind, VarDeclarator,
+  CallArg, CallExpr, CatchClause, DefData, DefTypeInfo, Export, ExportAlias, ExportAll,
+  ExportAssignment, ExportDefault, ExportDefaultValue, ExportKind, ExportNamed, ExportSpecifier,
+  Expr, ExprKind, FileKind, ForHead, ForInit, FunctionBody, FunctionData, HirFile, Import,
+  ImportBinding, ImportEquals, ImportEqualsTarget, ImportEs, ImportKind, ImportNamed, JsxElement,
+  JsxElementKind, Literal, LowerResult, MemberExpr, ModuleSpecifier, ObjectKey, ObjectLiteral,
+  ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat, PatKind, Stmt, StmtKind, SwitchCase,
+  TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl, VarDeclKind, VarDeclarator,
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
@@ -105,6 +105,7 @@ struct DefDescriptor<'a> {
   is_item: bool,
   is_ambient: bool,
   in_global: bool,
+  parent: Option<RawNode>,
   is_exported: bool,
   is_default_export: bool,
   source: DefSource<'a>,
@@ -119,6 +120,7 @@ enum DefSource<'a> {
   FuncExpr(&'a Node<FuncExpr>),
   ClassDecl(&'a Node<ClassDecl>),
   ClassExpr(&'a Node<ClassExpr>),
+  Enum(&'a Node<EnumDecl>),
   Var(&'a AstVarDeclarator, VarDeclKind),
   Method(&'a Node<parse_js::ast::class_or_object::ClassOrObjMethod>),
   Getter(&'a Node<parse_js::ast::class_or_object::ClassOrObjGetter>),
@@ -193,6 +195,7 @@ impl<'a> DefDescriptor<'a> {
       is_item,
       is_ambient,
       in_global,
+      parent: None,
       is_exported: false,
       is_default_export: false,
       source,
@@ -221,7 +224,7 @@ struct PlannedDef<'a> {
   body: Option<PlannedBody>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct RawNode(*const ());
 
 impl<T: Drive + DriveMut> From<&Node<T>> for RawNode {
@@ -239,6 +242,10 @@ impl DefLookup {
 
   fn def_for_node<T: Drive + DriveMut>(&self, node: &Node<T>) -> Option<DefId> {
     self.node_to_def.get(&RawNode::from(node)).copied()
+  }
+
+  fn def_for_raw(&self, raw: RawNode) -> Option<DefId> {
+    self.node_to_def.get(&raw).copied()
   }
 
   fn body_for(&self, def: DefId) -> Option<BodyId> {
@@ -278,6 +285,7 @@ impl<'a> DefSource<'a> {
       | DefSource::Method(_)
       | DefSource::Getter(_)
       | DefSource::Setter(_) => Some(BodyKind::Function),
+      DefSource::Enum(_) => None,
       DefSource::Var(..) => Some(BodyKind::Initializer),
       DefSource::ClassDecl(_) | DefSource::ClassExpr(_) => Some(BodyKind::Class),
       DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
@@ -292,6 +300,7 @@ impl<'a> DefSource<'a> {
       DefSource::FuncExpr(node) => Some(RawNode::from(*node)),
       DefSource::ClassDecl(node) => Some(RawNode::from(*node)),
       DefSource::ClassExpr(node) => Some(RawNode::from(*node)),
+      DefSource::Enum(node) => Some(RawNode::from(*node)),
       DefSource::Var(_, _) => None,
       DefSource::Method(node) => Some(RawNode::from(*node)),
       DefSource::Getter(node) => Some(RawNode::from(*node)),
@@ -329,15 +338,19 @@ pub fn lower_file_with_diagnostics(
   let mut span_map = SpanMap::new();
   let mut defs = Vec::with_capacity(descriptors.len());
   let mut pending_types = Vec::new();
-  let mut disambiguators: BTreeMap<(DefKind, NameId), u32> = BTreeMap::new();
+  let mut disambiguators: BTreeMap<(Option<DefId>, DefKind, NameId), u32> = BTreeMap::new();
   let mut def_lookup = DefLookup::default();
   let mut allocated_def_ids: BTreeMap<u32, DefPath> = BTreeMap::new();
+  let mut enum_members: HashMap<DefId, Vec<(TextRange, DefId)>> = HashMap::new();
 
   let mut planned = Vec::new();
   let mut body_disambiguators: BTreeMap<DefId, u32> = BTreeMap::new();
   for desc in descriptors {
-    let dis = disambiguators.entry((desc.kind, desc.name)).or_insert(0);
-    let def_path = DefPath::new(file, desc.kind, desc.name, *dis);
+    let parent = desc.parent.and_then(|raw| def_lookup.def_for_raw(raw));
+    let dis = disambiguators
+      .entry((parent, desc.kind, desc.name))
+      .or_insert(0);
+    let def_path = DefPath::new(file, desc.kind, desc.name, *dis, parent);
     *dis += 1;
     let def_id = allocate_def_id(def_path, &mut allocated_def_ids);
     let body = desc.source.body_kind().map(|kind| {
@@ -374,6 +387,15 @@ pub fn lower_file_with_diagnostics(
       items.push(def_id);
     }
 
+    if let Some(parent) = def_path.parent {
+      if desc.kind == DefKind::EnumMember {
+        enum_members
+          .entry(parent)
+          .or_default()
+          .push((desc.span, def_id));
+      }
+    }
+
     span_map.add_def(desc.span, def_id);
 
     let body_id = body.map(|b| b.id);
@@ -386,6 +408,7 @@ pub fn lower_file_with_diagnostics(
       in_global: desc.in_global,
       is_exported: desc.is_exported,
       is_default_export: desc.is_default_export,
+      parent: def_path.parent,
       body: body_id,
       type_info: None,
     };
@@ -413,6 +436,15 @@ pub fn lower_file_with_diagnostics(
     }
 
     defs.push(def_data);
+  }
+
+  for def in defs.iter_mut().filter(|def| def.path.kind == DefKind::Enum) {
+    let members = enum_members.remove(&def.id).unwrap_or_default();
+    let mut ordered: Vec<_> = members.into_iter().collect();
+    ordered.sort_by_key(|(span, _)| (span.start, span.end));
+    def.type_info = Some(DefTypeInfo::Enum {
+      members: ordered.into_iter().map(|(_, id)| id).collect(),
+    });
   }
 
   let mut root_body_id =
@@ -658,6 +690,7 @@ fn lower_body_from_source(
       builder.root_stmt(stmt_id);
       Some(builder.finish())
     }
+    DefSource::Enum(_) => None,
     DefSource::None => None,
   }
 }
@@ -2030,9 +2063,39 @@ fn collect_stmt<'a>(
         is_item,
         decl_ambient,
         in_global,
-        DefSource::None,
+        DefSource::Enum(en),
       );
       desc.is_exported = en.stx.export;
+      let parent_raw = RawNode::from(en);
+      for member in en.stx.members.iter() {
+        let member_name = names.intern(&member.stx.name);
+        let member_text = names.resolve(member_name).unwrap().to_string();
+        let mut member_desc = DefDescriptor::new(
+          DefKind::EnumMember,
+          member_name,
+          member_text,
+          ctx.to_range(member.loc),
+          false,
+          decl_ambient,
+          in_global,
+          DefSource::None,
+        );
+        member_desc.parent = Some(parent_raw);
+        member_desc.is_exported = desc.is_exported;
+        member_desc.is_default_export = desc.is_default_export;
+        descriptors.push(member_desc);
+        if let Some(init) = &member.stx.initializer {
+          collect_expr(
+            init,
+            descriptors,
+            module_items,
+            names,
+            decl_ambient,
+            in_global,
+            ctx,
+          );
+        }
+      }
       descriptors.push(desc);
       if en.stx.export {
         module_items.push(ModuleItem {

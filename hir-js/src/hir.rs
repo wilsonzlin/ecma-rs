@@ -178,6 +178,7 @@ pub struct DefData {
   pub name: NameId,
   pub path: DefPath,
   pub span: TextRange,
+  pub parent: Option<DefId>,
   pub is_ambient: bool,
   pub in_global: bool,
   pub is_exported: bool,
@@ -468,6 +469,9 @@ pub enum DefTypeInfo {
     type_params: Vec<TypeParamId>,
     extends: Vec<TypeExprId>,
     members: Vec<TypeMemberId>,
+  },
+  Enum {
+    members: Vec<DefId>,
   },
 }
 
