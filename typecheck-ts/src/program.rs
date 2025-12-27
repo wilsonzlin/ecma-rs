@@ -21,7 +21,6 @@ use parse_js::ast::type_expr::{
   TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
 use parse_js::loc::Loc;
-use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
@@ -36,7 +35,7 @@ use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, Typ
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::codes;
-use crate::db::GlobalBindingsDb;
+use crate::db::{self, GlobalBindingsDb, TypecheckDatabase};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileRegistry;
 use crate::profile::{
@@ -257,33 +256,6 @@ impl<'a> tti::TypeExpander for ProgramTypeExpander<'a> {
     let ty = *self.def_types.get(&def)?;
     let params = self.type_params.get(&def).cloned().unwrap_or_else(Vec::new);
     Some(tti::ExpandedType { params, ty })
-  }
-}
-
-fn parse_file(file: FileId, kind: FileKind, source: &str) -> Result<Node<TopLevel>, Diagnostic> {
-  PARSE_CALLS.fetch_add(1, Ordering::Relaxed);
-  let dialect = match kind {
-    FileKind::Js => Dialect::Js,
-    FileKind::Ts => Dialect::Ts,
-    FileKind::Tsx => Dialect::Tsx,
-    FileKind::Jsx => Dialect::Jsx,
-    FileKind::Dts => Dialect::Dts,
-  };
-  let module_opts = ParseOptions {
-    dialect,
-    source_type: SourceType::Module,
-  };
-  match parse_with_options(source, module_opts) {
-    Ok(ast) => Ok(ast),
-    Err(_err) if matches!(kind, FileKind::Js | FileKind::Jsx) => parse_with_options(
-      source,
-      ParseOptions {
-        dialect,
-        source_type: SourceType::Script,
-      },
-    )
-    .map_err(|err| err.to_diagnostic(file)),
-    Err(err) => Err(err.to_diagnostic(file)),
   }
 }
 
@@ -1850,7 +1822,11 @@ impl Program {
           state.lib_file_ids.insert(file.file);
         }
         if let Some(text) = file.text {
-          state.lib_texts.insert(file.file, Arc::from(text));
+          let arc = Arc::from(text);
+          state.lib_texts.insert(file.file, Arc::clone(&arc));
+          state.set_salsa_inputs(file.file, file.kind, arc);
+        } else {
+          state.typecheck_db.set_file_kind(file.file, file.kind);
         }
       }
       state.files = snapshot
@@ -2483,6 +2459,7 @@ struct ProgramState {
   lib_manager: Arc<LibManager>,
   compiler_options: CompilerOptions,
   file_overrides: HashMap<FileKey, Arc<str>>,
+  typecheck_db: db::TypecheckDb,
   checker_caches: CheckerCaches,
   cache_stats: CheckerCacheStats,
   asts: HashMap<FileId, Arc<Node<TopLevel>>>,
@@ -2573,6 +2550,7 @@ impl ProgramState {
       lib_manager,
       compiler_options: default_options.clone(),
       file_overrides: HashMap::new(),
+      typecheck_db: db::TypecheckDb::default(),
       checker_caches: CheckerCaches::new(default_options.cache.clone()),
       cache_stats: CheckerCacheStats::default(),
       asts: HashMap::new(),
@@ -3067,13 +3045,12 @@ impl ProgramState {
         false,
         Some(self.query_stats.clone()),
       );
-      let parsed = parse_file(file, file_kind, &text);
+      let parsed = self.parse_via_salsa(file, file_kind, Arc::clone(&text));
       if let Some(span) = parse_span {
         span.finish(None);
       }
       match parsed {
         Ok(ast) => {
-          let ast = Arc::new(ast);
           self.asts.insert(file, Arc::clone(&ast));
           let (lowered, lower_diags) = lower_hir_with_diagnostics(
             file,
@@ -3382,10 +3359,9 @@ impl ProgramState {
     for lib in libs {
       let file_id = self.intern_file_key(lib.key.clone(), FileOrigin::Lib);
       self.lib_texts.insert(file_id, lib.text.clone());
-      let parsed = parse_file(file_id, FileKind::Dts, lib.text.as_ref());
+      let parsed = self.parse_via_salsa(file_id, FileKind::Dts, Arc::clone(&lib.text));
       match parsed {
         Ok(ast) => {
-          let ast = Arc::new(ast);
           self.asts.insert(file_id, Arc::clone(&ast));
           let (lowered, lower_diags) = lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
           self.diagnostics.extend(lower_diags);
@@ -3416,6 +3392,34 @@ impl ProgramState {
       return Ok(text.clone());
     }
     host.file_text(&key)
+  }
+
+  fn set_salsa_inputs(&mut self, file: FileId, kind: FileKind, text: Arc<str>) {
+    self.typecheck_db.set_file_kind(file, kind);
+    self.typecheck_db.set_file_text(file, text);
+  }
+
+  fn parse_via_salsa(
+    &mut self,
+    file: FileId,
+    kind: FileKind,
+    text: Arc<str>,
+  ) -> Result<Arc<Node<TopLevel>>, Diagnostic> {
+    PARSE_CALLS.fetch_add(1, Ordering::Relaxed);
+    self.set_salsa_inputs(file, kind, Arc::clone(&text));
+    let result = db::parse(&self.typecheck_db, file);
+    match result.ast {
+      Some(ast) => Ok(ast),
+      None => Err(
+        result
+          .diagnostics
+          .into_iter()
+          .next()
+          .unwrap_or_else(|| {
+            codes::MISSING_BODY.error("missing parsed AST", Span::new(file, TextRange::new(0, 0)))
+          }),
+      ),
+    }
   }
 
   fn recompute_global_bindings(&mut self) {
