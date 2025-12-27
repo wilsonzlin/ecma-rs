@@ -10,7 +10,7 @@ use crate::hir::{
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
-  ImportSpecifierId, NameId, PatId, StmtId,
+  ImportSpecifierId, NameId, PatId, StableHasher, StmtId,
 };
 use crate::intern::NameInterner;
 use crate::lower_types::TypeLowerer;
@@ -3982,10 +3982,24 @@ fn obj_key_name(
 ) -> (NameId, String) {
   let name_id = match key {
     parse_js::ast::class_or_object::ClassOrObjKey::Direct(direct) => names.intern(&direct.stx.key),
-    parse_js::ast::class_or_object::ClassOrObjKey::Computed(_) => names.intern("<computed>"),
+    parse_js::ast::class_or_object::ClassOrObjKey::Computed(expr) => {
+      let fingerprint = stable_expr_fingerprint(expr);
+      let synthetic = format!("<computed:{:016x}>", fingerprint);
+      names.intern(synthetic)
+    }
   };
   let name_text = names.resolve(name_id).unwrap().to_string();
   (name_id, name_text)
+}
+
+fn stable_expr_fingerprint(expr: &Node<AstExpr>) -> u64 {
+  // Use the debug representation of the syntax (which intentionally omits
+  // locations) so fingerprints are stable across unrelated edits that shift
+  // spans.
+  let mut hasher = StableHasher::new();
+  let debug_repr = format!("{:?}", expr.stx);
+  hasher.write_str(&debug_repr);
+  hasher.finish()
 }
 
 fn collect_exprs_from_pat<'a>(

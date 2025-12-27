@@ -21,6 +21,21 @@ use parse_js::parse;
 use proptest::prelude::*;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+fn computed_methods(result: &hir_js::LowerResult) -> Vec<&hir_js::DefData> {
+  let names = &result.names;
+  result
+    .defs
+    .iter()
+    .filter(|def| def.path.kind == DefKind::Method)
+    .filter(|def| {
+      names
+        .resolve(def.path.name)
+        .map(|name| name.starts_with("<computed:"))
+        .unwrap_or(false)
+    })
+    .collect()
+}
+
 #[test]
 fn def_ids_are_sorted_and_stable() {
   let source = "function f() {}\nconst b = 2;\nconst a = 1;";
@@ -950,6 +965,64 @@ fn collects_nested_defs_in_object_literal_methods() {
     .find(|expr| matches!(expr.kind, ExprKind::ClassExpr { .. }))
     .expect("class expression inside arrow function");
   assert!(matches!(class_expr.kind, ExprKind::ClassExpr { .. }));
+}
+
+#[test]
+fn computed_member_names_are_distinct_and_stable() {
+  let base_source = "const obj = { [foo]() {}, [bar()]() {}, [foo]() {} };";
+  let base = lower_from_source_with_kind(FileKind::Ts, base_source).expect("lower base");
+
+  let base_methods = computed_methods(&base);
+  let distinct_spans: BTreeSet<_> = base_methods.iter().map(|def| def.span).collect();
+  assert_eq!(
+    distinct_spans.len(),
+    3,
+    "expected three computed member spans"
+  );
+
+  let mut name_counts = BTreeMap::new();
+  for def in &base_methods {
+    *name_counts.entry(def.name).or_insert(0) += 1;
+  }
+  assert_eq!(
+    name_counts.len(),
+    2,
+    "expected distinct names for foo and bar computed members"
+  );
+  assert!(
+    name_counts.values().any(|count| *count == 2),
+    "expected identical computed keys to share a synthetic name"
+  );
+
+  let with_extra_source = "const obj = { regular() {}, [foo]() {}, [bar()]() {}, [foo]() {} };";
+  let with_extra =
+    lower_from_source_with_kind(FileKind::Ts, with_extra_source).expect("lower variant");
+  let with_extra_methods = computed_methods(&with_extra);
+  let with_extra_spans: BTreeSet<_> = with_extra_methods.iter().map(|def| def.span).collect();
+  assert_eq!(
+    with_extra_spans.len(),
+    3,
+    "unrelated member should not change computed member count"
+  );
+
+  let base_paths: BTreeSet<_> = base_methods.iter().map(|def| def.path).collect();
+  let extra_paths: BTreeSet<_> = with_extra_methods.iter().map(|def| def.path).collect();
+  assert_eq!(
+    base_paths, extra_paths,
+    "computed member def paths should remain stable"
+  );
+
+  for def in &base_methods {
+    let variant_id = with_extra
+      .def_id_for_path(&def.path)
+      .expect("computed path present after insertion");
+    assert_eq!(
+      variant_id,
+      def.id,
+      "computed member def id should remain stable for {:?}",
+      base.names.resolve(def.path.name)
+    );
+  }
 }
 
 #[test]
