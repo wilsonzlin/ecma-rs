@@ -202,7 +202,7 @@ fn map_export(
   let mut all_defs: Vec<DefId> = Vec::new();
   for decl_id in semantics.symbol_decls(symbol_id, ns) {
     let decl = symbols.decl(*decl_id);
-    if let Some(def) = map_decl_to_program_def(state, decl, ns) {
+    if let Some(def) = state.map_decl_to_program_def(decl, ns) {
       all_defs.push(def);
       if sem_file.map_or(false, |file| decl.file == file) {
         local_defs.push(def);
@@ -261,32 +261,4 @@ fn map_export(
     def: local_def,
     type_id,
   })
-}
-
-fn map_decl_to_program_def(
-  state: &ProgramState,
-  decl: &sem_ts::DeclData,
-  ns: sem_ts::Namespace,
-) -> Option<DefId> {
-  let direct = DefId(decl.def_id.0);
-  if state.def_data.contains_key(&direct) {
-    return Some(direct);
-  }
-
-  let mut best: Option<(u8, DefId)> = None;
-  for (id, data) in state.def_data.iter() {
-    if data.file == FileId(decl.file.0) && data.name == decl.name {
-      let pri = state.def_priority(*id, ns);
-      best = best
-        .map(|(best_pri, best_id)| {
-          if pri < best_pri || (pri == best_pri && id < &best_id) {
-            (pri, *id)
-          } else {
-            (best_pri, best_id)
-          }
-        })
-        .or(Some((pri, *id)));
-    }
-  }
-  best.map(|(_, id)| id)
 }

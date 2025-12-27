@@ -2570,7 +2570,11 @@ pub fn refine_types_with_flow(
 ) -> BodyCheckResult {
   let initial = initial
     .iter()
-    .filter_map(|(name, ty)| bindings.binding_for_name(*name).map(|binding| (binding, *ty)))
+    .filter_map(|(name, ty)| {
+      bindings
+        .binding_for_name(*name)
+        .map(|binding| (binding, *ty))
+    })
     .collect::<HashMap<_, _>>();
 
   let mut checker = FlowBodyChecker::new(

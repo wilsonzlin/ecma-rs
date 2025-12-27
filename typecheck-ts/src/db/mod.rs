@@ -37,9 +37,10 @@ pub use queries::{
   global_bindings, local_symbol_info, lower_hir, module_dep_diagnostics, module_deps,
   module_resolve, module_specifiers, parse, parse_query_count, program_diagnostics,
   reachable_files, reset_parse_query_count, roots, sem_hir, span_of_def, span_of_expr,
-  symbol_occurrences, ts_semantics, type_at, type_params, type_store, unresolved_module_diagnostics,
-  var_initializer, DeclInfo, DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics,
-  TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
+  symbol_occurrences, ts_semantics, type_at, type_params, type_store,
+  unresolved_module_diagnostics, var_initializer, DeclInfo, DeclKind, GlobalBindingsDb,
+  Initializer, LowerResultWithDiagnostics, TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase,
+  VarInit,
 };
 pub use spans::FileSpanIndex;
 pub use types::{DeclTypes, SharedDeclTypes, SharedTypeStore};

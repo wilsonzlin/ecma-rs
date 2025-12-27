@@ -129,7 +129,7 @@ function f(x: string | null) {
     relate,
     None,
   );
- 
+
   let ret_ty = res.return_types()[0];
   // Truthiness leaves `string` in the falsy branch (empty string), but the hoisted
   // assignment must still update the shared binding with `number`.

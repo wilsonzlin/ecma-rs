@@ -4,7 +4,8 @@ use diagnostics::Span;
 use types_ts_interned::{RelateCtx, TypeId, TypeStore};
 
 use super::overload::{
-  resolve_construct as resolve_construct_overloads, resolve_overloads, CallResolution, OverloadContext,
+  resolve_construct as resolve_construct_overloads, resolve_overloads, CallResolution,
+  OverloadContext,
 };
 
 /// Resolve a call expression against a callable type.

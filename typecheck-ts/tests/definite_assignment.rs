@@ -112,10 +112,7 @@ fn loop_assignment_not_definite() {
   let store = TypeStore::new();
   let mut initial = HashMap::new();
   let (_body_id, body) = body_of(&parsed.lowered, &parsed.lowered.names, "f");
-  initial.insert(
-    param_name(body, 0),
-    store.primitive_ids().boolean,
-  );
+  initial.insert(param_name(body, 0), store.primitive_ids().boolean);
   let res = run_flow(&parsed, "f", &store, &initial);
   assert_eq!(res.diagnostics().len(), 1);
   assert_eq!(

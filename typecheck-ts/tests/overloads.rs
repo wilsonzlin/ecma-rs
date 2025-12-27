@@ -349,7 +349,16 @@ fn prefers_union_compatible_overload() {
     overloads: vec![sig_string_id, sig_number_id, sig_union_id],
   });
 
-  let resolution = resolve_call(&store, &relate, callable, &[union], None, None, span(), None);
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    callable,
+    &[union],
+    None,
+    None,
+    span(),
+    None,
+  );
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(sig_union_id));
