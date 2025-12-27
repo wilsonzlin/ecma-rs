@@ -1894,7 +1894,10 @@ fn external_module_augmentation_merges_without_new_exports() {
   );
 
   assert!(
-    semantics.exports_of(file_a).get("OnlyInAugmentation").is_none(),
+    semantics
+      .exports_of(file_a)
+      .get("OnlyInAugmentation")
+      .is_none(),
     "augmentation without export should not create a new export"
   );
 }

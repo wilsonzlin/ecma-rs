@@ -1,4 +1,9 @@
+use std::sync::Arc;
+
 use typecheck_ts::{codes, FileId, FileKey, MemoryHost, Program};
+use types_ts_interned::{
+  Param, RelateCtx, Signature, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
+};
 
 fn run_single_file(source: &str) -> (Program, FileId, Vec<diagnostics::Diagnostic>) {
   let mut host = MemoryHost::new();
@@ -34,19 +39,19 @@ fn unresolved_type_param_treated_conservatively() {
 
 #[test]
 fn conflicting_type_arguments_still_error() {
-  let store = std::sync::Arc::new(types_ts_interned::TypeStore::new());
+  let store = Arc::new(TypeStore::new());
   let primitives = store.primitive_ids();
-  let tp = types_ts_interned::TypeParamId(0);
-  let param_ty = store.intern_type(types_ts_interned::TypeKind::TypeParam(tp));
-  let sig = types_ts_interned::Signature {
+  let tp = TypeParamId(0);
+  let param_ty = store.intern_type(TypeKind::TypeParam(tp));
+  let sig = Signature {
     params: vec![
-      types_ts_interned::Param {
+      Param {
         name: None,
         ty: param_ty,
         optional: false,
         rest: false,
       },
-      types_ts_interned::Param {
+      Param {
         name: None,
         ty: param_ty,
         optional: false,
@@ -54,17 +59,14 @@ fn conflicting_type_arguments_still_error() {
       },
     ],
     ret: param_ty,
-    type_params: vec![tp],
+    type_params: vec![TypeParamDecl::new(tp)],
     this_param: None,
   };
   let sig_id = store.intern_signature(sig);
-  let callable = store.intern_type(types_ts_interned::TypeKind::Callable {
+  let callable = store.intern_type(TypeKind::Callable {
     overloads: vec![sig_id],
   });
-  let relate = types_ts_interned::RelateCtx::new(
-    std::sync::Arc::clone(&store),
-    types_ts_interned::TypeOptions::default(),
-  );
+  let relate = RelateCtx::new(Arc::clone(&store), TypeOptions::default());
   let span = diagnostics::Span {
     file: FileId(0),
     range: diagnostics::TextRange::new(0, 0),
@@ -75,7 +77,6 @@ fn conflicting_type_arguments_still_error() {
     callable,
     &[primitives.number, primitives.string],
     None,
-    &[typecheck_ts::check::infer::TypeParamDecl::new(tp)],
     None,
     span,
   );

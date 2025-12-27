@@ -1,5 +1,6 @@
 use salsa::Setter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
@@ -10,27 +11,26 @@ use hir_js::{
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
-use types_ts_interned::{CacheStats, PrimitiveIds, TypeId, TypeParamId, TypeStore};
+use types_ts_interned::{PrimitiveIds, TypeStore};
 
 use crate::codes;
-use crate::db::decl;
 use crate::db::inputs::{
   CancellationToken, CancelledInput, CompilerOptionsInput, FileInput, ModuleResolutionInput,
   RootsInput,
 };
 use crate::db::spans::{expr_at_from_spans, FileSpanIndex};
 use crate::db::symbols::{LocalSymbolInfo, SymbolIndex};
-use crate::db::types::{DeclTypes, SharedDeclTypes, SharedTypeStore};
 use crate::db::{symbols, Db, ModuleKey};
-use crate::db::{cache::BodyCache, cache::DefCache, cache::DefCacheEntry};
-use crate::lib_support::{CacheOptions, CompilerOptions, FileKind};
+use crate::lib_support::{CompilerOptions, FileKind};
 use crate::parse_metrics;
-use crate::profile::{CacheKind, QueryKind, QueryStatsCollector};
+use crate::profile::QueryKind;
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
-use crate::symbols::{semantic_js::SymbolId, SymbolBinding, SymbolOccurrence};
+use crate::semantic_js::SymbolId;
+use crate::symbols::SymbolBinding;
 use crate::FileKey;
-use crate::{BodyId, DefId, ExprId};
+use crate::SymbolOccurrence;
+use crate::{BodyId, DefId, ExprId, TypeId};
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
   db.file_input_by_key(key)
@@ -99,28 +99,92 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
 
 #[salsa::tracked]
 fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
-  let specs = module_specifiers_for(db, file);
+  unresolved_module_diagnostics_for(db, file)
+}
+
+#[salsa::tracked]
+fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
   };
-  let mut spans = HashMap::new();
-  for (spec, span) in collect_module_specifiers(lowered).into_iter() {
-    spans.entry(spec).or_insert(span);
-  }
-
   let mut diagnostics = Vec::new();
-  for spec in specs.iter() {
-    if module_resolve(db, file.file_id(db), Arc::clone(spec)).is_none() {
-      if let Some(span) = spans.get(spec) {
-        diagnostics.push(codes::UNRESOLVED_MODULE.error(
-          format!("module {} could not be resolved", spec),
-          Span::new(file.file_id(db), *span),
-        ));
+  let file_id = file.file_id(db);
+  let source = file_text_for(db, file);
+  let refine_spec_span = |spec: &hir_js::ModuleSpecifier| -> TextRange {
+    if (spec.span.end as usize) <= source.len() {
+      if let Some(segment) = source.get(spec.span.start as usize..spec.span.end as usize) {
+        for quote in ['"', '\'', '`'] {
+          let needle = format!("{quote}{}{quote}", spec.value);
+          if let Some(idx) = segment.find(&needle) {
+            let start = spec.span.start + idx as u32;
+            let end = start + needle.len() as u32;
+            return TextRange::new(start, end);
+          }
+        }
+      }
+    }
+    spec.span
+  };
+  let mut seen = BTreeSet::new();
+  let mut check_specifier =
+    |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
+      db,
+      file_id,
+      Arc::<str>::from(spec.value.clone()),
+    ) {
+      Some(_) => {}
+      None => {
+        let range = refine_spec_span(spec);
+        let key = (range.start, range.end, spec.value.clone());
+        if !seen.insert(key) {
+          return;
+        }
+        let mut diag = codes::UNRESOLVED_MODULE.error(
+          format!("unresolved module specifier \"{}\"", spec.value),
+          Span::new(file_id, range),
+        );
+        diag.push_note(format!("module specifier: \"{}\"", spec.value));
+        diags.push(diag);
+      }
+    };
+
+  for import in lowered.hir.imports.iter() {
+    match &import.kind {
+      hir_js::ImportKind::Es(es) => {
+        check_specifier(&es.specifier, &mut diagnostics);
+      }
+      hir_js::ImportKind::ImportEquals(eq) => {
+        if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
+          check_specifier(module, &mut diagnostics);
+        }
       }
     }
   }
-  diagnostics.sort();
+
+  for export in lowered.hir.exports.iter() {
+    match &export.kind {
+      ExportKind::Named(named) => {
+        if let Some(source) = named.source.as_ref() {
+          check_specifier(source, &mut diagnostics);
+        }
+      }
+      ExportKind::ExportAll(all) => {
+        check_specifier(&all.source, &mut diagnostics);
+      }
+      ExportKind::Default(_) | ExportKind::Assignment(_) => {}
+    }
+  }
+
+  diagnostics.sort_by(|a, b| {
+    a.primary
+      .range
+      .start
+      .cmp(&b.primary.range.start)
+      .then_with(|| a.primary.range.end.cmp(&b.primary.range.end))
+      .then_with(|| a.code.as_str().cmp(b.code.as_str()))
+      .then_with(|| a.message.cmp(&b.message))
+  });
   diagnostics.dedup();
   Arc::from(diagnostics.into_boxed_slice())
 }
@@ -220,28 +284,19 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
       .or_insert(binding);
   }
 
-  if let Some(primitives) = db.primitive_ids() {
-    globals
-      .entry("undefined".to_string())
-      .and_modify(|binding| binding.type_id = Some(primitives.undefined))
-      .or_insert(SymbolBinding {
-        symbol: deterministic_symbol_id("undefined"),
-        def: None,
-        type_id: Some(primitives.undefined),
-      });
-    globals
-      .entry("Error".to_string())
-      .and_modify(|binding| {
-        if binding.type_id.is_none() {
-          binding.type_id = Some(primitives.any);
-        }
-      })
-      .or_insert(SymbolBinding {
-        symbol: deterministic_symbol_id("Error"),
-        def: None,
-        type_id: Some(primitives.any),
-      });
-  }
+  let primitives = db.primitive_ids();
+  globals
+    .entry("undefined".to_string())
+    .or_insert(SymbolBinding {
+      symbol: deterministic_symbol_id("undefined"),
+      def: None,
+      type_id: primitives.map(|p| p.undefined),
+    });
+  globals.entry("Error".to_string()).or_insert(SymbolBinding {
+    symbol: deterministic_symbol_id("Error"),
+    def: None,
+    type_id: primitives.map(|p| p.any),
+  });
 
   Arc::new(globals)
 }
@@ -264,17 +319,15 @@ pub mod body_check {
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
   use crate::check::caches::CheckerCaches;
-  use crate::check::flow_bindings::FlowBindings;
   use crate::check::hir_body::{
-    check_body_with_env, check_body_with_expander, BindingTypeResolver,
+    check_body_with_env, check_body_with_expander, BindingTypeResolver, FlowBindingId, FlowBindings,
   };
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
   use crate::lib_support::{CacheMode, CacheOptions};
   use crate::profile::{QueryKind, QueryStatsCollector};
   use crate::program::check::relate_hooks;
-  use crate::symbols::SymbolBinding;
-  use crate::{BodyCheckResult, BodyId, DefId, PatId, TypeId};
+  use crate::{BodyCheckResult, BodyId, DefId, PatId, SymbolBinding, TypeId};
 
   #[derive(Clone)]
   pub struct ArcAst(Arc<Node<TopLevel>>);
@@ -549,7 +602,6 @@ pub mod body_check {
           .interned_def_types
           .get(&def)
           .copied()
-          .map(|ty| ctx.store.canon(ty))
           .unwrap_or(prim.unknown)
       };
 
@@ -562,7 +614,6 @@ pub mod body_check {
         &ctx.global_bindings,
         map_def_ty,
         prim.unknown,
-        &ctx.store,
       );
       if let Some(file_bindings) = ctx.file_bindings.get(&meta.file) {
         seed_bindings(
@@ -571,7 +622,6 @@ pub mod body_check {
           file_bindings,
           map_def_ty,
           prim.unknown,
-          &ctx.store,
         );
       }
 
@@ -585,6 +635,12 @@ pub mod body_check {
 
       let caches = ctx.checker_caches.for_body();
       let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
+      let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
+        function_expr_span(self, body_id)
+          .and_then(|span| contextual_callable_for_body(self, body_id, span))
+      } else {
+        None
+      };
       let mut result = check_body_with_expander(
         body_id,
         body,
@@ -597,13 +653,12 @@ pub mod body_check {
         (!binding_defs.is_empty())
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
+        contextual_fn_ty,
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
-        let (locals, _) = ::semantic_js::ts::locals::bind_ts_locals_tables(&*ast, meta.file, true);
-        let flow_bindings = FlowBindings::new(body, &locals);
-
-        let mut initial_env: HashMap<_, _> = HashMap::new();
+        let flow_bindings = FlowBindings::from_body(body);
+        let mut initial_env: HashMap<FlowBindingId, _> = HashMap::new();
         if let Some(function) = body.function.as_ref() {
           for param in function.params.iter() {
             if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
@@ -616,19 +671,16 @@ pub mod body_check {
           }
         }
         for (idx, expr) in body.exprs.iter().enumerate() {
-          if !matches!(expr.kind, hir_js::ExprKind::Ident(_)) {
-            continue;
-          }
-          let Some(binding) = flow_bindings.binding_for_expr(hir_js::ExprId(idx as u32)) else {
-            continue;
-          };
-          if initial_env.contains_key(&binding) {
-            continue;
-          }
-          let symbol = locals.symbol(binding);
-          if let Some(name) = locals.names.get(&symbol.name) {
-            if let Some(ty) = bindings.get(name) {
-              initial_env.insert(binding, *ty);
+          if let hir_js::ExprKind::Ident(name_id) = expr.kind {
+            if let Some(binding) = flow_bindings.binding_for_expr(hir_js::ExprId(idx as u32)) {
+              if initial_env.contains_key(&binding) {
+                continue;
+              }
+              if let Some(name) = lowered.names.resolve(name_id) {
+                if let Some(ty) = bindings.get(name) {
+                  initial_env.insert(binding, *ty);
+                }
+              }
             }
           }
         }
@@ -646,8 +698,7 @@ pub mod body_check {
           &lowered.names,
           meta.file,
           Arc::clone(&ctx.store),
-          &flow_bindings,
-          &locals,
+          None,
           &initial_env,
           flow_relate,
           Some(&expander),
@@ -863,17 +914,9 @@ pub mod body_check {
     source: &HashMap<String, SymbolBinding>,
     map_def_ty: impl Fn(DefId) -> TypeId,
     unknown: TypeId,
-    store: &Arc<TypeStore>,
   ) {
     for (name, binding) in source.iter() {
-      let mut ty = binding
-        .type_id
-        .filter(|ty| store.contains_type_id(*ty))
-        .map(|ty| store.canon(ty));
-      if ty.is_none() {
-        ty = binding.def.map(|d| map_def_ty(d));
-      }
-      let ty = ty.unwrap_or(unknown);
+      let ty = binding.def.map(|d| map_def_ty(d)).unwrap_or(unknown);
       bindings.insert(name.clone(), ty);
       if let Some(def) = binding.def {
         binding_defs.insert(name.clone(), def);
@@ -1000,112 +1043,6 @@ pub mod body_check {
 }
 impl Eq for LowerResultWithDiagnostics {}
 
-#[salsa::tracked]
-fn type_store_for(db: &dyn Db) -> SharedTypeStore {
-  let options = compiler_options(db);
-  SharedTypeStore(TypeStore::with_options((&options).into()))
-}
-
-#[salsa::tracked]
-fn canonical_defs_for(db: &dyn Db) -> Arc<HashMap<(FileId, String), DefId>> {
-  let mut defs = HashMap::new();
-  let files = all_files_for(db);
-  for file in files.iter() {
-    let lowered = lower_hir_for(db, db.file_input(*file).expect("file seeded for lowering"));
-    let Some(lowered_hir) = lowered.lowered.as_ref() else {
-      continue;
-    };
-    let mut file_defs = lowered_hir.defs.clone();
-    file_defs.sort_by_key(|def| (def.span.start, def.span.end, def.id.0));
-    for def in file_defs.into_iter() {
-      if let Some(name) = lowered_hir.names.resolve(def.name) {
-        defs.entry((*file, name.to_string())).or_insert(def.id);
-      }
-    }
-  }
-  Arc::new(defs)
-}
-
-#[salsa::tracked]
-fn decl_types_in_file_for(db: &dyn Db, file: FileInput) -> SharedDeclTypes {
-  let lowered = lower_hir_for(db, file);
-  let store = type_store_for(db).0;
-  let semantics = ts_semantics_for(db);
-  let def_by_name = canonical_defs_for(db);
-  let file_id = file.file_id(db);
-  let Some(lowered_hir) = lowered.lowered.as_ref() else {
-    let mut decls = DeclTypes::default();
-    decls
-      .diagnostics
-      .extend(lowered.diagnostics.iter().cloned());
-    return SharedDeclTypes(decls.into_shared());
-  };
-  let mut decls = decl::lower_decl_types(
-    store,
-    lowered_hir,
-    Some(&semantics.semantics),
-    def_by_name,
-    file_id,
-  );
-  decls
-    .diagnostics
-    .extend(lowered.diagnostics.iter().cloned());
-  SharedDeclTypes(decls.into_shared())
-}
-
-fn decl_for_def<'a>(
-  semantics: &'a sem_ts::TsProgramSemantics,
-  def: DefId,
-) -> Option<&'a sem_ts::DeclData> {
-  for ns in [
-    sem_ts::Namespace::TYPE,
-    sem_ts::Namespace::NAMESPACE,
-    sem_ts::Namespace::VALUE,
-  ] {
-    let Some(symbol) = semantics.symbol_for_def(def, ns) else {
-      continue;
-    };
-    for decl_id in semantics.symbol_decls(symbol, ns) {
-      let decl = semantics.symbols().decl(*decl_id);
-      if decl.def_id == def {
-        return Some(decl);
-      }
-    }
-  }
-  None
-}
-
-fn decl_type_for(db: &dyn Db, def: DefId) -> Option<TypeId> {
-  let semantics = ts_semantics_for(db);
-  let decl = decl_for_def(&semantics.semantics, def)?;
-  let handle = db.file_input(decl.file)?;
-  let decls = decl_types_in_file_for(db, handle).0;
-  if let Some(ty) = decls.types.get(&def).copied() {
-    return Some(ty);
-  }
-  decls
-    .namespace_members
-    .get(&def)
-    .map(|members| decl::build_namespace_object_type(&type_store_for(db).0, None, members))
-}
-
-fn type_params_for(db: &dyn Db, def: DefId) -> Arc<[TypeParamId]> {
-  let semantics = ts_semantics_for(db);
-  let decl = match decl_for_def(&semantics.semantics, def) {
-    Some(decl) => decl,
-    None => return Arc::from([]),
-  };
-  let handle = match db.file_input(decl.file) {
-    Some(handle) => handle,
-    None => return Arc::from([]),
-  };
-  let decls = decl_types_in_file_for(db, handle).0;
-  if let Some(params) = decls.type_params.get(&def) {
-    Arc::from(params.clone())
-  } else {
-    Arc::from([])
-  }
-}
 pub fn parse_query_count() -> usize {
   parse_metrics::parse_call_count()
 }
@@ -1151,10 +1088,9 @@ fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
 fn sem_hir_for(db: &dyn Db, file: FileInput) -> sem_ts::HirFile {
   let parsed = parse_for(db, file);
   let lowered = lower_hir_for(db, file);
-  if let (Some(ast), Some(lowered)) = (parsed.ast.as_ref(), lowered.lowered.as_ref()) {
-    sem_hir_from_lower(ast.as_ref(), lowered)
-  } else {
-    empty_sem_hir(file.file_id(db), lowered.file_kind)
+  match (parsed.ast.as_ref(), lowered.lowered.as_ref()) {
+    (Some(ast), Some(lowered)) => sem_hir_from_lower(ast, lowered),
+    _ => empty_sem_hir(file.file_id(db), lowered.file_kind),
   }
 }
 
@@ -1349,8 +1285,12 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
   }
   for arenas in lowered.types.values() {
     for ty in arenas.type_exprs.iter() {
-      if let hir_js::TypeExprKind::Import(import) = &ty.kind {
-        specs.push((Arc::from(import.module.clone()), ty.span));
+      if let hir_js::TypeExprKind::TypeRef(type_ref) = &ty.kind {
+        if let hir_js::TypeName::Import(import) = &type_ref.name {
+          if let Some(module) = &import.module {
+            specs.push((Arc::from(module.clone()), ty.span));
+          }
+        }
       }
     }
   }
@@ -1380,10 +1320,12 @@ pub fn file_kind(db: &dyn Db, file: FileId) -> FileKind {
   file_kind_for(db, handle)
 }
 
-/// Source text for a given file identifier, if seeded.
-pub fn file_text(db: &dyn Db, file: FileId) -> Option<Arc<str>> {
-  let handle = db.file_input(file)?;
-  Some(file_text_for(db, handle))
+/// Source text for a given file identifier.
+pub fn file_text(db: &dyn Db, file: FileId) -> Arc<str> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before reading text");
+  file_text_for(db, handle)
 }
 
 pub fn parse(db: &dyn Db, file: FileId) -> parser::ParseResult {
@@ -1419,10 +1361,6 @@ pub fn module_dep_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
     .file_input(file)
     .expect("file must be seeded before querying module deps");
   module_dep_diagnostics_for(db, handle)
-}
-
-pub fn unresolved_module_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
-  module_dep_diagnostics(db, file)
 }
 
 pub fn reachable_files(db: &dyn Db) -> Arc<Vec<FileId>> {
@@ -1533,25 +1471,6 @@ pub fn all_files(db: &dyn Db) -> Arc<Vec<FileId>> {
 
 pub fn ts_semantics(db: &dyn Db) -> Arc<TsSemantics> {
   ts_semantics_for(db)
-}
-
-pub fn type_store(db: &dyn Db) -> Arc<TypeStore> {
-  type_store_for(db).0
-}
-
-pub fn decl_types_in_file(db: &dyn Db, file: FileId) -> Arc<DeclTypes> {
-  let handle = db
-    .file_input(file)
-    .expect("file must be seeded before lowering declarations");
-  decl_types_in_file_for(db, handle).0
-}
-
-pub fn decl_type(db: &dyn Db, def: DefId) -> Option<TypeId> {
-  decl_type_for(db, def)
-}
-
-pub fn type_params(db: &dyn Db, def: DefId) -> Arc<[TypeParamId]> {
-  type_params_for(db, def)
 }
 
 /// Expose the current revision for smoke-testing the salsa plumbing.
@@ -1883,10 +1802,34 @@ pub trait TypeDb: salsa::Database + Send + 'static {
   fn type_store_input(&self) -> TypeStoreInput;
   fn files_input(&self) -> FilesInput;
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput>;
-  fn body_cache(&self) -> BodyCache;
-  fn def_cache(&self) -> DefCache;
-  fn profiler(&self) -> Option<QueryStatsCollector>;
 }
+
+/// Cheap wrapper around [`TypeStore`] with pointer-based equality for salsa
+/// inputs.
+#[derive(Clone)]
+pub struct SharedTypeStore(pub Arc<TypeStore>);
+
+impl SharedTypeStore {
+  pub fn arc(&self) -> Arc<TypeStore> {
+    Arc::clone(&self.0)
+  }
+}
+
+impl fmt::Debug for SharedTypeStore {
+  fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    f.debug_tuple("SharedTypeStore")
+      .field(&Arc::as_ptr(&self.0))
+      .finish()
+  }
+}
+
+impl PartialEq for SharedTypeStore {
+  fn eq(&self, other: &Self) -> bool {
+    Arc::ptr_eq(&self.0, &other.0)
+  }
+}
+
+impl Eq for SharedTypeStore {}
 
 /// Kind of declaration associated with a definition.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1939,7 +1882,7 @@ pub fn type_compiler_options(db: &dyn TypeDb) -> CompilerOptions {
 }
 
 #[salsa::tracked]
-pub fn types_type_store(db: &dyn TypeDb) -> SharedTypeStore {
+pub fn type_store(db: &dyn TypeDb) -> SharedTypeStore {
   db.type_store_input().store(db)
 }
 
@@ -1949,7 +1892,7 @@ pub fn files(db: &dyn TypeDb) -> Arc<Vec<FileId>> {
 }
 
 #[salsa::tracked]
-pub fn types_decl_types_in_file(
+pub fn decl_types_in_file(
   db: &dyn TypeDb,
   file: FileId,
   _seed: (),
@@ -1961,10 +1904,6 @@ pub fn types_decl_types_in_file(
     .unwrap_or_else(|| Arc::new(BTreeMap::new()))
 }
 
-pub fn cache_stats(db: &dyn TypeDb) -> (CacheStats, CacheStats) {
-  (db.body_cache().stats(), db.def_cache().stats())
-}
-
 #[salsa::tracked]
 pub fn type_semantics(db: &dyn TypeDb) -> Arc<TypeSemantics> {
   let mut by_name: BTreeMap<(FileId, String), Vec<DefId>> = BTreeMap::new();
@@ -1972,7 +1911,7 @@ pub fn type_semantics(db: &dyn TypeDb) -> Arc<TypeSemantics> {
   let mut file_list: Vec<_> = files(db).iter().copied().collect();
   file_list.sort_by_key(|f| f.0);
   for file in file_list.into_iter() {
-    for (def, decl) in types_decl_types_in_file(db, file, ()).iter() {
+    for (def, decl) in decl_types_in_file(db, file, ()).iter() {
       by_name
         .entry((decl.file, decl.name.clone()))
         .or_default()
@@ -2000,31 +1939,22 @@ pub fn type_semantics(db: &dyn TypeDb) -> Arc<TypeSemantics> {
 pub fn check_body(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // The unit seed mirrors `decl_types_in_file` to avoid introducing synthetic
   // salsa structs for every definition key.
-  let store = types_type_store(db).arc();
+  let store = type_store(db).arc();
   let fallback = store.primitive_ids().unknown;
-  let revision = salsa::plumbing::current_revision(db);
-  if let Some(cached) = db.body_cache().get(def, revision) {
-    return cached;
-  }
   let Some(decl) = decl_types_for_def(db, def) else {
     return fallback;
   };
   let Some(init) = decl.initializer.clone() else {
     return fallback;
   };
-  let result = eval_initializer(db, &store, init);
-  db.body_cache().insert(def, revision, result);
-  if let Some(profiler) = db.profiler() {
-    profiler.record_cache(CacheKind::Body, &db.body_cache().stats());
-  }
-  result
+  eval_initializer(db, &store, init)
 }
 
 fn check_body_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: ()) -> TypeId {
   // Bodies are part of the same cycle when an initializer references its own
   // definition. Recover with `any` to mirror `type_of_def`'s fallback and avoid
   // panicking on self-references.
-  types_type_store(db).arc().primitive_ids().any
+  type_store(db).arc().primitive_ids().any
 }
 
 #[salsa::tracked(recovery_fn = type_of_def_cycle)]
@@ -2033,14 +1963,8 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
   // without forcing them to implement salsa's struct traits.
   // Track compiler options changes even if we do not branch on them yet.
   let _options = type_compiler_options(db);
-  let store = types_type_store(db).arc();
+  let store = type_store(db).arc();
   let fallback = store.primitive_ids().any;
-  let revision = salsa::plumbing::current_revision(db);
-  if let Some(entry) = db.def_cache().get_entry(def, revision) {
-    if let Some(ty) = entry.store {
-      return ty;
-    }
-  }
 
   let base = base_type(db, &store, def, fallback);
 
@@ -2063,19 +1987,13 @@ pub fn type_of_def(db: &dyn TypeDb, def: DefId, _seed: ()) -> TypeId {
     }
   }
 
-  db
-    .def_cache()
-    .insert_entry(def, revision, DefCacheEntry::default().with_store(base));
-  if let Some(profiler) = db.profiler() {
-    profiler.record_cache(CacheKind::Def, &db.def_cache().stats());
-  }
   base
 }
 
 fn type_of_def_cycle(db: &dyn TypeDb, _cycle: &salsa::Cycle, _def: DefId, _seed: ()) -> TypeId {
   // Self-referential definitions fall back to `any` to keep results stable
   // under cycles instead of panicking.
-  types_type_store(db).arc().primitive_ids().any
+  type_store(db).arc().primitive_ids().any
 }
 
 fn base_type(db: &dyn TypeDb, store: &Arc<TypeStore>, def: DefId, fallback: TypeId) -> TypeId {
@@ -2093,7 +2011,7 @@ fn base_type(db: &dyn TypeDb, store: &Arc<TypeStore>, def: DefId, fallback: Type
 fn decl_types_for_def(db: &dyn TypeDb, def: DefId) -> Option<DeclInfo> {
   let semantics = type_semantics(db);
   if let Some(file) = semantics.def_files.get(&def).copied() {
-    if let Some(entry) = types_decl_types_in_file(db, file, ()).get(&def) {
+    if let Some(entry) = decl_types_in_file(db, file, ()).get(&def) {
       return Some(entry.clone());
     }
   }
@@ -2101,7 +2019,7 @@ fn decl_types_for_def(db: &dyn TypeDb, def: DefId) -> Option<DeclInfo> {
   let mut file_list: Vec<_> = files(db).iter().copied().collect();
   file_list.sort_by_key(|f| f.0);
   for file in file_list {
-    if let Some(entry) = types_decl_types_in_file(db, file, ()).get(&def) {
+    if let Some(entry) = decl_types_in_file(db, file, ()).get(&def) {
       return Some(entry.clone());
     }
   }
@@ -2133,23 +2051,16 @@ pub struct TypesDatabase {
   type_store: Option<TypeStoreInput>,
   files: Option<FilesInput>,
   decls: BTreeMap<FileId, DeclTypesInput>,
-  body_cache: BodyCache,
-  def_cache: DefCache,
-  profiler: Option<QueryStatsCollector>,
 }
 
 impl Default for TypesDatabase {
   fn default() -> Self {
-    let default_cache = CacheOptions::default();
     Self {
       storage: salsa::Storage::default(),
       compiler_options: None,
       type_store: None,
       files: None,
       decls: BTreeMap::new(),
-      body_cache: BodyCache::new(default_cache.body_config()),
-      def_cache: DefCache::new(default_cache.def_config()),
-      profiler: None,
     }
   }
 }
@@ -2178,18 +2089,6 @@ impl TypeDb for TypesDatabase {
   fn decl_types_input(&self, file: FileId) -> Option<DeclTypesInput> {
     self.decls.get(&file).copied()
   }
-
-  fn body_cache(&self) -> BodyCache {
-    self.body_cache.clone()
-  }
-
-  fn def_cache(&self) -> DefCache {
-    self.def_cache.clone()
-  }
-
-  fn profiler(&self) -> Option<QueryStatsCollector> {
-    self.profiler.clone()
-  }
 }
 
 impl TypesDatabase {
@@ -2202,14 +2101,11 @@ impl TypesDatabase {
   }
 
   pub fn set_compiler_options(&mut self, options: CompilerOptions) {
-    let cache_options = options.cache.clone();
     if let Some(handle) = self.compiler_options {
       handle.set_options(self).to(options);
     } else {
       self.compiler_options = Some(TypeCompilerOptions::new(self, options));
     }
-    self.body_cache = BodyCache::new(cache_options.body_config());
-    self.def_cache = DefCache::new(cache_options.def_config());
   }
 
   pub fn set_type_store(&mut self, store: SharedTypeStore) {
@@ -2226,10 +2122,6 @@ impl TypesDatabase {
     } else {
       self.files = Some(FilesInput::new(self, files));
     }
-  }
-
-  pub fn set_profiler(&mut self, profiler: QueryStatsCollector) {
-    self.profiler = Some(profiler);
   }
 
   pub fn set_decl_types_in_file(&mut self, file: FileId, decls: Arc<BTreeMap<DefId, DeclInfo>>) {
@@ -2299,11 +2191,13 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
   let files = all_files(db);
   let mut parse_diags = Vec::new();
   let mut lower_diags = Vec::new();
+  let mut module_diags = Vec::new();
   for file in files.iter() {
     let parsed = parse(db, *file);
     parse_diags.extend(parsed.diagnostics.into_iter());
     let lowered = lower_hir(db, *file);
     lower_diags.extend(lowered.diagnostics.into_iter());
+    module_diags.extend(module_dep_diagnostics(db, *file).iter().cloned());
   }
   let semantics = ts_semantics(db);
   let mut body_diags = Vec::new();
@@ -2314,12 +2208,16 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
     body_diags.extend(body_diagnostics_from_results(db, *body).iter().cloned());
   }
   body_diags.extend(extra_diagnostics_for(db).iter().cloned());
-  aggregate_program_diagnostics(
-    parse_diags,
-    lower_diags,
-    semantics.diagnostics.iter().cloned(),
-    body_diags,
-  )
+  // Drop binder-level unresolved import diagnostics (`BIND1002`) in favor of the
+  // module-resolution-based `UNRESOLVED_MODULE` diagnostics, which carry spans
+  // targeting the specifier literal.
+  let semantic_diags = semantics
+    .diagnostics
+    .iter()
+    .filter(|diag| diag.code.as_str() != "BIND1002")
+    .cloned()
+    .chain(module_diags.into_iter());
+  aggregate_program_diagnostics(parse_diags, lower_diags, semantic_diags, body_diags)
 }
 
 /// Derived query that aggregates diagnostics from parsing, lowering, binding,

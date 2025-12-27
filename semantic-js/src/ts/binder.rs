@@ -295,12 +295,14 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       }
 
       if let Some(target) = self.resolver.resolve(hir.file_id, &ambient.name) {
-        self.pending_file_augmentations.push(PendingModuleAugmentation {
-          target,
-          origin: hir.file_id,
-          origin_file_kind: hir.file_kind,
-          module: ambient.clone(),
-        });
+        self
+          .pending_file_augmentations
+          .push(PendingModuleAugmentation {
+            target,
+            origin: hir.file_id,
+            origin_file_kind: hir.file_kind,
+            module: ambient.clone(),
+          });
         deps.push(target);
       } else {
         deps.extend(self.bind_ambient_module(hir.file_id, hir.file_kind, ambient));
@@ -317,8 +319,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     }
 
     self.pending_file_augmentations.sort_by(|a, b| {
-      a
-        .target
+      a.target
         .cmp(&b.target)
         .then_with(|| a.origin.cmp(&b.origin))
         .then_with(|| a.module.name_span.start.cmp(&b.module.name_span.start))
@@ -348,11 +349,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         );
 
         for nested in &aug.module.ambient_modules {
-          deps.extend(self.bind_ambient_module(
-            aug.origin,
-            aug.origin_file_kind,
-            nested,
-          ));
+          deps.extend(self.bind_ambient_module(aug.origin, aug.origin_file_kind, nested));
         }
 
         self.modules.insert(aug.target, state);

@@ -1,23 +1,20 @@
 //! Flow-sensitive environment utilities for per-body analysis.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use semantic_js::ts::SymbolId;
 use types_ts_interned::{TypeId, TypeStore};
 
+pub use super::flow_bindings::FlowBindingId;
 use super::flow_narrow::Facts;
 
-pub type FlowBindingId = SymbolId;
-
-/// Segment within an access path (currently limited to static property keys).
+/// Path segment for an object/property access tracked during flow analysis.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PathSegment {
   String(String),
   Number(String),
 }
 
-/// Canonical key for flow facts and environment entries. Tracks a root local and
-/// zero or more property segments (e.g. `x`, `x.kind`, `x.meta.kind`).
+/// Stable key representing a binding and optional property path.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FlowKey {
   pub root: FlowBindingId,
@@ -26,7 +23,7 @@ pub struct FlowKey {
 
 impl FlowKey {
   pub fn root(root: FlowBindingId) -> Self {
-    Self {
+    FlowKey {
       root,
       segments: Vec::new(),
     }
@@ -41,177 +38,163 @@ impl FlowKey {
     }
   }
 
-  /// Returns true if `self` is a prefix (including exact match) of `other`.
-  pub fn is_prefix_of(&self, other: &FlowKey) -> bool {
+  fn is_prefix_of(&self, other: &FlowKey) -> bool {
     self.root == other.root && other.segments.starts_with(&self.segments)
   }
 }
 
-/// Per-variable state tracked by the flow-sensitive analysis.
+/// Flow-tracked state for a particular binding path.
 #[derive(Clone, Copy, Debug)]
-pub struct VarState {
+pub struct PathState {
   pub ty: TypeId,
   pub assigned: bool,
 }
 
-impl VarState {
-  pub fn new(ty: TypeId, assigned: bool) -> Self {
-    Self { ty, assigned }
-  }
-}
-
 /// Per-point variable environment used during flow-sensitive checks.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Env {
-  vars: HashMap<FlowKey, VarState>,
+  unknown: TypeId,
+  paths: HashMap<FlowKey, PathState>,
 }
 
 impl Env {
-  pub fn new() -> Self {
+  pub fn new(unknown: TypeId) -> Self {
     Env {
-      vars: HashMap::new(),
+      unknown,
+      paths: HashMap::new(),
     }
   }
 
-  pub fn with_initial(initial: &HashMap<FlowBindingId, TypeId>) -> Self {
-    let mut env = Env::new();
-    env.vars.extend(
-      initial
-        .iter()
-        .map(|(k, v)| (FlowKey::root(*k), VarState::new(*v, true))),
-    );
+  pub fn with_initial(initial: &HashMap<FlowBindingId, TypeId>, unknown: TypeId) -> Self {
+    let mut env = Env::new(unknown);
+    for (binding, ty) in initial {
+      env.set_var_with_assigned(*binding, *ty, true);
+    }
     env
   }
 
-  pub fn get_var(&self, name: FlowBindingId) -> Option<TypeId> {
-    self.get_path(&FlowKey::root(name))
+  pub fn get_path_state(&self, key: &FlowKey) -> Option<PathState> {
+    self.paths.get(key).copied()
   }
 
-  pub fn get_var_state(&self, name: FlowBindingId) -> Option<VarState> {
-    self.get_path_state(&FlowKey::root(name))
+  pub fn get_path(&self, key: &FlowKey) -> Option<TypeId> {
+    self.get_path_state(key).map(|s| s.ty)
   }
 
-  pub fn get(&self, name: FlowBindingId) -> Option<TypeId> {
-    self.get_var(name)
+  pub fn set_var(&mut self, binding: FlowBindingId, ty: TypeId) {
+    self.set_var_with_assigned(binding, ty, true);
   }
 
-  pub fn set_var(&mut self, name: FlowBindingId, ty: TypeId) {
-    self.set_var_with_assigned(name, ty, true);
-  }
-
-  pub fn set(&mut self, name: FlowBindingId, ty: TypeId) {
-    self.set_var(name, ty);
-  }
-
-  pub fn set_var_with_assigned(&mut self, name: FlowBindingId, ty: TypeId, assigned: bool) {
-    let key = FlowKey::root(name);
-    self.invalidate_prefix(&key);
-    self.vars.insert(key, VarState::new(ty, assigned));
-  }
-
-  pub fn set_with_assigned(&mut self, name: FlowBindingId, ty: TypeId, assigned: bool) {
-    self.set_var_with_assigned(name, ty, assigned);
-  }
-
-  pub fn get_path(&self, path: &FlowKey) -> Option<TypeId> {
-    self.vars.get(path).map(|state| state.ty)
-  }
-
-  pub fn get_path_state(&self, path: &FlowKey) -> Option<VarState> {
-    self.vars.get(path).copied()
-  }
-
-  pub fn set_path(&mut self, path: FlowKey, ty: TypeId) {
-    self.set_path_with_assigned(path, ty, true);
-  }
-
-  pub fn set_path_with_assigned(&mut self, path: FlowKey, ty: TypeId, assigned: bool) {
-    self.invalidate_prefix(&path);
-    self.vars.insert(path, VarState::new(ty, assigned));
-  }
-
-  pub fn invalidate_prefix(&mut self, prefix: &FlowKey) {
-    self.vars.retain(|key, _| !prefix.is_prefix_of(key));
-  }
-
-  pub fn invalidate_all(&mut self) {
-    self.vars.clear();
-  }
-
-  /// Remove any tracked information for a variable, clearing previous narrowings.
-  pub fn invalidate(&mut self, name: FlowBindingId) {
-    self.invalidate_prefix(&FlowKey::root(name));
-  }
-
-  /// Clear any tracked property narrowings rooted at `name`. Currently there are
-  /// no separate property entries, but this hook is used to invalidate access
-  /// paths when writes occur.
-  pub fn clear_properties_of(&mut self, name: FlowBindingId) {
+  pub fn set_var_with_assigned(&mut self, binding: FlowBindingId, ty: TypeId, assigned: bool) {
     self
-      .vars
-      .retain(|key, _| key.root != name || key.segments.is_empty());
+      .paths
+      .insert(FlowKey::root(binding), PathState { ty, assigned });
   }
 
-  /// Clear all tracked property-specific narrowings.
-  pub fn clear_all_properties(&mut self) {
-    self.vars.retain(|key, _| key.segments.is_empty());
+  pub fn set_path(&mut self, key: FlowKey, ty: TypeId) {
+    self.set_path_with_assigned(key, ty, true);
+  }
+
+  pub fn set_path_with_assigned(&mut self, key: FlowKey, ty: TypeId, assigned: bool) {
+    self.paths.insert(key, PathState { ty, assigned });
   }
 
   pub fn apply_facts(&mut self, facts: &Facts) {
-    for (name, ty) in facts.truthy.iter() {
-      self.vars.insert(name.clone(), VarState::new(*ty, true));
-    }
-    for (name, ty) in facts.assertions.iter() {
-      self.vars.insert(name.clone(), VarState::new(*ty, true));
+    for (key, ty) in facts.truthy.iter().chain(facts.assertions.iter()) {
+      self.paths.insert(
+        key.clone(),
+        PathState {
+          ty: *ty,
+          assigned: true,
+        },
+      );
     }
   }
 
   /// Apply falsy-directed facts to the environment, also honoring assertions
   /// that hold regardless of branch.
   pub fn apply_falsy(&mut self, facts: &Facts) {
-    for (name, ty) in facts.falsy.iter() {
-      self.vars.insert(name.clone(), VarState::new(*ty, true));
-    }
-    for (name, ty) in facts.assertions.iter() {
-      self.vars.insert(name.clone(), VarState::new(*ty, true));
+    for (key, ty) in facts.falsy.iter().chain(facts.assertions.iter()) {
+      self.paths.insert(
+        key.clone(),
+        PathState {
+          ty: *ty,
+          assigned: true,
+        },
+      );
     }
   }
 
   pub fn apply_map(&mut self, facts: &HashMap<FlowKey, TypeId>) {
-    for (name, ty) in facts.iter() {
-      self.vars.insert(name.clone(), VarState::new(*ty, true));
+    for (key, ty) in facts.iter() {
+      self.paths.insert(
+        key.clone(),
+        PathState {
+          ty: *ty,
+          assigned: true,
+        },
+      );
     }
   }
 
-  pub fn merge(&mut self, other: &Env, store: &TypeStore) {
-    self.merge_from(other, store);
+  pub fn invalidate_prefix(&mut self, key: &FlowKey) {
+    for (path, state) in self.paths.iter_mut() {
+      if key.is_prefix_of(path) {
+        state.ty = self.unknown;
+      }
+    }
+  }
+
+  pub fn invalidate_all(&mut self) {
+    for state in self.paths.values_mut() {
+      state.ty = self.unknown;
+    }
   }
 
   /// Join another environment into this one, returning whether any mapping
   /// changed. Types are merged using union to conservatively approximate all
-  /// reaching flows. A variable is only considered definitely assigned if all
-  /// incoming flows mark it as assigned.
+  /// reaching flows.
   pub fn merge_from(&mut self, other: &Env, store: &TypeStore) -> bool {
     let mut changed = false;
-    for (name, other_state) in other.vars.iter() {
-      match self.vars.get_mut(name) {
-        Some(existing) => {
-          let next_ty = store.union(vec![existing.ty, other_state.ty]);
-          let assigned = existing.assigned && other_state.assigned;
-          if next_ty != existing.ty || assigned != existing.assigned {
-            existing.ty = next_ty;
-            existing.assigned = assigned;
+    let mut keys: HashSet<FlowKey> = self.paths.keys().cloned().collect();
+    keys.extend(other.paths.keys().cloned());
+
+    for key in keys {
+      let left = self.paths.get(&key).copied().unwrap_or(PathState {
+        ty: self.unknown,
+        assigned: false,
+      });
+      let right = other.paths.get(&key).copied().unwrap_or(PathState {
+        ty: other.unknown,
+        assigned: false,
+      });
+      let merged_ty = store.union(vec![left.ty, right.ty]);
+      let merged_assigned = left.assigned && right.assigned;
+      match self.paths.get_mut(&key) {
+        Some(state) => {
+          if state.ty != merged_ty || state.assigned != merged_assigned {
+            state.ty = merged_ty;
+            state.assigned = merged_assigned;
             changed = true;
           }
         }
         None => {
-          self
-            .vars
-            .insert(name.clone(), VarState::new(other_state.ty, false));
+          self.paths.insert(
+            key,
+            PathState {
+              ty: merged_ty,
+              assigned: merged_assigned,
+            },
+          );
           changed = true;
         }
       }
     }
+
     changed
+  }
+
+  pub fn merge(&mut self, other: &Env, store: &TypeStore) {
+    self.merge_from(other, store);
   }
 }

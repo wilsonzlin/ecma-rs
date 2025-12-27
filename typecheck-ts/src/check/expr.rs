@@ -5,7 +5,6 @@ use types_ts_interned::{RelateCtx, TypeId, TypeStore};
 
 use super::overload::{
   resolve_construct as resolve_construct_overloads, resolve_overloads, CallResolution,
-  OverloadContext,
 };
 
 /// Resolve a call expression against a callable type.
@@ -17,7 +16,6 @@ pub fn resolve_call(
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
   span: Span,
-  context: Option<&mut dyn OverloadContext>,
 ) -> CallResolution {
   resolve_overloads(
     store,
@@ -27,7 +25,6 @@ pub fn resolve_call(
     this_arg,
     contextual_return,
     span,
-    context,
   )
 }
 

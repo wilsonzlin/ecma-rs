@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use diagnostics::FileId;
 use hir_js::{Body, BodyId};
-use typecheck_ts::check::flow_bindings::{FlowBindingId, FlowBindings};
-use typecheck_ts::check::hir_body::check_body_with_env;
+use typecheck_ts::check::hir_body::{check_body_with_env, FlowBindingId, FlowBindings};
 use types_ts_interned::{
   NameId as TypeNameId, Param, PropData, PropKey, Property, RelateCtx, Shape, Signature,
   TypeDisplay, TypeId, TypeKind, TypeStore,
@@ -103,7 +102,6 @@ fn run_flow(
   parsed: &crate::util::Parsed,
   body_id: BodyId,
   body: &Body,
-  bindings: &FlowBindings,
   store: &Arc<TypeStore>,
   initial: &HashMap<FlowBindingId, TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
@@ -114,8 +112,7 @@ fn run_flow(
     &parsed.lowered.names,
     FILE_ID,
     Arc::clone(store),
-    bindings,
-    &parsed.semantics,
+    Some(&parsed.semantics),
     initial,
     relate,
     None,
@@ -142,7 +139,7 @@ fn narrows_truthiness() {
       }
     }
   }
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
@@ -161,7 +158,7 @@ fn boolean_truthiness_splits_literals() {
     store.primitive_ids().boolean,
   );
 
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
 
   let true_ty =
     TypeDisplay::new(&store, store.intern_type(TypeKind::BooleanLiteral(true))).to_string();
@@ -186,7 +183,7 @@ fn narrows_typeof_checks() {
     param_binding(body, &bindings, 0),
     store.union(vec![prim.string, prim.number]),
   );
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let ret_types = res.return_types();
   let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
   let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
@@ -220,7 +217,7 @@ fn typeof_function_narrows_callables() {
     store.union(vec![callable, prim.number]),
   );
 
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
 
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
@@ -249,7 +246,7 @@ fn narrows_discriminants() {
     param_binding(body, &bindings, 0),
     store.union(vec![foo_obj, bar_obj]),
   );
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let ret_types = res.return_types();
   let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
   let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
@@ -281,7 +278,7 @@ function test(x: string | number) {
   let guard_binding =
     binding_for_name(body, &bindings, &parsed.semantics, "isStr").expect("guard binding");
   initial.insert(guard_binding, guard_ty);
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let ret_types = res.return_types();
 
   let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
@@ -323,7 +320,7 @@ function useIt(val: string | number) {
   );
   initial.insert(assert_name, assert_ty);
 
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   assert_eq!(ty, "string");
 }
@@ -369,7 +366,7 @@ function area(shape: { kind: "square", size: number } | { kind: "circle", radius
     param_binding(body, &bindings, 0),
     store.union(vec![square, circle]),
   );
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "number");
@@ -395,7 +392,7 @@ function f(x: string | null) {
     param_binding(body, &bindings, 0),
     store.union(vec![prim.string, prim.null]),
   );
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
@@ -429,14 +426,7 @@ function onlyObjects(val: object | number) {
   let val_obj = obj_type(&store, &[("value", prim.string)]);
   let other_obj = obj_type(&store, &[("other", prim.number)]);
   pick_env.insert(pick_param, store.union(vec![val_obj, other_obj]));
-  let res = run_flow(
-    &parsed,
-    pick_body_id,
-    pick_body,
-    &pick_bindings,
-    &store,
-    &pick_env,
-  );
+  let res = run_flow(&parsed, pick_body_id, pick_body, &store, &pick_env);
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
@@ -448,14 +438,7 @@ function onlyObjects(val: object | number) {
     param_binding(obj_body, &obj_bindings, 0),
     store.union(vec![obj_type(&store, &[]), prim.number]),
   );
-  let res = run_flow(
-    &parsed,
-    obj_body_id,
-    obj_body,
-    &obj_bindings,
-    &store,
-    &obj_env,
-  );
+  let res = run_flow(&parsed, obj_body_id, obj_body, &store, &obj_env);
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "{}");
@@ -486,7 +469,7 @@ function onlyArrays(val: string[] | number) {
     store.union(vec![arr, prim.number]),
   );
 
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, TypeDisplay::new(&store, arr).to_string());
@@ -528,7 +511,7 @@ function pick(val: string | number) {
     binding_for_name(body, &bindings, &parsed.semantics, "isStr").expect("guard binding");
   initial.insert(guard_binding, guard);
 
-  let res = run_flow(&parsed, body_id, body, &bindings, &store, &initial);
+  let res = run_flow(&parsed, body_id, body, &store, &initial);
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");

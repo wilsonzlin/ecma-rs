@@ -392,8 +392,8 @@ fn reports_overflowing_type_spans() {
     "expected overflow diagnostic for type span",
   );
 
-  let (type_expr, _) = type_alias(&result, "Overflow");
-  let span = result.types.type_exprs[type_expr.0 as usize].span;
+  let (_, arenas, type_expr, _) = type_alias(&result, "Overflow");
+  let span = arenas.type_exprs[type_expr.0 as usize].span;
   assert_eq!(span.start, u32::MAX);
   assert_eq!(span.end, u32::MAX);
 }
@@ -419,10 +419,10 @@ fn union_dedups_simple_duplicates() {
 }
 
 fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
-  let (expr_id, _) = type_alias(result, alias);
-  let mut ty = &result.types.type_exprs[expr_id.0 as usize].kind;
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
-    ty = &result.types.type_exprs[inner.0 as usize].kind;
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
   }
 
   let members = match ty {
@@ -432,7 +432,7 @@ fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> 
 
   members
     .iter()
-    .map(|id| type_name(&result.names, &result.types.type_exprs[id.0 as usize].kind))
+    .map(|id| type_name(&result.names, &arenas.type_exprs[id.0 as usize].kind))
     .collect()
 }
 
@@ -464,6 +464,9 @@ fn lowers_class_type_info_basic() {
     .find(|def| result.names.resolve(def.name).unwrap() == "C")
     .expect("class definition");
   let info = def.type_info.as_ref().expect("type info present");
+  let arenas = result
+    .type_arenas(def.id)
+    .expect("type arenas present for class");
   let (type_params, extends, implements, members) = match info {
     DefTypeInfo::Class {
       type_params,
@@ -476,7 +479,7 @@ fn lowers_class_type_info_basic() {
   assert_eq!(type_params.len(), 1);
 
   let base = extends.expect("extends clause");
-  let base_expr = &result.types.type_exprs[base.0 as usize];
+  let base_expr = &arenas.type_exprs[base.0 as usize];
   match &base_expr.kind {
     TypeExprKind::TypeRef(reference) => match &reference.name {
       TypeName::Ident(id) => assert_eq!(result.names.resolve(*id).unwrap(), "Base"),
@@ -486,7 +489,7 @@ fn lowers_class_type_info_basic() {
   }
 
   assert_eq!(implements.len(), 1);
-  let iface_expr = &result.types.type_exprs[implements[0].0 as usize];
+  let iface_expr = &arenas.type_exprs[implements[0].0 as usize];
   match &iface_expr.kind {
     TypeExprKind::TypeRef(reference) => match &reference.name {
       TypeName::Ident(id) => assert_eq!(result.names.resolve(*id).unwrap(), "IFace"),
@@ -511,7 +514,7 @@ fn lowers_class_type_info_basic() {
     } => {
       let ty = type_annotation.expect("field type");
       assert!(matches!(
-        result.types.type_exprs[ty.0 as usize].kind,
+        arenas.type_exprs[ty.0 as usize].kind,
         TypeExprKind::String
       ));
     }
@@ -535,12 +538,12 @@ fn lowers_class_type_info_basic() {
       let param_name = param.name.expect("param name");
       assert_eq!(result.names.resolve(param_name).unwrap(), "a");
       assert!(matches!(
-        result.types.type_exprs[param.ty.0 as usize].kind,
+        arenas.type_exprs[param.ty.0 as usize].kind,
         TypeExprKind::Number
       ));
       let ret = signature.return_type.expect("return type");
       assert!(matches!(
-        result.types.type_exprs[ret.0 as usize].kind,
+        arenas.type_exprs[ret.0 as usize].kind,
         TypeExprKind::Boolean
       ));
     }

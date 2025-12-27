@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::instantiate::Substituter;
 use types_ts_interned::{
-  Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+  Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
 };
 
 /// Diagnostic emitted when inference fails to satisfy a constraint.
@@ -253,6 +253,27 @@ impl InferenceContext {
           if has_specific {
             lowers
               .retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
+          }
+        }
+        if lowers.len() > 1 {
+          for (idx, a) in lowers.iter().enumerate() {
+            for b in lowers.iter().skip(idx + 1) {
+              if !is_assignable(self.store.as_ref(), *a, *b)
+                && !is_assignable(self.store.as_ref(), *b, *a)
+              {
+                result.diagnostics.push(InferenceDiagnostic {
+                  param: *tp,
+                  constraint: *b,
+                  actual: *a,
+                  message: format!(
+                    "conflicting inferences for {:?}: {} and {}",
+                    tp,
+                    TypeDisplay::new(self.store.as_ref(), *a),
+                    TypeDisplay::new(self.store.as_ref(), *b)
+                  ),
+                });
+              }
+            }
           }
         }
         candidate = Some(if lowers.len() == 1 {
