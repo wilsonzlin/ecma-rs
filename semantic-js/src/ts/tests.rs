@@ -1712,3 +1712,68 @@ fn type_only_imports_skip_value_resolution() {
     "type-only import should not resolve in value namespace"
   );
 }
+
+#[test]
+fn typeof_queries_use_value_namespace() {
+  let source = "type Foo = number;\nconst Foo = 1;\ntype Q = typeof Foo;\n";
+  let mut ast = parse(source).unwrap();
+  let locals = bind_ts_locals(&mut ast, FileId(94), true);
+
+  let type_alias_offset = source.find("type Foo").unwrap() + "type ".len();
+  let type_sym = locals
+    .resolve_expr_at_offset(type_alias_offset as u32)
+    .expect("type alias binding present")
+    .1;
+
+  let value_offset = source.find("const Foo").unwrap() + "const ".len();
+  let value_sym = locals
+    .resolve_expr_at_offset(value_offset as u32)
+    .expect("value binding present")
+    .1;
+
+  assert_ne!(type_sym, value_sym, "type and value symbols should differ");
+
+  let query_offset = source.rfind("Foo").unwrap() as u32;
+  let (_, query_sym) = locals
+    .resolve_type_at_offset(query_offset)
+    .expect("typeof Foo should resolve");
+  assert_eq!(
+    query_sym, value_sym,
+    "typeof queries should use the value namespace"
+  );
+}
+
+#[test]
+fn qualified_type_references_use_namespace_space() {
+  let source = "namespace NS { export type Foo = number; }\ntype Bar = NS.Foo;\n";
+  let mut ast = parse(source).unwrap();
+  let locals = bind_ts_locals(&mut ast, FileId(95), true);
+
+  let ns_decl = ast
+    .stx
+    .body
+    .iter()
+    .find_map(|stmt| match &*stmt.stx {
+      parse_js::ast::stmt::Stmt::NamespaceDecl(ns) => Some(ns),
+      _ => None,
+    })
+    .expect("namespace declaration present");
+  let ns_symbol = ts::declared_symbol(&ns_decl.assoc).expect("namespace symbol recorded");
+
+  let ns_qual_offset = source.find("NS.Foo").unwrap() as u32;
+  let (_, resolved) = locals
+    .resolve_type_at_offset(ns_qual_offset)
+    .expect("qualified type should resolve");
+
+  assert_eq!(
+    resolved, ns_symbol,
+    "qualified type references should resolve to the namespace symbol"
+  );
+  assert!(
+    locals
+      .symbol(resolved)
+      .namespaces
+      .contains(Namespace::NAMESPACE),
+    "resolved symbol should live in the namespace namespace"
+  );
+}

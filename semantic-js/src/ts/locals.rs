@@ -1664,7 +1664,10 @@ impl<'a> ResolvePass<'a> {
         }
       }
       TypeExpr::TypeQuery(query) => {
-        if let Some(sym) = self.resolve_type_entity_name(&query.stx.expr_name) {
+        let sym = self.resolve_type_query_entity_name(&query.stx.expr_name);
+        query.assoc.set(ResolvedSymbol(sym));
+        ty.assoc.set(ResolvedSymbol(sym));
+        if let Some(sym) = sym {
           self.type_resolutions.insert(to_range(ty.loc), sym);
         }
       }
@@ -1717,28 +1720,35 @@ impl<'a> ResolvePass<'a> {
     }
   }
 
-  fn resolve_type_reference(&self, reference: &Node<TypeReference>) -> Option<SymbolId> {
-    match &reference.stx.name {
-      TypeEntityName::Identifier(name) => {
-        self
-          .builder
-          .resolve(self.current_scope(), name.as_str(), Namespace::TYPE)
-      }
-      TypeEntityName::Qualified(q) => self.resolve_type_entity_name(&q.left),
-      TypeEntityName::Import(_) => None,
-    }
-  }
-
-  fn resolve_type_entity_name(&self, name: &TypeEntityName) -> Option<SymbolId> {
+  fn resolve_entity_name(
+    &self,
+    name: &TypeEntityName,
+    ident_namespace: Namespace,
+    qualified_namespace: Namespace,
+  ) -> Option<SymbolId> {
     match name {
       TypeEntityName::Identifier(name) => {
         self
           .builder
-          .resolve(self.current_scope(), name.as_str(), Namespace::TYPE)
+          .resolve(self.current_scope(), name.as_str(), ident_namespace)
       }
-      TypeEntityName::Qualified(q) => self.resolve_type_entity_name(&q.left),
+      TypeEntityName::Qualified(q) => {
+        self.resolve_entity_name(&q.left, qualified_namespace, qualified_namespace)
+      }
       TypeEntityName::Import(_) => None,
     }
+  }
+
+  fn resolve_type_query_entity_name(&self, name: &TypeEntityName) -> Option<SymbolId> {
+    self.resolve_entity_name(name, Namespace::VALUE, Namespace::VALUE)
+  }
+
+  fn resolve_type_reference(&self, reference: &Node<TypeReference>) -> Option<SymbolId> {
+    self.resolve_entity_name(&reference.stx.name, Namespace::TYPE, Namespace::NAMESPACE)
+  }
+
+  fn resolve_type_entity_name(&self, name: &TypeEntityName) -> Option<SymbolId> {
+    self.resolve_entity_name(name, Namespace::TYPE, Namespace::NAMESPACE)
   }
 
   fn walk_type_function(&mut self, func: &mut Node<TypeFunction>) {
