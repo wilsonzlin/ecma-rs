@@ -99,7 +99,6 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
 
 #[salsa::tracked]
 fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
-  let specs = module_specifiers_for(db, file);
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
@@ -123,6 +122,7 @@ fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]>
     spec.span
   };
   let mut seen = BTreeSet::new();
+  let mut diagnostics = Vec::new();
   let mut check_specifier =
     |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
       db,
@@ -315,10 +315,10 @@ pub mod body_check {
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
   use crate::check::caches::CheckerCaches;
+  use crate::check::flow_bindings::FlowBindings;
   use crate::check::hir_body::{
-    check_body_with_env, check_body_with_expander, BindingTypeResolver,
+    check_body_with_env_with_expander, check_body_with_expander, BindingTypeResolver,
   };
-  use crate::check::hir_body::{FlowBindingId, FlowBindings};
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
   use crate::lib_support::{CacheMode, CacheOptions};

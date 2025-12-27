@@ -35,7 +35,7 @@ use types_ts_interned::{self as tti, PropData, PropKey, Property, RelateCtx, Typ
 
 use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
-use crate::check::hir_body::FlowBindingId;
+use crate::check::flow_bindings::FlowBindings;
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::class_typing;
 use crate::codes;
@@ -1736,6 +1736,7 @@ impl Program {
         exports: fs.exports.clone(),
         bindings,
         top_body: fs.top_body,
+        ambient_modules: Vec::new(),
       });
     }
 
@@ -1865,7 +1866,6 @@ impl Program {
       builtin: state.builtin,
       next_def: state.next_def,
       next_body: state.next_body,
-      next_symbol: state.next_symbol,
     }
   }
 
@@ -1989,7 +1989,13 @@ impl Program {
       state.builtin = snapshot.builtin;
       state.next_def = snapshot.next_def;
       state.next_body = snapshot.next_body;
-      state.next_symbol = snapshot.next_symbol;
+      state.next_symbol = state
+        .symbol_to_def
+        .keys()
+        .map(|sym| sym.0)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
       state.sync_typecheck_roots();
       state.rebuild_callable_overloads();
       state.merge_callable_overload_types();
@@ -2989,7 +2995,7 @@ struct ProgramState {
   current_file: Option<FileId>,
   next_def: u32,
   next_body: u32,
-  next_symbol: u32,
+  next_symbol: u64,
   type_stack: Vec<DefId>,
 }
 
@@ -3135,6 +3141,14 @@ impl ProgramState {
     for (def, data) in self.def_data.iter() {
       def_spans.insert((data.file, data.span), *def);
     }
+    let mut local_semantics = HashMap::new();
+    for (file, ast) in self.asts.iter() {
+      let kind = self.file_kinds.get(file).copied().unwrap_or(FileKind::Ts);
+      let is_module = !matches!(kind, FileKind::Js | FileKind::Jsx);
+      let (locals, _) =
+        ::semantic_js::ts::locals::bind_ts_locals_tables(ast.as_ref(), *file, is_module);
+      local_semantics.insert(*file, Arc::new(locals));
+    }
     BodyCheckContext {
       store: Arc::clone(store),
       interned_def_types: self.interned_def_types.clone(),
@@ -3145,6 +3159,7 @@ impl ProgramState {
         .iter()
         .map(|(file, lowered)| (*file, Arc::new(lowered.clone())))
         .collect(),
+      local_semantics,
       body_info,
       body_parents: self.body_parents.clone(),
       global_bindings: self
@@ -7349,60 +7364,53 @@ impl ProgramState {
       resolver,
       Some(&expander),
       contextual_fn_ty,
+      None,
     );
     if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
-      let (locals, _) = ::semantic_js::ts::locals::bind_ts_locals_tables(&*ast, file, true);
-      let flow_bindings = check::hir_body::FlowBindings::new(body, &locals);
+      let is_module = !matches!(
+        self.file_kinds.get(&file),
+        Some(FileKind::Js | FileKind::Jsx)
+      );
+      let (locals, _) =
+        ::semantic_js::ts::locals::bind_ts_locals_tables(&*ast, file, is_module);
+      let flow_bindings = FlowBindings::new(body, &locals);
 
-      let mut initial_env: HashMap<FlowBindingId, TypeId> = HashMap::new();
-      if matches!(meta.kind, HirBodyKind::Function) {
-        if let Some(function) = body.function.as_ref() {
-          for param in function.params.iter() {
-            if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
-              if ty != prim.unknown {
-                if let Some(binding) = flow_bindings.binding_for_pat(param.pat) {
-                  initial_env.insert(binding, ty);
+      let mut initial_env: HashMap<hir_js::NameId, TypeId> = HashMap::new();
+      if let Some(function) = body.function.as_ref() {
+        for param in function.params.iter() {
+          if let Some(pat) = body.pats.get(param.pat.0 as usize) {
+            if let hir_js::PatKind::Ident(name) = pat.kind {
+              if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
+                if ty != prim.unknown {
+                  initial_env.insert(name, ty);
                 }
               }
             }
           }
         }
       }
-      for (idx, expr) in body.exprs.iter().enumerate() {
-        if !matches!(expr.kind, hir_js::ExprKind::Ident(_)) {
-          continue;
-        }
-        let expr_id = hir_js::ExprId(idx as u32);
-        if let Some(binding) = flow_bindings.binding_for_expr(expr_id) {
-          if initial_env.contains_key(&binding) {
+      for expr in body.exprs.iter() {
+        if let hir_js::ExprKind::Ident(name_id) = expr.kind {
+          if initial_env.contains_key(&name_id) {
             continue;
           }
-          let symbol = locals.symbol(binding);
-          if let Some(name) = locals.names.get(&symbol.name) {
+          if let Some(name) = lowered.names.resolve(name_id) {
             if let Some(ty) = bindings.get(name) {
-              initial_env.insert(binding, *ty);
+              initial_env.insert(name_id, *ty);
             }
           }
         }
       }
-      let mut flow_hooks = relate_hooks();
-      flow_hooks.expander = Some(&expander);
-      let flow_relate = RelateCtx::with_hooks_and_cache(
-        Arc::clone(&store),
-        store.options(),
-        flow_hooks,
-        caches.relation.clone(),
-      );
-      let flow_result = check::hir_body::check_body_with_env(
+      let flow_result = check::hir_body::check_body_with_env_with_expander(
         body_id,
         body,
         &lowered.names,
         file,
+        "",
         Arc::clone(&store),
-        Some(&locals),
         &initial_env,
-        flow_relate,
         Some(&expander),
+        Some(flow_bindings.clone()),
       );
       let mut relate_hooks = relate_hooks();
       relate_hooks.expander = Some(&expander);

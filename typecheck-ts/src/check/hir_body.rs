@@ -1003,7 +1003,6 @@ impl<'a> Checker<'a> {
         let resolution = resolve_call(
           &self.store,
           &self.relate,
-          self.ref_expander,
           callee_ty,
           &arg_types,
           None,

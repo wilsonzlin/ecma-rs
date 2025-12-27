@@ -21,6 +21,7 @@ mod inputs;
 pub mod queries;
 pub(crate) mod spans;
 pub mod symbols;
+pub mod types;
 
 pub use inputs::CancellationToken;
 pub use queries::body_check::{
@@ -33,10 +34,11 @@ pub use queries::{
   lower_hir, module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse,
   parse_query_count, program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir,
   span_of_def, span_of_expr, symbol_occurrences, ts_semantics, type_at, var_initializer, DeclInfo,
-  DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore,
-  TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
+  DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, TsSemantics, TypeDatabase,
+  TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;
+pub use types::SharedTypeStore;
 
 pub trait TypecheckDatabase: Db {}
 impl TypecheckDatabase for Database {}
