@@ -136,6 +136,7 @@ pub mod codes;
 pub mod db;
 mod error;
 mod expand;
+mod files;
 mod profile;
 mod program;
 mod sem_hir;

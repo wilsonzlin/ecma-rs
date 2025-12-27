@@ -35,6 +35,7 @@ use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::codes;
 use crate::expand::ProgramTypeExpander as RefExpander;
+use crate::files::FileRegistry;
 use crate::profile::{CacheKind, CacheStat, QueryKind, QueryStats, QueryStatsCollector};
 use crate::sem_hir::sem_hir_from_lower;
 #[cfg(feature = "serde")]
@@ -1802,8 +1803,8 @@ impl Program {
       state.cache_stats = CheckerCacheStats::default();
       for file in snapshot.files.into_iter() {
         let key = FileKey::new(format!("file{}.ts", file.file.0));
-        state.file_keys.insert(key.clone(), file.file);
-        state.file_ids.insert(file.file, key.clone());
+        let id = state.file_registry.intern(&key);
+        debug_assert_eq!(id, file.file, "snapshot file id mismatch");
         state.file_kinds.insert(file.file, file.kind);
         if let Some(text) = file.text {
           state.lib_texts.insert(file.file, Arc::from(text));
@@ -1935,15 +1936,14 @@ struct FileState {
 
 struct HostResolver {
   host: Arc<dyn Host>,
-  file_keys: HashMap<FileId, FileKey>,
-  file_ids: HashMap<FileKey, FileId>,
+  registry: FileRegistry,
 }
 
 impl sem_ts::Resolver for HostResolver {
   fn resolve(&self, from: sem_ts::FileId, specifier: &str) -> Option<sem_ts::FileId> {
-    let from_key = self.file_keys.get(&FileId(from.0))?;
-    let target_key = self.host.resolve(from_key, specifier)?;
-    let target_id = self.file_ids.get(&target_key)?;
+    let from_key = self.registry.lookup_key(FileId(from.0))?;
+    let target_key = self.host.resolve(&from_key, specifier)?;
+    let target_id = self.registry.lookup_id(&target_key)?;
     Some(sem_ts::FileId(target_id.0))
   }
 }
@@ -2481,8 +2481,7 @@ struct ProgramState {
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
   symbol_occurrences: HashMap<FileId, Vec<SymbolOccurrence>>,
   symbol_to_def: HashMap<semantic_js::SymbolId, DefId>,
-  file_keys: HashMap<FileKey, FileId>,
-  file_ids: HashMap<FileId, FileKey>,
+  file_registry: FileRegistry,
   file_kinds: HashMap<FileId, FileKind>,
   lib_file_ids: HashSet<FileId>,
   lib_texts: HashMap<FileId, Arc<str>>,
@@ -2496,7 +2495,6 @@ struct ProgramState {
   builtin: BuiltinTypes,
   query_stats: QueryStatsCollector,
   current_file: Option<FileId>,
-  next_file: u32,
   next_def: u32,
   next_body: u32,
   next_symbol: u32,
@@ -2526,8 +2524,7 @@ impl ProgramState {
       body_results: HashMap::new(),
       symbol_occurrences: HashMap::new(),
       symbol_to_def: HashMap::new(),
-      file_keys: HashMap::new(),
-      file_ids: HashMap::new(),
+      file_registry: FileRegistry::new(),
       file_kinds: HashMap::new(),
       lib_file_ids: HashSet::new(),
       lib_texts: HashMap::new(),
@@ -2541,7 +2538,6 @@ impl ProgramState {
       builtin,
       query_stats,
       current_file: None,
-      next_file: 0,
       next_def: 0,
       next_body: 0,
       next_symbol: 0,
@@ -2551,9 +2547,8 @@ impl ProgramState {
 
   fn file_id_for_key(&self, key: &FileKey) -> Option<FileId> {
     self
-      .file_keys
-      .get(key)
-      .copied()
+      .file_registry
+      .lookup_id(key)
       .and_then(|id| {
         if !self.lib_file_ids.contains(&id) {
           Some(id)
@@ -2561,49 +2556,30 @@ impl ProgramState {
           None
         }
       })
-      .or_else(|| self.file_keys.get(key).copied())
+      .or_else(|| self.file_registry.lookup_id(key))
   }
 
   fn file_key_for_id(&self, id: FileId) -> Option<FileKey> {
-    self.file_ids.get(&id).cloned()
+    self.file_registry.lookup_key(id)
   }
 
   fn intern_file_key(&mut self, key: FileKey, origin: FileOrigin) -> FileId {
-    if let Some(existing) = self.file_keys.get(&key).copied() {
-      let existing_is_lib = self.lib_file_ids.contains(&existing);
-      match (origin, existing_is_lib) {
-        (FileOrigin::Lib, true) | (FileOrigin::Source, false) => return existing,
-        (FileOrigin::Lib, false) | (FileOrigin::Source, true) => {}
+    if let Some(existing) = self.file_registry.lookup_id(&key) {
+      match origin {
+        FileOrigin::Lib => {
+          self.lib_file_ids.insert(existing);
+        }
+        FileOrigin::Source => {
+          self.lib_file_ids.remove(&existing);
+        }
       }
+      return existing;
     }
-    let mut id = FileId(self.next_file);
-    if let Some(preferred) = Self::preferred_file_id(&key) {
-      let preferred = FileId(preferred);
-      if !self.file_ids.contains_key(&preferred) {
-        id = preferred;
-      }
-    }
-    self.next_file = self.next_file.max(id.0 + 1);
-    self.file_ids.insert(id, key.clone());
-    match origin {
-      FileOrigin::Lib => {
-        self.lib_file_ids.insert(id);
-        self.file_keys.entry(key).or_insert(id);
-      }
-      FileOrigin::Source => {
-        self.file_keys.insert(key, id);
-      }
+    let id = self.file_registry.intern(&key);
+    if matches!(origin, FileOrigin::Lib) {
+      self.lib_file_ids.insert(id);
     }
     id
-  }
-
-  fn preferred_file_id(key: &FileKey) -> Option<u32> {
-    let name = key.as_str();
-    let remainder = name.strip_prefix("file")?;
-    let stripped = remainder
-      .strip_suffix(".ts")
-      .or_else(|| remainder.strip_suffix(".tsx"))?;
-    stripped.parse::<u32>().ok()
   }
 
   fn def_priority(&self, def: DefId, ns: sem_ts::Namespace) -> u8 {
@@ -2921,7 +2897,6 @@ impl ProgramState {
       .iter()
       .map(|l| self.intern_file_key(l.key.clone(), FileOrigin::Lib))
       .collect();
-    let lib_id_set: HashSet<FileId> = lib_ids.iter().copied().collect();
     self.process_libs(&libs, host);
     let mut root_ids: Vec<FileId> = roots
       .iter()
@@ -2936,11 +2911,7 @@ impl ProgramState {
       }
       let prev_file = self.current_file;
       self.current_file = Some(file);
-      if !seen.insert(file) {
-        self.current_file = prev_file;
-        continue;
-      }
-      if lib_id_set.contains(&file) {
+      if !seen.insert(file) || self.lib_file_ids.contains(&file) {
         self.current_file = prev_file;
         continue;
       }
@@ -3069,8 +3040,8 @@ impl ProgramState {
         }
       }
       let file_key = self.file_key_for_id(*file);
-      let file_ids_map = self.file_keys.clone();
-      let key_to_id = move |key: &FileKey| file_ids_map.get(key).copied();
+      let registry = self.file_registry.clone();
+      let key_to_id = move |key: &FileKey| registry.lookup_id(key);
       let mut lowerer = check::decls::HirDeclLowerer::new(
         Arc::clone(&store),
         &lowered.types,
@@ -3383,8 +3354,7 @@ impl ProgramState {
   fn compute_semantics(&mut self, host: &Arc<dyn Host>, roots: &[FileId], libs: &[FileId]) {
     let resolver = HostResolver {
       host: Arc::clone(host),
-      file_keys: self.file_ids.clone(),
-      file_ids: self.file_keys.clone(),
+      registry: self.file_registry.clone(),
     };
     let mut sem_roots: Vec<sem_ts::FileId> = roots
       .iter()
