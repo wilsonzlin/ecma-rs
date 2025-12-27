@@ -24,8 +24,9 @@ pub use inputs::CancellationToken;
 pub use queries::{
   all_files, body_file, body_parent, body_parents_in_file, body_to_file, cancelled,
   compiler_options, db_revision, def_file, def_to_file, file_kind, file_text, global_bindings,
-  lower_hir, module_resolve, parse, parse_query_count, reset_parse_query_count, roots, sem_hir,
-  ts_semantics, GlobalBindingsDb, LowerResultWithDiagnostics, TsSemantics,
+  lower_hir, module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse,
+  parse_query_count, reachable_files, reset_parse_query_count, roots, sem_hir, ts_semantics,
+  GlobalBindingsDb, LowerResultWithDiagnostics, TsSemantics,
 };
 
 pub trait TypecheckDatabase: Db {}
@@ -269,6 +270,22 @@ impl Database {
 
   pub fn sem_hir(&self, file: FileId) -> semantic_js::ts::HirFile {
     queries::sem_hir(self, file)
+  }
+
+  pub fn module_specifiers(&self, file: FileId) -> Arc<[Arc<str>]> {
+    queries::module_specifiers(self, file)
+  }
+
+  pub fn module_deps(&self, file: FileId) -> Arc<[FileId]> {
+    queries::module_deps(self, file)
+  }
+
+  pub fn module_dep_diagnostics(&self, file: FileId) -> Arc<[diagnostics::Diagnostic]> {
+    queries::module_dep_diagnostics(self, file)
+  }
+
+  pub fn reachable_files(&self) -> Arc<Vec<FileId>> {
+    queries::reachable_files(self)
   }
 
   pub fn all_files(&self) -> Arc<Vec<FileId>> {

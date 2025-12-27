@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use diagnostics::{Diagnostic, FileId};
+use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
   lower_file_with_diagnostics, ExportDefaultValue, ExportKind, ExprKind, FileKind as HirFileKind,
   LowerResult, ObjectProperty, StmtKind,
@@ -16,6 +16,7 @@ use crate::db::inputs::{
 };
 use crate::db::{Db, ModuleKey};
 use crate::lib_support::{CompilerOptions, FileKind};
+use crate::codes;
 use crate::profile::QueryKind;
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
@@ -58,6 +59,63 @@ fn file_text_for(db: &dyn Db, file: FileInput) -> Arc<str> {
 #[salsa::tracked]
 fn module_resolve_for(db: &dyn Db, entry: ModuleResolutionInput) -> Option<FileId> {
   entry.resolved(db)
+}
+
+#[salsa::tracked]
+fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
+  let lowered = lower_hir_for(db, file);
+  let Some(lowered) = lowered.lowered.as_deref() else {
+    return Arc::from([]);
+  };
+  let mut specs: Vec<_> = collect_module_specifiers(lowered)
+    .into_iter()
+    .map(|(spec, _)| spec)
+    .collect();
+  specs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
+  specs.dedup();
+  Arc::from(specs.into_boxed_slice())
+}
+
+#[salsa::tracked]
+fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
+  let specs = module_specifiers_for(db, file);
+  let mut deps = Vec::new();
+  for spec in specs.iter() {
+    if let Some(target) = module_resolve(db, file.file_id(db), Arc::clone(spec)) {
+      deps.push(target);
+    }
+  }
+  deps.sort_by_key(|id| id.0);
+  deps.dedup();
+  Arc::from(deps.into_boxed_slice())
+}
+
+#[salsa::tracked]
+fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
+  let specs = module_specifiers_for(db, file);
+  let lowered = lower_hir_for(db, file);
+  let Some(lowered) = lowered.lowered.as_deref() else {
+    return Arc::from([]);
+  };
+  let mut spans = HashMap::new();
+  for (spec, span) in collect_module_specifiers(lowered).into_iter() {
+    spans.entry(spec).or_insert(span);
+  }
+
+  let mut diagnostics = Vec::new();
+  for spec in specs.iter() {
+    if module_resolve(db, file.file_id(db), Arc::clone(spec)).is_none() {
+      if let Some(span) = spans.get(spec) {
+        diagnostics.push(codes::UNRESOLVED_MODULE.error(
+          format!("module {} could not be resolved", spec),
+          Span::new(file.file_id(db), *span),
+        ));
+      }
+    }
+  }
+  diagnostics.sort();
+  diagnostics.dedup();
+  Arc::from(diagnostics.into_boxed_slice())
 }
 
 #[derive(Debug, Clone)]
@@ -290,29 +348,11 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
     if !visited.insert(file) {
       continue;
     }
-    let sem_hir = sem_hir_for(db, db.file_input(file).expect("file seeded for sem_hir"));
-    for import in sem_hir.imports.iter() {
-      if let Some(target) = module_resolve(db, file, Arc::<str>::from(import.specifier.as_str())) {
-        queue.push_back(target);
-      }
-    }
-    for export in sem_hir.exports.iter() {
-      match export {
-        sem_ts::Export::Named(named) => {
-          if let Some(specifier) = named.specifier.as_ref() {
-            if let Some(target) = module_resolve(db, file, Arc::<str>::from(specifier.as_str())) {
-              queue.push_back(target);
-            }
-          }
-        }
-        sem_ts::Export::All(all) => {
-          if let Some(target) = module_resolve(db, file, Arc::<str>::from(all.specifier.as_str())) {
-            queue.push_back(target);
-          }
-        }
-        sem_ts::Export::ExportAssignment { .. } => {}
-      }
-    }
+    queue.extend(
+      module_deps_for(db, db.file_input(file).expect("file seeded for deps"))
+        .iter()
+        .copied(),
+    );
   }
   Arc::new(visited.into_iter().collect())
 }
@@ -377,6 +417,46 @@ impl<'db> sem_ts::Resolver for DbResolver<'db> {
   }
 }
 
+fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, TextRange)> {
+  let mut specs = Vec::new();
+  for import in lowered.hir.imports.iter() {
+    match &import.kind {
+      hir_js::ImportKind::Es(es) => {
+        specs.push((Arc::from(es.specifier.value.clone()), es.specifier.span));
+      }
+      hir_js::ImportKind::ImportEquals(eq) => {
+        if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
+          specs.push((Arc::from(module.value.clone()), module.span));
+        }
+      }
+    }
+  }
+  for import_equals in lowered.hir.import_equals.iter() {
+    if let hir_js::ImportEqualsTarget::Module(module) = &import_equals.target {
+      specs.push((Arc::from(module.value.clone()), module.span));
+    }
+  }
+  for export in lowered.hir.exports.iter() {
+    match &export.kind {
+      ExportKind::Named(named) => {
+        if let Some(source) = named.source.as_ref() {
+          specs.push((Arc::from(source.value.clone()), source.span));
+        }
+      }
+      ExportKind::ExportAll(all) => {
+        specs.push((Arc::from(all.source.value.clone()), all.source.span));
+      }
+      _ => {}
+    }
+  }
+  for ty in lowered.types.type_exprs.iter() {
+    if let hir_js::TypeExprKind::Import(import) = &ty.kind {
+      specs.push((Arc::from(import.module.clone()), ty.span));
+    }
+  }
+  specs
+}
+
 /// Current compiler options.
 pub fn compiler_options(db: &dyn Db) -> CompilerOptions {
   compiler_options_for(db, db.compiler_options_input())
@@ -420,6 +500,31 @@ pub fn lower_hir(db: &dyn Db, file: FileId) -> LowerResultWithDiagnostics {
     .file_input(file)
     .expect("file must be seeded before lowering");
   lower_hir_for(db, handle)
+}
+
+pub fn module_specifiers(db: &dyn Db, file: FileId) -> Arc<[Arc<str>]> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before querying module specifiers");
+  module_specifiers_for(db, handle)
+}
+
+pub fn module_deps(db: &dyn Db, file: FileId) -> Arc<[FileId]> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before querying module deps");
+  module_deps_for(db, handle)
+}
+
+pub fn module_dep_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before querying module deps");
+  module_dep_diagnostics_for(db, handle)
+}
+
+pub fn reachable_files(db: &dyn Db) -> Arc<Vec<FileId>> {
+  all_files_for(db)
 }
 
 pub fn sem_hir(db: &dyn Db, file: FileId) -> sem_ts::HirFile {
