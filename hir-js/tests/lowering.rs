@@ -708,6 +708,98 @@ fn name_ids_stay_stable_when_unrelated_names_are_introduced() {
 }
 
 #[test]
+fn module_decl_string_and_ident_have_distinct_def_ids() {
+  let source = r#"
+module Foo {}
+declare module "Foo" {}
+"#;
+  let lowered = lower_from_source_with_kind(FileKind::Ts, source).expect("lower");
+
+  // `module Foo {}` lowers as a namespace, while string-literal modules produce `DefKind::Module`.
+  let module_like_defs: Vec<_> = lowered
+    .defs
+    .iter()
+    .filter(|def| matches!(def.path.kind, DefKind::Module | DefKind::Namespace))
+    .collect();
+  assert_eq!(
+    module_like_defs.len(),
+    2,
+    "expected module and namespace declarations"
+  );
+
+  let ambient_module = module_like_defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Module)
+    .expect("ambient module present");
+  assert_eq!(
+    lowered.names.resolve(ambient_module.path.name),
+    Some("\"Foo\""),
+    "string-literal module names should remain quoted"
+  );
+
+  let name_texts: BTreeSet<_> = module_like_defs
+    .iter()
+    .map(|def| lowered.names.resolve(def.path.name).unwrap().to_string())
+    .collect();
+  assert_eq!(name_texts.len(), 2, "module names should not collide");
+  assert!(
+    name_texts.contains("Foo") && name_texts.contains("\"Foo\""),
+    "module names should distinguish identifier and ambient string forms: {:?}",
+    name_texts
+  );
+
+  let name_ids: BTreeSet<_> = module_like_defs.iter().map(|def| def.path.name).collect();
+  assert_eq!(
+    name_ids.len(),
+    module_like_defs.len(),
+    "module-like DefPaths should carry distinct names"
+  );
+
+  let def_ids: BTreeSet<_> = module_like_defs.iter().map(|def| def.id).collect();
+  assert_eq!(
+    def_ids.len(),
+    module_like_defs.len(),
+    "module-like DefIds should differ"
+  );
+}
+
+#[test]
+fn module_decl_string_name_is_stable() {
+  let source = r#"declare module "Foo" {}"#;
+  let first = lower_from_source_with_kind(FileKind::Ts, source).expect("lower first");
+  let second = lower_from_source_with_kind(FileKind::Ts, source).expect("lower second");
+
+  let first_module = first
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Module)
+    .expect("ambient module present");
+  let second_module = second
+    .defs
+    .iter()
+    .find(|def| def.path.kind == DefKind::Module)
+    .expect("ambient module present");
+
+  assert_eq!(
+    first.names.resolve(first_module.path.name),
+    Some("\"Foo\""),
+    "string-literal module names are quoted to avoid namespace collisions"
+  );
+  assert_eq!(
+    first_module.path.name, second_module.path.name,
+    "NameId for string module should be stable across runs"
+  );
+  assert_eq!(
+    first_module.id, second_module.id,
+    "DefId for string module should be stable across runs"
+  );
+  assert_eq!(
+    first_module.path, second_module.path,
+    "DefPath for string module should be stable across runs"
+  );
+}
+
+#[test]
 fn expr_at_offset_prefers_inner_expression() {
   let source = "const a = 1 + 2;";
   let ast = parse(source).expect("parse");

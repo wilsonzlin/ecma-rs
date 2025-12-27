@@ -2047,6 +2047,16 @@ fn collect_top_level<'a>(
   }
 }
 
+/// Render a module declaration name into a stable string suitable for
+/// interning. String-literal module specifiers are wrapped in quotes so they do
+/// not collide with namespace-style `module Foo {}` declarations.
+fn module_name_text(name: &ModuleName) -> String {
+  match name {
+    ModuleName::Identifier(name) => name.clone(),
+    ModuleName::String(spec) => format!("\"{}\"", spec),
+  }
+}
+
 fn collect_stmt<'a>(
   stmt: &'a Node<AstStmt>,
   descriptors: &mut Vec<DefDescriptor<'a>>,
@@ -2216,10 +2226,7 @@ fn collect_stmt<'a>(
       }
     }
     AstStmt::ModuleDecl(module) => {
-      let name_text = match &module.stx.name {
-        ModuleName::Identifier(name) => name.clone(),
-        ModuleName::String(name) => name.clone(),
-      };
+      let name_text = module_name_text(&module.stx.name);
       let name_id = names.intern(&name_text);
       let decl_ambient = ambient || module.stx.declare;
       let exported = module.stx.export || parent.is_some();
@@ -4798,10 +4805,8 @@ fn lower_module_items(
         ExportedDeclKind::Module(module) => {
           let def = find_def(defs, DefKind::Module, decl.span);
           let name_id = def.map(|info| info.name).unwrap_or_else(|| {
-            names.intern(match &module.stx.name {
-              parse_js::ast::ts_stmt::ModuleName::Identifier(name) => name,
-              parse_js::ast::ts_stmt::ModuleName::String(name) => name,
-            })
+            let name_text = module_name_text(&module.stx.name);
+            names.intern(&name_text)
           });
           push_named_export(
             &mut exports,
