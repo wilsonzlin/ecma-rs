@@ -115,6 +115,7 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
   };
   let mut diagnostics = Vec::new();
   let file_id = file.file_id(db);
+  let mut seen = BTreeSet::new();
   let mut check_specifier =
     |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
       db,
@@ -123,6 +124,10 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
     ) {
       Some(_) => {}
       None => {
+        let key = (spec.span.start, spec.span.end, spec.value.clone());
+        if !seen.insert(key) {
+          return;
+        }
         let mut diag = codes::UNRESOLVED_MODULE.error(
           format!("unresolved module specifier \"{}\"", spec.value),
           Span::new(file_id, spec.span),
