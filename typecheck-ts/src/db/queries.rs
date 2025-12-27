@@ -254,7 +254,9 @@ pub mod body_check {
   use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
 
   use crate::check::caches::CheckerCaches;
-  use crate::check::hir_body::{refine_types_with_flow, check_body_with_expander, BindingTypeResolver};
+  use crate::check::hir_body::{
+    check_body_with_env, check_body_with_expander, BindingTypeResolver, FlowBindings,
+  };
   use crate::codes;
   use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
   use crate::lib_support::{CacheMode, CacheOptions};
@@ -591,28 +593,36 @@ pub mod body_check {
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
-        let flow_bindings = crate::check::flow_bindings::FlowBindings::from_body(body);
-        let mut initial_env: HashMap<hir_js::NameId, TypeId> = HashMap::new();
+        let (locals, _) =
+          ::semantic_js::ts::locals::bind_ts_locals_tables(&*ast, meta.file, true);
+        let flow_bindings = FlowBindings::new(body, &locals);
+
+        let mut initial_env: HashMap<_, _> = HashMap::new();
         if let Some(function) = body.function.as_ref() {
           for param in function.params.iter() {
-            if let hir_js::PatKind::Ident(name_id) = body.pats[param.pat.0 as usize].kind {
-              if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
-                if ty != prim.unknown {
-                  initial_env.insert(name_id, ty);
+            if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
+              if ty != prim.unknown {
+                if let Some(binding) = flow_bindings.binding_for_pat(param.pat) {
+                  initial_env.insert(binding, ty);
                 }
               }
             }
           }
         }
-        for expr in body.exprs.iter() {
-          if let hir_js::ExprKind::Ident(name_id) = expr.kind {
-            if initial_env.contains_key(&name_id) {
-              continue;
-            }
-            if let Some(name) = lowered.names.resolve(name_id) {
-              if let Some(ty) = bindings.get(name) {
-                initial_env.insert(name_id, *ty);
-              }
+        for (idx, expr) in body.exprs.iter().enumerate() {
+          if !matches!(expr.kind, hir_js::ExprKind::Ident(_)) {
+            continue;
+          }
+          let Some(binding) = flow_bindings.binding_for_expr(hir_js::ExprId(idx as u32)) else {
+            continue;
+          };
+          if initial_env.contains_key(&binding) {
+            continue;
+          }
+          let symbol = locals.symbol(binding);
+          if let Some(name) = locals.names.get(&symbol.name) {
+            if let Some(ty) = bindings.get(name) {
+              initial_env.insert(binding, *ty);
             }
           }
         }
@@ -624,14 +634,13 @@ pub mod body_check {
           flow_hooks,
           caches.relation.clone(),
         );
-        let flow_result = refine_types_with_flow(
+        let flow_result = check_body_with_env(
           body_id,
           body,
           &lowered.names,
-          &flow_bindings,
           meta.file,
           Arc::clone(&ctx.store),
-          &result,
+          &locals,
           &initial_env,
           flow_relate,
           Some(&expander),
@@ -1335,9 +1344,11 @@ fn collect_module_specifiers(lowered: &hir_js::LowerResult) -> Vec<(Arc<str>, Te
       _ => {}
     }
   }
-  for ty in lowered.types.type_exprs.iter() {
-    if let hir_js::TypeExprKind::Import(import) = &ty.kind {
-      specs.push((Arc::from(import.module.clone()), ty.span));
+  for arenas in lowered.types.values() {
+    for ty in arenas.type_exprs.iter() {
+      if let hir_js::TypeExprKind::Import(import) = &ty.kind {
+        specs.push((Arc::from(import.module.clone()), ty.span));
+      }
     }
   }
   specs

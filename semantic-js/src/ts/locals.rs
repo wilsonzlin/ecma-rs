@@ -1201,6 +1201,7 @@ impl DeclarePass {
 
 struct ResolvePass<'a> {
   builder: &'a SemanticsBuilder,
+  root: ScopeId,
   scope_stack: Vec<ScopeId>,
   expr_resolutions: BTreeMap<TextRange, SymbolId>,
   type_resolutions: BTreeMap<TextRange, SymbolId>,
@@ -1210,6 +1211,7 @@ impl<'a> ResolvePass<'a> {
   fn new(builder: &'a SemanticsBuilder, root: ScopeId) -> Self {
     Self {
       builder,
+      root,
       scope_stack: vec![root],
       expr_resolutions: BTreeMap::new(),
       type_resolutions: BTreeMap::new(),
@@ -1217,7 +1219,7 @@ impl<'a> ResolvePass<'a> {
   }
 
   fn current_scope(&self) -> ScopeId {
-    *self.scope_stack.last().unwrap()
+    *self.scope_stack.last().unwrap_or(&self.root)
   }
 
   fn push_scope_from_assoc(&mut self, assoc: &NodeAssocData) {
