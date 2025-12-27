@@ -2805,6 +2805,7 @@ struct ProgramState {
   body_parents: HashMap<BodyId, BodyId>,
   hir_lowered: HashMap<FileId, LowerResult>,
   sem_hir: HashMap<FileId, sem_ts::HirFile>,
+  local_semantics: HashMap<FileId, sem_ts::locals::TsLocalSemantics>,
   semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
   def_types: HashMap<DefId, TypeId>,
   body_results: HashMap<BodyId, Arc<BodyCheckResult>>,
@@ -2900,6 +2901,7 @@ impl ProgramState {
       body_parents: HashMap::new(),
       hir_lowered: HashMap::new(),
       sem_hir: HashMap::new(),
+      local_semantics: HashMap::new(),
       semantics: None,
       def_types: HashMap::new(),
       body_results: HashMap::new(),
@@ -3655,7 +3657,12 @@ impl ProgramState {
         span.finish(None);
       }
       match parsed {
-        Ok(ast) => {
+        Ok(mut ast) => {
+          let is_module = !matches!(file_kind, FileKind::Js | FileKind::Jsx);
+          if let Some(locals_ast) = Arc::get_mut(&mut ast) {
+            let locals = sem_ts::locals::bind_ts_locals(locals_ast, file, is_module);
+            self.local_semantics.insert(file, locals);
+          }
           self.asts.insert(file, Arc::clone(&ast));
           let (lowered, _lower_diags) = lower_hir_with_diagnostics(
             file,
@@ -4159,7 +4166,11 @@ impl ProgramState {
       self.lib_texts.insert(file_id, lib.text.clone());
       let parsed = self.parse_via_salsa(file_id, FileKind::Dts, Arc::clone(&lib.text));
       match parsed {
-        Ok(ast) => {
+        Ok(mut ast) => {
+          if let Some(locals_ast) = Arc::get_mut(&mut ast) {
+            let locals = sem_ts::locals::bind_ts_locals(locals_ast, file_id, true);
+            self.local_semantics.insert(file_id, locals);
+          }
           self.asts.insert(file_id, Arc::clone(&ast));
           let (lowered, lower_diags) = lower_hir_with_diagnostics(file_id, HirFileKind::Dts, &ast);
           let _ = lower_diags;
@@ -6688,9 +6699,20 @@ impl ProgramState {
           }
         }
       }
-      for expr in body.exprs.iter() {
+      let local_semantics = self.local_semantics.get(&file);
+      for (idx, expr) in body.exprs.iter().enumerate() {
         if let hir_js::ExprKind::Ident(name_id) = expr.kind {
           if initial_env.contains_key(&name_id) {
+            continue;
+          }
+          let Some(locals) = local_semantics else {
+            continue;
+          };
+          let Some(binding_id) = locals.resolve_expr(body, hir_js::ExprId(idx as u32)) else {
+            continue;
+          };
+          let symbol = locals.symbol(binding_id);
+          if symbol.decl_scope != locals.root_scope() {
             continue;
           }
           if let Some(name) = lowered.names.resolve(name_id) {
@@ -6727,6 +6749,12 @@ impl ProgramState {
         relate_hooks,
         caches.relation.clone(),
       );
+      let widen_literal = |ty: TypeId| match store.type_kind(ty) {
+        tti::TypeKind::NumberLiteral(_) => prim.number,
+        tti::TypeKind::StringLiteral(_) => prim.string,
+        tti::TypeKind::BooleanLiteral(_) => prim.boolean,
+        _ => ty,
+      };
       if flow_result.expr_types.len() == result.expr_types.len() {
         for (idx, ty) in flow_result.expr_types.iter().enumerate() {
           if *ty != prim.unknown {
@@ -6751,7 +6779,11 @@ impl ProgramState {
           }
         }
       }
-      let flow_return_types = flow_result.return_types;
+      let flow_return_types: Vec<_> = flow_result
+        .return_types
+        .into_iter()
+        .map(widen_literal)
+        .collect();
       if result.return_types.is_empty() && !flow_return_types.is_empty() {
         result.return_types = flow_return_types;
       } else if flow_return_types.len() == result.return_types.len() {
@@ -6765,6 +6797,13 @@ impl ProgramState {
             }
           }
         }
+      }
+      if !result.return_types.is_empty() {
+        result.return_types = result
+          .return_types
+          .iter()
+          .map(|ty| widen_literal(*ty))
+          .collect();
       }
       let mut flow_diagnostics = flow_result.diagnostics;
       if !flow_diagnostics.is_empty() {
