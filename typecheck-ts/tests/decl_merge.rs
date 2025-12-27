@@ -191,6 +191,109 @@ fn merged_namespaces_expose_members_interned() {
 }
 
 #[test]
+fn namespace_value_members_use_member_types() {
+  let mut host = MemoryHost::default();
+  let key = fk(7);
+  let source = "namespace N { export const x: string = \"hi\"; }\nconst y = N.x;\ny;";
+  host.insert(key.clone(), source);
+
+  let program = Program::new(host, vec![key.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_id = program.file_id(&key).expect("file id");
+  let x_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d) == Some("x".to_string()))
+    .expect("namespace member def");
+  let x_def_kind = program.interned_type_kind(program.type_of_def_interned(x_def));
+  assert!(
+    matches!(x_def_kind, InternedTypeKind::String),
+    "member def should honor annotation, got {x_def_kind:?}"
+  );
+  let ns_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d) == Some("N".to_string()))
+    .expect("namespace definition");
+  let ns_ty = program.type_of_def_interned(ns_def);
+  let props = program.properties_of(ns_ty);
+  let x_prop = props.iter().find(|p| match &p.key {
+    typecheck_ts::PropertyKey::String(name) => name == "x",
+    _ => false,
+  });
+  let x_prop = x_prop.expect("namespace member x");
+  let x_kind = program.interned_type_kind(x_prop.ty);
+  assert!(
+    matches!(x_kind, InternedTypeKind::String),
+    "namespace member type should respect declared annotation, got {x_kind:?}"
+  );
+  let offset_x = source
+    .find("N.x")
+    .map(|idx| idx as u32 + 2)
+    .expect("offset for N.x");
+  let ty = program.type_at(file_id, offset_x).expect("type at N.x");
+  assert_eq!(
+    program.display_type(ty).to_string(),
+    "string",
+    "namespace property should retain declared type"
+  );
+  let offset_y = source.rfind("y;").map(|idx| idx as u32).expect("offset for y usage");
+  let y_ty = program.type_at(file_id, offset_y).expect("type at y");
+  assert_eq!(
+    program.display_type(y_ty).to_string(),
+    "string",
+    "namespace member access should flow through to value users"
+  );
+}
+
+#[test]
+fn namespace_omits_type_only_members() {
+  let mut host = MemoryHost::default();
+  let key = fk(8);
+  host.insert(key.clone(), "namespace N { export interface I {} }");
+
+  let program = Program::new(host, vec![key.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_id = program.file_id(&key).expect("file id");
+  let def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d) == Some("N".to_string()))
+    .expect("namespace N");
+  let ty = program.type_of_def_interned(def);
+  let props = program.properties_of(ty);
+  let has_interface = props.iter().any(|p| match &p.key {
+    typecheck_ts::PropertyKey::String(name) => name == "I",
+    _ => false,
+  });
+  assert!(
+    !has_interface,
+    "type-only members should not surface on namespace values"
+  );
+  let missing_prop = program.property_type(
+    program.type_of_def(def),
+    typecheck_ts::PropertyKey::String("I".to_string()),
+  );
+  if let Some(prop_ty) = missing_prop {
+    assert_eq!(
+      program.display_type(prop_ty).to_string(),
+      "unknown",
+      "type-only namespace members should not have meaningful value types"
+    );
+  }
+}
+
+#[test]
 fn value_namespace_merge_keeps_callability_and_members_interned() {
   let mut host = MemoryHost::default();
   let key = fk(5);

@@ -26,6 +26,7 @@ use parse_js::loc::Loc;
 use serde::{Deserialize, Serialize};
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::cmp::Reverse;
 use std::panic::{self, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -3491,58 +3492,6 @@ impl ProgramState {
       .unwrap_or(self.builtin.unknown)
   }
 
-  fn build_namespace_object_type(
-    store: &Arc<tti::TypeStore>,
-    existing: Option<tti::TypeId>,
-    members: &[String],
-  ) -> tti::TypeId {
-    let mut shape = existing
-      .and_then(|ty| match store.type_kind(ty) {
-        tti::TypeKind::Object(obj) => Some(store.shape(store.object(obj).shape)),
-        _ => None,
-      })
-      .unwrap_or_else(tti::Shape::new);
-    for name in members.iter() {
-      let key = PropKey::String(store.intern_name(name.clone()));
-      shape.properties.push(Property {
-        key,
-        data: PropData {
-          ty: store.primitive_ids().any,
-          optional: false,
-          readonly: true,
-          accessibility: None,
-          is_method: false,
-          origin: None,
-          declared_on: None,
-        },
-      });
-    }
-    let shape_id = store.intern_shape(shape);
-    let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
-    store.intern_type(tti::TypeKind::Object(obj_id))
-  }
-
-  fn build_namespace_type_store_object(
-    &mut self,
-    existing: Option<TypeId>,
-    members: &[String],
-  ) -> TypeId {
-    let mut obj = existing
-      .and_then(|ty| match self.type_store.kind(ty).clone() {
-        TypeKind::Object(obj) => Some(obj),
-        _ => None,
-      })
-      .unwrap_or_else(ObjectType::empty);
-    for name in members.iter() {
-      obj.props.entry(name.clone()).or_insert(ObjectProperty {
-        typ: self.builtin.any,
-        optional: false,
-        readonly: true,
-      });
-    }
-    self.type_store.object(obj)
-  }
-
   fn find_namespace_def(&self, file: FileId, name: &str) -> Option<DefId> {
     self
       .def_data
@@ -3559,110 +3508,6 @@ impl ProgramState {
     let Some(store) = self.interned_store.clone() else {
       return Ok(());
     };
-    let mut rebuilt: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
-    let mut namespaces: Vec<(FileId, String, Vec<DefId>)> = Vec::new();
-    let mut namespace_groups: HashMap<(FileId, String), Vec<DefId>> = HashMap::new();
-    let mut def_entries: Vec<_> = self.def_data.iter().collect();
-    def_entries.sort_by_key(|(id, data)| (data.file.0, data.span.start, id.0));
-    for (def_id, data) in def_entries.iter().copied() {
-      if matches!(data.kind, DefKind::Namespace(_) | DefKind::Module(_)) {
-        let members: Vec<DefId> = def_entries
-          .iter()
-          .copied()
-          .filter_map(|(member_id, member)| {
-            if member.file != data.file || member_id == def_id {
-              return None;
-            }
-            if member.span.start < data.span.start || member.span.end > data.span.end {
-              return None;
-            }
-            Some(*member_id)
-          })
-          .collect();
-        namespace_groups
-          .entry((data.file, data.name.clone()))
-          .or_default()
-          .push(*def_id);
-        namespaces.push((data.file, data.name.clone(), members));
-      }
-    }
-    namespaces.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
-    let mut merged_members: BTreeMap<(FileId, String), Vec<DefId>> = BTreeMap::new();
-    for (file, name, members) in namespaces.into_iter() {
-      merged_members
-        .entry((file, name))
-        .or_default()
-        .extend(members.into_iter());
-    }
-    for ((file, name), members) in merged_members.into_iter() {
-      let mut shape = tti::Shape::new();
-      let mut obj = ObjectType::empty();
-      let mut seen = HashSet::new();
-      for member_id in members.into_iter() {
-        if !seen.insert(member_id) {
-          continue;
-        }
-        let ty_interned = match self.export_type_for_def(member_id)? {
-          Some(ty) => store.canon(ty),
-          None => continue,
-        };
-        let ty_store = if let Some(store_ty) = self.def_types.get(&member_id).copied() {
-          store_ty
-        } else {
-          self.import_interned_type(ty_interned)
-        };
-        let member_name = self
-          .def_data
-          .get(&member_id)
-          .map(|d| d.name.clone())
-          .unwrap_or_default();
-        let key = PropKey::String(store.intern_name(member_name.clone()));
-        shape.properties.push(Property {
-          key,
-          data: PropData {
-            ty: ty_interned,
-            optional: false,
-            readonly: true,
-            accessibility: None,
-            is_method: false,
-            origin: None,
-            declared_on: None,
-          },
-        });
-        obj.props.entry(member_name).or_insert(ObjectProperty {
-          typ: ty_store,
-          optional: false,
-          readonly: true,
-        });
-      }
-      let shape_id = store.intern_shape(shape);
-      let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
-      let interned = store.intern_type(tti::TypeKind::Object(obj_id));
-      let store_ty = self.type_store.object(obj);
-      rebuilt.insert((file, name.clone()), (interned, store_ty));
-      if let Some(defs) = namespace_groups.get(&(file, name.clone())) {
-        for def_id in defs.iter() {
-          self.def_types.insert(*def_id, store_ty);
-          self.interned_def_types.insert(*def_id, interned);
-          if let Some(def_data) = self.def_data.get_mut(def_id) {
-            match &mut def_data.kind {
-              DefKind::Namespace(ns) => {
-                ns.value_type = Some(store_ty);
-                ns.type_type = Some(store_ty);
-              }
-              DefKind::Module(ns) => {
-                ns.value_type = Some(store_ty);
-                ns.type_type = Some(store_ty);
-              }
-              _ => {}
-            }
-          }
-        }
-      }
-    }
-    if !rebuilt.is_empty() {
-      self.namespace_object_types = rebuilt.clone();
-    }
     let mut entries: Vec<_> = self
       .namespace_object_types
       .iter()
@@ -3885,6 +3730,7 @@ impl ProgramState {
     let mut type_params = HashMap::new();
     let mut namespace_types: HashMap<(FileId, String), (tti::TypeId, TypeId)> = HashMap::new();
     let def_by_name = self.canonical_defs()?;
+    let mut hir_def_maps: HashMap<FileId, HashMap<HirDefId, DefId>> = HashMap::new();
     let hir_namespaces = |kind: HirDefKind| -> sem_ts::Namespace {
       match kind {
         HirDefKind::Class => sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE,
@@ -3946,6 +3792,7 @@ impl ProgramState {
           }
         }
       }
+      hir_def_maps.insert(*file, def_map.clone());
       let file_key = self.file_key_for_id(*file);
       let registry = self.file_registry.clone();
       let key_to_id = move |key: &FileKey| registry.lookup_id(key);
@@ -3993,8 +3840,58 @@ impl ProgramState {
 
     self.collect_function_decl_types(&store, &flat_defs, &mut def_types, &mut type_params);
 
-    let mut namespace_members: Vec<(FileId, String, Vec<String>)> = Vec::new();
-    for (file, lowered) in lowered_entries.into_iter() {
+    let value_ns_priority = |ns: &sem_ts::Namespace| {
+      if ns.contains(sem_ts::Namespace::VALUE) {
+        0
+      } else if ns.contains(sem_ts::Namespace::NAMESPACE) {
+        1
+      } else {
+        2
+      }
+    };
+    let mut value_defs_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
+    let mut ordered_value_defs: Vec<_> = def_by_name.iter().collect();
+    ordered_value_defs.sort_by(|a, b| {
+      let ((file_a, name_a, ns_a), _) = a;
+      let ((file_b, name_b, ns_b), _) = b;
+      (
+        file_a.0,
+        name_a,
+        value_ns_priority(ns_a),
+        ns_a.bits(),
+      )
+        .cmp(&(file_b.0, name_b, value_ns_priority(ns_b), ns_b.bits()))
+    });
+    for ((file, name, ns), def_id) in ordered_value_defs.into_iter() {
+      if ns.contains(sem_ts::Namespace::VALUE) || ns.contains(sem_ts::Namespace::NAMESPACE) {
+        value_defs_by_name.entry((*file, name.clone())).or_insert(*def_id);
+      }
+    }
+
+    #[derive(Clone)]
+    struct NamespaceInfo {
+      def: DefId,
+      hir_def: HirDefId,
+      file: FileId,
+      name: String,
+      members: Vec<(String, DefId, HirDefKind)>,
+    }
+
+    let mut hir_lookup_by_file: HashMap<FileId, HashMap<HirDefId, hir_js::DefData>> =
+      HashMap::new();
+    for (file, lowered) in lowered_entries.iter() {
+      let mut map = HashMap::new();
+      for def in lowered.defs.iter() {
+        map.insert(def.id, def.clone());
+      }
+      hir_lookup_by_file.insert(*file, map);
+    }
+
+    let mut namespace_infos: Vec<NamespaceInfo> = Vec::new();
+    let mut hir_namespace_map: HashMap<HirDefId, DefId> = HashMap::new();
+
+    for (file, lowered) in lowered_entries.iter() {
+      let def_map = hir_def_maps.get(file);
       for ns_def in lowered
         .defs
         .iter()
@@ -4003,40 +3900,251 @@ impl ProgramState {
         let Some(ns_name) = lowered.names.resolve(ns_def.name) else {
           continue;
         };
-        let mut members = Vec::new();
-        for member in lowered.defs.iter() {
-          if member.id == ns_def.id {
-            continue;
-          }
-          if member.span.start >= ns_def.span.start && member.span.end <= ns_def.span.end {
-            if let Some(name) = lowered.names.resolve(member.name) {
-              members.push(name.to_string());
-            }
-          }
-        }
-        members.sort();
-        members.dedup();
-        if members.is_empty() {
+        let mapped = def_by_name
+          .get(&(*file, ns_name.to_string(), sem_ts::Namespace::NAMESPACE))
+          .copied()
+          .or_else(|| def_map.and_then(|map| map.get(&ns_def.id).copied()))
+          .or_else(|| self.def_data.contains_key(&ns_def.id).then_some(ns_def.id))
+          .or_else(|| value_defs_by_name.get(&(*file, ns_name.to_string())).copied());
+        let Some(def_id) = mapped else {
           continue;
-        }
-        namespace_members.push((file, ns_name.to_string(), members));
+        };
+        hir_namespace_map.insert(ns_def.id, def_id);
+        namespace_infos.push(NamespaceInfo {
+          def: def_id,
+          hir_def: ns_def.id,
+          file: *file,
+          name: ns_name.to_string(),
+          members: Vec::new(),
+        });
       }
     }
-    namespace_members.sort_by(|a, b| (a.0 .0, &a.1).cmp(&(b.0 .0, &b.1)));
-    for (file, ns_name, members) in namespace_members.into_iter() {
-      let key = (file, ns_name);
+
+    let namespace_hirs: HashSet<HirDefId> = hir_namespace_map.keys().copied().collect();
+
+    fn namespace_ancestor(
+      mut current: Option<HirDefId>,
+      lookup: &HashMap<HirDefId, hir_js::DefData>,
+      namespaces: &HashSet<HirDefId>,
+    ) -> Option<HirDefId> {
+      while let Some(def) = current {
+        if namespaces.contains(&def) {
+          return Some(def);
+        }
+        current = lookup.get(&def).and_then(|data| data.parent);
+      }
+      None
+    }
+
+    let mut namespace_parents: HashMap<DefId, DefId> = HashMap::new();
+    for info in namespace_infos.iter() {
+      let Some(lookup) = hir_lookup_by_file.get(&info.file) else {
+        continue;
+      };
+      let parent = lookup
+        .get(&info.hir_def)
+        .and_then(|def| namespace_ancestor(def.parent, lookup, &namespace_hirs))
+        .and_then(|hir_parent| hir_namespace_map.get(&hir_parent).copied());
+      if let Some(parent) = parent {
+        namespace_parents.insert(info.def, parent);
+      }
+    }
+
+    let mut namespace_members: HashMap<DefId, Vec<(String, DefId, HirDefKind)>> = HashMap::new();
+    for (file, lowered) in lowered_entries.iter() {
+      let Some(lookup) = hir_lookup_by_file.get(file) else {
+        continue;
+      };
+      let def_map = hir_def_maps.get(file);
+      for member in lowered.defs.iter() {
+        let member_kind = member.path.kind;
+        if !matches!(
+          member_kind,
+          HirDefKind::Var
+            | HirDefKind::Function
+            | HirDefKind::Class
+            | HirDefKind::Enum
+            | HirDefKind::Namespace
+            | HirDefKind::Module
+        ) {
+          continue;
+        }
+        let Some(owner_hir) = namespace_ancestor(member.parent, lookup, &namespace_hirs) else {
+          continue;
+        };
+        let Some(owner_def) = hir_namespace_map.get(&owner_hir).copied() else {
+          continue;
+        };
+        let Some(member_name) = lowered.names.resolve(member.name) else {
+          continue;
+        };
+        let target_ns = match member_kind {
+          HirDefKind::Namespace | HirDefKind::Module => sem_ts::Namespace::NAMESPACE,
+          _ => sem_ts::Namespace::VALUE,
+        };
+        let member_def = def_by_name
+          .get(&(*file, member_name.to_string(), target_ns))
+          .copied()
+          .or_else(|| {
+            if target_ns.contains(sem_ts::Namespace::VALUE) {
+              value_defs_by_name
+                .get(&(*file, member_name.to_string()))
+                .copied()
+            } else {
+              None
+            }
+          })
+          .or_else(|| def_map.and_then(|map| map.get(&member.id).copied()))
+          .or_else(|| self.def_data.contains_key(&member.id).then_some(member.id));
+        let Some(member_def) = member_def else {
+          continue;
+        };
+        namespace_members
+          .entry(owner_def)
+          .or_default()
+          .push((member_name.to_string(), member_def, member_kind));
+      }
+    }
+
+    fn namespace_depth_for(
+      def: DefId,
+      parents: &HashMap<DefId, DefId>,
+      cache: &mut HashMap<DefId, usize>,
+    ) -> usize {
+      if let Some(depth) = cache.get(&def) {
+        return *depth;
+      }
+      let depth = parents
+        .get(&def)
+        .map(|parent| 1 + namespace_depth_for(*parent, parents, cache))
+        .unwrap_or(0);
+      cache.insert(def, depth);
+      depth
+    }
+
+    let mut depth_cache = HashMap::new();
+
+    let mut namespace_infos: Vec<NamespaceInfo> = namespace_infos
+      .into_iter()
+      .map(|mut info| {
+        let mut members = namespace_members.remove(&info.def).unwrap_or_default();
+        members.sort_by(|a, b| {
+          let ord = a.0.cmp(&b.0);
+          if ord == std::cmp::Ordering::Equal {
+            a.1.cmp(&b.1)
+          } else {
+            ord
+          }
+        });
+        members.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1 && a.2 == b.2);
+        info.members = members;
+        info
+      })
+      .collect();
+
+    namespace_infos.sort_by(|a, b| {
+      let depth_a = namespace_depth_for(a.def, &namespace_parents, &mut depth_cache);
+      let depth_b = namespace_depth_for(b.def, &namespace_parents, &mut depth_cache);
+      (
+        Reverse(depth_a),
+        a.file.0,
+        &a.name,
+        a.def.0,
+      )
+        .cmp(&(Reverse(depth_b), b.file.0, &b.name, b.def.0))
+    });
+
+    let mut namespace_cache: HashMap<DefId, (tti::TypeId, TypeId)> = HashMap::new();
+    for info in namespace_infos.iter() {
+      let mut props: BTreeMap<String, (tti::TypeId, TypeId)> = BTreeMap::new();
+      for (name, member_def, member_kind) in info.members.iter() {
+        let (prop_interned, prop_store) = match member_kind {
+          HirDefKind::Namespace | HirDefKind::Module => namespace_cache
+            .get(member_def)
+            .copied()
+            .or_else(|| namespace_types.get(&(info.file, name.clone())).copied())
+            .unwrap_or((store.primitive_ids().any, self.builtin.any)),
+          HirDefKind::Var
+          | HirDefKind::Function
+          | HirDefKind::Class
+          | HirDefKind::Enum => {
+            let interned = if let Some(existing) = def_types.get(member_def).copied() {
+              existing
+            } else {
+              if !self.def_types.contains_key(member_def) {
+                self.type_of_def(*member_def)?;
+              }
+              let store_ty = self
+                .def_types
+                .get(member_def)
+                .copied()
+                .unwrap_or(self.builtin.unknown);
+              let interned = self.ensure_interned_type(store_ty);
+              def_types.insert(*member_def, interned);
+              interned
+            };
+            let kind = store.type_kind(interned);
+            let (interned, store_ty) = if matches!(member_kind, HirDefKind::Class | HirDefKind::Enum)
+              && matches!(kind, tti::TypeKind::Unknown)
+            {
+              (store.primitive_ids().any, self.builtin.any)
+            } else {
+              let store_ty = self
+                .def_types
+                .get(member_def)
+                .copied()
+                .unwrap_or_else(|| self.import_interned_type(interned));
+              (interned, store_ty)
+            };
+            (interned, store_ty)
+          }
+          _ => continue,
+        };
+        props
+          .entry(name.clone())
+          .and_modify(|(existing_interned, existing_store)| {
+            *existing_interned =
+              ProgramState::merge_interned_decl_types(&store, *existing_interned, prop_interned);
+            *existing_store = self.merge_namespace_store_types(*existing_store, prop_store);
+          })
+          .or_insert((prop_interned, prop_store));
+      }
+
+      let mut shape = tti::Shape::new();
+      let mut obj = ObjectType::empty();
+      for (name, (prop_interned, prop_store)) in props.into_iter() {
+        let key = PropKey::String(store.intern_name(name.clone()));
+        shape.properties.push(Property {
+          key,
+          data: PropData {
+            ty: prop_interned,
+            optional: false,
+            readonly: true,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        });
+        obj.props.entry(name).or_insert(ObjectProperty {
+          typ: prop_store,
+          optional: false,
+          readonly: true,
+        });
+      }
+      let shape_id = store.intern_shape(shape);
+      let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+      let interned = store.intern_type(tti::TypeKind::Object(obj_id));
+      let store_ty = self.type_store.object(obj);
+      namespace_cache.insert(info.def, (interned, store_ty));
       namespace_types
-        .entry(key)
+        .entry((info.file, info.name.clone()))
         .and_modify(|(existing_interned, existing_store)| {
           *existing_interned =
-            ProgramState::build_namespace_object_type(&store, Some(*existing_interned), &members);
-          *existing_store = self.build_namespace_type_store_object(Some(*existing_store), &members);
+            ProgramState::merge_interned_object_types(&store, *existing_interned, interned);
+          *existing_store = self.merge_namespace_store_types(*existing_store, store_ty);
         })
-        .or_insert_with(|| {
-          let interned = ProgramState::build_namespace_object_type(&store, None, &members);
-          let store_ty = self.build_namespace_type_store_object(None, &members);
-          (interned, store_ty)
-        });
+        .or_insert((interned, store_ty));
     }
 
     if !namespace_types.is_empty() {
@@ -4241,6 +4349,27 @@ impl ProgramState {
     let sig_id = store.intern_signature(sig);
     let diags = lowerer.take_diagnostics();
     (sig_id, type_param_ids, diags)
+  }
+
+  fn merge_namespace_store_types(&mut self, existing: TypeId, incoming: TypeId) -> TypeId {
+    match (
+      self.type_store.kind(existing).clone(),
+      self.type_store.kind(incoming).clone(),
+    ) {
+      (TypeKind::Object(mut a), TypeKind::Object(b)) => {
+        for (name, prop) in b.props.into_iter() {
+          a.props.insert(name, prop);
+        }
+        if a.string_index.is_none() {
+          a.string_index = b.string_index;
+        }
+        if a.number_index.is_none() {
+          a.number_index = b.number_index;
+        }
+        self.type_store.object(a)
+      }
+      _ => self.type_store.union(vec![existing, incoming], &self.builtin),
+    }
   }
 
   fn merge_interned_object_types(
