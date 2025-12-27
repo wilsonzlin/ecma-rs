@@ -37,8 +37,11 @@ fn parse_query_uses_cache() {
     parse_call_count(),
     "cached query should not re-run the parse implementation"
   );
-  assert!(
-    Arc::ptr_eq(&first, &second),
-    "cached query results should be shared"
-  );
+  let shared_ast = first
+    .ast
+    .as_ref()
+    .zip(second.ast.as_ref())
+    .map(|(a, b)| Arc::ptr_eq(a, b))
+    .unwrap_or(false);
+  assert!(shared_ast, "cached query results should be shared");
 }
