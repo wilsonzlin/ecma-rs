@@ -27,7 +27,6 @@ mod ts_erase;
 #[cfg(feature = "fuzzing")]
 pub use fuzz::fuzz_minify_pipeline;
 mod ts_lower;
-mod ts_lower;
 
 #[cfg(feature = "emit-minify")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
