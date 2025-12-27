@@ -2,7 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json;
-use typecheck_ts::{FileId, FileKey, Host, HostError, Program, ProgramSnapshot};
+use typecheck_ts::{
+  parse_call_count, reset_parse_call_count, FileId, FileKey, Host, HostError, Program,
+  ProgramSnapshot, QueryKind,
+};
 
 fn key(id: FileId) -> FileKey {
   FileKey::new(format!("file{}.ts", id.0))
@@ -121,4 +124,73 @@ fn snapshot_serialization_is_deterministic() {
   let json_b = serde_json::to_string_pretty(&snap_b).expect("serialize snapshot");
 
   assert_eq!(json_a, json_b, "snapshots must be byte-stable");
+}
+
+#[test]
+fn snapshot_restoration_reuses_cached_body_for_type_at() {
+  let mut host = MemoryHost::default();
+  let entry_source = "import { add } from \"./math\";\nexport const total = add(1, 2);";
+  let math_source = "export function add(a: number, b: number) { return a + b; }";
+  host.insert(FileId(0), entry_source);
+  host.insert(FileId(1), math_source);
+  host.link(FileId(0), "./math", FileId(1));
+
+  let program = Program::new(host.clone(), vec![key(FileId(0))]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let file_entry = program.file_id(&key(FileId(0))).expect("entry id");
+  let call_offset = entry_source.find("add(1, 2)").unwrap() as u32;
+  let original_type = program
+    .type_at(file_entry, call_offset)
+    .expect("type at call");
+
+  let snapshot = program.snapshot();
+  reset_parse_call_count();
+  let restored = Program::from_snapshot(host, snapshot);
+
+  let restored_entry = restored.file_id(&key(FileId(0))).expect("restored entry");
+  let stats_before = restored.query_stats();
+  let parses_before = parse_call_count();
+  let restored_type = restored
+    .type_at(restored_entry, call_offset)
+    .expect("restored type");
+  let stats_after = restored.query_stats();
+  let parses_after = parse_call_count();
+
+  let before = stats_before
+    .queries
+    .get(&QueryKind::CheckBody)
+    .cloned()
+    .unwrap_or_default();
+  let after = stats_after
+    .queries
+    .get(&QueryKind::CheckBody)
+    .cloned()
+    .unwrap_or_default();
+
+  assert_eq!(restored_type, original_type);
+  assert_eq!(
+    after.total.saturating_sub(before.total),
+    1,
+    "type_at should reuse the cached body result instead of re-checking"
+  );
+  assert_eq!(
+    after.cache_misses.saturating_sub(before.cache_misses),
+    0,
+    "cached body should not register misses when restored from snapshot"
+  );
+  assert_eq!(
+    after.cache_hits.saturating_sub(before.cache_hits),
+    1,
+    "restored body should register a cache hit when queried"
+  );
+  assert_eq!(
+    parses_after.saturating_sub(parses_before),
+    0,
+    "restored snapshot should not trigger re-parsing"
+  );
 }

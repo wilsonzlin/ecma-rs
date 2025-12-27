@@ -4,20 +4,25 @@ use crate::lib_support::{CompilerOptions, FileKind};
 use crate::program::{
   BodyCheckResult, BuiltinTypes, DefData, SymbolBinding, SymbolOccurrence, TypeStore,
 };
-use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId};
+use crate::{semantic_js, BodyId, DefId, Diagnostic, ExportMap, FileId, FileKey};
 use types_ts_interned::{
   TypeId, TypeId as InternedTypeId, TypeParamId, TypeStoreSnapshot as InternedTypeStoreSnapshot,
 };
 
 /// Bumped whenever the on-disk snapshot schema changes in a breaking way.
-pub const PROGRAM_SNAPSHOT_VERSION: u32 = 7;
+pub const PROGRAM_SNAPSHOT_VERSION: u32 = 8;
 
 /// File metadata captured in a snapshot, including an optional copy of the text
-/// to allow offline reconstruction.
+/// to allow offline reconstruction. Snapshots are hybrid: when `text` is `None`
+/// the host must still be able to provide the source, but hashes are recorded
+/// to allow higher-level caches to detect drift.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FileSnapshot {
   pub file: FileId,
+  pub key: FileKey,
   pub kind: FileKind,
+  /// Whether this file originated from bundled or host-provided libraries.
+  pub is_lib: bool,
   pub hash: String,
   pub text: Option<String>,
 }
@@ -40,7 +45,9 @@ pub struct DefSnapshot {
 }
 
 /// Stable, deterministic snapshot of a checked program suitable for caching and
-/// offline queries.
+/// offline queries. Snapshots capture the file registry (including host-chosen
+/// keys), compiler options, and cached query results so callers can restore
+/// without re-parsing or re-checking.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProgramSnapshot {
   pub schema_version: u32,

@@ -1621,6 +1621,10 @@ impl Program {
     let mut files = Vec::new();
     for file in file_ids {
       let kind = *state.file_kinds.get(&file).unwrap_or(&FileKind::Ts);
+      let key = state
+        .file_key_for_id(file)
+        .unwrap_or_else(|| FileKey::new(format!("file{}.ts", file.0)));
+      let is_lib = state.lib_file_ids.contains(&file);
       let text = state.lib_texts.get(&file).cloned().or_else(|| {
         state
           .file_key_for_id(file)
@@ -1635,7 +1639,9 @@ impl Program {
       };
       files.push(FileSnapshot {
         file,
+        key,
         kind,
+        is_lib,
         hash,
         text: text.map(|t| t.to_string()),
       });
@@ -1789,10 +1795,20 @@ impl Program {
       snapshot.schema_version, PROGRAM_SNAPSHOT_VERSION,
       "Program snapshot schema mismatch"
     );
+    let file_key_map: HashMap<_, _> = snapshot
+      .files
+      .iter()
+      .map(|file| (file.file, file.key.clone()))
+      .collect();
     let root_keys: Vec<FileKey> = snapshot
       .roots
       .iter()
-      .map(|id| FileKey::new(format!("file{}.ts", id.0)))
+      .map(|id| {
+        file_key_map
+          .get(id)
+          .cloned()
+          .unwrap_or_else(|| FileKey::new(format!("file{}.ts", id.0)))
+      })
       .collect();
     let program = Program::with_lib_manager(host, root_keys, Arc::new(LibManager::new()));
     {
@@ -1802,10 +1818,13 @@ impl Program {
       state.checker_caches = CheckerCaches::new(state.compiler_options.cache.clone());
       state.cache_stats = CheckerCacheStats::default();
       for file in snapshot.files.into_iter() {
-        let key = FileKey::new(format!("file{}.ts", file.file.0));
+        let key = file.key.clone();
         let id = state.file_registry.intern(&key);
         debug_assert_eq!(id, file.file, "snapshot file id mismatch");
         state.file_kinds.insert(file.file, file.kind);
+        if file.is_lib {
+          state.lib_file_ids.insert(file.file);
+        }
         if let Some(text) = file.text {
           state.lib_texts.insert(file.file, Arc::from(text));
         }
