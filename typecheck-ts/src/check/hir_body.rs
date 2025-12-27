@@ -39,7 +39,7 @@ use super::expr::resolve_call;
 use super::infer::TypeParamDecl;
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
-use super::widen::widen_object_literal_props;
+use super::widen::{widen_array_elements, widen_literal, widen_object_literal_props};
 pub use crate::BodyCheckResult;
 use crate::{codes, BodyId, DefId};
 
@@ -56,7 +56,6 @@ struct Binding {
 
 #[derive(Clone, Copy, Default)]
 struct ExprContext {
-  contextual_type: Option<TypeId>,
   expected: Option<TypeId>,
   const_context: bool,
   preserve_inferred: bool,
@@ -65,7 +64,7 @@ struct ExprContext {
 impl ExprContext {
   fn const_with_type(ty: TypeId) -> Self {
     Self {
-      contextual_type: Some(ty),
+      expected: Some(ty),
       const_context: true,
       ..Default::default()
     }
@@ -994,96 +993,17 @@ impl<'a> Checker<'a> {
   ) -> TypeId {
     let mut widened = ty;
     if !skip_containers {
-      widened = self.widen_array_elements(widened);
+      widened = widen_array_elements(&self.store, widened);
       widened = self.widen_object_literal(widened);
     }
     if !matches!(mode, VarDeclMode::Const) {
-      widened = self.widen_literal(widened);
+      widened = widen_literal(&self.store, widened);
     }
     widened
   }
 
-  fn widen_literal(&self, ty: TypeId) -> TypeId {
-    let prim = self.store.primitive_ids();
-    match self.store.type_kind(ty) {
-      TypeKind::NumberLiteral(_) => prim.number,
-      TypeKind::StringLiteral(_) => prim.string,
-      TypeKind::BooleanLiteral(_) => prim.boolean,
-      _ => ty,
-    }
-  }
-
-  fn widen_union_literals(&self, ty: TypeId) -> TypeId {
-    let prim = self.store.primitive_ids();
-    match self.store.type_kind(ty) {
-      TypeKind::NumberLiteral(_) => prim.number,
-      TypeKind::StringLiteral(_) => prim.string,
-      TypeKind::BooleanLiteral(_) => prim.boolean,
-      TypeKind::Union(members) => {
-        let mapped: Vec<_> = members
-          .into_iter()
-          .map(|m| self.widen_union_literals(m))
-          .collect();
-        self.store.union(mapped)
-      }
-      TypeKind::Array { ty, readonly } => {
-        let widened = self.widen_union_literals(ty);
-        self.store.intern_type(TypeKind::Array {
-          ty: widened,
-          readonly,
-        })
-      }
-      _ => ty,
-    }
-  }
-
-  fn widen_array_elements(&self, ty: TypeId) -> TypeId {
-    match self.store.type_kind(ty) {
-      TypeKind::Array { ty, readonly } => {
-        let widened = self.widen_union_literals(ty);
-        self.store.intern_type(TypeKind::Array {
-          ty: widened,
-          readonly,
-        })
-      }
-      _ => ty,
-    }
-  }
-
   fn widen_object_literal(&self, ty: TypeId) -> TypeId {
     match self.store.type_kind(ty) {
-      TypeKind::Object(obj_id) => {
-        let obj = self.store.object(obj_id);
-        let mut shape = self.store.shape(obj.shape);
-        let mut changed = false;
-        for prop in shape.properties.iter_mut() {
-          if prop.data.readonly {
-            continue;
-          }
-          let widened = self.widen_union_literals(prop.data.ty);
-          if widened != prop.data.ty {
-            prop.data.ty = widened;
-            changed = true;
-          }
-        }
-        for idx in shape.indexers.iter_mut() {
-          if idx.readonly {
-            continue;
-          }
-          let widened = self.widen_union_literals(idx.value_type);
-          if widened != idx.value_type {
-            idx.value_type = widened;
-            changed = true;
-          }
-        }
-        if changed {
-          let shape_id = self.store.intern_shape(shape);
-          let obj_id = self.store.intern_object(ObjectType { shape: shape_id });
-          self.store.intern_type(TypeKind::Object(obj_id))
-        } else {
-          ty
-        }
-      }
       TypeKind::Union(members) => {
         let mapped: Vec<_> = members
           .into_iter()
@@ -1098,7 +1018,7 @@ impl<'a> Checker<'a> {
           .collect();
         self.store.intersection(mapped)
       }
-      _ => ty,
+      _ => widen_object_literal_props(&self.store, ty),
     }
   }
 
@@ -1326,7 +1246,7 @@ impl<'a> Checker<'a> {
         let lhs_ty = self.check_expr_in_ctx(
           &expr.stx.expression,
           ExprContext {
-            contextual_type: Some(target_ty),
+            expected: Some(target_ty),
             const_context: true,
             preserve_inferred: true,
             ..Default::default()
@@ -1376,14 +1296,14 @@ impl<'a> Checker<'a> {
     self
       .contextual_array_element_type(index)
       .map(|ty| ExprContext {
-        contextual_type: Some(ty),
+        expected: Some(ty),
         const_context: self.expr_context.const_context,
         ..ExprContext::default()
       })
   }
 
   fn contextual_array_element_type(&self, index: usize) -> Option<TypeId> {
-    let contextual = self.expr_context.contextual_type?;
+    let contextual = self.expr_context.expected?;
     match self.store.type_kind(contextual) {
       TypeKind::Array { ty, .. } => Some(ty),
       TypeKind::Tuple(elems) => elems
