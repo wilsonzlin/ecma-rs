@@ -4,11 +4,12 @@ use std::sync::Arc;
 use diagnostics::FileId;
 use hir_js::{
   lower_file_with_diagnostics, Body, BodyId, DefKind, FileKind as HirFileKind, LowerResult,
-  NameInterner,
+  NameInterner, PatKind,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts::locals::{bind_ts_locals, TsLocalSemantics};
-use typecheck_ts::check::hir_body::{check_body_with_env, FlowBindings};
+use typecheck_ts::check::flow_bindings::FlowBindings;
+use typecheck_ts::check::hir_body::{base_body_result, refine_types_with_flow};
 use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
 fn parse_and_lower_with_locals(source: &str) -> (LowerResult, TsLocalSemantics) {
@@ -52,22 +53,28 @@ function f(x: string | null) {
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
   let expected = store.union(vec![prim.string, prim.null]);
-  let param_binding = body
+  let param_name = match body
     .function
     .as_ref()
     .and_then(|f| f.params.first())
-    .and_then(|p| flow_bindings.binding_for_pat(p.pat))
-    .expect("param binding");
-  initial.insert(param_binding, expected);
+    .map(|p| body.pats[p.pat.0 as usize].kind.clone())
+  {
+    Some(PatKind::Ident(name)) => name,
+    other => panic!("expected ident param, got {other:?}"),
+  };
+  initial.insert(param_name, expected);
 
   let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  let res = check_body_with_env(
+  let base = base_body_result(body_id, body, prim.unknown);
+  let res = refine_types_with_flow(
     body_id,
     body,
     &lowered.names,
+    &flow_bindings,
+    &semantics,
     FileId(0),
     Arc::clone(&store),
-    Some(&semantics),
+    &base,
     &initial,
     relate,
     None,
@@ -96,27 +103,33 @@ function f(x: string | null) {
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
-  let param_binding = body
+  let param_name = match body
     .function
     .as_ref()
     .and_then(|f| f.params.first())
-    .and_then(|p| flow_bindings.binding_for_pat(p.pat))
-    .expect("param binding");
-  initial.insert(param_binding, store.union(vec![prim.string, prim.null]));
+    .map(|p| body.pats[p.pat.0 as usize].kind.clone())
+  {
+    Some(PatKind::Ident(name)) => name,
+    other => panic!("expected ident param, got {other:?}"),
+  };
+  initial.insert(param_name, store.union(vec![prim.string, prim.null]));
 
   let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  let res = check_body_with_env(
+  let base = base_body_result(body_id, body, prim.unknown);
+  let res = refine_types_with_flow(
     body_id,
     body,
     &lowered.names,
+    &flow_bindings,
+    &semantics,
     FileId(0),
     Arc::clone(&store),
-    Some(&semantics),
+    &base,
     &initial,
     relate,
     None,
   );
-
+ 
   let ret_ty = res.return_types()[0];
   // Truthiness leaves `string` in the falsy branch (empty string), but the hoisted
   // assignment must still update the shared binding with `number`.

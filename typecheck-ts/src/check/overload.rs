@@ -438,6 +438,7 @@ pub fn resolve_construct(
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
   span: Span,
+  _context: Option<&mut dyn OverloadContext>,
 ) -> CallResolution {
   let mut candidates = Vec::new();
   collect_construct_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());

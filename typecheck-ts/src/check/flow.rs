@@ -2,9 +2,11 @@
 
 use std::collections::{HashMap, HashSet};
 
+use semantic_js::ts::SymbolId;
 use types_ts_interned::{TypeId, TypeStore};
 
-pub use super::flow_bindings::FlowBindingId;
+/// Stable identifier for a flow binding, derived from locals semantics.
+pub type FlowBindingId = SymbolId;
 use super::flow_narrow::Facts;
 
 /// Path segment for an object/property access tracked during flow analysis.
