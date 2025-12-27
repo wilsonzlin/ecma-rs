@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use salsa::Setter;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
@@ -11,6 +10,7 @@ use hir_js::{
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts as sem_ts;
+use salsa::Setter;
 use types_ts_interned::{PrimitiveIds, TypeStore};
 
 use crate::codes;
@@ -245,7 +245,7 @@ pub mod body_check {
   use std::sync::{Arc, OnceLock, RwLock};
   use std::time::Instant;
 
-  use diagnostics::{FileId, Span, TextRange};
+  use diagnostics::{Diagnostic, FileId, Span, TextRange};
   use hir_js::{
     Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, DefId as HirDefId, NameInterner,
   };
@@ -664,11 +664,49 @@ pub mod body_check {
             }
           }
         }
-        if result.return_types.is_empty() && !flow_result.return_types.is_empty() {
-          result.return_types = flow_result.return_types;
+        let flow_return_types = flow_result.return_types;
+        if result.return_types.is_empty() && !flow_return_types.is_empty() {
+          result.return_types = flow_return_types;
+        } else if flow_return_types.len() == result.return_types.len() {
+          for (idx, ty) in flow_return_types.iter().enumerate() {
+            if *ty != prim.unknown {
+              let existing = result.return_types[idx];
+              let narrower =
+                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+              if existing == prim.unknown || narrower {
+                result.return_types[idx] = *ty;
+              }
+            }
+          }
         }
-        if result.diagnostics.is_empty() && !flow_result.diagnostics.is_empty() {
-          result.diagnostics = flow_result.diagnostics;
+        let mut flow_diagnostics = flow_result.diagnostics;
+        if !flow_diagnostics.is_empty() {
+          let mut seen: HashSet<(String, FileId, TextRange, String)> = HashSet::new();
+          let diag_key = |diag: &Diagnostic| -> (String, FileId, TextRange, String) {
+            (
+              diag.code.as_str().to_string(),
+              diag.primary.file,
+              diag.primary.range,
+              diag.message.clone(),
+            )
+          };
+          for diag in result.diagnostics.iter() {
+            seen.insert(diag_key(diag));
+          }
+          flow_diagnostics.sort_by(|a, b| {
+            a.primary
+              .file
+              .cmp(&b.primary.file)
+              .then(a.primary.range.start.cmp(&b.primary.range.start))
+              .then(a.primary.range.end.cmp(&b.primary.range.end))
+              .then(a.code.cmp(&b.code))
+              .then(a.message.cmp(&b.message))
+          });
+          for diag in flow_diagnostics.into_iter() {
+            if seen.insert(diag_key(&diag)) {
+              result.diagnostics.push(diag);
+            }
+          }
         }
       }
 

@@ -3196,7 +3196,7 @@ impl ProgramState {
         .iter()
         .filter(|(_, data)| matches!(data.kind, DefKind::Function(_)))
       {
-        let Some(symbol) = semantics.symbol_for_def(*def_id, sem_ts::Namespace::VALUE) else {
+        let Some(symbol) = semantics.symbol_for_def(sem_ts::DefId(def_id.0), sem_ts::Namespace::VALUE) else {
           continue;
         };
         if !seen_symbols.insert(symbol) {
@@ -6751,12 +6751,49 @@ impl ProgramState {
           }
         }
       }
-      if result.return_types.is_empty() && !flow_result.return_types.is_empty() {
-        result.return_types = flow_result.return_types;
+      let flow_return_types = flow_result.return_types;
+      if result.return_types.is_empty() && !flow_return_types.is_empty() {
+        result.return_types = flow_return_types;
+      } else if flow_return_types.len() == result.return_types.len() {
+        for (idx, ty) in flow_return_types.iter().enumerate() {
+          if *ty != prim.unknown {
+            let existing = result.return_types[idx];
+            let narrower =
+              relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+            if existing == prim.unknown || narrower {
+              result.return_types[idx] = *ty;
+            }
+          }
+        }
       }
-      if !flow_result.diagnostics.is_empty() {
-        result.diagnostics.extend(flow_result.diagnostics);
-        codes::normalize_diagnostics(&mut result.diagnostics);
+      let mut flow_diagnostics = flow_result.diagnostics;
+      if !flow_diagnostics.is_empty() {
+        let mut seen: HashSet<(String, FileId, TextRange, String)> = HashSet::new();
+        let diag_key = |diag: &Diagnostic| -> (String, FileId, TextRange, String) {
+          (
+            diag.code.as_str().to_string(),
+            diag.primary.file,
+            diag.primary.range,
+            diag.message.clone(),
+          )
+        };
+        for diag in result.diagnostics.iter() {
+          seen.insert(diag_key(diag));
+        }
+        flow_diagnostics.sort_by(|a, b| {
+          a.primary
+            .file
+            .cmp(&b.primary.file)
+            .then(a.primary.range.start.cmp(&b.primary.range.start))
+            .then(a.primary.range.end.cmp(&b.primary.range.end))
+            .then(a.code.cmp(&b.code))
+            .then(a.message.cmp(&b.message))
+        });
+        for diag in flow_diagnostics.into_iter() {
+          if seen.insert(diag_key(&diag)) {
+            result.diagnostics.push(diag);
+          }
+        }
       }
     }
     for (idx, expr) in body.exprs.iter().enumerate() {

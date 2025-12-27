@@ -189,16 +189,16 @@ pub const MISSING_GLOBAL_PROPERTY: Code = Code::new(
   &[],
 );
 
-/// TC0009: Variable is used before being definitely assigned.
+/// TC0009: Identifier may be used before it has been assigned.
 ///
-/// - Primary span: the identifier reference being read.
+/// - Primary span: the identifier token being read.
 /// - Labels: primary only.
 /// - Notes: none.
 pub const USE_BEFORE_ASSIGNMENT: Code = Code::new(
   "TC0009",
-  "variable used before being assigned",
   "identifier used before assignment",
-  &["primary: identifier read before assignment"],
+  "identifier reference that might not be assigned",
+  &["primary: identifier reference"],
   &[],
 );
 

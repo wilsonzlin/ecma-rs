@@ -589,10 +589,11 @@ fn method_type_params_do_not_leak_and_preserve_outer_bindings() {
   let alias = parse_type_alias("type Outer<T> = { method<U>(x: T, y: U): T };");
   let store = TypeStore::new();
   let mut lowerer = TypeLowerer::new(store.clone());
-  let outer_t = *lowerer
+  let outer_t = lowerer
     .register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]))
     .first()
-    .expect("outer type param");
+    .expect("outer type param")
+    .id;
   let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
 
   let TypeKind::Object(obj) = store.type_kind(ty) else {
@@ -614,7 +615,7 @@ fn method_type_params_do_not_leak_and_preserve_outer_bindings() {
   let sig = store.signature(overloads[0]);
 
   assert_eq!(sig.type_params.len(), 1);
-  let inner_u = sig.type_params[0];
+  let inner_u = sig.type_params[0].id;
   assert_ne!(inner_u, outer_t);
 
   let first_param = sig.params.first().expect("first param");
@@ -637,10 +638,11 @@ fn nested_function_type_params_shadow_outer() {
   let alias = parse_type_alias("type X<T> = (fn: <T>(arg: T) => T) => T;");
   let store = TypeStore::new();
   let mut lowerer = TypeLowerer::new(store.clone());
-  let outer_t = *lowerer
+  let outer_t = lowerer
     .register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]))
     .first()
-    .expect("outer type param");
+    .expect("outer type param")
+    .id;
   let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
 
   let TypeKind::Callable { overloads } = store.type_kind(ty) else {
@@ -661,7 +663,7 @@ fn nested_function_type_params_shadow_outer() {
   };
   let inner_sig = store.signature(inner_overloads[0]);
   assert_eq!(inner_sig.type_params.len(), 1);
-  let inner_t = inner_sig.type_params[0];
+  let inner_t = inner_sig.type_params[0].id;
   assert_ne!(inner_t, outer_t);
   let inner_param_ty = inner_sig.params.first().expect("inner param").ty;
   assert_eq!(
@@ -676,10 +678,11 @@ fn infer_type_params_are_scoped_to_conditional_types() {
   let alias = parse_type_alias("type C<T> = T extends infer U ? U : never;");
   let store = TypeStore::new();
   let mut lowerer = TypeLowerer::new(store.clone());
-  let outer_t = *lowerer
+  let outer_t = lowerer
     .register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]))
     .first()
-    .expect("outer type param");
+    .expect("outer type param")
+    .id;
   let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
 
   let TypeKind::Conditional {
@@ -711,10 +714,11 @@ fn infer_type_params_shadow_outer_and_arent_visible_in_false_branch() {
   let alias = parse_type_alias("type S<T> = T extends infer T ? T : T;");
   let store = TypeStore::new();
   let mut lowerer = TypeLowerer::new(store.clone());
-  let outer_t = *lowerer
+  let outer_t = lowerer
     .register_type_params(alias.stx.type_parameters.as_deref().unwrap_or(&[]))
     .first()
-    .expect("outer type param");
+    .expect("outer type param")
+    .id;
   let ty = lowerer.lower_type_expr(&alias.stx.type_expr);
 
   let TypeKind::Conditional {
