@@ -436,10 +436,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     params
       .iter()
       .filter_map(|id| {
-        let data = self.arenas().type_params.get(id.0 as usize)?;
+        let (constraint, default) = {
+          let data = self.arenas().type_params.get(id.0 as usize)?;
+          (data.constraint, data.default)
+        };
         let mapped = *self.type_params.get(id)?;
-        let constraint = data.constraint.map(|c| self.lower_type_expr(c, names));
-        let default = data.default.map(|d| self.lower_type_expr(d, names));
+        let constraint = constraint.map(|c| self.lower_type_expr(c, names));
+        let default = default.map(|d| self.lower_type_expr(d, names));
         Some(TypeParamDecl {
           id: mapped,
           constraint,

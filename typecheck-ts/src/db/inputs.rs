@@ -1,9 +1,10 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use diagnostics::FileId;
+use diagnostics::{Diagnostic, FileId};
 
 use crate::lib_support::{CompilerOptions, FileKind};
+use crate::BodyId;
 use crate::FileKey;
 
 /// Wrapper around an atomic cancellation flag that can participate in salsa's
@@ -75,4 +76,17 @@ pub struct ModuleResolutionInput {
   pub from_file: FileId,
   pub specifier: Arc<str>,
   pub resolved: Option<FileId>,
+}
+
+#[salsa::input]
+pub struct BodyResultInput {
+  pub body: BodyId,
+  #[return_ref]
+  pub result: Arc<crate::BodyCheckResult>,
+}
+
+#[salsa::input]
+pub struct ExtraDiagnosticsInput {
+  #[return_ref]
+  pub diagnostics: Arc<[Diagnostic]>,
 }

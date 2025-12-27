@@ -13,7 +13,7 @@ use crate::lib_support::{CompilerOptions, FileKind};
 use crate::profile::QueryStatsCollector;
 use crate::FileKey;
 use crate::{BodyCheckResult, BodyId, DefId};
-use diagnostics::FileId;
+use diagnostics::{Diagnostic, FileId};
 use salsa::Setter;
 
 pub mod expander;
@@ -32,9 +32,9 @@ pub use queries::{
   expr_at, file_kind, file_span_index, file_text, global_bindings, local_symbol_info, lower_hir,
   module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse, parse_query_count,
   program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir, span_of_def,
-  span_of_expr, symbol_occurrences, ts_semantics, type_at, unresolved_module_diagnostics,
-  var_initializer, DeclInfo, DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics,
-  SharedTypeStore, TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
+  span_of_expr, symbol_occurrences, ts_semantics, type_at, var_initializer, DeclInfo, DeclKind,
+  GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore, TsSemantics,
+  TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;
 
@@ -70,6 +70,7 @@ pub trait Db: salsa::Database + Send + 'static {
   fn lib_files(&self) -> Vec<FileId>;
   fn file_origin(&self, file: FileId) -> Option<FileOrigin>;
   fn module_resolution_input(&self, key: &ModuleKey) -> Option<inputs::ModuleResolutionInput>;
+  fn extra_diagnostics_input(&self) -> Option<inputs::ExtraDiagnosticsInput>;
   fn profiler(&self) -> Option<QueryStatsCollector>;
   fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>>;
 }
@@ -85,8 +86,9 @@ pub struct Database {
   file_keys: BTreeMap<FileKey, Vec<FileId>>,
   file_origins: BTreeMap<FileId, FileOrigin>,
   module_resolutions: BTreeMap<ModuleKey, inputs::ModuleResolutionInput>,
+  extra_diagnostics: Option<inputs::ExtraDiagnosticsInput>,
   profiler: Option<QueryStatsCollector>,
-  body_results: BTreeMap<BodyId, Arc<BodyCheckResult>>,
+  body_results: BTreeMap<BodyId, inputs::BodyResultInput>,
 }
 
 impl Default for Database {
@@ -100,6 +102,7 @@ impl Default for Database {
       file_keys: BTreeMap::new(),
       file_origins: BTreeMap::new(),
       module_resolutions: BTreeMap::new(),
+      extra_diagnostics: None,
       profiler: None,
       body_results: BTreeMap::new(),
     };
@@ -166,12 +169,19 @@ impl Db for Database {
     self.module_resolutions.get(key).copied()
   }
 
+  fn extra_diagnostics_input(&self) -> Option<inputs::ExtraDiagnosticsInput> {
+    self.extra_diagnostics.as_ref().copied()
+  }
+
   fn profiler(&self) -> Option<QueryStatsCollector> {
     self.profiler.clone()
   }
 
   fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>> {
-    self.body_results.get(&body).cloned()
+    self
+      .body_results
+      .get(&body)
+      .map(|input| input.result(self).clone())
   }
 }
 
@@ -309,6 +319,14 @@ impl Database {
     }
   }
 
+  pub fn set_extra_diagnostics(&mut self, diagnostics: Arc<[Diagnostic]>) {
+    if let Some(existing) = self.extra_diagnostics {
+      existing.set_diagnostics(self).to(diagnostics);
+    } else {
+      self.extra_diagnostics = Some(inputs::ExtraDiagnosticsInput::new(self, diagnostics));
+    }
+  }
+
   pub fn parse(&self, file: FileId) -> crate::queries::parse::ParseResult {
     queries::parse(self, file)
   }
@@ -333,10 +351,6 @@ impl Database {
     queries::module_dep_diagnostics(self, file)
   }
 
-  pub fn unresolved_module_diagnostics(&self, file: FileId) -> Arc<[diagnostics::Diagnostic]> {
-    queries::unresolved_module_diagnostics(self, file)
-  }
-
   pub fn reachable_files(&self) -> Arc<Vec<FileId>> {
     queries::reachable_files(self)
   }
@@ -355,7 +369,13 @@ impl Database {
 
   /// Cache a checked body result for reuse by span and type queries.
   pub fn set_body_result(&mut self, body: BodyId, result: Arc<BodyCheckResult>) {
-    self.body_results.insert(body, result);
+    if let Some(existing) = self.body_results.get(&body).copied() {
+      existing.set_body(self).to(body);
+      existing.set_result(self).to(result);
+    } else {
+      let input = inputs::BodyResultInput::new(self, body, result);
+      self.body_results.insert(body, input);
+    }
   }
 
   pub fn def_to_file(&self) -> Arc<BTreeMap<DefId, FileId>> {

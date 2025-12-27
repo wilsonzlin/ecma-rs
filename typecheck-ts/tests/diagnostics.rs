@@ -72,3 +72,45 @@ fn repeated_checks_with_multiple_files_are_identical() {
 
   assert_eq!(first_run, second_run);
 }
+
+#[test]
+fn diagnostics_remain_stable_after_body_check() {
+  let mut host = MemoryHost::new();
+  let key = FileKey::new("main.ts");
+  host.insert(
+    key.clone(),
+    "function f(): number { return 'not a number'; }",
+  );
+
+  let program = Program::new(host, vec![key.clone()]);
+  let file_id = program.file_id(&key).expect("file id available");
+  let body = program
+    .bodies_in_file(file_id)
+    .into_iter()
+    .next()
+    .expect("body available");
+  let _ = program.check_body(body);
+
+  let first = program.check();
+  let second = program.check();
+
+  assert!(!first.is_empty());
+  assert_eq!(first, second);
+}
+
+#[test]
+fn program_check_remains_stable_with_unresolved_imports() {
+  let mut host = MemoryHost::new();
+  let key = FileKey::new("index.ts");
+  host.insert(
+    key.clone(),
+    "import { missing } from \"./absent\";\nconst value: number = 'not a number';",
+  );
+
+  let program = Program::new(host, vec![key]);
+  let first = program.check();
+  let second = program.check();
+
+  assert!(!first.is_empty(), "expected diagnostics to be reported");
+  assert_eq!(first, second);
+}

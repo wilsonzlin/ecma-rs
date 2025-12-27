@@ -1,3 +1,4 @@
+use salsa::Setter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
@@ -5,11 +6,10 @@ use std::sync::Arc;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  lower_file_with_diagnostics, DefKind, ExportDefaultValue, ExportKind, ExprId, ExprKind,
+  lower_file_with_diagnostics, DefKind, ExportDefaultValue, ExportKind, ExprKind,
   FileKind as HirFileKind, LowerResult, ObjectProperty, PatId, PatKind, StmtKind, VarDeclKind,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
-use salsa::Setter;
 use semantic_js::ts as sem_ts;
 use types_ts_interned::{PrimitiveIds, TypeStore};
 
@@ -30,16 +30,12 @@ use crate::semantic_js::SymbolId;
 use crate::symbols::SymbolBinding;
 use crate::FileKey;
 use crate::SymbolOccurrence;
-use crate::{BodyId, DefId, TypeId};
+use crate::{BodyId, DefId, ExprId, TypeId};
 
-fn file_ids_from_key(db: &dyn Db, key: &FileKey) -> Vec<FileId> {
-  let mut ids = db.file_ids_for_key(key);
-  if ids.is_empty() {
-    panic!("file {:?} must be seeded before use", key);
-  }
-  ids.sort_by_key(|id| id.0);
-  ids.dedup();
-  ids
+fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
+  db.file_input_by_key(key)
+    .unwrap_or_else(|| panic!("file {:?} must be seeded before use", key))
+    .file_id(db)
 }
 
 #[salsa::tracked]
@@ -103,75 +99,28 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
 
 #[salsa::tracked]
 fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
-  unresolved_module_diagnostics_for(db, file)
-}
-
-#[salsa::tracked]
-fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
+  let specs = module_specifiers_for(db, file);
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
   };
+  let mut spans = HashMap::new();
+  for (spec, span) in collect_module_specifiers(lowered).into_iter() {
+    spans.entry(spec).or_insert(span);
+  }
+
   let mut diagnostics = Vec::new();
-  let file_id = file.file_id(db);
-  let mut seen = BTreeSet::new();
-  let mut check_specifier =
-    |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
-      db,
-      file_id,
-      Arc::<str>::from(spec.value.clone()),
-    ) {
-      Some(_) => {}
-      None => {
-        let key = (spec.span.start, spec.span.end, spec.value.clone());
-        if !seen.insert(key) {
-          return;
-        }
-        let mut diag = codes::UNRESOLVED_MODULE.error(
-          format!("unresolved module specifier \"{}\"", spec.value),
-          Span::new(file_id, spec.span),
-        );
-        diag.push_note(format!("module specifier: \"{}\"", spec.value));
-        diags.push(diag);
-      }
-    };
-
-  for import in lowered.hir.imports.iter() {
-    match &import.kind {
-      hir_js::ImportKind::Es(es) => {
-        check_specifier(&es.specifier, &mut diagnostics);
-      }
-      hir_js::ImportKind::ImportEquals(eq) => {
-        if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
-          check_specifier(module, &mut diagnostics);
-        }
+  for spec in specs.iter() {
+    if module_resolve(db, file.file_id(db), Arc::clone(spec)).is_none() {
+      if let Some(span) = spans.get(spec) {
+        diagnostics.push(codes::UNRESOLVED_MODULE.error(
+          format!("module {} could not be resolved", spec),
+          Span::new(file.file_id(db), *span),
+        ));
       }
     }
   }
-
-  for export in lowered.hir.exports.iter() {
-    match &export.kind {
-      ExportKind::Named(named) => {
-        if let Some(source) = named.source.as_ref() {
-          check_specifier(source, &mut diagnostics);
-        }
-      }
-      ExportKind::ExportAll(all) => {
-        check_specifier(&all.source, &mut diagnostics);
-      }
-      ExportKind::Default(_) | ExportKind::Assignment(_) => {}
-    }
-  }
-
-  diagnostics.sort_by(|a, b| {
-    a.primary
-      .range
-      .start
-      .cmp(&b.primary.range.start)
-      .then_with(|| a.primary.range.end.cmp(&b.primary.range.end))
-      .then_with(|| a.code.as_str().cmp(b.code.as_str()))
-      .then_with(|| a.message.cmp(&b.message))
-  });
+  diagnostics.sort();
   diagnostics.dedup();
   Arc::from(diagnostics.into_boxed_slice())
 }
@@ -1163,13 +1112,12 @@ impl std::fmt::Debug for TsSemantics {
 #[salsa::tracked]
 fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
   let mut visited = BTreeSet::new();
-  let mut seeds = Vec::new();
-  for key in db.roots_input().roots(db).iter() {
-    seeds.extend(file_ids_from_key(db, key));
-  }
-  seeds.sort_by_key(|id| id.0);
-  seeds.dedup();
-  let mut queue: VecDeque<FileId> = seeds.into();
+  let mut queue: VecDeque<FileId> = db
+    .roots_input()
+    .roots(db)
+    .iter()
+    .map(|key| file_id_from_key(db, key))
+    .collect();
   while let Some(file) = queue.pop_front() {
     if !visited.insert(file) {
       continue;
@@ -1207,7 +1155,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     .roots_input()
     .roots(db)
     .iter()
-    .flat_map(|f| file_ids_from_key(db, f))
+    .map(|f| file_id_from_key(db, f))
     .map(|id| sem_ts::FileId(id.0))
     .collect();
   roots.sort();
@@ -1344,13 +1292,6 @@ pub fn module_dep_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
     .file_input(file)
     .expect("file must be seeded before querying module deps");
   module_dep_diagnostics_for(db, handle)
-}
-
-pub fn unresolved_module_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
-  let handle = db
-    .file_input(file)
-    .expect("file must be seeded before querying module deps");
-  unresolved_module_diagnostics_for(db, handle)
 }
 
 pub fn reachable_files(db: &dyn Db) -> Arc<Vec<FileId>> {
@@ -2163,32 +2104,49 @@ pub fn aggregate_program_diagnostics(
   aggregate_diagnostics(diagnostics)
 }
 
-/// Derived query that aggregates diagnostics from parsing, lowering, binding,
-/// and any additional sources (e.g. body checking) across all reachable files.
-pub fn program_diagnostics(
-  db: &dyn Db,
-  additional: impl IntoIterator<Item = Diagnostic>,
-) -> Arc<[Diagnostic]> {
+#[salsa::tracked]
+fn extra_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
+  db.extra_diagnostics_input()
+    .map(|input| input.diagnostics(db).clone())
+    .unwrap_or_else(|| Arc::from([]))
+}
+
+fn body_diagnostics_from_results(db: &dyn Db, body: BodyId) -> Arc<[Diagnostic]> {
+  db.body_result(body)
+    .map(|result| Arc::from(result.diagnostics.clone().into_boxed_slice()))
+    .unwrap_or_else(|| Arc::from([]))
+}
+
+#[salsa::tracked]
+fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
   let files = all_files(db);
   let mut parse_diags = Vec::new();
   let mut lower_diags = Vec::new();
-  let mut module_diags = Vec::new();
   for file in files.iter() {
     let parsed = parse(db, *file);
     parse_diags.extend(parsed.diagnostics.into_iter());
     let lowered = lower_hir(db, *file);
     lower_diags.extend(lowered.diagnostics.into_iter());
-    module_diags.extend(unresolved_module_diagnostics(db, *file).iter().cloned());
   }
   let semantics = ts_semantics(db);
+  let mut body_diags = Vec::new();
+  for (body, file) in body_to_file(db).iter() {
+    if matches!(file_kind(db, *file), FileKind::Dts) {
+      continue;
+    }
+    body_diags.extend(body_diagnostics_from_results(db, *body).iter().cloned());
+  }
+  body_diags.extend(extra_diagnostics_for(db).iter().cloned());
   aggregate_program_diagnostics(
     parse_diags,
     lower_diags,
-    semantics
-      .diagnostics
-      .iter()
-      .cloned()
-      .chain(module_diags.into_iter()),
-    additional,
+    semantics.diagnostics.iter().cloned(),
+    body_diags,
   )
+}
+
+/// Derived query that aggregates diagnostics from parsing, lowering, binding,
+/// and body checking across all reachable files.
+pub fn program_diagnostics(db: &dyn Db) -> Arc<[Diagnostic]> {
+  program_diagnostics_for(db)
 }
