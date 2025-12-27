@@ -6,7 +6,7 @@ use hir_js::hir::{ExprKind, FileKind as HirFileKind, TypeExprKind};
 use hir_js::ids::{DefKind, ExprId, TypeExprId};
 use hir_js::lower_file;
 use parse_js::ast::node::NodeAssocData;
-use parse_js::parse;
+use parse_js::{parse, Dialect, ParseOptions, SourceType};
 use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
 use std::any::TypeId;
 use std::collections::{BTreeMap, HashMap};
@@ -2255,5 +2255,75 @@ fn import_type_qualifier_ignores_local_symbols() {
       .map(|(_, sym)| sym != local_foo)
       .unwrap_or(true),
     "import type qualifier should not resolve to local Foo"
+  );
+}
+
+#[test]
+fn block_function_is_lexical_in_modules() {
+  let source = "function outer() { if (true) { function foo() {} foo; } foo; }";
+  let mut ast = parse_js::parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("parse module source");
+
+  let locals = bind_ts_locals(&mut ast, FileId(200), true);
+  let positions = positions(source, "foo");
+  assert_eq!(positions.len(), 3, "expected three foo occurrences");
+  let decl_symbol = locals
+    .resolve_expr_at_offset(positions[0])
+    .map(|(_, sym)| sym)
+    .expect("function declaration resolves");
+  let inner_use_symbol = locals
+    .resolve_expr_at_offset(positions[1])
+    .map(|(_, sym)| sym)
+    .expect("inner block use resolves");
+  let outer_symbol = locals.resolve_expr_at_offset(positions[2]);
+
+  assert_eq!(
+    decl_symbol, inner_use_symbol,
+    "block use should see block-scoped function binding in modules"
+  );
+  assert!(
+    outer_symbol.is_none(),
+    "block-scoped function should not resolve outside its block in modules"
+  );
+}
+
+#[test]
+fn block_function_hoists_in_scripts() {
+  let source = "function outer() { if (true) { function foo() {} foo; } foo; }";
+  let mut ast = parse_js::parse_with_options(
+    source,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Script,
+    },
+  )
+  .expect("parse script source");
+
+  let locals = bind_ts_locals(&mut ast, FileId(201), false);
+  let positions = positions(source, "foo");
+  assert_eq!(positions.len(), 3, "expected three foo occurrences");
+  let decl_symbol = locals
+    .resolve_expr_at_offset(positions[0])
+    .map(|(_, sym)| sym)
+    .expect("function declaration resolves");
+  let inner_use_symbol = locals
+    .resolve_expr_at_offset(positions[1])
+    .map(|(_, sym)| sym)
+    .expect("inner block use resolves");
+  let outer_use_symbol = locals
+    .resolve_expr_at_offset(positions[2])
+    .map(|(_, sym)| sym)
+    .expect("outer use should resolve in scripts");
+
+  assert_eq!(decl_symbol, inner_use_symbol, "inner use matches decl");
+  assert_eq!(
+    decl_symbol, outer_use_symbol,
+    "non-module scripts hoist block function declarations"
   );
 }

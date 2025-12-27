@@ -414,7 +414,7 @@ pub fn bind_ts_locals(top: &mut Node<TopLevel>, file: FileId, is_module: bool) -
   };
   let root_span = TextRange::new(top.loc.0 as u32, top.loc.1 as u32);
   let (builder, root) = SemanticsBuilder::new(file, kind, root_span);
-  let mut decl = DeclarePass::new(builder, root);
+  let mut decl = DeclarePass::new(builder, root, is_module);
   decl.walk_top(top);
   let builder = decl.finish();
 
@@ -464,14 +464,16 @@ pub fn bind_ts_locals_tables(
 
 struct DeclarePass {
   builder: SemanticsBuilder,
+  is_module: bool,
   scope_stack: Vec<ScopeId>,
   decl_target: Vec<DeclTarget>,
 }
 
 impl DeclarePass {
-  fn new(builder: SemanticsBuilder, root: ScopeId) -> Self {
+  fn new(builder: SemanticsBuilder, root: ScopeId, is_module: bool) -> Self {
     Self {
       builder,
+      is_module,
       scope_stack: vec![root],
       decl_target: vec![DeclTarget::Lexical],
     }
@@ -479,6 +481,15 @@ impl DeclarePass {
 
   fn current_scope(&self) -> ScopeId {
     *self.scope_stack.last().unwrap()
+  }
+
+  fn current_scope_kind(&self) -> ScopeKind {
+    self
+      .builder
+      .scopes
+      .get(&self.current_scope())
+      .map(|s| s.kind)
+      .expect("scope data for current scope")
   }
 
   fn push_scope(&mut self, kind: ScopeKind, span: TextRange) {
@@ -557,6 +568,11 @@ impl DeclarePass {
       }
       AstStmt::VarDecl(var) => self.walk_var_decl(var),
       AstStmt::FunctionDecl(func) => {
+        let in_block = self.current_scope_kind() == ScopeKind::Block;
+        let block_scoped_func = self.is_module && in_block;
+        if block_scoped_func {
+          self.enter_decl_target(DeclTarget::Lexical);
+        }
         if let Some(name) = &mut func.stx.name {
           self.declare(
             &mut name.assoc,
@@ -564,6 +580,9 @@ impl DeclarePass {
             Namespace::VALUE,
             Some(span_for_name(name.loc, &name.stx.name)),
           );
+        }
+        if block_scoped_func {
+          self.exit_decl_target();
         }
         self.walk_func(&mut func.stx.function);
       }
