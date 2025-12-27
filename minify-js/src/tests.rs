@@ -8,8 +8,10 @@ use parse_js::ast::expr::jsx::JsxElemChild;
 use parse_js::ast::expr::Expr;
 use parse_js::ast::import_export::ImportNames;
 use parse_js::ast::node::Node;
+use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
+use parse_js::operator::OperatorName;
 use parse_js::{parse, parse_with_options, ParseOptions, SourceType};
 
 fn minified(mode: TopLevelMode, src: &str) -> String {
@@ -253,4 +255,68 @@ fn drops_type_only_imports() {
     other => panic!("expected remaining value import, got {other:?}"),
   }
   assert!(matches!(parsed.stx.body[1].stx.as_ref(), Stmt::VarDecl(_)));
+}
+
+#[test]
+fn lowers_import_equals_require() {
+  let src = r#"
+    import foo = require("bar");
+  "#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 1);
+  let decl = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected var decl, got {other:?}"),
+  };
+  assert_eq!(decl.stx.mode, VarDeclMode::Const);
+  let initializer = decl
+    .stx
+    .declarators
+    .first()
+    .and_then(|declarator| declarator.initializer.as_ref())
+    .expect("initializer should exist");
+  match initializer.stx.as_ref() {
+    Expr::Call(call) => match call.stx.callee.stx.as_ref() {
+      Expr::Id(id) => assert_eq!(id.stx.name, "require"),
+      other => panic!("expected require call, got {other:?}"),
+    },
+    other => panic!("expected require initializer, got {other:?}"),
+  }
+}
+
+#[test]
+fn lowers_export_assignment_to_module_exports() {
+  let src = r#"
+    const value = 1;
+    export = value;
+  "#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 2);
+  let export_stmt = parsed.stx.body.last().expect("module.exports assignment");
+  let expr_stmt = match export_stmt.stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  let assignment = match expr_stmt.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) => bin,
+    other => panic!("expected assignment expression, got {other:?}"),
+  };
+  assert_eq!(assignment.stx.operator, OperatorName::Assignment);
+  match assignment.stx.left.stx.as_ref() {
+    Expr::Member(member) => {
+      assert_eq!(member.stx.right, "exports");
+      match member.stx.left.stx.as_ref() {
+        Expr::Id(id) => assert_eq!(id.stx.name, "module"),
+        other => panic!("expected module identifier, got {other:?}"),
+      }
+    }
+    other => panic!("expected module.exports assignment, got {other:?}"),
+  }
+}
+
+#[test]
+fn drops_type_only_import_equals() {
+  let src = r#"import type foo = require("bar");"#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert!(parsed.stx.body.is_empty());
 }

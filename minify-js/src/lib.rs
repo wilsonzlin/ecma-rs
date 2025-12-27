@@ -201,7 +201,7 @@ pub fn minify_with_options(
   #[cfg(feature = "emit-minify")]
   let used_dialect = used_dialect.expect("successful parse must set dialect");
 
-  erase_types(file, &mut top_level_node)?;
+  erase_types(file, options.top_level_mode, source, &mut top_level_node)?;
 
   let (sem, _) = bind_js(&mut top_level_node, options.top_level_mode, file);
   let usage = collect_usages(&mut top_level_node, &sem, options.top_level_mode);
