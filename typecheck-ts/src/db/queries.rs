@@ -1,4 +1,3 @@
-use salsa::Setter;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
@@ -6,10 +5,11 @@ use std::sync::Arc;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  lower_file_with_diagnostics, ExportDefaultValue, ExportKind, ExprKind, FileKind as HirFileKind,
-  LowerResult, ObjectProperty, StmtKind,
+  lower_file_with_diagnostics, DefKind, ExportDefaultValue, ExportKind, ExprId, ExprKind,
+  FileKind as HirFileKind, LowerResult, ObjectProperty, PatId, PatKind, StmtKind, VarDeclKind,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
+use salsa::Setter;
 use semantic_js::ts as sem_ts;
 use types_ts_interned::{PrimitiveIds, TypeStore};
 
@@ -30,11 +30,16 @@ use crate::semantic_js::SymbolId;
 use crate::symbols::SymbolBinding;
 use crate::FileKey;
 use crate::SymbolOccurrence;
-use crate::{BodyId, DefId, ExprId, TypeId};
-fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
-  db.file_input_by_key(key)
-    .unwrap_or_else(|| panic!("file {:?} must be seeded before use", key))
-    .file_id(db)
+use crate::{BodyId, DefId, TypeId};
+
+fn file_ids_from_key(db: &dyn Db, key: &FileKey) -> Vec<FileId> {
+  let mut ids = db.file_ids_for_key(key);
+  if ids.is_empty() {
+    panic!("file {:?} must be seeded before use", key);
+  }
+  ids.sort_by_key(|id| id.0);
+  ids.dedup();
+  ids
 }
 
 #[salsa::tracked]
@@ -98,28 +103,75 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
 
 #[salsa::tracked]
 fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
-  let specs = module_specifiers_for(db, file);
+  unresolved_module_diagnostics_for(db, file)
+}
+
+#[salsa::tracked]
+fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
   };
-  let mut spans = HashMap::new();
-  for (spec, span) in collect_module_specifiers(lowered).into_iter() {
-    spans.entry(spec).or_insert(span);
-  }
-
   let mut diagnostics = Vec::new();
-  for spec in specs.iter() {
-    if module_resolve(db, file.file_id(db), Arc::clone(spec)).is_none() {
-      if let Some(span) = spans.get(spec) {
-        diagnostics.push(codes::UNRESOLVED_MODULE.error(
-          format!("module {} could not be resolved", spec),
-          Span::new(file.file_id(db), *span),
-        ));
+  let file_id = file.file_id(db);
+  let mut seen = BTreeSet::new();
+  let mut check_specifier =
+    |spec: &hir_js::ModuleSpecifier, diags: &mut Vec<Diagnostic>| match module_resolve(
+      db,
+      file_id,
+      Arc::<str>::from(spec.value.clone()),
+    ) {
+      Some(_) => {}
+      None => {
+        let key = (spec.span.start, spec.span.end, spec.value.clone());
+        if !seen.insert(key) {
+          return;
+        }
+        let mut diag = codes::UNRESOLVED_MODULE.error(
+          format!("unresolved module specifier \"{}\"", spec.value),
+          Span::new(file_id, spec.span),
+        );
+        diag.push_note(format!("module specifier: \"{}\"", spec.value));
+        diags.push(diag);
+      }
+    };
+
+  for import in lowered.hir.imports.iter() {
+    match &import.kind {
+      hir_js::ImportKind::Es(es) => {
+        check_specifier(&es.specifier, &mut diagnostics);
+      }
+      hir_js::ImportKind::ImportEquals(eq) => {
+        if let hir_js::ImportEqualsTarget::Module(module) = &eq.target {
+          check_specifier(module, &mut diagnostics);
+        }
       }
     }
   }
-  diagnostics.sort();
+
+  for export in lowered.hir.exports.iter() {
+    match &export.kind {
+      ExportKind::Named(named) => {
+        if let Some(source) = named.source.as_ref() {
+          check_specifier(source, &mut diagnostics);
+        }
+      }
+      ExportKind::ExportAll(all) => {
+        check_specifier(&all.source, &mut diagnostics);
+      }
+      ExportKind::Default(_) | ExportKind::Assignment(_) => {}
+    }
+  }
+
+  diagnostics.sort_by(|a, b| {
+    a.primary
+      .range
+      .start
+      .cmp(&b.primary.range.start)
+      .then_with(|| a.primary.range.end.cmp(&b.primary.range.end))
+      .then_with(|| a.code.as_str().cmp(b.code.as_str()))
+      .then_with(|| a.message.cmp(&b.message))
+  });
   diagnostics.dedup();
   Arc::from(diagnostics.into_boxed_slice())
 }
@@ -244,7 +296,7 @@ pub mod body_check {
   use std::sync::{Arc, OnceLock, RwLock};
   use std::time::Instant;
 
-  use diagnostics::{FileId, Span, TextRange};
+  use diagnostics::{Diagnostic, FileId, Span, TextRange};
   use hir_js::{
     Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, DefId as HirDefId, NameInterner,
   };
@@ -570,6 +622,12 @@ pub mod body_check {
 
       let caches = ctx.checker_caches.for_body();
       let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
+      let contextual_fn_ty = if matches!(meta.kind, HirBodyKind::Function) {
+        function_expr_span(self, body_id)
+          .and_then(|span| contextual_callable_for_body(self, body_id, span))
+      } else {
+        None
+      };
       let mut result = check_body_with_expander(
         body_id,
         body,
@@ -582,7 +640,7 @@ pub mod body_check {
         (!binding_defs.is_empty())
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
-        None,
+        contextual_fn_ty,
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
@@ -663,11 +721,49 @@ pub mod body_check {
             }
           }
         }
-        if result.return_types.is_empty() && !flow_result.return_types.is_empty() {
-          result.return_types = flow_result.return_types;
+        let flow_return_types = flow_result.return_types;
+        if result.return_types.is_empty() && !flow_return_types.is_empty() {
+          result.return_types = flow_return_types;
+        } else if flow_return_types.len() == result.return_types.len() {
+          for (idx, ty) in flow_return_types.iter().enumerate() {
+            if *ty != prim.unknown {
+              let existing = result.return_types[idx];
+              let narrower =
+                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+              if existing == prim.unknown || narrower {
+                result.return_types[idx] = *ty;
+              }
+            }
+          }
         }
-        if result.diagnostics.is_empty() && !flow_result.diagnostics.is_empty() {
-          result.diagnostics = flow_result.diagnostics;
+        let mut flow_diagnostics = flow_result.diagnostics;
+        if !flow_diagnostics.is_empty() {
+          let mut seen: HashSet<(String, FileId, TextRange, String)> = HashSet::new();
+          let diag_key = |diag: &Diagnostic| -> (String, FileId, TextRange, String) {
+            (
+              diag.code.as_str().to_string(),
+              diag.primary.file,
+              diag.primary.range,
+              diag.message.clone(),
+            )
+          };
+          for diag in result.diagnostics.iter() {
+            seen.insert(diag_key(diag));
+          }
+          flow_diagnostics.sort_by(|a, b| {
+            a.primary
+              .file
+              .cmp(&b.primary.file)
+              .then(a.primary.range.start.cmp(&b.primary.range.start))
+              .then(a.primary.range.end.cmp(&b.primary.range.end))
+              .then(a.code.cmp(&b.code))
+              .then(a.message.cmp(&b.message))
+          });
+          for diag in flow_diagnostics.into_iter() {
+            if seen.insert(diag_key(&diag)) {
+              result.diagnostics.push(diag);
+            }
+          }
         }
       }
 
@@ -861,6 +957,75 @@ pub mod body_check {
     }
     let _ = unknown;
   }
+
+  fn function_expr_span(db: &BodyCheckDb, body_id: BodyId) -> Option<TextRange> {
+    let ctx = &db.context;
+    let mut visited = HashSet::new();
+    let mut current = ctx.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let Some(meta) = db.bc_body_info(parent) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(hir_body_id) = meta.hir else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(lowered) = db.bc_lower_hir(meta.file) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(parent_body) = lowered.body(hir_body_id) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      for expr in parent_body.exprs.iter() {
+        if let hir_js::ExprKind::FunctionExpr { body, .. } = expr.kind {
+          if body == body_id {
+            return Some(expr.span);
+          }
+        }
+      }
+      current = ctx.body_parents.get(&parent).copied();
+    }
+    None
+  }
+
+  fn contextual_callable_for_body(
+    db: &BodyCheckDb,
+    body_id: BodyId,
+    func_span: TextRange,
+  ) -> Option<TypeId> {
+    let store = &db.context.store;
+    let mut visited = HashSet::new();
+    let mut current = db.context.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let parent_result = db.check_body(parent);
+      for (idx, span) in parent_result.expr_spans.iter().enumerate() {
+        if *span != func_span {
+          continue;
+        }
+        if let Some(ty) = parent_result.expr_types.get(idx).copied() {
+          if store.contains_type_id(ty)
+            && matches!(
+              store.type_kind(ty),
+              types_ts_interned::TypeKind::Callable { .. }
+            )
+          {
+            return Some(ty);
+          }
+        }
+      }
+      current = db.context.body_parents.get(&parent).copied();
+    }
+    None
+  }
 }
 impl Eq for LowerResultWithDiagnostics {}
 
@@ -998,12 +1163,13 @@ impl std::fmt::Debug for TsSemantics {
 #[salsa::tracked]
 fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
   let mut visited = BTreeSet::new();
-  let mut queue: VecDeque<FileId> = db
-    .roots_input()
-    .roots(db)
-    .iter()
-    .map(|key| file_id_from_key(db, key))
-    .collect();
+  let mut seeds = Vec::new();
+  for key in db.roots_input().roots(db).iter() {
+    seeds.extend(file_ids_from_key(db, key));
+  }
+  seeds.sort_by_key(|id| id.0);
+  seeds.dedup();
+  let mut queue: VecDeque<FileId> = seeds.into();
   while let Some(file) = queue.pop_front() {
     if !visited.insert(file) {
       continue;
@@ -1041,7 +1207,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     .roots_input()
     .roots(db)
     .iter()
-    .map(|f| file_id_from_key(db, f))
+    .flat_map(|f| file_ids_from_key(db, f))
     .map(|id| sem_ts::FileId(id.0))
     .collect();
   roots.sort();
@@ -1178,6 +1344,13 @@ pub fn module_dep_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
     .file_input(file)
     .expect("file must be seeded before querying module deps");
   module_dep_diagnostics_for(db, handle)
+}
+
+pub fn unresolved_module_diagnostics(db: &dyn Db, file: FileId) -> Arc<[Diagnostic]> {
+  let handle = db
+    .file_input(file)
+    .expect("file must be seeded before querying module deps");
+  unresolved_module_diagnostics_for(db, handle)
 }
 
 pub fn reachable_files(db: &dyn Db) -> Arc<Vec<FileId>> {
@@ -1461,6 +1634,132 @@ pub fn body_file(db: &dyn Db, body: BodyId) -> Option<FileId> {
 pub fn body_parent(db: &dyn Db, body: BodyId) -> Option<BodyId> {
   let file = body_file(db, body)?;
   body_parents_in_file(db, file).get(&body).copied()
+}
+
+/// Mapping from a definition to its initializer expression within HIR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VarInit {
+  /// Body containing the variable declarator.
+  pub body: BodyId,
+  /// Expression representing the initializer.
+  pub expr: ExprId,
+  /// Decl kind (`var`/`let`/`const`) of the declarator.
+  pub decl_kind: VarDeclKind,
+  /// Pattern bound by the declarator, if available.
+  pub pat: Option<PatId>,
+  /// Span covering the binding pattern, if available.
+  pub span: Option<TextRange>,
+}
+
+fn span_distance(a: TextRange, b: TextRange) -> u64 {
+  let start = a.start.abs_diff(b.start) as u64;
+  let end = a.end.abs_diff(b.end) as u64;
+  start.saturating_add(end)
+}
+
+pub fn var_initializer(db: &dyn Db, def: DefId) -> Option<VarInit> {
+  let file = def_file(db, def)?;
+  let lowered = lower_hir(db, file);
+  let lowered = lowered.lowered.as_deref()?;
+  let hir_def = lowered.def(def)?;
+  let def_span = hir_def.span;
+  let def_name = lowered.names.resolve(hir_def.path.name);
+  var_initializer_in_file(lowered, def, def_span, def_name)
+}
+
+pub(crate) fn var_initializer_in_file(
+  lowered: &LowerResult,
+  def: DefId,
+  def_span: TextRange,
+  def_name: Option<&str>,
+) -> Option<VarInit> {
+  let hir_def = lowered.def(def)?;
+  match hir_def.path.kind {
+    DefKind::Var => {}
+    DefKind::Field | DefKind::Param => return None,
+    _ if def_name != Some("default") => return None,
+    _ => {}
+  }
+
+  let mut best: Option<(u64, (usize, usize, usize), VarInit)> = None;
+
+  for (body_order, (body_id, _)) in lowered.body_index.iter().enumerate() {
+    let body = lowered.body(*body_id)?;
+    for (stmt_idx, stmt) in body.stmts.iter().enumerate() {
+      let decl = match &stmt.kind {
+        StmtKind::Var(decl) => decl,
+        _ => continue,
+      };
+      for (decl_idx, declarator) in decl.declarators.iter().enumerate() {
+        let Some(expr) = declarator.init else {
+          continue;
+        };
+        let pat = declarator.pat;
+        let pat_span = body.pats.get(pat.0 as usize).map(|p| p.span);
+        if let Some(span) = pat_span {
+          if span == def_span {
+            return Some(VarInit {
+              body: *body_id,
+              expr,
+              decl_kind: decl.kind,
+              pat: Some(pat),
+              span: Some(span),
+            });
+          }
+        }
+        if let (Some(name), Some(span)) = (def_name, pat_span) {
+          let pat_name = match body.pats.get(pat.0 as usize).map(|p| &p.kind) {
+            Some(PatKind::Ident(name_id)) => lowered.names.resolve(*name_id),
+            _ => None,
+          };
+          if pat_name == Some(name) {
+            let dist = span_distance(span, def_span);
+            let key = (dist, (body_order, stmt_idx, decl_idx));
+            let candidate = VarInit {
+              body: *body_id,
+              expr,
+              decl_kind: decl.kind,
+              pat: Some(pat),
+              span: Some(span),
+            };
+            let replace = best
+              .as_ref()
+              .map(|current| key < (current.0, current.1))
+              .unwrap_or(true);
+            if replace {
+              best = Some((dist, (body_order, stmt_idx, decl_idx), candidate));
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if let Some((_, _, init)) = best {
+    return Some(init);
+  }
+
+  if def_name == Some("default") {
+    for export in lowered.hir.exports.iter() {
+      if let ExportKind::Default(default) = &export.kind {
+        if let ExportDefaultValue::Expr { expr, body } = &default.value {
+          if export.span == def_span
+            || (export.span.start <= def_span.start && def_span.end <= export.span.end)
+          {
+            return Some(VarInit {
+              body: *body,
+              expr: *expr,
+              decl_kind: VarDeclKind::Const,
+              pat: None,
+              span: Some(export.span),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  None
 }
 
 #[salsa::input]
@@ -1873,17 +2172,23 @@ pub fn program_diagnostics(
   let files = all_files(db);
   let mut parse_diags = Vec::new();
   let mut lower_diags = Vec::new();
+  let mut module_diags = Vec::new();
   for file in files.iter() {
     let parsed = parse(db, *file);
     parse_diags.extend(parsed.diagnostics.into_iter());
     let lowered = lower_hir(db, *file);
     lower_diags.extend(lowered.diagnostics.into_iter());
+    module_diags.extend(unresolved_module_diagnostics(db, *file).iter().cloned());
   }
   let semantics = ts_semantics(db);
   aggregate_program_diagnostics(
     parse_diags,
     lower_diags,
-    semantics.diagnostics.iter().cloned(),
+    semantics
+      .diagnostics
+      .iter()
+      .cloned()
+      .chain(module_diags.into_iter()),
     additional,
   )
 }
