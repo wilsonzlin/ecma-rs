@@ -146,6 +146,7 @@ pub fn bind_ts_program(
     diagnostics: Vec::new(),
     export_cache: HashMap::new(),
     ambient_export_cache: HashMap::new(),
+    pending_file_augmentations: Vec::new(),
   };
   binder.run(roots)
 }
@@ -160,22 +161,38 @@ struct Binder<'a, HP: Fn(FileId) -> Arc<HirFile>> {
   diagnostics: Vec<Diagnostic>,
   export_cache: HashMap<FileId, ExportStatus>,
   ambient_export_cache: HashMap<String, ExportStatus>,
+  pending_file_augmentations: Vec<PendingModuleAugmentation>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingModuleAugmentation {
+  target: FileId,
+  origin: FileId,
+  origin_file_kind: FileKind,
+  module: AmbientModule,
 }
 
 impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   fn run(&mut self, roots: &[FileId]) -> (TsProgramSemantics, Vec<Diagnostic>) {
     let mut queue: VecDeque<FileId> = roots.iter().cloned().collect();
     let mut seen = HashMap::new();
-    while let Some(file_id) = queue.pop_front() {
-      if seen.insert(file_id, ()).is_some() {
-        continue;
+    while !queue.is_empty() || !self.pending_file_augmentations.is_empty() {
+      while let Some(file_id) = queue.pop_front() {
+        if seen.insert(file_id, ()).is_some() {
+          continue;
+        }
+        if self.modules.contains_key(&file_id) {
+          continue;
+        }
+        let hir = (self.hir_provider)(file_id);
+        let deps = self.bind_file(hir.clone());
+        queue.extend(deps);
       }
-      if self.modules.contains_key(&file_id) {
-        continue;
+
+      if !self.pending_file_augmentations.is_empty() {
+        let deps = self.apply_pending_augmentations();
+        queue.extend(deps);
       }
-      let hir = (self.hir_provider)(file_id);
-      let deps = self.bind_file(hir.clone());
-      queue.extend(deps);
     }
 
     self.reconcile_unresolved();
@@ -272,10 +289,76 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     );
 
     for ambient in &hir.ambient_modules {
-      deps.extend(self.bind_ambient_module(hir.file_id, hir.file_kind, ambient));
+      if is_script {
+        deps.extend(self.bind_ambient_module(hir.file_id, hir.file_kind, ambient));
+        continue;
+      }
+
+      if let Some(target) = self.resolver.resolve(hir.file_id, &ambient.name) {
+        self.pending_file_augmentations.push(PendingModuleAugmentation {
+          target,
+          origin: hir.file_id,
+          origin_file_kind: hir.file_kind,
+          module: ambient.clone(),
+        });
+        deps.push(target);
+      } else {
+        deps.extend(self.bind_ambient_module(hir.file_id, hir.file_kind, ambient));
+      }
     }
 
     self.modules.insert(hir.file_id, state);
+    deps
+  }
+
+  fn apply_pending_augmentations(&mut self) -> Vec<FileId> {
+    if self.pending_file_augmentations.is_empty() {
+      return Vec::new();
+    }
+
+    self.pending_file_augmentations.sort_by(|a, b| {
+      a
+        .target
+        .cmp(&b.target)
+        .then_with(|| a.origin.cmp(&b.origin))
+        .then_with(|| a.module.name_span.start.cmp(&b.module.name_span.start))
+        .then_with(|| a.module.name_span.end.cmp(&b.module.name_span.end))
+    });
+
+    let pending = std::mem::take(&mut self.pending_file_augmentations);
+    let mut deps = Vec::new();
+    for aug in pending {
+      if let Some(mut state) = self.modules.remove(&aug.target) {
+        let owner = SymbolOwner::Module(aug.target);
+        self.bind_module_items(
+          &mut state,
+          &owner,
+          aug.origin,
+          aug.origin_file_kind,
+          ModuleKind::Module,
+          false,
+          false,
+          &aug.module.decls,
+          &aug.module.imports,
+          &aug.module.import_equals,
+          &aug.module.exports,
+          &aug.module.export_as_namespace,
+          &aug.module.ambient_modules,
+          &mut deps,
+        );
+
+        for nested in &aug.module.ambient_modules {
+          deps.extend(self.bind_ambient_module(
+            aug.origin,
+            aug.origin_file_kind,
+            nested,
+          ));
+        }
+
+        self.modules.insert(aug.target, state);
+      }
+    }
+
     deps
   }
 

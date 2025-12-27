@@ -845,13 +845,11 @@ fn ambient_modules_lower_from_ast() {
   let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
   assert!(diags.is_empty());
 
-  let exports = semantics
-    .exports_of_ambient_module("pkg")
-    .expect("ambient module exports available");
-  assert!(
-    exports.contains_key("x"),
-    "ambient module exports should include x"
-  );
+  let exports = semantics.exports_of(pkg_file);
+  assert!(exports.contains_key("x"), "module exports should include x");
+  assert!(semantics
+    .resolve_export(pkg_file, "x", Namespace::VALUE)
+    .is_some());
 }
 
 #[test]
@@ -1842,6 +1840,63 @@ fn ambient_module_reexport_chain() {
     .and_then(|group| group.symbol_for(Namespace::VALUE, symbols))
     .expect("re-export present");
   assert_eq!(ambient_symbol, reexported_symbol);
+}
+
+#[test]
+fn external_module_augmentation_merges_without_new_exports() {
+  let file_a = FileId(160);
+  let mut a = HirFile::module(file_a);
+  a.file_kind = FileKind::Dts;
+  let mut request = mk_decl(0, "Request", DeclKind::Interface, Exported::Named);
+  request.is_ambient = true;
+  a.decls.push(request);
+
+  let file_aug = FileId(161);
+  let mut aug = HirFile::module(file_aug);
+  aug.file_kind = FileKind::Dts;
+  let mut augmented_request = mk_decl(1, "Request", DeclKind::Interface, Exported::No);
+  augmented_request.is_ambient = true;
+  let mut only_aug = mk_decl(2, "OnlyInAugmentation", DeclKind::Interface, Exported::No);
+  only_aug.is_ambient = true;
+  aug.ambient_modules.push(AmbientModule {
+    name: "./a".to_string(),
+    name_span: span(10),
+    decls: vec![augmented_request, only_aug],
+    imports: Vec::new(),
+    import_equals: Vec::new(),
+    exports: Vec::new(),
+    export_as_namespace: Vec::new(),
+    ambient_modules: Vec::new(),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> =
+    maplit::hashmap! { file_a => Arc::new(a), file_aug => Arc::new(aug) };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "./a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_aug], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let request_symbol = semantics
+    .resolve_export(file_a, "Request", Namespace::TYPE)
+    .expect("Request exported");
+  let request_decl_files: Vec<_> = semantics
+    .symbol_decls(request_symbol, Namespace::TYPE)
+    .iter()
+    .map(|d| semantics.symbols().decl(*d).file)
+    .collect();
+  assert_eq!(request_decl_files.len(), 2);
+  assert!(
+    request_decl_files.contains(&file_a) && request_decl_files.contains(&file_aug),
+    "merged declarations should include original and augmentation"
+  );
+
+  assert!(
+    semantics.exports_of(file_a).get("OnlyInAugmentation").is_none(),
+    "augmentation without export should not create a new export"
+  );
 }
 
 #[test]
