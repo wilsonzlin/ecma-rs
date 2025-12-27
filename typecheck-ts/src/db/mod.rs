@@ -22,6 +22,9 @@ pub(crate) mod spans;
 pub mod symbols;
 
 pub use inputs::CancellationToken;
+pub use queries::body_check::{
+  set_parallel_tracker, BodyCheckContext, BodyCheckDb, BodyInfo, ParallelTracker,
+};
 pub use queries::{
   aggregate_diagnostics, aggregate_program_diagnostics, all_files, body_file, body_parent,
   body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, def_file,

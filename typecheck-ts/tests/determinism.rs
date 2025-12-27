@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::Arc;
+use std::sync::{Arc, Barrier};
 use std::thread;
 
 use typecheck_ts::codes;
+use typecheck_ts::db::{set_parallel_tracker, ParallelTracker};
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibFile};
 use typecheck_ts::semantic_js;
 use typecheck_ts::{
@@ -240,14 +241,27 @@ fn convert_exports(map: &typecheck_ts::ExportMap) -> BTreeMap<String, ExportSnap
 }
 
 fn run_parallel_bodies(program: &Arc<Program>, bodies: &[BodyId]) {
+  let _ = program.check();
+  let tracker = Arc::new(ParallelTracker::new());
+  set_parallel_tracker(Some(Arc::clone(&tracker)));
+  let barrier = Arc::new(Barrier::new(bodies.len().max(1)));
   thread::scope(|scope| {
     for &body in bodies {
       let program = Arc::clone(program);
+      let barrier = Arc::clone(&barrier);
       scope.spawn(move || {
+        barrier.wait();
         let _ = program.check_body(body);
       });
     }
   });
+  set_parallel_tracker(None);
+  if bodies.len() > 1 {
+    assert!(
+      tracker.max_active() > 1,
+      "bodies did not execute in parallel"
+    );
+  }
 }
 
 #[test]

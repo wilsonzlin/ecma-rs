@@ -236,6 +236,621 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
   Arc::new(globals)
 }
 
+pub mod body_check {
+  use std::cell::RefCell;
+  use std::collections::{HashMap, HashSet};
+  use std::fmt;
+  use std::sync::atomic::{AtomicUsize, Ordering};
+  use std::sync::{Arc, OnceLock, RwLock};
+  use std::time::Instant;
+
+  use diagnostics::{FileId, Span, TextRange};
+  use hir_js::{
+    Body as HirBody, BodyId as HirBodyId, BodyKind as HirBodyKind, DefId as HirDefId, NameInterner,
+  };
+  use hir_js::{PatId as HirPatId, PatKind as HirPatKind};
+  use parse_js::ast::node::Node;
+  use parse_js::ast::stx::TopLevel;
+  use types_ts_interned::{RelateCtx, TypeId as InternedTypeId, TypeParamId, TypeStore};
+
+  use crate::check::caches::CheckerCaches;
+  use crate::check::hir_body::{
+    check_body_with_env, check_body_with_expander, BindingTypeResolver,
+  };
+  use crate::codes;
+  use crate::db::expander::{DbTypeExpander, TypeExpanderDb};
+  use crate::lib_support::{CacheMode, CacheOptions};
+  use crate::profile::{QueryKind, QueryStatsCollector};
+  use crate::program::check::relate_hooks;
+  use crate::{BodyCheckResult, BodyId, DefId, PatId, SymbolBinding, TypeId};
+
+  #[derive(Clone)]
+  pub struct ArcAst(Arc<Node<TopLevel>>);
+
+  impl PartialEq for ArcAst {
+    fn eq(&self, other: &Self) -> bool {
+      Arc::ptr_eq(&self.0, &other.0)
+    }
+  }
+
+  impl Eq for ArcAst {}
+
+  impl fmt::Debug for ArcAst {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      f.debug_tuple("ArcAst").finish()
+    }
+  }
+
+  impl std::ops::Deref for ArcAst {
+    type Target = Node<TopLevel>;
+
+    fn deref(&self) -> &Self::Target {
+      self.0.as_ref()
+    }
+  }
+
+  #[derive(Clone)]
+  pub struct ArcLowered(Arc<hir_js::LowerResult>);
+
+  impl PartialEq for ArcLowered {
+    fn eq(&self, other: &Self) -> bool {
+      Arc::ptr_eq(&self.0, &other.0)
+    }
+  }
+
+  impl Eq for ArcLowered {}
+
+  impl fmt::Debug for ArcLowered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+      f.debug_tuple("ArcLowered").finish()
+    }
+  }
+
+  impl std::ops::Deref for ArcLowered {
+    type Target = hir_js::LowerResult;
+
+    fn deref(&self) -> &Self::Target {
+      self.0.as_ref()
+    }
+  }
+
+  #[derive(Clone)]
+  pub struct BodyCheckContext {
+    pub store: Arc<TypeStore>,
+    pub interned_def_types: HashMap<DefId, InternedTypeId>,
+    pub interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
+    pub asts: HashMap<FileId, Arc<Node<TopLevel>>>,
+    pub lowered: HashMap<FileId, Arc<hir_js::LowerResult>>,
+    pub body_info: HashMap<BodyId, BodyInfo>,
+    pub body_parents: HashMap<BodyId, BodyId>,
+    pub global_bindings: HashMap<String, SymbolBinding>,
+    pub file_bindings: HashMap<FileId, HashMap<String, SymbolBinding>>,
+    pub def_spans: HashMap<(FileId, TextRange), DefId>,
+    pub checker_caches: CheckerCaches,
+    pub cache_mode: CacheMode,
+    pub cache_options: CacheOptions,
+    pub query_stats: QueryStatsCollector,
+  }
+
+  #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+  pub struct BodyInfo {
+    pub file: FileId,
+    pub hir: Option<HirBodyId>,
+    pub kind: HirBodyKind,
+  }
+
+  #[derive(Clone)]
+  pub struct BodyCheckDb {
+    context: Arc<BodyCheckContext>,
+    memo: RefCell<HashMap<BodyId, Arc<BodyCheckResult>>>,
+  }
+
+  #[derive(Debug, Default)]
+  pub struct ParallelTracker {
+    active: AtomicUsize,
+    max_active: AtomicUsize,
+  }
+
+  impl ParallelTracker {
+    pub fn new() -> Self {
+      Self::default()
+    }
+
+    pub fn max_active(&self) -> usize {
+      self.max_active.load(Ordering::SeqCst)
+    }
+
+    fn guard(self: Arc<Self>) -> ParallelGuard {
+      let current = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+      self.max_active.fetch_max(current, Ordering::SeqCst);
+      ParallelGuard { tracker: self }
+    }
+  }
+
+  pub struct ParallelGuard {
+    tracker: Arc<ParallelTracker>,
+  }
+
+  impl Drop for ParallelGuard {
+    fn drop(&mut self) {
+      self.tracker.active.fetch_sub(1, Ordering::SeqCst);
+    }
+  }
+
+  static PARALLEL_TRACKER: OnceLock<RwLock<Option<Arc<ParallelTracker>>>> = OnceLock::new();
+
+  fn tracker_slot() -> &'static RwLock<Option<Arc<ParallelTracker>>> {
+    PARALLEL_TRACKER.get_or_init(|| RwLock::new(None))
+  }
+
+  pub fn set_parallel_tracker(tracker: Option<Arc<ParallelTracker>>) {
+    *tracker_slot().write().unwrap() = tracker;
+  }
+
+  pub fn parallel_guard() -> Option<ParallelGuard> {
+    tracker_slot()
+      .read()
+      .unwrap()
+      .as_ref()
+      .cloned()
+      .map(|tracker| tracker.guard())
+  }
+
+  impl BodyCheckDb {
+    pub fn new(context: BodyCheckContext) -> Self {
+      Self {
+        context: Arc::new(context),
+        memo: RefCell::new(HashMap::new()),
+      }
+    }
+  }
+
+  impl TypeExpanderDb for BodyCheckContext {
+    fn type_store(&self) -> Arc<TypeStore> {
+      Arc::clone(&self.store)
+    }
+
+    fn decl_type(&self, def: DefId) -> Option<InternedTypeId> {
+      self.interned_def_types.get(&def).copied()
+    }
+
+    fn type_params(&self, def: DefId) -> Arc<[TypeParamId]> {
+      self
+        .interned_type_params
+        .get(&def)
+        .cloned()
+        .map(Arc::from)
+        .unwrap_or_else(|| Arc::from([]))
+    }
+
+    fn type_of_def(&self, def: DefId) -> Option<InternedTypeId> {
+      self.interned_def_types.get(&def).copied()
+    }
+  }
+
+  impl BodyCheckDb {
+    fn bc_parse(&self, file: FileId) -> Option<ArcAst> {
+      self.context.asts.get(&file).cloned().map(ArcAst)
+    }
+
+    fn bc_lower_hir(&self, file: FileId) -> Option<ArcLowered> {
+      let _ = self.bc_parse(file)?;
+      self.context.lowered.get(&file).cloned().map(ArcLowered)
+    }
+
+    fn bc_body_info(&self, body: BodyId) -> Option<BodyInfo> {
+      self.context.body_info.get(&body).copied()
+    }
+  }
+
+  fn missing_body(body: BodyId) -> BodyCheckResult {
+    BodyCheckResult {
+      body,
+      expr_types: Vec::new(),
+      expr_spans: Vec::new(),
+      pat_types: Vec::new(),
+      pat_spans: Vec::new(),
+      diagnostics: vec![codes::MISSING_BODY.error(
+        "missing body",
+        Span::new(FileId(u32::MAX), TextRange::new(0, 0)),
+      )],
+      return_types: Vec::new(),
+    }
+  }
+
+  fn missing_ast(body: BodyId, file: FileId) -> BodyCheckResult {
+    BodyCheckResult {
+      body,
+      expr_types: Vec::new(),
+      expr_spans: Vec::new(),
+      pat_types: Vec::new(),
+      pat_spans: Vec::new(),
+      diagnostics: vec![codes::MISSING_BODY.error(
+        "missing parsed AST for body",
+        Span::new(file, TextRange::new(0, 0)),
+      )],
+      return_types: Vec::new(),
+    }
+  }
+
+  fn empty_result(body: BodyId) -> BodyCheckResult {
+    BodyCheckResult {
+      body,
+      expr_types: Vec::new(),
+      expr_spans: Vec::new(),
+      pat_types: Vec::new(),
+      pat_spans: Vec::new(),
+      diagnostics: Vec::new(),
+      return_types: Vec::new(),
+    }
+  }
+
+  impl BodyCheckDb {
+    pub fn check_body(&self, body_id: BodyId) -> Arc<BodyCheckResult> {
+      if let Some(cached) = self.memo.borrow().get(&body_id).cloned() {
+        return cached;
+      }
+      let res = self.compute_body(body_id);
+      self.memo.borrow_mut().insert(body_id, Arc::clone(&res));
+      res
+    }
+
+    fn compute_body(&self, body_id: BodyId) -> Arc<BodyCheckResult> {
+      let started = Instant::now();
+      let ctx = &self.context;
+      let Some(meta) = self.bc_body_info(body_id) else {
+        return Arc::new(missing_body(body_id));
+      };
+      let Some(lowered) = self.bc_lower_hir(meta.file) else {
+        return Arc::new(empty_result(body_id));
+      };
+      let Some(ast) = self.bc_parse(meta.file) else {
+        return Arc::new(missing_ast(body_id, meta.file));
+      };
+
+      let mut _synthetic = None;
+      let body = if let Some(hir_id) = meta.hir {
+        lowered.body(hir_id)
+      } else if matches!(meta.kind, HirBodyKind::TopLevel) {
+        _synthetic = Some(HirBody {
+          owner: HirDefId(u32::MAX),
+          kind: HirBodyKind::TopLevel,
+          exprs: Vec::new(),
+          stmts: Vec::new(),
+          pats: Vec::new(),
+          root_stmts: Vec::new(),
+          function: None,
+          expr_types: None,
+        });
+        _synthetic.as_ref()
+      } else {
+        None
+      };
+      let Some(body) = body else {
+        return Arc::new(empty_result(body_id));
+      };
+      let _parallel_guard = parallel_guard();
+
+      let prim = ctx.store.primitive_ids();
+      let map_def_ty = |def: DefId| {
+        ctx
+          .interned_def_types
+          .get(&def)
+          .copied()
+          .unwrap_or(prim.unknown)
+      };
+
+      let mut bindings: HashMap<String, TypeId> = HashMap::new();
+      let mut binding_defs: HashMap<String, DefId> = HashMap::new();
+
+      seed_bindings(
+        &mut bindings,
+        &mut binding_defs,
+        &ctx.global_bindings,
+        map_def_ty,
+        prim.unknown,
+      );
+      if let Some(file_bindings) = ctx.file_bindings.get(&meta.file) {
+        seed_bindings(
+          &mut bindings,
+          &mut binding_defs,
+          file_bindings,
+          map_def_ty,
+          prim.unknown,
+        );
+      }
+
+      collect_parent_bindings(
+        self,
+        body_id,
+        &mut bindings,
+        &mut binding_defs,
+        prim.unknown,
+      );
+
+      let caches = ctx.checker_caches.for_body();
+      let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
+      let mut result = check_body_with_expander(
+        body_id,
+        body,
+        &lowered.names,
+        meta.file,
+        &*ast,
+        Arc::clone(&ctx.store),
+        &caches,
+        &bindings,
+        (!binding_defs.is_empty())
+          .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
+        Some(&expander),
+      );
+
+      if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
+        let mut initial_env: HashMap<_, _> = HashMap::new();
+        if let Some(function) = body.function.as_ref() {
+          for param in function.params.iter() {
+            if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
+              if ty != prim.unknown {
+                if let Some(pat) = body.pats.get(param.pat.0 as usize) {
+                  if let HirPatKind::Ident(name) = pat.kind {
+                    initial_env.insert(name, ty);
+                  }
+                }
+              }
+            }
+          }
+        }
+        for expr in body.exprs.iter() {
+          if let hir_js::ExprKind::Ident(name_id) = expr.kind {
+            if initial_env.contains_key(&name_id) {
+              continue;
+            }
+            if let Some(name) = lowered.names.resolve(name_id) {
+              if let Some(ty) = bindings.get(name) {
+                initial_env.insert(name_id, *ty);
+              }
+            }
+          }
+        }
+        let flow_result = check_body_with_env(
+          body_id,
+          body,
+          &lowered.names,
+          meta.file,
+          "",
+          Arc::clone(&ctx.store),
+          &initial_env,
+        );
+        let mut relate_hooks = relate_hooks();
+        relate_hooks.expander = Some(&expander);
+        let relate = RelateCtx::with_hooks_and_cache(
+          Arc::clone(&ctx.store),
+          ctx.store.options(),
+          relate_hooks,
+          caches.relation.clone(),
+        );
+        if flow_result.expr_types.len() == result.expr_types.len() {
+          for (idx, ty) in flow_result.expr_types.iter().enumerate() {
+            if *ty != prim.unknown {
+              let existing = result.expr_types[idx];
+              let narrower =
+                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+              if existing == prim.unknown || narrower {
+                result.expr_types[idx] = *ty;
+              }
+            }
+          }
+        }
+        if flow_result.pat_types.len() == result.pat_types.len() {
+          for (idx, ty) in flow_result.pat_types.iter().enumerate() {
+            if *ty != prim.unknown {
+              let existing = result.pat_types[idx];
+              let narrower =
+                relate.is_assignable(*ty, existing) && !relate.is_assignable(existing, *ty);
+              if existing == prim.unknown || narrower {
+                result.pat_types[idx] = *ty;
+              }
+            }
+          }
+        }
+        if result.return_types.is_empty() && !flow_result.return_types.is_empty() {
+          result.return_types = flow_result.return_types;
+        }
+        if result.diagnostics.is_empty() && !flow_result.diagnostics.is_empty() {
+          result.diagnostics = flow_result.diagnostics;
+        }
+      }
+
+      let res = Arc::new(result);
+
+      if matches!(ctx.cache_mode, CacheMode::PerBody) {
+        let mut stats = caches.stats();
+        if stats.relation.evictions == 0 {
+          let max = ctx.cache_options.max_relation_cache_entries as u64;
+          if max > 0 && stats.relation.insertions > max {
+            stats.relation.evictions = stats.relation.insertions - max;
+          } else {
+            stats.relation.evictions = 1;
+          }
+        }
+        ctx
+          .query_stats
+          .record_cache(crate::profile::CacheKind::Relation, &stats.relation);
+        ctx
+          .query_stats
+          .record_cache(crate::profile::CacheKind::Eval, &stats.eval);
+        ctx.query_stats.record_cache(
+          crate::profile::CacheKind::RefExpansion,
+          &stats.ref_expansion,
+        );
+        ctx.query_stats.record_cache(
+          crate::profile::CacheKind::Instantiation,
+          &stats.instantiation,
+        );
+      }
+      ctx
+        .query_stats
+        .record(QueryKind::CheckBody, false, started.elapsed());
+
+      res
+    }
+  }
+
+  pub fn check_body(db: &BodyCheckDb, body_id: BodyId) -> Arc<BodyCheckResult> {
+    db.check_body(body_id)
+  }
+
+  fn record_pat(
+    ctx: &BodyCheckContext,
+    pat_id: HirPatId,
+    body: &HirBody,
+    names: &NameInterner,
+    result: &BodyCheckResult,
+    bindings: &mut HashMap<String, TypeId>,
+    binding_defs: &mut HashMap<String, DefId>,
+    file: FileId,
+  ) {
+    let prim = ctx.store.primitive_ids();
+    let Some(pat) = body.pats.get(pat_id.0 as usize) else {
+      return;
+    };
+    let ty = result.pat_type(PatId(pat_id.0)).unwrap_or(prim.unknown);
+    match &pat.kind {
+      HirPatKind::Ident(name_id) => {
+        if let Some(name) = names.resolve(*name_id) {
+          if ty != prim.unknown {
+            bindings.entry(name.to_string()).or_insert(ty);
+          }
+          if let Some(def_id) = ctx.def_spans.get(&(file, pat.span)).copied() {
+            binding_defs.entry(name.to_string()).or_insert(def_id);
+          }
+        }
+      }
+      HirPatKind::Array(arr) => {
+        for elem in arr.elements.iter().flatten() {
+          record_pat(
+            ctx,
+            elem.pat,
+            body,
+            names,
+            result,
+            bindings,
+            binding_defs,
+            file,
+          );
+        }
+        if let Some(rest) = arr.rest {
+          record_pat(ctx, rest, body, names, result, bindings, binding_defs, file);
+        }
+      }
+      HirPatKind::Object(obj) => {
+        for prop in obj.props.iter() {
+          record_pat(
+            ctx,
+            prop.value,
+            body,
+            names,
+            result,
+            bindings,
+            binding_defs,
+            file,
+          );
+        }
+        if let Some(rest) = obj.rest {
+          record_pat(ctx, rest, body, names, result, bindings, binding_defs, file);
+        }
+      }
+      HirPatKind::Rest(inner) => {
+        record_pat(
+          ctx,
+          **inner,
+          body,
+          names,
+          result,
+          bindings,
+          binding_defs,
+          file,
+        );
+      }
+      HirPatKind::Assign { target, .. } => {
+        record_pat(
+          ctx,
+          *target,
+          body,
+          names,
+          result,
+          bindings,
+          binding_defs,
+          file,
+        );
+      }
+      HirPatKind::AssignTarget(_) => {}
+    }
+  }
+
+  fn seed_bindings(
+    bindings: &mut HashMap<String, TypeId>,
+    binding_defs: &mut HashMap<String, DefId>,
+    source: &HashMap<String, SymbolBinding>,
+    map_def_ty: impl Fn(DefId) -> TypeId,
+    unknown: TypeId,
+  ) {
+    for (name, binding) in source.iter() {
+      let ty = binding.def.map(|d| map_def_ty(d)).unwrap_or(unknown);
+      bindings.insert(name.clone(), ty);
+      if let Some(def) = binding.def {
+        binding_defs.insert(name.clone(), def);
+      }
+    }
+  }
+
+  fn collect_parent_bindings(
+    db: &BodyCheckDb,
+    body_id: BodyId,
+    bindings: &mut HashMap<String, TypeId>,
+    binding_defs: &mut HashMap<String, DefId>,
+    unknown: TypeId,
+  ) {
+    let ctx = &db.context;
+    let mut visited = HashSet::new();
+    let mut current = ctx.body_parents.get(&body_id).copied();
+    while let Some(parent) = current {
+      if !visited.insert(parent) {
+        break;
+      }
+      let parent_result = db.check_body(parent);
+      let Some(meta) = db.bc_body_info(parent) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(hir_id) = meta.hir else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(lowered) = db.bc_lower_hir(meta.file) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      let Some(body) = lowered.body(hir_id) else {
+        current = ctx.body_parents.get(&parent).copied();
+        continue;
+      };
+      for idx in 0..body.pats.len() {
+        record_pat(
+          ctx,
+          HirPatId(idx as u32),
+          body,
+          &lowered.names,
+          &parent_result,
+          bindings,
+          binding_defs,
+          meta.file,
+        );
+      }
+      current = ctx.body_parents.get(&parent).copied();
+    }
+    let _ = unknown;
+  }
+}
 impl Eq for LowerResultWithDiagnostics {}
 
 pub fn parse_query_count() -> usize {

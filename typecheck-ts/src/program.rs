@@ -37,7 +37,7 @@ use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::check::type_expr::{TypeLowerer, TypeResolver};
 use crate::codes;
-use crate::db::{self, GlobalBindingsDb};
+use crate::db::{self, BodyCheckContext, BodyCheckDb, BodyInfo, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileRegistry;
 use crate::profile::{
@@ -717,7 +717,22 @@ impl Program {
   }
 
   pub fn check_body_fallible(&self, body: BodyId) -> Result<Arc<BodyCheckResult>, FatalError> {
-    self.with_interned_state(|state| state.check_body(body))
+    self.catch_fatal(|| {
+      self.ensure_not_cancelled()?;
+      let context = {
+        let mut state = self.lock_state();
+        state.ensure_interned_types(&self.host, &self.roots)?;
+        if let Some(res) = state.body_results.get(&body).cloned() {
+          return Ok(res);
+        }
+        state.body_check_context()
+      };
+      let db = BodyCheckDb::new(context);
+      let res = db::queries::body_check::check_body(&db, body);
+      let mut state = self.lock_state();
+      state.body_results.insert(body, Arc::clone(&res));
+      Ok(res)
+    })
   }
 
   /// Type of a specific expression in a body.
@@ -2911,6 +2926,56 @@ impl ProgramState {
         }
       })
       .or_else(|| self.file_registry.lookup_id(key))
+  }
+
+  fn body_check_context(&self) -> BodyCheckContext {
+    let store = self
+      .interned_store
+      .as_ref()
+      .expect("interned store initialized");
+    let mut body_info = HashMap::new();
+    for (id, meta) in self.body_map.iter() {
+      body_info.insert(
+        *id,
+        BodyInfo {
+          file: meta.file,
+          hir: meta.hir,
+          kind: meta.kind,
+        },
+      );
+    }
+    let mut file_bindings = HashMap::new();
+    for (file, state) in self.files.iter() {
+      file_bindings.insert(*file, state.bindings.clone());
+    }
+    let mut def_spans = HashMap::new();
+    for (def, data) in self.def_data.iter() {
+      def_spans.insert((data.file, data.span), *def);
+    }
+    BodyCheckContext {
+      store: Arc::clone(store),
+      interned_def_types: self.interned_def_types.clone(),
+      interned_type_params: self.interned_type_params.clone(),
+      asts: self.asts.clone(),
+      lowered: self
+        .hir_lowered
+        .iter()
+        .map(|(file, lowered)| (*file, Arc::new(lowered.clone())))
+        .collect(),
+      body_info,
+      body_parents: self.body_parents.clone(),
+      global_bindings: self
+        .global_bindings
+        .iter()
+        .map(|(name, binding)| (name.clone(), binding.clone()))
+        .collect(),
+      file_bindings,
+      def_spans,
+      checker_caches: self.checker_caches.clone(),
+      cache_mode: self.compiler_options.cache.mode,
+      cache_options: self.compiler_options.cache.clone(),
+      query_stats: self.query_stats.clone(),
+    }
   }
 
   fn file_key_for_id(&self, id: FileId) -> Option<FileKey> {
@@ -6238,6 +6303,7 @@ impl ProgramState {
 
   fn check_body(&mut self, body_id: BodyId) -> Result<Arc<BodyCheckResult>, FatalError> {
     self.check_cancelled()?;
+    let _parallel_guard = db::queries::body_check::parallel_guard();
     let cache_hit = self.body_results.contains_key(&body_id);
     let body_meta = self.body_map.get(&body_id).copied();
     let owner = self.owner_of_body(body_id);
