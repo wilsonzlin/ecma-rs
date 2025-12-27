@@ -29,9 +29,9 @@ use types_ts_interned::{
 use super::cfg::{BlockId, ControlFlowGraph};
 use super::flow::Env;
 use super::flow_narrow::{
-  narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check, narrow_by_instanceof,
-  narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof, narrow_non_nullish,
-  truthy_falsy_types, Facts, LiteralValue,
+  and_facts, narrow_by_assignability, narrow_by_discriminant, narrow_by_in_check,
+  narrow_by_instanceof, narrow_by_literal, narrow_by_nullish_equality, narrow_by_typeof,
+  narrow_non_nullish, or_facts, truthy_falsy_types, Facts, LiteralValue,
 };
 
 use super::caches::BodyCaches;
@@ -2750,16 +2750,14 @@ impl<'a> FlowBodyChecker<'a> {
         let mut right_env = env.clone();
         right_env.apply_facts(&left_facts);
         let (right_ty, right_facts) = self.eval_expr(right, &mut right_env);
-        out.merge(left_facts, &self.store);
-        out.merge(right_facts, &self.store);
+        *out = and_facts(left_facts, right_facts, &self.store);
         self.store.union(vec![left_ty, right_ty])
       }
       BinaryOp::LogicalOr => {
         let mut right_env = env.clone();
         right_env.apply_falsy(&left_facts);
         let (right_ty, right_facts) = self.eval_expr(right, &mut right_env);
-        out.merge(left_facts, &self.store);
-        out.merge(right_facts, &self.store);
+        *out = or_facts(left_facts, right_facts, &self.store);
         self.store.union(vec![left_ty, right_ty])
       }
       BinaryOp::NullishCoalescing => {

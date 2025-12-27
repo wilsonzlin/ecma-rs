@@ -670,6 +670,107 @@ function f(x: string | null) {
 }
 
 #[test]
+fn logical_and_applies_both_narrowings() {
+  let src = r#"
+function check(x: string | number) {
+  if (x && typeof x === "string") {
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "check");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let x_ty = store.union(vec![prim.string, prim.number, prim.undefined]);
+  initial.insert(name_id(lowered.names.as_ref(), "x"), x_ty);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let after_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
+  assert_eq!(then_ty, "string");
+  let expected_else =
+    TypeDisplay::new(&store, store.union(vec![prim.number, prim.undefined])).to_string();
+  assert_eq!(after_ty, expected_else);
+}
+
+#[test]
+fn logical_or_keeps_truthy_conservative() {
+  let src = r#"
+function check(x: string | number) {
+  if (x || typeof x === "string") {
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "check");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let x_ty = store.union(vec![prim.string, prim.number]);
+  initial.insert(name_id(lowered.names.as_ref(), "x"), x_ty);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
+  let expected_truthy =
+    TypeDisplay::new(&store, store.union(vec![prim.string, prim.number])).to_string();
+  assert_eq!(then_ty, expected_truthy);
+}
+
+#[test]
+fn nested_logical_composition_is_conservative() {
+  let src = r#"
+function check(x: string | number, y: boolean, z: boolean) {
+  if ((x && y) || z) {
+    return x;
+  }
+  return x;
+}
+"#;
+  let lowered = lower_from_source(src).expect("lower");
+  let (body_id, body) = body_of(&lowered, &lowered.names, "check");
+  let store = TypeStore::new();
+  let prim = store.primitive_ids();
+  let mut initial = HashMap::new();
+  let x_ty = store.union(vec![prim.string, prim.number]);
+  initial.insert(name_id(lowered.names.as_ref(), "x"), x_ty);
+  initial.insert(name_id(lowered.names.as_ref(), "y"), prim.boolean);
+  initial.insert(name_id(lowered.names.as_ref(), "z"), prim.boolean);
+  let res = check_body_with_env(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    Arc::clone(&store),
+    &initial,
+  );
+  let ret_types = res.return_types();
+  assert_eq!(ret_types[0], x_ty);
+  assert_eq!(ret_types[1], x_ty);
+}
+
+#[test]
 fn in_and_instanceof_checks_narrow() {
   let src = r#"
 function pick(x: { value: string } | { other: number }) {

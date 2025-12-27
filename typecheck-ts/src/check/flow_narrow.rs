@@ -45,6 +45,102 @@ impl Facts {
   }
 }
 
+/// Compose facts for `A && B`.
+pub fn and_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
+  let Facts {
+    truthy: left_truthy,
+    falsy: left_falsy,
+    assertions: left_assertions,
+  } = left;
+  let Facts {
+    truthy: right_truthy,
+    falsy: right_falsy,
+    assertions: right_assertions,
+  } = right;
+
+  let truthy = apply_sequence(&left_truthy, &right_truthy);
+  let falsy = join_alternatives(
+    &left_falsy,
+    &apply_sequence(&left_truthy, &right_falsy),
+    store,
+  );
+  let assertions = merge_assertions(left_assertions, right_assertions, store);
+
+  Facts {
+    truthy,
+    falsy,
+    assertions,
+  }
+}
+
+/// Compose facts for `A || B`.
+pub fn or_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
+  let Facts {
+    truthy: left_truthy,
+    falsy: left_falsy,
+    assertions: left_assertions,
+  } = left;
+  let Facts {
+    truthy: right_truthy,
+    falsy: right_falsy,
+    assertions: right_assertions,
+  } = right;
+
+  let truthy = join_alternatives(
+    &left_truthy,
+    &apply_sequence(&left_falsy, &right_truthy),
+    store,
+  );
+  let falsy = apply_sequence(&left_falsy, &right_falsy);
+  let assertions = merge_assertions(left_assertions, right_assertions, store);
+
+  Facts {
+    truthy,
+    falsy,
+    assertions,
+  }
+}
+
+fn apply_sequence(
+  first: &HashMap<NameId, TypeId>,
+  second: &HashMap<NameId, TypeId>,
+) -> HashMap<NameId, TypeId> {
+  let mut result = first.clone();
+  for (name, ty) in second.iter() {
+    result.insert(*name, *ty);
+  }
+  result
+}
+
+fn join_alternatives(
+  first: &HashMap<NameId, TypeId>,
+  second: &HashMap<NameId, TypeId>,
+  store: &TypeStore,
+) -> HashMap<NameId, TypeId> {
+  let mut result = HashMap::new();
+  for (name, ty) in first.iter() {
+    if let Some(other) = second.get(name) {
+      result.insert(*name, store.union(vec![*ty, *other]));
+    }
+  }
+  result
+}
+
+fn merge_assertions(
+  left: HashMap<NameId, TypeId>,
+  right: HashMap<NameId, TypeId>,
+  store: &TypeStore,
+) -> HashMap<NameId, TypeId> {
+  let mut result = left;
+  for (name, ty) in right {
+    result
+      .entry(name)
+      .and_modify(|existing| *existing = store.union(vec![*existing, ty]))
+      .or_insert(ty);
+  }
+  result
+}
+
 /// Literal value used for equality-based narrowing.
 #[derive(Clone, Debug)]
 pub enum LiteralValue {
