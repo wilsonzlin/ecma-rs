@@ -13,6 +13,9 @@ enum ExportStatus {
 
 #[derive(Clone, Debug)]
 struct ModuleState {
+  file_id: FileId,
+  file_kind: FileKind,
+  is_script: bool,
   symbols: SymbolGroups,
   imports: BTreeMap<String, ImportEntry>,
   export_specs: Vec<ExportSpec>,
@@ -22,8 +25,11 @@ struct ModuleState {
 }
 
 impl ModuleState {
-  fn new(_file_id: FileId) -> Self {
+  fn new(file_id: FileId, file_kind: FileKind, is_script: bool) -> Self {
     Self {
+      file_id,
+      file_kind,
+      is_script,
       symbols: BTreeMap::new(),
       imports: BTreeMap::new(),
       export_specs: Vec::new(),
@@ -185,24 +191,14 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       .map(|(name, m)| (name.clone(), m.exports.clone()))
       .collect();
 
-    for state in self.modules.values() {
-      for export in &state.export_as_namespace {
-        self.diagnostics.push(Diagnostic::error(
-          "BIND1003",
-          "export as namespace is not supported yet",
-          export.span,
-        ));
-      }
+    let module_states: Vec<ModuleState> = self.modules.values().cloned().collect();
+    let ambient_states: Vec<ModuleState> = self.ambient_modules.values().cloned().collect();
+    let mut export_as_namespace_spans = BTreeMap::new();
+    for state in module_states.iter() {
+      self.handle_export_as_namespace(state, &mut export_as_namespace_spans);
     }
-
-    for state in self.ambient_modules.values() {
-      for export in &state.export_as_namespace {
-        self.diagnostics.push(Diagnostic::error(
-          "BIND1003",
-          "export as namespace is not supported yet",
-          export.span,
-        ));
-      }
+    for state in ambient_states.iter() {
+      self.handle_export_as_namespace(state, &mut export_as_namespace_spans);
     }
 
     let global_symbols = self.global_symbols.clone();
@@ -222,9 +218,6 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   }
 
   fn bind_file(&mut self, hir: Arc<HirFile>) -> Vec<FileId> {
-    let mut state = ModuleState::new(hir.file_id);
-    let owner = SymbolOwner::Module(hir.file_id);
-    let mut deps = Vec::new();
     let is_script = self.is_effective_script(
       hir.module_kind,
       hir.file_kind,
@@ -235,6 +228,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       &hir.export_as_namespace,
       &hir.ambient_modules,
     );
+    let mut state = ModuleState::new(hir.file_id, hir.file_kind, is_script);
+    let owner = SymbolOwner::Module(hir.file_id);
+    let mut deps = Vec::new();
 
     self.bind_module_items(
       &mut state,
@@ -271,7 +267,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     let mut state = self
       .ambient_modules
       .remove(&module.name)
-      .unwrap_or_else(|| ModuleState::new(file_id));
+      .unwrap_or_else(|| ModuleState::new(file_id, file_kind, false));
 
     self.bind_module_items(
       &mut state,
@@ -673,6 +669,80 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             .all(|decl| matches!(decl.exported, Exported::No))
       }
     }
+  }
+
+  fn handle_export_as_namespace(
+    &mut self,
+    state: &ModuleState,
+    seen: &mut BTreeMap<String, Span>,
+  ) {
+    for export in &state.export_as_namespace {
+      if state.is_script {
+        continue;
+      }
+
+      if state.file_kind != FileKind::Dts {
+        self.diagnostics.push(Diagnostic::error(
+          "BIND1003",
+          "export as namespace is only supported in .d.ts files",
+          export.span,
+        ));
+        continue;
+      }
+
+      if let Some(previous) = seen.get(&export.name) {
+        if previous.file != export.span.file {
+          self.diagnostics.push(
+            Diagnostic::error(
+              "BIND1006",
+              format!(
+                "conflicting export as namespace '{}' from multiple modules",
+                export.name
+              ),
+              export.span,
+            )
+            .with_label(Label::secondary(
+              *previous,
+              "previous export as namespace here",
+            )),
+          );
+        }
+      } else {
+        seen.insert(export.name.clone(), export.span);
+      }
+
+      self.insert_export_as_namespace_symbol(state, export);
+    }
+  }
+
+  fn insert_export_as_namespace_symbol(
+    &mut self,
+    state: &ModuleState,
+    export: &ExportAsNamespaceEntry,
+  ) {
+    let namespaces = Namespace::VALUE | Namespace::NAMESPACE | Namespace::TYPE;
+    let decl_id = self.symbols.alloc_decl(
+      state.file_id,
+      export.name.clone(),
+      DeclKind::ImportBinding,
+      namespaces,
+      true,
+      true,
+      export.span.range.start,
+      None,
+    );
+    add_decl_to_groups(
+      &mut self.global_symbols,
+      &export.name,
+      decl_id,
+      namespaces,
+      &mut self.symbols,
+      SymbolOrigin::Import {
+        from: Some(state.file_id),
+        imported: "*".to_string(),
+      },
+      &SymbolOwner::Global,
+    );
   }
 
   fn add_import_binding(

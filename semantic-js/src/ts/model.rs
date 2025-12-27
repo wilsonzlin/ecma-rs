@@ -27,11 +27,11 @@
 //! expressions (which are reported as diagnostics). Cross-file ambient
 //! augmentations are only represented through re-exports/imports rather than
 //! global name injection. Simple `export = Identifier` assignments synthesize a
-//! default export entry for tooling parity.
-//! Ambient module declarations (`declare module "foo" { }`) are bound into their
-//! own export/symbol maps; unimplemented features such as `export as namespace`
-//! and non-identifier `export =` forms are reported deterministically via
-//! diagnostics.
+//! default export entry for tooling parity. Ambient module declarations
+//! (`declare module "foo" { }`) are bound into their own export/symbol maps;
+//! unimplemented features such as non-identifier `export =` forms are reported
+//! deterministically via diagnostics. `export as namespace` in `.d.ts` modules
+//! is supported for UMD-style globals; other contexts emit diagnostics.
 //!
 //! Binder diagnostics use the shared [`diagnostics`] crate with stable codes:
 //! - `BIND1001`: duplicate export
@@ -40,6 +40,7 @@
 //!   module
 //! - `BIND1004`: duplicate import binding
 //! - `BIND1005`: `export =` combined with other exports
+//! - `BIND1006`: conflicting `export as namespace` declarations across modules
 //!
 //! ## Determinism expectations
 //!

@@ -1438,7 +1438,6 @@ fn export_assignment_with_named_export_emits_bind1005() {
 fn export_as_namespace_reports_diagnostic() {
   let file = FileId(95);
   let mut hir = HirFile::module(file);
-  hir.file_kind = FileKind::Dts;
   hir.export_as_namespace.push(ExportAsNamespace {
     name: "Foo".to_string(),
     span: span(20),
@@ -1453,6 +1452,80 @@ fn export_as_namespace_reports_diagnostic() {
   assert_eq!(diag.code, "BIND1003");
   assert_eq!(diag.primary.file, file);
   assert_eq!(diag.primary.range, span(20));
+}
+
+#[test]
+fn dts_export_as_namespace_creates_global_symbol() {
+  let file = FileId(116);
+  let mut hir = HirFile::module(file);
+  hir.file_kind = FileKind::Dts;
+  hir
+    .decls
+    .push(mk_decl(0, "value", DeclKind::Var, Exported::Named));
+  hir.export_as_namespace.push(ExportAsNamespace {
+    name: "Foo".to_string(),
+    span: span(30),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) =
+    bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert!(diags.is_empty());
+
+  let globals = semantics.global_symbols();
+  assert!(globals.contains_key("Foo"));
+  let symbols = semantics.symbols();
+  let group = globals.get("Foo").unwrap();
+  let mask = group.namespaces(symbols);
+  assert!(mask.contains(Namespace::VALUE));
+  assert!(mask.contains(Namespace::NAMESPACE));
+  assert!(mask.contains(Namespace::TYPE));
+  let sym = group.symbol_for(Namespace::VALUE, symbols).unwrap();
+  match symbols.symbol(sym).origin {
+    SymbolOrigin::Import { from, ref imported } => {
+      assert_eq!(from, Some(file));
+      assert_eq!(imported, "*");
+    }
+    ref other => panic!("expected import origin, got {:?}", other),
+  }
+}
+
+#[test]
+fn export_as_namespace_conflict_reports_diagnostic() {
+  let file_a = FileId(117);
+  let file_b = FileId(118);
+
+  let mut a = HirFile::module(file_a);
+  a.file_kind = FileKind::Dts;
+  a.export_as_namespace.push(ExportAsNamespace {
+    name: "Foo".to_string(),
+    span: span(40),
+  });
+
+  let mut b = HirFile::module(file_b);
+  b.file_kind = FileKind::Dts;
+  b.export_as_namespace.push(ExportAsNamespace {
+    name: "Foo".to_string(),
+    span: span(41),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> =
+    maplit::hashmap! { file_a => Arc::new(a), file_b => Arc::new(b) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) =
+    bind_ts_program(&[file_a, file_b], &resolver, |f| files.get(&f).unwrap().clone());
+
+  assert!(semantics.global_symbols().contains_key("Foo"));
+  assert_eq!(diags.len(), 1);
+  let diag = &diags[0];
+  assert_eq!(diag.code, "BIND1006");
+  assert_eq!(diag.primary.file, file_b);
+  assert_eq!(diag.primary.range, span(41));
+  assert_eq!(diag.labels.len(), 1);
+  assert_eq!(diag.labels[0].span.file, file_a);
+  assert_eq!(diag.labels[0].span.range, span(40));
 }
 
 #[test]
