@@ -16,7 +16,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stmt::decl::{FuncDecl, ParamDecl, VarDecl, VarDeclMode};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
-use parse_js::ast::ts_stmt::NamespaceBody;
+use parse_js::ast::ts_stmt::{ImportEqualsRhs, NamespaceBody};
 use parse_js::ast::type_expr::{
   TypeArray, TypeEntityName, TypeExpr, TypeLiteral, TypeMember, TypePropertyKey, TypeUnion,
 };
@@ -36,7 +36,7 @@ use self::check::caches::{CheckerCacheStats, CheckerCaches};
 use self::check::relate_hooks;
 use crate::check::type_expr::TypeResolver;
 use crate::codes;
-use crate::db::{self, GlobalBindingsDb};
+use crate::db::{self, Db, GlobalBindingsDb};
 use crate::expand::ProgramTypeExpander as RefExpander;
 use crate::files::FileRegistry;
 use crate::profile::{
@@ -2020,6 +2020,95 @@ pub struct ImportData {
   pub original: String,
 }
 
+#[derive(Clone)]
+struct SemanticTypeResolver {
+  bindings: HashMap<String, DefId>,
+  imports: HashMap<DefId, ImportData>,
+  def_by_name: HashMap<(FileId, String), DefId>,
+  def_ids: HashSet<DefId>,
+  semantics: Option<Arc<sem_ts::TsProgramSemantics>>,
+}
+
+impl SemanticTypeResolver {
+  fn symbol_target_file(
+    &self,
+    sem: &sem_ts::TsProgramSemantics,
+    symbol: sem_ts::SymbolId,
+  ) -> Option<FileId> {
+    let sym = sem.symbols().symbol(symbol);
+    match &sym.origin {
+      sem_ts::SymbolOrigin::Import { source, .. } => match source {
+        sem_ts::ImportSource::File(file) => Some(*file),
+        _ => None,
+      },
+      _ => match &sym.owner {
+        sem_ts::SymbolOwner::Module(file) => Some(*file),
+        _ => None,
+      },
+    }
+  }
+
+  fn def_for_symbol(
+    &self,
+    sem: &sem_ts::TsProgramSemantics,
+    symbol: sem_ts::SymbolId,
+  ) -> Option<DefId> {
+    for ns in [
+      sem_ts::Namespace::TYPE,
+      sem_ts::Namespace::NAMESPACE,
+      sem_ts::Namespace::VALUE,
+    ] {
+      if let Some(decl) = sem.symbol_decls(symbol, ns).first() {
+        let decl_data = sem.symbols().decl(*decl);
+        let def = DefId(decl_data.def_id.0);
+        if self.def_ids.contains(&def) {
+          return Some(def);
+        }
+        if let Some(mapped) = self
+          .def_by_name
+          .get(&(FileId(decl_data.file.0), decl_data.name.clone()))
+        {
+          return Some(*mapped);
+        }
+      }
+    }
+    None
+  }
+}
+
+impl TypeResolver for SemanticTypeResolver {
+  fn resolve_type_name(&self, path: &[String]) -> Option<DefId> {
+    let (head, tail) = path.split_first()?;
+    let def = *self.bindings.get(head)?;
+    if tail.is_empty() {
+      return Some(def);
+    }
+    let import = self.imports.get(&def)?;
+    if import.original != "*" {
+      return None;
+    }
+    let sem = self.semantics.as_deref()?;
+    let mut segments = tail.iter();
+    let Some(first) = segments.next() else {
+      return None;
+    };
+    let mut current_file = import.from;
+    let mut symbol = sem
+      .resolve_export(current_file, first, sem_ts::Namespace::TYPE)
+      .or_else(|| sem.resolve_export(current_file, first, sem_ts::Namespace::NAMESPACE))
+      .or_else(|| sem.resolve_export(current_file, first, sem_ts::Namespace::VALUE))?;
+    current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
+    for segment in segments {
+      symbol = sem
+        .resolve_export(current_file, segment, sem_ts::Namespace::TYPE)
+        .or_else(|| sem.resolve_export(current_file, segment, sem_ts::Namespace::NAMESPACE))
+        .or_else(|| sem.resolve_export(current_file, segment, sem_ts::Namespace::VALUE))?;
+      current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
+    }
+    self.def_for_symbol(sem, symbol)
+  }
+}
+
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[derive(Clone, Debug)]
 pub struct InterfaceData {
@@ -2197,7 +2286,10 @@ impl ProgramTypeResolver {
 
   fn import_origin_file(&self, symbol: sem_ts::SymbolId) -> Option<sem_ts::FileId> {
     match &self.semantics.symbols().symbol(symbol).origin {
-      sem_ts::SymbolOrigin::Import { from, .. } => *from,
+      sem_ts::SymbolOrigin::Import { source, .. } => match source {
+        sem_ts::ImportSource::File(file) => Some(*file),
+        _ => None,
+      },
       _ => None,
     }
   }
@@ -2878,9 +2970,9 @@ impl ProgramState {
         base.imports.push(import);
       }
     }
-    for import in extras.import_equals {
-      if !base.import_equals.contains(&import) {
-        base.import_equals.push(import);
+    for import_equals in extras.import_equals {
+      if !base.import_equals.contains(&import_equals) {
+        base.import_equals.push(import_equals);
       }
     }
     for export in extras.exports {
@@ -3620,12 +3712,14 @@ impl ProgramState {
   }
 
   fn set_salsa_inputs(&mut self, file: FileId, kind: FileKind, text: Arc<str>) {
-    if let Some(key) = self.file_key_for_id(file) {
-      self.typecheck_db.set_file(file, key, kind, text);
-    } else {
-      self.typecheck_db.set_file_kind(file, kind);
-      self.typecheck_db.set_file_text(file, text);
+    if self.typecheck_db.file_input(file).is_none() {
+      if let Some(key) = self.file_key_for_id(file) {
+        self.typecheck_db.set_file(file, key, kind, text);
+        return;
+      }
     }
+    self.typecheck_db.set_file_kind(file, kind);
+    self.typecheck_db.set_file_text(file, text);
   }
 
   fn parse_via_salsa(
@@ -5198,6 +5292,76 @@ impl ProgramState {
             is_type_only: import_stmt.stx.type_only,
           });
         }
+        Stmt::ImportEqualsDecl(import_equals) => match &import_equals.stx.rhs {
+          ImportEqualsRhs::Require { module } => {
+            let resolved = self
+              .file_key_for_id(file)
+              .and_then(|file_key| host.resolve(&file_key, module))
+              .map(|target| self.intern_file_key(target, FileOrigin::Source));
+            if let Some(target) = resolved {
+              queue.push_back(target);
+            }
+            let span = loc_to_span(file, stmt.loc).range;
+            let name = import_equals.stx.name.clone();
+            let symbol = self.alloc_symbol();
+            let def_id = self.alloc_def();
+            self.def_data.insert(
+              def_id,
+              DefData {
+                name: name.clone(),
+                file,
+                span,
+                symbol,
+                export: import_equals.stx.export,
+                kind: DefKind::Import(ImportData {
+                  from: resolved.unwrap_or(file),
+                  original: "*".to_string(),
+                }),
+              },
+            );
+            self.record_def_symbol(def_id, symbol);
+            defs.push(def_id);
+            bindings.insert(
+              name.clone(),
+              SymbolBinding {
+                symbol,
+                def: Some(def_id),
+                type_id: None,
+              },
+            );
+            self.record_symbol(file, span, symbol);
+            if import_equals.stx.export {
+              exports.insert(
+                name.clone(),
+                ExportEntry {
+                  symbol,
+                  def: Some(def_id),
+                  type_id: None,
+                },
+              );
+            }
+            sem_builder.add_import(sem_ts::Import {
+              specifier: module.clone(),
+              specifier_span: span,
+              default: None,
+              namespace: Some(sem_ts::ImportNamespace {
+                local: name,
+                local_span: span,
+                is_type_only: false,
+              }),
+              named: Vec::new(),
+              is_type_only: false,
+            });
+          }
+          ImportEqualsRhs::EntityName { .. } => {
+            self
+              .diagnostics
+              .push(codes::UNSUPPORTED_IMPORT_PATTERN.error(
+                "import = aliasing non-module targets is not supported yet",
+                loc_to_span(file, stmt.loc),
+              ));
+          }
+        },
         Stmt::Expr(_) | Stmt::If(_) | Stmt::Block(_) | Stmt::While(_) => {}
         _ => {}
       }
@@ -5548,6 +5712,42 @@ impl ProgramState {
     Ok(())
   }
 
+  fn build_type_resolver(
+    &self,
+    binding_defs: &HashMap<String, DefId>,
+  ) -> Option<Arc<dyn TypeResolver>> {
+    if binding_defs.is_empty() {
+      return None;
+    }
+    let imports: HashMap<_, _> = binding_defs
+      .values()
+      .filter_map(|def| {
+        self.def_data.get(def).and_then(|data| match &data.kind {
+          DefKind::Import(import) => Some((*def, import.clone())),
+          _ => None,
+        })
+      })
+      .collect();
+    let mut def_entries: Vec<_> = self
+      .def_data
+      .iter()
+      .map(|(id, data)| (*id, data.file, data.name.clone()))
+      .collect();
+    def_entries.sort_by_key(|(id, file, name)| (file.0, name.clone(), id.0));
+    let mut def_by_name: HashMap<(FileId, String), DefId> = HashMap::new();
+    for (id, file, name) in def_entries {
+      def_by_name.entry((file, name)).or_insert(id);
+    }
+    let def_ids = self.def_data.keys().copied().collect();
+    Some(Arc::new(SemanticTypeResolver {
+      bindings: binding_defs.clone(),
+      imports,
+      def_by_name,
+      def_ids,
+      semantics: self.semantics.clone(),
+    }) as Arc<dyn TypeResolver>)
+  }
+
   fn check_body(&mut self, body_id: BodyId) -> Result<Arc<BodyCheckResult>, FatalError> {
     self.check_cancelled()?;
     let cache_hit = self.body_results.contains_key(&body_id);
@@ -5753,6 +5953,7 @@ impl ProgramState {
       caches.eval.clone(),
     );
     let prim = store.primitive_ids();
+    let semantic_resolver = self.build_type_resolver(&binding_defs);
     let resolver = if let Some(semantics) = self.semantics.as_ref() {
       let def_kinds = self
         .def_data
@@ -5772,6 +5973,7 @@ impl ProgramState {
     } else {
       None
     };
+    let resolver = semantic_resolver.or(resolver);
     let mut result = check::hir_body::check_body_with_expander(
       body_id,
       body,

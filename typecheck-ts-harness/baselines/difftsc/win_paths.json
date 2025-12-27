@@ -1,20 +1,28 @@
 {
   "schema_version": 2,
   "metadata": {
-    "typescript_version": null,
+    "typescript_version": "5.9.3",
     "options": {
+      "exactOptionalPropertyTypes": false,
       "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
       "skipLibCheck": true,
-      "pretty": false
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
     }
   },
   "diagnostics": [
     {
       "code": 2345,
-      "file": "C:\\work\\input.ts",
+      "file": "C:\\\\work\\\\input.ts",
       "start": 48,
       "end": 54,
-      "category": "error"
+      "category": "error",
+      "message": "Argument of type '\"oops\"' is not assignable to parameter of type 'number'."
     }
   ]
 }

@@ -68,7 +68,10 @@ pub fn narrow_by_nullish_equality(
   }
   if !matches!(
     op_kind,
-    BinaryOp::Equality | BinaryOp::Inequality | BinaryOp::StrictEquality | BinaryOp::StrictInequality
+    BinaryOp::Equality
+      | BinaryOp::Inequality
+      | BinaryOp::StrictEquality
+      | BinaryOp::StrictInequality
   ) {
     return (primitives.never, ty);
   }

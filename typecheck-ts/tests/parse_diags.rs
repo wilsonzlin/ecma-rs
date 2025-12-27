@@ -118,12 +118,7 @@ fn parse_query_is_memoized() {
   let file = FileId(0);
   let key = FileKey::new("memoized.ts");
   let mut db = TypecheckDb::default();
-  db.set_file(
-    file,
-    key,
-    FileKind::Ts,
-    Arc::from("const value = 1;"),
-  );
+  db.set_file(file, key, FileKind::Ts, Arc::from("const value = 1;"));
 
   reset_parse_query_count();
   let first = db.parse(file);

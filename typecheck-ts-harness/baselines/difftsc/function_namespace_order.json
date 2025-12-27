@@ -1,11 +1,18 @@
 {
   "schema_version": 2,
   "metadata": {
-    "typescript_version": null,
+    "typescript_version": "5.9.3",
     "options": {
+      "exactOptionalPropertyTypes": false,
       "noEmit": true,
+      "noImplicitAny": false,
+      "noUncheckedIndexedAccess": false,
+      "pretty": false,
       "skipLibCheck": true,
-      "pretty": false
+      "strictFunctionTypes": true,
+      "strictNullChecks": true,
+      "target": 2,
+      "useDefineForClassFields": true
     }
   },
   "diagnostics": []

@@ -33,10 +33,7 @@ fn type_alias<'a>(
   }
 }
 
-fn type_query_import_name<'a>(
-  result: &'a hir_js::LowerResult,
-  name: &str,
-) -> &'a TypeImportName {
+fn type_query_import_name<'a>(result: &'a hir_js::LowerResult, name: &str) -> &'a TypeImportName {
   let (type_expr, _) = type_alias(result, name);
   let expr = &result.types.type_exprs[type_expr.0 as usize];
   match &expr.kind {
@@ -285,8 +282,7 @@ fn lowers_mapped_types_without_modifiers() {
 
 #[test]
 fn lowers_type_query_import_name() {
-  let result =
-    lower_from_source(r#"type T = typeof import("mod").Foo;"#).expect("lower");
+  let result = lower_from_source(r#"type T = typeof import("mod").Foo;"#).expect("lower");
   let import = type_query_import_name(&result, "T");
   assert_eq!(import.module.as_deref(), Some("mod"));
   let qualifier = import.qualifier.as_ref().expect("qualifier");
@@ -304,8 +300,7 @@ fn lowers_type_query_import_name_no_qualifier() {
 
 #[test]
 fn lowers_type_query_import_name_multi_segment() {
-  let result =
-    lower_from_source(r#"type T = typeof import("mod").Foo.Bar;"#).expect("lower");
+  let result = lower_from_source(r#"type T = typeof import("mod").Foo.Bar;"#).expect("lower");
   let import = type_query_import_name(&result, "T");
   assert_eq!(import.module.as_deref(), Some("mod"));
   let qualifier = import.qualifier.as_ref().expect("qualifier");

@@ -461,9 +461,7 @@ impl SalsaEventAdapter {
       }
       EventKind::WillExecute { database_key } => {
         if let Some(kind) = (self.mapper)(*database_key) {
-          self
-            .starts
-            .insert(*database_key, (kind, Instant::now()));
+          self.starts.insert(*database_key, (kind, Instant::now()));
         }
       }
       _ => {}

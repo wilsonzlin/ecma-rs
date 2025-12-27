@@ -1,7 +1,7 @@
 use diagnostics::TextRange;
 use hir_js::{
-  DefKind as HirDefKind, Export, ExportKind as HirExportKind, Import, ImportKind as HirImportKind,
-  LowerResult,
+  DefKind as HirDefKind, Export, ExportKind as HirExportKind, Import, ImportEqualsTarget,
+  ImportKind as HirImportKind, LowerResult,
 };
 use semantic_js::ts as sem_ts;
 
@@ -148,7 +148,21 @@ fn map_import_from_lower(
         is_type_only: es.is_type_only,
       })
     }
-    HirImportKind::ImportEquals(_) => None,
+    HirImportKind::ImportEquals(import_equals) => match &import_equals.target {
+      ImportEqualsTarget::Module(specifier) => Some(sem_ts::Import {
+        specifier: specifier.value.clone(),
+        specifier_span: specifier.span,
+        default: None,
+        namespace: Some(sem_ts::ImportNamespace {
+          local: resolve_name(import_equals.local.local),
+          local_span: import_equals.local.span,
+          is_type_only: false,
+        }),
+        named: Vec::new(),
+        is_type_only: false,
+      }),
+      ImportEqualsTarget::Path(_) => None,
+    },
   }
 }
 

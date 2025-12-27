@@ -345,7 +345,10 @@ function f(x: {kind:"a"}|{kind:"b"}|null) {
   let else_ty_expected = store.union(vec![b_obj, prim.null]);
   let else_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
   assert_eq!(then_ty, TypeDisplay::new(&store, kind_a).to_string());
-  assert_eq!(else_ty, TypeDisplay::new(&store, else_ty_expected).to_string());
+  assert_eq!(
+    else_ty,
+    TypeDisplay::new(&store, else_ty_expected).to_string()
+  );
 }
 
 #[test]
