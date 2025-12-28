@@ -835,7 +835,10 @@ pub mod body_check {
     unknown: TypeId,
   ) {
     for (name, binding) in source.iter() {
-      let ty = binding.def.map(|d| map_def_ty(d)).unwrap_or(unknown);
+      let ty = binding
+        .type_id
+        .or_else(|| binding.def.map(|d| map_def_ty(d)))
+        .unwrap_or(unknown);
       bindings.insert(name.clone(), ty);
       if let Some(def) = binding.def {
         binding_defs.insert(name.clone(), def);

@@ -3684,6 +3684,14 @@ impl ProgramState {
         self.interned_def_types.insert(val_def, merged);
         self.def_types.insert(ns_def, ns_store);
         self.def_types.insert(val_def, val_store_ty);
+        if let Some(file_state) = self.files.get_mut(&file) {
+          if let Some(binding) = file_state.bindings.get_mut(&name) {
+            binding.type_id = Some(merged);
+          }
+          if let Some(entry) = file_state.exports.get_mut(&name) {
+            entry.type_id = Some(merged);
+          }
+        }
       }
     }
   }

@@ -3,7 +3,7 @@ use super::expr::ImportExpr;
 use super::node::Node;
 use derive_visitor::Drive;
 use derive_visitor::DriveMut;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Main type expression enum covering all TypeScript type constructs
 #[derive(Debug, Drive, DriveMut, Serialize)]
@@ -379,7 +379,7 @@ pub struct TypeMapped {
 }
 
 /// Mapped type modifier: +, -, or none
-#[derive(Debug, Copy, Clone, Serialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum MappedTypeModifier {
   Plus,
   Minus,
