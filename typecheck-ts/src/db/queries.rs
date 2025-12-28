@@ -163,7 +163,7 @@ fn deterministic_symbol_id(name: &str) -> SymbolId {
     hash = hash.wrapping_mul(0x100000001b3);
   }
   let folded = hash ^ (hash >> 32);
-  SymbolId(folded)
+  SymbolId(folded as u32)
 }
 
 /// Global value bindings derived from TS semantics, `.d.ts` files, and builtin

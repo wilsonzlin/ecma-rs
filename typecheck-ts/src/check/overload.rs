@@ -137,6 +137,7 @@ struct CandidateOutcome {
 pub fn resolve_overloads(
   store: &Arc<TypeStore>,
   relate: &RelateCtx<'_>,
+  expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
@@ -157,13 +158,7 @@ pub fn resolve_overloads(
     );
   }
   let mut candidates = Vec::new();
-  collect_signatures(
-    store,
-    Some(relate),
-    callee,
-    &mut candidates,
-    &mut HashSet::new(),
-  );
+  collect_signatures(store, expander, callee, &mut candidates, &mut HashSet::new());
   candidates.sort_by(|a, b| store.compare_signatures(*a, *b));
   candidates.dedup();
   let primitives = store.primitive_ids();
@@ -689,7 +684,7 @@ pub fn resolve_construct(
 
 fn collect_signatures(
   store: &Arc<TypeStore>,
-  relate: Option<&RelateCtx<'_>>,
+  expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
   ty: TypeId,
   out: &mut Vec<SignatureId>,
   seen: &mut HashSet<TypeId>,
@@ -704,15 +699,15 @@ fn collect_signatures(
       out.extend(shape.call_signatures);
     }
     TypeKind::Ref { def, args } => {
-      if let Some(relate) = relate {
-        if let Some(expanded) = relate.expand_ref_type(def, &args) {
-          collect_signatures(store, Some(relate), expanded, out, seen);
+      if let Some(expander) = expander {
+        if let Some(expanded) = expander.expand_ref(store, def, &args) {
+          collect_signatures(store, Some(expander), expanded, out, seen);
         }
       }
     }
     TypeKind::Union(members) | TypeKind::Intersection(members) => {
       for member in members {
-        collect_signatures(store, relate, member, out, seen);
+        collect_signatures(store, expander, member, out, seen);
       }
     }
     _ => {}

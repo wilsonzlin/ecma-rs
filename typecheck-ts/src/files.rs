@@ -6,7 +6,7 @@ use std::hash::{Hash, Hasher};
 const FALLBACK_START: u32 = 1 << 31;
 
 /// Distinguish between user-provided source files and library inputs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum FileOrigin {
   Source,
   Lib,

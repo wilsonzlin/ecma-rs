@@ -2433,22 +2433,22 @@ impl Program {
       state.next_body = snapshot.next_body;
       let mut max_symbol: u64 = 0;
       for data in state.def_data.values() {
-        max_symbol = max_symbol.max(data.symbol.0);
+        max_symbol = max_symbol.max(data.symbol.0 as u64);
       }
       for binding in state.global_bindings.values() {
-        max_symbol = max_symbol.max(binding.symbol.0);
+        max_symbol = max_symbol.max(binding.symbol.0 as u64);
       }
       for bindings in state.files.values().map(|fs| &fs.bindings) {
         for binding in bindings.values() {
-          max_symbol = max_symbol.max(binding.symbol.0);
+          max_symbol = max_symbol.max(binding.symbol.0 as u64);
         }
       }
       for sym in state.symbol_to_def.keys() {
-        max_symbol = max_symbol.max(sym.0);
+        max_symbol = max_symbol.max(sym.0 as u64);
       }
       for occs in state.symbol_occurrences.values() {
         for occ in occs {
-          max_symbol = max_symbol.max(occ.symbol.0);
+          max_symbol = max_symbol.max(occ.symbol.0 as u64);
         }
       }
       state.next_symbol = max_symbol.saturating_add(1);
@@ -10382,7 +10382,7 @@ impl ProgramState {
   }
 
   fn alloc_symbol(&mut self) -> semantic_js::SymbolId {
-    let id = semantic_js::SymbolId(self.next_symbol);
+    let id = semantic_js::SymbolId(self.next_symbol.try_into().unwrap_or(u32::MAX));
     self.next_symbol = self.next_symbol.saturating_add(1);
     id
   }

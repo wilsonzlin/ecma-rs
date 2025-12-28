@@ -7,7 +7,7 @@ use hir_js::{
 };
 use semantic_js::ts::{locals::TsLocalSemantics, SymbolId};
 
-pub use super::flow::FlowBindingId;
+pub type FlowBindingId = SymbolId;
 
 /// Per-body side table mapping identifiers in expressions and patterns back to
 /// their resolved bindings.
