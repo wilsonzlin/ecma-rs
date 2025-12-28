@@ -56,6 +56,8 @@ fn for_init_runs_once() {
   "#;
   let lowered = lower_from_source(src).expect("lower");
   let (body_id, body) = body_of(&lowered, &lowered.names, "run");
+  let bindings = FlowBindings::from_body(body);
+  assert!(bindings.binding_for_name(name_id(lowered.names.as_ref(), "x")).is_some());
 
   let store = TypeStore::new();
   let prim = store.primitive_ids();
@@ -67,6 +69,15 @@ fn for_init_runs_once() {
 
   let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
   let returns = res.return_types();
+  let rendered: Vec<_> = returns
+    .iter()
+    .map(|ty| TypeDisplay::new(&store, *ty).to_string())
+    .collect();
+  let test_offset = src.find("typeof x === \"string\"").unwrap() as u32;
+  let test_ty = res
+    .expr_at(test_offset)
+    .map(|(id, ty)| (id, TypeDisplay::new(&store, ty).to_string()));
+  eprintln!("for_init_runs_once returns {:?}, test {:?}", rendered, test_ty);
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "string");
   assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
 }
@@ -96,6 +107,18 @@ fn do_while_body_executes_before_test() {
 
   let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
   let returns = res.return_types();
+  let rendered: Vec<_> = returns
+    .iter()
+    .map(|ty| TypeDisplay::new(&store, *ty).to_string())
+    .collect();
+  let test_offset = src.rfind("typeof x === \"string\"").unwrap() as u32;
+  let test_ty = res
+    .expr_at(test_offset)
+    .map(|(id, ty)| (id, TypeDisplay::new(&store, ty).to_string()));
+  eprintln!(
+    "do_while_body_executes_before_test returns {:?}, test {:?}",
+    rendered, test_ty
+  );
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "number");
   assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
 }

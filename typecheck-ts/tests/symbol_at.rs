@@ -98,6 +98,7 @@ fn expr_at_prefers_innermost_span() {
   assert_eq!(span, expected_span);
 
   let ty = program.type_at(file_id, offset).expect("type at offset");
+  println!("type_at {}", program.display_type(ty));
   assert_eq!(program.display_type(ty).to_string(), "number");
 }
 
@@ -167,6 +168,14 @@ fn type_at_picks_inner_expression_for_nested_call() {
     .find('?')
     .map(|idx| idx as u32 + 1)
     .expect("conditional");
+  let body = program.file_body(file_id).unwrap();
+  let res = program.check_body(body);
+  for (idx, span) in res.expr_spans().iter().enumerate() {
+    if span.start <= offset && offset < span.end {
+      let ty = res.expr_type(typecheck_ts::ExprId(idx as u32)).unwrap();
+      println!("span {:?} -> {}", span, program.display_type(ty));
+    }
+  }
   let ty = program.type_at(file_id, offset).expect("type at offset");
   assert_eq!(program.display_type(ty).to_string(), "number");
 }

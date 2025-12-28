@@ -174,19 +174,8 @@ fn type_at_prefers_inner_identifier_in_nested_arrows() {
     .try_into()
     .expect("offset fits");
 
-  dbg!(program.bodies_in_file(file_id));
   let (body, expr) = program.expr_at(file_id, offset).expect("expr at offset");
-  for expr_id in program.exprs_in_body(body) {
-    if let Some(span) = program.span_of_expr(body, expr_id) {
-      eprintln!(
-        "body {body:?} expr {expr_id:?} span {:?} text {}",
-        span.range,
-        &source[span.range.start as usize..span.range.end as usize]
-      );
-    }
-  }
   let span = program.span_of_expr(body, expr).expect("span of expr");
-  println!("expr id {:?}", expr);
   assert_eq!(
     &source[span.range.start as usize..span.range.end as usize],
     "value",

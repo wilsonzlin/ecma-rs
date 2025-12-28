@@ -54,11 +54,24 @@ fn interfaces_merge_members() {
     .find(|d| program.def_name(*d) == Some("Foo".to_string()))
     .expect("interface Foo");
   let ty = program.type_of_def(def);
-  let rendered = program.display_type(ty).to_string();
-  assert!(
-    rendered.contains("a") && rendered.contains("b"),
-    "merged interface should expose all members, got {rendered}"
-  );
+  let props = program.properties_of(ty);
+  let has_a = props.iter().any(|p| match &p.key {
+    typecheck_ts::PropertyKey::String(name) => name == "a",
+    _ => false,
+  });
+  let has_b = props.iter().any(|p| match &p.key {
+    typecheck_ts::PropertyKey::String(name) => name == "b",
+    _ => false,
+  });
+  assert!(has_a && has_b, "merged interface should expose all members");
+  let a_ty = program
+    .property_type(ty, typecheck_ts::PropertyKey::String("a".to_string()))
+    .expect("merged property a");
+  assert_eq!(program.display_type(a_ty).to_string(), "number");
+  let b_ty = program
+    .property_type(ty, typecheck_ts::PropertyKey::String("b".to_string()))
+    .expect("merged property b");
+  assert_eq!(program.display_type(b_ty).to_string(), "string");
 }
 
 #[test]
@@ -389,37 +402,23 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     .expect("namespace declaration");
 
   let ty = program.type_of_def_interned(func_def);
-  eprintln!("func kind {:?}", program.interned_type_kind(ty));
-  if let InternedTypeKind::Intersection(members) = program.interned_type_kind(ty) {
-    for member in members {
-      eprintln!(
-        "member kind {:?} sigs {}",
-        program.interned_type_kind(member),
-        program.call_signatures(member).len()
-      );
-    }
-  }
   let props = program.properties_of(ty);
   let has_bar = props.iter().any(|p| match &p.key {
     typecheck_ts::PropertyKey::String(name) => name == "bar",
     _ => false,
   });
-  eprintln!("func merged props: {:?}", props);
   assert!(
     has_bar,
     "namespace member should be visible on merged value"
   );
   let calls = program.call_signatures(ty);
-  eprintln!("func call sigs: {:?}", calls.len());
   assert!(
     !calls.is_empty(),
     "call signatures should survive namespace merge with preceding declaration"
   );
 
   let merged_ns_ty = program.type_of_def_interned(namespace_def);
-  eprintln!("ns kind {:?}", program.interned_type_kind(merged_ns_ty));
   let ns_calls = program.call_signatures(merged_ns_ty);
-  eprintln!("ns call sigs: {:?}", ns_calls.len());
   assert!(
     !ns_calls.is_empty(),
     "namespace side should also expose callable merged type"
@@ -429,6 +428,5 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     typecheck_ts::PropertyKey::String(name) => name == "bar",
     _ => false,
   });
-  eprintln!("ns props: {:?}", ns_props);
   assert!(ns_has_bar, "namespace side should include merged members");
 }

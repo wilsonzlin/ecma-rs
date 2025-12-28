@@ -68,7 +68,7 @@ pub(crate) fn instantiate_expanded<E: TypeExpander>(
 /// Expands `TypeKind::Ref` nodes by querying the program's type tables. The
 /// expander is safe to share across threads and memoizes instantiated results
 /// for assignability checks.
-pub(crate) struct ProgramTypeExpander<'a> {
+pub struct ProgramTypeExpander<'a> {
   store: Arc<TypeStore>,
   def_types: &'a HashMap<DefId, TypeId>,
   type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
@@ -77,7 +77,7 @@ pub(crate) struct ProgramTypeExpander<'a> {
 }
 
 impl<'a> ProgramTypeExpander<'a> {
-  pub(crate) fn new(
+  pub fn new(
     store: Arc<TypeStore>,
     def_types: &'a HashMap<DefId, TypeId>,
     type_params: &'a HashMap<DefId, Vec<TypeParamId>>,

@@ -32,6 +32,20 @@ impl CheckerCaches {
     }
   }
 
+  /// Clear any retained shared caches. Per-body caches are recreated on demand
+  /// so do not require explicit clearing.
+  pub fn clear_shared(&self) {
+    if let Some(cache) = &self.shared_relation {
+      cache.clear();
+    }
+    if let Some(caches) = &self.shared_eval {
+      caches.clear();
+    }
+    if let Some(cache) = &self.shared_instantiation {
+      cache.clear();
+    }
+  }
+
   /// Obtain caches for checking a single body.
   pub fn for_body(&self) -> BodyCaches {
     match self.options.mode {

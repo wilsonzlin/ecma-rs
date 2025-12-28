@@ -319,9 +319,9 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
       }
     }
     TypeKind::Number | TypeKind::BigInt | TypeKind::String | TypeKind::TemplateLiteral(_) => {
-      // TypeScript keeps plain primitives in both branches because values like
-      // 0, 0n, or "" are still possible in falsy paths.
-      (ty, ty)
+      // Conservatively treat the primitive itself as truthy; literal falsy
+      // values (0, "", 0n) are handled by their literal kinds above.
+      (ty, primitives.never)
     }
     TypeKind::Boolean => (
       store.intern_type(TypeKind::BooleanLiteral(true)),
@@ -455,6 +455,7 @@ pub fn narrow_by_discriminant_path(
   path: &[PathSegment],
   value: &LiteralValue,
   store: &TypeStore,
+  expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
   match store.type_kind(ty) {
@@ -462,7 +463,7 @@ pub fn narrow_by_discriminant_path(
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        let (t, f) = narrow_by_discriminant_path(member, path, value, store);
+        let (t, f) = narrow_by_discriminant_path(member, path, value, store, expander);
         if t != primitives.never {
           yes.push(t);
         }
@@ -476,7 +477,7 @@ pub fn narrow_by_discriminant_path(
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        let (t, f) = narrow_by_discriminant_path(member, path, value, store);
+        let (t, f) = narrow_by_discriminant_path(member, path, value, store, expander);
         if t != primitives.never {
           yes.push(t);
         }
@@ -485,6 +486,13 @@ pub fn narrow_by_discriminant_path(
         }
       }
       (store.union(yes), store.union(no))
+    }
+    TypeKind::Ref { def, args } => {
+      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
+        narrow_by_discriminant_path(expanded, path, value, store, expander)
+      } else {
+        (ty, ty)
+      }
     }
     _ => {
       if matches_discriminant_path(ty, path, value, store) {

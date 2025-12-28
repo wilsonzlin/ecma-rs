@@ -155,6 +155,42 @@ fn run_fixture(path: &Path) {
     .collect();
   let mut program = Program::new(host.clone(), roots);
   let diagnostics = program.check();
+  if path.ends_with("contextual_assignment")
+    || path.ends_with("contextual_array_literals")
+    || path.ends_with("contextual_object_literals")
+  {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+    let snap = program.snapshot();
+    println!("interned_def_types len {}", snap.interned_def_types.len());
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("def {name}: {}", program.display_type(*ty));
+      }
+    }
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(data) = snap.def_data.iter().find(|d| d.def == *def) {
+        if data.data.file == FileId(0) {
+          if let Some(name) = program.def_name(*def) {
+            println!("def {name}: {}", program.display_type(*ty));
+          }
+        }
+      }
+    }
+    if let Some(file) = program.file_id(&host.file_key("main.ts")) {
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          if res.expr_type(ExprId(idx as u32)).is_some() {
+            let desc = res
+              .expr_type(ExprId(idx as u32))
+              .map(|ty| program.display_type(ty).to_string())
+              .unwrap_or_default();
+            println!("{idx}: {:?} -> {}", span, desc);
+          }
+        }
+      }
+    }
+  }
   if !diagnostics.is_empty()
     && !path.ends_with("as_const")
     && !path.ends_with("argument_count_error")

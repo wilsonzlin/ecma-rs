@@ -137,7 +137,7 @@ pub mod codes;
 #[doc(hidden)]
 pub mod db;
 mod error;
-mod expand;
+pub mod expand;
 mod files;
 mod parse_metrics;
 mod profile;
@@ -158,7 +158,6 @@ pub use program::BodyCheckResult;
 pub use program::*;
 #[cfg(feature = "serde")]
 pub use snapshot::*;
-pub use symbols::*;
 pub use type_queries::*;
 
 use std::collections::HashMap;
@@ -201,6 +200,16 @@ impl MemoryHost {
   /// Add a library file that will be returned from [`Host::lib_files`].
   pub fn add_lib(&mut self, lib: lib_support::LibFile) {
     self.libs.push(lib);
+  }
+
+  /// Retrieve file text via the [`Host`] trait implementation.
+  pub fn file_text(&self, file: &FileKey) -> Result<Arc<str>, HostError> {
+    <Self as Host>::file_text(self, file)
+  }
+
+  /// Retrieve the kind for a file via the [`Host`] trait implementation.
+  pub fn file_kind(&self, file: &FileKey) -> lib_support::FileKind {
+    <Self as Host>::file_kind(self, file)
   }
 }
 

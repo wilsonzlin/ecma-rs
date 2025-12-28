@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use typecheck_ts::{codes, FileKey, Host, HostError, Program, TextRange};
+use typecheck_ts::{codes, FileKey, Host, HostError, Program, PropertyKey, TextRange};
 
 fn fk(id: u32) -> FileKey {
   FileKey::new(format!("file{id}.ts"))
@@ -237,10 +237,11 @@ fn type_exports_propagate_through_reexports() {
   assert!(foo.def.is_none(), "re-export should not point to local def");
   let foo_ty = foo.type_id.expect("type for Foo");
   let rendered = program.display_type(foo_ty).to_string();
-  assert!(
-    rendered.contains("a: string"),
-    "expected object type, got {rendered}"
-  );
+  assert_eq!(rendered, "Foo", "expected alias to be preserved for re-export");
+  let prop_ty = program
+    .property_type(foo_ty, PropertyKey::String("a".to_string()))
+    .expect("property type");
+  assert_eq!(program.display_type(prop_ty).to_string(), "string");
 }
 
 #[test]

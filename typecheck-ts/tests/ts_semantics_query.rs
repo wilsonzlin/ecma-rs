@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use typecheck_ts::db::TypecheckDb;
 use typecheck_ts::lib_support::FileKind;
-use typecheck_ts::{FileId, FileKey, FileOrigin, Host, MemoryHost, Program};
+use typecheck_ts::{FileId, FileKey, FileOrigin, MemoryHost, Program};
 
 fn fk(id: u32) -> FileKey {
   FileKey::new(format!("file{id}.ts"))

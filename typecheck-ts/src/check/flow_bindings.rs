@@ -5,6 +5,7 @@ use hir_js::{
   ArrayElement, Body, ExprKind, ForHead, ForInit, MemberExpr, ObjectKey, PatKind, StmtId, StmtKind,
   VarDeclKind,
 };
+use std::collections::HashSet;
 use semantic_js::ts::{locals::TsLocalSemantics, SymbolId};
 
 pub type FlowBindingId = SymbolId;
@@ -149,10 +150,11 @@ impl<'a> FlowBindingsBuilder<'a> {
   }
 
   fn build(mut self) -> FlowBindings {
-    self.collect_var_scope();
+    let roots = self.root_stmts();
+    self.collect_var_scope(&roots);
 
     let mut lexical_scopes: Vec<HashMap<_, _>> = Vec::new();
-    self.process_block(&self.body.root_stmts, &mut lexical_scopes);
+    self.process_block(&roots, &mut lexical_scopes);
 
     let mut entry = self.var_scope.clone();
     for (name, binding) in self.root_scope {
@@ -165,13 +167,29 @@ impl<'a> FlowBindingsBuilder<'a> {
     self.bindings
   }
 
-  fn collect_var_scope(&mut self) {
+  fn root_stmts(&self) -> Vec<StmtId> {
+    if !self.body.root_stmts.is_empty() {
+      return self.body.root_stmts.clone();
+    }
+    let mut referenced: HashSet<StmtId> = HashSet::new();
+    for stmt in self.body.stmts.iter() {
+      referenced.extend(child_stmt_ids(stmt));
+    }
+    let mut roots: Vec<StmtId> = (0..self.body.stmts.len() as u32)
+      .map(StmtId)
+      .filter(|id| !referenced.contains(id))
+      .collect();
+    roots.sort_by_key(|id| id.0);
+    roots
+  }
+
+  fn collect_var_scope(&mut self, roots: &[StmtId]) {
     if let Some(func) = &self.body.function {
       for param in func.params.iter() {
         self.declare_var_pat(param.pat);
       }
     }
-    for stmt in self.body.root_stmts.iter() {
+    for stmt in roots.iter() {
       self.collect_var_stmt(*stmt);
     }
   }
@@ -466,9 +484,44 @@ impl<'a> FlowBindingsBuilder<'a> {
       self.bind_existing_pat(declarator.pat, lexical_scopes);
       if let Some(init) = declarator.init {
         self.process_expr(init, lexical_scopes);
-      }
     }
   }
+}
+
+fn child_stmt_ids(stmt: &hir_js::Stmt) -> Vec<StmtId> {
+  match &stmt.kind {
+    StmtKind::Block(stmts) => stmts.clone(),
+    StmtKind::If {
+      consequent,
+      alternate,
+      ..
+    } => alternate
+      .iter()
+      .copied()
+      .chain(std::iter::once(*consequent))
+      .collect(),
+    StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } => vec![*body],
+    StmtKind::For { body, .. } => vec![*body],
+    StmtKind::ForIn { body, .. } => vec![*body],
+    StmtKind::Switch { cases, .. } => cases
+      .iter()
+      .flat_map(|c| c.consequent.iter().copied())
+      .collect(),
+    StmtKind::Try {
+      block,
+      catch,
+      finally_block,
+    } => catch
+      .iter()
+      .map(|c| c.body)
+      .chain(finally_block.iter().copied())
+      .chain(std::iter::once(*block))
+      .collect(),
+    StmtKind::Labeled { body, .. } => vec![*body],
+    StmtKind::With { body, .. } => vec![*body],
+    _ => Vec::new(),
+  }
+}
 
   fn process_expr(
     &mut self,
@@ -723,5 +776,40 @@ impl<'a> FlowBindingsBuilder<'a> {
     let next = SymbolId(self.next_binding);
     self.next_binding += 1;
     next
+  }
+}
+
+fn child_stmt_ids(stmt: &hir_js::Stmt) -> Vec<StmtId> {
+  match &stmt.kind {
+    StmtKind::Block(stmts) => stmts.clone(),
+    StmtKind::If {
+      consequent,
+      alternate,
+      ..
+    } => alternate
+      .iter()
+      .copied()
+      .chain(std::iter::once(*consequent))
+      .collect(),
+    StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } => vec![*body],
+    StmtKind::For { body, .. } => vec![*body],
+    StmtKind::ForIn { body, .. } => vec![*body],
+    StmtKind::Switch { cases, .. } => cases
+      .iter()
+      .flat_map(|c| c.consequent.iter().copied())
+      .collect(),
+    StmtKind::Try {
+      block,
+      catch,
+      finally_block,
+    } => catch
+      .iter()
+      .map(|c| c.body)
+      .chain(finally_block.iter().copied())
+      .chain(std::iter::once(*block))
+      .collect(),
+    StmtKind::Labeled { body, .. } => vec![*body],
+    StmtKind::With { body, .. } => vec![*body],
+    _ => Vec::new(),
   }
 }

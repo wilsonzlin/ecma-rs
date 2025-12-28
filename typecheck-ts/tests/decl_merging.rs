@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use typecheck_ts::{FileKey, MemoryHost, Program};
+use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey};
 
 #[test]
 fn interfaces_merge_across_declarations() {
@@ -30,15 +30,26 @@ interface Foo { b: number; }
     .find(|d| program.def_name(*d).as_deref() == Some("Foo"))
     .expect("interface Foo present");
   let ty = program.type_of_def(foo_def);
-  let rendered = program.display_type(ty).to_string();
+  let props = program.properties_of(ty);
+  let keys: Vec<_> = props
+    .iter()
+    .filter_map(|p| match &p.key {
+      PropertyKey::String(name) => Some(name.clone()),
+      _ => None,
+    })
+    .collect();
   assert!(
-    rendered.contains("a: string"),
-    "merged interface should include property a, got {rendered}"
+    keys.contains(&"a".to_string()) && keys.contains(&"b".to_string()),
+    "merged interface should include properties a and b, got {keys:?}"
   );
-  assert!(
-    rendered.contains("b: number"),
-    "merged interface should include property b, got {rendered}"
-  );
+  let a_ty = program
+    .property_type(ty, PropertyKey::String("a".into()))
+    .expect("merged property a");
+  assert_eq!(program.display_type(a_ty).to_string(), "string");
+  let b_ty = program
+    .property_type(ty, PropertyKey::String("b".into()))
+    .expect("merged property b");
+  assert_eq!(program.display_type(b_ty).to_string(), "number");
 }
 
 #[test]

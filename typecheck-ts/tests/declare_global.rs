@@ -8,7 +8,7 @@ use parse_js::parse;
 use semantic_js::ts::{
   bind_ts_program, from_hir_js::lower_to_ts_hir, FileId, ModuleKind, Resolver,
 };
-use typecheck_ts::{FileKey, MemoryHost, Program};
+use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey};
 
 struct NoResolve;
 
@@ -66,9 +66,24 @@ fn interfaces_merge_members_for_interned_types() {
     .find(|d| program.def_name(*d).as_deref() == Some("Foo"))
     .expect("Foo definition");
   let ty = program.type_of_def(def);
-  let rendered = program.display_type(ty).to_string();
+  let props = program.properties_of(ty);
+  let keys: Vec<_> = props
+    .iter()
+    .filter_map(|p| match &p.key {
+      PropertyKey::String(name) => Some(name.clone()),
+      _ => None,
+    })
+    .collect();
   assert!(
-    rendered.contains("a: string") && rendered.contains("b: number"),
-    "merged interface should expose all members, got {rendered}"
+    keys.contains(&"a".to_string()) && keys.contains(&"b".to_string()),
+    "merged interface should expose all members, got {keys:?}"
   );
+  let a_ty = program
+    .property_type(ty, PropertyKey::String("a".into()))
+    .expect("property a");
+  assert_eq!(program.display_type(a_ty).to_string(), "string");
+  let b_ty = program
+    .property_type(ty, PropertyKey::String("b".into()))
+    .expect("property b");
+  assert_eq!(program.display_type(b_ty).to_string(), "number");
 }

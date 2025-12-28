@@ -685,6 +685,9 @@ fn collect_def_targets(stmts: &[Node<Stmt>]) -> Vec<DefTarget> {
           None => {}
         }
       }
+      Stmt::GlobalDecl(global) => {
+        targets.extend(collect_def_targets(&global.stx.body));
+      }
       Stmt::VarDecl(var) => {
         for decl in var.stx.declarators.iter() {
           targets.push(DefTarget {
