@@ -1,6 +1,6 @@
 use hir_js::{lower_from_source, Body, BodyKind, StmtId};
 use std::sync::Arc;
-use typecheck_ts::check::cfg::{BlockId, BlockKind, ControlFlowGraph};
+use typecheck_ts::check::cfg::{BlockId, ControlFlowGraph};
 
 fn cfg_for_first_function(source: &str) -> (ControlFlowGraph, Arc<Body>) {
   let lowered = lower_from_source(source).expect("lower source");
@@ -30,34 +30,15 @@ fn block_for_stmt(cfg: &ControlFlowGraph, stmt: StmtId) -> BlockId {
     .iter()
     .find(|block| block.stmts.contains(&stmt))
     .map(|block| block.id)
-    .unwrap_or_else(|| {
-      eprintln!(
-        "missing block for statement {:?}; blocks: {:?}",
-        stmt,
-        cfg
-          .blocks
-          .iter()
-          .map(|block| (block.id, block.stmts.clone(), block.successors.clone()))
-          .collect::<Vec<_>>()
-      );
-      panic!("block containing statement");
-    })
+    .expect("block containing statement")
 }
 
 fn update_block_for(cfg: &ControlFlowGraph, header: BlockId) -> BlockId {
-  if let Some(block) = cfg
-    .blocks
-    .iter()
-    .find(|block| matches!(block.kind, BlockKind::ForUpdate { .. }))
-  {
-    return block.id;
-  }
   cfg
     .blocks
     .iter()
     .find(|block| {
-      block.id != cfg.entry
-        && matches!(block.kind, BlockKind::ForUpdate { .. })
+      matches!(block.kind, typecheck_ts::check::cfg::BlockKind::ForUpdate { .. })
         && block.successors == [header]
     })
     .map(|block| block.id)

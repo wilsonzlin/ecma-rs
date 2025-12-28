@@ -1,6 +1,6 @@
 use diagnostics::render::{render_diagnostic, SourceProvider};
 use diagnostics::{Diagnostic, FileId, TextRange};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::Arc;
 use std::thread;
 use typecheck_ts::db::{
   module_dep_diagnostics, parse_query_count, program_diagnostics as db_program_diagnostics,
@@ -9,12 +9,6 @@ use typecheck_ts::db::{
 use typecheck_ts::lib_support::FileKind;
 use typecheck_ts::queries::parse;
 use typecheck_ts::{codes, FileKey, FileOrigin, Host, HostError, Program};
-
-static PARSE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-fn lock_tests() -> MutexGuard<'static, ()> {
-  PARSE_TEST_LOCK.lock().unwrap()
-}
 
 struct SingleFile<'a> {
   name: &'a str,
@@ -33,7 +27,6 @@ impl<'a> SourceProvider for SingleFile<'a> {
 
 #[test]
 fn reports_diagnostic_with_span_for_invalid_syntax() {
-  let _guard = lock_tests();
   let file = FileId(0);
   let source = "function missingBrace(";
 
@@ -101,7 +94,6 @@ fn assert_unresolved_diag_covers_specifier(
 
 #[test]
 fn unresolved_import_points_at_specifier() {
-  let _guard = lock_tests();
   let source = r#"import { Foo } from "./missing";"#;
   let host = MissingImportHost {
     text: Arc::from(source.to_string()),
@@ -117,7 +109,6 @@ fn unresolved_import_points_at_specifier() {
 
 #[test]
 fn db_unresolved_import_points_at_specifier() {
-  let _guard = lock_tests();
   let source = r#"import { Foo } from "./missing";"#;
   let file = FileId(10);
   let key = FileKey::new("entry.ts");
@@ -136,14 +127,13 @@ fn db_unresolved_import_points_at_specifier() {
   assert_eq!(diags.len(), 1);
   assert_unresolved_diag_covers_specifier(&diags[0], file, source, "\"./missing\"");
 
-  let program_diags = db_program_diagnostics(&db);
+  let program_diags = db_program_diagnostics(&db, Vec::new());
   assert_eq!(program_diags.len(), 1);
   assert_unresolved_diag_covers_specifier(&program_diags[0], file, source, "\"./missing\"");
 }
 
 #[test]
 fn db_unresolved_export_all_and_import_equals_point_at_specifier() {
-  let _guard = lock_tests();
   let source = r#"import foo = require("./missing-import-equals");
 export * from "./missing-export-all";"#;
   let file = FileId(11);
@@ -167,7 +157,7 @@ export * from "./missing-export-all";"#;
   assert_unresolved_diag_covers_specifier(&diags[0], file, source, "\"./missing-import-equals\"");
   assert_unresolved_diag_covers_specifier(&diags[1], file, source, "\"./missing-export-all\"");
 
-  let mut program_diags: Vec<_> = db_program_diagnostics(&db).as_ref().to_vec();
+  let mut program_diags: Vec<_> = db_program_diagnostics(&db, Vec::new()).as_ref().to_vec();
   program_diags.sort_by_key(|diag| diag.primary.range.start);
   assert_eq!(program_diags.len(), 2);
   assert_unresolved_diag_covers_specifier(
@@ -186,7 +176,6 @@ export * from "./missing-export-all";"#;
 
 #[test]
 fn db_parse_reports_diagnostic_with_span_for_invalid_syntax() {
-  let _guard = lock_tests();
   let file = FileId(0);
   let key = FileKey::new("test.ts");
   let source = "function missingBrace(";
@@ -209,7 +198,6 @@ fn db_parse_reports_diagnostic_with_span_for_invalid_syntax() {
 
 #[test]
 fn parse_query_is_memoized() {
-  let _guard = lock_tests();
   let file = FileId(0);
   let key = FileKey::new("memoized.ts");
   let mut db = TypecheckDb::default();
@@ -246,7 +234,6 @@ fn parse_query_is_memoized() {
 
 #[test]
 fn concurrent_snapshots_share_results() {
-  let _guard = lock_tests();
   let file = FileId(0);
   let key = FileKey::new("add.ts");
   let mut db = TypecheckDb::default();

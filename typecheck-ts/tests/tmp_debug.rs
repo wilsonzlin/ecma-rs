@@ -207,3 +207,25 @@ fn debug_shadow_symbols() {
     program.debug_symbol_occurrences(file_id)
   );
 }
+
+#[test]
+#[ignore]
+fn debug_contextual_object_literals() {
+  let fixture = std::fs::read_to_string(
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+      .join("tests/litmus/contextual_object_literals/main.ts"),
+  )
+  .expect("fixture");
+  let key = FileKey::new("main.ts");
+  let mut host = MemoryHost::default();
+  host.insert(key.clone(), fixture);
+  let program = Program::new(host, vec![key.clone()]);
+  let diags = program.check();
+  println!("diagnostics: {diags:?}");
+  let file_id = program.file_id(&key).unwrap();
+  for def in program.definitions_in_file(file_id) {
+    let name = program.def_name(def).unwrap_or_default();
+    let ty = program.display_type(program.type_of_def(def)).to_string();
+    println!("def {name} -> {ty}");
+  }
+}

@@ -1,26 +1,9 @@
-use std::collections::HashSet;
-
 use hir_js::{lower_from_source, Body};
-use typecheck_ts::check::cfg::{BlockId, BlockKind, ControlFlowGraph};
+use typecheck_ts::check::cfg::{BlockKind, ControlFlowGraph};
 
 fn root_body(lowered: &hir_js::LowerResult) -> &Body {
   let body_id = lowered.root_body();
   lowered.body(body_id).expect("root body")
-}
-
-fn reaches(cfg: &ControlFlowGraph, start: BlockId, target: BlockId) -> bool {
-  let mut stack = vec![start];
-  let mut seen = HashSet::new();
-  while let Some(cur) = stack.pop() {
-    if !seen.insert(cur) {
-      continue;
-    }
-    if cur == target {
-      return true;
-    }
-    stack.extend(cfg.blocks[cur.0].successors.iter().copied());
-  }
-  false
 }
 
 #[test]
@@ -50,16 +33,15 @@ fn for_loop_uses_distinct_blocks() {
   assert_eq!(cfg.blocks[cfg.entry.0].successors, vec![init]);
   assert_eq!(cfg.blocks[init.0].successors, vec![test]);
 
-  let successors: HashSet<_> = cfg.blocks[test.0].successors.iter().copied().collect();
+  let body_entry = cfg.blocks[test.0]
+    .successors
+    .iter()
+    .copied()
+    .find(|succ| *succ != cfg.exit)
+    .expect("body edge");
 
-  assert!(
-    successors.iter().any(|succ| reaches(&cfg, *succ, update)),
-    "loop true edge should reach update"
-  );
-  assert!(
-    successors.iter().any(|succ| reaches(&cfg, *succ, cfg.exit)),
-    "loop false edge should exit"
-  );
+  assert!(cfg.blocks[test.0].successors.contains(&cfg.exit));
+  assert!(cfg.blocks[body_entry.0].successors.contains(&update));
   assert_eq!(cfg.blocks[update.0].successors, vec![test]);
 }
 
@@ -91,10 +73,7 @@ fn do_while_executes_body_before_test() {
     "test true edge should loop"
   );
   assert!(
-    cfg.blocks[test_block.0]
-      .successors
-      .iter()
-      .any(|succ| reaches(&cfg, *succ, cfg.exit)),
+    cfg.blocks[test_block.0].successors.contains(&cfg.exit),
     "test false edge should exit"
   );
 }

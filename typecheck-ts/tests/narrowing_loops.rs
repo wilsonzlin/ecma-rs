@@ -4,7 +4,7 @@ use std::sync::Arc;
 use diagnostics::FileId;
 use hir_js::{lower_from_source, Body, BodyId, DefKind, LowerResult, NameId, NameInterner};
 use typecheck_ts::check::hir_body::check_body_with_env;
-use types_ts_interned::{TypeDisplay, TypeStore};
+use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
 fn name_id(names: &NameInterner, target: &str) -> NameId {
   let mut clone = names.clone();
@@ -26,11 +26,22 @@ fn run_flow(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  src: &str,
+  _src: &str,
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, types_ts_interned::TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
-  check_body_with_env(body_id, body, names, file, src, Arc::clone(store), initial)
+  let relate = RelateCtx::new(Arc::clone(store), store.options());
+  check_body_with_env(
+    body_id,
+    body,
+    names,
+    file,
+    Arc::clone(store),
+    None,
+    initial,
+    relate,
+    None,
+  )
 }
 
 #[test]
@@ -54,15 +65,7 @@ fn for_init_runs_once() {
     store.union(vec![prim.string, prim.number]),
   );
 
-  let res = run_flow(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    &store,
-    &initial,
-  );
+  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
   let returns = res.return_types();
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "string");
   assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
@@ -91,15 +94,7 @@ fn do_while_body_executes_before_test() {
     store.union(vec![prim.string, prim.number]),
   );
 
-  let res = run_flow(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    &store,
-    &initial,
-  );
+  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
   let returns = res.return_types();
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "number");
   assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");

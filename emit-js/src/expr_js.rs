@@ -120,7 +120,7 @@ fn emit_expr_no_parens(em: &mut Emitter, expr: &Node<Expr>, ctx: ExprCtx) -> Emi
     Expr::LitNum(num) => em.write_number(&num.stx.value.to_string()),
     Expr::LitBool(lit) => em.write_keyword(if lit.stx.value { "true" } else { "false" }),
     Expr::LitNull(_) => em.write_keyword("null"),
-    Expr::LitBigInt(lit) => em.write_bigint(&lit.stx.value),
+    Expr::LitBigInt(lit) => em.write_number(&lit.stx.value),
     Expr::LitStr(lit) => emit_string_literal(em, &lit.stx.value),
     Expr::LitRegex(lit) => {
       let mut buf = Vec::new();

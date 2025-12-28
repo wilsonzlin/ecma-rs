@@ -149,192 +149,35 @@ fn run_fixture(path: &Path) {
     .collect();
   let mut program = Program::new(host.clone(), roots);
   let diagnostics = program.check();
-  if !diagnostics.is_empty()
-    && !path.ends_with("as_const")
-    && !path.ends_with("argument_count_error")
-  {
-    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
-  }
-  if path.ends_with("argument_count_error") {
-    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
-  }
-  if path.ends_with("as_const") {
-    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
-    let snap = program.snapshot();
-    println!("DEBUG as_const def_types {:?}", snap.def_types);
-    for (def, ty) in snap.def_types.iter() {
-      if let Some(name) = program.def_name(*def) {
-        if name == "tuple" || name == "nested" || name == "readonlyTuple" {
-          println!("DEBUG {} => {}", name, program.display_type(*ty));
-        }
-      }
-    }
-    for entry in snap.def_data.iter() {
-      if entry.data.name == "readonlyTuple" {
-        println!("DEBUG readonlyTuple def_data {:?}", entry.data);
-      }
-    }
+  if path.ends_with("contextual_callbacks") {
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {
-      if let Some(body) = program.file_body(file) {
-        let res = program.check_body(body);
-        println!("DEBUG as_const exprs");
-        for (idx, span) in res.expr_spans().iter().enumerate() {
-          let desc = res
-            .expr_type(ExprId(idx as u32))
-            .map(|ty| program.display_type(ty).to_string())
-            .unwrap_or_else(|| "<none>".to_string());
-          println!("  {}: {:?} -> {}", idx, span, desc);
+      for def in program.definitions_in_file(file) {
+        if let Some(name) = program.def_name(def) {
+          println!("contextual_callbacks def {} => {}", name, program.display_type(program.type_of_def(def)));
         }
       }
     }
   }
-  if path.ends_with("function_return_inference") {
-    let snap = program.snapshot();
-    println!("DEBUG function_return_inference def types:");
-    for (def, ty) in snap.def_types.iter() {
-      if let Some(name) = program.def_name(*def) {
-        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
-      }
-    }
-    println!("DEBUG function_return_inference def data:");
-    for entry in snap.def_data.iter() {
-      println!(
-        "  def {:?} name {} kind {:?}",
-        entry.def, entry.data.name, entry.data.kind
-      );
-    }
-  }
-  if path.ends_with("imports_exports") {
-    let snap = program.snapshot();
-    println!("DEBUG imports_exports def types:");
-    for (def, ty) in snap.def_types.iter() {
-      if let Some(name) = program.def_name(*def) {
-        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
-      }
-    }
-    println!("DEBUG imports_exports def data:");
-    for entry in snap.def_data.iter() {
-      println!(
-        "  def {:?} name {} kind {:?}",
-        entry.def, entry.data.name, entry.data.kind
-      );
-    }
-    let main_key = host.file_key("main.ts");
-    if let Some(file) = program.file_id(&main_key) {
-      if let Some(body) = program.file_body(file) {
-        let res = program.check_body(body);
-        println!("DEBUG imports_exports body exprs:");
-        for (idx, span) in res.expr_spans().iter().enumerate() {
-          let ty = res
-            .expr_type(ExprId(idx as u32))
-            .map(|t| program.display_type(t).to_string())
-            .unwrap_or_else(|| "<none>".to_string());
-          println!("  expr {} span {:?} ty {}", idx, span, ty);
-        }
-      }
-    }
-  }
-  if path.ends_with("literal_widening") {
-    let snap = program.snapshot();
-    println!("DEBUG literal_widening def types:");
-    for (def, ty) in snap.def_types.iter() {
-      if let Some(name) = program.def_name(*def) {
-        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
-      }
-    }
-    println!("DEBUG literal_widening def data:");
-    for entry in snap.def_data.iter() {
-      println!(
-        "  def {:?} name {} kind {:?}",
-        entry.def, entry.data.name, entry.data.kind
-      );
-    }
-  }
-  if path.ends_with("mapped_type_annotation") {
-    let snap = program.snapshot();
-    println!("DEBUG mapped_type_annotation def types:");
-    for (def, ty) in snap.def_types.iter() {
-      if let Some(name) = program.def_name(*def) {
-        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
-      }
-    }
-    println!("DEBUG mapped_type_annotation def data:");
-    for entry in snap.def_data.iter() {
-      println!(
-        "  def {:?} name {} kind {:?}",
-        entry.def, entry.data.name, entry.data.kind
-      );
-    }
-  }
-  if path.ends_with("narrowing_patterns") {
-    let snap = program.snapshot();
+  if path.ends_with("function_union_return") {
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {
-      println!("DEBUG narrowing_patterns def types:");
-      for (def, ty) in snap.def_types.iter() {
-        if let Some(data) = snap.def_data.iter().find(|d| d.def == *def) {
-          if data.data.file == file
-            && (data.data.name == "assertNumber" || data.data.name == "useAssert")
-          {
-            println!("  {} => {}", data.data.name, program.display_type(*ty));
-          }
-        }
-      }
-    }
-    if let Some(err) = snap.def_data.iter().find(|d| d.data.name == "Error") {
-      let ty = snap
-        .def_types
-        .iter()
-        .find(|(id, _)| *id == err.def)
-        .map(|(_, ty)| *ty);
-      let rendered = ty
-        .map(|ty| program.display_type(ty).to_string())
-        .unwrap_or_else(|| "<none>".to_string());
-      println!(
-        "DEBUG narrowing_patterns Error def {:?} ty {}",
-        err.def, rendered
-      );
-    } else {
-      println!("DEBUG narrowing_patterns missing Error def");
-    }
-    let main = host.file_key("main.ts");
-    if let Some(file) = program.file_id(&main) {
-      if let Some(body) = program.file_body(file) {
-        let res = program.check_body(body);
-        println!("DEBUG narrowing_patterns exprs:");
-        for (idx, span) in res.expr_spans().iter().enumerate() {
-          let ty = res
-            .expr_type(ExprId(idx as u32))
-            .map(|t| program.display_type(t).to_string())
-            .unwrap_or_else(|| "<none>".to_string());
-          println!("  {}: {:?} -> {}", idx, span, ty);
-        }
-      }
       for def in program.definitions_in_file(file) {
         if let Some(body) = program.body_of_def(def) {
-          let name = program
-            .def_name(def)
-            .unwrap_or_else(|| "<anon>".to_string());
           let res = program.check_body(body);
-          println!("DEBUG narrowing_patterns def {} exprs:", name);
-          for (idx, span) in res.expr_spans().iter().enumerate() {
-            let ty = res
-              .expr_type(ExprId(idx as u32))
-              .map(|t| program.display_type(t).to_string())
-              .unwrap_or_else(|| "<none>".to_string());
-            println!("  {}: {:?} -> {}", idx, span, ty);
-          }
+          let rets: Vec<_> = res
+            .return_types()
+            .iter()
+            .map(|ty| program.display_type(*ty).to_string())
+            .collect();
+          println!(
+            "function_union_return def {:?} name {:?} returns {:?} type {}",
+            def,
+            program.def_name(def),
+            rets,
+            program.display_type(program.type_of_def(def))
+          );
         }
-      }
-    }
-  }
-  if path.ends_with("satisfies") {
-    let snap = program.snapshot();
-    println!("DEBUG satisfies def types:");
-    for (def, ty) in snap.def_types.iter() {
-      if let Some(name) = program.def_name(*def) {
-        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
       }
     }
   }
@@ -549,9 +392,6 @@ fn resolve_expr_type(
   file: FileId,
   offset: u32,
 ) -> Option<typecheck_ts::TypeId> {
-  if let Some(ty) = program.type_at(file, offset) {
-    return Some(ty);
-  }
   let mut candidates: Vec<BodyId> = program
     .definitions_in_file(file)
     .into_iter()

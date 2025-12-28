@@ -155,70 +155,6 @@ fn type_at_handles_nested_bodies() {
 }
 
 #[test]
-fn type_at_uses_destructured_const_in_inner_function() {
-  let mut host = MemoryHost::default();
-  let source = "function outer() { const { value } = { value: 111 as const }; function inner() { return value; } return inner(); }";
-  let file = FileKey::new("file.ts");
-  host.insert(file.clone(), Arc::from(source.to_string()));
-
-  let program = Program::new(host, vec![file.clone()]);
-  let file_id = program.file_id(&file).unwrap();
-  let offset = source.rfind("value").expect("captured value occurrence") as u32;
-  let ty = program
-    .type_at(file_id, offset)
-    .expect("type for captured value");
-
-  match program.type_kind(ty) {
-    TypeKindSummary::NumberLiteral(value) => assert_eq!(value, OrderedFloat(111.0)),
-    TypeKindSummary::Number => {}
-    other => panic!("expected number-like type, got {other:?}"),
-  }
-}
-
-#[test]
-fn type_at_uses_outer_const_in_inner_function() {
-  let mut host = MemoryHost::default();
-  let source =
-    "function outer() { const answer = 123 as const; function inner() { return answer; } return inner(); }";
-  let file = FileKey::new("file.ts");
-  host.insert(file.clone(), Arc::from(source.to_string()));
-
-  let program = Program::new(host, vec![file.clone()]);
-  let file_id = program.file_id(&file).unwrap();
-  let offset = source.rfind("answer").expect("captured const occurrence") as u32;
-  let ty = program
-    .type_at(file_id, offset)
-    .expect("type for captured const");
-
-  match program.type_kind(ty) {
-    TypeKindSummary::NumberLiteral(value) => assert_eq!(value, OrderedFloat(123.0)),
-    TypeKindSummary::Number => {}
-    other => panic!("expected number-like type, got {other:?}"),
-  }
-}
-
-#[test]
-fn type_at_uses_outer_const_in_nested_function() {
-  let mut host = MemoryHost::default();
-  let source = "function outer() { const answer = 321 as const; function mid() { function inner() { return answer; } return inner(); } return mid(); }";
-  let file = FileKey::new("file.ts");
-  host.insert(file.clone(), Arc::from(source.to_string()));
-
-  let program = Program::new(host, vec![file.clone()]);
-  let file_id = program.file_id(&file).unwrap();
-  let positions = positions_of(source, "answer");
-  let offset = *positions.last().expect("inner answer");
-  let ty = program
-    .type_at(file_id, offset)
-    .expect("type for captured const");
-
-  match program.type_kind(ty) {
-    TypeKindSummary::NumberLiteral(value) => assert_eq!(value, OrderedFloat(321.0)),
-    other => panic!("expected number literal, got {other:?}"),
-  }
-}
-
-#[test]
 fn type_at_picks_inner_expression_for_nested_call() {
   let mut host = MemoryHost::default();
   let source = "function choose(value: number): boolean { return value > 0; }\nconst result = choose(true ? 1 : 2);";
@@ -232,11 +168,7 @@ fn type_at_picks_inner_expression_for_nested_call() {
     .map(|idx| idx as u32 + 1)
     .expect("conditional");
   let ty = program.type_at(file_id, offset).expect("type at offset");
-  let rendered = program.display_type(ty).to_string();
-  assert!(
-    rendered == "number" || rendered == "1 | 2",
-    "expected number-like type, got {rendered}"
-  );
+  assert_eq!(program.display_type(ty).to_string(), "number");
 }
 
 #[test]

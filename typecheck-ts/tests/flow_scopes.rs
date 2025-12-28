@@ -3,14 +3,13 @@ use std::sync::Arc;
 
 use diagnostics::FileId;
 use hir_js::{
-  lower_file_with_diagnostics, Body, BodyId, DefKind, FileKind as HirFileKind, LowerResult, NameId,
-  NameInterner,
+  lower_file_with_diagnostics, Body, BodyId, DefKind, FileKind as HirFileKind, LowerResult,
+  NameInterner, PatKind,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts::locals::{bind_ts_locals, TsLocalSemantics};
-use typecheck_ts::check::flow_bindings::FlowBindings;
-use typecheck_ts::check::hir_body::check_body_with_env_with_expander;
-use types_ts_interned::{TypeDisplay, TypeStore};
+use typecheck_ts::check::hir_body::{check_body_with_env, FlowBindings};
+use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
 fn parse_and_lower_with_locals(source: &str) -> (LowerResult, TsLocalSemantics) {
   let mut ast = parse_with_options(
@@ -21,14 +20,9 @@ fn parse_and_lower_with_locals(source: &str) -> (LowerResult, TsLocalSemantics) 
     },
   )
   .expect("parse");
-  let locals = bind_ts_locals(&mut ast, FileId(0), true);
+  let semantics = bind_ts_locals(&mut ast, FileId(0), true);
   let (lowered, _) = lower_file_with_diagnostics(FileId(0), HirFileKind::Ts, &ast);
-  (lowered, locals)
-}
-
-fn name_id(names: &NameInterner, target: &str) -> NameId {
-  let mut clone = names.clone();
-  clone.intern(target)
+  (lowered, semantics)
 }
 
 fn body_of<'a>(lowered: &'a LowerResult, names: &NameInterner, func: &str) -> (BodyId, &'a Body) {
@@ -51,25 +45,35 @@ function f(x: string | null) {
   return x;
 }
 "#;
-  let (lowered, locals) = parse_and_lower_with_locals(src);
+  let (lowered, semantics) = parse_and_lower_with_locals(src);
   let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let flow_bindings = FlowBindings::new(body, &semantics);
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
   let expected = store.union(vec![prim.string, prim.null]);
-  initial.insert(name_id(lowered.names.as_ref(), "x"), expected);
-  let flow_bindings = FlowBindings::new(body, &locals);
+  let param_name = body
+    .function
+    .as_ref()
+    .and_then(|f| f.params.first())
+    .and_then(|p| match body.pats[p.pat.0 as usize].kind {
+      PatKind::Ident(name) => Some(name),
+      _ => None,
+    })
+    .expect("param name");
+  initial.insert(param_name, expected);
 
-  let res = check_body_with_env_with_expander(
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  let res = check_body_with_env(
     body_id,
     body,
     &lowered.names,
     FileId(0),
-    src,
     Arc::clone(&store),
+    Some(&semantics),
     &initial,
+    relate,
     None,
-    Some(flow_bindings),
   );
 
   let ret_ty = res.return_types()[0];
@@ -89,33 +93,40 @@ function f(x: string | null) {
   return x;
 }
 "#;
-  let (lowered, locals) = parse_and_lower_with_locals(src);
+  let (lowered, semantics) = parse_and_lower_with_locals(src);
   let (body_id, body) = body_of(&lowered, &lowered.names, "f");
+  let flow_bindings = FlowBindings::new(body, &semantics);
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
-  initial.insert(
-    name_id(lowered.names.as_ref(), "x"),
-    store.union(vec![prim.string, prim.null]),
-  );
-  let flow_bindings = FlowBindings::new(body, &locals);
+  let param_name = body
+    .function
+    .as_ref()
+    .and_then(|f| f.params.first())
+    .and_then(|p| match body.pats[p.pat.0 as usize].kind {
+      PatKind::Ident(name) => Some(name),
+      _ => None,
+    })
+    .expect("param name");
+  initial.insert(param_name, store.union(vec![prim.string, prim.null]));
 
-  let res = check_body_with_env_with_expander(
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  let res = check_body_with_env(
     body_id,
     body,
     &lowered.names,
     FileId(0),
-    src,
     Arc::clone(&store),
+    Some(&semantics),
     &initial,
+    relate,
     None,
-    Some(flow_bindings),
   );
 
   let ret_ty = res.return_types()[0];
-  // The truthy check removes the string branch, and the hoisted assignment
-  // still updates the shared binding with `number`.
-  let expected = store.union(vec![prim.number, prim.null]);
+  // Truthiness leaves `string` in the falsy branch (empty string), but the hoisted
+  // assignment must still update the shared binding with `number`.
+  let expected = store.union(vec![prim.number, prim.null, prim.string]);
   assert_eq!(
     TypeDisplay::new(&store, ret_ty).to_string(),
     TypeDisplay::new(&store, expected).to_string()

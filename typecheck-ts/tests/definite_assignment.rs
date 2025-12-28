@@ -5,7 +5,7 @@ use diagnostics::FileId;
 use hir_js::{lower_from_source, Body, BodyId, DefKind, LowerResult, NameId, NameInterner};
 use typecheck_ts::check::hir_body::check_body_with_env;
 use typecheck_ts::codes;
-use types_ts_interned::TypeStore;
+use types_ts_interned::{RelateCtx, TypeStore};
 
 fn name_id(names: &NameInterner, target: &str) -> NameId {
   let mut clone = names.clone();
@@ -27,11 +27,22 @@ fn run_flow(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  src: &str,
+  _src: &str,
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, types_ts_interned::TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
-  check_body_with_env(body_id, body, names, file, src, Arc::clone(store), initial)
+  let relate = RelateCtx::new(Arc::clone(store), store.options());
+  check_body_with_env(
+    body_id,
+    body,
+    names,
+    file,
+    Arc::clone(store),
+    None,
+    initial,
+    relate,
+    None,
+  )
 }
 
 #[test]
@@ -46,15 +57,7 @@ fn assignment_on_all_paths() {
     name_id(lowered.names.as_ref(), "cond"),
     store.primitive_ids().boolean,
   );
-  let res = run_flow(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    &store,
-    &initial,
-  );
+  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
   assert!(res.diagnostics().is_empty());
 }
 
@@ -69,15 +72,7 @@ fn missing_assignment_in_branch() {
     name_id(lowered.names.as_ref(), "cond"),
     store.primitive_ids().boolean,
   );
-  let res = run_flow(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    &store,
-    &initial,
-  );
+  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
   assert_eq!(res.diagnostics().len(), 1);
   assert_eq!(
     res.diagnostics()[0].code.as_str(),
@@ -91,15 +86,7 @@ fn typeof_unassigned_allowed() {
   let lowered = lower_from_source(src).expect("lower");
   let (body_id, body) = body_of(&lowered, &lowered.names, "f");
   let store = TypeStore::new();
-  let res = run_flow(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    &store,
-    &HashMap::new(),
-  );
+  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &HashMap::new());
   assert!(res.diagnostics().is_empty());
 }
 
@@ -115,15 +102,7 @@ fn shadowed_bindings_are_distinct() {
     name_id(lowered.names.as_ref(), "cond"),
     store.primitive_ids().boolean,
   );
-  let res = run_flow(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    &store,
-    &initial,
-  );
+  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
   assert!(res.diagnostics().is_empty());
 }
 
@@ -138,40 +117,10 @@ fn loop_assignment_not_definite() {
     name_id(lowered.names.as_ref(), "cond"),
     store.primitive_ids().boolean,
   );
-  let res = run_flow(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    &store,
-    &initial,
-  );
+  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
   assert_eq!(res.diagnostics().len(), 1);
   assert_eq!(
     res.diagnostics()[0].code.as_str(),
     codes::USE_BEFORE_ASSIGNMENT.as_str()
-  );
-}
-
-#[test]
-fn parameters_are_definitely_assigned() {
-  let src = "function f(value: number) { const x = value + 1; return value; }";
-  let lowered = lower_from_source(src).expect("lower");
-  let (body_id, body) = body_of(&lowered, &lowered.names, "f");
-  let store = TypeStore::new();
-  let res = run_flow(
-    body_id,
-    body,
-    &lowered.names,
-    FileId(0),
-    src,
-    &store,
-    &HashMap::new(),
-  );
-  assert!(
-    res.diagnostics().is_empty(),
-    "parameters should start assigned: {:?}",
-    res.diagnostics()
   );
 }

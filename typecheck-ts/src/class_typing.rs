@@ -358,6 +358,13 @@ fn lower_runtime_members(
           .as_ref()
           .map(|ann| lowerer.lower_type_expr(ann))
           .unwrap_or_else(|| store.primitive_ids().unknown);
+        if std::env::var("DEBUG_CLASS_TYPING").is_ok() {
+          eprintln!(
+            "class member {:?} ty kind {:?}",
+            member.stx.key,
+            store.type_kind(ty)
+          );
+        }
         shape.properties.push(Property {
           key,
           data: PropData {

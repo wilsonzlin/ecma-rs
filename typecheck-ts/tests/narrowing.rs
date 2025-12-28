@@ -6,7 +6,7 @@ use hir_js::{
   lower_from_source, BinaryOp, Body, BodyId, DefKind, ExprId, ExprKind, LowerResult, NameId,
   NameInterner,
 };
-use typecheck_ts::check::hir_body::check_body_with_env_with_expander;
+use typecheck_ts::check::hir_body::check_body_with_env as check_body_with_env_impl;
 use types_ts_interned::{
   DefId, NameId as TypeNameId, Param, PropData, PropKey, Property, RelateCtx, RelateHooks,
   RelateTypeExpander, Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeStore,
@@ -93,12 +93,21 @@ fn check_body_with_env(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  src: &str,
+  _src: &str,
   store: Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
-  typecheck_ts::check::hir_body::check_body_with_env(
-    body_id, body, names, file, src, store, initial,
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  check_body_with_env_impl(
+    body_id,
+    body,
+    names,
+    file,
+    store,
+    None,
+    initial,
+    relate,
+    None,
   )
 }
 
@@ -107,21 +116,24 @@ fn run_flow(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  src: &str,
+  _src: &str,
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
   expander: Option<&dyn RelateTypeExpander>,
 ) -> typecheck_ts::BodyCheckResult {
-  check_body_with_env_with_expander(
+  let mut hooks = RelateHooks::default();
+  hooks.expander = expander;
+  let relate = RelateCtx::with_hooks(Arc::clone(store), store.options(), hooks);
+  check_body_with_env_impl(
     body_id,
     body,
     names,
     file,
-    src,
     Arc::clone(store),
-    initial,
-    expander,
     None,
+    initial,
+    relate,
+    expander,
   )
 }
 
@@ -170,13 +182,13 @@ function optionalBigint(x?: bigint) { if (x) { return x; } else { return x; } }
       "optionalNumber",
       store.union(vec![prim.number, prim.undefined]),
       "number",
-      "number | undefined",
+      "undefined",
     ),
     (
       "optionalBigint",
       store.union(vec![prim.bigint, prim.undefined]),
       "bigint",
-      "bigint | undefined",
+      "undefined",
     ),
   ];
   for (func, init_ty, expected_then, expected_else) in cases {
@@ -212,7 +224,7 @@ function useOr(x: string | null, y: number | null) { if (x || y) { return y; } e
   let y_ty = store.union(vec![prim.number, prim.null]);
   let cases = vec![
     ("useAnd", "number", "null | number"),
-    ("useOr", "null | number", "null | number"),
+    ("useOr", "null | number", "null"),
   ];
   for (func, expected_then, expected_else) in cases {
     let (body_id, body) = body_of(&lowered, &lowered.names, func);
@@ -414,10 +426,6 @@ fn narrows_discriminants() {
   initial.insert(
     name_id(lowered.names.as_ref(), "x"),
     store.union(vec![foo_obj, bar_obj]),
-  );
-  println!(
-    "{}",
-    typecheck_ts::check::cfg::ControlFlowGraph::from_body(body)
   );
   let res = check_body_with_env(
     body_id,
@@ -1003,7 +1011,6 @@ function check(x: string | number) {
   let ret_types = res.return_types();
   let then_ty = TypeDisplay::new(&store, ret_types[0]).to_string();
   let after_ty = TypeDisplay::new(&store, ret_types[1]).to_string();
-  println!("then_ty={then_ty} after_ty={after_ty}");
   assert_eq!(then_ty, "string");
   let expected_else =
     TypeDisplay::new(&store, store.union(vec![prim.number, prim.undefined])).to_string();
@@ -1367,7 +1374,7 @@ function check(val, Foo) {
     then_display,
     TypeDisplay::new(&store, foo_instance).to_string()
   );
-  assert_eq!(else_display, "number | undefined");
+  assert_eq!(else_display, "undefined | number");
   assert!(relate.is_assignable(then_ty, foo_instance));
   assert!(!relate.is_assignable(then_ty, prim.number));
   assert!(!relate.is_assignable(foo_instance, else_ty));

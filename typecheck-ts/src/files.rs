@@ -5,16 +5,11 @@ use std::hash::{Hash, Hasher};
 
 const FALLBACK_START: u32 = 1 << 31;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// Distinguish between user-provided source files and library inputs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileOrigin {
   Source,
   Lib,
-}
-
-#[derive(Clone, Debug)]
-struct FileEntry {
-  key: FileKey,
-  origin: FileOrigin,
 }
 
 fn preferred_file_id(key: &FileKey) -> Option<u32> {
@@ -26,26 +21,23 @@ fn preferred_file_id(key: &FileKey) -> Option<u32> {
   stripped.parse::<u32>().ok()
 }
 
-fn stable_hash(key: &FileKey, origin: FileOrigin) -> u64 {
+fn stable_hash(key: &FileKey) -> u64 {
   let mut hasher = DefaultHasher::new();
-  origin.hash(&mut hasher);
   key.as_str().hash(&mut hasher);
   hasher.finish()
 }
 
-/// Deterministic registry mapping [`FileKey`]s to [`FileId`]s with distinct
-/// identities for source and library files.
+/// Deterministic registry mapping [`FileKey`]s to [`FileId`]s.
 ///
 /// IDs are stable for the lifetime of the registry and derived purely from the
-/// key and origin to avoid order-dependent allocation. Source keys matching the
-/// `file{N}.ts` or `file{N}.tsx` pattern reserve `FileId(N)` when available; all
-/// other keys use a stable hash-based fallback in a high numeric range to avoid
-/// colliding with small test IDs.
+/// key to avoid order-dependent allocation. Keys matching the `file{N}.ts` or
+/// `file{N}.tsx` pattern reserve `FileId(N)` when available; all other keys use a
+/// stable hash-based fallback in a high numeric range to avoid colliding with
+/// small test IDs.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileRegistry {
-  key_to_ids: HashMap<FileKey, Vec<FileId>>,
-  id_to_entry: HashMap<FileId, FileEntry>,
-  key_origin_to_id: HashMap<(FileKey, FileOrigin), FileId>,
+  key_to_id: HashMap<FileKey, FileId>,
+  id_to_key: HashMap<FileId, FileKey>,
 }
 
 impl FileRegistry {
@@ -54,80 +46,61 @@ impl FileRegistry {
   }
 
   pub(crate) fn lookup_key(&self, id: FileId) -> Option<FileKey> {
-    self.id_to_entry.get(&id).map(|entry| entry.key.clone())
+    self.id_to_key.get(&id).cloned()
   }
 
   pub(crate) fn lookup_id(&self, key: &FileKey) -> Option<FileId> {
+    self.key_to_id.get(key).copied()
+  }
+
+  pub(crate) fn ids_for_key(&self, key: &FileKey) -> Vec<FileId> {
     self
-      .key_to_ids
-      .get(key)
-      .and_then(|ids| ids.first().copied())
+      .id_to_key
+      .iter()
+      .filter_map(|(id, stored)| if stored == key { Some(*id) } else { None })
+      .collect()
   }
 
-  pub(crate) fn lookup_ids(&self, key: &FileKey) -> Vec<FileId> {
-    let mut ids = self.key_to_ids.get(key).cloned().unwrap_or_default();
-    Self::sort_ids(&mut ids, &self.id_to_entry);
-    ids
-  }
-
-  pub(crate) fn origin(&self, id: FileId) -> Option<FileOrigin> {
-    self.id_to_entry.get(&id).map(|entry| entry.origin)
-  }
-
-  pub(crate) fn intern(&mut self, key: &FileKey, origin: FileOrigin) -> FileId {
-    if let Some(id) = self.key_origin_to_id.get(&(key.clone(), origin)).copied() {
-      return id;
+  pub(crate) fn intern_additional(&mut self, key: &FileKey, make_primary: bool) -> FileId {
+    let id = self.allocate_fallback(key);
+    self.id_to_key.insert(id, key.clone());
+    if make_primary {
+      self.key_to_id.insert(key.clone(), id);
     }
-    let id = self.allocate_id(key, origin);
-    self.id_to_entry.insert(
-      id,
-      FileEntry {
-        key: key.clone(),
-        origin,
-      },
-    );
-    self.key_origin_to_id.insert((key.clone(), origin), id);
-    let ids = self.key_to_ids.entry(key.clone()).or_default();
-    ids.push(id);
-    Self::sort_ids(ids, &self.id_to_entry);
-    ids.dedup();
     id
   }
 
-  fn allocate_id(&mut self, key: &FileKey, origin: FileOrigin) -> FileId {
-    if matches!(origin, FileOrigin::Source) {
-      if let Some(preferred) = preferred_file_id(key) {
-        let preferred_id = FileId(preferred);
-        if !self.id_to_entry.contains_key(&preferred_id) {
-          return preferred_id;
-        }
-      }
+  pub(crate) fn intern(&mut self, key: &FileKey) -> FileId {
+    if let Some(id) = self.lookup_id(key) {
+      return id;
     }
-    self.allocate_fallback(key, origin)
+    let id = if let Some(preferred) = preferred_file_id(key) {
+      let preferred_id = FileId(preferred);
+      if !self.id_to_key.contains_key(&preferred_id) {
+        preferred_id
+      } else {
+        self.allocate_fallback(key)
+      }
+    } else {
+      self.allocate_fallback(key)
+    };
+    self.key_to_id.insert(key.clone(), id);
+    self.id_to_key.insert(id, key.clone());
+    id
   }
 
-  fn allocate_fallback(&mut self, key: &FileKey, origin: FileOrigin) -> FileId {
-    let mut candidate = (stable_hash(key, origin) as u32) | FALLBACK_START;
+  fn allocate_fallback(&mut self, key: &FileKey) -> FileId {
+    let mut candidate = (stable_hash(key) as u32) | FALLBACK_START;
     if candidate == u32::MAX {
       candidate = FALLBACK_START;
     }
-    while self.id_to_entry.contains_key(&FileId(candidate)) {
+    while self.id_to_key.contains_key(&FileId(candidate)) {
       candidate = candidate.wrapping_add(1);
       if candidate < FALLBACK_START {
         candidate = FALLBACK_START;
       }
     }
     FileId(candidate)
-  }
-
-  fn sort_ids(ids: &mut Vec<FileId>, entries: &HashMap<FileId, FileEntry>) {
-    ids.sort_by_key(|id| {
-      let origin = entries
-        .get(id)
-        .map(|entry| entry.origin)
-        .unwrap_or(FileOrigin::Source);
-      (origin, id.0)
-    });
   }
 }
 
@@ -142,14 +115,14 @@ mod tests {
     let other = FileKey::new("x.ts");
 
     let mut registry_a = FileRegistry::new();
-    registry_a.intern(&file10, FileOrigin::Source);
-    registry_a.intern(&other, FileOrigin::Source);
-    registry_a.intern(&file0, FileOrigin::Source);
+    registry_a.intern(&file10);
+    registry_a.intern(&other);
+    registry_a.intern(&file0);
 
     let mut registry_b = FileRegistry::new();
-    registry_b.intern(&file0, FileOrigin::Source);
-    registry_b.intern(&file10, FileOrigin::Source);
-    registry_b.intern(&other, FileOrigin::Source);
+    registry_b.intern(&file0);
+    registry_b.intern(&file10);
+    registry_b.intern(&other);
 
     assert_eq!(registry_a.lookup_id(&file0), Some(FileId(0)));
     assert_eq!(registry_b.lookup_id(&file0), Some(FileId(0)));
@@ -161,18 +134,5 @@ mod tests {
     assert_eq!(other_id_a, other_id_b);
     assert_eq!(registry_a.lookup_key(other_id_a), Some(other.clone()));
     assert_eq!(registry_b.lookup_key(other_id_b), Some(other));
-  }
-
-  #[test]
-  fn allows_colliding_keys_with_origins() {
-    let key = FileKey::new("lib:lib.es2020.d.ts");
-    let mut registry = FileRegistry::new();
-    let lib_id = registry.intern(&key, FileOrigin::Lib);
-    let source_id = registry.intern(&key, FileOrigin::Source);
-    assert_ne!(lib_id, source_id);
-    assert_eq!(registry.lookup_id(&key), Some(source_id));
-    let mut ids = registry.lookup_ids(&key);
-    ids.sort_by_key(|id| id.0);
-    assert_eq!(ids.len(), 2);
   }
 }

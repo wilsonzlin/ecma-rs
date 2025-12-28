@@ -1290,7 +1290,7 @@ fn emit_literal(em: &mut Emitter, lit: &Literal) -> EmitResult {
     Literal::Boolean(false) => em.write_keyword("false"),
     Literal::Null => em.write_keyword("null"),
     Literal::Undefined => em.write_identifier("undefined"),
-    Literal::BigInt(num) => em.write_bigint(num),
+    Literal::BigInt(num) => em.write_number(num),
     Literal::Regex(regex) => {
       let mut buf = Vec::new();
       emit_regex_literal(&mut buf, regex);

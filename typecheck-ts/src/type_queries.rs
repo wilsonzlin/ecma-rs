@@ -310,7 +310,7 @@ impl<'a, E: TypeExpander> QueryCtx<'a, E> {
     shape
   }
 
-  fn shape_from_object(&mut self, obj: types_ts_interned::ObjectId) -> ShapeInfo {
+  fn shape_from_object(&self, obj: types_ts_interned::ObjectId) -> ShapeInfo {
     let object = self.store.object(obj);
     let shape = self.store.shape(object.shape);
     let mut props: Vec<PropertyEntry> = shape
@@ -318,7 +318,7 @@ impl<'a, E: TypeExpander> QueryCtx<'a, E> {
       .into_iter()
       .map(|prop| PropertyEntry {
         key: prop.key,
-        ty: self.evaluate(prop.data.ty),
+        ty: prop.data.ty,
         required: !prop.data.optional,
         type_optional: prop.data.optional,
         readonly: prop.data.readonly,
@@ -332,10 +332,6 @@ impl<'a, E: TypeExpander> QueryCtx<'a, E> {
     let mut construct_sigs = shape.construct_signatures;
     sort_signatures(&mut construct_sigs, &self.store);
     let mut indexers = shape.indexers;
-    for idx in indexers.iter_mut() {
-      idx.key_type = self.evaluate(idx.key_type);
-      idx.value_type = self.evaluate(idx.value_type);
-    }
     sort_indexers(&mut indexers, &self.store);
     ShapeInfo {
       props,

@@ -24,6 +24,7 @@ fn value_binding_type_id_used_for_builtins() {
     "unexpected diagnostics: {:?}",
     result.diagnostics()
   );
+
   let offset = src.find("undefined").expect("offset for undefined") as u32;
   let ty = program.type_at(file_id, offset).expect("type at undefined");
   assert_eq!(program.display_type(ty).to_string(), "undefined");

@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::instantiate::Substituter;
-use types_ts_interned::{
-  Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
-};
+use types_ts_interned::{Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore};
 
 /// Diagnostic emitted when inference fails to satisfy a constraint.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -256,25 +254,8 @@ impl InferenceContext {
           }
         }
         if lowers.len() > 1 {
-          for (idx, a) in lowers.iter().enumerate() {
-            for b in lowers.iter().skip(idx + 1) {
-              if !is_assignable(self.store.as_ref(), *a, *b)
-                && !is_assignable(self.store.as_ref(), *b, *a)
-              {
-                result.diagnostics.push(InferenceDiagnostic {
-                  param: *tp,
-                  constraint: *b,
-                  actual: *a,
-                  message: format!(
-                    "conflicting inferences for {:?}: {} and {}",
-                    tp,
-                    TypeDisplay::new(self.store.as_ref(), *a),
-                    TypeDisplay::new(self.store.as_ref(), *b)
-                  ),
-                });
-              }
-            }
-          }
+          lowers.sort();
+          lowers.dedup();
         }
         candidate = Some(if lowers.len() == 1 {
           lowers[0]

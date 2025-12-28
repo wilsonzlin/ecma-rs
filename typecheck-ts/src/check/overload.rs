@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use diagnostics::{Diagnostic, Span};
 use types_ts_interned::{
-  Param, RelateCtx, Signature, SignatureId, TupleElem, TypeDisplay, TypeId, TypeKind, TypeParamId,
-  TypeStore,
+  Param, RelateCtx, RelateTypeExpander, Signature, SignatureId, TupleElem, TypeDisplay, TypeId,
+  TypeKind, TypeParamId, TypeStore,
 };
 
 use super::infer::{infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature};
@@ -137,6 +137,7 @@ struct CandidateOutcome {
 pub fn resolve_overloads(
   store: &Arc<TypeStore>,
   relate: &RelateCtx<'_>,
+  expander: Option<&dyn RelateTypeExpander>,
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
@@ -144,8 +145,41 @@ pub fn resolve_overloads(
   span: Span,
   mut context: Option<&mut dyn OverloadContext>,
 ) -> CallResolution {
+  let mut callee = callee;
+  loop {
+    let TypeKind::Ref { def, args } = store.type_kind(callee) else {
+      break;
+    };
+    let Some(expand) = expander else { break };
+    let Some(expanded) = expand.expand_ref(store.as_ref(), def, &args) else {
+      break;
+    };
+    if expanded == callee {
+      break;
+    }
+    callee = expanded;
+  }
   let mut candidates = Vec::new();
   collect_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());
+  let mut seen = HashSet::new();
+  candidates.retain(|sig_id| {
+    let sig = store.signature(*sig_id);
+    let key = (
+      sig
+        .params
+        .iter()
+        .map(|p| (p.ty, p.optional, p.rest))
+        .collect::<Vec<_>>(),
+      sig.ret,
+      sig
+        .type_params
+        .iter()
+        .map(|p| (p.constraint, p.default))
+        .collect::<Vec<_>>(),
+      sig.this_param,
+    );
+    seen.insert(key)
+  });
   let primitives = store.primitive_ids();
   if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
     return CallResolution {
@@ -155,6 +189,13 @@ pub fn resolve_overloads(
     };
   }
   if candidates.is_empty() {
+    if matches!(store.type_kind(callee), TypeKind::Ref { .. }) {
+      return CallResolution {
+        return_type: primitives.unknown,
+        signature: None,
+        diagnostics: Vec::new(),
+      };
+    }
     let diag = codes::NO_OVERLOAD
       .error("expression is not callable", span)
       .with_note(format!(
@@ -194,9 +235,10 @@ pub fn resolve_overloads(
       continue;
     }
 
-    let call_inference =
+    let base_inference =
       infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
-    let mut merged_substitutions = call_inference.substitutions.clone();
+
+    let mut merged_substitutions = base_inference.substitutions.clone();
 
     let mut substituter = Substituter::new(Arc::clone(store), merged_substitutions.clone());
     let instantiated_id = substituter.substitute_signature(&original_sig);
@@ -395,6 +437,53 @@ pub fn resolve_overloads(
     })
     .collect();
   if tied.len() > 1 {
+    if let Some(expected_ret) = contextual_return {
+      let mut scored: Vec<(&CandidateOutcome, u8)> = tied
+        .iter()
+        .map(|c| {
+          let ret = c.instantiated_sig.ret;
+          let score = if ret == expected_ret {
+            0
+          } else {
+            match (
+              relate.is_assignable(ret, expected_ret),
+              relate.is_assignable(expected_ret, ret),
+            ) {
+              (true, false) => 1,
+              (true, true) => 2,
+              (false, true) => 3,
+              (false, false) => 4,
+            }
+          };
+          (*c, score)
+        })
+        .collect();
+      scored.sort_by(|(a, a_score), (b, b_score)| {
+        (*a_score, a.specificity, a.unknown_inferred, a.instantiated_sig.params.len(), a.sig_id)
+          .cmp(&(
+            *b_score,
+            b.specificity,
+            b.unknown_inferred,
+            b.instantiated_sig.params.len(),
+            b.sig_id,
+          ))
+      });
+      let best_score = scored[0].1;
+      let best_returns: Vec<&CandidateOutcome> = scored
+        .into_iter()
+        .take_while(|(_, score)| *score == best_score)
+        .map(|(c, _)| c)
+        .collect();
+      if let Some(chosen) = best_returns.first().copied() {
+        if best_returns.len() == 1 {
+          return CallResolution {
+            return_type: chosen.instantiated_sig.ret,
+            signature: Some(chosen.instantiated_id),
+            diagnostics: Vec::new(),
+          };
+        }
+      }
+    }
     let diag = build_ambiguous_diagnostic(span, &tied);
     return CallResolution {
       return_type: primitives.unknown,
@@ -470,7 +559,8 @@ pub fn resolve_construct(
       continue;
     }
 
-    let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
+    let inference =
+      infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
 
     let merged_substitutions = inference.substitutions.clone();
 
@@ -822,6 +912,11 @@ fn check_arguments(
     match store.type_kind(expected.ty) {
       TypeKind::Any | TypeKind::Unknown => {
         specificity += 2;
+      }
+      TypeKind::Union(_) => {
+        // Prefer narrower, non-union parameter types when multiple candidates
+        // accept the provided argument.
+        specificity += 1;
       }
       _ => {}
     }

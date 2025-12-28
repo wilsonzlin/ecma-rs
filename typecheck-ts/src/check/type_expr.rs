@@ -38,9 +38,9 @@ pub trait TypeResolver: Send + Sync {
   }
 }
 
-/// Captured lowering information for a type predicate. The lowered type for the
-/// predicate itself is `boolean`, but the richer predicate is preserved for
-/// downstream narrowing.
+/// Captured lowering information for a type predicate. The predicate itself is
+/// returned as a [`TypeKind::Predicate`] but this structure preserves the span
+/// and asserted type for any downstream consumers that need source context.
 #[derive(Debug, Clone)]
 pub struct LoweredPredicate {
   pub span: Span,
@@ -734,17 +734,18 @@ impl TypeLowerer {
       .type_annotation
       .as_ref()
       .map(|t| self.lower_type_expr(t));
+    let parameter_name = pred.stx.parameter_name.clone();
+    let parameter = (!parameter_name.is_empty())
+      .then(|| self.store.intern_name(parameter_name.clone()));
     let span = self.span_for(pred.loc);
     self.predicates.push(LoweredPredicate {
       span,
       asserts: pred.stx.asserts,
-      parameter: pred.stx.parameter_name.clone(),
+      parameter: parameter_name,
       ty: asserted,
     });
-    let param = (!pred.stx.parameter_name.is_empty())
-      .then(|| self.store.intern_name(pred.stx.parameter_name.clone()));
     self.store.intern_type(TypeKind::Predicate {
-      parameter: param,
+      parameter,
       asserted,
       asserts: pred.stx.asserts,
     })

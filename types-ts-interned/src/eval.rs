@@ -192,28 +192,17 @@ impl EvaluatorCaches {
     self.refs.get(&key)
   }
 
+  pub fn insert_ref(&self, def: DefId, args: &[TypeId], value: TypeId) {
+    let key = RefKey {
+      def,
+      args: args.to_vec(),
+    };
+    self.refs.insert(key, value);
+  }
+
   pub fn clear(&self) {
     self.eval.clear();
     self.refs.clear();
-  }
-
-  /// Retrieve a previously cached reference instantiation, if any.
-  pub fn cached_ref(&self, def: DefId, args: &[TypeId]) -> Option<TypeId> {
-    self.refs.get(&RefKey {
-      def,
-      args: args.to_vec(),
-    })
-  }
-
-  /// Insert an instantiated reference into the shared cache.
-  pub fn insert_ref(&self, def: DefId, args: &[TypeId], ty: TypeId) {
-    self.refs.insert(
-      RefKey {
-        def,
-        args: args.to_vec(),
-      },
-      ty,
-    );
   }
 }
 

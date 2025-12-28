@@ -355,27 +355,6 @@ fn lower_block(
           is_type_only: true,
         }));
       }
-      Stmt::GlobalDecl(global) => {
-        let nested = lower_block(
-          &global.stx.body,
-          lower,
-          None,
-          import_specifier_span,
-          export_specifier_span,
-        );
-        result.has_module_syntax |= nested.has_module_syntax;
-        result.local_defs.extend(nested.local_defs);
-        for (def_id, exported) in nested.exported.into_iter() {
-          result.exported.entry(def_id).or_insert(exported);
-        }
-        result.imports.extend(nested.imports);
-        result.import_equals.extend(nested.import_equals);
-        result.exports.extend(nested.exports);
-        result
-          .export_as_namespace
-          .extend(nested.export_as_namespace);
-        result.ambient_modules.extend(nested.ambient_modules);
-      }
       Stmt::VarDecl(var) => {
         if var.stx.export {
           result.has_module_syntax = true;
@@ -488,11 +467,33 @@ fn lower_block(
               &mut result.exported,
             );
           }
+          if let Some(body) = module.stx.body.as_deref() {
+            if matches!(&module.stx.name, ModuleName::Identifier(id) if id == "global") {
+              let nested = lower_block(
+                body,
+                lower,
+                None,
+                import_specifier_span,
+                export_specifier_span,
+              );
+              result.has_module_syntax |= nested.has_module_syntax;
+              result.local_defs.extend(nested.local_defs);
+              result.exported.extend(nested.exported);
+              result.imports.extend(nested.imports);
+              result.import_equals.extend(nested.import_equals);
+              result.exports.extend(nested.exports);
+              result
+                .export_as_namespace
+                .extend(nested.export_as_namespace);
+              result.ambient_modules.extend(nested.ambient_modules);
+            }
+          }
         }
         ModuleName::String(spec) => {
           if module.stx.export {
             result.has_module_syntax = true;
           }
+          let name_span = to_range(module.stx.name_loc);
           let nested = lower_block(
             module.stx.body.as_deref().unwrap_or(&[]),
             lower,
@@ -503,7 +504,7 @@ fn lower_block(
           let nested = finalize_block(nested, lower, ModuleKind::Module);
           result.ambient_modules.push(AmbientModule {
             name: spec.clone(),
-            name_span: stmt_range,
+            name_span,
             decls: nested.decls,
             imports: nested.imports,
             import_equals: nested.import_equals,
@@ -513,6 +514,25 @@ fn lower_block(
           });
         }
       },
+      Stmt::GlobalDecl(global) => {
+        let nested = lower_block(
+          &global.stx.body,
+          lower,
+          None,
+          import_specifier_span,
+          export_specifier_span,
+        );
+        result.has_module_syntax |= nested.has_module_syntax;
+        result.local_defs.extend(nested.local_defs);
+        result.exported.extend(nested.exported);
+        result.imports.extend(nested.imports);
+        result.import_equals.extend(nested.import_equals);
+        result.exports.extend(nested.exports);
+        result
+          .export_as_namespace
+          .extend(nested.export_as_namespace);
+        result.ambient_modules.extend(nested.ambient_modules);
+      }
       Stmt::AmbientVarDecl(av) => {
         if av.stx.export {
           result.has_module_syntax = true;
@@ -551,25 +571,6 @@ fn lower_block(
             &mut result.exported,
           );
         }
-      }
-      Stmt::GlobalDecl(global) => {
-        let nested = lower_block(
-          &global.stx.body,
-          lower,
-          allowed_defs,
-          import_specifier_span,
-          export_specifier_span,
-        );
-        result.local_defs.extend(nested.local_defs);
-        result.exported.extend(nested.exported);
-        result.imports.extend(nested.imports);
-        result.import_equals.extend(nested.import_equals);
-        result.exports.extend(nested.exports);
-        result
-          .export_as_namespace
-          .extend(nested.export_as_namespace);
-        result.ambient_modules.extend(nested.ambient_modules);
-        result.has_module_syntax |= nested.has_module_syntax;
       }
       _ => {}
     }
@@ -732,7 +733,6 @@ fn collect_def_targets(stmts: &[Node<Stmt>]) -> Vec<DefTarget> {
         span,
         kind: DefKind::Class,
       }),
-      Stmt::GlobalDecl(global) => targets.extend(collect_def_targets(&global.stx.body)),
       Stmt::ExportDefaultExpr(_) => targets.push(DefTarget {
         span,
         kind: DefKind::ExportAlias,

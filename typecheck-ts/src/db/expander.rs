@@ -84,9 +84,6 @@ impl<'db> RelateTypeExpander for DbTypeExpander<'db> {
     };
 
     let key = RefKey::new(def, args);
-    if let Some(cached) = self.caches.cached_ref(def, &key.args) {
-      return Some(cached);
-    }
     if !self.guard.begin(&key) {
       return Some(store.intern_type(TypeKind::Ref {
         def,

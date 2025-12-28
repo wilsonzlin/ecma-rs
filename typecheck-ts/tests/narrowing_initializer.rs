@@ -21,20 +21,18 @@ const from_init = maybe ? maybe.value : "fallback";
     "unexpected diagnostics: {diagnostics:?}"
   );
 
-  let file_id = program.file_id(&key).expect("file id for main.ts");
-  let body_id = program
-    .definitions_in_file(file_id)
+  let file = program.file_id(&key).expect("file id");
+  let def = program
+    .definitions_in_file(file)
     .into_iter()
-    .find_map(|def| {
-      (program.def_name(def).as_deref() == Some("from_init"))
-        .then(|| program.body_of_def(def))
-        .flatten()
-    })
-    .expect("initializer body");
+    .find(|def| program.def_name(*def).as_deref() == Some("from_init"))
+    .expect("from_init definition");
+  let body_id = program.body_of_def(def).expect("initializer body");
   let target_start = src.find("maybe.value").expect("member access span") as u32;
   let target_end = target_start + "maybe.value".len() as u32;
 
   let result = program.check_body(body_id);
+  println!("expr spans {:?}", result.expr_spans());
   let expr_idx = result
     .expr_spans()
     .iter()

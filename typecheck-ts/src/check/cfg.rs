@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::fmt;
 
 /// Identifier for a basic block inside a body-local CFG.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct BlockId(pub usize);
 
 /// Directed edge between two blocks.
@@ -90,47 +90,8 @@ impl ControlFlowGraph {
   /// Build a control-flow graph for a HIR [`Body`], creating one block per
   /// statement plus dedicated entry/exit blocks.
   pub fn from_body(body: &Body) -> ControlFlowGraph {
-    let mut cfg = CfgBuilder::new(body).build();
-    cfg.compress_passthrough_blocks();
-    cfg
-  }
-
-  /// Redirect edges that pass through empty blocks with a single successor.
-  fn compress_passthrough_blocks(&mut self) {
-    let len = self.blocks.len();
-    let mut preds: Vec<Vec<BlockId>> = vec![Vec::new(); len];
-    for block in &self.blocks {
-      for succ in &block.successors {
-        if succ.0 < len {
-          preds[succ.0].push(block.id);
-        }
-      }
-    }
-
-    for idx in 0..len {
-      if idx == self.entry.0 || idx == self.exit.0 {
-        continue;
-      }
-      let block = &self.blocks[idx];
-      if !block.stmts.is_empty()
-        || block.successors.len() != 1
-        || !matches!(block.kind, BlockKind::Normal)
-      {
-        continue;
-      }
-      let target = block.successors[0];
-      for pred in preds[idx].iter().copied() {
-        if let Some(pred_block) = self.blocks.get_mut(pred.0) {
-          for succ in pred_block.successors.iter_mut() {
-            if *succ == BlockId(idx) {
-              *succ = target;
-            }
-          }
-          pred_block.successors.sort();
-          pred_block.successors.dedup();
-        }
-      }
-    }
+    let builder = CfgBuilder::new(body);
+    builder.build()
   }
 }
 
@@ -206,39 +167,13 @@ impl<'a> CfgBuilder<'a> {
     if !preds.is_empty() {
       self.connect(&preds, self.cfg.exit);
     }
-    self.redirect_trivial_exit_blocks();
+    self.add_exit_shortcuts();
     self.cfg
   }
 
   fn connect(&mut self, from: &[BlockId], to: BlockId) {
     for pred in from {
       self.cfg.add_edge(*pred, to);
-    }
-  }
-
-  fn redirect_trivial_exit_blocks(&mut self) {
-    let exit = self.cfg.exit;
-    let trivial: HashSet<BlockId> = self
-      .cfg
-      .blocks
-      .iter()
-      .filter(|block| {
-        block.id != exit
-          && block.stmts.is_empty()
-          && block.successors.len() == 1
-          && block.successors[0] == exit
-      })
-      .map(|block| block.id)
-      .collect();
-    if trivial.is_empty() {
-      return;
-    }
-    for block in self.cfg.blocks.iter_mut() {
-      for succ in block.successors.iter_mut() {
-        if trivial.contains(succ) {
-          *succ = exit;
-        }
-      }
     }
   }
 
@@ -262,6 +197,24 @@ impl<'a> CfgBuilder<'a> {
     let block = self.cfg.add_block();
     self.cfg.blocks[block.0].stmts.push(stmt_id);
     block
+  }
+
+  fn add_exit_shortcuts(&mut self) {
+    let exit = self.cfg.exit;
+    let trivial_exit_blocks: std::collections::HashSet<_> = self
+      .cfg
+      .blocks
+      .iter()
+      .filter(|block| block.id != exit && block.stmts.is_empty() && block.successors == [exit])
+      .map(|block| block.id)
+      .collect();
+    for block in self.cfg.blocks.iter_mut() {
+      for succ in block.successors.iter_mut() {
+        if trivial_exit_blocks.contains(succ) {
+          *succ = exit;
+        }
+      }
+    }
   }
 
   fn resolve_break_target(&self, label: Option<NameId>) -> Option<BlockId> {
@@ -334,16 +287,14 @@ impl<'a> CfgBuilder<'a> {
       StmtKind::ForIn { body, .. } => self.build_for_in(stmt_id, *body, preds, None),
       StmtKind::Block(stmts) => {
         if stmts.is_empty() {
+          let block = self.add_stmt_block(stmt_id);
+          self.connect(&preds, block);
           BuildResult {
-            entry: None,
-            exits: preds,
+            entry: Some(block),
+            exits: vec![block],
           }
         } else {
-          let inner = self.build_stmt_list(stmts, preds);
-          BuildResult {
-            entry: inner.entry,
-            exits: inner.exits,
-          }
+          self.build_stmt_list(stmts, preds)
         }
       }
       StmtKind::Try {
@@ -360,8 +311,15 @@ impl<'a> CfgBuilder<'a> {
       StmtKind::Return(_) | StmtKind::Throw(_) => {
         let block = self.add_stmt_block(stmt_id);
         self.connect(&preds, block);
-        if let Some(target) = self.resolve_continue_target(None) {
-          self.cfg.add_edge(block, target);
+        if let Some(target) = self
+          .breakables
+          .iter()
+          .rev()
+          .find_map(|ctx| ctx.continue_target)
+        {
+          if !self.cfg.blocks[block.0].successors.contains(&target) {
+            self.cfg.add_edge(block, target);
+          }
         }
         BuildResult {
           entry: Some(block),
@@ -398,10 +356,12 @@ impl<'a> CfgBuilder<'a> {
           exits: vec![block],
         }
       }
-      StmtKind::Empty => BuildResult {
-        entry: None,
-        exits: preds,
-      },
+      StmtKind::Empty => {
+        BuildResult {
+          entry: None,
+          exits: preds,
+        }
+      }
       StmtKind::Labeled { label, body } => self.build_labeled(stmt_id, *label, *body, preds),
       StmtKind::With { body, .. } => {
         let block = self.add_stmt_block(stmt_id);
@@ -570,8 +530,9 @@ impl<'a> CfgBuilder<'a> {
     self.cfg.blocks[init_block.0].kind = BlockKind::ForInit { init };
     self.connect(&preds, init_block);
 
-    let test_block = self.add_stmt_block(stmt_id);
+    let test_block = self.cfg.add_block();
     self.cfg.blocks[test_block.0].kind = BlockKind::ForTest { test };
+    self.cfg.blocks[test_block.0].stmts.push(stmt_id);
 
     let update_block = self.cfg.add_block();
     self.cfg.blocks[update_block.0].kind = BlockKind::ForUpdate { update };
@@ -588,6 +549,9 @@ impl<'a> CfgBuilder<'a> {
     self.connect(&body_res.exits, update_block);
     self.breakables.pop();
 
+    if let Some(entry) = body_res.entry {
+      self.cfg.add_edge(test_block, entry);
+    }
     self.cfg.add_edge(init_block, test_block);
     self.cfg.add_edge(test_block, after);
 

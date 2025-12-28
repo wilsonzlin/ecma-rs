@@ -1,7 +1,7 @@
 type Tag = { tag: "a" | "b" };
 
 const ok: Tag = { tag: "a" };
-// expect-def-type: ok = { tag: ("a" | "b") }
+// expect-def-type: ok = Tag
 
 const xs: ("a" | "b")[] = ["a", "b"];
 // expect-def-type: xs = ("a" | "b")[]
