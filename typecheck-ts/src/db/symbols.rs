@@ -8,7 +8,7 @@ use parse_js::ast::node::Node;
 use parse_js::ast::stx::TopLevel;
 
 use crate::lib_support::FileKind;
-use crate::program::{semantic_js, SymbolOccurrence};
+use crate::symbols::{semantic_js, SymbolOccurrence};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LocalSymbolInfo {

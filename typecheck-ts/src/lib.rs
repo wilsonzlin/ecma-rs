@@ -158,6 +158,7 @@ pub use program::BodyCheckResult;
 pub use program::*;
 #[cfg(feature = "serde")]
 pub use snapshot::*;
+pub use symbols::{semantic_js, SymbolBinding, SymbolInfo, SymbolOccurrence};
 pub use type_queries::*;
 
 use std::collections::HashMap;

@@ -26,10 +26,8 @@ use crate::parse_metrics;
 use crate::profile::QueryKind;
 use crate::queries::parse as parser;
 use crate::sem_hir::sem_hir_from_lower;
-use crate::semantic_js::SymbolId;
-use crate::symbols::SymbolBinding;
+use crate::symbols::{semantic_js::SymbolId, SymbolBinding, SymbolOccurrence};
 use crate::FileKey;
-use crate::SymbolOccurrence;
 use crate::{BodyId, DefId, ExprId, TypeId};
 
 fn file_id_from_key(db: &dyn Db, key: &FileKey) -> FileId {
