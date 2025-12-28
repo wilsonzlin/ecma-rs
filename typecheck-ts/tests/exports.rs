@@ -313,12 +313,10 @@ fn imported_overloads_preserve_all_signatures() {
      export function overload(value: number): number;\n\
      export function overload(value: string | number) { return value; }",
   );
-  host.insert(
-    key_use.clone(),
-    "import { overload } from \"./math\";\n\
-     export const asString = overload(\"hi\");\n\
-     export const asNumber = overload(1);",
-  );
+  let use_src = "import { overload } from \"./math\";\n\
+      export const asString = overload(\"hi\");\n\
+      export const asNumber = overload(1);";
+  host.insert(key_use.clone(), use_src);
   host.link(key_use.clone(), "./math", key_math.clone());
 
   let program = Program::new(host, vec![key_use.clone()]);
@@ -331,6 +329,35 @@ fn imported_overloads_preserve_all_signatures() {
   let math_exports = program.exports_of(math_id);
   let overload_entry = math_exports.get("overload").expect("overload export");
   let overload_type = overload_entry.type_id.expect("type for overload");
+  let use_id = program.file_id(&key_use).expect("use id");
+  let import_def = program
+    .definitions_in_file(use_id)
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("overload"))
+    .expect("imported def");
+  let import_ty = program.type_of_def(import_def);
+  let import_returns: Vec<_> = program
+    .call_signatures(import_ty)
+    .iter()
+    .map(|sig| {
+      let params: Vec<_> = sig
+        .signature
+        .params
+        .iter()
+        .map(|param| program.display_type(param.ty).to_string())
+        .collect();
+      format!(
+        "({}) => {}",
+        params.join(", "),
+        program.display_type(sig.signature.ret).to_string()
+      )
+    })
+    .collect();
+  assert!(
+    import_returns.iter().any(|sig| sig.ends_with(" => string"))
+      && import_returns.iter().any(|sig| sig.ends_with(" => number")),
+    "expected import overload signatures for string and number, got {import_returns:?}"
+  );
   let returns: Vec<_> = program
     .call_signatures(overload_type)
     .iter()
@@ -351,12 +378,8 @@ fn imported_overloads_preserve_all_signatures() {
     .get("asNumber")
     .and_then(|entry| entry.def)
     .expect("asNumber def");
-  assert_eq!(
-    program
-      .display_type(program.type_of_def(str_def))
-      .to_string(),
-    "string"
-  );
+  let str_ty = program.type_of_def(str_def);
+  assert_eq!(program.display_type(str_ty).to_string(), "string");
   assert_eq!(
     program
       .display_type(program.type_of_def(num_def))
@@ -393,7 +416,17 @@ fn typeof_imported_overload_merges_signatures() {
     "unexpected diagnostics: {diagnostics:?}"
   );
 
+  let math_id = program.file_id(&key_math).expect("math id");
+  if let Some(overload) = program
+    .exports_of(math_id)
+    .get("overload")
+    .and_then(|entry| entry.type_id)
+  {
+    let _ = program.call_signatures(overload);
+  }
+
   let use_id = program.file_id(&key_use).expect("use id");
+  let defs = program.definitions_in_file(use_id);
   let exports = program.exports_of(use_id);
 
   let via_string = exports

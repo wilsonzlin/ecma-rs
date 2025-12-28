@@ -2,9 +2,11 @@ use std::sync::Arc;
 
 use diagnostics::{FileId, Span, TextRange};
 use typecheck_ts::check::expr::resolve_call;
+use typecheck_ts::check::overload::OverloadContext;
 use typecheck_ts::codes;
 use types_ts_interned::{
-  Param, RelateCtx, Signature, TypeId, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
+  Param, RelateCtx, Signature, TypeDisplay, TypeId, TypeKind, TypeOptions, TypeParamDecl,
+  TypeParamId, TypeStore,
 };
 
 fn span() -> Span {
@@ -74,6 +76,7 @@ fn selects_literal_overload() {
     None,
     None,
     span(),
+    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -108,6 +111,7 @@ fn infers_generic_return_type() {
     None,
     None,
     span(),
+    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -140,6 +144,7 @@ fn reports_no_matching_overload_with_reasons() {
     None,
     None,
     span(),
+    None,
   );
 
   assert!(resolution.signature.is_none());
@@ -188,6 +193,7 @@ fn reports_ambiguous_call() {
     None,
     None,
     span(),
+    None,
   );
 
   assert!(resolution.signature.is_none());
@@ -247,6 +253,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
     None,
     None,
     span(),
+    None,
   );
   assert!(string_resolution.signature.is_none());
   assert_eq!(string_resolution.diagnostics.len(), 1);
@@ -263,6 +270,7 @@ fn enforces_constraints_for_structurally_identical_generics() {
     None,
     None,
     span(),
+    None,
   );
   assert!(number_resolution.signature.is_none());
   assert_eq!(number_resolution.diagnostics.len(), 1);
@@ -296,7 +304,7 @@ fn applies_default_type_argument_from_interned_signature() {
     Some(primitives.string)
   );
 
-  let resolution = resolve_call(&store, &relate, callable, &[], None, None, span());
+  let resolution = resolve_call(&store, &relate, callable, &[], None, None, span(), None);
   assert!(resolution.diagnostics.is_empty());
   let instantiated = resolution
     .signature
@@ -351,11 +359,114 @@ fn prefers_union_compatible_overload() {
     None,
     None,
     span(),
+    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
   assert_eq!(resolution.signature, Some(sig_union_id));
   assert_eq!(resolution.return_type, union);
+}
+
+#[test]
+fn contextual_callback_infers_generic_arguments() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let relate = RelateCtx::new(store.clone(), TypeOptions::default());
+
+  let t_param = TypeParamId(0);
+  let u_param = TypeParamId(1);
+  let t_type = store.intern_type(TypeKind::TypeParam(t_param));
+  let u_type = store.intern_type(TypeKind::TypeParam(u_param));
+
+  let callback_sig = Signature {
+    params: vec![param("item", t_type, &store)],
+    ret: u_type,
+    type_params: Vec::new(),
+    this_param: None,
+  };
+  let callback_ty = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(callback_sig.clone())],
+  });
+
+  let map_sig = Signature {
+    params: vec![
+      param(
+        "items",
+        store.intern_type(TypeKind::Array {
+          ty: t_type,
+          readonly: false,
+        }),
+        &store,
+      ),
+      param("fn", callback_ty, &store),
+    ],
+    ret: store.intern_type(TypeKind::Array {
+      ty: u_type,
+      readonly: false,
+    }),
+    type_params: vec![TypeParamDecl::new(t_param), TypeParamDecl::new(u_param)],
+    this_param: None,
+  };
+  let map_ty = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(map_sig)],
+  });
+
+  let items_arg = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let callback_arg = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(Signature {
+      params: vec![param("item", primitives.unknown, &store)],
+      ret: primitives.unknown,
+      type_params: Vec::new(),
+      this_param: None,
+    })],
+  });
+
+  struct CallbackContext {
+    ret: TypeId,
+  }
+
+  impl OverloadContext for CallbackContext {
+    fn contextual_arg_type(&mut self, index: usize, expected: TypeId) -> Option<TypeId> {
+      (index == 1).then_some(expected)
+    }
+
+    fn actual_function_signature(
+      &mut self,
+      index: usize,
+      contextual_sig: &Signature,
+    ) -> Option<Signature> {
+      if index != 1 {
+        return None;
+      }
+      let mut sig = contextual_sig.clone();
+      sig.ret = self.ret;
+      Some(sig)
+    }
+  }
+
+  let mut ctx = CallbackContext {
+    ret: primitives.number,
+  };
+  let resolution = resolve_call(
+    &store,
+    &relate,
+    map_ty,
+    &[items_arg, callback_arg],
+    None,
+    None,
+    span(),
+    Some(&mut ctx),
+  );
+  assert!(
+    resolution.diagnostics.is_empty(),
+    "unexpected diagnostics: {:?}",
+    resolution.diagnostics
+  );
+  let rendered = TypeDisplay::new(&store, resolution.return_type).to_string();
+  assert_eq!(rendered, "number[]");
 }
 
 #[test]
@@ -403,6 +514,7 @@ fn prefers_fixed_arity_over_rest() {
     None,
     None,
     span(),
+    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -447,6 +559,7 @@ fn prefers_non_generic_when_inference_is_unknown() {
     None,
     None,
     span(),
+    None,
   );
 
   assert!(resolution.diagnostics.is_empty());
@@ -481,6 +594,7 @@ fn uses_contextual_return_for_generic_inference() {
     None,
     Some(primitives.number),
     span(),
+    None,
   );
 
   assert!(resolution.diagnostics.is_empty());

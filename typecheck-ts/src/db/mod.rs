@@ -8,14 +8,13 @@ use std::collections::BTreeMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use salsa::Setter;
-
 use crate::files::FileOrigin;
 use crate::lib_support::{CompilerOptions, FileKind};
 use crate::profile::QueryStatsCollector;
 use crate::FileKey;
 use crate::{BodyCheckResult, BodyId, DefId};
-use diagnostics::FileId;
+use diagnostics::{Diagnostic, FileId};
+use salsa::Setter;
 
 pub mod expander;
 mod inputs;
@@ -29,13 +28,13 @@ pub use queries::body_check::{
 };
 pub use queries::{
   aggregate_diagnostics, aggregate_program_diagnostics, all_files, body_file, body_parent,
-  body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, def_file, def_to_file,
-  expr_at, file_kind, file_span_index, file_text, global_bindings, local_symbol_info, lower_hir,
-  module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse, parse_query_count,
-  program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir, span_of_def,
-  span_of_expr, symbol_occurrences, ts_semantics, type_at, var_initializer, DeclInfo, DeclKind,
-  GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore, TsSemantics,
-  TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
+  body_parents_in_file, body_to_file, cancelled, compiler_options, db_revision, def_file,
+  def_to_file, expr_at, file_kind, file_span_index, file_text, global_bindings, local_symbol_info,
+  lower_hir, module_dep_diagnostics, module_deps, module_resolve, module_specifiers, parse,
+  parse_query_count, program_diagnostics, reachable_files, reset_parse_query_count, roots, sem_hir,
+  span_of_def, span_of_expr, symbol_occurrences, ts_semantics, type_at, var_initializer, DeclInfo,
+  DeclKind, GlobalBindingsDb, Initializer, LowerResultWithDiagnostics, SharedTypeStore,
+  TsSemantics, TypeDatabase, TypeSemantics, TypesDatabase, VarInit,
 };
 pub use spans::FileSpanIndex;
 
@@ -67,7 +66,11 @@ pub trait Db: salsa::Database + Send + 'static {
   fn cancelled_input(&self) -> inputs::CancelledInput;
   fn file_input(&self, file: FileId) -> Option<inputs::FileInput>;
   fn file_input_by_key(&self, key: &FileKey) -> Option<inputs::FileInput>;
+  fn file_ids_for_key(&self, key: &FileKey) -> Vec<FileId>;
+  fn lib_files(&self) -> Vec<FileId>;
+  fn file_origin(&self, file: FileId) -> Option<FileOrigin>;
   fn module_resolution_input(&self, key: &ModuleKey) -> Option<inputs::ModuleResolutionInput>;
+  fn extra_diagnostics_input(&self) -> Option<inputs::ExtraDiagnosticsInput>;
   fn profiler(&self) -> Option<QueryStatsCollector>;
   fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>>;
 }
@@ -80,10 +83,12 @@ pub struct Database {
   roots_input: Option<inputs::RootsInput>,
   cancelled_input: Option<inputs::CancelledInput>,
   files: BTreeMap<FileId, inputs::FileInput>,
-  file_keys: BTreeMap<FileKey, FileId>,
+  file_keys: BTreeMap<FileKey, Vec<FileId>>,
+  file_origins: BTreeMap<FileId, FileOrigin>,
   module_resolutions: BTreeMap<ModuleKey, inputs::ModuleResolutionInput>,
+  extra_diagnostics: Option<inputs::ExtraDiagnosticsInput>,
   profiler: Option<QueryStatsCollector>,
-  body_results: BTreeMap<BodyId, Arc<BodyCheckResult>>,
+  body_results: BTreeMap<BodyId, inputs::BodyResultInput>,
 }
 
 impl Default for Database {
@@ -95,7 +100,9 @@ impl Default for Database {
       cancelled_input: None,
       files: BTreeMap::new(),
       file_keys: BTreeMap::new(),
+      file_origins: BTreeMap::new(),
       module_resolutions: BTreeMap::new(),
+      extra_diagnostics: None,
       profiler: None,
       body_results: BTreeMap::new(),
     };
@@ -135,12 +142,35 @@ impl Db for Database {
     self
       .file_keys
       .get(key)
+      .and_then(|ids| ids.first())
       .and_then(|id| self.files.get(id))
       .copied()
   }
 
+  fn file_ids_for_key(&self, key: &FileKey) -> Vec<FileId> {
+    let mut ids = self.file_keys.get(key).cloned().unwrap_or_default();
+    sort_ids(&mut ids, &self.file_origins);
+    ids
+  }
+
+  fn lib_files(&self) -> Vec<FileId> {
+    self
+      .file_origins
+      .iter()
+      .filter_map(|(id, origin)| matches!(origin, FileOrigin::Lib).then_some(*id))
+      .collect()
+  }
+
+  fn file_origin(&self, file: FileId) -> Option<FileOrigin> {
+    self.file_origins.get(&file).copied()
+  }
+
   fn module_resolution_input(&self, key: &ModuleKey) -> Option<inputs::ModuleResolutionInput> {
     self.module_resolutions.get(key).copied()
+  }
+
+  fn extra_diagnostics_input(&self) -> Option<inputs::ExtraDiagnosticsInput> {
+    self.extra_diagnostics.as_ref().copied()
   }
 
   fn profiler(&self) -> Option<QueryStatsCollector> {
@@ -148,7 +178,10 @@ impl Db for Database {
   }
 
   fn body_result(&self, body: BodyId) -> Option<Arc<BodyCheckResult>> {
-    self.body_results.get(&body).cloned()
+    self
+      .body_results
+      .get(&body)
+      .map(|input| input.result(self).clone())
   }
 }
 
@@ -206,24 +239,20 @@ impl Database {
     key: FileKey,
     kind: FileKind,
     text: Arc<str>,
-    _origin: FileOrigin,
+    origin: FileOrigin,
   ) {
-    let key_id_entry = self.file_keys.entry(key.clone());
-    match key_id_entry {
-      std::collections::btree_map::Entry::Occupied(mut entry) => {
-        if *entry.get() != file {
-          entry.insert(file);
-        }
-      }
-      std::collections::btree_map::Entry::Vacant(entry) => {
-        entry.insert(file);
-      }
+    self.file_origins.insert(file, origin);
+    let entry = self.file_keys.entry(key.clone()).or_default();
+    if !entry.contains(&file) {
+      entry.push(file);
     }
+    sort_ids(entry, &self.file_origins);
     if let Some(existing) = self.files.get(&file).copied() {
       let old_key = existing.key(self);
       if old_key != key {
-        self.file_keys.remove(&old_key);
-        self.file_keys.insert(key.clone(), file);
+        if let Some(ids) = self.file_keys.get_mut(&old_key) {
+          ids.retain(|id| id != &file);
+        }
       }
       existing.set_key(self).to(key);
       existing.set_kind(self).to(kind);
@@ -245,7 +274,12 @@ impl Database {
       .get(&file)
       .map(|input| input.key(self))
       .unwrap_or_else(|| panic!("file {:?} must be seeded before setting kind", file));
-    self.set_file(file, key, kind, text, FileOrigin::Source);
+    let origin = self
+      .file_origins
+      .get(&file)
+      .copied()
+      .unwrap_or(FileOrigin::Source);
+    self.set_file(file, key, kind, text, origin);
   }
 
   pub fn set_file_text(&mut self, file: FileId, text: Arc<str>) {
@@ -259,7 +293,12 @@ impl Database {
       .get(&file)
       .map(|input| input.key(self))
       .unwrap_or_else(|| panic!("file {:?} must be seeded before setting text", file));
-    self.set_file(file, key, kind, text, FileOrigin::Source);
+    let origin = self
+      .file_origins
+      .get(&file)
+      .copied()
+      .unwrap_or(FileOrigin::Source);
+    self.set_file(file, key, kind, text, origin);
   }
 
   /// Seed or update a module resolution edge.
@@ -277,6 +316,14 @@ impl Database {
     } else {
       let input = inputs::ModuleResolutionInput::new(self, from, specifier, resolved);
       self.module_resolutions.insert(key, input);
+    }
+  }
+
+  pub fn set_extra_diagnostics(&mut self, diagnostics: Arc<[Diagnostic]>) {
+    if let Some(existing) = self.extra_diagnostics {
+      existing.set_diagnostics(self).to(diagnostics);
+    } else {
+      self.extra_diagnostics = Some(inputs::ExtraDiagnosticsInput::new(self, diagnostics));
     }
   }
 
@@ -322,7 +369,13 @@ impl Database {
 
   /// Cache a checked body result for reuse by span and type queries.
   pub fn set_body_result(&mut self, body: BodyId, result: Arc<BodyCheckResult>) {
-    self.body_results.insert(body, result);
+    if let Some(existing) = self.body_results.get(&body).copied() {
+      existing.set_body(self).to(body);
+      existing.set_result(self).to(result);
+    } else {
+      let input = inputs::BodyResultInput::new(self, body, result);
+      self.body_results.insert(body, input);
+    }
   }
 
   pub fn def_to_file(&self) -> Arc<BTreeMap<DefId, FileId>> {
@@ -382,4 +435,12 @@ impl Database {
       }
     }
   }
+}
+
+fn sort_ids(ids: &mut Vec<FileId>, origins: &BTreeMap<FileId, FileOrigin>) {
+  ids.sort_by_key(|id| {
+    let origin = origins.get(id).copied().unwrap_or(FileOrigin::Source);
+    (origin, id.0)
+  });
+  ids.dedup();
 }

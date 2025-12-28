@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use typecheck_ts::db::queries::{decl_type, type_params, type_store};
+use typecheck_ts::db::queries::{type_of_def, type_store};
 use typecheck_ts::db::{DeclInfo, DeclKind, SharedTypeStore, TypesDatabase};
 use typecheck_ts::{FileId, FileKey, MemoryHost, Program};
-use types_ts_interned::{DefId, TypeDisplay, TypeParamId, TypeStore};
+use types_ts_interned::{DefId, TypeDisplay, TypeStore};
 
 fn seed_host() -> (MemoryHost, FileKey, FileKey) {
   let mut host = MemoryHost::new();
@@ -65,8 +65,6 @@ fn decl_queries_match_program_types() {
     .iter()
     .map(|entry| (entry.def, entry.data.name.clone()))
     .collect();
-  let program_params: HashMap<DefId, Vec<TypeParamId>> =
-    snapshot.interned_type_params.clone().into_iter().collect();
 
   let mut decls_by_file: BTreeMap<_, BTreeMap<DefId, DeclInfo>> = BTreeMap::new();
   for def in snapshot.def_data.iter() {
@@ -75,14 +73,12 @@ fn decl_queries_match_program_types() {
         continue;
       }
     }
-    let params = program_params.get(&def.def).cloned().unwrap_or_default();
     let entry = DeclInfo {
       file: def.data.file,
       name: def.data.name.clone(),
       kind: DeclKind::Var,
       declared_type: Some(program.type_of_def_interned(def.def)),
       initializer: None,
-      type_params: Arc::from(params),
     };
     decls_by_file
       .entry(def.data.file)
@@ -108,35 +104,21 @@ fn decl_queries_match_program_types() {
       as Arc<dyn Fn(DefId) -> Option<String> + Send + Sync>
   };
 
-  let decl_box = decl_type(&db, box_def).expect("box decl type");
+  let decl_box = type_of_def(&db, box_def, ());
   let decl_box_str = TypeDisplay::new(store.as_ref(), decl_box)
     .with_ref_resolver(Arc::clone(&resolver))
     .to_string();
   let program_box_str = program.display_type(program_box_ty).to_string();
   assert_eq!(decl_box_str, program_box_str, "box type mismatch");
-  assert_eq!(
-    type_params(&db, box_def).as_ref(),
-    program_params
-      .get(&box_def)
-      .map(Vec::as_slice)
-      .unwrap_or(&[])
-  );
 
-  let decl_map = decl_type(&db, map_def).expect("MapBox decl type");
+  let decl_map = type_of_def(&db, map_def, ());
   let decl_map_str = TypeDisplay::new(store.as_ref(), decl_map)
     .with_ref_resolver(Arc::clone(&resolver))
     .to_string();
   let program_map_str = program.display_type(program_map_ty).to_string();
   assert_eq!(decl_map_str, program_map_str, "MapBox type mismatch");
-  assert_eq!(
-    type_params(&db, map_def).as_ref(),
-    program_params
-      .get(&map_def)
-      .map(Vec::as_slice)
-      .unwrap_or(&[])
-  );
 
-  let decl_wrapper = decl_type(&db, wrapper_def).expect("wrapper decl type");
+  let decl_wrapper = type_of_def(&db, wrapper_def, ());
   let decl_wrapper_str = TypeDisplay::new(store.as_ref(), decl_wrapper)
     .with_ref_resolver(resolver)
     .to_string();
@@ -144,12 +126,5 @@ fn decl_queries_match_program_types() {
   assert_eq!(
     decl_wrapper_str, program_wrapper_str,
     "wrapper interface type mismatch"
-  );
-  assert_eq!(
-    type_params(&db, wrapper_def).as_ref(),
-    program_params
-      .get(&wrapper_def)
-      .map(Vec::as_slice)
-      .unwrap_or(&[])
   );
 }

@@ -18,6 +18,65 @@ fn resolves_types_from_namespace_imports_through_reexports() {
   assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
 
   let file_id = program.file_id(&a_key).expect("file id for a.ts");
+  let m_id = program.file_id(&FileKey::new("m.ts")).expect("m id");
+  println!(
+    "defs in m: {:?}",
+    program
+      .definitions_in_file(m_id)
+      .iter()
+      .map(|d| (d, program.def_name(*d)))
+      .collect::<Vec<_>>()
+  );
+  println!(
+    "all defs: {:?}",
+    program
+      .files()
+      .into_iter()
+      .map(|id| {
+        (
+          program.file_key(id),
+          program
+            .definitions_in_file(id)
+            .into_iter()
+            .map(|d| (d, program.def_name(d)))
+            .collect::<Vec<_>>(),
+        )
+      })
+      .collect::<Vec<_>>()
+  );
+  println!(
+    "defs in a: {:?}",
+    program
+      .definitions_in_file(file_id)
+      .iter()
+      .map(|d| (d, program.def_name(*d)))
+      .collect::<Vec<_>>()
+  );
+  if let Some(ns_def) = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|d| program.def_name(*d).as_deref() == Some("NS"))
+  {
+    println!(
+      "NS type {}",
+      program
+        .display_type(program.type_of_def(ns_def))
+        .to_string()
+    );
+  }
+  let exports_m = program.exports_of(m_id);
+  println!(
+    "exports in m: {:?}",
+    exports_m
+      .iter()
+      .map(|(name, entry)| {
+        (
+          name.clone(),
+          entry.type_id.map(|ty| program.display_type(ty).to_string()),
+        )
+      })
+      .collect::<Vec<_>>()
+  );
   let v_def = program
     .definitions_in_file(file_id)
     .into_iter()

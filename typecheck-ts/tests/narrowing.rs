@@ -6,7 +6,9 @@ use hir_js::{
   lower_from_source, BinaryOp, Body, BodyId, DefKind, ExprId, ExprKind, LowerResult, NameId,
   NameInterner,
 };
-use typecheck_ts::check::hir_body::check_body_with_env as check_body_with_env_impl;
+use typecheck_ts::check::hir_body::{
+  check_body_with_env as check_body_with_env_impl, check_body_with_env_with_expander,
+};
 use types_ts_interned::{
   DefId, NameId as TypeNameId, Param, PropData, PropKey, Property, RelateCtx, RelateHooks,
   RelateTypeExpander, Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeStore,
@@ -93,22 +95,11 @@ fn check_body_with_env(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  _src: &str,
+  src: &str,
   store: Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
-  let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  check_body_with_env_impl(
-    body_id,
-    body,
-    names,
-    file,
-    store,
-    None,
-    initial,
-    relate,
-    None,
-  )
+  check_body_with_env_impl(body_id, body, names, file, src, store, initial)
 }
 
 fn run_flow(
@@ -116,25 +107,24 @@ fn run_flow(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  _src: &str,
+  src: &str,
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
   expander: Option<&dyn RelateTypeExpander>,
 ) -> typecheck_ts::BodyCheckResult {
-  let mut hooks = RelateHooks::default();
-  hooks.expander = expander;
-  let relate = RelateCtx::with_hooks(Arc::clone(store), store.options(), hooks);
-  check_body_with_env_impl(
-    body_id,
-    body,
-    names,
-    file,
-    Arc::clone(store),
-    None,
-    initial,
-    relate,
-    expander,
-  )
+  match expander {
+    Some(expander) => check_body_with_env_with_expander(
+      body_id,
+      body,
+      names,
+      file,
+      src,
+      Arc::clone(store),
+      initial,
+      Some(expander),
+    ),
+    None => check_body_with_env_impl(body_id, body, names, file, src, Arc::clone(store), initial),
+  }
 }
 
 #[test]
@@ -162,7 +152,7 @@ function optionalBigint(x?: bigint) { if (x) { return x; } else { return x; } }
       "nullableString",
       store.union(vec![prim.string, prim.null]),
       "string",
-      "null",
+      "null | string",
     ),
     ("emptyOrA", store.union(vec![empty, a]), "\"a\"", "\"\""),
     ("zeroOrOne", store.union(vec![zero, one]), "1", "0"),
@@ -176,19 +166,19 @@ function optionalBigint(x?: bigint) { if (x) { return x; } else { return x; } }
       "optionalString",
       store.union(vec![prim.string, prim.undefined]),
       "string",
-      "undefined",
+      "string | undefined",
     ),
     (
       "optionalNumber",
       store.union(vec![prim.number, prim.undefined]),
       "number",
-      "undefined",
+      "number | undefined",
     ),
     (
       "optionalBigint",
       store.union(vec![prim.bigint, prim.undefined]),
       "bigint",
-      "undefined",
+      "bigint | undefined",
     ),
   ];
   for (func, init_ty, expected_then, expected_else) in cases {
@@ -224,7 +214,7 @@ function useOr(x: string | null, y: number | null) { if (x || y) { return y; } e
   let y_ty = store.union(vec![prim.number, prim.null]);
   let cases = vec![
     ("useAnd", "number", "null | number"),
-    ("useOr", "null | number", "null"),
+    ("useOr", "null | number", "null | number"),
   ];
   for (func, expected_then, expected_else) in cases {
     let (body_id, body) = body_of(&lowered, &lowered.names, func);
@@ -979,7 +969,7 @@ function f(x: string | null) {
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
-  assert_eq!(else_ty, "null");
+  assert_eq!(else_ty, "null | string");
 }
 
 #[test]

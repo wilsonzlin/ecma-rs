@@ -3,15 +3,18 @@ use std::sync::Arc;
 
 use diagnostics::FileId;
 use hir_js::{
-  lower_file_with_diagnostics, Body, BodyId, DefKind, FileKind as HirFileKind, LowerResult,
-  NameInterner, PatKind,
+  lower_file_with_diagnostics, Body, BodyId, DefKind, FileKind as HirFileKind, LowerResult, NameId,
+  NameInterner,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
-use semantic_js::ts::locals::{bind_ts_locals, TsLocalSemantics};
-use typecheck_ts::check::hir_body::{check_body_with_env, FlowBindings};
-use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
+use semantic_js::ts::locals::bind_ts_locals;
+use typecheck_ts::check::flow_bindings::FlowBindings;
+use typecheck_ts::check::hir_body::check_body_with_env_with_bindings;
+use types_ts_interned::{TypeDisplay, TypeStore};
 
-fn parse_and_lower_with_locals(source: &str) -> (LowerResult, TsLocalSemantics) {
+fn parse_and_lower_with_locals(
+  source: &str,
+) -> (LowerResult, semantic_js::ts::locals::TsLocalSemantics) {
   let mut ast = parse_with_options(
     source,
     ParseOptions {
@@ -20,9 +23,14 @@ fn parse_and_lower_with_locals(source: &str) -> (LowerResult, TsLocalSemantics) 
     },
   )
   .expect("parse");
-  let semantics = bind_ts_locals(&mut ast, FileId(0), true);
+  let sem = bind_ts_locals(&mut ast, FileId(0), true);
   let (lowered, _) = lower_file_with_diagnostics(FileId(0), HirFileKind::Ts, &ast);
-  (lowered, semantics)
+  (lowered, sem)
+}
+
+fn name_id(names: &NameInterner, target: &str) -> NameId {
+  let mut clone = names.clone();
+  clone.intern(target)
 }
 
 fn body_of<'a>(lowered: &'a LowerResult, names: &NameInterner, func: &str) -> (BodyId, &'a Body) {
@@ -45,35 +53,24 @@ function f(x: string | null) {
   return x;
 }
 "#;
-  let (lowered, semantics) = parse_and_lower_with_locals(src);
+  let (lowered, sem) = parse_and_lower_with_locals(src);
   let (body_id, body) = body_of(&lowered, &lowered.names, "f");
-  let flow_bindings = FlowBindings::new(body, &semantics);
+  let bindings = FlowBindings::new(body, &sem);
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
   let expected = store.union(vec![prim.string, prim.null]);
-  let param_name = body
-    .function
-    .as_ref()
-    .and_then(|f| f.params.first())
-    .and_then(|p| match body.pats[p.pat.0 as usize].kind {
-      PatKind::Ident(name) => Some(name),
-      _ => None,
-    })
-    .expect("param name");
-  initial.insert(param_name, expected);
+  initial.insert(name_id(lowered.names.as_ref(), "x"), expected);
 
-  let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  let res = check_body_with_env(
+  let res = check_body_with_env_with_bindings(
     body_id,
     body,
     &lowered.names,
     FileId(0),
+    src,
     Arc::clone(&store),
-    Some(&semantics),
     &initial,
-    relate,
-    None,
+    bindings,
   );
 
   let ret_ty = res.return_types()[0];
@@ -93,34 +90,26 @@ function f(x: string | null) {
   return x;
 }
 "#;
-  let (lowered, semantics) = parse_and_lower_with_locals(src);
+  let (lowered, sem) = parse_and_lower_with_locals(src);
   let (body_id, body) = body_of(&lowered, &lowered.names, "f");
-  let flow_bindings = FlowBindings::new(body, &semantics);
+  let bindings = FlowBindings::new(body, &sem);
   let store = TypeStore::new();
   let prim = store.primitive_ids();
   let mut initial = HashMap::new();
-  let param_name = body
-    .function
-    .as_ref()
-    .and_then(|f| f.params.first())
-    .and_then(|p| match body.pats[p.pat.0 as usize].kind {
-      PatKind::Ident(name) => Some(name),
-      _ => None,
-    })
-    .expect("param name");
-  initial.insert(param_name, store.union(vec![prim.string, prim.null]));
+  initial.insert(
+    name_id(lowered.names.as_ref(), "x"),
+    store.union(vec![prim.string, prim.null]),
+  );
 
-  let relate = RelateCtx::new(Arc::clone(&store), store.options());
-  let res = check_body_with_env(
+  let res = check_body_with_env_with_bindings(
     body_id,
     body,
     &lowered.names,
     FileId(0),
+    src,
     Arc::clone(&store),
-    Some(&semantics),
     &initial,
-    relate,
-    None,
+    bindings,
   );
 
   let ret_ty = res.return_types()[0];

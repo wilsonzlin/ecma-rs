@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::instantiate::Substituter;
-use types_ts_interned::{Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore};
+use types_ts_interned::{
+  Shape, Signature, TypeId, TypeKind, TypeParamDecl, TypeParamId, TypeStore,
+};
 
 /// Diagnostic emitted when inference fails to satisfy a constraint.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,18 +56,18 @@ pub fn infer_type_arguments_for_call(
 /// assignment) paired with the actual inferred signature of the expression.
 pub fn infer_type_arguments_from_contextual_signature(
   store: &Arc<TypeStore>,
+  type_params: &[TypeParamDecl],
   contextual_sig: &Signature,
   actual_sig: &Signature,
 ) -> InferenceResult {
-  let decls: HashMap<TypeParamId, TypeParamDecl> = contextual_sig
-    .type_params
+  let decls: HashMap<TypeParamId, TypeParamDecl> = type_params
     .iter()
     .map(|decl| (decl.id, decl.clone()))
     .collect();
 
   let mut ctx = InferenceContext::new(Arc::clone(store), decls);
   ctx.constrain_signature(contextual_sig, actual_sig, Variance::Covariant);
-  let order: Vec<TypeParamId> = contextual_sig.type_params.iter().map(|tp| tp.id).collect();
+  let order: Vec<TypeParamId> = type_params.iter().map(|tp| tp.id).collect();
   ctx.solve(&order)
 }
 
@@ -252,10 +254,6 @@ impl InferenceContext {
             lowers
               .retain(|b| !matches!(self.store.type_kind(*b), TypeKind::Unknown | TypeKind::Any));
           }
-        }
-        if lowers.len() > 1 {
-          lowers.sort();
-          lowers.dedup();
         }
         candidate = Some(if lowers.len() == 1 {
           lowers[0]

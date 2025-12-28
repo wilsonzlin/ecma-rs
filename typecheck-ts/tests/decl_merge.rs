@@ -220,6 +220,29 @@ fn namespace_value_members_use_member_types() {
     .expect("namespace definition");
   let ns_ty = program.type_of_def_interned(ns_def);
   let props = program.properties_of(ns_ty);
+  if std::env::var("TRACE_NS").is_ok() {
+    eprintln!(
+      "namespace props: {:?}",
+      props
+        .iter()
+        .map(|p| {
+          (
+            match &p.key {
+              typecheck_ts::PropertyKey::String(name) => name.clone(),
+              _ => String::new(),
+            },
+            program.interned_type_kind(p.ty),
+          )
+        })
+        .collect::<Vec<_>>()
+    );
+    let defs: Vec<_> = program
+      .definitions_in_file(file_id)
+      .into_iter()
+      .map(|d| (d, program.def_name(d)))
+      .collect();
+    eprintln!("defs: {:?}", defs);
+  }
   let x_prop = props.iter().find(|p| match &p.key {
     typecheck_ts::PropertyKey::String(name) => name == "x",
     _ => false,

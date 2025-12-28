@@ -16,6 +16,7 @@ pub fn resolve_call(
   this_arg: Option<TypeId>,
   contextual_return: Option<TypeId>,
   span: Span,
+  context: Option<&mut dyn super::overload::OverloadContext>,
 ) -> CallResolution {
   resolve_overloads(
     store,
@@ -26,7 +27,28 @@ pub fn resolve_call(
     this_arg,
     contextual_return,
     span,
-    None,
+    context,
+  )
+}
+
+/// Resolve a `new` expression against construct signatures of the callee type.
+pub fn resolve_construct(
+  store: &Arc<TypeStore>,
+  relate: &RelateCtx<'_>,
+  callee: TypeId,
+  args: &[TypeId],
+  this_arg: Option<TypeId>,
+  contextual_return: Option<TypeId>,
+  span: Span,
+) -> CallResolution {
+  resolve_construct_overloads(
+    store,
+    relate,
+    callee,
+    args,
+    this_arg,
+    contextual_return,
+    span,
   )
 }
 

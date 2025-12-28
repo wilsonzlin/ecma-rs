@@ -1,8 +1,13 @@
+use typecheck_ts::lib_support::CompilerOptions;
 use typecheck_ts::{FileId, FileKey, MemoryHost, Program};
 
 #[test]
 fn reachable_files_are_stable_and_cycle_safe() {
-  let mut host = MemoryHost::new();
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    include_dom: false,
+    no_default_lib: true,
+    ..Default::default()
+  });
   let entry = FileKey::new("file0.ts");
   let dep = FileKey::new("file1.ts");
   let tail = FileKey::new("file2.ts");

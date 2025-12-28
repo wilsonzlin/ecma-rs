@@ -1,9 +1,26 @@
 use hir_js::{lower_from_source, Body};
-use typecheck_ts::check::cfg::{BlockKind, ControlFlowGraph};
+use typecheck_ts::check::cfg::{BlockId, BlockKind, ControlFlowGraph};
 
 fn root_body(lowered: &hir_js::LowerResult) -> &Body {
   let body_id = lowered.root_body();
   lowered.body(body_id).expect("root body")
+}
+
+fn reachable(cfg: &ControlFlowGraph, from: BlockId, to: BlockId) -> bool {
+  let mut stack = vec![from];
+  let mut visited = std::collections::HashSet::new();
+  while let Some(block) = stack.pop() {
+    if !visited.insert(block) {
+      continue;
+    }
+    if block == to {
+      return true;
+    }
+    if let Some(node) = cfg.blocks.get(block.0) {
+      stack.extend(node.successors.iter().copied());
+    }
+  }
+  false
 }
 
 #[test]
@@ -41,7 +58,10 @@ fn for_loop_uses_distinct_blocks() {
     .expect("body edge");
 
   assert!(cfg.blocks[test.0].successors.contains(&cfg.exit));
-  assert!(cfg.blocks[body_entry.0].successors.contains(&update));
+  assert!(
+    reachable(&cfg, body_entry, update),
+    "body should reach update"
+  );
   assert_eq!(cfg.blocks[update.0].successors, vec![test]);
 }
 

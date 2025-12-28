@@ -119,6 +119,31 @@ pub fn merge_interned_decl_types(
   incoming: TypeId,
 ) -> TypeId {
   match (store.type_kind(existing), store.type_kind(incoming)) {
+    (
+      TypeKind::Callable {
+        overloads: existing_overloads,
+      },
+      TypeKind::Callable {
+        overloads: incoming_overloads,
+      },
+    ) => {
+      let existing_unknown = existing_overloads.iter().all(|sig_id| {
+        matches!(
+          store.type_kind(store.signature(*sig_id).ret),
+          TypeKind::Unknown
+        )
+      });
+      if existing_unknown {
+        return store.intern_type(TypeKind::Callable {
+          overloads: incoming_overloads,
+        });
+      }
+      let mut merged = existing_overloads.clone();
+      merged.extend(incoming_overloads.iter().copied());
+      merged.sort_by(|a, b| store.compare_signatures(*a, *b));
+      merged.dedup();
+      store.intern_type(TypeKind::Callable { overloads: merged })
+    }
     (TypeKind::Object(obj_a), TypeKind::Object(obj_b)) => {
       let mut shape = store.shape(store.object(obj_a).shape);
       let other = store.shape(store.object(obj_b).shape);

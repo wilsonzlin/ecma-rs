@@ -163,7 +163,6 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
     .iter()
     .filter(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str())
     .collect();
-  dbg!(&unknown_identifiers);
   assert!(
     unknown_identifiers.len() >= 3,
     "expected unknown identifier diagnostics for Promise, Array, and Provided: {diagnostics:?}"
@@ -175,7 +174,6 @@ fn non_dts_libs_warn_and_leave_globals_missing() {
   let has_provided = unknown_identifiers
     .iter()
     .any(|diag| diag.primary.range == TextRange::new(provided_start, provided_end));
-  dbg!(provided_start, provided_end, has_provided);
   assert!(
     has_provided,
     "expected unknown identifier diagnostic for Provided: {diagnostics:?}"
@@ -242,6 +240,74 @@ fn declare_module_libs_do_not_crash() {
   assert!(
     diagnostics.is_empty(),
     "ambient modules should be tolerated: {diagnostics:?}"
+  );
+}
+
+#[test]
+fn ambient_module_types_are_bound() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let ambient_key = FileKey::new("ambient.d.ts");
+  let ambient_src = r#"declare module "ambient" { export interface Foo { a: string } }"#;
+  let lib = LibFile {
+    key: ambient_key.clone(),
+    name: Arc::from("ambient.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(ambient_src),
+  };
+  let entry = FileKey::new("entry.ts");
+  let source = "import type { Foo } from \"ambient\";\ntype Uses = Foo;";
+  let host = TestHost::new(options)
+    .with_lib(lib)
+    .with_file(ambient_key.clone(), ambient_src)
+    .with_file(entry.clone(), source)
+    .link(entry.clone(), "ambient", ambient_key.clone());
+  let program = Program::new(host, vec![entry.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+  let entry_id = program.file_id(&entry).expect("entry id");
+  if std::env::var("DEBUG_AMBIENT").is_ok() {
+    let snapshot = program.snapshot();
+    let store = types_ts_interned::TypeStore::from_snapshot(snapshot.interned_type_store.clone());
+    if let Some(ambient_id) = program.file_id(&ambient_key) {
+      for def in program.definitions_in_file(ambient_id) {
+        let name = program.def_name(def).unwrap_or_default();
+        let interned = program.type_of_def_interned(def);
+        eprintln!(
+          "ambient def {:?} {} => {} (interned {})",
+          def,
+          name,
+          program.display_type(program.type_of_def(def)),
+          types_ts_interned::TypeDisplay::new(&store, interned)
+        );
+      }
+    }
+    for def in program.definitions_in_file(entry_id) {
+      let name = program.def_name(def).unwrap_or_default();
+      let interned = program.type_of_def_interned(def);
+      eprintln!(
+        "entry def {:?} {} => {} (interned {})",
+        def,
+        name,
+        program.display_type(program.type_of_def(def)),
+        types_ts_interned::TypeDisplay::new(&store, interned)
+      );
+    }
+  }
+  let uses_def = program
+    .definitions_in_file(entry_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("Uses"))
+    .expect("definition for Uses");
+  let rendered = program
+    .display_type(program.type_of_def(uses_def))
+    .to_string();
+  assert!(
+    rendered.contains("a: string"),
+    "expected Uses to resolve to ambient Foo; got {rendered}"
   );
 }
 
@@ -353,8 +419,6 @@ fn bundled_lib_types_expose_promise_and_array_shapes() {
 
   let promise_ty = program.type_of_def_interned(promise_def);
   let array_ty = program.type_of_def_interned(array_def);
-  println!("promise kind {:?}", program.type_kind(promise_ty));
-  println!("array kind {:?}", program.type_kind(array_ty));
   assert_ne!(
     program.type_kind(promise_ty),
     TypeKindSummary::Unknown,
@@ -367,23 +431,11 @@ fn bundled_lib_types_expose_promise_and_array_shapes() {
   );
 
   let then_prop = program.property_type(promise_ty, PropertyKey::String("then".to_string()));
-  println!(
-    "then prop {:?}",
-    then_prop
-      .as_ref()
-      .map(|ty| program.display_type(*ty).to_string())
-  );
   assert!(
     then_prop.is_some(),
     "Promise lib surface should expose then property"
   );
   let length_prop = program.property_type(array_ty, PropertyKey::String("length".to_string()));
-  println!(
-    "length prop {:?}",
-    length_prop
-      .as_ref()
-      .map(|ty| program.display_type(*ty).to_string())
-  );
   assert!(
     length_prop.is_some(),
     "Array lib surface should expose length property"

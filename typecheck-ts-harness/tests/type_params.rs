@@ -79,6 +79,7 @@ fn conflicting_type_arguments_still_error() {
     None,
     None,
     span,
+    None,
   );
 
   assert!(

@@ -972,7 +972,8 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       current_file = self.symbol_target_file(sem, symbol).unwrap_or(current_file);
     }
 
-    self.def_for_symbol(sem, symbol)
+    let def = self.def_for_symbol(sem, symbol);
+    def
   }
 
   fn resolve_symbol_in_module_ns(

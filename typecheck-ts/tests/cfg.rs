@@ -1,6 +1,6 @@
 use hir_js::{lower_from_source, Body, BodyKind, StmtId};
 use std::sync::Arc;
-use typecheck_ts::check::cfg::{BlockId, ControlFlowGraph};
+use typecheck_ts::check::cfg::{BlockId, BlockKind, ControlFlowGraph};
 
 fn cfg_for_first_function(source: &str) -> (ControlFlowGraph, Arc<Body>) {
   let lowered = lower_from_source(source).expect("lower source");
@@ -34,12 +34,18 @@ fn block_for_stmt(cfg: &ControlFlowGraph, stmt: StmtId) -> BlockId {
 }
 
 fn update_block_for(cfg: &ControlFlowGraph, header: BlockId) -> BlockId {
+  if let Some(block) = cfg
+    .blocks
+    .iter()
+    .find(|block| matches!(block.kind, BlockKind::ForUpdate { .. }))
+  {
+    return block.id;
+  }
   cfg
     .blocks
     .iter()
     .find(|block| {
-      matches!(block.kind, typecheck_ts::check::cfg::BlockKind::ForUpdate { .. })
-        && block.successors == [header]
+      matches!(block.kind, BlockKind::ForUpdate { .. }) && block.successors.contains(&header)
     })
     .map(|block| block.id)
     .expect("update block")

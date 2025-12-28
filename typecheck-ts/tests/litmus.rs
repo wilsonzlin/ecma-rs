@@ -118,7 +118,13 @@ fn litmus_fixtures() {
     "no fixtures found under {}",
     base.display()
   );
+  let filter = std::env::var("LITMUS_FILTER").ok();
   for fixture in fixtures {
+    if let Some(f) = filter.as_ref() {
+      if !fixture.ends_with(f) {
+        continue;
+      }
+    }
     run_fixture(&fixture);
   }
 }
@@ -149,36 +155,308 @@ fn run_fixture(path: &Path) {
     .collect();
   let mut program = Program::new(host.clone(), roots);
   let diagnostics = program.check();
-  if path.ends_with("contextual_callbacks") {
+  if !diagnostics.is_empty()
+    && !path.ends_with("as_const")
+    && !path.ends_with("argument_count_error")
+  {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+  }
+  if path.ends_with("argument_count_error") {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+  }
+  if path.ends_with("as_const") {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+    let snap = program.snapshot();
+    println!("DEBUG as_const def_types {:?}", snap.def_types);
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        if name == "tuple" || name == "nested" || name == "readonlyTuple" {
+          println!("DEBUG {} => {}", name, program.display_type(*ty));
+        }
+      }
+    }
+    for entry in snap.def_data.iter() {
+      if entry.data.name == "readonlyTuple" {
+        println!("DEBUG readonlyTuple def_data {:?}", entry.data);
+      }
+    }
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {
-      for def in program.definitions_in_file(file) {
-        if let Some(name) = program.def_name(def) {
-          println!("contextual_callbacks def {} => {}", name, program.display_type(program.type_of_def(def)));
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("DEBUG as_const exprs");
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          let desc = res
+            .expr_type(ExprId(idx as u32))
+            .map(|ty| program.display_type(ty).to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+          println!("  {}: {:?} -> {}", idx, span, desc);
         }
       }
     }
   }
-  if path.ends_with("function_union_return") {
+  if path.ends_with("function_return_inference") {
+    let snap = program.snapshot();
+    println!("DEBUG function_return_inference def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    println!("DEBUG function_return_inference def data:");
+    for entry in snap.def_data.iter() {
+      println!(
+        "  def {:?} name {} kind {:?}",
+        entry.def, entry.data.name, entry.data.kind
+      );
+    }
     let main = host.file_key("main.ts");
     if let Some(file) = program.file_id(&main) {
-      for def in program.definitions_in_file(file) {
-        if let Some(body) = program.body_of_def(def) {
+      let defs = program.definitions_in_file(file);
+      if let Some(identity) = defs
+        .into_iter()
+        .find(|d| program.def_name(*d).as_deref() == Some("identity"))
+      {
+        if let Some(body) = program.body_of_def(identity) {
           let res = program.check_body(body);
-          let rets: Vec<_> = res
+          let ret: Vec<_> = res
             .return_types()
             .iter()
-            .map(|ty| program.display_type(*ty).to_string())
+            .map(|t| program.display_type(*t).to_string())
             .collect();
+          println!("DEBUG function_return_inference identity returns {:?}", ret);
+          let pats: Vec<_> = res
+            .pat_types()
+            .iter()
+            .map(|t| program.display_type(*t).to_string())
+            .collect();
+          println!("DEBUG function_return_inference identity pats {:?}", pats);
+        }
+      }
+    }
+  }
+  if path.ends_with("imports_exports") {
+    let snap = program.snapshot();
+    println!("DEBUG imports_exports def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    println!("DEBUG imports_exports def data:");
+    for entry in snap.def_data.iter() {
+      println!(
+        "  def {:?} name {} kind {:?}",
+        entry.def, entry.data.name, entry.data.kind
+      );
+    }
+    let main_key = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main_key) {
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("DEBUG imports_exports body exprs:");
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          let ty = res
+            .expr_type(ExprId(idx as u32))
+            .map(|t| program.display_type(t).to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+          println!("  expr {} span {:?} ty {}", idx, span, ty);
+        }
+      }
+    }
+  }
+  if path.ends_with("literal_widening") {
+    let snap = program.snapshot();
+    println!("DEBUG literal_widening def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    println!("DEBUG literal_widening def data:");
+    for entry in snap.def_data.iter() {
+      println!(
+        "  def {:?} name {} kind {:?}",
+        entry.def, entry.data.name, entry.data.kind
+      );
+    }
+  }
+  if path.ends_with("mapped_type_annotation") {
+    let snap = program.snapshot();
+    println!("DEBUG mapped_type_annotation def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    println!("DEBUG mapped_type_annotation def data:");
+    for entry in snap.def_data.iter() {
+      println!(
+        "  def {:?} name {} kind {:?}",
+        entry.def, entry.data.name, entry.data.kind
+      );
+    }
+  }
+  if path.ends_with("narrowing_patterns") {
+    let snap = program.snapshot();
+    let main = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main) {
+      println!("DEBUG narrowing_patterns def types:");
+      for (def, ty) in snap.def_types.iter() {
+        if let Some(data) = snap.def_data.iter().find(|d| d.def == *def) {
+          if data.data.file == file
+            && (data.data.name == "assertNumber" || data.data.name == "useAssert")
+          {
+            println!("  {} => {}", data.data.name, program.display_type(*ty));
+          }
+        }
+      }
+    }
+    if let Some(err) = snap.def_data.iter().find(|d| d.data.name == "Error") {
+      let ty = snap
+        .def_types
+        .iter()
+        .find(|(id, _)| *id == err.def)
+        .map(|(_, ty)| *ty);
+      let rendered = ty
+        .map(|ty| program.display_type(ty).to_string())
+        .unwrap_or_else(|| "<none>".to_string());
+      println!(
+        "DEBUG narrowing_patterns Error def {:?} ty {}",
+        err.def, rendered
+      );
+    } else {
+      println!("DEBUG narrowing_patterns missing Error def");
+    }
+    let main = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main) {
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("DEBUG narrowing_patterns exprs:");
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          let ty = res
+            .expr_type(ExprId(idx as u32))
+            .map(|t| program.display_type(t).to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+          println!("  {}: {:?} -> {}", idx, span, ty);
+        }
+      }
+      for def in program.definitions_in_file(file) {
+        if let Some(body) = program.body_of_def(def) {
+          let name = program
+            .def_name(def)
+            .unwrap_or_else(|| "<anon>".to_string());
+          let res = program.check_body(body);
+          println!("DEBUG narrowing_patterns def {} exprs:", name);
+          for (idx, span) in res.expr_spans().iter().enumerate() {
+            let ty = res
+              .expr_type(ExprId(idx as u32))
+              .map(|t| program.display_type(t).to_string())
+              .unwrap_or_else(|| "<none>".to_string());
+            println!("  {}: {:?} -> {}", idx, span, ty);
+          }
+        }
+      }
+    }
+  }
+  if path.ends_with("satisfies") {
+    let snap = program.snapshot();
+    println!("DEBUG satisfies def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+  }
+  if path.ends_with("contextual_callbacks") {
+    let snap = program.snapshot();
+    println!("DEBUG contextual_callbacks def types:");
+    for (def, ty) in snap.def_types.iter() {
+      if let Some(name) = program.def_name(*def) {
+        println!("  def {:?} {} => {}", def, name, program.display_type(*ty));
+      }
+    }
+    if std::env::var("TRACE_LITMUS").is_ok() {
+      let store = types_ts_interned::TypeStore::from_snapshot(snap.interned_type_store.clone());
+      println!("DEBUG contextual_callbacks interned def types:");
+      for (def, ty) in snap.interned_def_types.iter() {
+        if let Some(name) = program.def_name(*def) {
           println!(
-            "function_union_return def {:?} name {:?} returns {:?} type {}",
+            "  def {:?} {} => {}",
             def,
-            program.def_name(def),
-            rets,
-            program.display_type(program.type_of_def(def))
+            name,
+            types_ts_interned::TypeDisplay::new(&store, *ty)
           );
         }
       }
+      if let Some(map_def) = snap
+        .def_data
+        .iter()
+        .find(|d| program.def_name(d.def).as_deref() == Some("map"))
+      {
+        println!(
+          "DEBUG contextual_callbacks map def kind {:?}",
+          map_def.data.kind
+        );
+      }
+      let main = host.file_key("main.ts");
+      if let Some(file) = program.file_id(&main) {
+        if let Some(body) = program.file_body(file) {
+          let res = program.check_body(body);
+          println!("DEBUG contextual_callbacks exprs:");
+          for (idx, span) in res.expr_spans().iter().enumerate() {
+            let ty = res
+              .expr_type(ExprId(idx as u32))
+              .map(|t| program.display_type(t).to_string())
+              .unwrap_or_else(|| "<none>".to_string());
+            println!("  {}: {:?} -> {}", idx, span, ty);
+          }
+        }
+      }
+    }
+  }
+  if std::env::var("TRACE_LITMUS").is_ok() && path.ends_with("contextual_assignment") {
+    let snap = program.snapshot();
+    println!("[litmus] contextual_assignment defs:");
+    for entry in snap
+      .def_data
+      .iter()
+      .filter(|d| d.data.name == "<arrow>" || d.data.name == "f")
+    {
+      println!(
+        "  def {:?} name {} span {:?} kind {:?}",
+        entry.def, entry.data.name, entry.data.span, entry.data.kind
+      );
+    }
+  }
+  if std::env::var("TRACE_LITMUS").is_ok() && path.ends_with("contextual_object_literals") {
+    let snap = program.snapshot();
+    println!("[litmus] contextual_object_literals def types:");
+    for entry in snap
+      .def_data
+      .iter()
+      .filter(|d| matches!(program.def_name(d.def).as_deref(), Some("ok") | Some("Tag")))
+    {
+      let def_ty = snap
+        .def_types
+        .iter()
+        .find(|(def, _)| def == &entry.def)
+        .map(|(_, ty)| program.display_type(*ty).to_string());
+      let interned_ty = snap
+        .interned_def_types
+        .iter()
+        .find(|(def, _)| def == &entry.def)
+        .map(|(_, ty)| {
+          types_ts_interned::TypeDisplay::new(
+            &types_ts_interned::TypeStore::from_snapshot(snap.interned_type_store.clone()),
+            *ty,
+          )
+          .to_string()
+        });
+      println!(
+        "  def {:?} name {} ty {:?} interned {:?}",
+        entry.def, entry.data.name, def_ty, interned_ty
+      );
     }
   }
   assert_diagnostics(&program, &host, &fixture.expectations, &diagnostics);
@@ -344,6 +622,17 @@ fn assert_def_types(program: &mut Program, host: &FixtureHost, expectations: &Fi
     let file = program
       .file_id(&file_key)
       .unwrap_or_else(|| panic!("missing file id for {}", expect.file));
+    if std::env::var("TRACE_LITMUS").is_ok() {
+      let defs = program.definitions_in_file(file);
+      eprintln!(
+        "[litmus] defs in {}: {:?}",
+        expect.file,
+        defs
+          .iter()
+          .map(|d| (d, program.def_name(*d)))
+          .collect::<Vec<_>>()
+      );
+    }
     let def = program
       .definitions_in_file(file)
       .into_iter()
@@ -351,6 +640,7 @@ fn assert_def_types(program: &mut Program, host: &FixtureHost, expectations: &Fi
       .unwrap_or_else(|| panic!("definition `{}` not found in {}", expect.name, expect.file));
     let ty = program.type_of_def(def);
     let rendered = program.display_type(ty).to_string();
+    println!("def {} in {} -> {}", expect.name, expect.file, rendered);
     assert_eq!(
       rendered, expect.ty,
       "expected def `{}` in {} to be {}, got {}",
@@ -378,6 +668,29 @@ fn assert_expr_types(
         offset, expect.file
       )
     });
+    if std::env::var("TRACE_LITMUS").is_ok() {
+      if let Ok(Some((body, expr_id))) = program.expr_at_fallible(file, offset) {
+        eprintln!(
+          "[litmus] {} {:?} expr {:?} -> {}",
+          expect.snippet,
+          body,
+          expr_id,
+          program.display_type(ty)
+        );
+        let result = program.check_body(body);
+        if let Some(span) = result.expr_span(expr_id) {
+          eprintln!("  span {:?}", span);
+        }
+        eprintln!(
+          "  pat types {:?}",
+          result
+            .pat_types()
+            .iter()
+            .map(|t| program.display_type(*t).to_string())
+            .collect::<Vec<_>>()
+        );
+      }
+    }
     let rendered = program.display_type(ty).to_string();
     assert_eq!(
       rendered, expect.ty,
@@ -392,6 +705,9 @@ fn resolve_expr_type(
   file: FileId,
   offset: u32,
 ) -> Option<typecheck_ts::TypeId> {
+  if let Some(ty) = program.type_at(file, offset) {
+    return Some(ty);
+  }
   let mut candidates: Vec<BodyId> = program
     .definitions_in_file(file)
     .into_iter()

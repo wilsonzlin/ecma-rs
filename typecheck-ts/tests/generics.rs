@@ -317,7 +317,12 @@ fn infers_from_contextual_signature_return_type() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_from_contextual_signature(&store, &contextual_sig, &actual_sig);
+  let result = infer_type_arguments_from_contextual_signature(
+    &store,
+    &contextual_sig.type_params,
+    &contextual_sig,
+    &actual_sig,
+  );
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 }
@@ -343,7 +348,12 @@ fn infers_from_contextual_signature_parameter() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_from_contextual_signature(&store, &contextual_sig, &actual_sig);
+  let result = infer_type_arguments_from_contextual_signature(
+    &store,
+    &contextual_sig.type_params,
+    &contextual_sig,
+    &actual_sig,
+  );
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
 }

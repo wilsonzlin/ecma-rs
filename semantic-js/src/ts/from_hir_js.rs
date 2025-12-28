@@ -467,27 +467,29 @@ fn lower_block(
               &mut result.exported,
             );
           }
-          if let Some(body) = module.stx.body.as_deref() {
-            if matches!(&module.stx.name, ModuleName::Identifier(id) if id == "global") {
-              let nested = lower_block(
-                body,
-                lower,
-                None,
-                import_specifier_span,
-                export_specifier_span,
-              );
-              result.has_module_syntax |= nested.has_module_syntax;
-              result.local_defs.extend(nested.local_defs);
-              result.exported.extend(nested.exported);
-              result.imports.extend(nested.imports);
-              result.import_equals.extend(nested.import_equals);
-              result.exports.extend(nested.exports);
-              result
-                .export_as_namespace
-                .extend(nested.export_as_namespace);
-              result.ambient_modules.extend(nested.ambient_modules);
-            }
-          }
+          let name_span = to_range(module.stx.name_loc);
+          let nested = lower_block(
+            module.stx.body.as_deref().unwrap_or(&[]),
+            lower,
+            None,
+            import_specifier_span,
+            export_specifier_span,
+          );
+          let nested = finalize_block(nested, lower, ModuleKind::Module);
+          let module_name = match &module.stx.name {
+            ModuleName::Identifier(name) => name.clone(),
+            ModuleName::String(spec) => spec.clone(),
+          };
+          result.ambient_modules.push(AmbientModule {
+            name: module_name,
+            name_span,
+            decls: nested.decls,
+            imports: nested.imports,
+            import_equals: nested.import_equals,
+            exports: nested.exports,
+            export_as_namespace: nested.export_as_namespace,
+            ambient_modules: nested.ambient_modules,
+          });
         }
         ModuleName::String(spec) => {
           if module.stx.export {
@@ -518,13 +520,11 @@ fn lower_block(
         let nested = lower_block(
           &global.stx.body,
           lower,
-          None,
+          allowed_defs,
           import_specifier_span,
           export_specifier_span,
         );
-        result.has_module_syntax |= nested.has_module_syntax;
         result.local_defs.extend(nested.local_defs);
-        result.exported.extend(nested.exported);
         result.imports.extend(nested.imports);
         result.import_equals.extend(nested.import_equals);
         result.exports.extend(nested.exports);
@@ -532,6 +532,10 @@ fn lower_block(
           .export_as_namespace
           .extend(nested.export_as_namespace);
         result.ambient_modules.extend(nested.ambient_modules);
+        for (def, exported) in nested.exported {
+          result.exported.entry(def).or_insert(exported);
+        }
+        result.has_module_syntax |= nested.has_module_syntax;
       }
       Stmt::AmbientVarDecl(av) => {
         if av.stx.export {
@@ -733,6 +737,9 @@ fn collect_def_targets(stmts: &[Node<Stmt>]) -> Vec<DefTarget> {
         span,
         kind: DefKind::Class,
       }),
+      Stmt::GlobalDecl(global) => {
+        targets.extend(collect_def_targets(&global.stx.body));
+      }
       Stmt::ExportDefaultExpr(_) => targets.push(DefTarget {
         span,
         kind: DefKind::ExportAlias,
@@ -752,24 +759,37 @@ fn resolve_def_targets(
   lower: &LowerResult,
   allowed_defs: Option<&HashSet<DefId>>,
 ) -> Vec<DefId> {
-  let mut selected = Vec::new();
-  let mut seen = HashSet::new();
-  for def in &lower.defs {
-    if let Some(allowed) = allowed_defs {
+  if let Some(allowed) = allowed_defs {
+    let mut selected = Vec::new();
+    let mut seen = HashSet::new();
+    for def in &lower.defs {
       if !allowed.contains(&def.id) {
         continue;
       }
-    }
-    if targets
-      .iter()
-      .any(|target| target.span == def.span && target.kind == def.path.kind)
-    {
-      if seen.insert(def.id) {
-        selected.push(def.id);
+      let matches_target = targets
+        .iter()
+        .any(|target| target.span == def.span && target.kind == def.path.kind);
+      if matches_target || def.in_global {
+        if seen.insert(def.id) {
+          selected.push(def.id);
+        }
       }
     }
+    return selected;
   }
-  selected
+
+  let mut seen = HashSet::new();
+  lower
+    .defs
+    .iter()
+    .filter(|def| {
+      targets
+        .iter()
+        .any(|target| target.span == def.span && target.kind == def.path.kind)
+        && seen.insert(def.id)
+    })
+    .map(|def| def.id)
+    .collect()
 }
 
 fn build_name_map(local_defs: &[DefId], lower: &LowerResult) -> HashMap<String, Vec<DefId>> {

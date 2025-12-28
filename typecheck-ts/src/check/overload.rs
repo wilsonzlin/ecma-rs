@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use diagnostics::{Diagnostic, Span};
 use types_ts_interned::{
-  Param, RelateCtx, RelateTypeExpander, Signature, SignatureId, TupleElem, TypeDisplay, TypeId,
-  TypeKind, TypeParamId, TypeStore,
+  Param, RelateCtx, Signature, SignatureId, TupleElem, TypeDisplay, TypeId, TypeKind, TypeParamId,
+  TypeStore,
 };
 
 use super::infer::{infer_type_arguments_for_call, infer_type_arguments_from_contextual_signature};
@@ -42,9 +42,9 @@ pub struct CallResolution {
 
 /// Collect all callable signatures from a type, expanding unions/intersections
 /// and object call signatures.
-pub fn callable_signatures(store: &TypeStore, ty: TypeId) -> Vec<SignatureId> {
+pub fn callable_signatures(store: &Arc<TypeStore>, ty: TypeId) -> Vec<SignatureId> {
   let mut out = Vec::new();
-  collect_signatures(store, ty, &mut out, &mut HashSet::new());
+  collect_signatures(store, None, ty, &mut out, &mut HashSet::new());
   out
 }
 
@@ -137,7 +137,6 @@ struct CandidateOutcome {
 pub fn resolve_overloads(
   store: &Arc<TypeStore>,
   relate: &RelateCtx<'_>,
-  expander: Option<&dyn RelateTypeExpander>,
   callee: TypeId,
   args: &[TypeId],
   this_arg: Option<TypeId>,
@@ -145,41 +144,28 @@ pub fn resolve_overloads(
   span: Span,
   mut context: Option<&mut dyn OverloadContext>,
 ) -> CallResolution {
-  let mut callee = callee;
-  loop {
-    let TypeKind::Ref { def, args } = store.type_kind(callee) else {
-      break;
-    };
-    let Some(expand) = expander else { break };
-    let Some(expanded) = expand.expand_ref(store.as_ref(), def, &args) else {
-      break;
-    };
-    if expanded == callee {
-      break;
-    }
-    callee = expanded;
+  let debug = std::env::var("TRACE_TYPES").is_ok();
+  if debug {
+    let arg_display: Vec<_> = args
+      .iter()
+      .map(|a| TypeDisplay::new(store, *a).to_string())
+      .collect();
+    eprintln!(
+      "[resolve_overloads] callee {} args {:?}",
+      TypeDisplay::new(store, callee),
+      arg_display
+    );
   }
   let mut candidates = Vec::new();
-  collect_signatures(store.as_ref(), callee, &mut candidates, &mut HashSet::new());
-  let mut seen = HashSet::new();
-  candidates.retain(|sig_id| {
-    let sig = store.signature(*sig_id);
-    let key = (
-      sig
-        .params
-        .iter()
-        .map(|p| (p.ty, p.optional, p.rest))
-        .collect::<Vec<_>>(),
-      sig.ret,
-      sig
-        .type_params
-        .iter()
-        .map(|p| (p.constraint, p.default))
-        .collect::<Vec<_>>(),
-      sig.this_param,
-    );
-    seen.insert(key)
-  });
+  collect_signatures(
+    store,
+    Some(relate),
+    callee,
+    &mut candidates,
+    &mut HashSet::new(),
+  );
+  candidates.sort_by(|a, b| store.compare_signatures(*a, *b));
+  candidates.dedup();
   let primitives = store.primitive_ids();
   if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
     return CallResolution {
@@ -189,13 +175,6 @@ pub fn resolve_overloads(
     };
   }
   if candidates.is_empty() {
-    if matches!(store.type_kind(callee), TypeKind::Ref { .. }) {
-      return CallResolution {
-        return_type: primitives.unknown,
-        signature: None,
-        diagnostics: Vec::new(),
-      };
-    }
     let diag = codes::NO_OVERLOAD
       .error("expression is not callable", span)
       .with_note(format!(
@@ -235,12 +214,13 @@ pub fn resolve_overloads(
       continue;
     }
 
-    let base_inference =
+    let call_inference =
       infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
+    let mut merged_substitutions = call_inference.substitutions.clone();
 
-    let mut merged_substitutions = base_inference.substitutions.clone();
-
-    let mut substituter = Substituter::new(Arc::clone(store), merged_substitutions.clone());
+    let instantiation_subst =
+      strip_placeholder_substitutions(store.as_ref(), &merged_substitutions, primitives);
+    let mut substituter = Substituter::new(Arc::clone(store), instantiation_subst);
     let instantiated_id = substituter.substitute_signature(&original_sig);
     let instantiated_sig = store.signature(instantiated_id);
 
@@ -254,9 +234,8 @@ pub fn resolve_overloads(
           if let Some(ty) = ctx.contextual_arg_type(idx, expected.ty) {
             contextual_args[idx] = ty;
           }
-          if let Some(contextual_sig_id) = callable_signatures(store.as_ref(), expected.ty)
-            .into_iter()
-            .next()
+          if let Some(contextual_sig_id) =
+            callable_signatures(store, expected.ty).into_iter().next()
           {
             let contextual_sig = store.signature(contextual_sig_id);
             if let Some(actual) = ctx.actual_function_signature(idx, &contextual_sig) {
@@ -292,8 +271,24 @@ pub fn resolve_overloads(
 
     for (contextual_sig, actual_sig) in contextual_sigs.into_iter().zip(actual_sigs.into_iter()) {
       if let (Some(contextual_sig), Some(actual_sig)) = (contextual_sig, actual_sig) {
-        let contextual_inference =
-          infer_type_arguments_from_contextual_signature(store, &contextual_sig, &actual_sig);
+        let contextual_inference = infer_type_arguments_from_contextual_signature(
+          store,
+          &original_sig.type_params,
+          &contextual_sig,
+          &actual_sig,
+        );
+        if debug {
+          let subst_display: Vec<_> = contextual_inference
+            .substitutions
+            .iter()
+            .map(|(k, v)| format!("T{}={}", k.0, TypeDisplay::new(store, *v)))
+            .collect();
+          eprintln!(
+            "[resolve_overloads] contextual inference {:?} -> {:?}",
+            format_signature(store.as_ref(), &contextual_sig),
+            subst_display
+          );
+        }
         inference_diags.extend(
           contextual_inference
             .diagnostics
@@ -320,6 +315,18 @@ pub fn resolve_overloads(
     let mut substituter = Substituter::new(Arc::clone(store), merged_substitutions.clone());
     let instantiated_id = substituter.substitute_signature(&original_sig);
     let instantiated_sig = store.signature(instantiated_id);
+    if debug {
+      let subst_display: Vec<_> = merged_substitutions
+        .iter()
+        .map(|(k, v)| format!("T{}={}", k.0, TypeDisplay::new(store, *v)))
+        .collect();
+      eprintln!(
+        "[resolve_overloads] candidate {} subst {:?} -> {}",
+        outcome.display,
+        subst_display,
+        TypeDisplay::new(store, instantiated_sig.ret)
+      );
+    }
 
     let arity = analyze_arity(store.as_ref(), &instantiated_sig);
     if !arity.allows(args.len()) {
@@ -360,8 +367,13 @@ pub fn resolve_overloads(
       }
     }
 
+    let mapped_args;
     let arg_types = if context.is_some() {
-      contextual_args.as_slice()
+      mapped_args = contextual_args
+        .iter()
+        .map(|arg| substituter.substitute_type(*arg))
+        .collect::<Vec<_>>();
+      mapped_args.as_slice()
     } else {
       args
     };
@@ -377,6 +389,14 @@ pub fn resolve_overloads(
 
   let mut applicable: Vec<&CandidateOutcome> =
     outcomes.iter().filter(|c| c.rejection.is_none()).collect();
+  if debug {
+    for outcome in outcomes.iter() {
+      eprintln!(
+        "[resolve_overloads] candidate {} -> {:?}",
+        outcome.display, outcome.rejection
+      );
+    }
+  }
   if applicable.is_empty() {
     let mut fallback = outcomes.clone();
     let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes);
@@ -437,53 +457,6 @@ pub fn resolve_overloads(
     })
     .collect();
   if tied.len() > 1 {
-    if let Some(expected_ret) = contextual_return {
-      let mut scored: Vec<(&CandidateOutcome, u8)> = tied
-        .iter()
-        .map(|c| {
-          let ret = c.instantiated_sig.ret;
-          let score = if ret == expected_ret {
-            0
-          } else {
-            match (
-              relate.is_assignable(ret, expected_ret),
-              relate.is_assignable(expected_ret, ret),
-            ) {
-              (true, false) => 1,
-              (true, true) => 2,
-              (false, true) => 3,
-              (false, false) => 4,
-            }
-          };
-          (*c, score)
-        })
-        .collect();
-      scored.sort_by(|(a, a_score), (b, b_score)| {
-        (*a_score, a.specificity, a.unknown_inferred, a.instantiated_sig.params.len(), a.sig_id)
-          .cmp(&(
-            *b_score,
-            b.specificity,
-            b.unknown_inferred,
-            b.instantiated_sig.params.len(),
-            b.sig_id,
-          ))
-      });
-      let best_score = scored[0].1;
-      let best_returns: Vec<&CandidateOutcome> = scored
-        .into_iter()
-        .take_while(|(_, score)| *score == best_score)
-        .map(|(c, _)| c)
-        .collect();
-      if let Some(chosen) = best_returns.first().copied() {
-        if best_returns.len() == 1 {
-          return CallResolution {
-            return_type: chosen.instantiated_sig.ret,
-            signature: Some(chosen.instantiated_id),
-            diagnostics: Vec::new(),
-          };
-        }
-      }
-    }
     let diag = build_ambiguous_diagnostic(span, &tied);
     return CallResolution {
       return_type: primitives.unknown,
@@ -492,6 +465,13 @@ pub fn resolve_overloads(
     };
   }
 
+  if debug {
+    eprintln!(
+      "[resolve_overloads] selected {} -> {}",
+      best.display,
+      TypeDisplay::new(store, best.instantiated_sig.ret)
+    );
+  }
   CallResolution {
     return_type: best.instantiated_sig.ret,
     signature: Some(best.instantiated_id),
@@ -559,8 +539,7 @@ pub fn resolve_construct(
       continue;
     }
 
-    let inference =
-      infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
+    let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
 
     let merged_substitutions = inference.substitutions.clone();
 
@@ -709,7 +688,8 @@ pub fn resolve_construct(
 }
 
 fn collect_signatures(
-  store: &TypeStore,
+  store: &Arc<TypeStore>,
+  relate: Option<&RelateCtx<'_>>,
   ty: TypeId,
   out: &mut Vec<SignatureId>,
   seen: &mut HashSet<TypeId>,
@@ -723,9 +703,16 @@ fn collect_signatures(
       let shape = store.shape(store.object(obj).shape);
       out.extend(shape.call_signatures);
     }
+    TypeKind::Ref { def, args } => {
+      if let Some(relate) = relate {
+        if let Some(expanded) = relate.expand_ref_type(def, &args) {
+          collect_signatures(store, Some(relate), expanded, out, seen);
+        }
+      }
+    }
     TypeKind::Union(members) | TypeKind::Intersection(members) => {
       for member in members {
-        collect_signatures(store, member, out, seen);
+        collect_signatures(store, relate, member, out, seen);
       }
     }
     _ => {}
@@ -889,10 +876,30 @@ fn check_arguments(
       // Prefer fixed parameters over rest matches when both are applicable.
       specificity += 1;
     }
+    if matches!(store.type_kind(expected.ty), TypeKind::TypeParam(_)) {
+      // Unsolved type parameters are treated like `unknown` for compatibility,
+      // but they should make the candidate less specific than one with a
+      // concrete parameter type.
+      specificity += 2;
+      continue;
+    }
     if matches!(
       (store.type_kind(*arg), store.type_kind(expected.ty)),
       (TypeKind::Any | TypeKind::Unknown, _) | (_, TypeKind::Any | TypeKind::Unknown)
     ) {
+      if matches!(store.type_kind(*arg), TypeKind::Any | TypeKind::Unknown)
+        && !matches!(
+          store.type_kind(expected.ty),
+          TypeKind::Any | TypeKind::Unknown
+        )
+      {
+        specificity += 1;
+      } else if matches!(
+        store.type_kind(expected.ty),
+        TypeKind::Any | TypeKind::Unknown
+      ) {
+        specificity += 2;
+      }
       continue;
     }
     if !relate.is_assignable(*arg, expected.ty) {
@@ -914,8 +921,6 @@ fn check_arguments(
         specificity += 2;
       }
       TypeKind::Union(_) => {
-        // Prefer narrower, non-union parameter types when multiple candidates
-        // accept the provided argument.
         specificity += 1;
       }
       _ => {}
@@ -958,6 +963,27 @@ fn merge_substitutions(
       target.insert(*key, *value);
     }
   }
+}
+
+fn strip_placeholder_substitutions(
+  store: &TypeStore,
+  subst: &HashMap<TypeParamId, TypeId>,
+  primitives: types_ts_interned::PrimitiveIds,
+) -> HashMap<TypeParamId, TypeId> {
+  subst
+    .iter()
+    .filter_map(|(id, ty)| {
+      let ty_kind = store.type_kind(*ty);
+      let is_placeholder = *ty == primitives.any
+        || *ty == primitives.unknown
+        || matches!(ty_kind, TypeKind::Infer { .. });
+      if is_placeholder {
+        None
+      } else {
+        Some((*id, *ty))
+      }
+    })
+    .collect()
 }
 
 fn build_no_match_diagnostic(

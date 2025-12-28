@@ -33,39 +33,10 @@ pub(crate) fn exports_from_semantics(
     ];
     for ns in candidates {
       if let Some(symbol_id) = group.symbol_for(ns, symbols) {
-        mapped.insert(name.clone(), map_export(state, semantics, Some(sem_file), symbol_id, ns));
-        break;
-      }
-    }
-  }
-
-  mapped
-}
-
-/// Build [`ExportMap`] for an ambient module specifier using `semantic-js` binder output.
-pub(crate) fn exports_of_ambient_module(
-  state: &mut ProgramState,
-  semantics: &sem_ts::TsProgramSemantics,
-  specifier: &str,
-) -> ExportMap {
-  let Some(exports) = semantics.exports_of_ambient_module(specifier) else {
-    return ExportMap::new();
-  };
-  if exports.is_empty() {
-    return ExportMap::new();
-  }
-  let symbols = semantics.symbols();
-  let mut mapped = ExportMap::new();
-
-  for (name, group) in exports.iter() {
-    let candidates = [
-      sem_ts::Namespace::VALUE,
-      sem_ts::Namespace::NAMESPACE,
-      sem_ts::Namespace::TYPE,
-    ];
-    for ns in candidates {
-      if let Some(symbol_id) = group.symbol_for(ns, symbols) {
-        mapped.insert(name.clone(), map_export(state, semantics, None, symbol_id, ns));
+        mapped.insert(
+          name.clone(),
+          map_export(state, semantics, sem_file, symbol_id, ns),
+        );
         break;
       }
     }
@@ -77,7 +48,7 @@ pub(crate) fn exports_of_ambient_module(
 fn map_export(
   state: &mut ProgramState,
   semantics: &sem_ts::TsProgramSemantics,
-  sem_file: Option<sem_ts::FileId>,
+  sem_file: sem_ts::FileId,
   symbol_id: sem_ts::SymbolId,
   ns: sem_ts::Namespace,
 ) -> ExportEntry {
@@ -86,9 +57,9 @@ fn map_export(
   let mut all_defs: Vec<DefId> = Vec::new();
   for decl_id in semantics.symbol_decls(symbol_id, ns) {
     let decl = symbols.decl(*decl_id);
-    if let Some(def) = map_decl_to_program_def(state, decl, ns) {
+    if let Some(def) = state.map_decl_to_program_def(decl, ns) {
       all_defs.push(def);
-      if sem_file.map_or(false, |file| decl.file == file) {
+      if decl.file == sem_file {
         local_defs.push(def);
       }
     }
@@ -115,10 +86,7 @@ fn map_export(
   };
 
   let preferred = pick_best(&local_defs).or_else(|| pick_best(&all_defs));
-  let type_id: Option<TypeId> = match preferred {
-    Some(def) => state.export_type_for_def(def).unwrap_or(None),
-    None => None,
-  };
+  let type_id: Option<TypeId> = preferred.and_then(|def| state.export_type_for_def(def));
   let symbol = preferred
     .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
     .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
@@ -135,32 +103,4 @@ fn map_export(
     def: local_def,
     type_id,
   }
-}
-
-fn map_decl_to_program_def(
-  state: &ProgramState,
-  decl: &sem_ts::DeclData,
-  ns: sem_ts::Namespace,
-) -> Option<DefId> {
-  let direct = DefId(decl.def_id.0);
-  if state.def_data.contains_key(&direct) {
-    return Some(direct);
-  }
-
-  let mut best: Option<(u8, DefId)> = None;
-  for (id, data) in state.def_data.iter() {
-    if data.file == FileId(decl.file.0) && data.name == decl.name {
-      let pri = state.def_priority(*id, ns);
-      best = best
-        .map(|(best_pri, best_id)| {
-          if pri < best_pri || (pri == best_pri && id < &best_id) {
-            (pri, *id)
-          } else {
-            (best_pri, best_id)
-          }
-        })
-        .or(Some((pri, *id)));
-    }
-  }
-  best.map(|(_, id)| id)
 }
