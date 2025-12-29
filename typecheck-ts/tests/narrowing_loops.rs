@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use diagnostics::FileId;
 use hir_js::{lower_from_source, Body, BodyId, DefKind, LowerResult, NameId, NameInterner};
+use typecheck_ts::check::flow_bindings::FlowBindings;
 use typecheck_ts::check::hir_body::check_body_with_env;
 use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
@@ -26,22 +27,12 @@ fn run_flow(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  _src: &str,
+  src: &str,
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, types_ts_interned::TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
   let relate = RelateCtx::new(Arc::clone(store), store.options());
-  check_body_with_env(
-    body_id,
-    body,
-    names,
-    file,
-    Arc::clone(store),
-    None,
-    initial,
-    relate,
-    None,
-  )
+  check_body_with_env(body_id, body, names, file, src, Arc::clone(store), initial, relate, None)
 }
 
 #[test]
@@ -57,7 +48,9 @@ fn for_init_runs_once() {
   let lowered = lower_from_source(src).expect("lower");
   let (body_id, body) = body_of(&lowered, &lowered.names, "run");
   let bindings = FlowBindings::from_body(body);
-  assert!(bindings.binding_for_name(name_id(lowered.names.as_ref(), "x")).is_some());
+  assert!(bindings
+    .binding_for_name(name_id(lowered.names.as_ref(), "x"))
+    .is_some());
 
   let store = TypeStore::new();
   let prim = store.primitive_ids();
@@ -85,7 +78,10 @@ fn for_init_runs_once() {
   let test_ty = res
     .expr_at(test_offset)
     .map(|(id, ty)| (id, TypeDisplay::new(&store, ty).to_string()));
-  eprintln!("for_init_runs_once returns {:?}, test {:?}", rendered, test_ty);
+  eprintln!(
+    "for_init_runs_once returns {:?}, test {:?}",
+    rendered, test_ty
+  );
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "string");
   assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
 }

@@ -10,7 +10,7 @@ use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use semantic_js::ts::locals::bind_ts_locals;
 use typecheck_ts::check::flow_bindings::FlowBindings;
 use typecheck_ts::check::hir_body::check_body_with_env_with_bindings;
-use types_ts_interned::{TypeDisplay, TypeStore};
+use types_ts_interned::{RelateCtx, TypeDisplay, TypeStore};
 
 fn parse_and_lower_with_locals(
   source: &str,
@@ -62,6 +62,7 @@ function f(x: string | null) {
   let expected = store.union(vec![prim.string, prim.null]);
   initial.insert(name_id(lowered.names.as_ref(), "x"), expected);
 
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
   let res = check_body_with_env_with_bindings(
     body_id,
     body,
@@ -70,7 +71,9 @@ function f(x: string | null) {
     src,
     Arc::clone(&store),
     &initial,
-    bindings,
+    Some(&bindings),
+    relate,
+    None,
   );
 
   let ret_ty = res.return_types()[0];
@@ -101,6 +104,7 @@ function f(x: string | null) {
     store.union(vec![prim.string, prim.null]),
   );
 
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
   let res = check_body_with_env_with_bindings(
     body_id,
     body,
@@ -109,7 +113,9 @@ function f(x: string | null) {
     src,
     Arc::clone(&store),
     &initial,
-    bindings,
+    Some(&bindings),
+    relate,
+    None,
   );
 
   let ret_ty = res.return_types()[0];

@@ -32,17 +32,49 @@ const y = ctor.x;
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
+  let file_id = program.file_id(&FileKey::new("main.ts")).unwrap();
+  for def in program.definitions_in_file(file_id) {
+    eprintln!(
+      "def {:?} name {:?} type {}",
+      def,
+      program.def_name(def),
+      program.display_type(program.type_of_def_interned(def))
+    );
+  }
+  let alias_def = def_by_name(&mut program, FileKey::new("main.ts"), "T");
+  println!(
+    "defs {:?}",
+    program
+      .definitions_in_file(program.file_id(&FileKey::new("main.ts")).unwrap())
+  );
+  println!(
+    "typeof def {:?} kind {:?}",
+    alias_def,
+    program.interned_type_kind(program.type_of_def_interned(alias_def))
+  );
 
   let class_def = def_by_name(&mut program, FileKey::new("main.ts"), "C");
-  let alias_def = def_by_name(&mut program, FileKey::new("main.ts"), "T");
   let alias_ty = program.type_of_def_interned(alias_def);
-  match program.interned_type_kind(alias_ty) {
-    TypeKind::Ref { def, .. } => assert_ne!(
-      def, class_def,
-      "typeof should reference value-side def id, not the class instance def"
-    ),
+  let alias_target = match program.interned_type_kind(alias_ty) {
+    TypeKind::Ref { def, .. } => def,
     other => panic!("expected typeof alias to lower to a ref, got {:?}", other),
-  }
+  };
+  println!(
+    "value def kind {:?}",
+    program.interned_type_kind(program.type_of_def_interned(alias_target))
+  );
+  println!(
+    "value def display {}",
+    program.display_type(program.type_of_def_interned(alias_target))
+  );
+  println!(
+    "class def display {}",
+    program.display_type(program.type_of_def_interned(class_def))
+  );
+  assert_ne!(
+    alias_target, class_def,
+    "typeof should reference value-side def id, not the class instance def"
+  );
 
   let y_def = def_by_name(&mut program, FileKey::new("main.ts"), "y");
   let ty = program.type_of_def_interned(y_def);

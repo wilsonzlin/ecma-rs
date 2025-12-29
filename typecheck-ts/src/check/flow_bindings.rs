@@ -5,8 +5,8 @@ use hir_js::{
   ArrayElement, Body, ExprKind, ForHead, ForInit, MemberExpr, ObjectKey, PatKind, StmtId, StmtKind,
   VarDeclKind,
 };
-use std::collections::HashSet;
 use semantic_js::ts::{locals::TsLocalSemantics, SymbolId};
+use std::collections::HashSet;
 
 pub type FlowBindingId = SymbolId;
 
@@ -484,44 +484,9 @@ impl<'a> FlowBindingsBuilder<'a> {
       self.bind_existing_pat(declarator.pat, lexical_scopes);
       if let Some(init) = declarator.init {
         self.process_expr(init, lexical_scopes);
+      }
     }
   }
-}
-
-fn child_stmt_ids(stmt: &hir_js::Stmt) -> Vec<StmtId> {
-  match &stmt.kind {
-    StmtKind::Block(stmts) => stmts.clone(),
-    StmtKind::If {
-      consequent,
-      alternate,
-      ..
-    } => alternate
-      .iter()
-      .copied()
-      .chain(std::iter::once(*consequent))
-      .collect(),
-    StmtKind::While { body, .. } | StmtKind::DoWhile { body, .. } => vec![*body],
-    StmtKind::For { body, .. } => vec![*body],
-    StmtKind::ForIn { body, .. } => vec![*body],
-    StmtKind::Switch { cases, .. } => cases
-      .iter()
-      .flat_map(|c| c.consequent.iter().copied())
-      .collect(),
-    StmtKind::Try {
-      block,
-      catch,
-      finally_block,
-    } => catch
-      .iter()
-      .map(|c| c.body)
-      .chain(finally_block.iter().copied())
-      .chain(std::iter::once(*block))
-      .collect(),
-    StmtKind::Labeled { body, .. } => vec![*body],
-    StmtKind::With { body, .. } => vec![*body],
-    _ => Vec::new(),
-  }
-}
 
   fn process_expr(
     &mut self,
@@ -536,7 +501,7 @@ fn child_stmt_ids(stmt: &hir_js::Stmt) -> Vec<StmtId> {
       }
       ExprKind::Unary { expr, .. }
       | ExprKind::Update { expr, .. }
-      | ExprKind::TypeAssertion { expr } => {
+      | ExprKind::TypeAssertion { expr, .. } => {
         self.process_expr(*expr, lexical_scopes);
       }
       ExprKind::Binary { left, right, .. } => {

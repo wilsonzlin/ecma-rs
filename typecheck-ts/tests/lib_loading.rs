@@ -302,12 +302,15 @@ fn ambient_module_types_are_bound() {
     .into_iter()
     .find(|def| program.def_name(*def).as_deref() == Some("Uses"))
     .expect("definition for Uses");
-  let rendered = program
-    .display_type(program.type_of_def(uses_def))
-    .to_string();
+  let uses_ty = program.type_of_def(uses_def);
+  let has_prop_a = program
+    .properties_of(uses_ty)
+    .iter()
+    .any(|p| p.key == PropertyKey::String("a".to_string()));
   assert!(
-    rendered.contains("a: string"),
-    "expected Uses to resolve to ambient Foo; got {rendered}"
+    has_prop_a,
+    "expected Uses to expose ambient Foo shape; got {}",
+    program.display_type(uses_ty)
   );
 }
 

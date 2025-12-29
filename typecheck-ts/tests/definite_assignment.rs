@@ -27,22 +27,12 @@ fn run_flow(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  _src: &str,
+  src: &str,
   store: &Arc<TypeStore>,
   initial: &HashMap<NameId, types_ts_interned::TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
   let relate = RelateCtx::new(Arc::clone(store), store.options());
-  check_body_with_env(
-    body_id,
-    body,
-    names,
-    file,
-    Arc::clone(store),
-    None,
-    initial,
-    relate,
-    None,
-  )
+  check_body_with_env(body_id, body, names, file, src, Arc::clone(store), initial, relate, None)
 }
 
 #[test]

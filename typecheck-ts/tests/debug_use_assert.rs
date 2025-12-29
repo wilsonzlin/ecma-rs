@@ -41,7 +41,9 @@ fn debug_use_assert_return_type() {
     .copied()
     .find(|d| program.def_name(*d).as_deref() == Some("assertNumber"))
     .expect("assertNumber def");
-  let assert_ty = program.display_type(program.type_of_def(assert_number)).to_string();
+  let assert_ty = program
+    .display_type(program.type_of_def(assert_number))
+    .to_string();
   eprintln!("assertNumber type {assert_ty}");
   let use_assert = defs
     .iter()
@@ -56,7 +58,9 @@ fn debug_use_assert_return_type() {
     .map(|ty| program.display_type(*ty).to_string())
     .collect();
   eprintln!("return_types {:?}", rendered);
-  let def_ty = program.display_type(program.type_of_def(use_assert)).to_string();
+  let def_ty = program
+    .display_type(program.type_of_def(use_assert))
+    .to_string();
   eprintln!("def type {def_ty}");
   for (idx, span) in result.expr_spans().iter().enumerate() {
     let desc = result

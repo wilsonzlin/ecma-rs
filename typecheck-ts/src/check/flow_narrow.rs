@@ -59,13 +59,31 @@ pub fn and_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
     falsy: right_falsy,
     assertions: right_assertions,
   } = right;
+  let prim = store.primitive_ids();
 
   let truthy = apply_sequence(&left_truthy, &right_truthy);
-  let falsy = join_alternatives(
-    &left_falsy,
-    &apply_sequence(&left_truthy, &right_falsy),
-    store,
-  );
+  let right_falsy = apply_sequence(&left_truthy, &right_falsy);
+  let mut falsy = HashMap::new();
+  for (name, left_ty) in left_falsy.iter() {
+    if let Some(right_ty) = right_falsy.get(name) {
+      if *right_ty == prim.never {
+        falsy.insert(name.clone(), *left_ty);
+      } else {
+        let nullish = narrow_non_nullish(*left_ty, store).1;
+        let ty = if nullish == prim.never {
+          *right_ty
+        } else {
+          store.union(vec![*right_ty, nullish])
+        };
+        falsy.insert(name.clone(), ty);
+      }
+    } else {
+      falsy.insert(name.clone(), *left_ty);
+    }
+  }
+  for (name, ty) in right_falsy.iter() {
+    falsy.entry(name.clone()).or_insert(*ty);
+  }
   let assertions = merge_assertions(left_assertions, right_assertions, store);
 
   Facts {
@@ -88,11 +106,20 @@ pub fn or_facts(left: Facts, right: Facts, store: &TypeStore) -> Facts {
     assertions: right_assertions,
   } = right;
 
-  let truthy = join_alternatives(
-    &left_truthy,
-    &apply_sequence(&left_falsy, &right_truthy),
-    store,
-  );
+  let right_truthy = apply_sequence(&left_falsy, &right_truthy);
+  let mut truthy = left_truthy.clone();
+  for (name, ty) in right_truthy.iter() {
+    truthy
+      .entry(name.clone())
+      .and_modify(|existing| *existing = store.union(vec![*existing, *ty]))
+      .or_insert_with(|| {
+        if let Some(falsy) = right_falsy.get(name) {
+          store.union(vec![*ty, *falsy])
+        } else {
+          *ty
+        }
+      });
+  }
   let falsy = apply_sequence(&left_falsy, &right_falsy);
   let assertions = merge_assertions(left_assertions, right_assertions, store);
 
@@ -319,8 +346,7 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
         (ty, primitives.never)
       }
     }
-    TypeKind::String | TypeKind::TemplateLiteral(_) => (ty, primitives.never),
-    TypeKind::Number | TypeKind::BigInt => (ty, ty),
+    TypeKind::Number | TypeKind::BigInt | TypeKind::String | TypeKind::TemplateLiteral(_) => (ty, ty),
     TypeKind::Boolean => (
       store.intern_type(TypeKind::BooleanLiteral(true)),
       store.intern_type(TypeKind::BooleanLiteral(false)),
@@ -560,6 +586,8 @@ fn matches_discriminant_value(ty: TypeId, value: &LiteralValue, store: &TypeStor
       (TypeKind::Number, LiteralValue::Number(_)) => true,
       (TypeKind::BooleanLiteral(lit), LiteralValue::Boolean(target)) => lit == *target,
       (TypeKind::Boolean, LiteralValue::Boolean(_)) => true,
+      (TypeKind::Null, LiteralValue::Null) => true,
+      (TypeKind::Undefined, LiteralValue::Undefined) => true,
       _ => false,
     },
   }

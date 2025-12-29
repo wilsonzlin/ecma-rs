@@ -1026,6 +1026,7 @@ impl Program {
             Arc::clone(store),
             &state.interned_def_types,
             &state.interned_type_params,
+            &state.interned_class_instances,
             caches.eval.clone(),
           );
           let mut prop_ty = lookup_interned_property_type(store, Some(&expander), base_ty, &key);
@@ -1878,6 +1879,7 @@ impl Program {
         exports: fs.exports.clone(),
         bindings,
         top_body: fs.top_body,
+        ambient_modules: Vec::new(),
       });
     }
 
@@ -1958,9 +1960,9 @@ impl Program {
     };
     let mut canonical_defs: Vec<_> = canonical_defs_map
       .into_iter()
-      .map(|((file, name, ns), def)| ((file, name, ns.bits()), def))
+      .map(|((file, name, _ns), def)| ((file, name), def))
       .collect();
-    canonical_defs.sort_by(|a, b| (a.0 .0, &a.0 .1, a.0 .2).cmp(&(b.0 .0, &b.0 .1, b.0 .2)));
+    canonical_defs.sort_by(|a, b| (a.0 .0, &a.0 .1).cmp(&(b.0 .0, &b.0 .1)));
 
     let mut namespace_types: Vec<_> = state
       .namespace_object_types
@@ -2004,11 +2006,12 @@ impl Program {
       type_store: state.type_store.clone(),
       interned_type_store,
       interned_def_types,
+      enum_value_types: Vec::new(),
       interned_type_params,
+      value_def_map: Vec::new(),
       builtin: state.builtin,
       next_def: state.next_def,
       next_body: state.next_body,
-      next_symbol: state.next_symbol,
     }
   }
 
@@ -2051,7 +2054,7 @@ impl Program {
         } else {
           FileOrigin::Source
         };
-        let id = state.file_registry.intern(&key, origin);
+        let id = state.file_registry.intern(&key);
         debug_assert_eq!(id, file.file, "snapshot file id mismatch");
         state.file_kinds.insert(file.file, file.kind);
         if file.is_lib {
@@ -2132,7 +2135,6 @@ impl Program {
       state.builtin = snapshot.builtin;
       state.next_def = snapshot.next_def;
       state.next_body = snapshot.next_body;
-      state.next_symbol = snapshot.next_symbol;
       state.sync_typecheck_roots();
       state.rebuild_callable_overloads();
       state.merge_callable_overload_types();
@@ -3172,6 +3174,7 @@ struct ProgramState {
   interned_store: Option<Arc<tti::TypeStore>>,
   interned_def_types: HashMap<DefId, tti::TypeId>,
   interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
+  interned_class_instances: HashMap<DefId, tti::TypeId>,
   builtin: BuiltinTypes,
   query_stats: QueryStatsCollector,
   current_file: Option<FileId>,
@@ -3270,6 +3273,7 @@ impl ProgramState {
       interned_store: None,
       interned_def_types: HashMap::new(),
       interned_type_params: HashMap::new(),
+      interned_class_instances: HashMap::new(),
       builtin,
       query_stats,
       current_file: None,
@@ -3298,7 +3302,7 @@ impl ProgramState {
   }
 
   fn file_ids_for_key(&self, key: &FileKey) -> Vec<FileId> {
-    self.file_registry.lookup_ids(key)
+    self.file_registry.lookup_id(key).into_iter().collect()
   }
 
   fn body_check_context(&mut self) -> BodyCheckContext {
@@ -3384,7 +3388,7 @@ impl ProgramState {
   }
 
   fn intern_file_key(&mut self, key: FileKey, origin: FileOrigin) -> FileId {
-    let id = self.file_registry.intern(&key, origin);
+    let id = self.file_registry.intern(&key);
     if matches!(origin, FileOrigin::Lib) {
       self.lib_file_ids.insert(id);
     } else {
@@ -4142,6 +4146,7 @@ impl ProgramState {
         Some(&flat_defs),
         Some(host.as_ref()),
         Some(&key_to_id),
+        None,
       );
       for def in lowered.defs.iter() {
         let Some(info) = def.type_info.as_ref() else {
@@ -5138,10 +5143,11 @@ impl ProgramState {
     let Some(key) = self.file_key_for_id(file) else {
       return Err(HostError::new(format!("missing file key for {file:?}")));
     };
-    let origin = self
-      .file_registry
-      .origin(file)
-      .unwrap_or(FileOrigin::Source);
+    let origin = if self.lib_file_ids.contains(&file) {
+      FileOrigin::Lib
+    } else {
+      FileOrigin::Source
+    };
     if matches!(origin, FileOrigin::Lib) {
       if let Some(text) = self.lib_texts.get(&file) {
         return Ok(text.clone());
@@ -5178,10 +5184,11 @@ impl ProgramState {
       .file_registry
       .lookup_key(file)
       .unwrap_or_else(|| panic!("file {:?} must be interned before setting inputs", file));
-    let origin = self
-      .file_registry
-      .origin(file)
-      .unwrap_or(FileOrigin::Source);
+    let origin = if self.lib_file_ids.contains(&file) {
+      FileOrigin::Lib
+    } else {
+      FileOrigin::Source
+    };
     self.typecheck_db.set_file(file, key, kind, text, origin);
   }
 
@@ -8399,6 +8406,7 @@ impl ProgramState {
         Arc::clone(&store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_class_instances,
         caches.eval.clone(),
       );
       let semantic_resolver = self.build_type_resolver(&binding_defs);
@@ -8623,6 +8631,7 @@ impl ProgramState {
         Arc::clone(store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_class_instances,
         caches.eval.clone(),
       );
       for (idx, expr) in body.exprs.iter().enumerate() {
@@ -8708,6 +8717,7 @@ impl ProgramState {
         Arc::clone(&store),
         &self.interned_def_types,
         &self.interned_type_params,
+        &self.interned_class_instances,
         caches.eval.clone(),
       );
       let mut base_relate_hooks = relate_hooks();
@@ -10597,7 +10607,7 @@ impl ProgramState {
   }
 
   fn alloc_symbol(&mut self) -> semantic_js::SymbolId {
-    let id = semantic_js::SymbolId(self.next_symbol);
+    let id = semantic_js::SymbolId(self.next_symbol.into());
     self.next_symbol += 1;
     id
   }

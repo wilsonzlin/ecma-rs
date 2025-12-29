@@ -208,8 +208,8 @@ fn synthetic_symbol_id(
     span.end,
     ns.bits(),
   ));
-  // Set the high bit to avoid colliding with stable 32-bit IDs from semantics.
-  semantic_js::SymbolId(hash | (1 << 31))
+  // Set the high bit to avoid colliding with stable IDs from semantics.
+  semantic_js::SymbolId(u64::from(hash) | (1u64 << 63))
 }
 
 fn stable_hash_u32<T: Hash>(value: &T) -> u32 {

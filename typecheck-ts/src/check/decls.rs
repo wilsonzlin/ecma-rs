@@ -643,6 +643,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     prop: &hir_js::TypePropertySignature,
     names: &hir_js::NameInterner,
   ) -> Option<(PropKey, PropData)> {
+    let trace = std::env::var("TRACE_TYPEOF").is_ok();
     let key = match &prop.name {
       hir_js::PropertyName::Ident(id) => {
         PropKey::String(self.store.intern_name(names.resolve(*id)?.to_string()))
@@ -658,6 +659,19 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       .type_annotation
       .map(|t| self.lower_type_expr(t, names))
       .unwrap_or(self.store.primitive_ids().unknown);
+    if trace {
+      if let PropKey::String(name_id) = &key {
+        let name = self.store.name(*name_id);
+        if name == "document" {
+          eprintln!(
+            "[lower_property] file {:?} prop {} has_annotation={}",
+            self.file,
+            name,
+            prop.type_annotation.is_some()
+          );
+        }
+      }
+    }
     Some((
       key,
       PropData {
@@ -717,6 +731,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     reference: &hir_js::TypeRef,
     names: &hir_js::NameInterner,
   ) -> TypeId {
+    let args: Vec<_> = reference
+      .type_args
+      .iter()
+      .map(|a| self.lower_type_expr(*a, names))
+      .collect();
+
     // Type parameter reference.
     if let TypeName::Ident(name_id) = &reference.name {
       if let Some(tp) = self.type_param_names.get(name_id) {
@@ -725,11 +745,6 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
 
     if let Some(resolved) = self.resolve_type_name(&reference.name, names, None) {
-      let args: Vec<_> = reference
-        .type_args
-        .iter()
-        .map(|a| self.lower_type_expr(*a, names))
-        .collect();
       return self.store.intern_type(TypeKind::Ref {
         def: resolved,
         args,
@@ -737,6 +752,22 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
 
     let name = self.type_name_to_string(&reference.name, names);
+
+    if let Some(def) = self
+      .defs
+      .iter()
+      .find(|((_, def_name), _)| def_name == &name)
+      .map(|(_, def)| *def)
+      .or_else(|| {
+        self.def_by_name.and_then(|map| {
+          map.iter()
+            .find(|((_, def_name), _)| def_name == &name)
+            .map(|(_, def)| *def)
+        })
+      })
+    {
+      return self.store.intern_type(TypeKind::Ref { def, args });
+    }
 
     self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
       format!("Cannot find name '{name}'."),
@@ -859,8 +890,18 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
   }
 
   fn resolve_named_in_namespace(&self, name: &str, file: FileId, ns: Namespace) -> Option<DefId> {
+    let trace = std::env::var("TRACE_TYPEOF").is_ok() && (name == "document" || name == "window");
+    if trace {
+      eprintln!(
+        "[resolve_named_in_namespace] file {:?} name {} ns {:?}",
+        file, name, ns
+      );
+    }
     if file == self.file {
       if let Some(local) = self.local_defs.get(name).copied() {
+        if trace {
+          eprintln!("[resolve_named_in_namespace] local def {:?}", local);
+        }
         return self
           .def_map
           .and_then(|map| map.get(&local).copied())
@@ -874,6 +915,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     }
 
     if let Some(def) = self.defs.get(&(file, name.to_string())) {
+      if trace {
+        eprintln!(
+          "[resolve_named_in_namespace] defs map hit {:?} -> {:?}",
+          (file, name),
+          def
+        );
+      }
       return Some(*def);
     }
 
@@ -881,6 +929,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       .def_by_name
       .and_then(|map| map.get(&(file, name.to_string())).copied())
     {
+      if trace {
+        eprintln!(
+          "[resolve_named_in_namespace] def_by_name hit {:?} -> {:?}",
+          (file, name),
+          def
+        );
+      }
       return Some(def);
     }
 
@@ -912,6 +967,13 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
         }) {
           let decl_data = sem.symbols().decl(*decl);
           let target = DefId(decl_data.def_id.0);
+          if trace {
+            eprintln!(
+              "[resolve_named_in_namespace] symbol decl hit {:?} -> {:?}",
+              (file, name),
+              target
+            );
+          }
           return self
             .def_map
             .and_then(|map| map.get(&target).copied())
@@ -932,6 +994,12 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       {
         if let Some(symbol) = group.symbol_for(ns, sem.symbols()) {
           if let Some(def) = self.def_for_symbol(sem, symbol) {
+            if trace {
+              eprintln!(
+                "[resolve_named_in_namespace] global symbol {:?} -> {:?}",
+                name, def
+              );
+            }
             return Some(def);
           }
         }

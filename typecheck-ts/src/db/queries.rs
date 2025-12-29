@@ -236,14 +236,14 @@ pub trait GlobalBindingsDb {
 }
 
 fn deterministic_symbol_id(name: &str) -> SymbolId {
-  // FNV-1a 64-bit with fold-down to `u32` for stability across runs.
+  // FNV-1a 64-bit with fold-down to keep outputs stable across runs.
   let mut hash: u64 = 0xcbf29ce484222325;
   for byte in name.as_bytes() {
     hash ^= *byte as u64;
     hash = hash.wrapping_mul(0x100000001b3);
   }
   let folded = hash ^ (hash >> 32);
-  SymbolId(folded as u32)
+  SymbolId(folded)
 }
 
 /// Global value bindings derived from TS semantics, `.d.ts` files, and builtin
@@ -1263,6 +1263,15 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
       ))
     })
   });
+  for diag in bind_diags.iter_mut() {
+    if diag.code == "BIND1002" {
+      if diag.message.contains("unresolved") {
+        diag.code = codes::UNRESOLVED_MODULE.as_str().into();
+      } else {
+        diag.code = codes::UNKNOWN_EXPORT.as_str().into();
+      }
+    }
+  }
   diagnostics.append(&mut bind_diags);
   diagnostics.sort();
   diagnostics.dedup();

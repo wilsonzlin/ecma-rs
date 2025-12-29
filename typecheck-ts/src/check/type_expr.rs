@@ -735,22 +735,23 @@ impl TypeLowerer {
       .as_ref()
       .map(|t| self.lower_type_expr(t));
     let span = self.span_for(pred.loc);
+    let parameter = if pred.stx.parameter_name.is_empty() {
+      None
+    } else {
+      Some(self.store.intern_name(pred.stx.parameter_name.clone()))
+    };
+    let predicate = self.store.intern_type(TypeKind::Predicate {
+      parameter,
+      asserted,
+      asserts: pred.stx.asserts,
+    });
     self.predicates.push(LoweredPredicate {
       span,
       asserts: pred.stx.asserts,
       parameter: pred.stx.parameter_name.clone(),
       ty: asserted,
     });
-    let parameter = if pred.stx.parameter_name.is_empty() {
-      None
-    } else {
-      Some(self.store.intern_name(pred.stx.parameter_name.clone()))
-    };
-    self.store.intern_type(TypeKind::Predicate {
-      parameter,
-      asserted,
-      asserts: pred.stx.asserts,
-    })
+    predicate
   }
 
   fn lower_type_arguments(&mut self, args: &Option<Vec<Node<TypeExpr>>>) -> Vec<TypeId> {

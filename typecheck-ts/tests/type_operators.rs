@@ -207,7 +207,21 @@ fn captures_type_predicate_details() {
     panic!("expected callable, got {:?}", store.type_kind(ty));
   };
   let sig = store.signature(overloads[0]);
-  assert!(matches!(store.type_kind(sig.ret), TypeKind::Boolean));
+  let TypeKind::Predicate {
+    parameter,
+    asserted,
+    asserts,
+  } = store.type_kind(sig.ret)
+  else {
+    panic!("expected predicate, got {:?}", store.type_kind(sig.ret));
+  };
+  assert!(!asserts);
+  assert_eq!(
+    parameter.map(|id| store.name(id)),
+    Some("value".to_string())
+  );
+  let pred_ty = asserted.expect("predicate type");
+  assert!(matches!(store.type_kind(pred_ty), TypeKind::String));
 
   let preds: Vec<LoweredPredicate> = lowerer.predicates().to_vec();
   assert_eq!(preds.len(), 1);

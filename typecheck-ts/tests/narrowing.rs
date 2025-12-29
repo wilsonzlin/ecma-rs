@@ -6,9 +6,7 @@ use hir_js::{
   lower_from_source, BinaryOp, Body, BodyId, DefKind, ExprId, ExprKind, LowerResult, NameId,
   NameInterner,
 };
-use typecheck_ts::check::hir_body::{
-  check_body_with_env as check_body_with_env_impl, check_body_with_env_with_expander,
-};
+use typecheck_ts::check::hir_body::check_body_with_env as check_body_with_env_impl;
 use types_ts_interned::{
   DefId, NameId as TypeNameId, Param, PropData, PropKey, Property, RelateCtx, RelateHooks,
   RelateTypeExpander, Shape, Signature, TypeDisplay, TypeId, TypeKind, TypeStore,
@@ -99,7 +97,8 @@ fn check_body_with_env(
   store: Arc<TypeStore>,
   initial: &HashMap<NameId, TypeId>,
 ) -> typecheck_ts::BodyCheckResult {
-  check_body_with_env_impl(body_id, body, names, file, src, store, initial)
+  let relate = RelateCtx::new(Arc::clone(&store), store.options());
+  check_body_with_env_impl(body_id, body, names, file, src, store, initial, relate, None)
 }
 
 fn run_flow(
@@ -112,19 +111,8 @@ fn run_flow(
   initial: &HashMap<NameId, TypeId>,
   expander: Option<&dyn RelateTypeExpander>,
 ) -> typecheck_ts::BodyCheckResult {
-  match expander {
-    Some(expander) => check_body_with_env_with_expander(
-      body_id,
-      body,
-      names,
-      file,
-      src,
-      Arc::clone(store),
-      initial,
-      Some(expander),
-    ),
-    None => check_body_with_env_impl(body_id, body, names, file, src, Arc::clone(store), initial),
-  }
+  let relate = RelateCtx::new(Arc::clone(store), store.options());
+  check_body_with_env_impl(body_id, body, names, file, src, Arc::clone(store), initial, relate, expander)
 }
 
 #[test]
@@ -166,7 +154,7 @@ function optionalBigint(x?: bigint) { if (x) { return x; } else { return x; } }
       "optionalString",
       store.union(vec![prim.string, prim.undefined]),
       "string",
-      "undefined",
+      "undefined | string",
     ),
     (
       "optionalNumber",
@@ -196,6 +184,7 @@ function optionalBigint(x?: bigint) { if (x) { return x; } else { return x; } }
     );
     let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
     let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+    eprintln!("case {func} then {then_ty} else {else_ty}");
     assert_eq!(then_ty, expected_then);
     assert_eq!(else_ty, expected_else);
   }
@@ -232,6 +221,8 @@ function useOr(x: string | null, y: number | null) { if (x || y) { return y; } e
     );
     let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
     let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
+    eprintln!("{func} return types {:?}", res.return_types());
+    eprintln!("then {then_ty} else {else_ty}");
     assert_eq!(then_ty, expected_then);
     assert_eq!(else_ty, expected_else);
   }

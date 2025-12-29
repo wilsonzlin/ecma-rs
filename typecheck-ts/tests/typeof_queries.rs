@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use hir_js::{lower_from_source_with_kind, FileKind as HirFileKind};
 use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
@@ -8,6 +9,13 @@ fn typeof_queries_in_libs_resolve_value_types() {
   let file = FileKey::new("entry.ts");
   let source = "const t = window.document.title;";
   host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let lib_source = include_str!("../fixtures/libs/lib.dom.d.ts");
+  let lowered = lower_from_source_with_kind(HirFileKind::Dts, lib_source).expect("lower lib");
+  for def in lowered.defs.iter() {
+    let name = lowered.names.resolve(def.name).unwrap_or_default();
+    eprintln!("lib def {name} type_info={}", def.type_info.is_some());
+  }
 
   let program = Program::new(host, vec![file.clone()]);
   let diagnostics = program.check();
@@ -30,7 +38,22 @@ fn typeof_queries_in_libs_resolve_value_types() {
       eprintln!("global window type {}", program.display_type(ty));
     }
     if let Some(def) = binding.def {
-      eprintln!("window def type {}", program.display_type(program.type_of_def(def)));
+      eprintln!(
+        "window def type {}",
+        program.display_type(program.type_of_def(def))
+      );
+      eprintln!(
+        "window def interned type {}",
+        program.display_type(program.type_of_def_interned(def))
+      );
+      let win_props = program.properties_of(program.type_of_def_interned(def));
+      for prop in win_props {
+        eprintln!(
+          "window prop {:?}: {}",
+          prop.key,
+          program.display_type(prop.ty)
+        );
+      }
     }
   }
   if let Some(binding) = globals.get("Window") {
@@ -39,7 +62,10 @@ fn typeof_queries_in_libs_resolve_value_types() {
       eprintln!("global Window type {}", program.display_type(ty));
     }
     if let Some(def) = binding.def {
-      eprintln!("Window def type {}", program.display_type(program.type_of_def(def)));
+      eprintln!(
+        "Window def type {}",
+        program.display_type(program.type_of_def(def))
+      );
     }
   }
   if let Some(binding) = globals.get("document") {

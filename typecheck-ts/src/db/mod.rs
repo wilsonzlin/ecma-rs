@@ -260,7 +260,7 @@ impl Database {
       existing.set_kind(self).to(kind);
       existing.set_text(self).to(text);
     } else {
-      let input = inputs::FileInput::new(self, file, key, kind, text);
+      let input = inputs::FileInput::new(self, file, key, kind, text, None);
       self.files.insert(file, input);
     }
   }

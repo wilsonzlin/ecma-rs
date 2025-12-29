@@ -72,6 +72,7 @@ pub struct ProgramTypeExpander<'a> {
   store: Arc<TypeStore>,
   def_types: &'a HashMap<DefId, TypeId>,
   type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
+  class_instances: &'a HashMap<DefId, TypeId>,
   caches: EvaluatorCaches,
   guard: RefRecursionGuard,
 }
@@ -81,20 +82,28 @@ impl<'a> ProgramTypeExpander<'a> {
     store: Arc<TypeStore>,
     def_types: &'a HashMap<DefId, TypeId>,
     type_params: &'a HashMap<DefId, Vec<TypeParamId>>,
+    class_instances: &'a HashMap<DefId, TypeId>,
     caches: EvaluatorCaches,
   ) -> Self {
     Self {
       store,
       def_types,
       type_params,
+      class_instances,
       caches,
       guard: RefRecursionGuard::new(),
     }
   }
 
   fn expanded(&self, def: DefId) -> Option<ExpandedType> {
-    let ty = *self.def_types.get(&def)?;
     let params = self.type_params.get(&def).cloned().unwrap_or_default();
+    if let Some(instance) = self.class_instances.get(&def) {
+      return Some(ExpandedType {
+        params,
+        ty: *instance,
+      });
+    }
+    let ty = *self.def_types.get(&def)?;
     Some(ExpandedType { params, ty })
   }
 }

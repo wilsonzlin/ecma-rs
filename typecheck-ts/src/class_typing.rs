@@ -47,6 +47,7 @@ pub(crate) struct ClassTypeInfo {
   pub def: DefId,
   pub name: Option<String>,
   pub instance: TypeId,
+  pub value: TypeId,
   pub type_params: Vec<TypeParamId>,
 }
 
@@ -249,6 +250,31 @@ fn lower_ambient_class(
   } else {
     store.intersection(types)
   };
+  let mut ctor_sigs = Vec::new();
+  {
+    let shape = store.shape(shape_id);
+    for sig_id in shape.construct_signatures.iter().copied() {
+      let mut sig = store.signature(sig_id).clone();
+      sig.ret = instance;
+      ctor_sigs.push(store.intern_signature(sig));
+    }
+  }
+  if ctor_sigs.is_empty() {
+    let sig = Signature {
+      params: Vec::new(),
+      ret: instance,
+      type_params: Vec::new(),
+      this_param: None,
+    };
+    ctor_sigs.push(store.intern_signature(sig));
+  }
+  let mut value_shape = Shape::new();
+  value_shape.construct_signatures = ctor_sigs.clone();
+  value_shape.call_signatures = ctor_sigs;
+  let value_shape_id = store.intern_shape(value_shape);
+  let value = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: value_shape_id,
+  })));
 
   diagnostics.extend(lowerer.take_diagnostics());
 
@@ -256,6 +282,7 @@ fn lower_ambient_class(
     def,
     name: Some(class.name.clone()),
     instance,
+    value,
     type_params,
   }
 }
@@ -280,11 +307,18 @@ fn lower_runtime_class(
     type_params = decls.iter().map(|decl| decl.id).collect();
   }
 
-  let mut shape = Shape::new();
-  lower_runtime_members(store, &mut lowerer, &mut shape, &class.members);
+  let mut instance_shape = Shape::new();
+  let mut static_shape = Shape::new();
+  lower_runtime_members(
+    store,
+    &mut lowerer,
+    &mut instance_shape,
+    &mut static_shape,
+    &class.members,
+  );
 
   let mut types = Vec::new();
-  let shape_id = store.intern_shape(shape);
+  let shape_id = store.intern_shape(instance_shape);
   let obj = store.intern_object(ObjectType { shape: shape_id });
   types.push(store.intern_type(TypeKind::Object(obj)));
 
@@ -304,6 +338,31 @@ fn lower_runtime_class(
   } else {
     store.intersection(types)
   };
+  let mut ctor_sigs = Vec::new();
+  {
+    let shape = store.shape(shape_id);
+    for sig_id in shape.construct_signatures.iter().copied() {
+      let mut sig = store.signature(sig_id).clone();
+      sig.ret = instance;
+      ctor_sigs.push(store.intern_signature(sig));
+    }
+  }
+  if ctor_sigs.is_empty() {
+    let sig = Signature {
+      params: Vec::new(),
+      ret: instance,
+      type_params: Vec::new(),
+      this_param: None,
+    };
+    ctor_sigs.push(store.intern_signature(sig));
+  }
+  let mut value_shape = static_shape;
+  value_shape.construct_signatures = ctor_sigs.clone();
+  value_shape.call_signatures = ctor_sigs;
+  let value_shape_id = store.intern_shape(value_shape);
+  let value = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: value_shape_id,
+  })));
 
   diagnostics.extend(lowerer.take_diagnostics());
 
@@ -311,6 +370,7 @@ fn lower_runtime_class(
     def,
     name: class.name.as_ref().map(|n| n.stx.name.clone()),
     instance,
+    value,
     type_params,
   })
 }
@@ -339,13 +399,16 @@ fn lower_runtime_type_expr(
 fn lower_runtime_members(
   store: &Arc<TypeStore>,
   lowerer: &mut TypeLowerer,
-  shape: &mut Shape,
+  instance_shape: &mut Shape,
+  static_shape: &mut Shape,
   members: &[Node<ClassMember>],
 ) {
   for member in members.iter() {
-    if member.stx.static_ {
-      continue;
-    }
+    let shape = if member.stx.static_ {
+      &mut *static_shape
+    } else {
+      &mut *instance_shape
+    };
     let key = match class_member_key(store, &member.stx.key) {
       Some(key) => key,
       None => continue,
@@ -385,7 +448,32 @@ fn lower_runtime_members(
           ClassOrObjKey::Direct(direct) if direct.stx.key == "constructor"
         );
         if is_constructor {
-          shape.construct_signatures.push(sig);
+          static_shape.construct_signatures.push(sig);
+          for param in method.stx.func.stx.parameters.iter() {
+            if param.stx.accessibility.is_some() {
+              if let parse_js::ast::expr::pat::Pat::Id(id) = param.stx.pattern.stx.pat.stx.as_ref() {
+                let key = PropKey::String(store.intern_name(id.stx.name.clone()));
+                let ty = param
+                  .stx
+                  .type_annotation
+                  .as_ref()
+                  .map(|ann| lowerer.lower_type_expr(ann))
+                  .unwrap_or_else(|| store.primitive_ids().unknown);
+                instance_shape.properties.push(Property {
+                  key,
+                  data: PropData {
+                    ty,
+                    optional: param.stx.optional,
+                    readonly: param.stx.readonly,
+                    accessibility: map_accessibility(param.stx.accessibility),
+                    is_method: false,
+                    origin: None,
+                    declared_on: None,
+                  },
+                });
+              }
+            }
+          }
         } else {
           let ty = store.intern_type(TypeKind::Callable {
             overloads: vec![sig],
