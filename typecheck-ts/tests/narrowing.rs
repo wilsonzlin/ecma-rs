@@ -152,7 +152,7 @@ function optionalBigint(x?: bigint) { if (x) { return x; } else { return x; } }
       "nullableString",
       store.union(vec![prim.string, prim.null]),
       "string",
-      "null | string",
+      "null",
     ),
     ("emptyOrA", store.union(vec![empty, a]), "\"a\"", "\"\""),
     ("zeroOrOne", store.union(vec![zero, one]), "1", "0"),
@@ -166,19 +166,19 @@ function optionalBigint(x?: bigint) { if (x) { return x; } else { return x; } }
       "optionalString",
       store.union(vec![prim.string, prim.undefined]),
       "string",
-      "string | undefined",
+      "undefined",
     ),
     (
       "optionalNumber",
       store.union(vec![prim.number, prim.undefined]),
       "number",
-      "number | undefined",
+      "undefined | number",
     ),
     (
       "optionalBigint",
       store.union(vec![prim.bigint, prim.undefined]),
       "bigint",
-      "bigint | undefined",
+      "undefined | bigint",
     ),
   ];
   for (func, init_ty, expected_then, expected_else) in cases {
@@ -969,7 +969,7 @@ function f(x: string | null) {
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
-  assert_eq!(else_ty, "null | string");
+  assert_eq!(else_ty, "null");
 }
 
 #[test]

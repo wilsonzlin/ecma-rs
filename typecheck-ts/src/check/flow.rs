@@ -3,29 +3,10 @@
 use std::collections::{HashMap, HashSet};
 
 use hir_js::{NameId, PatId};
-use semantic_js::ts::SymbolId;
 use types_ts_interned::{TypeId, TypeStore};
 
+use super::flow_bindings::FlowBindingId;
 use super::flow_narrow::Facts;
-
-/// Unique key for a flow-tracked binding, distinguishing shadowed locals even
-/// when they share the same name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BindingKey {
-  Local { pat: PatId, name: NameId },
-  External(NameId),
-  Symbol { id: SymbolId, name: NameId },
-}
-
-impl BindingKey {
-  pub fn name(self) -> NameId {
-    match self {
-      BindingKey::Local { name, .. }
-      | BindingKey::External(name)
-      | BindingKey::Symbol { name, .. } => name,
-    }
-  }
-}
 
 /// Segment within an access path (currently limited to static property keys).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -38,12 +19,12 @@ pub enum PathSegment {
 /// zero or more property segments (e.g. `x`, `x.kind`, `x.meta.kind`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FlowKey {
-  pub root: BindingKey,
+  pub root: FlowBindingId,
   pub segments: Vec<PathSegment>,
 }
 
 impl FlowKey {
-  pub fn root(root: BindingKey) -> Self {
+  pub fn root(root: FlowBindingId) -> Self {
     Self {
       root,
       segments: Vec::new(),
@@ -62,6 +43,20 @@ impl FlowKey {
   /// Returns true if `self` is a prefix (including exact match) of `other`.
   pub fn is_prefix_of(&self, other: &FlowKey) -> bool {
     self.root == other.root && other.segments.starts_with(&self.segments)
+  }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BindingKey {
+  Local { pat: PatId, name: NameId },
+  External(NameId),
+}
+
+impl BindingKey {
+  pub fn name(self) -> NameId {
+    match self {
+      BindingKey::Local { name, .. } | BindingKey::External(name) => name,
+    }
   }
 }
 
@@ -97,20 +92,20 @@ impl Env {
     }
   }
 
-  pub fn with_initial(initial: &HashMap<BindingKey, TypeId>) -> Self {
+  pub fn with_initial(initial: &[(FlowBindingId, BindingKey, TypeId)]) -> Self {
     let mut env = Env::new();
-    for (key, ty) in initial.iter() {
-      env.vars.insert(FlowKey::root(*key), *ty);
+    for (id, key, ty) in initial.iter() {
+      env.vars.insert(FlowKey::root(*id), *ty);
       env.init.insert(*key, InitState::Assigned);
     }
     env
   }
 
-  pub fn get_var(&self, name: BindingKey) -> Option<TypeId> {
+  pub fn get_var(&self, name: FlowBindingId) -> Option<TypeId> {
     self.get_path(&FlowKey::root(name))
   }
 
-  pub fn set_var(&mut self, name: BindingKey, ty: TypeId) {
+  pub fn set_var(&mut self, name: FlowBindingId, ty: TypeId) {
     let key = FlowKey::root(name);
     self.invalidate_prefix(&key);
     self.vars.insert(key, ty);
@@ -120,11 +115,11 @@ impl Env {
     self.vars.get(path).copied()
   }
 
-  pub fn get(&self, name: BindingKey) -> Option<TypeId> {
+  pub fn get(&self, name: FlowBindingId) -> Option<TypeId> {
     self.get_var(name)
   }
 
-  pub fn set(&mut self, name: BindingKey, ty: TypeId) {
+  pub fn set(&mut self, name: FlowBindingId, ty: TypeId) {
     self.set_var(name, ty);
   }
 
@@ -142,14 +137,14 @@ impl Env {
   }
 
   /// Remove any tracked information for a variable, clearing previous narrowings.
-  pub fn invalidate(&mut self, name: BindingKey) {
+  pub fn invalidate(&mut self, name: FlowBindingId) {
     self.invalidate_prefix(&FlowKey::root(name));
   }
 
   /// Clear any tracked property narrowings rooted at `name`. Currently there are
   /// no separate property entries, but this hook is used to invalidate access
   /// paths when writes occur.
-  pub fn clear_properties_of(&mut self, name: BindingKey) {
+  pub fn clear_properties_of(&mut self, name: FlowBindingId) {
     self
       .vars
       .retain(|key, _| key.root != name || key.segments.is_empty());
@@ -160,16 +155,12 @@ impl Env {
     self.vars.retain(|key, _| key.segments.is_empty());
   }
 
-  pub fn mark_assigned(&mut self, name: NameId) {
-    self
-      .init
-      .insert(BindingKey::External(name), InitState::Assigned);
+  pub fn mark_assigned(&mut self, binding: BindingKey) {
+    self.init.insert(binding, InitState::Assigned);
   }
 
-  pub fn mark_unassigned(&mut self, name: NameId) {
-    self
-      .init
-      .insert(BindingKey::External(name), InitState::Unassigned);
+  pub fn mark_unassigned(&mut self, binding: BindingKey) {
+    self.init.insert(binding, InitState::Unassigned);
   }
 
   pub fn set_init_state(&mut self, key: BindingKey, state: InitState) {
@@ -177,11 +168,10 @@ impl Env {
   }
 
   pub fn init_state(&self, key: BindingKey) -> InitState {
-    self
-      .init
-      .get(&key)
-      .copied()
-      .unwrap_or(InitState::Unassigned)
+    self.init.get(&key).copied().unwrap_or(match key {
+      BindingKey::External(_) => InitState::Assigned,
+      BindingKey::Local { .. } => InitState::Unassigned,
+    })
   }
 
   pub fn apply_facts(&mut self, facts: &Facts) {

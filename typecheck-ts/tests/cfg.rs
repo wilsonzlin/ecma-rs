@@ -34,19 +34,10 @@ fn block_for_stmt(cfg: &ControlFlowGraph, stmt: StmtId) -> BlockId {
 }
 
 fn update_block_for(cfg: &ControlFlowGraph, header: BlockId) -> BlockId {
-  if let Some(block) = cfg
-    .blocks
-    .iter()
-    .find(|block| matches!(block.kind, BlockKind::ForUpdate { .. }))
-  {
-    return block.id;
-  }
   cfg
     .blocks
     .iter()
-    .find(|block| {
-      matches!(block.kind, BlockKind::ForUpdate { .. }) && block.successors.contains(&header)
-    })
+    .find(|block| matches!(block.kind, BlockKind::ForUpdate { .. }) && block.successors == [header])
     .map(|block| block.id)
     .expect("update block")
 }

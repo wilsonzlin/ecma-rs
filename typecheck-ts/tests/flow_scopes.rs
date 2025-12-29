@@ -113,9 +113,8 @@ function f(x: string | null) {
   );
 
   let ret_ty = res.return_types()[0];
-  // Truthiness leaves `string` in the falsy branch (empty string), but the hoisted
-  // assignment must still update the shared binding with `number`.
-  let expected = store.union(vec![prim.number, prim.null, prim.string]);
+  // The hoisted assignment updates the shared binding to include the number branch.
+  let expected = store.union(vec![prim.number, prim.null]);
   assert_eq!(
     TypeDisplay::new(&store, ret_ty).to_string(),
     TypeDisplay::new(&store, expected).to_string()

@@ -61,7 +61,11 @@ impl<'db> DbTypeExpander<'db> {
   }
 
   fn expanded(&self, def: DefId) -> Option<ExpandedType> {
-    self.db.ref_expansion(def)
+    let expanded = self.db.ref_expansion(def);
+    if expanded.is_none() && std::env::var("DEBUG_EXPAND").is_ok() {
+      eprintln!("DEBUG_EXPAND missing ref expansion for def {:?}", def);
+    }
+    expanded
   }
 }
 

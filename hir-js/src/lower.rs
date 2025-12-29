@@ -1504,6 +1504,7 @@ fn lower_expr(
     }
     AstExpr::TypeAssertion(assert) => ExprKind::TypeAssertion {
       expr: lower_expr(&assert.stx.expression, builder, ctx),
+      const_assertion: assert.stx.const_assertion,
     },
     AstExpr::NonNullAssertion(nn) => ExprKind::NonNull {
       expr: lower_expr(&nn.stx.expression, builder, ctx),

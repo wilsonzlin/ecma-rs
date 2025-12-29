@@ -203,6 +203,19 @@ fn type_at_prefers_innermost_member_access() {
     .expect("offset of innermost member") as u32;
 
   let ty = program.type_at(file_id, offset).expect("type at member");
+  if std::env::var("DEBUG_SPAN").is_ok() {
+    if let Some(obj_def) = program
+      .definitions_in_file(file_id)
+      .into_iter()
+      .find(|d| program.def_name(*d).as_deref() == Some("obj"))
+    {
+      eprintln!(
+        "DEBUG obj type {}",
+        program.display_type(program.type_of_def(obj_def))
+      );
+    }
+    eprintln!("DEBUG type_at {}", program.display_type(ty));
+  }
   let (body, expr) = program.expr_at(file_id, offset).expect("expr at offset");
   let span = program.span_of_expr(body, expr).expect("expr span");
   let snippet = &source[span.range.start as usize..span.range.end as usize];

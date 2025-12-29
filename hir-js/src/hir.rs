@@ -677,6 +677,7 @@ pub enum ExprKind {
   },
   TypeAssertion {
     expr: ExprId,
+    const_assertion: bool,
   },
   NonNull {
     expr: ExprId,

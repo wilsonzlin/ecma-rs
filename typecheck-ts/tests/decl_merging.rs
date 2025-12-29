@@ -80,7 +80,6 @@ export namespace Config { export const b = 2; }
     .and_then(|e| e.type_id)
     .expect("exported Config type");
   let rendered = program.display_type(config_ty).to_string();
-  println!("Config type: {rendered}");
   let def_a = program
     .definitions_in_file(file_id)
     .into_iter()
@@ -91,29 +90,8 @@ export namespace Config { export const b = 2; }
     .into_iter()
     .find(|d| program.def_name(*d).as_deref() == Some("b"))
     .expect("namespace member b");
-  println!(
-    "bodies: a={:?}, b={:?}",
-    program.body_of_def(def_a),
-    program.body_of_def(def_b)
-  );
-  if let Some(body) = program.body_of_def(def_a) {
-    let res = program.check_body(body);
-    println!(
-      "a expr spans: {:?}, pats: {:?}",
-      res.expr_spans(),
-      res.pat_spans()
-    );
-    for expr in program.exprs_in_body(body) {
-      let span = program.expr_span(body, expr);
-      let ty = program
-        .display_type(program.type_of_expr(body, expr))
-        .to_string();
-      println!("expr {expr:?} span {span:?} type {ty}");
-    }
-  }
   let a_ty = program.display_type(program.type_of_def(def_a)).to_string();
   let b_ty = program.display_type(program.type_of_def(def_b)).to_string();
-  println!("a type: {a_ty}, b type: {b_ty}");
   assert!(
     rendered.contains("a: 1"),
     "namespace merge should include first declaration, got {rendered}"
@@ -157,20 +135,6 @@ export const name = Lib.version;
 
   let file_id = program.file_id(&file).unwrap();
   let exports = program.exports_of(file_id);
-  println!("DEBUG exports: {:?}", exports.keys().collect::<Vec<_>>());
-  for def in program.definitions_in_file(file_id) {
-    let name = program
-      .def_name(def)
-      .unwrap_or_else(|| "<anon>".to_string());
-    let ty = program.display_type(program.type_of_def(def)).to_string();
-    println!(
-      "  def {:?} name {} body {:?} type {}",
-      def,
-      name,
-      program.body_of_def(def),
-      ty
-    );
-  }
   let lib_ty = exports
     .get("Lib")
     .and_then(|e| e.type_id)
@@ -185,34 +149,6 @@ export const name = Lib.version;
     "merged Lib should remain callable, got {rendered}"
   );
 
-  if let Some(def) = program
-    .definitions_in_file(file_id)
-    .into_iter()
-    .find(|d| program.def_name(*d).as_deref() == Some("version"))
-  {
-    if let Some(body) = program.body_of_def(def) {
-      let res = program.check_body(body);
-      println!("DEBUG version body exprs:");
-      for (idx, span) in res.expr_spans().iter().enumerate() {
-        let ty = res.expr_type(typecheck_ts::ExprId(idx as u32)).unwrap();
-        println!("  {}: {:?} -> {}", idx, span, program.display_type(ty));
-      }
-    }
-  }
-  if let Some(def) = program
-    .definitions_in_file(file_id)
-    .into_iter()
-    .find(|d| program.def_name(*d).as_deref() == Some("name"))
-  {
-    if let Some(body) = program.body_of_def(def) {
-      let res = program.check_body(body);
-      println!("DEBUG name body exprs:");
-      for (idx, span) in res.expr_spans().iter().enumerate() {
-        let ty = res.expr_type(typecheck_ts::ExprId(idx as u32)).unwrap();
-        println!("  {}: {:?} -> {}", idx, span, program.display_type(ty));
-      }
-    }
-  }
   let result_ty = exports
     .get("result")
     .and_then(|e| e.type_id)
@@ -228,7 +164,6 @@ export const name = Lib.version;
     .and_then(|e| e.type_id)
     .expect("name export type");
   let name_rendered = program.display_type(name_ty).to_string();
-  eprintln!("name type: {name_rendered}");
   assert!(
     name_rendered.contains("1.0.0") || name_rendered.contains("string"),
     "property access through merged namespace should preserve literal type"

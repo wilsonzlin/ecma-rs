@@ -1,4 +1,4 @@
-use typecheck_ts::{ExprId, FileKey, MemoryHost, Program};
+use typecheck_ts::{FileKey, MemoryHost, Program};
 
 #[test]
 fn resolves_types_from_namespace_imports_through_reexports() {
@@ -16,86 +16,77 @@ fn resolves_types_from_namespace_imports_through_reexports() {
   let program = Program::new(host, vec![a_key.clone()]);
   let diagnostics = program.check();
   println!("diagnostics: {diagnostics:?}");
-  let m_id = program.file_id(&m_key).expect("m id");
-  let re_id = program.file_id(&re_key).expect("re id");
-  println!("exports m: {:?}", program.exports_of(m_id));
-  println!("exports re: {:?}", program.exports_of(re_id));
   assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
 
-  let file_id = program.file_id(&a_key).expect("file id for a.ts");
-  let m_id = program.file_id(&FileKey::new("m.ts")).expect("m id");
-  println!(
-    "defs in m: {:?}",
-    program
-      .definitions_in_file(m_id)
-      .iter()
-      .map(|d| (d, program.def_name(*d)))
-      .collect::<Vec<_>>()
-  );
-  println!(
-    "all defs: {:?}",
-    program
-      .files()
-      .into_iter()
-      .map(|id| {
-        (
-          program.file_key(id),
-          program
-            .definitions_in_file(id)
-            .into_iter()
-            .map(|d| (d, program.def_name(d)))
-            .collect::<Vec<_>>(),
-        )
-      })
-      .collect::<Vec<_>>()
-  );
-  println!(
-    "defs in a: {:?}",
-    program
-      .definitions_in_file(file_id)
-      .iter()
-      .map(|d| (d, program.def_name(*d)))
-      .collect::<Vec<_>>()
-  );
-  if let Some(ns_def) = program
-    .definitions_in_file(file_id)
-    .into_iter()
-    .find(|d| program.def_name(*d).as_deref() == Some("NS"))
-  {
+  let m_id = program
+    .file_id(&FileKey::new("m.ts"))
+    .expect("file id for m.ts");
+  let exports = program.exports_of(m_id);
+  if let Some(entry) = exports.get("NS") {
     println!(
-      "NS type {}",
-      program
-        .display_type(program.type_of_def(ns_def))
-        .to_string()
+      "export NS def {:?} type {:?}",
+      entry.def,
+      entry.type_id.map(|t| program.display_type(t).to_string())
     );
+    if let Some(def) = entry.def {
+      println!(
+        "export NS type kind {:?}",
+        program.interned_type_kind(program.type_of_def_interned(def))
+      );
+    }
   }
-  let exports_m = program.exports_of(m_id);
-  println!(
-    "exports in m: {:?}",
-    exports_m
-      .iter()
-      .map(|(name, entry)| {
-        (
-          name.clone(),
-          entry.type_id.map(|ty| program.display_type(ty).to_string()),
-        )
-      })
-      .collect::<Vec<_>>()
-  );
+  for def in program.definitions_in_file(m_id) {
+    println!(
+      "m.ts def {:?} name {:?} kind {:?}",
+      def,
+      program.def_name(def),
+      program.interned_type_kind(program.type_of_def_interned(def))
+    );
+    if program.def_name(def).as_deref() == Some("Foo") {
+      let ty = program.type_of_def_interned(def);
+      println!(
+        "Foo props {:?}",
+        program
+          .properties_of(ty)
+          .iter()
+          .map(|p| (p.key.clone(), program.display_type(p.ty).to_string()))
+          .collect::<Vec<_>>()
+      );
+    }
+  }
+
+  let file_id = program.file_id(&a_key).expect("file id for a.ts");
   let v_def = program
     .definitions_in_file(file_id)
     .into_iter()
     .find(|def| program.def_name(*def).as_deref() == Some("v"))
     .expect("definition for v");
   let v_ty = program.type_of_def_interned(v_def);
-  println!("v ty: {}", program.display_type(v_ty));
+  println!("v type {}", program.display_type(v_ty));
+  println!("v kind {:?}", program.interned_type_kind(v_ty));
   assert_ne!(
     program.display_type(v_ty).to_string(),
     "unknown",
     "resolved type for v should not be unknown"
   );
   let offset = a_src.find("x;").expect("marker offset") as u32;
+  let expr_at = program.expr_at(file_id, offset);
+  println!("expr_at {expr_at:?}");
   let ty = program.type_at(file_id, offset).expect("type at v.x");
+  println!("type at v.x {}", program.display_type(ty));
+  let body = program.file_body(file_id);
+  println!("file body: {body:?}");
+  if let Some(body_id) = body.or(expr_at.map(|(b, _)| b)) {
+    let res = program.check_body(body_id);
+    if let Some(obj_ty) = res.expr_type(typecheck_ts::ExprId(0)) {
+      println!("expr0 kind {:?}", program.interned_type_kind(obj_ty));
+    }
+    for (idx, span) in res.expr_spans().iter().enumerate() {
+      if let Some(ty) = res.expr_type(typecheck_ts::ExprId(idx as u32)) {
+        println!("{idx}: {span:?} -> {}", program.display_type(ty));
+      }
+    }
+  }
   assert_eq!(program.display_type(ty).to_string(), "number");
 }
 
@@ -115,25 +106,37 @@ fn resolves_qualified_types_from_named_imports() {
   let program = Program::new(host, vec![a_key.clone()]);
   let diagnostics = program.check();
   println!("diagnostics: {diagnostics:?}");
-  let m_id = program.file_id(&FileKey::new("m.ts")).expect("m id");
-  println!("exports m: {:?}", program.exports_of(m_id));
-  for def in program.definitions_in_file(m_id) {
+  assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+
+  let m_id = program.file_id(&FileKey::new("m.ts")).expect("m file id");
+  let exports = program.exports_of(m_id);
+  println!("exports keys {:?}", exports.keys().collect::<Vec<_>>());
+  if let Some(entry) = exports.get("NS") {
     println!(
-      "m def {:?} {}",
-      program.def_name(def),
-      program.display_type(program.type_of_def_interned(def))
-    );
-    println!("  kind {:?}", program.interned_type_kind(program.type_of_def_interned(def)));
-    println!(
-      "  props {:?}",
-      program
-        .properties_of(program.type_of_def_interned(def))
-        .iter()
-        .map(|p| (p.key.clone(), program.display_type(p.ty).to_string()))
-        .collect::<Vec<_>>()
+      "export NS def {:?} type {:?}",
+      entry.def,
+      entry.type_id.map(|t| program.display_type(t).to_string())
     );
   }
-  assert!(diagnostics.is_empty(), "diagnostics: {diagnostics:?}");
+  for def in program.definitions_in_file(m_id) {
+    println!(
+      "m.ts def {:?} name {:?} kind {:?}",
+      def,
+      program.def_name(def),
+      program.interned_type_kind(program.type_of_def_interned(def))
+    );
+    if program.def_name(def).as_deref() == Some("Foo") {
+      let ty = program.type_of_def_interned(def);
+      println!(
+        "Foo props {:?}",
+        program
+          .properties_of(ty)
+          .iter()
+          .map(|p| (p.key.clone(), program.display_type(p.ty).to_string()))
+          .collect::<Vec<_>>()
+      );
+    }
+  }
 
   let file_id = program.file_id(&a_key).expect("file id for a.ts");
   let v_def = program
@@ -142,46 +145,29 @@ fn resolves_qualified_types_from_named_imports() {
     .find(|def| program.def_name(*def).as_deref() == Some("v"))
     .expect("definition for v");
   let v_ty = program.type_of_def_interned(v_def);
-  println!("v ty: {}", program.display_type(v_ty));
+  println!("v type {}", program.display_type(v_ty));
   assert_ne!(
     program.display_type(v_ty).to_string(),
     "unknown",
     "resolved type for v should not be unknown"
   );
   let offset = a_src.find("x;").expect("marker offset") as u32;
-  if let Some((body, expr)) = program.expr_at(file_id, offset) {
-    let res = program.check_body(body);
-    if let Some(t0) = res.expr_type(ExprId(0)) {
-      println!("expr0 kind {:?}", program.interned_type_kind(t0));
-      if let types_ts_interned::TypeKind::Ref { def, args: _ } = program.interned_type_kind(t0) {
-        println!("expr0 def {:?}", program.def_name(def));
-        println!(
-          "expr0 def span {:?} type {}",
-          program.span_of_def(def),
-          program.display_type(program.type_of_def_interned(def))
-        );
+  let expr_at = program.expr_at(file_id, offset);
+  println!("expr_at {expr_at:?}");
+  let ty = program.type_at(file_id, offset).expect("type at v.x");
+  println!("type at v.x {}", program.display_type(ty));
+  let body = program.file_body(file_id);
+  println!("file body: {body:?}");
+  if let Some(body_id) = body.or(expr_at.map(|(b, _)| b)) {
+    let res = program.check_body(body_id);
+    if let Some(obj_ty) = res.expr_type(typecheck_ts::ExprId(0)) {
+      println!("expr0 kind {:?}", program.interned_type_kind(obj_ty));
+    }
+    for (idx, span) in res.expr_spans().iter().enumerate() {
+      if let Some(ty) = res.expr_type(typecheck_ts::ExprId(idx as u32)) {
+        println!("{idx}: {span:?} -> {}", program.display_type(ty));
       }
     }
-    println!(
-      "expr_at -> {:?} span {:?} type {}",
-      expr,
-      res.expr_span(expr),
-      res
-        .expr_type(expr)
-        .map(|ty| program.display_type(ty).to_string())
-        .unwrap_or_else(|| "<none>".to_string())
-    );
-    for (idx, span) in res.expr_spans().iter().enumerate() {
-      println!(
-        "  {idx}: {:?} -> {}",
-        span,
-        res
-          .expr_type(typecheck_ts::ExprId(idx as u32))
-          .map(|ty| program.display_type(ty).to_string())
-          .unwrap_or_else(|| "<none>".to_string())
-      );
-    }
   }
-  let ty = program.type_at(file_id, offset).expect("type at v.x");
   assert_eq!(program.display_type(ty).to_string(), "number");
 }

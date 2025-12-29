@@ -154,6 +154,11 @@ fn run_fixture(path: &Path) {
     .map(|root| host.file_key(root))
     .collect();
   let mut program = Program::new(host.clone(), roots);
+  if path.ends_with("argument_type_error") {
+    std::env::set_var("DEBUG_CALL", "1");
+  } else {
+    std::env::remove_var("DEBUG_CALL");
+  }
   let diagnostics = program.check();
   if path.ends_with("contextual_assignment")
     || path.ends_with("contextual_array_literals")
@@ -200,6 +205,33 @@ fn run_fixture(path: &Path) {
   if path.ends_with("argument_count_error") {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
   }
+  if path.ends_with("argument_type_error") {
+    println!("diagnostics for {}: {:?}", path.display(), diagnostics);
+    let main = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main) {
+      let defs = program.definitions_in_file(file);
+      println!("defs:");
+      for def in defs {
+        println!(
+          "  def {:?} name {:?} type {}",
+          def,
+          program.def_name(def),
+          program.display_type(program.type_of_def(def))
+        );
+      }
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("body diagnostics: {:?}", res.diagnostics());
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          let ty = res
+            .expr_type(ExprId(idx as u32))
+            .map(|t| program.display_type(t).to_string())
+            .unwrap_or_else(|| "<none>".to_string());
+          println!("  expr {idx} span {span:?} ty {ty}");
+        }
+      }
+    }
+  }
   if path.ends_with("as_const") {
     println!("diagnostics for {}: {:?}", path.display(), diagnostics);
     let snap = program.snapshot();
@@ -227,6 +259,31 @@ fn run_fixture(path: &Path) {
             .map(|ty| program.display_type(ty).to_string())
             .unwrap_or_else(|| "<none>".to_string());
           println!("  {}: {:?} -> {}", idx, span, desc);
+        }
+      }
+    }
+  }
+  if path.ends_with("excess_props") {
+    let main = host.file_key("main.ts");
+    if let Some(file) = program.file_id(&main) {
+      println!("defs for excess_props:");
+      for def in program.definitions_in_file(file) {
+        let name = program
+          .def_name(def)
+          .unwrap_or_else(|| "<anon>".to_string());
+        println!(
+          "  def {:?} name {name} type {}",
+          def,
+          program.display_type(program.type_of_def(def))
+        );
+      }
+      if let Some(body) = program.file_body(file) {
+        let res = program.check_body(body);
+        println!("excess_props body diagnostics: {:?}", res.diagnostics());
+        for (idx, span) in res.expr_spans().iter().enumerate() {
+          if let Some(ty) = res.expr_type(ExprId(idx as u32)) {
+            println!("  expr {idx}: {span:?} -> {}", program.display_type(ty));
+          }
         }
       }
     }

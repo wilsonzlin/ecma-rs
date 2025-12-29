@@ -317,12 +317,7 @@ fn infers_from_contextual_signature_return_type() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_from_contextual_signature(
-    &store,
-    &contextual_sig.type_params,
-    &contextual_sig,
-    &actual_sig,
-  );
+  let result = infer_type_arguments_from_contextual_signature(&store, &contextual_sig, &actual_sig);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.number));
 }
@@ -348,12 +343,7 @@ fn infers_from_contextual_signature_parameter() {
     this_param: None,
   };
 
-  let result = infer_type_arguments_from_contextual_signature(
-    &store,
-    &contextual_sig.type_params,
-    &contextual_sig,
-    &actual_sig,
-  );
+  let result = infer_type_arguments_from_contextual_signature(&store, &contextual_sig, &actual_sig);
   assert!(result.diagnostics.is_empty());
   assert_eq!(result.substitutions.get(&t_param), Some(&primitives.string));
 }
@@ -430,13 +420,7 @@ fn function_definition_exposes_signature() {
     .find(|d| program.def_name(*d).as_deref() == Some("add"))
     .expect("add definition present");
   let ty = program.type_of_def(add_def);
-  eprintln!("add rendered {}", program.display_type(ty));
-  eprintln!(
-    "add interned kind {:?}",
-    program.interned_type_kind(program.type_of_def_interned(add_def))
-  );
   let sigs = program.call_signatures(ty);
-  eprintln!("call sigs {}", sigs.len());
   assert_eq!(sigs.len(), 1);
   let sig = &sigs[0].signature;
   assert_eq!(sig.params.len(), 2);

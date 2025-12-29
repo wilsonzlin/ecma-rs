@@ -1201,7 +1201,6 @@ impl DeclarePass {
 
 struct ResolvePass<'a> {
   builder: &'a SemanticsBuilder,
-  root: ScopeId,
   scope_stack: Vec<ScopeId>,
   expr_resolutions: BTreeMap<TextRange, SymbolId>,
   type_resolutions: BTreeMap<TextRange, SymbolId>,
@@ -1211,7 +1210,6 @@ impl<'a> ResolvePass<'a> {
   fn new(builder: &'a SemanticsBuilder, root: ScopeId) -> Self {
     Self {
       builder,
-      root,
       scope_stack: vec![root],
       expr_resolutions: BTreeMap::new(),
       type_resolutions: BTreeMap::new(),
@@ -1219,7 +1217,7 @@ impl<'a> ResolvePass<'a> {
   }
 
   fn current_scope(&self) -> ScopeId {
-    *self.scope_stack.last().unwrap_or(&self.root)
+    *self.scope_stack.last().unwrap_or(&self.builder.root)
   }
 
   fn push_scope_from_assoc(&mut self, assoc: &NodeAssocData) {
@@ -1232,7 +1230,7 @@ impl<'a> ResolvePass<'a> {
 
   fn pop_scope_from_assoc(&mut self, assoc: &NodeAssocData) {
     if let Some(id) = scope_id(assoc) {
-      if self.scope_stack.last().copied() == Some(id) {
+      if self.scope_stack.last().copied() == Some(id) && self.scope_stack.len() > 1 {
         self.scope_stack.pop();
       }
     }

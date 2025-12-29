@@ -67,7 +67,15 @@ fn for_init_runs_once() {
     store.union(vec![prim.string, prim.number]),
   );
 
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+  );
   let returns = res.return_types();
   let rendered: Vec<_> = returns
     .iter()
@@ -105,7 +113,15 @@ fn do_while_body_executes_before_test() {
     store.union(vec![prim.string, prim.number]),
   );
 
-  let res = run_flow(body_id, body, &lowered.names, FileId(0), src, &store, &initial);
+  let res = run_flow(
+    body_id,
+    body,
+    &lowered.names,
+    FileId(0),
+    src,
+    &store,
+    &initial,
+  );
   let returns = res.return_types();
   let rendered: Vec<_> = returns
     .iter()

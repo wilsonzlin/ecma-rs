@@ -119,11 +119,12 @@ fn join_alternatives(
   second: &HashMap<FlowKey, TypeId>,
   store: &TypeStore,
 ) -> HashMap<FlowKey, TypeId> {
-  let mut result = HashMap::new();
-  for (name, ty) in first.iter() {
-    if let Some(other) = second.get(name) {
-      result.insert(name.clone(), store.union(vec![*ty, *other]));
-    }
+  let mut result = first.clone();
+  for (name, ty) in second.iter() {
+    result
+      .entry(name.clone())
+      .and_modify(|existing| *existing = store.union(vec![*existing, *ty]))
+      .or_insert(*ty);
   }
   result
 }
@@ -318,11 +319,8 @@ pub fn truthy_falsy_types(ty: TypeId, store: &TypeStore) -> (TypeId, TypeId) {
         (ty, primitives.never)
       }
     }
-    TypeKind::Number | TypeKind::BigInt | TypeKind::String | TypeKind::TemplateLiteral(_) => {
-      // Conservatively treat the primitive itself as truthy; literal falsy
-      // values (0, "", 0n) are handled by their literal kinds above.
-      (ty, primitives.never)
-    }
+    TypeKind::String | TypeKind::TemplateLiteral(_) => (ty, primitives.never),
+    TypeKind::Number | TypeKind::BigInt => (ty, ty),
     TypeKind::Boolean => (
       store.intern_type(TypeKind::BooleanLiteral(true)),
       store.intern_type(TypeKind::BooleanLiteral(false)),
@@ -455,7 +453,6 @@ pub fn narrow_by_discriminant_path(
   path: &[PathSegment],
   value: &LiteralValue,
   store: &TypeStore,
-  expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
 ) -> (TypeId, TypeId) {
   let primitives = store.primitive_ids();
   match store.type_kind(ty) {
@@ -463,7 +460,7 @@ pub fn narrow_by_discriminant_path(
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        let (t, f) = narrow_by_discriminant_path(member, path, value, store, expander);
+        let (t, f) = narrow_by_discriminant_path(member, path, value, store);
         if t != primitives.never {
           yes.push(t);
         }
@@ -477,7 +474,7 @@ pub fn narrow_by_discriminant_path(
       let mut yes = Vec::new();
       let mut no = Vec::new();
       for member in members {
-        let (t, f) = narrow_by_discriminant_path(member, path, value, store, expander);
+        let (t, f) = narrow_by_discriminant_path(member, path, value, store);
         if t != primitives.never {
           yes.push(t);
         }
@@ -486,13 +483,6 @@ pub fn narrow_by_discriminant_path(
         }
       }
       (store.union(yes), store.union(no))
-    }
-    TypeKind::Ref { def, args } => {
-      if let Some(expanded) = expander.and_then(|e| e.expand_ref(store, def, &args)) {
-        narrow_by_discriminant_path(expanded, path, value, store, expander)
-      } else {
-        (ty, ty)
-      }
     }
     _ => {
       if matches_discriminant_path(ty, path, value, store) {
