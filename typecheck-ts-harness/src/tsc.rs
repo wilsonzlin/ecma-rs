@@ -283,6 +283,18 @@ pub fn node_available(node_path: &Path) -> bool {
   matches!(output, Ok(out) if out.status.success())
 }
 
+#[cfg(feature = "with-node")]
+pub fn typescript_available(node_path: &Path) -> bool {
+  let probe = Path::new(env!("CARGO_MANIFEST_DIR"))
+    .join("scripts")
+    .join("typescript_probe.js");
+  if !probe.exists() {
+    return false;
+  }
+  let output = std::process::Command::new(node_path).arg(probe).output();
+  matches!(output, Ok(out) if out.status.success())
+}
+
 #[cfg(not(feature = "with-node"))]
 #[derive(Debug, Default, Clone)]
 pub struct TscRunner;
@@ -302,5 +314,10 @@ impl TscRunner {
 
 #[cfg(not(feature = "with-node"))]
 pub fn node_available(_node_path: &Path) -> bool {
+  false
+}
+
+#[cfg(not(feature = "with-node"))]
+pub fn typescript_available(_node_path: &Path) -> bool {
   false
 }

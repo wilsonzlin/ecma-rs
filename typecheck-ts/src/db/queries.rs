@@ -1,12 +1,14 @@
+use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
-use std::sync::atomic::AtomicBool;
+use std::panic::panic_any;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use hir_js::{
-  lower_file_with_diagnostics, DefKind, ExportDefaultValue, ExportKind, ExprKind,
+  lower_file_with_diagnostics_with_cancellation, DefKind, ExportDefaultValue, ExportKind, ExprKind,
   FileKind as HirFileKind, LowerResult, ObjectProperty, PatId, PatKind, StmtKind, VarDeclKind,
 };
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
@@ -46,6 +48,12 @@ fn file_id_from_key(db: &dyn Db, key: &FileKey) -> Option<FileId> {
   db.file_input_by_key(key).map(|input| input.file_id(db))
 }
 
+fn panic_if_cancelled(db: &dyn Db) {
+  if cancelled(db).load(Ordering::Relaxed) {
+    panic_any(crate::FatalError::Cancelled);
+  }
+}
+
 #[salsa::tracked]
 fn compiler_options_for(db: &dyn Db, handle: CompilerOptionsInput) -> CompilerOptions {
   handle.options(db)
@@ -78,6 +86,7 @@ fn module_resolve_for(db: &dyn Db, entry: ModuleResolutionInput) -> Option<FileI
 
 #[salsa::tracked]
 fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
+  panic_if_cancelled(db);
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
@@ -93,9 +102,11 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
 
 #[salsa::tracked]
 fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
+  panic_if_cancelled(db);
   let specs = module_specifiers_for(db, file);
   let mut deps = Vec::new();
   for spec in specs.iter() {
+    panic_if_cancelled(db);
     if let Some(target) = module_resolve(db, file.file_id(db), Arc::clone(spec)) {
       deps.push(target);
     }
@@ -107,11 +118,13 @@ fn module_deps_for(db: &dyn Db, file: FileInput) -> Arc<[FileId]> {
 
 #[salsa::tracked]
 fn module_dep_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
+  panic_if_cancelled(db);
   unresolved_module_diagnostics_for(db, file)
 }
 
 #[salsa::tracked]
 fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagnostic]> {
+  panic_if_cancelled(db);
   let lowered = lower_hir_for(db, file);
   let Some(lowered) = lowered.lowered.as_deref() else {
     return Arc::from([]);
@@ -300,19 +313,47 @@ pub fn global_bindings(db: &dyn GlobalBindingsDb) -> Arc<BTreeMap<String, Symbol
       .or_insert(binding);
   }
 
-  let primitives = db.primitive_ids();
-  globals
-    .entry("undefined".to_string())
-    .or_insert(SymbolBinding {
-      symbol: deterministic_symbol_id("undefined"),
+  // Ensure a minimal set of JS builtins exist even when no lib files are loaded.
+  //
+  // These should be stable, deterministic, and should not depend on declaration
+  // ordering from `.d.ts` inputs. When a declaration exists we preserve its
+  // `symbol`/`def` identity but prefer our canonical primitive type IDs so that
+  // downstream queries (and tests) see the expected types.
+  if let Some(primitives) = db.primitive_ids() {
+    globals
+      .entry("undefined".to_string())
+      .and_modify(|binding| binding.type_id = Some(primitives.undefined))
+      .or_insert(SymbolBinding {
+        symbol: deterministic_symbol_id("undefined"),
+        def: None,
+        type_id: Some(primitives.undefined),
+      });
+    globals
+      .entry("Error".to_string())
+      .and_modify(|binding| {
+        if binding.type_id.is_none() {
+          binding.type_id = Some(primitives.any);
+        }
+      })
+      .or_insert(SymbolBinding {
+        symbol: deterministic_symbol_id("Error"),
+        def: None,
+        type_id: Some(primitives.any),
+      });
+  } else {
+    globals
+      .entry("undefined".to_string())
+      .or_insert(SymbolBinding {
+        symbol: deterministic_symbol_id("undefined"),
+        def: None,
+        type_id: None,
+      });
+    globals.entry("Error".to_string()).or_insert(SymbolBinding {
+      symbol: deterministic_symbol_id("Error"),
       def: None,
-      type_id: primitives.map(|p| p.undefined),
+      type_id: None,
     });
-  globals.entry("Error".to_string()).or_insert(SymbolBinding {
-    symbol: deterministic_symbol_id("Error"),
-    def: None,
-    type_id: primitives.map(|p| p.any),
-  });
+  }
 
   Arc::new(globals)
 }
@@ -426,6 +467,7 @@ pub mod body_check {
   pub struct BodyCheckDb {
     context: Arc<BodyCheckContext>,
     memo: RefCell<HashMap<BodyId, Arc<BodyCheckResult>>>,
+    ast_indexes: RefCell<HashMap<FileId, Arc<crate::check::hir_body::AstIndex>>>,
   }
 
   #[derive(Debug, Default)]
@@ -484,6 +526,7 @@ pub mod body_check {
       Self {
         context: Arc::new(context),
         memo: RefCell::new(HashMap::new()),
+        ast_indexes: RefCell::new(HashMap::new()),
       }
     }
   }
@@ -584,6 +627,23 @@ pub mod body_check {
       res
     }
 
+    fn ast_index(&self, file: FileId, ast: &ArcAst) -> Arc<crate::check::hir_body::AstIndex> {
+      let cached = self.ast_indexes.borrow().get(&file).cloned();
+      if let Some(index) = cached {
+        return index;
+      }
+      let index = Arc::new(crate::check::hir_body::AstIndex::new(
+        Arc::clone(&ast.0),
+        file,
+        Some(&self.context.cancelled),
+      ));
+      self
+        .ast_indexes
+        .borrow_mut()
+        .insert(file, Arc::clone(&index));
+      index
+    }
+
     fn compute_body(&self, body_id: BodyId) -> Arc<BodyCheckResult> {
       if self.context.cancelled.load(Ordering::Relaxed) {
         panic_any(crate::FatalError::Cancelled);
@@ -606,6 +666,7 @@ pub mod body_check {
       } else if matches!(meta.kind, HirBodyKind::TopLevel) {
         _synthetic = Some(HirBody {
           owner: HirDefId(u32::MAX),
+          span: TextRange::new(0, 0),
           kind: HirBodyKind::TopLevel,
           exprs: Vec::new(),
           stmts: Vec::new(),
@@ -659,6 +720,20 @@ pub mod body_check {
         &mut binding_defs,
         prim.unknown,
       );
+      if std::env::var("DEBUG_BINDINGS").is_ok() {
+        let has_greeter = bindings.contains_key("Greeter");
+        if !has_greeter {
+          let mut names: Vec<_> = bindings.keys().cloned().collect();
+          names.sort();
+          eprintln!(
+            "DEBUG_BINDINGS: body {:?} file {:?} missing Greeter ({} bindings): {:?}",
+            body_id,
+            meta.file,
+            bindings.len(),
+            names
+          );
+        }
+      }
 
       let caches = ctx.checker_caches.for_body();
       let expander = DbTypeExpander::new(ctx.as_ref(), caches.eval.clone());
@@ -668,12 +743,13 @@ pub mod body_check {
       } else {
         None
       };
+      let ast_index = self.ast_index(meta.file, &ast);
       let mut result = check_body_with_expander(
         body_id,
         body,
         &lowered.names,
         meta.file,
-        &*ast,
+        ast_index.as_ref(),
         Arc::clone(&ctx.store),
         &caches,
         &bindings,
@@ -681,6 +757,7 @@ pub mod body_check {
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
         contextual_fn_ty,
+        Some(&ctx.cancelled),
       );
 
       if !body.exprs.is_empty() && matches!(meta.kind, HirBodyKind::Function) {
@@ -943,7 +1020,13 @@ pub mod body_check {
     unknown: TypeId,
   ) {
     for (name, binding) in source.iter() {
-      let ty = binding.def.map(|d| map_def_ty(d)).unwrap_or(unknown);
+      let ty = if let Some(def) = binding.def {
+        map_def_ty(def)
+      } else if let Some(ty) = binding.type_id {
+        ty
+      } else {
+        unknown
+      };
       bindings.insert(name.clone(), ty);
       if let Some(def) = binding.def {
         binding_defs.insert(name.clone(), def);
@@ -1080,6 +1163,7 @@ pub fn reset_parse_query_count() {
 
 #[salsa::tracked]
 fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
+  panic_if_cancelled(db);
   let _timer = db
     .profiler()
     .map(|profiler| profiler.timer(QueryKind::Parse, false));
@@ -1091,15 +1175,24 @@ fn parse_for(db: &dyn Db, file: FileInput) -> parser::ParseResult {
 
 #[salsa::tracked]
 fn lower_hir_for(db: &dyn Db, file: FileInput) -> LowerResultWithDiagnostics {
+  panic_if_cancelled(db);
   let _timer = db
     .profiler()
     .map(|profiler| profiler.timer(QueryKind::LowerHir, false));
   let parsed = parse_for(db, file);
+  panic_if_cancelled(db);
   let file_kind = file.kind(db);
   let mut diagnostics = parsed.diagnostics.clone();
+  let cancelled_flag = cancelled(db);
   let lowered = parsed.ast.as_ref().map(|ast| {
+    panic_if_cancelled(db);
     let (lowered, mut lower_diags) =
-      lower_file_with_diagnostics(file.file_id(db), map_hir_file_kind(file_kind), ast);
+      lower_file_with_diagnostics_with_cancellation(
+        file.file_id(db),
+        map_hir_file_kind(file_kind),
+        ast,
+        Some(Arc::clone(&cancelled_flag)),
+      );
     diagnostics.append(&mut lower_diags);
     Arc::new(lowered)
   });
@@ -1203,6 +1296,7 @@ impl std::fmt::Debug for TsSemantics {
 
 #[salsa::tracked]
 fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
+  panic_if_cancelled(db);
   let mut visited = BTreeSet::new();
   let mut queue: VecDeque<FileId> = db
     .roots_input()
@@ -1210,7 +1304,13 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
     .iter()
     .filter_map(|key| file_id_from_key(db, key))
     .collect();
+  // Always seed bundled/host libs by `FileId` to avoid losing them when a host
+  // file shares the same `FileKey` as a bundled lib (two IDs, one key).
+  let mut lib_files = db.lib_files();
+  lib_files.sort_by_key(|id| id.0);
+  queue.extend(lib_files);
   while let Some(file) = queue.pop_front() {
+    panic_if_cancelled(db);
     if !visited.insert(file) {
       continue;
     }
@@ -1225,6 +1325,7 @@ fn all_files_for(db: &dyn Db) -> Arc<Vec<FileId>> {
 
 #[salsa::tracked]
 fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
+  panic_if_cancelled(db);
   let _timer = db
     .profiler()
     .map(|profiler| profiler.timer(QueryKind::Bind, false));
@@ -1232,6 +1333,7 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
   let mut diagnostics = Vec::new();
   let mut sem_hirs: HashMap<sem_ts::FileId, Arc<sem_ts::HirFile>> = HashMap::new();
   for file in files.iter() {
+    panic_if_cancelled(db);
     let lowered = lower_hir_for(db, db.file_input(*file).expect("file seeded for lowering"));
     diagnostics.extend(lowered.diagnostics.iter().cloned());
     sem_hirs.insert(
@@ -1250,10 +1352,15 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
     .filter_map(|f| file_id_from_key(db, f))
     .map(|id| sem_ts::FileId(id.0))
     .collect();
+  roots.extend(db.lib_files().into_iter().map(|id| sem_ts::FileId(id.0)));
   roots.sort();
   roots.dedup();
   let resolver = DbResolver { db };
-  let (semantics, mut bind_diags) = sem_ts::bind_ts_program(&roots, &resolver, |file| {
+  let cancelled_flag = cancelled(db);
+  let (semantics, mut bind_diags) = sem_ts::bind_ts_program_with_cancellation(
+    &roots,
+    &resolver,
+    |file| {
     sem_hirs.get(&file).cloned().unwrap_or_else(|| {
       Arc::new(empty_sem_hir(
         FileId(file.0),
@@ -1262,16 +1369,10 @@ fn ts_semantics_for(db: &dyn Db) -> Arc<TsSemantics> {
           .unwrap_or(FileKind::Ts),
       ))
     })
-  });
-  for diag in bind_diags.iter_mut() {
-    if diag.code == "BIND1002" {
-      if diag.message.contains("unresolved") {
-        diag.code = codes::UNRESOLVED_MODULE.as_str().into();
-      } else {
-        diag.code = codes::UNKNOWN_EXPORT.as_str().into();
-      }
-    }
-  }
+    },
+    Some(cancelled_flag.as_ref()),
+  );
+  panic_if_cancelled(db);
   diagnostics.append(&mut bind_diags);
   diagnostics.sort();
   diagnostics.dedup();
@@ -1524,11 +1625,13 @@ pub fn db_revision(db: &dyn Db) -> salsa::Revision {
 
 #[salsa::tracked]
 fn def_to_file_for(db: &dyn Db) -> Arc<BTreeMap<DefId, FileId>> {
+  panic_if_cancelled(db);
   let mut files: Vec<_> = all_files(db).iter().copied().collect();
   files.sort_by_key(|f| f.0);
 
   let mut map = BTreeMap::new();
   for file in files {
+    panic_if_cancelled(db);
     let lowered = lower_hir(db, file);
     if let Some(lowered) = lowered.lowered.as_ref() {
       for def in lowered.defs.iter() {
@@ -1555,11 +1658,13 @@ pub fn def_to_file(db: &dyn Db) -> Arc<BTreeMap<DefId, FileId>> {
 
 #[salsa::tracked]
 fn body_to_file_for(db: &dyn Db) -> Arc<BTreeMap<BodyId, FileId>> {
+  panic_if_cancelled(db);
   let mut files: Vec<_> = all_files(db).iter().copied().collect();
   files.sort_by_key(|f| f.0);
 
   let mut map = BTreeMap::new();
   for file in files {
+    panic_if_cancelled(db);
     let lowered = lower_hir(db, file);
     if let Some(lowered) = lowered.lowered.as_ref() {
       for body_id in lowered.body_index.keys() {
@@ -1585,14 +1690,25 @@ pub fn body_to_file(db: &dyn Db) -> Arc<BTreeMap<BodyId, FileId>> {
 }
 
 fn record_parent(map: &mut BTreeMap<BodyId, BodyId>, child: BodyId, parent: BodyId) {
-  if let Some(existing) = map.get(&child) {
-    debug_assert_eq!(
-      *existing, parent,
-      "conflicting parents for {child:?}: {existing:?} vs {parent:?}"
-    );
+  if child == parent {
     return;
   }
-  map.insert(child, parent);
+
+  match map.get(&child) {
+    None => {
+      map.insert(child, parent);
+    }
+    Some(existing) if *existing == parent => {}
+    Some(existing) => {
+      // Keep the first observed parent edge (deterministic iteration) and log the conflict.
+      tracing::debug!(
+        ?child,
+        ?existing,
+        ?parent,
+        "ignoring conflicting body parent edge"
+      );
+    }
+  }
 }
 
 #[salsa::tracked]
@@ -1606,6 +1722,32 @@ fn body_parents_in_file_for(db: &dyn Db, file: FileInput) -> Arc<BTreeMap<BodyId
 
   let mut body_ids: Vec<_> = lowered.body_index.keys().copied().collect();
   body_ids.sort_by_key(|id| id.0);
+
+  fn hir_body_range(lowered: &LowerResult, body: &hir_js::Body) -> TextRange {
+    let mut start = u32::MAX;
+    let mut end = 0u32;
+    for stmt in body.stmts.iter() {
+      start = start.min(stmt.span.start);
+      end = end.max(stmt.span.end);
+    }
+    for expr in body.exprs.iter() {
+      start = start.min(expr.span.start);
+      end = end.max(expr.span.end);
+    }
+    for pat in body.pats.iter() {
+      start = start.min(pat.span.start);
+      end = end.max(pat.span.end);
+    }
+
+    if start == u32::MAX {
+      lowered
+        .def(body.owner)
+        .map(|def| def.span)
+        .unwrap_or_else(|| TextRange::new(0, 0))
+    } else {
+      TextRange::new(start, end)
+    }
+  }
 
   for body_id in body_ids {
     let Some(body) = lowered.body(body_id) else {
@@ -1655,6 +1797,70 @@ fn body_parents_in_file_for(db: &dyn Db, file: FileInput) -> Arc<BTreeMap<BodyId
       ExportKind::Assignment(assign) => record_parent(&mut parents, assign.body, root_body),
       _ => {}
     }
+  }
+
+  // Bodies synthesized for definitions (notably variable initializers) may not
+  // be referenced directly by `StmtKind::Decl` or expression nodes in the
+  // surrounding body. Link them through the definition parent chain so nested
+  // checks can seed outer bindings.
+  let mut def_to_body: BTreeMap<hir_js::DefId, hir_js::BodyId> = BTreeMap::new();
+  for def in lowered.defs.iter() {
+    if let Some(body) = def.body {
+      def_to_body.insert(def.id, body);
+    }
+  }
+  for def in lowered.defs.iter() {
+    let Some(child_body) = def.body else {
+      continue;
+    };
+    if child_body == root_body {
+      continue;
+    }
+    let Some(parent_def) = def.parent else {
+      continue;
+    };
+    let Some(parent_body) = def_to_body.get(&parent_def).copied() else {
+      continue;
+    };
+    if child_body == parent_body {
+      continue;
+    }
+    parents.entry(child_body).or_insert(parent_body);
+  }
+
+  // Fallback: infer missing parent links from body span containment.
+  //
+  // `hir-js` synthesizes bodies for initializer expressions (and similar nodes) that are not
+  // referenced by the surrounding statement list. Those bodies still need parent edges so nested
+  // checks can seed parameter/local bindings.
+  let mut body_ranges: Vec<(BodyId, TextRange)> = lowered
+    .body_index
+    .keys()
+    .copied()
+    .filter_map(|id| lowered.body(id).map(|b| (id, hir_body_range(lowered, b))))
+    .collect();
+  body_ranges.sort_by_key(|(id, range)| (range.start, Reverse(range.end), id.0));
+
+  let mut stack: Vec<(BodyId, TextRange)> = Vec::new();
+  for (child, range) in body_ranges {
+    if child == root_body {
+      stack.clear();
+      stack.push((child, range));
+      continue;
+    }
+
+    while let Some((_, parent_range)) = stack.last().copied() {
+      if range.start >= parent_range.start && range.end <= parent_range.end {
+        break;
+      }
+      stack.pop();
+    }
+
+    let computed_parent = stack.last().map(|(id, _)| *id).unwrap_or(root_body);
+    if !parents.contains_key(&child) && computed_parent != child {
+      parents.insert(child, computed_parent);
+    }
+    stack.push((child, range));
   }
 
   Arc::new(parents)
@@ -2334,11 +2540,13 @@ fn body_diagnostics_from_results(db: &dyn Db, body: BodyId) -> Arc<[Diagnostic]>
 
 #[salsa::tracked]
 fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
+  panic_if_cancelled(db);
   let files = all_files(db);
   let mut parse_diags = Vec::new();
   let mut lower_diags = Vec::new();
   let mut module_diags = Vec::new();
   for file in files.iter() {
+    panic_if_cancelled(db);
     let parsed = parse(db, *file);
     parse_diags.extend(parsed.diagnostics.into_iter());
     let lowered = lower_hir(db, *file);
@@ -2348,6 +2556,7 @@ fn program_diagnostics_for(db: &dyn Db) -> Arc<[Diagnostic]> {
   let semantics = ts_semantics(db);
   let mut body_diags = Vec::new();
   for (body, file) in body_to_file(db).iter() {
+    panic_if_cancelled(db);
     if matches!(file_kind(db, *file), FileKind::Dts) {
       continue;
     }

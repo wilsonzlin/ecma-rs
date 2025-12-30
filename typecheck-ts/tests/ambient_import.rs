@@ -174,6 +174,17 @@ declare module "ambient" {
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
   let file_id = program.file_id(&entry).expect("entry file id");
+  let foo_import_def = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .find(|def| program.def_name(*def).as_deref() == Some("Foo"))
+    .expect("imported Foo def");
+  let foo_ty = program.type_of_def(foo_import_def);
+  assert_eq!(
+    program.display_type(foo_ty).to_string(),
+    "{ fromAmbient: string }",
+    "imported Foo should resolve to the ambient module export, not the global interface"
+  );
   assert!(
     diagnostics.is_empty(),
     "unexpected diagnostics when preferring ambient module declarations: {diagnostics:?}"

@@ -16,6 +16,7 @@ use crate::intern::NameInterner;
 use crate::lower_types::TypeLowerer;
 use crate::span_map::SpanMap;
 use derive_visitor::{Drive, DriveMut};
+use diagnostics::Cancelled;
 use diagnostics::Diagnostic;
 use diagnostics::FileId;
 use diagnostics::Span;
@@ -48,7 +49,9 @@ use parse_js::ast::stmt::Stmt as AstStmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::*;
 use parse_js::loc::Loc;
+use std::panic::panic_any;
 use std::collections::{btree_map::Entry, BTreeMap, HashMap};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -62,20 +65,33 @@ impl<T: Drive + DriveMut> From<&Node<T>> for RawNode {
 
 pub(crate) struct LoweringContext {
   file: FileId,
+  cancelled: Option<Arc<AtomicBool>>,
   diagnostics: Vec<Diagnostic>,
   parent_stack: Vec<Option<RawNode>>,
 }
 
 impl LoweringContext {
-  fn new(file: FileId) -> Self {
+  fn new(file: FileId, cancelled: Option<Arc<AtomicBool>>) -> Self {
     Self {
       file,
+      cancelled,
       diagnostics: Vec::new(),
       parent_stack: vec![None],
     }
   }
 
+  #[inline]
+  fn check_cancelled(&mut self) {
+    let Some(cancelled) = self.cancelled.as_ref() else {
+      return;
+    };
+    if cancelled.load(Ordering::Relaxed) {
+      panic_any(Cancelled);
+    }
+  }
+
   pub(crate) fn to_range(&mut self, loc: Loc) -> TextRange {
+    self.check_cancelled();
     let (range, note) = loc.to_diagnostics_range_with_note();
     if let Some(note) = note {
       self.diagnostics.push(
@@ -405,14 +421,40 @@ impl<'a> DefSource<'a> {
         }
       }
       DefSource::ClassStaticBlock(_) => Some(BodyKind::Class),
-      DefSource::Function(_)
-      | DefSource::ArrowFunction(_)
-      | DefSource::FuncExpr(_)
-      | DefSource::Method(_)
-      | DefSource::Getter(_)
-      | DefSource::Setter(_) => Some(BodyKind::Function),
+      DefSource::Function(decl) => decl
+        .stx
+        .function
+        .stx
+        .body
+        .as_ref()
+        .map(|_| BodyKind::Function),
+      DefSource::ArrowFunction(_) | DefSource::FuncExpr(_) => Some(BodyKind::Function),
+      DefSource::Method(method) => method
+        .stx
+        .func
+        .stx
+        .body
+        .as_ref()
+        .map(|_| BodyKind::Function),
+      DefSource::Getter(getter) => getter
+        .stx
+        .func
+        .stx
+        .body
+        .as_ref()
+        .map(|_| BodyKind::Function),
+      DefSource::Setter(setter) => setter
+        .stx
+        .func
+        .stx
+        .body
+        .as_ref()
+        .map(|_| BodyKind::Function),
       DefSource::Enum(_) => None,
-      DefSource::Var(..) => Some(BodyKind::Initializer),
+      DefSource::Var(decl, _) => decl
+        .initializer
+        .as_ref()
+        .map(|_| BodyKind::Initializer),
       DefSource::ClassDecl(_) | DefSource::ClassExpr(_) => Some(BodyKind::Class),
       DefSource::ExportDefaultExpr(_) | DefSource::ExportAssignment(_) => Some(BodyKind::TopLevel),
       DefSource::None => None,
@@ -446,7 +488,21 @@ pub fn lower_file_with_diagnostics(
   file_kind: FileKind,
   ast: &Node<TopLevel>,
 ) -> (LowerResult, Vec<Diagnostic>) {
-  let mut ctx = LoweringContext::new(file);
+  lower_file_with_diagnostics_with_cancellation(file, file_kind, ast, None)
+}
+
+/// Lower a parsed file into HIR structures, returning lowering diagnostics.
+///
+/// When a cancellation flag is provided, lowering aborts by panicking with
+/// [`diagnostics::Cancelled`] once cancellation is observed. This mirrors how
+/// the type checker propagates cancellation through salsa queries.
+pub fn lower_file_with_diagnostics_with_cancellation(
+  file: FileId,
+  file_kind: FileKind,
+  ast: &Node<TopLevel>,
+  cancelled: Option<Arc<AtomicBool>>,
+) -> (LowerResult, Vec<Diagnostic>) {
+  let mut ctx = LoweringContext::new(file, cancelled);
   let mut names = NameInterner::default();
   let mut descriptors = Vec::new();
   let mut module_items = Vec::new();
@@ -481,6 +537,7 @@ pub fn lower_file_with_diagnostics(
   let mut body_disambiguators: BTreeMap<DefId, u32> = BTreeMap::new();
   let mut parent_nodes: HashMap<RawNode, DefId> = HashMap::new();
   for desc in descriptors {
+    ctx.check_cancelled();
     let parent = desc.parent.and_then(|raw| {
       def_lookup
         .def_for_raw(raw)
@@ -528,6 +585,7 @@ pub fn lower_file_with_diagnostics(
     body,
   } in planned
   {
+    ctx.check_cancelled();
     if desc.is_item {
       items.push(def_id);
     }
@@ -565,7 +623,7 @@ pub fn lower_file_with_diagnostics(
         &mut ctx,
       )
       .map(Arc::new)
-      .unwrap_or_else(|| Arc::new(empty_body(def_id, body.kind)));
+      .unwrap_or_else(|| Arc::new(empty_body(def_id, body.kind, desc.span)));
       let idx = bodies.len();
       body_ids.push(body.id);
       body_index.insert(body.id, idx);
@@ -599,6 +657,7 @@ pub fn lower_file_with_diagnostics(
   let mut types = BTreeMap::new();
   let mut pending_namespaces: Vec<(DefId, TextRange)> = Vec::new();
   for (def_id, source) in pending_types {
+    ctx.check_cancelled();
     let mut type_lowerer = TypeLowerer::new(def_id, &mut names, &mut span_map, &mut ctx);
     let type_info = match source {
       TypeSource::TypeAlias(alias) => Some(type_lowerer.lower_type_alias(alias)),
@@ -628,6 +687,7 @@ pub fn lower_file_with_diagnostics(
     types.insert(def_id, type_lowerer.finish());
   }
   for (def_id, span) in pending_namespaces {
+    ctx.check_cancelled();
     if let Some(idx) = id_to_index.get(&def_id) {
       let members = collect_namespace_members(def_id, span, &defs);
       if let Some(def) = defs.get_mut(*idx) {
@@ -699,9 +759,10 @@ fn span_contains(container: TextRange, inner: TextRange) -> bool {
   inner.start >= container.start && inner.end <= container.end
 }
 
-fn empty_body(owner: DefId, kind: BodyKind) -> Body {
+fn empty_body(owner: DefId, kind: BodyKind, span: TextRange) -> Body {
   Body {
     owner,
+    span,
     kind,
     exprs: Vec::new(),
     stmts: Vec::new(),
@@ -720,8 +781,10 @@ fn lower_root_body(
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Body {
+  let span = ctx.to_range(ast.loc);
   let mut builder = BodyBuilder::new(
     DefId(u32::MAX),
+    span,
     body_id,
     BodyKind::TopLevel,
     def_lookup,
@@ -809,8 +872,9 @@ fn lower_body_from_source(
       ctx,
     ),
     DefSource::ClassStaticBlock(block) => {
+      let span = ctx.to_range(block.loc);
       let mut builder =
-        BodyBuilder::new(owner, body_id, BodyKind::Class, def_lookup, names, span_map);
+        BodyBuilder::new(owner, span, body_id, BodyKind::Class, def_lookup, names, span_map);
       for stmt in block.stx.body.iter() {
         let id = lower_stmt(stmt, &mut builder, ctx);
         builder.root_stmt(id);
@@ -841,8 +905,10 @@ fn lower_body_from_source(
       owner, body_id, decl, *kind, def_lookup, names, span_map, ctx,
     ),
     DefSource::ExportDefaultExpr(expr) => {
+      let span = ctx.to_range(expr.loc);
       let mut builder = BodyBuilder::new(
         owner,
+        span,
         body_id,
         BodyKind::TopLevel,
         def_lookup,
@@ -855,8 +921,10 @@ fn lower_body_from_source(
       Some(builder.finish())
     }
     DefSource::ExportAssignment(assign) => {
+      let span = ctx.to_range(assign.loc);
       let mut builder = BodyBuilder::new(
         owner,
+        span,
         body_id,
         BodyKind::TopLevel,
         def_lookup,
@@ -883,8 +951,10 @@ fn lower_var_body(
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
+  let span = ctx.to_range(decl.pattern.loc);
   let mut builder = BodyBuilder::new(
     owner,
+    span,
     body_id,
     BodyKind::Initializer,
     def_lookup,
@@ -916,8 +986,10 @@ fn lower_field_initializer_body(
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
+  let span = ctx.to_range(init.loc);
   let mut builder = BodyBuilder::new(
     owner,
+    span,
     body_id,
     BodyKind::Initializer,
     def_lookup,
@@ -940,8 +1012,10 @@ fn lower_function_body(
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Option<Body> {
+  let span = ctx.to_range(func.loc);
   let mut builder = BodyBuilder::new(
     owner,
+    span,
     body_id,
     BodyKind::Function,
     def_lookup,
@@ -998,7 +1072,20 @@ fn lower_class_body(
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> Body {
-  let mut builder = BodyBuilder::new(owner, body_id, BodyKind::Class, def_lookup, names, span_map);
+  let span = if members.is_empty() {
+    TextRange::new(0, 0)
+  } else {
+    let mut start = u32::MAX;
+    let mut end = 0u32;
+    for member in members {
+      let range = ctx.to_range(member.loc);
+      start = start.min(range.start);
+      end = end.max(range.end);
+    }
+    TextRange::new(start, end)
+  };
+  let mut builder =
+    BodyBuilder::new(owner, span, body_id, BodyKind::Class, def_lookup, names, span_map);
   for member in members {
     if let ClassOrObjVal::StaticBlock(block) = &member.stx.val {
       let mut block_stmts = Vec::new();
@@ -1907,6 +1994,7 @@ fn lower_pat(
 
 struct BodyBuilder<'a> {
   owner: DefId,
+  span: TextRange,
   kind: BodyKind,
   body_id: BodyId,
   exprs: Vec<Expr>,
@@ -1922,6 +2010,7 @@ struct BodyBuilder<'a> {
 impl<'a> BodyBuilder<'a> {
   fn new(
     owner: DefId,
+    span: TextRange,
     body_id: BodyId,
     kind: BodyKind,
     def_lookup: &'a DefLookup,
@@ -1930,6 +2019,7 @@ impl<'a> BodyBuilder<'a> {
   ) -> Self {
     Self {
       owner,
+      span,
       kind,
       body_id,
       exprs: Vec::new(),
@@ -1974,6 +2064,7 @@ impl<'a> BodyBuilder<'a> {
   fn finish(self) -> Body {
     Body {
       owner: self.owner,
+      span: self.span,
       kind: self.kind,
       exprs: self.exprs,
       stmts: self.stmts,

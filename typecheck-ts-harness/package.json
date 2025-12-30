@@ -1,0 +1,10 @@
+{
+  "name": "typecheck-ts-harness-node",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Local Node dependencies for typecheck-ts-harness (tsc oracle)",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "typescript": "5.9.3"
+  }
+}

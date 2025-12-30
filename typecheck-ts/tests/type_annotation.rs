@@ -71,7 +71,7 @@ fn qualified_type_reference_resolves() {
   );
   let value_def = def_by_name(&mut program, FileKey::new("main.ts"), "Value");
   let foo_def = def_by_name(&mut program, FileKey::new("types.ts"), "Foo");
-  let ty = program.type_of_def_interned(value_def);
+  let ty = program.declared_type_of_def_interned(value_def);
   match program.interned_type_kind(ty) {
     TypeKind::Ref { def, args } => {
       eprintln!(
@@ -101,7 +101,7 @@ fn import_type_resolves_to_module_export() {
   );
   let value_def = def_by_name(&mut program, FileKey::new("main.ts"), "Value");
   let foo_def = def_by_name(&mut program, FileKey::new("types.ts"), "Foo");
-  let ty = program.type_of_def_interned(value_def);
+  let ty = program.declared_type_of_def_interned(value_def);
   match program.interned_type_kind(ty) {
     TypeKind::Ref { def, args } => {
       assert_eq!(def, foo_def);
@@ -123,7 +123,7 @@ fn typeof_query_resolves_value_definition() {
   );
   let alias_def = def_by_name(&mut program, FileKey::new("main.ts"), "FooType");
   let foo_def = def_by_name(&mut program, FileKey::new("main.ts"), "foo");
-  let ty = program.type_of_def_interned(alias_def);
+  let ty = program.declared_type_of_def_interned(alias_def);
   match program.interned_type_kind(ty) {
     TypeKind::Ref { def, args } => {
       assert_eq!(def, foo_def);
@@ -151,17 +151,17 @@ fn type_params_shadow_type_names() {
   let bar_def = def_by_name(&mut program, FileKey::new("main.ts"), "Bar");
   println!(
     "bar type {:?}",
-    program.interned_type_kind(program.type_of_def_interned(bar_def))
+    program.interned_type_kind(program.declared_type_of_def_interned(bar_def))
   );
   println!(
     "bar expanded {:?}",
-    program.type_kind(program.type_of_def_interned(bar_def))
+    program.type_kind(program.declared_type_of_def_interned(bar_def))
   );
   println!(
     "foo type {:?}",
-    program.interned_type_kind(program.type_of_def_interned(foo_def))
+    program.interned_type_kind(program.declared_type_of_def_interned(foo_def))
   );
-  let ty = program.type_of_def_interned(bar_def);
+  let ty = program.declared_type_of_def_interned(bar_def);
   let TypeKind::Ref { def, args } = program.interned_type_kind(ty) else {
     panic!("expected ref, got {:?}", program.interned_type_kind(ty));
   };

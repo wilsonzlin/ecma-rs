@@ -380,11 +380,24 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
 
   let file_id = program.file_id(&key).expect("file id");
   let defs = program.definitions_in_file(file_id);
-  let func_def = defs
+  let mut foo_defs: Vec<_> = defs
     .iter()
     .copied()
-    .find(|d| program.body_of_def(*d).is_some())
-    .expect("function definition preserved after merge");
+    .filter(|d| program.def_name(*d) == Some("foo".to_string()))
+    .collect();
+  foo_defs.sort_by_key(|d| {
+    program
+      .def_span(*d)
+      .map(|span| span.range.start)
+      .unwrap_or(u32::MAX)
+  });
+  assert_eq!(
+    foo_defs.len(),
+    2,
+    "expected two merged defs for foo, got {foo_defs:?}"
+  );
+  let namespace_def = foo_defs[0];
+  let func_def = foo_defs[1];
   let exported = program
     .exports_of(FileId(6))
     .get("foo")
@@ -394,12 +407,6 @@ fn namespace_then_value_prefers_callable_def_and_merges_members() {
     exported, func_def,
     "export should point at callable side of merged declaration"
   );
-
-  let namespace_def = defs
-    .iter()
-    .copied()
-    .find(|d| *d != func_def)
-    .expect("namespace declaration");
 
   let ty = program.type_of_def_interned(func_def);
   let props = program.properties_of(ty);

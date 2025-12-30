@@ -977,11 +977,7 @@ impl TscRunner {
   fn available(&self) -> bool {
     #[cfg(feature = "with-node")]
     {
-      std::process::Command::new(&self.node_path)
-        .arg("--version")
-        .output()
-        .map(|out| out.status.success())
-        .unwrap_or(false)
+      crate::tsc::node_available(&self.node_path) && crate::tsc::typescript_available(&self.node_path)
     }
 
     #[cfg(not(feature = "with-node"))]

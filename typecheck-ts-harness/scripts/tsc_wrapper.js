@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 const path = require("path");
-const ts = require("typescript");
+const { loadTypeScript } = require("./typescript_loader");
+let ts;
+try {
+  ts = loadTypeScript();
+} catch (err) {
+  console.error(err?.message ?? String(err));
+  process.exit(1);
+}
 
 function categoryToString(category) {
   switch (category) {

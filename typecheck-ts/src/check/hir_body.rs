@@ -1,4 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::panic::panic_any;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use bumpalo::Bump;
@@ -12,6 +14,7 @@ use hir_js::{
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+use parse_js::ast::class_or_object::{ClassMember, ClassStaticBlock};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
@@ -37,7 +40,7 @@ use super::flow_narrow::{
 };
 
 use super::caches::BodyCaches;
-use super::expr::resolve_call;
+use super::expr::{resolve_call, resolve_construct};
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
 pub use crate::BodyCheckResult;
@@ -75,183 +78,252 @@ impl TypeResolver for BindingTypeResolver {
   }
 }
 
-#[derive(Default)]
-struct AstIndex<'a> {
-  stmts: HashMap<TextRange, &'a Node<Stmt>>,
-  exprs: HashMap<TextRange, &'a Node<AstExpr>>,
-  pats: HashMap<TextRange, &'a Node<AstPat>>,
-  params: HashMap<TextRange, &'a Node<ParamDecl>>,
-  vars: HashMap<TextRange, VarInfo<'a>>,
-  functions: Vec<FunctionInfo<'a>>,
+pub struct AstIndex {
+  ast: Arc<Node<parse_js::ast::stx::TopLevel>>,
+  stmts: HashMap<TextRange, *const Node<Stmt>>,
+  exprs: HashMap<TextRange, *const Node<AstExpr>>,
+  pats: HashMap<TextRange, *const Node<AstPat>>,
+  params: HashMap<TextRange, *const Node<ParamDecl>>,
+  vars: HashMap<TextRange, VarInfo>,
+  functions: Vec<FunctionInfo>,
+  class_static_blocks: Vec<ClassStaticBlockInfo>,
+}
+
+// Safety: `AstIndex` stores immutable pointers into an `Arc`-owned AST.
+unsafe impl Send for AstIndex {}
+unsafe impl Sync for AstIndex {}
+
+#[derive(Clone, Copy)]
+struct VarInfo {
+  initializer: Option<*const Node<AstExpr>>,
+  type_annotation: Option<*const Node<parse_js::ast::type_expr::TypeExpr>>,
 }
 
 #[derive(Clone, Copy)]
-struct VarInfo<'a> {
-  _decl: &'a Node<VarDecl>,
-  initializer: Option<&'a Node<AstExpr>>,
-  type_annotation: Option<&'a Node<parse_js::ast::type_expr::TypeExpr>>,
-}
-
-#[derive(Clone, Copy)]
-struct FunctionInfo<'a> {
+struct FunctionInfo {
   func_span: TextRange,
   body_span: TextRange,
-  func: &'a Node<Func>,
+  func: *const Node<Func>,
 }
 
-impl<'a> AstIndex<'a> {
-  fn new() -> Self {
-    Self::default()
+#[derive(Clone, Copy)]
+struct ClassStaticBlockInfo {
+  span: TextRange,
+  block: *const Node<ClassStaticBlock>,
+}
+
+impl AstIndex {
+  pub fn new(
+    ast: Arc<Node<parse_js::ast::stx::TopLevel>>,
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) -> Self {
+    let mut index = AstIndex {
+      ast,
+      stmts: HashMap::new(),
+      exprs: HashMap::new(),
+      pats: HashMap::new(),
+      params: HashMap::new(),
+      vars: HashMap::new(),
+      functions: Vec::new(),
+      class_static_blocks: Vec::new(),
+    };
+    index.index_top_level(file, cancelled);
+    index
   }
 
-  fn index_top_level(&mut self, ast: &'a Node<parse_js::ast::stx::TopLevel>, file: FileId) {
-    for stmt in ast.stx.body.iter() {
-      self.index_stmt(stmt, file);
+  pub(crate) fn ast(&self) -> &Node<parse_js::ast::stx::TopLevel> {
+    self.ast.as_ref()
+  }
+
+  fn check_cancelled(cancelled: Option<&Arc<AtomicBool>>) {
+    if let Some(flag) = cancelled {
+      if flag.load(Ordering::Relaxed) {
+        panic_any(crate::FatalError::Cancelled);
+      }
     }
   }
 
-  fn index_stmt(&mut self, stmt: &'a Node<Stmt>, file: FileId) {
+  fn index_top_level(&mut self, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
+    let ast = Arc::clone(&self.ast);
+    for (idx, stmt) in ast.stx.body.iter().enumerate() {
+      if idx % 1024 == 0 {
+        Self::check_cancelled(cancelled);
+      }
+      self.index_stmt(stmt, file, cancelled);
+    }
+  }
+
+  fn index_stmt(&mut self, stmt: &Node<Stmt>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
     let span = loc_to_range(file, stmt.loc);
-    self.stmts.insert(span, stmt);
+    self.stmts.insert(span, stmt as *const _);
     match stmt.stx.as_ref() {
       Stmt::Expr(expr_stmt) => {
-        self.index_expr(&expr_stmt.stx.expr, file);
+        self.index_expr(&expr_stmt.stx.expr, file, cancelled);
       }
       Stmt::Return(ret) => {
         if let Some(value) = &ret.stx.value {
-          self.index_expr(value, file);
+          self.index_expr(value, file, cancelled);
         }
       }
-      Stmt::Block(block) => self.index_stmt_list(&block.stx.body, file),
+      Stmt::Block(block) => self.index_stmt_list(&block.stx.body, file, cancelled),
       Stmt::If(if_stmt) => {
-        self.index_expr(&if_stmt.stx.test, file);
-        self.index_stmt(&if_stmt.stx.consequent, file);
+        self.index_expr(&if_stmt.stx.test, file, cancelled);
+        self.index_stmt(&if_stmt.stx.consequent, file, cancelled);
         if let Some(alt) = &if_stmt.stx.alternate {
-          self.index_stmt(alt, file);
+          self.index_stmt(alt, file, cancelled);
         }
       }
       Stmt::While(while_stmt) => {
-        self.index_expr(&while_stmt.stx.condition, file);
-        self.index_stmt(&while_stmt.stx.body, file);
+        self.index_expr(&while_stmt.stx.condition, file, cancelled);
+        self.index_stmt(&while_stmt.stx.body, file, cancelled);
       }
       Stmt::DoWhile(do_while) => {
-        self.index_expr(&do_while.stx.condition, file);
-        self.index_stmt(&do_while.stx.body, file);
+        self.index_expr(&do_while.stx.condition, file, cancelled);
+        self.index_stmt(&do_while.stx.body, file, cancelled);
       }
       Stmt::ForTriple(for_stmt) => {
         use parse_js::ast::stmt::ForTripleStmtInit;
         match &for_stmt.stx.init {
-          ForTripleStmtInit::Expr(expr) => self.index_expr(expr, file),
-          ForTripleStmtInit::Decl(decl) => self.index_var_decl(decl, file),
+          ForTripleStmtInit::Expr(expr) => self.index_expr(expr, file, cancelled),
+          ForTripleStmtInit::Decl(decl) => self.index_var_decl(decl, file, cancelled),
           ForTripleStmtInit::None => {}
         }
         if let Some(cond) = &for_stmt.stx.cond {
-          self.index_expr(cond, file);
+          self.index_expr(cond, file, cancelled);
         }
         if let Some(post) = &for_stmt.stx.post {
-          self.index_expr(post, file);
+          self.index_expr(post, file, cancelled);
         }
-        self.index_stmt_list(&for_stmt.stx.body.stx.body, file);
+        self.index_stmt_list(&for_stmt.stx.body.stx.body, file, cancelled);
       }
       Stmt::ForIn(for_in) => {
         use parse_js::ast::stmt::ForInOfLhs;
         match &for_in.stx.lhs {
-          ForInOfLhs::Assign(pat) => self.index_pat(pat, file),
-          ForInOfLhs::Decl((_, pat_decl)) => self.index_pat(&pat_decl.stx.pat, file),
+          ForInOfLhs::Assign(pat) => self.index_pat(pat, file, cancelled),
+          ForInOfLhs::Decl((_, pat_decl)) => self.index_pat(&pat_decl.stx.pat, file, cancelled),
         }
-        self.index_expr(&for_in.stx.rhs, file);
-        self.index_stmt_list(&for_in.stx.body.stx.body, file);
+        self.index_expr(&for_in.stx.rhs, file, cancelled);
+        self.index_stmt_list(&for_in.stx.body.stx.body, file, cancelled);
       }
       Stmt::ForOf(for_of) => {
         use parse_js::ast::stmt::ForInOfLhs;
         match &for_of.stx.lhs {
-          ForInOfLhs::Assign(pat) => self.index_pat(pat, file),
-          ForInOfLhs::Decl((_, pat_decl)) => self.index_pat(&pat_decl.stx.pat, file),
+          ForInOfLhs::Assign(pat) => self.index_pat(pat, file, cancelled),
+          ForInOfLhs::Decl((_, pat_decl)) => self.index_pat(&pat_decl.stx.pat, file, cancelled),
         }
-        self.index_expr(&for_of.stx.rhs, file);
-        self.index_stmt_list(&for_of.stx.body.stx.body, file);
+        self.index_expr(&for_of.stx.rhs, file, cancelled);
+        self.index_stmt_list(&for_of.stx.body.stx.body, file, cancelled);
       }
       Stmt::Switch(sw) => {
-        self.index_expr(&sw.stx.test, file);
+        self.index_expr(&sw.stx.test, file, cancelled);
         for branch in sw.stx.branches.iter() {
           if let Some(case) = &branch.stx.case {
-            self.index_expr(case, file);
+            self.index_expr(case, file, cancelled);
           }
           for stmt in branch.stx.body.iter() {
-            self.index_stmt(stmt, file);
+            self.index_stmt(stmt, file, cancelled);
           }
         }
       }
       Stmt::Try(tr) => {
-        self.index_stmt_list(&tr.stx.wrapped.stx.body, file);
+        self.index_stmt_list(&tr.stx.wrapped.stx.body, file, cancelled);
         if let Some(catch) = &tr.stx.catch {
           if let Some(param) = &catch.stx.parameter {
-            self.index_pat(&param.stx.pat, file);
+            self.index_pat(&param.stx.pat, file, cancelled);
           }
-          self.index_stmt_list(&catch.stx.body, file);
+          self.index_stmt_list(&catch.stx.body, file, cancelled);
         }
         if let Some(finally) = &tr.stx.finally {
-          self.index_stmt_list(&finally.stx.body, file);
+          self.index_stmt_list(&finally.stx.body, file, cancelled);
         }
       }
-      Stmt::Throw(th) => self.index_expr(&th.stx.value, file),
-      Stmt::Label(label) => self.index_stmt(&label.stx.statement, file),
+      Stmt::Throw(th) => self.index_expr(&th.stx.value, file, cancelled),
+      Stmt::Label(label) => self.index_stmt(&label.stx.statement, file, cancelled),
       Stmt::With(w) => {
-        self.index_expr(&w.stx.object, file);
-        self.index_stmt(&w.stx.body, file);
+        self.index_expr(&w.stx.object, file, cancelled);
+        self.index_stmt(&w.stx.body, file, cancelled);
       }
       Stmt::VarDecl(decl) => {
-        self.index_var_decl(decl, file);
+        self.index_var_decl(decl, file, cancelled);
       }
       Stmt::FunctionDecl(func) => {
-        self.index_function(&func.stx.function, file);
+        self.index_function(&func.stx.function, file, cancelled);
       }
-      Stmt::NamespaceDecl(ns) => self.index_namespace(ns, file),
+      Stmt::ClassDecl(class_decl) => {
+        for decorator in class_decl.stx.decorators.iter() {
+          self.index_expr(&decorator.stx.expression, file, cancelled);
+        }
+        if let Some(extends) = class_decl.stx.extends.as_ref() {
+          self.index_expr(extends, file, cancelled);
+        }
+        for implements in class_decl.stx.implements.iter() {
+          self.index_expr(implements, file, cancelled);
+        }
+        for member in class_decl.stx.members.iter() {
+          self.index_class_member(member, file, cancelled);
+        }
+      }
+      Stmt::NamespaceDecl(ns) => self.index_namespace(ns, file, cancelled),
       Stmt::ModuleDecl(module) => {
         if let Some(body) = &module.stx.body {
-          self.index_stmt_list(body, file);
+          self.index_stmt_list(body, file, cancelled);
         }
       }
       Stmt::GlobalDecl(global) => {
-        self.index_stmt_list(&global.stx.body, file);
+        self.index_stmt_list(&global.stx.body, file, cancelled);
       }
       _ => {}
     }
   }
 
-  fn index_stmt_list(&mut self, stmts: &'a [Node<Stmt>], file: FileId) {
-    for stmt in stmts.iter() {
-      self.index_stmt(stmt, file);
+  fn index_stmt_list(
+    &mut self,
+    stmts: &[Node<Stmt>],
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) {
+    for (idx, stmt) in stmts.iter().enumerate() {
+      if idx % 1024 == 0 {
+        Self::check_cancelled(cancelled);
+      }
+      self.index_stmt(stmt, file, cancelled);
     }
   }
 
-  fn index_namespace(&mut self, ns: &'a Node<NamespaceDecl>, file: FileId) {
+  fn index_namespace(
+    &mut self,
+    ns: &Node<NamespaceDecl>,
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) {
     match &ns.stx.body {
-      NamespaceBody::Block(stmts) => self.index_stmt_list(stmts, file),
-      NamespaceBody::Namespace(inner) => self.index_namespace(inner, file),
+      NamespaceBody::Block(stmts) => self.index_stmt_list(stmts, file, cancelled),
+      NamespaceBody::Namespace(inner) => self.index_namespace(inner, file, cancelled),
     }
   }
 
-  fn index_var_decl(&mut self, decl: &'a Node<VarDecl>, file: FileId) {
+  fn index_var_decl(&mut self, decl: &Node<VarDecl>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
     for declarator in decl.stx.declarators.iter() {
       let pat_span = loc_to_range(file, declarator.pattern.loc);
-      self.pats.insert(pat_span, &declarator.pattern.stx.pat);
+      self
+        .pats
+        .insert(pat_span, &declarator.pattern.stx.pat as *const _);
       self.vars.insert(
         pat_span,
         VarInfo {
-          _decl: decl,
-          initializer: declarator.initializer.as_ref(),
-          type_annotation: declarator.type_annotation.as_ref(),
+          initializer: declarator.initializer.as_ref().map(|n| n as *const _),
+          type_annotation: declarator.type_annotation.as_ref().map(|n| n as *const _),
         },
       );
-      self.index_pat(&declarator.pattern.stx.pat, file);
+      self.index_pat(&declarator.pattern.stx.pat, file, cancelled);
       if let Some(init) = &declarator.initializer {
-        self.index_expr(init, file);
+        self.index_expr(init, file, cancelled);
       }
     }
   }
 
-  fn index_function(&mut self, func: &'a Node<Func>, file: FileId) {
+  fn index_function(&mut self, func: &Node<Func>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
     let func_span = loc_to_range(file, func.loc);
     if let Some(body) = &func.stx.body {
       let body_span = match body {
@@ -263,65 +335,67 @@ impl<'a> AstIndex<'a> {
       self.functions.push(FunctionInfo {
         func_span,
         body_span,
-        func,
+        func: func as *const _,
       });
     }
 
     for param in func.stx.parameters.iter() {
       let pat_span = loc_to_range(file, param.stx.pattern.loc);
-      self.pats.insert(pat_span, &param.stx.pattern.stx.pat);
-      self.params.insert(pat_span, param);
-      self.index_pat(&param.stx.pattern.stx.pat, file);
+      self
+        .pats
+        .insert(pat_span, &param.stx.pattern.stx.pat as *const _);
+      self.params.insert(pat_span, param as *const _);
+      self.index_pat(&param.stx.pattern.stx.pat, file, cancelled);
       if let Some(default) = &param.stx.default_value {
-        self.index_expr(default, file);
+        self.index_expr(default, file, cancelled);
       }
     }
 
     if let Some(body) = &func.stx.body {
       match body {
-        FuncBody::Block(block) => self.index_stmt_list(block, file),
-        FuncBody::Expression(expr) => self.index_expr(expr, file),
+        FuncBody::Block(block) => self.index_stmt_list(block, file, cancelled),
+        FuncBody::Expression(expr) => self.index_expr(expr, file, cancelled),
       }
     }
   }
 
-  fn index_expr(&mut self, expr: &'a Node<AstExpr>, file: FileId) {
+  fn index_expr(&mut self, expr: &Node<AstExpr>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
     let span = loc_to_range(file, expr.loc);
-    self.exprs.insert(span, expr);
+    self.exprs.insert(span, expr as *const _);
     match expr.stx.as_ref() {
       AstExpr::Binary(bin) => {
-        self.index_expr(&bin.stx.left, file);
-        self.index_expr(&bin.stx.right, file);
+        self.index_expr(&bin.stx.left, file, cancelled);
+        self.index_expr(&bin.stx.right, file, cancelled);
       }
       AstExpr::Call(call) => {
-        self.index_expr(&call.stx.callee, file);
+        self.index_expr(&call.stx.callee, file, cancelled);
         for arg in call.stx.arguments.iter() {
-          self.index_expr(&arg.stx.value, file);
+          self.index_expr(&arg.stx.value, file, cancelled);
         }
       }
       AstExpr::Member(mem) => {
-        self.index_expr(&mem.stx.left, file);
+        self.index_expr(&mem.stx.left, file, cancelled);
       }
       AstExpr::ComputedMember(mem) => {
-        self.index_expr(&mem.stx.object, file);
-        self.index_expr(&mem.stx.member, file);
+        self.index_expr(&mem.stx.object, file, cancelled);
+        self.index_expr(&mem.stx.member, file, cancelled);
       }
       AstExpr::Cond(cond) => {
-        self.index_expr(&cond.stx.test, file);
-        self.index_expr(&cond.stx.consequent, file);
-        self.index_expr(&cond.stx.alternate, file);
+        self.index_expr(&cond.stx.test, file, cancelled);
+        self.index_expr(&cond.stx.consequent, file, cancelled);
+        self.index_expr(&cond.stx.alternate, file, cancelled);
       }
       AstExpr::Unary(un) => {
-        self.index_expr(&un.stx.argument, file);
+        self.index_expr(&un.stx.argument, file, cancelled);
       }
       AstExpr::UnaryPostfix(post) => {
-        self.index_expr(&post.stx.argument, file);
+        self.index_expr(&post.stx.argument, file, cancelled);
       }
       AstExpr::LitArr(arr) => {
         for elem in arr.stx.elements.iter() {
           match elem {
             parse_js::ast::expr::lit::LitArrElem::Single(v)
-            | parse_js::ast::expr::lit::LitArrElem::Rest(v) => self.index_expr(v, file),
+            | parse_js::ast::expr::lit::LitArrElem::Rest(v) => self.index_expr(v, file, cancelled),
             parse_js::ast::expr::lit::LitArrElem::Empty => {}
           }
         }
@@ -330,17 +404,30 @@ impl<'a> AstIndex<'a> {
         for member in obj.stx.members.iter() {
           match &member.stx.typ {
             ObjMemberType::Valued { val, .. } => match val {
-              ClassOrObjVal::Prop(Some(expr)) => self.index_expr(expr, file),
-              ClassOrObjVal::StaticBlock(block) => self.index_stmt_list(&block.stx.body, file),
+              ClassOrObjVal::Prop(Some(expr)) => self.index_expr(expr, file, cancelled),
+              ClassOrObjVal::StaticBlock(block) => {
+                self.index_stmt_list(&block.stx.body, file, cancelled)
+              }
               _ => {}
             },
-            ObjMemberType::Rest { val } => self.index_expr(val, file),
+            ObjMemberType::Rest { val } => self.index_expr(val, file, cancelled),
             ObjMemberType::Shorthand { .. } => {}
           }
         }
       }
-      AstExpr::Func(func) => self.index_function(&func.stx.func, file),
-      AstExpr::ArrowFunc(func) => self.index_function(&func.stx.func, file),
+      AstExpr::Class(class_expr) => {
+        for decorator in class_expr.stx.decorators.iter() {
+          self.index_expr(&decorator.stx.expression, file, cancelled);
+        }
+        if let Some(extends) = class_expr.stx.extends.as_ref() {
+          self.index_expr(extends, file, cancelled);
+        }
+        for member in class_expr.stx.members.iter() {
+          self.index_class_member(member, file, cancelled);
+        }
+      }
+      AstExpr::Func(func) => self.index_function(&func.stx.func, file, cancelled),
+      AstExpr::ArrowFunc(func) => self.index_function(&func.stx.func, file, cancelled),
       AstExpr::Id(..)
       | AstExpr::LitNull(..)
       | AstExpr::LitStr(..)
@@ -367,34 +454,65 @@ impl<'a> AstIndex<'a> {
       | AstExpr::JsxText(..)
       | AstExpr::LitRegex(..)
       | AstExpr::NewTarget(..)
-      | AstExpr::Class(..) => {}
+      => {}
     }
   }
 
-  fn index_pat(&mut self, pat: &'a Node<AstPat>, file: FileId) {
+  fn index_class_member(
+    &mut self,
+    member: &Node<ClassMember>,
+    file: FileId,
+    cancelled: Option<&Arc<AtomicBool>>,
+  ) {
+    for decorator in member.stx.decorators.iter() {
+      self.index_expr(&decorator.stx.expression, file, cancelled);
+    }
+    match &member.stx.key {
+      ClassOrObjKey::Computed(expr) => self.index_expr(expr, file, cancelled),
+      ClassOrObjKey::Direct(_) => {}
+    }
+    match &member.stx.val {
+      ClassOrObjVal::Getter(getter) => self.index_function(&getter.stx.func, file, cancelled),
+      ClassOrObjVal::Setter(setter) => self.index_function(&setter.stx.func, file, cancelled),
+      ClassOrObjVal::Method(method) => self.index_function(&method.stx.func, file, cancelled),
+      ClassOrObjVal::Prop(Some(expr)) => self.index_expr(expr, file, cancelled),
+      ClassOrObjVal::Prop(None) => {}
+      ClassOrObjVal::IndexSignature(_) => {}
+      ClassOrObjVal::StaticBlock(block) => {
+        let span = span_for_stmt_list(&block.stx.body, file).unwrap_or(loc_to_range(file, block.loc));
+        self.class_static_blocks.push(ClassStaticBlockInfo {
+          span,
+          block: block as *const _,
+        });
+        self.index_stmt_list(&block.stx.body, file, cancelled);
+      }
+    }
+  }
+
+  fn index_pat(&mut self, pat: &Node<AstPat>, file: FileId, cancelled: Option<&Arc<AtomicBool>>) {
     let span = loc_to_range(file, pat.loc);
-    self.pats.insert(span, pat);
+    self.pats.insert(span, pat as *const _);
     match pat.stx.as_ref() {
       AstPat::Arr(arr) => {
         for elem in arr.stx.elements.iter().flatten() {
-          self.index_pat(&elem.target, file);
+          self.index_pat(&elem.target, file, cancelled);
           if let Some(default) = &elem.default_value {
-            self.index_expr(default, file);
+            self.index_expr(default, file, cancelled);
           }
         }
         if let Some(rest) = &arr.stx.rest {
-          self.index_pat(rest, file);
+          self.index_pat(rest, file, cancelled);
         }
       }
       AstPat::Obj(obj) => {
         for prop in obj.stx.properties.iter() {
-          self.index_pat(&prop.stx.target, file);
+          self.index_pat(&prop.stx.target, file, cancelled);
           if let Some(default) = &prop.stx.default_value {
-            self.index_expr(default, file);
+            self.index_expr(default, file, cancelled);
           }
         }
         if let Some(rest) = &obj.stx.rest {
-          self.index_pat(rest, file);
+          self.index_pat(rest, file, cancelled);
         }
       }
       AstPat::Id(_) | AstPat::AssignTarget(_) => {}
@@ -408,14 +526,25 @@ pub fn check_body(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  ast: &Node<parse_js::ast::stx::TopLevel>,
+  ast_index: &AstIndex,
   store: Arc<TypeStore>,
   caches: &BodyCaches,
   bindings: &HashMap<String, TypeId>,
   resolver: Option<Arc<dyn TypeResolver>>,
 ) -> BodyCheckResult {
   check_body_with_expander(
-    body_id, body, names, file, ast, store, caches, bindings, resolver, None, None,
+    body_id,
+    body,
+    names,
+    file,
+    ast_index,
+    store,
+    caches,
+    bindings,
+    resolver,
+    None,
+    None,
+    None,
   )
 }
 
@@ -427,22 +556,26 @@ pub fn check_body_with_expander(
   body: &Body,
   names: &NameInterner,
   file: FileId,
-  ast: &Node<parse_js::ast::stx::TopLevel>,
+  ast_index: &AstIndex,
   store: Arc<TypeStore>,
   caches: &BodyCaches,
   bindings: &HashMap<String, TypeId>,
   resolver: Option<Arc<dyn TypeResolver>>,
   relate_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
   contextual_fn_ty: Option<TypeId>,
+  cancelled: Option<&Arc<AtomicBool>>,
 ) -> BodyCheckResult {
+  if let Some(flag) = cancelled {
+    if flag.load(Ordering::Relaxed) {
+      panic_any(crate::FatalError::Cancelled);
+    }
+  }
   let prim = store.primitive_ids();
   let expr_types = vec![prim.unknown; body.exprs.len()];
   let pat_types = vec![prim.unknown; body.pats.len()];
   let expr_spans: Vec<TextRange> = body.exprs.iter().map(|e| e.span).collect();
   let pat_spans: Vec<TextRange> = body.pats.iter().map(|p| p.span).collect();
-
-  let mut index = AstIndex::new();
-  index.index_top_level(ast, file);
+  let ast = ast_index.ast();
 
   let expr_map: HashMap<TextRange, ExprId> = body
     .exprs
@@ -489,14 +622,16 @@ pub fn check_body_with_expander(
     pat_map,
     diagnostics: Vec::new(),
     return_types: Vec::new(),
-    index,
+    index: ast_index,
     scopes: vec![Scope::default()],
+    namespace_scopes: HashMap::new(),
     expected_return: None,
     check_var_assignments: !synthetic_top_level,
     widen_object_literals: true,
     file,
     ref_expander: relate_expander,
     contextual_fn_ty,
+    cancelled,
     _names: names,
     _bump: Bump::new(),
   };
@@ -511,17 +646,37 @@ pub fn check_body_with_expander(
       checker.check_stmt_list(&ast.stx.body);
     }
     BodyKind::Function => {
-      if !checker.check_enclosing_function(body_range) {
-        checker.check_stmt_list(&ast.stx.body);
+      let found = checker.check_enclosing_function(body_range);
+      if !found {
+        checker.diagnostics.push(codes::MISSING_BODY.error(
+          "missing function body for checker",
+          Span::new(file, body_range),
+        ));
       }
     }
     BodyKind::Initializer => {
-      if !checker.check_matching_initializer(body_range) {
-        checker.check_stmt_list(&ast.stx.body);
+      let found = checker.check_matching_initializer(body_range);
+      if !found {
+        checker.diagnostics.push(codes::MISSING_BODY.error(
+          "missing initializer body for checker",
+          Span::new(file, body_range),
+        ));
       }
     }
-    BodyKind::Class | BodyKind::Unknown => {
-      checker.check_stmt_list(&ast.stx.body);
+    BodyKind::Class => {
+      let found = checker.check_enclosing_class(body_range);
+      if !found {
+        checker.diagnostics.push(codes::MISSING_BODY.error(
+          "missing class body for checker",
+          Span::new(file, body_range),
+        ));
+      }
+    }
+    BodyKind::Unknown => {
+      checker.diagnostics.push(codes::MISSING_BODY.error(
+        "missing body for checker",
+        Span::new(file, body_range),
+      ));
     }
   }
 
@@ -552,19 +707,29 @@ struct Checker<'a> {
   pat_map: HashMap<TextRange, PatId>,
   diagnostics: Vec<Diagnostic>,
   return_types: Vec<TypeId>,
-  index: AstIndex<'a>,
+  index: &'a AstIndex,
   scopes: Vec<Scope>,
+  namespace_scopes: HashMap<String, Scope>,
   expected_return: Option<TypeId>,
   check_var_assignments: bool,
   widen_object_literals: bool,
   file: FileId,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
   contextual_fn_ty: Option<TypeId>,
+  cancelled: Option<&'a Arc<AtomicBool>>,
   _names: &'a NameInterner,
   _bump: Bump,
 }
 
 impl<'a> Checker<'a> {
+  fn check_cancelled(&self) {
+    if let Some(flag) = self.cancelled {
+      if flag.load(Ordering::Relaxed) {
+        panic_any(crate::FatalError::Cancelled);
+      }
+    }
+  }
+
   fn seed_builtins(&mut self) {
     let prim = self.store.primitive_ids();
     self.insert_binding("undefined".to_string(), prim.undefined, Vec::new());
@@ -587,8 +752,11 @@ impl<'a> Checker<'a> {
   }
 
   fn check_enclosing_function(&mut self, body_range: TextRange) -> bool {
-    let mut best: Option<FunctionInfo<'_>> = None;
-    for func in self.index.functions.iter() {
+    let mut best: Option<FunctionInfo> = None;
+    for (idx, func) in self.index.functions.iter().copied().enumerate() {
+      if idx % 2048 == 0 {
+        self.check_cancelled();
+      }
       let contains =
         func.func_span.start <= body_range.start && func.func_span.end >= body_range.end;
       if !contains {
@@ -606,29 +774,30 @@ impl<'a> Checker<'a> {
         None => true,
       };
       if replace {
-        best = Some(*func);
+        best = Some(func);
       }
     }
     if let Some(func) = best {
+      self.check_cancelled();
+      let func_node = unsafe { &*func.func };
       let prev_return = self.expected_return;
       let mut type_param_decls = Vec::new();
       let mut has_type_params = false;
-      if let Some(params) = func.func.stx.type_parameters.as_ref() {
+      if let Some(params) = func_node.stx.type_parameters.as_ref() {
         self.lowerer.push_type_param_scope();
         has_type_params = true;
         type_param_decls = self.lower_type_params(params);
       }
       let contextual_sig = self.contextual_signature();
-      let annotated_return = func
-        .func
+      let annotated_return = func_node
         .stx
         .return_type
         .as_ref()
         .map(|ret| self.lowerer.lower_type_expr(ret));
       self.expected_return =
         annotated_return.or_else(|| contextual_sig.as_ref().map(|sig| sig.ret));
-      self.bind_params(func.func, &type_param_decls, contextual_sig.as_ref());
-      self.check_function_body(func.func);
+      self.bind_params(func_node, &type_param_decls, contextual_sig.as_ref());
+      self.check_function_body(func_node);
       if has_type_params {
         self.lowerer.pop_type_param_scope();
       }
@@ -638,32 +807,97 @@ impl<'a> Checker<'a> {
     false
   }
 
+  fn check_enclosing_class(&mut self, body_range: TextRange) -> bool {
+    if body_range.start == body_range.end {
+      // Empty class bodies (no static blocks) still count as checked.
+      return true;
+    }
+    let mut matched_blocks: Vec<ClassStaticBlockInfo> = Vec::new();
+    for (idx, block) in self.index.class_static_blocks.iter().copied().enumerate() {
+      if idx % 256 == 0 {
+        self.check_cancelled();
+      }
+      if ranges_overlap(body_range, block.span) || contains_range(block.span, body_range) {
+        matched_blocks.push(block);
+      }
+    }
+    if matched_blocks.is_empty() {
+      return false;
+    }
+    matched_blocks.sort_by_key(|block| (block.span.start, block.span.end));
+    matched_blocks.dedup_by_key(|block| (block.span.start, block.span.end, block.block));
+    for block in matched_blocks {
+      self.check_cancelled();
+      let block_node = unsafe { &*block.block };
+      self.check_block_body(&block_node.stx.body);
+    }
+    true
+  }
+
   fn check_matching_initializer(&mut self, body_range: TextRange) -> bool {
-    let mut best: Option<(TextRange, VarInfo<'_>)> = None;
+    let mut best: Option<(u32, TextRange, VarInfo)> = None;
     for (span, info) in self.index.vars.iter() {
       if let Some(init) = info.initializer {
-        if contains_range(loc_to_range(self.file, init.loc), body_range) {
-          let replace = match best {
-            Some((existing_span, _)) => span.start < existing_span.start,
-            None => true,
-          };
-          if replace {
-            best = Some((*span, *info));
-          }
+        let init = unsafe { &*init };
+        let init_range = loc_to_range(self.file, init.loc);
+        if !ranges_overlap(init_range, body_range) && !contains_range(body_range, init_range) {
+          continue;
+        }
+        let len = init_range.end.saturating_sub(init_range.start);
+        let replace = match best {
+          Some((best_len, best_span, _)) => len < best_len || (len == best_len && span.start < best_span.start),
+          None => true,
+        };
+        if replace {
+          best = Some((len, *span, *info));
         }
       }
     }
-    if let Some((pat_span, info)) = best {
+    if let Some((_len, pat_span, info)) = best {
+      self.check_cancelled();
       if let Some(init) = info.initializer {
-        let annotation = info
-          .type_annotation
-          .map(|ann| self.lowerer.lower_type_expr(ann));
-        let init_ty = self.check_expr(init);
+        let init = unsafe { &*init };
+        let annotation = info.type_annotation.map(|ann| unsafe { &*ann }).map(|ann| {
+          self.lowerer.lower_type_expr(ann)
+        });
+        let init_ty = match annotation {
+          Some(expected) => self.check_expr_with_expected(init, expected),
+          None => self.check_expr(init),
+        };
+        if let Some(annotation) = annotation {
+          self.check_assignable(init, init_ty, annotation);
+        }
         let ty = annotation.unwrap_or(init_ty);
-        if let Some(pat) = self.index.pats.get(&pat_span) {
+        if let Some(pat) = self.index.pats.get(&pat_span).copied() {
+          let pat = unsafe { &*pat };
           self.bind_pattern(pat, ty);
         }
       }
+      return true;
+    }
+
+    // Fallback for initializer bodies that are not var declarators (e.g. class
+    // field initializers). Match the tightest expression overlapping the body
+    // range and type-check it.
+    let mut best_expr: Option<(u32, TextRange, *const Node<AstExpr>)> = None;
+    for (span, expr) in self.index.exprs.iter() {
+      let span = *span;
+      if !ranges_overlap(span, body_range) && !contains_range(body_range, span) {
+        continue;
+      }
+      let len = span.end.saturating_sub(span.start);
+      let replace = match best_expr {
+        Some((best_len, best_span, _)) => len < best_len || (len == best_len && span.start < best_span.start),
+        None => true,
+      };
+      if replace {
+        best_expr = Some((len, span, *expr));
+      }
+    }
+    if let Some((_len, _span, expr)) = best_expr {
+      self.check_cancelled();
+      let expr = unsafe { &*expr };
+      let _ = self.check_expr(expr);
       return true;
     }
     false
@@ -677,6 +911,9 @@ impl<'a> Checker<'a> {
   ) {
     let prim = self.store.primitive_ids();
     for (idx, param) in func.stx.parameters.iter().enumerate() {
+      if idx % 64 == 0 {
+        self.check_cancelled();
+      }
       let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
       let annotation = param
         .stx
@@ -691,7 +928,8 @@ impl<'a> Checker<'a> {
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
       }
-      if let Some(pat) = self.index.pats.get(&pat_span) {
+      if let Some(pat) = self.index.pats.get(&pat_span).copied() {
+        let pat = unsafe { &*pat };
         self.bind_pattern_with_type_params(pat, ty, type_param_decls.to_vec());
       }
     }
@@ -729,7 +967,10 @@ impl<'a> Checker<'a> {
   }
 
   fn check_stmt_list(&mut self, stmts: &[Node<Stmt>]) {
-    for stmt in stmts {
+    for (idx, stmt) in stmts.iter().enumerate() {
+      if idx % 128 == 0 {
+        self.check_cancelled();
+      }
       self.check_stmt(stmt);
     }
   }
@@ -911,19 +1152,22 @@ impl<'a> Checker<'a> {
   fn check_var_decl(&mut self, decl: &Node<VarDecl>) {
     let prim = self.store.primitive_ids();
     for declarator in decl.stx.declarators.iter() {
-      let init_ty = if self.check_var_assignments {
-        declarator
-          .initializer
-          .as_ref()
-          .map(|i| self.check_expr(i))
-          .unwrap_or(prim.unknown)
-      } else {
-        prim.unknown
-      };
       let annot_ty = declarator
         .type_annotation
         .as_ref()
         .map(|ann| self.lowerer.lower_type_expr(ann));
+      let init_ty = if self.check_var_assignments {
+        declarator
+          .initializer
+          .as_ref()
+          .map(|init| match annot_ty {
+            Some(expected) => self.check_expr_with_expected(init, expected),
+            None => self.check_expr(init),
+          })
+          .unwrap_or(prim.unknown)
+      } else {
+        prim.unknown
+      };
       let binding_ty = match decl.stx.mode {
         VarDeclMode::Const | VarDeclMode::Using | VarDeclMode::AwaitUsing => init_ty,
         _ => self.base_type(init_ty),
@@ -939,10 +1183,32 @@ impl<'a> Checker<'a> {
   }
 
   fn check_namespace(&mut self, ns: &Node<NamespaceDecl>) {
-    match &ns.stx.body {
-      NamespaceBody::Block(stmts) => self.check_stmt_list(stmts),
-      NamespaceBody::Namespace(inner) => self.check_namespace(inner),
+    fn namespace_key(path: &[String]) -> String {
+      path.join(".")
     }
+
+    fn check_ns(checker: &mut Checker<'_>, ns: &Node<NamespaceDecl>, path: &mut Vec<String>) {
+      let name = ns.stx.name.clone();
+      path.push(name.clone());
+      let key = namespace_key(path);
+
+      let mut scope = checker.namespace_scopes.remove(&key).unwrap_or_default();
+      if let Some(binding) = checker.lookup(&name) {
+        scope.bindings.insert(name.clone(), binding);
+      }
+
+      checker.scopes.push(scope);
+      match &ns.stx.body {
+        NamespaceBody::Block(stmts) => checker.check_stmt_list(stmts),
+        NamespaceBody::Namespace(inner) => check_ns(checker, inner, path),
+      }
+      let scope = checker.scopes.pop().unwrap_or_default();
+      checker.namespace_scopes.insert(key, scope);
+      path.pop();
+    }
+
+    let mut path = Vec::new();
+    check_ns(self, ns, &mut path);
   }
 
   fn check_pat(&mut self, pat: &Node<AstPat>, value_ty: TypeId) {
@@ -975,7 +1241,56 @@ impl<'a> Checker<'a> {
       }
       AstExpr::This(_) => self.store.primitive_ids().unknown,
       AstExpr::Super(_) => self.store.primitive_ids().unknown,
-      AstExpr::Unary(un) => self.check_unary(un.stx.operator, &un.stx.argument),
+      AstExpr::Unary(un) => {
+        if matches!(un.stx.operator, OperatorName::New) {
+          let (callee_expr, arg_exprs, span_loc) = match un.stx.argument.stx.as_ref() {
+            AstExpr::Call(call) => (&call.stx.callee, Some(call.stx.arguments.as_slice()), call.loc),
+            _ => (&un.stx.argument, None, expr.loc),
+          };
+          let callee_ty = self.check_expr(callee_expr);
+          let arg_types: Vec<TypeId> = arg_exprs
+            .unwrap_or(&[])
+            .iter()
+            .map(|arg| self.check_expr(&arg.stx.value))
+            .collect();
+          let span = Span {
+            file: self.file,
+            range: loc_to_range(self.file, span_loc),
+          };
+          let resolution = resolve_construct(
+            &self.store,
+            &self.relate,
+            callee_ty,
+            &arg_types,
+            None,
+            None,
+            span,
+            self.ref_expander,
+          );
+          for diag in &resolution.diagnostics {
+            self.diagnostics.push(diag.clone());
+          }
+          if resolution.diagnostics.is_empty() {
+            if let Some(sig_id) = resolution.signature {
+              let sig = self.store.signature(sig_id);
+              if let Some(arg_exprs) = arg_exprs {
+                for (idx, arg) in arg_exprs.iter().enumerate() {
+                  if let Some(param) = sig.params.get(idx) {
+                    let arg_ty = arg_types
+                      .get(idx)
+                      .copied()
+                      .unwrap_or(self.store.primitive_ids().unknown);
+                    self.check_assignable(&arg.stx.value, arg_ty, param.ty);
+                  }
+                }
+              }
+            }
+          }
+          resolution.return_type
+        } else {
+          self.check_unary(un.stx.operator, &un.stx.argument)
+        }
+      }
       AstExpr::UnaryPostfix(post) => match post.stx.operator {
         OperatorName::PostfixIncrement | OperatorName::PostfixDecrement => {
           self.store.primitive_ids().number
@@ -990,7 +1305,7 @@ impl<'a> Checker<'a> {
       }
       AstExpr::Call(call) => {
         let callee_ty = self.check_expr(&call.stx.callee);
-        let arg_types: Vec<TypeId> = call
+        let mut arg_types: Vec<TypeId> = call
           .stx
           .arguments
           .iter()
@@ -1000,7 +1315,7 @@ impl<'a> Checker<'a> {
           file: self.file,
           range: loc_to_range(self.file, call.loc),
         };
-        let resolution = resolve_call(
+        let mut resolution = resolve_call(
           &self.store,
           &self.relate,
           callee_ty,
@@ -1010,6 +1325,50 @@ impl<'a> Checker<'a> {
           span,
           self.ref_expander,
         );
+        if resolution.diagnostics.is_empty() {
+          if let Some(sig_id) = resolution.signature {
+            let sig = self.store.signature(sig_id);
+            let mut refined = false;
+            for (idx, arg) in call.stx.arguments.iter().enumerate() {
+              let Some(param) = sig.params.get(idx) else {
+                continue;
+              };
+              let Some(func) = (match arg.stx.value.stx.as_ref() {
+                AstExpr::ArrowFunc(arrow) => Some(&arrow.stx.func),
+                AstExpr::Func(func) => Some(&func.stx.func),
+                _ => None,
+              }) else {
+                continue;
+              };
+
+              let Some(refined_ty) = self.refine_function_expr_with_expected(func, param.ty) else {
+                continue;
+              };
+              if let Some(slot) = arg_types.get_mut(idx) {
+                *slot = refined_ty;
+                refined = true;
+              }
+              self.record_expr_type(arg.stx.value.loc, refined_ty);
+            }
+
+            if refined {
+              let next = resolve_call(
+                &self.store,
+                &self.relate,
+                callee_ty,
+                &arg_types,
+                None,
+                None,
+                span,
+                self.ref_expander,
+              );
+              if next.diagnostics.is_empty() && next.signature.is_some() {
+                resolution = next;
+              }
+            }
+          }
+        }
+
         for diag in &resolution.diagnostics {
           self.diagnostics.push(diag.clone());
         }
@@ -1072,7 +1431,12 @@ impl<'a> Checker<'a> {
                 .get(idx)
                 .copied()
                 .unwrap_or(self.store.primitive_ids().unknown);
-              let contextual = self.contextual_arg_type(arg_ty, param.ty);
+              let contextual = match arg.stx.value.stx.as_ref() {
+                AstExpr::ArrowFunc(_) | AstExpr::Func(_) if self.is_callable_like(param.ty) => {
+                  arg_ty
+                }
+                _ => self.contextual_arg_type(arg_ty, param.ty),
+              };
               self.record_expr_type(arg.stx.value.loc, contextual);
             }
           }
@@ -1274,6 +1638,11 @@ impl<'a> Checker<'a> {
   fn member_type(&mut self, obj: TypeId, prop: &str) -> TypeId {
     let prim = self.store.primitive_ids();
     match self.store.type_kind(obj) {
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
+        .map(|expanded| self.member_type(expanded, prop))
+        .unwrap_or(prim.unknown),
       TypeKind::Object(obj_id) => {
         let shape = self.store.shape(self.store.object(obj_id).shape);
         for candidate in shape.properties.iter() {
@@ -1427,6 +1796,32 @@ impl<'a> Checker<'a> {
       range.start = range.start.saturating_sub(len);
       range.end = range.start.saturating_add(len);
     }
+    if std::env::var_os("DEBUG_RESOLVE_IDENT").is_some() {
+      let mut scopes: Vec<(usize, usize, bool)> = self
+        .scopes
+        .iter()
+        .enumerate()
+        .map(|(idx, scope)| (idx, scope.bindings.len(), scope.bindings.contains_key(name)))
+        .collect();
+      scopes.reverse();
+      let mut keys: Vec<String> = self
+        .scopes
+        .iter()
+        .flat_map(|scope| scope.bindings.keys().cloned())
+        .collect();
+      keys.sort();
+      keys.dedup();
+      let preview: Vec<&str> = keys.iter().take(32).map(|s| s.as_str()).collect();
+      eprintln!(
+        "DEBUG_RESOLVE_IDENT: file={:?} name={:?} range={:?} scopes_rev={:?} keys={} preview={:?}",
+        self.file,
+        name,
+        range,
+        scopes,
+        keys.len(),
+        preview
+      );
+    }
     self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
       format!("unknown identifier `{}`", name),
       Span {
@@ -1501,14 +1896,18 @@ impl<'a> Checker<'a> {
 
   fn check_assignment(
     &mut self,
-    _op: OperatorName,
+    op: OperatorName,
     left: &Node<AstExpr>,
     right: &Node<AstExpr>,
   ) -> TypeId {
-    let value_ty = self.check_expr(right);
     match left.stx.as_ref() {
       AstExpr::Id(id) => {
         if let Some(binding) = self.lookup(&id.stx.name) {
+          let value_ty = if matches!(op, OperatorName::Assignment) {
+            self.check_expr_with_expected(right, binding.ty)
+          } else {
+            self.check_expr(right)
+          };
           if !self.relate.is_assignable(value_ty, binding.ty) {
             self.diagnostics.push(codes::TYPE_MISMATCH.error(
               "assignment type mismatch",
@@ -1519,25 +1918,108 @@ impl<'a> Checker<'a> {
             ));
           }
           self.insert_binding(id.stx.name.clone(), value_ty, binding.type_params);
+          return value_ty;
         } else {
+          let value_ty = self.check_expr(right);
           self.insert_binding(id.stx.name.clone(), value_ty, Vec::new());
+          return value_ty;
         }
       }
       AstExpr::ArrPat(arr) => {
+        let value_ty = self.check_expr(right);
         let span = loc_to_range(self.file, arr.loc);
-        if let Some(pat) = self.index.pats.get(&span) {
+        if let Some(pat) = self.index.pats.get(&span).copied() {
+          let pat = unsafe { &*pat };
           self.bind_pattern(pat, value_ty);
         }
+        return value_ty;
       }
       AstExpr::ObjPat(obj) => {
+        let value_ty = self.check_expr(right);
         let span = loc_to_range(self.file, obj.loc);
-        if let Some(pat) = self.index.pats.get(&span) {
+        if let Some(pat) = self.index.pats.get(&span).copied() {
+          let pat = unsafe { &*pat };
           self.bind_pattern(pat, value_ty);
         }
+        return value_ty;
       }
       _ => {}
     }
-    value_ty
+    self.check_expr(right)
+  }
+
+  fn check_expr_with_expected(&mut self, expr: &Node<AstExpr>, expected: TypeId) -> TypeId {
+    let expected = self.store.canon(expected);
+    let prim = self.store.primitive_ids();
+    if expected == prim.unknown {
+      return self.check_expr(expr);
+    }
+
+    match expr.stx.as_ref() {
+      AstExpr::LitObj(obj) => {
+        let prev = self.widen_object_literals;
+        self.widen_object_literals = false;
+        let ty = self.object_literal_type(obj);
+        self.widen_object_literals = prev;
+        self.record_expr_type(expr.loc, ty);
+        ty
+      }
+      AstExpr::ArrowFunc(_) | AstExpr::Func(_) if self.is_callable_like(expected) => {
+        self.record_expr_type(expr.loc, expected);
+        expected
+      }
+      _ => self.check_expr(expr),
+    }
+  }
+
+  fn is_callable_like(&self, ty: TypeId) -> bool {
+    match self.store.type_kind(ty) {
+      TypeKind::Callable { .. } => true,
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
+        .is_some_and(|expanded| matches!(self.store.type_kind(expanded), TypeKind::Callable { .. })),
+      _ => false,
+    }
+  }
+
+  fn refine_function_expr_with_expected(&mut self, func: &Node<Func>, expected: TypeId) -> Option<TypeId> {
+    let expected_sig = self.first_callable_signature(expected)?;
+
+    let saved_expected = self.expected_return;
+    let saved_returns = std::mem::take(&mut self.return_types);
+
+    self.expected_return = Some(expected_sig.ret);
+    self.scopes.push(Scope::default());
+    self.bind_params(func, &[], Some(&expected_sig));
+    self.check_function_body(func);
+    self.scopes.pop();
+
+    let prim = self.store.primitive_ids();
+    let inferred_ret = if self.return_types.is_empty() {
+      prim.void
+    } else {
+      self.store.union(self.return_types.clone())
+    };
+
+    self.return_types = saved_returns;
+    self.expected_return = saved_expected;
+
+    let mut instantiated = expected_sig;
+    instantiated.ret = inferred_ret;
+    let sig_id = self.store.intern_signature(instantiated);
+    Some(self.store.intern_type(TypeKind::Callable { overloads: vec![sig_id] }))
+  }
+
+  fn first_callable_signature(&self, ty: TypeId) -> Option<Signature> {
+    match self.store.type_kind(ty) {
+      TypeKind::Callable { overloads } => overloads.first().map(|sig| self.store.signature(*sig)),
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
+        .and_then(|expanded| self.first_callable_signature(expanded)),
+      _ => None,
+    }
   }
 
   fn bind_pattern(&mut self, pat: &Node<AstPat>, value: TypeId) {
@@ -1691,10 +2173,10 @@ impl<'a> Checker<'a> {
 
   fn function_type(&mut self, func: &Node<Func>) -> TypeId {
     let mut type_params = Vec::new();
+    let pushed_type_params = func.stx.type_parameters.is_some();
     if let Some(params) = func.stx.type_parameters.as_ref() {
       self.lowerer.push_type_param_scope();
       type_params = self.lower_type_params(params);
-      self.lowerer.pop_type_param_scope();
     }
     let params = func
       .stx
@@ -1724,6 +2206,9 @@ impl<'a> Checker<'a> {
       .as_ref()
       .map(|t| self.lowerer.lower_type_expr(t))
       .unwrap_or(self.store.primitive_ids().unknown);
+    if pushed_type_params {
+      self.lowerer.pop_type_param_scope();
+    }
     let sig = Signature {
       params,
       ret,
@@ -1962,13 +2447,18 @@ impl<'a> Checker<'a> {
         ));
         return;
       }
-      // Fresh object literals only participate in excess property checking for
-      // now; other assignability rules (e.g. structural compatibility) are
-      // handled elsewhere in the type relation engine.
-      return;
     }
     if self.relate.is_assignable(src, dst) {
       return;
+    }
+    if std::env::var("DEBUG_TYPE_MISMATCH").is_ok() {
+      eprintln!(
+        "DEBUG_TYPE_MISMATCH src={} {:?} dst={} {:?}",
+        TypeDisplay::new(self.store.as_ref(), src),
+        self.store.type_kind(src),
+        TypeDisplay::new(self.store.as_ref(), dst),
+        self.store.type_kind(dst)
+      );
     }
     self.diagnostics.push(codes::TYPE_MISMATCH.error(
       "type mismatch",
@@ -2015,7 +2505,10 @@ fn body_range(body: &Body) -> TextRange {
     end = end.max(pat.span.end);
   }
   if start == u32::MAX {
-    TextRange::new(0, 0)
+    match body.kind {
+      BodyKind::Class => TextRange::new(0, 0),
+      _ => body.span,
+    }
   } else {
     TextRange::new(start, end)
   }
@@ -3779,16 +4272,29 @@ impl<'a> FlowBodyChecker<'a> {
         .get(expr_id.0 as usize)
         .unwrap_or(&TextRange::new(0, 0)),
     );
-    let resolution = resolve_call(
-      &self.store,
-      &self.relate,
-      callee_base,
-      &arg_bases,
-      this_arg,
-      None,
-      span,
-      self.ref_expander,
-    );
+    let resolution = if call.is_new {
+      resolve_construct(
+        &self.store,
+        &self.relate,
+        callee_base,
+        &arg_bases,
+        None,
+        None,
+        span,
+        self.ref_expander,
+      )
+    } else {
+      resolve_call(
+        &self.store,
+        &self.relate,
+        callee_base,
+        &arg_bases,
+        this_arg,
+        None,
+        span,
+        self.ref_expander,
+      )
+    };
     if std::env::var("DEBUG_ASSERT_NARROW").is_ok() {
       eprintln!(
         "DEBUG call resolution sig {:?} ret {}",
@@ -3798,7 +4304,8 @@ impl<'a> FlowBodyChecker<'a> {
     }
 
     let mut ret_ty = resolution.return_type;
-    if let Some(sig_id) = resolution.signature {
+    if !call.is_new {
+      if let Some(sig_id) = resolution.signature {
       let sig = self.store.signature(sig_id);
       if let TypeKind::Predicate {
         asserted,
@@ -3851,6 +4358,7 @@ impl<'a> FlowBodyChecker<'a> {
       } else {
         ret_ty = sig.ret;
       }
+    }
     }
 
     ret_ty

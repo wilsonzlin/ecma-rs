@@ -138,15 +138,377 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       DefTypeInfo::Class { type_params, .. } => {
         self.register_type_params(type_params);
         let params = self.collect_type_params(type_params);
-        (self.store.primitive_ids().unknown, params)
+        let (instance, _value) =
+          self.lower_class_instance_and_value(info, names, self.store.primitive_ids().unknown);
+        (instance, params)
       }
-      DefTypeInfo::Enum { .. } => (self.store.primitive_ids().any, Vec::new()),
+      DefTypeInfo::Enum { .. } => (self.lower_enum_type(info, names), Vec::new()),
       DefTypeInfo::Namespace { .. } => (self.store.primitive_ids().unknown, Vec::new()),
     };
     self.type_params.clear();
     self.type_param_names.clear();
     self.current_arenas = None;
     result
+  }
+
+  pub fn lower_class_instance_and_value_types(
+    &mut self,
+    owner: HirDefId,
+    info: &DefTypeInfo,
+    names: &hir_js::NameInterner,
+  ) -> Option<(TypeId, TypeId, Vec<TypeParamId>)> {
+    self.type_params.clear();
+    self.type_param_names.clear();
+    self.current_arenas = self.arenas.get(&owner);
+    let Some(_) = self.current_arenas else {
+      self.current_arenas = None;
+      return None;
+    };
+
+    let DefTypeInfo::Class {
+      type_params,
+      ..
+    } = info
+    else {
+      self.current_arenas = None;
+      return None;
+    };
+    self.register_type_params(type_params);
+    let params = self.collect_type_params(type_params);
+
+    let unknown = self.store.primitive_ids().unknown;
+    let (instance, value) = self.lower_class_instance_and_value(info, names, unknown);
+
+    self.type_params.clear();
+    self.type_param_names.clear();
+    self.current_arenas = None;
+    Some((instance, value, params))
+  }
+
+  pub fn lower_enum_type_and_value(
+    &mut self,
+    owner: HirDefId,
+    info: &DefTypeInfo,
+    names: &hir_js::NameInterner,
+  ) -> Option<(TypeId, TypeId)> {
+    self.current_arenas = self.arenas.get(&owner);
+    let Some(_) = self.current_arenas else {
+      self.current_arenas = None;
+      return None;
+    };
+    let value = self.lower_enum_value(info, names);
+    let ty = self.lower_enum_type(info, names);
+    self.current_arenas = None;
+    Some((ty, value))
+  }
+
+  fn lower_enum_type(&mut self, info: &DefTypeInfo, _names: &hir_js::NameInterner) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let DefTypeInfo::Enum { members } = info else {
+      return prim.any;
+    };
+    let mut has_number = false;
+    let mut has_string = false;
+    for member in members.iter() {
+      match member.value {
+        hir_js::EnumMemberValue::Number => has_number = true,
+        hir_js::EnumMemberValue::String => has_string = true,
+        hir_js::EnumMemberValue::Computed => {
+          has_number = true;
+          has_string = true;
+        }
+      }
+    }
+    match (has_number, has_string) {
+      (true, true) => self.store.union(vec![prim.number, prim.string]),
+      (true, false) => prim.number,
+      (false, true) => prim.string,
+      (false, false) => prim.any,
+    }
+  }
+
+  fn lower_enum_value(&mut self, info: &DefTypeInfo, names: &hir_js::NameInterner) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let DefTypeInfo::Enum { members } = info else {
+      return prim.unknown;
+    };
+    let mut shape = Shape::new();
+    for member in members.iter() {
+      let Some(name) = names.resolve(member.name) else {
+        continue;
+      };
+      let key = PropKey::String(self.store.intern_name(name.to_string()));
+      let ty = match member.value {
+        hir_js::EnumMemberValue::Number => prim.number,
+        hir_js::EnumMemberValue::String => prim.string,
+        hir_js::EnumMemberValue::Computed => prim.any,
+      };
+      shape.properties.push(Property {
+        key,
+        data: PropData {
+          ty,
+          optional: false,
+          readonly: true,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      });
+    }
+    let shape_id = self.store.intern_shape(shape);
+    let obj = self.store.intern_object(ObjectType { shape: shape_id });
+    self.store.intern_type(TypeKind::Object(obj))
+  }
+
+  fn lower_class_instance_and_value(
+    &mut self,
+    info: &DefTypeInfo,
+    names: &hir_js::NameInterner,
+    unknown: TypeId,
+  ) -> (TypeId, TypeId) {
+    let DefTypeInfo::Class {
+      extends,
+      implements,
+      members,
+      ..
+    } = info
+    else {
+      return (unknown, unknown);
+    };
+
+    let mut instance_shape = Shape::new();
+    let mut static_shape = Shape::new();
+    let mut ctor_signatures: Vec<TypeSignature> = Vec::new();
+
+    for member in members.iter() {
+      match &member.kind {
+        hir_js::ClassMemberSigKind::Constructor(sig) => {
+          ctor_signatures.push(sig.clone());
+        }
+        hir_js::ClassMemberSigKind::CallSignature(sig) => {
+          let lowered = self.lower_signature(sig, names);
+          let sig_id = self.store.intern_signature(lowered);
+          if member.static_ {
+            static_shape.call_signatures.push(sig_id);
+          } else {
+            instance_shape.call_signatures.push(sig_id);
+          }
+        }
+        hir_js::ClassMemberSigKind::IndexSignature(idx) => {
+          let key_type = self.lower_type_expr(idx.parameter_type, names);
+          let value_type = self.lower_type_expr(idx.type_annotation, names);
+          let indexer = Indexer {
+            key_type,
+            value_type,
+            readonly: idx.readonly,
+          };
+          if member.static_ {
+            static_shape.indexers.push(indexer);
+          } else {
+            instance_shape.indexers.push(indexer);
+          }
+        }
+        hir_js::ClassMemberSigKind::Field {
+          name,
+          type_annotation,
+        } => {
+          let Some(key) = self.prop_key_from_name(name, names) else {
+            continue;
+          };
+          let ty = type_annotation
+            .map(|t| self.lower_type_expr(t, names))
+            .unwrap_or(unknown);
+          let accessibility = member
+            .accessibility
+            .map(|a| match a {
+              hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+              hir_js::ClassMemberAccessibility::Protected => {
+                types_ts_interned::Accessibility::Protected
+              }
+              hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+            });
+          let prop = Property {
+            key,
+            data: PropData {
+              ty,
+              optional: member.optional,
+              readonly: member.readonly,
+              accessibility,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          };
+          if member.static_ {
+            static_shape.properties.push(prop);
+          } else {
+            instance_shape.properties.push(prop);
+          }
+        }
+        hir_js::ClassMemberSigKind::Method { name, signature } => {
+          let Some(key) = self.prop_key_from_name(name, names) else {
+            continue;
+          };
+          let sig = self.lower_signature(signature, names);
+          let sig_id = self.store.intern_signature(sig);
+          let ty = self.store.intern_type(TypeKind::Callable {
+            overloads: vec![sig_id],
+          });
+          let accessibility = member
+            .accessibility
+            .map(|a| match a {
+              hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+              hir_js::ClassMemberAccessibility::Protected => {
+                types_ts_interned::Accessibility::Protected
+              }
+              hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+            });
+          let prop = Property {
+            key,
+            data: PropData {
+              ty,
+              optional: member.optional,
+              readonly: member.readonly,
+              accessibility,
+              is_method: true,
+              origin: None,
+              declared_on: None,
+            },
+          };
+          if member.static_ {
+            static_shape.properties.push(prop);
+          } else {
+            instance_shape.properties.push(prop);
+          }
+        }
+        hir_js::ClassMemberSigKind::Getter { name, return_type } => {
+          let Some(key) = self.prop_key_from_name(name, names) else {
+            continue;
+          };
+          let ty = return_type
+            .map(|t| self.lower_type_expr(t, names))
+            .unwrap_or(unknown);
+          let accessibility = member
+            .accessibility
+            .map(|a| match a {
+              hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+              hir_js::ClassMemberAccessibility::Protected => {
+                types_ts_interned::Accessibility::Protected
+              }
+              hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+            });
+          let prop = Property {
+            key,
+            data: PropData {
+              ty,
+              optional: member.optional,
+              readonly: true,
+              accessibility,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          };
+          if member.static_ {
+            static_shape.properties.push(prop);
+          } else {
+            instance_shape.properties.push(prop);
+          }
+        }
+        hir_js::ClassMemberSigKind::Setter { name, parameter } => {
+          let Some(key) = self.prop_key_from_name(name, names) else {
+            continue;
+          };
+          let ty = self.lower_type_expr(parameter.ty, names);
+          let accessibility = member
+            .accessibility
+            .map(|a| match a {
+              hir_js::ClassMemberAccessibility::Public => types_ts_interned::Accessibility::Public,
+              hir_js::ClassMemberAccessibility::Protected => {
+                types_ts_interned::Accessibility::Protected
+              }
+              hir_js::ClassMemberAccessibility::Private => types_ts_interned::Accessibility::Private,
+            });
+          let prop = Property {
+            key,
+            data: PropData {
+              ty,
+              optional: member.optional || parameter.optional,
+              readonly: false,
+              accessibility,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          };
+          if member.static_ {
+            static_shape.properties.push(prop);
+          } else {
+            instance_shape.properties.push(prop);
+          }
+        }
+      }
+    }
+
+    let instance_obj = self.store.intern_type(TypeKind::Object(
+      self.store.intern_object(ObjectType {
+        shape: self.store.intern_shape(instance_shape),
+      }),
+    ));
+    let mut instance_parts = vec![instance_obj];
+    if let Some(ext) = extends {
+      instance_parts.push(self.lower_type_expr(*ext, names));
+    }
+    for implemented in implements.iter() {
+      instance_parts.push(self.lower_type_expr(*implemented, names));
+    }
+    let instance = if instance_parts.len() == 1 {
+      instance_parts[0]
+    } else {
+      self.store.intersection(instance_parts)
+    };
+
+    let mut ctor_sig_ids: Vec<types_ts_interned::SignatureId> = Vec::new();
+    for sig in ctor_signatures.iter() {
+      let mut lowered = self.lower_signature(sig, names);
+      lowered.ret = instance;
+      lowered.this_param = None;
+      ctor_sig_ids.push(self.store.intern_signature(lowered));
+    }
+    if ctor_sig_ids.is_empty() {
+      let sig = Signature {
+        params: Vec::new(),
+        ret: instance,
+        type_params: Vec::new(),
+        this_param: None,
+      };
+      ctor_sig_ids.push(self.store.intern_signature(sig));
+    }
+    static_shape.construct_signatures.extend(ctor_sig_ids);
+
+    let value = self.store.intern_type(TypeKind::Object(
+      self.store.intern_object(ObjectType {
+        shape: self.store.intern_shape(static_shape),
+      }),
+    ));
+
+    (instance, value)
+  }
+
+  fn prop_key_from_name(
+    &mut self,
+    name: &hir_js::PropertyName,
+    names: &hir_js::NameInterner,
+  ) -> Option<PropKey> {
+    match name {
+      hir_js::PropertyName::Ident(id) => {
+        Some(PropKey::String(self.store.intern_name(names.resolve(*id)?.to_string())))
+      }
+      hir_js::PropertyName::String(s) => Some(PropKey::String(self.store.intern_name(s.clone()))),
+      hir_js::PropertyName::Number(n) => Some(PropKey::Number(n.parse::<i64>().ok()?)),
+      hir_js::PropertyName::Computed => None,
+    }
   }
 
   fn map_value_def(&self, def: DefId) -> DefId {

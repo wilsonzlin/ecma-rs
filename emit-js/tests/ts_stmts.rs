@@ -38,12 +38,31 @@ fn type_alias_roundtrip() {
 }
 
 fn normalized_stmts(top: &Node<TopLevel>) -> Vec<String> {
+  fn scrub_locs(value: String) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value.as_str();
+    while let Some(idx) = rest.find("Loc(") {
+      out.push_str(&rest[..idx]);
+      out.push_str("Loc(..)");
+      rest = &rest[idx + "Loc(".len()..];
+      match rest.find(')') {
+        Some(end) => rest = &rest[end + 1..],
+        None => {
+          out.push_str(rest);
+          return out;
+        }
+      }
+    }
+    out.push_str(rest);
+    out
+  }
+
   top
     .stx
     .body
     .iter()
     .filter(|stmt| !matches!(stmt.stx.as_ref(), Stmt::Empty(_)))
-    .map(|stmt| format!("{:#?}", stmt.stx))
+    .map(|stmt| scrub_locs(format!("{:#?}", stmt.stx)))
     .collect()
 }
 

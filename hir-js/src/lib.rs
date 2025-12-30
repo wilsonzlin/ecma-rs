@@ -116,6 +116,7 @@ pub use ids::TypeParamId;
 pub use intern::NameInterner;
 pub use lower::lower_file;
 pub use lower::lower_file_with_diagnostics;
+pub use lower::lower_file_with_diagnostics_with_cancellation;
 use parse_js::parse_with_options;
 pub use span_map::SpanMap;
 

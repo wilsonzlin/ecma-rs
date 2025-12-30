@@ -31,6 +31,16 @@ pub mod paths;
 pub mod render;
 pub use files::SimpleFiles;
 
+/// Panic payload used by long-running operations to signal cooperative
+/// cancellation across crate boundaries.
+///
+/// Libraries should not install global cancellation hooks or subscribers; they
+/// may instead accept a shared `AtomicBool` and panic with this marker once the
+/// flag is observed. Callers are expected to catch the panic and surface a
+/// user-facing cancellation diagnostic.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cancelled;
+
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;

@@ -300,6 +300,31 @@ impl<'a, E: TypeExpander> QueryCtx<'a, E> {
           ..Default::default()
         }
       }
+      TypeKind::Array { ty, readonly } => {
+        let length_key = PropKey::String(self.store.intern_name("length".to_string()));
+        let prim = self.store.primitive_ids();
+        let mut props = vec![PropertyEntry {
+          key: length_key,
+          ty: prim.number,
+          required: true,
+          type_optional: false,
+          readonly,
+          accessibility: None,
+          is_method: false,
+        }];
+        sort_properties(&mut props, &self.store);
+        let mut indexers = vec![Indexer {
+          key_type: prim.number,
+          value_type: ty,
+          readonly,
+        }];
+        sort_indexers(&mut indexers, &self.store);
+        ShapeInfo {
+          props,
+          indexers,
+          ..Default::default()
+        }
+      }
       TypeKind::Union(members) => self.shape_union(members),
       TypeKind::Intersection(members) => self.shape_intersection(members),
       _ => ShapeInfo::default(),

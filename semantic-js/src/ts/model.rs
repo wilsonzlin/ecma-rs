@@ -78,7 +78,7 @@ use std::collections::BTreeMap;
 bitflags! {
   /// TypeScript has three namespaces: value, type, and namespace.
   /// Namespaces can be combined for merged symbols.
-  #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+  #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
   pub struct Namespace: u8 {
     const VALUE = 0b001;
     const TYPE = 0b010;
@@ -634,9 +634,22 @@ pub struct TsProgramSemantics {
   pub(crate) global_symbols: BTreeMap<String, SymbolGroup>,
   pub(crate) ambient_module_symbols: BTreeMap<String, SymbolGroups>,
   pub(crate) ambient_module_exports: BTreeMap<String, ExportMap>,
+  pub(crate) def_to_symbol: BTreeMap<(DefId, Namespace), SymbolId>,
 }
 
 impl TsProgramSemantics {
+  pub fn empty() -> Self {
+    TsProgramSemantics {
+      symbols: SymbolTable::new(),
+      module_symbols: BTreeMap::new(),
+      module_exports: BTreeMap::new(),
+      global_symbols: BTreeMap::new(),
+      ambient_module_symbols: BTreeMap::new(),
+      ambient_module_exports: BTreeMap::new(),
+      def_to_symbol: BTreeMap::new(),
+    }
+  }
+
   pub fn exports_of(&self, file: FileId) -> &ExportMap {
     self
       .module_exports
@@ -696,7 +709,10 @@ impl TsProgramSemantics {
 
   /// Look up the canonical symbol containing the provided HIR declaration.
   pub fn symbol_for_def(&self, def: DefId, ns: Namespace) -> Option<SymbolId> {
-    self.symbols.symbol_for_def(def, ns)
+    if !ns.is_single() {
+      return None;
+    }
+    self.def_to_symbol.get(&(def, ns)).copied()
   }
 }
 

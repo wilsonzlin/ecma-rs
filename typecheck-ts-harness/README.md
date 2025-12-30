@@ -10,7 +10,7 @@ against `tsc`.
 git submodule update --init --recursive parse-js/tests/TypeScript
 
 # 2) Install Node prereqs (once)
-npm install typescript@5.5.4
+cd typecheck-ts-harness && npm ci
 
 # 3) Run the Rust conformance harness
 cargo run -p typecheck-ts-harness --release -- conformance --filter "*/es2020/**" --shard 0/8
@@ -46,26 +46,27 @@ ls parse-js/tests/TypeScript/tests/cases/conformance | head
 
 ### Node.js + `typescript` npm package
 
-The `difftsc` command shells out to Node and loads the `typescript` package via
-`scripts/tsc_wrapper.js`.
+The harness shells out to Node and loads the `typescript` package via
+`scripts/tsc_wrapper.js` / `scripts/tsc_runner.js`.
 
 ```
 node --version
-npm install typescript          # or pnpm/yarn; install anywhere on Node's resolution path
-node -p "require('typescript').version"
+cd typecheck-ts-harness && npm ci
+node scripts/typescript_probe.js
 ```
 
-- CI pins `typescript@5.5.4`; install the same version under
-  `typecheck-ts-harness/` for reproducible difftsc runs:
-  `npm install --no-save --no-package-lock --ignore-scripts --prefix typecheck-ts-harness typescript@5.5.4`.
+- The harness ships a pinned `typecheck-ts-harness/package-lock.json`; `npm ci`
+  installs the exact `typescript` version used for baselines.
 - Use `--node /path/to/node` if `node` is not on `PATH` or you want a specific
   runtime.
 - Missing Node:
   - Built without `with-node` feature **or** `node --version` fails → `difftsc`
     logs a skip instead of failing.
 - Missing `typescript` package:
-  - `scripts/tsc_wrapper.js` will exit with a require error; install the package
-    and re-run.
+  - The harness logs a skip (or errors when updating baselines). Install via
+    `cd typecheck-ts-harness && npm ci`.
+  - To point at a different install, set `TYPECHECK_TS_HARNESS_TYPESCRIPT_DIR`
+    to a directory containing `node_modules/typescript`.
 
 ## Conformance runner (`conformance`)
 

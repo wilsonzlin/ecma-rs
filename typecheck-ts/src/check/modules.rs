@@ -129,10 +129,13 @@ fn map_export(
     let _ = state.type_of_def(def);
   }
 
-  let pick_best = |defs: &[DefId]| -> Option<DefId> {
+  let pick_best = |defs: &[DefId], ns: sem_ts::Namespace| -> Option<DefId> {
     let mut best: Option<(u8, DefId)> = None;
     for def in defs.iter().copied() {
       let priority = state.def_priority(def, ns);
+      if priority == u8::MAX {
+        continue;
+      }
       best = match best {
         Some((best_pri, best_def))
           if best_pri < priority || (best_pri == priority && best_def < def) =>
@@ -145,8 +148,12 @@ fn map_export(
     best.map(|(_, def)| def)
   };
 
-  let preferred_local = pick_best(&local_defs);
-  let preferred = preferred_local.or_else(|| pick_best(&all_defs));
+  let preferred_local = pick_best(&local_defs, ns);
+  let preferred = preferred_local.or_else(|| pick_best(&all_defs, ns));
+  let preferred_value_local = pick_best(&local_defs, sem_ts::Namespace::VALUE);
+  let preferred_value = preferred_value_local.or_else(|| pick_best(&all_defs, sem_ts::Namespace::VALUE));
+  let preferred_def = preferred_value_local.or(preferred_local);
+  let preferred_any = preferred_value.or(preferred);
   let mut type_id: Option<TypeId> = None;
   if ns.contains(sem_ts::Namespace::VALUE) && all_defs.len() > 1 {
     let store = {
@@ -156,31 +163,41 @@ fn map_export(
       Arc::clone(entry)
     };
     let mut cache = HashMap::new();
-    if let Some(merged) = state.merged_overload_callable_type(&all_defs, &store, &mut cache) {
-      for def in all_defs.iter().copied() {
-        state.interned_def_types.insert(def, merged);
+    let callable_defs: Vec<_> = all_defs
+      .iter()
+      .copied()
+      .filter(|def| match state.def_data.get(def).map(|data| &data.kind) {
+        Some(crate::program::DefKind::Function(_)) => true,
+        _ => false,
+      })
+      .collect();
+    if callable_defs.len() > 1 {
+      if let Some(merged) = state.merged_overload_callable_type(&callable_defs, &store, &mut cache) {
+        for def in callable_defs.iter().copied() {
+          state.interned_def_types.insert(def, merged);
+        }
+        type_id = Some(merged);
       }
-      type_id = Some(merged);
     }
   }
   if type_id.is_none() {
-    type_id = match preferred {
+    type_id = match preferred_any {
       Some(def) => state.export_type_for_def(def)?,
       None => None,
     };
   }
-  let symbol = preferred
+  let symbol = preferred_any
     .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
     .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));
 
   let mut entry = ExportEntry {
     symbol,
-    def: preferred_local,
+    def: preferred_def,
     type_id,
   };
 
   if entry.type_id.is_none() {
-    if let Some(def) = preferred {
+    if let Some(def) = preferred_any {
       entry.type_id = state.export_type_for_def(def)?;
     }
   }

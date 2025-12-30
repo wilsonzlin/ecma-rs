@@ -506,6 +506,38 @@ impl<'a> TypeLowerer<'a> {
           let name = self.lower_class_member_name(&member.stx.key);
           let is_constructor = !static_ && self.is_constructor_name(&name);
           let kind = if is_constructor {
+            // Parameter properties declared via constructor parameters (e.g.
+            // `constructor(public x: string)`) act like instance fields. Model
+            // them as additional field signatures so downstream consumers can
+            // type-check `x` without re-reading the AST.
+            for param in method.stx.func.stx.parameters.iter() {
+              if param.stx.accessibility.is_none() && !param.stx.readonly {
+                continue;
+              }
+              let Some(name) = (match &*param.stx.pattern.stx.pat.stx {
+                parse_js::ast::expr::pat::Pat::Id(id) => Some(self.names.intern(&id.stx.name)),
+                _ => None,
+              }) else {
+                continue;
+              };
+              let span = self.ctx.to_range(param.loc);
+              let type_annotation = param
+                .stx
+                .type_annotation
+                .as_ref()
+                .map(|ty| self.lower_type_expr(ty));
+              lowered.push(ClassMemberSig {
+                span,
+                static_: false,
+                accessibility: self.lower_member_accessibility(param.stx.accessibility),
+                readonly: param.stx.readonly,
+                optional: param.stx.optional,
+                kind: ClassMemberSigKind::Field {
+                  name: PropertyName::Ident(name),
+                  type_annotation,
+                },
+              });
+            }
             ClassMemberSigKind::Constructor(signature)
           } else {
             ClassMemberSigKind::Method { name, signature }

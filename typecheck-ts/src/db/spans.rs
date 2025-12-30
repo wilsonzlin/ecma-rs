@@ -58,6 +58,17 @@ impl FileSpanIndex {
     })
   }
 
+  /// Innermost pattern covering the offset, based on the lowered span map.
+  pub fn pat_at(&self, offset: u32) -> Option<SpanResult<(BodyId, hir_js::PatId)>> {
+    self
+      .span_map
+      .pat_span_at_offset(offset)
+      .map(|res| SpanResult {
+        range: res.range,
+        id: res.id,
+      })
+  }
+
   /// Innermost expression covering an offset within a specific body using HIR
   /// spans.
   pub fn expr_at_in_body(&self, body: BodyId, offset: u32) -> Option<(ExprId, TextRange)> {

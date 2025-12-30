@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -136,9 +137,19 @@ pub fn bind_ts_program(
   resolver: &dyn Resolver,
   hir_provider: impl Fn(FileId) -> Arc<HirFile>,
 ) -> (TsProgramSemantics, Vec<Diagnostic>) {
+  bind_ts_program_with_cancellation(roots, resolver, hir_provider, None)
+}
+
+pub fn bind_ts_program_with_cancellation(
+  roots: &[FileId],
+  resolver: &dyn Resolver,
+  hir_provider: impl Fn(FileId) -> Arc<HirFile>,
+  cancelled: Option<&AtomicBool>,
+) -> (TsProgramSemantics, Vec<Diagnostic>) {
   let mut binder = Binder {
     resolver,
     hir_provider: &hir_provider,
+    cancelled,
     modules: BTreeMap::new(),
     ambient_modules: BTreeMap::new(),
     symbols: SymbolTable::new(),
@@ -154,6 +165,7 @@ pub fn bind_ts_program(
 struct Binder<'a, HP: Fn(FileId) -> Arc<HirFile>> {
   resolver: &'a dyn Resolver,
   hir_provider: &'a HP,
+  cancelled: Option<&'a AtomicBool>,
   modules: BTreeMap<FileId, ModuleState>,
   ambient_modules: BTreeMap<String, ModuleState>,
   symbols: SymbolTable,
@@ -173,11 +185,24 @@ struct PendingModuleAugmentation {
 }
 
 impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
+  #[inline]
+  fn is_cancelled(&self) -> bool {
+    self
+      .cancelled
+      .is_some_and(|cancelled| cancelled.load(Ordering::Relaxed))
+  }
+
   fn run(&mut self, roots: &[FileId]) -> (TsProgramSemantics, Vec<Diagnostic>) {
+    if self.is_cancelled() {
+      return (TsProgramSemantics::empty(), Vec::new());
+    }
     let mut queue: VecDeque<FileId> = roots.iter().cloned().collect();
     let mut seen = HashMap::new();
     while !queue.is_empty() || !self.pending_file_augmentations.is_empty() {
       while let Some(file_id) = queue.pop_front() {
+        if self.is_cancelled() {
+          return (TsProgramSemantics::empty(), Vec::new());
+        }
         if seen.insert(file_id, ()).is_some() {
           continue;
         }
@@ -190,25 +215,40 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       }
 
       if !self.pending_file_augmentations.is_empty() {
+        if self.is_cancelled() {
+          return (TsProgramSemantics::empty(), Vec::new());
+        }
         let deps = self.apply_pending_augmentations();
         queue.extend(deps);
       }
     }
 
+    if self.is_cancelled() {
+      return (TsProgramSemantics::empty(), Vec::new());
+    }
     self.reconcile_unresolved();
 
     // Compute exports for every module.
     let files: Vec<FileId> = self.modules.keys().cloned().collect();
     for file in files {
+      if self.is_cancelled() {
+        return (TsProgramSemantics::empty(), Vec::new());
+      }
       self.exports_for(file);
     }
 
     // Compute exports for ambient modules.
     let ambient_specs: Vec<String> = self.ambient_modules.keys().cloned().collect();
     for spec in ambient_specs {
+      if self.is_cancelled() {
+        return (TsProgramSemantics::empty(), Vec::new());
+      }
       self.exports_for_ambient(&spec);
     }
 
+    if self.is_cancelled() {
+      return (TsProgramSemantics::empty(), Vec::new());
+    }
     let module_exports = self
       .modules
       .iter()
@@ -234,13 +274,38 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     let ambient_states: Vec<ModuleState> = self.ambient_modules.values().cloned().collect();
     let mut export_as_namespace_spans = BTreeMap::new();
     for state in module_states.iter() {
+      if self.is_cancelled() {
+        return (TsProgramSemantics::empty(), Vec::new());
+      }
       self.handle_export_as_namespace(state, &mut export_as_namespace_spans);
     }
     for state in ambient_states.iter() {
+      if self.is_cancelled() {
+        return (TsProgramSemantics::empty(), Vec::new());
+      }
       self.handle_export_as_namespace(state, &mut export_as_namespace_spans);
     }
 
     let global_symbols = self.global_symbols.clone();
+
+    if self.is_cancelled() {
+      return (TsProgramSemantics::empty(), Vec::new());
+    }
+    let mut def_to_symbol = BTreeMap::new();
+    for sym in self.symbols.symbols.values() {
+      if self.is_cancelled() {
+        return (TsProgramSemantics::empty(), Vec::new());
+      }
+      for ns in [Namespace::VALUE, Namespace::TYPE, Namespace::NAMESPACE] {
+        if !sym.namespaces.contains(ns) {
+          continue;
+        }
+        for decl_id in sym.decls_for(ns).iter().copied() {
+          let decl = self.symbols.decl(decl_id);
+          def_to_symbol.entry((decl.def_id, ns)).or_insert(sym.id);
+        }
+      }
+    }
 
     sort_diagnostics(&mut self.diagnostics);
     (
@@ -251,12 +316,16 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         global_symbols,
         ambient_module_symbols,
         ambient_module_exports,
+        def_to_symbol,
       },
       self.diagnostics.clone(),
     )
   }
 
   fn bind_file(&mut self, hir: Arc<HirFile>) -> Vec<FileId> {
+    if self.is_cancelled() {
+      return Vec::new();
+    }
     let is_script = self.is_effective_script(
       hir.module_kind,
       hir.file_kind,
@@ -314,6 +383,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   }
 
   fn apply_pending_augmentations(&mut self) -> Vec<FileId> {
+    if self.is_cancelled() {
+      return Vec::new();
+    }
     if self.pending_file_augmentations.is_empty() {
       return Vec::new();
     }
@@ -365,6 +437,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     file_kind: FileKind,
     module: &AmbientModule,
   ) -> Vec<FileId> {
+    if self.is_cancelled() {
+      return Vec::new();
+    }
     let mut deps = Vec::new();
     let owner = SymbolOwner::AmbientModule(module.name.clone());
     let mut state = self
@@ -1052,6 +1127,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   }
 
   fn exports_for(&mut self, file: FileId) -> ExportMap {
+    if self.is_cancelled() {
+      return ExportMap::new();
+    }
     if let Some(status) = self.export_cache.get(&file) {
       return match status {
         ExportStatus::InProgress(m) | ExportStatus::Done(m) => m.clone(),
@@ -1064,6 +1142,13 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     if let Some(module) = self.modules.get(&file).cloned() {
       let mut export_spans = module.export_spans.clone();
       for spec in &module.export_specs {
+        if self.is_cancelled() {
+          let empty = ExportMap::new();
+          self
+            .export_cache
+            .insert(file, ExportStatus::Done(empty.clone()));
+          return empty;
+        }
         match spec {
           ExportSpec::Local {
             name,
@@ -1155,6 +1240,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
   }
 
   fn exports_for_ambient(&mut self, name: &str) -> ExportMap {
+    if self.is_cancelled() {
+      return ExportMap::new();
+    }
     if let Some(status) = self.ambient_export_cache.get(name) {
       return match status {
         ExportStatus::InProgress(m) | ExportStatus::Done(m) => m.clone(),
@@ -1167,6 +1255,13 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     if let Some(module) = self.ambient_modules.get(name).cloned() {
       let mut export_spans = module.export_spans.clone();
       for spec in &module.export_specs {
+        if self.is_cancelled() {
+          let empty = ExportMap::new();
+          self
+            .ambient_export_cache
+            .insert(name.to_string(), ExportStatus::Done(empty.clone()));
+          return empty;
+        }
         match spec {
           ExportSpec::Local {
             name,

@@ -51,6 +51,12 @@ fn interned_types_cross_file_imports() {
   let box_kind = program.type_kind(box_ty);
   let make_box_kind = program.type_kind(make_box_ty);
 
+  let box_display = program.display_type(box_ty).to_string();
+  assert!(
+    box_display.contains("Box"),
+    "Box should display as named reference; got {box_display}"
+  );
+
   assert!(
     !matches!(
       box_kind,
@@ -67,6 +73,14 @@ fn interned_types_cross_file_imports() {
   assert!(
     make_box_display.contains("Box"),
     "makeBox return type should reference Box; got {make_box_display}"
+  );
+
+  let make_box_store_display = program
+    .display_type(program.type_of_def(make_box_def))
+    .to_string();
+  assert!(
+    make_box_store_display.contains("Box"),
+    "type_of_def should preserve signature references; got {make_box_store_display}"
   );
 }
 

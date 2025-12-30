@@ -120,7 +120,10 @@ function f(x: string | null) {
 
   let ret_ty = res.return_types()[0];
   // The hoisted assignment updates the shared binding to include the number branch.
-  let expected = store.union(vec![prim.number, prim.null]);
+  //
+  // Note: `if (x)` does not fully exclude `string` because `string` may be falsy at runtime
+  // (empty string) and the type system cannot represent "non-empty string" as a distinct type.
+  let expected = store.union(vec![prim.number, prim.null, prim.string]);
   assert_eq!(
     TypeDisplay::new(&store, ret_ty).to_string(),
     TypeDisplay::new(&store, expected).to_string()

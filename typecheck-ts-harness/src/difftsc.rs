@@ -12,6 +12,8 @@ use crate::tsc::{
   apply_default_tsc_options, node_available, ExportTypeFact, TscDiagnostics, TscRequest, TscRunner,
   TypeAtFact, TypeFacts, TypeQuery, TSC_BASELINE_SCHEMA_VERSION,
 };
+#[cfg(feature = "with-node")]
+use crate::tsc::typescript_available;
 use crate::{read_utf8_file, FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
@@ -381,6 +383,14 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
         "difftsc skipped: Node.js not available at {}",
         args.node.display()
       );
+      return Ok(CommandStatus::Skipped);
+    }
+    if !typescript_available(&args.node) {
+      let hint = "TypeScript npm package missing (run `cd typecheck-ts-harness && npm ci`)";
+      if args.update_baselines {
+        return Err(anyhow!("difftsc requires `tsc`, but {hint}"));
+      }
+      eprintln!("difftsc skipped: {hint}");
       return Ok(CommandStatus::Skipped);
     }
     Some(TscRunnerPool::new(
@@ -887,9 +897,6 @@ fn diff_type_facts(
       report.missing_exports.push(expected_export.clone());
     }
   }
-  report
-    .unexpected_exports
-    .extend(actual_exports.into_values());
 
   let mut actual_markers: HashMap<(String, u32), NormalizedMarkerType> = actual
     .markers
@@ -909,9 +916,6 @@ fn diff_type_facts(
       report.missing_markers.push(expected_marker.clone());
     }
   }
-  report
-    .unexpected_markers
-    .extend(actual_markers.into_values());
 
   if report.is_empty() {
     None

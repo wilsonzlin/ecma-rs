@@ -424,7 +424,7 @@ fn emit_ts_expr_minimal(em: &mut Emitter, expr: &Node<Expr>) -> EmitResult {
     Expr::LitNum(lit) => em.write_number(&format!("{}", lit.stx.value)),
     Expr::LitBool(lit) => em.write_keyword(if lit.stx.value { "true" } else { "false" }),
     Expr::LitNull(_) => em.write_keyword("null"),
-    Expr::LitBigInt(lit) => em.write_number(&lit.stx.value),
+    Expr::LitBigInt(lit) => em.write_bigint_literal(&lit.stx.value),
     Expr::This(_) => em.write_keyword("this"),
     Expr::Member(member) => {
       let member = member.stx.as_ref();

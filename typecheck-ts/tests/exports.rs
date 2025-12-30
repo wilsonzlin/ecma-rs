@@ -524,7 +524,7 @@ fn unresolved_export_points_at_specifier() {
   assert_eq!(
     diagnostics.len(),
     1,
-    "expected unresolved module diagnostic"
+    "expected unresolved module diagnostic, got {diagnostics:?}"
   );
   let diag = &diagnostics[0];
   assert_eq!(diag.code.as_str(), codes::UNRESOLVED_MODULE.as_str());

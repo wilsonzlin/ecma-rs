@@ -317,41 +317,78 @@ pub fn resolve_overloads(
     };
   }
 
+  if let Some(expected_ret) = contextual_return {
+    let contextual: Vec<&CandidateOutcome> = applicable
+      .iter()
+      .copied()
+      .filter(|candidate| relate.is_assignable(candidate.instantiated_sig.ret, expected_ret))
+      .collect();
+    if !contextual.is_empty() {
+      applicable = contextual;
+    }
+  }
+
   applicable.sort_by(|a, b| {
     (
       a.specificity,
       a.unknown_inferred,
-      a.return_rank,
       a.instantiated_sig.params.len(),
       a.sig_id,
     )
       .cmp(&(
         b.specificity,
         b.unknown_inferred,
-        b.return_rank,
         b.instantiated_sig.params.len(),
         b.sig_id,
       ))
   });
 
   let best = applicable[0];
-  let best_score = (
-    best.specificity,
-    best.unknown_inferred,
-    best.instantiated_sig.params.len(),
+  CallResolution {
+    return_type: best.instantiated_sig.ret,
+    signature: Some(best.instantiated_id),
+    diagnostics: Vec::new(),
+  }
+}
+
+/// Resolve a `new` expression against a constructable type, performing overload
+/// selection and generic inference over constructor signatures.
+pub fn resolve_construct_overloads(
+  store: &Arc<TypeStore>,
+  relate: &RelateCtx<'_>,
+  callee: TypeId,
+  args: &[TypeId],
+  this_arg: Option<TypeId>,
+  contextual_return: Option<TypeId>,
+  span: Span,
+  expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
+) -> CallResolution {
+  let mut candidates = Vec::new();
+  collect_construct_signatures(
+    store.as_ref(),
+    callee,
+    &mut candidates,
+    &mut HashSet::new(),
+    expander,
   );
-  let tied: Vec<&CandidateOutcome> = applicable
-    .into_iter()
-    .take_while(|c| {
-      (
-        c.specificity,
-        c.unknown_inferred,
-        c.instantiated_sig.params.len(),
-      ) == best_score
-    })
-    .collect();
-  if tied.len() > 1 {
-    let diag = build_ambiguous_diagnostic(span, &tied);
+  let mut seen_sig = HashSet::new();
+  candidates.retain(|sig| seen_sig.insert(*sig));
+  candidates.sort();
+  let primitives = store.primitive_ids();
+  if matches!(store.type_kind(callee), TypeKind::Any | TypeKind::Unknown) {
+    return CallResolution {
+      return_type: primitives.unknown,
+      signature: None,
+      diagnostics: Vec::new(),
+    };
+  }
+  if candidates.is_empty() {
+    let diag = codes::NO_OVERLOAD
+      .error("expression is not constructable", span)
+      .with_note(format!(
+        "callee has type {}",
+        TypeDisplay::new(store, callee)
+      ));
     return CallResolution {
       return_type: primitives.unknown,
       signature: None,
@@ -359,6 +396,160 @@ pub fn resolve_overloads(
     };
   }
 
+  let mut outcomes = Vec::new();
+
+  for sig_id in candidates {
+    let original_sig = store.signature(sig_id);
+    let display = format_signature(store.as_ref(), &original_sig);
+    let mut outcome = CandidateOutcome {
+      sig_id,
+      display,
+      instantiated_sig: original_sig.clone(),
+      instantiated_id: sig_id,
+      specificity: usize::MAX,
+      unknown_inferred: 0,
+      return_rank: usize::MAX,
+      rejection: None,
+    };
+
+    let arity = analyze_arity(store.as_ref(), &original_sig);
+    if !arity.allows(args.len()) {
+      outcome.rejection = Some(CandidateRejection::Arity {
+        min: arity.min,
+        max: arity.max,
+        actual: args.len(),
+      });
+      outcomes.push(outcome);
+      continue;
+    }
+
+    let inference = infer_type_arguments_for_call(store, &original_sig, args, contextual_return);
+    outcome.unknown_inferred = count_unknown(
+      store.as_ref(),
+      &inference.substitutions,
+      primitives.any,
+      primitives.unknown,
+    );
+    if !inference.diagnostics.is_empty() {
+      outcome.rejection = Some(CandidateRejection::Inference(
+        inference
+          .diagnostics
+          .into_iter()
+          .map(|d| d.message)
+          .collect(),
+      ));
+      outcomes.push(outcome);
+      continue;
+    }
+
+    let mut substituter = Substituter::new(Arc::clone(store), inference.substitutions.clone());
+    let instantiated_id = substituter.substitute_signature(&original_sig);
+    let instantiated_sig = store.signature(instantiated_id);
+
+    let arity = analyze_arity(store.as_ref(), &instantiated_sig);
+    if !arity.allows(args.len()) {
+      outcome.rejection = Some(CandidateRejection::Arity {
+        min: arity.min,
+        max: arity.max,
+        actual: args.len(),
+      });
+      outcomes.push(outcome);
+      continue;
+    }
+
+    if let Some(expected_this) = instantiated_sig.this_param {
+      match this_arg {
+        Some(actual_this) => {
+          if !relate.is_assignable(actual_this, expected_this) {
+            outcome.rejection = Some(CandidateRejection::ThisType {
+              expected: expected_this,
+              actual: Some(actual_this),
+            });
+            outcomes.push(outcome);
+            continue;
+          }
+        }
+        None => {
+          outcome.rejection = Some(CandidateRejection::ThisType {
+            expected: expected_this,
+            actual: None,
+          });
+          outcomes.push(outcome);
+          continue;
+        }
+      }
+    }
+
+    let (_assignable, specificity, mismatch) =
+      check_arguments(store.as_ref(), relate, &instantiated_sig, &arity, args);
+    outcome.instantiated_sig = instantiated_sig;
+    outcome.instantiated_id = instantiated_id;
+    outcome.specificity = specificity;
+    outcome.return_rank = return_rank(store.as_ref(), outcome.instantiated_sig.ret);
+    outcome.rejection = mismatch;
+    outcomes.push(outcome);
+    continue;
+  }
+
+  let mut applicable: Vec<&CandidateOutcome> =
+    outcomes.iter().filter(|c| c.rejection.is_none()).collect();
+  if applicable.is_empty() {
+    let mut fallback = outcomes.clone();
+    let diag = build_no_match_diagnostic(store.as_ref(), span, outcomes);
+    fallback.sort_by(|a, b| {
+      (
+        a.specificity,
+        a.unknown_inferred,
+        a.return_rank,
+        a.instantiated_sig.params.len(),
+        a.sig_id,
+      )
+        .cmp(&(
+          b.specificity,
+          b.unknown_inferred,
+          b.return_rank,
+          b.instantiated_sig.params.len(),
+          b.sig_id,
+        ))
+    });
+    let best = fallback.first();
+    let ret = best
+      .map(|best| best.instantiated_sig.ret)
+      .unwrap_or(primitives.unknown);
+    return CallResolution {
+      return_type: ret,
+      signature: None,
+      diagnostics: vec![diag],
+    };
+  }
+
+  if let Some(expected_ret) = contextual_return {
+    let contextual: Vec<&CandidateOutcome> = applicable
+      .iter()
+      .copied()
+      .filter(|candidate| relate.is_assignable(candidate.instantiated_sig.ret, expected_ret))
+      .collect();
+    if !contextual.is_empty() {
+      applicable = contextual;
+    }
+  }
+
+  applicable.sort_by(|a, b| {
+    (
+      a.specificity,
+      a.unknown_inferred,
+      a.instantiated_sig.params.len(),
+      a.sig_id,
+    )
+      .cmp(&(
+        b.specificity,
+        b.unknown_inferred,
+        b.instantiated_sig.params.len(),
+        b.sig_id,
+      ))
+  });
+
+  let best = applicable[0];
   CallResolution {
     return_type: best.instantiated_sig.ret,
     signature: Some(best.instantiated_id),
@@ -391,6 +582,37 @@ fn collect_signatures(
       if let Some(expander) = expander {
         if let Some(expanded) = expander.expand_ref(store, def, &args) {
           collect_signatures(store, expanded, out, seen, Some(expander));
+        }
+      }
+    }
+    _ => {}
+  }
+}
+
+fn collect_construct_signatures(
+  store: &TypeStore,
+  ty: TypeId,
+  out: &mut Vec<SignatureId>,
+  seen: &mut HashSet<TypeId>,
+  expander: Option<&dyn RelateTypeExpander>,
+) {
+  if !seen.insert(ty) {
+    return;
+  }
+  match store.type_kind(ty) {
+    TypeKind::Object(obj) => {
+      let shape = store.shape(store.object(obj).shape);
+      out.extend(shape.construct_signatures);
+    }
+    TypeKind::Union(members) | TypeKind::Intersection(members) => {
+      for member in members {
+        collect_construct_signatures(store, member, out, seen, expander);
+      }
+    }
+    TypeKind::Ref { def, args } => {
+      if let Some(expander) = expander {
+        if let Some(expanded) = expander.expand_ref(store, def, &args) {
+          collect_construct_signatures(store, expanded, out, seen, Some(expander));
         }
       }
     }
@@ -613,23 +835,6 @@ fn build_no_match_diagnostic(
     }
   }
   let hidden = outcomes.len().saturating_sub(shown);
-  if hidden > 0 {
-    diag.push_note(format!("{hidden} overload(s) not shown"));
-  }
-  diag
-}
-
-fn build_ambiguous_diagnostic(span: Span, candidates: &[&CandidateOutcome]) -> Diagnostic {
-  let mut diag = codes::AMBIGUOUS_OVERLOAD.error("call is ambiguous", span);
-  let mut shown = 0usize;
-  for candidate in candidates.iter() {
-    if shown >= MAX_NOTES {
-      break;
-    }
-    diag.push_note(candidate.display.clone());
-    shown += 1;
-  }
-  let hidden = candidates.len().saturating_sub(shown);
   if hidden > 0 {
     diag.push_note(format!("{hidden} overload(s) not shown"));
   }

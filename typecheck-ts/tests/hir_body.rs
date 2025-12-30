@@ -5,6 +5,7 @@ use diagnostics::FileId;
 use hir_js::{lower_from_source, BodyKind};
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use typecheck_ts::check::caches::CheckerCaches;
+use typecheck_ts::check::hir_body::AstIndex;
 use typecheck_ts::check::hir_body::check_body;
 use typecheck_ts::{
   parse_call_count, reset_parse_call_count, BodyId, ExprId, FileKey, Program, TypeKindSummary,
@@ -51,6 +52,8 @@ fn infers_basic_literals_and_identifiers() {
     },
   )
   .expect("parse");
+  let ast = Arc::new(ast);
+  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -59,7 +62,7 @@ fn infers_basic_literals_and_identifiers() {
     body,
     &lowered.names,
     FileId(0),
-    &ast,
+    &ast_index,
     Arc::clone(&store),
     &caches,
     &bindings,
@@ -95,6 +98,8 @@ fn local_variable_widening_respects_decl_mode() {
     },
   )
   .expect("parse");
+  let ast = Arc::new(ast);
+  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -103,7 +108,7 @@ fn local_variable_widening_respects_decl_mode() {
     body,
     &lowered.names,
     FileId(0),
-    &ast,
+    &ast_index,
     Arc::clone(&store),
     &caches,
     &bindings,
@@ -162,6 +167,8 @@ fn expression_spans_match_body_indices() {
     },
   )
   .expect("parse");
+  let ast = Arc::new(ast);
+  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -170,7 +177,7 @@ fn expression_spans_match_body_indices() {
     body,
     &lowered.names,
     FileId(0),
-    &ast,
+    &ast_index,
     store.clone(),
     &caches,
     &bindings,
@@ -205,6 +212,8 @@ fn expr_at_returns_innermost_type() {
     },
   )
   .expect("parse");
+  let ast = Arc::new(ast);
+  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -213,7 +222,7 @@ fn expr_at_returns_innermost_type() {
     body,
     &lowered.names,
     FileId(0),
-    &ast,
+    &ast_index,
     store.clone(),
     &caches,
     &bindings,
@@ -301,6 +310,8 @@ fn diagnostics_are_stably_sorted() {
     },
   )
   .expect("parse");
+  let ast = Arc::new(ast);
+  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let bindings = HashMap::new();
@@ -309,7 +320,7 @@ fn diagnostics_are_stably_sorted() {
     body,
     &lowered.names,
     FileId(0),
-    &ast,
+    &ast_index,
     store.clone(),
     &caches,
     &bindings,
@@ -345,6 +356,8 @@ fn call_with_missing_arguments_types_arguments_once() {
     },
   )
   .expect("parse");
+  let ast = Arc::new(ast);
+  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
   let result = check_body(
@@ -352,7 +365,7 @@ fn call_with_missing_arguments_types_arguments_once() {
     body,
     &lowered.names,
     FileId(0),
-    &ast,
+    &ast_index,
     Arc::clone(&store),
     &caches,
     &HashMap::new(),

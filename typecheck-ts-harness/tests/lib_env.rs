@@ -12,9 +12,9 @@ use serde_json::Value;
 #[cfg(feature = "with-node")]
 use std::collections::HashMap;
 #[cfg(feature = "with-node")]
-use std::process::Command;
-#[cfg(feature = "with-node")]
-use typecheck_ts_harness::tsc::{node_available, TscDiagnostics, TscRequest, TscRunner};
+use typecheck_ts_harness::tsc::{
+  node_available, typescript_available, TscDiagnostics, TscRequest, TscRunner,
+};
 
 #[derive(Clone)]
 struct SimpleHost {
@@ -96,7 +96,7 @@ fn runner_or_skip() -> Option<TscRunner> {
   }
 
   if !typescript_available(&node_path) {
-    eprintln!("skipping tsc lib env tests: typescript npm package missing");
+    eprintln!("skipping tsc lib env tests: typescript not available (run `cd typecheck-ts-harness && npm ci`)");
     return None;
   }
 
@@ -107,17 +107,6 @@ fn runner_or_skip() -> Option<TscRunner> {
       None
     }
   }
-}
-
-#[cfg(feature = "with-node")]
-fn typescript_available(node_path: &Path) -> bool {
-  Command::new(node_path)
-    .arg("-e")
-    .arg("require('typescript')")
-    .current_dir(env!("CARGO_MANIFEST_DIR"))
-    .status()
-    .map(|status| status.success())
-    .unwrap_or(false)
 }
 
 #[cfg(feature = "with-node")]

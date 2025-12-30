@@ -438,6 +438,19 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       args: evaluated_args.clone(),
     };
     if let Some(cached) = self.caches.refs.get(&key) {
+      // `refs` memoizes instantiated expansions, but callers may evolve the
+      // underlying definition tables over time (e.g. lazy type loading in a
+      // query-based program). In that situation a cached expansion might still
+      // contain unresolved references that are now expandable. Re-evaluate
+      // cached reference results once to avoid permanently "sticking" to a
+      // partially-expanded ref chain.
+      if matches!(self.store.type_kind(cached), TypeKind::Ref { .. }) {
+        let evaluated = self.evaluate_with_subst(cached, subst, depth + 1);
+        if evaluated != cached {
+          self.caches.refs.insert(key, evaluated);
+          return evaluated;
+        }
+      }
       return cached;
     }
     if self.ref_in_progress.contains(&key) {

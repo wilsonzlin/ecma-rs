@@ -1,6 +1,8 @@
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
 use typecheck_ts::{codes, FileKey, MemoryHost, Program};
 
@@ -19,12 +21,23 @@ fn cancel_check_returns_quickly() {
 
   let program = Arc::new(Program::new(host, vec![file.clone()]));
   let runner = Arc::clone(&program);
-  let handle = thread::spawn(move || runner.check());
+  let (tx, rx) = mpsc::channel();
+  thread::spawn(move || {
+    let diags = runner.check();
+    let _ = tx.send(diags);
+  });
 
   thread::sleep(Duration::from_millis(10));
+  let cancelled_at = Instant::now();
   program.cancel();
 
-  let diagnostics = handle.join().expect("checker thread completed");
+  let diagnostics = rx
+    .recv_timeout(Duration::from_millis(500))
+    .expect("checker thread should observe cancellation quickly");
+  assert!(
+    cancelled_at.elapsed() < Duration::from_millis(500),
+    "cancellation should complete quickly"
+  );
   assert!(
     diagnostics
       .iter()

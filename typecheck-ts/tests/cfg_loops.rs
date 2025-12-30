@@ -50,17 +50,31 @@ fn for_loop_uses_distinct_blocks() {
   assert_eq!(cfg.blocks[cfg.entry.0].successors, vec![init]);
   assert_eq!(cfg.blocks[init.0].successors, vec![test]);
 
+  assert_eq!(
+    cfg.blocks[test.0].successors.len(),
+    2,
+    "for-test should have two outgoing edges"
+  );
+
   let body_entry = cfg.blocks[test.0]
     .successors
     .iter()
     .copied()
-    .find(|succ| *succ != cfg.exit)
+    .find(|succ| reachable(&cfg, *succ, update))
     .expect("body edge");
-
-  assert!(cfg.blocks[test.0].successors.contains(&cfg.exit));
+  let after = cfg.blocks[test.0]
+    .successors
+    .iter()
+    .copied()
+    .find(|succ| *succ != body_entry)
+    .expect("after edge");
   assert!(
     reachable(&cfg, body_entry, update),
     "body should reach update"
+  );
+  assert!(
+    reachable(&cfg, after, cfg.exit),
+    "false edge should reach cfg exit"
   );
   assert_eq!(cfg.blocks[update.0].successors, vec![test]);
 }
@@ -92,8 +106,14 @@ fn do_while_executes_body_before_test() {
     cfg.blocks[test_block.0].successors.contains(&entry_succ),
     "test true edge should loop"
   );
+  let after = cfg.blocks[test_block.0]
+    .successors
+    .iter()
+    .copied()
+    .find(|succ| *succ != entry_succ)
+    .expect("after edge");
   assert!(
-    cfg.blocks[test_block.0].successors.contains(&cfg.exit),
-    "test false edge should exit"
+    reachable(&cfg, after, cfg.exit),
+    "test false edge should reach cfg exit"
   );
 }

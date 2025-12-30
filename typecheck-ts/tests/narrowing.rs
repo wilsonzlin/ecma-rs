@@ -140,7 +140,7 @@ function optionalBigint(x?: bigint) { if (x) { return x; } else { return x; } }
       "nullableString",
       store.union(vec![prim.string, prim.null]),
       "string",
-      "null",
+      "null | string",
     ),
     ("emptyOrA", store.union(vec![empty, a]), "\"a\"", "\"\""),
     ("zeroOrOne", store.union(vec![zero, one]), "1", "0"),
@@ -960,7 +960,7 @@ function f(x: string | null) {
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
-  assert_eq!(else_ty, "null");
+  assert_eq!(else_ty, "null | string");
 }
 
 #[test]
@@ -1429,7 +1429,7 @@ function f(x: string | null, y: string) {
   let then_ty = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let else_ty = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(then_ty, "string");
-  assert_eq!(else_ty, "null");
+  assert_eq!(else_ty, "null | string");
 }
 
 #[test]
@@ -1788,7 +1788,7 @@ function f(x: string | null) {
   let first_return = TypeDisplay::new(&store, res.return_types()[0]).to_string();
   let after_try = TypeDisplay::new(&store, res.return_types()[1]).to_string();
   assert_eq!(first_return, "string");
-  assert_eq!(after_try, "null");
+  assert_eq!(after_try, "null | string");
 }
 
 #[test]

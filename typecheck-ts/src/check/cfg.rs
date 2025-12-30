@@ -453,11 +453,11 @@ impl<'a> CfgBuilder<'a> {
     }
   }
 
-  fn build_do_while(
-    &mut self,
-    stmt_id: StmtId,
-    body: StmtId,
-    test: ExprId,
+	  fn build_do_while(
+	    &mut self,
+	    stmt_id: StmtId,
+	    body: StmtId,
+	    test: ExprId,
     preds: Vec<BlockId>,
     label: Option<NameId>,
   ) -> BuildResult {
@@ -474,14 +474,13 @@ impl<'a> CfgBuilder<'a> {
     self.connect(&body_res.exits, test_block);
     self.breakables.pop();
 
-    if let Some(entry) = body_res.entry {
-      self.cfg.add_edge(test_block, entry);
-    }
-    self.cfg.add_edge(test_block, self.cfg.exit);
-    self.cfg.add_edge(test_block, after);
+	    if let Some(entry) = body_res.entry {
+	      self.cfg.add_edge(test_block, entry);
+	    }
+	    self.cfg.add_edge(test_block, after);
 
-    BuildResult {
-      entry: body_res.entry.or(Some(test_block)),
+	    BuildResult {
+	      entry: body_res.entry.or(Some(test_block)),
       exits: vec![after],
     }
   }
@@ -518,15 +517,14 @@ impl<'a> CfgBuilder<'a> {
       StmtKind::Block(stmts) => self.build_stmt_list(stmts, vec![test_block]),
       _ => self.build_stmt(body, vec![test_block]),
     };
-    self.connect(&body_res.exits, update_block);
-    self.breakables.pop();
+	    self.connect(&body_res.exits, update_block);
+	    self.breakables.pop();
 
-    self.cfg.add_edge(test_block, self.cfg.exit);
-    self.cfg.add_edge(init_block, test_block);
-    self.cfg.add_edge(test_block, after);
+	    self.cfg.add_edge(init_block, test_block);
+	    self.cfg.add_edge(test_block, after);
 
-    BuildResult {
-      entry: Some(init_block),
+	    BuildResult {
+	      entry: Some(init_block),
       exits: vec![after],
     }
   }

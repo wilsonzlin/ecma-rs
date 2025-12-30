@@ -2,10 +2,8 @@
 
 use serde_json::Map;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
-use std::process::Command;
-use typecheck_ts_harness::tsc::node_available;
+use typecheck_ts_harness::tsc::{node_available, typescript_available};
 use typecheck_ts_harness::tsc::TscRequest;
 use typecheck_ts_harness::tsc::TscRunner;
 
@@ -18,7 +16,7 @@ fn runner_or_skip() -> Option<TscRunner> {
   }
 
   if !typescript_available(&node_path) {
-    eprintln!("skipping tsc runner tests: typescript npm package missing");
+    eprintln!("skipping tsc runner tests: typescript not available (run `cd typecheck-ts-harness && npm ci`)");
     return None;
   }
 
@@ -29,16 +27,6 @@ fn runner_or_skip() -> Option<TscRunner> {
       None
     }
   }
-}
-
-fn typescript_available(node_path: &Path) -> bool {
-  Command::new(node_path)
-    .arg("-e")
-    .arg("require('typescript')")
-    .current_dir(env!("CARGO_MANIFEST_DIR"))
-    .status()
-    .map(|status| status.success())
-    .unwrap_or(false)
 }
 
 #[test]

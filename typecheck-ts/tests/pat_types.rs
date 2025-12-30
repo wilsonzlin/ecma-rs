@@ -4,6 +4,7 @@ use std::sync::Arc;
 use hir_js::{lower_from_source, BodyKind};
 use parse_js::{parse_with_options, Dialect, ParseOptions, SourceType};
 use typecheck_ts::check::caches::CheckerCaches;
+use typecheck_ts::check::hir_body::AstIndex;
 use typecheck_ts::check::hir_body::check_body;
 use typecheck_ts::{FileId, PatId};
 use types_ts_interned::TypeStore;
@@ -29,6 +30,8 @@ fn records_pattern_types_for_params_and_vars() {
     },
   )
   .expect("parse");
+  let ast = Arc::new(ast);
+  let ast_index = AstIndex::new(Arc::clone(&ast), FileId(0), None);
 
   let store = TypeStore::new();
   let caches = CheckerCaches::new(Default::default()).for_body();
@@ -38,7 +41,7 @@ fn records_pattern_types_for_params_and_vars() {
     body,
     &names,
     FileId(0),
-    &ast,
+    &ast_index,
     store.clone(),
     &caches,
     &bindings,

@@ -343,6 +343,21 @@ impl Emitter {
     self.write_with_kind(number, TokenKind::Number);
   }
 
+  /// Emits a BigInt literal from its canonical decimal digits (without the
+  /// trailing `n`).
+  pub fn write_bigint_literal(&mut self, digits: &str) {
+    if digits.is_empty() {
+      return;
+    }
+
+    let boundaries = classify_fragment_with_kind(digits.as_bytes(), TokenKind::Number);
+    self.insert_boundary(boundaries.leading);
+    self.insert_html_comment_break(digits.as_bytes());
+    self.push_bytes(digits.as_bytes());
+    self.push_bytes(b"n");
+    self.state.trailing = Boundary::Word;
+  }
+
   /// Emits punctuation or operators.
   pub fn write_punct(&mut self, punct: &str) {
     let kind = match punct {

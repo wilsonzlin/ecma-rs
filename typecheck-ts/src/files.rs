@@ -12,6 +12,15 @@ pub enum FileOrigin {
   Lib,
 }
 
+impl FileOrigin {
+  fn stable_discriminant(&self) -> u8 {
+    match self {
+      FileOrigin::Source => 0,
+      FileOrigin::Lib => 1,
+    }
+  }
+}
+
 fn preferred_file_id(key: &FileKey) -> Option<u32> {
   let name = key.as_str();
   let remainder = name.strip_prefix("file")?;
@@ -21,8 +30,10 @@ fn preferred_file_id(key: &FileKey) -> Option<u32> {
   stripped.parse::<u32>().ok()
 }
 
-fn stable_hash(key: &FileKey) -> u64 {
+fn stable_hash(key: &FileKey, origin: FileOrigin, salt: u64) -> u64 {
   let mut hasher = DefaultHasher::new();
+  hasher.write_u8(origin.stable_discriminant());
+  hasher.write_u64(salt);
   key.as_str().hash(&mut hasher);
   hasher.finish()
 }
@@ -36,8 +47,15 @@ fn stable_hash(key: &FileKey) -> u64 {
 /// small test IDs.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FileRegistry {
-  key_to_id: HashMap<FileKey, FileId>,
+  keys: HashMap<FileKey, FileRegistryEntry>,
   id_to_key: HashMap<FileId, FileKey>,
+  id_to_origin: HashMap<FileId, FileOrigin>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct FileRegistryEntry {
+  source: Option<FileId>,
+  lib: Option<FileId>,
 }
 
 impl FileRegistry {
@@ -49,58 +67,81 @@ impl FileRegistry {
     self.id_to_key.get(&id).cloned()
   }
 
+  pub(crate) fn lookup_origin(&self, id: FileId) -> Option<FileOrigin> {
+    self.id_to_origin.get(&id).copied()
+  }
+
   pub(crate) fn lookup_id(&self, key: &FileKey) -> Option<FileId> {
-    self.key_to_id.get(key).copied()
+    let entry = self.keys.get(key)?;
+    entry.source.or(entry.lib)
+  }
+
+  pub(crate) fn lookup_id_with_origin(&self, key: &FileKey, origin: FileOrigin) -> Option<FileId> {
+    let entry = self.keys.get(key)?;
+    match origin {
+      FileOrigin::Source => entry.source,
+      FileOrigin::Lib => entry.lib,
+    }
   }
 
   pub(crate) fn ids_for_key(&self, key: &FileKey) -> Vec<FileId> {
-    self
-      .id_to_key
-      .iter()
-      .filter_map(|(id, stored)| if stored == key { Some(*id) } else { None })
-      .collect()
-  }
-
-  pub(crate) fn intern_additional(&mut self, key: &FileKey, make_primary: bool) -> FileId {
-    let id = self.allocate_fallback(key);
-    self.id_to_key.insert(id, key.clone());
-    if make_primary {
-      self.key_to_id.insert(key.clone(), id);
+    let entry = self.keys.get(key);
+    let mut ids = Vec::new();
+    if let Some(entry) = entry {
+      if let Some(id) = entry.source {
+        ids.push(id);
+      }
+      if let Some(id) = entry.lib {
+        ids.push(id);
+      }
     }
-    id
+    ids
   }
 
-  pub(crate) fn intern(&mut self, key: &FileKey) -> FileId {
-    if let Some(id) = self.lookup_id(key) {
+  pub(crate) fn intern(&mut self, key: &FileKey, origin: FileOrigin) -> FileId {
+    if let Some(id) = self.lookup_id_with_origin(key, origin) {
       return id;
     }
-    let id = if let Some(preferred) = preferred_file_id(key) {
-      let preferred_id = FileId(preferred);
-      if !self.id_to_key.contains_key(&preferred_id) {
-        preferred_id
-      } else {
-        self.allocate_fallback(key)
+
+    let id = match origin {
+      FileOrigin::Source => {
+        if let Some(preferred) = preferred_file_id(key) {
+          let preferred_id = FileId(preferred);
+          if !self.id_to_key.contains_key(&preferred_id) {
+            preferred_id
+          } else {
+            self.allocate_fallback(key, origin)
+          }
+        } else {
+          self.allocate_fallback(key, origin)
+        }
       }
-    } else {
-      self.allocate_fallback(key)
+      FileOrigin::Lib => self.allocate_fallback(key, origin),
     };
-    self.key_to_id.insert(key.clone(), id);
+
+    let entry = self.keys.entry(key.clone()).or_default();
+    match origin {
+      FileOrigin::Source => entry.source = Some(id),
+      FileOrigin::Lib => entry.lib = Some(id),
+    }
     self.id_to_key.insert(id, key.clone());
+    self.id_to_origin.insert(id, origin);
     id
   }
 
-  fn allocate_fallback(&mut self, key: &FileKey) -> FileId {
-    let mut candidate = (stable_hash(key) as u32) | FALLBACK_START;
-    if candidate == u32::MAX {
-      candidate = FALLBACK_START;
-    }
-    while self.id_to_key.contains_key(&FileId(candidate)) {
-      candidate = candidate.wrapping_add(1);
-      if candidate < FALLBACK_START {
+  fn allocate_fallback(&mut self, key: &FileKey, origin: FileOrigin) -> FileId {
+    let mut salt = 0u64;
+    loop {
+      let raw = stable_hash(key, origin, salt);
+      let mut candidate = (raw as u32) | FALLBACK_START;
+      if candidate == u32::MAX {
         candidate = FALLBACK_START;
       }
+      if !self.id_to_key.contains_key(&FileId(candidate)) {
+        return FileId(candidate);
+      }
+      salt = salt.wrapping_add(1);
     }
-    FileId(candidate)
   }
 }
 
@@ -115,14 +156,14 @@ mod tests {
     let other = FileKey::new("x.ts");
 
     let mut registry_a = FileRegistry::new();
-    registry_a.intern(&file10);
-    registry_a.intern(&other);
-    registry_a.intern(&file0);
+    registry_a.intern(&file10, FileOrigin::Source);
+    registry_a.intern(&other, FileOrigin::Source);
+    registry_a.intern(&file0, FileOrigin::Source);
 
     let mut registry_b = FileRegistry::new();
-    registry_b.intern(&file0);
-    registry_b.intern(&file10);
-    registry_b.intern(&other);
+    registry_b.intern(&file0, FileOrigin::Source);
+    registry_b.intern(&file10, FileOrigin::Source);
+    registry_b.intern(&other, FileOrigin::Source);
 
     assert_eq!(registry_a.lookup_id(&file0), Some(FileId(0)));
     assert_eq!(registry_b.lookup_id(&file0), Some(FileId(0)));
@@ -134,5 +175,16 @@ mod tests {
     assert_eq!(other_id_a, other_id_b);
     assert_eq!(registry_a.lookup_key(other_id_a), Some(other.clone()));
     assert_eq!(registry_b.lookup_key(other_id_b), Some(other));
+  }
+
+  #[test]
+  fn origin_distinguishes_colliding_keys() {
+    let key = FileKey::new("lib:lib.es5.d.ts");
+    let mut registry = FileRegistry::new();
+    let source = registry.intern(&key, FileOrigin::Source);
+    let lib = registry.intern(&key, FileOrigin::Lib);
+    assert_ne!(source, lib);
+    assert_eq!(registry.lookup_id(&key), Some(source));
+    assert_eq!(registry.ids_for_key(&key), vec![source, lib]);
   }
 }

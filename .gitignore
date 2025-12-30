@@ -1,6 +1,7 @@
 dist/
 node_modules/
 package-lock.json
+!typecheck-ts-harness/package-lock.json
 target/
 
 # Auto-generated test reports

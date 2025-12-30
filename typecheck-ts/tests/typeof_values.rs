@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use typecheck_ts::{FileKey, MemoryHost, Program};
+use typecheck_ts::{FileKey, MemoryHost, Program, PropertyKey};
 use types_ts_interned::TypeKind;
 
 fn def_by_name(program: &mut Program, file: FileKey, name: &str) -> typecheck_ts::DefId {
@@ -32,26 +32,7 @@ const y = ctor.x;
     diagnostics.is_empty(),
     "unexpected diagnostics: {diagnostics:?}"
   );
-  let file_id = program.file_id(&FileKey::new("main.ts")).unwrap();
-  for def in program.definitions_in_file(file_id) {
-    eprintln!(
-      "def {:?} name {:?} type {}",
-      def,
-      program.def_name(def),
-      program.display_type(program.type_of_def_interned(def))
-    );
-  }
   let alias_def = def_by_name(&mut program, FileKey::new("main.ts"), "T");
-  println!(
-    "defs {:?}",
-    program
-      .definitions_in_file(program.file_id(&FileKey::new("main.ts")).unwrap())
-  );
-  println!(
-    "typeof def {:?} kind {:?}",
-    alias_def,
-    program.interned_type_kind(program.type_of_def_interned(alias_def))
-  );
 
   let class_def = def_by_name(&mut program, FileKey::new("main.ts"), "C");
   let alias_ty = program.type_of_def_interned(alias_def);
@@ -59,18 +40,6 @@ const y = ctor.x;
     TypeKind::Ref { def, .. } => def,
     other => panic!("expected typeof alias to lower to a ref, got {:?}", other),
   };
-  println!(
-    "value def kind {:?}",
-    program.interned_type_kind(program.type_of_def_interned(alias_target))
-  );
-  println!(
-    "value def display {}",
-    program.display_type(program.type_of_def_interned(alias_target))
-  );
-  println!(
-    "class def display {}",
-    program.display_type(program.type_of_def_interned(class_def))
-  );
   assert_ne!(
     alias_target, class_def,
     "typeof should reference value-side def id, not the class instance def"
@@ -108,12 +77,23 @@ const a = e.A;
   let enum_def = def_by_name(&mut program, FileKey::new("main.ts"), "E");
   let alias_def = def_by_name(&mut program, FileKey::new("main.ts"), "TE");
   let alias_ty = program.type_of_def_interned(alias_def);
-  match program.interned_type_kind(alias_ty) {
-    TypeKind::Ref { def, .. } => assert_ne!(
-      def, enum_def,
-      "typeof should reference enum object def id, not the enum type def"
-    ),
+  let enum_object_def = match program.interned_type_kind(alias_ty) {
+    TypeKind::Ref { def, .. } => {
+      assert_ne!(
+        def, enum_def,
+        "typeof should reference enum object def id, not the enum type def"
+      );
+      def
+    }
     other => panic!("expected typeof alias to lower to a ref, got {:?}", other),
+  };
+  let enum_object_ty = program.type_of_def_interned(enum_object_def);
+  let enum_member_ty = program
+    .property_type(enum_object_ty, PropertyKey::String("A".to_string()))
+    .unwrap_or_else(|| panic!("expected enum object to have property A, got {}", program.display_type(enum_object_ty)));
+  match program.interned_type_kind(enum_member_ty) {
+    TypeKind::Number | TypeKind::NumberLiteral(_) => {}
+    other => panic!("expected enum member to be number, got {:?}", other),
   }
 
   let a_def = def_by_name(&mut program, FileKey::new("main.ts"), "a");

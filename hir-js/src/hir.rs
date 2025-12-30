@@ -560,6 +560,8 @@ pub enum DefTypeInfo {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
   pub owner: DefId,
+  /// Span covering this body in the source file.
+  pub span: TextRange,
   pub kind: BodyKind,
   pub exprs: Vec<Expr>,
   pub stmts: Vec<Stmt>,

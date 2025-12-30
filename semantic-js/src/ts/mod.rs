@@ -19,6 +19,7 @@ pub mod locals;
 mod model;
 
 pub use binder::bind_ts_program;
+pub use binder::bind_ts_program_with_cancellation;
 pub use model::*;
 
 #[cfg(test)]

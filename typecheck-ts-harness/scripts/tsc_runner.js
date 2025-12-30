@@ -2,7 +2,14 @@
 // Minimal NDJSON TypeScript runner for the Rust harness.
 const path = require("path");
 const readline = require("readline");
-const ts = require("typescript");
+const { loadTypeScript } = require("./typescript_loader");
+let ts;
+try {
+  ts = loadTypeScript();
+} catch (err) {
+  process.stderr.write(`${err?.message ?? String(err)}\n`);
+  process.exit(1);
+}
 
 const VIRTUAL_ROOT = "/";
 const SCHEMA_VERSION = 2;

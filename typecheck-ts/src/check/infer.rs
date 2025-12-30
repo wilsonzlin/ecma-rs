@@ -276,6 +276,7 @@ impl InferenceContext {
         }
       }
       let mut candidate = candidate.unwrap_or(primitives.unknown);
+      candidate = widen_inferred_candidate(self.store.as_ref(), candidate);
 
       if !bounds.upper.is_empty() {
         let upper = if bounds.upper.len() == 1 {
@@ -432,6 +433,48 @@ fn is_assignable(store: &TypeStore, src: TypeId, dst: TypeId) -> bool {
   }
 
   false
+}
+
+fn widen_inferred_candidate(store: &TypeStore, ty: TypeId) -> TypeId {
+  let prim = store.primitive_ids();
+  match store.type_kind(ty) {
+    TypeKind::Union(members) => {
+      let mut all_number = true;
+      let mut all_string = true;
+      let mut all_boolean = true;
+      let mut all_bigint = true;
+      for member in members {
+        match store.type_kind(member) {
+          TypeKind::NumberLiteral(_) => {}
+          _ => all_number = false,
+        }
+        match store.type_kind(member) {
+          TypeKind::StringLiteral(_) => {}
+          _ => all_string = false,
+        }
+        match store.type_kind(member) {
+          TypeKind::BooleanLiteral(_) => {}
+          _ => all_boolean = false,
+        }
+        match store.type_kind(member) {
+          TypeKind::BigIntLiteral(_) => {}
+          _ => all_bigint = false,
+        }
+      }
+      if all_number {
+        prim.number
+      } else if all_string {
+        prim.string
+      } else if all_boolean {
+        prim.boolean
+      } else if all_bigint {
+        prim.bigint
+      } else {
+        ty
+      }
+    }
+    _ => ty,
+  }
 }
 
 fn is_shape_assignable(store: &TypeStore, src: &Shape, dst: &Shape) -> bool {

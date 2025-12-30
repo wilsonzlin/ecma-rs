@@ -27,6 +27,8 @@ fn unresolved_type_param_treated_conservatively() {
     "call to `make` should not fail overload resolution: {diagnostics:?}"
   );
   let call_offset = SOURCE.find("make()").expect("call present") as u32;
+  // Query inside the `()` so `type_at` resolves the call expression rather than the callee symbol.
+  let call_offset = call_offset + "make".len() as u32;
   let call_type = program
     .type_at(file_id, call_offset)
     .expect("type_at available");
@@ -83,12 +85,25 @@ fn conflicting_type_arguments_still_error() {
   );
 
   assert!(
-    !resolution.diagnostics.is_empty(),
-    "call with conflicting type arguments should produce an error: {:?}",
+    resolution.diagnostics.is_empty(),
+    "generic inference should accept heterogeneous arguments by inferring a union, got diagnostics: {:?}",
     resolution
       .diagnostics
       .iter()
       .map(|d| d.message.clone())
       .collect::<Vec<_>>()
   );
+  match store.type_kind(resolution.return_type) {
+    TypeKind::Union(members) => {
+      assert!(
+        members.contains(&primitives.number) && members.contains(&primitives.string),
+        "expected inferred type param to include both number and string, got {:?}",
+        members
+          .iter()
+          .map(|ty| format!("{:?}", store.type_kind(*ty)))
+          .collect::<Vec<_>>()
+      );
+    }
+    other => panic!("expected union return type, got {other:?}"),
+  }
 }

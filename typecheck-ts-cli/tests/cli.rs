@@ -88,7 +88,7 @@ fn node_modules_resolution_is_opt_in() {
     .arg(path.as_os_str())
     .assert()
     .failure()
-    .stdout(contains("unresolved import"));
+    .stdout(contains("unresolved module specifier"));
 
   Command::cargo_bin("typecheck-ts-cli")
     .unwrap()

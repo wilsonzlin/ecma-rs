@@ -160,21 +160,21 @@ fn reports_no_matching_overload_with_reasons() {
 }
 
 #[test]
-fn reports_ambiguous_call() {
+fn selects_first_overload_on_tie() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
   let relate = RelateCtx::new(store.clone(), TypeOptions::default());
 
   let sig_a = Signature {
     params: vec![param("value", primitives.string, &store)],
-    ret: primitives.number,
+    ret: primitives.boolean,
     type_params: Vec::new(),
     this_param: None,
   };
   let sig_a_id = store.intern_signature(sig_a);
   let sig_b = Signature {
     params: vec![param("value", primitives.string, &store)],
-    ret: primitives.boolean,
+    ret: primitives.number,
     type_params: Vec::new(),
     this_param: None,
   };
@@ -195,12 +195,10 @@ fn reports_ambiguous_call() {
     None,
   );
 
-  assert!(resolution.signature.is_none());
-  assert_eq!(resolution.return_type, primitives.unknown);
-  assert_eq!(resolution.diagnostics.len(), 1);
-  let diag = &resolution.diagnostics[0];
-  assert_eq!(diag.code.as_str(), codes::AMBIGUOUS_OVERLOAD.as_str());
-  assert_eq!(diag.notes.len(), 2);
+  assert!(resolution.diagnostics.is_empty());
+  assert_eq!(resolution.signature, Some(sig_a_id));
+  assert_eq!(resolution.return_type, primitives.boolean);
+  assert_ne!(resolution.signature, Some(sig_b_id));
 }
 
 #[test]

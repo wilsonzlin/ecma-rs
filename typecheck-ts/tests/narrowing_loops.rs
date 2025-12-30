@@ -83,7 +83,7 @@ fn for_init_runs_once() {
     rendered, test_ty
   );
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "string");
-  assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
+  assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "never");
 }
 
 #[test]
@@ -132,5 +132,5 @@ fn do_while_body_executes_before_test() {
     rendered, test_ty
   );
   assert_eq!(TypeDisplay::new(&store, returns[0]).to_string(), "number");
-  assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "number");
+  assert_eq!(TypeDisplay::new(&store, returns[1]).to_string(), "never");
 }
