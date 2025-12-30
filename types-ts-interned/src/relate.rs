@@ -821,8 +821,8 @@ impl<'a> RelateCtx<'a> {
       (TypeKind::Tuple(src_elems), TypeKind::Tuple(dst_elems)) => {
         self.relate_tuple(src_elems, dst_elems, key, mode, record, depth + 1)
       }
-      (TypeKind::Array { ty, .. }, TypeKind::Tuple(dst_elems)) => {
-        self.relate_array_to_tuple(*ty, dst_elems, key, mode, record, depth + 1)
+      (TypeKind::Array { ty, readonly }, TypeKind::Tuple(dst_elems)) => {
+        self.relate_array_to_tuple(*ty, *readonly, dst_elems, key, mode, record, depth + 1)
       }
       (TypeKind::Tuple(src_elems), TypeKind::Array { ty, readonly }) => {
         self.relate_tuple_to_array(src_elems, *ty, *readonly, key, mode, record, depth + 1)
@@ -949,14 +949,95 @@ impl<'a> RelateCtx<'a> {
   fn relate_array_to_tuple(
     &self,
     src_elem: TypeId,
+    src_readonly: bool,
     dst_elems: &[crate::TupleElem],
     key: RelationKey,
     mode: RelationMode,
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    // Array -> fixed tuple is not assignable because an array type cannot
+    // statically guarantee the tuple's maximum length.
+    //
+    // Arrays can be assignable to variadic tuples (those containing a rest
+    // element), but TypeScript's semantics for those are intentionally loose.
+    let dst_readonly = dst_elems.iter().all(|e| e.readonly);
+    if src_readonly && !dst_readonly {
+      return RelationResult {
+        result: false,
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          false,
+          Some("readonly array".into()),
+          depth,
+        ),
+      };
+    }
+
+    let has_rest = dst_elems.iter().any(|e| e.rest);
+    if !has_rest {
+      return RelationResult {
+        result: false,
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          false,
+          Some("array to fixed tuple".into()),
+          depth,
+        ),
+      };
+    }
+
+    // If the tuple is purely a spread (`[...T]`), treat it as array-like and
+    // compare element types against the spread element type.
+    if dst_elems.iter().all(|e| e.rest) {
+      let rest = dst_elems
+        .iter()
+        .find(|e| e.rest)
+        .expect("has_rest implies at least one rest element");
+      let spread_elem = self.spread_element_type(rest.ty);
+      let related = self.relate_internal(
+        src_elem,
+        spread_elem,
+        RelationKind::Assignable,
+        mode,
+        record,
+        depth + 1,
+      );
+      return RelationResult {
+        result: related.result,
+        reason: self.join_reasons(
+          record,
+          key,
+          vec![related.reason],
+          related.result,
+          Some("array to rest tuple".into()),
+          depth,
+        ),
+      };
+    }
+
+    // Arrays do not satisfy required tuple positions, but they can flow into
+    // optional elements before the rest portion.
+    if dst_elems.iter().any(|e| !e.rest && !e.optional) {
+      return RelationResult {
+        result: false,
+        reason: self.join_reasons(
+          record,
+          key,
+          Vec::new(),
+          false,
+          Some("array required tuple element".into()),
+          depth,
+        ),
+      };
+    }
+
     let mut children = Vec::new();
-    for dst_elem in dst_elems {
+    for dst_elem in dst_elems.iter().filter(|e| !e.rest) {
       let dst_ty = self.optional_type(dst_elem.ty, dst_elem.optional, OptionalFlavor::TupleElement);
       let related = self.relate_internal(
         src_elem,
@@ -977,7 +1058,7 @@ impl<'a> RelateCtx<'a> {
             key,
             children,
             false,
-            Some("array to tuple".into()),
+            Some("array to variadic tuple".into()),
             depth,
           ),
         };
@@ -990,9 +1071,55 @@ impl<'a> RelateCtx<'a> {
         key,
         children,
         true,
-        Some("array to tuple".into()),
+        Some("array to variadic tuple".into()),
         depth,
       ),
+    }
+  }
+
+  fn spread_element_type(&self, ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let mut queue = vec![ty];
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+
+    while let Some(next) = queue.pop() {
+      if !seen.insert(next) {
+        continue;
+      }
+      match self.store.type_kind(next) {
+        TypeKind::Array { ty, .. } => out.push(ty),
+        TypeKind::Tuple(elems) => {
+          for elem in elems {
+            if elem.rest {
+              queue.push(elem.ty);
+            } else {
+              out.push(self.optional_type(elem.ty, elem.optional, OptionalFlavor::TupleElement));
+            }
+          }
+        }
+        TypeKind::Union(members) | TypeKind::Intersection(members) => {
+          for member in members {
+            queue.push(member);
+          }
+        }
+        TypeKind::Ref { def, args } => {
+          if let Some(expanded) = self.expand_ref(def, &args) {
+            queue.push(expanded);
+          } else {
+            out.push(prim.unknown);
+          }
+        }
+        _ => out.push(prim.unknown),
+      }
+    }
+
+    if out.is_empty() {
+      prim.unknown
+    } else if out.len() == 1 {
+      out[0]
+    } else {
+      self.store.union(out)
     }
   }
 
@@ -1021,7 +1148,12 @@ impl<'a> RelateCtx<'a> {
     }
     let mut children = Vec::new();
     for src_elem in src_elems {
-      let src_ty = self.optional_type(src_elem.ty, src_elem.optional, OptionalFlavor::TupleElement);
+      let src_ty = if src_elem.rest {
+        let spread_elem = self.spread_element_type(src_elem.ty);
+        self.optional_type(spread_elem, src_elem.optional, OptionalFlavor::TupleElement)
+      } else {
+        self.optional_type(src_elem.ty, src_elem.optional, OptionalFlavor::TupleElement)
+      };
       let related = self.relate_internal(
         src_ty,
         dst_elem,

@@ -7,6 +7,7 @@ use crate::lex::Lexer;
 use crate::loc::Loc;
 use crate::token::Token;
 use crate::token::TT;
+use crate::token::UNRESERVED_KEYWORDS;
 use crate::Dialect;
 use crate::ParseOptions;
 use crate::SourceType;
@@ -516,11 +517,17 @@ impl<'a> Parser<'a> {
   }
 
   /// Require an identifier, but allow TypeScript type keywords as identifiers
-  /// TypeScript allows type keywords like "any", "string", "number", etc. as identifiers in some contexts
+  /// TypeScript allows unreserved/contextual keywords like "as", "of", etc. as identifiers in some contexts.
+  /// For error recovery, it also allows type keywords like "any", "string", "number", etc. as identifiers.
   pub fn require_identifier_or_ts_keyword(&mut self) -> SyntaxResult<String> {
     let t = self.consume();
-    // Allow regular identifiers
-    if t.typ == TT::Identifier {
+    // Allow regular identifiers and unreserved/contextual keywords.
+    if t.typ == TT::Identifier
+      || UNRESERVED_KEYWORDS.contains(&t.typ)
+      || (t.typ == TT::KeywordAwait && !self.is_module())
+      // NOTE: `yield` is treated as an identifier outside generator contexts for parse recovery.
+      || t.typ == TT::KeywordYield
+    {
       return Ok(self.string(t.loc));
     }
     // Allow TypeScript type keywords as identifiers

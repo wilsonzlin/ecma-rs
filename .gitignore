@@ -3,6 +3,7 @@ node_modules/
 package-lock.json
 !typecheck-ts-harness/package-lock.json
 target/
+*.proptest-regressions
 
 # Auto-generated test reports
 

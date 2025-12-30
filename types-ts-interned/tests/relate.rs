@@ -13,6 +13,7 @@ use types_ts_interned::TypeKind;
 use types_ts_interned::TypeOptions;
 use types_ts_interned::TypeParamId;
 use types_ts_interned::TypeStore;
+use types_ts_interned::TupleElem;
 use types_ts_interned::{MappedModifier, MappedType, Shape, Signature};
 
 fn default_options() -> TypeOptions {
@@ -219,6 +220,53 @@ fn unions_and_intersections() {
   assert!(!ctx.is_assignable(num_or_str, num));
   assert!(ctx.is_assignable(num_or_str, num_str_bool));
   assert!(ctx.is_assignable(intersection, combined));
+}
+
+#[test]
+fn arrays_are_not_assignable_to_fixed_tuples() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let number_array = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let fixed_tuple = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+  ]));
+  assert!(!ctx.is_assignable(number_array, fixed_tuple));
+
+  let rest_tuple = store.intern_type(TypeKind::Tuple(vec![TupleElem {
+    ty: number_array,
+    optional: false,
+    rest: true,
+    readonly: false,
+  }]));
+  assert!(ctx.is_assignable(number_array, rest_tuple));
+
+  let readonly_array = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: true,
+  });
+  assert!(!ctx.is_assignable(readonly_array, rest_tuple));
 }
 
 #[test]

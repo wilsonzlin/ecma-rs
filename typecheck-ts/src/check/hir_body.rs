@@ -695,6 +695,12 @@ pub fn check_body_with_expander(
   }
 }
 
+#[derive(Clone, Debug)]
+enum ArrayLiteralContext {
+  Tuple(Vec<types_ts_interned::TupleElem>),
+  Array(TypeId),
+}
+
 struct Checker<'a> {
   store: Arc<TypeStore>,
   relate: RelateCtx<'a>,
@@ -1452,25 +1458,7 @@ impl<'a> Checker<'a> {
         let _ = self.check_expr(&mem.stx.member);
         self.member_type(obj_ty, "<computed>")
       }
-      AstExpr::LitArr(arr) => {
-        let mut elems = Vec::new();
-        for elem in arr.stx.elements.iter() {
-          match elem {
-            parse_js::ast::expr::lit::LitArrElem::Single(v) => elems.push(self.check_expr(v)),
-            parse_js::ast::expr::lit::LitArrElem::Rest(v) => elems.push(self.check_expr(v)),
-            parse_js::ast::expr::lit::LitArrElem::Empty => {}
-          }
-        }
-        let elem_ty = if elems.is_empty() {
-          self.store.primitive_ids().unknown
-        } else {
-          self.store.union(elems)
-        };
-        self.store.intern_type(TypeKind::Array {
-          ty: elem_ty,
-          readonly: false,
-        })
-      }
+      AstExpr::LitArr(arr) => self.array_literal_type(arr),
       AstExpr::LitObj(obj) => self.object_literal_type(obj),
       AstExpr::Func(func) => self.function_type(&func.stx.func),
       AstExpr::ArrowFunc(func) => self.function_type(&func.stx.func),
@@ -1491,11 +1479,8 @@ impl<'a> Checker<'a> {
       }
       AstExpr::NonNullAssertion(assert) => self.check_expr(&assert.stx.expression),
       AstExpr::SatisfiesExpr(expr) => {
-        let prev = self.widen_object_literals;
-        self.widen_object_literals = false;
-        let value_ty = self.check_expr(&expr.stx.expression);
-        self.widen_object_literals = prev;
         let target_ty = self.lowerer.lower_type_expr(&expr.stx.type_annotation);
+        let value_ty = self.check_expr_with_expected(&expr.stx.expression, target_ty);
         if !self.relate.is_assignable(value_ty, target_ty) {
           self.diagnostics.push(codes::TYPE_MISMATCH.error(
             "expression does not satisfy target type",
@@ -1701,6 +1686,229 @@ impl<'a> Checker<'a> {
     }
   }
 
+  fn array_literal_context(&self, expected: TypeId, arity: usize) -> Option<ArrayLiteralContext> {
+    let mut queue: VecDeque<TypeId> = VecDeque::from([expected]);
+    let mut seen = HashSet::new();
+    let mut tuples: Vec<Vec<types_ts_interned::TupleElem>> = Vec::new();
+    let mut arrays: Vec<TypeId> = Vec::new();
+
+    while let Some(ty) = queue.pop_front() {
+      if !seen.insert(ty) {
+        continue;
+      }
+      match self.store.type_kind(ty) {
+        TypeKind::Tuple(elems) => tuples.push(elems),
+        TypeKind::Array { ty, .. } => arrays.push(ty),
+        TypeKind::Union(members) | TypeKind::Intersection(members) => {
+          for member in members {
+            queue.push_back(member);
+          }
+        }
+        TypeKind::Ref { def, args } => {
+          if let Some(expanded) = self
+            .ref_expander
+            .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
+          {
+            queue.push_back(expanded);
+          }
+        }
+        _ => {}
+      }
+    }
+
+    if !tuples.is_empty() {
+      let mut best: Option<((u32, usize), Vec<types_ts_interned::TupleElem>)> = None;
+      for tuple in tuples.into_iter() {
+        let len = tuple.len();
+        let diff = len.abs_diff(arity) as u32;
+        let key = (diff, len);
+        let replace = match best.as_ref() {
+          Some((best_key, _)) => key < *best_key,
+          None => true,
+        };
+        if replace {
+          best = Some((key, tuple));
+        }
+      }
+      return best.map(|(_, elems)| ArrayLiteralContext::Tuple(elems));
+    }
+
+    arrays
+      .into_iter()
+      .next()
+      .map(ArrayLiteralContext::Array)
+  }
+
+  fn expected_contains_primitive(&self, expected: TypeId, primitive: TypeId) -> bool {
+    if expected == primitive {
+      return true;
+    }
+    let mut queue: VecDeque<TypeId> = VecDeque::from([expected]);
+    let mut seen = HashSet::new();
+    while let Some(ty) = queue.pop_front() {
+      if !seen.insert(ty) {
+        continue;
+      }
+      if ty == primitive {
+        return true;
+      }
+      match self.store.type_kind(ty) {
+        TypeKind::Any => return true,
+        TypeKind::Union(members) | TypeKind::Intersection(members) => {
+          for member in members {
+            queue.push_back(member);
+          }
+        }
+        TypeKind::Ref { def, args } => {
+          if let Some(expanded) = self
+            .ref_expander
+            .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
+          {
+            queue.push_back(expanded);
+          }
+        }
+        _ => {}
+      }
+    }
+    false
+  }
+
+  fn contextual_widen_container(&self, inferred: TypeId, expected: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let should_widen = self.expected_contains_primitive(expected, prim.number)
+      || self.expected_contains_primitive(expected, prim.string)
+      || self.expected_contains_primitive(expected, prim.boolean)
+      || self.expected_contains_primitive(expected, prim.bigint);
+    if should_widen {
+      self.widen_object_prop(inferred)
+    } else {
+      inferred
+    }
+  }
+
+  fn spread_element_type(&self, ty: TypeId) -> TypeId {
+    let prim = self.store.primitive_ids();
+    match self.store.type_kind(ty) {
+      TypeKind::Array { ty, .. } => ty,
+      TypeKind::Tuple(elems) => {
+        let members: Vec<_> = elems.into_iter().map(|e| e.ty).collect();
+        if members.is_empty() {
+          prim.unknown
+        } else {
+          self.store.union(members)
+        }
+      }
+      TypeKind::Ref { def, args } => self
+        .ref_expander
+        .and_then(|expander| expander.expand_ref(self.store.as_ref(), def, &args))
+        .map(|expanded| self.spread_element_type(expanded))
+        .unwrap_or(prim.unknown),
+      _ => prim.unknown,
+    }
+  }
+
+  fn array_literal_type(&mut self, arr: &Node<parse_js::ast::expr::lit::LitArrExpr>) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let mut elems = Vec::new();
+    for elem in arr.stx.elements.iter() {
+      match elem {
+        parse_js::ast::expr::lit::LitArrElem::Single(v) => elems.push(self.check_expr(v)),
+        parse_js::ast::expr::lit::LitArrElem::Rest(v) => {
+          let spread = self.check_expr(v);
+          elems.push(self.spread_element_type(spread));
+        }
+        parse_js::ast::expr::lit::LitArrElem::Empty => {}
+      }
+    }
+    let elem_ty = if elems.is_empty() {
+      prim.unknown
+    } else {
+      self.store.union(elems)
+    };
+    let elem_ty = if self.widen_object_literals {
+      self.widen_object_prop(elem_ty)
+    } else {
+      elem_ty
+    };
+    self.store.intern_type(TypeKind::Array {
+      ty: elem_ty,
+      readonly: false,
+    })
+  }
+
+  fn array_literal_type_with_expected(
+    &mut self,
+    arr: &Node<parse_js::ast::expr::lit::LitArrExpr>,
+    expected: TypeId,
+  ) -> TypeId {
+    let prim = self.store.primitive_ids();
+    if arr
+      .stx
+      .elements
+      .iter()
+      .any(|e| !matches!(e, parse_js::ast::expr::lit::LitArrElem::Single(_)))
+    {
+      return self.array_literal_type(arr);
+    }
+
+    let elems: Vec<_> = arr
+      .stx
+      .elements
+      .iter()
+      .filter_map(|e| match e {
+        parse_js::ast::expr::lit::LitArrElem::Single(v) => Some(v),
+        _ => None,
+      })
+      .collect();
+    let arity = elems.len();
+    let Some(context) = self.array_literal_context(expected, arity) else {
+      return self.array_literal_type(arr);
+    };
+
+    match context {
+      ArrayLiteralContext::Tuple(expected_elems) => {
+        let mut out = Vec::new();
+        for (idx, expr) in elems.into_iter().enumerate() {
+          let expected_elem = expected_elems.get(idx).map(|e| e.ty).unwrap_or(prim.unknown);
+          let expr_ty = if expected_elem != prim.unknown {
+            self.check_expr_with_expected(expr, expected_elem)
+          } else {
+            self.check_expr(expr)
+          };
+          let stored = if expected_elem != prim.unknown {
+            self.contextual_widen_container(expr_ty, expected_elem)
+          } else {
+            self.widen_object_prop(expr_ty)
+          };
+          out.push(types_ts_interned::TupleElem {
+            ty: stored,
+            optional: false,
+            rest: false,
+            readonly: false,
+          });
+        }
+        self.store.intern_type(TypeKind::Tuple(out))
+      }
+      ArrayLiteralContext::Array(expected_elem) => {
+        let mut out = Vec::new();
+        for expr in elems.into_iter() {
+          let expr_ty = self.check_expr_with_expected(expr, expected_elem);
+          let stored = self.contextual_widen_container(expr_ty, expected_elem);
+          out.push(stored);
+        }
+        let elem_ty = if out.is_empty() {
+          prim.unknown
+        } else {
+          self.store.union(out)
+        };
+        self.store.intern_type(TypeKind::Array {
+          ty: elem_ty,
+          readonly: false,
+        })
+      }
+    }
+  }
+
   fn object_literal_type(&mut self, obj: &Node<parse_js::ast::expr::lit::LitObjExpr>) -> TypeId {
     let mut shape = Shape::new();
     for member in obj.stx.members.iter() {
@@ -1762,12 +1970,91 @@ impl<'a> Checker<'a> {
     self.store.intern_type(TypeKind::Object(obj))
   }
 
+  fn object_literal_type_with_expected(
+    &mut self,
+    obj: &Node<parse_js::ast::expr::lit::LitObjExpr>,
+    expected: TypeId,
+  ) -> TypeId {
+    let prim = self.store.primitive_ids();
+    let mut shape = Shape::new();
+    for member in obj.stx.members.iter() {
+      match &member.stx.typ {
+        ObjMemberType::Valued { key, val } => {
+          let name = match key {
+            ClassOrObjKey::Direct(direct) => direct.stx.key.clone(),
+            ClassOrObjKey::Computed(_) => continue,
+          };
+          let prop_key = PropKey::String(self.store.intern_name(name.clone()));
+          let expected_prop = self.member_type(expected, &name);
+          if let ClassOrObjVal::Prop(Some(expr)) = val {
+            let expr_ty = if expected_prop != prim.unknown {
+              self.check_expr_with_expected(expr, expected_prop)
+            } else {
+              self.check_expr(expr)
+            };
+            let ty = if expected_prop != prim.unknown {
+              self.contextual_widen_container(expr_ty, expected_prop)
+            } else if self.widen_object_literals {
+              self.widen_object_prop(expr_ty)
+            } else {
+              expr_ty
+            };
+            shape.properties.push(types_ts_interned::Property {
+              key: prop_key,
+              data: PropData {
+                ty,
+                optional: false,
+                readonly: false,
+                accessibility: None,
+                is_method: false,
+                origin: None,
+                declared_on: None,
+              },
+            });
+          }
+        }
+        ObjMemberType::Shorthand { id } => {
+          let name = id.stx.name.clone();
+          let key = PropKey::String(self.store.intern_name(name.clone()));
+          let value = self.lookup(&name).map(|b| b.ty).unwrap_or(prim.unknown);
+          let expected_prop = self.member_type(expected, &name);
+          let ty = if expected_prop != prim.unknown {
+            self.contextual_widen_container(value, expected_prop)
+          } else if self.widen_object_literals {
+            self.widen_object_prop(value)
+          } else {
+            value
+          };
+          shape.properties.push(types_ts_interned::Property {
+            key,
+            data: PropData {
+              ty,
+              optional: false,
+              readonly: false,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+        ObjMemberType::Rest { val } => {
+          let _ = self.check_expr(val);
+        }
+      }
+    }
+    let shape_id = self.store.intern_shape(shape);
+    let obj = self.store.intern_object(ObjectType { shape: shape_id });
+    self.store.intern_type(TypeKind::Object(obj))
+  }
+
   fn widen_object_prop(&self, ty: TypeId) -> TypeId {
     let prim = self.store.primitive_ids();
     match self.store.type_kind(ty) {
       TypeKind::NumberLiteral(_) => prim.number,
       TypeKind::StringLiteral(_) => prim.string,
       TypeKind::BooleanLiteral(_) => prim.boolean,
+      TypeKind::BigIntLiteral(_) => prim.bigint,
       TypeKind::Union(members) => {
         let mapped: Vec<_> = members
           .into_iter()
@@ -1957,10 +2244,12 @@ impl<'a> Checker<'a> {
 
     match expr.stx.as_ref() {
       AstExpr::LitObj(obj) => {
-        let prev = self.widen_object_literals;
-        self.widen_object_literals = false;
-        let ty = self.object_literal_type(obj);
-        self.widen_object_literals = prev;
+        let ty = self.object_literal_type_with_expected(obj, expected);
+        self.record_expr_type(expr.loc, ty);
+        ty
+      }
+      AstExpr::LitArr(arr) => {
+        let ty = self.array_literal_type_with_expected(arr, expected);
         self.record_expr_type(expr.loc, ty);
         ty
       }

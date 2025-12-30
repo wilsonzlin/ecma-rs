@@ -21,6 +21,9 @@ fn ident() -> impl Strategy<Value = String> {
   const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
   prop::collection::vec(prop::sample::select(CHARS.to_vec()), 1..6)
     .prop_map(|bytes| String::from_utf8(bytes).unwrap())
+    .prop_filter("identifier must not be a keyword", |ident| {
+      parse_js::token::keyword_from_str(ident).is_none()
+    })
 }
 
 fn js_statement() -> impl Strategy<Value = String> {
