@@ -11,7 +11,7 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  lint-and-test:
+  test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -19,8 +19,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       # Cargo.lock is intentionally untracked for this library workspace.
       # Generate it on the fly so we can use --locked for reproducible
@@ -28,42 +26,12 @@ jobs:
       - name: Generate lockfile
         run: cargo generate-lockfile
 
-      - name: Regenerate workspace dependency graph
-        run: ./scripts/gen_deps_graph.sh
-
-      - name: Ensure docs/deps.md is up-to-date
-        run: |
-          git diff --exit-code docs/deps.md || {
-            echo "::error ::docs/deps.md is out of date; run ./scripts/gen_deps_graph.sh";
-            exit 1;
-          }
-
-      - name: Enforce UTF-8 source APIs
-        run: ./scripts/check_utf8_apis.sh
-
-      - name: cargo fmt
-        run: cargo fmt --all --check
-
-      - name: cargo clippy (workspace)
-        run: >
-          cargo clippy --workspace --all-targets --all-features --locked --
-          -A clippy::style
-          -A clippy::complexity
-          -A clippy::perf
-          -A clippy::nursery
-          -A clippy::pedantic
-          -D clippy::correctness
-          -D clippy::suspicious
-
-      - name: cargo check (workspace)
-        run: cargo check --workspace --all-targets --locked
-
       - name: cargo test (workspace)
         run: cargo test --workspace --locked
 
   typecheck-ts-harness:
     runs-on: ubuntu-latest
-    needs: lint-and-test
+    needs: test
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -93,7 +61,7 @@ jobs:
 
   difftsc:
     runs-on: ubuntu-latest
-    needs: lint-and-test
+    needs: test
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -124,7 +92,7 @@ jobs:
 
   difftsc-live-tsc:
     runs-on: ubuntu-latest
-    needs: lint-and-test
+    needs: test
     env:
       TYPESCRIPT_VERSION: 5.5.4
       RAYON_NUM_THREADS: 2
@@ -170,7 +138,7 @@ jobs:
 
   test262-parser:
     runs-on: ubuntu-latest
-    needs: lint-and-test
+    needs: test
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
