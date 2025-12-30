@@ -12,7 +12,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -33,7 +33,7 @@ jobs:
         run: cargo test --workspace --locked
 
   typecheck-ts-harness:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     steps:
       - name: Checkout repository
@@ -63,7 +63,7 @@ jobs:
           path: typecheck-conformance-mini.json
 
   difftsc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     steps:
       - name: Checkout repository
@@ -94,7 +94,7 @@ jobs:
           path: difftsc-report.json
 
   difftsc-live-tsc:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     env:
       TYPESCRIPT_VERSION: 5.5.4
@@ -140,7 +140,7 @@ jobs:
           path: difftsc-live-tsc.json
 
   test262-parser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: test
     steps:
       - name: Checkout repository
