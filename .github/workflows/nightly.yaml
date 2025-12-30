@@ -24,6 +24,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
       # The workspace ignores Cargo.lock; generate it per-run so --locked is
       # usable for reproducible resolution in CI.
       - name: Generate lockfile
