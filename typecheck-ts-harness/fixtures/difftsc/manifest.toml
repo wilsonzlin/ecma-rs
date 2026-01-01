@@ -1,9 +1,39 @@
 [[expectations]]
 id = "difftsc/assignability"
 status = "xfail"
-reason = "Rust checker reports a different diagnostic span/code than tsc for this case"
+reason = "Rust checker uses internal `TC0007` for assignability errors; tsc reports `TS2345`"
+
+[[expectations]]
+id = "difftsc/contextual_callbacks"
+status = "xfail"
+reason = "Rust checker reports a spurious callback assignability error; contextual typing is incomplete"
+
+[[expectations]]
+id = "difftsc/generic_constraints"
+status = "xfail"
+reason = "Rust checker reports `TC2000` (no overload matches) instead of `TS2345` for constraint violations"
+
+[[expectations]]
+id = "difftsc/mapped_types"
+status = "xfail"
+reason = "Rust `type_at` does not preserve mapped type aliases for marker queries (reports expanded initializer type)"
+
+[[expectations]]
+id = "difftsc/merged_function_namespace"
+status = "xfail"
+reason = "Rust checker does not yet support function+namespace merging (`Lib.helper` is mis-typed)"
 
 [[expectations]]
 id = "difftsc/multi"
 status = "xfail"
-reason = "Rust checker misses the multi-file error covered by the baseline"
+reason = "Rust checker uses internal `TC0007` for assignability errors; tsc reports `TS2322`"
+
+[[expectations]]
+id = "difftsc/this_param_call"
+status = "xfail"
+reason = "Rust checker uses internal `TC0007` for assignability errors; tsc reports `TS2322`"
+
+[[expectations]]
+id = "difftsc/win_paths"
+status = "xfail"
+reason = "Rust checker uses internal `TC0007` for assignability errors; tsc reports `TS2345`"

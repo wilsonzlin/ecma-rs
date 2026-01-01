@@ -122,7 +122,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs: test
     env:
-      TYPESCRIPT_VERSION: 5.5.4
+      TYPESCRIPT_VERSION: 5.9.3
       RAYON_NUM_THREADS: 2
     steps:
       - name: Checkout repository

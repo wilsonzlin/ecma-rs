@@ -237,9 +237,9 @@ the suite name (e.g. `difftsc/assignability`).
 
 ## CI: live `tsc` smoke run
 
-CI runs a small `fixtures/difftsc` suite against a pinned npm TypeScript to keep
-the Rust checker aligned with upstream diagnostics without relying on stored
-baselines. The workflow installs `typescript@5.5.4` and executes:
+ CI runs a small `fixtures/difftsc` suite against a pinned npm TypeScript to keep
+ the Rust checker aligned with upstream diagnostics without relying on stored
+ baselines. The workflow installs `typescript@5.9.3` and executes:
 
 ```
 RAYON_NUM_THREADS=2 cargo run -p typecheck-ts-harness --release --locked --jobs 2 -- \
@@ -256,6 +256,6 @@ RAYON_NUM_THREADS=2 cargo run -p typecheck-ts-harness --release --locked --jobs 
 - The JSON report artifact captures both `tsc` and Rust diagnostics for
   mismatches.
 
-To reproduce locally, install the pinned TypeScript package next to the harness
-(`cd typecheck-ts-harness && npm install --no-save --no-package-lock --ignore-scripts typescript@5.5.4`)
-before running the command above.
+ To reproduce locally, install the pinned TypeScript package next to the harness
+ (`cd typecheck-ts-harness && npm install --no-save --no-package-lock --ignore-scripts typescript@5.9.3`)
+ before running the command above.
