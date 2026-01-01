@@ -4,7 +4,7 @@ use crate::diagnostic_norm::{
   diagnostic_code_display, normalize_path_for_compare, normalize_tsc_diagnostics_with_options,
   normalize_type_string, sort_diagnostics, NormalizationOptions, NormalizedDiagnostic,
 };
-use crate::directives::HarnessOptions;
+use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet};
@@ -233,6 +233,10 @@ struct CaseReport {
   name: String,
   status: CaseStatus,
   #[serde(skip_serializing_if = "Option::is_none")]
+  harness_options: Option<HarnessOptions>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  tsc_options: Option<Map<String, Value>>,
+  #[serde(skip_serializing_if = "Option::is_none")]
   expected: Option<Vec<NormalizedDiagnostic>>,
   #[serde(skip_serializing_if = "Option::is_none")]
   actual: Option<Vec<NormalizedDiagnostic>>,
@@ -415,6 +419,8 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
             CaseReport {
               name: test.name.clone(),
               status: CaseStatus::Skipped,
+              harness_options: None,
+              tsc_options: None,
               expected: None,
               actual: None,
               diff: None,
@@ -580,7 +586,7 @@ fn run_single_test(
 ) -> CaseReport {
   let baseline_path = baselines_root.join(format!("{}.json", test.name));
   let notes = Vec::new();
-  let harness_options = HarnessOptions::default();
+  let harness_options = harness_options_from_files(&test.files);
   let tsc_options = harness_options.to_tsc_options_map();
   let type_queries = collect_type_queries(&test.files);
 
@@ -589,6 +595,8 @@ fn run_single_test(
       return CaseReport {
         name: test.name.clone(),
         status: CaseStatus::TscFailed,
+        harness_options: Some(harness_options),
+        tsc_options: Some(tsc_options),
         expected: None,
         actual: None,
         diff: None,
@@ -606,6 +614,8 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::TscFailed,
+          harness_options: Some(harness_options),
+          tsc_options: Some(tsc_options),
           expected: None,
           actual: None,
           diff: None,
@@ -627,6 +637,8 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::TscFailed,
+          harness_options: Some(harness_options),
+          tsc_options: Some(tsc_options),
           expected: None,
           actual: None,
           diff: None,
@@ -645,6 +657,8 @@ fn run_single_test(
       return CaseReport {
         name: test.name.clone(),
         status: CaseStatus::BaselineUpdated,
+        harness_options: Some(harness_options),
+        tsc_options: Some(tsc_options),
         expected: None,
         actual: None,
         diff: None,
@@ -662,6 +676,8 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::BaselineMissing,
+          harness_options: Some(harness_options),
+          tsc_options: Some(tsc_options),
           expected: None,
           actual: None,
           diff: None,
@@ -697,6 +713,8 @@ fn run_single_test(
     return CaseReport {
       name: test.name.clone(),
       status,
+      harness_options: Some(harness_options),
+      tsc_options: Some(tsc_options),
       expected: Some(expected),
       actual: Some(actual),
       expected_types: (!expected_types.is_empty()).then_some(expected_types),
@@ -717,6 +735,8 @@ fn run_single_test(
         return CaseReport {
           name: test.name.clone(),
           status: CaseStatus::BaselineMissing,
+          harness_options: Some(harness_options),
+          tsc_options: Some(tsc_options),
           expected: None,
           actual: None,
           diff: None,
@@ -743,6 +763,8 @@ fn run_single_test(
     return CaseReport {
       name: test.name.clone(),
       status: CaseStatus::RustFailed,
+      harness_options: Some(harness_options),
+      tsc_options: Some(tsc_options),
       expected: Some(expected),
       actual: None,
       expected_types: (!expected_types.is_empty()).then_some(expected_types),
@@ -771,6 +793,8 @@ fn run_single_test(
   CaseReport {
     name: test.name.clone(),
     status,
+    harness_options: Some(harness_options),
+    tsc_options: Some(tsc_options),
     expected: Some(expected),
     actual: Some(actual),
     expected_types: (!expected_types.is_empty()).then_some(expected_types),
@@ -1532,6 +1556,24 @@ fn collect_type_queries(files: &[VirtualFile]) -> Vec<TypeQuery> {
   queries
 }
 
+fn harness_options_from_files(files: &[VirtualFile]) -> HarnessOptions {
+  let mut ordered: Vec<_> = files.iter().collect();
+  ordered.sort_by(|a, b| normalize_name(&a.name).cmp(&normalize_name(&b.name)));
+
+  let mut directives = Vec::new();
+  for file in ordered {
+    for (idx, raw_line) in file.content.split_inclusive('\n').enumerate() {
+      let line_number = idx + 1;
+      let line = raw_line.trim_end_matches(|c| c == '\n' || c == '\r');
+      if let Some(directive) = parse_directive(line, line_number) {
+        directives.push(directive);
+      }
+    }
+  }
+
+  HarnessOptions::from_directives(&directives)
+}
+
 fn collect_rust_type_facts(
   file_set: &HarnessFileSet,
   options: &HarnessOptions,
@@ -1909,6 +1951,7 @@ mod tests {
   use super::*;
   use crate::diagnostic_norm::{DiagnosticCode, DiagnosticEngine, NormalizedDiagnostic};
   use crate::tsc::{TscDiagnostic, TscMetadata};
+  use serde_json::Value;
 
   #[test]
   fn determines_test_name_for_d_ts() {
@@ -2200,5 +2243,20 @@ span mismatches:
 
     assert_eq!(parsed.diagnostics[0].file.as_deref(), Some("a.ts"));
     assert_eq!(parsed.diagnostics[1].file.as_deref(), Some("b.ts"));
+  }
+
+  #[test]
+  fn reads_harness_options_from_fixture_directives() {
+    let case_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+      .join("fixtures")
+      .join("difftsc")
+      .join("this_param_call");
+    let files = collect_files_recursively(&case_dir).expect("collect fixture files");
+    let options = harness_options_from_files(&files);
+    assert_eq!(options.strict, Some(true));
+
+    let tsc = options.to_tsc_options_map();
+    assert_eq!(tsc.get("strict"), Some(&Value::Bool(true)));
+    assert_eq!(tsc.get("noImplicitAny"), Some(&Value::Bool(true)));
   }
 }
