@@ -65,15 +65,22 @@ fn resolve_non_relative(
     return resolve_imports_specifier(files, from, specifier);
   }
 
-  // a) Exact match of the normalized specifier (for explicit-path tests).
-  let normalized = normalize_name(specifier);
-  if let Some(found) = files.resolve(&normalized) {
-    return Some(found);
-  }
+  // a) Exact match of the normalized specifier (for explicit-path tests). Avoid normalizing bare
+  // package names (e.g. `react`) since they will almost always resolve through `node_modules`.
+  if specifier.contains('.')
+    || specifier.starts_with('/')
+    || specifier.starts_with('\\')
+    || starts_with_drive_letter(specifier)
+  {
+    let normalized = normalize_name(specifier);
+    if let Some(found) = files.resolve(&normalized) {
+      return Some(found);
+    }
 
-  // b) Treat the specifier as a rooted virtual path and apply file/directory expansion.
-  if let Some(found) = resolve_as_file_or_directory_normalized(files, &normalized, 0) {
-    return Some(found);
+    // b) Treat the specifier as a rooted virtual path and apply file/directory expansion.
+    if let Some(found) = resolve_as_file_or_directory_normalized(files, &normalized, 0) {
+      return Some(found);
+    }
   }
 
   // c) Walk up `node_modules` directories starting from the importing file's directory.
@@ -501,6 +508,11 @@ fn subpath_needs_normalization(subpath: &str) -> bool {
 fn is_drive_root(dir: &str) -> bool {
   let bytes = dir.as_bytes();
   bytes.len() == 3 && bytes[1] == b':' && bytes[2] == b'/' && bytes[0].is_ascii_alphabetic()
+}
+
+fn starts_with_drive_letter(path: &str) -> bool {
+  let bytes = path.as_bytes();
+  bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
 }
 
 fn virtual_parent_dir_str(path: &str) -> &str {
