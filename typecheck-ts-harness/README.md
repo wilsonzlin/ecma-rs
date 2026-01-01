@@ -59,9 +59,12 @@ node scripts/typescript_probe.js
   installs the exact `typescript` version used for baselines.
 - Use `--node /path/to/node` if `node` is not on `PATH` or you want a specific
   runtime.
-- Missing Node:
-  - Built without `with-node` feature **or** `node --version` fails → `difftsc`
-    logs a skip instead of failing.
+- Missing Node / TypeScript:
+  - `difftsc` only requires a live `tsc` (and therefore the `with-node` feature,
+    a working Node.js binary, and the `typescript` npm package) when it needs to
+    run `tsc` (e.g. verifying baselines, or `--update-baselines`).
+  - Baseline-only differential runs (`--compare-rust --use-baselines`) do **not**
+    require Node and will run even without `with-node`.
 - Missing `typescript` package:
   - The harness logs a skip (or errors when updating baselines). Install via
     `cd typecheck-ts-harness && npm ci`.
@@ -160,9 +163,11 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 ```
 
 - Node is discovered by running `node --version`; use `--node` to override.
-- `with-node` feature disabled or missing Node → command logs `difftsc skipped`
-  and exits successfully. Differential runs with `--use-baselines` can proceed
-  without Node.
+- Baseline-only differential runs (`--compare-rust --use-baselines`) do not need
+  Node and will run even without the `with-node` feature.
+- If `difftsc` needs live `tsc` (baseline verification, updates, or runs without
+  `--use-baselines`) and Node/TypeScript are missing, it logs `difftsc skipped`
+  and exits successfully (or errors when updating baselines).
 - TSC and Rust executions are parallelized across `--jobs` workers. Node
   invocations are concurrency-limited to keep process count bounded, and JSON
   output is stably ordered regardless of scheduling.
