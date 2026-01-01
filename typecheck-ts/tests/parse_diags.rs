@@ -231,6 +231,36 @@ fn unresolved_type_query_diagnostic_span_covers_reference() {
 }
 
 #[test]
+fn unresolved_qualified_type_reference_span_covers_qualified_name() {
+  let source = "type T = Foo.Bar;";
+  let file = FileId(0);
+  let parsed = parse::parse(file, FileKind::Ts, source);
+  let ast = parsed.ast.expect("expected valid AST");
+  let stmt = ast.stx.body.first().expect("expected statement");
+  let Stmt::TypeAliasDecl(alias) = stmt.stx.as_ref() else {
+    panic!("expected type alias declaration");
+  };
+
+  let store = TypeStore::new();
+  let mut lowerer = TypeLowerer::new(store);
+  lowerer.set_file(file);
+  lowerer.lower_type_expr(&alias.stx.type_expr);
+  let diagnostics = lowerer.take_diagnostics();
+
+  let unresolved = diagnostics
+    .iter()
+    .find(|diag| diag.code.as_str() == codes::UNSUPPORTED_QUALIFIED_NAME.as_str())
+    .expect("expected UNSUPPORTED_QUALIFIED_NAME diagnostic from TypeLowerer");
+  assert_diag_covers_substring(
+    unresolved,
+    &codes::UNSUPPORTED_QUALIFIED_NAME,
+    file,
+    source,
+    "Foo.Bar",
+  );
+}
+
+#[test]
 fn db_unresolved_import_points_at_specifier() {
   let source = r#"import { Foo } from "./missing";"#;
   let file = FileId(10);

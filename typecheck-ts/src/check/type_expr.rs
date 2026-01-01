@@ -205,7 +205,7 @@ impl TypeLowerer {
         let obj = self.store.intern_object(ObjectType { shape });
         self.store.intern_type(TypeKind::Object(obj))
       }
-      TypeExpr::TypeReference(reference) => self.lower_type_reference(reference),
+      TypeExpr::TypeReference(reference) => self.lower_type_reference(expr.loc, reference),
       TypeExpr::LiteralType(lit) => match lit.stx.as_ref() {
         TypeLiteral::String(value) => {
           let name = self.store.intern_name(value.clone());
@@ -617,6 +617,7 @@ impl TypeLowerer {
 
   fn lower_type_reference(
     &mut self,
+    outer_loc: Loc,
     reference: &Node<parse_js::ast::type_expr::TypeReference>,
   ) -> TypeId {
     let type_args = self.lower_type_arguments(&reference.stx.type_arguments);
@@ -646,7 +647,7 @@ impl TypeLowerer {
       TypeEntityName::Qualified(_) => {
         let Some(path) = entity_name_segments(&reference.stx.name) else {
           self.push_diag(
-            reference.loc,
+            outer_loc,
             &codes::UNSUPPORTED_QUALIFIED_NAME,
             "unsupported qualified type reference",
           );
@@ -656,7 +657,7 @@ impl TypeLowerer {
           return resolved;
         }
         self.push_diag(
-          reference.loc,
+          outer_loc,
           &codes::UNSUPPORTED_QUALIFIED_NAME,
           format!("unresolved qualified type '{}'", path.join(".")),
         );
