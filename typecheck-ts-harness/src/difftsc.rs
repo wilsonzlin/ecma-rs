@@ -1763,16 +1763,10 @@ fn collect_files_recursively(dir: &Path) -> Result<Vec<VirtualFile>> {
 }
 
 fn is_source_file(path: &Path) -> bool {
-  let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-  if file_name.ends_with(".d.ts") || file_name.ends_with(".d.mts") || file_name.ends_with(".d.cts")
-  {
-    return true;
-  }
-
-  matches!(
-    path.extension().and_then(|ext| ext.to_str()),
-    Some("ts") | Some("tsx") | Some("js") | Some("jsx") | Some("mts") | Some("cts")
-  )
+  let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+    return false;
+  };
+  is_source_root(file_name)
 }
 
 fn test_name_from_path(path: &Path) -> Result<String> {
