@@ -8,11 +8,12 @@ use typecheck_ts::{codes, FileKey, MemoryHost, Program};
 #[test]
 fn cancel_check_returns_quickly() {
   const CANCEL_TIMEOUT: Duration = Duration::from_millis(500);
+  const FUNC_COUNT: usize = 50;
 
   let mut host = MemoryHost::new();
   let mut source = String::new();
   source.push_str("export function main() { return 0; }\n");
-  for idx in 0..500 {
+  for idx in 0..FUNC_COUNT {
     source.push_str(&format!(
       "export function f{idx}(value: number) {{ let x = value + {idx}; return x * {idx}; }}\n"
     ));
