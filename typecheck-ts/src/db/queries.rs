@@ -523,8 +523,12 @@ pub mod body_check {
 
   impl BodyCheckDb {
     pub fn new(context: BodyCheckContext) -> Self {
+      Self::from_shared_context(Arc::new(context))
+    }
+
+    pub fn from_shared_context(context: Arc<BodyCheckContext>) -> Self {
       Self {
-        context: Arc::new(context),
+        context,
         memo: RefCell::new(HashMap::new()),
         ast_indexes: RefCell::new(HashMap::new()),
       }

@@ -68,7 +68,7 @@ use crate::{FatalError, HostError, Ice, IceContext};
 pub(crate) mod check;
 
 use crate::lib_support::lib_env::{collect_libs, validate_libs};
-use crate::lib_support::{CacheMode, CompilerOptions, FileKind, LibFile, LibManager};
+use crate::lib_support::{CacheMode, CacheOptions, CompilerOptions, FileKind, LibFile, LibManager};
 
 /// Environment provider for [`Program`].
 pub trait Host: Send + Sync + 'static {
@@ -804,7 +804,7 @@ impl Program {
         }
         state.body_check_context()
       };
-      let db = BodyCheckDb::new(context);
+      let db = BodyCheckDb::from_shared_context(context);
       let res = db::queries::body_check::check_body(&db, body);
       let mut state = self.lock_state();
       state.body_results.insert(body, Arc::clone(&res));
@@ -3377,6 +3377,13 @@ impl TypeResolver for DeclTypeResolver {
   }
 }
 
+#[derive(Clone)]
+struct CachedBodyCheckContext {
+  revision: salsa::Revision,
+  cache_options: CacheOptions,
+  context: Arc<BodyCheckContext>,
+}
+
 struct ProgramState {
   analyzed: bool,
   snapshot_loaded: bool,
@@ -3386,6 +3393,7 @@ struct ProgramState {
   compiler_options: CompilerOptions,
   file_overrides: HashMap<FileKey, Arc<str>>,
   interned_revision: Option<salsa::Revision>,
+  cached_body_context: Option<CachedBodyCheckContext>,
   typecheck_db: db::TypecheckDb,
   checker_caches: CheckerCaches,
   cache_stats: CheckerCacheStats,
@@ -3493,6 +3501,7 @@ impl ProgramState {
       compiler_options: default_options.clone(),
       file_overrides: HashMap::new(),
       interned_revision: None,
+      cached_body_context: None,
       typecheck_db,
       checker_caches: CheckerCaches::new(default_options.cache.clone()),
       cache_stats: CheckerCacheStats::default(),
@@ -3560,7 +3569,48 @@ impl ProgramState {
     self.file_registry.ids_for_key(key)
   }
 
-  fn body_check_context(&mut self) -> BodyCheckContext {
+  fn body_check_context(&mut self) -> Arc<BodyCheckContext> {
+    let revision = db::db_revision(&self.typecheck_db);
+    let cache_options = self.compiler_options.cache.clone();
+    let store = self
+      .interned_store
+      .as_ref()
+      .expect("interned store initialized");
+    if let Some(cached) = self.cached_body_context.as_ref() {
+      if cached.revision == revision
+        && cached.cache_options == cache_options
+        && Arc::ptr_eq(&cached.context.store, store)
+      {
+        return Arc::clone(&cached.context);
+      }
+    }
+
+    let span = QuerySpan::enter(
+      QueryKind::BuildBodyContext,
+      query_span!(
+        "typecheck_ts.build_body_context",
+        Option::<u32>::None,
+        Option::<u32>::None,
+        Option::<u32>::None,
+        false
+      ),
+      None,
+      false,
+      Some(self.query_stats.clone()),
+    );
+    let context = Arc::new(self.build_body_check_context());
+    self.cached_body_context = Some(CachedBodyCheckContext {
+      revision,
+      cache_options,
+      context: Arc::clone(&context),
+    });
+    if let Some(span) = span {
+      span.finish(None);
+    }
+    context
+  }
+
+  fn build_body_check_context(&mut self) -> BodyCheckContext {
     let store = self
       .interned_store
       .as_ref()

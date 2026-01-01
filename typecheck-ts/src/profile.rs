@@ -17,16 +17,18 @@ pub enum QueryKind {
   LowerHir,
   Bind,
   TypeOfDef,
+  BuildBodyContext,
   CheckBody,
   Relation,
 }
 
 impl QueryKind {
-  pub const ALL: [QueryKind; 6] = [
+  pub const ALL: [QueryKind; 7] = [
     QueryKind::Parse,
     QueryKind::LowerHir,
     QueryKind::Bind,
     QueryKind::TypeOfDef,
+    QueryKind::BuildBodyContext,
     QueryKind::CheckBody,
     QueryKind::Relation,
   ];
@@ -40,8 +42,9 @@ impl QueryKind {
       QueryKind::LowerHir => 1,
       QueryKind::Bind => 2,
       QueryKind::TypeOfDef => 3,
-      QueryKind::CheckBody => 4,
-      QueryKind::Relation => 5,
+      QueryKind::BuildBodyContext => 4,
+      QueryKind::CheckBody => 5,
+      QueryKind::Relation => 6,
     }
   }
 }

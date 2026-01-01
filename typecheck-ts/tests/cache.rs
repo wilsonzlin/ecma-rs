@@ -7,7 +7,7 @@ use typecheck_ts::check::caches::{CheckerCacheStats, CheckerCaches};
 use typecheck_ts::check::instantiate::InstantiationCache;
 use typecheck_ts::db::expander::{DbTypeExpander, TypeExpanderDb};
 use typecheck_ts::lib_support::{CacheMode, CacheOptions, CompilerOptions};
-use typecheck_ts::{CacheKind, FileKey, Host, HostError, Program, QueryStatsCollector};
+use typecheck_ts::{CacheKind, FileKey, Host, HostError, Program, QueryKind, QueryStatsCollector};
 use types_ts_interned::{
   CacheConfig, DefId, EvaluatorCaches, Param, RelateCtx, RelateTypeExpander, Signature,
   SignatureId, TypeEvaluator, TypeId, TypeKind, TypeOptions, TypeParamDecl, TypeParamId, TypeStore,
@@ -638,5 +638,49 @@ fn program_accumulates_per_body_cache_stats() {
   assert!(
     eval.misses >= (defs.len() * 2) as u64,
     "per-body cache stats should accumulate across calls"
+  );
+}
+
+#[test]
+fn body_check_context_is_reused_across_bodies() {
+  let source = r#"
+export function first(value: number): number {
+  return value + 1;
+}
+
+export function second(value: number): number {
+  return value + 2;
+}
+"#;
+  let host = SingleFileHost::new(source, CompilerOptions::default());
+  let root = FileKey::new("entry.ts");
+  let program = Program::new(host, vec![root.clone()]);
+  let file_id = program.file_id(&root).expect("file id");
+  let mut bodies: Vec<_> = program
+    .definitions_in_file(file_id)
+    .into_iter()
+    .filter_map(|def| program.body_of_def(def))
+    .collect();
+  bodies.sort_by_key(|body| body.0);
+  bodies.dedup();
+  assert!(
+    bodies.len() >= 2,
+    "expected at least two function bodies in test fixture"
+  );
+
+  // Multiple distinct bodies should reuse the shared `BodyCheckContext` instead
+  // of rebuilding it for each cache miss.
+  let _ = program.check_body(bodies[0]);
+  let _ = program.check_body(bodies[1]);
+
+  let stats = program.query_stats();
+  let builds = stats
+    .queries
+    .get(&QueryKind::BuildBodyContext)
+    .map(|stat| stat.total)
+    .unwrap_or(0);
+  assert_eq!(
+    builds, 1,
+    "expected body check context to be built once, got {builds} ({stats:?})"
   );
 }
