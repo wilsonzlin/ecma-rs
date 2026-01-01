@@ -388,7 +388,7 @@ impl HarnessFileSet {
     self.name_to_key.get(normalized).cloned()
   }
 
-  pub(crate) fn resolve_import(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
+  pub fn resolve_import(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
     resolve_module_specifier(self, from, specifier)
   }
 

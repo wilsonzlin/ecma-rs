@@ -1,5 +1,4 @@
 use typecheck_ts::FileKey;
-use typecheck_ts_harness::module_resolution::ModuleResolver;
 use typecheck_ts_harness::runner::HarnessFileSet;
 use typecheck_ts_harness::VirtualFile;
 
@@ -21,9 +20,7 @@ fn resolves_package_json_types_entrypoints() {
   ];
 
   let file_set = HarnessFileSet::new(&files);
-  let resolver = ModuleResolver::new();
-
-  let resolved = resolver.resolve(&file_set, &FileKey::new("/src/app.ts"), "pkg");
+  let resolved = file_set.resolve_import(&FileKey::new("/src/app.ts"), "pkg");
   assert_eq!(
     resolved,
     Some(FileKey::new("/node_modules/pkg/dist/index.d.ts"))
@@ -48,9 +45,7 @@ fn resolves_package_json_exports_types_entrypoints() {
   ];
 
   let file_set = HarnessFileSet::new(&files);
-  let resolver = ModuleResolver::new();
-
-  let resolved = resolver.resolve(&file_set, &FileKey::new("/src/app.ts"), "pkg");
+  let resolved = file_set.resolve_import(&FileKey::new("/src/app.ts"), "pkg");
   assert_eq!(
     resolved,
     Some(FileKey::new("/node_modules/pkg/dist/index.d.ts"))
