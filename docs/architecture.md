@@ -37,7 +37,7 @@ flowchart TD
   `DefPath` hashes and builds `SpanMap` indices for byte→ID lookups.
 - **semantic-js**: JS mode writes `ScopeId`/`DeclaredSymbol`/`ResolvedSymbol`
   into `NodeAssocData`; TS mode returns immutable symbol tables/export maps keyed
-  by deterministic `SymbolId`/`NameId`.
+  by deterministic `SymbolId`/`DeclId` plus export-name strings (ordered `BTreeMap`s).
 - **types-ts-interned**: `TypeId`/`ShapeId`/`ObjectId`/`SignatureId` are derived
   from stable hashes of canonical data; no spans leak into this layer.
 - **typecheck-ts**: diagnostics are emitted with `Span`, while public queries
@@ -75,7 +75,8 @@ other crates use this for structured errors and spans.
     such as `ScopeData::iter_symbols_sorted` enforce stable ordering.
 - TS mode (`ts` module):
   - `bind_ts_program` consumes lowered `ts::HirFile`s, merges namespaces, and
-    produces `SymbolTable` + export maps keyed by `SymbolId`/`NameId`.
+    produces `SymbolTable` + export maps keyed by stable `SymbolId`/`DeclId`
+    with `BTreeMap<String, ...>` export names.
   - Deterministic by construction (BTreeMap-backed maps; declaration order is
     inherited from HIR).
 - `assoc` helpers read the IDs written into `NodeAssocData` without exposing the
