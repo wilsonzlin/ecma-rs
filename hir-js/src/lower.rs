@@ -794,7 +794,22 @@ fn lower_root_body(
     span_map,
   );
   for stmt in ast.stx.body.iter() {
-    lower_stmt(stmt, &mut builder, ctx);
+    // Import/export declarations are tracked separately as module items and
+    // emitted via `HirFile::{imports,exports}`; do not lower them into the
+    // executable root body.
+    match &*stmt.stx {
+      AstStmt::Import(_)
+      | AstStmt::ExportList(_)
+      | AstStmt::ExportDefaultExpr(_)
+      | AstStmt::ImportTypeDecl(_)
+      | AstStmt::ExportTypeDecl(_)
+      | AstStmt::ExportAsNamespaceDecl(_)
+      | AstStmt::ImportEqualsDecl(_)
+      | AstStmt::ExportAssignmentDecl(_) => continue,
+      _ => {}
+    }
+    let stmt_id = lower_stmt(stmt, &mut builder, ctx);
+    builder.root_stmt(stmt_id);
   }
   builder.finish_with_id(body_id)
 }

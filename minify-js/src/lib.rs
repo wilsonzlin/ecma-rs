@@ -73,22 +73,25 @@ fn emit_minified(
   #[cfg(not(all(test, feature = "emit-minify")))]
   let force_failure = false;
 
-  let lowered = lower_file(file, file_kind, top_level_node);
-  let hir_output = if force_failure {
-    None
+  // Prefer emitting from HIR. Only fall back to the AST emitter when the HIR
+  // emission path reports an error (typically due to unsupported syntax).
+  //
+  // Production builds avoid the extra AST emission/parity check cost, while
+  // tests can still compare the two outputs via forced fallback runs.
+  let (emitted, backend) = if force_failure {
+    let ast_output = emit_top_level_diagnostic(file, top_level_node, emit_opts.clone())
+      .map_err(|diag| vec![diag])?;
+    (ast_output, EmitBackend::Ast)
   } else {
-    emit_hir_file_diagnostic(&lowered, emit_opts.clone()).ok()
-  };
-
-  let ast_output = emit_top_level_diagnostic(file, top_level_node, emit_opts.clone())
-    .map_err(|diag| vec![diag])?;
-
-  // Prefer the HIR emitter when it can faithfully reproduce the AST output,
-  // but always fall back to the AST emitter to avoid silently dropping
-  // unsupported constructs while still exercising the HIR path.
-  let (emitted, backend) = match hir_output {
-    Some(code) if code == ast_output => (code, EmitBackend::Hir),
-    _ => (ast_output, EmitBackend::Ast),
+    let lowered = lower_file(file, file_kind, top_level_node);
+    match emit_hir_file_diagnostic(&lowered, emit_opts.clone()) {
+      Ok(code) => (code, EmitBackend::Hir),
+      Err(hir_diag) => {
+        let ast_output = emit_top_level_diagnostic(file, top_level_node, emit_opts.clone())
+          .map_err(|ast_diag| vec![hir_diag, ast_diag])?;
+        (ast_output, EmitBackend::Ast)
+      }
+    }
   };
 
   #[cfg(all(test, feature = "emit-minify"))]

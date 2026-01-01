@@ -33,3 +33,4 @@ semantic-js = { version = "0.1.0", path = "../semantic-js" }
 
 [dev-dependencies]
 proptest = "1"
+serde_json = "1"

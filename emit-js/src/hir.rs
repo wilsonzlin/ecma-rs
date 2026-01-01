@@ -34,19 +34,62 @@ pub fn emit_hir_file_diagnostic(
     .map_err(|err| crate::diagnostic_from_emit_error(lowered.hir.file, err))
 }
 
-/// Emit top-level items for a lowered HIR file. This is declaration oriented and
-/// will skip unsupported definitions rather than partially emitting them.
+/// Emit a lowered HIR file (imports/exports plus the root body statements).
+///
+/// This is intended to reproduce full file output. Unsupported constructs are
+/// reported as errors so callers can fall back to alternative emitters.
 pub fn emit_hir_file(em: &mut Emitter, lowered: &LowerResult) -> EmitResult {
   let ctx = HirContext::new(lowered);
+  let root_body = ctx
+    .body(ctx.lowered.root_body())
+    .ok_or_else(|| EmitError::unsupported("missing root body for emission"))?;
+
+  enum ModuleItem<'a> {
+    Import(&'a Import),
+    Export(&'a Export),
+    Stmt(StmtId),
+  }
+
+  struct ItemWithSpan<'a> {
+    start: u32,
+    kind: u8,
+    item: ModuleItem<'a>,
+  }
+
+  let mut items: Vec<ItemWithSpan<'_>> = Vec::new();
+  for import in &ctx.lowered.hir.imports {
+    items.push(ItemWithSpan {
+      start: import.span.start,
+      kind: 0,
+      item: ModuleItem::Import(import),
+    });
+  }
+  for export in &ctx.lowered.hir.exports {
+    items.push(ItemWithSpan {
+      start: export.span.start,
+      kind: 1,
+      item: ModuleItem::Export(export),
+    });
+  }
+  for stmt_id in root_body.root_stmts.iter().copied() {
+    let stmt = ctx.stmt(root_body, stmt_id);
+    items.push(ItemWithSpan {
+      start: stmt.span.start,
+      kind: 2,
+      item: ModuleItem::Stmt(stmt_id),
+    });
+  }
+  items.sort_by(|a, b| (a.start, a.kind).cmp(&(b.start, b.kind)));
+
   let mut first = true;
-  for item in top_level_items(&ctx) {
+  for item in items {
     if !first && !em.minify() {
       em.write_newline();
     }
-    match item {
-      TopItem::Def(def) => emit_def(em, &ctx, def)?,
-      TopItem::Import(import) => emit_import(em, &ctx, import)?,
-      TopItem::Export(export) => emit_export(em, &ctx, export)?,
+    match item.item {
+      ModuleItem::Import(import) => emit_import(em, &ctx, import)?,
+      ModuleItem::Export(export) => emit_export(em, &ctx, export)?,
+      ModuleItem::Stmt(stmt_id) => emit_stmt(em, &ctx, root_body, stmt_id)?,
     }
     first = false;
   }
@@ -318,40 +361,8 @@ fn emit_export_default(
   }
 }
 
-fn top_level_items<'a>(ctx: &'a HirContext<'a>) -> Vec<TopItem<'a>> {
-  let mut items = Vec::new();
-  for import in &ctx.lowered.hir.imports {
-    items.push(TopItem::Import(import));
-  }
-  for export in &ctx.lowered.hir.exports {
-    items.push(TopItem::Export(export));
-  }
-  for def_id in ctx.lowered.hir.items.iter().copied() {
-    if let Some(def) = ctx.def(def_id) {
-      if !def.is_exported && !def.is_default_export {
-        items.push(TopItem::Def(def));
-      }
-    }
-  }
-  items.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
-  items
-}
-
-enum TopItem<'a> {
-  Def(&'a DefData),
-  Import(&'a Import),
-  Export(&'a Export),
-}
-
-impl<'a> TopItem<'a> {
-  fn sort_key(&self) -> (u32, u8) {
-    match self {
-      TopItem::Import(import) => (import.span.start, 0),
-      TopItem::Export(export) => (export.span.start, 1),
-      TopItem::Def(def) => (def.span.start, 2),
-    }
-  }
-}
+// `emit_hir_file` drives emission through the lowered root body, merging in
+// import/export declarations which are stored separately on `HirFile`.
 
 fn emit_var_def(em: &mut Emitter, ctx: &HirContext<'_>, def: &DefData) -> EmitResult {
   let Some(body_id) = def.body else {
@@ -466,6 +477,10 @@ fn emit_param_list(
   body: &Body,
   params: &[Param],
 ) -> EmitResult {
+  // Default values are followed by either `,` or `)` and must therefore treat
+  // the comma operator as needing parentheses to avoid being parsed as a
+  // parameter separator (e.g. `a=(b,c)`).
+  let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
   em.write_punct("(");
   for (idx, param) in params.iter().enumerate() {
     if idx > 0 {
@@ -479,7 +494,7 @@ fn emit_param_list(
         ctx,
         body,
         default,
-        Prec::new(OPERATORS[&OperatorName::Assignment].precedence),
+        assignment_expr_min_prec,
       )?;
     }
   }
@@ -499,6 +514,9 @@ fn emit_stmt_list(
 ) -> EmitResult {
   let mut first = true;
   for stmt_id in stmts {
+    if matches!(ctx.stmt(body, *stmt_id).kind, StmtKind::Empty) {
+      continue;
+    }
     if !first && !em.minify() {
       em.write_newline();
     }
@@ -506,6 +524,64 @@ fn emit_stmt_list(
     first = false;
   }
   Ok(())
+}
+
+fn emit_stmt_as_body(
+  em: &mut Emitter,
+  ctx: &HirContext<'_>,
+  body: &Body,
+  stmt_id: StmtId,
+) -> EmitResult {
+  if matches!(ctx.stmt(body, stmt_id).kind, StmtKind::Empty) {
+    em.write_semicolon();
+    Ok(())
+  } else {
+    emit_stmt(em, ctx, body, stmt_id)
+  }
+}
+
+fn var_decl_is_exported(ctx: &HirContext<'_>, body: &Body, decl: &VarDecl) -> bool {
+  decl
+    .declarators
+    .iter()
+    .any(|declarator| pat_contains_exported_binding(ctx, body, declarator.pat))
+}
+
+fn pat_contains_exported_binding(ctx: &HirContext<'_>, body: &Body, pat_id: PatId) -> bool {
+  let pat = ctx.pat(body, pat_id);
+  match &pat.kind {
+    PatKind::Ident(_) => {
+      let Some(def_id) = ctx.lowered.hir.span_map.def_at_offset(pat.span.start) else {
+        return false;
+      };
+      let Some(def) = ctx.def(def_id) else {
+        return false;
+      };
+      def.is_exported && def.parent.is_none()
+    }
+    PatKind::Array(array) => {
+      array
+        .elements
+        .iter()
+        .flatten()
+        .any(|elem| pat_contains_exported_binding(ctx, body, elem.pat))
+        || array
+          .rest
+          .is_some_and(|rest| pat_contains_exported_binding(ctx, body, rest))
+    }
+    PatKind::Object(obj) => {
+      obj
+        .props
+        .iter()
+        .any(|prop| pat_contains_exported_binding(ctx, body, prop.value))
+        || obj
+          .rest
+          .is_some_and(|rest| pat_contains_exported_binding(ctx, body, rest))
+    }
+    PatKind::Rest(inner) => pat_contains_exported_binding(ctx, body, **inner),
+    PatKind::Assign { target, .. } => pat_contains_exported_binding(ctx, body, *target),
+    PatKind::AssignTarget(_) => false,
+  }
 }
 
 fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtId) -> EmitResult {
@@ -545,10 +621,10 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
       em.write_punct("(");
       emit_expr_with_min_prec(em, ctx, body, *test, Prec::LOWEST)?;
       em.write_punct(")");
-      emit_stmt(em, ctx, body, *consequent)?;
+      emit_stmt_as_body(em, ctx, body, *consequent)?;
       if let Some(alt) = alternate {
         em.write_keyword("else");
-        emit_stmt(em, ctx, body, *alt)?;
+        emit_stmt_as_body(em, ctx, body, *alt)?;
       }
     }
     StmtKind::While { test, body: inner } => {
@@ -556,15 +632,16 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
       em.write_punct("(");
       emit_expr_with_min_prec(em, ctx, body, *test, Prec::LOWEST)?;
       em.write_punct(")");
-      emit_stmt(em, ctx, body, *inner)?;
+      emit_stmt_as_body(em, ctx, body, *inner)?;
     }
     StmtKind::DoWhile { test, body: inner } => {
       em.write_keyword("do");
-      emit_stmt(em, ctx, body, *inner)?;
+      emit_stmt_as_body(em, ctx, body, *inner)?;
       em.write_keyword("while");
       em.write_punct("(");
       emit_expr_with_min_prec(em, ctx, body, *test, Prec::LOWEST)?;
       em.write_punct(")");
+      em.write_semicolon();
     }
     StmtKind::For {
       init,
@@ -591,7 +668,7 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
         emit_expr_with_min_prec(em, ctx, body, *update, Prec::LOWEST)?;
       }
       em.write_punct(")");
-      emit_stmt(em, ctx, body, *inner)?;
+      emit_stmt_as_body(em, ctx, body, *inner)?;
     }
     StmtKind::ForIn {
       left,
@@ -616,7 +693,7 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
       }
       emit_expr_with_min_prec(em, ctx, body, *right, Prec::LOWEST)?;
       em.write_punct(")");
-      emit_stmt(em, ctx, body, *inner)?;
+      emit_stmt_as_body(em, ctx, body, *inner)?;
     }
     StmtKind::Switch {
       discriminant,
@@ -684,12 +761,15 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
       em.write_semicolon();
     }
     StmtKind::Var(decl) => {
+      if var_decl_is_exported(ctx, body, decl) {
+        em.write_keyword("export");
+      }
       emit_var_decl(em, ctx, body, decl, true)?;
     }
     StmtKind::Labeled { label, body: inner } => {
       em.write_identifier(ctx.name(*label));
       em.write_punct(":");
-      emit_stmt(em, ctx, body, *inner)?;
+      emit_stmt_as_body(em, ctx, body, *inner)?;
     }
     StmtKind::With {
       object,
@@ -699,9 +779,9 @@ fn emit_stmt(em: &mut Emitter, ctx: &HirContext<'_>, body: &Body, stmt_id: StmtI
       em.write_punct("(");
       emit_expr_with_min_prec(em, ctx, body, *object, Prec::LOWEST)?;
       em.write_punct(")");
-      emit_stmt(em, ctx, body, *inner)?;
+      emit_stmt_as_body(em, ctx, body, *inner)?;
     }
-    StmtKind::Empty => em.write_semicolon(),
+    StmtKind::Empty => {}
   }
   Ok(())
 }
@@ -733,6 +813,9 @@ fn emit_var_decl(
   decl: &VarDecl,
   trailing_semicolon: bool,
 ) -> EmitResult {
+  // Initializers are followed by `,` or `;`, so comma expressions must be
+  // parenthesized to avoid being parsed as additional declarators.
+  let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
   let keyword = match decl.kind {
     VarDeclKind::Const => "const",
     VarDeclKind::Let => "let",
@@ -751,7 +834,7 @@ fn emit_var_decl(
         ctx,
         body,
         init,
-        Prec::new(OPERATORS[&OperatorName::Assignment].precedence),
+        assignment_expr_min_prec,
       )?;
     }
   }
@@ -776,6 +859,9 @@ fn emit_pat(
       emit_pat(em, ctx, body, **inner, in_assignment)?;
     }
     PatKind::Array(array) => {
+      // Default values are followed by `,` or `]` and must therefore treat the
+      // comma operator as needing parentheses.
+      let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
       em.write_punct("[");
       for (idx, element) in array.elements.iter().enumerate() {
         if idx > 0 {
@@ -790,7 +876,7 @@ fn emit_pat(
               ctx,
               body,
               default,
-              Prec::new(OPERATORS[&OperatorName::Assignment].precedence),
+              assignment_expr_min_prec,
             )?;
           }
         }
@@ -805,6 +891,9 @@ fn emit_pat(
       em.write_punct("]");
     }
     PatKind::Object(obj) => {
+      // Default values are followed by `,` or `}` and must therefore treat the
+      // comma operator as needing parentheses.
+      let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
       if in_assignment {
         em.write_punct("(");
       }
@@ -825,7 +914,7 @@ fn emit_pat(
             ctx,
             body,
             default,
-            Prec::new(OPERATORS[&OperatorName::Assignment].precedence),
+            assignment_expr_min_prec,
           )?;
         }
       }
@@ -845,6 +934,7 @@ fn emit_pat(
       target,
       default_value,
     } => {
+      let assignment_expr_min_prec = Prec::new(OPERATORS[&OperatorName::Comma].precedence).tighter();
       emit_pat(em, ctx, body, *target, in_assignment)?;
       em.write_punct("=");
       emit_expr_with_min_prec(
@@ -852,7 +942,7 @@ fn emit_pat(
         ctx,
         body,
         *default_value,
-        Prec::new(OPERATORS[&OperatorName::Assignment].precedence),
+        assignment_expr_min_prec,
       )?;
     }
     PatKind::AssignTarget(expr) => {

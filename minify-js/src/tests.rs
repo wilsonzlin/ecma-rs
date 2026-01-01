@@ -13,6 +13,8 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::operator::OperatorName;
 use parse_js::{parse, parse_with_options, ParseOptions, SourceType};
+#[cfg(feature = "emit-minify")]
+use serde_json::to_value;
 
 fn minified(mode: TopLevelMode, src: &str) -> String {
   let mut out = Vec::new();
@@ -55,6 +57,27 @@ fn minified_with_backend_options(options: MinifyOptions, src: &str) -> (String, 
   minify_with_options(options, src, &mut out).unwrap();
   let backend = last_emit_backend_for_tests().expect("emitter backend should be recorded");
   (String::from_utf8(out).unwrap(), backend)
+}
+
+#[cfg(feature = "emit-minify")]
+fn assert_outputs_parse_to_same_ast(
+  mode: TopLevelMode,
+  dialect: Dialect,
+  hir_output: &str,
+  ast_output: &str,
+) {
+  let parse_opts = ParseOptions {
+    dialect,
+    source_type: match mode {
+      TopLevelMode::Global => SourceType::Script,
+      TopLevelMode::Module => SourceType::Module,
+    },
+  };
+  let hir_parsed = parse_with_options(hir_output, parse_opts).expect("HIR output should parse");
+  let ast_parsed = parse_with_options(ast_output, parse_opts).expect("AST output should parse");
+  let hir_json = to_value(&hir_parsed).expect("serialize HIR AST");
+  let ast_json = to_value(&ast_parsed).expect("serialize AST AST");
+  assert_eq!(hir_json, ast_json);
 }
 
 #[test]
@@ -113,10 +136,12 @@ fn test_minify_determinism() {
 #[cfg(feature = "emit-minify")]
 #[test]
 fn hir_emitter_matches_ast_output() {
-  let options = MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js);
   let src =
     "function wrap(value){return value+1;} const result=wrap(2); const doubled=wrap(result);";
-  let (hir_output, hir_backend) = minified_with_backend_options(options, src);
+  let (hir_output, hir_backend) = minified_with_backend_options(
+    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
+    src,
+  );
   assert_eq!(hir_backend, EmitBackend::Hir);
 
   force_hir_emit_failure_for_tests();
@@ -125,9 +150,33 @@ fn hir_emitter_matches_ast_output() {
     src,
   );
   assert_eq!(ast_backend, EmitBackend::Ast);
-  assert_eq!(hir_output, ast_output);
+  assert_outputs_parse_to_same_ast(TopLevelMode::Global, Dialect::Js, &hir_output, &ast_output);
+}
 
-  parse(&hir_output).expect("HIR-emitted output should remain parseable");
+#[cfg(feature = "emit-minify")]
+#[test]
+fn hir_emitter_can_differ_from_ast_output() {
+  // Expression statements starting with arrow functions are one example where
+  // the emitters may differ in parentheses without affecting semantics.
+  let src = "long_parameter_name=>long_parameter_name;";
+  let (hir_output, hir_backend) = minified_with_backend_options(
+    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
+    src,
+  );
+  assert_eq!(hir_backend, EmitBackend::Hir);
+
+  force_hir_emit_failure_for_tests();
+  let (ast_output, ast_backend) = minified_with_backend_options(
+    MinifyOptions::new(TopLevelMode::Global).with_dialect(Dialect::Js),
+    src,
+  );
+  assert_eq!(ast_backend, EmitBackend::Ast);
+
+  assert_ne!(
+    hir_output, ast_output,
+    "HIR emission should be accepted even when its formatting differs from the AST emitter"
+  );
+  assert_outputs_parse_to_same_ast(TopLevelMode::Global, Dialect::Js, &hir_output, &ast_output);
 }
 
 #[test]
