@@ -153,3 +153,36 @@ export type Mod = typeof import("./dep");
     .expect("dep should be discovered via typeof import() type query");
   assert_eq!(program.reachable_files(), vec![main_id, dep_id]);
 }
+
+#[test]
+fn import_type_in_type_assertion_enqueues_modules() {
+  let mut host = MemoryHost::with_options(CompilerOptions {
+    include_dom: false,
+    ..Default::default()
+  });
+
+  let main = FileKey::new("main.ts");
+  let dep = FileKey::new("dep.ts");
+
+  host.insert(
+    main.clone(),
+    r#"
+export const x = ({ value: 1 } as import("./dep").Thing).value;
+"#,
+  );
+  host.insert(dep.clone(), "export type Thing = { value: number };");
+  host.link(main.clone(), "./dep", dep.clone());
+
+  let program = Program::new(host, vec![main.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics, got {diagnostics:?}"
+  );
+
+  let main_id = program.file_id(&main).expect("main file id");
+  let dep_id = program
+    .file_id(&dep)
+    .expect("dep should be discovered via import() type assertion");
+  assert_eq!(program.reachable_files(), vec![main_id, dep_id]);
+}
