@@ -1047,7 +1047,11 @@ impl<'a> TypeLowerer<'a> {
       TypePropertyKey::Identifier(id) => PropertyName::Ident(self.names.intern(id)),
       TypePropertyKey::String(s) => PropertyName::String(s.clone()),
       TypePropertyKey::Number(n) => PropertyName::Number(n.clone()),
-      TypePropertyKey::Computed(_) => PropertyName::Computed,
+      TypePropertyKey::Computed(expr) => match &*expr.stx {
+        Expr::LitStr(lit) => PropertyName::String(lit.stx.value.clone()),
+        Expr::LitNum(lit) => PropertyName::Number(lit.stx.value.to_string()),
+        _ => PropertyName::Computed,
+      },
     }
   }
 

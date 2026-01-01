@@ -603,6 +603,14 @@ fn union_dedups_tuple_types_ignoring_labels() {
   ));
 }
 
+#[test]
+fn union_does_not_dedup_distinct_computed_string_property_names() {
+  let result = lower_from_source(r#"type A = { ["foo"]: string } | { ["bar"]: string };"#)
+    .expect("lower");
+  let members = union_member_first_property_names(&result, "A");
+  assert_eq!(members, vec!["bar", "foo"]);
+}
+
 fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
   let (_, arenas, expr_id, _) = type_alias(result, alias);
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
@@ -618,6 +626,45 @@ fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> 
   members
     .iter()
     .map(|id| type_name(&result.names, &arenas.type_exprs[id.0 as usize].kind))
+    .collect()
+}
+
+fn union_member_first_property_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let lit = match member_kind {
+        TypeExprKind::TypeLiteral(lit) => lit,
+        other => panic!("expected type literal member, got {other:?}"),
+      };
+
+      let first_member_id = lit.members.first().expect("type literal member");
+      match &arenas.type_members[first_member_id.0 as usize].kind {
+        TypeMemberKind::Property(prop) => match &prop.name {
+          PropertyName::Ident(id) => result.names.resolve(*id).unwrap().to_string(),
+          PropertyName::String(s) => s.clone(),
+          PropertyName::Number(n) => n.clone(),
+          PropertyName::Computed => "[computed]".to_string(),
+        },
+        other => panic!("expected property member, got {other:?}"),
+      }
+    })
     .collect()
 }
 
