@@ -575,6 +575,38 @@ fn union_canonicalization_is_span_stable_for_indexed_access_types() {
 }
 
 #[test]
+fn union_canonicalization_is_span_stable_for_template_literal_types() {
+  let base = lower_from_source(r#"type A = (`foo${string}`) | (`bar${string}`);"#).expect("lower");
+  let with_padding =
+    lower_from_source("type Z = string;\ntype A = (`foo${string}`) | (`bar${string}`);")
+      .expect("lower with padding");
+
+  let base_members = union_member_template_literal_heads(&base, "A");
+  let with_padding_members = union_member_template_literal_heads(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["bar", "foo"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
+fn union_canonicalization_is_span_stable_for_mapped_types() {
+  let base = lower_from_source(
+    "type A = { [K in keyof Foo]: Foo[K] } | { [K in keyof Bar]: Bar[K] };",
+  )
+  .expect("lower");
+  let with_padding = lower_from_source(
+    "type Z = string;\ntype A = { [K in keyof Foo]: Foo[K] } | { [K in keyof Bar]: Bar[K] };",
+  )
+  .expect("lower with padding");
+
+  let base_members = union_member_mapped_constraint_base_names(&base, "A");
+  let with_padding_members = union_member_mapped_constraint_base_names(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["Bar", "Foo"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
 fn union_dedups_simple_duplicates() {
   let result = lower_from_source("type A = string | string | Foo | Foo;").expect("lower");
   let members = union_member_names(&result, "A");
@@ -731,6 +763,13 @@ fn union_dedups_duplicate_import_types() {
     arenas.type_exprs[members[0].0 as usize].kind,
     TypeExprKind::Import(_)
   ));
+}
+
+#[test]
+fn union_dedups_duplicate_type_query_types() {
+  let result = lower_from_source("type A = (typeof Foo) | (typeof Foo);").expect("lower");
+  let members = union_member_type_query_name_strings(&result, "A");
+  assert_eq!(members, vec!["Foo"]);
 }
 
 #[test]
@@ -935,6 +974,38 @@ fn intersection_canonicalization_is_span_stable_for_indexed_access_types() {
   let with_padding_members = intersection_member_indexed_access_index_literals(&with_padding, "A");
 
   assert_eq!(base_members, vec!["a", "b"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
+fn intersection_canonicalization_is_span_stable_for_template_literal_types() {
+  let base = lower_from_source(r#"type A = (`foo${string}`) & (`bar${string}`);"#).expect("lower");
+  let with_padding =
+    lower_from_source("type Z = string;\ntype A = (`foo${string}`) & (`bar${string}`);")
+      .expect("lower with padding");
+
+  let base_members = intersection_member_template_literal_heads(&base, "A");
+  let with_padding_members = intersection_member_template_literal_heads(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["bar", "foo"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
+fn intersection_canonicalization_is_span_stable_for_mapped_types() {
+  let base = lower_from_source(
+    "type A = { [K in keyof Foo]: Foo[K] } & { [K in keyof Bar]: Bar[K] };",
+  )
+  .expect("lower");
+  let with_padding = lower_from_source(
+    "type Z = string;\ntype A = { [K in keyof Foo]: Foo[K] } & { [K in keyof Bar]: Bar[K] };",
+  )
+  .expect("lower with padding");
+
+  let base_members = intersection_member_mapped_constraint_base_names(&base, "A");
+  let with_padding_members = intersection_member_mapped_constraint_base_names(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["Bar", "Foo"]);
   assert_eq!(base_members, with_padding_members);
 }
 
@@ -1432,6 +1503,71 @@ fn union_member_indexed_access_index_literals<'a>(
     .collect()
 }
 
+fn normalize_template_literal_head(head: &str) -> String {
+  let head = head.strip_prefix('`').unwrap_or(head);
+  let head = head.strip_suffix("${").unwrap_or(head);
+  let head = head.strip_suffix('`').unwrap_or(head);
+  head.to_string()
+}
+
+fn union_member_template_literal_heads(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      match member_kind {
+        TypeExprKind::TemplateLiteral(tmpl) => normalize_template_literal_head(&tmpl.head),
+        other => panic!("expected template literal member, got {other:?}"),
+      }
+    })
+    .collect()
+}
+
+fn union_member_mapped_constraint_base_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let mapped = match member_kind {
+        TypeExprKind::Mapped(mapped) => mapped,
+        other => panic!("expected mapped type member, got {other:?}"),
+      };
+
+      mapped_constraint_base_name(result, arenas, mapped)
+    })
+    .collect()
+}
+
 fn intersection_member_first_ctor_param_type_names(
   result: &hir_js::LowerResult,
   alias: &str,
@@ -1513,6 +1649,70 @@ fn intersection_member_type_query_name_strings(
     .collect()
 }
 
+fn intersection_member_template_literal_heads(
+  result: &hir_js::LowerResult,
+  alias: &str,
+) -> Vec<String> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      match member_kind {
+        TypeExprKind::TemplateLiteral(tmpl) => normalize_template_literal_head(&tmpl.head),
+        other => panic!("expected template literal member, got {other:?}"),
+      }
+    })
+    .collect()
+}
+
+fn intersection_member_mapped_constraint_base_names(
+  result: &hir_js::LowerResult,
+  alias: &str,
+) -> Vec<String> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let mapped = match member_kind {
+        TypeExprKind::Mapped(mapped) => mapped,
+        other => panic!("expected mapped type member, got {other:?}"),
+      };
+
+      mapped_constraint_base_name(result, arenas, mapped)
+    })
+    .collect()
+}
+
 fn intersection_member_indexed_access_index_literals<'a>(
   result: &'a hir_js::LowerResult,
   alias: &str,
@@ -1548,6 +1748,36 @@ fn intersection_member_indexed_access_index_literals<'a>(
       }
     })
     .collect()
+}
+
+fn mapped_constraint_base_name(
+  result: &hir_js::LowerResult,
+  arenas: &hir_js::TypeArenas,
+  mapped: &hir_js::TypeMapped,
+) -> String {
+  let mut constraint_kind = &arenas.type_exprs[mapped.constraint.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = constraint_kind {
+    constraint_kind = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let base = match constraint_kind {
+    TypeExprKind::KeyOf(inner) => &arenas.type_exprs[inner.0 as usize].kind,
+    other => panic!("expected keyof constraint, got {other:?}"),
+  };
+
+  match base {
+    TypeExprKind::TypeRef(reference) => match &reference.name {
+      TypeName::Ident(id) => result.names.resolve(*id).unwrap().to_string(),
+      TypeName::Qualified(path) => path
+        .iter()
+        .map(|id| result.names.resolve(*id).unwrap())
+        .collect::<Vec<_>>()
+        .join("."),
+      TypeName::Import(_) => "[import]".to_string(),
+      TypeName::ImportExpr => "[import expr]".to_string(),
+    },
+    other => panic!("expected type ref in keyof constraint, got {other:?}"),
+  }
 }
 
 fn type_name(names: &hir_js::NameInterner, ty: &TypeExprKind) -> String {
