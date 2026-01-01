@@ -1787,54 +1787,56 @@ impl<'a> RelateCtx<'a> {
       };
     }
 
-    let paired = src.params.iter().zip(dst.params.iter());
-    for (s_param, d_param) in paired {
-      if !d_param.optional && s_param.optional {
-        return RelationResult {
-          result: false,
-          reason: self.join_reasons(
-            record,
-            key,
-            children,
-            false,
-            Some("optional parameter".into()),
-            depth,
-          ),
-        };
+    let prim = self.store.primitive_ids();
+    let src_rest_index = src.params.iter().position(|p| p.rest);
+    let dst_rest_index = dst.params.iter().position(|p| p.rest);
+
+    let effective_param_type = |sig: &Signature, rest_index: Option<usize>, index: usize| {
+      match sig.params.get(index) {
+        Some(param) => {
+          let ty = if param.rest {
+            self.spread_element_type(param.ty)
+          } else {
+            param.ty
+          };
+          self.optional_type(ty, param.optional, OptionalFlavor::Parameter)
+        }
+        None => match rest_index {
+          Some(rest_index) if index >= rest_index => sig
+            .params
+            .get(rest_index)
+            .map(|rest_param| {
+              let spread_elem = self.spread_element_type(rest_param.ty);
+              self.optional_type(spread_elem, rest_param.optional, OptionalFlavor::Parameter)
+            })
+            .unwrap_or(prim.any),
+          _ => prim.any,
+        },
       }
-      let s_ty = self.optional_type(s_param.ty, s_param.optional, OptionalFlavor::Parameter);
-      let d_ty = self.optional_type(d_param.ty, d_param.optional, OptionalFlavor::Parameter);
+    };
+
+    for index in 0..src.params.len().max(dst.params.len()) {
+      // If the destination signature has no parameter here and no rest parameter
+      // either, it can never be called with an argument at this position.
+      if index >= dst.params.len() && dst_rest_index.is_none() {
+        break;
+      }
+
+      let s_ty = effective_param_type(src, src_rest_index, index);
+      let d_ty = effective_param_type(dst, dst_rest_index, index);
+
       let related = if allow_bivariance {
-        let forward = self.relate_internal(
-          s_ty,
-          d_ty,
-          RelationKind::Assignable,
-          mode,
-          record,
-          depth + 1,
-        );
+        let forward =
+          self.relate_internal(s_ty, d_ty, RelationKind::Assignable, mode, record, depth + 1);
         if forward.result {
           forward
         } else {
-          self.relate_internal(
-            d_ty,
-            s_ty,
-            RelationKind::Assignable,
-            mode,
-            record,
-            depth + 1,
-          )
+          self.relate_internal(d_ty, s_ty, RelationKind::Assignable, mode, record, depth + 1)
         }
       } else {
-        self.relate_internal(
-          d_ty,
-          s_ty,
-          RelationKind::Assignable,
-          mode,
-          record,
-          depth + 1,
-        )
+        self.relate_internal(d_ty, s_ty, RelationKind::Assignable, mode, record, depth + 1)
       };
+
       if record {
         children.push(related.reason);
       }
@@ -1850,91 +1852,6 @@ impl<'a> RelateCtx<'a> {
             depth,
           ),
         };
-      }
-    }
-
-    if dst.params.len() > src.params.len() {
-      if let Some(rest) = src.params.iter().find(|p| p.rest) {
-        let rest_ty = self.optional_type(rest.ty, rest.optional, OptionalFlavor::Parameter);
-        for extra in dst.params.iter().skip(src.params.len()) {
-          if !extra.optional && !rest.rest {
-            return RelationResult {
-              result: false,
-              reason: self.join_reasons(
-                record,
-                key,
-                children,
-                false,
-                Some("rest coverage".into()),
-                depth,
-              ),
-            };
-          }
-          let extra_ty = self.optional_type(extra.ty, extra.optional, OptionalFlavor::Parameter);
-          let related = if allow_bivariance {
-            let forward = self.relate_internal(
-              rest_ty,
-              extra_ty,
-              RelationKind::Assignable,
-              mode,
-              record,
-              depth + 1,
-            );
-            if forward.result {
-              forward
-            } else {
-              self.relate_internal(
-                extra_ty,
-                rest_ty,
-                RelationKind::Assignable,
-                mode,
-                record,
-                depth + 1,
-              )
-            }
-          } else {
-            self.relate_internal(
-              extra_ty,
-              rest_ty,
-              RelationKind::Assignable,
-              mode,
-              record,
-              depth + 1,
-            )
-          };
-          if record {
-            children.push(related.reason);
-          }
-          if !related.result {
-            return RelationResult {
-              result: false,
-              reason: self.join_reasons(
-                record,
-                key,
-                children,
-                false,
-                Some("rest parameter".into()),
-                depth,
-              ),
-            };
-          }
-        }
-      } else {
-        for extra in dst.params.iter().skip(src.params.len()) {
-          if !extra.optional {
-            return RelationResult {
-              result: false,
-              reason: self.join_reasons(
-                record,
-                key,
-                children,
-                false,
-                Some("parameter count".into()),
-                depth,
-              ),
-            };
-          }
-        }
       }
     }
 

@@ -453,6 +453,91 @@ fn function_properties_respect_strict_function_types() {
 }
 
 #[test]
+fn function_arity_allows_dropping_parameters() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let param_num = Param {
+    name: None,
+    ty: primitives.number,
+    optional: false,
+    rest: false,
+  };
+
+  let src = callable(&store, vec![param_num.clone()], primitives.void);
+  let dst = callable(&store, vec![param_num.clone(), param_num], primitives.void);
+
+  assert!(ctx.is_assignable(src, dst));
+  assert!(!ctx.is_assignable(dst, src));
+}
+
+#[test]
+fn optional_param_is_assignable_to_required_param() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let param_optional = Param {
+    name: None,
+    ty: primitives.number,
+    optional: true,
+    rest: false,
+  };
+  let param_required = Param {
+    name: None,
+    ty: primitives.number,
+    optional: false,
+    rest: false,
+  };
+
+  let fn_optional = callable(&store, vec![param_optional.clone()], primitives.void);
+  let fn_required = callable(&store, vec![param_required.clone()], primitives.void);
+
+  assert!(ctx.is_assignable(fn_optional, fn_required));
+  assert!(!ctx.is_assignable(fn_required, fn_optional));
+}
+
+#[test]
+fn rest_param_compares_by_element_type() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let string_array = store.intern_type(TypeKind::Array {
+    ty: primitives.string,
+    readonly: false,
+  });
+  let rest_param = Param {
+    name: None,
+    ty: string_array,
+    optional: false,
+    rest: true,
+  };
+
+  let fn_rest = callable(&store, vec![rest_param], primitives.void);
+
+  let param_string = Param {
+    name: None,
+    ty: primitives.string,
+    optional: false,
+    rest: false,
+  };
+  let param_number = Param {
+    name: None,
+    ty: primitives.number,
+    optional: false,
+    rest: false,
+  };
+
+  let fn_one = callable(&store, vec![param_string.clone()], primitives.void);
+  let fn_two = callable(&store, vec![param_string, param_number], primitives.void);
+
+  assert!(ctx.is_assignable(fn_rest, fn_one));
+  assert!(!ctx.is_assignable(fn_rest, fn_two));
+}
+
+#[test]
 fn index_signatures_cover_properties() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
