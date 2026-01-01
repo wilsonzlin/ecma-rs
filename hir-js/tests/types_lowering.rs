@@ -610,10 +610,9 @@ fn union_dedups_type_predicate_function_types_ignoring_param_names() {
 
 #[test]
 fn union_does_not_dedup_generic_function_types_with_different_bindings() {
-  let result = lower_from_source(
-    "type T = string;\ntype A = (<T>(x: T) => void) | (<U>(x: T) => void);",
-  )
-  .expect("lower");
+  let result =
+    lower_from_source("type T = string;\ntype A = (<T>(x: T) => void) | (<U>(x: T) => void);")
+      .expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
