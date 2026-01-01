@@ -3,7 +3,7 @@ use crate::runner::HarnessFileSet;
 use serde_json::{Map, Value};
 use typecheck_ts::FileKey;
 
-const EXPORT_CONDITIONS: [&str; 4] = ["types", "default", "import", "require"];
+const EXPORT_CONDITIONS: [&str; 4] = ["types", "import", "require", "default"];
 const EXTENSIONS: [&str; 11] = [
   "ts", "tsx", "d.ts", "mts", "d.mts", "cts", "d.cts", "js", "jsx", "mjs", "cjs",
 ];
@@ -127,31 +127,14 @@ fn resolve_imports_in_dir(files: &HarnessFileSet, dir: &str, specifier: &str) ->
   let parsed: Value = serde_json::from_str(&raw).ok()?;
   let imports = parsed.get("imports")?.as_object()?;
 
-  let (key, star_match) = if imports.contains_key(specifier) {
-    (specifier.to_string(), None)
+  let (target, star_match) = if let Some(target) = imports.get(specifier) {
+    (target, None)
   } else {
     let (pattern_key, star_match) = best_exports_subpath_pattern(imports, specifier)?;
-    (pattern_key, Some(star_match))
+    (imports.get(&pattern_key)?, Some(star_match))
   };
 
-  let target = imports.get(&key)?;
-  let mut resolved = resolve_export_target(target, 0)?;
-  if let Some(star_match) = star_match {
-    resolved = resolved.replace('*', &star_match);
-  }
-
-  // Node-style `imports` targets are typically relative paths within the package scope.
-  if resolved.starts_with("./") || resolved.starts_with("../") {
-    let entry = normalize_name(&virtual_join(dir, &resolved));
-    return resolve_as_file_or_directory(files, &entry);
-  }
-
-  // Allow absolute virtual paths for harness flexibility.
-  if resolved.starts_with('/') || is_drive_root(&resolved) {
-    return resolve_as_file_or_directory(files, &resolved);
-  }
-
-  None
+  resolve_json_target_to_file(files, dir, target, star_match.as_deref(), 0)
 }
 
 fn resolve_as_file_or_directory(files: &HarnessFileSet, base: &str) -> Option<FileKey> {
@@ -237,19 +220,31 @@ fn resolve_via_package_json(files: &HarnessFileSet, dir: &str, depth: usize) -> 
   let parsed: Value = serde_json::from_str(&raw).ok()?;
 
   if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
-    return resolve_package_json_entry(files, dir, entry, depth);
+    if let Some(found) = resolve_package_json_entry(files, dir, entry, depth) {
+      return Some(found);
+    }
   }
 
   if let Some(entry) = parsed.get("typings").and_then(|v| v.as_str()) {
-    return resolve_package_json_entry(files, dir, entry, depth);
+    if let Some(found) = resolve_package_json_entry(files, dir, entry, depth) {
+      return Some(found);
+    }
   }
 
-  if let Some(entry) = resolve_exports_entry(&parsed, ".") {
-    return resolve_package_json_entry(files, dir, &entry, depth);
+  if let Some(exports) = parsed.get("exports") {
+    if let Some((target, star_match)) = select_exports_target(exports, ".") {
+      if let Some(found) =
+        resolve_json_target_to_file(files, dir, target, star_match.as_deref(), depth)
+      {
+        return Some(found);
+      }
+    }
   }
 
   if let Some(entry) = parsed.get("main").and_then(|v| v.as_str()) {
-    return resolve_package_json_entry(files, dir, entry, depth);
+    if let Some(found) = resolve_package_json_entry(files, dir, entry, depth) {
+      return Some(found);
+    }
   }
 
   None
@@ -278,67 +273,77 @@ fn resolve_via_exports(
   let package_key = files.resolve(&package_json)?;
   let raw = files.content(&package_key)?;
   let parsed: Value = serde_json::from_str(&raw).ok()?;
-  let entry = resolve_exports_entry(&parsed, subpath)?;
-  resolve_package_json_entry(files, package_dir, &entry, depth)
-}
-
-fn resolve_exports_entry(parsed: &Value, subpath: &str) -> Option<String> {
   let exports = parsed.get("exports")?;
-  resolve_exports_value(exports, subpath, 0)
+  let (target, star_match) = select_exports_target(exports, subpath)?;
+  resolve_json_target_to_file(files, package_dir, target, star_match.as_deref(), depth)
 }
 
-fn resolve_exports_value(exports: &Value, subpath: &str, depth: usize) -> Option<String> {
-  if depth > 16 {
-    return None;
-  }
-
-  match exports {
-    Value::String(s) => (subpath == ".").then(|| s.clone()),
-    Value::Array(items) => items
-      .iter()
-      .find_map(|item| resolve_exports_value(item, subpath, depth + 1)),
-    Value::Object(map) => {
-      let has_subpath_keys = map.keys().any(|k| k.starts_with('.'));
-      if has_subpath_keys {
-        if let Some(target) = map.get(subpath) {
-          return resolve_export_target(target, depth + 1);
-        }
-
-        let (pattern_key, star_match) = best_exports_subpath_pattern(map, subpath)?;
-        let target = map.get(&pattern_key)?;
-        let resolved = resolve_export_target(target, depth + 1)?;
-        Some(resolved.replace('*', &star_match))
-      } else {
-        (subpath == ".").then(|| resolve_export_target(exports, depth + 1))?
-      }
-    }
-    Value::Null => None,
-    _ => None,
-  }
-}
-
-fn resolve_export_target(value: &Value, depth: usize) -> Option<String> {
+fn resolve_json_target_to_file(
+  files: &HarnessFileSet,
+  base_dir: &str,
+  value: &Value,
+  star_match: Option<&str>,
+  depth: usize,
+) -> Option<FileKey> {
   if depth > 16 {
     return None;
   }
 
   match value {
-    Value::String(s) => Some(s.clone()),
-    Value::Array(items) => items
-      .iter()
-      .find_map(|item| resolve_export_target(item, depth + 1)),
-    Value::Object(map) => {
-      for cond in EXPORT_CONDITIONS {
-        if let Some(next) = map.get(cond) {
-          if let Some(resolved) = resolve_export_target(next, depth + 1) {
-            return Some(resolved);
-          }
-        }
-      }
-      None
+    Value::String(s) => {
+      let entry = match star_match {
+        Some(star) => s.replace('*', star),
+        None => s.to_string(),
+      };
+      resolve_json_string_to_file(files, base_dir, &entry, depth + 1)
     }
+    Value::Array(items) => items.iter().find_map(|item| {
+      resolve_json_target_to_file(files, base_dir, item, star_match, depth + 1)
+    }),
+    Value::Object(map) => EXPORT_CONDITIONS.iter().find_map(|cond| {
+      map.get(*cond).and_then(|next| {
+        resolve_json_target_to_file(files, base_dir, next, star_match, depth + 1)
+      })
+    }),
     Value::Null => None,
     _ => None,
+  }
+}
+
+fn resolve_json_string_to_file(
+  files: &HarnessFileSet,
+  base_dir: &str,
+  entry: &str,
+  depth: usize,
+) -> Option<FileKey> {
+  if entry.is_empty() {
+    return None;
+  }
+  if entry.starts_with('/') || is_drive_root(entry) {
+    return resolve_as_file_or_directory_inner(files, entry, depth);
+  }
+  let joined = virtual_join(base_dir, entry);
+  resolve_as_file_or_directory_inner(files, &joined, depth)
+}
+
+fn select_exports_target<'a>(
+  exports: &'a Value,
+  subpath: &str,
+) -> Option<(&'a Value, Option<String>)> {
+  match exports {
+    Value::Object(map) => {
+      let has_subpath_keys = map.keys().any(|k| k.starts_with('.'));
+      if has_subpath_keys {
+        if let Some(target) = map.get(subpath) {
+          return Some((target, None));
+        }
+        let (pattern_key, star_match) = best_exports_subpath_pattern(map, subpath)?;
+        Some((map.get(&pattern_key)?, Some(star_match)))
+      } else {
+        (subpath == ".").then_some((exports, None))
+      }
+    }
+    _ => (subpath == ".").then_some((exports, None)),
   }
 }
 
