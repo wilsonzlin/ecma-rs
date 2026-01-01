@@ -674,8 +674,12 @@ fn execute_case(
         match snapshots.load(&case.id) {
           Ok(snapshot) => {
             let normalized = normalize_tsc_diagnostics(&snapshot.diagnostics);
+            let crashed = snapshot
+              .crash
+              .as_ref()
+              .map(|crash| EngineDiagnostics::crashed(crash.message.clone()));
             tsc_raw = Some(snapshot);
-            EngineDiagnostics::ok(normalized)
+            crashed.unwrap_or_else(|| EngineDiagnostics::ok(normalized))
           }
           Err(err) => EngineDiagnostics::crashed(format!("missing snapshot: {err}")),
         }
@@ -684,7 +688,7 @@ fn execute_case(
     CompareMode::Auto => unreachable!("compare mode should be resolved before execution"),
   };
 
-  if update_snapshots {
+  if update_snapshots && tsc.status == EngineStatus::Ok {
     if let Some(raw) = tsc_raw.as_ref() {
       let _ = snapshots.save(&case.id, raw);
     }
@@ -780,10 +784,16 @@ fn run_tsc_with_raw(
   options: &Map<String, Value>,
 ) -> (EngineDiagnostics, Option<TscDiagnostics>) {
   match pool.run(file_set, options) {
-    Ok(diags) => {
-      let normalized = normalize_tsc_diagnostics(&diags.diagnostics);
-      (EngineDiagnostics::ok(normalized), Some(diags))
-    }
+    Ok(diags) => match &diags.crash {
+      Some(crash) => (
+        EngineDiagnostics::crashed(crash.message.clone()),
+        Some(diags),
+      ),
+      None => {
+        let normalized = normalize_tsc_diagnostics(&diags.diagnostics);
+        (EngineDiagnostics::ok(normalized), Some(diags))
+      }
+    },
     Err(err) => (EngineDiagnostics::crashed(err), None),
   }
 }
