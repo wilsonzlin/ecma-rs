@@ -1404,21 +1404,59 @@ fn dts_script_decls_participate_in_globals() {
 }
 
 #[test]
-fn non_dts_global_augments_emit_diagnostic() {
+fn ts_module_declare_global_merges_into_globals_without_exports() {
   let file = FileId(52);
   let mut hir = HirFile::module(file);
   let mut decl = mk_decl(0, "Aug", DeclKind::Interface, Exported::No);
+  decl.is_ambient = true;
   decl.is_global = true;
   hir.decls.push(decl);
 
   let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
   let resolver = StaticResolver::new(HashMap::new());
-  let (_semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
 
   assert!(
-    diags.iter().any(|d| d.code == "BIND2001"),
-    "expected unsupported augmentation diagnostic"
+    diags.iter().all(|d| d.code != "BIND2001"),
+    "unexpected BIND2001 diagnostics: {:?}",
+    diags
   );
+  assert!(semantics.global_symbols().contains_key("Aug"));
+  assert!(semantics.exports_of(file).get("Aug").is_none());
+}
+
+#[test]
+fn ts_module_global_interfaces_merge_in_globals() {
+  let file = FileId(53);
+  let mut hir = HirFile::module(file);
+
+  let mut first = mk_decl(0, "MergedGlobal", DeclKind::Interface, Exported::No);
+  first.is_ambient = true;
+  first.is_global = true;
+  let mut second = mk_decl(1, "MergedGlobal", DeclKind::Interface, Exported::No);
+  second.is_ambient = true;
+  second.is_global = true;
+  hir.decls.push(first);
+  hir.decls.push(second);
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! { file => Arc::new(hir) };
+  let resolver = StaticResolver::new(HashMap::new());
+  let (semantics, diags) = bind_ts_program(&[file], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty(), "unexpected diagnostics: {:?}", diags);
+
+  let symbols = semantics.symbols();
+  let group = semantics
+    .global_symbols()
+    .get("MergedGlobal")
+    .expect("global interface merged");
+  let sym = group
+    .symbol_for(Namespace::TYPE, symbols)
+    .expect("type symbol present");
+  let decls = symbols.symbol(sym).decls_for(Namespace::TYPE);
+  assert_eq!(decls.len(), 2);
+  assert!(decls
+    .windows(2)
+    .all(|w| symbols.decl(w[0]).order < symbols.decl(w[1]).order));
 }
 
 #[test]

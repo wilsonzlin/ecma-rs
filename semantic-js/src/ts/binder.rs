@@ -535,18 +535,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           SymbolOrigin::Local,
           &SymbolOwner::Global,
         );
-      } else if decl.is_global && file_kind != FileKind::Dts {
-        let span = Span::new(file_id, decl.span);
-        self.diagnostics.push(Diagnostic::error(
-          "BIND2001",
-          "global augmentations in non-.d.ts modules are not supported yet",
-          span,
-        ));
       }
       match decl.exported {
-        Exported::No => {
-          if implicit_export {
-            has_exports = true;
+         Exported::No => {
+           if implicit_export {
+             has_exports = true;
             has_other_exports = true;
             let span = Span::new(file_id, decl.span);
             first_export_span.get_or_insert(span);
@@ -850,14 +843,14 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
 
   fn decl_participates_in_global_kind(
     &self,
-    file_kind: FileKind,
+    _file_kind: FileKind,
     decl: &Decl,
     is_script: bool,
   ) -> bool {
     if is_script {
       return true;
     }
-    decl.is_global && matches!(file_kind, FileKind::Dts)
+    decl.is_global
   }
 
   fn is_effective_script(
