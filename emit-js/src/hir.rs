@@ -791,7 +791,17 @@ fn emit_arrow_function(
   emit_param_list(em, ctx, body, &func.params)?;
   em.write_punct("=>");
   match &func.body {
-    FunctionBody::Expr(expr) => emit_expr_with_min_prec(em, ctx, body, *expr, Prec::LOWEST),
+    FunctionBody::Expr(expr) => {
+      let needs_parens = arrow_concise_body_needs_parens(ctx.expr(body, *expr));
+      if needs_parens {
+        em.write_punct("(");
+      }
+      emit_expr_with_min_prec(em, ctx, body, *expr, Prec::LOWEST)?;
+      if needs_parens {
+        em.write_punct(")");
+      }
+      Ok(())
+    }
     FunctionBody::Block(stmts) => emit_block_like(em, ctx, body, stmts),
   }
 }
@@ -1980,6 +1990,13 @@ fn expr_stmt_needs_parens(expr: &Expr) -> bool {
         ..
       }
       | ExprKind::ClassExpr { .. }
+  )
+}
+
+fn arrow_concise_body_needs_parens(expr: &Expr) -> bool {
+  matches!(
+    expr.kind,
+    ExprKind::Object(_) | ExprKind::Binary { op: BinaryOp::Comma, .. }
   )
 }
 
