@@ -71,6 +71,108 @@ fn conditional_distributes_over_union_with_substitution() {
 }
 
 #[test]
+fn distributive_conditional_preserves_distributivity_for_type_param_members() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: true,
+  });
+
+  let mut expander = MockExpander::default();
+  expander.insert(
+    DefId(0),
+    ExpandedType {
+      params: vec![TypeParamId(0)],
+      ty: cond,
+    },
+  );
+
+  // Instantiate with `string | U` where `U` is a different (unresolved) type
+  // parameter. The conditional should distribute over the concrete member and
+  // keep a distributive conditional for the remaining type parameter.
+  let other_param = store.intern_type(TypeKind::TypeParam(TypeParamId(1)));
+  let arg_union = store.union(vec![primitives.string, other_param]);
+  let ref_ty = store.intern_type(TypeKind::Ref {
+    def: DefId(0),
+    args: vec![arg_union],
+  });
+
+  let mut eval = evaluator(store.clone(), &expander);
+  let result = eval.evaluate(ref_ty);
+  let TypeKind::Union(members) = store.type_kind(result) else {
+    panic!("expected union, got {:?}", store.type_kind(result));
+  };
+  assert!(members.contains(&primitives.number));
+
+  let mut saw_conditional = false;
+  for member in members {
+    if let TypeKind::Conditional {
+      distributive, check, extends, ..
+    } = store.type_kind(member)
+    {
+      saw_conditional = true;
+      assert!(distributive);
+      assert!(matches!(store.type_kind(check), TypeKind::TypeParam(_)));
+      assert!(matches!(store.type_kind(extends), TypeKind::String));
+    }
+  }
+  assert!(saw_conditional);
+}
+
+#[test]
+fn distributive_conditional_preserves_self_type_param_member() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
+    extends: primitives.string,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: true,
+  });
+
+  let mut expander = MockExpander::default();
+  expander.insert(
+    DefId(0),
+    ExpandedType {
+      params: vec![TypeParamId(0)],
+      ty: cond,
+    },
+  );
+
+  // Instantiate with `string | T` (recursive). The `T` branch must remain a
+  // conditional rather than collapsing to the false branch.
+  let self_param = store.intern_type(TypeKind::TypeParam(TypeParamId(0)));
+  let arg_union = store.union(vec![primitives.string, self_param]);
+  let ref_ty = store.intern_type(TypeKind::Ref {
+    def: DefId(0),
+    args: vec![arg_union],
+  });
+
+  let mut eval = evaluator(store.clone(), &expander);
+  let result = eval.evaluate(ref_ty);
+  let TypeKind::Union(members) = store.type_kind(result) else {
+    panic!("expected union, got {:?}", store.type_kind(result));
+  };
+  assert!(members.contains(&primitives.number));
+
+  let mut saw_conditional = false;
+  for member in members {
+    if let TypeKind::Conditional { distributive, .. } = store.type_kind(member) {
+      saw_conditional = true;
+      assert!(distributive);
+    }
+  }
+  assert!(saw_conditional);
+}
+
+#[test]
 fn conditional_with_unsubstituted_type_param_is_deferred() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
