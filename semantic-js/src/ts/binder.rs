@@ -862,7 +862,6 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         });
       }
       has_exports = true;
-      has_other_exports = true;
     }
 
     if has_export_assignment && has_other_exports && !is_script {

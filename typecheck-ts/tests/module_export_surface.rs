@@ -91,3 +91,37 @@ fn export_as_namespace_injects_global_binding() {
     "expected OnlyNS global binding from export as namespace"
   );
 }
+
+#[test]
+fn export_assignment_allows_export_as_namespace() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let mut host = MemoryHost::with_options(options);
+
+  host.add_lib(LibFile {
+    key: FileKey::new("umd_export_assignment.d.ts"),
+    name: Arc::from("umd_export_assignment.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      "declare function Foo(x: number): number;\n\
+       export = Foo;\n\
+       export as namespace Foo;\n",
+    ),
+  });
+
+  let root = FileKey::new("main.ts");
+  host.insert(root.clone(), Arc::from("/* noop */"));
+
+  let program = Program::new(host, vec![root]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let globals = program.global_bindings();
+  assert!(
+    globals.contains_key("Foo"),
+    "expected Foo global binding from export as namespace"
+  );
+}
