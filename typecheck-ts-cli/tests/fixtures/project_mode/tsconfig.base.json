@@ -1,0 +1,9 @@
+{
+  // Base config provides the path mapping used by the project.
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@lib/*": ["src/lib/*"],
+    },
+  },
+}

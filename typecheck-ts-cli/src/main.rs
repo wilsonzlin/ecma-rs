@@ -12,6 +12,8 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind, LibName, ScriptTarget};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 
+mod tsconfig;
+
 #[derive(Parser)]
 #[command(author, version, about = "TypeScript type checking CLI")]
 struct Cli {
@@ -27,8 +29,11 @@ enum Commands {
 
 #[derive(Args)]
 struct TypecheckArgs {
-  /// Entry files to type-check.
-  #[arg(required = true)]
+  /// TypeScript project file (tsconfig.json) to load.
+  #[arg(long, short = 'p')]
+  project: Option<PathBuf>,
+
+  /// Entry files to type-check. In project mode these are added as extra roots.
   entries: Vec<PathBuf>,
 
   /// Emit JSON diagnostics and query results.
@@ -99,9 +104,29 @@ enum ResolutionMode {
 }
 
 #[derive(Clone)]
+struct ModuleResolver {
+  mode: ResolutionMode,
+  tsconfig: Option<TsconfigResolver>,
+}
+
+#[derive(Clone)]
+struct TsconfigResolver {
+  base_url: PathBuf,
+  paths: Vec<TsconfigPathMapping>,
+}
+
+#[derive(Clone)]
+struct TsconfigPathMapping {
+  prefix: String,
+  suffix: String,
+  has_wildcard: bool,
+  substitutions: Vec<String>,
+}
+
+#[derive(Clone)]
 struct DiskHost {
   state: Arc<Mutex<DiskState>>,
-  resolver: ResolutionMode,
+  resolver: ModuleResolver,
   compiler_options: CompilerOptions,
 }
 
@@ -207,13 +232,28 @@ fn main() -> ExitCode {
 fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   init_tracing(args.trace || args.profile);
 
+  let project = match args.project.as_ref() {
+    Some(path) => match tsconfig::load_project_config(path) {
+      Ok(cfg) => Some(cfg),
+      Err(err) => {
+        eprintln!("{err}");
+        return ExitCode::FAILURE;
+      }
+    },
+    None => None,
+  };
+
   let resolution = if args.node_resolve {
     ResolutionMode::Node
   } else {
     ResolutionMode::Simple
   };
 
-  let options = match build_compiler_options(&args) {
+  let options_base = project
+    .as_ref()
+    .map(|cfg| cfg.compiler_options.clone())
+    .unwrap_or_default();
+  let options = match build_compiler_options(&args, options_base) {
     Ok(opts) => opts,
     Err(err) => {
       eprintln!("{err}");
@@ -221,7 +261,35 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
     }
   };
 
-  let (host, roots) = match DiskHost::new(&args.entries, resolution, options) {
+  let mut root_paths = Vec::new();
+  if let Some(cfg) = project.as_ref() {
+    root_paths.extend(cfg.root_files.iter().cloned());
+  }
+  for entry in &args.entries {
+    let canonical = match canonicalize_path(entry) {
+      Ok(path) => path,
+      Err(err) => {
+        eprintln!("failed to read entry {}: {err}", entry.to_string_lossy());
+        return ExitCode::FAILURE;
+      }
+    };
+    root_paths.push(canonical);
+  }
+  root_paths.sort_by(|a, b| a.display().to_string().cmp(&b.display().to_string()));
+  root_paths.dedup();
+
+  if project.is_none() && root_paths.is_empty() {
+    eprintln!("no entry files provided (expected at least one file, or use --project)");
+    return ExitCode::FAILURE;
+  }
+
+  let tsconfig_resolver = project.as_ref().and_then(TsconfigResolver::from_project);
+  let resolver = ModuleResolver {
+    mode: resolution,
+    tsconfig: tsconfig_resolver,
+  };
+
+  let (host, roots) = match DiskHost::new(&root_paths, resolver, options) {
     Ok(res) => res,
     Err(err) => {
       eprintln!("{err}");
@@ -354,12 +422,16 @@ fn run_typecheck(args: TypecheckArgs) -> ExitCode {
   }
 }
 
-fn build_compiler_options(args: &TypecheckArgs) -> Result<CompilerOptions, String> {
-  let mut options = CompilerOptions::default();
+fn build_compiler_options(
+  args: &TypecheckArgs,
+  mut options: CompilerOptions,
+) -> Result<CompilerOptions, String> {
   if let Some(target) = args.target {
     options.target = target.into();
   }
-  options.no_default_lib = args.no_default_lib;
+  if args.no_default_lib {
+    options.no_default_lib = true;
+  }
 
   if !args.lib.is_empty() {
     let mut libs = Vec::new();
@@ -429,7 +501,7 @@ fn init_tracing(enabled: bool) {
 impl DiskHost {
   fn new(
     entries: &[PathBuf],
-    resolver: ResolutionMode,
+    resolver: ModuleResolver,
     compiler_options: CompilerOptions,
   ) -> Result<(Self, Vec<FileKey>), String> {
     let mut state = DiskState::default();
@@ -542,6 +614,104 @@ fn snapshot_from_program(program: &Program) -> ProgramSourceSnapshot {
   ProgramSourceSnapshot { names, texts }
 }
 
+impl ModuleResolver {
+  fn resolve(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
+    if let Some(tsconfig) = self.tsconfig.as_ref() {
+      if let Some(resolved) = tsconfig.resolve(specifier) {
+        return Some(resolved);
+      }
+    }
+    self.mode.resolve(from, specifier)
+  }
+}
+
+impl TsconfigResolver {
+  fn from_project(cfg: &tsconfig::ProjectConfig) -> Option<Self> {
+    if cfg.base_url.is_none() && cfg.paths.is_empty() {
+      return None;
+    }
+    let base_url = cfg.base_url.clone().unwrap_or_else(|| cfg.root_dir.clone());
+    let mut paths = Vec::new();
+    for (pattern, subs) in &cfg.paths {
+      let (prefix, suffix, has_wildcard) = match pattern.split_once('*') {
+        Some((pre, suf)) => (pre.to_string(), suf.to_string(), true),
+        None => (pattern.clone(), String::new(), false),
+      };
+      paths.push(TsconfigPathMapping {
+        prefix,
+        suffix,
+        has_wildcard,
+        substitutions: subs.clone(),
+      });
+    }
+    Some(TsconfigResolver { base_url, paths })
+  }
+
+  fn resolve(&self, specifier: &str) -> Option<PathBuf> {
+    if is_relative_or_absolute_specifier(specifier) {
+      return None;
+    }
+
+    if let Some(resolved) = self.resolve_via_paths(specifier) {
+      return Some(resolved);
+    }
+
+    let candidate = self.base_url.join(specifier);
+    resolve_with_candidates(&candidate)
+  }
+
+  fn resolve_via_paths(&self, specifier: &str) -> Option<PathBuf> {
+    let mut best: Option<(&TsconfigPathMapping, String, (bool, usize, usize))> = None;
+    for mapping in &self.paths {
+      let Some(capture) = mapping.matches(specifier) else {
+        continue;
+      };
+      let score = (
+        !mapping.has_wildcard,
+        mapping.prefix.len(),
+        mapping.suffix.len(),
+      );
+      let replace = match best {
+        Some((_, _, best_score)) => score > best_score,
+        None => true,
+      };
+      if replace {
+        best = Some((mapping, capture, score));
+      }
+    }
+
+    let (mapping, capture, _) = best?;
+    for sub in &mapping.substitutions {
+      let substituted = if mapping.has_wildcard {
+        sub.replace('*', &capture)
+      } else {
+        sub.clone()
+      };
+      let path = Path::new(&substituted);
+      let candidate = if path.is_absolute() {
+        path.to_path_buf()
+      } else {
+        self.base_url.join(path)
+      };
+      if let Some(resolved) = resolve_with_candidates(&candidate) {
+        return Some(resolved);
+      }
+    }
+    None
+  }
+}
+
+impl TsconfigPathMapping {
+  fn matches(&self, specifier: &str) -> Option<String> {
+    if !self.has_wildcard {
+      return (specifier == self.prefix).then_some(String::new());
+    }
+    let rest = specifier.strip_prefix(&self.prefix)?;
+    let middle = rest.strip_suffix(&self.suffix)?;
+    Some(middle.to_string())
+  }
+}
+
 impl ResolutionMode {
   fn resolve(&self, from: &Path, specifier: &str) -> Option<PathBuf> {
     match self {
@@ -549,6 +719,13 @@ impl ResolutionMode {
       ResolutionMode::Node => resolve_node_like(from, specifier),
     }
   }
+}
+
+fn is_relative_or_absolute_specifier(specifier: &str) -> bool {
+  specifier.starts_with("./")
+    || specifier.starts_with("../")
+    || Path::new(specifier).is_absolute()
+    || specifier.starts_with('/')
 }
 
 fn resolve_relative(from: &Path, specifier: &str) -> Option<PathBuf> {

@@ -8,6 +8,9 @@ sources.
 ```bash
 cargo run -p typecheck-ts-cli -- typecheck fixtures/basic.ts
 
+# Load a real project via tsconfig.json (entries are optional in project mode):
+cargo run -p typecheck-ts-cli -- typecheck --project path/to/tsconfig.json
+
 # Request extra output:
 cargo run -p typecheck-ts-cli -- typecheck fixtures/basic.ts \
   --type-at fixtures/basic.ts:42 \
@@ -27,6 +30,7 @@ cargo run -p typecheck-ts-cli -- typecheck fixtures/basic.ts --json
 - `--lib <name>`: explicit lib set (e.g. `es2020`, `dom`); overrides defaults.
 - `--no-default-lib`: disable bundled libs.
 - `--target`: select target lib set (`es5`, `es2015`, …).
+- `--project` / `-p`: load `tsconfig.json` (compiler options, file discovery, and `baseUrl`/`paths` resolution).
 - `--node-resolve`: enable Node/TS-style resolution (including `node_modules`).
 - `--trace` / `--profile`: emit tracing spans in JSON (compatible with the
   harness profiling format).
