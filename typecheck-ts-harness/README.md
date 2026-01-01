@@ -182,6 +182,16 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
   tests become `<name>.json` and names must be unique within the suite; see below).
 - The runner uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
   writes `{ schemaVersion, metadata: { typescriptVersion, options }, diagnostics: [...] }`.
+- When `difftsc` runs with `diagnostics_only=false` (default), it also records
+  *type facts* when available:
+  - `type_facts.exports`: the rendered types of exported **value** symbols.
+  - `type_facts.markers`: the rendered type at each `^?` marker in the fixture.
+    Markers follow the TypeScript baseline-test convention: if `^?` appears in a
+    comment line by itself, it queries the preceding line; if there is code
+    before the marker, it queries that same line at the marker column.
+    (`difftsc` passes an empty `type_queries` list so `scripts/tsc_runner.js`
+    performs the marker scan, keeping the behavior consistent with `tsc`.)
+  Baseline JSON omits `type_facts` when no exports or markers were collected.
 
 ### Expectations manifests
 
