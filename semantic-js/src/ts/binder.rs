@@ -521,6 +521,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     let mut has_export_assignment = false;
     let mut has_other_exports = false;
     let mut export_assignment_span: Option<Span> = None;
+    let mut export_assignment_target: Option<String> = None;
+    let mut exported_decl_names: BTreeSet<String> = BTreeSet::new();
     let mut import_def_ids = HashMap::new();
 
     for decl in decls {
@@ -567,7 +569,6 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         Exported::No => {
           if implicit_export {
             has_exports = true;
-            has_other_exports = true;
             let span = Span::new(file_id, decl.span);
             first_export_span.get_or_insert(span);
             state.export_specs.push(ExportSpec::Local {
@@ -575,12 +576,12 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
               exported_as: decl.name.clone(),
               type_only: false,
               span,
-            })
+            });
+            exported_decl_names.insert(decl.name.clone());
           }
         }
         Exported::Named => {
           has_exports = true;
-          has_other_exports = true;
           let span = Span::new(file_id, decl.span);
           first_export_span.get_or_insert(span);
           state.export_specs.push(ExportSpec::Local {
@@ -588,11 +589,11 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             exported_as: decl.name.clone(),
             type_only: false,
             span,
-          })
+          });
+          exported_decl_names.insert(decl.name.clone());
         }
         Exported::Default => {
           has_exports = true;
-          has_other_exports = true;
           let span = Span::new(file_id, decl.span);
           first_export_span.get_or_insert(span);
           state.export_specs.push(ExportSpec::Local {
@@ -600,7 +601,8 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             exported_as: "default".to_string(),
             type_only: false,
             span,
-          })
+          });
+          exported_decl_names.insert("default".to_string());
         }
       }
     }
@@ -746,6 +748,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           type_only: false,
           span,
         });
+        exported_decl_names.insert(import.local.clone());
       }
     }
 
@@ -829,6 +832,9 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           }
           has_export_assignment = true;
           export_assignment_span.get_or_insert(span);
+          if export_assignment_target.is_none() && !expr.is_empty() {
+            export_assignment_target = Some(expr.clone());
+          }
           if expr.is_empty() {
             if !is_script {
               self.diagnostics.push(Diagnostic::error(
@@ -864,7 +870,18 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       has_exports = true;
     }
 
-    if has_export_assignment && has_other_exports && !is_script {
+    let has_export_assignment_conflict = if has_export_assignment && !is_script {
+      let mut conflict = has_other_exports;
+      conflict |= match export_assignment_target.as_ref() {
+        Some(target) => exported_decl_names.iter().any(|name| name != target),
+        None => !exported_decl_names.is_empty(),
+      };
+      conflict
+    } else {
+      false
+    };
+
+    if has_export_assignment_conflict {
       let span = export_assignment_span
         .or(first_export_span)
         .unwrap_or_else(|| Span::new(file_id, TextRange::new(0, 0)));
