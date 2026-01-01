@@ -249,6 +249,40 @@ fn type_at_prefers_innermost_member_access() {
 }
 
 #[test]
+fn type_at_includes_undefined_for_optional_chain_member() {
+  let mut host = MemoryHost::default();
+  let source = "function g(x: { v: number } | null) { const y = x?.v; return y; }";
+  let file = FileKey::new("optional_member.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+  let offset = source.find("?.").expect("optional chain operator") as u32;
+
+  let ty = program
+    .type_at(file_id, offset)
+    .expect("type at optional member");
+  assert_eq!(program.display_type(ty).to_string(), "undefined | number");
+}
+
+#[test]
+fn type_at_includes_undefined_for_optional_chain_call() {
+  let mut host = MemoryHost::default();
+  let source = "function g(cb: (() => number) | undefined) { const y = cb?.(); return y; }";
+  let file = FileKey::new("optional_call.ts");
+  host.insert(file.clone(), Arc::from(source.to_string()));
+
+  let program = Program::new(host, vec![file.clone()]);
+  let file_id = program.file_id(&file).expect("file id");
+  let offset = source.find("?.(").expect("optional call operator") as u32;
+
+  let ty = program
+    .type_at(file_id, offset)
+    .expect("type at optional call");
+  assert_eq!(program.display_type(ty).to_string(), "undefined | number");
+}
+
+#[test]
 fn type_at_prefers_inner_body_expression_in_nested_functions() {
   let mut host = MemoryHost::default();
   let source =
