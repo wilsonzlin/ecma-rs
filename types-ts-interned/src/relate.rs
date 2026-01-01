@@ -2112,7 +2112,7 @@ impl<'a> RelateCtx<'a> {
           if dst_prop.data.optional {
             continue;
           }
-          if let Some(index) = self.indexer_for_prop(&src_shape, &dst_prop.key, mode) {
+          if let Some(index) = self.indexer_for_prop(&src_shape, &dst_prop.key, mode, depth + 1) {
             if !dst_prop.data.readonly && index.readonly {
               return RelationResult {
                 result: false,
@@ -2207,7 +2207,7 @@ impl<'a> RelateCtx<'a> {
         }
       } else {
         for prop in &src_shape.properties {
-          if !self.indexer_accepts_prop(dst_index, &prop.key, mode) {
+          if !self.indexer_accepts_prop(dst_index, &prop.key, mode, depth + 1) {
             continue;
           }
           let related = self.relate_internal(
@@ -2352,6 +2352,7 @@ impl<'a> RelateCtx<'a> {
     shape: &'b Shape,
     name: &PropKey,
     mode: RelationMode,
+    depth: usize,
   ) -> Option<&'b Indexer> {
     let key_ty = self.prop_key_type(name);
     shape
@@ -2365,13 +2366,19 @@ impl<'a> RelateCtx<'a> {
             RelationKind::Assignable,
             mode,
             false,
-            0,
+            depth,
           )
           .result
       })
   }
 
-  fn indexer_accepts_prop(&self, idx: &Indexer, key: &PropKey, mode: RelationMode) -> bool {
+  fn indexer_accepts_prop(
+    &self,
+    idx: &Indexer,
+    key: &PropKey,
+    mode: RelationMode,
+    depth: usize,
+  ) -> bool {
     let key_ty = self.prop_key_type(key);
     self
       .relate_internal(
@@ -2380,7 +2387,7 @@ impl<'a> RelateCtx<'a> {
         RelationKind::Assignable,
         mode,
         false,
-        0,
+        depth,
       )
       .result
   }
