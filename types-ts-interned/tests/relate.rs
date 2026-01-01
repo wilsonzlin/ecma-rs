@@ -96,6 +96,21 @@ fn null_not_assignable_to_empty_object_under_strict_null_checks() {
 }
 
 #[test]
+fn nullish_assignable_to_empty_object_without_strict_null_checks() {
+  let store = TypeStore::with_options(TypeOptions {
+    strict_null_checks: false,
+    ..default_options()
+  });
+  let primitives = store.primitive_ids();
+  let empty_object = store.intern_type(TypeKind::EmptyObject);
+  let ctx = RelateCtx::new(store.clone(), store.options());
+
+  assert!(ctx.is_assignable(primitives.null, empty_object));
+  assert!(ctx.is_assignable(primitives.undefined, empty_object));
+  assert!(ctx.is_assignable(primitives.void, empty_object));
+}
+
+#[test]
 fn array_and_tuple_assignable_to_object_keyword() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();

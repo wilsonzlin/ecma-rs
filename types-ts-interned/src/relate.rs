@@ -1240,6 +1240,7 @@ impl<'a> RelateCtx<'a> {
       (_, TypeKind::Never) => Some(matches!(src, TypeKind::Never)),
       (TypeKind::Void, TypeKind::Void) => Some(true),
       (TypeKind::Void, TypeKind::Undefined) | (TypeKind::Undefined, TypeKind::Void) => Some(true),
+      (TypeKind::Void, TypeKind::EmptyObject) => Some(!opts.strict_null_checks),
       (TypeKind::Void, _) => Some(false),
       (_, TypeKind::EmptyObject) => {
         if !opts.strict_null_checks {
