@@ -481,6 +481,22 @@ fn lowers_runtime_namespaces_to_parseable_js() {
 }
 
 #[test]
+fn lowers_dotted_runtime_namespaces_to_parseable_js() {
+  let src = r#"export namespace A.B { export const x = 1; }"#;
+  let (code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 2);
+  let decl = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::VarDecl(decl) => decl,
+    other => panic!("expected namespace var decl, got {other:?}"),
+  };
+  assert!(decl.stx.export);
+  assert!(
+    code.contains("\"B\""),
+    "dotted namespace lowering should initialize A[\"B\"]"
+  );
+}
+
+#[test]
 fn lowers_runtime_modules_to_parseable_js() {
   let src = r#"
     module Mod {
