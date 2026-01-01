@@ -1260,6 +1260,7 @@ fn empty_sem_hir(file: FileId, kind: FileKind) -> sem_ts::HirFile {
     },
     decls: Vec::new(),
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),

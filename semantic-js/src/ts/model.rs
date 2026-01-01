@@ -197,6 +197,16 @@ pub struct Import {
   pub is_type_only: bool,
 }
 
+/// `import("specifier")` type references.
+///
+/// These do not create bindings, but they do introduce module graph edges that
+/// must be traversed so dependent modules are bound.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TypeImport {
+  pub specifier: String,
+  pub specifier_span: TextRange,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImportDefault {
   pub local: String,
@@ -290,6 +300,7 @@ pub struct AmbientModule {
   pub name_span: TextRange,
   pub decls: Vec<Decl>,
   pub imports: Vec<Import>,
+  pub type_imports: Vec<TypeImport>,
   pub import_equals: Vec<ImportEquals>,
   pub exports: Vec<Export>,
   pub export_as_namespace: Vec<ExportAsNamespace>,
@@ -303,6 +314,7 @@ pub struct HirFile {
   pub file_kind: FileKind,
   pub decls: Vec<Decl>,
   pub imports: Vec<Import>,
+  pub type_imports: Vec<TypeImport>,
   pub import_equals: Vec<ImportEquals>,
   pub exports: Vec<Export>,
   pub export_as_namespace: Vec<ExportAsNamespace>,
@@ -317,6 +329,7 @@ impl HirFile {
       file_kind: FileKind::Ts,
       decls: Vec::new(),
       imports: Vec::new(),
+      type_imports: Vec::new(),
       import_equals: Vec::new(),
       exports: Vec::new(),
       export_as_namespace: Vec::new(),
@@ -331,6 +344,7 @@ impl HirFile {
       file_kind: FileKind::Ts,
       decls: Vec::new(),
       imports: Vec::new(),
+      type_imports: Vec::new(),
       import_equals: Vec::new(),
       exports: Vec::new(),
       export_as_namespace: Vec::new(),

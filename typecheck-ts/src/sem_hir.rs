@@ -8,6 +8,7 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::{ModuleDecl, ModuleName};
 use semantic_js::ts as sem_ts;
+use std::collections::BTreeSet;
 
 pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) -> sem_ts::HirFile {
   let resolve_name = |name| lowered.names.resolve(name).unwrap_or_default().to_string();
@@ -97,6 +98,7 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
   } else {
     sem_ts::ModuleKind::Module
   };
+  let type_imports = collect_type_imports(lowered);
 
   sem_ts::HirFile {
     file_id: sem_ts::FileId(lowered.hir.file.0),
@@ -110,11 +112,40 @@ pub(crate) fn sem_hir_from_lower(ast: &Node<TopLevel>, lowered: &LowerResult) ->
     },
     decls,
     imports,
+    type_imports,
     import_equals,
     exports,
     export_as_namespace,
     ambient_modules: collect_ambient_modules(ast.stx.body.as_slice()),
   }
+}
+
+fn collect_type_imports(lowered: &LowerResult) -> Vec<sem_ts::TypeImport> {
+  let mut imports = BTreeSet::<(String, TextRange)>::new();
+  for arenas in lowered.types.values() {
+    for ty in arenas.type_exprs.iter() {
+      match &ty.kind {
+        hir_js::TypeExprKind::TypeRef(type_ref) => {
+          if let hir_js::TypeName::Import(import) = &type_ref.name {
+            if let Some(module) = &import.module {
+              imports.insert((module.clone(), ty.span));
+            }
+          }
+        }
+        hir_js::TypeExprKind::Import(import) => {
+          imports.insert((import.module.clone(), ty.span));
+        }
+        _ => {}
+      }
+    }
+  }
+  imports
+    .into_iter()
+    .map(|(specifier, specifier_span)| sem_ts::TypeImport {
+      specifier,
+      specifier_span,
+    })
+    .collect()
 }
 
 fn map_def_kind(kind: HirDefKind) -> Option<sem_ts::DeclKind> {
@@ -265,6 +296,7 @@ fn lower_ambient_module(module: &ModuleDecl) -> sem_ts::AmbientModule {
     name_span,
     decls: Vec::new(),
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),

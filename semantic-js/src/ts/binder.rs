@@ -372,6 +372,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       is_script,
       false,
       &hir.decls,
+      &hir.type_imports,
       &hir.imports,
       &hir.import_equals,
       &hir.exports,
@@ -435,6 +436,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           false,
           false,
           &aug.module.decls,
+          &aug.module.type_imports,
           &aug.module.imports,
           &aug.module.import_equals,
           &aug.module.exports,
@@ -479,6 +481,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       false,
       true,
       &module.decls,
+      &module.type_imports,
       &module.imports,
       &module.import_equals,
       &module.exports,
@@ -505,6 +508,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
     is_script: bool,
     implicit_export: bool,
     decls: &[Decl],
+    type_imports: &[TypeImport],
     imports: &[Import],
     import_equals: &[ImportEquals],
     exports: &[Export],
@@ -599,6 +603,24 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           })
         }
       }
+    }
+
+    for import in type_imports {
+      let specifier_span = Span::new(file_id, import.specifier_span);
+      let target = self.resolve_spec(
+        file_id,
+        &import.specifier,
+        specifier_span,
+        true,
+        ambient_modules,
+      );
+      if let ModuleRef::File(t) = &target {
+        deps.push(*t);
+      }
+      state.import_module_refs.push(ModuleRefEntry {
+        module: target,
+        span: specifier_span,
+      });
     }
 
     for import in imports {

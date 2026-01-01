@@ -2923,6 +2923,7 @@ impl SemHirBuilder {
       file_kind: self.file_kind,
       decls: self.decls,
       imports: self.imports,
+      type_imports: Vec::new(),
       import_equals: Vec::new(),
       exports: self.exports,
       export_as_namespace: Vec::new(),
@@ -2936,6 +2937,7 @@ impl SemHirBuilder {
       name_span,
       decls: self.decls,
       imports: self.imports,
+      type_imports: Vec::new(),
       import_equals: Vec::new(),
       exports: self.exports,
       export_as_namespace: Vec::new(),
@@ -3811,6 +3813,11 @@ impl ProgramState {
     for import in extras.imports {
       if !base.imports.contains(&import) {
         base.imports.push(import);
+      }
+    }
+    for import in extras.type_imports {
+      if !base.type_imports.contains(&import) {
+        base.type_imports.push(import);
       }
     }
     for import_equals in extras.import_equals {
@@ -5925,6 +5932,7 @@ impl ProgramState {
               file_kind,
               decls: Vec::new(),
               imports: Vec::new(),
+              type_imports: Vec::new(),
               import_equals: Vec::new(),
               exports: Vec::new(),
               export_as_namespace: Vec::new(),

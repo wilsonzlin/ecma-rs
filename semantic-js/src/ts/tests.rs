@@ -468,6 +468,41 @@ fn type_only_import_export_isolated() {
 }
 
 #[test]
+fn type_imports_are_traversed() {
+  let file_a = FileId(2000);
+  let file_b = FileId(2001);
+
+  let mut a = HirFile::module(file_a);
+  a.decls
+    .push(mk_decl(0, "Foo", DeclKind::Interface, Exported::Named));
+
+  let mut b = HirFile::script(file_b);
+  b.type_imports.push(TypeImport {
+    specifier: "a".to_string(),
+    specifier_span: span(10),
+  });
+
+  let files: HashMap<FileId, Arc<HirFile>> = maplit::hashmap! {
+    file_a => Arc::new(a),
+    file_b => Arc::new(b),
+  };
+  let resolver = StaticResolver::new(maplit::hashmap! {
+    "a".to_string() => file_a,
+  });
+
+  let (semantics, diags) =
+    bind_ts_program(&[file_b], &resolver, |f| files.get(&f).unwrap().clone());
+  assert!(diags.is_empty());
+
+  let exports_a = semantics
+    .exports_of_opt(file_a)
+    .expect("type import dependency should be bound");
+  let symbols = semantics.symbols();
+  let foo = exports_a.get("Foo").expect("Foo exported");
+  assert!(foo.symbol_for(Namespace::TYPE, symbols).is_some());
+}
+
+#[test]
 fn export_namespace_import_uses_local_binding() {
   let file_a = FileId(22);
   let file_b = FileId(23);
@@ -1821,6 +1856,7 @@ fn ambient_modules_collect_exports() {
     name_span: span(100),
     decls: vec![decl],
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
@@ -1865,6 +1901,7 @@ fn ambient_import_diagnostic_points_to_specifier() {
       named: Vec::new(),
       is_type_only: false,
     }],
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
@@ -2027,6 +2064,7 @@ fn ambient_module_export_as_namespace_fragments_preserve_decl_files() {
     name_span: span(0),
     decls: Vec::new(),
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: vec![ExportAsNamespace {
@@ -2043,6 +2081,7 @@ fn ambient_module_export_as_namespace_fragments_preserve_decl_files() {
     name_span: span(0),
     decls: Vec::new(),
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: vec![ExportAsNamespace {
@@ -2096,6 +2135,7 @@ fn ambient_module_fragments_merge_exports() {
     name_span: span(0),
     decls: Vec::new(),
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
@@ -2143,6 +2183,7 @@ fn ambient_module_interfaces_merge_deterministically() {
     name_span: span(0),
     decls: Vec::new(),
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
@@ -2194,6 +2235,7 @@ fn ambient_module_import_reexports_without_resolver_mapping() {
     name_span: span(0),
     decls: vec![decl],
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
@@ -2276,6 +2318,7 @@ fn ambient_module_reexport_chain() {
     name_span: span(0),
     decls: vec![decl],
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
@@ -2341,6 +2384,7 @@ fn external_module_augmentation_merges_without_new_exports() {
     name_span: span(10),
     decls: vec![augmented_request, only_aug],
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
@@ -2408,6 +2452,7 @@ fn imports_use_ambient_modules_when_file_missing() {
     name_span: span(4),
     decls: vec![ambient_decl],
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),
@@ -2468,6 +2513,7 @@ fn reexports_from_ambient_modules_are_resolved() {
     name_span: span(7),
     decls: vec![ambient_decl],
     imports: Vec::new(),
+    type_imports: Vec::new(),
     import_equals: Vec::new(),
     exports: Vec::new(),
     export_as_namespace: Vec::new(),

@@ -1,7 +1,7 @@
 use crate::ts::{
   AmbientModule, Decl, DeclKind, Export, ExportAll, ExportAsNamespace, ExportSpecifier, Exported,
   FileKind, HirFile, Import, ImportDefault, ImportEquals, ImportEqualsTarget, ImportNamed,
-  ImportNamespace, ModuleKind, NamedExport,
+  ImportNamespace, ModuleKind, NamedExport, TypeImport as TsTypeImport,
 };
 use diagnostics::TextRange;
 use hir_js::{DefId, DefKind, ExportKind, FileKind as HirFileKind, ImportKind, LowerResult};
@@ -13,7 +13,7 @@ use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
 use parse_js::ast::ts_stmt::{ImportEqualsRhs, ModuleName};
 use parse_js::loc::Loc;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 /// Convert a lowered `hir-js` file into the `semantic-js` TS binder input model.
 ///
@@ -72,6 +72,7 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
   };
 
   let finalized = finalize_block(block, lower, module_kind);
+  let type_imports = collect_type_imports(lower);
 
   HirFile {
     file_id,
@@ -82,11 +83,40 @@ pub fn lower_to_ts_hir(ast: &Node<TopLevel>, lower: &LowerResult) -> HirFile {
     },
     decls: finalized.decls,
     imports: finalized.imports,
+    type_imports,
     import_equals: finalized.import_equals,
     exports: finalized.exports,
     export_as_namespace: finalized.export_as_namespace,
     ambient_modules: finalized.ambient_modules,
   }
+}
+
+fn collect_type_imports(lower: &LowerResult) -> Vec<TsTypeImport> {
+  let mut seen = BTreeSet::<(String, TextRange)>::new();
+  for arenas in lower.types.values() {
+    for ty in arenas.type_exprs.iter() {
+      match &ty.kind {
+        hir_js::hir::TypeExprKind::TypeRef(type_ref) => {
+          if let hir_js::hir::TypeName::Import(import) = &type_ref.name {
+            if let Some(module) = &import.module {
+              seen.insert((module.clone(), ty.span));
+            }
+          }
+        }
+        hir_js::hir::TypeExprKind::Import(import) => {
+          seen.insert((import.module.clone(), ty.span));
+        }
+        _ => {}
+      }
+    }
+  }
+  seen
+    .into_iter()
+    .map(|(specifier, specifier_span)| TsTypeImport {
+      specifier,
+      specifier_span,
+    })
+    .collect()
 }
 
 struct BlockResult {
@@ -486,6 +516,7 @@ fn lower_block(
             name_span,
             decls: nested.decls,
             imports: nested.imports,
+            type_imports: Vec::new(),
             import_equals: nested.import_equals,
             exports: nested.exports,
             export_as_namespace: nested.export_as_namespace,
