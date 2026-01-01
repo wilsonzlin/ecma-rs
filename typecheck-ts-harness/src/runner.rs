@@ -1091,18 +1091,27 @@ impl TscRunnerPool {
   ) -> std::result::Result<TscDiagnostics, String> {
     let _permit = self.limiter.acquire();
     let mut runner = self.checkout().map_err(|err| err.to_string())?;
-    let result = runner.check(request).map_err(|err| err.to_string());
-    self.release(runner);
-    result
+    match runner.check(request) {
+      Ok(diags) => {
+        self.release(runner);
+        Ok(diags)
+      }
+      Err(err) => {
+        // Don't return broken runners back to the pool; `TscRunner::check` only errors when the
+        // runner crashed or otherwise failed unexpectedly (not on normal type errors).
+        Err(err.to_string())
+      }
+    }
   }
 
   fn checkout(&self) -> anyhow::Result<TscRunner> {
-    let mut runners = self.runners.lock().unwrap();
-    if let Some(runner) = runners.pop() {
-      Ok(runner)
-    } else {
-      TscRunner::new(self.node_path.clone())
-    }
+    // Avoid holding the mutex while spawning Node. This prevents other threads from being blocked
+    // when returning an existing runner to the pool.
+    let runner = {
+      let mut runners = self.runners.lock().unwrap();
+      runners.pop()
+    };
+    runner.map(Ok).unwrap_or_else(|| TscRunner::new(self.node_path.clone()))
   }
 
   fn release(&self, runner: TscRunner) {
