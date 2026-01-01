@@ -882,7 +882,8 @@ fn diff_type_facts(
   while exp_idx < expected.exports.len() && act_idx < actual.exports.len() {
     let expected_export = &expected.exports[exp_idx];
     let actual_export = &actual.exports[act_idx];
-    match (&expected_export.file, &expected_export.name).cmp(&(&actual_export.file, &actual_export.name))
+    match (&expected_export.file, &expected_export.name)
+      .cmp(&(&actual_export.file, &actual_export.name))
     {
       std::cmp::Ordering::Equal => {
         if expected_export.type_str != actual_export.type_str {
@@ -916,7 +917,8 @@ fn diff_type_facts(
   while exp_idx < expected.markers.len() && act_idx < actual.markers.len() {
     let expected_marker = &expected.markers[exp_idx];
     let actual_marker = &actual.markers[act_idx];
-    match (&expected_marker.file, expected_marker.offset).cmp(&(&actual_marker.file, actual_marker.offset))
+    match (&expected_marker.file, expected_marker.offset)
+      .cmp(&(&actual_marker.file, actual_marker.offset))
     {
       std::cmp::Ordering::Equal => {
         if expected_marker.type_str != actual_marker.type_str {

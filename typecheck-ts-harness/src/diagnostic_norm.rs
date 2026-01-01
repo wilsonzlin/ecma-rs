@@ -255,7 +255,10 @@ fn normalize_file_name_owned(
   Some(name)
 }
 
-fn normalize_file_name_borrowed(file: Option<&str>, options: &NormalizationOptions) -> Option<String> {
+fn normalize_file_name_borrowed(
+  file: Option<&str>,
+  options: &NormalizationOptions,
+) -> Option<String> {
   let file = file?;
   if !options.normalize_paths {
     return Some(file.to_string());
@@ -280,11 +283,7 @@ fn normalize_file_name_into(raw: &str, options: &NormalizationOptions, out: &mut
 fn strip_drive_prefix(name: &mut String) {
   let (is_drive, strip_start, len) = {
     let bytes = name.as_bytes();
-    if bytes.len() >= 3
-      && bytes[0] == b'/'
-      && bytes[2] == b':'
-      && bytes[1].is_ascii_alphabetic()
-    {
+    if bytes.len() >= 3 && bytes[0] == b'/' && bytes[2] == b':' && bytes[1].is_ascii_alphabetic() {
       let mut idx = 3usize;
       while idx < bytes.len() && bytes[idx] == b'/' {
         idx += 1;
