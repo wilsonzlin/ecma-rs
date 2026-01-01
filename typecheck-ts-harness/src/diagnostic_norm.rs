@@ -385,6 +385,25 @@ pub fn normalize_path_for_compare(path: &str, options: &NormalizationOptions) ->
 /// arrow-function signatures so differences in source-level identifiers do not
 /// cause spurious diffs.
 pub fn normalize_type_string(raw: &str) -> String {
+  fn collapse_whitespace(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut pending_space = false;
+    for ch in raw.chars() {
+      if ch.is_whitespace() {
+        if !out.is_empty() {
+          pending_space = true;
+        }
+        continue;
+      }
+      if pending_space {
+        out.push(' ');
+        pending_space = false;
+      }
+      out.push(ch);
+    }
+    out
+  }
+
   fn split_top_level(raw: &str, delim: char) -> Option<Vec<String>> {
     let mut parts = Vec::new();
     let mut start = 0usize;
@@ -513,9 +532,35 @@ pub fn normalize_type_string(raw: &str) -> String {
     out
   }
 
-  let collapsed = raw.split_whitespace().collect::<Vec<_>>().join(" ");
-  let normalized = strip_trailing_object_semicolons(collapsed.trim());
-  let tighten = |s: String| s.replace("< ", "<").replace(" >", ">");
+  fn tighten(value: String) -> String {
+    if !value.contains("< ") && !value.contains(" >") {
+      return value;
+    }
+
+    let mut out = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+      match ch {
+        '<' => {
+          out.push('<');
+          if matches!(chars.peek(), Some(' ')) {
+            chars.next();
+          }
+        }
+        ' ' => {
+          if matches!(chars.peek(), Some('>')) {
+            continue;
+          }
+          out.push(' ');
+        }
+        _ => out.push(ch),
+      }
+    }
+    out
+  }
+
+  let collapsed = collapse_whitespace(raw);
+  let normalized = strip_trailing_object_semicolons(&collapsed);
 
   if let Some(parts) = split_top_level(&normalized, '|') {
     let mut normalized_parts: Vec<_> = parts
