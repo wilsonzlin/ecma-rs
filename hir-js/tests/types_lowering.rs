@@ -885,6 +885,37 @@ fn intersection_canonicalization_is_span_stable_for_function_types() {
 }
 
 #[test]
+fn intersection_canonicalization_is_span_stable_for_constructor_types() {
+  let base =
+    lower_from_source("type A = (new (x: string) => Foo) & (new (y: number) => Foo);")
+      .expect("lower");
+  let with_padding = lower_from_source(
+    "type Z = string;\ntype A = (new (x: string) => Foo) & (new (y: number) => Foo);",
+  )
+  .expect("lower with padding");
+
+  let base_members = intersection_member_first_ctor_param_type_names(&base, "A");
+  let with_padding_members = intersection_member_first_ctor_param_type_names(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["number", "string"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
+fn intersection_canonicalization_is_span_stable_for_type_query_types() {
+  let base = lower_from_source("type A = (typeof Foo) & (typeof Bar);").expect("lower");
+  let with_padding =
+    lower_from_source("type Z = string;\ntype A = (typeof Foo) & (typeof Bar);")
+      .expect("lower with padding");
+
+  let base_members = intersection_member_type_query_name_strings(&base, "A");
+  let with_padding_members = intersection_member_type_query_name_strings(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["Bar", "Foo"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
 fn intersection_dedups_duplicate_function_types() {
   let result =
     lower_from_source("type A = ((x: string) => void) & ((y: string) => void);").expect("lower");
@@ -900,6 +931,140 @@ fn intersection_dedups_duplicate_function_types() {
   };
 
   assert_eq!(members.len(), 1);
+}
+
+#[test]
+fn intersection_dedups_duplicate_constructor_types() {
+  let result = lower_from_source(
+    "type A = (new (x: string) => Foo) & (new (y: string) => Foo);",
+  )
+  .expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::Constructor(_)
+  ));
+}
+
+#[test]
+fn intersection_dedups_duplicate_template_literal_types() {
+  let result =
+    lower_from_source(r#"type A = (`foo${string}`) & (`foo${string}`);"#).expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::TemplateLiteral(_)
+  ));
+}
+
+#[test]
+fn intersection_dedups_duplicate_mapped_types() {
+  let result =
+    lower_from_source("type A = { [K in keyof T]: T[K] } & { [K in keyof T]: T[K] };")
+      .expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::Mapped(_)
+  ));
+}
+
+#[test]
+fn intersection_dedups_duplicate_indexed_access_types() {
+  let result = lower_from_source(r#"type A = (T["a"]) & (T["a"]);"#).expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::IndexedAccess { .. }
+  ));
+}
+
+#[test]
+fn intersection_dedups_duplicate_conditional_types() {
+  let result =
+    lower_from_source("type A = (T extends U ? X : Y) & (T extends U ? X : Y);").expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::Conditional(_)
+  ));
+}
+
+#[test]
+fn intersection_dedups_duplicate_import_types() {
+  let result =
+    lower_from_source(r#"type A = import("mod").Foo & import("mod").Foo;"#).expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::Import(_)
+  ));
 }
 
 #[test]
@@ -1181,6 +1346,87 @@ fn union_member_type_query_name_strings(result: &hir_js::LowerResult, alias: &st
   let members = match ty {
     TypeExprKind::Union(members) => members.as_slice(),
     other => panic!("expected union, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let name = match member_kind {
+        TypeExprKind::TypeQuery(name) => name,
+        other => panic!("expected type query member, got {other:?}"),
+      };
+
+      match name {
+        TypeName::Ident(id) => result.names.resolve(*id).unwrap().to_string(),
+        TypeName::Qualified(path) => path
+          .iter()
+          .map(|id| result.names.resolve(*id).unwrap())
+          .collect::<Vec<_>>()
+          .join("."),
+        TypeName::Import(_) => "[import]".to_string(),
+        TypeName::ImportExpr => "[import expr]".to_string(),
+      }
+    })
+    .collect()
+}
+
+fn intersection_member_first_ctor_param_type_names(
+  result: &hir_js::LowerResult,
+  alias: &str,
+) -> Vec<&'static str> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let func = match member_kind {
+        TypeExprKind::Constructor(func) => func,
+        other => panic!("expected constructor member, got {other:?}"),
+      };
+
+      let first = func.params.first().expect("constructor param");
+      let param_ty = &arenas.type_exprs[first.ty.0 as usize].kind;
+      match param_ty {
+        TypeExprKind::String => "string",
+        TypeExprKind::Number => "number",
+        other => panic!("expected primitive param type, got {other:?}"),
+      }
+    })
+    .collect()
+}
+
+fn intersection_member_type_query_name_strings(
+  result: &hir_js::LowerResult,
+  alias: &str,
+) -> Vec<String> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
   };
 
   members
