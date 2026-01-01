@@ -2302,6 +2302,19 @@ fn strip_class_member(
     None
   }
 
+  fn directive_prologue_len(stmts: &[Node<Stmt>]) -> usize {
+    let mut len = 0;
+    for stmt in stmts {
+      match stmt.stx.as_ref() {
+        Stmt::Expr(expr_stmt) if matches!(expr_stmt.stx.expr.stx.as_ref(), Expr::LitStr(_)) => {
+          len += 1;
+        }
+        _ => break,
+      }
+    }
+    len
+  }
+
   fn constructor_param_property_assignments(props: Vec<(String, Loc)>) -> Vec<Node<Stmt>> {
     props
       .into_iter()
@@ -2359,7 +2372,7 @@ fn strip_class_member(
           let insert_at = if is_derived {
             super_call_insert_after(stmts).unwrap_or(stmts.len())
           } else {
-            0
+            directive_prologue_len(stmts)
           };
           let assignments = constructor_param_property_assignments(props);
           stmts.splice(insert_at..insert_at, assignments);

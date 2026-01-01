@@ -1289,6 +1289,69 @@ fn lowers_parameter_properties_after_super_in_derived_constructors() {
 }
 
 #[test]
+fn constructor_parameter_properties_preserve_directive_prologue() {
+  let src = r#"class C { constructor(public x: number) { "use strict"; } }"#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  let class_decl = match parsed.stx.body.first().map(|stmt| stmt.stx.as_ref()) {
+    Some(Stmt::ClassDecl(decl)) => decl,
+    other => panic!("expected class decl, got {other:?}"),
+  };
+  let ctor = class_decl
+    .stx
+    .members
+    .iter()
+    .find(|member| match &member.stx.key {
+      ClassOrObjKey::Direct(key) => key.stx.key == "constructor",
+      _ => false,
+    })
+    .expect("constructor member");
+  let method = match &ctor.stx.val {
+    ClassOrObjVal::Method(method) => method,
+    other => panic!("expected constructor method, got {other:?}"),
+  };
+  let body = match method.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected constructor body block, got {other:?}"),
+  };
+  assert_eq!(body.len(), 2);
+
+  let directive = match body[0].stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  match directive.stx.expr.stx.as_ref() {
+    Expr::LitStr(lit) => assert_eq!(lit.stx.value, "use strict"),
+    other => panic!("expected string literal directive, got {other:?}"),
+  };
+
+  let assign = match body[1].stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  let assign = match assign.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+    other => panic!("expected assignment expression, got {other:?}"),
+  };
+  match assign.stx.left.stx.as_ref() {
+    Expr::ComputedMember(member) => {
+      assert!(matches!(member.stx.object.stx.as_ref(), Expr::This(_)));
+      assert!(matches!(member.stx.member.stx.as_ref(), Expr::LitStr(_)));
+    }
+    other => panic!("expected computed member assignment, got {other:?}"),
+  };
+}
+
+#[test]
 fn string_enum_aliases_do_not_emit_reverse_mappings() {
   let src = r#"enum S { A = "a", B = A }"#;
   let mut parsed = parse_with_options(
