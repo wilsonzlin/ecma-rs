@@ -11,6 +11,7 @@ use hir_js::{
 };
 use ordered_float::OrderedFloat;
 use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
+use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::func::Func;
 use parse_js::ast::import_export::{ExportNames, ImportNames};
@@ -2293,6 +2294,7 @@ impl Program {
       state.next_def = snapshot.next_def;
       state.next_body = snapshot.next_body;
       state.sync_typecheck_roots();
+      state.rebuild_module_namespace_defs();
       state.rebuild_callable_overloads();
       state.merge_callable_overload_types();
       state.rebuild_interned_named_def_types();
@@ -2482,6 +2484,7 @@ struct ProgramTypeResolver {
   current_file: FileId,
   local_defs: HashMap<String, DefId>,
   exports: HashMap<FileId, ExportMap>,
+  module_namespace_defs: HashMap<FileId, DefId>,
 }
 
 impl ProgramTypeResolver {
@@ -2493,6 +2496,7 @@ impl ProgramTypeResolver {
     current_file: FileId,
     local_defs: HashMap<String, DefId>,
     exports: HashMap<FileId, ExportMap>,
+    module_namespace_defs: HashMap<FileId, DefId>,
   ) -> Self {
     ProgramTypeResolver {
       semantics,
@@ -2502,6 +2506,7 @@ impl ProgramTypeResolver {
       current_file,
       local_defs,
       exports,
+      module_namespace_defs,
     }
   }
 
@@ -2748,6 +2753,22 @@ impl TypeResolver for ProgramTypeResolver {
       return None;
     }
     self.resolve_export_path(path, &mut module, sem_ts::Namespace::TYPE)
+  }
+
+  fn resolve_import_typeof(&self, module: &str, qualifier: Option<&[String]>) -> Option<DefId> {
+    let Some(from_key) = self.registry.lookup_key(self.current_file) else {
+      return None;
+    };
+    let target_key = self.host.resolve(&from_key, module)?;
+    let target_file = self.registry.lookup_id(&target_key)?;
+    let mut module = sem_ts::FileId(target_file.0);
+    let Some(path) = qualifier else {
+      return self.module_namespace_defs.get(&target_file).copied();
+    };
+    if path.is_empty() {
+      return self.module_namespace_defs.get(&target_file).copied();
+    }
+    self.resolve_export_path(path, &mut module, sem_ts::Namespace::VALUE)
   }
 }
 
@@ -3421,6 +3442,7 @@ struct ProgramState {
   root_ids: Vec<FileId>,
   global_bindings: Arc<BTreeMap<String, SymbolBinding>>,
   namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
+  module_namespace_defs: HashMap<FileId, DefId>,
   callable_overloads: HashMap<(FileId, String), Vec<DefId>>,
   diagnostics: Vec<Diagnostic>,
   type_store: TypeStore,
@@ -3529,6 +3551,7 @@ impl ProgramState {
       root_ids: Vec::new(),
       global_bindings: Arc::new(BTreeMap::new()),
       namespace_object_types: HashMap::new(),
+      module_namespace_defs: HashMap::new(),
       callable_overloads: HashMap::new(),
       diagnostics: Vec::new(),
       type_store,
@@ -4392,6 +4415,20 @@ impl ProgramState {
     Ok(())
   }
 
+  fn rebuild_module_namespace_defs(&mut self) {
+    self.module_namespace_defs.clear();
+    let mut taken_ids: HashSet<DefId> = self.def_data.keys().copied().collect();
+    let mut files: Vec<FileId> = self.files.keys().copied().collect();
+    files.sort_by_key(|file| file.0);
+    for file in files {
+      let key = self
+        .file_key_for_id(file)
+        .unwrap_or_else(|| FileKey::new(format!("file{}.ts", file.0)));
+      let def = alloc_synthetic_def_id(&mut taken_ids, &("ts_module_namespace", key.as_str()));
+      self.module_namespace_defs.insert(file, def);
+    }
+  }
+
   fn ensure_interned_types(
     &mut self,
     host: &Arc<dyn Host>,
@@ -4414,6 +4451,7 @@ impl ProgramState {
     self.interned_def_types.clear();
     self.interned_named_def_types.clear();
     self.interned_type_params.clear();
+    self.rebuild_module_namespace_defs();
     self.rebuild_callable_overloads();
     self.check_cancelled()?;
     let mut def_types = HashMap::new();
@@ -4532,6 +4570,7 @@ impl ProgramState {
         Some(&flat_defs),
         Some(host.as_ref()),
         Some(&key_to_id),
+        Some(&self.module_namespace_defs),
         Some(&self.value_defs),
       );
       for def in lowered.defs.iter() {
@@ -5093,6 +5132,72 @@ impl ProgramState {
         continue;
       };
       def_types.insert(def_id, ty);
+    }
+
+    let mut module_namespace_entries: Vec<_> = self
+      .module_namespace_defs
+      .iter()
+      .map(|(file, def)| (*file, *def))
+      .collect();
+    module_namespace_entries.sort_by_key(|(file, def)| (file.0, def.0));
+    let unknown = store.primitive_ids().unknown;
+    let mut convert_cache = HashMap::new();
+    for (file, namespace_def) in module_namespace_entries.into_iter() {
+      let mut shape = tti::Shape::new();
+      if let Some(file_state) = self.files.get(&file) {
+        for (name, entry) in file_state.exports.iter() {
+          let is_value_export = self
+            .semantics
+            .as_ref()
+            .and_then(|semantics| {
+              semantics.resolve_export(sem_ts::FileId(file.0), name, sem_ts::Namespace::VALUE)
+            })
+            .is_some()
+            || entry
+              .def
+              .and_then(|def| self.def_data.get(&def))
+              .map(|data| !matches!(data.kind, DefKind::Interface(_) | DefKind::TypeAlias(_)))
+              .unwrap_or(false);
+          if !is_value_export {
+            continue;
+          }
+          let ty = entry
+            .def
+            .and_then(|def| def_types.get(&def).copied())
+            .or_else(|| {
+              entry.type_id.and_then(|ty| {
+                if store.contains_type_id(ty) {
+                  Some(store.canon(ty))
+                } else {
+                  Some(store.canon(convert_type_for_display(
+                    ty,
+                    self,
+                    &store,
+                    &mut convert_cache,
+                  )))
+                }
+              })
+            })
+            .unwrap_or(unknown);
+          let key = PropKey::String(store.intern_name(name.clone()));
+          shape.properties.push(Property {
+            key,
+            data: PropData {
+              ty,
+              optional: false,
+              readonly: true,
+              accessibility: None,
+              is_method: false,
+              origin: None,
+              declared_on: None,
+            },
+          });
+        }
+      }
+      let shape_id = store.intern_shape(shape);
+      let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+      let ty = store.canon(store.intern_type(tti::TypeKind::Object(obj_id)));
+      def_types.insert(namespace_def, ty);
     }
 
     self.interned_store = Some(store);
@@ -7109,7 +7214,13 @@ impl ProgramState {
       TypeEntityName::Qualified(qualified) => {
         self.queue_type_imports_in_entity_name(file, &qualified.left, host, queue);
       }
-      TypeEntityName::Import(_) => {}
+      TypeEntityName::Import(import) => {
+        if let Expr::LitStr(spec) = import.stx.module.stx.as_ref() {
+          if let Some(target) = self.record_module_resolution(file, &spec.stx.value, host) {
+            queue.push_back(target);
+          }
+        }
+      }
       _ => {}
     }
   }
@@ -8447,6 +8558,7 @@ impl ProgramState {
         self.current_file.unwrap_or(FileId(u32::MAX)),
         binding_defs.clone(),
         exports,
+        self.module_namespace_defs.clone(),
       )) as Arc<_>);
     }
     Some(Arc::new(check::hir_body::BindingTypeResolver::new(

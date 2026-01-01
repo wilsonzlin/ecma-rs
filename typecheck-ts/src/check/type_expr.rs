@@ -4,6 +4,7 @@ use diagnostics::{Diagnostic, FileId, Span, TextRange};
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use parse_js::ast::node::Node;
+use parse_js::ast::expr::Expr;
 use parse_js::ast::type_expr::{
   MappedTypeModifier, TypeArray, TypeConditional, TypeConstructor, TypeEntityName, TypeExpr,
   TypeFunction, TypeFunctionParameter, TypeIndexedAccess, TypeInfer, TypeIntersection, TypeKeyOf,
@@ -34,6 +35,12 @@ pub trait TypeResolver: Send + Sync {
   /// Resolve an `import()` type with an optional qualifier path inside the
   /// imported module namespace.
   fn resolve_import_type(&self, _module: &str, _qualifier: Option<&[String]>) -> Option<DefId> {
+    None
+  }
+
+  /// Resolve a `typeof import("...")` query in the value namespace, optionally
+  /// looking up a value export within the imported module.
+  fn resolve_import_typeof(&self, _module: &str, _qualifier: Option<&[String]>) -> Option<DefId> {
     None
   }
 }
@@ -664,6 +671,23 @@ impl TypeLowerer {
   }
 
   fn lower_type_query(&mut self, query: &Node<parse_js::ast::type_expr::TypeQuery>) -> TypeId {
+    if let Some((module, qualifier)) = import_typeof_target(&query.stx.expr_name) {
+      let qualifier_opt = (!qualifier.is_empty()).then_some(qualifier);
+      if let Some(resolver) = &self.resolver {
+        if let Some(def) =
+          resolver.resolve_import_typeof(&module, qualifier_opt.as_deref())
+        {
+          return self.store.intern_type(TypeKind::Ref { def, args: Vec::new() });
+        }
+      }
+      let mut message = format!("cannot resolve typeof import(\"{}\")", module);
+      if let Some(path) = qualifier_opt.as_ref() {
+        message.push('.');
+        message.push_str(&path.join("."));
+      }
+      self.push_diag(query.loc, &codes::UNRESOLVED_TYPE_QUERY, message);
+      return self.store.primitive_ids().unknown;
+    }
     let Some(path) = entity_name_segments(&query.stx.expr_name) else {
       self.push_diag(
         query.loc,
@@ -816,5 +840,24 @@ fn entity_name_segments(name: &TypeEntityName) -> Option<Vec<String>> {
       Some(parts)
     }
     TypeEntityName::Import(_) => None,
+  }
+}
+
+fn import_typeof_target(name: &TypeEntityName) -> Option<(String, Vec<String>)> {
+  match name {
+    TypeEntityName::Import(import) => module_specifier_from_import(import).map(|m| (m, Vec::new())),
+    TypeEntityName::Qualified(qualified) => {
+      let (module, mut qualifier) = import_typeof_target(&qualified.left)?;
+      qualifier.push(qualified.right.clone());
+      Some((module, qualifier))
+    }
+    TypeEntityName::Identifier(_) => None,
+  }
+}
+
+fn module_specifier_from_import(import: &Node<parse_js::ast::expr::ImportExpr>) -> Option<String> {
+  match import.stx.module.stx.as_ref() {
+    Expr::LitStr(lit) => Some(lit.stx.value.clone()),
+    _ => None,
   }
 }

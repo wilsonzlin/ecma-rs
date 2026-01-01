@@ -51,6 +51,7 @@ pub fn lower_decl_types(
     None,
     None,
     None,
+    None,
   );
   for def in sorted_defs.iter() {
     let Some(info) = def.type_info.as_ref() else {

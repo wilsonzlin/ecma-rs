@@ -33,6 +33,7 @@ pub struct HirDeclLowerer<'a, 'diag> {
   def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
   host: Option<&'a dyn Host>,
   key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
+  module_namespace_defs: Option<&'a HashMap<FileId, DefId>>,
   value_defs: Option<&'a HashMap<DefId, DefId>>,
 }
 
@@ -50,6 +51,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
     def_by_name: Option<&'a HashMap<(FileId, String), DefId>>,
     host: Option<&'a dyn Host>,
     key_to_id: Option<&'a dyn Fn(&FileKey) -> Option<FileId>>,
+    module_namespace_defs: Option<&'a HashMap<FileId, DefId>>,
     value_defs: Option<&'a HashMap<DefId, DefId>>,
   ) -> Self {
     Self {
@@ -68,6 +70,7 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       def_by_name,
       host,
       key_to_id,
+      module_namespace_defs,
       value_defs,
     }
   }
@@ -611,6 +614,21 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       TypeExprKind::Parenthesized(inner) => self.lower_type_expr(inner, names),
       TypeExprKind::TypeRef(r) => self.lower_type_ref(&r, names),
       TypeExprKind::TypeQuery(name) => {
+        if let TypeName::Import(import) = &name {
+          let empty_qualifier = import
+            .qualifier
+            .as_ref()
+            .map(|segments| segments.is_empty())
+            .unwrap_or(true);
+          if empty_qualifier {
+            if let Some(namespace_def) = self.resolve_import_module_namespace(import) {
+              return self.store.intern_type(TypeKind::Ref {
+                def: self.map_value_def(namespace_def),
+                args: Vec::new(),
+              });
+            }
+          }
+        }
         if let Some(def) = self.resolve_value_name(&name, names, None) {
           return self.store.intern_type(TypeKind::Ref {
             def: self.map_value_def(def),
@@ -1238,6 +1256,17 @@ impl<'a, 'diag> HirDeclLowerer<'a, 'diag> {
       }),
       TypeName::ImportExpr => None,
     }
+  }
+
+  fn resolve_import_module_namespace(&self, import: &hir_js::hir::TypeImportName) -> Option<DefId> {
+    let module = import.module.as_ref()?;
+    let from_key = self.file_key.as_ref()?;
+    let host = self.host?;
+    let target_key = host.resolve(from_key, module)?;
+    let target_file = self.key_to_id.and_then(|resolver| resolver(&target_key))?;
+    self
+      .module_namespace_defs
+      .and_then(|defs| defs.get(&target_file).copied())
   }
 
   fn resolve_named_in_namespace(&self, name: &str, file: FileId, ns: Namespace) -> Option<DefId> {
