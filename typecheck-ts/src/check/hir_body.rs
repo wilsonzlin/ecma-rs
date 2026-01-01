@@ -3914,7 +3914,11 @@ fn awaited_type(
       out
     }
 
-    fn thenable_from_object(&mut self, obj: types_ts_interned::ObjectId, depth: usize) -> Option<TypeId> {
+    fn thenable_from_object(
+      &mut self,
+      obj: types_ts_interned::ObjectId,
+      depth: usize,
+    ) -> Option<TypeId> {
       let shape = self.store.shape(self.store.object(obj).shape);
       let then_prop = shape.properties.iter().find(|prop| match prop.key {
         PropKey::String(name) => name == self.then_name,
@@ -3937,12 +3941,7 @@ fn awaited_type(
           continue;
         };
         let mut cb_sigs = Vec::new();
-        self.collect_call_signatures(
-          onfulfilled.ty,
-          &mut cb_sigs,
-          &mut HashSet::new(),
-          depth + 1,
-        );
+        self.collect_call_signatures(onfulfilled.ty, &mut cb_sigs, &mut HashSet::new(), depth + 1);
         if cb_sigs.is_empty() {
           continue;
         }

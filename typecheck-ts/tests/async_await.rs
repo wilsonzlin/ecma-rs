@@ -34,11 +34,10 @@ export const q = bar();
     .expect("type for export q");
   assert_eq!(program.display_type(q_ty).to_string(), "Promise<number>");
 
-  let x_offset = source
-    .find("return x")
-    .expect("return x offset") as u32
-    + "return ".len() as u32;
-  let x_ty = program.type_at(file_id, x_offset).expect("type of x reference");
+  let x_offset = source.find("return x").expect("return x offset") as u32 + "return ".len() as u32;
+  let x_ty = program
+    .type_at(file_id, x_offset)
+    .expect("type of x reference");
   assert_eq!(program.display_type(x_ty).to_string(), "number");
 }
 

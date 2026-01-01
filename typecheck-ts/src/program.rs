@@ -9591,7 +9591,14 @@ impl ProgramState {
       });
 
       let should_infer_callable_return = state.def_data.get(&def).is_some_and(|data| {
-        matches!(data.kind, DefKind::Function(FuncData { return_ann: None, body: Some(_), .. }))
+        matches!(
+          data.kind,
+          DefKind::Function(FuncData {
+            return_ann: None,
+            body: Some(_),
+            ..
+          })
+        )
       });
       let cached_interned = state
         .interned_def_types
@@ -9599,18 +9606,16 @@ impl ProgramState {
         .copied()
         .map(|ty| store.canon(ty))
         .filter(|ty| !matches!(store.type_kind(*ty), tti::TypeKind::Unknown));
-      let cached_interned = cached_interned.filter(|ty| {
-        !should_infer_callable_return || !callable_return_is_unknown(store, *ty)
-      });
+      let cached_interned = cached_interned
+        .filter(|ty| !should_infer_callable_return || !callable_return_is_unknown(store, *ty));
       let cached_legacy = state
         .def_types
         .get(&def)
         .copied()
         .map(|ty| canon_or_convert(state, store, cache, ty))
         .filter(|ty| !matches!(store.type_kind(*ty), tti::TypeKind::Unknown));
-      let cached_legacy = cached_legacy.filter(|ty| {
-        !should_infer_callable_return || !callable_return_is_unknown(store, *ty)
-      });
+      let cached_legacy = cached_legacy
+        .filter(|ty| !should_infer_callable_return || !callable_return_is_unknown(store, *ty));
       let computed = if Some(def) == owner {
         None
       } else if nested_check {
@@ -9692,11 +9697,21 @@ impl ProgramState {
     file_binding_entries.sort_by(|(name_a, binding_a), (name_b, binding_b)| {
       let def_key_a = binding_a
         .def
-        .and_then(|def| self.def_data.get(&def).map(|data| (data.span.start, data.span.end, def.0)))
+        .and_then(|def| {
+          self
+            .def_data
+            .get(&def)
+            .map(|data| (data.span.start, data.span.end, def.0))
+        })
         .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
       let def_key_b = binding_b
         .def
-        .and_then(|def| self.def_data.get(&def).map(|data| (data.span.start, data.span.end, def.0)))
+        .and_then(|def| {
+          self
+            .def_data
+            .get(&def)
+            .map(|data| (data.span.start, data.span.end, def.0))
+        })
         .unwrap_or((u32::MAX, u32::MAX, u32::MAX));
       def_key_a.cmp(&def_key_b).then_with(|| name_a.cmp(name_b))
     });
@@ -12352,7 +12367,9 @@ impl ProgramState {
     };
     let prim = store.primitive_ids();
     if is_async && ret != prim.unknown {
-      ret = self.promise_ref(store.as_ref(), ret).unwrap_or(prim.unknown);
+      ret = self
+        .promise_ref(store.as_ref(), ret)
+        .unwrap_or(prim.unknown);
     }
     let sig_id = overloads[0];
     let mut sig = store.signature(sig_id);
@@ -12464,14 +12481,20 @@ impl ProgramState {
     if let Some(store) = self.interned_store.as_ref() {
       let mut cache = HashMap::new();
       let mut interned = store.canon(convert_type_for_display(ty, self, store, &mut cache));
-      if inferred_from_body && func.body.is_some_and(|body| self.body_is_async_function(body)) {
+      if inferred_from_body
+        && func
+          .body
+          .is_some_and(|body| self.body_is_async_function(body))
+      {
         let prim = store.primitive_ids();
         if let tti::TypeKind::Callable { overloads } = store.type_kind(interned) {
           if overloads.len() == 1 {
             let sig_id = overloads[0];
             let mut sig = store.signature(sig_id);
             if sig.ret != prim.unknown {
-              let wrapped = self.promise_ref(store.as_ref(), sig.ret).unwrap_or(prim.unknown);
+              let wrapped = self
+                .promise_ref(store.as_ref(), sig.ret)
+                .unwrap_or(prim.unknown);
               if wrapped != sig.ret {
                 sig.ret = wrapped;
                 let sig_id = store.intern_signature(sig);
