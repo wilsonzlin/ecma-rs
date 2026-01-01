@@ -254,11 +254,8 @@ fn normalize_file_name(file: Option<String>, options: &NormalizationOptions) -> 
     }
   }
 
-  // The conformance runner writes drive-rooted virtual paths like `c:/foo/bar.ts` to disk under a
-  // synthetic directory (e.g. `drive_c/foo/bar.ts`) so joins remain relative on Windows.
-  //
-  // For diagnostics comparisons we want those to behave like real drive paths, so strip the
-  // synthetic `drive_<letter>` segment back to the drive-less canonical form.
+  // Some fixtures/baselines may contain synthetic `drive_<letter>/...` prefixes (historically used
+  // to keep drive-rooted paths relative on Windows). Strip that segment back to the canonical form.
   if let Some(rest) = name.strip_prefix('/') {
     let (first, remaining) = rest.split_once('/').unwrap_or((rest, ""));
     if let Some(letter) = first.strip_prefix("drive_") {

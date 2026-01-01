@@ -9029,6 +9029,50 @@ impl ProgramState {
       .map(|(name, _)| name.clone())
       .collect();
 
+    fn collect_jsx_root_names(
+      element: &hir_js::JsxElement,
+      lowered: &hir_js::LowerResult,
+      names: &mut HashSet<String>,
+    ) {
+      if let Some(name) = element.name.as_ref() {
+        match name {
+          hir_js::JsxElementName::Member(member) => {
+            if let Some(base) = lowered.names.resolve(member.base) {
+              names.insert(base.to_string());
+            }
+          }
+          hir_js::JsxElementName::Ident(name_id) => {
+            let Some(name) = lowered.names.resolve(*name_id) else {
+              return;
+            };
+            let Some(first_char) = name.chars().next() else {
+              return;
+            };
+            if !first_char.is_ascii_lowercase() {
+              names.insert(name.to_string());
+            }
+          }
+          hir_js::JsxElementName::Name(_) => {}
+        }
+      }
+
+      for attr in &element.attributes {
+        match attr {
+          hir_js::JsxAttr::Named {
+            value: Some(hir_js::JsxAttrValue::Element(child)),
+            ..
+          } => collect_jsx_root_names(child, lowered, names),
+          _ => {}
+        }
+      }
+
+      for child in &element.children {
+        if let hir_js::JsxChild::Element(element) = child {
+          collect_jsx_root_names(element, lowered, names);
+        }
+      }
+    }
+
     let needed_root_names: HashSet<String> = match self.local_semantics.get(&file) {
       Some(locals) => {
         let mut names = HashSet::new();
@@ -9051,64 +9095,31 @@ impl ProgramState {
                 names.insert(name.to_string());
               }
             }
-            hir_js::ExprKind::Jsx(jsxe) => match &jsxe.kind {
-              hir_js::JsxElementKind::Member(parts) => {
-                let Some(first) = parts.first() else {
-                  continue;
-                };
-                let Some(name) = lowered.names.resolve(*first) else {
-                  continue;
-                };
-                names.insert(name.to_string());
-              }
-              hir_js::JsxElementKind::Element(name_id) => {
-                let Some(name) = lowered.names.resolve(*name_id) else {
-                  continue;
-                };
-                let Some(first_char) = name.chars().next() else {
-                  continue;
-                };
-                if !first_char.is_ascii_lowercase() {
-                  names.insert(name.to_string());
-                }
-              }
-              hir_js::JsxElementKind::Fragment
-              | hir_js::JsxElementKind::Text(_)
-              | hir_js::JsxElementKind::Expr(_)
-              | hir_js::JsxElementKind::Spread(_)
-              | hir_js::JsxElementKind::Name(_) => {}
-            },
+            hir_js::ExprKind::Jsx(jsxe) => {
+              collect_jsx_root_names(jsxe, &lowered, &mut names);
+            }
             _ => {}
           }
         }
         names
       }
-      None => body
-        .exprs
-        .iter()
-        .filter_map(|expr| match &expr.kind {
-          hir_js::ExprKind::Ident(name_id) => {
-            lowered.names.resolve(*name_id).map(|n| n.to_string())
-          }
-          hir_js::ExprKind::Jsx(jsxe) => match &jsxe.kind {
-            hir_js::JsxElementKind::Member(parts) => parts
-              .first()
-              .and_then(|first| lowered.names.resolve(*first))
-              .map(|n| n.to_string()),
-            hir_js::JsxElementKind::Element(name_id) => {
-              let name = lowered.names.resolve(*name_id)?;
-              let first_char = name.chars().next()?;
-              (!first_char.is_ascii_lowercase()).then(|| name.to_string())
+      None => {
+        let mut names = HashSet::new();
+        for expr in &body.exprs {
+          match &expr.kind {
+            hir_js::ExprKind::Ident(name_id) => {
+              if let Some(name) = lowered.names.resolve(*name_id) {
+                names.insert(name.to_string());
+              }
             }
-            hir_js::JsxElementKind::Fragment
-            | hir_js::JsxElementKind::Text(_)
-            | hir_js::JsxElementKind::Expr(_)
-            | hir_js::JsxElementKind::Spread(_)
-            | hir_js::JsxElementKind::Name(_) => None,
-          },
-          _ => None,
-        })
-        .collect(),
+            hir_js::ExprKind::Jsx(jsxe) => {
+              collect_jsx_root_names(jsxe, &lowered, &mut names);
+            }
+            _ => {}
+          }
+        }
+        names
+      }
     };
 
     let mut needed_globals: Vec<_> = needed_root_names
