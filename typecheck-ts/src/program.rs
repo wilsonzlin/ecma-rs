@@ -2545,17 +2545,54 @@ pub struct ModuleData {
   pub declare: bool,
 }
 
+#[derive(Clone, Debug, Default)]
+struct NamespaceMemberIndex {
+  // (parent def, namespace bit) -> (member name -> candidate defs)
+  by_parent: HashMap<(DefId, sem_ts::Namespace), HashMap<String, Vec<DefId>>>,
+}
+
+impl NamespaceMemberIndex {
+  fn insert(&mut self, parent: DefId, ns: sem_ts::Namespace, name: String, def: DefId) {
+    self
+      .by_parent
+      .entry((parent, ns))
+      .or_default()
+      .entry(name)
+      .or_default()
+      .push(def);
+  }
+
+  fn members(&self, parent: DefId, ns: sem_ts::Namespace, name: &str) -> Option<&[DefId]> {
+    self
+      .by_parent
+      .get(&(parent, ns))
+      .and_then(|map| map.get(name))
+      .map(|defs| defs.as_slice())
+  }
+
+  fn finalize(&mut self) {
+    for map in self.by_parent.values_mut() {
+      for defs in map.values_mut() {
+        defs.sort_by_key(|id| id.0);
+        defs.dedup();
+      }
+    }
+  }
+}
+
 #[derive(Clone)]
 struct ProgramTypeResolver {
   semantics: Arc<sem_ts::TsProgramSemantics>,
   def_kinds: HashMap<DefId, DefKind>,
+  def_files: HashMap<DefId, FileId>,
+  def_spans: HashMap<DefId, TextRange>,
   registry: FileRegistry,
   host: Arc<dyn Host>,
   current_file: FileId,
   local_defs: HashMap<String, DefId>,
   exports: HashMap<FileId, ExportMap>,
   module_namespace_defs: HashMap<FileId, DefId>,
-  namespace_members: HashMap<DefId, HashMap<String, Vec<DefId>>>,
+  namespace_members: Arc<NamespaceMemberIndex>,
   qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
 }
 
@@ -2564,17 +2601,21 @@ impl ProgramTypeResolver {
     host: Arc<dyn Host>,
     semantics: Arc<sem_ts::TsProgramSemantics>,
     def_kinds: HashMap<DefId, DefKind>,
+    def_files: HashMap<DefId, FileId>,
+    def_spans: HashMap<DefId, TextRange>,
     registry: FileRegistry,
     current_file: FileId,
     local_defs: HashMap<String, DefId>,
     exports: HashMap<FileId, ExportMap>,
     module_namespace_defs: HashMap<FileId, DefId>,
-    namespace_members: HashMap<DefId, HashMap<String, Vec<DefId>>>,
+    namespace_members: Arc<NamespaceMemberIndex>,
     qualified_def_members: Arc<HashMap<(DefId, String, sem_ts::Namespace), DefId>>,
   ) -> Self {
     ProgramTypeResolver {
       semantics,
       def_kinds,
+      def_files,
+      def_spans,
       registry,
       host,
       current_file,
@@ -2590,6 +2631,55 @@ impl ProgramTypeResolver {
     ProgramState::def_namespaces(kind).contains(ns)
   }
 
+  fn def_sort_key(&self, def: DefId, ns: sem_ts::Namespace) -> (u8, u8, u32, u32, u32) {
+    let file = self
+      .def_files
+      .get(&def)
+      .copied()
+      .unwrap_or(FileId(u32::MAX));
+    let origin = self.registry.lookup_origin(file);
+    let origin_rank = if file == self.current_file {
+      0
+    } else if matches!(origin, Some(FileOrigin::Source)) {
+      1
+    } else {
+      2
+    };
+    let pri = self.def_priority(def, ns);
+    let span = self
+      .def_spans
+      .get(&def)
+      .copied()
+      .unwrap_or_else(|| TextRange::new(u32::MAX, u32::MAX));
+    (origin_rank, pri, span.start, span.end, def.0)
+  }
+
+  fn pick_best_def(
+    &self,
+    defs: impl IntoIterator<Item = DefId>,
+    ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    let mut best: Option<(u8, u8, u32, u32, u32, DefId)> = None;
+    for def in defs {
+      let Some(kind) = self.def_kinds.get(&def) else {
+        continue;
+      };
+      if !Self::matches_namespace(kind, ns) {
+        continue;
+      }
+      let key = self.def_sort_key(def, ns);
+      best = match best {
+        Some((best_rank, best_pri, best_start, best_end, best_id, best_def))
+          if (best_rank, best_pri, best_start, best_end, best_id) <= key =>
+        {
+          Some((best_rank, best_pri, best_start, best_end, best_id, best_def))
+        }
+        _ => Some((key.0, key.1, key.2, key.3, key.4, def)),
+      };
+    }
+    best.map(|(_, _, _, _, _, def)| def)
+  }
+
   fn resolve_local(&self, name: &str, ns: sem_ts::Namespace) -> Option<DefId> {
     let def = self.local_defs.get(name).copied()?;
     let kind = self.def_kinds.get(&def)?;
@@ -2601,23 +2691,6 @@ impl ProgramTypeResolver {
     }
   }
 
-  fn pick_best_def(&self, defs: &[DefId], ns: sem_ts::Namespace) -> Option<DefId> {
-    let mut best: Option<(u8, DefId)> = None;
-    for def in defs.iter().copied() {
-      let pri = self.def_priority(def, ns);
-      if pri == u8::MAX {
-        continue;
-      }
-      best = match best {
-        Some((best_pri, best_def)) if best_pri < pri || (best_pri == pri && best_def <= def) => {
-          Some((best_pri, best_def))
-        }
-        _ => Some((pri, def)),
-      };
-    }
-    best.map(|(_, def)| def)
-  }
-
   fn resolve_entity_name_path(
     &self,
     path: &[String],
@@ -2626,40 +2699,108 @@ impl ProgramTypeResolver {
     match path {
       [] => None,
       [name] => self.resolve_symbol_in_module(name, final_ns),
-      _ => {
-        let mut current = self
-          .resolve_symbol_in_module(&path[0], sem_ts::Namespace::NAMESPACE)
-          .or_else(|| self.resolve_symbol_in_module(&path[0], final_ns))
-          .or_else(|| self.resolve_symbol_in_module(&path[0], sem_ts::Namespace::VALUE))?;
-        for (idx, segment) in path.iter().enumerate().skip(1) {
-          let is_last = idx + 1 == path.len();
-          let ns = if is_last {
-            final_ns
-          } else {
-            sem_ts::Namespace::NAMESPACE
-          };
-          match self.def_kinds.get(&current) {
-            Some(DefKind::Namespace(_) | DefKind::Module(_)) => {
-              if let Some(members) = self.namespace_members.get(&current) {
-                if let Some(candidates) = members.get(segment) {
-                  if let Some(next) = self.pick_best_def(candidates, ns) {
-                    current = next;
-                    continue;
-                  }
-                }
-              }
-              current = *self
-                .qualified_def_members
-                .get(&(current, segment.clone(), ns))?;
-            }
-            _ => {
-              return self.resolve_namespace_import_path(path, final_ns);
+      _ => self
+        .resolve_namespace_import_path(path, final_ns)
+        .or_else(|| self.resolve_namespace_member_path(path, final_ns)),
+    }
+  }
+
+  fn collect_symbol_decls(&self, symbol: sem_ts::SymbolId, ns: sem_ts::Namespace) -> Vec<DefId> {
+    let symbols = self.semantics.symbols();
+    let mut defs: Vec<DefId> = self
+      .semantics
+      .symbol_decls(symbol, ns)
+      .iter()
+      .filter_map(|decl_id| {
+        let decl = symbols.decl(*decl_id);
+        let def = decl.def_id;
+        self
+          .def_kinds
+          .get(&def)
+          .and_then(|kind| Self::matches_namespace(kind, ns).then_some(def))
+      })
+      .collect();
+    defs.sort_by_key(|id| id.0);
+    defs.dedup();
+    defs
+  }
+
+  fn resolve_namespace_symbol_defs(&self, name: &str) -> Option<Vec<DefId>> {
+    if let Some(local_def) = self.resolve_local(name, sem_ts::Namespace::NAMESPACE) {
+      if let Some(symbol) = self
+        .semantics
+        .symbol_for_def(local_def, sem_ts::Namespace::NAMESPACE)
+      {
+        let defs = self.collect_symbol_decls(symbol, sem_ts::Namespace::NAMESPACE);
+        if !defs.is_empty() {
+          return Some(defs);
+        }
+      }
+      return Some(vec![local_def]);
+    }
+
+    let symbol = self
+      .semantics
+      .resolve_in_module(
+        sem_ts::FileId(self.current_file.0),
+        name,
+        sem_ts::Namespace::NAMESPACE,
+      )
+      .or_else(|| self.global_symbol(name, sem_ts::Namespace::NAMESPACE))?;
+    let defs = self.collect_symbol_decls(symbol, sem_ts::Namespace::NAMESPACE);
+    (!defs.is_empty()).then_some(defs)
+  }
+
+  fn resolve_namespace_member_path(
+    &self,
+    path: &[String],
+    final_ns: sem_ts::Namespace,
+  ) -> Option<DefId> {
+    if path.len() < 2 {
+      return None;
+    }
+    let mut parents = self.resolve_namespace_symbol_defs(&path[0])?;
+    // Resolve intermediate namespace segments (excluding final segment).
+    for segment in path.iter().take(path.len() - 1).skip(1) {
+      let mut next: Vec<DefId> = Vec::new();
+      let mut seen: HashSet<DefId> = HashSet::new();
+      for parent in parents.iter().copied() {
+        if let Some(members) =
+          self
+            .namespace_members
+            .members(parent, sem_ts::Namespace::NAMESPACE, segment)
+        {
+          for member in members.iter().copied() {
+            if seen.insert(member) {
+              next.push(member);
             }
           }
         }
-        Some(current)
+      }
+      if next.is_empty() {
+        return None;
+      }
+      next.sort_by_key(|id| id.0);
+      next.dedup();
+      parents = next;
+    }
+
+    let final_segment = path.last()?;
+    let mut candidates: Vec<DefId> = Vec::new();
+    let mut seen: HashSet<DefId> = HashSet::new();
+    for parent in parents.iter().copied() {
+      if let Some(members) = self
+        .namespace_members
+        .members(parent, final_ns, final_segment)
+      {
+        for member in members.iter().copied() {
+          if seen.insert(member) {
+            candidates.push(member);
+          }
+        }
       }
     }
+    self.pick_best_def(candidates, final_ns)
   }
 
   fn global_symbol(&self, name: &str, ns: sem_ts::Namespace) -> Option<sem_ts::SymbolId> {
@@ -2894,7 +3035,9 @@ impl TypeResolver for ProgramTypeResolver {
     match path {
       [] => None,
       [name] => self.resolve_symbol_in_module(name, sem_ts::Namespace::TYPE),
-      _ => self.resolve_namespace_import_path(path, sem_ts::Namespace::TYPE),
+      _ => self
+        .resolve_namespace_import_path(path, sem_ts::Namespace::TYPE)
+        .or_else(|| self.resolve_namespace_member_path(path, sem_ts::Namespace::TYPE)),
     }
   }
 
@@ -2902,7 +3045,9 @@ impl TypeResolver for ProgramTypeResolver {
     match path {
       [] => None,
       [name] => self.resolve_symbol_in_module(name, sem_ts::Namespace::VALUE),
-      _ => self.resolve_namespace_import_path(path, sem_ts::Namespace::VALUE),
+      _ => self
+        .resolve_namespace_import_path(path, sem_ts::Namespace::VALUE)
+        .or_else(|| self.resolve_namespace_member_path(path, sem_ts::Namespace::VALUE)),
     }
   }
 
@@ -3623,6 +3768,7 @@ struct ProgramState {
   global_bindings: Arc<BTreeMap<String, SymbolBinding>>,
   namespace_object_types: HashMap<(FileId, String), (tti::TypeId, TypeId)>,
   module_namespace_defs: HashMap<FileId, DefId>,
+  namespace_member_index: Option<Arc<NamespaceMemberIndex>>,
   callable_overloads: HashMap<(FileId, String), Vec<DefId>>,
   diagnostics: Vec<Diagnostic>,
   implicit_any_reported: HashSet<Span>,
@@ -3734,6 +3880,7 @@ impl ProgramState {
       global_bindings: Arc::new(BTreeMap::new()),
       namespace_object_types: HashMap::new(),
       module_namespace_defs: HashMap::new(),
+      namespace_member_index: None,
       callable_overloads: HashMap::new(),
       diagnostics: Vec::new(),
       implicit_any_reported: HashSet::new(),
@@ -4168,6 +4315,67 @@ impl ProgramState {
       }
     }
     Ok(def_by_name)
+  }
+
+  fn rebuild_namespace_member_index(&mut self) -> Result<(), FatalError> {
+    let mut index = NamespaceMemberIndex::default();
+    let mut lowered_entries: Vec<_> = self.hir_lowered.iter().collect();
+    lowered_entries.sort_by_key(|(file, _)| file.0);
+
+    let namespaces_for_hir_kind = |kind: HirDefKind| -> sem_ts::Namespace {
+      match kind {
+        HirDefKind::Class | HirDefKind::Enum => sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE,
+        HirDefKind::Interface | HirDefKind::TypeAlias => sem_ts::Namespace::TYPE,
+        HirDefKind::Namespace | HirDefKind::Module => {
+          sem_ts::Namespace::VALUE | sem_ts::Namespace::NAMESPACE
+        }
+        HirDefKind::ImportBinding => {
+          sem_ts::Namespace::VALUE | sem_ts::Namespace::TYPE | sem_ts::Namespace::NAMESPACE
+        }
+        _ => sem_ts::Namespace::VALUE,
+      }
+    };
+
+    for (file_idx, (_file, lowered)) in lowered_entries.into_iter().enumerate() {
+      if (file_idx % 16) == 0 {
+        self.check_cancelled()?;
+      }
+      for (idx, def) in lowered.defs.iter().enumerate() {
+        if (idx % 4096) == 0 {
+          self.check_cancelled()?;
+        }
+        let Some(parent) = def.parent else {
+          continue;
+        };
+        let Some(name) = lowered.names.resolve(def.name) else {
+          continue;
+        };
+        let name = name.to_string();
+        let namespaces = namespaces_for_hir_kind(def.path.kind);
+        for ns in [
+          sem_ts::Namespace::VALUE,
+          sem_ts::Namespace::TYPE,
+          sem_ts::Namespace::NAMESPACE,
+        ] {
+          if !namespaces.contains(ns) {
+            continue;
+          }
+          let mut member_def = def.id;
+          if ns.contains(sem_ts::Namespace::VALUE)
+            && matches!(def.path.kind, HirDefKind::Class | HirDefKind::Enum)
+          {
+            if let Some(value_def) = self.value_defs.get(&def.id).copied() {
+              member_def = value_def;
+            }
+          }
+          index.insert(parent, ns, name.clone(), member_def);
+        }
+      }
+    }
+
+    index.finalize();
+    self.namespace_member_index = Some(Arc::new(index));
+    Ok(())
   }
 
   fn rebuild_callable_overloads(&mut self) {
@@ -4614,6 +4822,7 @@ impl ProgramState {
     self.resolve_reexports();
     self.rebuild_callable_overloads();
     self.recompute_global_bindings();
+    self.rebuild_namespace_member_index()?;
     self.rebuild_body_owners();
     self.analyzed = true;
     Ok(())
@@ -8871,53 +9080,31 @@ impl ProgramState {
     &self,
     binding_defs: &HashMap<String, DefId>,
   ) -> Option<Arc<dyn TypeResolver>> {
-    if binding_defs.is_empty() {
-      return None;
-    }
     if let Some(semantics) = self.semantics.as_ref() {
-      let def_kinds = self
-        .def_data
-        .iter()
-        .map(|(id, data)| (*id, data.kind.clone()))
-        .collect();
+      let mut def_kinds = HashMap::with_capacity(self.def_data.len());
+      let mut def_files = HashMap::with_capacity(self.def_data.len());
+      let mut def_spans = HashMap::with_capacity(self.def_data.len());
+      for (id, data) in self.def_data.iter() {
+        def_kinds.insert(*id, data.kind.clone());
+        def_files.insert(*id, data.file);
+        def_spans.insert(*id, data.span);
+      }
       let exports = self
         .files
         .iter()
         .map(|(file, state)| (*file, state.exports.clone()))
         .collect();
       let current_file = self.current_file.unwrap_or(FileId(u32::MAX));
-      let mut namespace_members: HashMap<DefId, HashMap<String, Vec<DefId>>> = HashMap::new();
-      if let Some(lowered) = self.hir_lowered.get(&current_file) {
-        for def in lowered.defs.iter() {
-          let Some(hir_js::DefTypeInfo::Namespace { members }) = def.type_info.as_ref() else {
-            continue;
-          };
-          for member_def in members.iter().copied() {
-            let Some(member) = lowered.def(member_def) else {
-              continue;
-            };
-            let Some(name) = lowered.names.resolve(member.name) else {
-              continue;
-            };
-            namespace_members
-              .entry(def.id)
-              .or_default()
-              .entry(name.to_string())
-              .or_default()
-              .push(member_def);
-          }
-        }
-      }
-      for members in namespace_members.values_mut() {
-        for defs in members.values_mut() {
-          defs.sort_by_key(|def| def.0);
-          defs.dedup();
-        }
-      }
+      let namespace_members = self
+        .namespace_member_index
+        .clone()
+        .unwrap_or_else(|| Arc::new(NamespaceMemberIndex::default()));
       return Some(Arc::new(ProgramTypeResolver::new(
         Arc::clone(&self.host),
         Arc::clone(semantics),
         def_kinds,
+        def_files,
+        def_spans,
         self.file_registry.clone(),
         current_file,
         binding_defs.clone(),
@@ -8926,6 +9113,9 @@ impl ProgramState {
         namespace_members,
         Arc::clone(&self.qualified_def_members),
       )) as Arc<_>);
+    }
+    if binding_defs.is_empty() {
+      return None;
     }
     Some(Arc::new(check::hir_body::BindingTypeResolver::new(
       binding_defs.clone(),
