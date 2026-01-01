@@ -11,6 +11,10 @@ declare namespace JSX {
   interface IntrinsicElements {
     div: { id?: string; children?: string };
     span: { children?: string };
+
+    "Svg:Path": {};
+    "my-tag": {};
+    "My-Tag": {};
   }
 }
 "#;
@@ -193,10 +197,41 @@ const bad = <Foo x={"no"} />;
   );
   assert!(
     diagnostics.iter().any(|d| {
-      d.code.as_str() == codes::TYPE_MISMATCH.as_str()
-        || d.code.as_str() == codes::NO_OVERLOAD.as_str()
+      d.code.as_str() == codes::TYPE_MISMATCH.as_str() || d.code.as_str() == codes::NO_OVERLOAD.as_str()
     }),
     "expected a prop type error for bad JSX usage, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn intrinsic_namespaced_and_hyphenated_tags_are_not_value_identifiers() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+const a = <Svg:Path />;
+const b = <my-tag />;
+const c = <My-Tag />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str()),
+    "did not expect unknown identifiers, got {diagnostics:?}"
+  );
+  assert!(
+    !diagnostics.iter().any(|d| {
+      d.code.as_str() == codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.as_str()
+    }),
+    "did not expect unknown intrinsic elements, got {diagnostics:?}"
   );
 }
 
@@ -220,3 +255,39 @@ fn unknown_intrinsic_emits_diagnostic() {
     "expected JSX_UNKNOWN_INTRINSIC_ELEMENT, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn component_member_tags_seed_base_identifier() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let component = FileKey::new("component.ts");
+  let main = FileKey::new("main.tsx");
+
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(
+      component.clone(),
+      r#"export const Foo = { Bar: (props: { x: number }): JSX.Element => null as any };"#,
+    )
+    .with_file(
+      main.clone(),
+      r#"
+import { Foo } from "./component";
+const ok = <Foo.Bar x={1} />;
+"#,
+    )
+    .link(main.clone(), "./component", component);
+
+  let program = Program::new(host, vec![main]);
+  let diagnostics = program.check();
+
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::UNKNOWN_IDENTIFIER.as_str()),
+    "did not expect unknown identifiers, got {diagnostics:?}"
+  );
+}
+

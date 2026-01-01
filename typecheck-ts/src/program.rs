@@ -9443,6 +9443,15 @@ impl ProgramState {
       .map(|(name, _)| name.clone())
       .collect();
 
+    // JSX tag names are not represented as `ExprKind::Ident` in HIR, so we need
+    // to collect component tag bases explicitly. This lets the body checker
+    // include value bindings for imported/global components referenced only
+    // from JSX (e.g. `<Foo />` or `<Foo.Bar />`).
+    //
+    // NOTE: `parse-js` may classify some non-identifier tag names as identifier
+    // names based on capitalization alone (e.g. `Svg:Path`, `My-Tag`). Treat tag
+    // names containing `:` or `-` as intrinsic elements and avoid seeding them
+    // as value identifiers.
     fn collect_jsx_root_names(
       element: &hir_js::JsxElement,
       lowered: &hir_js::LowerResult,
@@ -9452,18 +9461,20 @@ impl ProgramState {
         match name {
           hir_js::JsxElementName::Member(member) => {
             if let Some(base) = lowered.names.resolve(member.base) {
-              names.insert(base.to_string());
+              if !(base.contains(':') || base.contains('-')) {
+                names.insert(base.to_string());
+              }
             }
           }
           hir_js::JsxElementName::Ident(name_id) => {
-            let Some(name) = lowered.names.resolve(*name_id) else {
-              return;
-            };
-            let Some(first_char) = name.chars().next() else {
-              return;
-            };
-            if !first_char.is_ascii_lowercase() {
-              names.insert(name.to_string());
+            if let Some(name) = lowered.names.resolve(*name_id) {
+              if !(name.contains(':') || name.contains('-')) {
+                if let Some(first_char) = name.chars().next() {
+                  if !first_char.is_ascii_lowercase() {
+                    names.insert(name.to_string());
+                  }
+                }
+              }
             }
           }
           hir_js::JsxElementName::Name(_) => {}

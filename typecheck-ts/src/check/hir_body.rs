@@ -13,9 +13,10 @@ use hir_js::{
 };
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
-use parse_js::ast::class_or_object::{ClassMember, ClassStaticBlock};
-use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
-use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxText};
+use parse_js::ast::class_or_object::{ClassMember, ClassStaticBlock, ClassOrObjKey, ClassOrObjVal, ObjMemberType};
+use parse_js::ast::expr::jsx::{
+  JsxAttr, JsxAttrVal, JsxElem, JsxElemChild, JsxElemName, JsxName, JsxText,
+};
 use parse_js::ast::expr::pat::{ArrPat, ObjPat, Pat as AstPat};
 use parse_js::ast::expr::Expr as AstExpr;
 use parse_js::ast::func::{Func, FuncBody};
@@ -1631,6 +1632,7 @@ impl<'a> Checker<'a> {
         }
         value_ty
       }
+      AstExpr::JsxElem(elem) => self.check_jsx_elem(elem),
       _ => self.store.primitive_ids().unknown,
     };
     self.record_expr_type(expr.loc, ty);
@@ -1673,46 +1675,84 @@ impl<'a> Checker<'a> {
       }
       Some(JsxElemName::Id(id)) => {
         let name = id.stx.name.as_str();
-        let component_ty = self
-          .lookup(name)
-          .map(|binding| binding.ty)
-          .unwrap_or_else(|| {
-            self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
-              format!("unknown identifier `{name}`"),
-              Span::new(self.file, loc_to_range(self.file, id.loc)),
-            ));
-            prim.unknown
-          });
-        props_ty = self
-          .jsx_component_props_type(component_ty)
-          .unwrap_or(prim.unknown);
+        if name.contains(':') || name.contains('-') {
+          let intrinsic_elements = self.jsx_intrinsic_elements_type();
+          if intrinsic_elements != prim.unknown {
+            let found = self.member_type(intrinsic_elements, name);
+            if found == prim.unknown {
+              self
+                .diagnostics
+                .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
+                  format!("unknown JSX intrinsic element `{name}`"),
+                  Span::new(self.file, loc_to_range(self.file, id.loc)),
+                ));
+            } else {
+              props_ty = found;
+            }
+          }
+        } else {
+          let component_ty = self
+            .lookup(name)
+            .map(|binding| binding.ty)
+            .unwrap_or_else(|| {
+              self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+                format!("unknown identifier `{name}`"),
+                Span::new(self.file, loc_to_range(self.file, id.loc)),
+              ));
+              prim.unknown
+            });
+          props_ty = self
+            .jsx_component_props_type(component_ty)
+            .unwrap_or(prim.unknown);
+        }
       }
       Some(JsxElemName::Member(member)) => {
-        // Member expressions like `<Foo.Bar />` are treated like looking up
-        // `Foo` and then checking `.Bar` as a value.
         let base_name = member.stx.base.stx.name.as_str();
-        let mut current = self
-          .lookup(base_name)
-          .map(|binding| binding.ty)
-          .unwrap_or_else(|| {
-            self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
-              format!("unknown identifier `{base_name}`"),
-              Span::new(self.file, loc_to_range(self.file, member.stx.base.loc)),
-            ));
-            prim.unknown
-          });
-        for segment in member.stx.path.iter() {
-          current = self.member_type(current, segment);
+        if base_name.contains(':') || base_name.contains('-') {
+          let mut tag = base_name.to_string();
+          for segment in member.stx.path.iter() {
+            tag.push('.');
+            tag.push_str(segment);
+          }
+          let intrinsic_elements = self.jsx_intrinsic_elements_type();
+          if intrinsic_elements != prim.unknown {
+            let found = self.member_type(intrinsic_elements, &tag);
+            if found == prim.unknown {
+              self
+                .diagnostics
+                .push(codes::JSX_UNKNOWN_INTRINSIC_ELEMENT.error(
+                  format!("unknown JSX intrinsic element `{tag}`"),
+                  Span::new(self.file, loc_to_range(self.file, member.loc)),
+                ));
+            } else {
+              props_ty = found;
+            }
+          }
+        } else {
+          // Member expressions like `<Foo.Bar />` are treated like looking up
+          // `Foo` and then checking `.Bar` as a value.
+          let mut current = self
+            .lookup(base_name)
+            .map(|binding| binding.ty)
+            .unwrap_or_else(|| {
+              self.diagnostics.push(codes::UNKNOWN_IDENTIFIER.error(
+                format!("unknown identifier `{base_name}`"),
+                Span::new(self.file, loc_to_range(self.file, member.stx.base.loc)),
+              ));
+              prim.unknown
+            });
+          for segment in member.stx.path.iter() {
+            current = self.member_type(current, segment);
+          }
+          props_ty = self
+            .jsx_component_props_type(current)
+            .unwrap_or(prim.unknown);
         }
-        props_ty = self
-          .jsx_component_props_type(current)
-          .unwrap_or(prim.unknown);
       }
     }
 
     self.check_jsx_attrs(&elem.stx.attributes, props_ty);
     self.check_jsx_children(&elem.stx.children, props_ty);
-
     element_ty
   }
 
@@ -1861,7 +1901,6 @@ impl<'a> Checker<'a> {
     let sig = self.first_callable_signature(component_ty)?;
     sig.params.first().map(|param| param.ty)
   }
-
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
     let prim = self.store.primitive_ids();
     let ty = match expr.stx.as_ref() {
