@@ -590,7 +590,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
           build_skipped_result(&planned.case)
         } else {
           run_single_case(
-            planned.case.clone(),
+            &planned.case,
             compare_mode,
             tsc_pool.clone(),
             timeout_manager.clone(),
@@ -877,7 +877,7 @@ fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
 }
 
 fn run_single_case(
-  case: TestCase,
+  case: &TestCase,
   compare_mode: CompareMode,
   tsc_pool: Option<Arc<TscRunnerPool>>,
   timeout_manager: Arc<TimeoutManager>,
@@ -907,7 +907,7 @@ fn run_single_case(
 }
 
 fn execute_case(
-  case: TestCase,
+  case: &TestCase,
   compare_mode: CompareMode,
   tsc_pool: Option<Arc<TscRunnerPool>>,
   tsc_available: bool,
@@ -929,7 +929,7 @@ fn execute_case(
 
   if let Some(delay) = harness_sleep_for_case(&case.id) {
     if sleep_with_deadline(delay, deadline) {
-      return build_timeout_result(&case, timeout);
+      return build_timeout_result(case, timeout);
     }
   }
   let notes = case.notes.clone();
@@ -949,10 +949,10 @@ fn execute_case(
       diagnostics,
       query_stats,
     } => (diagnostics, query_stats),
-    RustRunResult::Cancelled => return build_timeout_result(&case, timeout),
+    RustRunResult::Cancelled => return build_timeout_result(case, timeout),
   };
   if Instant::now() >= deadline {
-    return build_timeout_result(&case, timeout);
+    return build_timeout_result(case, timeout);
   }
   let tsc_options = harness_options.to_tsc_options_map();
   let options = build_test_options(&harness_options, &tsc_options);
@@ -989,12 +989,12 @@ fn execute_case(
     CompareMode::None => EngineDiagnostics::skipped(Some("comparison disabled".to_string())),
     CompareMode::Tsc => match run_live_tsc("tsc unavailable") {
       Some(diag) => diag,
-      None => return build_timeout_result(&case, timeout),
+      None => return build_timeout_result(case, timeout),
     },
     CompareMode::Snapshot if update_snapshots => {
       match run_live_tsc("tsc unavailable for snapshot update") {
         Some(diag) => diag,
-        None => return build_timeout_result(&case, timeout),
+        None => return build_timeout_result(case, timeout),
       }
     }
     CompareMode::Snapshot => match snapshots.load(&case.id) {
@@ -1013,7 +1013,7 @@ fn execute_case(
   };
 
   if Instant::now() >= deadline {
-    return build_timeout_result(&case, timeout);
+    return build_timeout_result(case, timeout);
   }
 
   if update_snapshots && tsc.status == EngineStatus::Ok {
@@ -1025,11 +1025,11 @@ fn execute_case(
   let (outcome, detail) = compute_outcome(compare_mode, &rust, &tsc, span_tolerance);
   let diff_ms = diff_start.elapsed().as_millis();
   if Instant::now() >= deadline {
-    return build_timeout_result(&case, timeout);
+    return build_timeout_result(case, timeout);
   }
 
   TestResult {
-    id: case.id,
+    id: case.id.clone(),
     path: case.path.display().to_string(),
     outcome,
     duration_ms: total_start.elapsed().as_millis(),
