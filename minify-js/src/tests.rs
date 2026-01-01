@@ -101,7 +101,7 @@ fn test_unknown_globals_not_shadowed() {
 #[test]
 fn test_module_export_bindings_preserved() {
   let result = minified(TopLevelMode::Module, "export const x=1; const y=2;");
-  assert_eq!(result, "export const x=1;const a=2;");
+  assert_eq!(result, "export const x=1;");
 }
 
 #[test]
@@ -131,6 +131,69 @@ fn test_minify_determinism() {
   let first = minified(TopLevelMode::Module, src);
   let second = minified(TopLevelMode::Module, src);
   assert_eq!(first, second);
+}
+
+#[test]
+fn folds_numeric_expressions() {
+  let result = minified(TopLevelMode::Global, "console.log(1+2*3);");
+  assert_eq!(result, "console.log(7);");
+}
+
+#[test]
+fn folds_string_concatenation() {
+  let result = minified(TopLevelMode::Global, r#"console.log("a"+"b");"#);
+  assert_eq!(result, r#"console.log("ab");"#);
+}
+
+#[test]
+fn folds_boolean_negation() {
+  let result = minified(TopLevelMode::Global, "console.log(!true);");
+  assert_eq!(result, "console.log(false);");
+}
+
+#[test]
+fn rewrites_if_to_logical_and() {
+  let result = minified(TopLevelMode::Global, "if(foo)bar();");
+  assert_eq!(result, "foo&&bar();");
+}
+
+#[test]
+fn rewrites_if_to_ternary_expression() {
+  let result = minified(TopLevelMode::Global, "if(foo)a();else b();");
+  assert_eq!(result, "foo?a():b();");
+}
+
+#[test]
+fn removes_unreachable_if_branches() {
+  let result = minified(TopLevelMode::Global, "if(false)foo();bar();");
+  assert_eq!(result, "bar();");
+}
+
+#[test]
+fn removes_unused_var_decls_with_pure_initializers() {
+  let result = minified(TopLevelMode::Module, "let x=1;console.log(2);");
+  assert_eq!(result, "console.log(2);");
+}
+
+#[test]
+fn rewrites_return_undefined() {
+  let result = minified(TopLevelMode::Global, "function f(){return undefined;}");
+  assert_eq!(result, "function f(){return;}");
+}
+
+#[test]
+fn does_not_rewrite_shadowed_undefined() {
+  let result = minified(TopLevelMode::Global, "function f(undefined){return undefined;}");
+  assert_eq!(result, "function f(a){return a;}");
+}
+
+#[test]
+fn rewrites_nullish_or_to_loose_equality() {
+  let result = minified(
+    TopLevelMode::Global,
+    "function f(x){if(x===null||x===undefined)g();}",
+  );
+  assert_eq!(result, "function f(a){a==null&&g();}");
 }
 
 #[cfg(feature = "emit-minify")]
@@ -204,7 +267,7 @@ fn test_direct_eval_disables_renaming() {
 fn test_shadowed_eval_allows_renaming() {
   let src = "function f(eval){let x;eval(\"x\");}";
   let result = minified(TopLevelMode::Global, src);
-  assert_eq!(result, "function f(a){let b;a(\"x\");}");
+  assert_eq!(result, "function f(a){a(\"x\");}");
 }
 
 #[test]

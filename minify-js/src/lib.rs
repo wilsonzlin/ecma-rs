@@ -20,6 +20,8 @@ use ts_erase::erase_types;
 pub use parse_js::Dialect;
 #[cfg(feature = "fuzzing")]
 mod fuzz;
+#[cfg(feature = "emit-minify")]
+mod opt;
 mod rename;
 #[cfg(test)]
 mod tests;
@@ -206,6 +208,9 @@ pub fn minify_with_options(
   let used_dialect = used_dialect.expect("successful parse must set dialect");
 
   erase_types(file, options.top_level_mode, source, &mut top_level_node)?;
+
+  #[cfg(feature = "emit-minify")]
+  opt::optimize(file, options.top_level_mode, &mut top_level_node);
 
   let (sem, _) = bind_js(&mut top_level_node, options.top_level_mode, file);
   let usage = collect_usages(&mut top_level_node, &sem, options.top_level_mode);
