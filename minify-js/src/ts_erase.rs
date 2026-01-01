@@ -791,136 +791,661 @@ fn rewrite_enum_member_refs(
   enum_name: &str,
   member_names: &HashSet<String>,
 ) {
-  fn replace_with_member_access(expr: &mut Node<Expr>, enum_name: &str, member: String) {
-    let loc = expr.loc;
-    let assoc = std::mem::take(&mut expr.assoc);
-    let mut replacement = ts_lower::member_expr(
-      loc,
-      ts_lower::id(loc, enum_name.to_string()),
-      ts_lower::MemberKey::Name(member),
-    );
-    replacement.assoc = assoc;
-    *expr = replacement;
+  struct Rewriter<'a> {
+    enum_name: &'a str,
+    member_names: &'a HashSet<String>,
+    shadowed: Vec<HashSet<String>>,
   }
 
-  fn visit(expr: &mut Node<Expr>, enum_name: &str, member_names: &HashSet<String>) {
-    if let Some(member) = match expr.stx.as_ref() {
-      Expr::Id(id) if member_names.contains(&id.stx.name) => Some(id.stx.name.clone()),
-      _ => None,
-    } {
-      replace_with_member_access(expr, enum_name, member);
-      return;
+  impl<'a> Rewriter<'a> {
+    fn is_shadowed(&self, name: &str) -> bool {
+      self.shadowed.iter().any(|scope| scope.contains(name))
     }
 
-    match expr.stx.as_mut() {
-      Expr::Id(_) => {}
-      Expr::Binary(bin) => {
-        visit(&mut bin.stx.left, enum_name, member_names);
-        visit(&mut bin.stx.right, enum_name, member_names);
-      }
-      Expr::Unary(unary) => {
-        visit(&mut unary.stx.argument, enum_name, member_names);
-      }
-      Expr::UnaryPostfix(unary) => {
-        visit(&mut unary.stx.argument, enum_name, member_names);
-      }
-      Expr::Call(call) => {
-        visit(&mut call.stx.callee, enum_name, member_names);
-        for arg in call.stx.arguments.iter_mut() {
-          visit(&mut arg.stx.value, enum_name, member_names);
-        }
-      }
-      Expr::Member(member) => {
-        visit(&mut member.stx.left, enum_name, member_names);
-      }
-      Expr::ComputedMember(member) => {
-        visit(&mut member.stx.object, enum_name, member_names);
-        visit(&mut member.stx.member, enum_name, member_names);
-      }
-      Expr::Cond(cond) => {
-        visit(&mut cond.stx.test, enum_name, member_names);
-        visit(&mut cond.stx.consequent, enum_name, member_names);
-        visit(&mut cond.stx.alternate, enum_name, member_names);
-      }
-      Expr::Import(import) => {
-        visit(&mut import.stx.module, enum_name, member_names);
-        if let Some(attrs) = import.stx.attributes.as_mut() {
-          visit(attrs, enum_name, member_names);
-        }
-      }
-      Expr::TaggedTemplate(tagged) => {
-        visit(&mut tagged.stx.function, enum_name, member_names);
-        for part in tagged.stx.parts.iter_mut() {
-          if let LitTemplatePart::Substitution(expr) = part {
-            visit(expr, enum_name, member_names);
+    fn with_scope<F: FnOnce(&mut Self)>(&mut self, scope: HashSet<String>, f: F) {
+      self.shadowed.push(scope);
+      f(self);
+      self.shadowed.pop();
+    }
+
+    fn replace_with_member_access(&self, expr: &mut Node<Expr>, member: String) {
+      let loc = expr.loc;
+      let assoc = std::mem::take(&mut expr.assoc);
+      let mut replacement = ts_lower::member_expr(
+        loc,
+        ts_lower::id(loc, self.enum_name.to_string()),
+        ts_lower::MemberKey::Name(member),
+      );
+      replacement.assoc = assoc;
+      *expr = replacement;
+    }
+
+    fn collect_pat_declared(&self, pat: &Node<Pat>, out: &mut HashSet<String>) {
+      match pat.stx.as_ref() {
+        Pat::Id(id) => {
+          if self.member_names.contains(&id.stx.name) {
+            out.insert(id.stx.name.clone());
           }
         }
-      }
-      Expr::LitArr(arr) => {
-        for elem in arr.stx.elements.iter_mut() {
-          if let LitArrElem::Single(expr) | LitArrElem::Rest(expr) = elem {
-            visit(expr, enum_name, member_names);
+        Pat::Arr(arr) => {
+          for elem in arr.stx.elements.iter().flatten() {
+            self.collect_pat_declared(&elem.target, out);
+          }
+          if let Some(rest) = &arr.stx.rest {
+            self.collect_pat_declared(rest, out);
           }
         }
+        Pat::Obj(obj) => {
+          for prop in &obj.stx.properties {
+            self.collect_pat_declared(&prop.stx.target, out);
+          }
+          if let Some(rest) = &obj.stx.rest {
+            self.collect_pat_declared(rest, out);
+          }
+        }
+        Pat::AssignTarget(_) => {}
       }
-      Expr::LitObj(obj) => {
-        for member in obj.stx.members.iter_mut() {
-          match &mut member.stx.typ {
-            ObjMemberType::Valued { key, val } => {
-              if let ClassOrObjKey::Computed(expr) = key {
-                visit(expr, enum_name, member_names);
-              }
-              match val {
-                ClassOrObjVal::Prop(Some(expr)) => visit(expr, enum_name, member_names),
-                ClassOrObjVal::Prop(None)
-                | ClassOrObjVal::IndexSignature(_)
-                | ClassOrObjVal::Getter(_)
-                | ClassOrObjVal::Setter(_)
-                | ClassOrObjVal::Method(_)
-                | ClassOrObjVal::StaticBlock(_) => {}
+    }
+
+    fn collect_var_declared_names_in_stmt(&self, stmt: &Node<Stmt>, out: &mut HashSet<String>) {
+      match stmt.stx.as_ref() {
+        Stmt::VarDecl(decl) if decl.stx.mode == VarDeclMode::Var => {
+          for declarator in &decl.stx.declarators {
+            self.collect_pat_declared(&declarator.pattern.stx.pat, out);
+          }
+        }
+        Stmt::ForTriple(for_stmt) => {
+          if let ForTripleStmtInit::Decl(decl) = &for_stmt.stx.init {
+            if decl.stx.mode == VarDeclMode::Var {
+              for declarator in &decl.stx.declarators {
+                self.collect_pat_declared(&declarator.pattern.stx.pat, out);
               }
             }
-            ObjMemberType::Rest { val } => visit(val, enum_name, member_names),
-            ObjMemberType::Shorthand { .. } => {}
+          }
+          for stmt in &for_stmt.stx.body.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+        }
+        Stmt::ForIn(for_stmt) => {
+          if let ForInOfLhs::Decl((VarDeclMode::Var, pat)) = &for_stmt.stx.lhs {
+            self.collect_pat_declared(&pat.stx.pat, out);
+          }
+          for stmt in &for_stmt.stx.body.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+        }
+        Stmt::ForOf(for_stmt) => {
+          if let ForInOfLhs::Decl((VarDeclMode::Var, pat)) = &for_stmt.stx.lhs {
+            self.collect_pat_declared(&pat.stx.pat, out);
+          }
+          for stmt in &for_stmt.stx.body.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+        }
+        Stmt::Block(block) => {
+          for stmt in &block.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+        }
+        Stmt::If(if_stmt) => {
+          self.collect_var_declared_names_in_stmt(&if_stmt.stx.consequent, out);
+          if let Some(alt) = &if_stmt.stx.alternate {
+            self.collect_var_declared_names_in_stmt(alt, out);
+          }
+        }
+        Stmt::While(while_stmt) => self.collect_var_declared_names_in_stmt(&while_stmt.stx.body, out),
+        Stmt::DoWhile(do_stmt) => self.collect_var_declared_names_in_stmt(&do_stmt.stx.body, out),
+        Stmt::With(with_stmt) => self.collect_var_declared_names_in_stmt(&with_stmt.stx.body, out),
+        Stmt::Label(label) => self.collect_var_declared_names_in_stmt(&label.stx.statement, out),
+        Stmt::Switch(switch_stmt) => {
+          for branch in &switch_stmt.stx.branches {
+            for stmt in &branch.stx.body {
+              self.collect_var_declared_names_in_stmt(stmt, out);
+            }
+          }
+        }
+        Stmt::Try(try_stmt) => {
+          for stmt in &try_stmt.stx.wrapped.stx.body {
+            self.collect_var_declared_names_in_stmt(stmt, out);
+          }
+          if let Some(catch) = &try_stmt.stx.catch {
+            for stmt in &catch.stx.body {
+              self.collect_var_declared_names_in_stmt(stmt, out);
+            }
+          }
+          if let Some(finally) = &try_stmt.stx.finally {
+            for stmt in &finally.stx.body {
+              self.collect_var_declared_names_in_stmt(stmt, out);
+            }
+          }
+        }
+        Stmt::FunctionDecl(_) | Stmt::ClassDecl(_) => {}
+        _ => {}
+      }
+    }
+
+    fn collect_block_declared_names(&self, stmts: &[Node<Stmt>]) -> HashSet<String> {
+      let mut out = HashSet::new();
+      for stmt in stmts {
+        match stmt.stx.as_ref() {
+          Stmt::VarDecl(decl)
+            if matches!(
+              decl.stx.mode,
+              VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+            ) =>
+          {
+            for declarator in &decl.stx.declarators {
+              self.collect_pat_declared(&declarator.pattern.stx.pat, &mut out);
+            }
+          }
+          Stmt::FunctionDecl(func_decl) => {
+            if let Some(name) = func_decl.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+              if self.member_names.contains(&name) {
+                out.insert(name);
+              }
+            }
+          }
+          Stmt::ClassDecl(class_decl) => {
+            if let Some(name) = class_decl.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+              if self.member_names.contains(&name) {
+                out.insert(name);
+              }
+            }
+          }
+          _ => {}
+        }
+      }
+      out
+    }
+
+    fn rewrite_pat(&mut self, pat: &mut Node<Pat>) {
+      match pat.stx.as_mut() {
+        Pat::Arr(arr) => {
+          for elem in arr.stx.elements.iter_mut() {
+            if let Some(elem) = elem {
+              self.rewrite_pat(&mut elem.target);
+              if let Some(default) = elem.default_value.as_mut() {
+                self.rewrite_expr(default);
+              }
+            }
+          }
+          if let Some(rest) = arr.stx.rest.as_mut() {
+            self.rewrite_pat(rest);
+          }
+        }
+        Pat::Obj(obj) => {
+          for prop in obj.stx.properties.iter_mut() {
+            if let ClassOrObjKey::Computed(expr) = &mut prop.stx.key {
+              self.rewrite_expr(expr);
+            }
+            self.rewrite_pat(&mut prop.stx.target);
+            if let Some(default) = prop.stx.default_value.as_mut() {
+              self.rewrite_expr(default);
+            }
+          }
+          if let Some(rest) = obj.stx.rest.as_mut() {
+            self.rewrite_pat(rest);
+          }
+        }
+        Pat::AssignTarget(expr) => self.rewrite_expr(expr),
+        Pat::Id(_) => {}
+      }
+    }
+
+    fn rewrite_var_decl(&mut self, decl: &mut VarDecl) {
+      for declarator in decl.declarators.iter_mut() {
+        self.rewrite_pat(&mut declarator.pattern.stx.pat);
+        if let Some(init) = declarator.initializer.as_mut() {
+          self.rewrite_expr(init);
+        }
+      }
+    }
+
+    fn rewrite_func(&mut self, func: &mut Func, func_name: Option<&str>) {
+      let mut scope = HashSet::new();
+      for param in func.parameters.iter() {
+        self.collect_pat_declared(&param.stx.pattern.stx.pat, &mut scope);
+      }
+      if let Some(name) = func_name {
+        if self.member_names.contains(name) {
+          scope.insert(name.to_string());
+        }
+      }
+      if let Some(FuncBody::Block(body)) = &func.body {
+        for stmt in body {
+          self.collect_var_declared_names_in_stmt(stmt, &mut scope);
+        }
+      }
+      self.with_scope(scope, |rewriter| {
+        for param in func.parameters.iter_mut() {
+          rewriter.rewrite_pat(&mut param.stx.pattern.stx.pat);
+          if let Some(default) = param.stx.default_value.as_mut() {
+            rewriter.rewrite_expr(default);
+          }
+        }
+        match func.body.as_mut() {
+          Some(FuncBody::Block(body)) => rewriter.rewrite_stmts_in_block(body),
+          Some(FuncBody::Expression(expr)) => rewriter.rewrite_expr(expr),
+          None => {}
+        }
+      });
+    }
+
+    fn rewrite_class_members(&mut self, members: &mut Vec<Node<ClassMember>>) {
+      for member in members.iter_mut() {
+        if let ClassOrObjKey::Computed(expr) = &mut member.stx.key {
+          self.rewrite_expr(expr);
+        }
+        for decorator in member.stx.decorators.iter_mut() {
+          self.rewrite_expr(&mut decorator.stx.expression);
+        }
+        match &mut member.stx.val {
+          ClassOrObjVal::Getter(get) => self.rewrite_func(&mut get.stx.func.stx, None),
+          ClassOrObjVal::Setter(set) => self.rewrite_func(&mut set.stx.func.stx, None),
+          ClassOrObjVal::Method(method) => self.rewrite_func(&mut method.stx.func.stx, None),
+          ClassOrObjVal::Prop(Some(expr)) => self.rewrite_expr(expr),
+          ClassOrObjVal::Prop(None) | ClassOrObjVal::IndexSignature(_) => {}
+          ClassOrObjVal::StaticBlock(block) => self.rewrite_stmts_in_block(&mut block.stx.body),
+        }
+      }
+    }
+
+    fn rewrite_obj_member(&mut self, member: &mut Node<ObjMember>) {
+      match &mut member.stx.typ {
+        ObjMemberType::Valued { key, val } => {
+          if let ClassOrObjKey::Computed(expr) = key {
+            self.rewrite_expr(expr);
+          }
+          match val {
+            ClassOrObjVal::Getter(get) => self.rewrite_func(&mut get.stx.func.stx, None),
+            ClassOrObjVal::Setter(set) => self.rewrite_func(&mut set.stx.func.stx, None),
+            ClassOrObjVal::Method(method) => self.rewrite_func(&mut method.stx.func.stx, None),
+            ClassOrObjVal::Prop(Some(expr)) => self.rewrite_expr(expr),
+            ClassOrObjVal::Prop(None)
+            | ClassOrObjVal::IndexSignature(_)
+            | ClassOrObjVal::StaticBlock(_) => {}
+          }
+        }
+        ObjMemberType::Rest { val } => self.rewrite_expr(val),
+        ObjMemberType::Shorthand { .. } => {}
+      }
+    }
+
+    fn rewrite_stmts_in_block(&mut self, stmts: &mut Vec<Node<Stmt>>) {
+      let scope = self.collect_block_declared_names(stmts);
+      self.with_scope(scope, |rewriter| {
+        for stmt in stmts.iter_mut() {
+          rewriter.rewrite_stmt(stmt);
+        }
+      });
+    }
+
+    fn rewrite_for_body(&mut self, body: &mut Node<ForBody>) {
+      self.rewrite_stmts_in_block(&mut body.stx.body);
+    }
+
+    fn rewrite_switch(&mut self, switch_stmt: &mut SwitchStmt) {
+      let mut scope = HashSet::new();
+      for branch in switch_stmt.branches.iter() {
+        for stmt in branch.stx.body.iter() {
+          match stmt.stx.as_ref() {
+            Stmt::VarDecl(decl)
+              if matches!(
+                decl.stx.mode,
+                VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+              ) =>
+            {
+              for declarator in &decl.stx.declarators {
+                self.collect_pat_declared(&declarator.pattern.stx.pat, &mut scope);
+              }
+            }
+            Stmt::FunctionDecl(func_decl) => {
+              if let Some(name) =
+                func_decl.stx.name.as_ref().map(|name| name.stx.name.clone())
+              {
+                if self.member_names.contains(&name) {
+                  scope.insert(name);
+                }
+              }
+            }
+            Stmt::ClassDecl(class_decl) => {
+              if let Some(name) =
+                class_decl.stx.name.as_ref().map(|name| name.stx.name.clone())
+              {
+                if self.member_names.contains(&name) {
+                  scope.insert(name);
+                }
+              }
+            }
+            _ => {}
           }
         }
       }
-      Expr::LitTemplate(tpl) => {
-        for part in tpl.stx.parts.iter_mut() {
-          if let LitTemplatePart::Substitution(expr) = part {
-            visit(expr, enum_name, member_names);
+
+      self.with_scope(scope, |rewriter| {
+        rewriter.rewrite_expr(&mut switch_stmt.test);
+        for branch in switch_stmt.branches.iter_mut() {
+          if let Some(case) = branch.stx.case.as_mut() {
+            rewriter.rewrite_expr(case);
+          }
+          for stmt in branch.stx.body.iter_mut() {
+            rewriter.rewrite_stmt(stmt);
           }
         }
+      });
+    }
+
+    fn rewrite_stmt(&mut self, stmt: &mut Node<Stmt>) {
+      match stmt.stx.as_mut() {
+        Stmt::Block(block) => self.rewrite_stmts_in_block(&mut block.stx.body),
+        Stmt::Expr(expr_stmt) => self.rewrite_expr(&mut expr_stmt.stx.expr),
+        Stmt::If(if_stmt) => {
+          self.rewrite_expr(&mut if_stmt.stx.test);
+          self.rewrite_stmt(&mut if_stmt.stx.consequent);
+          if let Some(alt) = if_stmt.stx.alternate.as_mut() {
+            self.rewrite_stmt(alt);
+          }
+        }
+        Stmt::ForTriple(for_stmt) => {
+          let mut loop_scope = HashSet::new();
+          if let ForTripleStmtInit::Decl(decl) = &for_stmt.stx.init {
+            if matches!(
+              decl.stx.mode,
+              VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+            ) {
+              for declarator in &decl.stx.declarators {
+                self.collect_pat_declared(&declarator.pattern.stx.pat, &mut loop_scope);
+              }
+            }
+          }
+          self.with_scope(loop_scope, |rewriter| {
+            match &mut for_stmt.stx.init {
+              ForTripleStmtInit::Expr(expr) => rewriter.rewrite_expr(expr),
+              ForTripleStmtInit::Decl(decl) => rewriter.rewrite_var_decl(&mut decl.stx),
+              ForTripleStmtInit::None => {}
+            }
+            if let Some(cond) = for_stmt.stx.cond.as_mut() {
+              rewriter.rewrite_expr(cond);
+            }
+            if let Some(post) = for_stmt.stx.post.as_mut() {
+              rewriter.rewrite_expr(post);
+            }
+            rewriter.rewrite_for_body(&mut for_stmt.stx.body);
+          });
+        }
+        Stmt::ForIn(for_stmt) => {
+          let mut loop_scope = HashSet::new();
+          if let ForInOfLhs::Decl((mode, pat)) = &for_stmt.stx.lhs {
+            if matches!(
+              mode,
+              VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+            ) {
+              self.collect_pat_declared(&pat.stx.pat, &mut loop_scope);
+            }
+          }
+          self.with_scope(loop_scope, |rewriter| {
+            match &mut for_stmt.stx.lhs {
+              ForInOfLhs::Assign(pat) => rewriter.rewrite_pat(pat),
+              ForInOfLhs::Decl((_, pat)) => rewriter.rewrite_pat(&mut pat.stx.pat),
+            }
+            rewriter.rewrite_expr(&mut for_stmt.stx.rhs);
+            rewriter.rewrite_for_body(&mut for_stmt.stx.body);
+          });
+        }
+        Stmt::ForOf(for_stmt) => {
+          let mut loop_scope = HashSet::new();
+          if let ForInOfLhs::Decl((mode, pat)) = &for_stmt.stx.lhs {
+            if matches!(
+              mode,
+              VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+            ) {
+              self.collect_pat_declared(&pat.stx.pat, &mut loop_scope);
+            }
+          }
+          self.with_scope(loop_scope, |rewriter| {
+            match &mut for_stmt.stx.lhs {
+              ForInOfLhs::Assign(pat) => rewriter.rewrite_pat(pat),
+              ForInOfLhs::Decl((_, pat)) => rewriter.rewrite_pat(&mut pat.stx.pat),
+            }
+            rewriter.rewrite_expr(&mut for_stmt.stx.rhs);
+            rewriter.rewrite_for_body(&mut for_stmt.stx.body);
+          });
+        }
+        Stmt::While(while_stmt) => {
+          self.rewrite_expr(&mut while_stmt.stx.condition);
+          self.rewrite_stmt(&mut while_stmt.stx.body);
+        }
+        Stmt::DoWhile(do_stmt) => {
+          self.rewrite_stmt(&mut do_stmt.stx.body);
+          self.rewrite_expr(&mut do_stmt.stx.condition);
+        }
+        Stmt::With(with_stmt) => {
+          self.rewrite_expr(&mut with_stmt.stx.object);
+          self.rewrite_stmt(&mut with_stmt.stx.body);
+        }
+        Stmt::Label(label) => self.rewrite_stmt(&mut label.stx.statement),
+        Stmt::Switch(switch_stmt) => self.rewrite_switch(&mut switch_stmt.stx),
+        Stmt::Try(try_stmt) => {
+          self.rewrite_stmts_in_block(&mut try_stmt.stx.wrapped.stx.body);
+          if let Some(catch) = try_stmt.stx.catch.as_mut() {
+            let mut scope = HashSet::new();
+            if let Some(param) = &catch.stx.parameter {
+              self.collect_pat_declared(&param.stx.pat, &mut scope);
+            }
+            scope.extend(self.collect_block_declared_names(&catch.stx.body));
+            self.with_scope(scope, |rewriter| {
+              for stmt in catch.stx.body.iter_mut() {
+                rewriter.rewrite_stmt(stmt);
+              }
+            });
+          }
+          if let Some(finally) = try_stmt.stx.finally.as_mut() {
+            self.rewrite_stmts_in_block(&mut finally.stx.body);
+          }
+        }
+        Stmt::Throw(throw_stmt) => self.rewrite_expr(&mut throw_stmt.stx.value),
+        Stmt::Return(ret_stmt) => {
+          if let Some(expr) = ret_stmt.stx.value.as_mut() {
+            self.rewrite_expr(expr);
+          }
+        }
+        Stmt::VarDecl(decl) => self.rewrite_var_decl(&mut decl.stx),
+        Stmt::FunctionDecl(func_decl) => {
+          let func_name = func_decl
+            .stx
+            .name
+            .as_ref()
+            .map(|name| name.stx.name.as_str());
+          self.rewrite_func(&mut func_decl.stx.function.stx, func_name);
+        }
+        Stmt::ClassDecl(class_decl) => {
+          if let Some(extends) = class_decl.stx.extends.as_mut() {
+            self.rewrite_expr(extends);
+          }
+          for decorator in class_decl.stx.decorators.iter_mut() {
+            self.rewrite_expr(&mut decorator.stx.expression);
+          }
+          self.rewrite_class_members(&mut class_decl.stx.members);
+        }
+        Stmt::Debugger(_)
+        | Stmt::Break(_)
+        | Stmt::Continue(_)
+        | Stmt::Empty(_)
+        | Stmt::ExportDefaultExpr(_)
+        | Stmt::ExportList(_)
+        | Stmt::Import(_)
+        | Stmt::InterfaceDecl(_)
+        | Stmt::TypeAliasDecl(_)
+        | Stmt::EnumDecl(_)
+        | Stmt::NamespaceDecl(_)
+        | Stmt::ModuleDecl(_)
+        | Stmt::GlobalDecl(_)
+        | Stmt::AmbientVarDecl(_)
+        | Stmt::AmbientFunctionDecl(_)
+        | Stmt::AmbientClassDecl(_)
+        | Stmt::ImportTypeDecl(_)
+        | Stmt::ExportTypeDecl(_)
+        | Stmt::ImportEqualsDecl(_)
+        | Stmt::ExportAssignmentDecl(_)
+        | Stmt::ExportAsNamespaceDecl(_) => {}
       }
-      Expr::ArrowFunc(_) | Expr::Func(_) | Expr::Class(_) => {
-        // Do not rewrite inside nested scopes.
+    }
+
+    fn rewrite_expr(&mut self, expr: &mut Node<Expr>) {
+      if let Some(member) = match expr.stx.as_ref() {
+        Expr::Id(id) if self.member_names.contains(&id.stx.name) && !self.is_shadowed(&id.stx.name) => {
+          Some(id.stx.name.clone())
+        }
+        _ => None,
+      } {
+        self.replace_with_member_access(expr, member);
+        return;
       }
-      Expr::JsxElem(_)
-      | Expr::JsxExprContainer(_)
-      | Expr::JsxSpreadAttr(_)
-      | Expr::JsxName(_)
-      | Expr::JsxText(_)
-      | Expr::JsxMember(_)
-      | Expr::IdPat(_)
-      | Expr::ArrPat(_)
-      | Expr::ObjPat(_)
-      | Expr::ImportMeta(_)
-      | Expr::NewTarget(_)
-      | Expr::Super(_)
-      | Expr::This(_)
-      | Expr::LitBool(_)
-      | Expr::LitNull(_)
-      | Expr::LitNum(_)
-      | Expr::LitBigInt(_)
-      | Expr::LitRegex(_)
-      | Expr::LitStr(_) => {}
-      Expr::TypeAssertion(_) | Expr::NonNullAssertion(_) | Expr::SatisfiesExpr(_) => {
-        // These should have been erased already.
+
+      match expr.stx.as_mut() {
+        Expr::ArrowFunc(arrow) => self.rewrite_func(&mut arrow.stx.func.stx, None),
+        Expr::Func(func_expr) => {
+          let func_name = func_expr
+            .stx
+            .name
+            .as_ref()
+            .map(|name| name.stx.name.as_str());
+          self.rewrite_func(&mut func_expr.stx.func.stx, func_name);
+        }
+        Expr::Class(class_expr) => {
+          if let Some(name) = class_expr.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+            if self.member_names.contains(&name) {
+              let mut scope = HashSet::new();
+              scope.insert(name);
+              self.with_scope(scope, |rewriter| {
+                rewriter.rewrite_class_members(&mut class_expr.stx.members);
+              });
+              return;
+            }
+          }
+          if let Some(extends) = class_expr.stx.extends.as_mut() {
+            self.rewrite_expr(extends);
+          }
+          for decorator in class_expr.stx.decorators.iter_mut() {
+            self.rewrite_expr(&mut decorator.stx.expression);
+          }
+          self.rewrite_class_members(&mut class_expr.stx.members);
+        }
+        Expr::Binary(bin) => {
+          self.rewrite_expr(&mut bin.stx.left);
+          self.rewrite_expr(&mut bin.stx.right);
+        }
+        Expr::Call(call) => {
+          self.rewrite_expr(&mut call.stx.callee);
+          for arg in call.stx.arguments.iter_mut() {
+            self.rewrite_expr(&mut arg.stx.value);
+          }
+        }
+        Expr::ComputedMember(member) => {
+          self.rewrite_expr(&mut member.stx.object);
+          self.rewrite_expr(&mut member.stx.member);
+        }
+        Expr::Cond(cond) => {
+          self.rewrite_expr(&mut cond.stx.test);
+          self.rewrite_expr(&mut cond.stx.consequent);
+          self.rewrite_expr(&mut cond.stx.alternate);
+        }
+        Expr::Import(import) => {
+          self.rewrite_expr(&mut import.stx.module);
+          if let Some(attrs) = import.stx.attributes.as_mut() {
+            self.rewrite_expr(attrs);
+          }
+        }
+        Expr::Member(member) => {
+          self.rewrite_expr(&mut member.stx.left);
+        }
+        Expr::TaggedTemplate(tagged) => {
+          self.rewrite_expr(&mut tagged.stx.function);
+          for part in tagged.stx.parts.iter_mut() {
+            if let LitTemplatePart::Substitution(expr) = part {
+              self.rewrite_expr(expr);
+            }
+          }
+        }
+        Expr::Unary(unary) => self.rewrite_expr(&mut unary.stx.argument),
+        Expr::UnaryPostfix(unary) => self.rewrite_expr(&mut unary.stx.argument),
+        Expr::LitArr(arr) => {
+          for elem in arr.stx.elements.iter_mut() {
+            if let LitArrElem::Single(expr) | LitArrElem::Rest(expr) = elem {
+              self.rewrite_expr(expr);
+            }
+          }
+        }
+        Expr::LitObj(obj) => {
+          for member in obj.stx.members.iter_mut() {
+            self.rewrite_obj_member(member);
+          }
+        }
+        Expr::LitTemplate(tpl) => {
+          for part in tpl.stx.parts.iter_mut() {
+            if let LitTemplatePart::Substitution(expr) = part {
+              self.rewrite_expr(expr);
+            }
+          }
+        }
+        Expr::ArrPat(pat) => {
+          for elem in pat.stx.elements.iter_mut() {
+            if let Some(elem) = elem {
+              self.rewrite_pat(&mut elem.target);
+              if let Some(default) = elem.default_value.as_mut() {
+                self.rewrite_expr(default);
+              }
+            }
+          }
+          if let Some(rest) = pat.stx.rest.as_mut() {
+            self.rewrite_pat(rest);
+          }
+        }
+        Expr::ObjPat(pat) => {
+          for prop in pat.stx.properties.iter_mut() {
+            if let ClassOrObjKey::Computed(expr) = &mut prop.stx.key {
+              self.rewrite_expr(expr);
+            }
+            self.rewrite_pat(&mut prop.stx.target);
+            if let Some(default) = prop.stx.default_value.as_mut() {
+              self.rewrite_expr(default);
+            }
+          }
+          if let Some(rest) = pat.stx.rest.as_mut() {
+            self.rewrite_pat(rest);
+          }
+        }
+        Expr::Id(_)
+        | Expr::ImportMeta(_)
+        | Expr::NewTarget(_)
+        | Expr::Super(_)
+        | Expr::This(_)
+        | Expr::JsxElem(_)
+        | Expr::JsxExprContainer(_)
+        | Expr::JsxMember(_)
+        | Expr::JsxName(_)
+        | Expr::JsxSpreadAttr(_)
+        | Expr::JsxText(_)
+        | Expr::LitBigInt(_)
+        | Expr::LitBool(_)
+        | Expr::LitNull(_)
+        | Expr::LitNum(_)
+        | Expr::LitRegex(_)
+        | Expr::LitStr(_)
+        | Expr::IdPat(_) => {}
+        Expr::TypeAssertion(_)
+        | Expr::NonNullAssertion(_)
+        | Expr::SatisfiesExpr(_) => {}
       }
     }
   }
 
-  visit(expr, enum_name, member_names);
+  let mut rewriter = Rewriter {
+    enum_name,
+    member_names,
+    shadowed: Vec::new(),
+  };
+  rewriter.rewrite_expr(expr);
 }
 
 fn enum_assign_stmt(loc: Loc, enum_ident: &str, member: &str, value: Node<Expr>) -> Node<Stmt> {

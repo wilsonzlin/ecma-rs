@@ -562,6 +562,178 @@ fn rewrites_enum_member_references_in_initializers() {
 }
 
 #[test]
+fn rewrites_enum_member_references_in_nested_scopes() {
+  let src = r#"enum E { A = 1, B = (() => A)(), C = (function(){ return A; })() }"#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  assert_eq!(parsed.stx.body.len(), 2);
+  let iife = match parsed.stx.body[1].stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected enum IIFE expr stmt, got {other:?}"),
+  };
+  let call = match iife.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => match bin.stx.right.stx.as_ref()
+    {
+      Expr::Call(call) => call,
+      other => panic!("expected comma call rhs, got {other:?}"),
+    },
+    other => panic!("expected comma expression, got {other:?}"),
+  };
+  let func = match call.stx.callee.stx.as_ref() {
+    Expr::Func(func) => func,
+    other => panic!("expected function callee, got {other:?}"),
+  };
+  let body = match func.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+
+  fn get_value_expr<'a>(stmt: &'a Node<Stmt>) -> &'a Node<Expr> {
+    let expr_stmt = match stmt.stx.as_ref() {
+      Stmt::Expr(expr) => expr,
+      other => panic!("expected expression statement, got {other:?}"),
+    };
+    let outer_assign = match expr_stmt.stx.expr.stx.as_ref() {
+      Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+      other => panic!("expected assignment expression, got {other:?}"),
+    };
+    let outer_left = match outer_assign.stx.left.stx.as_ref() {
+      Expr::ComputedMember(member) => member,
+      other => panic!("expected computed member assignment, got {other:?}"),
+    };
+    let name_assign = match outer_left.stx.member.stx.as_ref() {
+      Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+      other => panic!("expected inner assignment, got {other:?}"),
+    };
+    &name_assign.stx.right
+  }
+
+  let b_stmt = body.get(1).expect("B member statement");
+  let b_value = get_value_expr(b_stmt);
+  let b_call = match b_value.stx.as_ref() {
+    Expr::Call(call) => call,
+    other => panic!("expected call expression for B initializer, got {other:?}"),
+  };
+  let b_arrow = match b_call.stx.callee.stx.as_ref() {
+    Expr::ArrowFunc(arrow) => arrow,
+    other => panic!("expected arrow function callee, got {other:?}"),
+  };
+  let b_arrow_body = match b_arrow.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Expression(expr)) => expr,
+    other => panic!("expected arrow expression body, got {other:?}"),
+  };
+  assert!(
+    matches!(b_arrow_body.stx.as_ref(), Expr::ComputedMember(_)),
+    "expected A in arrow initializer to rewrite to E[\"A\"]"
+  );
+
+  let c_stmt = body.get(2).expect("C member statement");
+  let c_value = get_value_expr(c_stmt);
+  let c_call = match c_value.stx.as_ref() {
+    Expr::Call(call) => call,
+    other => panic!("expected call expression for C initializer, got {other:?}"),
+  };
+  let c_func = match c_call.stx.callee.stx.as_ref() {
+    Expr::Func(func) => func,
+    other => panic!("expected function expression callee, got {other:?}"),
+  };
+  let c_body = match c_func.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+  let ret = c_body.iter().find_map(|stmt| match stmt.stx.as_ref() {
+    Stmt::Return(ret) => ret.stx.value.as_ref(),
+    _ => None,
+  });
+  let ret = ret.expect("expected return statement in function initializer");
+  assert!(
+    matches!(ret.stx.as_ref(), Expr::ComputedMember(_)),
+    "expected A in function initializer to rewrite to E[\"A\"]"
+  );
+}
+
+#[test]
+fn does_not_rewrite_shadowed_enum_member_references() {
+  let src = r#"enum E { A = 1, B = ((A) => A)(2) }"#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  assert_eq!(parsed.stx.body.len(), 2);
+  let iife = match parsed.stx.body[1].stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected enum IIFE expr stmt, got {other:?}"),
+  };
+  let call = match iife.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => match bin.stx.right.stx.as_ref()
+    {
+      Expr::Call(call) => call,
+      other => panic!("expected comma call rhs, got {other:?}"),
+    },
+    other => panic!("expected comma expression, got {other:?}"),
+  };
+  let func = match call.stx.callee.stx.as_ref() {
+    Expr::Func(func) => func,
+    other => panic!("expected function callee, got {other:?}"),
+  };
+  let body = match func.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+
+  let b_stmt = body.get(1).expect("B member statement");
+  let expr_stmt = match b_stmt.stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected expression statement, got {other:?}"),
+  };
+  let outer_assign = match expr_stmt.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+    other => panic!("expected assignment expression, got {other:?}"),
+  };
+  let outer_left = match outer_assign.stx.left.stx.as_ref() {
+    Expr::ComputedMember(member) => member,
+    other => panic!("expected computed member assignment, got {other:?}"),
+  };
+  let name_assign = match outer_left.stx.member.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+    other => panic!("expected inner assignment, got {other:?}"),
+  };
+  let value_expr = &name_assign.stx.right;
+  let call = match value_expr.stx.as_ref() {
+    Expr::Call(call) => call,
+    other => panic!("expected call expression for B initializer, got {other:?}"),
+  };
+  let arrow = match call.stx.callee.stx.as_ref() {
+    Expr::ArrowFunc(arrow) => arrow,
+    other => panic!("expected arrow function callee, got {other:?}"),
+  };
+  let arrow_body = match arrow.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Expression(expr)) => expr,
+    other => panic!("expected arrow expression body, got {other:?}"),
+  };
+  assert!(
+    matches!(arrow_body.stx.as_ref(), Expr::Id(_)),
+    "shadowed A in arrow initializer should remain an identifier"
+  );
+}
+
+#[test]
 fn string_enum_aliases_do_not_emit_reverse_mappings() {
   let src = r#"enum S { A = "a", B = A }"#;
   let mut parsed = parse_with_options(
