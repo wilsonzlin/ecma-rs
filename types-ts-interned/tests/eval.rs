@@ -5,7 +5,7 @@ use ordered_float::OrderedFloat;
 use types_ts_interned::{
   DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, Param, PropData, PropKey,
   Property, Shape, Signature, TemplateChunk, TemplateLiteralType, TupleElem, TypeEvaluator,
-  TypeExpander, TypeId, TypeKind, TypeParamId, TypeStore,
+  TypeExpander, TypeId, TypeKind, TypeOptions, TypeParamId, TypeStore,
 };
 
 #[derive(Default)]
@@ -818,6 +818,45 @@ fn conditional_uses_structural_object_assignability_for_index_signatures() {
     distributive: false,
   });
   assert_eq!(store.evaluate(cond), false_ty);
+}
+
+#[test]
+fn conditional_respects_strict_null_checks_option() {
+  let strict_store = TypeStore::new();
+  let strict_primitives = strict_store.primitive_ids();
+  let empty_object = strict_store.intern_type(TypeKind::EmptyObject);
+  let true_ty = strict_primitives.number;
+  let false_ty = strict_primitives.boolean;
+
+  // Under `strictNullChecks`, `null` is not assignable to `{}`.
+  let strict_conditional = strict_store.intern_type(TypeKind::Conditional {
+    check: strict_primitives.null,
+    extends: empty_object,
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(strict_store.evaluate(strict_conditional), false_ty);
+
+  let loose_store = TypeStore::with_options(TypeOptions {
+    strict_null_checks: false,
+    ..TypeOptions::default()
+  });
+  let loose_primitives = loose_store.primitive_ids();
+  let empty_object = loose_store.intern_type(TypeKind::EmptyObject);
+
+  // Without `strictNullChecks`, `null` is assignable to `{}`.
+  let loose_conditional = loose_store.intern_type(TypeKind::Conditional {
+    check: loose_primitives.null,
+    extends: empty_object,
+    true_ty: loose_primitives.number,
+    false_ty: loose_primitives.boolean,
+    distributive: false,
+  });
+  assert_eq!(
+    loose_store.evaluate(loose_conditional),
+    loose_primitives.number
+  );
 }
 
 #[test]
