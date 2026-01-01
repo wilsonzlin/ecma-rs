@@ -1755,7 +1755,9 @@ mod tests {
 
     let from = file_set.resolve("/a.ts").unwrap();
     let resolved = host.resolve(&from, "foo").expect("foo should resolve");
-    let expected = file_set.resolve("/node_modules/foo/dist/index.d.ts").unwrap();
+    let expected = file_set
+      .resolve("/node_modules/foo/dist/index.d.ts")
+      .unwrap();
     assert_eq!(resolved, expected);
   }
 

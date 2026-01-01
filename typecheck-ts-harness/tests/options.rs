@@ -3,9 +3,7 @@ use std::time::Duration;
 
 use typecheck_ts::lib_support::{LibName, ModuleKind, ScriptTarget};
 use typecheck_ts_harness::runner::EngineStatus;
-use typecheck_ts_harness::{
-  run_conformance, CompareMode, ConformanceOptions,
-};
+use typecheck_ts_harness::{run_conformance, CompareMode, ConformanceOptions};
 
 fn conformance_options(compare: CompareMode) -> ConformanceOptions {
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

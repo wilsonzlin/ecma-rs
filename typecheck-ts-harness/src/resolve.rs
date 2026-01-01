@@ -297,13 +297,13 @@ fn resolve_json_target_to_file(
       };
       resolve_json_string_to_file(files, base_dir, &entry, depth + 1)
     }
-    Value::Array(items) => items.iter().find_map(|item| {
-      resolve_json_target_to_file(files, base_dir, item, star_match, depth + 1)
-    }),
+    Value::Array(items) => items
+      .iter()
+      .find_map(|item| resolve_json_target_to_file(files, base_dir, item, star_match, depth + 1)),
     Value::Object(map) => EXPORT_CONDITIONS.iter().find_map(|cond| {
-      map.get(*cond).and_then(|next| {
-        resolve_json_target_to_file(files, base_dir, next, star_match, depth + 1)
-      })
+      map
+        .get(*cond)
+        .and_then(|next| resolve_json_target_to_file(files, base_dir, next, star_match, depth + 1))
     }),
     Value::Null => None,
     _ => None,

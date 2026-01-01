@@ -963,9 +963,7 @@ impl Program {
               let Ok(cand_u32) = cand.try_into() else {
                 break;
               };
-              if state.expr_at(file, cand_u32).is_some()
-                || state.pat_at(file, cand_u32).is_some()
-              {
+              if state.expr_at(file, cand_u32).is_some() || state.pat_at(file, cand_u32).is_some() {
                 found = Some(cand_u32);
                 break;
               }
@@ -6202,7 +6200,9 @@ impl ProgramState {
             return_ann: None,
             body: def.body,
           }),
-          DefMatchKind::VarDeclarator => DefKind::VarDeclarator(VarDeclaratorData { body: def.body }),
+          DefMatchKind::VarDeclarator => {
+            DefKind::VarDeclarator(VarDeclaratorData { body: def.body })
+          }
           DefMatchKind::Class => DefKind::Class(ClassData {
             body: def.body,
             instance_type: None,
@@ -10871,9 +10871,7 @@ impl ProgramState {
           continue;
         }
         best = match best {
-          Some((best_pri, best_def))
-            if best_pri < pri || (best_pri == pri && best_def <= def) =>
-          {
+          Some((best_pri, best_def)) if best_pri < pri || (best_pri == pri && best_def <= def) => {
             Some((best_pri, best_def))
           }
           _ => Some((pri, def)),
@@ -10887,7 +10885,9 @@ impl ProgramState {
   fn resolve_import_alias_target(&self, file: FileId, path: &[String]) -> Option<DefId> {
     self
       .resolve_import_alias_target_in_namespace(file, path, sem_ts::Namespace::VALUE)
-      .or_else(|| self.resolve_import_alias_target_in_namespace(file, path, sem_ts::Namespace::TYPE))
+      .or_else(|| {
+        self.resolve_import_alias_target_in_namespace(file, path, sem_ts::Namespace::TYPE)
+      })
       .or_else(|| {
         self.resolve_import_alias_target_in_namespace(file, path, sem_ts::Namespace::NAMESPACE)
       })
