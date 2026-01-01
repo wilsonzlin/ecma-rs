@@ -35,8 +35,7 @@ pub(crate) fn resolve_module_specifier(
 
 fn resolve_relative(files: &HarnessFileSet, from: &FileKey, specifier: &str) -> Option<FileKey> {
   let base = files.name_for_key(from)?;
-  let parent = virtual_parent_dir(base);
-  let joined = virtual_join(&parent, specifier);
+  let joined = virtual_join(virtual_parent_dir_str(base), specifier);
   resolve_as_file_or_directory(files, &joined)
 }
 
@@ -410,6 +409,32 @@ fn is_drive_root(dir: &str) -> bool {
   bytes.len() == 3 && bytes[1] == b':' && bytes[2] == b'/' && bytes[0].is_ascii_alphabetic()
 }
 
+fn virtual_parent_dir_str(path: &str) -> &str {
+  if path == "/" || is_drive_root(path) {
+    return path;
+  }
+
+  let trimmed = path.trim_end_matches('/');
+  if trimmed == "/" || is_drive_root(trimmed) {
+    return trimmed;
+  }
+
+  let Some(idx) = trimmed.rfind('/') else {
+    return "/";
+  };
+
+  if idx == 0 {
+    return "/";
+  }
+
+  let bytes = trimmed.as_bytes();
+  if idx == 2 && bytes.get(1) == Some(&b':') && bytes.get(2) == Some(&b'/') {
+    return &trimmed[..3];
+  }
+
+  &trimmed[..idx]
+}
+
 fn virtual_pop_dir(path: &mut String) -> bool {
   if path == "/" || is_drive_root(path) {
     return false;
@@ -446,29 +471,7 @@ fn virtual_pop_dir(path: &mut String) -> bool {
 }
 
 fn virtual_parent_dir(path: &str) -> String {
-  if path == "/" || is_drive_root(path) {
-    return path.to_string();
-  }
-
-  let trimmed = path.trim_end_matches('/');
-  if trimmed == "/" || is_drive_root(trimmed) {
-    return trimmed.to_string();
-  }
-
-  let Some(idx) = trimmed.rfind('/') else {
-    return "/".to_string();
-  };
-
-  if idx == 0 {
-    return "/".to_string();
-  }
-
-  let bytes = trimmed.as_bytes();
-  if idx == 2 && bytes.get(1) == Some(&b':') && bytes.get(2) == Some(&b'/') {
-    return trimmed[..3].to_string();
-  }
-
-  trimmed[..idx].to_string()
+  virtual_parent_dir_str(path).to_string()
 }
 
 fn virtual_join(base: &str, segment: &str) -> String {
