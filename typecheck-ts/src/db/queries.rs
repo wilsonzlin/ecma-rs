@@ -1011,9 +1011,14 @@ pub mod body_check {
     match &pat.kind {
       HirPatKind::Ident(name_id) => {
         if let Some(name) = names.resolve(*name_id) {
-          if ty != prim.unknown {
-            bindings.entry(name.to_string()).or_insert(ty);
-          }
+          bindings
+            .entry(name.to_string())
+            .and_modify(|existing| {
+              if *existing == prim.unknown && ty != prim.unknown {
+                *existing = ty;
+              }
+            })
+            .or_insert(ty);
           if let Some(def_id) = ctx.def_spans.get(&(file, pat.span)).copied() {
             binding_defs.entry(name.to_string()).or_insert(def_id);
           }
