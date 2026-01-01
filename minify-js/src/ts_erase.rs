@@ -1076,6 +1076,35 @@ fn rewrite_enum_member_refs(
       }
     }
 
+    fn rewrite_jsx_expr_container(&mut self, expr: &mut Node<JsxExprContainer>) {
+      self.rewrite_expr(&mut expr.stx.value);
+    }
+
+    fn rewrite_jsx_elem(&mut self, elem: &mut Node<JsxElem>) {
+      for attr in elem.stx.attributes.iter_mut() {
+        match attr {
+          JsxAttr::Named { value, .. } => {
+            if let Some(value) = value {
+              match value {
+                JsxAttrVal::Expression(expr) => self.rewrite_jsx_expr_container(expr),
+                JsxAttrVal::Element(elem) => self.rewrite_jsx_elem(elem),
+                JsxAttrVal::Text(_) => {}
+              }
+            }
+          }
+          JsxAttr::Spread { value } => self.rewrite_expr(&mut value.stx.value),
+        }
+      }
+
+      for child in elem.stx.children.iter_mut() {
+        match child {
+          JsxElemChild::Element(elem) => self.rewrite_jsx_elem(elem),
+          JsxElemChild::Expr(expr) => self.rewrite_jsx_expr_container(expr),
+          JsxElemChild::Text(_) => {}
+        }
+      }
+    }
+
     fn rewrite_obj_member(&mut self, member: &mut Node<ObjMember>) {
       match &mut member.stx.typ {
         ObjMemberType::Valued { key, val } => {
@@ -1488,11 +1517,8 @@ fn rewrite_enum_member_refs(
         | Expr::NewTarget(_)
         | Expr::Super(_)
         | Expr::This(_)
-        | Expr::JsxElem(_)
-        | Expr::JsxExprContainer(_)
         | Expr::JsxMember(_)
         | Expr::JsxName(_)
-        | Expr::JsxSpreadAttr(_)
         | Expr::JsxText(_)
         | Expr::LitBigInt(_)
         | Expr::LitBool(_)
@@ -1501,6 +1527,9 @@ fn rewrite_enum_member_refs(
         | Expr::LitRegex(_)
         | Expr::LitStr(_)
         | Expr::IdPat(_) => {}
+        Expr::JsxElem(elem) => self.rewrite_jsx_elem(elem),
+        Expr::JsxExprContainer(expr) => self.rewrite_jsx_expr_container(expr),
+        Expr::JsxSpreadAttr(spread) => self.rewrite_expr(&mut spread.stx.value),
         Expr::TypeAssertion(_) | Expr::NonNullAssertion(_) | Expr::SatisfiesExpr(_) => {}
       }
     }
