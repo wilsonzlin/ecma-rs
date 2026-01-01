@@ -1,6 +1,7 @@
 use num_bigint::BigInt;
 use ordered_float::OrderedFloat;
 use types_ts_interned::Accessibility;
+use types_ts_interned::DefId;
 use types_ts_interned::Indexer;
 use types_ts_interned::ObjectType;
 use types_ts_interned::PropData;
@@ -224,6 +225,59 @@ fn shape_canonicalization_merges_duplicate_properties() {
   assert!(!prop.data.optional);
   assert!(prop.data.readonly);
   assert_eq!(prop.data.accessibility, Some(Accessibility::Private));
+}
+
+#[test]
+fn shape_canonicalization_declared_on_merge_is_order_independent() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let name = store.intern_name("x");
+
+  let prop_a = Property {
+    key: PropKey::String(name),
+    data: PropData {
+      ty: primitives.number,
+      optional: false,
+      readonly: false,
+      accessibility: Some(Accessibility::Protected),
+      is_method: false,
+      origin: None,
+      declared_on: Some(DefId(1)),
+    },
+  };
+  let prop_b = Property {
+    key: PropKey::String(name),
+    data: PropData {
+      ty: primitives.number,
+      optional: false,
+      readonly: false,
+      accessibility: Some(Accessibility::Protected),
+      is_method: false,
+      origin: None,
+      declared_on: Some(DefId(2)),
+    },
+  };
+
+  let shape_a = Shape {
+    properties: vec![prop_a.clone(), prop_b.clone()],
+    call_signatures: vec![],
+    construct_signatures: vec![],
+    indexers: vec![],
+  };
+  let shape_b = Shape {
+    properties: vec![prop_b, prop_a],
+    call_signatures: vec![],
+    construct_signatures: vec![],
+    indexers: vec![],
+  };
+
+  let id_a = store.intern_shape(shape_a);
+  let id_b = store.intern_shape(shape_b);
+  assert_eq!(id_a, id_b);
+
+  let merged = store.shape(id_a);
+  assert_eq!(merged.properties.len(), 1);
+  assert_eq!(merged.properties[0].data.declared_on, None);
 }
 
 #[test]

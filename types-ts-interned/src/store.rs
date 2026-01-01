@@ -507,6 +507,7 @@ impl TypeStore {
     // readonly if any declaration is readonly, and keeping the most
     // restrictive accessibility modifier if present.
     let mut merged_properties: Vec<Property> = Vec::with_capacity(shape.properties.len());
+    let mut declared_on_conflict = false;
     for prop in shape.properties.into_iter() {
       if let Some(last) = merged_properties.last_mut() {
         if last.key == prop.key {
@@ -514,8 +515,18 @@ impl TypeStore {
           last.data.optional = last.data.optional && prop.data.optional;
           last.data.readonly = last.data.readonly || prop.data.readonly;
           last.data.is_method = last.data.is_method || prop.data.is_method;
-          if last.data.declared_on.is_none() {
-            last.data.declared_on = prop.data.declared_on;
+          match (last.data.declared_on, prop.data.declared_on) {
+            (Some(a), Some(b)) if a == b => {}
+            (Some(_), Some(_)) => {
+              last.data.declared_on = None;
+              declared_on_conflict = true;
+            }
+            (None, Some(b)) => {
+              if !declared_on_conflict {
+                last.data.declared_on = Some(b);
+              }
+            }
+            _ => {}
           }
           match (last.data.origin, prop.data.origin) {
             (Some(a), Some(b)) if a == b => {}
@@ -533,6 +544,7 @@ impl TypeStore {
         }
       }
       merged_properties.push(prop);
+      declared_on_conflict = false;
     }
     shape.properties = merged_properties;
     shape
