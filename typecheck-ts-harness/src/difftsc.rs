@@ -7,12 +7,12 @@ use crate::diagnostic_norm::{
 use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
-use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet};
+use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet, TscRunnerPool};
 #[cfg(feature = "with-node")]
 use crate::tsc::typescript_available;
 use crate::tsc::{
-  apply_default_tsc_options, node_available, ExportTypeFact, TscDiagnostics, TscRequest, TscRunner,
-  TypeAtFact, TypeFacts, TypeQuery, TSC_BASELINE_SCHEMA_VERSION,
+  apply_default_tsc_options, node_available, ExportTypeFact, TscDiagnostics, TscRequest, TypeAtFact,
+  TypeFacts, TypeQuery, TSC_BASELINE_SCHEMA_VERSION,
 };
 use crate::{read_utf8_file, FailOn, VirtualFile};
 use anyhow::{anyhow, Context, Result};
@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::fmt::Write as FmtWrite;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use typecheck_ts::lib_support::{CompilerOptions, FileKind};
 use typecheck_ts::{FileKey, Host, HostError, Program};
 use walkdir::WalkDir;
@@ -290,51 +290,6 @@ pub fn run(args: DifftscArgs) -> Result<CommandStatus> {
   #[cfg(feature = "with-node")]
   {
     run_with_node(args)
-  }
-}
-
-#[cfg(feature = "with-node")]
-struct TscRunnerPool {
-  node_path: PathBuf,
-  limiter: Arc<ConcurrencyLimiter>,
-  runners: Mutex<Vec<TscRunner>>,
-}
-
-#[cfg(feature = "with-node")]
-impl TscRunnerPool {
-  fn new(node_path: PathBuf, limiter: Arc<ConcurrencyLimiter>) -> Self {
-    Self {
-      node_path,
-      limiter,
-      runners: Mutex::new(Vec::new()),
-    }
-  }
-
-  fn run(
-    &self,
-    test: &TestCase,
-    options: &Map<String, Value>,
-    type_queries: &[TypeQuery],
-  ) -> Result<TscDiagnostics> {
-    let _permit = self.limiter.acquire();
-    let mut runner = self.checkout()?;
-    let result = run_tsc_on_test(test, &mut runner, options, type_queries);
-    self.release(runner);
-    result
-  }
-
-  fn checkout(&self) -> Result<TscRunner> {
-    let mut runners = self.runners.lock().unwrap();
-    if let Some(runner) = runners.pop() {
-      Ok(runner)
-    } else {
-      TscRunner::new(self.node_path.clone())
-    }
-  }
-
-  fn release(&self, runner: TscRunner) {
-    let mut runners = self.runners.lock().unwrap();
-    runners.push(runner);
   }
 }
 
@@ -608,7 +563,8 @@ fn run_single_test(
       };
     };
 
-    match pool.run(test, &tsc_options, &type_queries) {
+    let request = build_request(test, &tsc_options, &type_queries);
+    match pool.run_request(request) {
       Ok(diags) => Some(diags),
       Err(err) => {
         return CaseReport {
@@ -623,7 +579,7 @@ fn run_single_test(
           actual_types: None,
           type_diff: None,
           report: None,
-          notes: vec![err.to_string()],
+          notes: vec![err],
         };
       }
     }
@@ -1729,19 +1685,6 @@ fn build_request(
     diagnostics_only: false,
     type_queries: type_queries.to_vec(),
   }
-}
-
-#[cfg(feature = "with-node")]
-fn run_tsc_on_test(
-  test: &TestCase,
-  runner: &mut TscRunner,
-  options: &Map<String, Value>,
-  type_queries: &[TypeQuery],
-) -> Result<TscDiagnostics> {
-  let request = build_request(test, options, type_queries);
-  runner
-    .check(request)
-    .with_context(|| format!("run tsc for test {}", test.name))
 }
 
 fn collect_tests(suite_path: &Path) -> Result<Vec<TestCase>> {

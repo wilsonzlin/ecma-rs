@@ -994,14 +994,14 @@ fn has_known_extension(name: &str) -> bool {
     || name.ends_with(".jsx")
 }
 
-struct TscRunnerPool {
+pub(crate) struct TscRunnerPool {
   node_path: PathBuf,
   limiter: Arc<ConcurrencyLimiter>,
   runners: Mutex<Vec<TscRunner>>,
 }
 
 impl TscRunnerPool {
-  fn new(node_path: PathBuf, limiter: Arc<ConcurrencyLimiter>) -> Self {
+  pub(crate) fn new(node_path: PathBuf, limiter: Arc<ConcurrencyLimiter>) -> Self {
     Self {
       node_path,
       limiter,
@@ -1009,14 +1009,21 @@ impl TscRunnerPool {
     }
   }
 
-  fn run(
+  pub(crate) fn run(
     &self,
     file_set: &HarnessFileSet,
     options: &Map<String, Value>,
   ) -> std::result::Result<TscDiagnostics, String> {
+    let request = build_tsc_request(file_set, options);
+    self.run_request(request)
+  }
+
+  pub(crate) fn run_request(
+    &self,
+    request: TscRequest,
+  ) -> std::result::Result<TscDiagnostics, String> {
     let _permit = self.limiter.acquire();
     let mut runner = self.checkout().map_err(|err| err.to_string())?;
-    let request = build_tsc_request(file_set, options);
     let result = runner.check(request).map_err(|err| err.to_string());
     self.release(runner);
     result
