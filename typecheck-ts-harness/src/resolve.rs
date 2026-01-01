@@ -89,10 +89,9 @@ fn resolve_non_relative(
       }
     }
 
-    if is_virtual_root_dir(&dir) {
+    if !virtual_pop_dir(&mut dir) {
       break;
     }
-    dir = virtual_parent_dir(&dir);
   }
 
   None
@@ -110,10 +109,9 @@ fn resolve_imports_specifier(
       return Some(found);
     }
 
-    if is_virtual_root_dir(&dir) {
+    if !virtual_pop_dir(&mut dir) {
       break;
     }
-    dir = virtual_parent_dir(&dir);
   }
 
   None
@@ -408,13 +406,44 @@ fn is_relative_specifier(specifier: &str) -> bool {
   specifier.starts_with("./") || specifier.starts_with("../")
 }
 
-fn is_virtual_root_dir(dir: &str) -> bool {
-  dir == "/" || is_drive_root(dir)
-}
-
 fn is_drive_root(dir: &str) -> bool {
   let bytes = dir.as_bytes();
   bytes.len() == 3 && bytes[1] == b':' && bytes[2] == b'/' && bytes[0].is_ascii_alphabetic()
+}
+
+fn virtual_pop_dir(path: &mut String) -> bool {
+  if path == "/" || is_drive_root(path) {
+    return false;
+  }
+
+  while path.ends_with('/') && path != "/" && !is_drive_root(path) {
+    path.pop();
+  }
+
+  if path == "/" || is_drive_root(path) {
+    return false;
+  }
+
+  let trimmed = path.as_str();
+  let Some(idx) = trimmed.rfind('/') else {
+    path.clear();
+    path.push('/');
+    return true;
+  };
+
+  if idx == 0 {
+    path.truncate(1);
+    return true;
+  }
+
+  let bytes = trimmed.as_bytes();
+  if idx == 2 && bytes.get(1) == Some(&b':') && bytes.get(2) == Some(&b'/') {
+    path.truncate(3);
+    return true;
+  }
+
+  path.truncate(idx);
+  true
 }
 
 fn virtual_parent_dir(path: &str) -> String {
