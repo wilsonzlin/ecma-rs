@@ -390,8 +390,7 @@ struct HarnessFile {
 #[derive(Clone)]
 pub struct HarnessFileSet {
   files: Vec<HarnessFile>,
-  name_to_key: HashMap<String, FileKey>,
-  key_to_name: HashMap<FileKey, String>,
+  name_to_index: HashMap<Arc<str>, usize>,
   package_json_cache: Arc<PackageJsonCache>,
 }
 
@@ -408,38 +407,29 @@ struct PlannedCase {
 
 impl HarnessFileSet {
   pub fn new(files: &[VirtualFile]) -> Self {
-    let mut normalized_names = Vec::with_capacity(files.len());
+    let mut stored: Vec<HarnessFile> = Vec::with_capacity(files.len());
+    let mut name_to_index: HashMap<Arc<str>, usize> = HashMap::with_capacity(files.len());
+
     for file in files {
-      normalized_names.push(normalize_name(&file.name));
-    }
-
-    let mut last_occurrence = HashMap::new();
-    for (idx, normalized) in normalized_names.iter().enumerate() {
-      last_occurrence.insert(normalized.clone(), idx);
-    }
-
-    let mut stored = Vec::with_capacity(last_occurrence.len());
-    let mut name_to_key = HashMap::new();
-    let mut key_to_name = HashMap::new();
-
-    for (idx, normalized) in normalized_names.into_iter().enumerate() {
-      if last_occurrence.get(&normalized).copied() != Some(idx) {
+      let normalized = normalize_name(&file.name);
+      if let Some(&idx) = name_to_index.get(normalized.as_str()) {
+        stored[idx].content = Arc::clone(&file.content);
         continue;
       }
 
-      let key = FileKey::new(normalized.clone());
-      name_to_key.insert(normalized.clone(), key.clone());
-      key_to_name.insert(key.clone(), normalized.clone());
+      let normalized: Arc<str> = normalized.into();
+      let key = FileKey::new(Arc::clone(&normalized));
+      let idx = stored.len();
       stored.push(HarnessFile {
         key,
-        content: Arc::clone(&files[idx].content),
+        content: Arc::clone(&file.content),
       });
+      name_to_index.insert(normalized, idx);
     }
 
     Self {
       files: stored,
-      name_to_key,
-      key_to_name,
+      name_to_index,
       package_json_cache: Arc::new(PackageJsonCache::default()),
     }
   }
@@ -462,7 +452,11 @@ impl HarnessFileSet {
   }
 
   pub(crate) fn resolve(&self, normalized: &str) -> Option<FileKey> {
-    self.name_to_key.get(normalized).cloned()
+    self
+      .name_to_index
+      .get(normalized)
+      .and_then(|idx| self.files.get(*idx))
+      .map(|file| file.key.clone())
   }
 
   pub fn resolve_import(&self, from: &FileKey, specifier: &str) -> Option<FileKey> {
@@ -486,7 +480,10 @@ impl HarnessFileSet {
   }
 
   pub(crate) fn name_for_key(&self, key: &FileKey) -> Option<String> {
-    self.key_to_name.get(key).cloned()
+    self
+      .name_to_index
+      .contains_key(key.as_str())
+      .then(|| key.as_str().to_string())
   }
 
   fn iter(&self) -> impl Iterator<Item = &HarnessFile> {
@@ -495,10 +492,10 @@ impl HarnessFileSet {
 
   pub(crate) fn content(&self, key: &FileKey) -> Option<Arc<str>> {
     self
-      .files
-      .iter()
-      .find(|f| &f.key == key)
-      .map(|f| f.content.clone())
+      .name_to_index
+      .get(key.as_str())
+      .and_then(|idx| self.files.get(*idx))
+      .map(|f| Arc::clone(&f.content))
   }
 }
 
