@@ -2,7 +2,7 @@ use assert_cmd::Command;
 use serde_json::{to_string, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::tempdir;
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::CompareMode;
@@ -283,9 +283,19 @@ fn conformance_enforces_timeouts_per_test() {
     .arg("--timeout-secs")
     .arg("1")
     .arg("--allow-mismatches")
-    .env("HARNESS_SLEEP_MS_PER_TEST", "slow=1500");
+    // Simulate a slow case that must be cancelled when the per-test deadline
+    // fires (the harness should not wait for this sleep to fully elapse).
+    .env("HARNESS_SLEEP_MS_PER_TEST", "slow=5000");
 
-  let output = cmd.assert().success().get_output().stdout.clone();
+  let start = Instant::now();
+  let assert = cmd.assert().success();
+  let elapsed = start.elapsed();
+  assert!(
+    elapsed < Duration::from_secs(3),
+    "expected the conformance command to return shortly after the 1s timeout; got {elapsed:?}"
+  );
+
+  let output = assert.get_output().stdout.clone();
   let report: JsonReport = serde_json::from_slice(&output).expect("valid json");
   assert_eq!(report.summary.total, 2);
   assert_eq!(report.summary.outcomes.timeout, 1);
@@ -297,6 +307,17 @@ fn conformance_enforces_timeouts_per_test() {
     .results
     .iter()
     .any(|r| r.id.ends_with("slow.ts") && r.outcome == TestOutcome::Timeout));
+
+  let slow_ms = report
+    .results
+    .iter()
+    .find(|r| r.id.ends_with("slow.ts"))
+    .map(|r| r.duration_ms)
+    .unwrap_or_default();
+  assert!(
+    slow_ms <= 1500,
+    "expected timed-out case duration_ms to be near the 1s timeout, got {slow_ms}"
+  );
 }
 
 #[test]

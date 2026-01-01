@@ -20,7 +20,7 @@ use std::io::BufWriter;
 use std::io::Write;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::AtomicU64;
 #[cfg(feature = "with-node")]
 use std::sync::atomic::Ordering;
 #[cfg(feature = "with-node")]
@@ -174,24 +174,76 @@ pub struct TypeAtFact {
 #[cfg(feature = "with-node")]
 #[derive(Clone, Debug)]
 pub(crate) struct TscKillSwitch {
-  child: Arc<Mutex<Option<std::process::Child>>>,
+  state: Arc<Mutex<KillState>>,
+}
+
+#[cfg(feature = "with-node")]
+#[derive(Debug)]
+struct KillState {
+  child: Option<std::process::Child>,
+  active_request_id: u64,
 }
 
 #[cfg(feature = "with-node")]
 impl TscKillSwitch {
   pub(crate) fn new() -> Self {
     Self {
-      child: Arc::new(Mutex::new(None)),
+      state: Arc::new(Mutex::new(KillState {
+        child: None,
+        active_request_id: 0,
+      })),
     }
   }
 
   pub(crate) fn kill(&self) {
-    let mut guard = self.child.lock().unwrap();
-    let Some(child) = guard.as_mut() else {
-      return;
-    };
-    let _ = child.kill();
+    let mut guard = self.state.lock().unwrap();
+    if let Some(child) = guard.child.as_mut() {
+      let _ = child.kill();
+    }
   }
+
+  pub(crate) fn kill_request(&self, request_id: u64) {
+    let mut guard = self.state.lock().unwrap();
+    if guard.active_request_id != request_id {
+      return;
+    }
+    if let Some(child) = guard.child.as_mut() {
+      let _ = child.kill();
+    }
+  }
+
+  fn activate_request(&self, request_id: u64) -> ActiveRequestGuard {
+    {
+      let mut guard = self.state.lock().unwrap();
+      guard.active_request_id = request_id;
+    }
+    ActiveRequestGuard {
+      state: Arc::clone(&self.state),
+      request_id,
+    }
+  }
+}
+
+#[cfg(feature = "with-node")]
+struct ActiveRequestGuard {
+  state: Arc<Mutex<KillState>>,
+  request_id: u64,
+}
+
+#[cfg(feature = "with-node")]
+impl Drop for ActiveRequestGuard {
+  fn drop(&mut self) {
+    let mut guard = self.state.lock().unwrap();
+    if guard.active_request_id == self.request_id {
+      guard.active_request_id = 0;
+    }
+  }
+}
+
+#[cfg(feature = "with-node")]
+fn is_cancelled(cancel: &AtomicU64, request_id: u64) -> bool {
+  let value = cancel.load(Ordering::Relaxed);
+  value == request_id || value == u64::MAX
 }
 
 #[cfg(not(feature = "with-node"))]
@@ -205,6 +257,8 @@ impl TscKillSwitch {
   }
 
   pub(crate) fn kill(&self) {}
+
+  pub(crate) fn kill_request(&self, _request_id: u64) {}
 }
 
 #[cfg(feature = "with-node")]
@@ -244,30 +298,34 @@ impl TscRunner {
   pub fn check(&mut self, request: TscRequest) -> anyhow::Result<TscDiagnostics> {
     self.ensure_running()?;
 
-    let cancel = AtomicBool::new(false);
-    self.check_inner(request, &cancel)
+    let cancel = AtomicU64::new(0);
+    self.check_inner(request, &cancel, 1)
   }
 
   pub(crate) fn check_cancellable(
     &mut self,
     request: TscRequest,
-    cancel: &AtomicBool,
+    cancel: &AtomicU64,
+    request_id: u64,
   ) -> anyhow::Result<TscDiagnostics> {
-    if cancel.load(Ordering::Relaxed) {
+    if is_cancelled(cancel, request_id) {
       bail!("tsc request cancelled");
     }
+
+    let _active = self.kill_switch.activate_request(request_id);
     self.ensure_running()?;
-    self.check_inner(request, cancel)
+    self.check_inner(request, cancel, request_id)
   }
 
   fn check_inner(
     &mut self,
     request: TscRequest,
-    cancel: &AtomicBool,
+    cancel: &AtomicU64,
+    request_id: u64,
   ) -> anyhow::Result<TscDiagnostics> {
     let mut attempts = 0;
     loop {
-      if cancel.load(Ordering::Relaxed) {
+      if is_cancelled(cancel, request_id) {
         bail!("tsc request cancelled");
       }
       attempts += 1;
@@ -279,7 +337,7 @@ impl TscRunner {
           return Ok(diags);
         }
         Err(err) => {
-          if cancel.load(Ordering::Relaxed) || attempts >= 2 {
+          if is_cancelled(cancel, request_id) || attempts >= 2 {
             return Err(err);
           }
           self.spawn()?;
@@ -290,8 +348,8 @@ impl TscRunner {
 
   fn ensure_running(&mut self) -> anyhow::Result<()> {
     if self.process.is_some() {
-      let mut child_guard = self.kill_switch.child.lock().unwrap();
-      if let Some(child) = child_guard.as_mut() {
+      let mut child_guard = self.kill_switch.state.lock().unwrap();
+      if let Some(child) = child_guard.child.as_mut() {
         if child.try_wait()?.is_none() {
           return Ok(());
         }
@@ -303,8 +361,11 @@ impl TscRunner {
 
   fn spawn(&mut self) -> anyhow::Result<()> {
     let _ = self.process.take();
-    let mut child_guard = self.kill_switch.child.lock().unwrap();
-    if let Some(mut child) = child_guard.take() {
+    let existing = {
+      let mut child_guard = self.kill_switch.state.lock().unwrap();
+      child_guard.child.take()
+    };
+    if let Some(mut child) = existing {
       if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
       }
@@ -337,8 +398,8 @@ impl TscRunner {
       .context("failed to open stdout for tsc runner")?;
 
     {
-      let mut child_guard = self.kill_switch.child.lock().unwrap();
-      *child_guard = Some(spawned);
+      let mut child_guard = self.kill_switch.state.lock().unwrap();
+      child_guard.child = Some(spawned);
     }
     self.process = Some(RunnerProcess {
       stdin: BufWriter::new(stdin),
@@ -387,8 +448,11 @@ impl TscRunner {
 impl Drop for TscRunner {
   fn drop(&mut self) {
     let _ = self.process.take();
-    let mut child_guard = self.kill_switch.child.lock().unwrap();
-    if let Some(mut child) = child_guard.take() {
+    let existing = {
+      let mut child_guard = self.kill_switch.state.lock().unwrap();
+      child_guard.child.take()
+    };
+    if let Some(mut child) = existing {
       if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
       }
@@ -443,7 +507,8 @@ impl TscRunner {
   pub(crate) fn check_cancellable(
     &mut self,
     request: TscRequest,
-    _cancel: &AtomicBool,
+    _cancel: &AtomicU64,
+    _request_id: u64,
   ) -> anyhow::Result<TscDiagnostics> {
     self.check(request)
   }

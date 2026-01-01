@@ -19,7 +19,7 @@ use serde_json::{Map, Value};
 use std::collections::{HashMap, VecDeque};
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -851,8 +851,15 @@ fn execute_case(
   let roots = file_set.root_keys();
   let program = Arc::new(Program::new(host, roots));
   timeout_guard.set_program(Arc::clone(&program));
-  let (rust, query_stats) = run_rust_with_profile(&program, &file_set, collect_query_stats);
+  let rust_result = run_rust_with_profile(&program, &file_set, collect_query_stats);
   let rust_ms = rust_start.elapsed().as_millis();
+  let (rust, query_stats) = match rust_result {
+    RustRunResult::Completed {
+      diagnostics,
+      query_stats,
+    } => (diagnostics, query_stats),
+    RustRunResult::Cancelled => return build_timeout_result(&case, timeout),
+  };
   if Instant::now() >= deadline {
     return build_timeout_result(&case, timeout);
   }
@@ -949,25 +956,47 @@ pub(crate) fn run_rust(file_set: &HarnessFileSet, options: &HarnessOptions) -> E
   let host = HarnessHost::new(file_set.clone(), compiler_options.clone());
   let roots = file_set.root_keys();
   let program = Program::new(host, roots);
-  run_rust_with_profile(&program, file_set, false).0
+  match run_rust_with_profile(&program, file_set, false) {
+    RustRunResult::Completed { diagnostics, .. } => diagnostics,
+    // `run_rust` is only used in non-timeout contexts; treat cancellation as a
+    // skipped run if it ever occurs unexpectedly.
+    RustRunResult::Cancelled => EngineDiagnostics::skipped(Some("cancelled".to_string())),
+  }
+}
+
+enum RustRunResult {
+  Completed {
+    diagnostics: EngineDiagnostics,
+    query_stats: Option<QueryStats>,
+  },
+  Cancelled,
 }
 
 fn run_rust_with_profile(
   program: &Program,
   file_set: &HarnessFileSet,
   collect_profile: bool,
-) -> (EngineDiagnostics, Option<QueryStats>) {
-  let result = std::panic::catch_unwind(AssertUnwindSafe(|| program.check()));
-  let stats = (collect_profile && result.is_ok()).then(|| program.query_stats());
-  let diagnostics = match result {
-    Ok(diags) => EngineDiagnostics::ok(normalize_rust_diagnostics(&diags, |id| {
-      program
-        .file_key(id)
-        .and_then(|key| file_set.name_for_key(&key))
-    })),
-    Err(_) => EngineDiagnostics::ice("typechecker panicked"),
-  };
-  (diagnostics, stats)
+) -> RustRunResult {
+  let result = std::panic::catch_unwind(AssertUnwindSafe(|| program.check_fallible()));
+  match result {
+    Err(_) => RustRunResult::Completed {
+      diagnostics: EngineDiagnostics::ice("typechecker panicked"),
+      query_stats: None,
+    },
+    Ok(Err(typecheck_ts::FatalError::Cancelled)) => RustRunResult::Cancelled,
+    Ok(Err(fatal)) => RustRunResult::Completed {
+      diagnostics: EngineDiagnostics::ice(fatal.to_string()),
+      query_stats: None,
+    },
+    Ok(Ok(diags)) => RustRunResult::Completed {
+      diagnostics: EngineDiagnostics::ok(normalize_rust_diagnostics(&diags, |id| {
+        program
+          .file_key(id)
+          .and_then(|key| file_set.name_for_key(&key))
+      })),
+      query_stats: collect_profile.then(|| program.query_stats()),
+    },
+  }
 }
 
 fn init_tracing(enabled: bool) {
@@ -1303,6 +1332,7 @@ impl Host for HarnessHost {
 pub(crate) struct TscRunnerPool {
   workers: Vec<TscWorker>,
   availability: Arc<TscWorkerAvailability>,
+  next_request_id: AtomicU64,
   threads: Mutex<Vec<std::thread::JoinHandle<()>>>,
 }
 
@@ -1315,7 +1345,7 @@ impl TscRunnerPool {
 
     for worker_idx in 0..worker_count {
       let (tx, rx) = mpsc::channel();
-      let cancel = Arc::new(AtomicBool::new(false));
+      let cancel = Arc::new(AtomicU64::new(0));
       let kill_switch = TscKillSwitch::new();
       let thread_availability = Arc::clone(&availability);
       let thread_cancel = Arc::clone(&cancel);
@@ -1343,6 +1373,7 @@ impl TscRunnerPool {
     Self {
       workers,
       availability,
+      next_request_id: AtomicU64::new(1),
       threads: Mutex::new(threads),
     }
   }
@@ -1362,6 +1393,11 @@ impl TscRunnerPool {
     request: TscRequest,
     deadline: Instant,
   ) -> std::result::Result<TscDiagnostics, TscPoolError> {
+    let mut request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+    if request_id == 0 {
+      request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+    }
+
     let Some(worker_idx) = self.availability.checkout(deadline) else {
       return Err(TscPoolError::Timeout);
     };
@@ -1372,12 +1408,11 @@ impl TscRunnerPool {
     }
 
     let (reply_tx, reply_rx) = mpsc::channel();
-    self.workers[worker_idx]
-      .cancel
-      .store(false, Ordering::Relaxed);
+    self.workers[worker_idx].cancel.store(0, Ordering::Relaxed);
     if self.workers[worker_idx]
       .tx
       .send(TscWorkerCommand::Run {
+        request_id,
         request,
         reply: reply_tx,
       })
@@ -1390,8 +1425,10 @@ impl TscRunnerPool {
     let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
       self.workers[worker_idx]
         .cancel
-        .store(true, Ordering::Relaxed);
-      self.workers[worker_idx].kill_switch.kill();
+        .store(request_id, Ordering::Relaxed);
+      self.workers[worker_idx]
+        .kill_switch
+        .kill_request(request_id);
       return Err(TscPoolError::Timeout);
     };
 
@@ -1401,15 +1438,19 @@ impl TscRunnerPool {
       Err(mpsc::RecvTimeoutError::Timeout) => {
         self.workers[worker_idx]
           .cancel
-          .store(true, Ordering::Relaxed);
-        self.workers[worker_idx].kill_switch.kill();
+          .store(request_id, Ordering::Relaxed);
+        self.workers[worker_idx]
+          .kill_switch
+          .kill_request(request_id);
         Err(TscPoolError::Timeout)
       }
       Err(mpsc::RecvTimeoutError::Disconnected) => {
         self.workers[worker_idx]
           .cancel
-          .store(true, Ordering::Relaxed);
-        self.workers[worker_idx].kill_switch.kill();
+          .store(request_id, Ordering::Relaxed);
+        self.workers[worker_idx]
+          .kill_switch
+          .kill_request(request_id);
         Err(TscPoolError::Crashed("tsc worker disconnected".to_string()))
       }
     }
@@ -1419,7 +1460,7 @@ impl TscRunnerPool {
 impl Drop for TscRunnerPool {
   fn drop(&mut self) {
     for worker in &self.workers {
-      worker.cancel.store(true, Ordering::Relaxed);
+      worker.cancel.store(u64::MAX, Ordering::Relaxed);
       worker.kill_switch.kill();
       let _ = worker.tx.send(TscWorkerCommand::Shutdown);
     }
@@ -1448,12 +1489,13 @@ impl std::fmt::Display for TscPoolError {
 
 struct TscWorker {
   tx: mpsc::Sender<TscWorkerCommand>,
-  cancel: Arc<AtomicBool>,
+  cancel: Arc<AtomicU64>,
   kill_switch: TscKillSwitch,
 }
 
 enum TscWorkerCommand {
   Run {
+    request_id: u64,
     request: TscRequest,
     reply: mpsc::Sender<std::result::Result<TscDiagnostics, String>>,
   },
@@ -1505,7 +1547,7 @@ fn tsc_worker_loop(
   worker_idx: usize,
   node_path: PathBuf,
   kill_switch: TscKillSwitch,
-  cancel: Arc<AtomicBool>,
+  cancel: Arc<AtomicU64>,
   availability: Arc<TscWorkerAvailability>,
   rx: mpsc::Receiver<TscWorkerCommand>,
 ) {
@@ -1513,13 +1555,17 @@ fn tsc_worker_loop(
 
   for command in rx {
     match command {
-      TscWorkerCommand::Run { request, reply } => {
+      TscWorkerCommand::Run {
+        request_id,
+        request,
+        reply,
+      } => {
         let outcome = if let Some(runner) = runner.as_mut() {
-          run_tsc_request(runner, request, &cancel)
+          run_tsc_request(runner, request, &cancel, request_id)
         } else {
           match TscRunner::with_kill_switch(node_path.clone(), kill_switch.clone()) {
             Ok(mut created) => {
-              let outcome = run_tsc_request(&mut created, request, &cancel);
+              let outcome = run_tsc_request(&mut created, request, &cancel, request_id);
               runner = Some(created);
               outcome
             }
@@ -1537,10 +1583,11 @@ fn tsc_worker_loop(
 fn run_tsc_request(
   runner: &mut TscRunner,
   request: TscRequest,
-  cancel: &AtomicBool,
+  cancel: &AtomicU64,
+  request_id: u64,
 ) -> std::result::Result<TscDiagnostics, String> {
   match std::panic::catch_unwind(AssertUnwindSafe(|| {
-    runner.check_cancellable(request, cancel)
+    runner.check_cancellable(request, cancel, request_id)
   })) {
     Ok(Ok(diags)) => Ok(diags),
     Ok(Err(err)) => Err(err.to_string()),
