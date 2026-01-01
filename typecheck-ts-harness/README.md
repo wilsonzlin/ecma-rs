@@ -108,6 +108,8 @@ cargo run -p typecheck-ts-harness --release -- conformance \
 - Comparison is configurable:
   - `--compare auto|tsc|snapshot|none` (default auto: prefer `tsc`, then
     snapshots, else none with a warning)
+  - `--update-snapshots` regenerates snapshot baselines under `baselines/<suite>/`
+    (requires Node + the `typescript` npm package; implies `--compare snapshot`)
   - `--node /path/to/node` overrides the Node.js executable used for `tsc`
   - `--span-tolerance <bytes>` allows small span drift when diffing
 - `--json` prints the machine-readable conformance report to stdout.
