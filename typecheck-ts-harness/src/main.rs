@@ -47,7 +47,7 @@ enum Commands {
     #[arg(long)]
     json: bool,
 
-    /// Update stored snapshots (placeholder)
+    /// Update stored snapshots (implies `--compare snapshot`)
     #[arg(long)]
     update_snapshots: bool,
 

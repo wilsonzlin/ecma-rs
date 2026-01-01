@@ -452,7 +452,12 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
 
   let tsc_available = node_available(&opts.node_path) && typescript_available(&opts.node_path);
   let snapshot_store = SnapshotStore::new(&opts.root);
-  let compare_mode = resolve_compare_mode(opts.compare, tsc_available, &snapshot_store);
+  let requested_compare = if opts.update_snapshots {
+    CompareMode::Snapshot
+  } else {
+    opts.compare
+  };
+  let compare_mode = resolve_compare_mode(requested_compare, tsc_available, &snapshot_store);
   if opts.update_snapshots && !tsc_available {
     return Err(crate::HarnessError::Typecheck(
       "cannot update snapshots: tsc unavailable (install Node.js and the `typescript` npm package)"
