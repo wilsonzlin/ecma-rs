@@ -25,10 +25,12 @@ use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
 #[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::Cell;
 
 #[cfg(test)]
-static NORMALIZE_CALLS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+  static NORMALIZE_CALLS: Cell<usize> = const { Cell::new(0) };
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RelationKind {
@@ -1984,7 +1986,7 @@ impl<'a> RelateCtx<'a> {
   fn normalize_type(&self, ty: TypeId) -> TypeId {
     #[cfg(test)]
     {
-      NORMALIZE_CALLS.fetch_add(1, Ordering::Relaxed);
+      NORMALIZE_CALLS.with(|counter| counter.set(counter.get() + 1));
     }
     let adapter = RelateExpanderAdapter {
       hook: self.hooks.expander,
@@ -2451,7 +2453,7 @@ mod tests {
 
   #[test]
   fn assignable_skip_normalize_does_not_invoke_normalize_type() {
-    NORMALIZE_CALLS.store(0, Ordering::Relaxed);
+    NORMALIZE_CALLS.with(|counter| counter.set(0));
 
     let store = TypeStore::new();
     let ctx = RelateCtx::new(store.clone(), store.options());
@@ -2489,9 +2491,59 @@ mod tests {
     let dst_ty = store.intern_type(TypeKind::Object(dst_obj));
 
     assert!(ctx.is_assignable_no_normalize(src_ty, dst_ty));
-    assert_eq!(NORMALIZE_CALLS.load(Ordering::Relaxed), 0);
+    assert_eq!(NORMALIZE_CALLS.with(|counter| counter.get()), 0);
 
     assert!(ctx.is_assignable(src_ty, dst_ty));
-    assert!(NORMALIZE_CALLS.load(Ordering::Relaxed) > 0);
+    assert!(NORMALIZE_CALLS.with(|counter| counter.get()) > 0);
+  }
+
+  #[test]
+  fn relation_cache_separates_skip_normalize_mode() {
+    let store = TypeStore::new();
+    let ctx = RelateCtx::new(store.clone(), store.options());
+    let primitives = store.primitive_ids();
+
+    let key = store.intern_name("a");
+    let base_obj = {
+      let shape_id = store.intern_shape(Shape {
+        properties: vec![Property {
+          key: PropKey::String(key),
+          data: PropData {
+            ty: primitives.number,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        }],
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: Vec::new(),
+      });
+      let obj = store.intern_object(ObjectType { shape: shape_id });
+      store.intern_type(TypeKind::Object(obj))
+    };
+
+    let key_a = store.intern_type(TypeKind::StringLiteral(key));
+    let keyof_obj = store.intern_type(TypeKind::KeyOf(base_obj));
+
+    // Skip-normalize mode cannot evaluate `keyof` and will treat the target as
+    // an unsupported structural kind.
+    assert!(!ctx
+      .relate_internal(
+        key_a,
+        keyof_obj,
+        RelationKind::Assignable,
+        RelationMode::SKIP_NORMALIZE,
+        false,
+        1,
+      )
+      .result);
+
+    // Normal mode normalizes `keyof` before the structural check and should not
+    // be affected by the cached SKIP_NORMALIZE result.
+    assert!(ctx.is_assignable(key_a, keyof_obj));
   }
 }
