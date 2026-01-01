@@ -359,8 +359,21 @@ impl HarnessFileSet {
     }
   }
 
+  /// Roots to pass to the Rust checker / `tsc` as `rootNames`.
+  ///
+  /// The harness virtual file system can include non-source files such as
+  /// `package.json` used for module resolution. Those must remain available to
+  /// the host/tsc runner, but should not be parsed/typechecked as compilation
+  /// roots.
   pub(crate) fn root_keys(&self) -> Vec<FileKey> {
-    self.files.iter().map(|f| f.key.clone()).collect()
+    let mut roots: Vec<_> = self
+      .files
+      .iter()
+      .filter(|file| is_source_root(file.key.as_str()))
+      .map(|file| file.key.clone())
+      .collect();
+    roots.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    roots
   }
 
   pub(crate) fn resolve(&self, normalized: &str) -> Option<FileKey> {
@@ -386,6 +399,14 @@ impl HarnessFileSet {
       .find(|f| &f.key == key)
       .map(|f| f.content.clone())
   }
+}
+
+pub(crate) fn is_source_root(name: &str) -> bool {
+  [
+    ".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mts", ".cts", ".d.mts", ".d.cts",
+  ]
+  .into_iter()
+  .any(|suffix| name.ends_with(suffix))
 }
 
 pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
@@ -1121,16 +1142,17 @@ impl TscRunnerPool {
 
 fn build_tsc_request(file_set: &HarnessFileSet, options: &Map<String, Value>) -> TscRequest {
   let mut files = HashMap::new();
-  let mut root_names = Vec::new();
 
   for file in file_set.iter() {
     let name = file.key.as_str().to_string();
-    root_names.push(name.clone());
     files.insert(name, file.content.to_string());
   }
 
-  root_names.sort();
-  root_names.dedup();
+  let root_names: Vec<String> = file_set
+    .root_keys()
+    .into_iter()
+    .map(|key| key.as_str().to_string())
+    .collect();
 
   TscRequest {
     root_names,
@@ -1507,6 +1529,78 @@ mod tests {
     let program = Program::new(host, file_set.root_keys());
 
     assert_eq!(program.compiler_options(), compiler_options);
+  }
+
+  #[test]
+  fn harness_file_set_excludes_json_files_from_roots() {
+    let files = vec![
+      VirtualFile {
+        name: "a.ts".to_string(),
+        content: "const a = 1;\n".to_string(),
+      },
+      VirtualFile {
+        name: "package.json".to_string(),
+        content: "{\n  \"name\": \"pkg\"\n}\n".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let roots = file_set.root_keys();
+    let root_names: Vec<&str> = roots.iter().map(|k| k.as_str()).collect();
+    assert_eq!(root_names, vec!["/a.ts"]);
+
+    let rust = run_rust(&file_set, &HarnessOptions::default());
+    assert!(
+      rust.diagnostics.is_empty(),
+      "expected JSON to be excluded from roots; got diagnostics: {:#?}",
+      rust.diagnostics
+    );
+  }
+
+  #[test]
+  fn harness_file_set_root_order_is_deterministic() {
+    let files = vec![
+      VirtualFile {
+        name: "b.ts".to_string(),
+        content: "const b = 1;\n".to_string(),
+      },
+      VirtualFile {
+        name: "a.ts".to_string(),
+        content: "const a = 1;\n".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let roots = file_set.root_keys();
+    let root_names: Vec<&str> = roots.iter().map(|k| k.as_str()).collect();
+    assert_eq!(root_names, vec!["/a.ts", "/b.ts"]);
+  }
+
+  #[test]
+  fn harness_file_set_roots_include_mts_and_cts() {
+    let files = vec![
+      VirtualFile {
+        name: "a.mts".to_string(),
+        content: "export const a = 1;\n".to_string(),
+      },
+      VirtualFile {
+        name: "b.cts".to_string(),
+        content: "export const b = 2;\n".to_string(),
+      },
+      VirtualFile {
+        name: "c.d.mts".to_string(),
+        content: "export {};\n".to_string(),
+      },
+      VirtualFile {
+        name: "d.d.cts".to_string(),
+        content: "export {};\n".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let roots = file_set.root_keys();
+    let root_names: Vec<&str> = roots.iter().map(|k| k.as_str()).collect();
+    assert_eq!(root_names, vec!["/a.mts", "/b.cts", "/c.d.mts", "/d.d.cts"]);
   }
 
   #[test]

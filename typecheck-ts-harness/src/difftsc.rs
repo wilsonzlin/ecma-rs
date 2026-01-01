@@ -5,7 +5,9 @@ use crate::diagnostic_norm::{
 use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
-use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet, TscRunnerPool};
+use crate::runner::{
+  is_source_root, run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet, TscRunnerPool,
+};
 use crate::tsc::{
   node_available, ExportTypeFact, TscDiagnostics, TscRequest, TypeAtFact, TypeFacts, TypeQuery,
   TSC_BASELINE_SCHEMA_VERSION,
@@ -1660,7 +1662,9 @@ fn build_request(
 
   for file in &test.files {
     let normalized = normalize_name(&file.name);
-    root_names.push(normalized.clone());
+    if is_source_root(&normalized) {
+      root_names.push(normalized.clone());
+    }
     files.insert(normalized, file.content.clone());
   }
 
@@ -1820,7 +1824,10 @@ impl Host for DifftscHost {
 
 fn is_source_file(path: &Path) -> bool {
   let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-  if file_name.ends_with(".d.ts") {
+  if file_name.ends_with(".d.ts")
+    || file_name.ends_with(".d.mts")
+    || file_name.ends_with(".d.cts")
+  {
     return true;
   }
 
@@ -1837,6 +1844,12 @@ fn test_name_from_path(path: &Path) -> Result<String> {
     .context("test file missing name")?;
 
   if let Some(stripped) = file_name.strip_suffix(".d.ts") {
+    return Ok(stripped.to_string());
+  }
+  if let Some(stripped) = file_name.strip_suffix(".d.mts") {
+    return Ok(stripped.to_string());
+  }
+  if let Some(stripped) = file_name.strip_suffix(".d.cts") {
     return Ok(stripped.to_string());
   }
 
