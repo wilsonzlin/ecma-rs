@@ -10322,13 +10322,14 @@ impl ProgramState {
               }
             }
           }
+          let probe_key = if name.parse::<f64>().is_ok() {
+            tti::PropKey::Number(0)
+          } else {
+            tti::PropKey::String(store.intern_name(String::new()))
+          };
           for indexer in shape.indexers.iter() {
-            match store.type_kind(indexer.key_type) {
-              tti::TypeKind::Number if name.parse::<f64>().is_ok() => {
-                return Some(indexer.value_type)
-              }
-              tti::TypeKind::String => return Some(indexer.value_type),
-              _ => {}
+            if crate::type_queries::indexer_accepts_key(&probe_key, indexer.key_type, store) {
+              return Some(indexer.value_type);
             }
           }
           None

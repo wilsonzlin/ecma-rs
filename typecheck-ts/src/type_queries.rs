@@ -607,7 +607,7 @@ fn indexer_matches(key: &PropKey, idxer: &Indexer, store: &TypeStore) -> bool {
 
 const MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
 
-fn indexer_accepts_key(key: &PropKey, idx_key: TypeId, store: &TypeStore) -> bool {
+pub(crate) fn indexer_accepts_key(key: &PropKey, idx_key: TypeId, store: &TypeStore) -> bool {
   indexer_accepts_key_inner(key, idx_key, store, 0)
 }
 
