@@ -550,6 +550,27 @@ impl<'a> Parser<'a> {
   /// Get string value of a template part literal
   pub fn lit_template_part_str_val(&mut self) -> SyntaxResult<String> {
     let t = self.require(TT::LiteralTemplatePartString)?;
-    Ok(self.string(t.loc))
+    let raw = self.str(t.loc);
+    // Template part tokens include the surrounding delimiters, e.g.:
+    // - head:   `foo${
+    // - middle: bar${
+    // - tail:   baz`
+    //
+    // This helper is used by the type-expression parser for template literal
+    // types, where we want the *cooked* string content of the chunk.
+    let raw = raw.strip_prefix('`').unwrap_or(raw);
+    let Some(body) = raw.strip_suffix("${") else {
+      return Err(t.error(SyntaxErrorType::ExpectedSyntax(
+        "template literal continuation",
+      )));
+    };
+
+    // Be permissive: TypeScript allows parsing templates with invalid escape
+    // sequences (semantic errors are reported later). If decoding fails, fall
+    // back to the raw body so we still produce an AST.
+    Ok(
+      crate::parse::expr::lit::normalise_literal_string_or_template_inner(body)
+        .unwrap_or_else(|| body.to_string()),
+    )
   }
 }

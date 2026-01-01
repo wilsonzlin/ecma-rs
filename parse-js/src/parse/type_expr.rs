@@ -1693,16 +1693,44 @@ impl<'a> Parser<'a> {
       use crate::lex::LexMode;
       let t = self.consume_with_mode(LexMode::TemplateStrContinue);
 
-      let literal = if t.typ == TT::LiteralTemplatePartString {
-        self.string(t.loc).to_string()
-      } else if t.typ == TT::LiteralTemplatePartStringEnd {
-        end_loc = t.loc;
-        self.string(t.loc).to_string()
-      } else {
-        return Err(t.error(SyntaxErrorType::ExpectedSyntax(
-          "template literal continuation",
-        )));
+      let (string_is_end, raw) = match t.typ {
+        TT::LiteralTemplatePartString => (false, self.str(t.loc)),
+        TT::LiteralTemplatePartStringEnd => {
+          end_loc = t.loc;
+          (true, self.str(t.loc))
+        }
+        _ => {
+          return Err(t.error(SyntaxErrorType::ExpectedSyntax(
+            "template literal continuation",
+          )));
+        }
       };
+
+      // Like JS template literals, the lexer includes the delimiters in the
+      // token text (e.g. `foo${`, `bar${
+      // or `baz``). Strip them so the AST stores only the cooked chunk content.
+      let mut raw = raw;
+      // Only strip a leading backtick if there's more content than just the
+      // terminator itself (e.g. for an empty tail token, the raw text is "`").
+      if raw.len() > 1 {
+        if let Some(stripped) = raw.strip_prefix('`') {
+          raw = stripped;
+        }
+      }
+      let body = if string_is_end {
+        raw
+          .strip_suffix('`')
+          .ok_or_else(|| t.error(SyntaxErrorType::UnexpectedEnd))?
+      } else {
+        raw
+          .strip_suffix("${")
+          .ok_or_else(|| t.error(SyntaxErrorType::UnexpectedEnd))?
+      };
+
+      // Be permissive: if decoding fails (invalid escapes), keep the raw body so
+      // we can still build an AST and let semantic layers report errors.
+      let literal = crate::parse::expr::lit::normalise_literal_string_or_template_inner(body)
+        .unwrap_or_else(|| body.to_string());
 
       let span_start = type_expr.loc;
       use crate::loc::Loc;
