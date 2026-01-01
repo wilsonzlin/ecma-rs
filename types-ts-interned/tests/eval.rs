@@ -207,12 +207,15 @@ fn distributive_conditional_substitutes_extends_per_member() {
 }
 
 #[test]
-fn conditional_uses_structural_assignability() {
+fn conditional_uses_structural_object_assignability() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
 
   let foo = store.intern_name("foo");
   let bar = store.intern_name("bar");
+
+  let true_ty = store.intern_type(TypeKind::NumberLiteral(OrderedFloat::from(1.0)));
+  let false_ty = store.intern_type(TypeKind::BooleanLiteral(false));
 
   let src_shape_id = store.intern_shape(Shape {
     properties: vec![
@@ -273,19 +276,195 @@ fn conditional_uses_structural_assignability() {
       shape: dst_shape_id,
     }),
   ));
-
-  let cond = store.intern_type(TypeKind::Conditional {
-    check: src_ty,
-    extends: dst_ty,
-    true_ty: primitives.boolean,
-    false_ty: primitives.never,
-    distributive: false,
-  });
-
   assert_ne!(src_ty, dst_ty);
 
-  let result = store.evaluate(cond);
-  assert_eq!(result, primitives.boolean);
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+
+  let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
+    check: src_ty,
+    extends: dst_ty,
+    true_ty,
+    false_ty,
+    distributive: false,
+  }));
+  assert_eq!(result, true_ty);
+
+  // Negative: property types differ (`foo: number` is not assignable to `foo: string`).
+  let dst_mismatch = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType {
+      shape: store.intern_shape(Shape {
+        properties: vec![Property {
+          key: PropKey::String(foo),
+          data: PropData {
+            ty: primitives.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        }],
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: Vec::new(),
+      }),
+    }),
+  ));
+  let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
+    check: src_ty,
+    extends: dst_mismatch,
+    true_ty,
+    false_ty,
+    distributive: false,
+  }));
+  assert_eq!(result, false_ty);
+
+  // Negative: optional vs required (`foo?: number` is not assignable to `foo: number`).
+  let src_optional = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType {
+      shape: store.intern_shape(Shape {
+        properties: vec![Property {
+          key: PropKey::String(foo),
+          data: PropData {
+            ty: primitives.number,
+            optional: true,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        }],
+        call_signatures: Vec::new(),
+        construct_signatures: Vec::new(),
+        indexers: Vec::new(),
+      }),
+    }),
+  ));
+  let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
+    check: src_optional,
+    extends: dst_ty,
+    true_ty,
+    false_ty,
+    distributive: false,
+  }));
+  assert_eq!(result, false_ty);
+}
+
+#[test]
+fn conditional_uses_tuple_vs_array_assignability() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let number_array = store.intern_type(TypeKind::Array {
+    ty: primitives.number,
+    readonly: false,
+  });
+  let fixed_tuple = store.intern_type(TypeKind::Tuple(vec![
+    TupleElem {
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+    TupleElem {
+      ty: primitives.number,
+      optional: false,
+      rest: false,
+      readonly: false,
+    },
+  ]));
+  let rest_tuple = store.intern_type(TypeKind::Tuple(vec![TupleElem {
+    ty: number_array,
+    optional: false,
+    rest: true,
+    readonly: false,
+  }]));
+
+  let true_ty = primitives.number;
+  let false_ty = primitives.boolean;
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+
+  let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
+    check: number_array,
+    extends: fixed_tuple,
+    true_ty,
+    false_ty,
+    distributive: false,
+  }));
+  assert_eq!(result, false_ty);
+
+  let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
+    check: number_array,
+    extends: rest_tuple,
+    true_ty,
+    false_ty,
+    distributive: false,
+  }));
+  assert_eq!(result, true_ty);
+}
+
+#[test]
+fn conditional_uses_callable_assignability() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let num_or_str = store.union(vec![primitives.number, primitives.string]);
+
+  let param_num = Param {
+    name: None,
+    ty: primitives.number,
+    optional: false,
+    rest: false,
+  };
+  let param_num_or_str = Param {
+    name: None,
+    ty: num_or_str,
+    optional: false,
+    rest: false,
+  };
+
+  let f_num = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(Signature::new(
+      vec![param_num],
+      primitives.number,
+    ))],
+  });
+  let f_num_or_str = store.intern_type(TypeKind::Callable {
+    overloads: vec![store.intern_signature(Signature::new(
+      vec![param_num_or_str],
+      primitives.number,
+    ))],
+  });
+
+  let true_ty = primitives.number;
+  let false_ty = primitives.boolean;
+
+  let default_expander = MockExpander::default();
+  let mut eval = evaluator(store.clone(), &default_expander);
+
+  // With `strict_function_types` enabled by default, a function accepting
+  // `number | string` is assignable to one requiring `number`.
+  let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
+    check: f_num_or_str,
+    extends: f_num,
+    true_ty,
+    false_ty,
+    distributive: false,
+  }));
+  assert_eq!(result, true_ty);
+
+  let result = eval.evaluate(store.intern_type(TypeKind::Conditional {
+    check: f_num,
+    extends: f_num_or_str,
+    true_ty,
+    false_ty,
+    distributive: false,
+  }));
+  assert_eq!(result, false_ty);
 }
 
 #[test]
@@ -924,13 +1103,36 @@ fn recursive_conditional_terminates() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
 
+  let name_a = store.intern_name("a");
+  let name_b = store.intern_name("b");
+
+  let extends_obj = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(name_a),
+        data: PropData {
+          ty: primitives.number,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
+    }),
+  })));
+
   let self_ref = store.intern_type(TypeKind::Ref {
     def: DefId(0),
     args: vec![store.intern_type(TypeKind::TypeParam(TypeParamId(0)))],
   });
   let cond = store.intern_type(TypeKind::Conditional {
     check: store.intern_type(TypeKind::TypeParam(TypeParamId(0))),
-    extends: primitives.string,
+    extends: extends_obj,
     true_ty: self_ref,
     false_ty: primitives.boolean,
     distributive: false,
@@ -945,7 +1147,39 @@ fn recursive_conditional_terminates() {
     },
   );
 
-  let arg = store.intern_type(TypeKind::StringLiteral(store.intern_name("loop")));
+  let arg = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: store.intern_shape(Shape {
+      properties: vec![
+        Property {
+          key: PropKey::String(name_a),
+          data: PropData {
+            ty: primitives.number,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+        Property {
+          key: PropKey::String(name_b),
+          data: PropData {
+            ty: primitives.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+      ],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
+    }),
+  })));
   let ref_ty = store.intern_type(TypeKind::Ref {
     def: DefId(0),
     args: vec![arg],

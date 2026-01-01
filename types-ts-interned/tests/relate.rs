@@ -864,6 +864,79 @@ fn conditional_normalization_uses_relation_ctx_hooks() {
 }
 
 #[test]
+fn conditional_normalization_uses_structural_assignability() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let src = object_type(
+    &store,
+    Shape {
+      properties: vec![
+        Property {
+          key: PropKey::String(store.intern_name("a")),
+          data: PropData {
+            ty: primitives.number,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+        Property {
+          key: PropKey::String(store.intern_name("b")),
+          data: PropData {
+            ty: primitives.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+      ],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+  let dst = object_type(
+    &store,
+    Shape {
+      properties: vec![Property {
+        key: PropKey::String(store.intern_name("a")),
+        data: PropData {
+          ty: primitives.number,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+
+  let conditional = store.intern_type(TypeKind::Conditional {
+    check: src,
+    extends: dst,
+    true_ty: primitives.number,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  let ctx = RelateCtx::new(store.clone(), store.options());
+  assert!(ctx.is_assignable(primitives.number, conditional));
+  assert!(!ctx.is_assignable(primitives.boolean, conditional));
+}
+
+#[test]
 fn cyclic_reference_terminates() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
@@ -949,4 +1022,105 @@ fn explain_assignable_reason_nodes_only_reference_interned_type_ids() {
   assert!(result.result);
   let reason = result.reason.expect("expected reason tree");
   walk_reason(&store, &reason);
+}
+
+#[test]
+fn cyclic_reference_conditional_normalization_terminates() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tref = store.intern_type(TypeKind::Ref {
+    def: DefId(1),
+    args: vec![],
+  });
+
+  let src = object_type(
+    &store,
+    Shape {
+      properties: vec![
+        Property {
+          key: PropKey::String(store.intern_name("a")),
+          data: PropData {
+            ty: primitives.number,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+        Property {
+          key: PropKey::String(store.intern_name("b")),
+          data: PropData {
+            ty: primitives.string,
+            optional: false,
+            readonly: false,
+            accessibility: None,
+            is_method: false,
+            origin: None,
+            declared_on: None,
+          },
+        },
+      ],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+  let dst = object_type(
+    &store,
+    Shape {
+      properties: vec![Property {
+        key: PropKey::String(store.intern_name("a")),
+        data: PropData {
+          ty: primitives.number,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: vec![],
+      construct_signatures: vec![],
+      indexers: vec![],
+    },
+  );
+
+  // `tref` expands to a conditional type whose true branch is a union containing
+  // `tref` again. The relation engine must normalize through this cycle without
+  // overflowing the stack.
+  let cycle_union = store.union(vec![primitives.number, tref]);
+  let conditional = store.intern_type(TypeKind::Conditional {
+    check: src,
+    extends: dst,
+    true_ty: cycle_union,
+    false_ty: primitives.boolean,
+    distributive: false,
+  });
+
+  struct Expand {
+    ty: types_ts_interned::TypeId,
+  }
+  impl RelateTypeExpander for Expand {
+    fn expand_ref(
+      &self,
+      _store: &TypeStore,
+      _def: DefId,
+      _args: &[types_ts_interned::TypeId],
+    ) -> Option<types_ts_interned::TypeId> {
+      Some(self.ty)
+    }
+  }
+
+  let expander = Expand { ty: conditional };
+  let hooks = RelateHooks {
+    expander: Some(&expander),
+    is_same_origin_private_member: None,
+  };
+
+  let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
+  assert!(ctx.is_assignable(primitives.number, tref));
 }
