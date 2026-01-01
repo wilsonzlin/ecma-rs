@@ -1,8 +1,8 @@
 use std::cell::Cell;
 use std::thread_local;
 
-/// Thread-local instrumentation hook for counting actual HIR lowering executions.
 thread_local! {
+  /// Thread-local instrumentation hook for counting actual HIR lowering executions.
   static LOWER_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 

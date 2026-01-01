@@ -1884,7 +1884,7 @@ impl<'a> ResolvePass<'a> {
   }
 
   fn resolve_type_reference(&self, reference: &Node<TypeReference>) -> Option<SymbolId> {
-    self.resolve_entity_name(&reference.stx.name, Namespace::TYPE, Namespace::NAMESPACE)
+    self.resolve_type_entity_name(&reference.stx.name)
   }
 
   fn resolve_type_entity_name(&self, name: &TypeEntityName) -> Option<SymbolId> {

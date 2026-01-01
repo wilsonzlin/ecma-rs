@@ -22,7 +22,6 @@ use aho_corasick::MatchKind;
 use aho_corasick::StartKind;
 use core::ops::Index;
 use memchr::memchr;
-use memchr::memchr2;
 use memchr::memchr3;
 use once_cell::sync::Lazy;
 use unicode_ident::is_xid_continue;
@@ -194,43 +193,11 @@ impl<'a> Lexer<'a> {
     Match(0)
   }
 
-  fn through_char_or_end(&self, c: char) -> Match {
-    if c.is_ascii() {
-      memchr(c as u8, self.source[self.next..].as_bytes())
-        .map(|pos| Match(pos + 1))
-        .unwrap_or_else(|| Match(self.remaining()))
-    } else {
-      self.source[self.next..]
-        .find(c)
-        .map(|pos| Match(pos + c.len_utf8()))
-        .unwrap_or_else(|| Match(self.remaining()))
-    }
-  }
-
   fn while_not_char(&self, a: char) -> Match {
     if a.is_ascii() {
       Match(memchr(a as u8, self.source[self.next..].as_bytes()).unwrap_or(self.remaining()))
     } else {
       Match(self.source[self.next..].find(a).unwrap_or(self.remaining()))
-    }
-  }
-
-  fn while_not_2_chars(&self, a: char, b: char) -> Match {
-    if a.is_ascii() && b.is_ascii() {
-      Match(
-        memchr2(a as u8, b as u8, self.source[self.next..].as_bytes()).unwrap_or(self.remaining()),
-      )
-    } else {
-      let remaining = &self.source[self.next..];
-      let pos_a = remaining.find(a);
-      let pos_b = remaining.find(b);
-      let pos = match (pos_a, pos_b) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (Some(a), None) => Some(a),
-        (None, Some(b)) => Some(b),
-        (None, None) => None,
-      };
-      Match(pos.unwrap_or(self.remaining()))
     }
   }
 

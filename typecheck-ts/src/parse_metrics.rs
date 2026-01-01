@@ -1,8 +1,8 @@
 use std::cell::Cell;
 use std::thread_local;
 
-/// Thread-local instrumentation hook for counting actual parse executions.
 thread_local! {
+  /// Thread-local instrumentation hook for counting actual parse executions.
   static PARSE_CALLS: Cell<usize> = const { Cell::new(0) };
 }
 
