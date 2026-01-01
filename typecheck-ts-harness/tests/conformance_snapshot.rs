@@ -77,7 +77,7 @@ fn conformance_snapshot_mode_does_not_probe_node() {
   let report = run_conformance(options).expect("run conformance");
   let elapsed = start.elapsed();
   assert!(
-    elapsed < Duration::from_secs(5),
+    elapsed < Duration::from_secs(1),
     "snapshot mode should not invoke the node binary; elapsed={elapsed:?}"
   );
 
