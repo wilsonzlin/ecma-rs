@@ -307,10 +307,11 @@ fn resolve_json_target_to_file(
 
   match value {
     Value::String(s) => match star_match {
-      Some(star) => {
+      Some(star) if s.contains('*') => {
         let entry = s.replace('*', star);
         resolve_json_string_to_file(files, base_dir, &entry, depth + 1)
       }
+      Some(_) => resolve_json_string_to_file(files, base_dir, s, depth + 1),
       None => resolve_json_string_to_file(files, base_dir, s, depth + 1),
     },
     Value::Array(items) => items
