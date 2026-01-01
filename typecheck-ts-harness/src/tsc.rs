@@ -374,7 +374,7 @@ impl TscRunner {
       if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
       }
-      let _ = child.wait();
+      let _ = reap_child_with_timeout(&mut child, Duration::from_millis(500));
     }
 
     let runner_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -461,7 +461,26 @@ impl Drop for TscRunner {
       if child.try_wait().ok().flatten().is_none() {
         let _ = child.kill();
       }
-      let _ = child.wait();
+      let _ = reap_child_with_timeout(&mut child, Duration::from_millis(500));
+    }
+  }
+}
+
+#[cfg(feature = "with-node")]
+fn reap_child_with_timeout(
+  child: &mut std::process::Child,
+  timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+  let deadline = Instant::now() + timeout;
+  loop {
+    match child.try_wait()? {
+      Some(status) => return Ok(Some(status)),
+      None => {
+        if Instant::now() >= deadline {
+          return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+      }
     }
   }
 }
@@ -483,7 +502,7 @@ fn command_succeeds_with_timeout(mut command: std::process::Command, timeout: Du
       Ok(None) => {
         if Instant::now() >= deadline {
           let _ = child.kill();
-          let _ = child.wait();
+          let _ = reap_child_with_timeout(&mut child, Duration::from_millis(200));
           return false;
         }
         std::thread::sleep(Duration::from_millis(10));
