@@ -2082,7 +2082,55 @@ impl<'a> Checker<'a> {
         let expected_props_ty = self.member_type_for_index_key(intrinsic_elements, prim.string);
         (expected_props_ty != prim.unknown).then_some(expected_props_ty)
       }
-      _ => None,
+      _ => {
+        let call_sigs = self.jsx_component_call_signatures(tag_ty);
+        let is_construct = call_sigs.is_empty();
+        let sigs = if !is_construct {
+          call_sigs
+        } else {
+          self.jsx_component_construct_signatures(tag_ty)
+        };
+        if sigs.is_empty() {
+          return None;
+        }
+        let empty_props = {
+          let shape_id = self.store.intern_shape(Shape::new());
+          let obj = self.store.intern_object(ObjectType { shape: shape_id });
+          self.store.intern_type(TypeKind::Object(obj))
+        };
+        let mut props = Vec::new();
+        for sig_id in sigs {
+          let sig = self.store.signature(sig_id);
+          let mut props_ty = sig.params.first().map(|p| p.ty).unwrap_or(empty_props);
+          let ret_ty = sig.ret;
+
+          if is_construct {
+            if let Some(attrs_prop) = self.jsx_element_attributes_prop_key() {
+              let prop_name = self.store.name(attrs_prop);
+              if self.type_has_prop(ret_ty, &prop_name) {
+                props_ty = self.member_type(ret_ty, &prop_name);
+              }
+            }
+          }
+
+          props_ty = self.jsx_apply_library_managed_attributes(tag_ty, props_ty);
+          if is_construct {
+            let class_attrs = self.jsx_intrinsic_class_attributes_type(ret_ty);
+            if !matches!(self.store.type_kind(class_attrs), TypeKind::EmptyObject) {
+              props_ty = self.store.intersection(vec![props_ty, class_attrs]);
+            }
+          }
+          props.push(props_ty);
+        }
+        props.sort();
+        props.dedup();
+        let expected_props = if props.len() == 1 {
+          props[0]
+        } else {
+          self.store.union(props)
+        };
+        (expected_props != prim.unknown).then_some(expected_props)
+      }
     }
   }
 
