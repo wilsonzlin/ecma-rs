@@ -781,17 +781,53 @@ pub mod body_check {
           panic_any(crate::FatalError::Cancelled);
         }
         let mut initial_env: HashMap<_, _> = HashMap::new();
-        if let Some(function) = body.function.as_ref() {
-          for param in function.params.iter() {
-            if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
-              if ty != prim.unknown {
-                if let Some(pat) = body.pats.get(param.pat.0 as usize) {
-                  if let HirPatKind::Ident(name) = pat.kind {
-                    initial_env.insert(name, ty);
-                  }
+        fn record_param_pats(
+          body: &HirBody,
+          pat_id: HirPatId,
+          pat_types: &[TypeId],
+          unknown: TypeId,
+          initial_env: &mut HashMap<hir_js::NameId, TypeId>,
+        ) {
+          let Some(pat) = body.pats.get(pat_id.0 as usize) else {
+            return;
+          };
+          match &pat.kind {
+            HirPatKind::Ident(name_id) => {
+              if let Some(ty) = pat_types.get(pat_id.0 as usize).copied() {
+                if ty != unknown {
+                  initial_env.insert(*name_id, ty);
                 }
               }
             }
+            HirPatKind::Array(arr) => {
+              for elem in arr.elements.iter().flatten() {
+                record_param_pats(body, elem.pat, pat_types, unknown, initial_env);
+              }
+              if let Some(rest) = arr.rest {
+                record_param_pats(body, rest, pat_types, unknown, initial_env);
+              }
+            }
+            HirPatKind::Object(obj) => {
+              for prop in obj.props.iter() {
+                record_param_pats(body, prop.value, pat_types, unknown, initial_env);
+              }
+              if let Some(rest) = obj.rest {
+                record_param_pats(body, rest, pat_types, unknown, initial_env);
+              }
+            }
+            HirPatKind::Rest(inner) => {
+              record_param_pats(body, **inner, pat_types, unknown, initial_env);
+            }
+            HirPatKind::Assign { target, .. } => {
+              record_param_pats(body, *target, pat_types, unknown, initial_env);
+            }
+            HirPatKind::AssignTarget(_) => {}
+          }
+        }
+
+        if let Some(function) = body.function.as_ref() {
+          for param in function.params.iter() {
+            record_param_pats(body, param.pat, &result.pat_types, prim.unknown, &mut initial_env);
           }
         }
         for (idx, expr) in body.exprs.iter().enumerate() {

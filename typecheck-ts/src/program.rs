@@ -8620,10 +8620,8 @@ impl ProgramState {
 
   fn lower_function(&mut self, file: FileId, func: &Func, _def: DefId) -> FuncData {
     let mut params = Vec::new();
-    for param in func.parameters.iter() {
-      if let Some(data) = self.lower_param(file, param) {
-        params.push(data);
-      }
+    for (idx, param) in func.parameters.iter().enumerate() {
+      params.push(self.lower_param(file, param, idx));
     }
     let return_ann = func
       .return_type
@@ -8636,32 +8634,25 @@ impl ProgramState {
     }
   }
 
-  fn lower_param(&mut self, file: FileId, param: &Node<ParamDecl>) -> Option<ParamData> {
-    let name = match param.stx.pattern.stx.pat.stx.as_ref() {
-      Pat::Id(id) => id.stx.name.clone(),
-      _ => {
-        self
-          .diagnostics
-          .push(codes::UNSUPPORTED_PARAM_PATTERN.error(
-            "unsupported parameter pattern",
-            loc_to_span(file, param.loc),
-          ));
-        return None;
-      }
+  fn lower_param(&mut self, file: FileId, param: &Node<ParamDecl>, index: usize) -> ParamData {
+    let (name, symbol, record_symbol) = match param.stx.pattern.stx.pat.stx.as_ref() {
+      Pat::Id(id) => (id.stx.name.clone(), self.alloc_symbol(), true),
+      _ => (format!("<pattern{index}>"), self.alloc_symbol(), false),
     };
     let typ = param
       .stx
       .type_annotation
       .as_ref()
       .map(|t| self.type_from_type_expr(t));
-    let symbol = self.alloc_symbol();
-    self.record_symbol(file, loc_to_span(file, param.stx.pattern.loc).range, symbol);
-    Some(ParamData {
+    if record_symbol {
+      self.record_symbol(file, loc_to_span(file, param.stx.pattern.loc).range, symbol);
+    }
+    ParamData {
       name,
       typ,
       symbol,
       pat: None,
-    })
+    }
   }
 
   fn collect_parent_bindings(
@@ -9776,17 +9767,53 @@ impl ProgramState {
         }
         let mut initial_env: HashMap<NameId, TypeId> = HashMap::new();
         if matches!(meta.kind, HirBodyKind::Function) {
-          if let Some(function) = body.function.as_ref() {
-            for param in function.params.iter() {
-              if let Some(ty) = result.pat_types.get(param.pat.0 as usize).copied() {
-                if ty != prim.unknown {
-                  if let Some(pat) = body.pats.get(param.pat.0 as usize) {
-                    if let hir_js::PatKind::Ident(name) = pat.kind {
-                      initial_env.insert(name, ty);
-                    }
+          fn record_param_pats(
+            body: &hir_js::Body,
+            pat_id: HirPatId,
+            pat_types: &[TypeId],
+            unknown: TypeId,
+            initial_env: &mut HashMap<NameId, TypeId>,
+          ) {
+            let Some(pat) = body.pats.get(pat_id.0 as usize) else {
+              return;
+            };
+            match &pat.kind {
+              HirPatKind::Ident(name_id) => {
+                if let Some(ty) = pat_types.get(pat_id.0 as usize).copied() {
+                  if ty != unknown {
+                    initial_env.insert(*name_id, ty);
                   }
                 }
               }
+              HirPatKind::Array(arr) => {
+                for elem in arr.elements.iter().flatten() {
+                  record_param_pats(body, elem.pat, pat_types, unknown, initial_env);
+                }
+                if let Some(rest) = arr.rest {
+                  record_param_pats(body, rest, pat_types, unknown, initial_env);
+                }
+              }
+              HirPatKind::Object(obj) => {
+                for prop in obj.props.iter() {
+                  record_param_pats(body, prop.value, pat_types, unknown, initial_env);
+                }
+                if let Some(rest) = obj.rest {
+                  record_param_pats(body, rest, pat_types, unknown, initial_env);
+                }
+              }
+              HirPatKind::Rest(inner) => {
+                record_param_pats(body, **inner, pat_types, unknown, initial_env);
+              }
+              HirPatKind::Assign { target, .. } => {
+                record_param_pats(body, *target, pat_types, unknown, initial_env);
+              }
+              HirPatKind::AssignTarget(_) => {}
+            }
+          }
+
+          if let Some(function) = body.function.as_ref() {
+            for param in function.params.iter() {
+              record_param_pats(body, param.pat, &result.pat_types, prim.unknown, &mut initial_env);
             }
           }
         }
@@ -10977,6 +11004,82 @@ impl ProgramState {
     }
   }
 
+  fn param_type_for_def(&mut self, def: DefId, file: FileId) -> Result<TypeId, FatalError> {
+    let unknown = self.interned_unknown();
+    let Some(lowered) = self.hir_lowered.get(&file) else {
+      return Ok(unknown);
+    };
+    let Some(hir_def) = lowered.def(def) else {
+      return Ok(unknown);
+    };
+    let target_span = hir_def.span;
+
+    fn record_matches(
+      body_id: BodyId,
+      body: &hir_js::Body,
+      pat_id: HirPatId,
+      target_span: TextRange,
+      matches: &mut Vec<(BodyId, HirPatId)>,
+    ) {
+      let Some(pat) = body.pats.get(pat_id.0 as usize) else {
+        return;
+      };
+      if pat.span == target_span {
+        if matches!(pat.kind, HirPatKind::Ident(_)) {
+          matches.push((body_id, pat_id));
+        }
+      }
+      match &pat.kind {
+        HirPatKind::Ident(_) | HirPatKind::AssignTarget(_) => {}
+        HirPatKind::Array(arr) => {
+          for elem in arr.elements.iter().flatten() {
+            record_matches(body_id, body, elem.pat, target_span, matches);
+          }
+          if let Some(rest) = arr.rest {
+            record_matches(body_id, body, rest, target_span, matches);
+          }
+        }
+        HirPatKind::Object(obj) => {
+          for prop in obj.props.iter() {
+            record_matches(body_id, body, prop.value, target_span, matches);
+          }
+          if let Some(rest) = obj.rest {
+            record_matches(body_id, body, rest, target_span, matches);
+          }
+        }
+        HirPatKind::Rest(inner) => {
+          record_matches(body_id, body, **inner, target_span, matches);
+        }
+        HirPatKind::Assign { target, .. } => {
+          record_matches(body_id, body, *target, target_span, matches);
+        }
+      }
+    }
+
+    let mut body_ids: Vec<_> = lowered.body_index.keys().copied().collect();
+    body_ids.sort_by_key(|id| id.0);
+    let mut matches = Vec::new();
+    for body_id in body_ids {
+      let Some(body) = lowered.body(body_id) else {
+        continue;
+      };
+      let Some(function) = body.function.as_ref() else {
+        continue;
+      };
+      for param in function.params.iter() {
+        record_matches(body_id, body, param.pat, target_span, &mut matches);
+      }
+    }
+
+    matches.sort_by_key(|(body_id, pat_id)| (body_id.0, pat_id.0));
+    let Some((body_id, pat_id)) = matches.first().copied() else {
+      return Ok(unknown);
+    };
+
+    let result = self.check_body(body_id)?;
+    Ok(result.pat_type(PatId(pat_id.0)).unwrap_or(unknown))
+  }
+
   fn type_of_def(&mut self, def: DefId) -> Result<TypeId, FatalError> {
     self.check_cancelled()?;
     let cache_hit = self.def_types.contains_key(&def);
@@ -11002,13 +11105,24 @@ impl ProgramState {
         return Ok(self.builtin.unknown);
       }
     };
+    let is_param_def = self
+      .hir_lowered
+      .get(&def_data.file)
+      .and_then(|lowered| lowered.def(def))
+      .map(|hir_def| hir_def.path.kind == HirDefKind::Param)
+      .unwrap_or(false);
     let synthetic_value_def = matches!(def_data.kind, DefKind::Var(_))
       && self.value_defs.values().any(|value_def| *value_def == def);
     if let Some(store) = self.interned_store.clone() {
       if let Some(interned) = self.interned_def_types.get(&def).copied() {
         let skip_cache = matches!(def_data.kind, DefKind::Var(_)) && !synthetic_value_def;
         let mut ty = store.canon(interned);
-        if matches!(store.type_kind(ty), tti::TypeKind::Unknown) || skip_cache {
+        let is_self_ref = matches!(
+          store.type_kind(ty),
+          tti::TypeKind::Ref { def: ref_def, args }
+            if args.is_empty() && ref_def.0 == def.0
+        );
+        if matches!(store.type_kind(ty), tti::TypeKind::Unknown) || skip_cache || (is_param_def && is_self_ref) {
           self.interned_def_types.remove(&def);
         } else {
           if let DefKind::Function(func) = &def_data.kind {
@@ -11106,6 +11220,9 @@ impl ProgramState {
       let ty = match def_data.kind.clone() {
         DefKind::Function(func) => self.function_type(def, func)?,
         DefKind::Var(var) => {
+          if is_param_def {
+            return Ok(self.param_type_for_def(def, def_data.file)?);
+          }
           let init = self.var_initializer(def);
           let decl_kind =
             init
