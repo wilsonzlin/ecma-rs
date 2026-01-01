@@ -117,6 +117,17 @@ fn preserves_string_import_aliases() {
 }
 
 #[test]
+fn preserves_string_namespace_import_aliases() {
+  // Use direct `eval` to disable renaming so we can assert the raw output
+  // contains the string literal namespace alias.
+  let result = minified(
+    TopLevelMode::Module,
+    r#"eval("x");import * as "ns-name" from "x";"#,
+  );
+  assert_eq!(result, r#"eval("x");import*as"ns-name"from"x";"#);
+}
+
+#[test]
 fn reexport_keeps_renamed_string_import_aliases_in_sync() {
   // Exporting a string-named import binding should keep the binding name and the
   // export specifier's `exportable` name consistent after renaming.
@@ -129,6 +140,17 @@ fn reexport_keeps_renamed_string_import_aliases_in_sync() {
     r#"import { "a-b" as "c-d" } from "x";export { "c-d" as "e-f" };"#,
   );
   assert_eq!(result, r#"import{"a-b"as a}from"x";export{a as"e-f"};"#);
+}
+
+#[test]
+fn reexport_keeps_renamed_string_namespace_import_aliases_in_sync() {
+  // Namespace imports can also use string aliases. When we rename the internal
+  // binding, ensure export specifiers are updated to reference the renamed name.
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import * as "ns-name" from "x";export { "ns-name" as ns };"#,
+  );
+  assert_eq!(result, r#"import*as a from"x";export{a as ns};"#);
 }
 
 #[test]
