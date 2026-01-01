@@ -115,6 +115,10 @@ cargo run -p typecheck-ts-harness --release -- conformance \
   parseable when `--json` is enabled. Redirect with `2> trace.jsonl`.
 - `--profile` is forwarded to the checker.
 - A tiny demo corpus lives at `typecheck-ts-harness/fixtures/conformance-mini`.
+- Stored conformance snapshots (for `--compare snapshot`) live under
+  `typecheck-ts-harness/baselines/<suite>/<id>.json`, where the filename is the
+  test id with `.json` appended (so single-file tests preserve their original
+  extension, e.g. `match/basic.ts` → `baselines/conformance-mini/match/basic.ts.json`).
 
 **GitHub Actions suggestion (`ubuntu-latest`, 2-core):**
 
@@ -172,8 +176,8 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
   invocations are concurrency-limited to keep process count bounded, and JSON
   output is stably ordered regardless of scheduling.
 - Baselines are read from/written to `baselines/<suite>/<test>.json`, where the
-  filename is the test id with `.json` appended (so single-file tests preserve
-  their original extension, e.g. `match/basic.ts` → `baselines/conformance-mini/match/basic.ts.json`).
+  test name is derived from the fixture file stem or directory name (so single-file
+  tests become `<name>.json` and names must be unique within the suite; see below).
 - The runner uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
   writes `{ schemaVersion, metadata: { typescriptVersion, options }, diagnostics: [...] }`.
 
