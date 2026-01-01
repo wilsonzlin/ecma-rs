@@ -1542,9 +1542,10 @@ fn collect_type_only_module_specifiers_from_ast(
     fn enter_type_expr_node(&mut self, node: &TypeExprNode) {
       match node.stx.as_ref() {
         TypeExpr::ImportType(import) => {
-          self
-            .specs
-            .push((Arc::from(import.stx.module_specifier.clone()), node.loc.into()));
+          self.specs.push((
+            Arc::from(import.stx.module_specifier.clone()),
+            node.loc.into(),
+          ));
         }
         TypeExpr::TypeQuery(query) => {
           collect_from_entity_name(&query.stx.expr_name, &mut self.specs);
