@@ -6,7 +6,7 @@ Extremely fast JavaScript minifier, written in Rust.
 
 - Fully written in Rust for maximum compatibility with Rust programs and derivatives (FFI, WASM, embedded, etc.).
 - Maximises performance on a single CPU core for simple efficient scaling and easy compatible integration.
-- Minification of individual inputs/files only; no bundling or transforming.
+- Minification of individual inputs/files only; no bundling (TypeScript is handled by erasing type-only syntax).
 - Prefer minimal complexity and faster performance over maximum configurability and minimal extra compression.
 
 ## Performance
@@ -17,18 +17,22 @@ Comparison with esbuild, run on [common libraries](./bench).
 
 ## Features
 
-- Fast parsing powered by SIMD instructions and lookup tables.
-- Data is backed by a fast reusable bump allocation arena.
-- Supports JSX.
-- Analyses scopes and variable visibilities.
-- Minifies identifiers.
-- Omits semicolons, spaces, parentheses, and braces where possible.
-- Transforms functions to arrow functions when `new`, `this`, `arguments`, and `prototype` aren't used.
-- Transforms `if` statements to expressions.
+- Fast parsing via `parse-js` (JS/JSX/TS/TSX).
+- TypeScript/TSX inputs are accepted: type-only syntax is erased before
+  minification so the output is always JavaScript.
+- Builds lexical scopes and resolves identifiers via `semantic-js` (including
+  hoisting/TDZ metadata and dynamic-scope hazard marking).
+- Deterministic identifier renaming (module exports preserved).
+- Emits minified output via `emit-js` (minimal whitespace + ASI-safe statement
+  separation).
 
 ## Limitations
 
 - Identifier renaming is disabled when code contains `with` statements or direct calls to the global `eval` function to avoid changing runtime name resolution semantics.
+- TypeScript constructs with runtime semantics (such as non-`declare` namespaces
+  or `enum`s) are currently rejected during type erasure.
+- Minification currently focuses on formatting + identifier renaming; advanced
+  compression passes (constant folding, DCE, etc.) are still in progress.
 
 ## Usage
 
@@ -46,7 +50,7 @@ Download URLs (replace `VERSION` with the release tag, e.g. `0.6.0`):
 Use the `--help` argument for more details.
 
 ```bash
-minify-js --output /path/to/output.min.js /path/to/src.js
+minify-js --mode global --input /path/to/src.js --output /path/to/output.min.js
 ```
 
 ### Rust
@@ -66,7 +70,7 @@ use minify_js::{TopLevelMode, minify};
 let code: &str = "const main = () => { let my_first_variable = 1; };";
 let mut out = Vec::new();
 minify(TopLevelMode::Global, code, &mut out).unwrap();
-assert_eq!(out.as_slice(), b"const main = () => { let a = 1; };");
+assert_eq!(out.as_slice(), b"const main=()=>{let a=1;};");
 ```
 
 `minify` returns a `Result<(), Vec<diagnostics::Diagnostic>>`, allowing you to
@@ -80,7 +84,7 @@ Install the dependency:
 npm i @minify-js/node
 ```
 
-Call the method (signature: `minify(topLevelType: "global" | "module", src: Buffer): Buffer`):
+Call the method (signature: `minify(topLevelType: "global" | "module", src: string | Buffer): Buffer`):
 
 ```typescript
 import {minify} from "@minify-js/node";
@@ -93,7 +97,6 @@ const min = minify("global", src);
 
 - Combine and reorder declarations.
 - Evaluation and folding of constant expressions.
-- Parse and erase TypeScript syntax.
 - Removal of unreachable, unused, and redundant code.
 - Inlining single-use declarations.
 - Replacing if statements with conditional and logical expressions.
