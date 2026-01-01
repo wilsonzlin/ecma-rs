@@ -117,6 +117,21 @@ fn preserves_string_import_aliases() {
 }
 
 #[test]
+fn reexport_keeps_renamed_string_import_aliases_in_sync() {
+  // Exporting a string-named import binding should keep the binding name and the
+  // export specifier's `exportable` name consistent after renaming.
+  //
+  // (Previously, export specifier symbol tracking only resolved identifier
+  // exportables, so `"c-d"` could be renamed in the import while remaining
+  // unchanged in the export list.)
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import { "a-b" as "c-d" } from "x";export { "c-d" as "e-f" };"#,
+  );
+  assert_eq!(result, r#"import{"a-b"as a}from"x";export{a as"e-f"};"#);
+}
+
+#[test]
 fn export_list_marks_local_binding_as_used() {
   let result = minified(TopLevelMode::Module, "const long=1;export { long as b };");
   assert_eq!(result, "const a=1;export{a as b};");

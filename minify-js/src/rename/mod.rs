@@ -232,13 +232,12 @@ impl SymbolCollectorVisitor<'_> {
       .unwrap_or(false);
     if !is_reexport {
       if let Some(scope) = scope_id(&node.assoc) {
-        if let ModuleExportImportName::Ident(name) = &node.stx.exportable {
-          if let Some(sym) = self.inner.resolve_export_name(scope, name) {
-            node.assoc.set(ExportNameSymbol(sym));
-            self.inner.record_symbol_usage(scope, sym);
-          } else {
-            self.inner.record_unknown(scope, name);
-          }
+        let exportable = node.stx.exportable.as_str();
+        if let Some(sym) = self.inner.resolve_export_name(scope, exportable) {
+          node.assoc.set(ExportNameSymbol(sym));
+          self.inner.record_symbol_usage(scope, sym);
+        } else {
+          self.inner.record_unknown(scope, exportable);
         }
       }
     }
