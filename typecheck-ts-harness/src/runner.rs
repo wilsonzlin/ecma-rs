@@ -18,7 +18,6 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
-use std::path::Component;
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -283,7 +282,6 @@ fn build_test_options(
 
 #[derive(Clone)]
 struct HarnessFile {
-  fs_path: PathBuf,
   key: FileKey,
   content: Arc<str>,
 }
@@ -302,67 +300,6 @@ struct PlannedCase {
 }
 
 impl HarnessFileSet {
-  fn ensure_safe_relative_path(path: &Path) -> std::io::Result<()> {
-    if path.as_os_str().is_empty() {
-      return Err(std::io::Error::new(
-        std::io::ErrorKind::InvalidInput,
-        "empty harness filesystem path",
-      ));
-    }
-
-    for component in path.components() {
-      match component {
-        Component::Normal(_) => {}
-        Component::CurDir | Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-          return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!("unsafe harness filesystem path component: {}", path.display()),
-          ));
-        }
-      }
-    }
-
-    Ok(())
-  }
-
-  fn fs_path_for_virtual_name(normalized: &str) -> PathBuf {
-    // `multifile::normalize_name` / `normalize_ts_path` intentionally produce stable virtual
-    // paths rooted at `/` (e.g. `a.ts` -> `/a.ts`). Those are great for diagnostics comparisons
-    // but are unsafe to `Path::join` directly because absolute paths discard the base directory.
-    //
-    // Map the virtual name into a relative filesystem path so the harness never writes outside
-    // its per-test temp directory.
-    let normalized = normalized.replace('\\', "/");
-    let trimmed = normalized.trim_start_matches('/');
-
-    let mut out = PathBuf::new();
-
-    let bytes = trimmed.as_bytes();
-    let is_drive = bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':';
-    let mut rest = trimmed;
-
-    if is_drive {
-      let drive = (bytes[0] as char).to_ascii_lowercase();
-      out.push(format!("drive_{drive}"));
-      rest = &trimmed[2..];
-    }
-
-    rest = rest.trim_start_matches('/');
-
-    for part in rest.split('/') {
-      if part.is_empty() || part == "." {
-        continue;
-      }
-      // Defensive: `normalize_ts_path` should have removed `..`, but never allow it to escape.
-      if part == ".." {
-        continue;
-      }
-      out.push(part);
-    }
-
-    out
-  }
-
   pub(crate) fn new(files: &[VirtualFile]) -> Self {
     let mut normalized_names = Vec::with_capacity(files.len());
     for file in files {
@@ -387,7 +324,6 @@ impl HarnessFileSet {
       name_to_key.insert(normalized.clone(), key.clone());
       key_to_name.insert(key.clone(), normalized.clone());
       stored.push(HarnessFile {
-        fs_path: Self::fs_path_for_virtual_name(&normalized),
         key,
         content: Arc::from(files[idx].content.clone()),
       });
@@ -471,24 +407,6 @@ impl HarnessFileSet {
       .iter()
       .find(|f| &f.key == key)
       .map(|f| f.content.clone())
-  }
-
-  pub(crate) fn write_to_dir(&self, dir: &Path) -> std::io::Result<()> {
-    if std::env::var_os("TYPECHECK_TS_HARNESS_FORBID_WRITE_TO_DIR").is_some() {
-      return Err(std::io::Error::new(
-        std::io::ErrorKind::PermissionDenied,
-        "TYPECHECK_TS_HARNESS_FORBID_WRITE_TO_DIR is set; refusing to write harness virtual files to disk",
-      ));
-    }
-    for file in &self.files {
-      Self::ensure_safe_relative_path(&file.fs_path)?;
-      let path = dir.join(&file.fs_path);
-      if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-      }
-      std::fs::write(&path, &*file.content)?;
-    }
-    Ok(())
   }
 }
 
@@ -1251,7 +1169,6 @@ impl SnapshotStore {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use std::fs;
   use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::Arc;
   use std::time::Duration;
@@ -1383,57 +1300,5 @@ mod tests {
       parse_diags.is_empty(),
       "expected no parse-js diagnostics for TSX input, got: {parse_diags:?}"
     );
-  }
-
-  #[test]
-  fn writes_rooted_virtual_files_into_temp_dir() {
-    let files = vec![VirtualFile {
-      name: "a.ts".to_string(),
-      content: "const a = 1;\n".to_string(),
-    }];
-    let file_set = HarnessFileSet::new(&files);
-
-    let dir = tempfile::tempdir().unwrap();
-    file_set.write_to_dir(dir.path()).unwrap();
-
-    let written = dir.path().join("a.ts");
-    assert!(written.exists(), "expected {} to exist", written.display());
-    assert_eq!(fs::read_to_string(written).unwrap(), "const a = 1;\n");
-  }
-
-  #[test]
-  fn writes_nested_virtual_files_into_temp_dir() {
-    let files = vec![VirtualFile {
-      name: "sub/dir/b.ts".to_string(),
-      content: "export const b = 2;\n".to_string(),
-    }];
-    let file_set = HarnessFileSet::new(&files);
-
-    let dir = tempfile::tempdir().unwrap();
-    file_set.write_to_dir(dir.path()).unwrap();
-
-    let written = dir.path().join("sub").join("dir").join("b.ts");
-    assert!(written.exists(), "expected {} to exist", written.display());
-    assert_eq!(fs::read_to_string(written).unwrap(), "export const b = 2;\n");
-  }
-
-  #[test]
-  fn writes_drive_virtual_files_into_temp_dir() {
-    let files = vec![VirtualFile {
-      name: r"C:\case\a.ts".to_string(),
-      content: "const a = 1;\n".to_string(),
-    }];
-    let file_set = HarnessFileSet::new(&files);
-
-    let dir = tempfile::tempdir().unwrap();
-    file_set.write_to_dir(dir.path()).unwrap();
-
-    let written = dir
-      .path()
-      .join("drive_c")
-      .join("case")
-      .join("a.ts");
-    assert!(written.exists(), "expected {} to exist", written.display());
-    assert_eq!(fs::read_to_string(written).unwrap(), "const a = 1;\n");
   }
 }
