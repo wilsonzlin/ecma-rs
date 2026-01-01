@@ -213,6 +213,15 @@ fn dce_removes_unused_object_literals_with_function_values() {
 }
 
 #[test]
+fn dce_eliminates_transitively_unused_closure_chains() {
+  let result = minified(
+    TopLevelMode::Module,
+    "let x=1;let y=()=>x;let z=()=>y;console.log(2);",
+  );
+  assert_eq!(result, "console.log(2);");
+}
+
+#[test]
 fn direct_eval_disables_dce_in_nested_arrow_expr_bodies() {
   let result = minified(
     TopLevelMode::Global,

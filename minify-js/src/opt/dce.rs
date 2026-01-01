@@ -22,10 +22,25 @@ impl Pass for DcePass {
   }
 
   fn run(&mut self, cx: &mut OptCtx, top: &mut Node<TopLevel>) -> bool {
-    let mut used = collect_used_symbols(top);
-    // Exported symbols are always considered used.
-    used.extend(cx.usage().exported.iter().copied());
-    apply_to_function_like_bodies(top, |stmts, changed| dce_stmts(stmts, cx, &used, changed))
+    // Removing unused declarations can enable additional DCE by erasing initializer
+    // expressions that were the only remaining "uses" of other symbols (e.g.
+    // `let a=1,b=()=>a,c=()=>b;` when `c` is unused).
+    //
+    // Iterate a few rounds to reach a local fixpoint without requiring extra
+    // full post-bind pipeline iterations/rebinding.
+    let mut any_changed = false;
+    for _ in 0..8 {
+      let mut used = collect_used_symbols(top);
+      // Exported symbols are always considered used.
+      used.extend(cx.usage().exported.iter().copied());
+
+      let changed = apply_to_function_like_bodies(top, |stmts, changed| dce_stmts(stmts, cx, &used, changed));
+      any_changed |= changed;
+      if !changed {
+        break;
+      }
+    }
+    any_changed
   }
 }
 
