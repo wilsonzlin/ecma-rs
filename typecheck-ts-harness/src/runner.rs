@@ -1273,7 +1273,7 @@ impl SnapshotStore {
     }
 
     let mut payload = diagnostics.clone();
-    payload.schema_version = Some(TSC_BASELINE_SCHEMA_VERSION);
+    payload.canonicalize_for_baseline();
     let json = serde_json::to_string_pretty(&payload)?;
     std::fs::write(path, format!("{json}\n"))
   }

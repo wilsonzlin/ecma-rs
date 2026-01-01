@@ -74,6 +74,29 @@ pub struct TscDiagnostics {
   pub type_facts: Option<TypeFacts>,
 }
 
+impl TscDiagnostics {
+  pub(crate) fn canonicalize_for_baseline(&mut self) {
+    self.schema_version = Some(TSC_BASELINE_SCHEMA_VERSION);
+    self.diagnostics.sort_by(|a, b| {
+      (a.file.as_deref().unwrap_or(""), a.start, a.end, a.code).cmp(&(
+        b.file.as_deref().unwrap_or(""),
+        b.start,
+        b.end,
+        b.code,
+      ))
+    });
+
+    if let Some(type_facts) = self.type_facts.as_mut() {
+      type_facts
+        .exports
+        .sort_by(|a, b| (&a.file, &a.name, &a.type_str).cmp(&(&b.file, &b.name, &b.type_str)));
+      type_facts
+        .markers
+        .sort_by(|a, b| (&a.file, a.offset, &a.type_str).cmp(&(&b.file, b.offset, &b.type_str)));
+    }
+  }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TscMetadata {
   #[serde(default, alias = "typescriptVersion")]

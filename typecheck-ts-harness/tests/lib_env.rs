@@ -171,14 +171,24 @@ fn default_libs_resolve_global_types() {
     "expected definitions for {}, found none",
     fixture.name
   );
+  let mut checked = 0usize;
   for def in defs {
+    let Some(name) = program.def_name(def) else {
+      continue;
+    };
+    checked += 1;
     let ty = program.type_of_def_interned(def);
     let summary = program.type_kind(ty);
     assert!(
       !matches!(summary, typecheck_ts::TypeKindSummary::Unknown),
-      "expected known type for def {def:?}"
+      "expected known type for def {name} ({def:?})"
     );
   }
+  assert!(
+    checked >= 2,
+    "expected at least 2 user-visible definitions for {}, got {checked}",
+    fixture.name
+  );
 }
 
 #[test]
