@@ -1409,7 +1409,6 @@ impl<'a> TypeLowerer<'a> {
       ty: self.type_expr_sort_key(param.ty, cache, in_progress),
       optional: param.optional,
       rest: param.rest,
-      name: param.name.map(|id| self.name_id_to_string(id)),
     }
   }
 
@@ -1662,7 +1661,6 @@ struct FnParamKey {
   ty: TypeSortKey,
   optional: bool,
   rest: bool,
-  name: Option<String>,
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
