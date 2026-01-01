@@ -1,19 +1,23 @@
 use anyhow::{anyhow, bail, Context, Result};
-use clap::command;
 use clap::Parser;
 use clap::ValueEnum;
 use diagnostics::render::{render_diagnostic, SourceProvider};
-use diagnostics::{host_error, Diagnostic, FileId};
+use diagnostics::{host_error, Diagnostic, FileId, Span, TextRange};
 use globset::Glob;
-use parse_js::{Dialect, ParseOptions, SourceType};
+use parse_js::error::SyntaxErrorType;
+use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
 use rayon::prelude::*;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
-const REPORT_SCHEMA_VERSION: u32 = 1;
+const REPORT_SCHEMA_VERSION: u32 = 2;
 
 fn main() {
   if let Err(err) = try_main() {
@@ -29,6 +33,9 @@ fn try_main() -> Result<()> {
     Some(path) => Expectations::from_path(path)?,
     None => Expectations::empty(),
   };
+
+  let timeout_manager = TimeoutManager::new();
+  let timeout = Duration::from_secs(cli.timeout_secs);
 
   let mut cases = discover_cases(&cli.data_dir)?;
   let total_cases = cases.len();
@@ -51,7 +58,7 @@ fn try_main() -> Result<()> {
     );
   }
 
-  let mut results = run_cases(&cases, &expectations);
+  let mut results = run_cases(&cases, &expectations, timeout, &timeout_manager);
   results.sort_by(|a, b| a.id.cmp(&b.id));
 
   let summary = summarize(&results);
@@ -106,6 +113,10 @@ struct Cli {
   /// Control which mismatches cause a non-zero exit code.
   #[arg(long, default_value_t = FailOn::New, value_enum)]
   fail_on: FailOn,
+
+  /// Timeout in seconds for each test case (best-effort cooperative cancellation).
+  #[arg(long, default_value_t = 10)]
+  timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -155,6 +166,7 @@ enum ExpectedOutcome {
 enum TestOutcome {
   Passed,
   Failed,
+  TimedOut,
   Skipped,
 }
 
@@ -271,6 +283,7 @@ struct Summary {
   total: usize,
   passed: usize,
   failed: usize,
+  timed_out: usize,
   skipped: usize,
   #[serde(skip_serializing_if = "Option::is_none")]
   mismatches: Option<MismatchSummary>,
@@ -428,17 +441,27 @@ fn apply_shard(cases: Vec<TestCase>, shard: Shard) -> Vec<TestCase> {
     .collect()
 }
 
-fn run_cases(cases: &[TestCase], expectations: &Expectations) -> Vec<TestResult> {
+fn run_cases(
+  cases: &[TestCase],
+  expectations: &Expectations,
+  timeout: Duration,
+  timeout_manager: &TimeoutManager,
+) -> Vec<TestResult> {
   cases
     .par_iter()
     .map(|case| {
       let expectation = expectations.lookup(&case.id);
-      run_single_case(case, expectation)
+      run_single_case(case, expectation, timeout, timeout_manager)
     })
     .collect()
 }
 
-fn run_single_case(case: &TestCase, expectation: AppliedExpectation) -> TestResult {
+fn run_single_case(
+  case: &TestCase,
+  expectation: AppliedExpectation,
+  timeout: Duration,
+  timeout_manager: &TimeoutManager,
+) -> TestResult {
   if expectation.expectation.kind == ExpectationKind::Skip {
     return TestResult {
       id: case.id.clone(),
@@ -484,18 +507,37 @@ fn run_single_case(case: &TestCase, expectation: AppliedExpectation) -> TestResu
   };
 
   let parse_opts = case.source_type.to_parse_options();
-  let parsed = parse_js::parse_with_options(&source, parse_opts);
-  let diagnostic = parsed.err().map(|err| err.to_diagnostic(FileId(0)));
+  let cancel = Arc::new(AtomicBool::new(false));
+  let deadline = Instant::now() + timeout;
+  let _timeout_guard = timeout_manager.register(deadline, Arc::clone(&cancel));
 
-  let outcome = if diagnostic.is_some() {
-    TestOutcome::Failed
-  } else {
-    TestOutcome::Passed
+  let parsed = parse_with_options_cancellable(&source, parse_opts, cancel);
+  let (outcome, diagnostic) = match parsed {
+    Ok(_) => (TestOutcome::Passed, None),
+    Err(err) => {
+      if err.typ == SyntaxErrorType::Cancelled {
+        (
+          TestOutcome::TimedOut,
+          Some(Diagnostic::error(
+            "T2620001",
+            format!("timeout after {} seconds", timeout.as_secs()),
+            Span {
+              file: FileId(0),
+              range: TextRange::new(0, 0),
+            },
+          )),
+        )
+      } else {
+        (TestOutcome::Failed, Some(err.to_diagnostic(FileId(0))))
+      }
+    }
   };
 
-  let mismatched = match case.expected {
-    ExpectedOutcome::Pass => outcome == TestOutcome::Failed,
-    ExpectedOutcome::Fail => outcome == TestOutcome::Passed,
+  let mismatched = match outcome {
+    TestOutcome::TimedOut => true,
+    TestOutcome::Passed => case.expected == ExpectedOutcome::Fail,
+    TestOutcome::Failed => case.expected == ExpectedOutcome::Pass,
+    TestOutcome::Skipped => false,
   };
 
   let raw_diagnostic = if mismatched { diagnostic.clone() } else { None };
@@ -543,6 +585,7 @@ fn summarize(results: &[TestResult]) -> Summary {
     match result.outcome {
       TestOutcome::Passed => summary.passed += 1,
       TestOutcome::Failed => summary.failed += 1,
+      TestOutcome::TimedOut => summary.timed_out += 1,
       TestOutcome::Skipped => summary.skipped += 1,
     }
 
@@ -580,8 +623,8 @@ fn write_report(path: &Path, report: &ReportRef<'_>) -> Result<()> {
 
 fn print_human_summary(summary: &Summary) {
   println!(
-    "test262 parser tests: total={}, passed={}, failed={}, skipped={}",
-    summary.total, summary.passed, summary.failed, summary.skipped
+    "test262 parser tests: total={}, passed={}, failed={}, timed_out={}, skipped={}",
+    summary.total, summary.passed, summary.failed, summary.timed_out, summary.skipped
   );
 
   if let Some(mismatches) = &summary.mismatches {
@@ -597,6 +640,26 @@ fn print_unexpected_details(results: &[TestResult]) {
     .iter()
     .filter(|r| r.mismatched && !r.expected_mismatch && !r.flaky)
   {
+    if result.outcome == TestOutcome::TimedOut {
+      if let (Some(diag), Some(source)) = (&result.raw_diagnostic, &result.source) {
+        let provider = SingleFileSource {
+          file_name: &result.id,
+          text: source,
+        };
+        eprintln!(
+          "Timeout while parsing {} (expected {:?}):\n{}",
+          result.id,
+          result.expected,
+          render_diagnostic(&provider, diag)
+        );
+      } else {
+        eprintln!(
+          "Timeout while parsing {} (expected {:?}; no diagnostic available)",
+          result.id, result.expected
+        );
+      }
+      continue;
+    }
     match result.expected {
       ExpectedOutcome::Pass => {
         if let (Some(diag), Some(source)) = (&result.raw_diagnostic, &result.source) {
@@ -622,6 +685,130 @@ fn print_unexpected_details(results: &[TestResult]) {
           result.id
         );
       }
+    }
+  }
+}
+
+struct TimeoutManager {
+  inner: Arc<TimeoutManagerInner>,
+  next_id: AtomicUsize,
+  thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+struct TimeoutManagerInner {
+  state: Mutex<TimeoutManagerState>,
+  cv: Condvar,
+}
+
+struct TimeoutManagerState {
+  active: HashMap<usize, TimeoutEntry>,
+  shutdown: bool,
+}
+
+struct TimeoutEntry {
+  deadline: Instant,
+  cancel: Arc<AtomicBool>,
+  cancelled: bool,
+}
+
+struct TimeoutGuard {
+  id: usize,
+  inner: Arc<TimeoutManagerInner>,
+}
+
+impl TimeoutManager {
+  fn new() -> Self {
+    let inner = Arc::new(TimeoutManagerInner {
+      state: Mutex::new(TimeoutManagerState {
+        active: HashMap::new(),
+        shutdown: false,
+      }),
+      cv: Condvar::new(),
+    });
+    let thread_inner = Arc::clone(&inner);
+    let handle = std::thread::spawn(move || timeout_thread(thread_inner));
+    Self {
+      inner,
+      next_id: AtomicUsize::new(1),
+      thread: Mutex::new(Some(handle)),
+    }
+  }
+
+  fn register(&self, deadline: Instant, cancel: Arc<AtomicBool>) -> TimeoutGuard {
+    let id = self.next_id.fetch_add(1, AtomicOrdering::Relaxed);
+    let mut state = self.inner.state.lock().unwrap();
+    state.active.insert(
+      id,
+      TimeoutEntry {
+        deadline,
+        cancel,
+        cancelled: false,
+      },
+    );
+    self.inner.cv.notify_one();
+    TimeoutGuard {
+      id,
+      inner: Arc::clone(&self.inner),
+    }
+  }
+}
+
+impl Drop for TimeoutManager {
+  fn drop(&mut self) {
+    {
+      let mut state = self.inner.state.lock().unwrap();
+      state.shutdown = true;
+      self.inner.cv.notify_one();
+    }
+
+    if let Some(handle) = self.thread.lock().unwrap().take() {
+      let _ = handle.join();
+    }
+  }
+}
+
+impl Drop for TimeoutGuard {
+  fn drop(&mut self) {
+    let mut state = self.inner.state.lock().unwrap();
+    state.active.remove(&self.id);
+    self.inner.cv.notify_one();
+  }
+}
+
+fn timeout_thread(inner: Arc<TimeoutManagerInner>) {
+  let mut guard = inner.state.lock().unwrap();
+  loop {
+    if guard.shutdown {
+      return;
+    }
+
+    let now = Instant::now();
+    let mut next_deadline: Option<Instant> = None;
+
+    for entry in guard.active.values_mut() {
+      if entry.cancelled {
+        continue;
+      }
+      if now >= entry.deadline {
+        entry.cancelled = true;
+        entry.cancel.store(true, AtomicOrdering::Relaxed);
+        continue;
+      }
+
+      next_deadline = match next_deadline {
+        Some(existing) => Some(existing.min(entry.deadline)),
+        None => Some(entry.deadline),
+      };
+    }
+
+    if let Some(deadline) = next_deadline {
+      let wait_for = deadline
+        .checked_duration_since(now)
+        .unwrap_or_else(|| Duration::from_millis(0));
+      let (new_guard, _) = inner.cv.wait_timeout(guard, wait_for).unwrap();
+      guard = new_guard;
+    } else {
+      guard = inner.cv.wait(guard).unwrap();
     }
   }
 }
@@ -929,7 +1116,13 @@ status = "skip"
     write_case(temp.path(), "pass", "bad.js", "let =;");
 
     let expectations = Expectations::empty();
-    let mut results = run_cases(&discover_cases(temp.path()).unwrap(), &expectations);
+    let timeout_manager = TimeoutManager::new();
+    let mut results = run_cases(
+      &discover_cases(temp.path()).unwrap(),
+      &expectations,
+      Duration::from_secs(10),
+      &timeout_manager,
+    );
     results.sort_by(|a, b| a.id.cmp(&b.id));
     let summary = summarize(&results);
     let report = ReportRef::new(&summary, &results);
@@ -951,7 +1144,13 @@ status = "xfail"
 reason = "known parse gap"
     "#;
     let expectations = Expectations::from_str(manifest).unwrap();
-    let mut results = run_cases(&discover_cases(temp.path()).unwrap(), &expectations);
+    let timeout_manager = TimeoutManager::new();
+    let mut results = run_cases(
+      &discover_cases(temp.path()).unwrap(),
+      &expectations,
+      Duration::from_secs(10),
+      &timeout_manager,
+    );
     results.sort_by(|a, b| a.id.cmp(&b.id));
     let summary = summarize(&results);
     let mismatches = summary.mismatches.expect("mismatch summary present");

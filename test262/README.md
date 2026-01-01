@@ -37,6 +37,7 @@ Key flags:
 - `--shard <index>/<total>` — run a deterministic subset of tests
 - `--manifest` — apply skip/xfail/flaky expectations
 - `--fail-on {all,new,none}` — control the exit code when mismatches are present (`new` only fails on unexpected results)
+- `--timeout <secs>` — per-test timeout (best-effort cooperative cancellation) to prevent hangs
 
 ### Expectations manifest
 
@@ -60,9 +61,9 @@ The shipped manifest marks `fail/**`, `early/**`, and a handful of template lite
 
 ### Output
 
-The JSON artifact is deterministic (schema version `1`) and includes:
+The JSON artifact is deterministic (schema version `2`) and includes:
 
-- `summary` with pass/fail/skip counts and mismatch breakdown
+- `summary` with pass/fail/timeout/skip counts and mismatch breakdown
 - ordered `results` for every test (including expectation info)
 - diagnostic code and byte span for any parse failures
 
