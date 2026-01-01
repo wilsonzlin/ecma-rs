@@ -3445,6 +3445,7 @@ struct ProgramState {
   module_namespace_defs: HashMap<FileId, DefId>,
   callable_overloads: HashMap<(FileId, String), Vec<DefId>>,
   diagnostics: Vec<Diagnostic>,
+  implicit_any_reported: HashSet<Span>,
   type_store: TypeStore,
   interned_store: Option<Arc<tti::TypeStore>>,
   interned_def_types: HashMap<DefId, tti::TypeId>,
@@ -3554,6 +3555,7 @@ impl ProgramState {
       module_namespace_defs: HashMap::new(),
       callable_overloads: HashMap::new(),
       diagnostics: Vec::new(),
+      implicit_any_reported: HashSet::new(),
       type_store,
       interned_store: None,
       interned_def_types: HashMap::new(),
@@ -3577,6 +3579,15 @@ impl ProgramState {
     } else {
       Ok(())
     }
+  }
+
+  fn push_program_diagnostic(&mut self, diagnostic: Diagnostic) {
+    if diagnostic.code.as_str() == codes::IMPLICIT_ANY.as_str() {
+      if !self.implicit_any_reported.insert(diagnostic.primary) {
+        return;
+      }
+    }
+    self.diagnostics.push(diagnostic);
   }
 
   fn set_extra_diagnostics_input(&mut self) {
@@ -3686,6 +3697,7 @@ impl ProgramState {
     }
     BodyCheckContext {
       store: Arc::clone(&store),
+      no_implicit_any: self.compiler_options.no_implicit_any,
       interned_def_types: self.interned_def_types.clone(),
       interned_type_params: self.interned_type_params.clone(),
       asts: self.asts.clone(),
@@ -5301,10 +5313,17 @@ impl ProgramState {
           continue;
         };
         let has_body = func.stx.function.stx.body.is_some();
-        let (sig_id, params, diags) =
-          Self::lower_function_signature(store, file, func.stx.as_ref(), Some(resolver.clone()));
+        let (sig_id, params, diags) = Self::lower_function_signature(
+          store,
+          file,
+          func.stx.as_ref(),
+          Some(resolver.clone()),
+          self.compiler_options.no_implicit_any,
+        );
         if !diags.is_empty() {
-          self.diagnostics.extend(diags);
+          for diag in diags {
+            self.push_program_diagnostic(diag);
+          }
         }
         sigs_by_name
           .entry((file, name.stx.name.clone()))
@@ -5356,12 +5375,14 @@ impl ProgramState {
     file: FileId,
     func: &FuncDecl,
     resolver: Option<Arc<dyn TypeResolver>>,
+    no_implicit_any: bool,
   ) -> (tti::SignatureId, Vec<TypeParamId>, Vec<Diagnostic>) {
     let mut lowerer = match resolver {
       Some(resolver) => TypeLowerer::with_resolver(Arc::clone(store), resolver),
       None => TypeLowerer::new(Arc::clone(store)),
     };
     lowerer.set_file(file);
+    let prim = store.primitive_ids();
     let mut type_param_decls = Vec::new();
     if let Some(params) = func.function.stx.type_parameters.as_ref() {
       type_param_decls = lowerer.register_type_params(params);
@@ -5369,17 +5390,29 @@ impl ProgramState {
     let type_param_ids: Vec<_> = type_param_decls.iter().map(|d| d.id).collect();
     let mut params = Vec::new();
     let mut this_param = None;
+    let mut diagnostics = Vec::new();
     for (idx, param) in func.function.stx.parameters.iter().enumerate() {
       let name = match &*param.stx.pattern.stx.pat.stx {
         Pat::Id(id) => Some(id.stx.name.clone()),
         _ => None,
       };
-      let ty = param
+      let is_this = idx == 0 && matches!(name.as_deref(), Some("this"));
+      let annotation = param
         .stx
         .type_annotation
         .as_ref()
-        .map(|ann| lowerer.lower_type_expr(ann))
-        .unwrap_or(store.primitive_ids().unknown);
+        .map(|ann| lowerer.lower_type_expr(ann));
+      let mut ty = annotation.unwrap_or(prim.unknown);
+      if annotation.is_none() && !is_this && no_implicit_any {
+        // Match TypeScript's error-recovery semantics: keep checking by treating
+        // the missing annotation as `any` while emitting `--noImplicitAny`.
+        ty = prim.any;
+        let span = loc_to_span(file, param.stx.pattern.stx.pat.loc);
+        diagnostics.push(codes::IMPLICIT_ANY.error(
+          codes::implicit_any_message(name.as_deref()),
+          span,
+        ));
+      }
       if idx == 0 && matches!(name.as_deref(), Some("this")) {
         this_param = Some(ty);
         continue;
@@ -5397,7 +5430,7 @@ impl ProgramState {
       .return_type
       .as_ref()
       .map(|r| lowerer.lower_type_expr(r))
-      .unwrap_or(store.primitive_ids().unknown);
+      .unwrap_or(prim.unknown);
     let sig = tti::Signature {
       params,
       ret,
@@ -5405,8 +5438,8 @@ impl ProgramState {
       this_param,
     };
     let sig_id = store.intern_signature(sig);
-    let diags = lowerer.take_diagnostics();
-    (sig_id, type_param_ids, diags)
+    diagnostics.extend(lowerer.take_diagnostics());
+    (sig_id, type_param_ids, diagnostics)
   }
 
   fn merge_namespace_store_types(&mut self, existing: TypeId, incoming: TypeId) -> TypeId {
@@ -9360,6 +9393,7 @@ impl ProgramState {
         resolver,
         Some(&expander),
         contextual_fn_ty,
+        self.compiler_options.no_implicit_any,
         Some(&self.cancelled),
       );
       let mut base_relate_hooks = relate_hooks();
@@ -10672,6 +10706,16 @@ impl ProgramState {
                 }
               }
             }
+          }
+          if self.compiler_options.no_implicit_any && annotated.is_none() && inferred == self.builtin.unknown {
+            // Like TypeScript with `--noImplicitAny`, flag unannotated bindings
+            // that could not be inferred. Use `any` for recovery so later checks
+            // don't cascade.
+            self.push_program_diagnostic(codes::IMPLICIT_ANY.error(
+              codes::implicit_any_message(Some(&def_data.name)),
+              Span::new(def_data.file, def_data.span),
+            ));
+            inferred = self.builtin.any;
           }
           let init_is_satisfies = init
             .map(|init| self.init_is_satisfies(init.body, init.expr))

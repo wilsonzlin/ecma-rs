@@ -440,6 +440,7 @@ pub mod body_check {
   #[derive(Clone)]
   pub struct BodyCheckContext {
     pub store: Arc<TypeStore>,
+    pub no_implicit_any: bool,
     pub interned_def_types: HashMap<DefId, InternedTypeId>,
     pub interned_type_params: HashMap<DefId, Vec<TypeParamId>>,
     pub asts: HashMap<FileId, Arc<Node<TopLevel>>>,
@@ -761,6 +762,7 @@ pub mod body_check {
           .then(|| Arc::new(BindingTypeResolver::new(binding_defs)) as Arc<_>),
         Some(&expander),
         contextual_fn_ty,
+        ctx.no_implicit_any,
         Some(&ctx.cancelled),
       );
 

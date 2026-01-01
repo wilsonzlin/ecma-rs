@@ -548,7 +548,19 @@ pub fn check_body(
   resolver: Option<Arc<dyn TypeResolver>>,
 ) -> BodyCheckResult {
   check_body_with_expander(
-    body_id, body, names, file, ast_index, store, caches, bindings, resolver, None, None, None,
+    body_id,
+    body,
+    names,
+    file,
+    ast_index,
+    store,
+    caches,
+    bindings,
+    resolver,
+    None,
+    None,
+    false,
+    None,
   )
 }
 
@@ -567,6 +579,7 @@ pub fn check_body_with_expander(
   resolver: Option<Arc<dyn TypeResolver>>,
   relate_expander: Option<&dyn types_ts_interned::RelateTypeExpander>,
   contextual_fn_ty: Option<TypeId>,
+  no_implicit_any: bool,
   cancelled: Option<&Arc<AtomicBool>>,
 ) -> BodyCheckResult {
   if let Some(flag) = cancelled {
@@ -625,6 +638,7 @@ pub fn check_body_with_expander(
     expr_map,
     pat_map,
     diagnostics: Vec::new(),
+    implicit_any_reported: HashSet::new(),
     return_types: Vec::new(),
     index: ast_index,
     scopes: vec![Scope::default()],
@@ -632,6 +646,7 @@ pub fn check_body_with_expander(
     expected_return: None,
     check_var_assignments: !synthetic_top_level,
     widen_object_literals: true,
+    no_implicit_any,
     file,
     ref_expander: relate_expander,
     contextual_fn_ty,
@@ -715,6 +730,7 @@ struct Checker<'a> {
   expr_map: HashMap<TextRange, ExprId>,
   pat_map: HashMap<TextRange, PatId>,
   diagnostics: Vec<Diagnostic>,
+  implicit_any_reported: HashSet<TextRange>,
   return_types: Vec<TypeId>,
   index: &'a AstIndex,
   scopes: Vec<Scope>,
@@ -722,6 +738,7 @@ struct Checker<'a> {
   expected_return: Option<TypeId>,
   check_var_assignments: bool,
   widen_object_literals: bool,
+  no_implicit_any: bool,
   file: FileId,
   ref_expander: Option<&'a dyn types_ts_interned::RelateTypeExpander>,
   contextual_fn_ty: Option<TypeId>,
@@ -731,6 +748,45 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
+  fn report_implicit_any(&mut self, range: TextRange, name: Option<&str>) {
+    if !self.no_implicit_any {
+      return;
+    }
+    if !self.implicit_any_reported.insert(range) {
+      return;
+    }
+    self.diagnostics.push(codes::IMPLICIT_ANY.error(
+      codes::implicit_any_message(name),
+      Span::new(self.file, range),
+    ));
+  }
+
+  fn report_implicit_any_in_pat(&mut self, pat: &Node<AstPat>) {
+    match pat.stx.as_ref() {
+      AstPat::Id(id) => {
+        let range = loc_to_range(self.file, pat.loc);
+        self.report_implicit_any(range, Some(&id.stx.name));
+      }
+      AstPat::Arr(arr) => {
+        for elem in arr.stx.elements.iter().flatten() {
+          self.report_implicit_any_in_pat(&elem.target);
+        }
+        if let Some(rest) = &arr.stx.rest {
+          self.report_implicit_any_in_pat(rest);
+        }
+      }
+      AstPat::Obj(obj) => {
+        for prop in obj.stx.properties.iter() {
+          self.report_implicit_any_in_pat(&prop.stx.target);
+        }
+        if let Some(rest) = &obj.stx.rest {
+          self.report_implicit_any_in_pat(rest);
+        }
+      }
+      AstPat::AssignTarget(_) => {}
+    }
+  }
+
   fn check_cancelled(&self) {
     if let Some(flag) = self.cancelled {
       if flag.load(Ordering::Relaxed) {
@@ -938,7 +994,24 @@ impl<'a> Checker<'a> {
       let contextual_param_ty = contextual_sig
         .and_then(|sig| sig.params.get(idx))
         .map(|param| param.ty);
-      let mut ty = annotation.or(contextual_param_ty).unwrap_or(prim.unknown);
+      let is_this = idx == 0
+        && matches!(
+          param.stx.pattern.stx.pat.stx.as_ref(),
+          AstPat::Id(id) if id.stx.name == "this"
+        );
+      let implicit_any =
+        self.no_implicit_any && !is_this && annotation.is_none() && contextual_param_ty.is_none();
+      let mut ty = annotation
+        .or(contextual_param_ty)
+        .unwrap_or(if implicit_any { prim.any } else { prim.unknown });
+      if implicit_any {
+        let range = loc_to_range(self.file, param.stx.pattern.stx.pat.loc);
+        let name = match param.stx.pattern.stx.pat.stx.as_ref() {
+          AstPat::Id(id) => Some(id.stx.name.as_str()),
+          _ => None,
+        };
+        self.report_implicit_any(range, name);
+      }
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
       }
@@ -1186,7 +1259,14 @@ impl<'a> Checker<'a> {
         VarDeclMode::Const | VarDeclMode::Using | VarDeclMode::AwaitUsing => init_ty,
         _ => self.base_type(init_ty),
       };
-      let final_ty = annot_ty.unwrap_or(binding_ty);
+      let mut final_ty = annot_ty.unwrap_or(binding_ty);
+      if self.no_implicit_any && annot_ty.is_none() && final_ty == prim.unknown {
+        // Like TypeScript `--noImplicitAny`, report untyped bindings that
+        // would otherwise become `any`. Use `any` for recovery to keep
+        // type checking resilient.
+        self.report_implicit_any_in_pat(&declarator.pattern.stx.pat);
+        final_ty = prim.any;
+      }
       if self.check_var_assignments {
         if let (Some(ann), Some(init)) = (annot_ty, declarator.initializer.as_ref()) {
           self.check_assignable(init, init_ty, ann);
@@ -2373,6 +2453,7 @@ impl<'a> Checker<'a> {
     let element_ty = match self.store.type_kind(value) {
       TypeKind::Array { ty, .. } => ty,
       TypeKind::Tuple(elems) => elems.first().map(|e| e.ty).unwrap_or(prim.unknown),
+      TypeKind::Any => prim.any,
       _ => prim.unknown,
     };
     for (idx, elem) in arr.stx.elements.iter().enumerate() {
@@ -2393,6 +2474,10 @@ impl<'a> Checker<'a> {
         TypeKind::Array { ty, readonly } => {
           self.store.intern_type(TypeKind::Array { ty, readonly })
         }
+        TypeKind::Any => self.store.intern_type(TypeKind::Array {
+          ty: prim.any,
+          readonly: false,
+        }),
         TypeKind::Tuple(elems) => {
           let elems: Vec<TypeId> = elems.into_iter().map(|e| e.ty).collect();
           let elem_ty = if elems.is_empty() {
@@ -2421,6 +2506,7 @@ impl<'a> Checker<'a> {
     type_params: Vec<TypeParamDecl>,
   ) {
     let prim = self.store.primitive_ids();
+    let value_is_any = matches!(self.store.type_kind(value), TypeKind::Any);
     let shape = match self.store.type_kind(value) {
       TypeKind::Object(obj_id) => Some(self.store.shape(self.store.object(obj_id).shape)),
       _ => None,
@@ -2430,23 +2516,25 @@ impl<'a> Checker<'a> {
         ClassOrObjKey::Direct(direct) => Some(direct.stx.key.clone()),
         ClassOrObjKey::Computed(_) => None,
       };
-      let mut prop_ty = prim.unknown;
-      if let Some(shape) = &shape {
-        if let Some(key) = key_name.as_ref() {
-          for candidate in shape.properties.iter() {
-            let matches = match &candidate.key {
-              PropKey::String(name) => self.store.name(*name) == *key,
-              PropKey::Number(num) => num.to_string() == *key,
-              _ => false,
-            };
-            if matches {
-              prop_ty = candidate.data.ty;
-              break;
+      let mut prop_ty = if value_is_any { prim.any } else { prim.unknown };
+      if !value_is_any {
+        if let Some(shape) = &shape {
+          if let Some(key) = key_name.as_ref() {
+            for candidate in shape.properties.iter() {
+              let matches = match &candidate.key {
+                PropKey::String(name) => self.store.name(*name) == *key,
+                PropKey::Number(num) => num.to_string() == *key,
+                _ => false,
+              };
+              if matches {
+                prop_ty = candidate.data.ty;
+                break;
+              }
             }
-          }
-          if prop_ty == prim.unknown {
-            if let Some(idx) = shape.indexers.first() {
-              prop_ty = idx.value_type;
+            if prop_ty == prim.unknown {
+              if let Some(idx) = shape.indexers.first() {
+                prop_ty = idx.value_type;
+              }
             }
           }
         }

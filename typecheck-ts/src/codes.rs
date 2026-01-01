@@ -78,6 +78,19 @@ pub fn normalize_diagnostic(diagnostic: &mut Diagnostic) {
   diagnostic.notes.sort();
 }
 
+/// Helper to format the checker message for implicit-`any` diagnostics.
+///
+/// The checker may discover implicit `any` types in multiple phases (signature
+/// lowering, body checking, and global var typing). Keeping the message
+/// identical across those phases allows [`normalize_diagnostics`] to
+/// de-duplicate repeats deterministically.
+pub fn implicit_any_message(name: Option<&str>) -> String {
+  match name {
+    Some(name) => format!("`{name}` implicitly has an `any` type"),
+    None => "implicitly has an `any` type".to_string(),
+  }
+}
+
 /// TC0001: No libraries were loaded.
 ///
 /// - Primary span: zero-length span at the start of the checked file if known,
@@ -357,6 +370,23 @@ pub const UNRESOLVED_TYPE_QUERY: Code = Code::new(
   "unresolved type query",
   "typeof query that could not be resolved",
   &["primary: typeof query span"],
+  &[],
+);
+
+/// TC3000: Implicit `any` type (TypeScript `--noImplicitAny`).
+///
+/// This diagnostic is emitted when the checker would otherwise fall back to
+/// `any` due to a missing annotation and lack of contextual typing.
+///
+/// - Primary span: the identifier (preferred) or binding pattern that receives
+///   the implicit `any` type.
+/// - Labels: primary only.
+/// - Notes: none.
+pub const IMPLICIT_ANY: Code = Code::new(
+  "TC3000",
+  "implicit any type",
+  "identifier or binding pattern receiving the implicit any type",
+  &["primary: identifier/pattern with implicit any"],
   &[],
 );
 
