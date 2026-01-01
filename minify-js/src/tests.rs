@@ -771,11 +771,12 @@ fn rewrites_enum_member_references_using_alias_when_enum_name_shadowed() {
     other => panic!("expected enum IIFE expr stmt, got {other:?}"),
   };
   let call = match iife.stx.expr.stx.as_ref() {
-    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => match bin.stx.right.stx.as_ref()
-    {
-      Expr::Call(call) => call,
-      other => panic!("expected comma call rhs, got {other:?}"),
-    },
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => {
+      match bin.stx.right.stx.as_ref() {
+        Expr::Call(call) => call,
+        other => panic!("expected comma call rhs, got {other:?}"),
+      }
+    }
     other => panic!("expected comma expression, got {other:?}"),
   };
   let func = match call.stx.callee.stx.as_ref() {
@@ -794,7 +795,11 @@ fn rewrites_enum_member_references_using_alias_when_enum_name_shadowed() {
     other => panic!("expected enum alias var decl, got {other:?}"),
   };
   assert_eq!(alias_decl.stx.mode, VarDeclMode::Var);
-  let alias_declarator = alias_decl.stx.declarators.first().expect("alias declarator");
+  let alias_declarator = alias_decl
+    .stx
+    .declarators
+    .first()
+    .expect("alias declarator");
   match alias_declarator.pattern.stx.pat.stx.as_ref() {
     parse_js::ast::expr::pat::Pat::Id(id) => assert_eq!(id.stx.name, "__minify_ts_enum_E"),
     other => panic!("expected identifier pattern, got {other:?}"),

@@ -70,10 +70,7 @@ fn reports_implicit_any_for_uncontextualized_arrow_params() {
     "expected exactly one implicit-any diagnostic, got {implicit:?} (all={diagnostics:?})",
   );
 
-  let x_start = source
-    .find("(x) =>")
-    .expect("expected `(x) =>` in source") as u32
-    + 1;
+  let x_start = source.find("(x) =>").expect("expected `(x) =>` in source") as u32 + 1;
   let x_span = TextRange::new(x_start, x_start + 1);
   assert!(
     implicit
