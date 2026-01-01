@@ -98,3 +98,8 @@ fn hir_keeps_export_star_reserved_keyword_alias_quoted() {
     "export*as\"while\"from\"mod\";",
   );
 }
+
+#[test]
+fn hir_emits_escaped_identifier_alias_without_quotes() {
+  roundtrip("export { a as \\u0061 };", "export{a as \\u0061};");
+}

@@ -776,7 +776,8 @@ impl<'a> TypeEmitter<'a> {
 
   fn emit_template_literal(&mut self, template: &Node<TypeTemplateLiteral>) -> EmitResult {
     let template = template.stx.as_ref();
-
+    // `parse-js` stores template literal type chunks as cooked text. Rebuild
+    // the full `...${T}...` syntax while escaping chunk content so it roundtrips.
     self.em.write_raw_byte(b'`');
 
     let mut buf = Vec::new();
@@ -784,7 +785,6 @@ impl<'a> TypeEmitter<'a> {
     self
       .em
       .write_raw_str(std::str::from_utf8(&buf).expect("template literal segment is UTF-8"));
-
     for span in &template.spans {
       self.em.write_raw_str("${");
       self.emit_type_expr_with_prec(&span.stx.type_expr, TypePrec::ArrowOrConditional)?;

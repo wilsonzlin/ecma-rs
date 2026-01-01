@@ -68,7 +68,6 @@ fn push_entity_name(out: &mut String, name: &TypeEntityName) {
 fn expected_output(template: &TypeTemplateLiteral) -> String {
   let mut out = Vec::new();
   out.push(b'`');
-
   emit_template_literal_segment(&mut out, &template.head);
   for span in &template.spans {
     out.extend_from_slice(b"${");
@@ -94,7 +93,20 @@ fn assert_roundtrip(source: &str) {
 
   let reparsed = parse_template_type_expr(&format!("type T = {emitted};"));
   let reparsed_template = extract_template_literal(reparsed.stx.as_ref());
+  assert_eq!(reparsed_template.stx.head, template.stx.head);
   assert_eq!(reparsed_template.stx.spans.len(), template.stx.spans.len());
+  for (reparsed_span, original_span) in reparsed_template
+    .stx
+    .spans
+    .iter()
+    .zip(template.stx.spans.iter())
+  {
+    assert_eq!(
+      type_expr_to_string(&reparsed_span.stx.type_expr.stx),
+      type_expr_to_string(&original_span.stx.type_expr.stx)
+    );
+    assert_eq!(reparsed_span.stx.literal, original_span.stx.literal);
+  }
 
   let re_emitted = emit_type_expr_to_string(&reparsed);
   assert_eq!(re_emitted, emitted, "emission should be idempotent");
