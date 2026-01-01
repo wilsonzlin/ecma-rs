@@ -239,6 +239,9 @@ impl<'a> TypeDisplay<'a> {
           } else {
             write!(f, "; ")?;
           }
+          if idxer.readonly {
+            write!(f, "readonly ")?;
+          }
           write!(f, "[")?;
           self.fmt_with_prec(idxer.key_type, Precedence::Primary, f)?;
           write!(f, "]: ")?;

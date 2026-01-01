@@ -100,6 +100,30 @@ fn formats_complex_object_shape() {
 }
 
 #[test]
+fn formats_readonly_index_signature() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let shape_id = store.intern_shape(Shape {
+    properties: Vec::new(),
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: vec![Indexer {
+      key_type: primitives.string,
+      value_type: primitives.number,
+      readonly: true,
+    }],
+  });
+  let obj = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape: shape_id }),
+  ));
+
+  let formatted = format!("{}", store.display(obj));
+  assert!(formatted.contains("readonly [string]: number"));
+  assert_eq!(formatted, "{ readonly [string]: number }");
+}
+
+#[test]
 fn formats_nested_combinations() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
