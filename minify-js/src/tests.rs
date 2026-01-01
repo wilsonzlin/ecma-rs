@@ -94,9 +94,9 @@ fn test_shadow_safety() {
 fn test_unknown_globals_not_shadowed() {
   let result = minified(
     TopLevelMode::Global,
-    "console.log(x);(()=>{let console=1;})();",
+    "console.log(x);(()=>{let console=1;return console;})();",
   );
-  assert_eq!(result, "console.log(x);(()=>{})();");
+  assert_eq!(result, "console.log(x);(()=>{let a=1;return a;})();");
 }
 
 #[test]
@@ -192,6 +192,15 @@ fn direct_eval_disables_dce_in_nested_arrow_expr_bodies() {
     r#"const f=()=>{if(false){sideEffect()}let x=1;eval("x");return 2;};"#,
   );
   assert_eq!(result, r#"const f=()=>{let x=1;eval("x");return 2;};"#);
+}
+
+#[test]
+fn with_statement_disables_dce_in_nested_arrow_expr_bodies() {
+  let result = minified(
+    TopLevelMode::Global,
+    "call(()=>{with({}){let x=1;}return 2;});",
+  );
+  assert_eq!(result, "call(()=>{with({}){let x=1;}return 2;});");
 }
 
 #[test]
