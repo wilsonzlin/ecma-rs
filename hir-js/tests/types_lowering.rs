@@ -562,6 +562,20 @@ fn union_canonicalization_is_span_stable_for_type_query_types() {
 }
 
 #[test]
+fn union_canonicalization_is_span_stable_for_indexed_access_types() {
+  let base = lower_from_source(r#"type A = (T["b"]) | (T["a"]);"#).expect("lower");
+  let with_padding =
+    lower_from_source("type Z = string;\ntype A = (T[\"b\"]) | (T[\"a\"]);")
+      .expect("lower with padding");
+
+  let base_members = union_member_indexed_access_index_literals(&base, "A");
+  let with_padding_members = union_member_indexed_access_index_literals(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["a", "b"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
 fn union_dedups_simple_duplicates() {
   let result = lower_from_source("type A = string | string | Foo | Foo;").expect("lower");
   let members = union_member_names(&result, "A");
@@ -909,6 +923,20 @@ fn intersection_canonicalization_is_span_stable_for_type_query_types() {
   let with_padding_members = intersection_member_type_query_name_strings(&with_padding, "A");
 
   assert_eq!(base_members, vec!["Bar", "Foo"]);
+  assert_eq!(base_members, with_padding_members);
+}
+
+#[test]
+fn intersection_canonicalization_is_span_stable_for_indexed_access_types() {
+  let base = lower_from_source(r#"type A = (T["b"]) & (T["a"]);"#).expect("lower");
+  let with_padding =
+    lower_from_source("type Z = string;\ntype A = (T[\"b\"]) & (T[\"a\"]);")
+      .expect("lower with padding");
+
+  let base_members = intersection_member_indexed_access_index_literals(&base, "A");
+  let with_padding_members = intersection_member_indexed_access_index_literals(&with_padding, "A");
+
+  assert_eq!(base_members, vec!["a", "b"]);
   assert_eq!(base_members, with_padding_members);
 }
 
@@ -1369,6 +1397,43 @@ fn union_member_type_query_name_strings(result: &hir_js::LowerResult, alias: &st
     .collect()
 }
 
+fn union_member_indexed_access_index_literals<'a>(
+  result: &'a hir_js::LowerResult,
+  alias: &str,
+) -> Vec<&'a str> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let index_type = match member_kind {
+        TypeExprKind::IndexedAccess { index_type, .. } => index_type,
+        other => panic!("expected indexed access member, got {other:?}"),
+      };
+
+      let index_type = &arenas.type_exprs[index_type.0 as usize].kind;
+      match index_type {
+        TypeExprKind::Literal(hir_js::TypeLiteral::String(s)) => s.as_str(),
+        other => panic!("expected string literal index type, got {other:?}"),
+      }
+    })
+    .collect()
+}
+
 fn intersection_member_first_ctor_param_type_names(
   result: &hir_js::LowerResult,
   alias: &str,
@@ -1445,6 +1510,43 @@ fn intersection_member_type_query_name_strings(
           .join("."),
         TypeName::Import(_) => "[import]".to_string(),
         TypeName::ImportExpr => "[import expr]".to_string(),
+      }
+    })
+    .collect()
+}
+
+fn intersection_member_indexed_access_index_literals<'a>(
+  result: &'a hir_js::LowerResult,
+  alias: &str,
+) -> Vec<&'a str> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|member_id| {
+      let mut member_kind = &arenas.type_exprs[member_id.0 as usize].kind;
+      while let TypeExprKind::Parenthesized(inner) = member_kind {
+        member_kind = &arenas.type_exprs[inner.0 as usize].kind;
+      }
+
+      let index_type = match member_kind {
+        TypeExprKind::IndexedAccess { index_type, .. } => index_type,
+        other => panic!("expected indexed access member, got {other:?}"),
+      };
+
+      let index_type = &arenas.type_exprs[index_type.0 as usize].kind;
+      match index_type {
+        TypeExprKind::Literal(hir_js::TypeLiteral::String(s)) => s.as_str(),
+        other => panic!("expected string literal index type, got {other:?}"),
       }
     })
     .collect()
