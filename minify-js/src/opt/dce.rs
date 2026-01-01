@@ -34,7 +34,8 @@ impl Pass for DcePass {
       // Exported symbols are always considered used.
       used.extend(cx.usage().exported.iter().copied());
 
-      let changed = apply_to_function_like_bodies(top, |stmts, changed| dce_stmts(stmts, cx, &used, changed));
+      let changed =
+        apply_to_function_like_bodies(top, |stmts, changed| dce_stmts(stmts, cx, &used, changed));
       any_changed |= changed;
       if !changed {
         break;
