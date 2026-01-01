@@ -1480,14 +1480,22 @@ fn marker_line_col(
 }
 
 fn print_tsc_response(test: &TestCase, baseline_path: &Path, response: &Option<TscDiagnostics>) {
-  if let Some(tsc) = response {
-    if let Ok(json) = serde_json::to_string_pretty(tsc) {
-      eprintln!(
-        "tsc response for {} ({}):\n{}",
-        test.name,
-        baseline_path.display(),
-        json
-      );
+  let Some(tsc) = response else {
+    return;
+  };
+
+  let stderr = std::io::stderr();
+  let mut handle = stderr.lock();
+  if writeln!(
+    handle,
+    "tsc response for {} ({}):",
+    test.name,
+    baseline_path.display()
+  )
+  .is_ok()
+  {
+    if serde_json::to_writer_pretty(&mut handle, tsc).is_ok() {
+      let _ = writeln!(handle);
     }
   }
 }
