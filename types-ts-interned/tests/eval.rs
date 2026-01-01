@@ -734,6 +734,93 @@ fn conditional_uses_structural_object_assignability() {
 }
 
 #[test]
+fn conditional_uses_structural_object_assignability_for_index_signatures() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let foo = store.intern_name("foo");
+  let true_ty = primitives.number;
+  let false_ty = primitives.boolean;
+
+  // `check`: { [key: string]: number }
+  // This is assignable to `{ foo: number }` even though `foo` is not an explicit
+  // property, thanks to the index signature.
+  let src_shape_id = store.intern_shape(Shape {
+    properties: Vec::new(),
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: vec![Indexer {
+      key_type: primitives.string,
+      value_type: primitives.number,
+      readonly: false,
+    }],
+  });
+  let src_ty = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: src_shape_id,
+  })));
+
+  let dst_shape_id = store.intern_shape(Shape {
+    properties: vec![Property {
+      key: PropKey::String(foo),
+      data: PropData {
+        ty: primitives.number,
+        optional: false,
+        readonly: false,
+        accessibility: None,
+        is_method: false,
+        origin: None,
+        declared_on: None,
+      },
+    }],
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: Vec::new(),
+  });
+  let dst_ty = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: dst_shape_id,
+  })));
+
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: src_ty,
+    extends: dst_ty,
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), true_ty);
+
+  // Negative: index signature value type (`number`) is not assignable to
+  // property type (`string`).
+  let dst_mismatch = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: store.intern_shape(Shape {
+      properties: vec![Property {
+        key: PropKey::String(foo),
+        data: PropData {
+          ty: primitives.string,
+          optional: false,
+          readonly: false,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      }],
+      call_signatures: Vec::new(),
+      construct_signatures: Vec::new(),
+      indexers: Vec::new(),
+    }),
+  })));
+  let cond = store.intern_type(TypeKind::Conditional {
+    check: src_ty,
+    extends: dst_mismatch,
+    true_ty,
+    false_ty,
+    distributive: false,
+  });
+  assert_eq!(store.evaluate(cond), false_ty);
+}
+
+#[test]
 fn conditional_uses_tuple_vs_array_assignability() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
