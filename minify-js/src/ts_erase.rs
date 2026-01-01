@@ -643,7 +643,11 @@ fn strip_class_decl(
     let expr = take_expr(&mut decorator.stx.expression);
     decorator.stx.expression = strip_expr(ctx, expr);
   }
-  strip_class_members(ctx, &mut class_decl.stx.members, class_decl.stx.extends.is_some());
+  strip_class_members(
+    ctx,
+    &mut class_decl.stx.members,
+    class_decl.stx.extends.is_some(),
+  );
   Some(new_node(loc, assoc, Stmt::ClassDecl(class_decl)))
 }
 

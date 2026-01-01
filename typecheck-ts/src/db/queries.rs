@@ -158,7 +158,9 @@ fn unresolved_module_diagnostics_for(db: &dyn Db, file: FileInput) -> Arc<[Diagn
     span
   };
   let mut seen = BTreeSet::new();
-  let mut check_specifier_value = |specifier: &str, span: TextRange, diags: &mut Vec<Diagnostic>| {
+  let mut check_specifier_value = |specifier: &str,
+                                   span: TextRange,
+                                   diags: &mut Vec<Diagnostic>| {
     match module_resolve(db, file_id, Arc::<str>::from(specifier)) {
       Some(_) => {}
       None => {
