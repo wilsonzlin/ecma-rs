@@ -242,6 +242,14 @@ fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> Emit
   if es.is_type_only {
     return Ok(());
   }
+  let named_specifiers: Vec<_> = es.named.iter().filter(|s| !s.is_type_only).collect();
+  if es.default.is_none()
+    && es.namespace.is_none()
+    && named_specifiers.is_empty()
+    && !es.named.is_empty()
+  {
+    return Ok(());
+  }
   em.write_keyword("import");
   let mut wrote = false;
   if let Some(default) = &es.default {
@@ -257,7 +265,6 @@ fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> Emit
     em.write_identifier(ctx.name(ns.local));
     wrote = true;
   }
-  let named_specifiers: Vec<_> = es.named.iter().filter(|s| !s.is_type_only).collect();
   if !named_specifiers.is_empty() {
     if wrote {
       em.write_punct(",");

@@ -2152,6 +2152,39 @@ fn drops_method_signatures_in_abstract_classes() {
 }
 
 #[test]
+fn erases_class_auto_accessors_to_parseable_js() {
+  let src = r#"class Foo { protected override accessor bar!: number; }"#;
+  let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Ts, Dialect::Js, src);
+  assert_eq!(parsed.stx.body.len(), 1);
+
+  let class_decl = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::ClassDecl(decl) => decl,
+    other => panic!("expected class decl, got {other:?}"),
+  };
+  assert_eq!(class_decl.stx.members.len(), 1);
+  let member = class_decl.stx.members.first().expect("class member").stx.as_ref();
+
+  match &member.key {
+    ClassOrObjKey::Direct(key) => assert_eq!(key.stx.key, "bar"),
+    other => panic!("expected direct class member key, got {other:?}"),
+  };
+  assert!(
+    !member.accessor,
+    "expected TS auto-accessor modifier to be erased in JS output"
+  );
+  assert!(member.accessibility.is_none());
+  assert!(!member.override_);
+  assert!(!member.readonly);
+  assert!(!member.optional);
+  assert!(!member.definite_assignment);
+  assert!(member.type_annotation.is_none());
+  match &member.val {
+    ClassOrObjVal::Prop(None) => {}
+    other => panic!("expected erased accessor to be a property, got {other:?}"),
+  }
+}
+
+#[test]
 fn string_enum_aliases_do_not_emit_reverse_mappings() {
   let src = r#"enum S { A = "a", B = A }"#;
   let mut parsed = parse_with_options(
