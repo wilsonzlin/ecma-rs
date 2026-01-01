@@ -1,5 +1,7 @@
 use parse_js::error::SyntaxErrorType;
-use parse_js::{parse_with_options, parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
+use parse_js::{
+  parse_with_options, parse_with_options_cancellable, Dialect, ParseOptions, SourceType,
+};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering};
 use std::sync::{Arc, Condvar, Mutex};
