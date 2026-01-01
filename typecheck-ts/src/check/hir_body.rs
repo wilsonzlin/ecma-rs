@@ -2372,9 +2372,9 @@ impl<'a> Checker<'a> {
       }
     }
 
-    candidates.into_iter().any(|key| {
-      crate::type_queries::indexer_accepts_key(&key, indexer_key, &self.store)
-    })
+    candidates
+      .into_iter()
+      .any(|key| crate::type_queries::indexer_accepts_key(&key, indexer_key, &self.store))
   }
 
   fn build_call_method_type(&self, sigs: Vec<SignatureId>) -> TypeId {
@@ -6577,9 +6577,9 @@ impl<'a> FlowBodyChecker<'a> {
       return false;
     }
 
-    candidates.into_iter().any(|key| {
-      crate::type_queries::indexer_accepts_key(&key, indexer_key, &self.store)
-    })
+    candidates
+      .into_iter()
+      .any(|key| crate::type_queries::indexer_accepts_key(&key, indexer_key, &self.store))
   }
 
   fn object_prop_type(&self, obj: TypeId, key: &str) -> Option<TypeId> {

@@ -26,7 +26,10 @@ fn computed_member_rejects_symbol_for_string_like_intersection_indexer() {
   let indexers = program.indexers(obj_ty);
   assert_eq!(indexers.len(), 1);
   assert!(
-    matches!(program.interned_type_kind(indexers[0].key_type), TypeKind::Intersection(_)),
+    matches!(
+      program.interned_type_kind(indexers[0].key_type),
+      TypeKind::Intersection(_)
+    ),
     "expected an intersection key type, got {:?}",
     program.interned_type_kind(indexers[0].key_type)
   );
