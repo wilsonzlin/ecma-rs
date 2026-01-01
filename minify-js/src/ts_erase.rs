@@ -810,6 +810,15 @@ fn rewrite_enum_member_refs(
       self.shadowed.iter().any(|scope| scope.contains(name))
     }
 
+    fn enum_object_ident(&mut self) -> &'a str {
+      if self.is_shadowed(self.enum_name) {
+        self.used_alias = true;
+        self.enum_alias
+      } else {
+        self.enum_name
+      }
+    }
+
     fn with_scope<F: FnOnce(&mut Self)>(&mut self, scope: HashSet<String>, f: F) {
       self.shadowed.push(scope);
       f(self);
@@ -819,12 +828,7 @@ fn rewrite_enum_member_refs(
     fn replace_with_member_access(&mut self, expr: &mut Node<Expr>, member: String) {
       let loc = expr.loc;
       let assoc = std::mem::take(&mut expr.assoc);
-      let object_ident = if self.is_shadowed(self.enum_name) {
-        self.used_alias = true;
-        self.enum_alias
-      } else {
-        self.enum_name
-      };
+      let object_ident = self.enum_object_ident();
       let mut replacement = ts_lower::member_expr(
         loc,
         ts_lower::id(loc, object_ident.to_string()),
@@ -1080,7 +1084,40 @@ fn rewrite_enum_member_refs(
       self.rewrite_expr(&mut expr.stx.value);
     }
 
+    fn rewrite_jsx_elem_name(&mut self, name: &mut JsxElemName) {
+      match name {
+        JsxElemName::Id(id) => {
+          if self.member_names.contains(&id.stx.name) && !self.is_shadowed(&id.stx.name) {
+            let loc = id.loc;
+            let member = id.stx.name.clone();
+            let object_ident = self.enum_object_ident();
+            *name = JsxElemName::Member(Node::new(
+              loc,
+              JsxMemberExpr {
+                base: Node::new(loc, IdExpr {
+                  name: object_ident.to_string(),
+                }),
+                path: vec![member],
+              },
+            ));
+          }
+        }
+        JsxElemName::Member(member) => {
+          let base_name = member.stx.base.stx.name.clone();
+          if self.member_names.contains(&base_name) && !self.is_shadowed(&base_name) {
+            let object_ident = self.enum_object_ident();
+            member.stx.base.stx.name = object_ident.to_string();
+            member.stx.path.insert(0, base_name);
+          }
+        }
+        JsxElemName::Name(_) => {}
+      }
+    }
+
     fn rewrite_jsx_elem(&mut self, elem: &mut Node<JsxElem>) {
+      if let Some(name) = elem.stx.name.as_mut() {
+        self.rewrite_jsx_elem_name(name);
+      }
       for attr in elem.stx.attributes.iter_mut() {
         match attr {
           JsxAttr::Named { value, .. } => {

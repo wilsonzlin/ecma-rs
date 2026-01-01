@@ -5,7 +5,7 @@ use crate::{
 };
 use crate::{minify, minify_with_options, Dialect, FileId, MinifyOptions, Severity, TopLevelMode};
 use parse_js::ast::class_or_object::{ClassOrObjKey, ClassOrObjVal, ObjMemberType};
-use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemChild};
+use parse_js::ast::expr::jsx::{JsxAttr, JsxAttrVal, JsxElemChild, JsxElemName};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::import_export::ImportNames;
 use parse_js::ast::node::Node;
@@ -947,6 +947,90 @@ fn rewrites_enum_member_references_in_jsx_expression_containers() {
     Expr::LitStr(key) => assert_eq!(key.stx.value, "A"),
     other => panic!("expected string literal member, got {other:?}"),
   };
+}
+
+#[test]
+fn rewrites_enum_member_references_in_jsx_element_names() {
+  let src = r#"enum E { A = 1, B = (() => <A />)(), C }"#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Tsx,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  assert_eq!(parsed.stx.body.len(), 2);
+  let iife = match parsed.stx.body[1].stx.as_ref() {
+    Stmt::Expr(expr) => expr,
+    other => panic!("expected enum IIFE expr stmt, got {other:?}"),
+  };
+  let call = match iife.stx.expr.stx.as_ref() {
+    Expr::Binary(bin) if bin.stx.operator == OperatorName::Comma => {
+      match bin.stx.right.stx.as_ref() {
+        Expr::Call(call) => call,
+        other => panic!("expected comma call rhs, got {other:?}"),
+      }
+    }
+    other => panic!("expected comma expression, got {other:?}"),
+  };
+  let func = match call.stx.callee.stx.as_ref() {
+    Expr::Func(func) => func,
+    other => panic!("expected function callee, got {other:?}"),
+  };
+  let body = match func.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Block(stmts)) => stmts,
+    other => panic!("expected function body block, got {other:?}"),
+  };
+
+  fn get_value_expr<'a>(stmt: &'a Node<Stmt>) -> &'a Node<Expr> {
+    let expr_stmt = match stmt.stx.as_ref() {
+      Stmt::Expr(expr) => expr,
+      other => panic!("expected expression statement, got {other:?}"),
+    };
+    let outer_assign = match expr_stmt.stx.expr.stx.as_ref() {
+      Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+      other => panic!("expected assignment expression, got {other:?}"),
+    };
+    let outer_left = match outer_assign.stx.left.stx.as_ref() {
+      Expr::ComputedMember(member) => member,
+      other => panic!("expected computed member assignment, got {other:?}"),
+    };
+    let name_assign = match outer_left.stx.member.stx.as_ref() {
+      Expr::Binary(bin) if bin.stx.operator == OperatorName::Assignment => bin,
+      other => panic!("expected inner assignment, got {other:?}"),
+    };
+    &name_assign.stx.right
+  }
+
+  let b_stmt = body.get(1).expect("B member statement");
+  let b_value = get_value_expr(b_stmt);
+  let b_call = match b_value.stx.as_ref() {
+    Expr::Call(call) => call,
+    other => panic!("expected call expression for B initializer, got {other:?}"),
+  };
+  let b_arrow = match b_call.stx.callee.stx.as_ref() {
+    Expr::ArrowFunc(arrow) => arrow,
+    other => panic!("expected arrow function callee, got {other:?}"),
+  };
+  let b_arrow_body = match b_arrow.stx.func.stx.body.as_ref() {
+    Some(parse_js::ast::func::FuncBody::Expression(expr)) => expr,
+    other => panic!("expected arrow expression body, got {other:?}"),
+  };
+  let jsx = match b_arrow_body.stx.as_ref() {
+    Expr::JsxElem(elem) => elem,
+    other => panic!("expected JSX element, got {other:?}"),
+  };
+  let name = jsx.stx.name.as_ref().expect("JSX element name");
+  let member = match name {
+    JsxElemName::Member(member) => member,
+    other => panic!("expected rewritten JSX member element name, got {other:?}"),
+  };
+  assert_eq!(member.stx.base.stx.name, "E");
+  assert_eq!(member.stx.path, vec!["A".to_string()]);
 }
 
 #[test]
