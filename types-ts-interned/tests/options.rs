@@ -201,13 +201,15 @@ fn no_unchecked_indexed_access_adds_undefined() {
 }
 
 #[test]
-#[should_panic]
-fn relate_ctx_panics_on_mismatched_store_options() {
-  let mut store_opts = TypeOptions::default();
-  store_opts.no_unchecked_indexed_access = true;
-  let store = TypeStore::with_options(store_opts);
-
-  // RelateCtx must use the store's options; constructing it with mismatched
-  // options should fail fast.
-  let _ctx = RelateCtx::new(store.clone(), TypeOptions::default());
+#[cfg(debug_assertions)]
+#[should_panic(expected = "RelateCtx.options.no_unchecked_indexed_access must match")]
+fn relate_ctx_panics_on_store_option_mismatch_in_debug() {
+  let store = TypeStore::new();
+  let _ctx = RelateCtx::new(
+    store.clone(),
+    TypeOptions {
+      no_unchecked_indexed_access: true,
+      ..store.options()
+    },
+  );
 }

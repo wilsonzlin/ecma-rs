@@ -202,19 +202,18 @@ impl<'a> fmt::Debug for RelateCtx<'a> {
 impl<'a> RelateCtx<'a> {
   /// Create a new [`RelateCtx`].
   ///
-  /// `options` must be exactly equal to [`TypeStore::options`]. Mismatched
-  /// options panic at runtime to prevent subtle inconsistencies between
-  /// relation checks and type normalization.
+  /// `options.exact_optional_property_types` and `options.no_unchecked_indexed_access`
+  /// must match [`TypeStore::options`] because type normalization uses
+  /// [`TypeEvaluator`], which reads these evaluation-affecting flags from the
+  /// store. Other options (e.g. `strict_null_checks` and `strict_function_types`)
+  /// only affect relation and may differ from the store.
   pub fn new(store: Arc<TypeStore>, options: TypeOptions) -> Self {
     Self::with_options(store, options)
   }
 
   /// Create a new [`RelateCtx`] with the given [`TypeOptions`].
   ///
-  /// `options` must be exactly equal to [`TypeStore::options`]. Mismatched
-  /// options panic at runtime; if you need different semantics, construct the
-  /// store with [`TypeStore::with_options`] and then create a [`RelateCtx`] from
-  /// that store.
+  /// See [`RelateCtx::new`] for invariants around evaluation-affecting options.
   pub fn with_options(store: Arc<TypeStore>, options: TypeOptions) -> Self {
     Self::with_hooks(store, options, RelateHooks::default())
   }
@@ -247,13 +246,28 @@ impl<'a> RelateCtx<'a> {
     cache: RelationCache,
   ) -> Self {
     let store_options = store.options();
-    assert_eq!(
-      options, store_options,
-      "RelateCtx TypeOptions must match the TypeStore options; build the store with TypeStore::with_options(...) to use different options"
+    debug_assert_eq!(
+      options.exact_optional_property_types,
+      store_options.exact_optional_property_types,
+      concat!(
+        "RelateCtx.options.exact_optional_property_types must match ",
+        "TypeStore.options().exact_optional_property_types because type normalization uses ",
+        "TypeEvaluator, which reads evaluation-affecting options from the TypeStore."
+      )
     );
+    debug_assert_eq!(
+      options.no_unchecked_indexed_access,
+      store_options.no_unchecked_indexed_access,
+      concat!(
+        "RelateCtx.options.no_unchecked_indexed_access must match ",
+        "TypeStore.options().no_unchecked_indexed_access because type normalization uses ",
+        "TypeEvaluator, which reads evaluation-affecting options from the TypeStore."
+      )
+    );
+
     Self {
       store,
-      options: store_options,
+      options,
       hooks,
       cache,
       normalizer_caches: EvaluatorCaches::new(CacheConfig::default()),
