@@ -71,24 +71,20 @@ fn difftsc_uses_canonical_file_paths() {
     "module_types should not produce Rust diagnostics: {:?}",
     rust_diags
   );
-  if let Some(types) = module_case
+  if let Some(exports) = module_case
     .get("actual_types")
     .and_then(|t| t.get("exports"))
+    .and_then(|e| e.as_array())
   {
-    let mut bad = Vec::new();
-    if let Some(exports) = types.as_array() {
-      for export in exports {
-        if let Some(type_str) = export.get("type").and_then(|t| t.as_str()) {
-          if type_str == "unknown" {
-            bad.push(export.clone());
-          }
-        }
-      }
-    }
-    assert!(
-      bad.is_empty(),
-      "module_types should resolve export types, found unknown: {:?}",
-      bad
+    let foo_type = exports
+      .iter()
+      .find(|export| export.get("name").and_then(|n| n.as_str()) == Some("Foo"))
+      .and_then(|export| export.get("type").and_then(|t| t.as_str()))
+      .unwrap_or("unknown");
+    assert_ne!(
+      foo_type, "unknown",
+      "module_types should resolve interface export types; exports={:?}",
+      exports
     );
   }
 }

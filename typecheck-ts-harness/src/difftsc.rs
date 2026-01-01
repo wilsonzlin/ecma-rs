@@ -1,5 +1,3 @@
-#![cfg_attr(not(feature = "with-node"), allow(dead_code, unused_imports))]
-
 use crate::diagnostic_norm::{
   diagnostic_code_display, normalize_path_for_compare, normalize_tsc_diagnostics_with_options,
   normalize_type_string, sort_diagnostics, NormalizationOptions, NormalizedDiagnostic,
@@ -8,8 +6,6 @@ use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet, TscRunnerPool};
-#[cfg(feature = "with-node")]
-use crate::tsc::typescript_available;
 use crate::tsc::{
   node_available, ExportTypeFact, TscDiagnostics, TscRequest, TypeAtFact, TypeFacts, TypeQuery,
   TSC_BASELINE_SCHEMA_VERSION,
@@ -280,21 +276,15 @@ struct TestCase {
 }
 
 pub fn run(args: DifftscArgs) -> Result<CommandStatus> {
-  #[cfg(not(feature = "with-node"))]
-  {
-    let _ = args;
+  if needs_live_tsc(&args) && !cfg!(feature = "with-node") {
     eprintln!("difftsc skipped: built without `with-node` feature");
     return Ok(CommandStatus::Skipped);
   }
 
-  #[cfg(feature = "with-node")]
-  {
-    run_with_node(args)
-  }
+  run_impl(args)
 }
 
-#[cfg(feature = "with-node")]
-fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
+fn run_impl(args: DifftscArgs) -> Result<CommandStatus> {
   let suite_path = resolve_suite_path(&args.suite)?;
   if !suite_path.exists() {
     return Err(anyhow!(
@@ -344,7 +334,7 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
       );
       return Ok(CommandStatus::Skipped);
     }
-    if !typescript_available(&args.node) {
+    if !crate::tsc::typescript_available(&args.node) {
       let hint = "TypeScript npm package missing (run `cd typecheck-ts-harness && npm ci`)";
       if args.update_baselines {
         return Err(anyhow!("difftsc requires `tsc`, but {hint}"));
@@ -457,7 +447,6 @@ fn run_with_node(args: DifftscArgs) -> Result<CommandStatus> {
   Ok(CommandStatus::Success)
 }
 
-#[cfg(feature = "with-node")]
 fn summarize(results: &[CaseReport]) -> Summary {
   let mut summary = Summary::default();
   summary.total = results.len();
@@ -475,7 +464,6 @@ fn summarize(results: &[CaseReport]) -> Summary {
   summary
 }
 
-#[cfg(feature = "with-node")]
 fn print_human_summary(suite: &str, summary: &Summary, results: &[CaseReport]) {
   println!(
     "difftsc: suite `{suite}` — total={}, matched={}, mismatched={}, updated={}, errors={}, skipped={}",
@@ -531,7 +519,6 @@ fn print_human_summary(suite: &str, summary: &Summary, results: &[CaseReport]) {
   }
 }
 
-#[cfg(feature = "with-node")]
 fn run_single_test(
   test: &TestCase,
   args: &DifftscArgs,
@@ -1631,13 +1618,11 @@ fn collect_marker_type_facts(
   facts
 }
 
-#[cfg(feature = "with-node")]
 fn needs_live_tsc(args: &DifftscArgs) -> bool {
   // Updating baselines or baseline-only mode always require a live tsc run.
   args.update_baselines || !args.compare_rust || !args.use_baselines
 }
 
-#[cfg(feature = "with-node")]
 fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
   let suite_path = if suite.is_absolute() {
     suite.to_path_buf()
@@ -1657,7 +1642,6 @@ fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
   }
 }
 
-#[cfg(feature = "with-node")]
 fn build_request(
   test: &TestCase,
   base_options: &Map<String, Value>,
