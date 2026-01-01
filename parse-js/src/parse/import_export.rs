@@ -27,6 +27,28 @@ use crate::parse::stmt::decl::VarDeclParseMode;
 use crate::token::TT;
 
 impl<'a> Parser<'a> {
+  fn starts_with_type_only_import(&mut self, ctx: ParseCtx) -> bool {
+    let [t0, t1, t2] = self.peek_n::<3>();
+    if t0.typ != TT::KeywordType {
+      return false;
+    }
+    if matches!(t1.typ, TT::BraceOpen | TT::Asterisk) {
+      return true;
+    }
+    if !is_valid_pattern_identifier(t1.typ, ctx.rules) {
+      return false;
+    }
+    matches!(t2.typ, TT::Comma | TT::KeywordFrom | TT::Equals)
+  }
+
+  fn starts_with_type_only_named_specifier(&mut self) -> bool {
+    let [t0, t1] = self.peek_n::<2>();
+    if t0.typ != TT::KeywordType {
+      return false;
+    }
+    !matches!(t1.typ, TT::Comma | TT::BraceClose | TT::KeywordAs)
+  }
+
   /// Parses `target`, `target as alias`, `default as alias`, `"target" as alias`.
   /// For exports, `default` can be used without an alias. For imports, it requires an alias.
   fn import_or_export_name(
@@ -131,14 +153,19 @@ impl<'a> Parser<'a> {
     self.require(TT::KeywordImport)?;
 
     // TypeScript: import type
-    let type_only = self.consume_if(TT::KeywordType).is_match();
-    let (default, can_have_names) = if self.peek().typ == TT::Identifier {
+    let type_only = if self.starts_with_type_only_import(ctx) {
+      self.consume();
+      true
+    } else {
+      false
+    };
+    let (default, can_have_names) = if is_valid_pattern_identifier(self.peek().typ, ctx.rules) {
       let alias = self.id_pat_decl(ctx)?;
 
       // TypeScript: import equals: import id = require("module") or import id = EntityName
       if self.peek().typ == TT::Equals {
         self.consume(); // =
-        return self.import_equals_decl(export, alias, start);
+        return self.import_equals_decl(export, type_only, alias, start);
       }
 
       (Some(alias), self.consume_if(TT::Comma).is_match())
@@ -155,7 +182,12 @@ impl<'a> Parser<'a> {
       self.require(TT::BraceOpen)?;
       let names = self.list_with_loc(TT::Comma, TT::BraceClose, |p| {
         // TypeScript: per-specifier type-only import
-        let type_only = p.consume_if(TT::KeywordType).is_match();
+        let type_only = if p.starts_with_type_only_named_specifier() {
+          p.consume();
+          true
+        } else {
+          false
+        };
         let (target, alias) = p.import_or_export_name(ctx, false)?;
         let alias = alias.into_wrapped();
         let alias = alias.wrap(|pat| PatDecl { pat });
@@ -208,6 +240,7 @@ impl<'a> Parser<'a> {
   fn import_equals_decl(
     &mut self,
     export: bool,
+    type_only: bool,
     alias: Node<PatDecl>,
     start: ParserCheckpoint,
   ) -> SyntaxResult<Node<Stmt>> {
@@ -250,7 +283,16 @@ impl<'a> Parser<'a> {
     }
 
     let loc = self.since_checkpoint(&start);
-    Ok(Node::new(loc, ImportEqualsDecl { export, name, rhs }).into_wrapped())
+    Ok(Node::new(
+      loc,
+      ImportEqualsDecl {
+        export,
+        type_only,
+        name,
+        rhs,
+      },
+    )
+    .into_wrapped())
   }
 
   pub fn export_list_stmt(&mut self, ctx: ParseCtx) -> SyntaxResult<Node<ExportListStmt>> {
@@ -263,7 +305,12 @@ impl<'a> Parser<'a> {
         TT::BraceOpen => {
           let names = p.list_with_loc(TT::Comma, TT::BraceClose, |p| {
             // TypeScript: per-specifier type-only export
-            let type_only = p.consume_if(TT::KeywordType).is_match();
+            let type_only = if p.starts_with_type_only_named_specifier() {
+              p.consume();
+              true
+            } else {
+              false
+            };
             p.import_or_export_name(ctx, true)
               .map(|(target, alias)| ExportName {
                 type_only,

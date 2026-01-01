@@ -27,10 +27,9 @@ use std::collections::{HashMap, HashSet};
 
 const ERR_TS_UNSUPPORTED: &str = "MINIFYTS0001";
 
-struct StripContext<'a> {
+struct StripContext {
   file: FileId,
   top_level_mode: TopLevelMode,
-  source: &'a str,
   top_level_value_bindings: HashSet<String>,
   top_level_module_exports: HashSet<String>,
   emitted_export_var: HashSet<String>,
@@ -90,19 +89,18 @@ fn take_jsx_elem(elem: &mut Node<JsxElem>) -> Node<JsxElem> {
 pub fn erase_types(
   file: FileId,
   top_level_mode: TopLevelMode,
-  source: &str,
+  _source: &str,
   top_level: &mut Node<TopLevel>,
 ) -> Result<(), Vec<Diagnostic>> {
-  let top_level_value_bindings = collect_top_level_value_bindings(source, &top_level.stx.body);
+  let top_level_value_bindings = collect_top_level_value_bindings(&top_level.stx.body);
   let top_level_module_exports = if matches!(top_level_mode, TopLevelMode::Module) {
-    collect_top_level_module_exports(source, &top_level.stx.body)
+    collect_top_level_module_exports(&top_level.stx.body)
   } else {
     HashSet::new()
   };
   let mut ctx = StripContext {
     file,
     top_level_mode,
-    source,
     top_level_value_bindings,
     top_level_module_exports,
     emitted_export_var: HashSet::new(),
@@ -116,7 +114,7 @@ pub fn erase_types(
   }
 }
 
-fn strip_stmts(ctx: &mut StripContext<'_>, stmts: &mut Vec<Node<Stmt>>, is_top_level: bool) {
+fn strip_stmts(ctx: &mut StripContext, stmts: &mut Vec<Node<Stmt>>, is_top_level: bool) {
   let mut new_stmts = Vec::with_capacity(stmts.len());
   for stmt in stmts.drain(..) {
     new_stmts.extend(strip_stmt(ctx, stmt, is_top_level));
@@ -152,7 +150,7 @@ fn export_binding_stmt(loc: Loc, name: String) -> Node<Stmt> {
 }
 
 fn strip_stmt_required(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   mut stmt: Node<Stmt>,
   is_top_level: bool,
 ) -> Node<Stmt> {
@@ -171,7 +169,7 @@ fn strip_stmt_required(
 }
 
 fn strip_stmt_optional(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   mut stmt: Node<Stmt>,
   is_top_level: bool,
 ) -> Option<Node<Stmt>> {
@@ -189,7 +187,7 @@ fn strip_stmt_optional(
   }
 }
 
-fn strip_stmt(ctx: &mut StripContext<'_>, stmt: Node<Stmt>, is_top_level: bool) -> Vec<Node<Stmt>> {
+fn strip_stmt(ctx: &mut StripContext, stmt: Node<Stmt>, is_top_level: bool) -> Vec<Node<Stmt>> {
   let loc = stmt.loc;
   let assoc = stmt.assoc;
   match *stmt.stx {
@@ -336,10 +334,9 @@ fn strip_stmt(ctx: &mut StripContext<'_>, stmt: Node<Stmt>, is_top_level: bool) 
   }
 }
 
-fn collect_top_level_value_bindings(source: &str, stmts: &[Node<Stmt>]) -> HashSet<String> {
+fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
   let mut names = HashSet::new();
   for stmt in stmts {
-    let loc = stmt.loc;
     match stmt.stx.as_ref() {
       Stmt::FunctionDecl(func) => {
         if func.stx.function.stx.body.is_some() {
@@ -389,7 +386,7 @@ fn collect_top_level_value_bindings(source: &str, stmts: &[Node<Stmt>]) -> HashS
         }
       }
       Stmt::ImportEqualsDecl(decl) => {
-        if !import_equals_is_type_only_in_source(source, loc) {
+        if !decl.stx.type_only {
           names.insert(decl.stx.name.clone());
         }
       }
@@ -399,7 +396,7 @@ fn collect_top_level_value_bindings(source: &str, stmts: &[Node<Stmt>]) -> HashS
   names
 }
 
-fn collect_top_level_module_exports(source: &str, stmts: &[Node<Stmt>]) -> HashSet<String> {
+fn collect_top_level_module_exports(stmts: &[Node<Stmt>]) -> HashSet<String> {
   let mut names = HashSet::new();
   for stmt in stmts {
     match stmt.stx.as_ref() {
@@ -438,7 +435,7 @@ fn collect_top_level_module_exports(source: &str, stmts: &[Node<Stmt>]) -> HashS
         ExportNames::All(None) => {}
       },
       Stmt::ImportEqualsDecl(decl) if decl.stx.export => {
-        if !import_equals_is_type_only_in_source(source, stmt.loc) {
+        if !decl.stx.type_only {
           names.insert(decl.stx.name.clone());
         }
       }
@@ -448,62 +445,14 @@ fn collect_top_level_module_exports(source: &str, stmts: &[Node<Stmt>]) -> HashS
   names
 }
 
-fn trim_leading_trivia(mut text: &str) -> &str {
-  loop {
-    let trimmed = text.trim_start_matches(|c: char| c.is_whitespace());
-    if let Some(without_line_comment) = trimmed.strip_prefix("//") {
-      match without_line_comment.find('\n') {
-        Some(pos) => {
-          text = &without_line_comment[pos + 1..];
-          continue;
-        }
-        None => return "",
-      }
-    }
-    if let Some(without_block_comment) = trimmed.strip_prefix("/*") {
-      match without_block_comment.find("*/") {
-        Some(pos) => {
-          text = &without_block_comment[pos + 2..];
-          continue;
-        }
-        None => return "",
-      }
-    }
-    return trimmed;
-  }
-}
-
-fn import_equals_is_type_only_in_source(source: &str, loc: Loc) -> bool {
-  let Some(slice) = source.get(loc.0..loc.1) else {
-    return false;
-  };
-  let mut view = trim_leading_trivia(slice);
-  if let Some(after_export) = view.strip_prefix("export") {
-    view = trim_leading_trivia(after_export);
-  }
-  let Some(after_import) = view.strip_prefix("import") else {
-    return false;
-  };
-  let view = trim_leading_trivia(after_import);
-  if let Some(rest) = view.strip_prefix("type") {
-    let next = rest.chars().next();
-    return next.map_or(true, |ch| !ch.is_ascii_alphanumeric() && ch != '_');
-  }
-  false
-}
-
-fn import_equals_is_type_only(ctx: &StripContext<'_>, loc: Loc) -> bool {
-  import_equals_is_type_only_in_source(ctx.source, loc)
-}
-
 fn lower_import_equals_decl(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   decl: Node<ImportEqualsDecl>,
   loc: Loc,
   assoc: NodeAssocData,
   is_top_level: bool,
 ) -> Option<Node<Stmt>> {
-  if import_equals_is_type_only(ctx, loc) {
+  if decl.stx.type_only {
     return None;
   }
   if !is_top_level {
@@ -561,7 +510,7 @@ fn lower_import_equals_decl(
 }
 
 fn lower_export_assignment(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   loc: Loc,
   assoc: NodeAssocData,
   expr: Node<Expr>,
@@ -668,7 +617,7 @@ fn qualified_path_expr(loc: Loc, path: &[String]) -> Option<Node<Expr>> {
 }
 
 fn strip_func_decl(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   func_decl: Node<FuncDecl>,
   loc: Loc,
   assoc: NodeAssocData,
@@ -681,7 +630,7 @@ fn strip_func_decl(
 }
 
 fn strip_class_decl(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   class_decl: Node<ClassDecl>,
   loc: Loc,
   assoc: NodeAssocData,
@@ -709,7 +658,7 @@ fn strip_class_decl(
 }
 
 fn strip_import(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   import_stmt: Node<ImportStmt>,
   loc: Loc,
   assoc: NodeAssocData,
@@ -766,7 +715,7 @@ fn strip_import(
 }
 
 fn strip_export_list(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   export_stmt: Node<ExportListStmt>,
   loc: Loc,
   assoc: NodeAssocData,
@@ -1732,7 +1681,7 @@ fn enum_iife_arg(loc: Loc, enum_name: &str, parent_namespace: Option<&str>) -> N
 }
 
 fn strip_enum_decl(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   decl: Node<EnumDecl>,
   loc: Loc,
   _assoc: NodeAssocData,
@@ -1938,7 +1887,7 @@ fn collect_pat_binding_names(pat: &Node<Pat>, out: &mut Vec<String>) {
 }
 
 fn strip_namespace_body_stmt(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   stmt: Node<Stmt>,
   namespace_param: &str,
 ) -> Vec<Node<Stmt>> {
@@ -2030,7 +1979,7 @@ fn strip_namespace_body_stmt(
 }
 
 fn strip_namespace_body(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   body: NamespaceBody,
   namespace_param: &str,
 ) -> Vec<Node<Stmt>> {
@@ -2055,7 +2004,7 @@ fn strip_namespace_body(
 }
 
 fn strip_namespace_decl(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   decl: Node<NamespaceDecl>,
   loc: Loc,
   _assoc: NodeAssocData,
@@ -2107,7 +2056,7 @@ fn strip_namespace_decl(
 }
 
 fn strip_module_decl(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   decl: Node<ModuleDecl>,
   loc: Loc,
   assoc: NodeAssocData,
@@ -2140,7 +2089,7 @@ fn strip_module_decl(
 }
 
 fn strip_switch_branch(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   branch: Node<SwitchBranch>,
 ) -> Node<SwitchBranch> {
   let mut branch = branch;
@@ -2151,7 +2100,7 @@ fn strip_switch_branch(
   branch
 }
 
-fn strip_catch(ctx: &mut StripContext<'_>, mut catch: Node<CatchBlock>) -> Node<CatchBlock> {
+fn strip_catch(ctx: &mut StripContext, mut catch: Node<CatchBlock>) -> Node<CatchBlock> {
   catch.stx.type_annotation = None;
   if let Some(param) = catch.stx.parameter.as_mut() {
     let pat = take_pat(&mut param.stx.pat);
@@ -2161,17 +2110,17 @@ fn strip_catch(ctx: &mut StripContext<'_>, mut catch: Node<CatchBlock>) -> Node<
   catch
 }
 
-fn strip_for_body(ctx: &mut StripContext<'_>, body: &mut Node<ForBody>) {
+fn strip_for_body(ctx: &mut StripContext, body: &mut Node<ForBody>) {
   strip_stmts(ctx, &mut body.stx.body, false);
 }
 
-fn strip_block(ctx: &mut StripContext<'_>, block: Node<BlockStmt>) -> Node<BlockStmt> {
+fn strip_block(ctx: &mut StripContext, block: Node<BlockStmt>) -> Node<BlockStmt> {
   let mut block = block;
   strip_stmts(ctx, &mut block.stx.body, false);
   block
 }
 
-fn strip_for_in_of_lhs(ctx: &mut StripContext<'_>, lhs: &mut ForInOfLhs) {
+fn strip_for_in_of_lhs(ctx: &mut StripContext, lhs: &mut ForInOfLhs) {
   match lhs {
     ForInOfLhs::Assign(pat) => {
       let owned = take_pat(pat);
@@ -2184,13 +2133,13 @@ fn strip_for_in_of_lhs(ctx: &mut StripContext<'_>, lhs: &mut ForInOfLhs) {
   }
 }
 
-fn strip_var_decl(ctx: &mut StripContext<'_>, decl: &mut VarDecl) {
+fn strip_var_decl(ctx: &mut StripContext, decl: &mut VarDecl) {
   for declarator in decl.declarators.iter_mut() {
     strip_var_declarator(ctx, declarator);
   }
 }
 
-fn strip_var_declarator(ctx: &mut StripContext<'_>, decl: &mut VarDeclarator) {
+fn strip_var_declarator(ctx: &mut StripContext, decl: &mut VarDeclarator) {
   decl.type_annotation = None;
   decl.definite_assignment = false;
   let pat = take_pat(&mut decl.pattern.stx.pat);
@@ -2200,7 +2149,7 @@ fn strip_var_declarator(ctx: &mut StripContext<'_>, decl: &mut VarDeclarator) {
   }
 }
 
-fn strip_func(ctx: &mut StripContext<'_>, func: &mut Func) -> bool {
+fn strip_func(ctx: &mut StripContext, func: &mut Func) -> bool {
   func.type_parameters = None;
   func.return_type = None;
   func.parameters.retain(|param| {
@@ -2228,7 +2177,7 @@ fn strip_func(ctx: &mut StripContext<'_>, func: &mut Func) -> bool {
   }
 }
 
-fn strip_param(ctx: &mut StripContext<'_>, param: &mut Node<ParamDecl>) {
+fn strip_param(ctx: &mut StripContext, param: &mut Node<ParamDecl>) {
   param.stx.optional = false;
   param.stx.accessibility = None;
   param.stx.readonly = false;
@@ -2244,7 +2193,7 @@ fn strip_param(ctx: &mut StripContext<'_>, param: &mut Node<ParamDecl>) {
   }
 }
 
-fn strip_pat(ctx: &mut StripContext<'_>, pat: Node<Pat>) -> Node<Pat> {
+fn strip_pat(ctx: &mut StripContext, pat: Node<Pat>) -> Node<Pat> {
   let Node { loc, assoc, stx } = pat;
   match *stx {
     Pat::Arr(arr) => new_node(loc, assoc, Pat::Arr(strip_arr_pat(ctx, arr))),
@@ -2254,7 +2203,7 @@ fn strip_pat(ctx: &mut StripContext<'_>, pat: Node<Pat>) -> Node<Pat> {
   }
 }
 
-fn strip_arr_pat(ctx: &mut StripContext<'_>, pat: Node<ArrPat>) -> Node<ArrPat> {
+fn strip_arr_pat(ctx: &mut StripContext, pat: Node<ArrPat>) -> Node<ArrPat> {
   let mut pat = pat;
   for elem in pat.stx.elements.iter_mut() {
     if let Some(elem) = elem {
@@ -2272,7 +2221,7 @@ fn strip_arr_pat(ctx: &mut StripContext<'_>, pat: Node<ArrPat>) -> Node<ArrPat> 
   pat
 }
 
-fn strip_obj_pat(ctx: &mut StripContext<'_>, pat: Node<ObjPat>) -> Node<ObjPat> {
+fn strip_obj_pat(ctx: &mut StripContext, pat: Node<ObjPat>) -> Node<ObjPat> {
   let mut pat = pat;
   for prop in pat.stx.properties.iter_mut() {
     let target = take_pat(&mut prop.stx.target);
@@ -2288,7 +2237,7 @@ fn strip_obj_pat(ctx: &mut StripContext<'_>, pat: Node<ObjPat>) -> Node<ObjPat> 
   pat
 }
 
-fn strip_expr(ctx: &mut StripContext<'_>, expr: Node<Expr>) -> Node<Expr> {
+fn strip_expr(ctx: &mut StripContext, expr: Node<Expr>) -> Node<Expr> {
   let loc = expr.loc;
   let assoc = expr.assoc;
   match *expr.stx {
@@ -2411,7 +2360,7 @@ fn strip_expr(ctx: &mut StripContext<'_>, expr: Node<Expr>) -> Node<Expr> {
   }
 }
 
-fn strip_class_expr(ctx: &mut StripContext<'_>, class: Node<ClassExpr>) -> Node<ClassExpr> {
+fn strip_class_expr(ctx: &mut StripContext, class: Node<ClassExpr>) -> Node<ClassExpr> {
   let mut class = class;
   class.stx.type_parameters = None;
   class.stx.implements.clear();
@@ -2427,7 +2376,7 @@ fn strip_class_expr(ctx: &mut StripContext<'_>, class: Node<ClassExpr>) -> Node<
 }
 
 fn strip_class_members(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   members: &mut Vec<Node<ClassMember>>,
   is_derived: bool,
 ) {
@@ -2441,7 +2390,7 @@ fn strip_class_members(
 }
 
 fn strip_class_member(
-  ctx: &mut StripContext<'_>,
+  ctx: &mut StripContext,
   member: Node<ClassMember>,
   is_derived: bool,
 ) -> Option<Node<ClassMember>> {
@@ -2573,7 +2522,7 @@ fn strip_class_member(
   Some(member)
 }
 
-fn strip_obj_member(ctx: &mut StripContext<'_>, member: &mut Node<ObjMember>) {
+fn strip_obj_member(ctx: &mut StripContext, member: &mut Node<ObjMember>) {
   match &mut member.stx.typ {
     ObjMemberType::Valued { key, val } => {
       match key {
@@ -2611,7 +2560,7 @@ fn strip_obj_member(ctx: &mut StripContext<'_>, member: &mut Node<ObjMember>) {
   }
 }
 
-fn strip_jsx_elem(ctx: &mut StripContext<'_>, elem: Node<JsxElem>) -> Node<JsxElem> {
+fn strip_jsx_elem(ctx: &mut StripContext, elem: Node<JsxElem>) -> Node<JsxElem> {
   let mut elem = elem;
   for attr in elem.stx.attributes.iter_mut() {
     match attr {
@@ -2646,7 +2595,7 @@ fn strip_jsx_elem(ctx: &mut StripContext<'_>, elem: Node<JsxElem>) -> Node<JsxEl
   elem
 }
 
-fn unsupported_ts(ctx: &mut StripContext<'_>, loc: Loc, message: impl Into<String>) {
+fn unsupported_ts(ctx: &mut StripContext, loc: Loc, message: impl Into<String>) {
   ctx.diagnostics.push(Diagnostic::error(
     ERR_TS_UNSUPPORTED,
     message.into(),

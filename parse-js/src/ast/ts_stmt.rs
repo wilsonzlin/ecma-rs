@@ -194,6 +194,8 @@ pub struct ImportEqualsDecl {
   #[drive(skip)]
   pub export: bool,
   #[drive(skip)]
+  pub type_only: bool,
+  #[drive(skip)]
   pub name: String,
   pub rhs: ImportEqualsRhs,
 }

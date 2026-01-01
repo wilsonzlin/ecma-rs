@@ -1,0 +1,13 @@
+{
+  "$t": "Import",
+  "attributes": null,
+  "default": {
+    "pat": {
+      "$t": "Id",
+      "name": "from"
+    }
+  },
+  "module": "mod",
+  "names": null,
+  "type_only": false
+}

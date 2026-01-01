@@ -1,0 +1,23 @@
+{
+  "$t": "Import",
+  "attributes": null,
+  "default": null,
+  "module": "mod",
+  "names": {
+    "Specific": [
+      {
+        "alias": {
+          "pat": {
+            "$t": "Id",
+            "name": "type"
+          }
+        },
+        "importable": {
+          "Ident": "type"
+        },
+        "type_only": false
+      }
+    ]
+  },
+  "type_only": false
+}

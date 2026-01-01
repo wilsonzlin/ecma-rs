@@ -328,6 +328,9 @@ fn emit_import_equals_decl(em: &mut Emitter, decl: &ImportEqualsDecl) -> EmitRes
     em.write_keyword("export");
   }
   em.write_keyword("import");
+  if decl.type_only {
+    em.write_keyword("type");
+  }
   em.write_identifier(&decl.name);
   space_if_canonical(em);
   em.write_punct("=");

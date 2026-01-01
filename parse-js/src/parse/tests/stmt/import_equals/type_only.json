@@ -1,7 +1,7 @@
 {
   "$t": "ImportEqualsDecl",
   "export": false,
-  "type_only": false,
+  "type_only": true,
   "name": "foo",
   "rhs": {
     "$t": "Require",
