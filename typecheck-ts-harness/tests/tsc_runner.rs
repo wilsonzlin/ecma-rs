@@ -52,6 +52,10 @@ fn reports_single_file_error() {
 
   let output = runner.check(request).expect("tsc output");
   assert_eq!(output.diagnostics.len(), 1);
+  assert!(
+    output.type_facts.is_none(),
+    "expected no type facts when diagnostics_only is enabled"
+  );
   let diag = &output.diagnostics[0];
   assert_eq!(diag.code, 2322);
   assert_eq!(diag.file.as_deref(), Some("main.ts"));
@@ -85,6 +89,10 @@ fn resolves_relative_imports_across_files() {
 
   let output = runner.check(request).expect("tsc output");
   assert_eq!(output.diagnostics.len(), 1);
+  assert!(
+    output.type_facts.is_none(),
+    "expected no type facts when diagnostics_only is enabled"
+  );
   let diag = &output.diagnostics[0];
   assert_eq!(diag.code, 2322);
   assert_eq!(diag.file.as_deref(), Some("b.ts"));
