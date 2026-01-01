@@ -581,7 +581,11 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     .build()
     .map_err(|err| crate::HarnessError::Typecheck(format!("create thread pool: {err}")))?;
 
-  let mut results: Vec<TestResult> = pool.install(|| {
+  // `planned_cases` is sorted by test id, and `par_iter()` on slices is an indexed
+  // parallel iterator. Rayon preserves iteration order when collecting indexed
+  // iterators into a `Vec`, so the final results remain deterministically sorted
+  // without an explicit sort step.
+  let results: Vec<TestResult> = pool.install(|| {
     planned_cases
       .par_iter()
       .map(|planned| {
@@ -607,9 +611,6 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
       })
       .collect()
   });
-
-  // Ensure deterministic output ordering regardless of parallel execution timing.
-  results.sort_by(|a, b| a.id.cmp(&b.id));
 
   if let Some(builder) = profile_builder.as_mut() {
     for result in &results {
