@@ -406,7 +406,7 @@ pub fn run_conformance(opts: ConformanceOptions) -> Result<ConformanceReport> {
     })
     .collect();
 
-  let tsc_runner = TscRunner::new(opts.node_path.clone());
+  let tsc_runner = TscWrapperRunner::new(opts.node_path.clone());
   let tsc_available = tsc_runner.available();
   let snapshot_store = SnapshotStore::new(&opts.root);
   let compare_mode = resolve_compare_mode(opts.compare, tsc_available, &snapshot_store);
@@ -548,7 +548,7 @@ fn resolve_compare_mode(
 fn run_single_case(
   case: TestCase,
   compare_mode: CompareMode,
-  tsc_runner: &TscRunner,
+  tsc_runner: &TscWrapperRunner,
   tsc_available: bool,
   snapshots: &SnapshotStore,
   tsc_limiter: Arc<ConcurrencyLimiter>,
@@ -606,7 +606,7 @@ fn run_single_case(
 fn execute_case(
   case: TestCase,
   compare_mode: CompareMode,
-  tsc_runner: TscRunner,
+  tsc_runner: TscWrapperRunner,
   tsc_available: bool,
   snapshots: SnapshotStore,
   span_tolerance: u32,
@@ -746,7 +746,7 @@ fn harness_sleep_for_case(id: &str) -> Option<Duration> {
 }
 
 fn run_tsc_with_raw(
-  runner: &TscRunner,
+  runner: &TscWrapperRunner,
   file_set: &HarnessFileSet,
   options: &Map<String, Value>,
   limiter: &ConcurrencyLimiter,
@@ -973,11 +973,11 @@ fn has_known_extension(name: &str) -> bool {
 }
 
 #[derive(Clone)]
-struct TscRunner {
+struct TscWrapperRunner {
   node_path: PathBuf,
 }
 
-impl TscRunner {
+impl TscWrapperRunner {
   fn new(node_path: PathBuf) -> Self {
     Self { node_path }
   }
