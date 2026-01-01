@@ -17,5 +17,7 @@ Clippy focuses on correctness and suspicious lints while allowing the noisier st
 
 If you have [`just`](https://github.com/casey/just) installed, the root `justfile` provides shortcuts:
 
+- `just fmt` checks Rust formatting (CI uses the same check)
+- `just fmt-fix` applies Rust formatting (`cargo fmt --all`)
 - `just lint` runs `fmt` and `clippy`
 - `just ci` runs the full `fmt` + `clippy` + `check` + `test` suite and enforces `docs/deps.md` stays in sync

@@ -3,6 +3,9 @@ default: lint
 fmt:
   cargo fmt --all --check
 
+fmt-fix:
+  cargo fmt --all
+
 clippy:
   cargo clippy --workspace --all-targets --all-features --
     -A clippy::style
