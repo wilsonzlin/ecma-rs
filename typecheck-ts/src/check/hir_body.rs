@@ -2172,10 +2172,17 @@ impl<'a> Checker<'a> {
       }
     }
 
-    if let Some(children_ty) = self.jsx_children_prop_type(children) {
-      let key_id = self.jsx_children_prop_key(loc);
-      props.insert(self.store.name(key_id));
-      let key = PropKey::String(key_id);
+    let children_key_id = self.jsx_children_prop_key(loc);
+    let expected_children_prop_ty = expected
+      .filter(|ty| !matches!(self.store.type_kind(*ty), TypeKind::Any | TypeKind::Unknown))
+      .map(|props_ty| {
+        let children_prop = self.store.name(children_key_id);
+        self.member_type(props_ty, &children_prop)
+      });
+
+    if let Some(children_ty) = self.jsx_children_prop_type(children, expected_children_prop_ty) {
+      props.insert(self.store.name(children_key_id));
+      let key = PropKey::String(children_key_id);
       shape.properties.push(types_ts_interned::Property {
         key,
         data: PropData {
@@ -2204,10 +2211,49 @@ impl<'a> Checker<'a> {
     }
   }
 
-  fn jsx_children_prop_type(&mut self, children: &[JsxElemChild]) -> Option<TypeId> {
+  fn jsx_children_prop_type(
+    &mut self,
+    children: &[JsxElemChild],
+    expected: Option<TypeId>,
+  ) -> Option<TypeId> {
     let prim = self.store.primitive_ids();
     let mut collected = Vec::new();
     let mut spread = false;
+
+    let mut meaningful = 0usize;
+    let mut has_spread_child = false;
+    for child in children {
+      match child {
+        JsxElemChild::Text(text) => {
+          if !text.stx.value.trim().is_empty() {
+            meaningful += 1;
+          }
+        }
+        JsxElemChild::Expr(expr) => {
+          if is_empty_jsx_expr_placeholder(&expr.stx.value) {
+            continue;
+          }
+          meaningful += 1;
+          if expr.stx.spread {
+            has_spread_child = true;
+          }
+        }
+        JsxElemChild::Element(_) => {
+          meaningful += 1;
+        }
+      }
+      if meaningful > 1 {
+        break;
+      }
+    }
+
+    let mut expected_child_ty = expected.unwrap_or(prim.unknown);
+    if has_spread_child || meaningful > 1 {
+      if let TypeKind::Array { ty, .. } = self.store.type_kind(expected_child_ty) {
+        expected_child_ty = ty;
+      }
+    }
+
     for child in children {
       match child {
         JsxElemChild::Text(text) => {
@@ -2219,7 +2265,11 @@ impl<'a> Checker<'a> {
           if is_empty_jsx_expr_placeholder(&expr.stx.value) {
             continue;
           }
-          let expr_ty = self.check_expr(&expr.stx.value);
+          let expr_ty = if expr.stx.spread {
+            self.check_expr(&expr.stx.value)
+          } else {
+            self.check_expr_with_expected(&expr.stx.value, expected_child_ty)
+          };
           let ty = if expr.stx.spread {
             spread = true;
             self.spread_element_type(expr_ty)
