@@ -4875,15 +4875,18 @@ impl<'a> FlowBodyChecker<'a> {
   ) -> Self {
     let prim = store.primitive_ids();
     let expr_types = vec![prim.unknown; body.exprs.len()];
+    let mut bindings = BindingCollector::collect(body, flow_bindings);
     let mut pat_types = vec![prim.unknown; body.pats.len()];
-    for (idx, pat) in body.pats.iter().enumerate() {
-      if let PatKind::Ident(name) = pat.kind {
-        if let Some(ty) = initial.get(&name) {
-          pat_types[idx] = *ty;
+    for binding in bindings.param_bindings.iter() {
+      let BindingKey::Local { pat, name } = *binding else {
+        continue;
+      };
+      if let Some(ty) = initial.get(&name) {
+        if let Some(slot) = pat_types.get_mut(pat.0 as usize) {
+          *slot = *ty;
         }
       }
     }
-    let mut bindings = BindingCollector::collect(body, flow_bindings);
     let mut initial_flow = HashMap::new();
     for (name, ty) in initial.iter() {
       let id = bindings

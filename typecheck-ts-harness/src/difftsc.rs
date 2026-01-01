@@ -1634,7 +1634,22 @@ fn collect_marker_type_facts(
     let Some(file_id) = program.file_id(&file) else {
       continue;
     };
-    if let Some(ty) = program.type_at(file_id, marker.offset) {
+    // `Program::type_at` reports the inferred type for the innermost expression/pattern at
+    // `offset`. For binding identifiers, that may return the initializer's literal/object type
+    // rather than the declared symbol type. TypeScript's `checker.getTypeAtLocation` on an
+    // identifier token generally reflects the declared symbol type, so prefer `symbol_at` when
+    // the marker does not land within an expression span.
+    let ty = if program.expr_at(file_id, marker.offset).is_some() {
+      program.type_at(file_id, marker.offset)
+    } else {
+      program
+        .symbol_at(file_id, marker.offset)
+        .and_then(|symbol| program.symbol_info(symbol))
+        .and_then(|info| info.type_id)
+        .or_else(|| program.type_at(file_id, marker.offset))
+    };
+
+    if let Some(ty) = ty {
       facts.push(TypeAtFact {
         file: marker.file.clone(),
         offset: marker.offset,

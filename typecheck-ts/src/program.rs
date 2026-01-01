@@ -6739,13 +6739,17 @@ impl ProgramState {
   }
 
   fn map_hir_bodies(&mut self, file: FileId, lowered: &LowerResult) {
-    let stale: HashSet<_> = self
+    // Bodies are keyed by stable hash-based IDs. In the (rare) event that a body id collides
+    // across files, we must ensure we clear any stale metadata/parent edges before inserting the
+    // newly-lowered bodies for `file`.
+    let mut stale: HashSet<BodyId> = self
       .body_map
       .iter()
       .filter(|(_, meta)| meta.file == file)
       .map(|(id, _)| *id)
       .collect();
-    self.body_map.retain(|_, meta| meta.file != file);
+    stale.extend(lowered.body_index.keys().copied());
+    self.body_map.retain(|id, _| !stale.contains(id));
     self.body_parents.retain(|child, _| !stale.contains(child));
 
     if let Some(state) = self.files.get_mut(&file) {
