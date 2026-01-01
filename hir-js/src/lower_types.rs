@@ -1207,10 +1207,19 @@ impl<'a> TypeLowerer<'a> {
     out: &mut Vec<TypeExprId>,
   ) {
     for &member in members {
-      if let Some(inner) = nested(&self.arenas.type_exprs[member.0 as usize].kind) {
-        self.flatten_type_members(inner, nested, out);
-      } else {
-        out.push(member);
+      let mut current = member;
+      loop {
+        match &self.arenas.type_exprs[current.0 as usize].kind {
+          TypeExprKind::Parenthesized(inner) => current = *inner,
+          kind => {
+            if let Some(inner) = nested(kind) {
+              self.flatten_type_members(inner, nested, out);
+            } else {
+              out.push(current);
+            }
+            break;
+          }
+        }
       }
     }
   }

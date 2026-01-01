@@ -541,6 +541,20 @@ fn union_dedups_simple_duplicates() {
 }
 
 #[test]
+fn union_strips_parenthesized_members() {
+  let result = lower_from_source("type A = (Foo) | Bar;").expect("lower");
+  let members = union_member_names(&result, "A");
+  assert_eq!(members, vec!["Bar", "Foo"]);
+}
+
+#[test]
+fn union_flattens_parenthesized_nested_unions() {
+  let result = lower_from_source("type A = Foo | (Bar | Baz);").expect("lower");
+  let members = union_member_names(&result, "A");
+  assert_eq!(members, vec!["Bar", "Baz", "Foo"]);
+}
+
+#[test]
 fn union_dedups_duplicate_function_types() {
   let result = lower_from_source("type A = ((x: string) => void) | ((x: string) => void);")
     .expect("lower");
@@ -694,6 +708,20 @@ fn intersection_dedups_duplicate_function_types() {
   assert_eq!(members.len(), 1);
 }
 
+#[test]
+fn intersection_strips_parenthesized_members() {
+  let result = lower_from_source("type A = (Foo) & Bar;").expect("lower");
+  let members = intersection_member_names(&result, "A");
+  assert_eq!(members, vec!["Bar", "Foo"]);
+}
+
+#[test]
+fn intersection_flattens_parenthesized_nested_intersections() {
+  let result = lower_from_source("type A = Foo & (Bar & Baz);").expect("lower");
+  let members = intersection_member_names(&result, "A");
+  assert_eq!(members, vec!["Bar", "Baz", "Foo"]);
+}
+
 fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
   let (_, arenas, expr_id, _) = type_alias(result, alias);
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
@@ -704,6 +732,24 @@ fn union_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> 
   let members = match ty {
     TypeExprKind::Union(members) => members.as_slice(),
     other => panic!("expected union, got {other:?}"),
+  };
+
+  members
+    .iter()
+    .map(|id| type_name(&result.names, &arenas.type_exprs[id.0 as usize].kind))
+    .collect()
+}
+
+fn intersection_member_names(result: &hir_js::LowerResult, alias: &str) -> Vec<String> {
+  let (_, arenas, expr_id, _) = type_alias(result, alias);
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Intersection(members) => members.as_slice(),
+    other => panic!("expected intersection, got {other:?}"),
   };
 
   members
