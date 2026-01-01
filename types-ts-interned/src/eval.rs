@@ -973,16 +973,18 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             .or_insert((prop.data.optional, prop.data.readonly));
         }
         for idxer in shape.indexers.iter() {
-          let key = match self.store.type_kind(idxer.key_type) {
-            TypeKind::String => Key::String,
-            TypeKind::Number => Key::Number,
-            TypeKind::Symbol | TypeKind::UniqueSymbol => Key::Symbol,
+          let keys: &[Key] = match self.store.type_kind(idxer.key_type) {
+            TypeKind::String => &[Key::String, Key::Number],
+            TypeKind::Number => &[Key::Number],
+            TypeKind::Symbol | TypeKind::UniqueSymbol => &[Key::Symbol],
             _ => continue,
           };
-          merged
-            .entry(key)
-            .and_modify(|entry| entry.1 |= idxer.readonly)
-            .or_insert((false, idxer.readonly));
+          for key in keys {
+            merged
+              .entry(key.clone())
+              .and_modify(|entry| entry.1 |= idxer.readonly)
+              .or_insert((false, idxer.readonly));
+          }
         }
         let mut entries: Vec<KeyInfo> = merged
           .into_iter()
@@ -1024,6 +1026,7 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         acc
       }
+      TypeKind::Unknown | TypeKind::Never => KeySet::Known(Vec::new()),
       TypeKind::Object(obj) => {
         let mut keys = Vec::new();
         let shape = self.store.shape(self.store.object(obj).shape);
@@ -1032,7 +1035,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         }
         for idx in shape.indexers.iter() {
           match self.store.type_kind(idx.key_type) {
-            TypeKind::String => keys.push(Key::String),
+            TypeKind::String => {
+              keys.push(Key::String);
+              keys.push(Key::Number);
+            }
             TypeKind::Number => keys.push(Key::Number),
             TypeKind::Symbol | TypeKind::UniqueSymbol => keys.push(Key::Symbol),
             _ => {}

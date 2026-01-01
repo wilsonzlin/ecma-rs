@@ -3,9 +3,9 @@ use std::sync::Arc;
 
 use ordered_float::OrderedFloat;
 use types_ts_interned::{
-  DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, PropData, PropKey, Property,
-  Shape, TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId, TypeKind,
-  TypeParamId, TypeStore,
+  DefId, ExpandedType, Indexer, MappedModifier, MappedType, ObjectType, PropData, PropKey,
+  Property, Shape, TemplateChunk, TemplateLiteralType, TypeEvaluator, TypeExpander, TypeId,
+  TypeKind, TypeParamId, TypeStore,
 };
 
 #[derive(Default)]
@@ -618,6 +618,51 @@ fn keyof_respects_union_and_intersection_semantics() {
     names,
     vec!["a".to_string(), "b".to_string(), "c".to_string()]
   );
+}
+
+#[test]
+fn keyof_unknown_is_never() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let evaluated = store.evaluate(store.intern_type(TypeKind::KeyOf(primitives.unknown)));
+  assert_eq!(evaluated, primitives.never);
+}
+
+#[test]
+fn keyof_never_is_never() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let evaluated = store.evaluate(store.intern_type(TypeKind::KeyOf(primitives.never)));
+  assert_eq!(evaluated, primitives.never);
+}
+
+#[test]
+fn keyof_string_indexer_includes_number() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let shape = store.intern_shape(Shape {
+    properties: Vec::new(),
+    call_signatures: Vec::new(),
+    construct_signatures: Vec::new(),
+    indexers: vec![Indexer {
+      key_type: primitives.string,
+      value_type: primitives.boolean,
+      readonly: false,
+    }],
+  });
+  let obj = store.intern_type(TypeKind::Object(
+    store.intern_object(ObjectType { shape }),
+  ));
+  let evaluated = store.evaluate(store.intern_type(TypeKind::KeyOf(obj)));
+  let TypeKind::Union(members) = store.type_kind(evaluated) else {
+    panic!("expected union, got {:?}", store.type_kind(evaluated));
+  };
+  assert!(members.contains(&primitives.string));
+  assert!(members.contains(&primitives.number));
+  assert_eq!(members.len(), 2);
 }
 
 #[test]
