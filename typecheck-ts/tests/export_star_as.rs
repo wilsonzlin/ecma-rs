@@ -151,3 +151,46 @@ fn export_type_star_as_namespace_supports_string_literal_aliases() {
     .expect("type for x export");
   assert_eq!(program.display_type(x_ty).to_string(), "number");
 }
+
+#[test]
+fn type_only_reexport_of_namespace_export_preserves_namespace_slot() {
+  let mut host = MemoryHost::new();
+
+  let dep_key = FileKey::new("dep.ts");
+  host.insert(dep_key.clone(), "export interface Foo { x: number; }\n");
+
+  let root_key = FileKey::new("root.ts");
+  host.insert(
+    root_key.clone(),
+    "export * as \"ns-name\" from \"./dep\";\n",
+  );
+
+  let mid_key = FileKey::new("mid.ts");
+  host.insert(
+    mid_key.clone(),
+    "export type { \"ns-name\" as ns } from \"./root\";\n",
+  );
+
+  let entry_key = FileKey::new("entry.ts");
+  host.insert(
+    entry_key.clone(),
+    "import type { ns } from \"./mid\";\n\
+     export const typed: ns.Foo = { x: 1 };\n\
+     export const x = typed.x;\n",
+  );
+
+  let program = Program::new(host, vec![entry_key.clone()]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let entry_id = program.file_id(&entry_key).expect("entry.ts file id");
+  let exports_entry = program.exports_of(entry_id);
+  let x_ty = exports_entry
+    .get("x")
+    .and_then(|entry| entry.type_id)
+    .expect("type for x export");
+  assert_eq!(program.display_type(x_ty).to_string(), "number");
+}

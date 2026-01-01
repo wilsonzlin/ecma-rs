@@ -1461,7 +1461,10 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
           let filtered = filter_group(
             group.clone(),
             if type_only || import.type_only {
-              Namespace::TYPE
+              // A type-only export of a namespace import (`import * as NS`) should
+              // still export the namespace slot so consumers can write `NS.Foo`
+              // in type positions.
+              Namespace::TYPE | Namespace::NAMESPACE
             } else {
               Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
             },
@@ -1491,7 +1494,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
             let filtered = filter_group(
               entry.clone(),
               if type_only || import.type_only {
-                Namespace::TYPE
+                Namespace::TYPE | Namespace::NAMESPACE
               } else {
                 Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
               },
@@ -1525,7 +1528,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
       let filtered = filter_group(
         group.clone(),
         if type_only {
-          Namespace::TYPE
+          Namespace::TYPE | Namespace::NAMESPACE
         } else {
           Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
         },
@@ -1573,7 +1576,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         if let Some(group) = filter_group(
           entry.clone(),
           if type_only {
-            Namespace::TYPE
+            Namespace::TYPE | Namespace::NAMESPACE
           } else {
             Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
           },
@@ -1616,7 +1619,7 @@ impl<'a, HP: Fn(FileId) -> Arc<HirFile>> Binder<'a, HP> {
         if let Some(group) = filter_group(
           entry.clone(),
           if type_only {
-            Namespace::TYPE
+            Namespace::TYPE | Namespace::NAMESPACE
           } else {
             Namespace::VALUE | Namespace::TYPE | Namespace::NAMESPACE
           },
