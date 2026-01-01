@@ -1749,7 +1749,7 @@ pub(crate) fn build_tsc_request(
 
   for file in file_set.iter() {
     let name = file.key.as_str().to_string();
-    files.insert(name, file.content.to_string());
+    files.insert(name, Arc::clone(&file.content));
   }
 
   let mut root_names: Vec<String> = file_set

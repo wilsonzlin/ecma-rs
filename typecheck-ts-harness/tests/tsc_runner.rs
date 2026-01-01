@@ -4,6 +4,7 @@ mod common;
 
 use serde_json::Map;
 use std::collections::HashMap;
+use std::sync::Arc;
 use typecheck_ts_harness::tsc::TscRequest;
 
 #[test]
@@ -16,7 +17,7 @@ fn reports_single_file_error() {
   let mut files = HashMap::new();
   files.insert(
     "main.ts".to_string(),
-    "const value: string = 1;".to_string(),
+    Arc::from("const value: string = 1;"),
   );
 
   let request = TscRequest {
@@ -49,11 +50,11 @@ fn resolves_relative_imports_across_files() {
   let mut files = HashMap::new();
   files.insert(
     "a.ts".to_string(),
-    "export const value: number = 1;".to_string(),
+    Arc::from("export const value: number = 1;"),
   );
   files.insert(
     "b.ts".to_string(),
-    "import { value } from './a';\nconst str: string = value;\n".to_string(),
+    Arc::from("import { value } from './a';\nconst str: string = value;\n"),
   );
 
   let request = TscRequest {

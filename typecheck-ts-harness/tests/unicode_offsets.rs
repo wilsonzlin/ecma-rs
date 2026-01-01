@@ -4,6 +4,7 @@ mod common;
 
 use serde_json::Map;
 use std::collections::HashMap;
+use std::sync::Arc;
 use typecheck_ts_harness::tsc::{TscRequest, TypeQuery};
 
 #[test]
@@ -18,7 +19,7 @@ fn diagnostics_report_utf8_byte_offsets() {
   let expected_end = expected_start + "notDefined".len() as u32;
 
   let mut files = HashMap::new();
-  files.insert("main.ts".to_string(), source);
+  files.insert("main.ts".to_string(), Arc::from(source));
 
   let request = TscRequest {
     root_names: vec!["main.ts".to_string()],
@@ -50,7 +51,7 @@ fn auto_scanned_type_queries_use_utf8_byte_offsets() {
     source.find("const t = ").expect("expected const usage") + "const t = ".len();
 
   let mut files = HashMap::new();
-  files.insert("main.ts".to_string(), source);
+  files.insert("main.ts".to_string(), Arc::from(source));
 
   let request = TscRequest {
     root_names: vec!["main.ts".to_string()],
@@ -81,7 +82,7 @@ fn provided_type_queries_convert_utf8_offsets_for_typescript() {
   let expected_offset = source.find("let a").expect("expected let a") + "let ".len();
 
   let mut files = HashMap::new();
-  files.insert("main.ts".to_string(), source);
+  files.insert("main.ts".to_string(), Arc::from(source));
 
   let request = TscRequest {
     root_names: vec!["main.ts".to_string()],

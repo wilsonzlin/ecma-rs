@@ -23,8 +23,9 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 #[cfg(feature = "with-node")]
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 #[cfg(feature = "with-node")]
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 #[cfg(feature = "with-node")]
 use std::time::{Duration, Instant};
 
@@ -32,7 +33,7 @@ use std::time::{Duration, Instant};
 #[serde(rename_all = "camelCase")]
 pub struct TscRequest {
   pub root_names: Vec<String>,
-  pub files: HashMap<String, String>,
+  pub files: HashMap<String, Arc<str>>,
   #[serde(default)]
   pub options: Map<String, Value>,
   /// When set, the runner will skip collecting type facts (exports/markers) and
