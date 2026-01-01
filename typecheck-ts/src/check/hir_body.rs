@@ -1508,31 +1508,31 @@ impl<'a> Checker<'a> {
             self.diagnostics.push(diag.clone());
           }
         }
-          if resolution.diagnostics.is_empty() {
-            if let Some(sig_id) = resolution.signature {
-              let sig = self.store.signature(sig_id);
-              for (idx, arg) in call.stx.arguments.iter().enumerate() {
-                if let Some(param) = sig.params.get(idx) {
-                  let arg_expr = &arg.stx.value;
-                  let arg_ty = match arg_expr.stx.as_ref() {
-                    AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
-                      let contextual = self.check_expr_with_expected(arg_expr, param.ty);
-                      if let Some(slot) = arg_types.get_mut(idx) {
-                        *slot = contextual;
-                      }
-                      contextual
+        if resolution.diagnostics.is_empty() {
+          if let Some(sig_id) = resolution.signature {
+            let sig = self.store.signature(sig_id);
+            for (idx, arg) in call.stx.arguments.iter().enumerate() {
+              if let Some(param) = sig.params.get(idx) {
+                let arg_expr = &arg.stx.value;
+                let arg_ty = match arg_expr.stx.as_ref() {
+                  AstExpr::LitObj(_) | AstExpr::LitArr(_) => {
+                    let contextual = self.check_expr_with_expected(arg_expr, param.ty);
+                    if let Some(slot) = arg_types.get_mut(idx) {
+                      *slot = contextual;
                     }
-                    _ => arg_types
-                      .get(idx)
-                      .copied()
-                      .unwrap_or(self.store.primitive_ids().unknown),
-                  };
-                  self.check_assignable(arg_expr, arg_ty, param.ty);
-                }
+                    contextual
+                  }
+                  _ => arg_types
+                    .get(idx)
+                    .copied()
+                    .unwrap_or(self.store.primitive_ids().unknown),
+                };
+                self.check_assignable(arg_expr, arg_ty, param.ty);
               }
-              if let TypeKind::Predicate {
-                parameter: Some(param_name),
-                asserted: Some(asserted),
+            }
+            if let TypeKind::Predicate {
+              parameter: Some(param_name),
+              asserted: Some(asserted),
               asserts: true,
             } = self.store.type_kind(sig.ret)
             {

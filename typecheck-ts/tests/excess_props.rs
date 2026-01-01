@@ -174,7 +174,12 @@ fn call_argument_nested_contextual_object_literal_checks_excess_properties() {
     "function takes(obj: { nested: { foo: number } }) {}\n\
      takes({ nested: { foo: 1, bar: 2 } });",
   );
-  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "unexpected diagnostics: {:?}",
+    diagnostics
+  );
   assert_eq!(
     diagnostics[0].code.as_str(),
     codes::EXCESS_PROPERTY.as_str(),
@@ -189,7 +194,12 @@ fn call_argument_array_literal_element_checks_excess_properties() {
     "function takes(xs: { foo: number }[]) {}\n\
      takes([{ foo: 1, bar: 2 }]);",
   );
-  assert_eq!(diagnostics.len(), 1, "unexpected diagnostics: {:?}", diagnostics);
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "unexpected diagnostics: {:?}",
+    diagnostics
+  );
   assert_eq!(
     diagnostics[0].code.as_str(),
     codes::EXCESS_PROPERTY.as_str(),
