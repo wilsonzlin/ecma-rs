@@ -233,73 +233,74 @@ fn resolve_as_file_or_directory_normalized(
     return Some(found);
   }
 
+  let mut scratch = String::with_capacity(base_candidate.len() + 1 + "package.json".len());
+
   if base_candidate.ends_with(".js") {
     let trimmed = base_candidate.trim_end_matches(".js");
-    let mut candidate = String::with_capacity(trimmed.len() + 1 + 4);
-    candidate.push_str(trimmed);
-    candidate.push('.');
-    let prefix_len = candidate.len();
+    scratch.clear();
+    scratch.push_str(trimmed);
+    scratch.push('.');
+    let prefix_len = scratch.len();
     for ext in ["ts", "tsx", "d.ts"] {
-      candidate.truncate(prefix_len);
-      candidate.push_str(ext);
-      if let Some(found) = files.resolve(&candidate) {
+      scratch.truncate(prefix_len);
+      scratch.push_str(ext);
+      if let Some(found) = files.resolve(&scratch) {
         return Some(found);
       }
     }
   } else if base_candidate.ends_with(".jsx") {
     let trimmed = base_candidate.trim_end_matches(".jsx");
-    let mut candidate = String::with_capacity(trimmed.len() + 1 + 4);
-    candidate.push_str(trimmed);
-    candidate.push('.');
-    let prefix_len = candidate.len();
+    scratch.clear();
+    scratch.push_str(trimmed);
+    scratch.push('.');
+    let prefix_len = scratch.len();
     for ext in ["tsx", "d.ts"] {
-      candidate.truncate(prefix_len);
-      candidate.push_str(ext);
-      if let Some(found) = files.resolve(&candidate) {
+      scratch.truncate(prefix_len);
+      scratch.push_str(ext);
+      if let Some(found) = files.resolve(&scratch) {
         return Some(found);
       }
     }
   } else if base_candidate.ends_with(".mjs") {
     let trimmed = base_candidate.trim_end_matches(".mjs");
-    let mut candidate = String::with_capacity(trimmed.len() + 1 + 5);
-    candidate.push_str(trimmed);
-    candidate.push('.');
-    let prefix_len = candidate.len();
+    scratch.clear();
+    scratch.push_str(trimmed);
+    scratch.push('.');
+    let prefix_len = scratch.len();
     for ext in ["mts", "d.mts"] {
-      candidate.truncate(prefix_len);
-      candidate.push_str(ext);
-      if let Some(found) = files.resolve(&candidate) {
+      scratch.truncate(prefix_len);
+      scratch.push_str(ext);
+      if let Some(found) = files.resolve(&scratch) {
         return Some(found);
       }
     }
   } else if base_candidate.ends_with(".cjs") {
     let trimmed = base_candidate.trim_end_matches(".cjs");
-    let mut candidate = String::with_capacity(trimmed.len() + 1 + 5);
-    candidate.push_str(trimmed);
-    candidate.push('.');
-    let prefix_len = candidate.len();
+    scratch.clear();
+    scratch.push_str(trimmed);
+    scratch.push('.');
+    let prefix_len = scratch.len();
     for ext in ["cts", "d.cts"] {
-      candidate.truncate(prefix_len);
-      candidate.push_str(ext);
-      if let Some(found) = files.resolve(&candidate) {
+      scratch.truncate(prefix_len);
+      scratch.push_str(ext);
+      if let Some(found) = files.resolve(&scratch) {
         return Some(found);
       }
     }
   } else if !is_source_root(base_candidate) {
-    let mut candidate = String::with_capacity(base_candidate.len() + 1 + 5);
-    candidate.push_str(base_candidate);
-    candidate.push('.');
-    let prefix_len = candidate.len();
+    scratch.clear();
+    scratch.push_str(base_candidate);
+    scratch.push('.');
+    let prefix_len = scratch.len();
     for ext in EXTENSIONS {
-      candidate.truncate(prefix_len);
-      candidate.push_str(ext);
-      if let Some(found) = files.resolve(&candidate) {
+      scratch.truncate(prefix_len);
+      scratch.push_str(ext);
+      if let Some(found) = files.resolve(&scratch) {
         return Some(found);
       }
     }
   }
 
-  let mut scratch = String::with_capacity(base_candidate.len() + 1 + "package.json".len());
   if !is_source_root(base_candidate) {
     virtual_join_into(&mut scratch, base_candidate, "package.json");
     if let Some(package_key) = files.resolve(&scratch) {
