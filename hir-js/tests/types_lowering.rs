@@ -307,13 +307,13 @@ fn span_map_can_locate_type_member() {
     .span_map
     .type_member_at_offset(span.start)
     .expect("member at offset");
-  assert_eq!(found, member_id);
+  assert_eq!(found, (def.id, member_id));
 }
 
 #[test]
 fn span_map_can_locate_type_param() {
   let result = lower_from_source("type T<A extends string> = A;").expect("lower");
-  let (_, arenas, _, type_params) = type_alias(&result, "T");
+  let (def_id, arenas, _, type_params) = type_alias(&result, "T");
   assert_eq!(type_params.len(), 1);
   let type_param_id = type_params[0];
 
@@ -323,7 +323,113 @@ fn span_map_can_locate_type_param() {
     .span_map
     .type_param_at_offset(span.start)
     .expect("type param at offset");
-  assert_eq!(found, type_param_id);
+  assert_eq!(found, (def_id, type_param_id));
+}
+
+#[test]
+fn span_map_type_ids_are_scoped_to_def() {
+  let result =
+    lower_from_source("interface A<T> { a: T }\ninterface B<U> { b: U }").expect("lower");
+
+  let def_a = result
+    .defs
+    .iter()
+    .find(|def| result.names.resolve(def.name).unwrap() == "A")
+    .expect("interface A");
+  let def_b = result
+    .defs
+    .iter()
+    .find(|def| result.names.resolve(def.name).unwrap() == "B")
+    .expect("interface B");
+
+  let arenas_a = result.type_arenas(def_a.id).expect("type arenas for A");
+  let arenas_b = result.type_arenas(def_b.id).expect("type arenas for B");
+
+  let (members_a, type_params_a) = match def_a.type_info.as_ref().expect("type info for A") {
+    DefTypeInfo::Interface {
+      members,
+      type_params,
+      ..
+    } => (members.as_slice(), type_params.as_slice()),
+    other => panic!("expected interface for A, found {other:?}"),
+  };
+  let (members_b, type_params_b) = match def_b.type_info.as_ref().expect("type info for B") {
+    DefTypeInfo::Interface {
+      members,
+      type_params,
+      ..
+    } => (members.as_slice(), type_params.as_slice()),
+    other => panic!("expected interface for B, found {other:?}"),
+  };
+
+  assert_eq!(members_a.len(), 1);
+  assert_eq!(members_b.len(), 1);
+  assert_eq!(type_params_a.len(), 1);
+  assert_eq!(type_params_b.len(), 1);
+
+  let member0 = hir_js::TypeMemberId(0);
+  assert_eq!(members_a[0], member0);
+  assert_eq!(members_b[0], member0);
+
+  let type_param0 = hir_js::TypeParamId(0);
+  assert_eq!(type_params_a[0], type_param0);
+  assert_eq!(type_params_b[0], type_param0);
+
+  let member_a_span = arenas_a.type_members[member0.0 as usize].span;
+  let member_b_span = arenas_b.type_members[member0.0 as usize].span;
+  assert_ne!(member_a_span, member_b_span);
+
+  assert_eq!(
+    result.hir.span_map.type_member_span(def_a.id, member0),
+    Some(member_a_span),
+  );
+  assert_eq!(
+    result.hir.span_map.type_member_span(def_b.id, member0),
+    Some(member_b_span),
+  );
+
+  assert_eq!(
+    result
+      .hir
+      .span_map
+      .type_member_at_offset(member_a_span.start),
+    Some((def_a.id, member0)),
+  );
+  assert_eq!(
+    result
+      .hir
+      .span_map
+      .type_member_at_offset(member_b_span.start),
+    Some((def_b.id, member0)),
+  );
+
+  let type_param_a_span = arenas_a.type_params[type_param0.0 as usize].span;
+  let type_param_b_span = arenas_b.type_params[type_param0.0 as usize].span;
+  assert_ne!(type_param_a_span, type_param_b_span);
+
+  assert_eq!(
+    result.hir.span_map.type_param_span(def_a.id, type_param0),
+    Some(type_param_a_span),
+  );
+  assert_eq!(
+    result.hir.span_map.type_param_span(def_b.id, type_param0),
+    Some(type_param_b_span),
+  );
+
+  assert_eq!(
+    result
+      .hir
+      .span_map
+      .type_param_at_offset(type_param_a_span.start),
+    Some((def_a.id, type_param0)),
+  );
+  assert_eq!(
+    result
+      .hir
+      .span_map
+      .type_param_at_offset(type_param_b_span.start),
+    Some((def_b.id, type_param0)),
+  );
 }
 
 #[test]
