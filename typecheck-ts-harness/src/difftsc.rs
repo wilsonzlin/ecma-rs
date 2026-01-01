@@ -532,7 +532,6 @@ fn run_single_test(
   let mut notes = Vec::new();
   let harness_options = harness_options_from_files(&test.files);
   let tsc_options = harness_options.to_tsc_options_map();
-  let type_queries = collect_type_queries(&test.files);
 
   let live_tsc = if needs_live_tsc(args) {
     let Some(pool) = tsc_pool else {
@@ -552,7 +551,7 @@ fn run_single_test(
       };
     };
 
-    let request = build_request(test, &tsc_options, &type_queries);
+    let request = build_request(test, &tsc_options);
     match pool.run_request(request) {
       Ok(diags) => Some(diags),
       Err(err) => {
@@ -707,8 +706,9 @@ fn run_single_test(
   let rust = run_rust(&file_set, &harness_options);
   let expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
   let expected_types = normalize_type_facts(&tsc_diags.type_facts, normalization);
+  let marker_queries = marker_queries_from_type_facts(&tsc_diags.type_facts);
   let actual_types = if rust.status == EngineStatus::Ok {
-    collect_rust_type_facts(&file_set, &harness_options, &type_queries, normalization)
+    collect_rust_type_facts(&file_set, &harness_options, &marker_queries, normalization)
   } else {
     NormalizedTypeFacts::default()
   };
@@ -1476,37 +1476,21 @@ fn print_tsc_response(test: &TestCase, baseline_path: &Path, response: &Option<T
   }
 }
 
-fn collect_type_queries(files: &[VirtualFile]) -> Vec<TypeQuery> {
-  let mut queries = Vec::new();
-  for file in files {
-    let normalized = normalize_name(&file.name);
-    let lines = collect_lines(&file.content);
-    for (idx, line) in lines.iter().enumerate() {
-      let mut search_start = 0usize;
-      while let Some(rel_idx) = line.text[search_start..].find("^?") {
-        let absolute_idx = search_start + rel_idx;
-        let before = &line.text[..absolute_idx];
-        let has_code_before = !before.trim().is_empty() && !before.trim().starts_with("//");
-        let target_line = if has_code_before {
-          idx
-        } else {
-          idx.saturating_sub(1)
-        };
-        if let Some(target) = lines.get(target_line) {
-          let column = absolute_idx.min(target.text.len());
-          let offset = target.start + column;
-          queries.push(TypeQuery {
-            file: normalized.clone(),
-            offset: offset as u32,
-            line: Some(target_line as u32),
-            column: Some(column as u32),
-          });
-        }
-        search_start = absolute_idx + 2;
-      }
-    }
-  }
-  queries
+fn marker_queries_from_type_facts(type_facts: &Option<TypeFacts>) -> Vec<TypeQuery> {
+  let Some(type_facts) = type_facts.as_ref() else {
+    return Vec::new();
+  };
+
+  type_facts
+    .markers
+    .iter()
+    .map(|marker| TypeQuery {
+      file: marker.file.clone(),
+      offset: marker.offset,
+      line: marker.line,
+      column: marker.column,
+    })
+    .collect()
 }
 
 fn harness_options_from_files(files: &[VirtualFile]) -> HarnessOptions {
@@ -1655,7 +1639,6 @@ fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
 fn build_request(
   test: &TestCase,
   base_options: &Map<String, Value>,
-  type_queries: &[TypeQuery],
 ) -> TscRequest {
   let mut files = HashMap::new();
   let mut root_names = Vec::new();
@@ -1676,7 +1659,7 @@ fn build_request(
     files,
     options: base_options.clone(),
     diagnostics_only: false,
-    type_queries: type_queries.to_vec(),
+    type_queries: Vec::new(),
   }
 }
 
