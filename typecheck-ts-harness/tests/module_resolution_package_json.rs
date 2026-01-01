@@ -56,4 +56,3 @@ fn resolves_package_json_exports_types_entrypoints() {
     Some(FileKey::new("/node_modules/pkg/dist/index.d.ts"))
   );
 }
-

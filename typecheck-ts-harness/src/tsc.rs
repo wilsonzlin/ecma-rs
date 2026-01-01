@@ -1,10 +1,10 @@
+use crate::diagnostic_norm::normalize_type_string;
 #[cfg(not(feature = "with-node"))]
 use anyhow::anyhow;
 #[cfg(feature = "with-node")]
 use anyhow::bail;
 #[cfg(feature = "with-node")]
 use anyhow::Context;
-use crate::diagnostic_norm::normalize_type_string;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;

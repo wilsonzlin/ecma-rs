@@ -551,9 +551,8 @@ fn union_canonicalization_is_span_stable_for_constructor_types() {
 #[test]
 fn union_canonicalization_is_span_stable_for_type_query_types() {
   let base = lower_from_source("type A = (typeof Foo) | (typeof Bar);").expect("lower");
-  let with_padding =
-    lower_from_source("type Z = string;\ntype A = (typeof Foo) | (typeof Bar);")
-      .expect("lower with padding");
+  let with_padding = lower_from_source("type Z = string;\ntype A = (typeof Foo) | (typeof Bar);")
+    .expect("lower with padding");
 
   let base_members = union_member_type_query_name_strings(&base, "A");
   let with_padding_members = union_member_type_query_name_strings(&with_padding, "A");
@@ -679,8 +678,8 @@ fn union_dedups_duplicate_indexed_access_types() {
 
 #[test]
 fn union_dedups_duplicate_conditional_types() {
-  let result = lower_from_source("type A = (T extends U ? X : Y) | (T extends U ? X : Y);")
-    .expect("lower");
+  let result =
+    lower_from_source("type A = (T extends U ? X : Y) | (T extends U ? X : Y);").expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -886,9 +885,8 @@ fn intersection_canonicalization_is_span_stable_for_function_types() {
 
 #[test]
 fn intersection_canonicalization_is_span_stable_for_constructor_types() {
-  let base =
-    lower_from_source("type A = (new (x: string) => Foo) & (new (y: number) => Foo);")
-      .expect("lower");
+  let base = lower_from_source("type A = (new (x: string) => Foo) & (new (y: number) => Foo);")
+    .expect("lower");
   let with_padding = lower_from_source(
     "type Z = string;\ntype A = (new (x: string) => Foo) & (new (y: number) => Foo);",
   )
@@ -904,9 +902,8 @@ fn intersection_canonicalization_is_span_stable_for_constructor_types() {
 #[test]
 fn intersection_canonicalization_is_span_stable_for_type_query_types() {
   let base = lower_from_source("type A = (typeof Foo) & (typeof Bar);").expect("lower");
-  let with_padding =
-    lower_from_source("type Z = string;\ntype A = (typeof Foo) & (typeof Bar);")
-      .expect("lower with padding");
+  let with_padding = lower_from_source("type Z = string;\ntype A = (typeof Foo) & (typeof Bar);")
+    .expect("lower with padding");
 
   let base_members = intersection_member_type_query_name_strings(&base, "A");
   let with_padding_members = intersection_member_type_query_name_strings(&with_padding, "A");
@@ -935,10 +932,8 @@ fn intersection_dedups_duplicate_function_types() {
 
 #[test]
 fn intersection_dedups_duplicate_constructor_types() {
-  let result = lower_from_source(
-    "type A = (new (x: string) => Foo) & (new (y: string) => Foo);",
-  )
-  .expect("lower");
+  let result = lower_from_source("type A = (new (x: string) => Foo) & (new (y: string) => Foo);")
+    .expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
@@ -981,9 +976,8 @@ fn intersection_dedups_duplicate_template_literal_types() {
 
 #[test]
 fn intersection_dedups_duplicate_mapped_types() {
-  let result =
-    lower_from_source("type A = { [K in keyof T]: T[K] } & { [K in keyof T]: T[K] };")
-      .expect("lower");
+  let result = lower_from_source("type A = { [K in keyof T]: T[K] } & { [K in keyof T]: T[K] };")
+    .expect("lower");
   let (_, arenas, expr_id, _) = type_alias(&result, "A");
   let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
   while let TypeExprKind::Parenthesized(inner) = ty {
