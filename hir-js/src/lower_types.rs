@@ -1471,7 +1471,6 @@ impl<'a> TypeLowerer<'a> {
   ) -> TypeParamKey {
     let param = &self.arenas.type_params[id.0 as usize];
     TypeParamKey {
-      name: self.name_id_to_string(param.name),
       constraint: param
         .constraint
         .map(|id| Box::new(self.type_expr_sort_key(id, cache, in_progress))),
@@ -1723,7 +1722,6 @@ struct FnParamKey {
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct TypeParamKey {
-  name: String,
   constraint: Option<Box<TypeSortKey>>,
   default: Option<Box<TypeSortKey>>,
   variance: Option<VarianceKey>,

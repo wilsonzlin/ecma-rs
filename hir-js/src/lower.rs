@@ -2463,9 +2463,7 @@ fn lower_jsx_attr_value(
     jsx::JsxAttrVal::Expression(expr) => {
       JsxAttrValue::Expression(lower_jsx_expr_container(expr, builder, ctx))
     }
-    jsx::JsxAttrVal::Element(elem) => {
-      JsxAttrValue::Element(lower_jsx_elem_as_expr(elem, builder, ctx))
-    }
+    jsx::JsxAttrVal::Element(elem) => JsxAttrValue::Element(lower_jsx_elem_as_expr(elem, builder, ctx)),
   }
 }
 
@@ -2514,7 +2512,6 @@ fn lower_jsx_elem_as_expr(
   builder.alloc_expr(ctx.to_range(elem.loc), kind);
   lowered
 }
-
 fn lower_pat(
   pat: &Node<AstPat>,
   builder: &mut BodyBuilder<'_>,
