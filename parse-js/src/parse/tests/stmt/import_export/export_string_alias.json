@@ -1,0 +1,28 @@
+{
+  "$t": "ExportList",
+  "attributes": null,
+  "from": "mod",
+  "names": {
+    "Specific": [
+      {
+        "alias": {
+          "name": "a-b"
+        },
+        "exportable": {
+          "Ident": "a"
+        },
+        "type_only": false
+      },
+      {
+        "alias": {
+          "name": "while"
+        },
+        "exportable": {
+          "Ident": "while"
+        },
+        "type_only": false
+      }
+    ]
+  },
+  "type_only": false
+}
