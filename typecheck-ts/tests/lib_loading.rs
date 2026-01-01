@@ -259,8 +259,7 @@ fn ambient_module_types_are_bound() {
   let source = "import type { Foo } from \"ambient\";\ntype Uses = Foo;";
   let host = TestHost::new(options)
     .with_lib(lib)
-    .with_file(entry.clone(), source)
-    ;
+    .with_file(entry.clone(), source);
   let program = Program::new(host, vec![entry.clone()]);
   let diagnostics = program.check();
   assert!(
