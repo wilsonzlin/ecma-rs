@@ -2142,6 +2142,12 @@ fn strip_var_declarator(ctx: &mut StripContext<'_>, decl: &mut VarDeclarator) {
 fn strip_func(ctx: &mut StripContext<'_>, func: &mut Func) -> bool {
   func.type_parameters = None;
   func.return_type = None;
+  func.parameters.retain(|param| {
+    !matches!(
+      param.stx.pattern.stx.pat.stx.as_ref(),
+      Pat::Id(id) if id.stx.name == "this"
+    )
+  });
   func
     .parameters
     .iter_mut()

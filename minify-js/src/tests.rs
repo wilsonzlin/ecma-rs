@@ -477,10 +477,37 @@ fn erases_type_parameters_from_functions() {
 }
 
 #[test]
+fn drops_this_parameters_from_functions() {
+  let src = r#"function f(this: any, x: number) { return x; }"#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  assert_eq!(parsed.stx.body.len(), 1);
+  let func = match parsed.stx.body[0].stx.as_ref() {
+    Stmt::FunctionDecl(func) => func,
+    other => panic!("expected function decl, got {other:?}"),
+  };
+  let params = &func.stx.function.stx.parameters;
+  assert_eq!(params.len(), 1);
+  match params[0].stx.pattern.stx.pat.stx.as_ref() {
+    parse_js::ast::expr::pat::Pat::Id(id) => assert_eq!(id.stx.name, "x"),
+    other => panic!("expected identifier param, got {other:?}"),
+  };
+}
+
+#[test]
 fn preserves_tsx_and_jsx_content() {
   let src = r#"
-    import type { ReactNode } from "react";
-    const element: ReactNode = <div className="x">{value as number}</div>;
+     import type { ReactNode } from "react";
+     const element: ReactNode = <div className="x">{value as number}</div>;
   "#;
   let (_code, parsed) = minified_program(TopLevelMode::Module, Dialect::Tsx, Dialect::Jsx, src);
   assert_eq!(parsed.stx.body.len(), 1);
