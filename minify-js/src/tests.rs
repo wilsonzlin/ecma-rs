@@ -186,6 +186,15 @@ fn dce_removes_unused_locals_in_arrow_expr_bodies() {
 }
 
 #[test]
+fn dce_removes_unused_arrow_function_initializers_in_nested_scopes() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const f=()=>{let g=()=>{if(false){sideEffect()}return 1;};return 2;};",
+  );
+  assert_eq!(result, "const f=()=>{return 2;};");
+}
+
+#[test]
 fn direct_eval_disables_dce_in_nested_arrow_expr_bodies() {
   let result = minified(
     TopLevelMode::Global,

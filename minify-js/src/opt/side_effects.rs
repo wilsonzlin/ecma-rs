@@ -12,6 +12,7 @@ pub(super) fn is_side_effect_free_expr(expr: &Node<Expr>) -> bool {
     | Expr::LitStr(_)
     | Expr::LitBigInt(_)
     | Expr::LitRegex(_) => true,
+    Expr::ArrowFunc(_) | Expr::Func(_) => true,
     Expr::Unary(unary) => match unary.stx.operator {
       OperatorName::UnaryPlus
       | OperatorName::UnaryNegation
