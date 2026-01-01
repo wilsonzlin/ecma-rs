@@ -176,27 +176,26 @@ fn main() -> ExitCode {
         None => Vec::new(),
       };
 
-      let options = ConformanceOptions {
-        root: root.unwrap_or_else(|| DEFAULT_ROOT.into()),
-        filter,
-        filter_pattern,
-        shard,
-        json,
-        update_snapshots,
-        timeout: Duration::from_secs(timeout_secs),
-        trace,
-        profile,
-        profile_out,
-        compare: compare.into(),
-        node_path: node,
-        span_tolerance,
-        allow_mismatches,
-        manifest,
-        fail_on,
-        extensions,
-        allow_empty,
-        jobs,
-      };
+      let root_dir = root.unwrap_or_else(|| DEFAULT_ROOT.into());
+      let mut options = ConformanceOptions::new(root_dir);
+      options.filter = filter;
+      options.filter_pattern = filter_pattern;
+      options.shard = shard;
+      options.json = json;
+      options.update_snapshots = update_snapshots;
+      options.timeout = Duration::from_secs(timeout_secs);
+      options.trace = trace;
+      options.profile = profile;
+      options.profile_out = profile_out;
+      options.compare = compare.into();
+      options.node_path = node;
+      options.span_tolerance = span_tolerance;
+      options.allow_mismatches = allow_mismatches;
+      options.manifest = manifest;
+      options.fail_on = fail_on;
+      options.extensions = extensions;
+      options.allow_empty = allow_empty;
+      options.jobs = jobs;
 
       match run_conformance(options) {
         Ok(report) => {

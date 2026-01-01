@@ -1,9 +1,6 @@
 use std::path::PathBuf;
 use std::time::Duration;
-use typecheck_ts_harness::{
-  build_filter, run_conformance, CompareMode, ConformanceOptions, FailOn, HarnessError,
-  DEFAULT_EXTENSIONS, DEFAULT_PROFILE_OUT,
-};
+use typecheck_ts_harness::{run_conformance, CompareMode, ConformanceOptions, HarnessError};
 
 #[test]
 fn updating_snapshots_requires_tsc() {
@@ -11,28 +8,13 @@ fn updating_snapshots_requires_tsc() {
     .join("fixtures")
     .join("conformance-mini");
 
-  let options = ConformanceOptions {
-    root,
-    filter: build_filter(None).unwrap(),
-    filter_pattern: None,
-    shard: None,
-    json: false,
-    update_snapshots: true,
-    timeout: Duration::from_secs(1),
-    trace: false,
-    profile: false,
-    profile_out: DEFAULT_PROFILE_OUT.into(),
-    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-    allow_empty: false,
-    compare: CompareMode::Snapshot,
-    // Force `tsc` to be unavailable regardless of the environment.
-    node_path: PathBuf::from("__typecheck_ts_harness_missing_node__"),
-    span_tolerance: 0,
-    allow_mismatches: true,
-    jobs: 1,
-    manifest: None,
-    fail_on: FailOn::New,
-  };
+  let mut options = ConformanceOptions::new(root);
+  options.update_snapshots = true;
+  options.timeout = Duration::from_secs(1);
+  options.compare = CompareMode::Snapshot;
+  // Force `tsc` to be unavailable regardless of the environment.
+  options.node_path = PathBuf::from("__typecheck_ts_harness_missing_node__");
+  options.allow_mismatches = true;
 
   let err = run_conformance(options).expect_err("expected snapshot update to require tsc");
   match err {

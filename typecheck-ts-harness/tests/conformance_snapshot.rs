@@ -2,10 +2,7 @@ use globset::{Glob, GlobSetBuilder};
 use std::path::PathBuf;
 use std::time::Duration;
 use typecheck_ts_harness::runner::EngineStatus;
-use typecheck_ts_harness::{
-  run_conformance, CompareMode, ConformanceOptions, FailOn, Filter, DEFAULT_EXTENSIONS,
-  DEFAULT_PROFILE_OUT,
-};
+use typecheck_ts_harness::{run_conformance, CompareMode, ConformanceOptions, Filter};
 
 #[test]
 fn conformance_snapshot_mode_loads_stored_baselines() {
@@ -21,30 +18,16 @@ fn conformance_snapshot_mode_loads_stored_baselines() {
   builder.add(Glob::new("mismatch/type_error.ts").unwrap());
   let filter = Filter::Glob(builder.build().unwrap());
 
-  let report = run_conformance(ConformanceOptions {
-    root,
-    filter,
-    filter_pattern: None,
-    shard: None,
-    json: false,
-    update_snapshots: false,
-    timeout: Duration::from_secs(5),
-    trace: false,
-    profile: false,
-    profile_out: DEFAULT_PROFILE_OUT.into(),
-    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-    allow_empty: false,
-    compare: CompareMode::Snapshot,
-    // Force `tsc` to be unavailable regardless of environment; snapshot mode
-    // should still work when not updating snapshots.
-    node_path: PathBuf::from("__typecheck_ts_harness_missing_node__"),
-    span_tolerance: 0,
-    allow_mismatches: true,
-    jobs: 1,
-    manifest: None,
-    fail_on: FailOn::New,
-  })
-  .expect("run conformance with stored snapshots");
+  let mut options = ConformanceOptions::new(root);
+  options.filter = filter;
+  options.timeout = Duration::from_secs(5);
+  options.compare = CompareMode::Snapshot;
+  // Force `tsc` to be unavailable regardless of environment; snapshot mode
+  // should still work when not updating snapshots.
+  options.node_path = PathBuf::from("__typecheck_ts_harness_missing_node__");
+  options.allow_mismatches = true;
+
+  let report = run_conformance(options).expect("run conformance with stored snapshots");
 
   assert_eq!(report.summary.total, 2);
 
