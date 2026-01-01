@@ -156,6 +156,41 @@ fn reexport_does_not_keep_or_rename_same_named_locals() {
 }
 
 #[test]
+fn preserves_side_effect_only_imports() {
+  let result = minified(TopLevelMode::Module, "import \"side\";const x=1;");
+  let normalized: String = result.chars().filter(|ch| !ch.is_whitespace()).collect();
+  assert!(
+    normalized.contains("import\"side\""),
+    "side-effect-only import should be preserved: {result}"
+  );
+}
+
+#[test]
+fn type_only_import_does_not_become_side_effect_import() {
+  let result = minified(
+    TopLevelMode::Module,
+    "import { type Foo } from \"mod\";const x=1;",
+  );
+  assert!(
+    !result.contains("import"),
+    "type-only imports should be erased without becoming side-effect imports: {result}"
+  );
+}
+
+#[test]
+fn preserves_module_import_export_attributes() {
+  let result = minified(
+    TopLevelMode::Module,
+    "import \"side\" with { type: \"json\" };export { a as b } from \"pkg\" with { type: \"json\" };",
+  );
+  let normalized: String = result.chars().filter(|ch| !ch.is_whitespace()).collect();
+  assert!(
+    normalized.contains("with{type:\"json\"}"),
+    "module import/export attributes should be preserved: {result}"
+  );
+}
+
+#[test]
 fn returns_diagnostics_on_parse_error() {
   let mut output = Vec::new();
   let diagnostics = minify(TopLevelMode::Global, "let =", &mut output).unwrap_err();

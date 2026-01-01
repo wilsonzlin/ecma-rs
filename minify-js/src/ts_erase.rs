@@ -305,7 +305,7 @@ fn strip_stmt(ctx: &mut StripContext<'_>, stmt: Node<Stmt>, is_top_level: bool) 
     Stmt::Import(import_stmt) => strip_import(ctx, import_stmt, loc, assoc)
       .into_iter()
       .collect(),
-    Stmt::ExportList(export_stmt) => strip_export_list(export_stmt, loc, assoc)
+    Stmt::ExportList(export_stmt) => strip_export_list(ctx, export_stmt, loc, assoc)
       .into_iter()
       .collect(),
     Stmt::ExportDefaultExpr(mut expr) => {
@@ -747,18 +747,26 @@ fn strip_import(
     let pat = take_pat(&mut default.stx.pat);
     default.stx.pat = strip_pat(ctx, pat);
   }
-  if import_stmt.stx.default.is_none() && import_stmt.stx.names.is_none() {
-    if was_side_effect_only {
-      Some(new_node(loc, assoc, Stmt::Import(import_stmt)))
-    } else {
-      None
-    }
+  let keep_import = if import_stmt.stx.default.is_none() && import_stmt.stx.names.is_none() {
+    // Preserve true side-effect imports:
+    // - `import "side";`
+    // - `import {} from "side";`
+    // while still removing imports that became empty after stripping type-only specifiers.
+    was_side_effect_only
   } else {
-    Some(new_node(loc, assoc, Stmt::Import(import_stmt)))
+    true
+  };
+  if !keep_import {
+    return None;
   }
+  if let Some(attrs) = import_stmt.stx.attributes.take() {
+    import_stmt.stx.attributes = Some(strip_expr(ctx, attrs));
+  }
+  Some(new_node(loc, assoc, Stmt::Import(import_stmt)))
 }
 
 fn strip_export_list(
+  ctx: &mut StripContext<'_>,
   export_stmt: Node<ExportListStmt>,
   loc: Loc,
   assoc: NodeAssocData,
@@ -774,14 +782,14 @@ fn strip_export_list(
       for name in names.iter_mut() {
         name.stx.type_only = false;
       }
-      if names.is_empty() {
-        if was_empty && export_stmt.stx.from.is_some() {
-          return Some(new_node(loc, assoc, Stmt::ExportList(export_stmt)));
-        }
+      if names.is_empty() && !(was_empty && export_stmt.stx.from.is_some()) {
         return None;
       }
     }
     ExportNames::All(_) => {}
+  }
+  if let Some(attrs) = export_stmt.stx.attributes.take() {
+    export_stmt.stx.attributes = Some(strip_expr(ctx, attrs));
   }
   Some(new_node(loc, assoc, Stmt::ExportList(export_stmt)))
 }

@@ -1,4 +1,4 @@
-use emit_js::{ts_type_to_string, EmitMode};
+use emit_js::{emit_template_literal_segment, ts_type_to_string, EmitMode};
 use parse_js::ast::node::Node;
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stx::TopLevel;
@@ -66,16 +66,19 @@ fn push_entity_name(out: &mut String, name: &TypeEntityName) {
 }
 
 fn expected_output(template: &TypeTemplateLiteral) -> String {
-  let mut out = String::new();
-  out.push_str(&template.head);
+  let mut out = Vec::new();
+  out.push(b'`');
 
+  emit_template_literal_segment(&mut out, &template.head);
   for span in &template.spans {
-    out.push_str(&type_expr_to_string(&span.stx.type_expr.stx));
-    out.push('}');
-    out.push_str(&span.stx.literal);
+    out.extend_from_slice(b"${");
+    out.extend_from_slice(type_expr_to_string(&span.stx.type_expr.stx).as_bytes());
+    out.push(b'}');
+    emit_template_literal_segment(&mut out, &span.stx.literal);
   }
 
-  out
+  out.push(b'`');
+  String::from_utf8(out).expect("expected output is UTF-8")
 }
 
 fn assert_roundtrip(source: &str) {

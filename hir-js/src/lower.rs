@@ -6,10 +6,10 @@ use crate::hir::{
   ExportKind, ExportNamed, ExportSpecifier, Expr, ExprKind, FileKind, ForHead, ForInit,
   FunctionBody, FunctionData, HirFile, Import, ImportBinding, ImportEquals, ImportEqualsTarget,
   ImportEs, ImportKind, ImportNamed, JsxAttr, JsxAttrValue, JsxChild, JsxElement, JsxElementName,
-  JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr, ModuleSpecifier,
-  ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat, PatKind, Stmt,
-  StmtKind, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp, VarDecl,
-  VarDeclKind, VarDeclarator,
+  JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr, ModuleAttributes,
+  ModuleSpecifier, ObjectKey, ObjectLiteral, ObjectPat, ObjectPatProp, ObjectProperty, Param, Pat,
+  PatKind, Stmt, StmtKind, SwitchCase, TemplateLiteral, TemplateLiteralSpan, UnaryOp, UpdateOp,
+  VarDecl, VarDeclKind, VarDeclarator,
 };
 use crate::ids::{
   BodyId, BodyPath, DefId, DefKind, DefPath, ExportId, ExportSpecifierId, ExprId, ImportId,
@@ -716,8 +716,11 @@ pub fn lower_file_with_diagnostics_with_cancellation(
     &def_lookup,
     &defs,
     &id_to_index,
-    &bodies,
-    &body_index,
+    &mut bodies,
+    &mut body_index,
+    &mut body_ids,
+    &mut allocated_body_ids,
+    &mut types,
     &mut span_map,
     &mut ctx,
   );
@@ -5069,6 +5072,7 @@ fn push_named_export(
     span,
     kind: ExportKind::Named(ExportNamed {
       source: None,
+      attributes: None,
       specifiers: vec![ExportSpecifier {
         id: spec_id,
         local: name_id,
@@ -5094,14 +5098,53 @@ fn body_by_id<'a>(
     .map(Arc::as_ref)
 }
 
+fn lower_module_item_attributes(
+  attrs: &Node<AstExpr>,
+  disambiguator: u32,
+  names: &mut NameInterner,
+  def_lookup: &DefLookup,
+  types: &mut crate::hir::TypeArenasByDef,
+  bodies: &mut Vec<Arc<Body>>,
+  body_ids: &mut Vec<BodyId>,
+  body_index: &mut BTreeMap<BodyId, usize>,
+  allocated_body_ids: &mut BTreeMap<u32, BodyPath>,
+  span_map: &mut SpanMap,
+  ctx: &mut LoweringContext,
+) -> ModuleAttributes {
+  let span = ctx.to_range(attrs.loc);
+  let body_id = allocate_body_id(
+    BodyPath::new(DefId(ctx.file.0), BodyKind::Unknown, disambiguator),
+    allocated_body_ids,
+  );
+  let mut builder = BodyBuilder::new(
+    DefId(u32::MAX),
+    span,
+    body_id,
+    BodyKind::Unknown,
+    def_lookup,
+    names,
+    types,
+    span_map,
+  );
+  let expr = lower_expr(attrs, &mut builder, ctx);
+  let idx = bodies.len();
+  body_ids.push(body_id);
+  body_index.insert(body_id, idx);
+  bodies.push(Arc::new(builder.finish_with_id(body_id)));
+  ModuleAttributes { body: body_id, expr, span }
+}
+
 fn lower_module_items(
   module_items: Vec<ModuleItem<'_>>,
   names: &mut NameInterner,
   def_lookup: &DefLookup,
   defs: &[DefData],
   _def_index: &BTreeMap<DefId, usize>,
-  bodies: &[Arc<Body>],
-  body_index: &BTreeMap<BodyId, usize>,
+  bodies: &mut Vec<Arc<Body>>,
+  body_index: &mut BTreeMap<BodyId, usize>,
+  body_ids: &mut Vec<BodyId>,
+  allocated_body_ids: &mut BTreeMap<u32, BodyPath>,
+  types: &mut crate::hir::TypeArenasByDef,
   span_map: &mut SpanMap,
   ctx: &mut LoweringContext,
 ) -> (Vec<Import>, Vec<Export>) {
@@ -5168,11 +5211,31 @@ fn lower_module_items(
           value: import.stx.module.clone(),
           span: item.span,
         };
+        let attributes = import
+          .stx
+          .attributes
+          .as_ref()
+          .map(|attrs| {
+            lower_module_item_attributes(
+              attrs,
+              item.span.start,
+              names,
+              def_lookup,
+              types,
+              bodies,
+              body_ids,
+              body_index,
+              allocated_body_ids,
+              span_map,
+              ctx,
+            )
+          });
         imports.push(Import {
           id: ImportId(next_import),
           span: item.span,
           kind: ImportKind::Es(ImportEs {
             specifier,
+            attributes,
             is_type_only: import.stx.type_only,
             default,
             namespace,
@@ -5212,6 +5275,7 @@ fn lower_module_items(
           span: item.span,
           kind: ImportKind::Es(ImportEs {
             specifier,
+            attributes: None,
             is_type_only: true,
             default: None,
             namespace: None,
@@ -5263,6 +5327,25 @@ fn lower_module_items(
           value: s.clone(),
           span: item.span,
         });
+        let attributes = export
+          .stx
+          .attributes
+          .as_ref()
+          .map(|attrs| {
+            lower_module_item_attributes(
+              attrs,
+              item.span.start,
+              names,
+              def_lookup,
+              types,
+              bodies,
+              body_ids,
+              body_index,
+              allocated_body_ids,
+              span_map,
+              ctx,
+            )
+          });
         match &export.stx.names {
           ExportNames::All(alias) => {
             let alias = alias.as_ref().map(|a| ExportAlias {
@@ -5277,6 +5360,7 @@ fn lower_module_items(
                   value: "".into(),
                   span: item.span,
                 }),
+                attributes,
                 alias,
                 is_type_only: export.stx.type_only,
               }),
@@ -5306,6 +5390,7 @@ fn lower_module_items(
               span: item.span,
               kind: ExportKind::Named(ExportNamed {
                 source,
+                attributes,
                 specifiers: specs,
                 is_type_only: export.stx.type_only,
               }),
@@ -5344,6 +5429,7 @@ fn lower_module_items(
           span: item.span,
           kind: ExportKind::Named(ExportNamed {
             source,
+            attributes: None,
             specifiers: specs,
             is_type_only: true,
           }),
@@ -5510,6 +5596,7 @@ fn lower_module_items(
               span: decl.span,
               kind: ExportKind::Named(ExportNamed {
                 source: None,
+                attributes: None,
                 specifiers,
                 is_type_only: decl.type_only,
               }),

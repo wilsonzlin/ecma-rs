@@ -60,6 +60,13 @@ pub struct ModuleSpecifier {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ModuleAttributes {
+  pub body: BodyId,
+  pub expr: ExprId,
+  pub span: TextRange,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Import {
   pub id: ImportId,
   pub span: TextRange,
@@ -75,6 +82,7 @@ pub enum ImportKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImportEs {
   pub specifier: ModuleSpecifier,
+  pub attributes: Option<ModuleAttributes>,
   pub is_type_only: bool,
   pub default: Option<ImportBinding>,
   pub namespace: Option<ImportBinding>,
@@ -139,6 +147,7 @@ pub enum ExportKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportNamed {
   pub source: Option<ModuleSpecifier>,
+  pub attributes: Option<ModuleAttributes>,
   pub specifiers: Vec<ExportSpecifier>,
   pub is_type_only: bool,
 }
@@ -156,6 +165,7 @@ pub struct ExportSpecifier {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExportAll {
   pub source: ModuleSpecifier,
+  pub attributes: Option<ModuleAttributes>,
   pub alias: Option<ExportAlias>,
   pub is_type_only: bool,
 }

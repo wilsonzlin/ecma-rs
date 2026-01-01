@@ -15,8 +15,8 @@ use hir_js::{
   ExportNamed, Expr, ExprId, ExprKind, FunctionBody, FunctionData, Import, ImportBinding,
   ImportEqualsTarget, ImportEs, ImportKind, JsxAttr, JsxAttrValue, JsxChild, JsxElement,
   JsxElementName, JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr,
-  NameId, ObjectKey, ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt, StmtId,
-  StmtKind, TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
+  ModuleAttributes, NameId, ObjectKey, ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind,
+  Stmt, StmtId, StmtKind, TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
 };
 use parse_js::operator::{OperatorName, OPERATORS};
 use std::fmt::Write;
@@ -225,6 +225,14 @@ fn emit_import(em: &mut Emitter, ctx: &HirContext<'_>, import: &Import) -> EmitR
   }
 }
 
+fn emit_module_attributes(em: &mut Emitter, ctx: &HirContext<'_>, attrs: &ModuleAttributes) -> EmitResult {
+  em.write_keyword("with");
+  let body = ctx
+    .body(attrs.body)
+    .ok_or_else(|| EmitError::unsupported("module attributes body missing"))?;
+  emit_expr_with_min_prec(em, ctx, body, attrs.expr, Prec::LOWEST)
+}
+
 fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> EmitResult {
   // Type-only imports do not produce runtime code after type erasure.
   if es.is_type_only {
@@ -270,6 +278,9 @@ fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> Emit
     em.write_keyword("from");
   }
   emit_string(em, &es.specifier.value);
+  if let Some(attrs) = &es.attributes {
+    emit_module_attributes(em, ctx, attrs)?;
+  }
   em.write_semicolon();
   Ok(())
 }
@@ -350,6 +361,9 @@ fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed
         if named.specifiers.is_empty() {
           em.write_keyword("import");
           emit_string(em, &source.value);
+          if let Some(attrs) = &named.attributes {
+            emit_module_attributes(em, ctx, attrs)?;
+          }
           em.write_semicolon();
         }
       }
@@ -374,6 +388,9 @@ fn emit_export_named(em: &mut Emitter, ctx: &HirContext<'_>, named: &ExportNamed
   if let Some(source) = &named.source {
     em.write_keyword("from");
     emit_string(em, &source.value);
+    if let Some(attrs) = &named.attributes {
+      emit_module_attributes(em, ctx, attrs)?;
+    }
   }
   em.write_semicolon();
   Ok(())
@@ -388,6 +405,9 @@ fn emit_export_all(em: &mut Emitter, ctx: &HirContext<'_>, all: &ExportAll) -> E
   }
   em.write_keyword("from");
   emit_string(em, &all.source.value);
+  if let Some(attrs) = &all.attributes {
+    emit_module_attributes(em, ctx, attrs)?;
+  }
   em.write_semicolon();
   Ok(())
 }

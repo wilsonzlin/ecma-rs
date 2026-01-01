@@ -104,6 +104,10 @@ fn roundtrip_matrix() {
       FileKind::Tsx,
       "export default function App(){return <><div>{value}</div></>}",
     ),
+    (
+      FileKind::Js,
+      "import * as ns from \"pkg\" with { type: \"json\" };export { a as b } from \"pkg\" with { type: \"json\" };",
+    ),
   ];
   for (kind, case) in cases {
     roundtrip(kind, case);

@@ -1,3 +1,4 @@
+use crate::escape::emit_template_literal_segment;
 use crate::{EmitMode, EmitOptions, EmitResult, Emitter};
 use parse_js::ast::expr::Expr;
 use parse_js::ast::expr::ImportExpr;
@@ -775,12 +776,23 @@ impl<'a> TypeEmitter<'a> {
 
   fn emit_template_literal(&mut self, template: &Node<TypeTemplateLiteral>) -> EmitResult {
     let template = template.stx.as_ref();
-    self.em.write_str(&template.head);
+
+    self.em.write_raw_byte(b'`');
+
+    let mut buf = Vec::new();
+    emit_template_literal_segment(&mut buf, &template.head);
+    self.em.write_raw_str(std::str::from_utf8(&buf).expect("template literal segment is UTF-8"));
+
     for span in &template.spans {
+      self.em.write_raw_str("${");
       self.emit_type_expr_with_prec(&span.stx.type_expr, TypePrec::ArrowOrConditional)?;
-      self.em.write_punct("}");
-      self.em.write_str(&span.stx.literal);
+      self.em.write_raw_byte(b'}');
+      buf.clear();
+      emit_template_literal_segment(&mut buf, &span.stx.literal);
+      self.em.write_raw_str(std::str::from_utf8(&buf).expect("template literal segment is UTF-8"));
     }
+
+    self.em.write_raw_byte(b'`');
     Ok(())
   }
 

@@ -84,6 +84,7 @@ pub use hir::JsxName;
 pub use hir::Literal;
 pub use hir::LowerResult;
 pub use hir::MemberExpr;
+pub use hir::ModuleAttributes;
 pub use hir::ModuleSpecifier;
 pub use hir::ObjectKey;
 pub use hir::ObjectLiteral;
