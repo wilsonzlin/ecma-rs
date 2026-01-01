@@ -746,3 +746,47 @@ const bad = <Foo x={1} managed={123} />;
     "expected a type mismatch diagnostic for managed, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn element_class_filters_invalid_class_components() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+  interface ElementClass { render(): Element }
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+interface FooInstance { props: { x: number } }
+declare const Foo: { new (props: { x: number }): FooInstance };
+const el = <Foo x={1} />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx)
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::NO_OVERLOAD.as_str(),
+    "expected NO_OVERLOAD, got {diagnostics:?}"
+  );
+}

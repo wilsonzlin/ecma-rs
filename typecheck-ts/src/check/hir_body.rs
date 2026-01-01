@@ -631,6 +631,7 @@ pub fn check_body_with_expander(
     type_resolver,
     jsx_mode,
     jsx_element_ty: None,
+    jsx_element_class_ty: None,
     jsx_intrinsic_elements_ty: None,
     jsx_intrinsic_attributes_ty: None,
     jsx_intrinsic_class_attributes_def: None,
@@ -741,6 +742,7 @@ struct Checker<'a> {
   type_resolver: Option<Arc<dyn TypeResolver>>,
   jsx_mode: Option<JsxMode>,
   jsx_element_ty: Option<TypeId>,
+  jsx_element_class_ty: Option<TypeId>,
   jsx_intrinsic_elements_ty: Option<TypeId>,
   jsx_intrinsic_attributes_ty: Option<TypeId>,
   jsx_intrinsic_class_attributes_def: Option<Option<DefId>>,
@@ -2149,6 +2151,11 @@ impl<'a> Checker<'a> {
       self.store.intern_type(TypeKind::Object(obj))
     };
 
+    let element_class_ty = is_construct.then(|| self.jsx_element_class_type());
+    let enforce_element_class = element_class_ty.is_some_and(|ty| {
+      !matches!(self.store.type_kind(ty), TypeKind::Any | TypeKind::Unknown)
+    });
+
     let args = [actual_props.ty];
     let contextual_return_ty = contextual_return.then_some(element_ty);
     let mut filtered_props: Vec<TypeId> = Vec::new();
@@ -2163,6 +2170,14 @@ impl<'a> Checker<'a> {
         let mut substituter = Substituter::new(Arc::clone(&self.store), inference.substitutions);
         props_ty = substituter.substitute_type(props_ty);
         ret_ty = substituter.substitute_type(ret_ty);
+      }
+      if enforce_element_class
+        && !matches!(self.store.type_kind(ret_ty), TypeKind::Any | TypeKind::Unknown)
+      {
+        let class_ty = element_class_ty.expect("enforced element class type");
+        if !self.relate.is_assignable(ret_ty, class_ty) {
+          continue;
+        }
       }
       if is_construct {
         if let Some(attrs_prop) = self.jsx_element_attributes_prop_key() {
@@ -2183,6 +2198,19 @@ impl<'a> Checker<'a> {
       if contextual_return_ty.is_some() && self.relate.is_assignable(ret_ty, element_ty) {
         filtered_props.push(props_ty);
       }
+    }
+    if enforce_element_class && all_props.is_empty() {
+      let class_ty = element_class_ty.expect("enforced element class type");
+      self.diagnostics.push(
+        codes::NO_OVERLOAD
+          .error("JSX class component does not satisfy JSX.ElementClass", span)
+          .with_note(format!(
+            "expected JSX.ElementClass {}, got component type {}",
+            TypeDisplay::new(self.store.as_ref(), class_ty),
+            TypeDisplay::new(self.store.as_ref(), component_ty)
+          )),
+      );
+      return;
     }
     let mut props = if contextual_return_ty.is_some() && !filtered_props.is_empty() {
       filtered_props
@@ -2324,6 +2352,18 @@ impl<'a> Checker<'a> {
     }
     let ty = resolved.unwrap_or(prim.unknown);
     self.jsx_element_ty = Some(ty);
+    ty
+  }
+
+  fn jsx_element_class_type(&mut self) -> TypeId {
+    if let Some(ty) = self.jsx_element_class_ty {
+      return ty;
+    }
+    let prim = self.store.primitive_ids();
+    let ty = self
+      .resolve_type_ref(&["JSX", "ElementClass"])
+      .unwrap_or(prim.unknown);
+    self.jsx_element_class_ty = Some(ty);
     ty
   }
 
