@@ -4,16 +4,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tempfile::tempdir;
-use typecheck_ts_harness::build_filter;
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
-use typecheck_ts_harness::FailOn;
 use typecheck_ts_harness::JsonReport;
 use typecheck_ts_harness::TestOutcome;
-use typecheck_ts_harness::DEFAULT_EXTENSIONS;
 
 const HARNESS_SLEEP_ENV: &str = "HARNESS_SLEEP_MS_PER_TEST";
+
+fn conformance_options(root: PathBuf) -> ConformanceOptions {
+  let mut options = ConformanceOptions::new(root);
+  options.compare = CompareMode::None;
+  options.timeout = Duration::from_secs(2);
+  options.allow_mismatches = true;
+  options
+}
 
 fn write_fixtures() -> (tempfile::TempDir, PathBuf) {
   let dir = tempdir().expect("tempdir");
@@ -87,27 +92,7 @@ fn normalize_report(report: &mut JsonReport) {
 fn smoke_runs_on_small_fixtures() {
   let (_dir, root) = write_fixtures();
 
-  let options = ConformanceOptions {
-    root: root.clone(),
-    filter: build_filter(None).unwrap(),
-    filter_pattern: None,
-    shard: None,
-    json: false,
-    update_snapshots: false,
-    compare: CompareMode::None,
-    node_path: "node".into(),
-    span_tolerance: 0,
-    timeout: Duration::from_secs(2),
-    trace: false,
-    profile: false,
-    manifest: None,
-    fail_on: FailOn::New,
-    allow_mismatches: true,
-    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-    allow_empty: false,
-    profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
-    jobs: 1,
-  };
+  let options = conformance_options(root);
 
   let report = run_conformance(options).expect("run_conformance");
   assert_eq!(report.summary.total, 3);
@@ -121,30 +106,7 @@ fn smoke_runs_on_small_fixtures() {
 fn repeated_runs_produce_identical_reports() {
   let (_dir, root) = write_fixtures();
 
-  let options = ConformanceOptions {
-    root: root.clone(),
-    filter: build_filter(None).unwrap(),
-    filter_pattern: None,
-    shard: None,
-    json: false,
-    update_snapshots: false,
-    compare: CompareMode::None,
-    node_path: "node".into(),
-    span_tolerance: 0,
-    timeout: Duration::from_secs(2),
-    trace: false,
-    profile: false,
-    manifest: None,
-    fail_on: FailOn::New,
-    allow_mismatches: true,
-    extensions: typecheck_ts_harness::DEFAULT_EXTENSIONS
-      .iter()
-      .map(|s| s.to_string())
-      .collect(),
-    allow_empty: false,
-    profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
-    jobs: 1,
-  };
+  let options = conformance_options(root);
 
   let mut first = run_conformance(options.clone()).expect("run_conformance");
   let mut second = run_conformance(options).expect("run_conformance");
@@ -289,27 +251,8 @@ fn fail_on_new_ignores_manifested_expectations() {
   let manifest =
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/conformance_manifest.toml");
 
-  let options = ConformanceOptions {
-    root: root.clone(),
-    filter: build_filter(None).unwrap(),
-    filter_pattern: None,
-    shard: None,
-    json: false,
-    update_snapshots: false,
-    compare: CompareMode::None,
-    node_path: "node".into(),
-    span_tolerance: 0,
-    timeout: Duration::from_secs(2),
-    trace: false,
-    profile: false,
-    manifest: Some(manifest),
-    fail_on: FailOn::New,
-    allow_mismatches: true,
-    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-    allow_empty: false,
-    profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
-    jobs: 1,
-  };
+  let mut options = conformance_options(root);
+  options.manifest = Some(manifest);
 
   let report = run_conformance(options).expect("run_conformance");
   let parse_expectation = report
@@ -362,27 +305,10 @@ fn json_results_are_stably_ordered_with_parallel_execution() {
   let _guard = EnvGuard::set(HARNESS_SLEEP_ENV, "parse_error=50,multi=25");
 
   let jobs = std::cmp::max(2, num_cpus::get());
-  let options = ConformanceOptions {
-    root: root.clone(),
-    filter: build_filter(None).unwrap(),
-    filter_pattern: None,
-    shard: None,
-    json: true,
-    update_snapshots: false,
-    compare: CompareMode::None,
-    node_path: "node".into(),
-    span_tolerance: 0,
-    timeout: Duration::from_secs(5),
-    trace: false,
-    profile: false,
-    manifest: None,
-    fail_on: FailOn::New,
-    allow_mismatches: true,
-    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-    allow_empty: false,
-    profile_out: typecheck_ts_harness::DEFAULT_PROFILE_OUT.into(),
-    jobs,
-  };
+  let mut options = conformance_options(root);
+  options.json = true;
+  options.timeout = Duration::from_secs(5);
+  options.jobs = jobs;
 
   let first = run_conformance(options.clone()).expect("run_conformance first");
   let second = run_conformance(options).expect("run_conformance second");

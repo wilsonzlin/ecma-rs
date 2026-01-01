@@ -1,51 +1,30 @@
+mod common;
+
 use std::path::PathBuf;
 use std::time::Duration;
 use typecheck_ts_harness::diagnostic_norm::sort_diagnostics;
 use typecheck_ts_harness::runner::EngineStatus;
-use typecheck_ts_harness::tsc::{node_available, typescript_available};
-use typecheck_ts_harness::{
-  build_filter, run_conformance, CompareMode, ConformanceOptions, FailOn, DEFAULT_EXTENSIONS,
-  DEFAULT_PROFILE_OUT,
-};
+use typecheck_ts_harness::{run_conformance, CompareMode, ConformanceOptions};
 
 #[test]
 fn conformance_tsc_engine_is_ok_and_sorted() {
-  let node_path = PathBuf::from("node");
-  if !node_available(&node_path) {
-    eprintln!("skipping conformance tsc test: node not available");
-    return;
-  }
-  if !typescript_available(&node_path) {
-    eprintln!("skipping conformance tsc test: typescript not available (run `cd typecheck-ts-harness && npm ci`)");
-    return;
-  }
+  let node_path = match common::node_path_or_skip("conformance tsc test") {
+    Some(path) => path,
+    None => return,
+  };
 
   let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     .join("fixtures")
     .join("conformance-mini");
 
-  let report = run_conformance(ConformanceOptions {
-    root,
-    filter: build_filter(None).unwrap(),
-    filter_pattern: None,
-    shard: None,
-    json: false,
-    update_snapshots: false,
-    timeout: Duration::from_secs(5),
-    trace: false,
-    profile: false,
-    profile_out: DEFAULT_PROFILE_OUT.into(),
-    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-    allow_empty: false,
-    compare: CompareMode::Tsc,
-    node_path,
-    span_tolerance: 0,
-    allow_mismatches: true,
-    jobs: 2,
-    manifest: None,
-    fail_on: FailOn::New,
-  })
-  .expect("run conformance");
+  let mut options = ConformanceOptions::new(root);
+  options.compare = CompareMode::Tsc;
+  options.node_path = node_path;
+  options.timeout = Duration::from_secs(5);
+  options.allow_mismatches = true;
+  options.jobs = 2;
+
+  let report = run_conformance(options).expect("run conformance");
 
   assert_eq!(report.summary.total, 5);
 

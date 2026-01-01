@@ -4,8 +4,7 @@ use std::time::Duration;
 use typecheck_ts::lib_support::{LibName, ModuleKind, ScriptTarget};
 use typecheck_ts_harness::runner::EngineStatus;
 use typecheck_ts_harness::{
-  build_filter, run_conformance, CompareMode, ConformanceOptions, FailOn, DEFAULT_EXTENSIONS,
-  DEFAULT_PROFILE_OUT,
+  run_conformance, CompareMode, ConformanceOptions,
 };
 
 fn conformance_options(compare: CompareMode) -> ConformanceOptions {
@@ -13,27 +12,11 @@ fn conformance_options(compare: CompareMode) -> ConformanceOptions {
     .join("fixtures")
     .join("conformance-mini");
 
-  ConformanceOptions {
-    root,
-    filter: build_filter(None).unwrap(),
-    filter_pattern: None,
-    shard: None,
-    json: false,
-    update_snapshots: false,
-    compare,
-    node_path: "node".into(),
-    span_tolerance: 0,
-    timeout: Duration::from_secs(5),
-    trace: false,
-    profile: false,
-    profile_out: DEFAULT_PROFILE_OUT.into(),
-    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-    allow_empty: false,
-    allow_mismatches: true,
-    jobs: 1,
-    manifest: None,
-    fail_on: FailOn::New,
-  }
+  let mut options = ConformanceOptions::new(root);
+  options.compare = compare;
+  options.timeout = Duration::from_secs(5);
+  options.allow_mismatches = true;
+  options
 }
 
 #[test]

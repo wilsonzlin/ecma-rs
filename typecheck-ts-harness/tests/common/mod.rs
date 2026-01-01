@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use typecheck_ts_harness::tsc::{node_available, typescript_available, TscRunner};
 
-pub fn runner_or_skip(context: &str) -> Option<TscRunner> {
+pub fn node_path_or_skip(context: &str) -> Option<PathBuf> {
   let node_path = PathBuf::from("node");
 
   if !node_available(&node_path) {
@@ -15,6 +15,13 @@ pub fn runner_or_skip(context: &str) -> Option<TscRunner> {
     );
     return None;
   }
+
+  Some(node_path)
+}
+
+#[allow(dead_code)]
+pub fn runner_or_skip(context: &str) -> Option<TscRunner> {
+  let node_path = node_path_or_skip(context)?;
 
   match TscRunner::new(node_path) {
     Ok(runner) => Some(runner),

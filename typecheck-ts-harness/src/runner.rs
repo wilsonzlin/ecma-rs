@@ -75,6 +75,32 @@ pub struct ConformanceOptions {
   pub fail_on: FailOn,
 }
 
+impl ConformanceOptions {
+  pub fn new(root: PathBuf) -> Self {
+    Self {
+      root,
+      filter: Filter::All,
+      filter_pattern: None,
+      shard: None,
+      json: false,
+      update_snapshots: false,
+      timeout: Duration::from_secs(10),
+      trace: false,
+      profile: false,
+      profile_out: crate::DEFAULT_PROFILE_OUT.into(),
+      extensions: Vec::new(),
+      allow_empty: false,
+      compare: CompareMode::Auto,
+      node_path: "node".into(),
+      span_tolerance: 0,
+      allow_mismatches: false,
+      jobs: 1,
+      manifest: None,
+      fail_on: FailOn::New,
+    }
+  }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct OutcomeCounts {
   #[serde(rename = "match")]

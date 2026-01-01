@@ -2,12 +2,9 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::tempdir;
-use typecheck_ts_harness::build_filter;
 use typecheck_ts_harness::run_conformance;
 use typecheck_ts_harness::CompareMode;
 use typecheck_ts_harness::ConformanceOptions;
-use typecheck_ts_harness::FailOn;
-use typecheck_ts_harness::DEFAULT_EXTENSIONS;
 
 #[test]
 fn conformance_profile_emits_actionable_json() {
@@ -15,27 +12,11 @@ fn conformance_profile_emits_actionable_json() {
   let dir = tempdir().expect("tempdir");
   let profile_out = dir.path().join("profile.json");
 
-  let options = ConformanceOptions {
-    root: suite,
-    filter: build_filter(None).unwrap(),
-    filter_pattern: None,
-    shard: None,
-    json: false,
-    update_snapshots: false,
-    timeout: Duration::from_secs(5),
-    trace: false,
-    profile: true,
-    profile_out: profile_out.clone(),
-    extensions: DEFAULT_EXTENSIONS.iter().map(|s| s.to_string()).collect(),
-    allow_empty: false,
-    compare: CompareMode::None,
-    node_path: "node".into(),
-    span_tolerance: 0,
-    allow_mismatches: false,
-    jobs: 1,
-    manifest: None,
-    fail_on: FailOn::New,
-  };
+  let mut options = ConformanceOptions::new(suite);
+  options.compare = CompareMode::None;
+  options.timeout = Duration::from_secs(5);
+  options.profile = true;
+  options.profile_out = profile_out.clone();
 
   run_conformance(options).expect("run_conformance");
 

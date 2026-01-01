@@ -173,10 +173,7 @@ fn main() -> ExitCode {
           .map(|s| s.trim().to_string())
           .filter(|s| !s.is_empty())
           .collect(),
-        None => typecheck_ts_harness::DEFAULT_EXTENSIONS
-          .iter()
-          .map(|s| s.to_string())
-          .collect(),
+        None => Vec::new(),
       };
 
       let options = ConformanceOptions {
