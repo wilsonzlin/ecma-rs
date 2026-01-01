@@ -14,9 +14,7 @@ use serde_json::Value;
 #[cfg(feature = "with-node")]
 use std::collections::HashMap;
 #[cfg(feature = "with-node")]
-use typecheck_ts_harness::tsc::{
-  TscDiagnostics, TscRequest, TscRunner,
-};
+use typecheck_ts_harness::tsc::{TscDiagnostics, TscRequest, TscRunner};
 
 #[derive(Clone)]
 struct SimpleHost {

@@ -171,11 +171,7 @@ fn resolve_as_file_or_directory_inner(
   None
 }
 
-fn resolve_via_package_json(
-  files: &HarnessFileSet,
-  dir: &str,
-  depth: usize,
-) -> Option<FileKey> {
+fn resolve_via_package_json(files: &HarnessFileSet, dir: &str, depth: usize) -> Option<FileKey> {
   let package_json = normalize_name(&virtual_join(dir, "package.json"));
   let package_key = files.resolve(&package_json)?;
   let raw = files.content(&package_key)?;
@@ -287,7 +283,10 @@ fn resolve_export_target(value: &Value, depth: usize) -> Option<String> {
   }
 }
 
-fn best_exports_subpath_pattern(map: &Map<String, Value>, subpath: &str) -> Option<(String, String)> {
+fn best_exports_subpath_pattern(
+  map: &Map<String, Value>,
+  subpath: &str,
+) -> Option<(String, String)> {
   let mut best_key: Option<String> = None;
   let mut best_star: Option<String> = None;
 

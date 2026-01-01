@@ -21,8 +21,10 @@ pub(crate) fn is_identifier_name_token(name: &str) -> bool {
     return false;
   }
 
-  matches!(token.typ, TT::Identifier | TT::LiteralFalse | TT::LiteralTrue | TT::LiteralNull)
-    || token.typ.is_keyword()
+  matches!(
+    token.typ,
+    TT::Identifier | TT::LiteralFalse | TT::LiteralTrue | TT::LiteralNull
+  ) || token.typ.is_keyword()
 }
 
 pub(crate) fn emit_identifier_name_or_string_literal(em: &mut Emitter, name: &str) {
@@ -32,4 +34,3 @@ pub(crate) fn emit_identifier_name_or_string_literal(em: &mut Emitter, name: &st
     em.write_string_literal(name);
   }
 }
-

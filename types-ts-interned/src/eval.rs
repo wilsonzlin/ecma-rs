@@ -321,25 +321,26 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
         let object = self.store.object(obj);
         let shape = self.store.shape(object.shape);
 
-        shape.properties.into_iter().any(|prop| {
-          self.has_free_type_param(prop.data.ty, bound, visited, depth + 1)
-        }) || shape
-          .indexers
+        shape
+          .properties
           .into_iter()
-          .any(|idxer| {
+          .any(|prop| self.has_free_type_param(prop.data.ty, bound, visited, depth + 1))
+          || shape.indexers.into_iter().any(|idxer| {
             self.has_free_type_param(idxer.key_type, bound, visited, depth + 1)
               || self.has_free_type_param(idxer.value_type, bound, visited, depth + 1)
           })
-          || shape.call_signatures.into_iter().any(|sig| {
-            self.signature_has_free_type_param(sig, bound, visited, depth + 1)
-          })
-          || shape.construct_signatures.into_iter().any(|sig| {
-            self.signature_has_free_type_param(sig, bound, visited, depth + 1)
-          })
+          || shape
+            .call_signatures
+            .into_iter()
+            .any(|sig| self.signature_has_free_type_param(sig, bound, visited, depth + 1))
+          || shape
+            .construct_signatures
+            .into_iter()
+            .any(|sig| self.signature_has_free_type_param(sig, bound, visited, depth + 1))
       }
-      TypeKind::Callable { overloads } => overloads.into_iter().any(|sig| {
-        self.signature_has_free_type_param(sig, bound, visited, depth + 1)
-      }),
+      TypeKind::Callable { overloads } => overloads
+        .into_iter()
+        .any(|sig| self.signature_has_free_type_param(sig, bound, visited, depth + 1)),
       TypeKind::Ref { args, .. } => args
         .into_iter()
         .any(|arg| self.has_free_type_param(arg, bound, visited, depth + 1)),

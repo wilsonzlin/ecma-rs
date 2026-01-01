@@ -893,7 +893,9 @@ fn rewrite_enum_member_refs(
             self.collect_var_declared_names_in_stmt(alt, out);
           }
         }
-        Stmt::While(while_stmt) => self.collect_var_declared_names_in_stmt(&while_stmt.stx.body, out),
+        Stmt::While(while_stmt) => {
+          self.collect_var_declared_names_in_stmt(&while_stmt.stx.body, out)
+        }
         Stmt::DoWhile(do_stmt) => self.collect_var_declared_names_in_stmt(&do_stmt.stx.body, out),
         Stmt::With(with_stmt) => self.collect_var_declared_names_in_stmt(&with_stmt.stx.body, out),
         Stmt::Label(label) => self.collect_var_declared_names_in_stmt(&label.stx.statement, out),
@@ -939,14 +941,24 @@ fn rewrite_enum_member_refs(
             }
           }
           Stmt::FunctionDecl(func_decl) => {
-            if let Some(name) = func_decl.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+            if let Some(name) = func_decl
+              .stx
+              .name
+              .as_ref()
+              .map(|name| name.stx.name.clone())
+            {
               if self.member_names.contains(&name) {
                 out.insert(name);
               }
             }
           }
           Stmt::ClassDecl(class_decl) => {
-            if let Some(name) = class_decl.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+            if let Some(name) = class_decl
+              .stx
+              .name
+              .as_ref()
+              .map(|name| name.stx.name.clone())
+            {
               if self.member_names.contains(&name) {
                 out.insert(name);
               }
@@ -1092,7 +1104,10 @@ fn rewrite_enum_member_refs(
             Stmt::VarDecl(decl)
               if matches!(
                 decl.stx.mode,
-                VarDeclMode::Const | VarDeclMode::Let | VarDeclMode::Using | VarDeclMode::AwaitUsing
+                VarDeclMode::Const
+                  | VarDeclMode::Let
+                  | VarDeclMode::Using
+                  | VarDeclMode::AwaitUsing
               ) =>
             {
               for declarator in &decl.stx.declarators {
@@ -1100,8 +1115,11 @@ fn rewrite_enum_member_refs(
               }
             }
             Stmt::FunctionDecl(func_decl) => {
-              if let Some(name) =
-                func_decl.stx.name.as_ref().map(|name| name.stx.name.clone())
+              if let Some(name) = func_decl
+                .stx
+                .name
+                .as_ref()
+                .map(|name| name.stx.name.clone())
               {
                 if self.member_names.contains(&name) {
                   scope.insert(name);
@@ -1109,8 +1127,11 @@ fn rewrite_enum_member_refs(
               }
             }
             Stmt::ClassDecl(class_decl) => {
-              if let Some(name) =
-                class_decl.stx.name.as_ref().map(|name| name.stx.name.clone())
+              if let Some(name) = class_decl
+                .stx
+                .name
+                .as_ref()
+                .map(|name| name.stx.name.clone())
               {
                 if self.member_names.contains(&name) {
                   scope.insert(name);
@@ -1293,7 +1314,9 @@ fn rewrite_enum_member_refs(
 
     fn rewrite_expr(&mut self, expr: &mut Node<Expr>) {
       if let Some(member) = match expr.stx.as_ref() {
-        Expr::Id(id) if self.member_names.contains(&id.stx.name) && !self.is_shadowed(&id.stx.name) => {
+        Expr::Id(id)
+          if self.member_names.contains(&id.stx.name) && !self.is_shadowed(&id.stx.name) =>
+        {
           Some(id.stx.name.clone())
         }
         _ => None,
@@ -1313,7 +1336,12 @@ fn rewrite_enum_member_refs(
           self.rewrite_func(&mut func_expr.stx.func.stx, func_name);
         }
         Expr::Class(class_expr) => {
-          if let Some(name) = class_expr.stx.name.as_ref().map(|name| name.stx.name.clone()) {
+          if let Some(name) = class_expr
+            .stx
+            .name
+            .as_ref()
+            .map(|name| name.stx.name.clone())
+          {
             if self.member_names.contains(&name) {
               let mut scope = HashSet::new();
               scope.insert(name);
@@ -1433,9 +1461,7 @@ fn rewrite_enum_member_refs(
         | Expr::LitRegex(_)
         | Expr::LitStr(_)
         | Expr::IdPat(_) => {}
-        Expr::TypeAssertion(_)
-        | Expr::NonNullAssertion(_)
-        | Expr::SatisfiesExpr(_) => {}
+        Expr::TypeAssertion(_) | Expr::NonNullAssertion(_) | Expr::SatisfiesExpr(_) => {}
       }
     }
   }

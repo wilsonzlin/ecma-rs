@@ -776,7 +776,10 @@ fn locals_do_not_affect_top_level_disambiguators() {
     .find(|d| d.path.kind == DefKind::VarDeclarator && d.span.start == variant_offset as u32)
     .expect("variant top-level x declarator");
 
-  assert_eq!(base_decl.path, variant_decl.path, "DefPath should remain stable");
+  assert_eq!(
+    base_decl.path, variant_decl.path,
+    "DefPath should remain stable"
+  );
   assert_eq!(base_decl.id, variant_decl.id, "DefId should remain stable");
 
   let func = variant

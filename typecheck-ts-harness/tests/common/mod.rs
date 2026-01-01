@@ -10,7 +10,9 @@ pub fn runner_or_skip(context: &str) -> Option<TscRunner> {
   }
 
   if !typescript_available(&node_path) {
-    eprintln!("skipping {context}: typescript not available (run `cd typecheck-ts-harness && npm ci`)");
+    eprintln!(
+      "skipping {context}: typescript not available (run `cd typecheck-ts-harness && npm ci`)"
+    );
     return None;
   }
 

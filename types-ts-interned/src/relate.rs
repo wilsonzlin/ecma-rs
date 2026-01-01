@@ -2204,7 +2204,14 @@ impl<'a> RelateCtx<'a> {
       } else {
         return RelationResult {
           result: false,
-          reason: self.join_reasons(record, key, children, false, Some("missing indexer".into()), depth),
+          reason: self.join_reasons(
+            record,
+            key,
+            children,
+            false,
+            Some("missing indexer".into()),
+            depth,
+          ),
         };
       }
     }
@@ -2413,7 +2420,14 @@ impl<'a> RelateCtx<'a> {
           PropKeyKind::Symbol => self.store.primitive_ids().symbol,
         };
         self
-          .relate_internal(key_ty, idx_key, RelationKind::Assignable, mode, false, depth)
+          .relate_internal(
+            key_ty,
+            idx_key,
+            RelationKind::Assignable,
+            mode,
+            false,
+            depth,
+          )
           .result
       }
     }

@@ -43,4 +43,3 @@ fn updating_snapshots_requires_tsc() {
     other => panic!("unexpected error: {other:?}"),
   }
 }
-

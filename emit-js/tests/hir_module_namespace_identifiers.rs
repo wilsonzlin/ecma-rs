@@ -15,8 +15,8 @@ fn syntax_value(source: &str) -> Value {
 }
 
 fn roundtrip(source: &str, expected: &str) {
-  let lowered =
-    lower_from_source_with_kind(FileKind::Ts, source).unwrap_or_else(|err| panic!("lower: {err:?}"));
+  let lowered = lower_from_source_with_kind(FileKind::Ts, source)
+    .unwrap_or_else(|err| panic!("lower: {err:?}"));
   let emitted =
     emit_hir_file_to_string(&lowered, EmitOptions::minified()).expect("emit lowered program");
   assert_eq!(emitted, expected);

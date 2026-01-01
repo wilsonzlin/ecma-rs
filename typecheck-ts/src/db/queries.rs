@@ -91,10 +91,18 @@ fn module_specifiers_for(db: &dyn Db, file: FileInput) -> Arc<[Arc<str>]> {
   let parsed = parse_for(db, file);
   let mut specs: Vec<Arc<str>> = Vec::new();
   if let Some(lowered) = lowered.lowered.as_deref() {
-    specs.extend(collect_module_specifiers(lowered).into_iter().map(|(spec, _)| spec));
+    specs.extend(
+      collect_module_specifiers(lowered)
+        .into_iter()
+        .map(|(spec, _)| spec),
+    );
   }
   if let Some(ast) = parsed.ast.as_deref() {
-    specs.extend(collect_type_only_module_specifiers_from_ast(ast).into_iter().map(|(s, _)| s));
+    specs.extend(
+      collect_type_only_module_specifiers_from_ast(ast)
+        .into_iter()
+        .map(|(s, _)| s),
+    );
   }
   specs.sort_unstable_by(|a, b| a.as_ref().cmp(b.as_ref()));
   specs.dedup();
@@ -1480,9 +1488,10 @@ fn collect_type_only_module_specifiers_from_ast(
 
   impl Collector {
     fn enter_type_import_node(&mut self, node: &TypeImportNode) {
-      self
-        .specs
-        .push((Arc::from(node.stx.module_specifier.clone()), node.loc.into()));
+      self.specs.push((
+        Arc::from(node.stx.module_specifier.clone()),
+        node.loc.into(),
+      ));
     }
 
     fn enter_type_query_node(&mut self, node: &TypeQueryNode) {

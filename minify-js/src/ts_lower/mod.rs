@@ -177,7 +177,10 @@ pub fn iife_stmt(
         pattern: Node::new(
           iife_loc,
           PatDecl {
-            pat: Node::new(iife_loc, Pat::Id(Node::new(iife_loc, IdPat { name: param }))),
+            pat: Node::new(
+              iife_loc,
+              Pat::Id(Node::new(iife_loc, IdPat { name: param })),
+            ),
           },
         ),
         type_annotation: None,
@@ -210,6 +213,11 @@ pub fn iife_stmt(
   // otherwise be parsed as a declaration.
   expr_stmt(
     iife_loc,
-    binary_expr(iife_loc, OperatorName::Comma, number(iife_loc, 0.0), call_expr),
+    binary_expr(
+      iife_loc,
+      OperatorName::Comma,
+      number(iife_loc, 0.0),
+      call_expr,
+    ),
   )
 }

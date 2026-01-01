@@ -235,22 +235,22 @@ fn emit_import_es(em: &mut Emitter, ctx: &HirContext<'_>, es: &ImportEs) -> Emit
       em.write_punct(",");
     }
     em.write_punct("{");
-      for (idx, spec) in named_specifiers.iter().enumerate() {
-        if idx > 0 {
-          em.write_punct(",");
-        }
-        let imported = ctx.name(spec.imported);
-        emit_identifier_name_or_string_literal(em, imported);
-        // String-literal module import names always require an explicit alias
-        // (`import { "a-b" as ... }`), even when the alias matches.
-        if spec.imported != spec.local || !is_identifier_name_token(imported) {
-          em.write_keyword("as");
-          emit_identifier_name_or_string_literal(em, ctx.name(spec.local));
-        }
+    for (idx, spec) in named_specifiers.iter().enumerate() {
+      if idx > 0 {
+        em.write_punct(",");
       }
-      em.write_punct("}");
-      wrote = true;
+      let imported = ctx.name(spec.imported);
+      emit_identifier_name_or_string_literal(em, imported);
+      // String-literal module import names always require an explicit alias
+      // (`import { "a-b" as ... }`), even when the alias matches.
+      if spec.imported != spec.local || !is_identifier_name_token(imported) {
+        em.write_keyword("as");
+        emit_identifier_name_or_string_literal(em, ctx.name(spec.local));
+      }
     }
+    em.write_punct("}");
+    wrote = true;
+  }
   if wrote {
     em.write_keyword("from");
   }
@@ -2021,12 +2021,12 @@ fn contextual_keyword_start_from_expr(
 ) -> Option<ContextualKeywordStart> {
   let expr = ctx.expr(body, expr_id);
   match &expr.kind {
-    ExprKind::Ident(name) => contextual_keyword_from_name(ctx.name(*name)).map(|kind| {
-      ContextualKeywordStart {
+    ExprKind::Ident(name) => {
+      contextual_keyword_from_name(ctx.name(*name)).map(|kind| ContextualKeywordStart {
         kind,
         next: NextTokenAfterKeyword::None,
-      }
-    }),
+      })
+    }
     ExprKind::Await { expr } => {
       if let Some(child_start) = contextual_keyword_start_from_expr(ctx, body, *expr) {
         if child_start.kind == ContextualKeyword::Using {
@@ -2120,12 +2120,12 @@ fn contextual_keyword_start_from_pat(
 ) -> Option<ContextualKeywordStart> {
   let pat = ctx.pat(body, pat_id);
   match &pat.kind {
-    PatKind::Ident(name) => contextual_keyword_from_name(ctx.name(*name)).map(|kind| {
-      ContextualKeywordStart {
+    PatKind::Ident(name) => {
+      contextual_keyword_from_name(ctx.name(*name)).map(|kind| ContextualKeywordStart {
         kind,
         next: NextTokenAfterKeyword::None,
-      }
-    }),
+      })
+    }
     PatKind::AssignTarget(expr) => contextual_keyword_start_from_expr(ctx, body, *expr),
     PatKind::Assign { target, .. } => contextual_keyword_start_from_pat(ctx, body, *target),
     PatKind::Rest(inner) => contextual_keyword_start_from_pat(ctx, body, **inner),
@@ -2152,7 +2152,9 @@ fn for_init_expr_needs_parens(ctx: &HirContext<'_>, body: &Body, expr_id: ExprId
     ContextualKeyword::AwaitUsing => true,
     ContextualKeyword::Let | ContextualKeyword::Using => matches!(
       start.next,
-      NextTokenAfterKeyword::Brace | NextTokenAfterKeyword::Bracket | NextTokenAfterKeyword::IdentLike
+      NextTokenAfterKeyword::Brace
+        | NextTokenAfterKeyword::Bracket
+        | NextTokenAfterKeyword::IdentLike
     ),
   })
 }

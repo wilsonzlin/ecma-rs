@@ -2463,7 +2463,9 @@ fn lower_jsx_attr_value(
     jsx::JsxAttrVal::Expression(expr) => {
       JsxAttrValue::Expression(lower_jsx_expr_container(expr, builder, ctx))
     }
-    jsx::JsxAttrVal::Element(elem) => JsxAttrValue::Element(lower_jsx_elem_as_expr(elem, builder, ctx)),
+    jsx::JsxAttrVal::Element(elem) => {
+      JsxAttrValue::Element(lower_jsx_elem_as_expr(elem, builder, ctx))
+    }
   }
 }
 
@@ -2473,7 +2475,9 @@ fn lower_jsx_child(
   ctx: &mut LoweringContext,
 ) -> JsxChild {
   match child {
-    jsx::JsxElemChild::Element(elem) => JsxChild::Element(lower_jsx_elem_as_expr(elem, builder, ctx)),
+    jsx::JsxElemChild::Element(elem) => {
+      JsxChild::Element(lower_jsx_elem_as_expr(elem, builder, ctx))
+    }
     jsx::JsxElemChild::Expr(expr) => JsxChild::Expr(lower_jsx_expr_container(expr, builder, ctx)),
     jsx::JsxElemChild::Text(text) => JsxChild::Text(text.stx.value.clone()),
   }

@@ -86,7 +86,10 @@ fn conditional_with_unsubstituted_type_param_is_deferred() {
   let default_expander = MockExpander::default();
   let mut eval = evaluator(store.clone(), &default_expander);
   let result = eval.evaluate(cond);
-  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+  assert!(matches!(
+    store.type_kind(result),
+    TypeKind::Conditional { .. }
+  ));
 }
 
 #[test]
@@ -105,7 +108,10 @@ fn conditional_with_unresolved_extends_type_param_is_deferred() {
   let default_expander = MockExpander::default();
   let mut eval = evaluator(store.clone(), &default_expander);
   let result = eval.evaluate(cond);
-  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+  assert!(matches!(
+    store.type_kind(result),
+    TypeKind::Conditional { .. }
+  ));
 }
 
 #[test]
@@ -130,7 +136,10 @@ fn conditional_with_wrapped_unresolved_type_param_is_deferred() {
   let default_expander = MockExpander::default();
   let mut eval = evaluator(store.clone(), &default_expander);
   let result = eval.evaluate(cond);
-  assert!(matches!(store.type_kind(result), TypeKind::Conditional { .. }));
+  assert!(matches!(
+    store.type_kind(result),
+    TypeKind::Conditional { .. }
+  ));
 }
 
 #[test]
@@ -460,9 +469,9 @@ fn distributive_conditional_substitutes_in_extends_per_member() {
     construct_signatures: Vec::new(),
     indexers: Vec::new(),
   });
-  let extends_ty = store.intern_type(TypeKind::Object(
-    store.intern_object(ObjectType { shape: extends_shape }),
-  ));
+  let extends_ty = store.intern_type(TypeKind::Object(store.intern_object(ObjectType {
+    shape: extends_shape,
+  })));
 
   let cond = store.intern_type(TypeKind::Conditional {
     check: param_ty,
