@@ -627,6 +627,74 @@ fn union_dedups_type_predicate_function_types_ignoring_param_names() {
 }
 
 #[test]
+fn union_dedups_duplicate_constructor_types() {
+  let result = lower_from_source(
+    "type A = (new (x: string) => Foo) | (new (y: string) => Foo);",
+  )
+  .expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::Constructor(_)
+  ));
+}
+
+#[test]
+fn union_dedups_duplicate_template_literal_types() {
+  let result = lower_from_source(r#"type A = `foo${string}` | `foo${string}`;"#).expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::TemplateLiteral(_)
+  ));
+}
+
+#[test]
+fn union_dedups_duplicate_mapped_types() {
+  let result =
+    lower_from_source("type A = { [K in keyof T]: T[K] } | { [K in keyof T]: T[K] };")
+      .expect("lower");
+  let (_, arenas, expr_id, _) = type_alias(&result, "A");
+  let mut ty = &arenas.type_exprs[expr_id.0 as usize].kind;
+  while let TypeExprKind::Parenthesized(inner) = ty {
+    ty = &arenas.type_exprs[inner.0 as usize].kind;
+  }
+
+  let members = match ty {
+    TypeExprKind::Union(members) => members.as_slice(),
+    other => panic!("expected union, got {other:?}"),
+  };
+
+  assert_eq!(members.len(), 1);
+  assert!(matches!(
+    arenas.type_exprs[members[0].0 as usize].kind,
+    TypeExprKind::Mapped(_)
+  ));
+}
+
+#[test]
 fn union_does_not_dedup_generic_function_types_with_different_bindings() {
   let result =
     lower_from_source("type T = string;\ntype A = (<T>(x: T) => void) | (<U>(x: T) => void);")
