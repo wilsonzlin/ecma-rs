@@ -422,3 +422,89 @@ const ok = <Foo.Bar x={1} />;
     "did not expect unknown identifiers, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn intrinsic_excess_props_are_reported() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), r#"const bad = <div foo="x" />;"#);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::EXCESS_PROPERTY.as_str()),
+    "expected an excess property diagnostic, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn component_without_props_param_allows_empty_props() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+function Foo() { return null as any; }
+const ok = <Foo />;
+const bad = <Foo x={1} />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert_eq!(
+    diagnostics.len(),
+    1,
+    "expected one diagnostic, got {diagnostics:?}"
+  );
+  assert_eq!(
+    diagnostics[0].code.as_str(),
+    codes::EXCESS_PROPERTY.as_str(),
+    "expected EXCESS_PROPERTY, got {diagnostics:?}"
+  );
+}
+
+#[test]
+fn element_children_attribute_controls_children_prop_name() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+  interface ElementChildrenAttribute { kid: {} }
+  interface IntrinsicElements {
+    div: { kid?: string };
+  }
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = "const el = <div>hi</div>;";
+  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics.is_empty(),
+    "expected no diagnostics for ElementChildrenAttribute, got {diagnostics:?}"
+  );
+}

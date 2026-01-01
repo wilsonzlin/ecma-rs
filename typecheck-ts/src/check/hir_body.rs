@@ -28,9 +28,9 @@ use parse_js::loc::Loc;
 use parse_js::operator::OperatorName;
 use semantic_js::ts::SymbolId;
 use types_ts_interned::{
-  ExpandedType, ObjectType, Param as SigParam, PropData, PropKey, RelateCtx, Shape, Signature,
-  SignatureId, TypeDisplay, TypeEvaluator, TypeExpander, TypeId, TypeKind, TypeParamDecl,
-  TypeStore,
+  ExpandedType, NameId as TsNameId, ObjectType, Param as SigParam, PropData, PropKey, RelateCtx,
+  Shape, Signature, SignatureId, TypeDisplay, TypeEvaluator, TypeExpander, TypeId, TypeKind,
+  TypeParamDecl, TypeStore,
 };
 
 use super::cfg::{BlockId, BlockKind, ControlFlowGraph};
@@ -630,6 +630,7 @@ pub fn check_body_with_expander(
     jsx_mode,
     jsx_element_ty: None,
     jsx_intrinsic_elements_ty: None,
+    jsx_children_prop_name: None,
     jsx_namespace_missing_reported: false,
     expr_types,
     pat_types,
@@ -720,6 +721,13 @@ enum ArrayLiteralContext {
   Array(TypeId),
 }
 
+#[derive(Debug)]
+struct JsxActualProps {
+  ty: TypeId,
+  props: HashSet<String>,
+  has_spread: bool,
+}
+
 struct Checker<'a> {
   store: Arc<TypeStore>,
   relate: RelateCtx<'a>,
@@ -728,6 +736,7 @@ struct Checker<'a> {
   jsx_mode: Option<JsxMode>,
   jsx_element_ty: Option<TypeId>,
   jsx_intrinsic_elements_ty: Option<TypeId>,
+  jsx_children_prop_name: Option<TsNameId>,
   jsx_namespace_missing_reported: bool,
   expr_types: Vec<TypeId>,
   pat_types: Vec<TypeId>,
@@ -1798,7 +1807,7 @@ impl<'a> Checker<'a> {
     }
 
     let element_ty = self.jsx_element_type(elem.loc);
-    let actual_props_ty = self.jsx_actual_props_type(&elem.stx.attributes, &elem.stx.children);
+    let actual_props = self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children);
 
     match &elem.stx.name {
       None => {
@@ -1822,7 +1831,7 @@ impl<'a> Checker<'a> {
                 Span::new(self.file, loc_to_range(self.file, name.loc)),
               ));
           } else {
-            self.check_jsx_props_assignable(elem.loc, actual_props_ty, expected_props_ty);
+            self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
           }
         }
       }
@@ -1840,7 +1849,7 @@ impl<'a> Checker<'a> {
                   Span::new(self.file, loc_to_range(self.file, id.loc)),
                 ));
             } else {
-              self.check_jsx_props_assignable(elem.loc, actual_props_ty, expected_props_ty);
+              self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
             }
           }
         } else {
@@ -1854,7 +1863,7 @@ impl<'a> Checker<'a> {
               ));
               prim.unknown
             });
-          self.check_jsx_component(component_ty, actual_props_ty, element_ty, elem.loc);
+          self.check_jsx_component(component_ty, &actual_props, element_ty, elem.loc);
         }
       }
       Some(JsxElemName::Member(member)) => {
@@ -1876,7 +1885,7 @@ impl<'a> Checker<'a> {
                   Span::new(self.file, loc_to_range(self.file, member.loc)),
                 ));
             } else {
-              self.check_jsx_props_assignable(elem.loc, actual_props_ty, expected_props_ty);
+              self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
             }
           }
         } else {
@@ -1895,7 +1904,7 @@ impl<'a> Checker<'a> {
           for segment in member.stx.path.iter() {
             current = self.member_type(current, segment);
           }
-          self.check_jsx_component(current, actual_props_ty, element_ty, elem.loc);
+          self.check_jsx_component(current, &actual_props, element_ty, elem.loc);
         }
       }
     }
@@ -1903,19 +1912,27 @@ impl<'a> Checker<'a> {
     element_ty
   }
 
-  fn jsx_actual_props_type(&mut self, attrs: &[JsxAttr], children: &[JsxElemChild]) -> TypeId {
+  fn jsx_actual_props(
+    &mut self,
+    loc: Loc,
+    attrs: &[JsxAttr],
+    children: &[JsxElemChild],
+  ) -> JsxActualProps {
     let prim = self.store.primitive_ids();
+    let mut props = HashSet::new();
     let mut shape = Shape::new();
     let mut spreads = Vec::new();
+    let mut has_spread = false;
     for attr in attrs {
       match attr {
         JsxAttr::Named { name, value } => {
-          let key = if let Some(namespace) = name.stx.namespace.as_ref() {
+          let key_string = if let Some(namespace) = name.stx.namespace.as_ref() {
             format!("{namespace}:{}", name.stx.name)
           } else {
             name.stx.name.clone()
           };
-          let key = PropKey::String(self.store.intern_name(key));
+          props.insert(key_string.clone());
+          let key = PropKey::String(self.store.intern_name(key_string));
           let value_ty = match value {
             None => self.store.intern_type(TypeKind::BooleanLiteral(true)),
             Some(JsxAttrVal::Text(text)) => self.jsx_attr_text_type(text),
@@ -1942,13 +1959,16 @@ impl<'a> Checker<'a> {
           });
         }
         JsxAttr::Spread { value } => {
+          has_spread = true;
           spreads.push(self.check_expr(&value.stx.value));
         }
       }
     }
 
     if let Some(children_ty) = self.jsx_children_prop_type(children) {
-      let key = PropKey::String(self.store.intern_name("children".to_string()));
+      let key_id = self.jsx_children_prop_key(loc);
+      props.insert(self.store.name(key_id));
+      let key = PropKey::String(key_id);
       shape.properties.push(types_ts_interned::Property {
         key,
         data: PropData {
@@ -1970,7 +1990,11 @@ impl<'a> Checker<'a> {
       spreads.insert(0, ty);
       ty = self.store.intersection(spreads);
     }
-    ty
+    JsxActualProps {
+      ty,
+      props,
+      has_spread,
+    }
   }
 
   fn jsx_children_prop_type(&mut self, children: &[JsxElemChild]) -> Option<TypeId> {
@@ -2023,17 +2047,24 @@ impl<'a> Checker<'a> {
     Some(self.store.intern_type(TypeKind::StringLiteral(name)))
   }
 
-  fn check_jsx_props_assignable(&mut self, loc: Loc, actual: TypeId, expected: TypeId) {
+  fn check_jsx_props(&mut self, loc: Loc, actual: &JsxActualProps, expected: TypeId) {
+    if matches!(self.store.type_kind(expected), TypeKind::Any | TypeKind::Unknown) {
+      return;
+    }
+    if !actual.has_spread && !self.type_accepts_props(expected, &actual.props) {
+      self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+        "excess property",
+        Span::new(self.file, loc_to_range(self.file, loc)),
+      ));
+      return;
+    }
     if matches!(
-      self.store.type_kind(actual),
-      TypeKind::Any | TypeKind::Unknown
-    ) || matches!(
-      self.store.type_kind(expected),
+      self.store.type_kind(actual.ty),
       TypeKind::Any | TypeKind::Unknown
     ) {
       return;
     }
-    if self.relate.is_assignable(actual, expected) {
+    if self.relate.is_assignable(actual.ty, expected) {
       return;
     }
     self.diagnostics.push(codes::TYPE_MISMATCH.error(
@@ -2045,38 +2076,162 @@ impl<'a> Checker<'a> {
   fn check_jsx_component(
     &mut self,
     component_ty: TypeId,
-    actual_props_ty: TypeId,
+    actual_props: &JsxActualProps,
     element_ty: TypeId,
     loc: Loc,
   ) {
     let span = Span::new(self.file, loc_to_range(self.file, loc));
-    let args = [actual_props_ty];
-    let has_call_sigs = !callable_signatures(self.store.as_ref(), component_ty).is_empty();
-    let resolution = if has_call_sigs {
-      resolve_call(
-        &self.store,
-        &self.relate,
-        component_ty,
-        &args,
-        None,
-        Some(element_ty),
-        span,
-        self.ref_expander,
-      )
+    let prim = self.store.primitive_ids();
+    if matches!(
+      self.store.type_kind(component_ty),
+      TypeKind::Any | TypeKind::Unknown
+    ) {
+      return;
+    }
+
+    let call_sigs = self.jsx_component_call_signatures(component_ty);
+    let (sigs, contextual_return) = if !call_sigs.is_empty() {
+      let contextual_return = !matches!(
+        self.store.type_kind(element_ty),
+        TypeKind::Any | TypeKind::Unknown
+      );
+      (call_sigs, contextual_return)
     } else {
-      resolve_construct(
-        &self.store,
-        &self.relate,
-        component_ty,
-        &args,
-        None,
-        Some(element_ty),
-        span,
-        self.ref_expander,
-      )
+      (self.jsx_component_construct_signatures(component_ty), false)
     };
-    for diag in resolution.diagnostics {
-      self.diagnostics.push(diag);
+
+    if sigs.is_empty() {
+      self.diagnostics.push(
+        codes::NO_OVERLOAD
+          .error("JSX component is not callable or constructable", span)
+          .with_note(format!(
+            "component has type {}",
+            TypeDisplay::new(self.store.as_ref(), component_ty)
+          )),
+      );
+      return;
+    }
+
+    let empty_props = {
+      let shape_id = self.store.intern_shape(Shape::new());
+      let obj = self.store.intern_object(ObjectType { shape: shape_id });
+      self.store.intern_type(TypeKind::Object(obj))
+    };
+
+    let mut props: Vec<TypeId> = Vec::new();
+    if contextual_return {
+      for sig_id in sigs.iter().copied() {
+        let sig = self.store.signature(sig_id);
+        if self.relate.is_assignable(sig.ret, element_ty) {
+          props.push(sig.params.first().map(|p| p.ty).unwrap_or(empty_props));
+        }
+      }
+    }
+    if props.is_empty() {
+      for sig_id in sigs.into_iter() {
+        let sig = self.store.signature(sig_id);
+        props.push(sig.params.first().map(|p| p.ty).unwrap_or(empty_props));
+      }
+    }
+    props.sort();
+    props.dedup();
+    let expected_props = if props.len() == 1 {
+      props[0]
+    } else {
+      self.store.union(props)
+    };
+    if expected_props == prim.unknown {
+      return;
+    }
+    self.check_jsx_props(loc, actual_props, expected_props);
+  }
+
+  fn jsx_component_call_signatures(&self, ty: TypeId) -> Vec<SignatureId> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    self.jsx_collect_call_signatures(ty, &mut out, &mut seen);
+    out.sort();
+    out.dedup();
+    out
+  }
+
+  fn jsx_collect_call_signatures(
+    &self,
+    ty: TypeId,
+    out: &mut Vec<SignatureId>,
+    seen: &mut HashSet<TypeId>,
+  ) {
+    if !seen.insert(ty) {
+      return;
+    }
+    let expanded = self.expand_for_props(ty);
+    if expanded != ty {
+      self.jsx_collect_call_signatures(expanded, out, seen);
+      return;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::Callable { overloads } => out.extend(overloads),
+      TypeKind::Object(obj) => {
+        let shape = self.store.shape(self.store.object(obj).shape);
+        out.extend(shape.call_signatures);
+      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        for member in members {
+          self.jsx_collect_call_signatures(member, out, seen);
+        }
+      }
+      TypeKind::Ref { def, args } => {
+        if let Some(expander) = self.ref_expander {
+          if let Some(expanded) = expander.expand_ref(self.store.as_ref(), def, &args) {
+            self.jsx_collect_call_signatures(expanded, out, seen);
+          }
+        }
+      }
+      _ => {}
+    }
+  }
+
+  fn jsx_component_construct_signatures(&self, ty: TypeId) -> Vec<SignatureId> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    self.jsx_collect_construct_signatures(ty, &mut out, &mut seen);
+    out.sort();
+    out.dedup();
+    out
+  }
+
+  fn jsx_collect_construct_signatures(
+    &self,
+    ty: TypeId,
+    out: &mut Vec<SignatureId>,
+    seen: &mut HashSet<TypeId>,
+  ) {
+    if !seen.insert(ty) {
+      return;
+    }
+    let expanded = self.expand_for_props(ty);
+    if expanded != ty {
+      self.jsx_collect_construct_signatures(expanded, out, seen);
+      return;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::Object(obj) => {
+        let shape = self.store.shape(self.store.object(obj).shape);
+        out.extend(shape.construct_signatures);
+      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        for member in members {
+          self.jsx_collect_construct_signatures(member, out, seen);
+        }
+      }
+      TypeKind::Ref { def, args } => {
+        if let Some(expander) = self.ref_expander {
+          if let Some(expanded) = expander.expand_ref(self.store.as_ref(), def, &args) {
+            self.jsx_collect_construct_signatures(expanded, out, seen);
+          }
+        }
+      }
+      _ => {}
     }
   }
 
@@ -2127,6 +2282,71 @@ impl<'a> Checker<'a> {
     let ty = resolved.unwrap_or(prim.unknown);
     self.jsx_intrinsic_elements_ty = Some(ty);
     ty
+  }
+
+  fn jsx_children_prop_key(&mut self, _loc: Loc) -> TsNameId {
+    if let Some(id) = self.jsx_children_prop_name {
+      return id;
+    }
+    let fallback = self.store.intern_name("children".to_string());
+    let Some(children_attr_ty) = self.resolve_type_ref(&["JSX", "ElementChildrenAttribute"])
+    else {
+      self.jsx_children_prop_name = Some(fallback);
+      return fallback;
+    };
+
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+    self.jsx_collect_children_attribute_keys(children_attr_ty, &mut candidates, &mut seen);
+    candidates.sort();
+    candidates.dedup();
+    let selected = candidates
+      .into_iter()
+      .next()
+      .map(|name| self.store.intern_name(name))
+      .unwrap_or(fallback);
+    self.jsx_children_prop_name = Some(selected);
+    selected
+  }
+
+  fn jsx_collect_children_attribute_keys(
+    &self,
+    ty: TypeId,
+    out: &mut Vec<String>,
+    seen: &mut HashSet<TypeId>,
+  ) {
+    if !seen.insert(ty) {
+      return;
+    }
+    let expanded = self.expand_for_props(ty);
+    if expanded != ty {
+      self.jsx_collect_children_attribute_keys(expanded, out, seen);
+      return;
+    }
+    match self.store.type_kind(ty) {
+      TypeKind::Object(obj_id) => {
+        let shape = self.store.shape(self.store.object(obj_id).shape);
+        for prop in shape.properties.iter() {
+          match prop.key {
+            PropKey::String(name) | PropKey::Symbol(name) => out.push(self.store.name(name)),
+            PropKey::Number(num) => out.push(num.to_string()),
+          }
+        }
+      }
+      TypeKind::Union(members) | TypeKind::Intersection(members) => {
+        for member in members {
+          self.jsx_collect_children_attribute_keys(member, out, seen);
+        }
+      }
+      TypeKind::Ref { def, args } => {
+        if let Some(expander) = self.ref_expander {
+          if let Some(expanded) = expander.expand_ref(self.store.as_ref(), def, &args) {
+            self.jsx_collect_children_attribute_keys(expanded, out, seen);
+          }
+        }
+      }
+      _ => {}
+    }
   }
   fn const_assertion_type(&mut self, expr: &Node<AstExpr>) -> TypeId {
     let prim = self.store.primitive_ids();
