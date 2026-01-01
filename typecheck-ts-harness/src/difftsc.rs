@@ -1726,6 +1726,7 @@ fn build_request(
     root_names,
     files,
     options,
+    diagnostics_only: false,
     type_queries: type_queries.to_vec(),
   }
 }

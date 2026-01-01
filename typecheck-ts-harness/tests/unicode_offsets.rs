@@ -47,6 +47,7 @@ fn diagnostics_report_utf8_byte_offsets() {
     root_names: vec!["main.ts".to_string()],
     files,
     options: Map::new(),
+    diagnostics_only: true,
     type_queries: Vec::new(),
   };
 
@@ -78,6 +79,7 @@ fn auto_scanned_type_queries_use_utf8_byte_offsets() {
     root_names: vec!["main.ts".to_string()],
     files,
     options: Map::new(),
+    diagnostics_only: false,
     type_queries: Vec::new(),
   };
 
@@ -108,6 +110,7 @@ fn provided_type_queries_convert_utf8_offsets_for_typescript() {
     root_names: vec!["main.ts".to_string()],
     files,
     options: Map::new(),
+    diagnostics_only: false,
     type_queries: vec![TypeQuery {
       file: "main.ts".to_string(),
       offset: expected_offset as u32,
@@ -124,4 +127,3 @@ fn provided_type_queries_convert_utf8_offsets_for_typescript() {
   assert_eq!(marker.offset, expected_offset as u32);
   assert_eq!(marker.type_str, "number");
 }
-

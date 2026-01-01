@@ -122,6 +122,7 @@ fn run_tsc(
     root_names: vec![file.name.clone()],
     files,
     options,
+    diagnostics_only: true,
     type_queries: Vec::new(),
   };
 

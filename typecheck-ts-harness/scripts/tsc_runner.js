@@ -608,32 +608,37 @@ function runRequest(request) {
     ...optionErrors,
     ...ts.getPreEmitDiagnostics(program),
   ];
-  const providedMarkers =
-    (request.type_queries && request.type_queries.length
-      ? request.type_queries
-      : request.typeQueries && request.typeQueries.length
-        ? request.typeQueries
-        : null) ?? null;
-  const markers =
-    providedMarkers && providedMarkers.length
-      ? providedMarkers
-      : collectTypeQueries(request.files);
-  const checker = program.getTypeChecker();
-  const typeFacts = collectTypeFacts(
-    program,
-    checker,
-    markers,
-    request.files ?? {},
-  );
-  return {
+  const diagnosticsOnly =
+    request.diagnosticsOnly === true || request.diagnostics_only === true;
+
+  let typeFacts = null;
+  if (!diagnosticsOnly) {
+    const providedMarkers =
+      (request.type_queries && request.type_queries.length
+        ? request.type_queries
+        : request.typeQueries && request.typeQueries.length
+          ? request.typeQueries
+          : null) ?? null;
+    const markers =
+      providedMarkers && providedMarkers.length
+        ? providedMarkers
+        : collectTypeQueries(request.files);
+    const checker = program.getTypeChecker();
+    typeFacts = collectTypeFacts(program, checker, markers, request.files ?? {});
+  }
+
+  const response = {
     schemaVersion: SCHEMA_VERSION,
     metadata: {
       typescriptVersion: ts.version,
       options,
     },
     diagnostics: serializeDiagnostics(diagnostics),
-    type_facts: typeFacts,
   };
+  if (typeFacts) {
+    response.type_facts = typeFacts;
+  }
+  return response;
 }
 
 function respond(payload) {

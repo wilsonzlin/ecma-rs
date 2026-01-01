@@ -46,6 +46,7 @@ fn reports_single_file_error() {
     root_names: vec!["main.ts".to_string()],
     files,
     options: Map::new(),
+    diagnostics_only: true,
     type_queries: Vec::new(),
   };
 
@@ -78,6 +79,7 @@ fn resolves_relative_imports_across_files() {
     root_names: vec!["a.ts".to_string(), "b.ts".to_string()],
     files,
     options: Map::new(),
+    diagnostics_only: true,
     type_queries: Vec::new(),
   };
 

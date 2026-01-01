@@ -1054,6 +1054,7 @@ fn build_tsc_request(file_set: &HarnessFileSet, options: &Map<String, Value>) ->
     root_names,
     files,
     options: options.clone(),
+    diagnostics_only: true,
     type_queries: Vec::new(),
   }
 }
