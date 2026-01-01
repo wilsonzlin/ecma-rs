@@ -897,6 +897,14 @@ fn diff_type_facts(
       report.missing_exports.push(expected_export.clone());
     }
   }
+  if !actual_exports.is_empty() {
+    report
+      .unexpected_exports
+      .extend(actual_exports.into_values());
+    report
+      .unexpected_exports
+      .sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
+  }
 
   let mut actual_markers: HashMap<(String, u32), NormalizedMarkerType> = actual
     .markers
@@ -915,6 +923,14 @@ fn diff_type_facts(
     } else {
       report.missing_markers.push(expected_marker.clone());
     }
+  }
+  if !actual_markers.is_empty() {
+    report
+      .unexpected_markers
+      .extend(actual_markers.into_values());
+    report
+      .unexpected_markers
+      .sort_by(|a, b| (&a.file, a.offset).cmp(&(&b.file, b.offset)));
   }
 
   if report.is_empty() {
@@ -1845,6 +1861,28 @@ fn write_baseline(path: &Path, diagnostics: &TscDiagnostics) -> Result<()> {
 
   let mut diagnostics = diagnostics.clone();
   diagnostics.schema_version = Some(TSC_BASELINE_SCHEMA_VERSION);
+  diagnostics.diagnostics.sort_by(|a, b| {
+    (
+      a.file.as_deref().unwrap_or(""),
+      a.start,
+      a.end,
+      a.code,
+    )
+      .cmp(&(
+        b.file.as_deref().unwrap_or(""),
+        b.start,
+        b.end,
+        b.code,
+      ))
+  });
+  if let Some(type_facts) = diagnostics.type_facts.as_mut() {
+    type_facts
+      .exports
+      .sort_by(|a, b| (&a.file, &a.name, &a.type_str).cmp(&(&b.file, &b.name, &b.type_str)));
+    type_facts.markers.sort_by(|a, b| {
+      (&a.file, a.offset, &a.type_str).cmp(&(&b.file, b.offset, &b.type_str))
+    });
+  }
   let json = serde_json::to_string_pretty(&diagnostics)?;
   fs::write(path, format!("{json}\n"))
     .with_context(|| format!("write baseline at {}", path.display()))?;
@@ -1870,7 +1908,7 @@ fn read_baseline(path: &Path) -> Result<TscDiagnostics> {
 mod tests {
   use super::*;
   use crate::diagnostic_norm::{DiagnosticCode, DiagnosticEngine, NormalizedDiagnostic};
-  use crate::tsc::TscDiagnostic;
+  use crate::tsc::{TscDiagnostic, TscMetadata};
 
   #[test]
   fn determines_test_name_for_d_ts() {
@@ -2026,5 +2064,141 @@ span mismatches:
        1 │ abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz
          │                      ^^^^^^";
     assert_eq!(report, expected_report);
+  }
+
+  #[test]
+  fn type_fact_diff_reports_unexpected_exports() {
+    let expected = NormalizedTypeFacts {
+      exports: vec![NormalizedExportType {
+        file: "/a.ts".to_string(),
+        name: "a".to_string(),
+        type_str: "number".to_string(),
+      }],
+      markers: Vec::new(),
+    };
+    let actual = NormalizedTypeFacts {
+      exports: vec![
+        NormalizedExportType {
+          file: "/a.ts".to_string(),
+          name: "a".to_string(),
+          type_str: "number".to_string(),
+        },
+        NormalizedExportType {
+          file: "/a.ts".to_string(),
+          name: "b".to_string(),
+          type_str: "string".to_string(),
+        },
+      ],
+      markers: Vec::new(),
+    };
+    let diff = diff_type_facts(&expected, &actual).expect("diff");
+    assert_eq!(diff.unexpected_exports.len(), 1);
+    assert_eq!(diff.unexpected_exports[0].name, "b");
+  }
+
+  #[test]
+  fn type_fact_diff_reports_unexpected_markers() {
+    let expected = NormalizedTypeFacts {
+      exports: Vec::new(),
+      markers: vec![NormalizedMarkerType {
+        file: "/a.ts".to_string(),
+        offset: 1,
+        line: None,
+        column: None,
+        type_str: "number".to_string(),
+      }],
+    };
+    let actual = NormalizedTypeFacts {
+      exports: Vec::new(),
+      markers: vec![
+        NormalizedMarkerType {
+          file: "/a.ts".to_string(),
+          offset: 1,
+          line: None,
+          column: None,
+          type_str: "number".to_string(),
+        },
+        NormalizedMarkerType {
+          file: "/a.ts".to_string(),
+          offset: 2,
+          line: None,
+          column: None,
+          type_str: "string".to_string(),
+        },
+      ],
+    };
+    let diff = diff_type_facts(&expected, &actual).expect("diff");
+    assert_eq!(diff.unexpected_markers.len(), 1);
+    assert_eq!(diff.unexpected_markers[0].offset, 2);
+  }
+
+  #[test]
+  fn write_baseline_sorts_type_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("baseline.json");
+    let diagnostics = TscDiagnostics {
+      schema_version: None,
+      metadata: TscMetadata::default(),
+      diagnostics: vec![
+        TscDiagnostic {
+          code: 2,
+          file: Some("b.ts".to_string()),
+          start: 10,
+          end: 12,
+          category: None,
+          message: None,
+        },
+        TscDiagnostic {
+          code: 1,
+          file: Some("a.ts".to_string()),
+          start: 0,
+          end: 1,
+          category: None,
+          message: None,
+        },
+      ],
+      crash: None,
+      type_facts: Some(TypeFacts {
+        exports: vec![
+          ExportTypeFact {
+            file: "b.ts".to_string(),
+            name: "b".to_string(),
+            type_str: "string".to_string(),
+          },
+          ExportTypeFact {
+            file: "a.ts".to_string(),
+            name: "a".to_string(),
+            type_str: "number".to_string(),
+          },
+        ],
+        markers: vec![
+          TypeAtFact {
+            file: "a.ts".to_string(),
+            offset: 2,
+            line: None,
+            column: None,
+            type_str: "string".to_string(),
+          },
+          TypeAtFact {
+            file: "a.ts".to_string(),
+            offset: 1,
+            line: None,
+            column: None,
+            type_str: "number".to_string(),
+          },
+        ],
+      }),
+    };
+
+    write_baseline(&path, &diagnostics).unwrap();
+    let parsed = read_baseline(&path).unwrap();
+    let type_facts = parsed.type_facts.unwrap();
+    assert_eq!(type_facts.exports[0].name, "a");
+    assert_eq!(type_facts.exports[1].name, "b");
+    assert_eq!(type_facts.markers[0].offset, 1);
+    assert_eq!(type_facts.markers[1].offset, 2);
+
+    assert_eq!(parsed.diagnostics[0].file.as_deref(), Some("a.ts"));
+    assert_eq!(parsed.diagnostics[1].file.as_deref(), Some("b.ts"));
   }
 }
