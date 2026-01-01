@@ -44,6 +44,8 @@ use super::flow_narrow::{
 
 use super::caches::BodyCaches;
 use super::expr::{resolve_call, resolve_construct};
+use super::infer::infer_type_arguments_for_call;
+use super::instantiate::Substituter;
 use super::overload::callable_signatures;
 use super::type_expr::{TypeLowerer, TypeResolver};
 use crate::lib_support::JsxMode;
@@ -2118,21 +2120,31 @@ impl<'a> Checker<'a> {
       self.store.intern_type(TypeKind::Object(obj))
     };
 
-    let mut props: Vec<TypeId> = Vec::new();
-    if contextual_return {
-      for sig_id in sigs.iter().copied() {
-        let sig = self.store.signature(sig_id);
-        if self.relate.is_assignable(sig.ret, element_ty) {
-          props.push(sig.params.first().map(|p| p.ty).unwrap_or(empty_props));
-        }
+    let args = [actual_props.ty];
+    let contextual_return_ty = contextual_return.then_some(element_ty);
+    let mut filtered_props: Vec<TypeId> = Vec::new();
+    let mut all_props: Vec<TypeId> = Vec::new();
+    for sig_id in sigs.iter().copied() {
+      let sig = self.store.signature(sig_id);
+      let mut props_ty = sig.params.first().map(|p| p.ty).unwrap_or(empty_props);
+      let mut ret_ty = sig.ret;
+      if !sig.type_params.is_empty() && !sig.params.is_empty() {
+        let inference =
+          infer_type_arguments_for_call(&self.store, &sig, &args, contextual_return_ty);
+        let mut substituter = Substituter::new(Arc::clone(&self.store), inference.substitutions);
+        props_ty = substituter.substitute_type(props_ty);
+        ret_ty = substituter.substitute_type(ret_ty);
+      }
+      all_props.push(props_ty);
+      if contextual_return_ty.is_some() && self.relate.is_assignable(ret_ty, element_ty) {
+        filtered_props.push(props_ty);
       }
     }
-    if props.is_empty() {
-      for sig_id in sigs.into_iter() {
-        let sig = self.store.signature(sig_id);
-        props.push(sig.params.first().map(|p| p.ty).unwrap_or(empty_props));
-      }
-    }
+    let mut props = if contextual_return_ty.is_some() && !filtered_props.is_empty() {
+      filtered_props
+    } else {
+      all_props
+    };
     props.sort();
     props.dedup();
     let expected_props = if props.len() == 1 {

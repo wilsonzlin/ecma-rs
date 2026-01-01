@@ -531,3 +531,29 @@ const ok = <Foo />;
     "expected no diagnostics, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn generic_component_respects_type_param_constraints() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+function Foo<T extends number>(props: { x: T }): JSX.Element { return null as any; }
+const ok = <Foo x={1} />;
+const bad = <Foo x={"no"} />;
+"#;
+  let host = TestHost::new(options)
+    .with_lib(jsx_lib_file())
+    .with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::TYPE_MISMATCH.as_str()),
+    "expected a type mismatch diagnostic for constrained generic props, got {diagnostics:?}"
+  );
+}
