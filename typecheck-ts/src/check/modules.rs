@@ -188,6 +188,18 @@ fn map_export(
       None => None,
     };
   }
+  if type_id.is_none() && ns.contains(sem_ts::Namespace::VALUE) {
+    if let sem_ts::SymbolOrigin::Import { from, imported } = &symbols.symbol(symbol_id).origin {
+      if imported == "*" {
+        match from {
+          sem_ts::ModuleRef::File(from_file) => {
+            type_id = Some(state.module_namespace_type(FileId(from_file.0))?);
+          }
+          sem_ts::ModuleRef::Ambient(_) | sem_ts::ModuleRef::Unresolved(_) => {}
+        }
+      }
+    }
+  }
   let symbol = preferred_any
     .and_then(|def| state.def_data.get(&def).map(|d| d.symbol))
     .unwrap_or_else(|| semantic_js::SymbolId::from(symbol_id));

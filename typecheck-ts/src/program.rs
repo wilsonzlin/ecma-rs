@@ -2583,13 +2583,34 @@ impl ProgramTypeResolver {
       .or_else(|| self.global_symbol(&path[0], sem_ts::Namespace::NAMESPACE))
       .or_else(|| self.global_symbol(&path[0], final_ns))
       .or_else(|| self.global_symbol(&path[0], sem_ts::Namespace::VALUE))?;
+    let imported_name = match &self.semantics.symbols().symbol(symbol).origin {
+      sem_ts::SymbolOrigin::Import { imported, .. } => Some(imported.clone()),
+      _ => None,
+    };
     let Some(mut module) = self
       .import_origin_file(symbol)
       .or_else(|| self.symbol_owner_file(symbol))
     else {
       return None;
     };
-    self.resolve_export_path(&path[1..], &mut module, final_ns)
+    let origin = module;
+    if let Some(def) = self.resolve_export_path(&path[1..], &mut module, final_ns) {
+      return Some(def);
+    }
+
+    // Named imports of a namespace re-export (e.g. `import { ns } from "./mod"; type T = ns.Foo`)
+    // require following the namespace export edge before resolving the remaining segments.
+    let Some(imported_name) = imported_name else {
+      return None;
+    };
+    if imported_name == "*" {
+      return None;
+    }
+    let mut segments = Vec::with_capacity(path.len());
+    segments.push(imported_name);
+    segments.extend_from_slice(&path[1..]);
+    let mut module = origin;
+    self.resolve_export_path(&segments, &mut module, final_ns)
   }
 
   fn resolve_export_path(
@@ -2808,13 +2829,19 @@ impl SemHirBuilder {
       }));
   }
 
-  fn add_export_all(&mut self, specifier: String, specifier_span: TextRange, is_type_only: bool) {
+  fn add_export_all(
+    &mut self,
+    specifier: String,
+    specifier_span: TextRange,
+    is_type_only: bool,
+    alias: Option<(String, TextRange)>,
+  ) {
     self.exports.push(sem_ts::Export::All(sem_ts::ExportAll {
       specifier,
       is_type_only,
       specifier_span,
-      alias: None,
-      alias_span: None,
+      alias: alias.as_ref().map(|(name, _)| name.clone()),
+      alias_span: alias.as_ref().map(|(_, span)| *span),
     }));
   }
 
@@ -7458,23 +7485,27 @@ impl ProgramState {
               }
             }
             ExportNames::All(alias) => {
-              if alias.is_some() {
-                self.diagnostics.push(
-                  codes::UNSUPPORTED_PATTERN
-                    .error("unsupported export * as alias", loc_to_span(file, stmt.loc)),
-                );
-              } else if let Some(spec) = export_list.stx.from.clone() {
-                if let Some(target) = resolved {
-                  export_all.push(ExportAll {
-                    from: target,
-                    type_only: export_list.stx.type_only,
-                    span: loc_to_span(file, stmt.loc).range,
-                  });
+              if let Some(spec) = export_list.stx.from.clone() {
+                if alias.is_none() {
+                  if let Some(target) = resolved {
+                    export_all.push(ExportAll {
+                      from: target,
+                      type_only: export_list.stx.type_only,
+                      span: loc_to_span(file, stmt.loc).range,
+                    });
+                  }
                 }
+                let alias = alias.as_ref().map(|alias| {
+                  (
+                    alias.stx.name.clone(),
+                    loc_to_span(file, alias.loc).range,
+                  )
+                });
                 sem_builder.add_export_all(
                   spec,
                   loc_to_span(file, stmt.loc).range,
                   export_list.stx.type_only,
+                  alias,
                 );
               }
             }
@@ -10579,33 +10610,40 @@ impl ProgramState {
           }
         }
         DefKind::Import(import) => {
-          let exports = self.exports_for_import(&import)?;
-          if let Some(entry) = exports.get(&import.original) {
-            if let Some(def) = entry.def {
-              if let Some(ty) = self.export_type_for_def(def)? {
-                ty
-              } else {
-                self.type_of_def(def)?
-              }
-            } else if let Some(ty) = entry.type_id {
-              let mut unknown = false;
-              if self.type_store.contains_id(ty) {
-                unknown = matches!(self.type_store.kind(ty), TypeKind::Unknown);
-              } else if let Some(store) = self.interned_store.as_ref() {
-                if store.contains_type_id(ty) {
-                  unknown = matches!(store.type_kind(ty), tti::TypeKind::Unknown);
+          if import.original == "*" {
+            match import.target {
+              ImportTarget::File(file) => self.module_namespace_type(file)?,
+              ImportTarget::Unresolved { .. } => self.builtin.unknown,
+            }
+          } else {
+            let exports = self.exports_for_import(&import)?;
+            if let Some(entry) = exports.get(&import.original) {
+              if let Some(def) = entry.def {
+                if let Some(ty) = self.export_type_for_def(def)? {
+                  ty
+                } else {
+                  self.type_of_def(def)?
                 }
-              }
-              if !unknown {
-                ty
+              } else if let Some(ty) = entry.type_id {
+                let mut unknown = false;
+                if self.type_store.contains_id(ty) {
+                  unknown = matches!(self.type_store.kind(ty), TypeKind::Unknown);
+                } else if let Some(store) = self.interned_store.as_ref() {
+                  if store.contains_type_id(ty) {
+                    unknown = matches!(store.type_kind(ty), tti::TypeKind::Unknown);
+                  }
+                }
+                if !unknown {
+                  ty
+                } else {
+                  self.builtin.unknown
+                }
               } else {
                 self.builtin.unknown
               }
             } else {
               self.builtin.unknown
             }
-          } else {
-            self.builtin.unknown
           }
         }
         DefKind::Interface(interface) => {
@@ -10948,6 +10986,87 @@ impl ProgramState {
       ImportTarget::File(file) => self.exports_of_file(*file),
       ImportTarget::Unresolved { specifier } => self.exports_of_ambient_module(specifier),
     }
+  }
+
+  fn module_namespace_type(&mut self, file: FileId) -> Result<TypeId, FatalError> {
+    self.check_cancelled()?;
+    let store = match self.interned_store.as_ref() {
+      Some(store) => Arc::clone(store),
+      None => {
+        let store = tti::TypeStore::with_options((&self.compiler_options).into());
+        self.interned_store = Some(Arc::clone(&store));
+        store
+      }
+    };
+
+    let exports = self.exports_of_file(file)?;
+    let mut names: Vec<String> = if let Some(semantics) = self.semantics.as_ref() {
+      semantics
+        .exports_of_opt(sem_ts::FileId(file.0))
+        .map(|exports| {
+          exports
+            .iter()
+            .filter_map(|(name, group)| {
+              group
+                .symbol_for(sem_ts::Namespace::VALUE, semantics.symbols())
+                .is_some()
+                .then_some(name.clone())
+            })
+            .collect()
+        })
+        .unwrap_or_default()
+    } else {
+      exports
+        .iter()
+        .filter_map(|(name, entry)| {
+          let is_value = entry
+            .def
+            .and_then(|def| self.def_data.get(&def))
+            .map(|data| !matches!(data.kind, DefKind::Interface(_) | DefKind::TypeAlias(_)))
+            .unwrap_or(true);
+          is_value.then_some(name.clone())
+        })
+        .collect()
+    };
+    names.sort();
+    names.dedup();
+
+    let prim = store.primitive_ids();
+    let mut shape = tti::Shape::new();
+    let mut cache = HashMap::new();
+    for name in names.into_iter() {
+      let entry = exports.get(&name);
+      let ty = entry
+        .and_then(|entry| entry.type_id)
+        .or_else(|| {
+          entry
+            .and_then(|entry| entry.def)
+            .and_then(|def| self.export_type_for_def(def).ok().flatten())
+        })
+        .or_else(|| entry.and_then(|entry| entry.def).and_then(|def| self.def_types.get(&def).copied()))
+        .unwrap_or(prim.unknown);
+      let ty = if store.contains_type_id(ty) {
+        store.canon(ty)
+      } else {
+        store.canon(convert_type_for_display(ty, self, &store, &mut cache))
+      };
+      let key = PropKey::String(store.intern_name(name.clone()));
+      shape.properties.push(Property {
+        key,
+        data: PropData {
+          ty,
+          optional: false,
+          readonly: true,
+          accessibility: None,
+          is_method: false,
+          origin: None,
+          declared_on: None,
+        },
+      });
+    }
+    let shape_id = store.intern_shape(shape);
+    let obj_id = store.intern_object(tti::ObjectType { shape: shape_id });
+    Ok(store.canon(store.intern_type(tti::TypeKind::Object(obj_id))))
   }
 
   fn symbol_info(&self, symbol: semantic_js::SymbolId) -> Option<SymbolInfo> {

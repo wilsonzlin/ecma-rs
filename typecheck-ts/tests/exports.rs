@@ -491,24 +491,30 @@ fn export_star_conflict_reports_diagnostic() {
 }
 
 #[test]
-fn export_namespace_all_reports_diagnostic() {
+fn export_namespace_all_is_supported() {
   let mut host = MemoryHost::default();
   let key_a = fk(300);
   let key_b = fk(301);
-  host.insert(key_a.clone(), "export const a = 1;");
+  host.insert(key_a.clone(), "export const a: number = 1;");
   host.insert(key_b.clone(), "export * as ns from \"./a\";");
   host.link(key_b.clone(), "./a", key_a.clone());
 
   let program = Program::new(host, vec![key_b.clone()]);
   let diagnostics = program.check();
-  assert_eq!(
-    diagnostics.len(),
-    1,
-    "expected unsupported pattern diagnostic"
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
   );
+
+  let file_b = program.file_id(&key_b).expect("file b");
+  let exports = program.exports_of(file_b);
+  let ns_entry = exports.get("ns").expect("ns export");
+  assert!(ns_entry.def.is_none(), "namespace re-export should not bind a local def");
+  let ns_ty = ns_entry.type_id.expect("type for ns");
   assert_eq!(
-    diagnostics[0].code.as_str(),
-    codes::UNSUPPORTED_PATTERN.as_str()
+    program.display_type(ns_ty).to_string(),
+    "{ readonly a: number }",
+    "ns should be typed as a module namespace object of the target's value exports"
   );
 }
 
