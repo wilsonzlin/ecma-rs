@@ -125,3 +125,37 @@ fn export_assignment_allows_export_as_namespace() {
     "expected Foo global binding from export as namespace"
   );
 }
+
+#[test]
+fn export_assignment_allows_export_as_namespace_for_declared_const() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  let mut host = MemoryHost::with_options(options);
+
+  host.add_lib(LibFile {
+    key: FileKey::new("umd_export_assignment_const.d.ts"),
+    name: Arc::from("umd_export_assignment_const.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      "declare const Foo: number;\n\
+       export = Foo;\n\
+       export as namespace Foo;\n",
+    ),
+  });
+
+  let root = FileKey::new("main.ts");
+  host.insert(root.clone(), Arc::from("/* noop */"));
+
+  let program = Program::new(host, vec![root]);
+  let diagnostics = program.check();
+  assert!(
+    diagnostics.is_empty(),
+    "unexpected diagnostics: {diagnostics:?}"
+  );
+
+  let globals = program.global_bindings();
+  assert!(
+    globals.contains_key("Foo"),
+    "expected Foo global binding from export as namespace"
+  );
+}

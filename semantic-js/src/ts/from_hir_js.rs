@@ -608,7 +608,27 @@ fn finalize_block(
         continue;
       }
       let def = def_by_id(*def_id, &lower.defs, &lower.def_index);
-      if def.is_ambient && !def.in_global {
+      // Ambient namespaces/modules implicitly export their members. However,
+      // `.d.ts` files that become modules via top-level module syntax (e.g.
+      // `export = Foo`) do *not* implicitly export top-level declarations.
+      //
+      // `hir-js` nests some declarations under intermediate defs (e.g. var
+      // bindings are children of `VarDeclarator` defs), so checking
+      // `def.parent.is_some()` alone would still incorrectly treat top-level
+      // ambient `const Foo: ...` declarations as additional exports. Instead,
+      // require that the declaration has a namespace/module ancestor.
+      let mut nested_in_namespace_or_module = false;
+      let mut parent = def.parent;
+      while let Some(parent_id) = parent {
+        let parent_def = def_by_id(parent_id, &lower.defs, &lower.def_index);
+        if matches!(parent_def.path.kind, DefKind::Namespace | DefKind::Module) {
+          nested_in_namespace_or_module = true;
+          break;
+        }
+        parent = parent_def.parent;
+      }
+
+      if def.is_ambient && !def.in_global && nested_in_namespace_or_module {
         exported.insert(*def_id, Exported::Named);
       }
     }
