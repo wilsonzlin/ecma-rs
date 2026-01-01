@@ -875,59 +875,75 @@ fn diff_type_facts(
 ) -> Option<TypeMismatchReport> {
   let mut report = TypeMismatchReport::default();
 
-  let mut actual_exports: HashMap<(String, String), NormalizedExportType> = actual
-    .exports
-    .iter()
-    .map(|exp| ((exp.file.clone(), exp.name.clone()), exp.clone()))
-    .collect();
-  for expected_export in &expected.exports {
-    let key = (expected_export.file.clone(), expected_export.name.clone());
-    if let Some(actual_export) = actual_exports.remove(&key) {
-      if expected_export.type_str != actual_export.type_str {
-        report.mismatched_exports.push(TypeMismatchPair {
-          expected: expected_export.clone(),
-          actual: actual_export,
-        });
+  // `NormalizedTypeFacts` are already sorted by `(file, name)` and `(file, offset)` respectively,
+  // so we can diff them via a linear merge without allocating intermediate maps.
+  let mut exp_idx = 0usize;
+  let mut act_idx = 0usize;
+  while exp_idx < expected.exports.len() && act_idx < actual.exports.len() {
+    let expected_export = &expected.exports[exp_idx];
+    let actual_export = &actual.exports[act_idx];
+    match (&expected_export.file, &expected_export.name).cmp(&(&actual_export.file, &actual_export.name))
+    {
+      std::cmp::Ordering::Equal => {
+        if expected_export.type_str != actual_export.type_str {
+          report.mismatched_exports.push(TypeMismatchPair {
+            expected: expected_export.clone(),
+            actual: actual_export.clone(),
+          });
+        }
+        exp_idx += 1;
+        act_idx += 1;
       }
-    } else {
-      report.missing_exports.push(expected_export.clone());
+      std::cmp::Ordering::Less => {
+        report.missing_exports.push(expected_export.clone());
+        exp_idx += 1;
+      }
+      std::cmp::Ordering::Greater => {
+        report.unexpected_exports.push(actual_export.clone());
+        act_idx += 1;
+      }
     }
   }
-  if !actual_exports.is_empty() {
-    report
-      .unexpected_exports
-      .extend(actual_exports.into_values());
-    report
-      .unexpected_exports
-      .sort_by(|a, b| (&a.file, &a.name).cmp(&(&b.file, &b.name)));
-  }
+  report
+    .missing_exports
+    .extend(expected.exports[exp_idx..].iter().cloned());
+  report
+    .unexpected_exports
+    .extend(actual.exports[act_idx..].iter().cloned());
 
-  let mut actual_markers: HashMap<(String, u32), NormalizedMarkerType> = actual
-    .markers
-    .iter()
-    .map(|marker| ((marker.file.clone(), marker.offset), marker.clone()))
-    .collect();
-  for expected_marker in &expected.markers {
-    let key = (expected_marker.file.clone(), expected_marker.offset);
-    if let Some(actual_marker) = actual_markers.remove(&key) {
-      if expected_marker.type_str != actual_marker.type_str {
-        report.mismatched_markers.push(TypeMismatchPair {
-          expected: expected_marker.clone(),
-          actual: actual_marker,
-        });
+  exp_idx = 0usize;
+  act_idx = 0usize;
+  while exp_idx < expected.markers.len() && act_idx < actual.markers.len() {
+    let expected_marker = &expected.markers[exp_idx];
+    let actual_marker = &actual.markers[act_idx];
+    match (&expected_marker.file, expected_marker.offset).cmp(&(&actual_marker.file, actual_marker.offset))
+    {
+      std::cmp::Ordering::Equal => {
+        if expected_marker.type_str != actual_marker.type_str {
+          report.mismatched_markers.push(TypeMismatchPair {
+            expected: expected_marker.clone(),
+            actual: actual_marker.clone(),
+          });
+        }
+        exp_idx += 1;
+        act_idx += 1;
       }
-    } else {
-      report.missing_markers.push(expected_marker.clone());
+      std::cmp::Ordering::Less => {
+        report.missing_markers.push(expected_marker.clone());
+        exp_idx += 1;
+      }
+      std::cmp::Ordering::Greater => {
+        report.unexpected_markers.push(actual_marker.clone());
+        act_idx += 1;
+      }
     }
   }
-  if !actual_markers.is_empty() {
-    report
-      .unexpected_markers
-      .extend(actual_markers.into_values());
-    report
-      .unexpected_markers
-      .sort_by(|a, b| (&a.file, a.offset).cmp(&(&b.file, b.offset)));
-  }
+  report
+    .missing_markers
+    .extend(expected.markers[exp_idx..].iter().cloned());
+  report
+    .unexpected_markers
+    .extend(actual.markers[act_idx..].iter().cloned());
 
   if report.is_empty() {
     None
