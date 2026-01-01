@@ -63,7 +63,13 @@ fn resolve_non_relative(
   let from_name = files.name_for_key(from)?;
   let (package_name, package_rest) = split_package_name(specifier).unwrap_or((specifier, ""));
   let subpath = package_rest.trim_start_matches('/');
-  let exports_subpath = (!subpath.is_empty()).then(|| format!("./{subpath}"));
+  let exports_subpath = (!subpath.is_empty()).then(|| {
+    let mut resolved = String::with_capacity(2 + subpath.len());
+    resolved.push('.');
+    resolved.push('/');
+    resolved.push_str(subpath);
+    resolved
+  });
   let types_specifier = types_fallback_specifier(specifier);
   let mut dir = virtual_parent_dir(from_name);
   loop {
