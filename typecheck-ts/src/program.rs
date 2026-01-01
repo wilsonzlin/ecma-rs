@@ -4001,10 +4001,14 @@ impl ProgramState {
       .clone();
     if let Some(store) = self.interned_store.clone() {
       let mut cache = HashMap::new();
-      let def_ids: Vec<_> = self.def_data.keys().copied().collect();
+      let mut def_ids: Vec<_> = self.def_data.keys().copied().collect();
+      def_ids.sort_by_key(|def| def.0);
       for def in def_ids.into_iter() {
         let needs_type = match self.interned_def_types.get(&def).copied() {
-          Some(existing) => matches!(store.type_kind(existing), tti::TypeKind::Unknown),
+          Some(existing) => {
+            matches!(store.type_kind(existing), tti::TypeKind::Unknown)
+              || callable_return_is_unknown(&store, existing)
+          }
           None => true,
         };
         if !needs_type {

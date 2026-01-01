@@ -927,13 +927,14 @@ impl<'a> Checker<'a> {
     }
     if let Some((_len, pat_span, info)) = best {
       self.check_cancelled();
+      let mut has_type_params = false;
       if let Some(init) = info.initializer {
         let init = unsafe { &*init };
         // Initializer bodies can be nested inside functions. Bind any enclosing
         // function parameters so references like `const x = param;` do not emit
         // spurious `unknown identifier` diagnostics when the initializer is
         // type-checked in isolation.
-        self.bind_enclosing_params(loc_to_range(self.file, init.loc));
+        has_type_params = self.bind_enclosing_params(loc_to_range(self.file, init.loc));
         let annotation = info
           .type_annotation
           .map(|ann| unsafe { &*ann })
@@ -950,6 +951,9 @@ impl<'a> Checker<'a> {
           let pat = unsafe { &*pat };
           self.bind_pattern(pat, ty);
         }
+      }
+      if has_type_params {
+        self.lowerer.pop_type_param_scope();
       }
       return true;
     }
@@ -983,9 +987,16 @@ impl<'a> Checker<'a> {
     false
   }
 
-  fn bind_enclosing_params(&mut self, span: TextRange) {
+  /// Bind the closest enclosing function's parameters into the current scope.
+  ///
+  /// Returns `true` when a type parameter scope was pushed and must be popped by
+  /// the caller.
+  fn bind_enclosing_params(&mut self, span: TextRange) -> bool {
     let mut best: Option<FunctionInfo> = None;
-    for func in self.index.functions.iter().copied() {
+    for (idx, func) in self.index.functions.iter().copied().enumerate() {
+      if idx % 2048 == 0 {
+        self.check_cancelled();
+      }
       let contains = func.func_span.start <= span.start && func.func_span.end >= span.end;
       if !contains {
         continue;
@@ -1007,7 +1018,7 @@ impl<'a> Checker<'a> {
     }
 
     let Some(func) = best else {
-      return;
+      return false;
     };
     let func_node = unsafe { &*func.func };
 
@@ -1020,10 +1031,7 @@ impl<'a> Checker<'a> {
     }
 
     self.bind_params(func_node, &type_param_decls, None);
-
-    if has_type_params {
-      self.lowerer.pop_type_param_scope();
-    }
+    has_type_params
   }
 
   fn bind_params(
@@ -1037,7 +1045,6 @@ impl<'a> Checker<'a> {
       if idx % 64 == 0 {
         self.check_cancelled();
       }
-      let pat_span = loc_to_range(self.file, param.stx.pattern.loc);
       let annotation = param
         .stx
         .type_annotation
@@ -1073,10 +1080,11 @@ impl<'a> Checker<'a> {
       if let Some(default) = default_ty {
         ty = self.store.union(vec![ty, default]);
       }
-      if let Some(pat) = self.index.pats.get(&pat_span).copied() {
-        let pat = unsafe { &*pat };
-        self.bind_pattern_with_type_params(pat, ty, type_param_decls.to_vec());
-      }
+      // Bind parameters directly from the AST node. Function parameters must be
+      // in scope for identifier resolution while checking the body; relying on
+      // `AstIndex` span lookups here can be brittle when spans differ between
+      // HIR lowering and parse-js nodes.
+      self.bind_pattern_with_type_params(&param.stx.pattern.stx.pat, ty, type_param_decls.to_vec());
     }
   }
 
@@ -5153,6 +5161,11 @@ impl<'a> FlowBodyChecker<'a> {
       ExprKind::Member(mem) => {
         let obj_ty = self.eval_expr(mem.object, env).0;
         let base_obj_ty = if mem.optional {
+          // Optional chaining short-circuits on `null` / `undefined`, so the
+          // property lookup is performed only on the non-nullish portion of the
+          // base type. Doing the lookup on the full union would introduce
+          // `unknown` from the nullish branches (and `unknown | T` collapses to
+          // `unknown`).
           let (non_nullish, _) = narrow_non_nullish(obj_ty, &self.store);
           non_nullish
         } else {
