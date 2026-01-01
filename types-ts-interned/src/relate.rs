@@ -1685,9 +1685,21 @@ impl<'a> RelateCtx<'a> {
     record: bool,
     depth: usize,
   ) -> RelationResult {
+    let (src_reason_ty, dst_reason_ty) = if record {
+      (
+        self
+          .store
+          .intern_type(TypeKind::Callable { overloads: vec![src_id] }),
+        self
+          .store
+          .intern_type(TypeKind::Callable { overloads: vec![dst_id] }),
+      )
+    } else {
+      (TypeId(src_id.0), TypeId(dst_id.0))
+    };
     let key = RelationKey {
-      src: TypeId(src_id.0),
-      dst: TypeId(dst_id.0),
+      src: src_reason_ty,
+      dst: dst_reason_ty,
       kind: RelationKind::Assignable,
       mode,
     };

@@ -6,6 +6,7 @@ use types_ts_interned::Param;
 use types_ts_interned::PropData;
 use types_ts_interned::PropKey;
 use types_ts_interned::Property;
+use types_ts_interned::ReasonNode;
 use types_ts_interned::RelateCtx;
 use types_ts_interned::RelateHooks;
 use types_ts_interned::RelateTypeExpander;
@@ -896,4 +897,56 @@ fn cyclic_reference_terminates() {
   assert!(ctx.is_assignable(tref, tref));
   assert!(ctx.is_assignable(tref, primitives.string));
   assert!(ctx.explain_assignable(tref, tref).result);
+}
+
+#[test]
+fn explain_assignable_reason_nodes_only_reference_interned_type_ids() {
+  fn walk_reason(store: &TypeStore, node: &ReasonNode) {
+    assert!(
+      store.contains_type_id(node.src),
+      "uninterned reason src TypeId: {:?}",
+      node.src
+    );
+    assert!(
+      store.contains_type_id(node.dst),
+      "uninterned reason dst TypeId: {:?}",
+      node.dst
+    );
+    for child in &node.children {
+      walk_reason(store, child);
+    }
+  }
+
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let num = primitives.number;
+  let num_or_str = store.union(vec![primitives.number, primitives.string]);
+
+  let src = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: num_or_str,
+      optional: false,
+      rest: false,
+    }],
+    num,
+  );
+  let dst = callable(
+    &store,
+    vec![Param {
+      name: None,
+      ty: num,
+      optional: false,
+      rest: false,
+    }],
+    num,
+  );
+
+  let result = ctx.explain_assignable(src, dst);
+  assert!(result.result);
+  let reason = result.reason.expect("expected reason tree");
+  walk_reason(&store, &reason);
 }
