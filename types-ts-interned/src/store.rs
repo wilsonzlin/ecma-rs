@@ -693,6 +693,7 @@ impl TypeStore {
       TypeKind::BooleanLiteral(_) => !has_boolean,
       TypeKind::NumberLiteral(_) => !has_number,
       TypeKind::StringLiteral(_) => !has_string,
+      TypeKind::TemplateLiteral(_) => !has_string,
       TypeKind::BigIntLiteral(_) => !has_bigint,
       TypeKind::UniqueSymbol => !has_symbol,
       _ => true,
@@ -731,12 +732,16 @@ impl TypeStore {
     let mut has_number_literal = false;
     let mut has_string_literal = false;
     let mut has_bigint_literal = false;
+    let mut has_template_literal = false;
+    let mut has_unique_symbol = false;
     for member in &flat {
       match self.type_kind(*member) {
         TypeKind::BooleanLiteral(_) => has_boolean_literal = true,
         TypeKind::NumberLiteral(_) => has_number_literal = true,
         TypeKind::StringLiteral(_) => has_string_literal = true,
         TypeKind::BigIntLiteral(_) => has_bigint_literal = true,
+        TypeKind::TemplateLiteral(_) => has_template_literal = true,
+        TypeKind::UniqueSymbol => has_unique_symbol = true,
         _ => {}
       }
     }
@@ -752,6 +757,12 @@ impl TypeStore {
     }
     if has_bigint_literal {
       flat.retain(|member| !matches!(self.type_kind(*member), TypeKind::BigInt));
+    }
+    if has_template_literal {
+      flat.retain(|member| !matches!(self.type_kind(*member), TypeKind::String));
+    }
+    if has_unique_symbol {
+      flat.retain(|member| !matches!(self.type_kind(*member), TypeKind::Symbol));
     }
 
     // unknown acts as identity; if no other members, it is the result.

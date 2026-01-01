@@ -5,6 +5,8 @@ use types_ts_interned::PropData;
 use types_ts_interned::PropKey;
 use types_ts_interned::Property;
 use types_ts_interned::Shape;
+use types_ts_interned::TemplateChunk;
+use types_ts_interned::TemplateLiteralType;
 use types_ts_interned::TupleElem;
 use types_ts_interned::TypeKind;
 use types_ts_interned::TypeParamId;
@@ -92,6 +94,23 @@ fn union_absorbs_literals_and_unique_symbols() {
 }
 
 #[test]
+fn union_absorbs_template_literals_when_string_present() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tpl = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+    head: "a".to_owned(),
+    spans: vec![TemplateChunk {
+      literal: "b".to_owned(),
+      ty: primitives.string,
+    }],
+  }));
+
+  assert_eq!(store.union(vec![primitives.string, tpl]), primitives.string);
+  assert_eq!(store.union(vec![tpl, primitives.string]), primitives.string);
+}
+
+#[test]
 fn intersection_prefers_literals() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
@@ -118,6 +137,32 @@ fn intersection_prefers_literals() {
   assert_eq!(
     store.intersection(vec![primitives.bigint, bigint_lit]),
     bigint_lit
+  );
+}
+
+#[test]
+fn intersection_prefers_template_literals_and_unique_symbols() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+
+  let tpl = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+    head: "x".to_owned(),
+    spans: vec![TemplateChunk {
+      literal: "y".to_owned(),
+      ty: primitives.string,
+    }],
+  }));
+
+  assert_eq!(store.intersection(vec![primitives.string, tpl]), tpl);
+  assert_eq!(store.intersection(vec![tpl, primitives.string]), tpl);
+
+  assert_eq!(
+    store.intersection(vec![primitives.symbol, primitives.unique_symbol]),
+    primitives.unique_symbol
+  );
+  assert_eq!(
+    store.intersection(vec![primitives.unique_symbol, primitives.symbol]),
+    primitives.unique_symbol
   );
 }
 
