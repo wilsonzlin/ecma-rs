@@ -204,12 +204,36 @@ fn with_statement_disables_dce_in_nested_arrow_expr_bodies() {
 }
 
 #[test]
+fn direct_eval_disables_dce_in_ancestor_scopes() {
+  let result = minified(TopLevelMode::Module, r#"let x=1;(()=>{eval("x");})();"#);
+  assert_eq!(result, r#"let x=1;(()=>{eval("x");})();"#);
+}
+
+#[test]
+fn semantic_rewrite_does_not_break_dce_symbol_tracking() {
+  let result = minified(
+    TopLevelMode::Module,
+    "let x=1;if(x===null||x===undefined)g();",
+  );
+  assert_eq!(result, "let a=1;a==null&&g();");
+}
+
+#[test]
 fn optimizes_object_literal_methods_in_expression_position() {
   let result = minified(
     TopLevelMode::Global,
     "const o={m(){if(false){sideEffect()}return 1;}};",
   );
   assert_eq!(result, "const o={m(){return 1;}};");
+}
+
+#[test]
+fn optimizes_class_expression_methods_in_expression_position() {
+  let result = minified(
+    TopLevelMode::Global,
+    "const C=class{m(){if(false){sideEffect()}return 1;}};",
+  );
+  assert_eq!(result, "const C=class{m(){return 1;}};");
 }
 
 #[test]
