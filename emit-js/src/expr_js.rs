@@ -677,7 +677,9 @@ fn emit_arrow_function(em: &mut Emitter, func: &Node<ArrowFuncExpr>, ctx: ExprCt
   let func = func.func.stx.as_ref();
 
   if func.generator {
-    return Err(EmitError::unsupported("generator arrow function not supported"));
+    return Err(EmitError::unsupported(
+      "generator arrow function not supported",
+    ));
   }
   if func.async_ {
     em.write_keyword("async");
@@ -714,10 +716,7 @@ fn emit_arrow_function(em: &mut Emitter, func: &Node<ArrowFuncExpr>, ctx: ExprCt
   }
 }
 
-fn emit_function_params(
-  em: &mut Emitter,
-  params: &[Node<ParamDecl>],
-) -> EmitResult {
+fn emit_function_params(em: &mut Emitter, params: &[Node<ParamDecl>]) -> EmitResult {
   em.write_punct("(");
   for (idx, param) in params.iter().enumerate() {
     if idx > 0 {
