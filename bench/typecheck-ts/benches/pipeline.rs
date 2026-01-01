@@ -105,11 +105,15 @@ impl BenchResult {
 #[derive(Default)]
 struct BenchArgs {
   json: bool,
+  iters_scale: u64,
 }
 
 impl BenchArgs {
   fn from_env() -> Self {
-    let mut args = BenchArgs { json: false };
+    let mut args = BenchArgs {
+      json: false,
+      iters_scale: 1,
+    };
     for arg in env::args().skip(1) {
       if arg == "--json" {
         args.json = true;
@@ -119,6 +123,14 @@ impl BenchArgs {
     if let Ok(val) = env::var("TYPECHECK_TS_BENCH_JSON") {
       if val == "1" || val.eq_ignore_ascii_case("true") {
         args.json = true;
+      }
+    }
+
+    if let Ok(val) = env::var("TYPECHECK_TS_BENCH_ITERS_SCALE") {
+      if let Ok(scale) = val.parse::<u64>() {
+        if scale > 0 {
+          args.iters_scale = scale;
+        }
       }
     }
     args
@@ -177,6 +189,16 @@ fn detail_from_query_stats(stats: &typecheck_ts::QueryStats) -> BenchDetail {
 fn main() {
   let args = BenchArgs::from_env();
   let mut results = Vec::new();
+  let iters_scale = args.iters_scale;
+  let parse_iters = scaled_iters(PARSE_ITERS, iters_scale);
+  let lower_iters = scaled_iters(LOWER_ITERS, iters_scale);
+  let parse_lower_iters = scaled_iters(PARSE_LOWER_ITERS, iters_scale);
+  let bind_iters = scaled_iters(BIND_ITERS, iters_scale);
+  let typecheck_iters = scaled_iters(TYPECHECK_ITERS, iters_scale);
+  let type_of_def_iters = scaled_iters(TYPE_OF_DEF_ITERS, iters_scale);
+  let check_body_iters = scaled_iters(CHECK_BODY_ITERS, iters_scale);
+  let relations_iters = scaled_iters(RELATIONS_ITERS, iters_scale);
+  let incremental_iters = scaled_iters(INCREMENTAL_ITERS, iters_scale);
 
   let fixtures = all_fixtures();
   let module_graphs = module_graph_fixtures();
@@ -189,7 +211,7 @@ fn main() {
   for fixture in fixtures {
     results.push(measure(
       format!("parse/{}", fixture.name),
-      PARSE_ITERS,
+      parse_iters,
       || {
         let parsed = parse_only(fixture)
           .unwrap_or_else(|err| panic!("fixtures must parse ({}): {err:?}", fixture.name));
@@ -205,7 +227,7 @@ fn main() {
     let file_id = HirFileId(idx as u32);
     results.push(measure(
       format!("lower/{}", fixture.name),
-      LOWER_ITERS,
+      lower_iters,
       || {
         let lowered = lower_to_hir(file_id, hir_kind(fixture.kind), &parsed);
         let summary = summarize_hir(&lowered);
@@ -219,7 +241,7 @@ fn main() {
     let file_id = HirFileId(idx as u32);
     results.push(measure(
       format!("parse_lower/{}", fixture.name),
-      PARSE_LOWER_ITERS,
+      parse_lower_iters,
       || {
         let summary = parse_and_lower(file_id, fixture);
         black_box((summary.defs, summary.bodies, summary.exprs, summary.stmts));
@@ -231,7 +253,7 @@ fn main() {
   for graph in module_graphs {
     results.push(measure(
       format!("pipeline/parse_lower_bind/{}", graph.name),
-      BIND_ITERS,
+      bind_iters,
       || {
         let summary = bind_module_graph(graph);
         black_box((summary.exports, summary.globals, summary.diagnostics));
@@ -247,7 +269,7 @@ fn main() {
   for fixture in fixtures {
     results.push(measure(
       format!("typecheck/{}", fixture.name),
-      TYPECHECK_ITERS,
+      typecheck_iters,
       || {
         let summary = typecheck_fixture(fixture);
         black_box((summary.bodies, summary.diagnostics));
@@ -259,7 +281,7 @@ fn main() {
   for graph in module_graphs {
     results.push(measure(
       format!("typecheck/module_graph/{}", graph.name),
-      TYPECHECK_ITERS,
+      typecheck_iters,
       || {
         let summary = typecheck_module_graph(graph);
         black_box((summary.bodies, summary.diagnostics));
@@ -271,7 +293,7 @@ fn main() {
   for graph in module_graphs {
     results.push(measure(
       format!("type_of_def/exports/{}", graph.name),
-      TYPE_OF_DEF_ITERS,
+      type_of_def_iters,
       || {
         let summary = type_of_exported_defs(graph);
         black_box((summary.exports, summary.rendered_types.len()));
@@ -286,7 +308,7 @@ fn main() {
     .iter()
     .find(|f| f.name == "control_flow")
     .expect("control_flow fixture");
-  results.push(measure("check_body/control_flow", CHECK_BODY_ITERS, || {
+  results.push(measure("check_body/control_flow", check_body_iters, || {
     let summary = check_body_named(control_flow, "evaluate");
     black_box((summary.exprs, summary.diagnostics));
     detail_from_body(&summary)
@@ -302,7 +324,7 @@ fn main() {
     .expect("advanced_types fixture");
   results.push(measure(
     "check_body/cold/control_flow",
-    CHECK_BODY_ITERS,
+    check_body_iters,
     || {
       let summary =
         check_body_with_warmups((control_flow, "evaluate"), &[], cold_cache_options.clone());
@@ -313,7 +335,7 @@ fn main() {
 
   results.push(measure(
     "check_body/warm/control_flow",
-    CHECK_BODY_ITERS,
+    check_body_iters,
     || {
       let summary = check_body_with_warmups(
         (control_flow, "evaluate"),
@@ -327,7 +349,7 @@ fn main() {
 
   results.push(measure(
     "check_body/cold/advanced_types",
-    CHECK_BODY_ITERS,
+    check_body_iters,
     || {
       let summary =
         check_body_with_warmups((advanced, "mergeDefaults"), &[], cold_cache_options.clone());
@@ -338,7 +360,7 @@ fn main() {
 
   results.push(measure(
     "check_body/warm/advanced_types",
-    CHECK_BODY_ITERS,
+    check_body_iters,
     || {
       let summary = check_body_with_warmups(
         (advanced, "mergeDefaults"),
@@ -360,7 +382,7 @@ fn main() {
     let mut edit_total = Duration::ZERO;
     let mut full_detail = BenchDetail::default();
     let mut edit_detail = BenchDetail::default();
-    for _ in 0..INCREMENTAL_ITERS {
+    for _ in 0..incremental_iters {
       let timings = incremental_recheck(project, &edit);
       full_total += timings.full;
       edit_total += timings.edit;
@@ -374,38 +396,47 @@ fn main() {
 
     results.push(BenchResult {
       name: format!("incremental/full/{}", project.name),
-      iterations: INCREMENTAL_ITERS,
+      iterations: incremental_iters,
       total_nanos: duration_to_nanos(full_total),
-      details: full_detail.finalize(INCREMENTAL_ITERS),
+      details: full_detail.finalize(incremental_iters),
     });
     results.push(BenchResult {
       name: format!("incremental/edit/{}", project.name),
-      iterations: INCREMENTAL_ITERS,
+      iterations: incremental_iters,
       total_nanos: duration_to_nanos(edit_total),
-      details: edit_detail.finalize(INCREMENTAL_ITERS),
+      details: edit_detail.finalize(incremental_iters),
     });
   }
 
-  results.push(measure("relations/cold", RELATIONS_ITERS, || {
+  results.push(measure("relations/cold", relations_iters, || {
     let stats = assignability_micro(RELATION_DEPTH, false);
     black_box((stats.checks, stats.successes));
     detail_from_relation(&stats)
   }));
 
-  results.push(measure("relations/warm", RELATIONS_ITERS, || {
+  results.push(measure("relations/warm", relations_iters, || {
     let stats = assignability_micro(RELATION_DEPTH, true);
     black_box((stats.checks, stats.successes));
     detail_from_relation(&stats)
   }));
 
-  print_summary(&results);
-
   if args.json {
+    print_summary_stderr(&results);
     let json = serde_json::json!({ "benches": results });
     println!(
       "{}",
       serde_json::to_string_pretty(&json).expect("json serialisation")
     );
+  } else {
+    print_summary_stdout(&results);
+  }
+}
+
+fn scaled_iters(base: u64, scale: u64) -> u64 {
+  if scale <= 1 {
+    base
+  } else {
+    (base / scale).max(1)
   }
 }
 
@@ -432,7 +463,7 @@ fn duration_to_nanos(dur: Duration) -> u128 {
   dur.as_secs() as u128 * 1_000_000_000u128 + dur.subsec_nanos() as u128
 }
 
-fn print_summary(results: &[BenchResult]) {
+fn print_summary_stdout(results: &[BenchResult]) {
   println!("=== typecheck-ts benchmarks ===");
   for result in results {
     let detail = result
@@ -450,6 +481,34 @@ fn print_summary(results: &[BenchResult]) {
       );
     } else {
       println!(
+        "{:<32} {:>6} iters {:>12} ns ({:.2} ns/iter)",
+        result.name,
+        result.iterations,
+        result.total_nanos,
+        result.per_iter_ns(),
+      );
+    }
+  }
+}
+
+fn print_summary_stderr(results: &[BenchResult]) {
+  eprintln!("=== typecheck-ts benchmarks ===");
+  for result in results {
+    let detail = result
+      .details
+      .as_ref()
+      .and_then(|d| format_detail(d, result.iterations));
+    if let Some(detail) = detail {
+      eprintln!(
+        "{:<32} {:>6} iters {:>12} ns ({:.2} ns/iter) {}",
+        result.name,
+        result.iterations,
+        result.total_nanos,
+        result.per_iter_ns(),
+        detail,
+      );
+    } else {
+      eprintln!(
         "{:<32} {:>6} iters {:>12} ns ({:.2} ns/iter)",
         result.name,
         result.iterations,

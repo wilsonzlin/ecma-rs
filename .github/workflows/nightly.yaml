@@ -38,6 +38,34 @@ jobs:
       - name: cargo test --workspace (full suite)
         run: cargo test --workspace --locked
 
+  typecheck-ts-bench:
+    runs-on: ubuntu-24.04
+    needs: full
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate lockfile
+        run: cargo generate-lockfile
+
+      - name: typecheck-ts benchmark (JSON)
+        env:
+          TYPECHECK_TS_BENCH_JSON: "1"
+          TYPECHECK_TS_BENCH_ITERS_SCALE: "10"
+        run: |
+          mkdir -p reports
+          cargo bench -p typecheck-ts-bench --bench pipeline --locked > reports/typecheck-ts-bench.json
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-ts-bench
+          path: reports/typecheck-ts-bench.json
+
   ts-conformance:
     runs-on: ubuntu-24.04
     needs: full

@@ -10,9 +10,26 @@ cargo bench -p typecheck-ts-bench
 
 By default a human-readable summary is printed. To additionally emit structured
 JSON (suitable for CI tracking), set `TYPECHECK_TS_BENCH_JSON=1` in the
-environment. Passing `--json` directly to `cargo bench` is discouraged because
-that flag is forwarded to all test binaries and may be rejected by libtest
-harnesses.
+environment. When JSON output is enabled, the human-readable summary is emitted
+to stderr and stdout is reserved for JSON so it can be redirected to a file.
+
+To keep CI runtime bounded, you can scale down the iteration counts by setting
+`TYPECHECK_TS_BENCH_ITERS_SCALE` to a positive integer. Each benchmark's default
+iteration count is divided by this value (clamped to a minimum of 1), preserving
+deterministic ordering/format while reducing total work.
+
+Passing `--json` directly to `cargo bench` is discouraged because that flag is
+forwarded to all test binaries and may be rejected by libtest harnesses.
+
+### Reproducing the nightly JSON report locally
+
+```
+cargo generate-lockfile
+mkdir -p reports
+TYPECHECK_TS_BENCH_JSON=1 TYPECHECK_TS_BENCH_ITERS_SCALE=10 \
+  cargo bench -p typecheck-ts-bench --bench pipeline --locked \
+  > reports/typecheck-ts-bench.json
+```
 
 ## What is measured
 
