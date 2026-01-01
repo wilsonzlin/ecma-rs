@@ -534,9 +534,8 @@ fn union_canonicalization_is_span_stable_for_function_types() {
 
 #[test]
 fn union_canonicalization_is_span_stable_for_constructor_types() {
-  let base =
-    lower_from_source("type A = (new (x: string) => Foo) | (new (y: number) => Foo);")
-      .expect("lower");
+  let base = lower_from_source("type A = (new (x: string) => Foo) | (new (y: number) => Foo);")
+    .expect("lower");
   let with_padding = lower_from_source(
     "type Z = string;\ntype A = (new (x: string) => Foo) | (new (y: number) => Foo);",
   )
