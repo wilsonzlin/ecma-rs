@@ -3,9 +3,10 @@ use crate::runner::Summary;
 use crate::{CompareMode, ConformanceOptions, HarnessError, TestOutcome, TestResult};
 use serde::Serialize;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use typecheck_ts::QueryStats;
 
 const PROFILE_SCHEMA_VERSION: u32 = 1;
@@ -242,20 +243,63 @@ fn timestamp_ms() -> u128 {
 }
 
 fn git_sha() -> Option<String> {
-  let output = Command::new("git")
-    .args(["rev-parse", "HEAD"])
-    .output()
-    .ok()?;
-
-  if !output.status.success() {
-    return None;
-  }
-
-  let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+  let mut command = Command::new("git");
+  command.args(["rev-parse", "HEAD"]);
+  let output = command_stdout_with_timeout(command, Duration::from_secs(2))?;
+  let sha = String::from_utf8_lossy(&output).trim().to_string();
   if sha.is_empty() {
     None
   } else {
     Some(sha)
+  }
+}
+
+fn reap_child_with_timeout(
+  child: &mut std::process::Child,
+  timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
+  let deadline = Instant::now() + timeout;
+  loop {
+    match child.try_wait()? {
+      Some(status) => return Ok(Some(status)),
+      None => {
+        if Instant::now() >= deadline {
+          return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+      }
+    }
+  }
+}
+
+fn command_stdout_with_timeout(mut command: Command, timeout: Duration) -> Option<Vec<u8>> {
+  command.stdin(Stdio::null());
+  command.stdout(Stdio::piped());
+  command.stderr(Stdio::null());
+  let mut child = command.spawn().ok()?;
+  let mut stdout = child.stdout.take()?;
+
+  let deadline = Instant::now() + timeout;
+  loop {
+    match child.try_wait() {
+      Ok(Some(status)) => {
+        if !status.success() {
+          return None;
+        }
+        let mut out = Vec::new();
+        let _ = stdout.read_to_end(&mut out);
+        return Some(out);
+      }
+      Ok(None) => {
+        if Instant::now() >= deadline {
+          let _ = child.kill();
+          let _ = reap_child_with_timeout(&mut child, Duration::from_millis(200));
+          return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+      }
+      Err(_) => return None,
+    }
   }
 }
 
