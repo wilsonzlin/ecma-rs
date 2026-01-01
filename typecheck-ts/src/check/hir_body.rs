@@ -1889,8 +1889,6 @@ impl<'a> Checker<'a> {
             self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
           }
         } else {
-          let actual_props =
-            self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children, None);
           let component_ty = self
             .lookup(name)
             .map(|binding| binding.ty)
@@ -1901,6 +1899,16 @@ impl<'a> Checker<'a> {
               ));
               prim.unknown
             });
+          let expected_props_ty =
+            self.jsx_expected_props_for_value_tag(component_ty, elem.loc).map(|expected| {
+              self.jsx_apply_intrinsic_attributes(expected)
+            });
+          let actual_props = self.jsx_actual_props(
+            elem.loc,
+            &elem.stx.attributes,
+            &elem.stx.children,
+            expected_props_ty,
+          );
           self.check_jsx_value_tag(component_ty, &actual_props, element_ty, elem.loc, id.loc);
         }
       }
@@ -1939,8 +1947,6 @@ impl<'a> Checker<'a> {
             self.check_jsx_props(elem.loc, &actual_props, expected_props_ty);
           }
         } else {
-          let actual_props =
-            self.jsx_actual_props(elem.loc, &elem.stx.attributes, &elem.stx.children, None);
           // Member expressions like `<Foo.Bar />` are treated like looking up
           // `Foo` and then checking `.Bar` as a value.
           let mut current = self
@@ -1956,6 +1962,16 @@ impl<'a> Checker<'a> {
           for segment in member.stx.path.iter() {
             current = self.member_type(current, segment);
           }
+          let expected_props_ty =
+            self.jsx_expected_props_for_value_tag(current, elem.loc).map(|expected| {
+              self.jsx_apply_intrinsic_attributes(expected)
+            });
+          let actual_props = self.jsx_actual_props(
+            elem.loc,
+            &elem.stx.attributes,
+            &elem.stx.children,
+            expected_props_ty,
+          );
           self.check_jsx_value_tag(current, &actual_props, element_ty, elem.loc, member.loc);
         }
       }
@@ -2021,6 +2037,54 @@ impl<'a> Checker<'a> {
       _ => {
         self.check_jsx_component(tag_ty, actual_props, element_ty, elem_loc);
       }
+    }
+  }
+
+  fn jsx_expected_props_for_value_tag(&mut self, tag_ty: TypeId, elem_loc: Loc) -> Option<TypeId> {
+    let prim = self.store.primitive_ids();
+    if matches!(
+      self.store.type_kind(tag_ty),
+      TypeKind::Any | TypeKind::Unknown
+    ) {
+      return None;
+    }
+
+    let expanded = self.expand_for_props(tag_ty);
+    if expanded != tag_ty {
+      return self.jsx_expected_props_for_value_tag(expanded, elem_loc);
+    }
+
+    match self.store.type_kind(tag_ty) {
+      TypeKind::Union(members) => {
+        let mut collected = Vec::new();
+        for member in members {
+          let props_ty = self.jsx_expected_props_for_value_tag(member, elem_loc)?;
+          collected.push(props_ty);
+        }
+        if collected.is_empty() {
+          None
+        } else {
+          Some(self.store.intersection(collected))
+        }
+      }
+      TypeKind::StringLiteral(name_id) => {
+        let intrinsic_elements = self.jsx_intrinsic_elements_type(elem_loc);
+        if intrinsic_elements == prim.unknown {
+          return None;
+        }
+        let tag = self.store.name(name_id);
+        let expected_props_ty = self.member_type(intrinsic_elements, tag.as_str());
+        (expected_props_ty != prim.unknown).then_some(expected_props_ty)
+      }
+      TypeKind::String => {
+        let intrinsic_elements = self.jsx_intrinsic_elements_type(elem_loc);
+        if intrinsic_elements == prim.unknown {
+          return None;
+        }
+        let expected_props_ty = self.member_type_for_index_key(intrinsic_elements, prim.string);
+        (expected_props_ty != prim.unknown).then_some(expected_props_ty)
+      }
+      _ => None,
     }
   }
 
