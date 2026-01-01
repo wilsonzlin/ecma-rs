@@ -3,10 +3,8 @@ use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
 use ahash::HashSet;
 use derive_visitor::{Drive, Visitor};
-use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
 use parse_js::ast::expr::pat::{IdPat, Pat};
 use parse_js::ast::expr::IdExpr;
-use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stmt::decl::VarDeclMode;
 use parse_js::ast::stmt::Stmt;
@@ -146,16 +144,8 @@ fn dce_stmt(
       label_stmt.stx.statement = dce_stmt(label_stmt.stx.statement, cx, used, changed);
       new_node(loc, assoc, Stmt::Label(label_stmt))
     }
-    Stmt::FunctionDecl(mut decl) => {
-      dce_func(&mut decl.stx.function, cx, used, changed);
-      new_node(loc, assoc, Stmt::FunctionDecl(decl))
-    }
-    Stmt::ClassDecl(mut decl) => {
-      for member in decl.stx.members.iter_mut() {
-        dce_class_member(member, cx, used, changed);
-      }
-      new_node(loc, assoc, Stmt::ClassDecl(decl))
-    }
+    Stmt::FunctionDecl(decl) => new_node(loc, assoc, Stmt::FunctionDecl(decl)),
+    Stmt::ClassDecl(decl) => new_node(loc, assoc, Stmt::ClassDecl(decl)),
     Stmt::VarDecl(mut decl) => {
       if decl.stx.export || matches!(decl.stx.mode, VarDeclMode::Using | VarDeclMode::AwaitUsing) {
         return new_node(loc, assoc, Stmt::VarDecl(decl));
@@ -246,32 +236,5 @@ fn dce_try_stmt(
   if let Some(finally) = try_stmt.stx.finally.as_mut() {
     let body = std::mem::take(&mut finally.stx.body);
     finally.stx.body = dce_stmts(body, cx, used, changed);
-  }
-}
-
-fn dce_func(func: &mut Node<Func>, cx: &OptCtx, used: &HashSet<SymbolId>, changed: &mut bool) {
-  if let Some(body) = func.stx.body.take() {
-    func.stx.body = Some(match body {
-      FuncBody::Block(stmts) => FuncBody::Block(dce_stmts(stmts, cx, used, changed)),
-      other => other,
-    });
-  }
-}
-
-fn dce_class_member(
-  member: &mut Node<ClassMember>,
-  cx: &OptCtx,
-  used: &HashSet<SymbolId>,
-  changed: &mut bool,
-) {
-  match &mut member.stx.val {
-    ClassOrObjVal::Getter(get) => dce_func(&mut get.stx.func, cx, used, changed),
-    ClassOrObjVal::Setter(set) => dce_func(&mut set.stx.func, cx, used, changed),
-    ClassOrObjVal::Method(method) => dce_func(&mut method.stx.func, cx, used, changed),
-    ClassOrObjVal::StaticBlock(block) => {
-      let body = std::mem::take(&mut block.stx.body);
-      block.stx.body = dce_stmts(body, cx, used, changed);
-    }
-    _ => {}
   }
 }

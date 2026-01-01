@@ -1,7 +1,5 @@
 use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
-use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
-use parse_js::ast::func::{Func, FuncBody};
 use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stmt::Stmt;
 use parse_js::ast::stmt::{ForBody, SwitchBranch, TryStmt};
@@ -130,16 +128,8 @@ fn clean_stmt(stmt: Node<Stmt>, changed: &mut bool) -> Node<Stmt> {
       label_stmt.stx.statement = clean_single_stmt(label_stmt.stx.statement, changed);
       new_node(loc, assoc, Stmt::Label(label_stmt))
     }
-    Stmt::FunctionDecl(mut decl) => {
-      clean_func(&mut decl.stx.function, changed);
-      new_node(loc, assoc, Stmt::FunctionDecl(decl))
-    }
-    Stmt::ClassDecl(mut decl) => {
-      for member in decl.stx.members.iter_mut() {
-        clean_class_member(member, changed);
-      }
-      new_node(loc, assoc, Stmt::ClassDecl(decl))
-    }
+    Stmt::FunctionDecl(decl) => new_node(loc, assoc, Stmt::FunctionDecl(decl)),
+    Stmt::ClassDecl(decl) => new_node(loc, assoc, Stmt::ClassDecl(decl)),
     other => new_node(loc, assoc, other),
   }
 }
@@ -168,28 +158,6 @@ fn clean_try_stmt(try_stmt: &mut Node<TryStmt>, changed: &mut bool) {
   if let Some(finally) = try_stmt.stx.finally.as_mut() {
     let finally_body = std::mem::take(&mut finally.stx.body);
     finally.stx.body = clean_stmts(finally_body, changed);
-  }
-}
-
-fn clean_func(func: &mut Node<Func>, changed: &mut bool) {
-  if let Some(body) = func.stx.body.take() {
-    func.stx.body = Some(match body {
-      FuncBody::Block(stmts) => FuncBody::Block(clean_stmts(stmts, changed)),
-      other => other,
-    });
-  }
-}
-
-fn clean_class_member(member: &mut Node<ClassMember>, changed: &mut bool) {
-  match &mut member.stx.val {
-    ClassOrObjVal::Getter(get) => clean_func(&mut get.stx.func, changed),
-    ClassOrObjVal::Setter(set) => clean_func(&mut set.stx.func, changed),
-    ClassOrObjVal::Method(method) => clean_func(&mut method.stx.func, changed),
-    ClassOrObjVal::StaticBlock(block) => {
-      let body = std::mem::take(&mut block.stx.body);
-      block.stx.body = clean_stmts(body, changed);
-    }
-    _ => {}
   }
 }
 

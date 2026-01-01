@@ -1,6 +1,5 @@
 use super::traverse::apply_to_function_like_bodies;
 use super::{OptCtx, Pass};
-use parse_js::ast::class_or_object::{ClassMember, ClassOrObjVal};
 use parse_js::ast::expr::pat::Pat;
 use parse_js::ast::expr::{BinaryExpr, CondExpr, Expr};
 use parse_js::ast::node::{Node, NodeAssocData};
@@ -214,16 +213,8 @@ fn rewrite_stmt(stmt: Node<Stmt>, changed: &mut bool, in_list: bool) -> Vec<Node
       label_stmt.stx.statement = rewrite_single_stmt(label_stmt.stx.statement, changed);
       vec![new_node(loc, assoc, Stmt::Label(label_stmt))]
     }
-    Stmt::FunctionDecl(mut decl) => {
-      rewrite_func_body(&mut decl.stx.function, changed);
-      vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))]
-    }
-    Stmt::ClassDecl(mut decl) => {
-      for member in decl.stx.members.iter_mut() {
-        rewrite_class_member(member, changed);
-      }
-      vec![new_node(loc, assoc, Stmt::ClassDecl(decl))]
-    }
+    Stmt::FunctionDecl(decl) => vec![new_node(loc, assoc, Stmt::FunctionDecl(decl))],
+    Stmt::ClassDecl(decl) => vec![new_node(loc, assoc, Stmt::ClassDecl(decl))],
     Stmt::VarDecl(decl) => {
       // Rewrites inside initializers are handled by const folding; keep as-is.
       vec![new_node(loc, assoc, Stmt::VarDecl(decl))]
@@ -276,30 +267,6 @@ fn rewrite_try_stmt(try_stmt: &mut Node<TryStmt>, changed: &mut bool) {
   if let Some(finally) = try_stmt.stx.finally.as_mut() {
     let body = std::mem::take(&mut finally.stx.body);
     finally.stx.body = rewrite_stmts(body, changed);
-  }
-}
-
-fn rewrite_func_body(func: &mut Node<parse_js::ast::func::Func>, changed: &mut bool) {
-  if let Some(body) = func.stx.body.take() {
-    func.stx.body = Some(match body {
-      parse_js::ast::func::FuncBody::Block(stmts) => {
-        parse_js::ast::func::FuncBody::Block(rewrite_stmts(stmts, changed))
-      }
-      other => other,
-    });
-  }
-}
-
-fn rewrite_class_member(member: &mut Node<ClassMember>, changed: &mut bool) {
-  match &mut member.stx.val {
-    ClassOrObjVal::Getter(get) => rewrite_func_body(&mut get.stx.func, changed),
-    ClassOrObjVal::Setter(set) => rewrite_func_body(&mut set.stx.func, changed),
-    ClassOrObjVal::Method(method) => rewrite_func_body(&mut method.stx.func, changed),
-    ClassOrObjVal::StaticBlock(block) => {
-      let body = std::mem::take(&mut block.stx.body);
-      block.stx.body = rewrite_stmts(body, changed);
-    }
-    _ => {}
   }
 }
 
