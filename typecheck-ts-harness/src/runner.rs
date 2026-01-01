@@ -474,6 +474,12 @@ impl HarnessFileSet {
   }
 
   pub(crate) fn write_to_dir(&self, dir: &Path) -> std::io::Result<()> {
+    if std::env::var_os("TYPECHECK_TS_HARNESS_FORBID_WRITE_TO_DIR").is_some() {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "TYPECHECK_TS_HARNESS_FORBID_WRITE_TO_DIR is set; refusing to write harness virtual files to disk",
+      ));
+    }
     for file in &self.files {
       Self::ensure_safe_relative_path(&file.fs_path)?;
       let path = dir.join(&file.fs_path);
