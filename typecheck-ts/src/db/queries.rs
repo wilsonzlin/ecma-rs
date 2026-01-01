@@ -827,7 +827,13 @@ pub mod body_check {
 
         if let Some(function) = body.function.as_ref() {
           for param in function.params.iter() {
-            record_param_pats(body, param.pat, &result.pat_types, prim.unknown, &mut initial_env);
+            record_param_pats(
+              body,
+              param.pat,
+              &result.pat_types,
+              prim.unknown,
+              &mut initial_env,
+            );
           }
         }
         for (idx, expr) in body.exprs.iter().enumerate() {

@@ -9813,7 +9813,13 @@ impl ProgramState {
 
           if let Some(function) = body.function.as_ref() {
             for param in function.params.iter() {
-              record_param_pats(body, param.pat, &result.pat_types, prim.unknown, &mut initial_env);
+              record_param_pats(
+                body,
+                param.pat,
+                &result.pat_types,
+                prim.unknown,
+                &mut initial_env,
+              );
             }
           }
         }
@@ -11122,7 +11128,10 @@ impl ProgramState {
           tti::TypeKind::Ref { def: ref_def, args }
             if args.is_empty() && ref_def.0 == def.0
         );
-        if matches!(store.type_kind(ty), tti::TypeKind::Unknown) || skip_cache || (is_param_def && is_self_ref) {
+        if matches!(store.type_kind(ty), tti::TypeKind::Unknown)
+          || skip_cache
+          || (is_param_def && is_self_ref)
+        {
           self.interned_def_types.remove(&def);
         } else {
           if let DefKind::Function(func) = &def_data.kind {

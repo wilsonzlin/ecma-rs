@@ -20,10 +20,8 @@ fn destructured_object_params_are_typed() {
   );
 
   let file_id = program.file_id(&file).expect("file id");
-  let offset = source
-    .rfind("return x")
-    .expect("x in return statement") as u32
-    + "return ".len() as u32;
+  let offset =
+    source.rfind("return x").expect("x in return statement") as u32 + "return ".len() as u32;
   let ty = program.type_at(file_id, offset).expect("type at x");
   assert_eq!(program.display_type(ty).to_string(), "number");
 
@@ -43,8 +41,7 @@ fn destructured_object_params_are_typed() {
 fn destructured_array_params_are_typed() {
   let mut host = MemoryHost::default();
   let file = FileKey::new("main.ts");
-  let source: Arc<str> =
-    Arc::from("export function g([x, y]: [number, string]) { return y; }");
+  let source: Arc<str> = Arc::from("export function g([x, y]: [number, string]) { return y; }");
   host.insert(file.clone(), Arc::clone(&source));
 
   let program = Program::new(host, vec![file.clone()]);
@@ -57,10 +54,8 @@ fn destructured_array_params_are_typed() {
   );
 
   let file_id = program.file_id(&file).expect("file id");
-  let offset = source
-    .rfind("return y")
-    .expect("y in return statement") as u32
-    + "return ".len() as u32;
+  let offset =
+    source.rfind("return y").expect("y in return statement") as u32 + "return ".len() as u32;
   let ty = program.type_at(file_id, offset).expect("type at y");
   assert_eq!(program.display_type(ty).to_string(), "string");
 
@@ -85,4 +80,3 @@ fn destructured_array_params_are_typed() {
     "string"
   );
 }
-

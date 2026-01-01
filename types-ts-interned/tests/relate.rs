@@ -756,7 +756,10 @@ fn relation_uses_merged_indexer() {
   let ctx = RelateCtx::new(store.clone(), default_options());
   let a = ctx.is_assignable(src_first_readonly, dst);
   let b = ctx.is_assignable(src_first_mutable, dst);
-  assert_eq!(a, b, "assignability must not depend on indexer insertion order");
+  assert_eq!(
+    a, b,
+    "assignability must not depend on indexer insertion order"
+  );
   assert!(
     !a,
     "a readonly + mutable indexer intersection should canonicalize to readonly"

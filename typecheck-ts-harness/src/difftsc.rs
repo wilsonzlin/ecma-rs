@@ -1824,9 +1824,7 @@ impl Host for DifftscHost {
 
 fn is_source_file(path: &Path) -> bool {
   let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-  if file_name.ends_with(".d.ts")
-    || file_name.ends_with(".d.mts")
-    || file_name.ends_with(".d.cts")
+  if file_name.ends_with(".d.ts") || file_name.ends_with(".d.mts") || file_name.ends_with(".d.cts")
   {
     return true;
   }
