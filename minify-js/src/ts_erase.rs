@@ -10,7 +10,7 @@ use parse_js::ast::expr::lit::{LitArrElem, LitStrExpr, LitTemplatePart};
 use parse_js::ast::expr::pat::{ArrPat, IdPat, ObjPat, Pat};
 use parse_js::ast::expr::*;
 use parse_js::ast::func::{Func, FuncBody};
-use parse_js::ast::import_export::{ExportNames, ImportNames};
+use parse_js::ast::import_export::{ExportName, ExportNames, ImportNames, ModuleExportImportName};
 use parse_js::ast::node::{Node, NodeAssocData};
 use parse_js::ast::stmt::decl::{
   ClassDecl, FuncDecl, ParamDecl, PatDecl, VarDecl, VarDeclMode, VarDeclarator,
@@ -126,6 +126,29 @@ fn strip_stmts(ctx: &mut StripContext<'_>, stmts: &mut Vec<Node<Stmt>>, is_top_l
 
 fn empty_stmt(loc: Loc) -> Node<Stmt> {
   Node::new(loc, Stmt::Empty(Node::new(loc, EmptyStmt {})))
+}
+
+fn export_binding_stmt(loc: Loc, name: String) -> Node<Stmt> {
+  let export_name = Node::new(
+    loc,
+    ExportName {
+      type_only: false,
+      exportable: ModuleExportImportName::Ident(name.clone()),
+      alias: Node::new(loc, IdPat { name }),
+    },
+  );
+  Node::new(
+    loc,
+    Stmt::ExportList(Node::new(
+      loc,
+      ExportListStmt {
+        type_only: false,
+        names: ExportNames::Specific(vec![export_name]),
+        from: None,
+        attributes: None,
+      },
+    )),
+  )
 }
 
 fn strip_stmt_required(
@@ -329,11 +352,6 @@ fn collect_top_level_value_bindings(stmts: &[Node<Stmt>]) -> HashSet<String> {
           if let Some(name) = class.stx.name.as_ref().map(|name| name.stx.name.clone()) {
             names.insert(name);
           }
-        }
-      }
-      Stmt::EnumDecl(enum_decl) => {
-        if !enum_decl.stx.declare {
-          names.insert(enum_decl.stx.name.clone());
         }
       }
       _ => {}
@@ -1671,7 +1689,7 @@ fn strip_enum_decl(
     .iter()
     .map(|member| member.stx.name.clone())
     .collect();
-  let should_export_var = parent_namespace.is_none()
+  let should_export_binding = parent_namespace.is_none()
     && is_top_level
     && matches!(ctx.top_level_mode, TopLevelMode::Module)
     && decl.stx.export
@@ -1679,15 +1697,28 @@ fn strip_enum_decl(
     && ctx.emitted_export_var.insert(enum_name.clone());
 
   let mut out = Vec::new();
-  out.push(ts_lower::var_decl_stmt(
-    loc,
-    enum_name.clone(),
-    None,
-    should_export_var,
-    VarDeclMode::Var,
-  ));
-  if parent_namespace.is_none() && is_top_level {
-    ctx.top_level_value_bindings.insert(enum_name.clone());
+  let has_top_level_value_binding = parent_namespace.is_none()
+    && is_top_level
+    && ctx.top_level_value_bindings.contains(&enum_name);
+  if should_export_binding && has_top_level_value_binding {
+    out.push(export_binding_stmt(loc, enum_name.clone()));
+  }
+  let should_export_var = should_export_binding && !has_top_level_value_binding;
+  let needs_var_decl = parent_namespace.is_some()
+    || !is_top_level
+    || should_export_var
+    || !has_top_level_value_binding;
+  if needs_var_decl {
+    out.push(ts_lower::var_decl_stmt(
+      loc,
+      enum_name.clone(),
+      None,
+      should_export_var,
+      VarDeclMode::Var,
+    ));
+    if parent_namespace.is_none() && is_top_level {
+      ctx.top_level_value_bindings.insert(enum_name.clone());
+    }
   }
 
   let enum_alias = format!("__minify_ts_enum_{enum_name}");
@@ -1978,7 +2009,7 @@ fn strip_namespace_decl(
   let namespace_name = decl.stx.name.clone();
   let mut out = Vec::new();
 
-  let should_export_var = parent_namespace.is_none()
+  let should_export_binding = parent_namespace.is_none()
     && is_top_level
     && matches!(ctx.top_level_mode, TopLevelMode::Module)
     && decl.stx.export
@@ -1988,6 +2019,10 @@ fn strip_namespace_decl(
   let has_top_level_value_binding = parent_namespace.is_none()
     && is_top_level
     && ctx.top_level_value_bindings.contains(&namespace_name);
+  if should_export_binding && has_top_level_value_binding {
+    out.push(export_binding_stmt(loc, namespace_name.clone()));
+  }
+  let should_export_var = should_export_binding && !has_top_level_value_binding;
   let needs_var_decl = parent_namespace.is_some()
     || !is_top_level
     || should_export_var

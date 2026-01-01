@@ -668,7 +668,7 @@ fn lowers_runtime_namespaces_to_parseable_js() {
   let src = r#"
      export namespace NS {
        export const x: number = 1;
-      export function get() { return x; }
+       export function get() { return x; }
       export namespace Inner {
         export const y = 2;
       }
@@ -683,6 +683,58 @@ fn lowers_runtime_namespaces_to_parseable_js() {
     other => panic!("expected namespace var decl, got {other:?}"),
   };
   assert!(decl.stx.export);
+}
+
+#[test]
+fn exports_namespaces_merged_with_existing_classes_without_var_redecls() {
+  let src = r#"
+    class C {}
+    export namespace C { export const x = 1; }
+  "#;
+  let mut parsed = parse_with_options(
+    src,
+    ParseOptions {
+      dialect: Dialect::Ts,
+      source_type: SourceType::Module,
+    },
+  )
+  .expect("input should parse");
+  crate::ts_erase::erase_types(FileId(0), TopLevelMode::Module, src, &mut parsed)
+    .expect("type erasure should succeed");
+
+  assert_eq!(parsed.stx.body.len(), 3);
+  assert!(matches!(parsed.stx.body[0].stx.as_ref(), Stmt::ClassDecl(_)));
+  let export_stmt = match parsed.stx.body[1].stx.as_ref() {
+    Stmt::ExportList(stmt) => stmt,
+    other => panic!("expected export list statement, got {other:?}"),
+  };
+  assert!(export_stmt.stx.from.is_none());
+  match &export_stmt.stx.names {
+    parse_js::ast::import_export::ExportNames::Specific(names) => {
+      assert_eq!(names.len(), 1);
+      let name = names.first().expect("export name");
+      assert_eq!(name.stx.alias.stx.name, "C");
+    }
+    other => panic!("expected specific exports, got {other:?}"),
+  };
+  assert!(
+    matches!(parsed.stx.body[2].stx.as_ref(), Stmt::Expr(_)),
+    "expected namespace IIFE statement"
+  );
+
+  let mut found_var_decl = false;
+  for stmt in &parsed.stx.body {
+    if let Stmt::VarDecl(decl) = stmt.stx.as_ref() {
+      for declarator in &decl.stx.declarators {
+        if let parse_js::ast::expr::pat::Pat::Id(id) = declarator.pattern.stx.pat.stx.as_ref() {
+          if id.stx.name == "C" {
+            found_var_decl = true;
+          }
+        }
+      }
+    }
+  }
+  assert!(!found_var_decl, "should not introduce `var C;` for class-merged namespaces");
 }
 
 #[test]
