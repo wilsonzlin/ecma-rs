@@ -143,6 +143,18 @@ fn reexport_keeps_renamed_string_import_aliases_in_sync() {
 }
 
 #[test]
+fn reexport_keeps_renamed_default_import_with_string_alias_in_sync() {
+  // `default` is special-cased by the parser/emitters; ensure that importing it
+  // via a named specifier and giving it a string-literal local name still works
+  // with renaming + export specifier rewrites.
+  let result = minified(
+    TopLevelMode::Module,
+    r#"import { default as "c-d" } from "x";export { "c-d" as "e-f" };"#,
+  );
+  assert_eq!(result, r#"import{default as a}from"x";export{a as"e-f"};"#);
+}
+
+#[test]
 fn reexport_keeps_renamed_string_namespace_import_aliases_in_sync() {
   // Namespace imports can also use string aliases. When we rename the internal
   // binding, ensure export specifiers are updated to reference the renamed name.
