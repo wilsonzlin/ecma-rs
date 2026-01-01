@@ -2377,6 +2377,27 @@ impl<'a> Checker<'a> {
             } else {
               self.check_expr(expr)
             };
+            // Nested object literals are also "fresh" and participate in excess
+            // property checks when contextually typed by an expected property
+            // type.
+            //
+            // Without this, `let x: { nested: { foo: number } } = { nested: { foo: 1, bar: 2 } }`
+            // would be accepted because `{ foo: 1, bar: 2 }` is structurally
+            // assignable to `{ foo: number }` once it is no longer treated as a
+            // fresh literal.
+            if expected_prop != prim.unknown {
+              if let AstExpr::LitObj(nested_obj) = expr.stx.as_ref() {
+                if self.has_excess_properties(nested_obj, expected_prop) {
+                  self.diagnostics.push(codes::EXCESS_PROPERTY.error(
+                    "excess property",
+                    Span {
+                      file: self.file,
+                      range: loc_to_range(self.file, nested_obj.loc),
+                    },
+                  ));
+                }
+              }
+            }
             let ty = if expected_prop != prim.unknown {
               self.contextual_widen_container(expr_ty, expected_prop)
             } else if self.widen_object_literals {
