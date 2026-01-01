@@ -180,6 +180,15 @@ fn reexport_does_not_keep_or_rename_same_named_locals() {
 }
 
 #[test]
+fn preserves_default_export_in_reexports() {
+  let result = minified(
+    TopLevelMode::Module,
+    "const foo=1;export { default } from \"mod\";",
+  );
+  assert_eq!(result, "export{default}from\"mod\";");
+}
+
+#[test]
 fn preserves_string_export_names_in_reexports() {
   let result = minified(
     TopLevelMode::Module,
