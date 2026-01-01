@@ -1099,14 +1099,11 @@ fn mapped_type_remap_as_never_filters_keys() {
   let default_expander = MockExpander::default();
   let mut eval = evaluator(store.clone(), &default_expander);
   let result = eval.evaluate(mapped);
-  let TypeKind::Object(obj) = store.type_kind(result) else {
-    panic!("expected object, got {:?}", store.type_kind(result));
-  };
-  let shape = store.shape(store.object(obj).shape);
-  assert!(shape.properties.is_empty());
-  assert!(shape.indexers.is_empty());
-  assert!(shape.call_signatures.is_empty());
-  assert!(shape.construct_signatures.is_empty());
+  assert!(
+    matches!(store.type_kind(result), TypeKind::EmptyObject),
+    "expected {{}}, got {:?}",
+    store.type_kind(result)
+  );
 }
 
 #[test]

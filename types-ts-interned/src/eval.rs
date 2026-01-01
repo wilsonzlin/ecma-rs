@@ -1005,6 +1005,17 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
       construct_signatures: Vec::new(),
       indexers,
     };
+
+    // Mapped types always produce an object type literal. If it has no keys, the
+    // result is the empty object type literal `{}` (which is semantically
+    // distinct from the `object` keyword).
+    if shape.properties.is_empty()
+      && shape.indexers.is_empty()
+      && shape.call_signatures.is_empty()
+      && shape.construct_signatures.is_empty()
+    {
+      return self.store.intern_type(TypeKind::EmptyObject);
+    }
     let shape_id = self.store.intern_shape(shape);
     let obj = self
       .store
