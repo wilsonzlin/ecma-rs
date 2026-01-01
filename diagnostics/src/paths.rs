@@ -43,25 +43,8 @@ pub fn normalize_ts_path(raw: &str) -> String {
     }
   }
 
-  // Split on either slash flavor so we don't need to allocate a normalized intermediate.
-  let mut components: Vec<&str> = Vec::new();
-  let bytes = rest.as_bytes();
-  let mut segment_start = 0;
-  for idx in 0..=bytes.len() {
-    if idx == bytes.len() || bytes[idx] == b'/' || bytes[idx] == b'\\' {
-      let part = &rest[segment_start..idx];
-      segment_start = idx + 1;
-      if part.is_empty() || part == "." {
-        continue;
-      }
-      if part == ".." {
-        components.pop();
-        continue;
-      }
-      components.push(part);
-    }
-  }
-
+  // Build the normalized output directly, using the output buffer itself as the "stack" for `..`
+  // segment popping. This avoids allocating a temporary `Vec<&str>` of components.
   let mut normalized = String::with_capacity(raw.len() + 1);
   if let Some(drive) = drive {
     normalized.push(drive);
@@ -71,12 +54,55 @@ pub fn normalize_ts_path(raw: &str) -> String {
     // Treat bare relative inputs as rooted at `/` for determinism.
     normalized.push('/');
   }
+  let root_len = normalized.len();
 
-  for (idx, part) in components.iter().enumerate() {
-    if idx > 0 {
-      normalized.push('/');
+  // Split on either slash flavor so we don't need to allocate a normalized intermediate.
+  let bytes = rest.as_bytes();
+  let mut segment_start = 0;
+  for idx in 0..=bytes.len() {
+    if idx == bytes.len() || bytes[idx] == b'/' || bytes[idx] == b'\\' {
+      let part = &rest[segment_start..idx];
+      segment_start = idx + 1;
+      if part.is_empty() || part == "." {
+        continue;
+      }
+
+      if part == ".." {
+        if normalized.len() <= root_len {
+          continue;
+        }
+
+        // Remove the last segment without escaping the root.
+        let end = normalized.len();
+        // If the current buffer ends with a slash (only happens at the root), skip it so we pop a
+        // real segment boundary.
+        let search_end = if end > root_len && normalized.ends_with('/') {
+          end - 1
+        } else {
+          end
+        };
+        if search_end <= root_len {
+          normalized.truncate(root_len);
+          continue;
+        }
+
+        if let Some(pos) = normalized[..search_end].rfind('/') {
+          if pos < root_len {
+            normalized.truncate(root_len);
+          } else {
+            normalized.truncate(pos);
+          }
+        } else {
+          normalized.truncate(root_len);
+        }
+        continue;
+      }
+
+      if !normalized.ends_with('/') {
+        normalized.push('/');
+      }
+      normalized.push_str(part);
     }
-    normalized.push_str(part);
   }
 
   normalized
