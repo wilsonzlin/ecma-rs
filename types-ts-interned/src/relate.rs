@@ -23,7 +23,7 @@ use bitflags::bitflags;
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 
@@ -72,6 +72,9 @@ pub struct ReasonNode {
 const MAX_REASON_DEPTH: usize = 12;
 const MAX_REASON_NODES: usize = 256;
 const MAX_INDEXER_KEY_MATCH_DEPTH: usize = 64;
+const MAX_TEMPLATE_MATCH_DEPTH: usize = 32;
+const MAX_TEMPLATE_MATCH_STATES: usize = 1024;
+const MAX_TEMPLATE_ATOM_STRINGS: usize = 1024;
 
 #[derive(Default, Debug)]
 struct ReasonBudget {
@@ -977,6 +980,203 @@ impl<'a> RelateCtx<'a> {
     }
   }
 
+  fn template_atom_strings(
+    &self,
+    ty: TypeId,
+    depth: usize,
+    visited: &mut HashSet<TypeId>,
+  ) -> Option<Vec<String>> {
+    if depth >= MAX_TEMPLATE_MATCH_DEPTH {
+      return None;
+    }
+    if !visited.insert(ty) {
+      // Cyclic template-literal graphs are treated as non-enumerable.
+      return None;
+    }
+
+    let mut result = match self.store.type_kind(ty) {
+      TypeKind::StringLiteral(id) => Some(vec![self.store.name(id)]),
+      TypeKind::NumberLiteral(num) => Some(vec![num.0.to_string()]),
+      TypeKind::BooleanLiteral(val) => Some(vec![val.to_string()]),
+      TypeKind::TemplateLiteral(tpl) => self.template_strings(&tpl, depth + 1, visited),
+      TypeKind::Union(members) => {
+        let mut out = Vec::new();
+        let mut ok = true;
+        for member in members {
+          let Some(mut vals) = self.template_atom_strings(member, depth + 1, visited) else {
+            ok = false;
+            break;
+          };
+          out.append(&mut vals);
+          if out.len() > MAX_TEMPLATE_ATOM_STRINGS {
+            ok = false;
+            break;
+          }
+        }
+        ok.then_some(out)
+      }
+      TypeKind::Never => Some(Vec::new()),
+      _ => None,
+    };
+
+    if let Some(strings) = result.as_mut() {
+      strings.sort();
+      strings.dedup();
+      if strings.len() > MAX_TEMPLATE_ATOM_STRINGS {
+        result = None;
+      }
+    }
+
+    visited.remove(&ty);
+    result
+  }
+
+  fn template_strings(
+    &self,
+    tpl: &crate::TemplateLiteralType,
+    depth: usize,
+    visited: &mut HashSet<TypeId>,
+  ) -> Option<Vec<String>> {
+    if depth >= MAX_TEMPLATE_MATCH_DEPTH {
+      return None;
+    }
+
+    let mut acc = vec![tpl.head.clone()];
+    for span in tpl.spans.iter() {
+      if acc.is_empty() {
+        break;
+      }
+      let atom_strings = self.template_atom_strings(span.ty, depth + 1, visited)?;
+      if atom_strings.is_empty() {
+        acc.clear();
+        break;
+      }
+      match acc.len().checked_mul(atom_strings.len()) {
+        Some(product) if product <= MAX_TEMPLATE_ATOM_STRINGS => {}
+        _ => return None,
+      }
+      let mut next = Vec::new();
+      for base in &acc {
+        for atom in &atom_strings {
+          if next.len() >= MAX_TEMPLATE_ATOM_STRINGS {
+            return None;
+          }
+          let mut new = base.clone();
+          new.push_str(atom);
+          new.push_str(&span.literal);
+          next.push(new);
+        }
+      }
+      acc = next;
+    }
+    if acc.len() > MAX_TEMPLATE_ATOM_STRINGS {
+      return None;
+    }
+    acc.sort();
+    acc.dedup();
+    Some(acc)
+  }
+
+  fn string_matches_template(
+    &self,
+    value: &str,
+    tpl: &crate::TemplateLiteralType,
+    depth: usize,
+  ) -> bool {
+    if depth >= MAX_TEMPLATE_MATCH_DEPTH {
+      return false;
+    }
+
+    if !value.starts_with(&tpl.head) {
+      return false;
+    }
+
+    let mut span_atoms: Vec<Option<Vec<String>>> = Vec::with_capacity(tpl.spans.len());
+    for span in tpl.spans.iter() {
+      let mut visited = HashSet::new();
+      span_atoms.push(self.template_atom_strings(span.ty, depth + 1, &mut visited));
+    }
+
+    let mut queue = VecDeque::new();
+    queue.push_back((0usize, tpl.head.len()));
+
+    let mut seen = HashSet::new();
+    let mut processed = 0usize;
+
+    while let Some((idx, pos)) = queue.pop_front() {
+      if !seen.insert((idx, pos)) {
+        continue;
+      }
+      processed += 1;
+      if processed > MAX_TEMPLATE_MATCH_STATES {
+        return false;
+      }
+
+      if idx == tpl.spans.len() {
+        if pos == value.len() {
+          return true;
+        }
+        continue;
+      }
+
+      let span = &tpl.spans[idx];
+      let Some(remainder) = value.get(pos..) else {
+        continue;
+      };
+
+      match &span_atoms[idx] {
+        Some(atoms) => {
+          for atom in atoms {
+            if !remainder.starts_with(atom) {
+              continue;
+            }
+            let after_atom = pos + atom.len();
+            let Some(after_atom_str) = value.get(after_atom..) else {
+              continue;
+            };
+            if !after_atom_str.starts_with(&span.literal) {
+              continue;
+            }
+            queue.push_back((idx + 1, after_atom + span.literal.len()));
+          }
+        }
+        None => {
+          if span.literal.is_empty() {
+            queue.push_back((idx + 1, pos));
+            for (off, _) in remainder.char_indices().skip(1) {
+              if processed + queue.len() >= MAX_TEMPLATE_MATCH_STATES {
+                break;
+              }
+              queue.push_back((idx + 1, pos + off));
+            }
+            queue.push_back((idx + 1, value.len()));
+          } else {
+            let mut search_pos = pos;
+            while search_pos <= value.len() {
+              let Some(search_slice) = value.get(search_pos..) else {
+                break;
+              };
+              let Some(found_rel) = search_slice.find(&span.literal) else {
+                break;
+              };
+              let found = search_pos + found_rel;
+              queue.push_back((idx + 1, found + span.literal.len()));
+              if processed + queue.len() >= MAX_TEMPLATE_MATCH_STATES {
+                break;
+              }
+              let Some(ch) = value.get(found..).and_then(|s| s.chars().next()) else {
+                break;
+              };
+              search_pos = found + ch.len_utf8();
+            }
+          }
+        }
+      }
+    }
+
+    false
+  }
+
   fn assignable_special(&self, src: &TypeKind, dst: &TypeKind) -> Option<bool> {
     let opts = &self.options;
     match (src, dst) {
@@ -1027,6 +1227,27 @@ impl<'a> RelateCtx<'a> {
       (TypeKind::NumberLiteral(_), TypeKind::Number) => Some(true),
       (TypeKind::StringLiteral(_), TypeKind::String) => Some(true),
       (TypeKind::BigIntLiteral(_), TypeKind::BigInt) => Some(true),
+      (TypeKind::StringLiteral(src), TypeKind::TemplateLiteral(dst_tpl)) => {
+        let value = self.store.name(*src);
+        Some(self.string_matches_template(&value, dst_tpl, 0))
+      }
+      (TypeKind::TemplateLiteral(src_tpl), TypeKind::TemplateLiteral(dst_tpl)) => {
+        let mut visited = HashSet::new();
+        match self.template_strings(src_tpl, 0, &mut visited) {
+          Some(src_strings) => Some(
+            src_strings
+              .iter()
+              .all(|s| self.string_matches_template(s, dst_tpl, 0)),
+          ),
+          None => {
+            // Non-enumerable template literal types can contain infinitely many
+            // strings. We do not currently attempt to prove template-to-template
+            // assignability for those patterns, so only identical TypeIds
+            // (handled earlier) are accepted.
+            Some(false)
+          }
+        }
+      }
       (TypeKind::TemplateLiteral(_), TypeKind::String) => Some(true),
       (TypeKind::UniqueSymbol, TypeKind::Symbol) => Some(true),
       (TypeKind::Predicate { .. }, TypeKind::Boolean) => Some(true),

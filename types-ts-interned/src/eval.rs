@@ -1134,12 +1134,10 @@ impl<'a, E: TypeExpander> TypeEvaluator<'a, E> {
             ty: self.evaluate_with_subst(chunk.ty, subst, depth + 1),
           })
           .collect();
-        self
-          .store
-          .intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
-            head: tpl.head,
-            spans: evaluated_spans,
-          }))
+        self.store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+          head: tpl.head,
+          spans: evaluated_spans,
+        }))
       }
     }
   }

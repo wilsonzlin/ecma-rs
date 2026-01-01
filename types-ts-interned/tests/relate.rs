@@ -15,7 +15,9 @@ use types_ts_interned::TypeKind;
 use types_ts_interned::TypeOptions;
 use types_ts_interned::TypeParamId;
 use types_ts_interned::TypeStore;
-use types_ts_interned::{MappedModifier, MappedType, Shape, Signature};
+use types_ts_interned::{
+  MappedModifier, MappedType, Shape, Signature, TemplateChunk, TemplateLiteralType,
+};
 
 fn default_options() -> TypeOptions {
   TypeOptions {
@@ -1524,4 +1526,44 @@ fn cyclic_reference_conditional_normalization_terminates() {
 
   let ctx = RelateCtx::with_hooks(store.clone(), store.options(), hooks);
   assert!(ctx.is_assignable(primitives.number, tref));
+}
+
+#[test]
+fn string_literal_assignable_to_template_literal_pattern() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let foo_bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo_bar")));
+  let foo = store.intern_type(TypeKind::StringLiteral(store.intern_name("foo")));
+
+  let template = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+    head: "foo".into(),
+    spans: vec![TemplateChunk {
+      ty: primitives.string,
+      literal: "".into(),
+    }],
+  }));
+
+  assert!(ctx.is_assignable(foo_bar, template));
+  assert!(ctx.is_assignable(foo, template));
+}
+
+#[test]
+fn string_literal_not_assignable_to_template_literal_pattern() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let bar = store.intern_type(TypeKind::StringLiteral(store.intern_name("bar")));
+
+  let template = store.intern_type(TypeKind::TemplateLiteral(TemplateLiteralType {
+    head: "foo".into(),
+    spans: vec![TemplateChunk {
+      ty: primitives.string,
+      literal: "".into(),
+    }],
+  }));
+
+  assert!(!ctx.is_assignable(bar, template));
 }
