@@ -11,6 +11,7 @@ use parse_js::lex::{lex_next, LexMode, Lexer};
 use parse_js::{parse_with_options_cancellable, Dialect, ParseOptions, SourceType};
 use rayon::prelude::*;
 use serde::Serialize;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::fs;
@@ -155,6 +156,15 @@ fn empty_test_result(path: &Path) -> TestResult {
     diagnostics: Vec::new(),
     timed_out: false,
     files_store: SimpleFiles::default(),
+  }
+}
+
+fn normalize_path_for_compare(path: &Path) -> Cow<'_, str> {
+  let raw = path.to_string_lossy();
+  if raw.contains('\\') {
+    Cow::Owned(raw.replace('\\', "/"))
+  } else {
+    raw
   }
 }
 
@@ -868,13 +878,13 @@ Ensure the TypeScript submodule is checked out:\n  git submodule update --init -
   }
 
   if let Some(filter) = &options.filter {
-    tests.retain(|path| normalize_path(path).contains(filter));
+    tests.retain(|path| normalize_path_for_compare(path).contains(filter));
   }
 
   if let Some(report_path) = &options.failures_path {
     let failing = load_failure_paths(report_path);
     if !failing.is_empty() {
-      tests.retain(|path| failing.contains(&normalize_path(path)));
+      tests.retain(|path| failing.contains(normalize_path_for_compare(path).as_ref()));
     }
   }
 
