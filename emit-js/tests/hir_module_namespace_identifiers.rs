@@ -76,6 +76,30 @@ fn hir_keeps_reexport_default_shorthand() {
 }
 
 #[test]
+fn hir_emits_default_reexport_with_identifier_alias() {
+  roundtrip(
+    "export { default as foo } from \"mod\";",
+    "export{default as foo}from\"mod\";",
+  );
+}
+
+#[test]
+fn hir_emits_named_reexport_as_default() {
+  roundtrip(
+    "export { foo as default } from \"mod\";",
+    "export{foo as default}from\"mod\";",
+  );
+}
+
+#[test]
+fn hir_emits_named_import_of_default_with_alias() {
+  roundtrip(
+    "import { default as foo } from \"mod\";",
+    "import{default as foo}from\"mod\";",
+  );
+}
+
+#[test]
 fn hir_emits_string_literal_import_alias() {
   roundtrip(
     "import { \"a-b\" as \"c-d\" } from \"x\";",

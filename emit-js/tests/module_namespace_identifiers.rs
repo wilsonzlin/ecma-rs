@@ -73,6 +73,30 @@ fn reexport_default_name_does_not_require_as() {
 }
 
 #[test]
+fn reexport_default_can_be_aliased() {
+  roundtrip(
+    "export { default as foo } from \"mod\";",
+    "export{default as foo}from\"mod\";",
+  );
+}
+
+#[test]
+fn reexport_named_can_be_aliased_as_default() {
+  roundtrip(
+    "export { foo as default } from \"mod\";",
+    "export{foo as default}from\"mod\";",
+  );
+}
+
+#[test]
+fn import_named_default_requires_as() {
+  roundtrip(
+    "import { default as foo } from \"mod\";",
+    "import{default as foo}from\"mod\";",
+  );
+}
+
+#[test]
 fn import_alias_can_be_string_literal() {
   roundtrip(
     "import { \"a-b\" as \"c-d\" } from \"x\";",
