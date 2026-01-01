@@ -633,6 +633,7 @@ pub fn check_body_with_expander(
     jsx_element_ty: None,
     jsx_intrinsic_elements_ty: None,
     jsx_intrinsic_attributes_ty: None,
+    jsx_intrinsic_class_attributes_def: None,
     jsx_children_prop_name: None,
     jsx_namespace_missing_reported: false,
     expr_types,
@@ -740,6 +741,7 @@ struct Checker<'a> {
   jsx_element_ty: Option<TypeId>,
   jsx_intrinsic_elements_ty: Option<TypeId>,
   jsx_intrinsic_attributes_ty: Option<TypeId>,
+  jsx_intrinsic_class_attributes_def: Option<Option<DefId>>,
   jsx_children_prop_name: Option<TsNameId>,
   jsx_namespace_missing_reported: bool,
   expr_types: Vec<TypeId>,
@@ -2114,7 +2116,8 @@ impl<'a> Checker<'a> {
     }
 
     let call_sigs = self.jsx_component_call_signatures(component_ty);
-    let (sigs, contextual_return) = if !call_sigs.is_empty() {
+    let is_construct = call_sigs.is_empty();
+    let (sigs, contextual_return) = if !is_construct {
       let contextual_return = !matches!(
         self.store.type_kind(element_ty),
         TypeKind::Any | TypeKind::Unknown
@@ -2156,6 +2159,12 @@ impl<'a> Checker<'a> {
         let mut substituter = Substituter::new(Arc::clone(&self.store), inference.substitutions);
         props_ty = substituter.substitute_type(props_ty);
         ret_ty = substituter.substitute_type(ret_ty);
+      }
+      if is_construct {
+        let class_attrs = self.jsx_intrinsic_class_attributes_type(ret_ty);
+        if !matches!(self.store.type_kind(class_attrs), TypeKind::EmptyObject) {
+          props_ty = self.store.intersection(vec![props_ty, class_attrs]);
+        }
       }
       all_props.push(props_ty);
       if contextual_return_ty.is_some() && self.relate.is_assignable(ret_ty, element_ty) {
@@ -2330,6 +2339,30 @@ impl<'a> Checker<'a> {
       .unwrap_or_else(|| self.store.intern_type(TypeKind::EmptyObject));
     self.jsx_intrinsic_attributes_ty = Some(ty);
     ty
+  }
+
+  fn jsx_intrinsic_class_attributes_def_id(&mut self) -> Option<DefId> {
+    if let Some(cached) = self.jsx_intrinsic_class_attributes_def.as_ref() {
+      return *cached;
+    }
+    let def = self
+      .resolve_type_ref(&["JSX", "IntrinsicClassAttributes"])
+      .and_then(|ty| match self.store.type_kind(ty) {
+        TypeKind::Ref { def, args } if args.is_empty() => Some(def),
+        _ => None,
+      });
+    self.jsx_intrinsic_class_attributes_def = Some(def);
+    def
+  }
+
+  fn jsx_intrinsic_class_attributes_type(&mut self, instance: TypeId) -> TypeId {
+    let Some(def) = self.jsx_intrinsic_class_attributes_def_id() else {
+      return self.store.intern_type(TypeKind::EmptyObject);
+    };
+    self.store.canon(self.store.intern_type(TypeKind::Ref {
+      def,
+      args: vec![instance],
+    }))
   }
 
   fn jsx_children_prop_key(&mut self, _loc: Loc) -> TsNameId {

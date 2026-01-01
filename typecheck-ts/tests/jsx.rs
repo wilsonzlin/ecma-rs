@@ -611,3 +611,50 @@ const bad = <div key={123} />;
     "did not expect excess property diagnostics, got {diagnostics:?}"
   );
 }
+
+#[test]
+fn intrinsic_class_attributes_apply_to_construct_signatures() {
+  let mut options = CompilerOptions::default();
+  options.no_default_lib = true;
+  options.jsx = Some(JsxMode::React);
+
+  let jsx = LibFile {
+    key: FileKey::new("jsx.d.ts"),
+    name: Arc::from("jsx.d.ts"),
+    kind: FileKind::Dts,
+    text: Arc::from(
+      r#"
+declare namespace JSX {
+  interface Element {}
+  interface IntrinsicAttributes { key?: string }
+  interface IntrinsicClassAttributes<T> { ref?: T }
+}
+"#,
+    ),
+  };
+
+  let entry = FileKey::new("entry.tsx");
+  let source = r#"
+interface FooInstance { readonly _tag: "Foo" }
+declare const Foo: { new (props: { x: number }): FooInstance };
+declare const inst: FooInstance;
+const ok = <Foo x={1} ref={inst} key="k" />;
+const bad = <Foo x={1} ref={123} />;
+"#;
+  let host = TestHost::new(options).with_lib(jsx).with_file(entry.clone(), source);
+  let program = Program::new(host, vec![entry]);
+  let diagnostics = program.check();
+
+  assert!(
+    diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::TYPE_MISMATCH.as_str()),
+    "expected a type mismatch diagnostic for bad ref type, got {diagnostics:?}"
+  );
+  assert!(
+    !diagnostics
+      .iter()
+      .any(|d| d.code.as_str() == codes::EXCESS_PROPERTY.as_str()),
+    "did not expect excess property diagnostics, got {diagnostics:?}"
+  );
+}
