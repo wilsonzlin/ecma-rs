@@ -1174,13 +1174,30 @@ impl SnapshotStore {
 
   fn path_for(&self, id: &str) -> PathBuf {
     let mut path = self.base.join(id);
+    if let Some(ext) = path.extension().and_then(|s| s.to_str()) {
+      path.set_extension(format!("{ext}.json"));
+    } else {
+      path.set_extension("json");
+    }
+    path
+  }
+
+  fn legacy_path_for(&self, id: &str) -> PathBuf {
+    let mut path = self.base.join(id);
     path.set_extension("json");
     path
   }
 
   fn load(&self, id: &str) -> std::io::Result<TscDiagnostics> {
     let path = self.path_for(id);
-    let data = read_utf8_file(&path)?;
+    let data = match read_utf8_file(&path) {
+      Ok(data) => data,
+      Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+        let legacy = self.legacy_path_for(id);
+        read_utf8_file(&legacy)?
+      }
+      Err(err) => return Err(err),
+    };
     let parsed: TscDiagnostics = serde_json::from_str(&data)?;
     let version = parsed.schema_version.unwrap_or(0);
     if version != TSC_BASELINE_SCHEMA_VERSION {
@@ -1213,6 +1230,7 @@ mod tests {
   use std::sync::atomic::{AtomicUsize, Ordering};
   use std::sync::Arc;
   use std::time::Duration;
+  use tempfile::tempdir;
 
   #[test]
   fn shard_parse_rejects_invalid() {
@@ -1563,5 +1581,41 @@ mod tests {
       .resolve("/node_modules/@types/foo/index.d.ts")
       .unwrap();
     assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn snapshots_preserve_extension_and_load_legacy_paths() {
+    let tmp = tempdir().unwrap();
+    let store = SnapshotStore {
+      base: tmp.path().to_path_buf(),
+    };
+
+    let ts = store.path_for("foo.ts");
+    let tsx = store.path_for("foo.tsx");
+    assert_ne!(ts, tsx);
+    assert_eq!(ts.file_name().unwrap(), "foo.ts.json");
+    assert_eq!(tsx.file_name().unwrap(), "foo.tsx.json");
+
+    let legacy_path = store.legacy_path_for("foo.ts");
+    let payload = TscDiagnostics {
+      schema_version: Some(TSC_BASELINE_SCHEMA_VERSION),
+      metadata: Default::default(),
+      diagnostics: vec![crate::tsc::TscDiagnostic {
+        code: 1,
+        file: None,
+        start: 0,
+        end: 0,
+        category: None,
+        message: None,
+      }],
+      crash: None,
+      type_facts: None,
+    };
+    let json = serde_json::to_string(&payload).unwrap();
+    std::fs::write(legacy_path, json).unwrap();
+
+    let loaded = store.load("foo.ts").unwrap();
+    assert_eq!(loaded.diagnostics.len(), 1);
+    assert_eq!(loaded.diagnostics[0].code, 1);
   }
 }

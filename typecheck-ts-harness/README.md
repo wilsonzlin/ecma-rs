@@ -166,7 +166,9 @@ cargo run -p typecheck-ts-harness --release -- difftsc --suite fixtures/difftsc 
 - TSC and Rust executions are parallelized across `--jobs` workers. Node
   invocations are concurrency-limited to keep process count bounded, and JSON
   output is stably ordered regardless of scheduling.
-- Baselines are read from/written to `baselines/<suite>/<test>.json` (see below).
+- Baselines are read from/written to `baselines/<suite>/<test>.json`, where the
+  filename is the test id with `.json` appended (so single-file tests preserve
+  their original extension, e.g. `match/basic.ts` → `baselines/conformance-mini/match/basic.ts.json`).
 - The runner uses `ts.getPreEmitDiagnostics` with `noEmit`, `skipLibCheck` and
   writes `{ schemaVersion, metadata: { typescriptVersion, options }, diagnostics: [...] }`.
 
@@ -202,7 +204,8 @@ the suite name (e.g. `difftsc/assignability`).
   - Single-file tests are `<name>.ts/tsx/js/...`
   - Multi-file tests are directories (all TS/JS files inside are included).
   - Test names come from the file stem or directory name.
-- Baselines live under `baselines/<suite>/<test>.json`.
+- Baselines live under `baselines/<suite>/<test>.json` (the test id plus `.json`,
+  so single-file tests become e.g. `<name>.ts.json`).
 - Baselines carry a schema version plus the `typescript` version/options used to
   generate them.
 - To add/update tests:
