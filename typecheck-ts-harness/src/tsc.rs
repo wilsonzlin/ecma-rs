@@ -34,6 +34,7 @@ pub struct TscRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TypeQuery {
   pub file: String,
+  /// UTF-8 byte offset into `file` where the query should be resolved.
   pub offset: u32,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub line: Option<u32>,
@@ -86,7 +87,9 @@ pub struct TscCrash {
 pub struct TscDiagnostic {
   pub code: u32,
   pub file: Option<String>,
+  /// UTF-8 byte offset into `file`.
   pub start: u32,
+  /// UTF-8 byte offset into `file`.
   pub end: u32,
   pub category: Option<String>,
   #[serde(default)]
@@ -118,6 +121,7 @@ pub struct ExportTypeFact {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeAtFact {
   pub file: String,
+  /// UTF-8 byte offset into `file` where the type was queried.
   pub offset: u32,
   #[serde(default, skip_serializing_if = "Option::is_none")]
   pub line: Option<u32>,

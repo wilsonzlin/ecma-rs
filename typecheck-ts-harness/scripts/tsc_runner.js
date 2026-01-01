@@ -18,6 +18,77 @@ function normalizePath(fileName) {
   return path.posix.normalize(fileName.replace(/\\/g, "/"));
 }
 
+function utf16ToUtf8ByteOffset(text, utf16Pos) {
+  if (!text || utf16Pos <= 0) {
+    return 0;
+  }
+  const target = Math.min(utf16Pos, text.length);
+  let bytes = 0;
+  let idx = 0;
+  while (idx < target) {
+    const code = text.charCodeAt(idx);
+    if (code < 0x80) {
+      bytes += 1;
+      idx += 1;
+      continue;
+    }
+    if (code < 0x800) {
+      bytes += 2;
+      idx += 1;
+      continue;
+    }
+    // Surrogate pair (UTF-16 uses 2 code units, UTF-8 uses 4 bytes).
+    if (code >= 0xd800 && code <= 0xdbff && idx + 1 < text.length) {
+      const next = text.charCodeAt(idx + 1);
+      if (next >= 0xdc00 && next <= 0xdfff && idx + 1 < target) {
+        bytes += 4;
+        idx += 2;
+        continue;
+      }
+    }
+    bytes += 3;
+    idx += 1;
+  }
+  return bytes;
+}
+
+function utf8ByteOffsetToUtf16(text, bytePos) {
+  if (!text || bytePos <= 0) {
+    return 0;
+  }
+
+  let utf16Pos = 0;
+  let bytes = 0;
+  const target = Math.max(0, bytePos);
+  while (utf16Pos < text.length && bytes < target) {
+    const code = text.charCodeAt(utf16Pos);
+    let charBytes = 0;
+    let charLen = 1;
+    if (code < 0x80) {
+      charBytes = 1;
+    } else if (code < 0x800) {
+      charBytes = 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && utf16Pos + 1 < text.length) {
+      const next = text.charCodeAt(utf16Pos + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        charBytes = 4;
+        charLen = 2;
+      } else {
+        charBytes = 3;
+      }
+    } else {
+      charBytes = 3;
+    }
+
+    if (bytes + charBytes > target) {
+      return utf16Pos;
+    }
+    bytes += charBytes;
+    utf16Pos += charLen;
+  }
+  return utf16Pos;
+}
+
 function toAbsolute(fileName) {
   const normalized = normalizePath(fileName);
   return path.posix.isAbsolute(normalized)
@@ -109,10 +180,13 @@ function collectTypeQueries(files) {
           before.trim().length > 0 && !before.trim().startsWith("//");
         const targetLine = hasCodeBefore ? i : i - 1;
         if (targetLine >= 0) {
-          const start = lineStarts[targetLine] ?? 0;
-          const end = lineStarts[targetLine + 1] ?? text.length;
-          const column = Math.min(search, end - start);
-          const offset = start + column;
+          const startUtf16 = lineStarts[targetLine] ?? 0;
+          const endUtf16 = lineStarts[targetLine + 1] ?? text.length;
+          const columnUtf16 = Math.min(search, endUtf16 - startUtf16);
+          const offsetUtf16 = startUtf16 + columnUtf16;
+          const offset = utf16ToUtf8ByteOffset(text, offsetUtf16);
+          const startBytes = utf16ToUtf8ByteOffset(text, startUtf16);
+          const column = offset - startBytes;
           queries.push({
             file: normalized,
             offset,
@@ -373,9 +447,10 @@ function collectMarkerTypes(checker, markers, sourceFiles) {
     const absName = toAbsolute(marker.file);
     const sf = sourceFiles.get(absName);
     if (!sf) continue;
+    const offsetUtf16 = utf8ByteOffsetToUtf16(sf.text, marker.offset);
     const node =
-      ts.findPrecedingToken(marker.offset, sf) ??
-      ts.getTokenAtPosition(sf, marker.offset);
+      ts.findPrecedingToken(offsetUtf16, sf) ??
+      ts.getTokenAtPosition(sf, offsetUtf16);
     if (!node) continue;
     const type = checker.getTypeAtLocation(node);
     const typeStr = renderType(checker, type, node);
@@ -410,10 +485,13 @@ function collectTypeFacts(program, checker, markers, requestFiles) {
 }
 
 function serializeDiagnostic(diagnostic) {
-  const start = diagnostic.start ?? 0;
-  const end = (diagnostic.start ?? 0) + (diagnostic.length ?? 0);
+  const startUtf16 = diagnostic.start ?? 0;
+  const endUtf16 = (diagnostic.start ?? 0) + (diagnostic.length ?? 0);
   const fileName = diagnostic.file ? toAbsolute(diagnostic.file.fileName) : null;
   const relative = fileName ? path.posix.relative(VIRTUAL_ROOT, fileName) : null;
+  const text = diagnostic.file?.text;
+  const start = text ? utf16ToUtf8ByteOffset(text, startUtf16) : startUtf16;
+  const end = text ? utf16ToUtf8ByteOffset(text, endUtf16) : endUtf16;
 
   return {
     code: diagnostic.code,

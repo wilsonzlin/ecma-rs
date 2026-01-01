@@ -9,6 +9,76 @@ try {
   process.exit(1);
 }
 
+function utf16ToUtf8ByteOffset(text, utf16Pos) {
+  if (!text || utf16Pos <= 0) {
+    return 0;
+  }
+  const target = Math.min(utf16Pos, text.length);
+  let bytes = 0;
+  let idx = 0;
+  while (idx < target) {
+    const code = text.charCodeAt(idx);
+    if (code < 0x80) {
+      bytes += 1;
+      idx += 1;
+      continue;
+    }
+    if (code < 0x800) {
+      bytes += 2;
+      idx += 1;
+      continue;
+    }
+    if (code >= 0xd800 && code <= 0xdbff && idx + 1 < text.length) {
+      const next = text.charCodeAt(idx + 1);
+      if (next >= 0xdc00 && next <= 0xdfff && idx + 1 < target) {
+        bytes += 4;
+        idx += 2;
+        continue;
+      }
+    }
+    bytes += 3;
+    idx += 1;
+  }
+  return bytes;
+}
+
+function utf8ByteOffsetToUtf16(text, bytePos) {
+  if (!text || bytePos <= 0) {
+    return 0;
+  }
+
+  let utf16Pos = 0;
+  let bytes = 0;
+  const target = Math.max(0, bytePos);
+  while (utf16Pos < text.length && bytes < target) {
+    const code = text.charCodeAt(utf16Pos);
+    let charBytes = 0;
+    let charLen = 1;
+    if (code < 0x80) {
+      charBytes = 1;
+    } else if (code < 0x800) {
+      charBytes = 2;
+    } else if (code >= 0xd800 && code <= 0xdbff && utf16Pos + 1 < text.length) {
+      const next = text.charCodeAt(utf16Pos + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        charBytes = 4;
+        charLen = 2;
+      } else {
+        charBytes = 3;
+      }
+    } else {
+      charBytes = 3;
+    }
+
+    if (bytes + charBytes > target) {
+      return utf16Pos;
+    }
+    bytes += charBytes;
+    utf16Pos += charLen;
+  }
+  return utf16Pos;
+}
+
 function categoryToString(category) {
   switch (category) {
     case ts.DiagnosticCategory.Message:
@@ -28,8 +98,11 @@ function formatMessage(messageText) {
 }
 
 function serializeDiagnostic(diagnostic) {
-  const start = diagnostic.start ?? 0;
-  const end = (diagnostic.start ?? 0) + (diagnostic.length ?? 0);
+  const startUtf16 = diagnostic.start ?? 0;
+  const endUtf16 = (diagnostic.start ?? 0) + (diagnostic.length ?? 0);
+  const text = diagnostic.file?.text;
+  const start = text ? utf16ToUtf8ByteOffset(text, startUtf16) : startUtf16;
+  const end = text ? utf16ToUtf8ByteOffset(text, endUtf16) : endUtf16;
   return {
     code: diagnostic.code,
     category: categoryToString(diagnostic.category),
