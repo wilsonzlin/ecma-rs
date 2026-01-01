@@ -16,8 +16,7 @@ use hir_js::{
   ImportEqualsTarget, ImportEs, ImportKind, JsxAttr, JsxAttrValue, JsxChild, JsxElement,
   JsxElementName, JsxExprContainer, JsxMemberExpr, JsxName, Literal, LowerResult, MemberExpr,
   NameId, ObjectKey, ObjectLiteral, ObjectProperty, Param, Pat, PatId, PatKind, Stmt, StmtId,
-  StmtKind,
-  TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
+  StmtKind, TemplateLiteral, UnaryOp, UpdateOp, VarDecl, VarDeclKind,
 };
 use parse_js::operator::{OperatorName, OPERATORS};
 use std::fmt::Write;

@@ -28,8 +28,10 @@ fn assert_hir_decorator_roundtrip(source: &str, expected_substrings: &[&str]) {
     )
     .expect("decorator output should parse as TS");
 
-    let lowered_roundtrip = lower_from_source_with_kind(FileKind::Ts, &emitted1)
-      .unwrap_or_else(|err| panic!("failed to lower emitted output: {err:?}\nemitted:\n{emitted1}"));
+    let lowered_roundtrip =
+      lower_from_source_with_kind(FileKind::Ts, &emitted1).unwrap_or_else(|err| {
+        panic!("failed to lower emitted output: {err:?}\nemitted:\n{emitted1}")
+      });
     let emitted_roundtrip =
       emit_hir_file_to_string(&lowered_roundtrip, opts).expect("emit roundtrip pass");
     assert_eq!(
@@ -41,10 +43,7 @@ fn assert_hir_decorator_roundtrip(source: &str, expected_substrings: &[&str]) {
 
 #[test]
 fn hir_emits_class_decorators_before_export() {
-  assert_hir_decorator_roundtrip(
-    "@dec\nexport class C {}",
-    &["@dec export class C"],
-  );
+  assert_hir_decorator_roundtrip("@dec\nexport class C {}", &["@dec export class C"]);
 }
 
 #[test]
@@ -56,4 +55,3 @@ fn hir_emits_class_member_decorators() {
 fn hir_emits_parameter_decorators() {
   assert_hir_decorator_roundtrip("class C { method(@dec x: any){} }", &["(@dec x"]);
 }
-
