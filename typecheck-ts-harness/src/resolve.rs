@@ -305,14 +305,36 @@ fn resolve_as_file_or_directory_normalized(
     virtual_join_into(&mut scratch, base_candidate, "package.json");
     if let Some(package_key) = files.resolve(&scratch) {
       if let Some(parsed) = files.package_json(&package_key) {
+        let mut resolve_package_entry = |entry: &str| -> Option<FileKey> {
+          if entry.is_empty() {
+            return None;
+          }
+
+          // Most `package.json` entries are written as `./foo/bar`. Strip the leading `./` so the
+          // joined path is already normalized and we can skip an extra `normalize_name` allocation.
+          let entry = entry.strip_prefix("./").unwrap_or(entry);
+          if entry.is_empty() {
+            return resolve_as_file_or_directory_normalized(files, base_candidate, depth + 1);
+          }
+
+          virtual_join_into(&mut scratch, base_candidate, entry);
+          // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
+          // Fall back to the normalizing path to preserve resolution behaviour.
+          if entry.starts_with('/') || subpath_needs_normalization(entry) {
+            resolve_as_file_or_directory_inner(files, &scratch, depth + 1)
+          } else {
+            resolve_as_file_or_directory_normalized(files, &scratch, depth + 1)
+          }
+        };
+
         if let Some(entry) = parsed.get("types").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_json_entry(files, base_candidate, entry, depth) {
+          if let Some(found) = resolve_package_entry(entry) {
             return Some(found);
           }
         }
 
         if let Some(entry) = parsed.get("typings").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_json_entry(files, base_candidate, entry, depth) {
+          if let Some(found) = resolve_package_entry(entry) {
             return Some(found);
           }
         }
@@ -328,7 +350,7 @@ fn resolve_as_file_or_directory_normalized(
         }
 
         if let Some(entry) = parsed.get("main").and_then(|v| v.as_str()) {
-          if let Some(found) = resolve_package_json_entry(files, base_candidate, entry, depth) {
+          if let Some(found) = resolve_package_entry(entry) {
             return Some(found);
           }
         }
@@ -351,33 +373,6 @@ fn resolve_as_file_or_directory_normalized(
   }
 
   None
-}
-
-fn resolve_package_json_entry(
-  files: &HarnessFileSet,
-  dir: &str,
-  entry: &str,
-  depth: usize,
-) -> Option<FileKey> {
-  if entry.is_empty() {
-    return None;
-  }
-
-  // Most `package.json` entries are written as `./foo/bar`. Strip the leading `./` so the joined
-  // path is already normalized and we can skip an extra `normalize_name` allocation.
-  let entry = entry.strip_prefix("./").unwrap_or(entry);
-  if entry.is_empty() {
-    return resolve_as_file_or_directory_normalized(files, dir, depth + 1);
-  }
-
-  let joined = virtual_join(dir, entry);
-  // If the stripped entry starts with `/`, the join will introduce a `//` segment (e.g. `.//foo`).
-  // Fall back to the normalizing path to preserve resolution behaviour.
-  if entry.starts_with('/') || subpath_needs_normalization(entry) {
-    resolve_as_file_or_directory_inner(files, &joined, depth + 1)
-  } else {
-    resolve_as_file_or_directory_normalized(files, &joined, depth + 1)
-  }
 }
 
 fn resolve_json_target_to_file(
