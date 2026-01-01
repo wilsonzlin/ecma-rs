@@ -108,6 +108,9 @@ cargo run -p typecheck-ts-harness --release -- conformance \
   - Live `tsc` checks are executed via a fixed-size worker pool; a timed-out request
     kills the Node.js runner process so a blocked `read_line` unblocks and the
     worker can recover on the next request.
+  - The harness does **not** spawn an OS thread per test case; execution happens
+    inline on the rayon worker threads with a small bounded set of background
+    threads enforcing deadlines.
 - Execution is parallel by default; cap worker threads with `--jobs <n>` (default
   is the CPU count). Combine with sharding for coarse-grained CI splits.
 - Comparison is configurable:
