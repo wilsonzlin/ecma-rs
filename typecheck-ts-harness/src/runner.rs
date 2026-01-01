@@ -1618,4 +1618,76 @@ mod tests {
     assert_eq!(loaded.diagnostics.len(), 1);
     assert_eq!(loaded.diagnostics[0].code, 1);
   }
+
+  #[test]
+  fn resolves_scoped_bare_specifier_via_at_types_fallback() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import { x } from \"@scope/pkg\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/@types/scope__pkg/index.d.ts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host
+      .resolve(&from, "@scope/pkg")
+      .expect("@scope/pkg should resolve");
+    let expected = file_set
+      .resolve("/node_modules/@types/scope__pkg/index.d.ts")
+      .unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn resolves_bare_specifier_via_node_modules_d_mts_index() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import { x } from \"foo\";".to_string(),
+      },
+      VirtualFile {
+        name: "/node_modules/foo/index.d.mts".to_string(),
+        content: "export const x: number;".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host.resolve(&from, "foo").expect("foo should resolve");
+    let expected = file_set.resolve("/node_modules/foo/index.d.mts").unwrap();
+    assert_eq!(resolved, expected);
+  }
+
+  #[test]
+  fn resolves_relative_mjs_specifier_via_d_mts_substitution() {
+    let files = vec![
+      VirtualFile {
+        name: "/a.ts".to_string(),
+        content: "import \"./foo.mjs\";".to_string(),
+      },
+      VirtualFile {
+        name: "/foo.d.mts".to_string(),
+        content: "export {};".to_string(),
+      },
+    ];
+
+    let file_set = HarnessFileSet::new(&files);
+    let host = HarnessHost::new(file_set.clone(), CompilerOptions::default());
+
+    let from = file_set.resolve("/a.ts").unwrap();
+    let resolved = host
+      .resolve(&from, "./foo.mjs")
+      .expect("./foo.mjs should resolve");
+    let expected = file_set.resolve("/foo.d.mts").unwrap();
+    assert_eq!(resolved, expected);
+  }
 }

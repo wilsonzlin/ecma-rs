@@ -2,13 +2,21 @@ use crate::multifile::normalize_name;
 use crate::runner::HarnessFileSet;
 use typecheck_ts::FileKey;
 
-const EXTENSIONS: [&str; 5] = ["ts", "tsx", "d.ts", "js", "jsx"];
-const INDEX_FILES: [&str; 5] = [
+const EXTENSIONS: [&str; 11] = [
+  "ts", "tsx", "d.ts", "mts", "d.mts", "cts", "d.cts", "js", "jsx", "mjs", "cjs",
+];
+const INDEX_FILES: [&str; 11] = [
   "index.ts",
   "index.tsx",
   "index.d.ts",
+  "index.mts",
+  "index.d.mts",
+  "index.cts",
+  "index.d.cts",
   "index.js",
   "index.jsx",
+  "index.mjs",
+  "index.cjs",
 ];
 
 pub(crate) fn resolve_module_specifier(
@@ -95,6 +103,22 @@ fn resolve_as_file_or_directory(files: &HarnessFileSet, base: &str) -> Option<Fi
     if let Some(found) = files.resolve(&candidate) {
       return Some(found);
     }
+  } else if base_candidate.ends_with(".mjs") {
+    let trimmed = base_candidate.trim_end_matches(".mjs");
+    for ext in ["mts", "d.mts"] {
+      let candidate = normalize_name(&format!("{trimmed}.{ext}"));
+      if let Some(found) = files.resolve(&candidate) {
+        return Some(found);
+      }
+    }
+  } else if base_candidate.ends_with(".cjs") {
+    let trimmed = base_candidate.trim_end_matches(".cjs");
+    for ext in ["cts", "d.cts"] {
+      let candidate = normalize_name(&format!("{trimmed}.{ext}"));
+      if let Some(found) = files.resolve(&candidate) {
+        return Some(found);
+      }
+    }
   } else if !has_known_extension(&base_candidate) {
     for ext in EXTENSIONS {
       let candidate = normalize_name(&format!("{base_candidate}.{ext}"));
@@ -120,10 +144,16 @@ fn is_relative_specifier(specifier: &str) -> bool {
 
 fn has_known_extension(name: &str) -> bool {
   name.ends_with(".d.ts")
+    || name.ends_with(".d.mts")
+    || name.ends_with(".d.cts")
     || name.ends_with(".ts")
     || name.ends_with(".tsx")
+    || name.ends_with(".mts")
+    || name.ends_with(".cts")
     || name.ends_with(".js")
     || name.ends_with(".jsx")
+    || name.ends_with(".mjs")
+    || name.ends_with(".cjs")
 }
 
 fn is_virtual_root_dir(dir: &str) -> bool {
