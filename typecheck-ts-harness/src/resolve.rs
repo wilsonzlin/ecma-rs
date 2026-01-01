@@ -45,6 +45,10 @@ fn resolve_non_relative(
   from: &FileKey,
   specifier: &str,
 ) -> Option<FileKey> {
+  if specifier.starts_with('#') {
+    return resolve_imports_specifier(files, from, specifier);
+  }
+
   // a) Exact match of the normalized specifier (for explicit-path tests).
   let normalized = normalize_name(specifier);
   if let Some(found) = files.resolve(&normalized) {
@@ -90,6 +94,61 @@ fn resolve_non_relative(
       break;
     }
     dir = virtual_parent_dir(&dir);
+  }
+
+  None
+}
+
+fn resolve_imports_specifier(
+  files: &HarnessFileSet,
+  from: &FileKey,
+  specifier: &str,
+) -> Option<FileKey> {
+  let from_name = files.name_for_key(from)?;
+  let mut dir = virtual_parent_dir(&from_name);
+  loop {
+    if let Some(found) = resolve_imports_in_dir(files, &dir, specifier) {
+      return Some(found);
+    }
+
+    if is_virtual_root_dir(&dir) {
+      break;
+    }
+    dir = virtual_parent_dir(&dir);
+  }
+
+  None
+}
+
+fn resolve_imports_in_dir(files: &HarnessFileSet, dir: &str, specifier: &str) -> Option<FileKey> {
+  let package_json = normalize_name(&virtual_join(dir, "package.json"));
+  let package_key = files.resolve(&package_json)?;
+  let raw = files.content(&package_key)?;
+  let parsed: Value = serde_json::from_str(&raw).ok()?;
+  let imports = parsed.get("imports")?.as_object()?;
+
+  let (key, star_match) = if imports.contains_key(specifier) {
+    (specifier.to_string(), None)
+  } else {
+    let (pattern_key, star_match) = best_exports_subpath_pattern(imports, specifier)?;
+    (pattern_key, Some(star_match))
+  };
+
+  let target = imports.get(&key)?;
+  let mut resolved = resolve_export_target(target, 0)?;
+  if let Some(star_match) = star_match {
+    resolved = resolved.replace('*', &star_match);
+  }
+
+  // Node-style `imports` targets are typically relative paths within the package scope.
+  if resolved.starts_with("./") || resolved.starts_with("../") {
+    let entry = normalize_name(&virtual_join(dir, &resolved));
+    return resolve_as_file_or_directory(files, &entry);
+  }
+
+  // Allow absolute virtual paths for harness flexibility.
+  if resolved.starts_with('/') || is_drive_root(&resolved) {
+    return resolve_as_file_or_directory(files, &resolved);
   }
 
   None
