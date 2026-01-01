@@ -1104,7 +1104,7 @@ impl TscRunnerPool {
     file_set: &HarnessFileSet,
     options: &Map<String, Value>,
   ) -> std::result::Result<TscDiagnostics, String> {
-    let request = build_tsc_request(file_set, options);
+    let request = build_tsc_request(file_set, options, true);
     self.run_request(request)
   }
 
@@ -1145,7 +1145,11 @@ impl TscRunnerPool {
   }
 }
 
-fn build_tsc_request(file_set: &HarnessFileSet, options: &Map<String, Value>) -> TscRequest {
+pub(crate) fn build_tsc_request(
+  file_set: &HarnessFileSet,
+  options: &Map<String, Value>,
+  diagnostics_only: bool,
+) -> TscRequest {
   let mut files = HashMap::new();
 
   for file in file_set.iter() {
@@ -1165,7 +1169,7 @@ fn build_tsc_request(file_set: &HarnessFileSet, options: &Map<String, Value>) ->
     root_names,
     files,
     options: options.clone(),
-    diagnostics_only: true,
+    diagnostics_only,
     type_queries: Vec::new(),
   }
 }

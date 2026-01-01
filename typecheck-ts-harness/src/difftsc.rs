@@ -6,11 +6,11 @@ use crate::directives::{parse_directive, HarnessOptions};
 use crate::expectations::{ExpectationKind, Expectations};
 use crate::multifile::normalize_name;
 use crate::runner::{
-  is_source_root, run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet, HarnessHost,
-  TscRunnerPool,
+  build_tsc_request, is_source_root, run_rust, ConcurrencyLimiter, EngineStatus, HarnessFileSet,
+  HarnessHost, TscRunnerPool,
 };
 use crate::tsc::{
-  node_available, ExportTypeFact, TscDiagnostics, TscRequest, TypeAtFact, TypeFacts, TypeQuery,
+  node_available, ExportTypeFact, TscDiagnostics, TypeAtFact, TypeFacts, TypeQuery,
   TSC_BASELINE_SCHEMA_VERSION,
 };
 use crate::{read_utf8_file, FailOn, VirtualFile};
@@ -532,6 +532,7 @@ fn run_single_test(
   let mut notes = Vec::new();
   let harness_options = harness_options_from_files(&test.files);
   let tsc_options = harness_options.to_tsc_options_map();
+  let file_set = HarnessFileSet::new(&test.files);
 
   let live_tsc = if needs_live_tsc(args) {
     let Some(pool) = tsc_pool else {
@@ -551,7 +552,7 @@ fn run_single_test(
       };
     };
 
-    let request = build_request(test, &tsc_options);
+    let request = build_tsc_request(&file_set, &tsc_options, false);
     match pool.run_request(request) {
       Ok(diags) => Some(diags),
       Err(err) => {
@@ -702,7 +703,6 @@ fn run_single_test(
     &tsc_diags.metadata.options,
   ));
 
-  let file_set = HarnessFileSet::new(&test.files);
   let rust = run_rust(&file_set, &harness_options);
   let expected = normalize_tsc_diagnostics_with_options(&tsc_diags.diagnostics, normalization);
   let expected_types = normalize_type_facts(&tsc_diags.type_facts, normalization);
@@ -1633,30 +1633,6 @@ fn resolve_suite_path(suite: &Path) -> Result<PathBuf> {
     Ok(manifest_candidate)
   } else {
     Ok(suite_path)
-  }
-}
-
-fn build_request(test: &TestCase, base_options: &Map<String, Value>) -> TscRequest {
-  let mut files = HashMap::new();
-  let mut root_names = Vec::new();
-
-  for file in &test.files {
-    let normalized = normalize_name(&file.name);
-    if is_source_root(&normalized) {
-      root_names.push(normalized.clone());
-    }
-    files.insert(normalized, file.content.clone());
-  }
-
-  root_names.sort();
-  root_names.dedup();
-
-  TscRequest {
-    root_names,
-    files,
-    options: base_options.clone(),
-    diagnostics_only: false,
-    type_queries: Vec::new(),
   }
 }
 
