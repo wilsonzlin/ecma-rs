@@ -907,6 +907,28 @@ impl<'a> RelateCtx<'a> {
       ),
       (TypeKind::Array { ty: src_elem, .. }, TypeKind::Object(dst_obj)) => {
         let dst_shape = self.store.shape(self.store.object(*dst_obj).shape);
+        // `object` (keyword) is represented as an empty structural object type.
+        // Arrays (and tuples) are objects in TypeScript, so they are assignable
+        // to `object` even though we do not model the full `Array` instance
+        // shape here.
+        if dst_shape.properties.is_empty()
+          && dst_shape.call_signatures.is_empty()
+          && dst_shape.construct_signatures.is_empty()
+          && dst_shape.indexers.is_empty()
+        {
+          let reason = self.join_reasons(
+            record,
+            key,
+            Vec::new(),
+            true,
+            Some("array to empty object".into()),
+            depth,
+          );
+          return RelationResult {
+            result: true,
+            reason,
+          };
+        }
         if let Some(idx) = dst_shape
           .indexers
           .iter()
@@ -941,6 +963,24 @@ impl<'a> RelateCtx<'a> {
             Vec::new(),
             false,
             Some("array to object".into()),
+            depth,
+          ),
+        }
+      }
+      (TypeKind::Tuple(_), TypeKind::Object(dst_obj)) => {
+        let dst_shape = self.store.shape(self.store.object(*dst_obj).shape);
+        let res = dst_shape.properties.is_empty()
+          && dst_shape.call_signatures.is_empty()
+          && dst_shape.construct_signatures.is_empty()
+          && dst_shape.indexers.is_empty();
+        RelationResult {
+          result: res,
+          reason: self.join_reasons(
+            record,
+            key,
+            Vec::new(),
+            res,
+            Some("tuple to object".into()),
             depth,
           ),
         }

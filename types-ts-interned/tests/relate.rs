@@ -96,6 +96,28 @@ fn null_not_assignable_to_empty_object_under_strict_null_checks() {
 }
 
 #[test]
+fn array_and_tuple_assignable_to_object_keyword() {
+  let store = TypeStore::new();
+  let primitives = store.primitive_ids();
+  let ctx = RelateCtx::new(store.clone(), default_options());
+
+  let object_keyword = object_type(&store, Shape::new());
+  let array = store.intern_type(TypeKind::Array {
+    ty: primitives.string,
+    readonly: false,
+  });
+  assert!(ctx.is_assignable(array, object_keyword));
+
+  let tuple = store.intern_type(TypeKind::Tuple(vec![TupleElem {
+    ty: primitives.string,
+    optional: false,
+    rest: false,
+    readonly: false,
+  }]));
+  assert!(ctx.is_assignable(tuple, object_keyword));
+}
+
+#[test]
 fn type_params_treated_as_unknown() {
   let store = TypeStore::new();
   let primitives = store.primitive_ids();
